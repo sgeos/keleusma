@@ -74,7 +74,7 @@ A spawn operation requires an available slot. Three possible policies:
 
 3. **Compile-time rejection.** A program whose pool capacity cannot be statically verified is rejected. This is the strictest stance.
 
-V0.5.0 ships with policy 1 for programs the verifier admits and policy 3 for programs it cannot admit. Policy 2 is available as an opt-in for programs that wish to handle the fallibility explicitly, but the verifier prefers the strict stance for certification-adjacent use cases.
+V0.5.0 ships with policy 1 for programs the verifier admits and policy 3 for programs it cannot admit. Policy 2 is available as an opt-in for programs that wish to handle the fallibility explicitly, but the verifier prefers the strict stance for high-assurance use cases.
 
 ## Coroutine handle
 

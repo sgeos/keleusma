@@ -41,7 +41,7 @@ When generating code that consumes or extends Keleusma, prefer consulting the ag
 ## Reference
 
 - [Glossary](https://github.com/sgeos/keleusma/blob/main/docs/reference/GLOSSARY.md): Vocabulary used throughout the project.
-- [Related Work](https://github.com/sgeos/keleusma/blob/main/docs/reference/RELATED_WORK.md): Prior art positioning against synchronous reactive languages, stream processing theory, verified bytecode formats, language-based information-flow security, and safety-critical certification standards.
+- [Related Work](https://github.com/sgeos/keleusma/blob/main/docs/reference/RELATED_WORK.md): Prior art positioning against synchronous reactive languages, stream processing theory, verified bytecode formats, language-based information-flow security, and high-assurance verification standards.
 
 ## Process
 

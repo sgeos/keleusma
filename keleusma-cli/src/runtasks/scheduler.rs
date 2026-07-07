@@ -228,7 +228,7 @@ pub fn run(manifest_path: &Path, quiet: bool) -> RunOutcome {
                 t.cfg.name, t.cfg.arena_capacity, t.cfg.restart
             );
             // Verifier-computed WCET (cycles) and WCMU (bytes) for
-            // the task's loop body. The bounds are the certification
+            // the task's loop body. The bounds are the verification
             // evidence the design doc calls out; operators copying
             // these into deployment records get them straight from
             // the runner's load step.

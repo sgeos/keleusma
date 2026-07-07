@@ -30,7 +30,7 @@ Key terminology used in the Keleusma documentation and source code. Citations us
 
 **Atomic function** -- A function declared with the `fn` keyword that must terminate without yielding. May call other atomic functions and native functions.
 
-**Bounded-step invariant** -- The property that there exists a statically provable upper bound on instructions executed between any two yield points. This enables WCET analysis for safety-critical certification.
+**Bounded-step invariant** -- The property that there exists a statically provable upper bound on instructions executed between any two yield points. This enables WCET analysis for high-assurance verification.
 
 **Bump allocator** -- The arena allocation strategy. Allocations advance a pointer linearly through a contiguous buffer. Deallocation occurs only at RESET when the entire arena is cleared.
 
@@ -96,7 +96,7 @@ Key terminology used in the Keleusma documentation and source code. Citations us
 
 **RESET** -- A structural ISA primitive that clears the arena, performs a hot swap if scheduled, and jumps to the STREAM entry point. RESET is the only instruction allowed to target STREAM and is the only global back-edge in the program. RESET is the only update point at which a hot code update may take effect.
 
-**Soundness** -- The property that a verification pass rejects all invalid programs. A sound verifier never accepts a program that violates the property it checks. The structural verifier's soundness has not been formally proven. See [RELATED_WORK.md](./RELATED_WORK.md) Section 7 for the certification gap analysis.
+**Soundness** -- The property that a verification pass rejects all invalid programs. A sound verifier never accepts a program that violates the property it checks. The structural verifier's soundness has not been formally proven. See [RELATED_WORK.md](./RELATED_WORK.md) Section 7 for the verification-maturity discussion.
 
 **Schema** -- The number, names, and types of fields declared in a `data` block. Within a single code image the schema is fixed at compile time. Across hot updates the schema may change arbitrarily because the update applies at RESET and the host supplies a conforming data segment instance.
 
@@ -106,9 +106,7 @@ Key terminology used in the Keleusma documentation and source code. Citations us
 
 **Synchronous hypothesis** -- The assumption, originating in the synchronous reactive language tradition [L1, SY1], that computation completes within one logical tick. In Keleusma, each yield-to-yield slice corresponds to one logical tick, and the bounded-step invariant ensures that each tick completes in bounded time.
 
-**STREAM** -- A structural ISA block type representing the mission loop entry point. Zero or one STREAM region may exist per program. STREAM terminates with RESET. The RESET -> STREAM cycle is the only unbounded cycle.
-
-**Tool qualification** -- The certification process for development tools under safety standards such as DO-178C [IC1] and DO-330 [IC2]. A qualified tool has been demonstrated to produce correct output or to detect its own errors. Keleusma's compiler and verifier are not currently qualified. See [RELATED_WORK.md](./RELATED_WORK.md) Section 7 for the certification gap analysis.
+**STREAM** -- A structural ISA block type representing the stream loop entry point. Zero or one STREAM region may exist per program. STREAM terminates with RESET. The RESET -> STREAM cycle is the only unbounded cycle.
 
 **Total function** -- A function guaranteed to terminate, assuming called functions return. Both `fn` and `yield` functions are total. Loop functions are not total but are productive. The totality guarantee follows Turner's argument for total functional programming [T1].
 

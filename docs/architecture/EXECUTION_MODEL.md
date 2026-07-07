@@ -293,7 +293,7 @@ Hot code swapping occurs only at RESET boundaries. The following requirements ap
 - The YIELD signature, namely the dialogue type A exchanged for B, remains invariant across the entire STREAM and across swaps.
 - Text, rodata, and the data segment schema may all change across a swap. Only the dialogue type is invariant.
 - The arena is cleared before new code executes.
-- WCET and reset-to-reset bounds are certified per routine independently.
+- WCET and reset-to-reset bounds are verified per routine independently.
 
 Different routines may have different WCETs, which are declared in a static header for the host scheduler to validate before accepting the swap.
 
@@ -323,7 +323,7 @@ Individual time slices are not Turing complete. Each yield-to-yield slice execut
 
 The VM-Host pair is Turing complete. Turing completeness arises from the unbounded RESET cycle with the host providing the "tape" through YIELD exchanges. The host supplies new input on each resumption, and host-controlled state that persists across resets serves as the unbounded external memory. Computation can span arbitrarily many RESET cycles.
 
-This separation is deliberate. The VM executes finite, certifiable slices. The host drives the unbounded computation loop. Industrial certification applies to individual slices, not to the overall infinite execution.
+This separation is deliberate. The VM executes finite, auditable slices. The host drives the unbounded computation loop. The verification argument applies to individual slices, not to the overall infinite execution.
 
 ## Structural Verification
 

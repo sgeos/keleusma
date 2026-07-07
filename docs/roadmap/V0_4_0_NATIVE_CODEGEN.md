@@ -179,7 +179,7 @@ Three possible postures:
 
 1. **Native WCET as best-effort.** The verifier reports the bytecode-level WCET claim. The LLVM-produced native code is faster than the bytecode in the typical case; the bytecode WCET claim is a soft upper bound on native execution. Operators who need hard real-time guarantees use the bytecode shape. Operators who use the native shape accept best-effort timing, similar to the impure-WCET convention. **Recommended for V0.4.0.**
 
-2. **Measurement-based native WCET.** After LLVM compilation, the native artefact is benchmarked on the target platform under worst-case input. The measured WCET is published as the certified bound. Per-target, per-build effort; produces hard bounds at the cost of a measurement infrastructure. **Recommended for V0.4.x as the rigorous path.**
+2. **Measurement-based native WCET.** After LLVM compilation, the native artefact is benchmarked on the target platform under worst-case input. The measured WCET is published as the verified bound. Per-target, per-build effort; produces hard bounds at the cost of a measurement infrastructure. **Recommended for V0.4.x as the rigorous path.**
 
 3. **Per-target WCET analysis on the native output.** Each LLVM target has documented instruction-cycle behaviour (mostly; modern superscalar pipelines complicate this). The verifier could in principle re-analyse the native output against the target's cycle model. This is the most rigorous and the most expensive. **V0.5+ research, not V0.4.0.**
 

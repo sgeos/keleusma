@@ -704,7 +704,7 @@ The two clauses run independently. The product lattice composes algebraically.
 
 **Why deferred.** The V0.2.0 parameter-position form covers the immediate signing-and-sanitization use cases. The product-lattice extension adds doubled per-value state, more delicate declassify semantics (a `re-attest` operator that re-establishes a negative guarantee after declassify is its own surface question), and conceptual surface for regular programmers ("how does a value know what it doesn't have?"). The deferral keeps V0.2.0 minimal without preventing the eventual extension: value-side negatives are a strict superset of parameter-position negatives, so a V0.2.0 program will not need to change when the extension lands.
 
-**Forcing case.** Awaits a concrete customer use case. The trust-chain aspects of the fleet delivery scenarios are the strongest candidate; certification audits that want compositional absence proofs would also qualify. Without a concrete forcing case, designing the value-side semantics risks committing to a model that the eventual case will need to revise.
+**Forcing case.** Awaits a concrete customer use case. The trust-chain aspects of the fleet delivery scenarios are the strongest candidate; audits that want compositional absence proofs would also qualify. Without a concrete forcing case, designing the value-side semantics risks committing to a model that the eventual case will need to revise.
 
 **Compatibility.** Value-side negatives can land as a backwards-compatible feature addition. Every V0.2.0 program parses unchanged; every existing test continues to pass; the AST gains an internal-only extension to `TypeExpr::NegativeLabelled` that the parser starts to produce at additional positions, and the type checker propagates the negative component through the lattice. No surface syntax changes are required.
 
@@ -765,7 +765,7 @@ Keleusma's layered-security posture combines four protective layers: cryptograph
 
 **Scope: narrow integration only.** Keleusma provides primitives that the host can use to mark arena regions as secure-world only, configure the MPU for arena protection, and store decryption keys in secure flash. The runtime does not manage secure-world entry points itself; secure-world control remains the host's responsibility. The narrow scope keeps the work bounded and avoids substantial architectural changes to the runtime.
 
-The broad scope alternative, in which Keleusma manages secure-world execution directly and configures TrustZone-M as a first-class language feature, is out of scope. The broad scope would require redesign of the arena memory model, the dual-end stack-and-heap discipline, and the call frame layout to accommodate secure-world transitions. Substantial work with certification implications. Not contemplated.
+The broad scope alternative, in which Keleusma manages secure-world execution directly and configures TrustZone-M as a first-class language feature, is out of scope. The broad scope would require redesign of the arena memory model, the dual-end stack-and-heap discipline, and the call frame layout to accommodate secure-world transitions. Substantial work with assurance implications. Not contemplated.
 
 **Components of the narrow integration.**
 
@@ -780,11 +780,11 @@ The broad scope alternative, in which Keleusma manages secure-world execution di
 - Host-side TrustZone-M plumbing: roughly two to four weeks per platform.
 - Secure-world routines: one to two weeks per cryptographic primitive (X25519 unwrap, AES decryption).
 - MPU configuration helpers: one week per platform.
-- Testing across the platform's certified Common Criteria evaluation if applicable: weeks to months depending on the certification level required.
+- Testing across the platform's evaluation requirements if applicable: weeks to months depending on the assurance level required.
 
 Total per-platform integration cost is therefore in the range of one to three months. Multiple platforms compound accordingly.
 
-**Prior art.** ARM's documentation for the Cortex-M55 TrustZone-M architecture is the canonical reference. The Keil RTX5 RTOS and the FreeRTOS-Plus-TrustZone integrations provide working open-source examples of secure-world entry-point design. Several embedded firmware vendors (NXP, ST, Renesas) ship platform-specific TrustZone-M templates. Defense-adjacent certifications (Common Criteria EAL4+ and above) typically require this kind of hardware isolation; specific requirements vary by evaluation scheme and protection profile.
+**Prior art.** ARM's documentation for the Cortex-M55 TrustZone-M architecture is the canonical reference. The Keil RTX5 RTOS and the FreeRTOS-Plus-TrustZone integrations provide working open-source examples of secure-world entry-point design. Several embedded firmware vendors (NXP, ST, Renesas) ship platform-specific TrustZone-M templates. High-assurance evaluation schemes typically require this kind of hardware isolation; specific requirements vary by evaluation scheme and protection profile.
 
 **Composition with existing infrastructure.** The four-layer posture composes cleanly:
 
@@ -997,7 +997,7 @@ The persistent counterpart to this entry is B26. The architectural intent that m
 
 1. **Embedded targets without a global allocator are blocked.** Cortex-M targets that disable `alloc::alloc::GlobalAlloc` or configure a fixed-size heap separate from the Keleusma arena cannot run scripts that build composite values. The arena is sized to bound the script; the global allocator is separate and either absent or independently sized. This is a real obstacle to V0.4.x cross-target deployment for any script touching composite types.
 
-2. **WCMU bounds are not equivalent to the arena's bound.** A script's WCMU report says "this iteration peaks at N bytes of operand stack and M bytes of heap". The arena's `with_capacity(total)` is sized to satisfy operand-stack peak plus persistent region. The M bytes of `body_heap` come from the global allocator. An operator certifying the script's memory bound must add the global-heap quota to the arena bound. The two-allocator accounting is correct but awkward.
+2. **WCMU bounds are not equivalent to the arena's bound.** A script's WCMU report says "this iteration peaks at N bytes of operand stack and M bytes of heap". The arena's `with_capacity(total)` is sized to satisfy operand-stack peak plus persistent region. The M bytes of `body_heap` come from the global allocator. An operator verifying the script's memory bound must add the global-heap quota to the arena bound. The two-allocator accounting is correct but awkward.
 
 3. **Allocator behaviour bleeds in.** Global allocators on different platforms have different fragmentation behaviour, different time-to-allocate, different failure modes. A Keleusma script's runtime behaviour gains a dependency on the host platform's allocator even though every per-op cost is bounded. The arena's bump allocator is statically predictable; the global allocator is not.
 
@@ -1199,7 +1199,7 @@ No opcode changes in any phase. `BYTECODE_VERSION` stays at 1 for lack of tracti
 
 **Forcing case.**
 
-V0.4.x cross-target deployment, particularly to embedded targets without a global allocator (Cortex-M55, Cortex-M variants, rad-tolerant cores). V0.5.x self-hosted compiler that produces native code through `llvm-mos` or similar backends and wants LLVM's register allocator to see through composite values. The fleet delivery scenarios that require deterministic memory-allocation behaviour for certification.
+V0.4.x cross-target deployment, particularly to embedded targets without a global allocator (Cortex-M55, Cortex-M variants, rad-tolerant cores). V0.5.x self-hosted compiler that produces native code through `llvm-mos` or similar backends and wants LLVM's register allocator to see through composite values. The fleet delivery scenarios that require deterministic memory-allocation behaviour for verification.
 
 **Composition with B26 and B27.**
 
@@ -1219,7 +1219,7 @@ B26 and B27 stay in the backlog as documentary captures of the symptom-level fix
 - R29 (hot code swap) interacts: the migration path needs updating because the Value tree's internal shape changes.
 - B16 (parametric Vm for sub-64-bit native runtimes) intersects: byte-size computation depends on the target's word and float widths. `LayoutDescriptor` is parameterised over those widths from P0.
 - B24 (hardware-isolation for Cortex-M) is the deployment family that benefits from arena-as-sole-allocator and from precise WCMU bounds.
-- The fleet delivery scenarios are the operational shape that benefits most from the deterministic-allocator property and the certification-grade WCMU precision.
+- The fleet delivery scenarios are the operational shape that benefits most from the deterministic-allocator property and the high-precision WCMU precision.
 - V0.2.0's WCMU calculation imprecision is the operational artefact of this defect; corrected runtime produces corrected numbers.
 
 ## ~~B29. Strippable debug metadata in the ISA~~ (Resolved for V0.2.1; three precision refinements deferred)
@@ -1316,7 +1316,7 @@ The following record kinds are candidates. Each is sized by its expected operati
 | `IfcLabelAnnotation` | Per-position IFC label info beyond what the type system already carries. Strictly compile-time today, but the annotation creates an audit trail | Position plus label set | Stripping reduces IFC audit trail granularity |
 | `WCETMarker` | Per-block WCET annotation from the cost model. Lets runtime telemetry compare measured against declared bounds | Block id plus declared cycle count | Stripping disables runtime WCET telemetry |
 | `OptimisationMarker` | Records which optimisations the compiler applied to a region. Pure provenance | Optimisation identifier | Stripping erases optimisation history |
-| `VerifierWitness` | Trace of why the verifier accepted (or rejected) certain constructs. Audit-grade info for certification reviewers | Witness identifier plus structured payload | Stripping reduces audit trail for certification artefacts |
+| `VerifierWitness` | Trace of why the verifier accepted (or rejected) certain constructs. Audit-grade info for auditors | Witness identifier plus structured payload | Stripping reduces audit trail for audit artefacts |
 
 **Breakpoint mechanism**
 
@@ -1358,7 +1358,7 @@ The wire format framing is unchanged. The chunk-level `debug_pool` field is a ne
 
 **Forcing case**
 
-Debugger quality, certification artefacts, and richer error reports each create demand for one or more debug record kinds. None individually forces the entire framework; the framework lands once and admits incremental record-kind additions thereafter. Each record kind becomes operationally important when its consuming workflow (a debugger, a certification reviewer, a runtime introspection tool) becomes operationally important.
+Debugger quality, audit artefacts, and richer error reports each create demand for one or more debug record kinds. None individually forces the entire framework; the framework lands once and admits incremental record-kind additions thereafter. Each record kind becomes operationally important when its consuming workflow (a debugger, a auditor, a runtime introspection tool) becomes operationally important.
 
 B35 P1 created one concrete near-term demand. The compiler-emitted traps now surface as specific `VmError` variants without the dynamic detail the prior message carried, namely the failing predicate and newtype names for a refinement trap and the function name for a no-matching-head trap, so a runtime trap identifies its cause but not its source site. The intended way to restore localization is the `SourceSpan` or `CallSite` debug record here, or a dedicated trap-context record, which would let a host map a trap back to a source position at `Word` cost rather than re-embedding a string. So a refinement or no-match trap is a consumer of this framework, and the `AssertionContext` row is the closest existing analogue for the trap case.
 
@@ -1378,7 +1378,7 @@ Three items deferred during the V0.2.1 CLI runner work that are not specific to 
 | # | Item | Description | Forcing case |
 |---|------|-------------|--------------|
 | 1 | Mutable `shared`/`private data` REPL persistence beyond scalars | The V0.2.x REPL persists shared data through the host-visible `Vm::set_data` and `Vm::get_data` Value-clone API. Scalar types round-trip correctly. Composite types (Tuple, Array, Struct, Enum) clone correctly across evaluations through the existing API. Private data slots have no equivalent host API; private data persistence requires either an arena snapshot-and-restore mechanism in the VM or incremental module loading that preserves state across recompiles. The structural fix is B28's flat-byte composite representation, which makes byte-snapshot of the persistent region sound. | Operators who want their REPL session state to survive a private-data declaration would feel this most. |
-| 2 | Generic `Result<T, E>` type | A language-design question deferred deliberately. The V0.2.x bundled shell natives use the trap-on-error pattern (errors surface as `VmError::NativeError` and halt execution) rather than returning a `Result` that the script-side code unwraps. Adding `Result<T, E>` adds a sum-type pattern that the language does not currently provide; the choice between trap-on-error and explicit-Result has implications for total-functional reasoning, WCET analysis, and the certification narrative. | Operators who want to write recoverable shell pipelines rather than trap-on-first-failure would feel this most. The host-native error-handling boundary is the natural location for it. |
+| 2 | Generic `Result<T, E>` type | A language-design question deferred deliberately. The V0.2.x bundled shell natives use the trap-on-error pattern (errors surface as `VmError::NativeError` and halt execution) rather than returning a `Result` that the script-side code unwraps. Adding `Result<T, E>` adds a sum-type pattern that the language does not currently provide; the choice between trap-on-error and explicit-Result has implications for total-functional reasoning, WCET analysis, and the verification narrative. | Operators who want to write recoverable shell pipelines rather than trap-on-first-failure would feel this most. The host-native error-handling boundary is the natural location for it. |
 | 3 | `shell::read_lines` native | Returns the lines of a text file as a script-visible collection. Contingent on a dynamic-length Array type or equivalent. The V0.2.x `shell::read_string` returns the entire file contents as a single Text; line-by-line iteration in script-side code requires splitting the string, which the bundled natives do not currently provide. | Operators who want to process line-delimited inputs (logs, CSV, configuration files) inside a Keleusma script without a host-side preprocessor. |
 
 **Cross-references**

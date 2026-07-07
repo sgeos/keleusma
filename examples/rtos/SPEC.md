@@ -333,7 +333,7 @@ For task `T` with WCET-to-yield `W_T` cycles, the worst-case dispatch latency fr
 latency(T) = scheduler_overhead + max(W_other for other tasks ready at tick)
 ```
 
-Every `W_other` is a verifier-proven bound. The kernel's `scheduler_overhead` is a small constant measurable on the platform. Therefore `latency(T)` is bounded by a known constant for every task, certifiable.
+Every `W_other` is a verifier-proven bound. The kernel's `scheduler_overhead` is a small constant measurable on the platform. Therefore `latency(T)` is bounded by a known constant for every task, auditable.
 
 This is the load-bearing property. Preemptive RTOSes need additional verification artifacts to make a similar claim (priority inversion protocols, atomic critical sections, etc.). The cooperative + total combination gets the same result for free from the verifier.
 
@@ -392,7 +392,7 @@ Expected output, condensed:
 ...
 ```
 
-The verifier-proven WCETs printed at boot are the certification evidence. The timeline below is the qualitative correctness evidence.
+The verifier-proven WCETs printed at boot are the verification evidence. The timeline below is the qualitative correctness evidence.
 
 ### 8.1 Test plan
 

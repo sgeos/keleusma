@@ -473,7 +473,7 @@ Items left for follow-up work. None are blockers for the current state of the de
 |------|-------|
 | ADC wiring on the N6 | `sensor_read` returns `0` on the N6 (stub). Phase 4 wires `ADC1` channel 0 through `embassy-stm32`'s ADC driver and removes the stub. The natives layer is already in place; only the platform method body changes. |
 | Pin map extension | The N6 wires only pin 13 (PG10). A pin-to-handle table installed at boot would expand the addressable pin set. The natives layer accepts any index below `RESOURCES.gpio_pin_count` (256). |
-| WCET banner | The spec calls for the verifier-bounded per-task WCET to be printed at boot as certification evidence. `keleusma::vm::auto_arena_capacity_for` and related hooks expose the data; wiring them into the boot banner is a small follow-up. |
+| WCET banner | The spec calls for the verifier-bounded per-task WCET to be printed at boot as verification evidence. `keleusma::vm::auto_arena_capacity_for` and related hooks expose the data; wiring them into the boot banner is a small follow-up. |
 | Event bus | The `YieldReason::WaitForEvent` code is accepted but parks the task indefinitely. A kernel-side event bus and a `host::wait_for_event` native would close the loop. |
 | Hot reload | The rogue example's F5 reload pattern applies cleanly; not wired here. |
 | Precompiled bytecode | Loading rkyv-archived bytecode at boot instead of compiling source on-chip would cut the 215 ms kernel-construction time and shrink the FLASH image. |

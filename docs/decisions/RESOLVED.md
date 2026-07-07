@@ -58,7 +58,7 @@ The VM uses an arena memory model consisting of a single contiguous bump-allocat
 
 ## R14. Two temporal domains
 
-Execution is governed by two temporal domains. The yield domain (control clock) provides fine-grained scheduling with WCET measured yield-to-yield. The reset domain (phase clock) provides coarse-grained phase control with swap latency measured reset-to-reset. This separation allows independent analysis and certification of timing properties at each granularity.
+Execution is governed by two temporal domains. The yield domain (control clock) provides fine-grained scheduling with WCET measured yield-to-yield. The reset domain (phase clock) provides coarse-grained phase control with swap latency measured reset-to-reset. This separation allows independent analysis and verification of timing properties at each granularity.
 
 ## R15. Structural ISA verification
 
@@ -74,7 +74,7 @@ All control flow uses block-structured instructions (If/Else/EndIf, Loop/EndLoop
 
 ## R18. Surface language compiles down
 
-The surface language (pattern dispatch, pipelines, dynamic types) is syntactic sugar. The compiler lowers rich surface constructs to austere certifiable bytecode. The surface language does not narrow. The bytecode ISA is deliberately minimal and verifiable, while the surface language provides developer ergonomics.
+The surface language (pattern dispatch, pipelines, dynamic types) is syntactic sugar. The compiler lowers rich surface constructs to austere auditable bytecode. The surface language does not narrow. The bytecode ISA is deliberately minimal and verifiable, while the surface language provides developer ergonomics.
 
 ## R19. Double-buffered hot swap
 
@@ -126,7 +126,7 @@ Native function registration uses static marshalling through the `KeleusmaType` 
 
 ## R31. Worst-case memory usage as the fifth guarantee
 
-Bounded-memory becomes the fifth Keleusma guarantee, peer to totality, productivity, bounded-step, and safe swapping. Programs whose worst-case memory usage cannot be statically computed are rejected at verification time. The unit of measurement is aligned bytes. Each bytecode instruction carries a memory footprint declaration via a method paralleling `Op::cost()`. The analysis recursively traverses the block-structured control flow taking the maximum at each branch and summing along sequential paths, mirroring `wcet_stream_iteration()`. The host-attestation surface widens. Each native function is declared with both a worst-case execution time and a worst-case memory usage. Auto-arena sizing follows from the WCMU computation, namely the arena is sized to accommodate the worst case the program can produce. Industrial certification standards including DO-178C and ISO 26262 routinely require both timing and memory bounds, so adding WCMU brings Keleusma into closer parity with the safety-critical analysis tradition.
+Bounded-memory becomes the fifth Keleusma guarantee, peer to totality, productivity, bounded-step, and safe swapping. Programs whose worst-case memory usage cannot be statically computed are rejected at verification time. The unit of measurement is aligned bytes. Each bytecode instruction carries a memory footprint declaration via a method paralleling `Op::cost()`. The analysis recursively traverses the block-structured control flow taking the maximum at each branch and summing along sequential paths, mirroring `wcet_stream_iteration()`. The host-attestation surface widens. Each native function is declared with both a worst-case execution time and a worst-case memory usage. Auto-arena sizing follows from the WCMU computation, namely the arena is sized to accommodate the worst case the program can produce. High-assurance analysis practice routinely requires both timing and memory bounds, so adding WCMU brings Keleusma into closer parity with that tradition.
 
 ## R32. Dual-end arena with separate stack and heap WCMU bounds
 
@@ -158,7 +158,7 @@ The helper `extract_loop_iteration_bound` in `src/verify.rs` recognizes two patt
 
 The return types of `wcmu_region`, `wcmu_subregion`, and `wcet_region` change to `Result<Option<...>, VerifyError>` to propagate strict mode rejection. The `Option` distinguishes fall-through from path-exit; the `Result` carries the rejection error.
 
-Strict mode is mandatory rather than optional. There is no permissive variant. Programs that the analysis cannot bound are not accepted. This trade-off favors soundness over expressiveness, consistent with Keleusma's stated certification posture.
+Strict mode is mandatory rather than optional. There is no permissive variant. Programs that the analysis cannot bound are not accepted. This trade-off favors soundness over expressiveness, consistent with Keleusma's stated high-assurance posture.
 
 ## R37. Call-graph integration and auto-arena sizing for WCMU
 

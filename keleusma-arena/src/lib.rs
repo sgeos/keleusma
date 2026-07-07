@@ -183,7 +183,7 @@ enum Storage {
 ///
 /// In-process recovery from saturation is possible through
 /// [`Arena::force_reset_epoch`], which is unsafe and requires the
-/// caller to certify that no `ArenaHandle` from any prior epoch is
+/// caller to ensure that no `ArenaHandle` from any prior epoch is
 /// reachable. Cross-process recovery for very long-lived deployments
 /// uses checkpoint and restart against host-owned non-volatile storage.
 /// `ArenaHandle` is intentionally not serializable because its pointer
@@ -753,7 +753,7 @@ impl Arena {
     ///
     /// # Safety
     ///
-    /// The caller must certify that no allocator-bound collection
+    /// The caller must ensure that no allocator-bound collection
     /// holds storage in the arena at the moment of reset. Concretely,
     /// no `allocator_api2::vec::Vec<T, BottomHandle>` or
     /// `allocator_api2::vec::Vec<T, TopHandle>` value may have non-zero
@@ -784,7 +784,7 @@ impl Arena {
     ///
     /// # Safety
     ///
-    /// The caller must certify that no allocator-bound collection
+    /// The caller must ensure that no allocator-bound collection
     /// holds storage in the top end at the moment of reset. Bottom-end
     /// allocator-bound collections are unaffected by this call and
     /// retain their storage. Outstanding [`ArenaHandle`] values are
@@ -869,7 +869,7 @@ impl Arena {
     ///
     /// # Safety
     ///
-    /// The caller must certify that no [`ArenaHandle`] produced under
+    /// The caller must ensure that no [`ArenaHandle`] produced under
     /// any prior epoch is reachable. Calling this while such handles
     /// exist invalidates the stale-detection guarantee and may permit
     /// use after invalidation that the type system would otherwise

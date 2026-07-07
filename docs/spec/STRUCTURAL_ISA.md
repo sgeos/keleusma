@@ -145,7 +145,7 @@ Inside STREAM:
 
 ## Implementation Status
 
-The structural ISA is fully implemented. The compiler emits block-structured bytecode, the VM executes it natively, and the structural verifier validates all modules at load time. The surface language (Keleusma source syntax) remains unchanged. The compiler backend targets the structural ISA. Surface-level constructs such as pattern dispatch, pipelines, and dynamic types are syntactic sugar that the compiler lowers to the austere certifiable bytecode.
+The structural ISA is fully implemented. The compiler emits block-structured bytecode, the VM executes it natively, and the structural verifier validates all modules at load time. The surface language (Keleusma source syntax) remains unchanged. The compiler backend targets the structural ISA. Surface-level constructs such as pattern dispatch, pipelines, and dynamic types are syntactic sugar that the compiler lowers to the austere auditable bytecode.
 
 The structural verifier (`verify()` in `src/verify.rs`) enforces all rules described in this document through five passes.
 
@@ -159,7 +159,7 @@ A WCET analysis function (`wcet_stream_iteration()`) computes the worst-case cos
 
 ### Soundness
 
-The correctness of the structural verifier has not been formally proven. The five verification passes are tested against positive and negative examples, but a soundness argument would require demonstrating that every program accepted by the verifier satisfies the productivity invariant and block nesting rules on all possible execution paths. Watt [W2] provides a model for mechanized verification of bytecode specifications, having formalized the WebAssembly type system in Isabelle/HOL. A similar mechanization of Keleusma's structural verification rules would strengthen confidence in the verifier's soundness and is identified as a certification gap in [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 7.
+The correctness of the structural verifier has not been formally proven. The five verification passes are tested against positive and negative examples, but a soundness argument would require demonstrating that every program accepted by the verifier satisfies the productivity invariant and block nesting rules on all possible execution paths. Watt [W2] provides a model for mechanized verification of bytecode specifications, having formalized the WebAssembly type system in Isabelle/HOL. A similar mechanization of Keleusma's structural verification rules would strengthen confidence in the verifier's soundness and is identified as a verification-maturity gap in [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 7.
 
 ## Cross-References
 

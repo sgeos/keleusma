@@ -2,7 +2,7 @@
 
 > **Navigation**: [Reference](./README.md) | [Documentation Root](../README.md)
 
-This document positions Keleusma within the established landscape of synchronous reactive languages, stream processing theory, verified bytecode formats, industrial safety certification, and language-based information-flow security. Each section explains the relationship to Keleusma, identifies what the project adopts, adapts, or defers from prior work, and provides citations to the relevant literature. A formal bibliography appears at the end.
+This document positions Keleusma within the established landscape of synchronous reactive languages, stream processing theory, verified bytecode formats, high-assurance verification, and language-based information-flow security. Each section explains the relationship to Keleusma, identifies what the project adopts, adapts, or defers from prior work, and provides citations to the relevant literature. A formal bibliography appears at the end.
 
 ## 1. Synchronous Reactive Languages
 
@@ -10,11 +10,11 @@ Keleusma belongs to the family of synchronous reactive languages, a class of pro
 
 The three principal synchronous languages are Lustre [L1, L2], a declarative dataflow language for reactive systems; Esterel [E1], an imperative synchronous language with concurrent composition; and Signal [S1], a relational synchronous language that defines systems as constraints on signal clocks. Halbwachs provided a book-length treatment synthesizing the synchronous approach to reactive system design [L3]. Benveniste et al. published a retrospective survey covering twelve years of development and industrial adoption [SY1].
 
-SCADE (Safety Critical Application Development Environment) is the industrial realization of the synchronous approach. SCADE 6 combines Lustre-style dataflow with control structures from Esterel [SC1]. The SCADE Suite KCG code generator has been qualified under DO-178C at Tool Qualification Level 1 (the highest level), demonstrating that synchronous language compilers can achieve the most rigorous levels of industrial certification [SC1, IC1, IC2].
+SCADE is a widely used industrial realization of the synchronous approach. SCADE 6 combines Lustre-style dataflow with control structures from Esterel [SC1].
 
 **Relationship to Keleusma.** Keleusma shares the synchronous hypothesis with Lustre, Esterel, and SCADE. The yield domain (control clock) corresponds to the synchronous tick: all computation between two YIELD points completes within a bounded number of instructions. The RESET domain (phase clock) provides a coarser temporal boundary analogous to mode changes in SCADE.
 
-Keleusma differs from the established synchronous languages in several ways. It is a bytecode VM language rather than compiling to automata or native C code. It does not support multi-clock domains or concurrent composition. It targets embedded scripting (audio engines, game logic) rather than safety-critical control systems as its primary application domain. Its claims of suitability for safety-critical applications are design aspirations informed by synchronous language principles, not certification status. See Section 7 for a discussion of the gap between current implementation and industrial certification.
+Keleusma differs from the established synchronous languages in several ways. It is a bytecode VM language rather than compiling to automata or native C code. It does not support multi-clock domains or concurrent composition. It targets embedded scripting (audio engines, game logic) rather than safety-critical control systems as its primary application domain. Its claims of suitability for safety-critical applications are design aspirations informed by synchronous language principles, not verification status. See Section 7 for a discussion of the gap between current implementation and high-assurance verification.
 
 ## 2. Coalgebra and Stream Processing
 
@@ -48,9 +48,9 @@ For bytecode-level WCET analysis, Schoeberl et al. demonstrated that WCET analys
 
 **Relationship to Keleusma.** Keleusma's `Op::cost()` method and `wcet_stream_iteration()` function implement abstract opcode counting: each instruction is assigned a relative integer cost, and the worst-case total cost of one Stream-to-Reset iteration is computed by taking the maximum cost branch at each control flow join. This is a form of high-level WCET analysis that provides a sound bound on abstract execution cost.
 
-However, abstract opcode cost does not directly correspond to wall-clock execution time. The relationship between abstract cost and real time depends on the host interpreter's execution characteristics, including the cost of dispatching each opcode, memory allocation patterns, and the host platform's cache and pipeline behavior. For safety-critical certification, a sound bound on real-time WCET requires either a time-predictable execution platform (as in [WC5]) or a validated mapping from abstract cost to physical time on the target hardware.
+However, abstract opcode cost does not directly correspond to wall-clock execution time. The relationship between abstract cost and real time depends on the host interpreter's execution characteristics, including the cost of dispatching each opcode, memory allocation patterns, and the host platform's cache and pipeline behavior. For high-assurance verification, a sound bound on real-time WCET requires either a time-predictable execution platform (as in [WC5]) or a validated mapping from abstract cost to physical time on the target hardware.
 
-Keleusma's current WCET analysis is sufficient for soft real-time applications (audio engines, game scripting) where approximate cost bounds inform scheduling decisions. It is not sufficient for hard real-time certification without additional analysis of the execution platform. The cost weights are preliminary and subject to refinement.
+Keleusma's current WCET analysis is sufficient for soft real-time applications (audio engines, game scripting) where approximate cost bounds inform scheduling decisions. It is not sufficient for hard real-time verification without additional analysis of the execution platform. The cost weights are preliminary and subject to refinement.
 
 ## 5. Abstract Interpretation
 
@@ -82,26 +82,18 @@ The blanket recursion prohibition is broader than strictly necessary for totalit
 
 The totality guarantee depends on an explicit trust boundary: host-registered native functions are assumed to be total (R9). If a native function diverges, the totality guarantee for any Keleusma function that calls it is invalidated. The documentation does not currently specify mitigation strategies for this trust boundary beyond declaring it.
 
-## 7. Industrial Certification
+## 7. Verification Maturity
 
-Industrial certification of safety-critical software is governed by domain-specific standards. DO-178C [IC1] governs airborne software, defining Design Assurance Levels (DAL) A through E where DAL-A (catastrophic failure condition) requires the most rigorous development and verification activities. IEC 61508 [IC3] provides the foundational cross-industry standard for functional safety, defining Safety Integrity Levels (SIL 1 through SIL 4). ISO 26262 [IC4] adapts IEC 61508 for the automotive domain with Automotive Safety Integrity Levels (ASIL A through ASIL D).
+Keleusma's design choices, being no recursion, a block-structured instruction set, statically bounded loops, and single-pass verification, reduce the verification burden and favor static analysis over runtime checking. The design is deliberately amenable to independent checking by a small verifier. Several properties remain design aspirations rather than achieved guarantees in the current implementation, and are recorded here as honest gaps.
 
-All three standards require qualification of software tools used in development. DO-330 [IC2] provides specific guidance for qualifying software tools, defining five Tool Qualification Levels (TQL-1 through TQL-5). A compiler whose output is not independently verified requires TQL-1 qualification at the highest DAL. Tool qualification requires demonstrating that the tool correctly preserves the semantics of the source language, typically through formal methods, extensive testing, and documented traceability.
-
-SCADE's KCG code generator is qualified at DO-178C TQL-1, providing the most direct precedent for qualifying a synchronous language compiler for safety-critical applications [SC1].
-
-**Relationship to Keleusma.** Keleusma's documentation describes the language as suitable for "safety-critical control systems." These statements reflect design aspirations informed by synchronous language principles, not current certification status.
-
-The gap between Keleusma's current implementation and industrial certification readiness includes the following areas.
-
-- **Compiler correctness.** The Keleusma compiler has no formal correctness proof. Tool qualification under DO-330 would require demonstrating that the compiler preserves source semantics in the emitted bytecode, either through formal verification or through exhaustive testing with documented coverage.
+- **Compiler correctness.** The compiler has no formal correctness proof. Establishing that the compiler preserves source semantics in the emitted bytecode would require formal verification or exhaustive testing with documented coverage.
 - **Verifier soundness.** The structural verifier (`verify()`) is tested but not formally proven sound. A soundness proof would require a formal specification of bytecode semantics and a machine-checked proof that verified programs satisfy the stated safety properties.
-- **WCET validity.** The abstract opcode cost model does not account for execution platform characteristics. A valid WCET bound for hard real-time certification would require either a time-predictable execution platform or a validated mapping from abstract cost to physical time.
-- **Native function trust boundary.** Totality guarantees depend on host-declared native function behavior. Certification would require a contract mechanism for native functions with verifiable pre- and post-conditions.
-- **Requirements traceability.** Certification requires bidirectional traceability between requirements, design, implementation, and verification artifacts. The current documentation provides design rationale but not formal requirements traceability.
-- **Structural coverage analysis.** DO-178C DAL-A requires Modified Condition/Decision Coverage (MC/DC) of the source code. The test suite provides functional coverage but does not demonstrate MC/DC.
+- **Worst-case timing validity.** The abstract opcode cost model does not fully account for execution-platform characteristics. A demonstrably conservative worst-case timing bound would require either a time-predictable execution platform or a validated mapping from abstract cost to physical time.
+- **Native function trust boundary.** Totality and the worst-case bounds depend on host-declared native function behavior. Closing this would require a contract mechanism for native functions with verifiable pre- and post-conditions.
+- **Requirements traceability.** The current documentation provides design rationale but not full bidirectional traceability between requirements, design, implementation, and verification artifacts.
+- **Structural coverage.** The test suite provides functional coverage but does not yet demonstrate structural coverage of the implementation.
 
-Keleusma's design choices (no recursion, block-structured ISA, bounded loops, single-pass verification) are favorable for eventual certification because they reduce the verification burden. However, achieving certification for any specific standard and assurance level would require substantial additional work in formal methods, tool qualification, and evidence generation.
+These are the areas where additional formal-methods and evidence-generation work would raise verification confidence. The design's austerity is intended to make that work tractable.
 
 ## 8. Hot Code Update with Persistent State
 
@@ -126,7 +118,7 @@ The conventional executable memory layout, with sections for code, read-only dat
 
 Keleusma differs from Erlang and OTP in two specific ways. The host owns the data segment storage rather than the runtime. There is therefore no `code_change` callback within the script. Instead, the host is responsible for supplying whatever data segment instance is appropriate at each RESET, including possibly a migrated instance, a freshly initialized instance, or the unchanged previous instance. This is referred to as Replace semantics in the architecture documents. Schema may change arbitrarily across hot updates because the script never observes any cross-update invariant on the data segment beyond what the host elects to provide.
 
-Keleusma differs from SCADE mode automata in that the schema of the state vector is permitted to change across the mode transition when that transition coincides with a hot code update. SCADE's mode automaton model fixes the state vector at code generation time. Keleusma's model places this responsibility on the host, which permits schema flexibility at the cost of moving the verification responsibility to the host as well. This division of concerns is consistent with the broader Keleusma philosophy in which the script is austere and certifiable while the host is rich and responsible for orchestration.
+Keleusma differs from SCADE mode automata in that the schema of the state vector is permitted to change across the mode transition when that transition coincides with a hot code update. SCADE's mode automaton model fixes the state vector at code generation time. Keleusma's model places this responsibility on the host, which permits schema flexibility at the cost of moving the verification responsibility to the host as well. This division of concerns is consistent with the broader Keleusma philosophy in which the script is austere and auditable while the host is rich and responsible for orchestration.
 
 Keleusma differs from Ksplice and Kitsune in that update points are explicit and structurally enforced rather than inferred. RESET is the only update point. Stack quiescence is trivial because the operand stack is empty at RESET by construction.
 
@@ -148,7 +140,7 @@ Keleusma differs from wasm-bindgen in scope. Keleusma is a complete embedded scr
 
 The static marshalling approach has precedents in the typed embedded scripting tradition, including the Lua bindings used in Tarantool and the typed effects in Koka, but Keleusma's combination of synchronous reactive semantics with a typed marshalling layer is, to the author's knowledge, novel.
 
-Rex [E3] is the closest contemporary parallel to Keleusma's embedded-scripting framing. Both languages are pure functional, target embedding in Rust applications through host-injected native functions, use Hindley-Milner inference, and treat the native-function boundary as the single point where effects enter the system. The two designs diverge in three substantive ways. Rex targets scientific workflows and high-performance computing orchestration with implicit parallel execution via tokio; Keleusma targets embedded real-time and certification-adjacent use cases on `no_std + alloc` hosts with single-threaded execution. Rex has no worst-case execution time or worst-case memory usage bounds; Keleusma's bounded-resource discipline is its defining property. Rex treats LLM code-generation as an explicit first-class design goal with a published `LLMS.md` guidance document; Keleusma's [`LLM_USAGE.md`](../guide/LLM_USAGE.md) is the parallel artefact, added after operator-level conversations with the Rex maintainer surfaced the convention.
+Rex [E3] is the closest contemporary parallel to Keleusma's embedded-scripting framing. Both languages are pure functional, target embedding in Rust applications through host-injected native functions, use Hindley-Milner inference, and treat the native-function boundary as the single point where effects enter the system. The two designs diverge in three substantive ways. Rex targets scientific workflows and high-performance computing orchestration with implicit parallel execution via tokio; Keleusma targets embedded real-time and high-assurance use cases on `no_std + alloc` hosts with single-threaded execution. Rex has no worst-case execution time or worst-case memory usage bounds; Keleusma's bounded-resource discipline is its defining property. Rex treats LLM code-generation as an explicit first-class design goal with a published `LLMS.md` guidance document; Keleusma's [`LLM_USAGE.md`](../guide/LLM_USAGE.md) is the parallel artefact, added after operator-level conversations with the Rex maintainer surfaced the convention.
 
 Rex's `CallSite` mechanism, where every native invocation in `rex-engine/src/native_fn.rs::apply_at_site` carries an opaque token through the runtime, is a useful precedent for a future Keleusma per-call-site identifier (B-numbered backlog item; see `tmp/call_site_identifier.md` for the design spec). Both projects independently converged on the static-marshalling approach (Rex's `#[derive(Rex)]` mirrors Keleusma's `#[derive(KeleusmaType)]`) and on host-injected native functions as the unique effect boundary, suggesting the architectural pattern is broadly correct for pure-functional embedded scripting.
 
@@ -239,16 +231,6 @@ Information-flow control should not be conflated with two adjacent disciplines. 
 [T4] The Coq Development Team. "The Coq Proof Assistant Reference Manual." Inria, 1989-present. The proof assistant was renamed Rocq in 2024. Reference manual available at https://coq.inria.fr/refman/ and https://rocq-prover.org/.
 
 [T5] D. P. Friedman and C. Eastlund. *The Little Prover*. MIT Press, 2015, ISBN 978-0-262-52795-8. Pedagogical introduction to structural-recursion termination proofs in the ACL2 tradition that Rocq inherits.
-
-### Industrial Certification
-
-[IC1] RTCA. DO-178C: Software Considerations in Airborne Systems and Equipment Certification. RTCA, Inc., 2011.
-
-[IC2] RTCA. DO-330: Software Tool Qualification Considerations. RTCA, Inc., 2011.
-
-[IC3] International Electrotechnical Commission. IEC 61508: Functional Safety of Electrical/Electronic/Programmable Electronic Safety-Related Systems. Parts 1-7. Edition 2, 2010.
-
-[IC4] International Organization for Standardization. ISO 26262: Road Vehicles -- Functional Safety. Parts 1-12. Edition 2, 2018.
 
 ### Hot Code Update
 

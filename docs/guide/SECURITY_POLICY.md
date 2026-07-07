@@ -158,11 +158,11 @@ Local operators on the production server cannot run unauthorised scripts; the st
 
 A medical informatics pipeline must demonstrate to auditors that only validated workflow scripts ran on patient data.
 
-1. Each workflow version is signed by the certification team.
-2. Production processing nodes carry only the certification team's verifying key in their trust store.
+1. Each workflow version is signed by the approval team.
+2. Production processing nodes carry only the approval team's verifying key in their trust store.
 3. Audit logs (host-side, outside the script) record which signed bytecode hash ran which input.
 
-The strict-signing gate ensures rogue scripts cannot bypass the certification process.
+The strict-signing gate ensures rogue scripts cannot bypass the approval process.
 
 ### Kiosk or quarantine deployment
 

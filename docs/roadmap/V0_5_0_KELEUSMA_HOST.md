@@ -25,7 +25,7 @@ Three reasons.
 
 First, the demonstration is stronger than self-hosting alone. V0.3.0 demonstrates that Keleusma can express its own compiler. V0.5.0 demonstrates that Keleusma can host applications of substantial complexity, of which the compiler driver is one example. The signal to a prospective adopter shifts from "this language can compile itself" to "this language can drive arbitrary applications, including its own toolchain, under its own bounded-resource discipline."
 
-Second, V0.5.0 shortens the dependency graph for certification-adjacent use cases. With V0.5.0 in place, the only Rust code that ships in the operator-facing path is the runtime VM and a small shim. The compiler driver, the CLI surface, the file orchestration, and the pipeline coordination all live in Keleusma source, are subject to Keleusma's verifier, and inherit its bounded-WCMU and bounded-WCET properties.
+Second, V0.5.0 shortens the dependency graph for high-assurance use cases. With V0.5.0 in place, the only Rust code that ships in the operator-facing path is the runtime VM and a small shim. The compiler driver, the CLI surface, the file orchestration, and the pipeline coordination all live in Keleusma source, are subject to Keleusma's verifier, and inherit its bounded-WCMU and bounded-WCET properties.
 
 Third, V0.5.0 forces the runtime to support several primitives that are independently valuable: structured live code update with verification, multiple-module compilation with interface contracts, sub-DAG arena partitioning with master-WCMU-based allocation, and an impurity modifier for I/O-performing functions. The host migration is the forcing function that brings these primitives together.
 
@@ -150,7 +150,7 @@ Allocation strategy: *master-WCMU-based*. The total arena is sized at compile ti
 
 Mutual-exclusivity analysis is an optional V0.5.0 refinement. Partitions whose lifetimes are statically disjoint may share an arena slot. The refinement reduces the total arena size from the sum to the maximum of mutually exclusive sets. The analysis is similar to rate-monotonic analysis in real-time scheduling. V0.5.0 may ship without the refinement (using the simple sum) and add it in V0.5.x once a real case justifies the analysis cost.
 
-Auto-detection of partition boundaries (analysing the program graph and partitioning automatically) is deferred to V0.5.x or later. Declaration is preferable for certification: partition boundaries are auditable, stable across edits, and reviewed as part of the source.
+Auto-detection of partition boundaries (analysing the program graph and partitioning automatically) is deferred to V0.5.x or later. Declaration is preferable for auditability: partition boundaries are auditable, stable across edits, and reviewed as part of the source.
 
 Ephemeral partition pools (a pool of N similar partition slots in a shared arena, each slot holding an ephemeral sub-coroutine) are deferred to V0.5.x. The pattern fits particle systems, network connection handlers, and RTOS task pools, none of which are V0.5.0 deliverables.
 
@@ -196,7 +196,7 @@ Long-lived autonomous systems (where binary restart is undesirable and bytecode 
 
 The bytecode-level WCET is the verification artefact. LLVM optimisation reorders, inlines, vectorises, and combines instructions during native code generation in ways the bytecode-instruction-cost model cannot predict. The native code is typically faster than the bytecode in expectation; the bytecode WCET claim is a soft upper bound on native execution, not a tight bound on native execution time.
 
-Operators who need hard real-time guarantees use the bytecode shape on a verified-cost VM where the bytecode WCET claim is the certified bound. Operators who use the native shape accept the best-effort timing convention, similar to the impure-WCET convention. The V0.4.0 strategy document covers this in detail; the V0.5.0 implication is that the Keleusma host's WCMU bounds compose cleanly across the native lowering, but its WCET bounds carry the best-effort label.
+Operators who need hard real-time guarantees use the bytecode shape on a verified-cost VM where the bytecode WCET claim is the verified bound. Operators who use the native shape accept the best-effort timing convention, similar to the impure-WCET convention. The V0.4.0 strategy document covers this in detail; the V0.5.0 implication is that the Keleusma host's WCMU bounds compose cleanly across the native lowering, but its WCET bounds carry the best-effort label.
 
 See [V0_4_0_NATIVE_CODEGEN.md](./V0_4_0_NATIVE_CODEGEN.md) for the per-target WCET analysis options and the V0.4.x and V0.5+ refinements available.
 
@@ -227,7 +227,7 @@ Validation runs alongside Phases β, γ, and δ: the regression corpus is compil
 | Diagnostic quality for host-level errors regresses compared to the Rust shim | Document accepted regression. Invest in diagnostic quality alongside the migration. The host has access to Keleusma's existing error machinery; the question is whether the operating-system interface natives surface enough detail to produce comparable messages. |
 | The Rust shim grows beyond budget (target: less than 500 lines) | Track size as a project metric. Factor functionality into the Keleusma host or into additional natives if the shim grows. |
 | Live code update introduces consistency hazards in cross-module reference resolution | Reject swaps whose interface-fingerprint cannot be reconciled with consumer expectations. Build cross-module dependency graph at load time; refuse swaps that would invalidate any reachable consumer. |
-| Module interface declarations accumulate maintenance overhead | Accept the cost. The certification posture and the live-update model both require explicit interface contracts. Tooling assists by checking that implementation and declaration agree. |
+| Module interface declarations accumulate maintenance overhead | Accept the cost. The high-assurance posture and the live-update model both require explicit interface contracts. Tooling assists by checking that implementation and declaration agree. |
 | Master-WCMU sum is loose enough to make some programs infeasible | Apply mutual-exclusivity refinement where partitions are statically disjoint. If the sum still exceeds available memory, the program is genuinely too large for the deployment target and the operator must reduce scope or relax bounds. |
 | Native object files compiled at different toolchain versions accidentally link | Reject at link time by stamping each object file with the toolchain version. Mixing across versions is unsupported; matching versions link successfully. |
 

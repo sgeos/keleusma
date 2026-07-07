@@ -1498,7 +1498,6 @@ Note that `handle` is declared with `yield` because it is called from the `loop 
 | Synchronous hypothesis | Yes (yield-to-yield bounded) | Yes (tick-based) |
 | Temporal model | Single yield clock + phase clock | Multi-clock (Lustre), concurrent (Esterel) |
 | Compilation target | Bytecode VM | C code / automata (Lustre, SCADE) |
-| Certification status | Design aspiration | DO-178C TQL-1 qualified (SCADE KCG) |
 | Concurrency | Single coroutine | Concurrent composition (Esterel) |
 | Memory model | Arena (bump allocation, cleared at RESET) | Static allocation |
 | Host interaction | Bidirectional typed yield | Sensor/actuator interface |

@@ -161,7 +161,7 @@ enum StatusErrorCode {
 }
 ```
 
-Variants identified by name are the script-side mechanism for pattern matching; discriminants are the host-side mechanism for stable numeric mapping. The runtime currently identifies variants by name on the wire, so two scripts that agree on variant names but disagree on discriminant values still interoperate. Discriminants matter when scripts cast variants to a numeric type, when host code constructs variants by numeric index, or when an external system (logging, telemetry, certification audit) wants stable numeric error codes.
+Variants identified by name are the script-side mechanism for pattern matching; discriminants are the host-side mechanism for stable numeric mapping. The runtime currently identifies variants by name on the wire, so two scripts that agree on variant names but disagree on discriminant values still interoperate. Discriminants matter when scripts cast variants to a numeric type, when host code constructs variants by numeric index, or when an external system (logging, telemetry, audit) wants stable numeric error codes.
 
 Restrictions: discriminants must be integer literals, optionally preceded by a unary minus for negative values. Expressions, named constants, and casts are not admissible in the discriminant clause itself. Duplicate discriminant values within a single enum are rejected at parse time.
 

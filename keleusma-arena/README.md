@@ -14,7 +14,7 @@ Born as the memory substrate of the Keleusma scripting language and extracted as
 
 ## Philosophy
 
-Boring code that does exciting things. The arena's storage shape, allocation strategy, and failure mode are the simplest possible. The discipline that emerges supports real-time predictability, certifiable memory bounds, and zero-allocation hot paths on platforms with fixed memory.
+Boring code that does exciting things. The arena's storage shape, allocation strategy, and failure mode are the simplest possible. The discipline that emerges supports real-time predictability, verifiable memory bounds, and zero-allocation hot paths on platforms with fixed memory.
 
 - Single allocation strategy. No chunk lists, no fallback paths.
 - Fixed at construction. No surprise growth at use-time.
@@ -149,7 +149,7 @@ assert!(handle.get(&arena).is_err());
 
 See `examples/epoch_handle.rs` for the runnable variant. For an arena-backed `&str` handle that encapsulates the byte copy and `*mut str` construction, see the `KString` newtype in the [`keleusma`](https://crates.io/crates/keleusma) crate; that name is intentionally kept in the parent crate because it carries Keleusma-specific semantics around dynamic-string flow.
 
-The epoch counter is `u64` and saturates at `u64::MAX`. The safe `Arena::reset` returns `EpochSaturated` once the counter cannot advance further; recovery is through `Arena::force_reset_epoch`, which is unsafe because the caller must certify that no `ArenaHandle` from any prior epoch is still in use. The unsafe variants `Arena::reset_unchecked` and `Arena::reset_top_unchecked` are available for callers who hold an active borrow into the arena and have certified the same condition for that borrow.
+The epoch counter is `u64` and saturates at `u64::MAX`. The safe `Arena::reset` returns `EpochSaturated` once the counter cannot advance further; recovery is through `Arena::force_reset_epoch`, which is unsafe because the caller must ensure that no `ArenaHandle` from any prior epoch is still in use. The unsafe variants `Arena::reset_unchecked` and `Arena::reset_top_unchecked` are available for callers who hold an active borrow into the arena and have ensured the same condition for that borrow.
 
 The epoch model is opt-in. Callers who prefer the 0.1.0-style mark-and-rewind discipline can continue to use `bottom_mark`, `top_mark`, `rewind_bottom`, `rewind_top`, `reset_bottom`, and `reset_top` without ever constructing an `ArenaHandle`; those operations remain available with their original semantics.
 

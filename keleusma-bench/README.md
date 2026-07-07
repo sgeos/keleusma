@@ -98,7 +98,7 @@ The methodology has known limitations.
 - The host system must be quiescent during measurement. Background processes can perturb readings.
 - Frequency scaling can change cycle-to-time mapping mid-run. Disable frequency scaling or pin the benchmark to a fixed frequency for repeatable results.
 
-These limitations are inherent to benchmark-based measurement. Sound WCET requires static analysis with hardware models (aiT, Bound-T) or deployment on time-predictable platforms (JOP, ARM Cortex-R with timing analysis). The measured tool produces best-effort calibration suitable for soft real-time and order-of-magnitude WCET, not certified hard real-time bounds.
+These limitations are inherent to benchmark-based measurement. Sound WCET requires static analysis with hardware models (aiT, Bound-T) or deployment on time-predictable platforms (JOP, ARM Cortex-R with timing analysis). The measured tool produces best-effort calibration suitable for soft real-time and order-of-magnitude WCET, not sound hard real-time bounds.
 
 ## License
 

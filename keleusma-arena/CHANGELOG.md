@@ -44,8 +44,8 @@ Adds the epoch system for stale-pointer detection on safe arena handles. The 0.1
 ### Added
 
 - `Arena::reset` returning `Result<(), EpochSaturated>`. Advances the epoch counter, clears both the bottom and top regions, and refuses if the counter has saturated. This is the safe full-reset operation; the older `reset_bottom` and `reset_top` remain available as unsafe per-end resets.
-- `Arena::reset_unchecked` and `Arena::reset_top_unchecked`, the unsafe variants suitable for callers who hold an active borrow into the arena and have certified that no allocator-bound collection retains storage at the moment of reset. Both advance the epoch.
-- `Arena::force_reset_epoch`, an unsafe recovery path for the saturated case. The caller certifies that no `ArenaHandle` from any prior epoch is still in use.
+- `Arena::reset_unchecked` and `Arena::reset_top_unchecked`, the unsafe variants suitable for callers who hold an active borrow into the arena and have ensured that no allocator-bound collection retains storage at the moment of reset. Both advance the epoch.
+- `Arena::force_reset_epoch`, an unsafe recovery path for the saturated case. The caller ensures that no `ArenaHandle` from any prior epoch is still in use.
 - `Arena::epoch` and `Arena::epoch_remaining` for observability.
 - `EpochSaturated` error type returned by the safe reset path when the epoch counter cannot advance further. `u64::MAX` epochs are sufficient for almost all deployments; the type exists to make the saturating refusal explicit.
 - `ArenaHandle<T: ?Sized>`, a generic safe wrapper around an arena pointer that captures the epoch at construction. The `get(&arena)` accessor returns `Result<&T, Stale>`, so a handle from a prior epoch is detected at access rather than producing undefined behavior.

@@ -1894,7 +1894,7 @@ fn enforce_arena_capacity(
 /// nesting and offset validation (pass 1) and block-type constraints
 /// (pass 2) apply to every chunk, and productive divergence (pass 3,
 /// every Stream-to-Reset path yields) additionally applies to Stream
-/// chunks. The names are stable identifiers a certification reviewer
+/// chunks. The names are stable identifiers a auditor
 /// can correlate to the verifier's passes; this is a per-chunk
 /// admission summary. For a finer trace keyed to individual op
 /// positions, see [`chunk_verification_obligations`].

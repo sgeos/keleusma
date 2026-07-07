@@ -70,7 +70,7 @@ Measured values in the fragment header are CPU cycles, computed by scaling the r
 
 The `KELEUSMA_BENCH_CPU_HZ` environment variable overrides the assumed CPU clock when regenerating a fragment. The default is documented in `keleusma-bench/src/counter.rs` (`DEFAULT_ASSUMED_CPU_HZ`); operators on a host whose CPU clock differs should set the variable to obtain accurate CPU-cycle values for their host.
 
-The generated fragments are not certified hard-real-time bounds. They are best-effort estimates suitable for soft-real-time analysis and order-of-magnitude WCET. The CPU-cycle scaling depends on an assumed clock frequency that may not match the host's instantaneous frequency under thermal throttling, frequency scaling, or core type heterogeneity (P-core vs. E-core on Apple Silicon). For certified bounds, use the bundled `NOMINAL_COST_MODEL` with a verified-cost VM, or use a third-party static-analysis toolchain (aiT, Bound-T) on the native lowering.
+The generated fragments are not sound hard-real-time bounds. They are best-effort estimates suitable for soft-real-time analysis and order-of-magnitude WCET. The CPU-cycle scaling depends on an assumed clock frequency that may not match the host's instantaneous frequency under thermal throttling, frequency scaling, or core type heterogeneity (P-core vs. E-core on Apple Silicon). For verified bounds, use the bundled `NOMINAL_COST_MODEL` with a verified-cost VM, or use a third-party static-analysis toolchain (aiT, Bound-T) on the native lowering.
 
 ## Regeneration
 

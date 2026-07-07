@@ -131,7 +131,7 @@ restart = "always"
 # No period; the script waits on the data_ready event via `yield (1, 1)`.
 ```
 
-The runner prints WCET and WCMU bounds for each task at startup so operators have certification evidence in the deployment log without an extra step. Signing and encryption gates apply per task; each bytecode artefact passes through the same policy checks as `keleusma run`.
+The runner prints WCET and WCMU bounds for each task at startup so operators have verification evidence in the deployment log without an extra step. Signing and encryption gates apply per task; each bytecode artefact passes through the same policy checks as `keleusma run`.
 
 POSIX signals are honoured: SIGINT and SIGTERM begin a graceful drain with the manifest's `shutdown_grace` window, SIGHUP is reserved for future configuration reload. The runner returns conventional exit codes: 0 for natural shutdown, 130 for SIGINT clean drain, 143 for SIGTERM clean drain, 1 for manifest or task-load failure.
 

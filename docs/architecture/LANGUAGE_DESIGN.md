@@ -32,7 +32,7 @@ Keleusma pursues seven design goals drawn from its grammar specification.
 
 Keleusma targets three application domains.
 
-- **Safety-critical control systems.** The totality guarantees of the language, bounded-step execution, and static Worst-Case Execution Time (WCET) analysis make it suitable for industrially certifiable control loops.
+- **Safety-critical control systems.** The totality guarantees of the language, bounded-step execution, and static Worst-Case Execution Time (WCET) analysis make it suitable for high-assurance control loops.
 - **Audio engines.** Real-time audio synthesis and effect processing. The deterministic execution model prevents glitches and timing jitter.
 - **Game scripting.** Scenario event handling, NPC behavior, and game logic. The coroutine model allows scripts to process events across multiple game ticks.
 
@@ -65,7 +65,7 @@ Keleusma provides five static guarantees about program behavior.
 1. **Totality.** No partial functions or undefined behavior. Every execution path terminates or yields. This follows Turner's argument for total functional programming [T1] and is enforced through recursion prohibition and bounded loops.
 2. **Productivity.** Each iteration of a productive divergent function produces observable output via at least one yield. This is the coinductive dual of termination, as studied by Endrullis et al. for stream definitions [C4] and unified with termination checking by Abel and Pientka [C3].
 3. **Bounded-step.** There exists a statically provable upper bound on instructions executed between any two yield points (WCET analyzable). This corresponds to the synchronous hypothesis [L1, SY1] and enables WCET analysis [WC1].
-4. **Bounded-memory.** There exists a statically provable upper bound on arena memory consumed during one Stream-to-Reset cycle, separately for the stack region and the heap region. The Worst-Case Memory Usage (WCMU) analysis is the memory analog of WCET. The arena is sized to accommodate the worst case the program can produce. Programs whose WCMU cannot be statically computed are rejected at verification time. This guarantee parallels the timing bound and is required for full safety-critical certification under DO-178C and ISO 26262.
+4. **Bounded-memory.** There exists a statically provable upper bound on arena memory consumed during one Stream-to-Reset cycle, separately for the stack region and the heap region. The Worst-Case Memory Usage (WCMU) analysis is the memory analog of WCET. The arena is sized to accommodate the worst case the program can produce. Programs whose WCMU cannot be statically computed are rejected at verification time. This guarantee parallels the timing bound and supplies the static memory analysis that high-assurance systems require.
 5. **Safe swapping.** Hot code swaps preserve type safety and stream continuity. Only the dialogue type must remain invariant across swaps.
 
 ## Conservative Verification
@@ -140,7 +140,7 @@ Sufficient verifier rule. The module is ephemeral when `private_data_bytes == 0`
 
 ## Hot Code Swapping
 
-Keleusma supports hot code swapping at the RESET boundary of a productive divergent function iteration. Only the dialogue type, namely the yield contract from A to B, must remain invariant across swaps. Text, rodata, and the data segment schema may all change across a swap, and each routine's WCET and reset-to-reset bound is certified independently. Cross-swap data handling follows Replace semantics, with the host atomically supplying the data instance appropriate for the new code version. The model parallels the Erlang and Open Telecom Platform multi-version code coexistence pattern [H1, H2], with the simplification that the migration callback resides in the host rather than in the script. See [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) for the full specification including atomicity, rollback, and stale-slot behavior.
+Keleusma supports hot code swapping at the RESET boundary of a productive divergent function iteration. Only the dialogue type, namely the yield contract from A to B, must remain invariant across swaps. Text, rodata, and the data segment schema may all change across a swap, and each routine's WCET and reset-to-reset bound is verified independently. Cross-swap data handling follows Replace semantics, with the host atomically supplying the data instance appropriate for the new code version. The model parallels the Erlang and Open Telecom Platform multi-version code coexistence pattern [H1, H2], with the simplification that the migration callback resides in the host rather than in the script. See [EXECUTION_MODEL.md](./EXECUTION_MODEL.md) for the full specification including atomicity, rollback, and stale-slot behavior.
 
 ## WCET and WCMU Analysis
 
@@ -178,7 +178,7 @@ Keleusma proves a definitive bound in pipelined cycles. For practical applicatio
 
 For many practical applications, an order-of-magnitude bound is sufficient. Audio engines need to know that one stream iteration completes within the audio-buffer period. Game scripts need to know that one tick completes within the frame budget. Embedded controllers need to know that one control-loop iteration completes within the sample interval. The pipelined-cycle bound multiplied by a measured calibration factor gives an effective approximation of the worst-case wall-clock execution time. The calibration factor is established once per deployment configuration during host validation and remains stable across program updates that pass the verifier on the same platform.
 
-The host accepts responsibility for the calibration factor. The language guarantees the pipelined-cycle bound. The host attests to the calibration factor appropriate for its deployment. This is the right place to draw the abstraction boundary because the factor depends on the host platform, the host operating environment, and the host certification process, none of which the language can determine unilaterally.
+The host accepts responsibility for the calibration factor. The language guarantees the pipelined-cycle bound. The host attests to the calibration factor appropriate for its deployment. This is the right place to draw the abstraction boundary because the factor depends on the host platform, the host operating environment, and the host approval process, none of which the language can determine unilaterally.
 
 ### Cost model
 
@@ -190,11 +190,11 @@ Internal threading of the host-supplied cost model through the per-chunk WCMU co
 
 ### Limitations
 
-Pipelined cycles do not directly correspond to actual cycles or to wall-clock time. The conversion to actual cycles requires the platform's stall budget. The conversion to wall-clock time additionally requires the clock period. Industrial WCET analysis tools such as aiT [WC2] account for pipeline effects, cache behavior, and branch prediction on the target hardware to produce a tight actual-cycle bound. For safety-critical certification, a sound wall-clock bound requires either a time-predictable execution platform [WC5] or a validated mapping from pipelined cycles to physical time. Keleusma's pipelined-cycle bound is sufficient for relative comparison of programs and, multiplied by a deployment-specific calibration factor, sufficient for soft real-time and many embedded scheduling applications. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 4 for the full discussion.
+Pipelined cycles do not directly correspond to actual cycles or to wall-clock time. The conversion to actual cycles requires the platform's stall budget. The conversion to wall-clock time additionally requires the clock period. Industrial WCET analysis tools such as aiT [WC2] account for pipeline effects, cache behavior, and branch prediction on the target hardware to produce a tight actual-cycle bound. For high-assurance verification, a sound wall-clock bound requires either a time-predictable execution platform [WC5] or a validated mapping from pipelined cycles to physical time. Keleusma's pipelined-cycle bound is sufficient for relative comparison of programs and, multiplied by a deployment-specific calibration factor, sufficient for soft real-time and many embedded scheduling applications. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 4 for the full discussion.
 
 ## Turing Completeness and Temporal Domains
 
-Individual yield-to-yield slices are not Turing complete by design. The language is deliberately bounded in isolation; Turing completeness arises only from the VM-Host pair operating over the unbounded RESET cycle, with the host providing input through YIELD exchanges and persistent state across RESET serving as unbounded external memory. This separation is what makes static WCET analysis and industrial certification possible. The two temporal domains (yield-to-yield for fine-grained scheduling, reset-to-reset for coarse-grained phase control) are specified in [EXECUTION_MODEL.md](./EXECUTION_MODEL.md).
+Individual yield-to-yield slices are not Turing complete by design. The language is deliberately bounded in isolation; Turing completeness arises only from the VM-Host pair operating over the unbounded RESET cycle, with the host providing input through YIELD exchanges and persistent state across RESET serving as unbounded external memory. This separation is what makes static WCET analysis and high-assurance verification possible. The two temporal domains (yield-to-yield for fine-grained scheduling, reset-to-reset for coarse-grained phase control) are specified in [EXECUTION_MODEL.md](./EXECUTION_MODEL.md).
 
 ## Coroutine Model
 
@@ -214,7 +214,7 @@ Native functions participate in the script call graph like any other function. T
 
 Type coercion at the native function boundary is flexible. Integer arguments are accepted where floating-point parameters are expected, with automatic widening from `Word` to `Float`. Purity of native functions is declared by the host and is not verified by the compiler. The host is responsible for ensuring that functions declared as pure do not produce side effects.
 
-The host is responsible for verifying and certifying host functions. Native functions can define domain-specific vocabularies tailored to the target application.
+The host is responsible for verifying and validating host functions. Native functions can define domain-specific vocabularies tailored to the target application.
 
 ### KeleusmaType and Static Marshalling
 
@@ -239,7 +239,7 @@ Features explicitly excluded from the current design.
 
 Hot code swapping at the bytecode level is part of the design and is described in [EXECUTION_MODEL.md](./EXECUTION_MODEL.md). Structural verification is implemented and described in [STRUCTURAL_ISA.md](../spec/STRUCTURAL_ISA.md).
 
-Keleusma's design choices are informed by synchronous reactive language principles and are favorable for eventual safety-critical certification, but current claims of suitability for safety-critical control systems are design aspirations, not certification status. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 7 for a gap analysis between the current implementation and industrial certification readiness.
+Keleusma's design choices are informed by synchronous reactive language principles and are favorable for eventual high-assurance verification, but current claims of suitability for safety-critical control systems are design aspirations, not verification status. See [RELATED_WORK.md](../reference/RELATED_WORK.md) Section 7 for a gap analysis between the current implementation and verification maturity.
 
 ## Surface Extensions Added in V0.2
 
