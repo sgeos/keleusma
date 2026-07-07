@@ -164,8 +164,7 @@ pub const WIRE_FORMAT_HEADER_BYTES: usize = 64;
 /// the base header on signed modules. Bytes are laid out as:
 ///
 /// - byte 0: `scheme_id` (u8). `0` is reserved-invalid; `1` is
-///   Ed25519. Other values are reserved for future schemes
-///   tracked in `secret/SIGNATURE_SCHEME_MIGRATION.md`.
+///   Ed25519. Other values are reserved for future schemes.
 /// - byte 1: reserved (must be `0`).
 /// - bytes 2..4: `signature_length` (u16 little-endian).
 /// - bytes 4..8: reserved (must be `0`).

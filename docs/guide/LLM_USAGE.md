@@ -105,7 +105,7 @@ The protocol is documented in [`AGENTS.md`](../../AGENTS.md) and in [`CLAUDE.md`
 
 ### Scratch directories
 
-Use `tmp/` for transient files (drafts, probe outputs, scratch scripts, design specs awaiting integration). Contents of `tmp/` and `secret/` are gitignored by convention. Use `secret/` for files that must never be committed regardless of permission state.
+Use `tmp/` for transient files (drafts, probe outputs, scratch scripts, design specs awaiting integration). The contents of `tmp/` are gitignored by convention and are never committed.
 
 A common AI reflex is to put work in the repository root or in a new subdirectory of `docs/`. For draft material, `tmp/` is correct. For finished material, the appropriate `docs/` subdirectory is correct. The pattern is: drafts in `tmp/`, then promote to `docs/` once reviewed.
 

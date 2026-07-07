@@ -64,7 +64,7 @@ V0.2.0 adds optional Ed25519 signing of compiled bytecode. The mechanism enforce
 - **CLI.** `keleusma compile script.kel --signing-key seed.bin -o out.bin` signs (requires `signed` on the entry function). `keleusma run out.bin --verifying-key key.pub` (repeatable) populates the trust matrix. `keleusma keygen --seed seed.bin --public pub.bin` generates a fresh Ed25519 keypair; the seed file is written with `0o600` permissions on Unix; existing files are not overwritten. Key file format is raw 32-byte Ed25519 seed and public key respectively.
 - **Hardware verification.** `examples/rtos` gains a `keleusma-signatures` feature passthrough and a boot-time `setup::run_signed_self_test` path. The N6 binary built with the feature on flashes, verifies an embedded signed fixture at boot via `verify_module_signature`, logs `signed self-test: verify_module_signature succeeded`, and enters the scheduler loop. Without the feature, the firmware behaviour is unchanged.
 
-Documentation lives in `R42` (`docs/decisions/RESOLVED.md`), the wire-format spec (`docs/spec/WIRE_FORMAT.md`), and the migration matrix for future schemes (`secret/SIGNATURE_SCHEME_MIGRATION.md`, internal).
+Documentation lives in `R42` (`docs/decisions/RESOLVED.md`) and the wire-format spec (`docs/spec/WIRE_FORMAT.md`).
 
 ### Wire-format reset
 
