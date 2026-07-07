@@ -31,7 +31,7 @@ Items that an AI assistant trained on general Rust code is likely to get wrong o
 - **Trait-bounded generics over trait objects.** Prefer `fn foo<T: Trait>(x: T)` to `fn foo(x: &dyn Trait)`. The latter is rejected by the verifier in most positions.
 - **No flat jumps.** Control flow uses block-structured instructions (`If`, `Else`, `EndIf`, `Loop`, `EndLoop`, `Break`, `BreakIf`). Flat `Jmp` and `Branch` opcodes are not present in the ISA.
 - **Per-session protocol.** Read `docs/process/TASKLOG.md` for current task state and `docs/process/REVERSE_PROMPT.md` for the last AI-to-human handoff before proceeding. After completing a task, update `TASKLOG.md` and overwrite `REVERSE_PROMPT.md`.
-- **Scratch directories.** Use `tmp/` for transient files (drafts, probe outputs, scratch scripts). Contents of `tmp/` and `secret/` are gitignored by convention. Do not commit to either.
+- **Scratch directories.** Use `tmp/` for transient files (drafts, probe outputs, scratch scripts). Contents of `tmp/` are gitignored by convention; do not commit them.
 - **No commits without explicit authorisation.** Even when work is complete, do not run `git commit` unless the human operator explicitly asks.
 
 ## Build, test, lint

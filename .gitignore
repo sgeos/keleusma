@@ -16,16 +16,15 @@
 # revisions are pinned through `rev = "..."` in the manifest.
 examples/rtos/Cargo.lock
 
-# Project-local scratch directories. The directories themselves are
-# committed via .gitkeep markers; their contents are ignored. Use
-# `tmp/` for transient files such as commit messages, draft text,
-# scratch scripts, and probe outputs. Use `secret/` for files that
-# must never be committed such as credentials, API keys, and
-# environment-specific secrets.
+# Project-local scratch directory, committed via a .gitkeep marker with
+# its contents ignored. Use `tmp/` for transient files such as commit
+# messages, draft text, scratch scripts, and probe outputs.
 tmp/*
 !tmp/.gitkeep
-secret/*
-!secret/.gitkeep
+
+# Local, never-committed material such as credentials, API keys, and
+# environment-specific secrets.
+secret/
 
 # Precompiled Keleusma bytecode artefacts. The wire format is
 # producer-specific and goes stale across V0.2.x patch releases
