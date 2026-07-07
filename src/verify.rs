@@ -2001,7 +2001,7 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
 /// control-flow ops `If`, `Loop`, `Break`, `Trap`, and `Return` are
 /// intercepted by [`verify_depth_region`]; their entries here are used
 /// only as a defensive fall-through.
-fn op_depth_effect(op: &Op, _chunk: &Chunk) -> (i32, i32) {
+pub(crate) fn op_depth_effect(op: &Op, _chunk: &Chunk) -> (i32, i32) {
     match op {
         Op::Const(_) | Op::GetLocal(_) | Op::GetData(_) | Op::PushImmediate(_) => (0, 1),
         Op::Dup => (1, 1),
