@@ -10521,6 +10521,28 @@ fn compile_call(
     Ok(())
 }
 
+/// Discard the scrutinee copy that a peeking refutable test (`IsEnum`,
+/// `IsStruct`) leaves beneath its Boolean result, so the operand stack is
+/// balanced on both the match-continue and fail paths of the test's `If`.
+///
+/// The peeking ops read `stack.last()` and push a `Bool` on top, leaving
+/// `[scrutinee, bool]`. Discarding the scrutinee copy here (its authoritative
+/// value lives in `value_slot` and is re-fetched for field extraction) means
+/// the subsequent `If` pops only the `Bool` and both arms of the branch leave
+/// the same height. Without this, a failed arm leaks the peeked scrutinee onto
+/// the stack, which accumulates across arms into a stack-imbalanced `Break`
+/// (audit finding B5). `IsEnum`/`IsStruct` remain peeking for
+/// `emit_enum_fieldwise_eq`, which reuses the peeked value; this helper is the
+/// pattern-test-local consume convention.
+fn emit_consume_peeked_scrutinee(fc: &mut FuncCompiler) {
+    // Stash the `Bool` result, drop the peeked scrutinee copy, restore the
+    // `Bool`. Net effect: `[scrutinee, bool]` -> `[bool]`.
+    let scratch = fc.declare_local("__pat_test");
+    fc.emit(Op::SetLocal(scratch));
+    fc.emit(Op::PopN(1));
+    fc.emit(Op::GetLocal(scratch));
+}
+
 /// Compile a pattern test. Returns addresses of If instructions that need
 /// patching to the "fail" destination (EndIf at the next arm or error).
 fn compile_pattern_test(
@@ -10620,8 +10642,10 @@ fn compile_pattern_test(
             };
             let d_const = fc.add_constant(Value::Int(disc));
             fc.emit(Op::IsEnum(e_const, v_const, d_const));
+            // `IsEnum` peeks; consume the scrutinee copy on both branches so a
+            // failed arm does not leak it onto the stack (B5).
+            emit_consume_peeked_scrutinee(fc);
             fail_addrs.push(fc.emit_jump(Op::If(0)));
-            fc.emit(Op::PopN(1)); // Discard the peeked value.
 
             // Test sub-patterns on extracted fields.
             for (i, sub_pat) in sub_pats.iter().enumerate() {
@@ -10665,8 +10689,10 @@ fn compile_pattern_test(
                 fc.emit(Op::GetLocal(value_slot));
                 let t_const = fc.add_string_constant(type_name);
                 fc.emit(Op::IsStruct(t_const));
+                // `IsStruct` peeks; consume the scrutinee copy on both branches
+                // so a failed arm does not leak it onto the stack (B5).
+                emit_consume_peeked_scrutinee(fc);
                 fail_addrs.push(fc.emit_jump(Op::If(0)));
-                fc.emit(Op::PopN(1));
             }
 
             for field_pat in field_pats {

@@ -917,8 +917,13 @@ mod tests {
         for src in programs {
             let module =
                 compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+            // The compiler bakes flat-composite sizes at the module's target
+            // widths; verify at those same widths (they differ from the host's
+            // under a narrow-word feature build).
+            let wb = (1usize << module.word_bits_log2) / 8;
+            let fb = (1usize << module.float_bits_log2) / 8;
             for c in &module.chunks {
-                let r = typed_check_chunk(c, 8, 8);
+                let r = typed_check_chunk(c, wb, fb);
                 assert!(
                     r.is_ok(),
                     "balanced real chunk `{}` from `{}` should verify, got {:?}",
@@ -930,19 +935,20 @@ mod tests {
         }
     }
 
-    // Phase 1 finding (B5): the current `match`/enum lowering compiles to a
-    // dispatch `Loop` with one `Break` per arm, and it leaves the scrutinee
-    // on the operand stack in the non-first arm, so the arms' break edges
-    // leave different stack heights (`[v]` vs `[e, 0]`). The scalar depth
-    // pass hides this by taking the max; the typed pass's exact join over
-    // the break edges detects it. Balancing the match lowering in the
-    // compiler is therefore a prerequisite to wiring this pass into
-    // `verify()`. This test pins the detection so the prerequisite is not
-    // forgotten; it is expected to flip to an accept once the lowering is
-    // balanced.
+    // Phase 1 finding (B5), now fixed: the `match`/enum lowering compiled to a
+    // dispatch `Loop` with one `Break` per arm and left the peeked scrutinee on
+    // the operand stack in a failed arm, so the arms' break edges left
+    // different stack heights (`[v]` vs `[e, 0]`). The scalar depth pass hid
+    // this by taking the max; the typed pass's exact join over the break edges
+    // detected it. The compiler now consumes the peeked scrutinee on both
+    // branches of each refutable `IsEnum`/`IsStruct` test
+    // (`emit_consume_peeked_scrutinee`), so the match lowering is balanced.
+    // This test pins that the once-imbalanced program now verifies; a
+    // regression that reintroduces the leak would fail it with a
+    // `BranchHeightMismatch`.
     #[cfg(feature = "compile")]
     #[test]
-    fn detects_match_scrutinee_leak_b5() {
+    fn balanced_match_verifies_after_b5_fix() {
         use crate::compiler::compile;
         use crate::lexer::tokenize;
         use crate::parser::parse;
@@ -952,16 +958,17 @@ mod tests {
                    fn main() -> Word { f(E::A(5)) }";
         let module =
             compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
-        let any_imbalance = module.chunks.iter().any(|c| {
-            matches!(
-                typed_check_chunk(c, 8, 8),
-                Err(TypedError::BranchHeightMismatch { .. })
-            )
-        });
-        assert!(
-            any_imbalance,
-            "the typed pass should detect the match-lowering scrutinee-leak imbalance (B5)"
-        );
+        let wb = (1usize << module.word_bits_log2) / 8;
+        let fb = (1usize << module.float_bits_log2) / 8;
+        for c in &module.chunks {
+            let r = typed_check_chunk(c, wb, fb);
+            assert!(
+                r.is_ok(),
+                "match chunk `{}` should verify after the B5 balancing fix, got {:?}",
+                c.name,
+                r
+            );
+        }
     }
 
     // A neutral loop body (pushes then pops) accepts; a non-neutral one
