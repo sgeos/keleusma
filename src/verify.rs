@@ -38,6 +38,12 @@ fn analyze_yield_coverage(
     let mut has_yielded = initial;
     let mut ip = start;
 
+    // Clamp the region end into the op array (audit F1): the standalone cost
+    // and coverage passes are reachable via public entry points that do not gate
+    // through `verify()`, so a crafted branch target that overruns the array
+    // must not drive an out-of-range index and panic. On the safe load path
+    // Pass 1 has already validated every target, so this never fires there.
+    let end = end.min(ops.len());
     while ip < end {
         match &ops[ip] {
             Op::Yield => {
@@ -54,7 +60,7 @@ fn analyze_yield_coverage(
             }
             Op::If(target) => {
                 let target = *target as usize;
-                if target > 0 && matches!(&ops[target - 1], Op::Else(_)) {
+                if target > 0 && target <= ops.len() && matches!(&ops[target - 1], Op::Else(_)) {
                     // If-Else-EndIf pattern.
                     let endif_pos = if let Op::Else(e) = &ops[target - 1] {
                         *e as usize
@@ -187,6 +193,8 @@ fn wcet_region(
     let mut cost: u32 = 0;
     let mut ip = start;
 
+    // Clamp the region end into the op array (audit F1); see analyze_yield_coverage.
+    let end = end.min(ops.len());
     while ip < end {
         match &ops[ip] {
             Op::Break(_) => {
@@ -210,7 +218,7 @@ fn wcet_region(
             Op::If(target) => {
                 cost = cost.saturating_add(op_wcet_cycles(chunk, ip, cost_model, wcet_extra)?);
                 let target = *target as usize;
-                if target > 0 && matches!(&ops[target - 1], Op::Else(_)) {
+                if target > 0 && target <= ops.len() && matches!(&ops[target - 1], Op::Else(_)) {
                     let endif_pos = if let Op::Else(e) = &ops[target - 1] {
                         *e as usize
                     } else {
@@ -689,6 +697,8 @@ fn wcmu_region(
     let mut peak: u32 = 0;
     let mut heap: u32 = 0;
     let mut ip = start;
+    // Clamp the region end into the op array (audit F1); see analyze_yield_coverage.
+    let end = end.min(ops.len());
 
     while ip < end {
         let op = &ops[ip];
@@ -747,7 +757,7 @@ fn wcmu_region(
                 current_offset += growth - shrink;
 
                 let target = *target as usize;
-                if target > 0 && matches!(&ops[target - 1], Op::Else(_)) {
+                if target > 0 && target <= ops.len() && matches!(&ops[target - 1], Op::Else(_)) {
                     let endif_pos = if let Op::Else(e) = &ops[target - 1] {
                         *e as usize
                     } else {
@@ -2230,6 +2240,8 @@ fn verify_depth_region(
     let ops = &chunk.ops;
     let mut depth = entry;
     let mut ip = start;
+    // Clamp the region end into the op array (audit F1); see analyze_yield_coverage.
+    let end = end.min(ops.len());
     while ip < end {
         let op = &ops[ip];
         match op {
@@ -2258,7 +2270,7 @@ fn verify_depth_region(
                 }
                 depth += net;
                 let target = *target as usize;
-                if target > 0 && matches!(&ops[target - 1], Op::Else(_)) {
+                if target > 0 && target <= ops.len() && matches!(&ops[target - 1], Op::Else(_)) {
                     let endif = match &ops[target - 1] {
                         Op::Else(e) => *e as usize,
                         _ => unreachable!(),
@@ -3933,6 +3945,37 @@ mod tests {
             "expected a Loop-exit rejection, got: {}",
             err.message
         );
+    }
+
+    #[test]
+    fn out_of_range_branch_target_does_not_panic_in_standalone_cost_pass() {
+        // Audit F1: the public standalone cost passes (`wcet_whole_chunk`,
+        // `wcmu_whole_chunk`) are reachable without the `verify()` Pass-1 gate, so
+        // a crafted branch target that overruns the op array must be clamped
+        // rather than index out of range and panic. Reaching the end of each call
+        // without a panic is the assertion; the analysis result is immaterial.
+        // An If whose target is past the array.
+        let bad_if = make_chunk(
+            "bad_if",
+            vec![Op::Const(0), Op::If(9999), Op::Return],
+            BlockType::Func,
+        );
+        let _ = wcet_whole_chunk(&bad_if);
+        let _ = wcmu_whole_chunk(&bad_if);
+        // An If-Else whose Else target, the region end, is past the array.
+        let bad_else = make_chunk(
+            "bad_else",
+            vec![
+                Op::Const(0),
+                Op::If(3),
+                Op::Else(9999),
+                Op::EndIf,
+                Op::Return,
+            ],
+            BlockType::Func,
+        );
+        let _ = wcet_whole_chunk(&bad_else);
+        let _ = wcmu_whole_chunk(&bad_else);
     }
 
     #[test]

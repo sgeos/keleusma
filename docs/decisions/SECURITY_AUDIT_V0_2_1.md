@@ -229,6 +229,28 @@ wire-format, `BYTECODE_VERSION`, or instruction-set change. The gate is green on
 default, signatures, and all-features, with `clippy --tests --all-features
 -D warnings` and `fmt` clean.
 
+## Re-audit delta 4 (baseline 3b439be)
+
+A fix-verification re-audit at `3b439be` (`keleusma-reaudit-3b439be.md`) dropped the
+severity ceiling to low, confirmed E1 fixed-correctly and D6 and D1 closed, and
+found two low residuals, one a new sibling of E1 on the standalone cost surface and
+one a surviving corner of the Multiword-dimension work. Both are addressed on the
+same feature branch.
+
+| # | Sev | Status | Note |
+|---|-----|--------|------|
+| F1 | Low | Fixed | The public standalone cost passes (`wcet_whole_chunk`, `wcmu_whole_chunk`, and the yield-coverage scan), which are reachable without the `verify()` Pass-1 gate, indexed `ops[target - 1]` for an If/Else pattern with only a `target > 0` guard, and drove a region end from an Else target, so a crafted out-of-range branch target on unverified bytecode could index past the array and panic. The If/Else guard now also requires `target <= ops.len()`, and every region function clamps its `end` into the op array on entry. Test `out_of_range_branch_target_does_not_panic_in_standalone_cost_pass`. On the safe load path this was never reachable, since Pass 1 validates all targets first. |
+| F2 | Low | Fixed | A Multiword fraction-bit expression that overflows i64 during monomorphization folding stays symbolic past the re-typecheck, and `as_multiword_lit` returned `None` on the failed `u16::try_from`, silently skipping the Multiword construction. The cast lowering now rejects a Multiword target whose dimensions do not resolve after monomorphization, and the layout pass gained a fraction-bit tripwire mirroring the word-count one. Test `f2_multiword_cast_overflowed_symbolic_fraction_bits_rejected`. |
+
+The recurring same-class pattern held for a sixth audit, but both residuals were low
+and on secondary or adversarial surfaces (the public cost-estimation interface and
+an i64-overflow corner), and each was the sibling of a just-closed family. This
+round tied the If/Else and Loop targets in the standalone cost passes to the same
+discipline as E1's `exit - 1` case, and extended the Multiword-dimension rejection
+to the symbolic-overflow fraction-bit path. No wire-format, `BYTECODE_VERSION`, or
+instruction-set change. The gate is green on default, signatures, and all-features,
+with `clippy --tests --all-features -D warnings` and `fmt` clean.
+
 ## Severity and category distribution
 
 | Severity | Count |

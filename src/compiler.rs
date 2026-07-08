@@ -9101,8 +9101,25 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
         Expr::Cast {
             expr: inner,
             target,
-            ..
+            span,
         } => {
+            // A Multiword cast target whose dimensions do not resolve to a
+            // concrete `u16` after monomorphization is an unresolved or
+            // overflowed dimension, not a valid construction (audit F2). Reject
+            // it rather than fall through the `as_multiword_lit` guard below and
+            // silently produce the untyped tuple with no Multiword opcode. The
+            // typecheck cast-dimension check (audit E2) catches an out-of-range
+            // literal or folded dimension; this closes the residual where a
+            // fraction-bit expression overflows `i64` during folding and stays
+            // symbolic past the re-typecheck.
+            if matches!(target, TypeExpr::Multiword(..)) && target.as_multiword_lit().is_none() {
+                return Err(CompileError {
+                    message: String::from(
+                        "Multiword cast target has an out-of-range or unresolved dimension after monomorphization",
+                    ),
+                    span: *span,
+                });
+            }
             // Choose the cast opcode based on the source type
             // (inferred from the inner expression) and the target.
             // The type checker has already validated the cast pair

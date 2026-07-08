@@ -179,6 +179,27 @@ fn e2_multiword_cast_fraction_bits_range_checked() {
 }
 
 #[test]
+fn f2_multiword_cast_overflowed_symbolic_fraction_bits_rejected() {
+    // Audit F2: a fraction-bit const expression that overflows i64 during
+    // monomorphization folding stays symbolic past the re-typecheck (checked
+    // folding leaves it unresolved rather than wrapping). The cast lowering and
+    // the layout fraction-bit backstop reject it rather than silently skip the
+    // Multiword construction and emit the untyped tuple.
+    assert!(compile_fails(
+        "fn c<const f: Word>() -> Word { let m = (1, 2) as Multiword<2, f * f>; m[0] }\n\
+         fn main() -> Word { c::<3037000500>() }"
+    ));
+    // A fraction-bit expression that stays in range still compiles and runs.
+    assert_eq!(
+        run_to_int(
+            "fn c<const f: Word>() -> Word { let m = (1, 2) as Multiword<2, f * f>; m[0] }\n\
+             fn main() -> Word { c::<3>() }"
+        ),
+        1
+    );
+}
+
+#[test]
 fn const_generic_struct_basic() {
     // A struct parameterized by a const value; the field type [Word; n]
     // specializes to a concrete array (B40 phase 3).

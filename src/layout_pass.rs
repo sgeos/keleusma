@@ -138,7 +138,7 @@ impl<'a> LayoutContext<'a> {
         match ty {
             TypeExpr::Unit(_) => Ok(LayoutDescriptor::Scalar(ScalarKind::Unit)),
             TypeExpr::Prim(prim, _) => Ok(LayoutDescriptor::Scalar(scalar_kind_for_prim(*prim))),
-            TypeExpr::Multiword(n, _, _) => {
+            TypeExpr::Multiword(n, f, _) => {
                 // Post-erasure tripwire: a symbolic const dimension must
                 // never reach the layout pass; monomorphization resolves
                 // it to a literal first (B40).
@@ -153,6 +153,20 @@ impl<'a> LayoutContext<'a> {
                 // to a wrong width.
                 if !(1..=65535).contains(&n) {
                     return Err(LayoutError::InvalidMultiwordDim(n));
+                }
+                // The fraction-bit count does not affect the byte layout, but a
+                // symbolic or out-of-range f is an unresolved or overflowed
+                // dimension (audit F2): a fraction-bit expression that overflows
+                // i64 during folding stays symbolic, and here it is a
+                // post-erasure backstop rejected the same way as the word count.
+                let f = f.as_lit().ok_or_else(|| {
+                    LayoutError::UnresolvedGeneric(alloc::format!(
+                        "Multiword fraction bits `{}`",
+                        f
+                    ))
+                })?;
+                if !(0..=65535).contains(&f) {
+                    return Err(LayoutError::InvalidMultiwordDim(f));
                 }
                 Ok(LayoutDescriptor::Array {
                     element: Box::new(LayoutDescriptor::Scalar(ScalarKind::Int)),
