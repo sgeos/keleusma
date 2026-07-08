@@ -47,7 +47,15 @@ additionally exercised under Miri (Tree Borrows) over the zero-copy path. The
 flat-read cluster (6, 10, 11, 12, 14, 19, 20, 21) is closed by the scalar-codec
 totality (`24df9dd`), the marshall/derive slice bounds-checks (`af1b381`), and the
 verifier-completeness checks (`e35e816`); the gate is green on default, signatures,
-and all-features, with `clippy --all-targets -D warnings` clean.
+and all-features, with `clippy --all-targets -D warnings` clean. A later follow-on,
+the typed operand-stack pass of Standard 8.2 and Annex A.2.1 on
+`feat-verifier-typed-pass`, promotes the flat-offset invariant from a runtime
+codec-totality property to a load-time static check for every operand whose flat
+shape it reconstructs, and hardens the one remaining `debug_assert`-guarded flat
+access (`FlatComposite::nested_view`) to a real runtime fault so a release build no
+longer performs out-of-bounds pointer arithmetic on a corrupt nested-composite
+offset. Codec totality is retained as the runtime backstop for an operand of
+undeclared shape.
 
 | # | Sev | Status | Note |
 |---|-----|--------|------|
@@ -61,7 +69,7 @@ and all-features, with `clippy --all-targets -D warnings` clean.
 | 8 | High | Fixed | `38e4268` strips the shebang before validating and storing; Miri-clean |
 | 9 | High | Fixed | `e30f7a3` enforces signing by host policy (non-empty trust matrix) |
 | 10 | High | Fixed | `af1b381` `flat_subslice` bounds-checks every composite-body slice in the marshall decoders and the derive |
-| 11 | High | Fixed | `24df9dd` codec total: an unverified offset/kind yields a clean `VmError`, not a panic (the verifier still does not statically validate flat offsets; safety is by codec totality) |
+| 11 | High | Fixed | `24df9dd` made the codec total, so an unverified offset or kind yields a clean `VmError` rather than a panic. The typed operand-stack pass of Annex A.2.1 (`feat-verifier-typed-pass`) now additionally validates baked flat offsets statically at load for every operand whose flat shape it reconstructs, with codec totality retained as the runtime backstop for an operand of undeclared shape |
 | 12 | High | Fixed | `24df9dd` `read_scalar_le` returns `ReferenceKind` for Text/Opaque instead of panicking |
 | 13 | Med | Fixed | `e35e816` validates the boxed `NewComposite` template index |
 | 14 | Med | Fixed | `24df9dd` codec total (the flat-tuple field read reaches a clean error, not a panic) |

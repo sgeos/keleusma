@@ -552,9 +552,15 @@ typed pass of Standard 8.2, so layout is type-determined and verified rather tha
 trusted. Runtime access then uses the baked offset directly with no per-access bounds
 check, because the offset was proven at load, which preserves the zero-copy goal.
 
-**Note.** The typed pass that decides baked-offset agreement is a known
-non-conformance per Annex A. In the reference implementation baked-offset
-correctness is a compiler-integrity assumption, not a verifier-decided invariant.
+**Note.** The typed pass that decides baked-offset agreement is implemented in the
+reference verifier and runs at load. Where the accessed operand's flat shape is
+reconstructed, the baked offset is proven against the canonical layout at load as
+this section describes. Where the operand's shape is not reconstructed, at present
+an unsignatured native result or a per-yield reentrant reply value, the check
+defers and a retained runtime bounds guard covers the access, so the
+no-per-access-check goal stated above is not yet realized for those operands.
+Removing the runtime guard is contingent on closing that residual, which Annex A
+records.
 
 ### 5.3 Section model
 
@@ -901,9 +907,21 @@ load. The pass subsumes operand-stack depth discipline, operand-index bounds, an
 baked-offset agreement in one obligation. This is a complete and decidable
 MUST-REJECT obligation and never a MAY-REJECT one.
 
-**Note.** This pass is a known non-conformance per Annex A. The reference
-implementation tracks only operand depth and does not reconstruct operand types, so
-baked-offset correctness is presently a compiler-integrity assumption.
+**Note.** The reference implementation performs this pass, and it is wired into the
+load-time verifier and runs on every module load and hot swap. It reconstructs
+operand-stack and local-frame shapes from a wire-carried per-chunk signature table
+and a native-return table, validates every baked composite, field, and
+array-element offset it attributes to a reconstructed composite shape, enforces
+exact-height branch joins and loop back-edge neutrality, and validates the
+wire-carried shared-slot and enum-layout tables. It runs in a defer-on-unknown
+mode. Where an operand's flat shape is not reconstructed, at present an
+unsignatured native result or a per-yield reentrant reply value, the baked-offset
+check defers to a retained runtime bounds guard rather than a load-time rejection.
+The complete and decidable MUST-REJECT obligation of this section therefore holds
+for every operand whose shape is reconstructed, and the residual is covered at
+runtime. Reaching the obligation for every operand, and thereby lifting the runtime
+guard, requires rejecting a program that flat-accesses an operand of undeclared
+shape, an admission-policy decision Annex A records.
 
 ### 8.3 Worst-case execution time and worst-case memory usage
 
@@ -1187,9 +1205,18 @@ points below. Each is a known non-conformance under Standard 1.3, not an error i
 this document.
 
 1. The typed operand-stack pass of Standard 8.2 and the baked-offset validation of
-   Standard 5.2.6 are not implemented. The reference verifier tracks only operand
-   depth, and baked-offset correctness is a compiler-integrity assumption. This is
-   the single largest verifier work item.
+   Standard 5.2.6 are implemented and wired into the load-time verifier. The pass
+   reconstructs operand and local shapes from wire-carried per-chunk signatures and
+   native-return shapes, validates every baked offset it attributes to a
+   reconstructed shape, enforces exact branch-join and loop-neutrality discipline,
+   and validates the shared-slot and enum-layout tables. The residual non-conformance
+   is narrow. Where an operand's flat shape is not reconstructed, at present an
+   unsignatured native result or a per-yield reentrant reply value, the baked-offset
+   check defers to a retained runtime bounds guard rather than a load-time
+   MUST-REJECT, so the runtime access bounds check of Standard 5.2.6 is retained
+   rather than removed. Closing the residual, and thereby the zero-copy guard
+   removal, requires an admission-policy decision to reject a program that
+   flat-accesses an operand of undeclared shape.
 2. The multi-word fixed-point family of Standard 5.1.2 is implemented for its whole
    arithmetic surface. The type `Multiword<N>` and `Multiword<N, F>`, its
    construction and indexing, its scale-independent addition and subtraction, the

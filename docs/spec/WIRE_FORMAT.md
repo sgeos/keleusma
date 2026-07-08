@@ -2,7 +2,7 @@
 
 > **Navigation**: [Spec](./README.md) | [Documentation Root](../README.md)
 
-This document specifies the V0.2.0 bytecode wire format. The format pairs a fixed-size 64-byte framing header with a section-partitioned body. The body partitions into a fixed-size opcode stream, a separately addressed operand pool for compound operands, and the in-place archived auxiliary data (chunk metadata, constant pool, struct templates, native names, data layout) that the existing rkyv path produces.
+This document specifies the V0.2.0 bytecode wire format. The format pairs a fixed-size 64-byte framing header with a section-partitioned body. The body partitions into a fixed-size opcode stream, a separately addressed operand pool for compound operands, and the in-place archived auxiliary data (chunk metadata, constant pool, struct templates, native names, data layout, the enum-layout table, and the typed-verifier signature and native-return descriptor tables) that the existing rkyv path produces.
 
 V0.2.0 introduces the format. V0.1.x runtimes cannot read V0.2.0 bytecode. The framing-header `version` field resets to `1` to signal the discontinuity. The rkyv-archived encoding survives as the internal representation for the auxiliary body and as a cross-process transport mechanism, but the execution loop reads the opcode stream and the operand pool directly through the new fixed-size records.
 
@@ -167,7 +167,7 @@ The body of the bytecode partitions into three sections after the framing header
 
 1. **Opcode stream.** Concatenated four-byte records for every chunk in declaration order. Per-chunk boundaries live in the auxiliary body's chunk table.
 2. **Operand pool.** Concatenated eight-byte entries indexed by the inline pool index in the opcode records that reference them.
-3. **Auxiliary body.** Constant pool, struct templates, chunk table (name, op offset, op count, local count, parameter types, and an optional per-chunk debug metadata section), native names, data layout, and entry point index. The auxiliary body uses the existing rkyv archived encoding through V0.2.x and migrates to a custom encoding under a Phase 7c follow-on.
+3. **Auxiliary body.** Constant pool, struct templates, chunk table (name, op offset, op count, local count, parameter types, and an optional per-chunk debug metadata section), native names, data layout, entry point index, the per-enum-type layout table (`enum_layouts`, added under B37 with the variant discriminants and padded-body sizes), and the typed-verifier descriptor tables (Annex A.2.1) that seed the typed operand-stack pass: a per-chunk signature table (`signatures`, the flat shape of each parameter, the return, and the Stream resume), and a per-native return-shape table (`native_return_shapes`, parallel to the native names). The verifier tables are additive and carry no `BYTECODE_VERSION` change; an empty table reproduces the unseeded behaviour. The auxiliary body uses the existing rkyv archived encoding through V0.2.x and migrates to a custom encoding under a Phase 7c follow-on.
 
 The CRC-32 trailer covers the header and all three sections. The trailer's algebraic self-inclusion property holds: a consumer computing the CRC over the bytes from offset zero through the four-byte trailer obtains the residue constant `0x2144DF1C`. This property survives the section-partitioned body unchanged.
 
