@@ -155,7 +155,13 @@ impl<'a> LayoutContext<'a> {
                 let count = count.as_lit().ok_or_else(|| {
                     LayoutError::UnresolvedGeneric(alloc::format!("array size `{}`", count))
                 })?;
-                if count < 0 {
+                // A fixed-size array must have a positive length (audit C11).
+                // The type checker's post-monomorphization walk is the primary
+                // gate with a spanned diagnostic; this is a defense-in-depth
+                // backstop for any layout computed without that walk. A
+                // zero-length array is degenerate (no storage, every index
+                // traps) and a negative length is malformed.
+                if count <= 0 {
                     return Err(LayoutError::InvalidArraySize(count));
                 }
                 let elem_layout = self.layout_for(elem)?;
@@ -368,6 +374,19 @@ mod tests {
         assert!(matches!(
             ctx.size_in_bytes(&ty),
             Err(LayoutError::InvalidArraySize(-1))
+        ));
+    }
+
+    #[test]
+    fn array_zero_size_rejected() {
+        // Defense-in-depth backstop for audit C11. A zero-length array is
+        // degenerate and rejected at layout time as well as at typecheck.
+        let (structs, enums) = empty_tables();
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let ty = TypeExpr::array_lit(Box::new(TypeExpr::Prim(PrimType::Word, span())), 0, span());
+        assert!(matches!(
+            ctx.size_in_bytes(&ty),
+            Err(LayoutError::InvalidArraySize(0))
         ));
     }
 

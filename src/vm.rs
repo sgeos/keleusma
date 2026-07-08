@@ -5908,6 +5908,22 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     }
                 }
                 Op::FixedToWord(frac_bits) => {
+                    // Defense in depth. The structural verifier bounds a
+                    // Fixed's fraction-bit count below the word width, so a
+                    // safe load never reaches here out of range. Under a
+                    // no-verify `new_unchecked` or corrupt bytecode an
+                    // out-of-range count would overflow the shift below;
+                    // fail closed rather than panic. WordToFixed saturates
+                    // instead, but that arm converts an in-range integer
+                    // whose result merely overflows the Fixed range, whereas
+                    // an out-of-range fraction count is corrupt input, for
+                    // which the fail-closed response is the honest one.
+                    let word_bits = 1u32 << <W as crate::word::Word>::BITS_LOG2;
+                    if frac_bits as u32 >= word_bits {
+                        return Err(VmError::InvalidBytecode(format!(
+                            "Fixed fraction bits {frac_bits} exceed word width {word_bits}"
+                        )));
+                    }
                     let val = self.pop()?;
                     match val {
                         crate::bytecode::GenericValue::Fixed(bits) => {
@@ -5928,6 +5944,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     }
                 }
                 Op::FixedMul(frac_bits) => {
+                    // See FixedToWord: fail closed on an out-of-range
+                    // fraction count the verifier would have rejected.
+                    let word_bits = 1u32 << <W as crate::word::Word>::BITS_LOG2;
+                    if frac_bits as u32 >= word_bits {
+                        return Err(VmError::InvalidBytecode(format!(
+                            "Fixed fraction bits {frac_bits} exceed word width {word_bits}"
+                        )));
+                    }
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
@@ -5960,6 +5984,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     }
                 }
                 Op::FixedDiv(frac_bits) => {
+                    // See FixedToWord: fail closed on an out-of-range
+                    // fraction count the verifier would have rejected.
+                    let word_bits = 1u32 << <W as crate::word::Word>::BITS_LOG2;
+                    if frac_bits as u32 >= word_bits {
+                        return Err(VmError::InvalidBytecode(format!(
+                            "Fixed fraction bits {frac_bits} exceed word width {word_bits}"
+                        )));
+                    }
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
@@ -11370,6 +11402,101 @@ mod tests {
             "expected VerifyError for WordToFixed(200), got {:?}",
             res.map(|_| "Ok")
         );
+    }
+
+    /// Build a single-chunk module from `ops` and assert the safe loader
+    /// rejects it with a fraction-bit-count verify error. Shared by the
+    /// Fixed-opcode overshift tests (audit C9): the verifier is the primary
+    /// gate that keeps an out-of-range Q-format fraction count from reaching
+    /// the VM's shift, so a safe load never exercises the fail-closed runtime
+    /// guard added to the FixedToWord / FixedMul / FixedDiv arms.
+    #[cfg(feature = "verify")]
+    fn assert_verify_rejects_fraction(ops: alloc::vec::Vec<crate::bytecode::Op>) {
+        use crate::bytecode::{BlockType, Chunk, ConstValue, Module};
+        let chunk = Chunk {
+            name: alloc::string::String::from("main"),
+            ops,
+            constants: alloc::vec![ConstValue::Int(0)],
+            struct_templates: alloc::vec![],
+            local_count: 0,
+            param_count: 0,
+            block_type: BlockType::Func,
+            param_types: alloc::vec![],
+            debug_pool: None,
+        };
+        let module = Module {
+            schema_hash: 0,
+            enum_layouts: alloc::vec::Vec::new(),
+            signatures: alloc::vec::Vec::new(),
+            native_return_shapes: alloc::vec::Vec::new(),
+            chunks: alloc::vec![chunk],
+            native_names: alloc::vec![],
+            entry_point: Some(0),
+            data_layout: None,
+            word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
+            addr_bits_log2: crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
+            float_bits_log2: crate::bytecode::RUNTIME_FLOAT_BITS_LOG2,
+            wcet_cycles: 0,
+            wcmu_bytes: 0,
+            aux_arena_bytes: 0,
+            persistent_composite_bytes: 0,
+            flags: 0,
+            shared_data_bytes: 0,
+            private_data_bytes: 0,
+        };
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        match Vm::new(module, &arena) {
+            Err(VmError::VerifyError(m)) => assert!(
+                m.contains("fraction"),
+                "expected a fraction-bit-count rejection, got: {m}"
+            ),
+            other => panic!(
+                "expected VerifyError, got {:?}",
+                other.map(|_| "Ok").map_err(|e| format!("{e:?}"))
+            ),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "verify")]
+    fn fixedtoword_overshift_rejected_by_verifier() {
+        use crate::bytecode::Op;
+        // `WordToFixed(1)` yields a valid Fixed operand; the overshift is the
+        // `FixedToWord(200)` fraction count, not a type mismatch.
+        assert_verify_rejects_fraction(alloc::vec![
+            Op::Const(0),
+            Op::WordToFixed(1),
+            Op::FixedToWord(200),
+            Op::Return,
+        ]);
+    }
+
+    #[test]
+    #[cfg(feature = "verify")]
+    fn fixedmul_overshift_rejected_by_verifier() {
+        use crate::bytecode::Op;
+        assert_verify_rejects_fraction(alloc::vec![
+            Op::Const(0),
+            Op::WordToFixed(1),
+            Op::Const(0),
+            Op::WordToFixed(1),
+            Op::FixedMul(200),
+            Op::Return,
+        ]);
+    }
+
+    #[test]
+    #[cfg(feature = "verify")]
+    fn fixeddiv_overshift_rejected_by_verifier() {
+        use crate::bytecode::Op;
+        assert_verify_rejects_fraction(alloc::vec![
+            Op::Const(0),
+            Op::WordToFixed(1),
+            Op::Const(0),
+            Op::WordToFixed(1),
+            Op::FixedDiv(200),
+            Op::Return,
+        ]);
     }
 
     #[test]

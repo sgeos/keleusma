@@ -910,6 +910,54 @@ fn check_multiword_dim_range(
     Ok(())
 }
 
+/// Reject a fixed-size array whose length resolves to a non-positive literal
+/// (audit C11). A zero-length array can never be indexed without trapping and
+/// occupies no storage, so it is a degenerate type with no legitimate use; a
+/// negative length cannot arise from a well-formed const expression but is
+/// rejected here for completeness. As with the Multiword dimension checks, a
+/// const-parameter or arithmetic length is symbolic here and skips the check,
+/// and after monomorphization substitutes the concrete value this walk runs
+/// again on the re-typecheck and catches an out-of-range length. The layout
+/// pass carries the same bound as a defense-in-depth backstop.
+fn check_array_len_positive(ce: &crate::ast::ConstExpr) -> Result<(), TypeError> {
+    if let crate::ast::ConstExpr::Lit(n, span) = ce
+        && *n < 1
+    {
+        return Err(TypeError {
+            message: alloc::format!("a fixed-size array must have a positive length, got {n}"),
+            span: *span,
+        });
+    }
+    Ok(())
+}
+
+/// Walk a type and reject any fixed-size array whose length resolves to a
+/// non-positive literal (audit C11). Unlike
+/// [`validate_no_nested_negative_labels`] this inspects only array lengths, so
+/// it validates struct and enum field types without introducing new
+/// information-flow-label rejections in those positions, which the label walk
+/// does not currently police. A symbolic length is skipped and is re-checked
+/// after monomorphization on the re-typecheck, exactly as the Multiword
+/// dimension checks are.
+fn check_array_lengths(t: &TypeExpr) -> Result<(), TypeError> {
+    match t {
+        TypeExpr::Array(elem, len, _) => {
+            check_array_len_positive(len)?;
+            check_array_lengths(elem)
+        }
+        TypeExpr::Option(inner, _)
+        | TypeExpr::Labelled(inner, _, _)
+        | TypeExpr::NegativeLabelled(inner, _, _) => check_array_lengths(inner),
+        TypeExpr::Tuple(items, _) | TypeExpr::Named(_, items, _, _) => {
+            for item in items {
+                check_array_lengths(item)?;
+            }
+            Ok(())
+        }
+        TypeExpr::Multiword(_, _, _) | TypeExpr::Prim(_, _) | TypeExpr::Unit(_) => Ok(()),
+    }
+}
+
 fn validate_no_nested_negative_labels(
     t: &TypeExpr,
     at_top_level_allowed_position: bool,
@@ -945,9 +993,11 @@ fn validate_no_nested_negative_labels(
             }
             Ok(())
         }
-        TypeExpr::Array(elem, _, _) | TypeExpr::Option(elem, _) => {
+        TypeExpr::Array(elem, len, _) => {
+            check_array_len_positive(len)?;
             validate_no_nested_negative_labels(elem, false)
         }
+        TypeExpr::Option(elem, _) => validate_no_nested_negative_labels(elem, false),
         TypeExpr::Named(_, args, _, _) => {
             for arg in args {
                 validate_no_nested_negative_labels(arg, false)?;
@@ -1709,6 +1759,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
                 }
                 let mut fields = BTreeMap::new();
                 for f in &s.fields {
+                    check_array_lengths(&f.type_expr)?;
                     fields.insert(
                         f.name.clone(),
                         ctx.resolve_type_with_params(&f.type_expr, &tp_map),
@@ -1727,6 +1778,9 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
                 }
                 let mut variants = BTreeMap::new();
                 for v in &e.variants {
+                    for t in &v.fields {
+                        check_array_lengths(t)?;
+                    }
                     let payload: Vec<Type> = v
                         .fields
                         .iter()
