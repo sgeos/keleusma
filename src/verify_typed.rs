@@ -1,10 +1,10 @@
-//! Typed operand-stack verifier pass (A.2.1) — Phase 1: the abstract
-//! interpreter framework.
+//! Typed operand-stack verifier pass (A.2.1) — the abstract interpreter.
 //!
-//! This is a standalone pass, not yet wired into [`crate::verify`]. It
-//! walks a chunk's block-structured control flow over an *abstract operand
-//! stack* whose slots carry the flat shape (composite kind and byte size)
-//! of each value where known. The pass:
+//! This is a standalone pass, not yet wired into [`crate::verify`] (that is
+//! Phase 6, gated on the conformance corpus). It walks a chunk's
+//! block-structured control flow over an *abstract state* — an operand stack
+//! and a local frame — whose slots carry the flat shape (composite kind and
+//! byte size) of each value where known. The pass:
 //!
 //! - subsumes the scalar operand-depth pass (`verify::verify_stack_depth`):
 //!   the abstract stack height is the depth, and a pop from an empty stack
@@ -16,16 +16,20 @@
 //!   must restore the exact entry stack (height and per-slot shape), so
 //!   per-iteration stack growth cannot escape the worst-case bound
 //!   (finding 3/B4);
-//! - validates a compiler-baked flat-field offset against the byte size of
-//!   the composite it is applied to, wherever that size is statically known
-//!   (findings B1/B2).
+//! - validates every compiler-baked flat-field offset and array stride
+//!   against the byte size of the composite it is applied to (findings
+//!   B1/B2), including across the local frame and a script-to-script call;
+//! - validates the wire-carried layout tables — shared-slot offsets against
+//!   the shared-data buffer (finding B6) and a flat-enum construction size
+//!   against the declared enum body sizes (finding B8).
 //!
-//! Where a value's shape is not yet known — a parameter, a local, a call
-//! result, a resume value, a composite constant — the slot is [`AbsVal::Top`]
-//! and shape-dependent checks are conservatively skipped. Seeding those from
-//! per-chunk signatures (so the checks fire everywhere) is Phase 2; extending
-//! the offset validation to every access op and the wire-carried layout
-//! tables is Phase 3/4. Nothing here changes runtime behaviour.
+//! Seeding comes from the module's per-chunk signature table (parameters,
+//! return, resume) and the local frame is then tracked precisely. Where a
+//! value's shape is still not known — an unseeded boundary such as a native
+//! result or a Reentrant resume, a loop-written local, or a composite
+//! constant — the slot is [`AbsVal::Top`] and shape-dependent checks defer
+//! (they will become MUST-REJECT once seeding is complete and the pass is
+//! wired in). Nothing here changes runtime behaviour.
 
 use crate::bytecode::{
     ArrayElem, Chunk, ChunkSignature, ConstValue, EnumField, Module, NewCompositeOperand, Op,
