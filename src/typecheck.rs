@@ -4841,6 +4841,15 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             Ok(Type::Tuple(tys))
         }
         Expr::Cast { expr, target, span } => {
+            // Range-check any Multiword or array dimension in the cast target
+            // (audit E2). A symbolic const-generic dimension is skipped here and
+            // re-checked after monomorphization; a concrete out-of-range
+            // dimension, for example `(a, b) as Multiword<2, 65537>` reached
+            // through a const fraction-bit parameter, is rejected rather than
+            // silently truncated by the compiler's `as_multiword_lit`. The
+            // layout-pass backstop does not rescue the cast, since the compiler's
+            // `layout_for` consumers swallow its error to a default.
+            check_composite_dimensions(target)?;
             let from_ty_raw = type_of_expr(ctx, expr)?;
             let to_ty_raw = ctx.resolve_type(target);
             // Strip information-flow labels before the cast

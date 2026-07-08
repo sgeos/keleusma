@@ -157,6 +157,28 @@ fn const_dim_mismatch_fails_at_retypecheck() {
 }
 
 #[test]
+fn e2_multiword_cast_fraction_bits_range_checked() {
+    // Audit E2: a cast target Multiword<N, f> whose fraction-bit parameter
+    // monomorphizes out of [0, 65535] is rejected in the cast typecheck. The
+    // layout-pass backstop does not rescue the cast, because the compiler's
+    // layout_for consumers swallow its error to a default, so the check must be
+    // at typecheck. The word-count position is not reachable via a cast, since
+    // the cast arity must match a concrete tuple.
+    assert!(compile_fails(
+        "fn c<const f: Word>() -> Word { let m = (1, 2) as Multiword<2, f>; m[0] }\n\
+         fn main() -> Word { c::<65537>() }"
+    ));
+    // A valid fraction-bit count compiles and runs; m[0] is the low digit.
+    assert_eq!(
+        run_to_int(
+            "fn c<const f: Word>() -> Word { let m = (1, 2) as Multiword<2, f>; m[0] }\n\
+             fn main() -> Word { c::<8>() }"
+        ),
+        1
+    );
+}
+
+#[test]
 fn const_generic_struct_basic() {
     // A struct parameterized by a const value; the field type [Word; n]
     // specializes to a concrete array (B40 phase 3).

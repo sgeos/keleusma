@@ -959,6 +959,45 @@ fn marshal_shared_round_trips_and_script_reads_it() {
 }
 
 #[test]
+fn d1_shared_composite_over_length_write_faults() {
+    // Audit D1: the shared composite write is bounded by the validated slot
+    // length. A crafted module whose shared composite slot declares a shorter
+    // length than the value's resolved body would, before the guard, overrun the
+    // adjacent slot or panic. Compile a script that writes a Point to a shared
+    // slot, then shrink that slot's declared length by one byte below the body
+    // size (width-agnostic, so it holds under the narrow framing features too);
+    // the write must fault rather than copy the full body.
+    let src = "struct Point { x: Word, y: Word }\n\
+               data d { p: Point }\n\
+               fn main() -> Word { d.p = Point { x: 1, y: 2 }; 0 }";
+    let mut m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    {
+        let dl = m.data_layout.as_mut().expect("data layout");
+        let entry = dl
+            .shared_layout
+            .iter_mut()
+            .find(|e| e.kind & keleusma::bytecode::SHARED_SLOT_COMPOSITE_FLAG != 0)
+            .expect("a composite shared slot");
+        assert!(
+            entry.len > 0,
+            "the Point composite body should be non-empty"
+        );
+        entry.len -= 1; // one byte shorter than the resolved body
+    }
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = Vm::new(m, &arena).expect("verify");
+    let mut buf = vec![0u8; vm.shared_data_bytes()];
+    let err = vm
+        .call_with_shared(&mut buf, &[])
+        .expect_err("the over-length shared composite write must fault, not copy the full body");
+    let msg = alloc::format!("{err:?}");
+    assert!(
+        msg.contains("the slot declares"),
+        "expected a D1 slot-length fault, got: {msg}"
+    );
+}
+
+#[test]
 fn marshal_shared_round_trips_other_variants() {
     // The `On` enum variant (smaller than the largest, so padded) and a `None`
     // option round-trip too.

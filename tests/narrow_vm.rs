@@ -841,13 +841,19 @@ fn narrow_declared_multiword_long_division_on_wide_runtime() {
 fn narrow_declared_long_division_masks_remainder_on_wide_runtime() {
     // Audit D6: the bit-serial long division shifts the running remainder left
     // by one on every step, and on the 64-bit runtime a declared-16-bit limb is
-    // not physically masked (unlike the i16 narrow runtime, where the limb type
-    // wraps at 16 bits). If a shifted remainder limb kept bits above the
-    // declared width, the wide-runtime result would diverge from the narrow
-    // runtime. Cross-check every result limb of several large-quotient and
-    // high-limb-divisor divisions against the physically-16-bit i16 runtime,
-    // the correct 16-bit oracle. Agreement demonstrates the lowering keeps the
-    // limbs masked across iterations.
+    // not physically masked mid-loop (unlike the i16 narrow runtime, where the
+    // limb type wraps at 16 bits). An internal remainder limb can therefore
+    // carry bits above the declared width. The masking guarantee is the flat
+    // store: `GenericValue::write_scalar_le` truncates each limb to the declared
+    // `word_bytes` when the result body is written back, so the observable
+    // result is correct even though an intermediate limb was contaminated. This
+    // cross-checks every result limb against the physically-16-bit i16 runtime,
+    // the correct 16-bit oracle, and includes divisors with a limb top bit set
+    // (unsigned >= 32768) and large-remainder modulo cases that drive the
+    // borrow-keep contaminated path, not only the top-bit-clear cases. Agreement
+    // demonstrates the store mask covers the contamination end to end. A prior
+    // version of this test used only top-bit-clear divisors and would have
+    // passed with or without the store mask.
     let cases = [
         // Large quotient (~30-bit dividend), many remainder shifts.
         "fn main() -> Word { let a = (0, 12345) as Multiword<2>; let b = (7, 0) as Multiword<2>; let s = a / b; s[0] }",
@@ -858,6 +864,18 @@ fn narrow_declared_long_division_masks_remainder_on_wide_runtime() {
         "fn main() -> Word { let a = (65535, 32766) as Multiword<2>; let b = (0, 32767) as Multiword<2>; let s = a / b; s[0] }",
         "fn main() -> Word { let a = (65535, 32766) as Multiword<2>; let b = (0, 32767) as Multiword<2>; let s = a % b; s[0] }",
         "fn main() -> Word { let a = (65535, 32766) as Multiword<2>; let b = (0, 32767) as Multiword<2>; let s = a % b; s[1] }",
+        // Divisor limbs with bit 15 set (unsigned 50000, 60000): these are
+        // negative signed values, so the sign handling and the magnitude
+        // remainder both run with contaminated limbs.
+        "fn main() -> Word { let a = (12345, 6789) as Multiword<2>; let b = (0, 50000) as Multiword<2>; let s = a / b; s[0] }",
+        "fn main() -> Word { let a = (12345, 6789) as Multiword<2>; let b = (0, 50000) as Multiword<2>; let s = a % b; s[0] }",
+        "fn main() -> Word { let a = (12345, 6789) as Multiword<2>; let b = (0, 50000) as Multiword<2>; let s = a % b; s[1] }",
+        "fn main() -> Word { let a = (60000, 40000) as Multiword<2>; let b = (60001, 40000) as Multiword<2>; let s = a % b; s[0] }",
+        "fn main() -> Word { let a = (60000, 40000) as Multiword<2>; let b = (60001, 40000) as Multiword<2>; let s = a % b; s[1] }",
+        // Large-remainder modulo: dividend one below the divisor, so the
+        // remainder is the whole dividend and its top limb shifts every step.
+        "fn main() -> Word { let a = (65533, 32766) as Multiword<2>; let b = (65534, 32766) as Multiword<2>; let s = a % b; s[0] }",
+        "fn main() -> Word { let a = (65533, 32766) as Multiword<2>; let b = (65534, 32766) as Multiword<2>; let s = a % b; s[1] }",
         // A three-word division at the narrow width.
         "fn main() -> Word { let a = (1, 2, 40000) as Multiword<3>; let b = (0, 0, 7) as Multiword<3>; let s = a / b; s[0] }",
         "fn main() -> Word { let a = (1, 2, 40000) as Multiword<3>; let b = (0, 0, 7) as Multiword<3>; let s = a % b; s[2] }",

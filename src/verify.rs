@@ -87,7 +87,10 @@ fn analyze_yield_coverage(
             }
             Op::Loop(target) => {
                 let loop_exit_target = *target as usize;
-                let endloop_ip = loop_exit_target - 1;
+                // Saturating so a malformed `Loop(exit = 0)` reaching a
+                // standalone scan without Pass 1 cannot underflow (audit E1);
+                // valid input always has exit >= 1, so this is unchanged there.
+                let endloop_ip = loop_exit_target.saturating_sub(1);
                 let mut loop_breaks: Vec<bool> = Vec::new();
                 let _body_result =
                     analyze_yield_coverage(ops, ip + 1, endloop_ip, has_yielded, &mut loop_breaks);
@@ -263,7 +266,10 @@ fn wcet_region(
             Op::Loop(target) => {
                 cost = cost.saturating_add(op_wcet_cycles(chunk, ip, cost_model, wcet_extra)?);
                 let loop_exit_target = *target as usize;
-                let endloop_ip = loop_exit_target - 1;
+                // Saturating so a malformed `Loop(exit = 0)` reaching a
+                // standalone scan without Pass 1 cannot underflow (audit E1);
+                // valid input always has exit >= 1, so this is unchanged there.
+                let endloop_ip = loop_exit_target.saturating_sub(1);
                 let mut loop_break_costs: Vec<u32> = Vec::new();
                 let body_cost = wcet_region(
                     chunk,
@@ -817,7 +823,10 @@ fn wcmu_region(
                 current_offset += growth - shrink;
 
                 let loop_exit_target = *target as usize;
-                let endloop_ip = loop_exit_target - 1;
+                // Saturating so a malformed `Loop(exit = 0)` reaching a
+                // standalone scan without Pass 1 cannot underflow (audit E1);
+                // valid input always has exit >= 1, so this is unchanged there.
+                let endloop_ip = loop_exit_target.saturating_sub(1);
                 let mut loop_breaks: Vec<McuResult> = Vec::new();
                 let body = wcmu_subregion(
                     chunk,
@@ -2278,7 +2287,10 @@ fn verify_depth_region(
                 // body resumes at the loop-entry depth.
                 let mut loop_breaks: Vec<i32> = Vec::new();
                 let body_end =
-                    verify_depth_region(chunk, ip + 1, exit - 1, depth, &mut loop_breaks)?;
+                    // Saturating so a malformed `Loop(exit = 0)` cannot underflow
+                    // the body delimiter (audit E1); the verify() path already
+                    // rejects it in Pass 1, and valid input has exit >= 1.
+                    verify_depth_region(chunk, ip + 1, exit.saturating_sub(1), depth, &mut loop_breaks)?;
                 depth = loop_breaks
                     .iter()
                     .copied()
@@ -2530,6 +2542,33 @@ fn verify_chunk(
                                 });
                             }
                             record(ip, P1, "endloop-back-edge-targets-loop-entry");
+                            // The paired Loop's exit target must be the
+                            // instruction right after this EndLoop (audit E1).
+                            // Pass 1 otherwise left it attacker-chosen within
+                            // bounds: a Break to that exit would be an arbitrary
+                            // in-bounds jump (the Break-target check only ties
+                            // Break to the Loop exit, not the Loop exit to a
+                            // structured position), and a `Loop(exit = 0)` would
+                            // underflow the `exit - 1` body delimiter in the
+                            // depth and cost passes to a verifier-time panic.
+                            // This one equality makes the exit sound by
+                            // construction; valid compiler output always
+                            // satisfies it.
+                            if let Op::Loop(exit) = &ops[loop_ip]
+                                && *exit as usize != ip + 1
+                            {
+                                return Err(VerifyError {
+                                    chunk_name: name.clone(),
+                                    message: alloc::format!(
+                                        "Loop at {} exits to {} but its EndLoop is at {} (expected exit {})",
+                                        loop_ip,
+                                        exit,
+                                        ip,
+                                        ip + 1
+                                    ),
+                                });
+                            }
+                            record(ip, P1, "loop-exit-targets-after-endloop");
                         }
                         Some((BlockKind::If, _)) => {
                             return Err(VerifyError {
@@ -3845,6 +3884,53 @@ mod tests {
         assert!(
             err.message.contains("enclosing loop exits to"),
             "expected a Break-target rejection, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn loop_exit_zero_rejected_without_panic() {
+        // Audit E1: Loop(exit = 0) must be rejected at load, not underflow the
+        // `exit - 1` body delimiter to a verifier-time panic. A returned error
+        // (rather than a panic) is itself the assertion that the totality of the
+        // verifier is preserved.
+        let chunk = make_chunk(
+            "hostile",
+            vec![
+                Op::Loop(0),    // 0 HOSTILE exit = 0
+                Op::EndLoop(1), // 1 back-edge to Loop+1
+                Op::Return,     // 2
+            ],
+            BlockType::Func,
+        );
+        let module = make_module(vec![chunk]);
+        let err = verify(&module).unwrap_err();
+        assert!(
+            err.message.contains("expected exit"),
+            "expected a Loop-exit rejection, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn loop_exit_not_after_endloop_rejected() {
+        // Audit E1: a Loop whose exit is an arbitrary in-bounds position rather
+        // than the instruction after its EndLoop is rejected, closing the
+        // arbitrary in-bounds jump a Break to that exit would otherwise perform.
+        let chunk = make_chunk(
+            "hostile",
+            vec![
+                Op::Loop(3),    // 0 HOSTILE exit = 3, but EndLoop@1 means exit must be 2
+                Op::EndLoop(1), // 1
+                Op::Return,     // 2
+            ],
+            BlockType::Func,
+        );
+        let module = make_module(vec![chunk]);
+        let err = verify(&module).unwrap_err();
+        assert!(
+            err.message.contains("expected exit"),
+            "expected a Loop-exit rejection, got: {}",
             err.message
         );
     }

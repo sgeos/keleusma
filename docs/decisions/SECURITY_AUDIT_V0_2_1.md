@@ -205,6 +205,30 @@ yet written, the same coverage boundary as the C2 runtime guard. No wire-format,
 signatures, and all-features, with `clippy --tests --all-features -D warnings` and
 `fmt` clean.
 
+## Re-audit delta 3 (baseline 4a1ede7)
+
+A fix-verification re-audit at `4a1ede7` (`keleusma-reaudit-4a1ede7.md`) confirmed
+D1, D4, and D5 fixed-correctly and found two same-class siblings the D-series left
+open, plus a rationale and coverage note. All are addressed on the same feature
+branch.
+
+| # | Sev | Status | Note |
+|---|-----|--------|------|
+| E1 | Med | Fixed | The D2 branch-target work forced `Break`/`BreakIf` to equal the Loop exit but never validated the Loop exit itself, so it was attacker-chosen within bounds, permitting an arbitrary in-bounds jump and, on `Loop(exit = 0)`, a verifier-time panic through the `exit - 1` body delimiter. Pass 1 now requires the Loop exit to equal the instruction after its EndLoop, and the `exit - 1` sites are made saturating for the standalone cost passes. Tests `loop_exit_zero_rejected_without_panic`, `loop_exit_not_after_endloop_rejected`. |
+| E2 | Med | Fixed | The D3 Multiword dimension check reached struct and enum fields but not cast targets, and the layout backstop is swallowed by the compiler's `layout_for` consumers. The cast typecheck now calls `check_composite_dimensions` on the target, so an out-of-range fraction-bit parameter such as `... as Multiword<2, 65537>` is rejected rather than silently truncated. The word-count position is unreachable through a cast, since the arity must match a concrete tuple. Test `e2_multiword_cast_fraction_bits_range_checked`. |
+| D6 | Info | Resolved (rationale corrected) | The division inner loop is not masked; the observable result is correct because the flat store `write_scalar_le` truncates each limb to the declared width on write-back. The store mask is now documented as the masking guarantee, and the test drives the borrow-keep contaminated path with bit-15-set divisors and large-remainder modulo, which the prior top-bit-clear cases did not. |
+| D1 | Low | Test added | The previously inspection-only D1 shared composite guard now has a crafted-module regression, `d1_shared_composite_over_length_write_faults`, which shrinks a shared composite slot's declared length below its body and confirms the write faults. |
+
+The recurring same-class pattern that this remediation loop keeps surfacing, a fix
+closing the named instance while a structural sibling remains, was the central
+finding for this delta as for the prior four. E1 and E2 were exactly that pattern
+on the branch-target and Multiword-dimension work. This round closed the loop-exit
+and cast siblings and made the branch-target family, the Multiword-dimension
+family, and the composite-write family each cover their full position set. No
+wire-format, `BYTECODE_VERSION`, or instruction-set change. The gate is green on
+default, signatures, and all-features, with `clippy --tests --all-features
+-D warnings` and `fmt` clean.
+
 ## Severity and category distribution
 
 | Severity | Count |
