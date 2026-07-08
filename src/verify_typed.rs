@@ -28,7 +28,8 @@
 //! tables is Phase 3/4. Nothing here changes runtime behaviour.
 
 use crate::bytecode::{
-    Chunk, ChunkSignature, ConstValue, Module, NewCompositeOperand, Op, StructField, WireShape,
+    ArrayElem, Chunk, ChunkSignature, ConstValue, EnumField, Module, NewCompositeOperand, Op,
+    StructField, TupleField, WireShape,
 };
 use crate::value_layout::{CompositeKind, ScalarKind};
 use crate::verify::op_depth_effect;
@@ -167,6 +168,18 @@ pub enum TypedError {
         callee: usize,
         /// Zero-based argument position.
         arg: usize,
+    },
+    /// A flat array element access carries an element stride that does not
+    /// evenly divide the array body, so the baked stride disagrees with the
+    /// body size (A.2.1 Phase 3). The index bound remains a runtime trap; this
+    /// validates only the element stride.
+    ArrayStrideMismatch {
+        /// Instruction index of the `GetIndex`.
+        ip: usize,
+        /// The baked per-element byte stride.
+        element_size: u32,
+        /// The array body's byte size.
+        array_size: u32,
     },
 }
 
@@ -615,6 +628,70 @@ fn apply_op(
             });
         }
 
+        // Flat tuple-field access mirrors the struct case (a tuple is an
+        // anonymous struct): a scalar field is bounds-checked at its offset, a
+        // nested composite field at its offset and size (A.2.1 Phase 3).
+        Op::GetTupleField(TupleField::Flat { offset, kind }) => {
+            let v = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
+            check_flat_scalar(&v, *offset, *kind, ctx.wb, ctx.fb, ip)?;
+            stack.push(AbsVal::Scalar(*kind));
+        }
+        Op::GetTupleField(TupleField::FlatNested {
+            offset,
+            size,
+            variant,
+        }) => {
+            let v = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
+            check_flat_nested(&v, *offset, *size, ip)?;
+            stack.push(AbsVal::Flat {
+                kind: *variant,
+                size: u32::from(*size),
+            });
+        }
+
+        // Flat enum-payload access. The baked offset already includes the
+        // leading discriminant word, so the bounds check is the same as a
+        // struct field against the padded enum body (A.2.1 Phase 3).
+        Op::GetEnumField(EnumField::Flat { offset, kind }) => {
+            let v = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
+            check_flat_scalar(&v, *offset, *kind, ctx.wb, ctx.fb, ip)?;
+            stack.push(AbsVal::Scalar(*kind));
+        }
+        Op::GetEnumField(EnumField::FlatNested {
+            offset,
+            size,
+            variant,
+        }) => {
+            let v = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
+            check_flat_nested(&v, *offset, *size, ip)?;
+            stack.push(AbsVal::Flat {
+                kind: *variant,
+                size: u32::from(*size),
+            });
+        }
+
+        // Flat array element access pops the index and the array. The element
+        // offset is `index * element_size` computed at run time, so the index
+        // bound stays a runtime trap; the static check validates that the
+        // baked element stride evenly divides the array body (A.2.1 Phase 3),
+        // then pushes the element shape.
+        Op::GetIndex(ArrayElem::Flat { kind }) => {
+            let _index = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
+            let arr = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
+            let elem = kind.size_in_bytes(ctx.wb, ctx.fb) as u32;
+            check_flat_array_stride(&arr, elem, ip)?;
+            stack.push(AbsVal::Scalar(*kind));
+        }
+        Op::GetIndex(ArrayElem::FlatNested { size, variant }) => {
+            let _index = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
+            let arr = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
+            check_flat_array_stride(&arr, u32::from(*size), ip)?;
+            stack.push(AbsVal::Flat {
+                kind: *variant,
+                size: u32::from(*size),
+            });
+        }
+
         // A script-to-script call: pop the arguments, check each against the
         // callee's declared parameter shape, and push the callee's return
         // shape (A.2.1 Phase 2b). With no module signature table (an isolated
@@ -715,6 +792,27 @@ fn check_flat_nested(v: &AbsVal, offset: u16, size: u16, ip: usize) -> Result<()
     }
 }
 
+/// Validate a flat array element access: the baked element stride must evenly
+/// divide the array body, so a corrupted element kind or size is a
+/// MUST-REJECT. A zero-size element (a `Unit` array) reads no bytes and needs
+/// no stride check. A `Top` array defers; a scalar is a type error.
+fn check_flat_array_stride(arr: &AbsVal, element_size: u32, ip: usize) -> Result<(), TypedError> {
+    match arr {
+        AbsVal::Flat { size, .. } => {
+            if element_size != 0 && *size % element_size != 0 {
+                return Err(TypedError::ArrayStrideMismatch {
+                    ip,
+                    element_size,
+                    array_size: *size,
+                });
+            }
+            Ok(())
+        }
+        AbsVal::Scalar(_) => Err(TypedError::ExpectedComposite { ip }),
+        AbsVal::Top => Ok(()),
+    }
+}
+
 /// Whether a value's shape may be stored into a slot of the declared
 /// shape. `Top` on either side defers. Two scalars are compatible
 /// regardless of kind (they share the word/byte/float width the layout
@@ -740,8 +838,11 @@ fn const_abs(cv: Option<&ConstValue>) -> AbsVal {
         Some(ConstValue::Byte(_)) => AbsVal::Scalar(ScalarKind::Byte),
         Some(ConstValue::Fixed(_)) => AbsVal::Scalar(ScalarKind::Fixed),
         Some(ConstValue::Float(_)) => AbsVal::Scalar(ScalarKind::Float),
-        // Strings, composites, and options carry a shape the pass does not
-        // yet compute; conservatively unknown.
+        // A static string pushes a fixed-size `Text` handle (A.2.1 Phase 3).
+        Some(ConstValue::StaticStr(_)) => AbsVal::Scalar(ScalarKind::Text),
+        // Composite constants (tuple, array, struct, enum) carry a flat shape
+        // whose byte size needs the layout widths the constant pool does not
+        // record; conservatively unknown until a later phase threads them.
         _ => AbsVal::Top,
     }
 }
@@ -851,6 +952,114 @@ mod tests {
         assert!(matches!(
             typed_check_chunk(&chunk(two_int_struct(24), ints()), 8, 8),
             Err(TypedError::NewCompositeSizeMismatch { .. })
+        ));
+    }
+
+    // Phase 3: flat tuple-field access is bounds-checked like a struct field.
+    #[test]
+    fn tuple_field_out_of_bounds_rejects() {
+        let mut ops = two_int_struct(16);
+        ops.push(Op::GetTupleField(TupleField::Flat {
+            offset: 12,
+            kind: ScalarKind::Int,
+        }));
+        assert!(matches!(
+            typed_check_chunk(&chunk(ops, ints()), 8, 8),
+            Err(TypedError::OffsetOutOfBounds { .. })
+        ));
+    }
+
+    #[test]
+    fn tuple_field_in_bounds_accepts() {
+        let mut ops = two_int_struct(16);
+        ops.push(Op::GetTupleField(TupleField::Flat {
+            offset: 8,
+            kind: ScalarKind::Int,
+        }));
+        assert!(typed_check_chunk(&chunk(ops, ints()), 8, 8).is_ok());
+    }
+
+    // Phase 3: flat enum-payload access is bounds-checked against the padded
+    // enum body (the baked offset already includes the discriminant word).
+    #[test]
+    fn enum_field_out_of_bounds_rejects() {
+        let mut ops = two_int_struct(16);
+        ops.push(Op::GetEnumField(EnumField::Flat {
+            offset: 12,
+            kind: ScalarKind::Int,
+        }));
+        assert!(matches!(
+            typed_check_chunk(&chunk(ops, ints()), 8, 8),
+            Err(TypedError::OffsetOutOfBounds { .. })
+        ));
+    }
+
+    #[test]
+    fn enum_nested_field_out_of_bounds_rejects() {
+        let mut ops = two_int_struct(16);
+        ops.push(Op::GetEnumField(EnumField::FlatNested {
+            offset: 8,
+            size: 12,
+            variant: CompositeKind::Struct,
+        }));
+        assert!(matches!(
+            typed_check_chunk(&chunk(ops, ints()), 8, 8),
+            Err(TypedError::OffsetOutOfBounds { .. })
+        ));
+    }
+
+    // Phase 3: a flat array element access whose baked stride evenly divides
+    // the array body accepts; a stride that does not is rejected. The index
+    // bound stays a runtime trap.
+    #[test]
+    fn array_index_valid_stride_accepts() {
+        let mut ops = two_int_struct(16); // a 16-byte flat body [Flat]
+        ops.push(Op::Const(0)); // index -> [Flat, Int]
+        ops.push(Op::GetIndex(ArrayElem::Flat {
+            kind: ScalarKind::Int, // stride 8; 16 % 8 == 0
+        }));
+        assert!(typed_check_chunk(&chunk(ops, ints()), 8, 8).is_ok());
+    }
+
+    #[test]
+    fn array_index_bad_stride_rejects() {
+        // A seeded 12-byte array with an 8-byte nested element: 12 % 8 != 0.
+        let ops = vec![
+            Op::GetLocal(0),
+            Op::Const(0),
+            Op::GetIndex(ArrayElem::FlatNested {
+                size: 8,
+                variant: CompositeKind::Struct,
+            }),
+        ];
+        let sig = ChunkSig {
+            locals: vec![AbsVal::Flat {
+                kind: CompositeKind::Array,
+                size: 12,
+            }],
+            resume: None,
+        };
+        assert!(matches!(
+            typed_check_chunk_with_sig(&chunk(ops, ints()), &sig, 8, 8),
+            Err(TypedError::ArrayStrideMismatch { .. })
+        ));
+    }
+
+    // Phase 3: a static-string constant is a fixed-size `Text` scalar, so a
+    // composite field access on it is a type error rather than a deferral.
+    #[test]
+    fn static_str_const_is_scalar_text() {
+        let ops = vec![
+            Op::Const(0),
+            Op::GetField(StructField::Flat {
+                offset: 0,
+                kind: ScalarKind::Int,
+            }),
+        ];
+        let consts = vec![ConstValue::StaticStr(String::from("hi"))];
+        assert!(matches!(
+            typed_check_chunk(&chunk(ops, consts), 8, 8),
+            Err(TypedError::ExpectedComposite { .. })
         ));
     }
 
@@ -1233,6 +1442,10 @@ mod tests {
             "struct Q { p: (Word, Word), z: Word }\n\
              fn g(q: Q) -> Word { q.z }\n\
              fn main() -> Word { g(Q { p: (1, 2), z: 3 }) }",
+            // Tuple field access on a local (exercises GetTupleField).
+            "fn main() -> Word { let t = (10, 20); t.0 + t.1 }",
+            // Array indexing on a local (exercises GetIndex stride check).
+            "fn main() -> Word { let a = [1, 2, 3, 4]; a[0] + a[3] }",
             // A Stream chunk resumes with its parameter's shape.
             "loop main(i: Word) -> Word { let n = yield i * 2; n }",
         ];
