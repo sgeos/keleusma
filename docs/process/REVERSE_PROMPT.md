@@ -8,6 +8,43 @@ AI to Human communication channel.
 
 ## Last Updated
 
+**Date**: 2026-07-08 (session 22)
+
+**DELTA RE-AUDIT (`f7a9ace`) REMEDIATION COMPLETE, MERGED to `v0.2.1`, PUSHED to `origin` at `7dafd42`. This entry is the handoff for the next auditor.**
+
+The A.2.1 typed pass (session 21) was merged in the `f7a9ace` lineage and delta-re-audited (`~/projects/sbir/keleusma-reaudit-f7a9ace.md`). The re-audit re-confirmed the four prior publish-gating closures (B1/14, B4/3, B5, 30) and raised twelve new findings C1-C12 plus a carried-open register. All are remediated on `feat-reaudit-f7a9ace`, six `fix(audit)` commits fast-forwarded onto `v0.2.1`.
+
+**Delta manifest for the auditor.** Baseline `f7a9ace`. Commits: `994e3fd` (C1/C2/C3/C12), `ae0ab36` (C5/C6), `768343f` (C4/C8), `c93145b` (C7), `49217b5` (C9/C10/C11), `7dafd42` (B6 residual, B12, B13, plus the C1-C3 and long-division regression proofs).
+
+**Per-finding remediation.**
+- **C1** (critical, null Text pointer undefined behavior at the marshalling boundary). `from_flat_bytes_ctx` screens `ptr == 0` to the empty string, mirroring the in-VM read. Miri (Tree Borrows) proof-of-concept `c1_null_text_pointer_marshals_to_empty_string_not_ub`.
+- **C2** (high, flat Text VM read panic). The Text branch of `read_flat_scalar` routes through a checked `bytes.get(..)`. The typed pass rejects the reconstructible-shape case at load (`c2_flat_text_field_offset_overrun_rejected`); the runtime guard is the defer-on-`Top` backstop.
+- **C3** (medium, IsEnum/IsStruct WCMU under-count). `stack_growth` corrected 0 to 1, aligning the WCMU reporting model with the operand-depth and typed models (`is_enum_is_struct_operand_models_agree`, `is_enum_accumulation_counted_in_wcmu`).
+- **C4** (medium, unvalidated private-composite table). `validate_data_layout` validates strict ascending unique in-range slots and pool-bounded ascending offsets.
+- **C5/C6** (high, const-generic soundness). The post-monomorphization re-typecheck range-checks a concrete Multiword dimension to [1, 65535], `as_multiword_lit` refuses to truncate, and const arithmetic is checked so an overflow stays symbolic rather than wrapping.
+- **C7** (medium, loop iteration-count multiplier). `extract_loop_iteration_bound` now requires the body to advance the induction variable by a positive constant and to reassign neither the induction nor the end local, else the loop is rejected. Confirmed a real soundness gap, not a hypothesis.
+- **C8/C9/C10/C11/C12** (low/info). Loop-cap neutrality re-check; fail-closed Fixed-shift guards; accurate shift specification; non-positive array length rejected; corrected comment.
+
+**Carried residuals.**
+- **B6 residual** (a real reachable index panic). `validate_data_layout` now reconciles `shared_layout.len()` with the shared-slot count and requires shared slots to be the contiguous prefix (`SharedLayoutCountMismatch`), closing an out-of-bounds `shared_layout[slot]` the structural verifier admitted (it bounds the slot against the unified `slots.len()`, but the runtime indexes the shorter shared-layout array with the same index).
+- **B12** checked `struct_field_offset` accumulation. **B13** saturating private-composite pool widening. **B8** construction side already cross-checked. **B11** informational, no change (bounded by construction, authenticated when signed).
+- The narrow-declared multiword long-division case the re-audit flagged unconfirmed is confirmed correct (`narrow_declared_multiword_long_division_on_wide_runtime`).
+
+**Verification.** Full gate green on default, signatures, and all-features. Lib 1179. `clippy --tests --all-features -D warnings` and `fmt` clean. Workspace examples build (`cargo build --examples`). Miri (Tree Borrows): `flat_text` clean (the C2 read path) and every `marshall` test Miri can execute clean (C1 included); the one `register_fn_with_derived_struct_arg` test aborts on inline assembly Miri does not support, a Miri limitation not a defect. No wire-format, `BYTECODE_VERSION`, or ISA change.
+
+**CONCERNS / SELF-DECLARED RESIDUALS FOR THE NEXT AUDIT (do not spend the audit rediscovering these).**
+1. The **C2 runtime guard is confirmed by inspection but not exercised end to end**. The test covers the load-time rejection. Reaching the runtime `read_flat_scalar` guard needs an operand of unreconstructible (`Top`) shape, for example an unsignatured native return; constructing that end to end was judged disproportionate to a one-line guard and is a real coverage gap.
+2. The **producer-supplied wire tables** (per-chunk signatures, native returns, enum layouts) are **not cross-validated against the opcode-derived layout**. Where the typed pass decides, it decides agreement between two producer artifacts rather than deriving safety from first principles. This is architectural and untouched, and is the strongest remaining reservation about the verifiable-kernel claim.
+3. **These fixes have not been independently re-audited.** They rest on the reasoning and tests above, weaker assurance than the multi-reviewer process that found the defects. The next audit should treat this delta as unverified.
+
+**Epistemic caveat.** This is a self-assessment. A clean gate is necessary, not sufficient, for publication readiness. The verifiable-kernel property remains partial by the prior audit's own characterization and should be presented as feasibility, not achieved.
+
+**Intended next step (operator decision).** Commission the independent re-audit of the merged delta, and decide how the verifiable-kernel property is represented. Pre-audit hardening offered but not done, pending an operator go-ahead: close the C2 runtime-guard end-to-end test via the native-return path, and add a fuzz harness over `Vm::new`/`verify` for the untrusted-bytecode threat model.
+
+---
+
+## Prior session (21)
+
 **Date**: 2026-07-07 (session 21)
 
 **ISA MINIMISATION (post-typed-pass): `SetDataComposite` (wire id 70) RETIRED into `SetData`, so the live ISA is 66 opcodes with a maximum live wire id of 69.** Under the rad-hard minimal-instruction-set discipline the opcode was scrutinised and found unnecessary: it baked a persistent-pool byte offset that duplicates the module's `private_composite_layout` table, its handler already dispatched composite-vs-scalar at run time, and its `u16` offset was strictly less capable than the table's `u32` (a latent 64 KiB pool cap). The fold routes every private composite slot, single fields included, through the table; the compiler emits `SetData` and drops the `persistent_composite_offsets` map; the VM's `SetData` handler persists via `write_data_slot`/`private_composite_pool_offset` as it already did for array elements. `INSTRUCTION_SET.md` already described the 66-opcode ISA without this opcode, so the code now agrees with its own spec; `STANDARD.md` count corrected 67 to 66, its opcode-table row removed, and Annex A.2 item 3 (the undocumented-opcode non-conformance) resolved into A.3. Full gate green (lib 1168, all workspace tests incl. `persistent_data`, clippy, fmt); `BYTECODE_VERSION` stays 1. The prior REVERSE_PROMPT entries below that describe adding `SetDataComposite` are retained as accurate history.
