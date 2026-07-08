@@ -1516,10 +1516,11 @@ fn eval_const_expr(e: &crate::ast::ConstExpr, subst: &BTreeMap<String, i64>) -> 
         ConstExpr::Bin(op, l, r, _) => {
             let a = eval_const_expr(l, subst)?;
             let b = eval_const_expr(r, subst)?;
+            // Checked, not wrapping (audit C6): overflow yields `None`.
             Some(match op {
-                ConstBinOp::Add => a.wrapping_add(b),
-                ConstBinOp::Sub => a.wrapping_sub(b),
-                ConstBinOp::Mul => a.wrapping_mul(b),
+                ConstBinOp::Add => a.checked_add(b)?,
+                ConstBinOp::Sub => a.checked_sub(b)?,
+                ConstBinOp::Mul => a.checked_mul(b)?,
             })
         }
     }
@@ -1542,12 +1543,19 @@ fn subst_const_expr(
             let l = subst_const_expr(l, const_subst);
             let r = subst_const_expr(r, const_subst);
             if let (Some(a), Some(b)) = (l.as_lit(), r.as_lit()) {
+                // Checked, not wrapping (audit C6). On overflow leave the
+                // expression symbolic so the layout pass rejects it as an
+                // unresolved dimension rather than folding a wrapped, wrong
+                // literal that would silently mis-size an array or Multiword.
                 let v = match op {
-                    ConstBinOp::Add => a.wrapping_add(b),
-                    ConstBinOp::Sub => a.wrapping_sub(b),
-                    ConstBinOp::Mul => a.wrapping_mul(b),
+                    ConstBinOp::Add => a.checked_add(b),
+                    ConstBinOp::Sub => a.checked_sub(b),
+                    ConstBinOp::Mul => a.checked_mul(b),
                 };
-                ConstExpr::Lit(v, *span)
+                match v {
+                    Some(v) => ConstExpr::Lit(v, *span),
+                    None => ConstExpr::Bin(*op, Box::new(l), Box::new(r), *span),
+                }
             } else {
                 ConstExpr::Bin(*op, Box::new(l), Box::new(r), *span)
             }

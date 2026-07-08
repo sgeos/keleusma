@@ -293,3 +293,22 @@ fn distinct_enum_const_args_specialize_independently() {
         13
     );
 }
+
+#[test]
+fn const_arithmetic_overflow_is_rejected_not_wrapped() {
+    // audit C6: `3037000500 * 3037000500` overflows i64. Checked const
+    // arithmetic yields no static value, so the const argument fails to
+    // resolve rather than folding a silently wrapped, wrong dimension.
+    assert!(compile_fails(
+        "fn val<const n: Word>() -> Word { n }\n\
+         fn main() -> Word { val::<3037000500 * 3037000500>() }"
+    ));
+    // A non-overflowing const expression still compiles and runs.
+    assert_eq!(
+        run_to_int(
+            "fn val<const n: Word>() -> Word { n }\n\
+                    fn main() -> Word { val::<3000 * 3>() }"
+        ),
+        9000
+    );
+}

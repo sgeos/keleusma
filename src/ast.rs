@@ -1205,7 +1205,15 @@ impl TypeExpr {
     /// body). Every dimension is literal after monomorphization (B40).
     pub fn as_multiword_lit(&self) -> Option<(u16, u16)> {
         match self {
-            TypeExpr::Multiword(n, f, _) => Some((n.as_lit()? as u16, f.as_lit()? as u16)),
+            // `u16::try_from`, not `as u16` (audit C5): refuse to truncate a
+            // dimension outside the `u16` range (for example a substituted
+            // const parameter of 65537) to a silently wrong width. An
+            // out-of-range dimension is rejected earlier by the post-
+            // monomorphization range check; this is the defence in depth.
+            TypeExpr::Multiword(n, f, _) => Some((
+                u16::try_from(n.as_lit()?).ok()?,
+                u16::try_from(f.as_lit()?).ok()?,
+            )),
             _ => None,
         }
     }
@@ -1338,6 +1346,33 @@ mod tests {
             line: 1,
             column: start as u32 + 1,
         }
+    }
+
+    #[test]
+    fn as_multiword_lit_refuses_to_truncate() {
+        // audit C5: a dimension outside the `u16` range must not silently
+        // truncate (65537 to 1). `as_multiword_lit` returns `None` so the
+        // wrong width can never reach the compiler.
+        let in_range = TypeExpr::Multiword(
+            ConstExpr::Lit(2, span_at(0, 1)),
+            ConstExpr::Lit(0, span_at(2, 3)),
+            span_at(0, 3),
+        );
+        assert_eq!(in_range.as_multiword_lit(), Some((2, 0)));
+
+        let over = TypeExpr::Multiword(
+            ConstExpr::Lit(65537, span_at(0, 1)),
+            ConstExpr::Lit(0, span_at(2, 3)),
+            span_at(0, 3),
+        );
+        assert_eq!(over.as_multiword_lit(), None);
+
+        let negative = TypeExpr::Multiword(
+            ConstExpr::Lit(-1, span_at(0, 1)),
+            ConstExpr::Lit(0, span_at(2, 3)),
+            span_at(0, 3),
+        );
+        assert_eq!(negative.as_multiword_lit(), None);
     }
 
     #[test]

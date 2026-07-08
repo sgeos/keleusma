@@ -113,10 +113,13 @@ fn eval_const_lit(ce: &crate::ast::ConstExpr) -> Option<i64> {
         ConstExpr::Bin(op, l, r, _) => {
             let a = eval_const_lit(l)?;
             let b = eval_const_lit(r)?;
+            // Checked, not wrapping (audit C6): an overflowing const expression
+            // yields `None` (no static value) rather than a silently wrapped
+            // one, so an overflowed dimension never folds to a wrong literal.
             Some(match op {
-                ConstBinOp::Add => a.wrapping_add(b),
-                ConstBinOp::Sub => a.wrapping_sub(b),
-                ConstBinOp::Mul => a.wrapping_mul(b),
+                ConstBinOp::Add => a.checked_add(b)?,
+                ConstBinOp::Sub => a.checked_sub(b)?,
+                ConstBinOp::Mul => a.checked_mul(b)?,
             })
         }
     }
@@ -871,6 +874,42 @@ fn check_negative_labels_against_return(
 /// V0.2.0 admits negative labels only at top-level parameter and
 /// return type positions. Every other type position rejects them
 /// with a diagnostic naming the offending span.
+/// Range-check a concrete `Multiword` dimension (audit C5). Mirrors the
+/// parser's literal check but runs post-monomorphization on the re-typecheck,
+/// when a const-parameter or arithmetic dimension has been substituted to a
+/// literal. A symbolic (non-literal) dimension is skipped; the layout pass
+/// rejects one that never resolves. `is_word_count` selects `[1, 65535]` for
+/// the word count N versus `[0, 65535]` for the fraction-bit count F.
+fn check_multiword_dim_range(
+    ce: &crate::ast::ConstExpr,
+    is_word_count: bool,
+) -> Result<(), TypeError> {
+    if let crate::ast::ConstExpr::Lit(n, span) = ce {
+        let (lo, hi): (i64, i64) = if is_word_count {
+            (1, 65535)
+        } else {
+            (0, 65535)
+        };
+        if *n < lo || *n > hi {
+            return Err(TypeError {
+                message: alloc::format!(
+                    "Multiword {} must be in the range [{}, {}], got {}",
+                    if is_word_count {
+                        "word count"
+                    } else {
+                        "fraction-bit count"
+                    },
+                    lo,
+                    hi,
+                    n
+                ),
+                span: *span,
+            });
+        }
+    }
+    Ok(())
+}
+
 fn validate_no_nested_negative_labels(
     t: &TypeExpr,
     at_top_level_allowed_position: bool,
@@ -888,7 +927,18 @@ fn validate_no_nested_negative_labels(
             validate_no_nested_negative_labels(inner, false)
         }
         TypeExpr::Labelled(inner, _, _) => validate_no_nested_negative_labels(inner, false),
-        TypeExpr::Multiword(_, _, _) => Ok(()),
+        // Range-check a Multiword dimension once it is a concrete literal
+        // (audit C5). The parser range-checks literal dimensions, but a
+        // const-parameter or arithmetic dimension is symbolic there and skips
+        // it; after monomorphization substitutes the concrete value this walk
+        // runs again on the re-typecheck and catches an out-of-range dimension
+        // (for example `Multiword<65537>`) before the compiler would truncate
+        // it to `u16`. The word count is `[1, 65535]`, the fraction-bit count
+        // `[0, 65535]`, matching the parser.
+        TypeExpr::Multiword(n, f, _) => {
+            check_multiword_dim_range(n, true)?;
+            check_multiword_dim_range(f, false)
+        }
         TypeExpr::Tuple(items, _) => {
             for item in items {
                 validate_no_nested_negative_labels(item, false)?;
