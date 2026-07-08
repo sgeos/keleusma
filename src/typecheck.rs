@@ -1529,14 +1529,18 @@ fn type_to_expr_full(ty: &Type, span: crate::token::Span) -> Option<TypeExpr> {
                 .collect::<Option<Vec<_>>>()?;
             TypeExpr::Tuple(elems, span)
         }
-        Type::Array(elem, n) => TypeExpr::array_lit(
-            Box::new(type_to_expr_full(elem, span)?),
-            n.known().unwrap_or(0),
-            span,
-        ),
+        // Refuse an unresolved or out-of-range dimension rather than coerce it
+        // to zero (audit F2 residual): a symbolic dimension reaching this
+        // Type-to-TypeExpr conversion is unresolved, and a silent zero would
+        // mis-size. This path is choke-pointed today (construction is gated at
+        // the cast), so refusing is defense against a future non-cast
+        // constructor, mirroring `as_multiword_lit`.
+        Type::Array(elem, n) => {
+            TypeExpr::array_lit(Box::new(type_to_expr_full(elem, span)?), n.known()?, span)
+        }
         Type::Multiword(n, f) => TypeExpr::multiword_lit(
-            n.known().unwrap_or(0) as u16,
-            f.known().unwrap_or(0) as u16,
+            u16::try_from(n.known()?).ok()?,
+            u16::try_from(f.known()?).ok()?,
             span,
         ),
         Type::Option(inner) => TypeExpr::Option(Box::new(type_to_expr_full(inner, span)?), span),

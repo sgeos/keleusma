@@ -143,6 +143,15 @@ fn analyze_yield_coverage(
 /// as not-provably-productive and keeps its full iteration bound, which
 /// is conservative (sound).
 fn loop_body_all_paths_yield_no_inner_loop(ops: &[Op], start: usize, end: usize) -> bool {
+    // Clamp the slice bounds into the op array (audit G1). This helper is
+    // reached from the public standalone WCET pass, which is not gated through
+    // `verify()`, and its `end` is a `Loop`-exit-derived `endloop_ip` whose
+    // `saturating_sub` guards underflow but not an over-range exit target. An
+    // unclamped `ops[start..end]` slice would panic on crafted unverified
+    // bytecode. On the safe load path Pass 1 has already validated the target,
+    // so this never fires there.
+    let start = start.min(ops.len());
+    let end = end.clamp(start, ops.len());
     if ops[start..end].iter().any(|op| matches!(op, Op::Loop(_))) {
         return false;
     }
@@ -3497,6 +3506,19 @@ mod tests {
             0,
             none.len()
         ));
+    }
+
+    #[test]
+    fn productive_loop_predicate_clamps_out_of_range_bounds() {
+        // Audit G1: the helper slices `ops[start..end]` directly, and its `end`
+        // is a `Loop`-exit-derived `endloop_ip` reachable from the public WCET
+        // pass on unverified bytecode. An out-of-range end (or start) must be
+        // clamped rather than panic on the slice. Reaching the return without a
+        // panic is the assertion; the productivity verdict is immaterial.
+        let body = [Op::PushImmediate(1), Op::Yield, Op::BreakIf(0)];
+        let _ = loop_body_all_paths_yield_no_inner_loop(&body, 0, 9999);
+        let _ = loop_body_all_paths_yield_no_inner_loop(&body, 5000, 9999);
+        let _ = loop_body_all_paths_yield_no_inner_loop(&body, 2, 1);
     }
 
     #[test]

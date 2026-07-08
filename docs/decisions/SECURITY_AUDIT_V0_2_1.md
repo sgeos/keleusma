@@ -251,6 +251,27 @@ to the symbolic-overflow fraction-bit path. No wire-format, `BYTECODE_VERSION`, 
 instruction-set change. The gate is green on default, signatures, and all-features,
 with `clippy --tests --all-features -D warnings` and `fmt` clean.
 
+## Re-audit delta 5 (baseline 8859acb)
+
+A fix-verification re-audit at `8859acb` (`keleusma-reaudit-8859acb.md`) confirmed
+F2 fixed-correctly and class-complete (the single-constructor choke point left no
+sibling) and found one more low F1 sibling on the standalone cost surface, plus two
+low informational F2 residuals. All are addressed on the same feature branch.
+
+| # | Sev | Status | Note |
+|---|-----|--------|------|
+| G1 | Low | Fixed | The F1 clamps covered the region `while ip < end` loops but not `loop_body_all_paths_yield_no_inner_loop`, which slices `ops[start..end]` directly and is fed a `Loop`-exit-derived `endloop_ip` whose `saturating_sub` guards underflow but not an over-range exit, so the public WCET pass could panic on crafted unverified bytecode. The helper now clamps its bounds into the op array on entry. Test `productive_loop_predicate_clamps_out_of_range_bounds`. Not reachable on the safe load path. |
+| F2 residual 1 | Low (info) | Fixed | `type_to_expr_full` coerced an unresolved array or Multiword dimension to zero via `unwrap_or(0)`; it now refuses an unresolved or out-of-range dimension, mirroring `as_multiword_lit`. |
+| F2 residual 2 | Low (info) | Fixed | The Multiword binary and unary operator lowerings silently fell through to the scalar path for a Multiword operand with an unresolved dimension; they now hard-error, symmetric with the array-dimension and cast rejections. Both residuals are unreachable today because construction is choke-pointed at the cast; the fixes keep the operator and conversion paths robust against a future non-cast constructor. |
+
+The severity ceiling stayed low for a second round. G1 was the last standalone-cost
+sibling of the E1/F1 branch-target family, now closed by clamping at the helper's
+own slice rather than only at the region loops. The two F2 residuals were closed to
+break the Multiword-dimension pattern at every position, not only the reachable
+one. No wire-format, `BYTECODE_VERSION`, or instruction-set change. The gate is
+green on default, signatures, and all-features, with `clippy --tests --all-features
+-D warnings` and `fmt` clean.
+
 ## Severity and category distribution
 
 | Severity | Count |

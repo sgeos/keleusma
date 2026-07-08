@@ -8342,6 +8342,20 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             if let Some((n, f)) = operand_ty.as_ref().and_then(|t| t.as_multiword_lit()) {
                 return compile_multiword_binop(fc, *op, left, right, n, f);
             }
+            // A Multiword operand whose dimension does not resolve after
+            // monomorphization is unresolved or overflowed (audit F2 residual);
+            // reject it rather than misroute to the scalar lowering below. Not
+            // reachable today, since Multiword construction is gated at the cast,
+            // but this keeps the operator path robust if a non-cast constructor
+            // is ever added, mirroring the array-dimension hard error.
+            if matches!(operand_ty, Some(TypeExpr::Multiword(..))) {
+                return Err(CompileError {
+                    message: String::from(
+                        "Multiword operand has an out-of-range or unresolved dimension after monomorphization",
+                    ),
+                    span: left.span(),
+                });
+            }
             // Scalar `Word`/`Byte` shifts, constant or variable amount. The
             // Multiword case is handled above through compile_multiword_binop.
             if matches!(op, BinOp::Shl | BinOp::AShl | BinOp::ShrA | BinOp::ShrL) {
@@ -8491,6 +8505,19 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                     infer_expr_type(fc, operand).and_then(|t| t.as_multiword_lit())
             {
                 return compile_multiword_bnot(fc, operand, n);
+            }
+            // Symmetric F2-residual guard for the unary Multiword path: a `bnot`
+            // on a Multiword operand whose dimension does not resolve is rejected
+            // rather than falling through to the scalar lowering.
+            if matches!(op, UnaryOp::Bnot)
+                && matches!(infer_expr_type(fc, operand), Some(TypeExpr::Multiword(..)))
+            {
+                return Err(CompileError {
+                    message: String::from(
+                        "Multiword operand has an out-of-range or unresolved dimension after monomorphization",
+                    ),
+                    span: operand.span(),
+                });
             }
             // Mirrors the binary-op type-specialization from
             // Consolidation B: operands inferred or defaulted to
