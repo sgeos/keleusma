@@ -2335,6 +2335,16 @@ fn verify_chunk(
         // -- Pass 1: Block nesting and offset validation --
         let mut block_stack: Vec<(BlockKind, usize)> = Vec::new();
         let mut loop_depth: usize = 0;
+        // Control-flow-integrity of `If` targets (audit D2). An `If`'s target is
+        // only bounds-checked above; a hostile target that points at an
+        // enclosing `EndLoop` back-edge, rather than the structured
+        // else-body-start or `EndIf`, would send the false path around the loop
+        // and defeat the loop-advancement and operand-neutrality analyses. This
+        // parallel stack carries each open `If`'s `(if_ip, if_target,
+        // else_seen)` so the matching `Else` and `EndIf` can require the target
+        // to equal the structured position. It mirrors the `If` subset of
+        // `block_stack`, which already guarantees well-nested If/Else/EndIf.
+        let mut if_stack: Vec<(usize, usize, bool)> = Vec::new();
 
         for (ip, op) in ops.iter().enumerate() {
             match op {
@@ -2355,6 +2365,9 @@ fn verify_chunk(
                         });
                     }
                     block_stack.push((BlockKind::If, ip));
+                    // Record the target for structured validation at the
+                    // matching Else/EndIf (audit D2).
+                    if_stack.push((ip, t, false));
                     record(ip, P1, "if-branch-target-in-bounds");
                 }
                 Op::Else(target) => {
@@ -2373,6 +2386,40 @@ fn verify_chunk(
                         }
                     }
                     record(ip, P1, "else-preceded-by-matching-if");
+                    // The matching If's false-branch target must be the
+                    // else-body start, the instruction right after this Else
+                    // (audit D2). This is the innermost open If, the if_stack
+                    // top, since block_stack just confirmed it. Mark it as
+                    // having an Else so EndIf does not also require it to target
+                    // the EndIf.
+                    match if_stack.last_mut() {
+                        Some(frame) => {
+                            let (if_ip, if_target, _) = *frame;
+                            if if_target != ip + 1 {
+                                return Err(VerifyError {
+                                    chunk_name: name.clone(),
+                                    message: alloc::format!(
+                                        "If at {} targets {} but its Else at {} requires the false branch to enter the else body at {}",
+                                        if_ip,
+                                        if_target,
+                                        ip,
+                                        ip + 1
+                                    ),
+                                });
+                            }
+                            frame.2 = true;
+                        }
+                        None => {
+                            return Err(VerifyError {
+                                chunk_name: name.clone(),
+                                message: alloc::format!(
+                                    "Else at {} has no matching If on the control-flow stack",
+                                    ip
+                                ),
+                            });
+                        }
+                    }
+                    record(ip, P1, "if-target-is-else-body-start");
                     // Target must point to EndIf within bounds.
                     if t >= ops.len() {
                         return Err(VerifyError {
@@ -2400,6 +2447,34 @@ fn verify_chunk(
                     record(ip, P1, "else-target-is-endif");
                 }
                 Op::EndIf => {
+                    // Close the innermost open If's target validation (audit
+                    // D2): a no-Else If must target this EndIf, so its false
+                    // branch skips the then-body to here. An If with an Else was
+                    // already validated at the Else.
+                    match if_stack.pop() {
+                        Some((if_ip, if_target, else_seen)) => {
+                            if !else_seen && if_target != ip {
+                                return Err(VerifyError {
+                                    chunk_name: name.clone(),
+                                    message: alloc::format!(
+                                        "If at {} has no Else so its false branch must target its EndIf at {}, but targets {}",
+                                        if_ip,
+                                        ip,
+                                        if_target
+                                    ),
+                                });
+                            }
+                        }
+                        None => {
+                            return Err(VerifyError {
+                                chunk_name: name.clone(),
+                                message: alloc::format!(
+                                    "EndIf at {} with no matching If on the control-flow stack",
+                                    ip
+                                ),
+                            });
+                        }
+                    }
                     match block_stack.pop() {
                         Some((BlockKind::If, _)) => {}
                         Some((BlockKind::Loop, _)) => {
@@ -2492,6 +2567,35 @@ fn verify_chunk(
                         });
                     }
                     record(ip, P1, "break-target-in-bounds");
+                    // The target must be the enclosing loop's exit, not an
+                    // arbitrary in-bounds position (audit D2, the Break sibling
+                    // of the If hole): a Break to the back-edge or into another
+                    // block would corrupt the structured control flow the WCET,
+                    // WCMU, and operand-neutrality analyses assume. The
+                    // innermost enclosing loop is the most recent Loop frame;
+                    // its exit is the Loop op's target.
+                    let enclosing_loop_exit =
+                        block_stack
+                            .iter()
+                            .rev()
+                            .find_map(|(k, lip)| match (k, &ops[*lip]) {
+                                (BlockKind::Loop, Op::Loop(exit)) => Some(*exit as usize),
+                                _ => None,
+                            });
+                    if let Some(exit) = enclosing_loop_exit
+                        && t != exit
+                    {
+                        return Err(VerifyError {
+                            chunk_name: name.clone(),
+                            message: alloc::format!(
+                                "Break at {} targets {} but its enclosing loop exits to {}",
+                                ip,
+                                t,
+                                exit
+                            ),
+                        });
+                    }
+                    record(ip, P1, "break-targets-loop-exit");
                 }
                 Op::BreakIf(target) => {
                     if loop_depth == 0 {
@@ -2514,6 +2618,30 @@ fn verify_chunk(
                         });
                     }
                     record(ip, P1, "break-if-target-in-bounds");
+                    // The target must be the enclosing loop's exit (audit D2),
+                    // as for Break above.
+                    let enclosing_loop_exit =
+                        block_stack
+                            .iter()
+                            .rev()
+                            .find_map(|(k, lip)| match (k, &ops[*lip]) {
+                                (BlockKind::Loop, Op::Loop(exit)) => Some(*exit as usize),
+                                _ => None,
+                            });
+                    if let Some(exit) = enclosing_loop_exit
+                        && t != exit
+                    {
+                        return Err(VerifyError {
+                            chunk_name: name.clone(),
+                            message: alloc::format!(
+                                "BreakIf at {} targets {} but its enclosing loop exits to {}",
+                                ip,
+                                t,
+                                exit
+                            ),
+                        });
+                    }
+                    record(ip, P1, "break-if-targets-loop-exit");
                 }
                 Op::GetData(slot) | Op::SetData(slot) => {
                     let idx = *slot as usize;
@@ -3190,7 +3318,7 @@ mod tests {
         let chunk = make_chunk(
             "main",
             vec![
-                Op::If(3),      // 0 valid: target 3 <= len 4
+                Op::If(1),      // 0 valid: no-Else If targets its EndIf at 1
                 Op::EndIf,      // 1 closes the If
                 Op::Loop(99),   // 2 INVALID: target 99 > len 4
                 Op::EndLoop(3), // 3
@@ -3656,9 +3784,9 @@ mod tests {
             "bad",
             vec![
                 Op::PushImmediate(1), // 0
-                Op::If(3),            // 1 -> Else at 3
+                Op::If(4),            // 1 -> else body starts at 4 (after Else)
                 Op::PushImmediate(0), // 2
-                Op::Else(5),          // 3 -> targets PushUnit, not EndIf
+                Op::Else(5),          // 3 -> targets PushImmediate, not EndIf
                 Op::PushImmediate(0), // 4
                 Op::PushImmediate(0), // 5 (not EndIf)
                 Op::Return,           // 6
@@ -3668,6 +3796,57 @@ mod tests {
         let module = make_module(vec![chunk]);
         let err = verify(&module).unwrap_err();
         assert!(err.message.contains("expected EndIf"));
+    }
+
+    #[test]
+    fn interior_if_targeting_back_edge_rejected() {
+        // Audit D2: a body-internal If whose false branch targets the EndLoop
+        // back-edge, rather than its own EndIf, would skip the loop's tail
+        // increment and defeat the C7 advancement proof and operand-neutrality.
+        // Pass 1 now requires a no-Else If to target its EndIf.
+        let chunk = make_chunk(
+            "hostile",
+            vec![
+                Op::Loop(5),          // 0 exit = 5
+                Op::PushImmediate(1), // 1 (a Bool for the If)
+                Op::If(4),            // 2 HOSTILE: targets EndLoop@4, not EndIf@3
+                Op::EndIf,            // 3
+                Op::EndLoop(1),       // 4 back-edge to Loop+1
+                Op::Return,           // 5
+            ],
+            BlockType::Func,
+        );
+        let module = make_module(vec![chunk]);
+        let err = verify(&module).unwrap_err();
+        assert!(
+            err.message.contains("must target its EndIf"),
+            "expected an If-target rejection, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn breakif_targeting_back_edge_rejected() {
+        // Audit D2, the Break sibling: a BreakIf whose target is the back-edge
+        // rather than the loop exit is rejected.
+        let chunk = make_chunk(
+            "hostile",
+            vec![
+                Op::Loop(4),          // 0 exit = 4
+                Op::PushImmediate(1), // 1 (a Bool for the BreakIf)
+                Op::BreakIf(3),       // 2 HOSTILE: targets EndLoop@3, not exit 4
+                Op::EndLoop(1),       // 3 back-edge to Loop+1
+                Op::Return,           // 4
+            ],
+            BlockType::Func,
+        );
+        let module = make_module(vec![chunk]);
+        let err = verify(&module).unwrap_err();
+        assert!(
+            err.message.contains("enclosing loop exits to"),
+            "expected a Break-target rejection, got: {}",
+            err.message
+        );
     }
 
     #[test]

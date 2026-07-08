@@ -838,6 +838,40 @@ fn narrow_declared_multiword_long_division_on_wide_runtime() {
 }
 
 #[test]
+fn narrow_declared_long_division_masks_remainder_on_wide_runtime() {
+    // Audit D6: the bit-serial long division shifts the running remainder left
+    // by one on every step, and on the 64-bit runtime a declared-16-bit limb is
+    // not physically masked (unlike the i16 narrow runtime, where the limb type
+    // wraps at 16 bits). If a shifted remainder limb kept bits above the
+    // declared width, the wide-runtime result would diverge from the narrow
+    // runtime. Cross-check every result limb of several large-quotient and
+    // high-limb-divisor divisions against the physically-16-bit i16 runtime,
+    // the correct 16-bit oracle. Agreement demonstrates the lowering keeps the
+    // limbs masked across iterations.
+    let cases = [
+        // Large quotient (~30-bit dividend), many remainder shifts.
+        "fn main() -> Word { let a = (0, 12345) as Multiword<2>; let b = (7, 0) as Multiword<2>; let s = a / b; s[0] }",
+        "fn main() -> Word { let a = (0, 12345) as Multiword<2>; let b = (7, 0) as Multiword<2>; let s = a / b; s[1] }",
+        "fn main() -> Word { let a = (0, 12345) as Multiword<2>; let b = (7, 0) as Multiword<2>; let s = a % b; s[0] }",
+        // High-limb divisor near the sign bit, driving a large remainder that
+        // shifts its top bit repeatedly.
+        "fn main() -> Word { let a = (65535, 32766) as Multiword<2>; let b = (0, 32767) as Multiword<2>; let s = a / b; s[0] }",
+        "fn main() -> Word { let a = (65535, 32766) as Multiword<2>; let b = (0, 32767) as Multiword<2>; let s = a % b; s[0] }",
+        "fn main() -> Word { let a = (65535, 32766) as Multiword<2>; let b = (0, 32767) as Multiword<2>; let s = a % b; s[1] }",
+        // A three-word division at the narrow width.
+        "fn main() -> Word { let a = (1, 2, 40000) as Multiword<3>; let b = (0, 0, 7) as Multiword<3>; let s = a / b; s[0] }",
+        "fn main() -> Word { let a = (1, 2, 40000) as Multiword<3>; let b = (0, 0, 7) as Multiword<3>; let s = a % b; s[2] }",
+    ];
+    for src in cases {
+        assert_eq!(
+            run_decl16_on_wide(src),
+            run_i16(src) as i64,
+            "wide-runtime long division diverged from the 16-bit oracle for: {src}"
+        );
+    }
+}
+
+#[test]
 fn narrow_multiword_fixed_div() {
     // Q8.8 at i16: 6.0 / 2.0 = 3.0. 6.0 = 1536, 2.0 = 512, and the
     // pre-shifted division (1536 lsl 8) / 512 = 768 = 3.0. Confirms the

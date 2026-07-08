@@ -179,6 +179,32 @@ instruction set. The gate is green on default, signatures, and all-features, wit
 `clippy --tests --all-features -D warnings` and `fmt` clean, and the C1 path is
 additionally Miri-clean under Tree Borrows.
 
+## Re-audit delta 2 (baseline 97d9b6d)
+
+A fix-verification re-audit at `97d9b6d` (`keleusma-reaudit-97d9b6d.md`) confirmed
+both prior publish gates closed (C1 and C2 FIXED-CORRECTLY) and most other
+remediations correct, and raised six items: four same-class siblings the prior
+round closed only at the named instance, one genuinely new control-flow-integrity
+gap, and one unresolved test-coverage question. All are addressed on
+`feat-reaudit-97d9b6d`.
+
+| # | Sev | Status | Note |
+|---|-----|--------|------|
+| D1 | Med | Fixed | The shared composite write bounded the copy by the resolved `body.len()` but validation bounded only the declared `sl.len`. `write_shared_to_buffer` now requires `body.len() == len`, keeping the copy within the validated extent and preventing an adjacent-slot overwrite or release panic on a mismatched Top-deferred body. Runtime guard; the D4 twin carries the crafted-module regression. |
+| D2 | Med (new) | Fixed | Pass 1 only bounds-checked `Op::If` targets, so a body-internal `If` whose false branch targeted the enclosing `EndLoop` back-edge would skip the loop's tail increment and defeat the C7 advancement proof and operand-neutrality. Pass 1 now requires a no-Else `If` to target its `EndIf`, an `If` with an `Else` to target the else-body start, and `Break`/`BreakIf` to target the enclosing loop's exit. Tests `interior_if_targeting_back_edge_rejected`, `breakif_targeting_back_edge_rejected`. |
+| D3 | Med | Fixed | The Multiword dimension range check reached signature, parameter, and data-field positions but not struct or enum field types or cast targets. The typecheck field walk (`check_composite_dimensions`) now range-checks Multiword dimensions, and the layout pass carries an `InvalidMultiwordDim` backstop for any position that reaches layout. Out-of-range Multiword values are unconstructable via surface syntax (no 65537-element tuple), so the layout unit test drives the backstop directly. |
+| D4 | Med | Fixed | The private-composite table validation bounded offset ordering and pool containment but not inter-slot overlap, since per-slot body size is not wire-carried. `persist_composite_body` now bounds each write by the next table offset (the slot's region end), so a crafted table with under-spaced offsets faults rather than overwriting the neighbour. Test `d4_private_composite_write_bounded_by_slot_region`. |
+| D5 | Low | Fixed | The C9 Fixed-shift guard was extended to the two `CheckedMul` and `CheckedDiv` Fixed arms it had missed; verifier-rejection tests added. |
+| D6 | Info | Resolved | The narrow-declared multiword long division is confirmed correct by cross-checking the wide-runtime result against the physically-16-bit narrow runtime across large-quotient, high-limb-divisor, and three-word cases (`narrow_declared_long_division_masks_remainder_on_wide_runtime`); the limbs stay masked. |
+
+Two runtime guards, D1 and the shared twin of D4, are confirmed by inspection with
+the crafted-module regression carried by the D4 private-composite test; a dedicated
+D1 shared-composite crafted test needs the shared-buffer call harness and is not
+yet written, the same coverage boundary as the C2 runtime guard. No wire-format,
+`BYTECODE_VERSION`, or instruction-set change. The gate is green on default,
+signatures, and all-features, with `clippy --tests --all-features -D warnings` and
+`fmt` clean.
+
 ## Severity and category distribution
 
 | Severity | Count |

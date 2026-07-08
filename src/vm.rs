@@ -2298,6 +2298,38 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             .map(|i| table[i].offset.to_native() as usize)
     }
 
+    /// The exclusive upper bound of the private-composite pool region that
+    /// begins at `rel_offset` (audit D4). `validate_data_layout` proves the
+    /// `private_composite_layout` offsets strictly ascending, so a slot's region
+    /// ends at the next-higher table offset, or at the declared pool size for
+    /// the highest slot. Bounding a composite write to this extent prevents one
+    /// slot's body from overwriting the adjacent slot's region, which the
+    /// ascending-offset check alone does not since per-slot body size is not
+    /// carried in the wire format.
+    fn private_composite_slot_end(&self, rel_offset: usize) -> usize {
+        // The declared pool size is not mirrored on the aux body, so derive the
+        // pool's upper bound from the persistent region past the private-slot
+        // Value array. This is the exact bound for the highest slot; every
+        // interior slot is bounded tightly by the next table offset below. The
+        // arena-capacity check at the write independently bounds the physical
+        // region.
+        let private_storage = self.private_slot_count as usize
+            * core::mem::size_of::<crate::bytecode::GenericValue<W, F>>();
+        let pool = self
+            .arena
+            .persistent_capacity()
+            .saturating_sub(private_storage);
+        let Some(dl) = self.archived().data_layout.as_ref() else {
+            return pool;
+        };
+        dl.private_composite_layout
+            .iter()
+            .map(|e| e.offset.to_native() as usize)
+            .filter(|&o| o > rel_offset)
+            .min()
+            .unwrap_or(pool)
+    }
+
     /// The shared layout entry for a shared slot, as `(byte offset, kind tag,
     /// composite body length)` copied out of the archived table so the borrow
     /// of the bytecode image does not outlive the read (B28 item 2).
@@ -2415,7 +2447,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         slot: usize,
         value: crate::bytecode::GenericValue<W, F>,
     ) -> Result<(), VmError> {
-        let (offset, kind, _len) = self.shared_layout_entry(slot);
+        let (offset, kind, len) = self.shared_layout_entry(slot);
         let wb = self.module_word_bytes();
         let fb = self.module_float_bytes();
         if kind & crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG == 0 {
@@ -2440,6 +2472,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     .map_err(|_| stale_arena_body())?
                     .to_vec()
             };
+            // Reconcile the resolved body length with the slot's validated
+            // declared length (audit D1). `validate_data_layout` proved
+            // `offset + len <= buffer`, so requiring `body.len() == len` keeps
+            // the copy in bounds and prevents a mismatched body from
+            // overwriting the adjacent slot. For a well-typed program the value
+            // type matches the slot type and the two are equal; the guard bites
+            // hostile bytecode whose Top-shaped operand deferred past the typed
+            // pass, the same class as C2 on the shared composite write path.
+            if body.len() != len {
+                return Err(VmError::InvalidBytecode(alloc::format!(
+                    "shared composite slot {slot} resolves to a {}-byte body but the slot declares {len} bytes",
+                    body.len()
+                )));
+            }
             let buf = self
                 .shared_buf
                 .bytes_mut()
@@ -2472,6 +2518,16 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 .expect("persist_composite_body called on a non-flat-composite value");
             let bytes = fc.resolve(self.arena).map_err(|_| stale_arena_body())?;
             let len = bytes.len();
+            // Bound the body within this slot's declared pool region (audit D4),
+            // so a mismatched body cannot overwrite the adjacent slot's region.
+            // The ascending-offset validation alone does not catch this, since
+            // per-slot body size is not wire-carried.
+            let slot_end = self.private_composite_slot_end(rel_offset);
+            if rel_offset.checked_add(len).is_none_or(|end| end > slot_end) {
+                return Err(VmError::InvalidBytecode(alloc::format!(
+                    "private composite body of {len} bytes overruns its pool slot region ending at {slot_end}"
+                )));
+            }
             if dst_off
                 .checked_add(len)
                 .is_none_or(|end| end > self.arena.persistent_capacity())
@@ -6291,6 +6347,17 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // classify against the Word range. The
                             // checked form wraps the low slot, unlike
                             // the saturating `Op::FixedMul`.
+                            // Fail closed on an out-of-range fraction count
+                            // (audit D5, parity with the FixedMul/FixedDiv guard
+                            // of C9): the verifier bounds it, so this bites only
+                            // corrupt or no-verify bytecode, keeping the shift
+                            // panic-free.
+                            let word_bits = 1u32 << <W as crate::word::Word>::BITS_LOG2;
+                            if frac_bits as u32 >= word_bits {
+                                return Err(VmError::InvalidBytecode(alloc::format!(
+                                    "Fixed fraction bits {frac_bits} exceed word width {word_bits}"
+                                )));
+                            }
                             let product = x.widen() * y.widen();
                             let shifted = product >> (frac_bits as u32);
                             let (low, flag) = fixed_checked_outputs::<W>(shifted);
@@ -6484,6 +6551,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // wide domain, divide, then classify. The
                             // checked form wraps the low slot, unlike
                             // the saturating `Op::FixedDiv`.
+                            // Fail closed on an out-of-range fraction count
+                            // (audit D5, parity with the C9 guard).
+                            let word_bits = 1u32 << <W as crate::word::Word>::BITS_LOG2;
+                            if frac_bits as u32 >= word_bits {
+                                return Err(VmError::InvalidBytecode(alloc::format!(
+                                    "Fixed fraction bits {frac_bits} exceed word width {word_bits}"
+                                )));
+                            }
                             let dividend = x.widen() << (frac_bits as u32);
                             let quotient = dividend / y.widen();
                             let (low, flag) = fixed_checked_outputs::<W>(quotient);
@@ -11495,6 +11570,36 @@ mod tests {
             Op::Const(0),
             Op::WordToFixed(1),
             Op::FixedDiv(200),
+            Op::Return,
+        ]);
+    }
+
+    #[test]
+    #[cfg(feature = "verify")]
+    fn checkedmul_overshift_rejected_by_verifier() {
+        // Audit D5: the CheckedMul Fixed arm gained the same fail-closed guard
+        // as FixedMul; the verifier is the primary gate that bounds the count.
+        use crate::bytecode::Op;
+        assert_verify_rejects_fraction(alloc::vec![
+            Op::Const(0),
+            Op::WordToFixed(1),
+            Op::Const(0),
+            Op::WordToFixed(1),
+            Op::CheckedMul(200),
+            Op::Return,
+        ]);
+    }
+
+    #[test]
+    #[cfg(feature = "verify")]
+    fn checkeddiv_overshift_rejected_by_verifier() {
+        use crate::bytecode::Op;
+        assert_verify_rejects_fraction(alloc::vec![
+            Op::Const(0),
+            Op::WordToFixed(1),
+            Op::Const(0),
+            Op::WordToFixed(1),
+            Op::CheckedDiv(200),
             Op::Return,
         ]);
     }

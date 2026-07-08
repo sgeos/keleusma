@@ -51,6 +51,42 @@ fn private_tuple_slot_write_then_read() {
 }
 
 #[test]
+fn d4_private_composite_write_bounded_by_slot_region() {
+    // Audit D4: a private-composite layout table whose offsets are spaced closer
+    // than the bodies (a crafted table that still passes the ascending-offset
+    // validation) must not let one slot's write overrun into the next slot's
+    // region. Two Point slots each occupy a 16-byte body. Shrinking slot a's
+    // region to one byte by moving slot b's pool offset down to 1 keeps the
+    // table strictly ascending, so it loads, but the 16-byte write to a now
+    // overruns [0, 1) and must fault rather than overwrite b's region.
+    let src = "struct Point { x: Word, y: Word }\n\
+               private data d { a: Point, b: Point }\n\
+               fn main() -> Word { d.a = Point { x: 1, y: 2 }; 0 }";
+    let mut m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    {
+        let dl = m.data_layout.as_mut().expect("data layout");
+        assert!(
+            dl.private_composite_layout.len() >= 2,
+            "expected two private composite slots"
+        );
+        dl.private_composite_layout[0].offset = 0;
+        dl.private_composite_layout[1].offset = 1;
+    }
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize_persistent");
+    let mut vm = Vm::new(m, &arena).expect("verify");
+    let err = vm
+        .call(&[])
+        .expect_err("the overrunning composite write must fault, not corrupt the neighbour");
+    let msg = alloc::format!("{err:?}");
+    assert!(
+        msg.contains("overruns its pool slot region"),
+        "expected a D4 pool-region fault, got: {msg}"
+    );
+}
+
+#[test]
 fn private_nested_struct_slot_round_trips() {
     let src = "struct Inner { a: Word, b: Word }\n\
                struct Outer { inner: Inner, c: Word }\n\

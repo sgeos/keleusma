@@ -931,30 +931,36 @@ fn check_array_len_positive(ce: &crate::ast::ConstExpr) -> Result<(), TypeError>
     Ok(())
 }
 
-/// Walk a type and reject any fixed-size array whose length resolves to a
-/// non-positive literal (audit C11). Unlike
-/// [`validate_no_nested_negative_labels`] this inspects only array lengths, so
-/// it validates struct and enum field types without introducing new
+/// Walk a type and reject an out-of-range fixed-size array length (audit C11)
+/// or Multiword dimension (audit C5, extended per audit D3). Unlike
+/// [`validate_no_nested_negative_labels`] this inspects only dimensions, so it
+/// validates struct and enum field types without introducing new
 /// information-flow-label rejections in those positions, which the label walk
-/// does not currently police. A symbolic length is skipped and is re-checked
-/// after monomorphization on the re-typecheck, exactly as the Multiword
-/// dimension checks are.
-fn check_array_lengths(t: &TypeExpr) -> Result<(), TypeError> {
+/// does not currently police. A symbolic dimension is skipped and re-checked
+/// after monomorphization on the re-typecheck. The D3 residual was that the
+/// Multiword arm here returned `Ok`, so a `Multiword<n>` field of a struct or
+/// enum instantiated to an out-of-range concrete `n` escaped the range check
+/// that the signature, parameter, and data-field positions already enforced.
+fn check_composite_dimensions(t: &TypeExpr) -> Result<(), TypeError> {
     match t {
         TypeExpr::Array(elem, len, _) => {
             check_array_len_positive(len)?;
-            check_array_lengths(elem)
+            check_composite_dimensions(elem)
         }
         TypeExpr::Option(inner, _)
         | TypeExpr::Labelled(inner, _, _)
-        | TypeExpr::NegativeLabelled(inner, _, _) => check_array_lengths(inner),
+        | TypeExpr::NegativeLabelled(inner, _, _) => check_composite_dimensions(inner),
         TypeExpr::Tuple(items, _) | TypeExpr::Named(_, items, _, _) => {
             for item in items {
-                check_array_lengths(item)?;
+                check_composite_dimensions(item)?;
             }
             Ok(())
         }
-        TypeExpr::Multiword(_, _, _) | TypeExpr::Prim(_, _) | TypeExpr::Unit(_) => Ok(()),
+        TypeExpr::Multiword(n, f, _) => {
+            check_multiword_dim_range(n, true)?;
+            check_multiword_dim_range(f, false)
+        }
+        TypeExpr::Prim(_, _) | TypeExpr::Unit(_) => Ok(()),
     }
 }
 
@@ -1759,7 +1765,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
                 }
                 let mut fields = BTreeMap::new();
                 for f in &s.fields {
-                    check_array_lengths(&f.type_expr)?;
+                    check_composite_dimensions(&f.type_expr)?;
                     fields.insert(
                         f.name.clone(),
                         ctx.resolve_type_with_params(&f.type_expr, &tp_map),
@@ -1779,7 +1785,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
                 let mut variants = BTreeMap::new();
                 for v in &e.variants {
                     for t in &v.fields {
-                        check_array_lengths(t)?;
+                        check_composite_dimensions(t)?;
                     }
                     let payload: Vec<Type> = v
                         .fields

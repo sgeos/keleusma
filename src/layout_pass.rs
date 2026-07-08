@@ -50,6 +50,12 @@ pub enum LayoutError {
     /// negative values are rejected by the parser but defensive
     /// checks are kept here.
     InvalidArraySize(i64),
+    /// A Multiword word count is outside the admissible range `[1, 65535]`
+    /// (audit D3). The parser range-checks a literal dimension and the type
+    /// checker range-checks a concrete const-parameter dimension after
+    /// monomorphization; this backstops any layout computed without that walk,
+    /// for example a struct or enum field or a cast target.
+    InvalidMultiwordDim(i64),
     /// Type expression has no byte representation. Currently
     /// emitted only by future extension paths; the V0.2.x
     /// `TypeExpr` enum covers exhaustively-representable types.
@@ -139,6 +145,15 @@ impl<'a> LayoutContext<'a> {
                 let n = n.as_lit().ok_or_else(|| {
                     LayoutError::UnresolvedGeneric(alloc::format!("Multiword word count `{}`", n))
                 })?;
+                // A Multiword word count must lie in [1, 65535] (audit D3). The
+                // type checker's post-monomorphization walk is the primary gate
+                // with a spanned diagnostic; this backstops a layout computed
+                // without that walk (a struct or enum field, a cast target). An
+                // out-of-range count would otherwise truncate through `as usize`
+                // to a wrong width.
+                if !(1..=65535).contains(&n) {
+                    return Err(LayoutError::InvalidMultiwordDim(n));
+                }
                 Ok(LayoutDescriptor::Array {
                     element: Box::new(LayoutDescriptor::Scalar(ScalarKind::Int)),
                     count: n as usize,
@@ -388,6 +403,37 @@ mod tests {
             ctx.size_in_bytes(&ty),
             Err(LayoutError::InvalidArraySize(0))
         ));
+    }
+
+    #[test]
+    fn multiword_out_of_range_dim_rejected() {
+        // Audit D3 backstop: a Multiword word count outside [1, 65535] is
+        // rejected at layout time, catching a struct or enum field or a cast
+        // target that reaches the layout pass, where an `as usize` truncation
+        // would otherwise silently produce a wrong width.
+        use crate::ast::ConstExpr;
+        let (structs, enums) = empty_tables();
+        let ctx = LayoutContext::new(&structs, &enums, I64_BYTES, F64_BYTES);
+        let too_big = TypeExpr::Multiword(
+            ConstExpr::Lit(65537, span()),
+            ConstExpr::Lit(0, span()),
+            span(),
+        );
+        assert!(matches!(
+            ctx.size_in_bytes(&too_big),
+            Err(LayoutError::InvalidMultiwordDim(65537))
+        ));
+        let zero =
+            TypeExpr::Multiword(ConstExpr::Lit(0, span()), ConstExpr::Lit(0, span()), span());
+        assert!(matches!(
+            ctx.size_in_bytes(&zero),
+            Err(LayoutError::InvalidMultiwordDim(0))
+        ));
+        // A valid dimension still lays out.
+        assert!(
+            ctx.size_in_bytes(&TypeExpr::multiword_lit(3, 0, span()))
+                .is_ok()
+        );
     }
 
     #[test]
