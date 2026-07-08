@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Strict-mode signing and encryption execution policy.** An operator-configured trust store (the `KELEUSMA_TRUSTED_KEYS_DIR` directory of `*.pub` keys, the platform-conventional `/etc/keleusma/trusted_keys` or `%PROGRAMDATA%\keleusma\trusted_keys`, or the `KELEUSMA_REQUIRE_SIGNED=1` force flag) makes `run` reject source files and unsigned bytecode, admit signed bytecode only from an enrolled signer, and reject the `--verifying-key` flag so an unprivileged operator cannot relax the system list. A symmetric encryption policy (`KELEUSMA_DECRYPTION_KEYS_DIR` / `KELEUSMA_REQUIRE_ENCRYPTED`) admits only bytecode encrypted to an enrolled X25519 recipient and rejects the `--decryption-key` flag. The operator guide is [`docs/guide/SECURITY_POLICY.md`](../docs/guide/SECURITY_POLICY.md).
+- **Executable scripts via a shebang.** `run` honors a leading `#!/usr/bin/env keleusma` line, and a bare path invokes `run`, so a script file marked executable runs directly on Unix.
+- **Script argument vector.** Positional arguments after the script path, and after a `--` terminator, are exposed to the running script through the `shell::arg` and `shell::arg_count` natives, mirroring `$0`/`$1` semantics.
+- **`run --print-memory`.** Reports a program's worst-case arena footprint (total, persistent, and transient bytes) and exits without running, turning the static worst-case-memory bound into a provisioning figure.
+- **`compile --debug` and `keleusma strip`.** `--debug` emits strippable per-chunk debug metadata (source spans, call sites, breakpoint candidates, verifier witnesses, and more); `strip` removes it, producing a release artefact byte-identical to a non-debug compile. `strip` refuses signed or encrypted input.
+- **REPL session commands.** `:save <file>` and `:load <file>` persist and restore the session program; `:run` and `:resume [value]` start a `loop`/`yield` program and step it to the next yield, printing the yielded value and decoded shared-data state.
+
+### Changed
+
+- Adapted to the V0.2.x runtime: the `shared data` segment is a host-owned borrowed byte buffer, the instruction set is consolidated to 66 opcodes, and composites are flat-byte bodies. The crate version tracks the major-minor of `keleusma`.
+
+### Fixed
+
+- Strict-mode encryption now distinguishes a wrong-recipient artefact from an artefact that decrypted but carries a signature from a non-enrolled key, rather than reporting both as a key-set failure.
+- `run` fails cleanly with an `out of memory` diagnostic and a non-zero exit when the program's bounded arena cannot be allocated, rather than aborting.
+
 ## [0.2.0] - 2026-05-21
 
 First publicly released line. V0.1.x circulated as a pre-release alongside the parent `keleusma` crate. The crate version is locked one-to-one with the major-minor of `keleusma`.

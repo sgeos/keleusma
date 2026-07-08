@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `Arena::resize_persistent_capacity(new_size) -> Result<(), ResizeError>`, a preserving in-place resize of the persistent region. Unlike `resize_persistent`, which fully resets the dual-headed region, this preserves the persistent prefix's contents and relocates the dual-headed (bottom) region by the size delta. It errors without mutation on a dual-headed overlap or an oversize request, and advances the epoch so any handle into the old dual-headed region fails closed. It supports growing or shrinking a live persistent region, for example a REPL restoring a saved session image.
+
 ## [0.3.0] - 2026-05-19
 
 Adds a persistent (`.data`) region inside the arena that is preserved across every form of reset. The dual-headed (bottom plus top) layout is unchanged; the persistent region occupies a configurable prefix of the buffer. The 0.2.0 surface is preserved unchanged when `persistent_capacity == 0`; this release is purely additive at the API level for arenas that opt into the new region.

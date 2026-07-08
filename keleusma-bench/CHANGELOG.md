@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The calibration tool and its benchmark `Module` are kept current with the V0.2.x runtime wire format and cost model: the 66-opcode instruction set and the `NewComposite` consolidation, the additive `enum_layouts` and `aux_arena_bytes` auxiliary-body fields, the persistent composite data region, and the length-dependent worst-case-execution-time cost term for string operations. No measurement-surface change; the crate version tracks the major-minor of `keleusma`.
+
 ## [0.2.0] - 2026-05-21
 
 First publicly released line. V0.1.x circulated as a pre-release alongside the parent `keleusma` crate. The crate version is locked one-to-one with the major-minor of `keleusma`.
