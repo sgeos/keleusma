@@ -443,6 +443,15 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for alloc::string::String {
         };
         let ptr = read_word(0)?;
         let len = read_word(word_bytes)?;
+        // A null data pointer is not a live allocation; it is the value a
+        // zero-filled body decodes to (for example the persistent composite
+        // body pool cleared on a module swap, B28 P3 item 4). Screen it as an
+        // empty string, mirroring the in-VM read path (`Vm::decode`). Building a
+        // `KString` from a null pointer would construct `NonNull::new_unchecked`
+        // from null, which is immediate undefined behavior.
+        if ptr == 0 {
+            return Ok(alloc::string::String::new());
+        }
         // SAFETY: the (ptr, len) was packed from a KString issued under the
         // composite body's originating epoch (`ctx.ref_epoch`). Rebuilding
         // with that epoch (not the current arena epoch) means the `get`

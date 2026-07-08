@@ -3160,13 +3160,23 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             // outcome rather than dereferencing reclaimed memory: the
             // composite's `ref_epoch` no longer matches the advanced arena
             // epoch, so the rebuilt `KString` resolves stale.
-            let read_word = |o: usize| -> usize {
+            // Bounds-checked, mirroring the non-Text path's `src.get(..)`: the
+            // baked `offset` is a raw `u16` operand and may exceed the body, so
+            // an unchecked slice would panic in release on untrusted or
+            // Top-deferred bytecode (the typed pass bounds this read only for a
+            // reconstructed flat shape). A short body faults cleanly instead.
+            let read_word = |o: usize| -> Result<usize, VmError> {
+                let src = bytes.get(o..o + word_bytes).ok_or_else(|| {
+                    VmError::InvalidBytecode(alloc::string::String::from(
+                        "flat Text field read out of bounds",
+                    ))
+                })?;
                 let mut buf = [0u8; 8];
-                buf[..word_bytes].copy_from_slice(&bytes[o..o + word_bytes]);
-                u64::from_le_bytes(buf) as usize
+                buf[..word_bytes].copy_from_slice(src);
+                Ok(u64::from_le_bytes(buf) as usize)
             };
-            let ptr = read_word(offset);
-            let len = read_word(offset + word_bytes);
+            let ptr = read_word(offset)?;
+            let len = read_word(offset + word_bytes)?;
             // A null data pointer is not a live allocation; it is the value a
             // zero-filled body decodes to (for example the persistent composite
             // body pool cleared on a module swap, B28 P3 item 4). Screen it as

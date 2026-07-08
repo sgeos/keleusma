@@ -1,10 +1,11 @@
 //! Typed operand-stack verifier pass (A.2.1) — the abstract interpreter.
 //!
-//! This is a standalone pass, not yet wired into [`crate::verify`] (that is
-//! Phase 6, gated on the conformance corpus). It walks a chunk's
-//! block-structured control flow over an *abstract state* — an operand stack
-//! and a local frame — whose slots carry the flat shape (composite kind and
-//! byte size) of each value where known. The pass:
+//! This pass is wired into [`crate::verify`] (`verify()` calls
+//! [`typed_check_module`] after the structural passes), so it runs on the safe
+//! `Vm::new` load path and every hot swap. It walks a chunk's block-structured
+//! control flow over an *abstract state* — an operand stack and a local frame —
+//! whose slots carry the flat shape (composite kind and byte size) of each
+//! value where known. The pass:
 //!
 //! - subsumes the scalar operand-depth pass (`verify::verify_stack_depth`):
 //!   the abstract stack height is the depth, and a pop from an empty stack

@@ -2726,7 +2726,12 @@ impl Op {
             | Op::GetEnumField(_)
             | Op::Len => 0,
 
-            Op::IsEnum(_, _, _) | Op::IsStruct(_) => 0,
+            // `IsEnum`/`IsStruct` peek the scrutinee (no pop) and push a Bool,
+            // so they grow the operand stack by one slot. Modelling this as `0`
+            // under-counted the worst-case operand peak by one relative to the
+            // depth pass (`op_depth_effect` net +1) and the typed pass, which is
+            // the number the WCMU bound checks against arena capacity.
+            Op::IsEnum(_, _, _) | Op::IsStruct(_) => 1,
 
             Op::IntToFloat
             | Op::FloatToInt
