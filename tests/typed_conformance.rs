@@ -64,6 +64,44 @@ fn b1_b2_flat_field_offset_overrun_rejected() {
     );
 }
 
+// C2: a flat `Text` field read is the sibling of the B1/B2 Word-field path,
+// reaching `read_flat_scalar`'s Text branch. When the composite shape is
+// reconstructible the typed pass bounds the two-word (ptr, len) read and an
+// out-of-bounds offset is a load-time MUST-REJECT, exactly as for a Word field.
+// The `read_flat_scalar` runtime bounds guard (audit C2) is the defer-on-Top
+// backstop for shapes the pass cannot reconstruct, for example a native return
+// with no declared shape; it is not reached on this reconstructible path.
+//
+// Gated to a build wide enough that a `Text` struct field lowers to a flat
+// two-word body with a `GetField(StructField::Flat)` access. Under the narrow
+// 8-bit framing features the representation differs, so the mutation target is
+// absent; the finding and its guard are word-width-independent.
+#[cfg(not(any(feature = "narrow-word-8", feature = "narrow-address-8")))]
+#[test]
+fn c2_flat_text_field_offset_overrun_rejected() {
+    // `w.s` is the only field access, so the single flat GetField is the Text
+    // field's two-word read.
+    let src = "struct W { s: Text, n: Word }\n\
+               fn main() -> Text { let w = W { s: \"hi\", n: 5 }; w.s }";
+    let mut m = compile_module(src);
+    assert!(verify(&m).is_ok(), "baseline program must verify");
+
+    let mut mutated = false;
+    for chunk in &mut m.chunks {
+        for op in &mut chunk.ops {
+            if let Op::GetField(StructField::Flat { offset, .. }) = op {
+                *offset = 40000; // far past the struct body
+                mutated = true;
+            }
+        }
+    }
+    assert!(mutated, "expected a flat Text field access to mutate");
+    assert!(
+        rejected_by_typed_pass(&m),
+        "an out-of-bounds flat Text field offset must be rejected by the typed pass"
+    );
+}
+
 // B6: a shared data slot's byte offset is trusted; the runtime reads and writes
 // the slot at it. An offset past the shared-data buffer must be rejected.
 #[test]

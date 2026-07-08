@@ -134,6 +134,29 @@ fn flat_decode_rejects_a_short_body() {
 }
 
 #[test]
+fn c1_null_text_pointer_marshals_to_empty_string_not_ub() {
+    // Audit finding C1 (register B3), the null Text data pointer at the host
+    // marshalling boundary. A flat Text field whose (ptr, len) words are both
+    // zero is what a zero-filled or cleared composite body decodes to, for
+    // example the persistent composite body pool after a module swap. The host
+    // marshalling path (`String::from_flat_bytes_ctx`) must screen the null
+    // pointer and yield an empty string, matching the in-VM read at
+    // `vm.rs:3176`. Before the fix it built `NonNull::new_unchecked(0)`, which
+    // is immediate undefined behavior. This test constructs precisely that body
+    // and is a Miri proof-of-concept: run with
+    // `cargo +nightly miri test --test marshall c1_null_text_pointer
+    // -- -Zmiri-tree-borrows` to confirm no undefined behavior.
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let ctx = bundled_ctx(&arena);
+    // A flat Text body at the bundled 64-bit widths is two words: the data
+    // pointer and the length. Both zero models the cleared body.
+    let body = [0u8; 16];
+    let s = <String as KeleusmaType<i64, f64>>::from_flat_bytes_ctx(&body, 8, 8, &ctx)
+        .expect("a null Text pointer must decode, not error or trap");
+    assert_eq!(s, "", "a null Text pointer decodes to the empty string");
+}
+
+#[test]
 fn f64_int_coercion_rejects_precision_loss() {
     // Audit finding 29: an Int coerces to f64 only within the f64
     // safe-integer range; beyond ±2^53 the cast would round, so from_value

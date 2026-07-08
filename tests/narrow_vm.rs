@@ -520,6 +520,24 @@ fn run_bool_i16(src: &str) -> bool {
     }
 }
 
+/// Compile a Multiword source for the 16-bit target but run it on the DEFAULT
+/// 64-bit runtime. This is the declared-word-width-narrower-than-runtime
+/// widening path: the bytecode declares 16-bit words while the runtime is
+/// 64-bit, so the runtime must mask each limb to the declared width. The
+/// return is the finished i64.
+fn run_decl16_on_wide(src: &str) -> i64 {
+    type WideVm<'a, 'arena> = GenericVm<'a, 'arena, i64, u64, f64>;
+    let tokens = tokenize(src).expect("lex");
+    let program = parse(&tokens).expect("parse");
+    let module = compile_with_target(&program, &Target::embedded_16()).expect("compile");
+    let arena = Arena::with_capacity(4096);
+    let mut vm: WideVm<'_, '_> = WideVm::new(module, &arena).expect("new");
+    match vm.call(&[]).expect("call") {
+        GenericVmState::Finished(GenericValue::Int(n)) => n,
+        other => panic!("unexpected: {:?}", other),
+    }
+}
+
 #[test]
 fn narrow_multiword_construct_and_index() {
     // A two-word value at i16 is a 32-bit magnitude; the words index
@@ -756,6 +774,66 @@ fn narrow_multiword_div_min_over_minus_one_wraps() {
             "fn main() -> Word { let a = (0, -32768) as Multiword<2>; let b = (-1, -1) as Multiword<2>; let s = a % b; s[1] }"
         ),
         0_i16
+    );
+}
+
+#[test]
+fn narrow_declared_multiword_long_division_on_wide_runtime() {
+    // Audit follow-up: the multiword long-division inner loop under a declared
+    // word width narrower than the runtime width was flagged unconfirmed. Here
+    // the bytecode declares a 16-bit word (Target::embedded_16) but runs on the
+    // 64-bit runtime. The long division must respect the declared width, not
+    // the runtime width. The matching-width results (`run_i16` above) are the
+    // reference.
+    //
+    // 100 / 7 = 14, 100 % 7 = 2 at the declared 16-bit width.
+    assert_eq!(
+        run_decl16_on_wide(
+            "fn main() -> Word { let a = (100, 0) as Multiword<2>; let b = (7, 0) as Multiword<2>; let s = a / b; s[0] }"
+        ),
+        14
+    );
+    assert_eq!(
+        run_decl16_on_wide(
+            "fn main() -> Word { let a = (100, 0) as Multiword<2>; let b = (7, 0) as Multiword<2>; let s = a % b; s[0] }"
+        ),
+        2
+    );
+    // Sign handling at the narrow declared width: -100 / 7 = -14.
+    assert_eq!(
+        run_decl16_on_wide(
+            "fn main() -> Word { let a = (-100, -1) as Multiword<2>; let b = (7, 0) as Multiword<2>; let s = a / b; s[0] }"
+        ),
+        -14
+    );
+    // Spans a word boundary: 2^16 / 2 = 2^15. The quotient's low limb is the
+    // 16-bit sign pattern i16::MIN (=-32768) after masking to the declared
+    // width, NOT the naive 64-bit 32768, and the high limb is zero.
+    assert_eq!(
+        run_decl16_on_wide(
+            "fn main() -> Word { let a = (0, 1) as Multiword<2>; let b = (2, 0) as Multiword<2>; let s = a / b; s[0] }"
+        ),
+        i16::MIN as i64
+    );
+    assert_eq!(
+        run_decl16_on_wide(
+            "fn main() -> Word { let a = (0, 1) as Multiword<2>; let b = (2, 0) as Multiword<2>; let s = a / b; s[1] }"
+        ),
+        0
+    );
+    // A genuinely multi-limb divisor (nonzero high limb) drives the inner
+    // loop: (6*2^16 + 5) / (3*2^16) = 2 remainder 5.
+    assert_eq!(
+        run_decl16_on_wide(
+            "fn main() -> Word { let a = (5, 6) as Multiword<2>; let b = (0, 3) as Multiword<2>; let s = a / b; s[0] }"
+        ),
+        2
+    );
+    assert_eq!(
+        run_decl16_on_wide(
+            "fn main() -> Word { let a = (5, 6) as Multiword<2>; let b = (0, 3) as Multiword<2>; let s = a % b; s[0] }"
+        ),
+        5
     );
 }
 

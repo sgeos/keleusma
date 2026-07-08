@@ -398,12 +398,18 @@ impl LayoutDescriptor {
     ) -> Option<usize> {
         match self {
             Self::Struct { fields, .. } => {
-                let mut offset = 0;
+                // Accumulate with a checked add (audit B12). A saturating or
+                // wrapping running offset could name an in-range byte position
+                // for an out-of-range field layout. The callers are test-only
+                // today, so this is latent hardening: an offset that overflows
+                // `usize` is not a representable layout and yields `None`.
+                let mut offset: usize = 0;
                 for (field_name, field_type) in fields {
                     if field_name == name {
                         return Some(offset);
                     }
-                    offset += field_type.size_in_bytes(word_bytes, float_bytes);
+                    offset =
+                        offset.checked_add(field_type.size_in_bytes(word_bytes, float_bytes))?;
                 }
                 None
             }

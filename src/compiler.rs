@@ -3462,7 +3462,10 @@ pub fn compile_with_options(
                                 offset: total,
                             });
                         }
-                        total = total.saturating_add(body as u32);
+                        // Saturate the widening so a body larger than u32::MAX
+                        // fails closed at the downstream arena check rather than
+                        // truncating and under-sizing the pool (audit B13).
+                        total = total.saturating_add(u32::try_from(body).unwrap_or(u32::MAX));
                     } else {
                         // An array-of-composite field: every element slot is a
                         // composite of `body` bytes at a distinct pool offset,
@@ -3475,7 +3478,10 @@ pub fn compile_with_options(
                                     offset: total,
                                 });
                             }
-                            total = total.saturating_add(body as u32);
+                            // Saturate the widening so a body larger than u32::MAX
+                            // fails closed at the downstream arena check rather than
+                            // truncating and under-sizing the pool (audit B13).
+                            total = total.saturating_add(u32::try_from(body).unwrap_or(u32::MAX));
                         }
                     }
                 }

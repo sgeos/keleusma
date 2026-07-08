@@ -224,6 +224,22 @@ pub enum TypedError {
         /// Which invariant the entry violated.
         reason: &'static str,
     },
+    /// The shared-slot layout table does not reconcile with the shared slots in
+    /// the unified slot array (audit B6 residual). The runtime dispatches a slot
+    /// as shared when its unified index is below the shared-slot count and then
+    /// indexes `shared_layout[slot]` with that same unified index, so shared
+    /// slots must be the contiguous prefix of the slot array and there must be
+    /// exactly one layout entry per shared slot. Otherwise a shared-slot access
+    /// the structural verifier admits (its index is below the unified slot
+    /// count) indexes the layout table out of bounds at runtime.
+    SharedLayoutCountMismatch {
+        /// Number of shared slots the unified slot array declares.
+        shared_slots: usize,
+        /// Number of entries the shared-slot layout table carries.
+        layout_len: usize,
+        /// Which invariant was violated.
+        reason: &'static str,
+    },
 }
 
 /// Per-chunk signature that seeds the abstract stack where the op stream
@@ -345,6 +361,39 @@ fn validate_data_layout(
     let Some(layout) = &module.data_layout else {
         return Ok(());
     };
+    // Reconcile the shared-slot layout table with the shared slots in the
+    // unified slot array (audit B6 residual). The runtime dispatches a slot as
+    // shared when its unified index is below the shared-slot count and then
+    // indexes `shared_layout[slot]` with that same unified index. So shared
+    // slots must be a contiguous prefix of the slot array, and there must be
+    // exactly one layout entry per shared slot. Without this a shared-slot
+    // access the structural verifier admits (its index is below the unified
+    // slot count) could index the layout table out of bounds at runtime.
+    let prefix_shared = layout
+        .slots
+        .iter()
+        .take_while(|s| matches!(s.visibility, crate::bytecode::SlotVisibility::Shared))
+        .count();
+    let total_shared = layout
+        .slots
+        .iter()
+        .filter(|s| matches!(s.visibility, crate::bytecode::SlotVisibility::Shared))
+        .count();
+    if prefix_shared != total_shared {
+        return Err(TypedError::SharedLayoutCountMismatch {
+            shared_slots: total_shared,
+            layout_len: layout.shared_layout.len(),
+            reason: "shared slots are not a contiguous prefix of the slot array",
+        });
+    }
+    if layout.shared_layout.len() != total_shared {
+        return Err(TypedError::SharedLayoutCountMismatch {
+            shared_slots: total_shared,
+            layout_len: layout.shared_layout.len(),
+            reason: "shared-slot layout entry count does not match the shared-slot count",
+        });
+    }
+
     let buffer = module.shared_data_bytes;
     for (slot, sl) in layout.shared_layout.iter().enumerate() {
         // A composite slot's size is its carried body length; a scalar slot's
@@ -1310,11 +1359,17 @@ mod tests {
     // accepts.
     #[test]
     fn shared_slot_out_of_bounds_rejects() {
-        use crate::bytecode::{DataLayout, SharedSlotLayout};
+        use crate::bytecode::{DataLayout, DataSlot, SharedSlotLayout, SlotVisibility};
         let mut m = module(vec![chunk(vec![Op::Return], ints())], vec![]);
         m.shared_data_bytes = 16;
         m.data_layout = Some(DataLayout {
-            slots: Vec::new(),
+            // One shared slot matching the single layout entry, so the
+            // byte-extent check (not the B6-residual count reconciliation) is
+            // what rejects this fixture.
+            slots: vec![DataSlot {
+                name: String::from("s"),
+                visibility: SlotVisibility::Shared,
+            }],
             // offset 12 + scalar Int size 8 = 20 > 16.
             shared_layout: vec![SharedSlotLayout {
                 offset: 12,
@@ -1331,11 +1386,14 @@ mod tests {
 
     #[test]
     fn shared_slot_in_bounds_accepts() {
-        use crate::bytecode::{DataLayout, SharedSlotLayout};
+        use crate::bytecode::{DataLayout, DataSlot, SharedSlotLayout, SlotVisibility};
         let mut m = module(vec![chunk(vec![Op::Return], ints())], vec![]);
         m.shared_data_bytes = 16;
         m.data_layout = Some(DataLayout {
-            slots: Vec::new(),
+            slots: vec![DataSlot {
+                name: String::from("s"),
+                visibility: SlotVisibility::Shared,
+            }],
             shared_layout: vec![SharedSlotLayout {
                 offset: 8, // 8 + 8 = 16 <= 16
                 kind: ScalarKind::Int.to_tag(),
@@ -1344,6 +1402,72 @@ mod tests {
             private_composite_layout: Vec::new(),
         });
         assert!(typed_check_module(&m, 8, 8).is_ok());
+    }
+
+    // Audit B6 residual: the shared-slot layout table must reconcile with the
+    // shared slots in the unified slot array, since the runtime dispatches a
+    // slot as shared by its unified index and indexes `shared_layout` with it.
+    #[test]
+    fn shared_layout_count_mismatch_rejects() {
+        use crate::bytecode::{DataLayout, DataSlot, SharedSlotLayout, SlotVisibility};
+        // Two shared slots but one layout entry: a GetData on shared slot 1
+        // would index shared_layout[1] out of bounds at runtime.
+        let mut m = module(vec![chunk(vec![Op::Return], ints())], vec![]);
+        m.shared_data_bytes = 16;
+        m.data_layout = Some(DataLayout {
+            slots: vec![
+                DataSlot {
+                    name: String::from("a"),
+                    visibility: SlotVisibility::Shared,
+                },
+                DataSlot {
+                    name: String::from("b"),
+                    visibility: SlotVisibility::Shared,
+                },
+            ],
+            shared_layout: vec![SharedSlotLayout {
+                offset: 0,
+                kind: ScalarKind::Int.to_tag(),
+                len: 0,
+            }],
+            private_composite_layout: Vec::new(),
+        });
+        assert!(matches!(
+            typed_check_module(&m, 8, 8),
+            Err(TypedError::SharedLayoutCountMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn shared_slots_not_a_prefix_rejects() {
+        use crate::bytecode::{DataLayout, DataSlot, SharedSlotLayout, SlotVisibility};
+        // A shared slot follows a private slot. The runtime counts one shared
+        // slot and dispatches index 0 (here the private slot) as shared, so the
+        // prefix invariant its index-based dispatch relies on is broken.
+        let mut m = module(vec![chunk(vec![Op::Return], ints())], vec![]);
+        m.shared_data_bytes = 16;
+        m.data_layout = Some(DataLayout {
+            slots: vec![
+                DataSlot {
+                    name: String::from("p"),
+                    visibility: SlotVisibility::Private,
+                },
+                DataSlot {
+                    name: String::from("s"),
+                    visibility: SlotVisibility::Shared,
+                },
+            ],
+            shared_layout: vec![SharedSlotLayout {
+                offset: 0,
+                kind: ScalarKind::Int.to_tag(),
+                len: 0,
+            }],
+            private_composite_layout: Vec::new(),
+        });
+        assert!(matches!(
+            typed_check_module(&m, 8, 8),
+            Err(TypedError::SharedLayoutCountMismatch { .. })
+        ));
     }
 
     // Audit C4: a private-composite layout table with non-ascending (here

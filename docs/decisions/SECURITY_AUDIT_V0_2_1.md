@@ -136,6 +136,49 @@ finding-26 underscored-origin specialization guard. The finding-10 flat-read
 subslice and the finding-25 Option flat-body (`build_in_arena`) paths were
 additionally exercised clean under Miri (Tree Borrows).
 
+## Re-audit delta (baseline f7a9ace)
+
+A second delta re-audit at `f7a9ace` (`keleusma-reaudit-f7a9ace.md`) re-confirmed
+the four prior publish-gating closures (B1/14, B4/3, B5, 30) and the wired Annex
+A.2.1 typed operand-stack pass, and raised twelve new findings (C1-C12) plus a
+register of carried-open latent items. All are now remediated on
+`feat-reaudit-f7a9ace`.
+
+| # | Sev | Status | Note |
+|---|-----|--------|------|
+| C1 | Critical | Fixed | Null Text data pointer at the host marshalling boundary (`from_flat_bytes_ctx`) now screens `ptr == 0` to an empty string, mirroring the in-VM read, so it no longer builds `NonNull::new_unchecked(0)`. Miri (Tree Borrows) proof-of-concept `c1_null_text_pointer_marshals_to_empty_string_not_ub`. |
+| C2 | High | Fixed | The flat Text VM read routes through a checked `bytes.get(..)`, faulting `InvalidBytecode` rather than panicking on an out-of-bounds offset. The typed pass rejects the reconstructible-shape case at load (`c2_flat_text_field_offset_overrun_rejected`); the runtime guard is the defer-on-Top backstop. |
+| C3 | Med | Fixed | IsEnum/IsStruct `stack_growth` corrected from 0 to 1, aligning the WCMU reporting model with the operand-depth and typed models (`is_enum_is_struct_operand_models_agree`, `is_enum_accumulation_counted_in_wcmu`). |
+| C4 | Med | Fixed | `validate_data_layout` validates the `private_composite_layout` table for strict ascending unique in-range slots and pool-bounded ascending offsets. |
+| C5 | High | Fixed | The post-monomorphization re-typecheck range-checks a concrete Multiword dimension to [1, 65535]; `as_multiword_lit` refuses to truncate. |
+| C6 | High | Fixed | Const arithmetic uses checked add/sub/mul; overflow keeps the expression symbolic rather than wrapping, and an overflowed or non-positive dimension is rejected. |
+| C7 | Med | Fixed | `extract_loop_iteration_bound` now verifies the loop body advances the induction variable by a positive constant and reassigns neither the induction nor the end local; a non-advancing loop is rejected rather than assigned a finite bound. |
+| C8 | Low | Fixed | The loop-fixpoint cap path re-checks operand neutrality. |
+| C9 | Low | Fixed | FixedToWord/FixedMul/FixedDiv fail closed on an out-of-range fraction count rather than risk a shift overflow; verifier-rejection tests cover the three arms. |
+| C10 | Low | Fixed (doc) | The shift-operator specification states the scalar mask-modulo-width and multi-word saturate-to-fill semantics accurately, including negative amounts. |
+| C11 | Low | Fixed | A non-positive fixed-size array length is rejected in every declaration position (`c11_array_length`). |
+| C12 | Info | Fixed | The typed-pass module comment now states it is wired into `crate::verify`. |
+
+Carried-open residuals from the prior register are also closed. B3 was elevated
+to C1. The B2 and 11/12/19 Text residual is C2. The B6 residual is closed:
+`validate_data_layout` reconciles `shared_layout.len()` with the shared-slot
+count and requires shared slots to be the contiguous prefix, closing a reachable
+`shared_layout[slot]` index panic (`shared_layout_count_mismatch_rejects`,
+`shared_slots_not_a_prefix_rejects`). Finding 28/B12 is closed by checked
+accumulation in `struct_field_offset`. B13 is closed by saturating the
+private-composite pool widening rather than truncating. B8's construction side
+was already cross-checked. The narrow-declared multiword long-division case the
+re-audit flagged unconfirmed is confirmed correct by
+`narrow_declared_multiword_long_division_on_wide_runtime`. B11 (repurposed
+reserved header words) remains informational: it is bounded by construction
+failure rather than an out-of-bounds access and is authenticated in signed
+modules, so no code change was warranted.
+
+None of the remediations change the wire format, `BYTECODE_VERSION`, or the
+instruction set. The gate is green on default, signatures, and all-features, with
+`clippy --tests --all-features -D warnings` and `fmt` clean, and the C1 path is
+additionally Miri-clean under Tree Borrows.
+
 ## Severity and category distribution
 
 | Severity | Count |

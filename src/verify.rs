@@ -2964,6 +2964,61 @@ mod tests {
     }
 
     #[test]
+    fn is_enum_is_struct_operand_models_agree() {
+        // Audit C3: the WCMU reporting model (`Op::stack_growth`/`stack_shrink`)
+        // must agree with the operand-depth model (`op_depth_effect` net) for
+        // IsEnum and IsStruct. Both peek the scrutinee and push a Bool, a true
+        // net effect of +1. A prior `stack_growth` of 0 under-counted the
+        // worst-case operand peak, so a hostile chunk accumulating IsEnum
+        // results could exceed the reported WCMU while still verifying.
+        let dummy = make_chunk("d", vec![Op::Return], BlockType::Func);
+        for op in [Op::IsEnum(0, 0, 0), Op::IsStruct(0)] {
+            let reporting_net = op.stack_growth() as i32 - op.stack_shrink() as i32;
+            let (_, depth_net) = op_depth_effect(&op, &dummy);
+            assert_eq!(reporting_net, 1, "{op:?}: reporting model net must be +1");
+            assert_eq!(
+                reporting_net, depth_net,
+                "{op:?}: WCMU reporting and operand-depth models must agree"
+            );
+        }
+    }
+
+    #[test]
+    fn is_enum_accumulation_counted_in_wcmu() {
+        // Audit C3 end to end: a chunk that accumulates live IsEnum results
+        // (each peeks the top and pushes a Bool, growing the stack by one) must
+        // reflect the higher operand peak in the reported stack WCMU. Before the
+        // fix (stack_growth 0) the extra Bools were invisible to the bound the
+        // arena capacity is checked against, so a hostile chunk could exceed the
+        // reported WCMU.
+        let one = make_chunk(
+            "one",
+            vec![Op::Const(0), Op::IsEnum(0, 0, 0), Op::Return],
+            BlockType::Func,
+        );
+        let four = make_chunk(
+            "four",
+            vec![
+                Op::Const(0),
+                Op::IsEnum(0, 0, 0),
+                Op::IsEnum(0, 0, 0),
+                Op::IsEnum(0, 0, 0),
+                Op::IsEnum(0, 0, 0),
+                Op::Return,
+            ],
+            BlockType::Func,
+        );
+        let (stack_one, _) = wcmu_whole_chunk(&one).expect("wcmu one");
+        let (stack_four, _) = wcmu_whole_chunk(&four).expect("wcmu four");
+        // Three additional IsEnum results are three additional live slots.
+        assert_eq!(
+            stack_four - stack_one,
+            3 * crate::bytecode::VALUE_SLOT_SIZE_BYTES,
+            "each accumulated IsEnum result must add one operand slot to the WCMU"
+        );
+    }
+
+    #[test]
     fn valid_func_chunk() {
         let chunk = make_chunk("main", vec![Op::Const(0), Op::Return], BlockType::Func);
         let module = make_module(vec![chunk]);
@@ -4045,7 +4100,7 @@ mod tests {
             aux_arena_bytes: 0,
             persistent_composite_bytes: 0,
             flags: 0,
-            shared_data_bytes: 0,
+            shared_data_bytes: 16,
             private_data_bytes: 0,
             data_layout: Some(DataLayout {
                 slots: vec![
@@ -4058,7 +4113,21 @@ mod tests {
                         visibility: crate::bytecode::SlotVisibility::Shared,
                     },
                 ],
-                shared_layout: Vec::new(),
+                // One layout entry per shared slot, as a compiled module emits
+                // (audit B6 residual reconciliation): two 8-byte Int scalars at
+                // offsets 0 and 8 within the 16-byte shared buffer.
+                shared_layout: vec![
+                    crate::bytecode::SharedSlotLayout {
+                        offset: 0,
+                        kind: crate::value_layout::ScalarKind::Int.to_tag(),
+                        len: 0,
+                    },
+                    crate::bytecode::SharedSlotLayout {
+                        offset: 8,
+                        kind: crate::value_layout::ScalarKind::Int.to_tag(),
+                        len: 0,
+                    },
+                ],
                 private_composite_layout: Vec::new(),
             }),
         };
