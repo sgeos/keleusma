@@ -210,6 +210,20 @@ pub enum TypedError {
         /// The baked flat enum body size.
         baked: u32,
     },
+    /// An entry in the private-composite layout table is malformed (audit C4).
+    /// The runtime binary-searches this producer-supplied table by slot and
+    /// reads a flat composite write's persistent-pool offset from it, so a
+    /// corrupt table can route a write to the wrong slot's offset. The table
+    /// must list strictly ascending, unique, in-range slots with strictly
+    /// ascending pool offsets bounded by the persistent composite pool.
+    PrivateCompositeLayoutInvalid {
+        /// Zero-based table entry index.
+        index: usize,
+        /// The slot the entry names.
+        slot: usize,
+        /// Which invariant the entry violated.
+        reason: &'static str,
+    },
 }
 
 /// Per-chunk signature that seeds the abstract stack where the op stream
@@ -361,6 +375,42 @@ fn validate_data_layout(
                 buffer,
             });
         }
+    }
+
+    // Validate the private-composite layout table (audit C4). The runtime
+    // binary-searches it by slot (`private_composite_pool_offset`) and reads a
+    // flat composite write's pool offset from it, so a corrupt table can route
+    // a write to the wrong slot's offset or place a body outside the pool.
+    // Require strictly ascending unique slots (the binary-search invariant),
+    // in-range slot indices, and strictly ascending offsets within the
+    // persistent composite pool. The per-slot body size is not wire-carried,
+    // so exact non-overlap is bounded by the ascending-offset-within-pool
+    // check together with the runtime capacity guard at the write, rather than
+    // recomputed here.
+    let data_len = layout.slots.len();
+    let pool = module.persistent_composite_bytes;
+    let mut prev: Option<(u16, u32)> = None;
+    for (index, e) in layout.private_composite_layout.iter().enumerate() {
+        let invalid = |reason| TypedError::PrivateCompositeLayoutInvalid {
+            index,
+            slot: usize::from(e.slot),
+            reason,
+        };
+        if usize::from(e.slot) >= data_len {
+            return Err(invalid("slot index out of range"));
+        }
+        if e.offset >= pool {
+            return Err(invalid("pool offset outside the persistent composite pool"));
+        }
+        if let Some((pslot, poff)) = prev {
+            if e.slot <= pslot {
+                return Err(invalid("slots are not strictly ascending"));
+            }
+            if e.offset <= poff {
+                return Err(invalid("pool offsets are not strictly ascending"));
+            }
+        }
+        prev = Some((e.slot, e.offset));
     }
     Ok(())
 }
@@ -561,10 +611,24 @@ fn interp_region(
                         break; // stable
                     }
                     if iters >= cap {
+                        // Defensive convergence: invalidate every body-written
+                        // slot and do one final pass. Re-check operand-stack
+                        // neutrality on this pass too (audit C8), for parity
+                        // with the in-loop check above; invalidation touches
+                        // only locals, so `head.stack` is unchanged.
                         invalidate_written_locals(ctx.chunk, ip + 1, exit - 1, &mut head.locals);
                         loop_breaks.clear();
                         body_end =
                             interp_region(ctx, ip + 1, exit - 1, head.clone(), &mut loop_breaks)?;
+                        if let Some(be) = &body_end
+                            && be.stack != head.stack
+                        {
+                            return Err(TypedError::LoopNotNeutral {
+                                ip,
+                                entry_height,
+                                exit_height: be.stack.len(),
+                            });
+                        }
                         break;
                     }
                     head.locals = widened;
@@ -1280,6 +1344,83 @@ mod tests {
             private_composite_layout: Vec::new(),
         });
         assert!(typed_check_module(&m, 8, 8).is_ok());
+    }
+
+    // Audit C4: a private-composite layout table with non-ascending (here
+    // duplicate/unsorted) slots is rejected, since the runtime binary-searches
+    // it and an unsorted table would route a composite write to the wrong
+    // slot's pool offset. An out-of-range slot and a pool-overrunning offset
+    // are likewise rejected; a well-formed table accepts.
+    #[test]
+    fn private_composite_layout_unsorted_rejects() {
+        use crate::bytecode::{DataLayout, DataSlot, PrivateCompositeSlot, SlotVisibility};
+        let slots = vec![
+            DataSlot {
+                name: alloc::string::String::from("a"),
+                visibility: SlotVisibility::Private,
+            },
+            DataSlot {
+                name: alloc::string::String::from("b"),
+                visibility: SlotVisibility::Private,
+            },
+        ];
+        let mk = |table: Vec<PrivateCompositeSlot>| {
+            let mut m = module(vec![chunk(vec![Op::Return], ints())], vec![]);
+            m.persistent_composite_bytes = 64;
+            m.data_layout = Some(DataLayout {
+                slots: slots.clone(),
+                shared_layout: Vec::new(),
+                private_composite_layout: table,
+            });
+            m
+        };
+        // Not strictly ascending (slot 1 then slot 0).
+        assert!(matches!(
+            typed_check_module(
+                &mk(vec![
+                    PrivateCompositeSlot { slot: 1, offset: 0 },
+                    PrivateCompositeSlot {
+                        slot: 0,
+                        offset: 16
+                    },
+                ]),
+                8,
+                8
+            ),
+            Err(TypedError::PrivateCompositeLayoutInvalid { .. })
+        ));
+        // Slot index out of range (data layout has 2 slots).
+        assert!(matches!(
+            typed_check_module(&mk(vec![PrivateCompositeSlot { slot: 5, offset: 0 }]), 8, 8),
+            Err(TypedError::PrivateCompositeLayoutInvalid { .. })
+        ));
+        // Offset outside the pool.
+        assert!(matches!(
+            typed_check_module(
+                &mk(vec![PrivateCompositeSlot {
+                    slot: 0,
+                    offset: 64
+                }]),
+                8,
+                8
+            ),
+            Err(TypedError::PrivateCompositeLayoutInvalid { .. })
+        ));
+        // Well-formed: ascending slots and offsets within the pool.
+        assert!(
+            typed_check_module(
+                &mk(vec![
+                    PrivateCompositeSlot { slot: 0, offset: 0 },
+                    PrivateCompositeSlot {
+                        slot: 1,
+                        offset: 16
+                    },
+                ]),
+                8,
+                8
+            )
+            .is_ok()
+        );
     }
 
     // Phase 4 (B8): a flat-enum `NewComposite` whose baked body size matches no
