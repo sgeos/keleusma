@@ -370,6 +370,18 @@ fn extract_loop_iteration_bound(chunk: &Chunk, loop_ip: usize) -> Option<u32> {
     let end_val = trace_const_set_local(chunk, loop_ip, end_slot)?;
     let start_val = trace_const_set_local(chunk, loop_ip, var_slot)?;
 
+    // Verify the loop body actually advances the induction variable by a
+    // positive step and never reassigns the induction or bound local, so the
+    // count below is a sound upper bound on iterations rather than a trusted
+    // guess (audit C7). Without this a hostile loop carrying the canonical
+    // header but a non-advancing body would be admitted with a finite
+    // worst-case bound while running more iterations, or forever. On failure
+    // return `None`, which the caller treats as an inextractable bound and
+    // rejects under the strict stance.
+    if !loop_body_advances_induction(chunk, loop_ip, var_slot, end_slot) {
+        return None;
+    }
+
     if end_val >= start_val {
         let count = (end_val - start_val) as u64;
         if count > u32::MAX as u64 {
@@ -379,6 +391,73 @@ fn extract_loop_iteration_bound(chunk: &Chunk, loop_ip: usize) -> Option<u32> {
         }
     } else {
         Some(0)
+    }
+}
+
+/// Verify that the body of the canonical for-range loop at `loop_ip` advances
+/// `var_slot` by a positive constant exactly once, at its tail, and never
+/// reassigns `var_slot` or `end_slot` elsewhere (audit C7). This is what makes
+/// `end - start` a sound upper bound on the iteration count.
+///
+/// The loop body is `[loop_ip + 5, endloop)`, following the four header ops
+/// (`GetLocal var`, `GetLocal end`, `CmpGe`, `BreakIf`). The compiler emits the
+/// increment as the last five ops before `EndLoop`
+/// (`GetLocal(var); Const(step); CheckedAdd; PopN(2); SetLocal(var)`), which
+/// dominates the back edge because a `Break`/`BreakIf` inside the body exits the
+/// loop rather than continuing. A reassignment of the loop variable inside the
+/// body (`for i in 0..n { i = 0 }`) is an unbounded program and is correctly
+/// rejected here; a bounded loop never carries one.
+fn loop_body_advances_induction(
+    chunk: &Chunk,
+    loop_ip: usize,
+    var_slot: u16,
+    end_slot: u16,
+) -> bool {
+    let ops = &chunk.ops;
+    let Some(Op::Loop(exit)) = ops.get(loop_ip) else {
+        return false;
+    };
+    let exit = *exit as usize;
+    if exit == 0 || exit > ops.len() {
+        return false;
+    }
+    let endloop = exit - 1;
+    if !matches!(ops.get(endloop), Some(Op::EndLoop(_))) {
+        return false;
+    }
+    let body = loop_ip + 5;
+    // The five-op increment must fit within the body, before EndLoop.
+    if endloop < 5 || endloop - 5 < body {
+        return false;
+    }
+    // No reassignment of the bound local, and exactly one of the induction
+    // variable, anywhere in the body.
+    let mut var_sets = 0u32;
+    for op in &ops[body..endloop] {
+        if let Op::SetLocal(s) = op {
+            if *s == end_slot {
+                return false;
+            }
+            if *s == var_slot {
+                var_sets += 1;
+            }
+        }
+    }
+    if var_sets != 1 {
+        return false;
+    }
+    // The single reassignment is the canonical positive increment at the tail.
+    match &ops[endloop - 5..endloop] {
+        [
+            Op::GetLocal(g),
+            Op::Const(c),
+            Op::CheckedAdd,
+            Op::PopN(2),
+            Op::SetLocal(s),
+        ] if *g == var_slot && *s == var_slot => {
+            matches!(chunk.constants.get(*c as usize), Some(ConstValue::Int(n)) if *n > 0)
+        }
+        _ => false,
     }
 }
 
@@ -4541,7 +4620,9 @@ mod tests {
 
     #[test]
     fn extract_loop_iteration_bound_matches_canonical() {
-        // Synthetic chunk in the canonical for-range shape.
+        // Synthetic chunk in the canonical for-range shape, including the
+        // per-iteration increment (`var + 1`) the compiler emits. The bound is
+        // only extractable because the body advances the induction variable.
         let mut chunk = make_chunk(
             "test",
             vec![
@@ -4549,20 +4630,52 @@ mod tests {
                 Op::SetLocal(0), // 1: var = 0
                 Op::Const(1),    // 2: push end (10)
                 Op::SetLocal(1), // 3: end = 10
-                Op::Loop(11),    // 4
+                Op::Loop(15),    // 4
                 Op::GetLocal(0), // 5: get var
                 Op::GetLocal(1), // 6: get end
                 Op::CmpGe,       // 7
+                Op::BreakIf(15), // 8
+                Op::GetLocal(0), // 9: increment var + 1
+                Op::Const(2),    // 10: Int(1)
+                Op::CheckedAdd,  // 11
+                Op::PopN(2),     // 12
+                Op::SetLocal(0), // 13
+                Op::EndLoop(5),  // 14
+                Op::Return,      // 15
+            ],
+            BlockType::Func,
+        );
+        chunk.constants = vec![ConstValue::Int(0), ConstValue::Int(10), ConstValue::Int(1)];
+
+        let count = extract_loop_iteration_bound(&chunk, 4);
+        assert_eq!(count, Some(10));
+    }
+
+    #[test]
+    fn extract_loop_iteration_bound_none_without_increment() {
+        // audit C7: the canonical header but a body that never advances the
+        // induction variable is a non-terminating loop. The bound must not be
+        // extractable (it would be an unsound worst-case multiplier); the
+        // caller then rejects the loop.
+        let mut chunk = make_chunk(
+            "test",
+            vec![
+                Op::Const(0),    // 0
+                Op::SetLocal(0), // 1: var = 0
+                Op::Const(1),    // 2
+                Op::SetLocal(1), // 3: end = 10
+                Op::Loop(11),    // 4
+                Op::GetLocal(0), // 5
+                Op::GetLocal(1), // 6
+                Op::CmpGe,       // 7
                 Op::BreakIf(11), // 8
-                Op::EndLoop(5),  // 9
+                Op::EndLoop(5),  // 9: no increment in the body
                 Op::Return,      // 10
             ],
             BlockType::Func,
         );
         chunk.constants = vec![ConstValue::Int(0), ConstValue::Int(10)];
-
-        let count = extract_loop_iteration_bound(&chunk, 4);
-        assert_eq!(count, Some(10));
+        assert_eq!(extract_loop_iteration_bound(&chunk, 4), None);
     }
 
     #[test]
@@ -4645,32 +4758,42 @@ mod tests {
             "tick",
             vec![
                 Op::Stream,
-                Op::Const(0),    // start = 5
-                Op::SetLocal(0), // var = 5
-                Op::Const(1),    // end = 5
-                Op::SetLocal(1), // end_slot = 5
-                Op::Loop(15),
-                Op::GetLocal(0),
-                Op::GetLocal(1),
-                Op::CmpGe,
-                Op::BreakIf(15),
-                Op::Const(2),
-                Op::Const(2),
+                Op::Const(0),    // 1: start = 5
+                Op::SetLocal(0), // 2: var = 5
+                Op::Const(1),    // 3: end = 5
+                Op::SetLocal(1), // 4: end_slot = 5
+                Op::Loop(20),    // 5
+                Op::GetLocal(0), // 6
+                Op::GetLocal(1), // 7
+                Op::CmpGe,       // 8
+                Op::BreakIf(20), // 9
+                Op::Const(2),    // 10
+                Op::Const(2),    // 11
                 Op::NewComposite(crate::bytecode::NewCompositeOperand::Flat {
                     kind: crate::value_layout::CompositeKind::Array,
                     count: 2,
                     byte_size: 16,
-                }), // body: allocate 2-element array
-                Op::PopN(1),
-                Op::EndLoop(6),
-                Op::PushImmediate(0),
-                Op::Yield,
-                Op::PopN(1),
-                Op::Reset,
+                }), // 12: body: allocate 2-element array
+                Op::PopN(1),     // 13
+                Op::GetLocal(0), // 14: increment var + 1
+                Op::Const(3),    // 15: Int(1)
+                Op::CheckedAdd,  // 16
+                Op::PopN(2),     // 17
+                Op::SetLocal(0), // 18
+                Op::EndLoop(6),  // 19
+                Op::PushImmediate(0), // 20
+                Op::Yield,       // 21
+                Op::PopN(1),     // 22
+                Op::Reset,       // 23
             ],
             BlockType::Stream,
         );
-        chunk.constants = vec![ConstValue::Int(5), ConstValue::Int(5), ConstValue::Int(0)];
+        chunk.constants = vec![
+            ConstValue::Int(5),
+            ConstValue::Int(5),
+            ConstValue::Int(0),
+            ConstValue::Int(1),
+        ];
         chunk.local_count = 2;
         let (_stack, heap) = wcmu_stream_iteration(&chunk).unwrap();
         // 0 iterations means the body's heap allocation does not count.
