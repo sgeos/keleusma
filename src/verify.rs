@@ -1983,6 +1983,17 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
         verify_chunk(chunk, module, None)?;
         verify_stack_depth(chunk)?;
     }
+    // Typed operand-stack pass (A.2.1): reconstructs per-slot flat shapes and
+    // validates baked flat offsets, branch/loop stack balance, and the
+    // wire-carried layout tables. It runs in defer-on-`Top` mode — a value
+    // whose shape it cannot reconstruct defers to the retained runtime guard —
+    // so it only ever rejects a provable violation and never a valid program.
+    let wb = (1usize << module.word_bits_log2) / 8;
+    let fb = (1usize << module.float_bits_log2) / 8;
+    crate::verify_typed::typed_check_module(module, wb, fb).map_err(|e| VerifyError {
+        chunk_name: alloc::string::String::from("<typed operand-stack pass>"),
+        message: alloc::format!("typed operand-stack verification failed: {e:?}"),
+    })?;
     Ok(())
 }
 
@@ -2968,17 +2979,18 @@ mod tests {
     #[test]
     fn valid_if_else() {
         // If targets the else body (instruction after Else), Else targets EndIf.
+        // Both arms leave one value so the operand stack is balanced at the
+        // merge (the typed pass's exact-height join requires it).
         let chunk = make_chunk(
             "main",
             vec![
                 Op::PushImmediate(1), // 0
-                Op::If(5),            // 1 -> else body at 5
+                Op::If(4),            // 1 -> else body at 4
                 Op::Const(0),         // 2 (then body)
-                Op::Const(0),         // 3 (then body continued)
-                Op::Else(6),          // 4 -> EndIf at 6
-                Op::Const(0),         // 5 (else body)
-                Op::EndIf,            // 6
-                Op::Return,           // 7
+                Op::Else(5),          // 3 -> EndIf at 5
+                Op::Const(0),         // 4 (else body)
+                Op::EndIf,            // 5
+                Op::Return,           // 6
             ],
             BlockType::Func,
         );
@@ -2994,13 +3006,12 @@ mod tests {
             "main",
             vec![
                 Op::PushImmediate(1), // 0
-                Op::If(5),            // 1
+                Op::If(4),            // 1
                 Op::Const(0),         // 2
-                Op::Const(0),         // 3
-                Op::Else(6),          // 4
-                Op::Const(0),         // 5
-                Op::EndIf,            // 6
-                Op::Return,           // 7
+                Op::Else(5),          // 3
+                Op::Const(0),         // 4
+                Op::EndIf,            // 5
+                Op::Return,           // 6
             ],
             BlockType::Func,
         );
@@ -3015,10 +3026,10 @@ mod tests {
         assert!(has(1, "if-branch-target-in-bounds"));
         // The Else construct discharges three distinct checks, each its
         // own obligation, all keyed to the Else op.
-        assert!(has(4, "else-preceded-by-matching-if"));
-        assert!(has(4, "else-target-in-bounds"));
-        assert!(has(4, "else-target-is-endif"));
-        assert!(has(6, "endif-closes-open-if"));
+        assert!(has(3, "else-preceded-by-matching-if"));
+        assert!(has(3, "else-target-in-bounds"));
+        assert!(has(3, "else-target-is-endif"));
+        assert!(has(5, "endif-closes-open-if"));
         // Chunk-level pass-1 and pass-2 facts at op 0.
         assert!(has(0, "all-blocks-closed"));
         assert!(has(0, "func-has-no-yield"));
@@ -3622,20 +3633,21 @@ mod tests {
     #[test]
     fn productivity_yield_both_branches() {
         // Stream -> If { Yield } Else { Yield } -> Reset: both branches yield.
+        // Each arm discards its resume value so both leave the stack balanced.
         let chunk = make_chunk(
             "tick",
             vec![
                 Op::Stream,           // 0
                 Op::PushImmediate(1), // 1
-                Op::If(6),            // 2 -> else body at 6
+                Op::If(7),            // 2 -> else body at 7
                 Op::GetLocal(0),      // 3 (then)
                 Op::Yield,            // 4 (then)
-                Op::Else(9),          // 5 -> EndIf at 9
-                Op::GetLocal(0),      // 6 (else)
-                Op::Yield,            // 7 (else)
-                Op::PopN(1),          // 8 (else)
-                Op::EndIf,            // 9
-                Op::PopN(1),          // 10
+                Op::PopN(1),          // 5 (then)
+                Op::Else(10),         // 6 -> EndIf at 10
+                Op::GetLocal(0),      // 7 (else)
+                Op::Yield,            // 8 (else)
+                Op::PopN(1),          // 9 (else)
+                Op::EndIf,            // 10
                 Op::Reset,            // 11
             ],
             BlockType::Stream,
@@ -3647,6 +3659,7 @@ mod tests {
     #[test]
     fn productivity_yield_before_if() {
         // Stream -> Yield -> If/Else -> Reset: yield dominates both branches.
+        // Both arms push then pop, leaving the stack balanced at the merge.
         let chunk = make_chunk(
             "tick",
             vec![
@@ -3655,13 +3668,14 @@ mod tests {
                 Op::Yield,            // 2
                 Op::PopN(1),          // 3
                 Op::PushImmediate(1), // 4
-                Op::If(8),            // 5 -> else body at 8
+                Op::If(9),            // 5 -> else body at 9
                 Op::PushImmediate(0), // 6 (then)
-                Op::Else(10),         // 7 -> EndIf at 10
-                Op::PushImmediate(0), // 8 (else)
-                Op::PopN(1),          // 9 (else)
-                Op::EndIf,            // 10
-                Op::Reset,            // 11
+                Op::PopN(1),          // 7 (then)
+                Op::Else(11),         // 8 -> EndIf at 11
+                Op::PushImmediate(0), // 9 (else)
+                Op::PopN(1),          // 10 (else)
+                Op::EndIf,            // 11
+                Op::Reset,            // 12
             ],
             BlockType::Stream,
         );
@@ -3744,7 +3758,9 @@ mod tests {
     #[test]
     fn productivity_yield_before_loop() {
         // Stream -> Yield -> Loop { BreakIf } -> Reset.
-        // Yield dominates the loop, so all paths have yielded.
+        // Yield dominates the loop, so all paths have yielded. The loop body is
+        // stack-neutral (it pushes and pops the condition only), as the typed
+        // pass's back-edge neutrality requires.
         let chunk = make_chunk(
             "tick",
             vec![
@@ -3752,12 +3768,11 @@ mod tests {
                 Op::GetLocal(0),      // 1
                 Op::Yield,            // 2
                 Op::PopN(1),          // 3
-                Op::Loop(9),          // 4 -> past EndLoop
+                Op::Loop(8),          // 4 -> past EndLoop
                 Op::PushImmediate(1), // 5
-                Op::BreakIf(9),       // 6 -> past EndLoop
-                Op::PushImmediate(0), // 7
-                Op::EndLoop(5),       // 8 -> back to 5
-                Op::Reset,            // 9
+                Op::BreakIf(8),       // 6 -> past EndLoop
+                Op::EndLoop(5),       // 7 -> back to 5
+                Op::Reset,            // 8
             ],
             BlockType::Stream,
         );
