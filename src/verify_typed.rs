@@ -507,36 +507,66 @@ fn interp_region(
             Op::Loop(target) => {
                 let exit = *target as usize;
                 let entry_height = state.stack.len();
-                // A slot the loop body writes may hold a prior iteration's
-                // value at the loop head, which a single pass cannot know, so
-                // invalidate it to `Top` before interpreting the body. A slot
-                // the body never writes is loop-invariant and keeps its shape.
-                let mut body_entry = state.clone();
-                invalidate_written_locals(ctx.chunk, ip + 1, exit - 1, &mut body_entry.locals);
+                // Loop-head local shapes are a bounded ascending fixpoint: start
+                // from the entry locals and widen by joining in the back-edge
+                // (body fall-through) locals until stable. A slot with the same
+                // shape on every iteration is proven; one that differs across
+                // iterations widens to `Top` and defers. Starting from the
+                // concrete entry locals (rather than invalidating every
+                // body-written slot to `Top` up front) also validates the first
+                // iteration precisely, which reads each slot's pre-loop value.
+                // The lattice is finite and the join only moves toward `Top`, so
+                // this converges (a slot changes at most once, concrete to
+                // `Top`); a defensive cap forces convergence by invalidating
+                // every body-written slot to `Top` — the sound over-
+                // approximation — and doing one final pass. The operand stack is
+                // not widened: back-edge neutrality (below) fixes its shapes
+                // across iterations.
+                let mut head = state.clone();
+                let cap = head.locals.len() + 2;
                 let mut loop_breaks: Vec<AbsState> = Vec::new();
-                let body_end =
-                    interp_region(ctx, ip + 1, exit - 1, body_entry.clone(), &mut loop_breaks)?;
-                // Back-edge neutrality: the body's fall-through must restore
-                // the exact entry operand stack (height and per-slot shape), so
-                // each iteration begins in the same state and per-iteration
-                // stack growth cannot escape the worst-case bound. Locals may
-                // legitimately change across iterations and are not required to
-                // be neutral.
-                if let Some(be) = &body_end
-                    && be.stack != body_entry.stack
-                {
-                    return Err(TypedError::LoopNotNeutral {
-                        ip,
-                        entry_height,
-                        exit_height: be.stack.len(),
-                    });
+                let mut body_end;
+                let mut iters = 0usize;
+                loop {
+                    loop_breaks.clear();
+                    body_end =
+                        interp_region(ctx, ip + 1, exit - 1, head.clone(), &mut loop_breaks)?;
+                    let Some(be) = &body_end else {
+                        // The body always exits via Break/Trap/Return: no
+                        // back-edge, so no fixpoint is needed.
+                        break;
+                    };
+                    // Back-edge neutrality: the fall-through must restore the
+                    // exact entry operand stack (height and per-slot shape), so
+                    // per-iteration stack growth cannot escape the worst-case
+                    // bound. Locals may change across iterations.
+                    if be.stack != head.stack {
+                        return Err(TypedError::LoopNotNeutral {
+                            ip,
+                            entry_height,
+                            exit_height: be.stack.len(),
+                        });
+                    }
+                    let widened = join_locals(&head.locals, &be.locals);
+                    if widened == head.locals {
+                        break; // stable
+                    }
+                    if iters >= cap {
+                        invalidate_written_locals(ctx.chunk, ip + 1, exit - 1, &mut head.locals);
+                        loop_breaks.clear();
+                        body_end =
+                            interp_region(ctx, ip + 1, exit - 1, head.clone(), &mut loop_breaks)?;
+                        break;
+                    }
+                    head.locals = widened;
+                    iters += 1;
                 }
                 // The code after the loop is reached via the break edges; if
                 // there are none, fall back to the (neutral) body exit or the
-                // body-entry state, mirroring the depth pass.
+                // fixpoint head, mirroring the depth pass.
                 state = match join_all(loop_breaks, ip)? {
                     Some(s) => s,
-                    None => body_end.unwrap_or(body_entry),
+                    None => body_end.unwrap_or(head),
                 };
                 ip = exit;
             }
@@ -1483,35 +1513,51 @@ mod tests {
         assert!(typed_check_chunk(&chunk(ops, ints()), 8, 8).is_ok());
     }
 
-    // Phase 2 local tracking, loop soundness: a local the loop body writes is
-    // invalidated to `Top` at the loop head (a prior iteration may have
-    // overwritten it), so a flat access on it inside the loop defers rather
-    // than trusting the stale shape it held before the loop. Slot 0 is set to
-    // a 16-byte struct before the loop; the loop body reads it with an offset
-    // that would be out of bounds for that struct and also rewrites it. With
-    // the slot invalidated the access defers and the program verifies; without
-    // invalidation the stale struct shape would make it a false out-of-bounds
-    // rejection.
-    #[test]
-    fn loop_written_local_is_invalidated_and_defers() {
+    // Phase 2 loop fixpoint: a loop-carried local whose shape is the same on
+    // every iteration is proven, so a flat access on it inside the loop is
+    // validated rather than deferred. Slot 0 holds a 16-byte struct before the
+    // loop and is rewritten to the same shape each iteration; the fixpoint's
+    // ascending join keeps it `Flat{16}`, so an in-bounds field access accepts.
+    //
+    // Body layout (Loop at 4, exit 14): 5 GetLocal(0), 6 GetField, 7 PopN,
+    // 8-10 rebuild, 11 SetLocal(0), 12 Break(14); 13 EndLoop(5); 14 Return.
+    fn loop_carried_local_chunk(field_offset: u16) -> Chunk {
         let mut ops = two_int_struct(16); // 0,1,2: build a struct
         ops.push(Op::SetLocal(0)); // 3: slot 0 = Flat{16}
-        ops.push(Op::Loop(14)); // 4: body [5,13), exit=14, EndLoop at 13
-        ops.push(Op::GetLocal(0)); // 5: slot 0 invalidated to Top -> [Top]
+        ops.push(Op::Loop(14)); // 4: body [5,13), EndLoop at 13
+        ops.push(Op::GetLocal(0)); // 5: carried slot 0 -> [Flat{16}]
         ops.push(Op::GetField(StructField::Flat {
-            offset: 12,
+            offset: field_offset,
             kind: ScalarKind::Int,
-        })); // 6: on Top -> defers -> [Scalar]
+        })); // 6
         ops.push(Op::PopN(1)); // 7: -> []
         ops.extend(two_int_struct(16)); // 8,9,10: rebuild -> [Flat]
-        ops.push(Op::SetLocal(0)); // 11: writes slot 0 (triggers invalidation) -> []
+        ops.push(Op::SetLocal(0)); // 11: slot 0 = Flat{16} again -> []
         ops.push(Op::Break(14)); // 12: exit
         ops.push(Op::EndLoop(5)); // 13: back-edge to 5
         ops.push(Op::Return); // 14
+        chunk(ops, ints())
+    }
+
+    #[test]
+    fn loop_carried_local_stable_shape_is_proven() {
+        // In-bounds field (8 + 8 == 16) on the stable carried `Flat{16}`.
         assert!(
-            typed_check_chunk(&chunk(ops, ints()), 8, 8).is_ok(),
-            "a loop-written local must be invalidated to Top so the access defers"
+            typed_check_chunk(&loop_carried_local_chunk(8), 8, 8).is_ok(),
+            "a stable loop-carried composite local must be proven and its field access accepted"
         );
+    }
+
+    #[test]
+    fn loop_carried_local_out_of_bounds_rejected() {
+        // Out-of-bounds field (12 + 8 = 20 > 16) on the same carried local; the
+        // first iteration reads its concrete pre-loop shape and every iteration
+        // keeps it, so the fixpoint rejects. The old invalidate-to-`Top`
+        // approximation deferred (missed) this.
+        assert!(matches!(
+            typed_check_chunk(&loop_carried_local_chunk(12), 8, 8),
+            Err(TypedError::OffsetOutOfBounds { .. })
+        ));
     }
 
     // A loop body that returns to the entry height but with a different slot
