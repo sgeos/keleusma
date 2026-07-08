@@ -38,6 +38,11 @@ exclude = [
     "tools/",
     "tmp/",
     "secret/",
+    # Internal audit narrative and process logs are kept out of the published
+    # tarball (audit 8859acb publication review); user-facing docs/guide/ and
+    # docs/spec/ still ship.
+    "docs/decisions/",
+    "docs/process/",
 ]
 
 [package.metadata.docs.rs]
