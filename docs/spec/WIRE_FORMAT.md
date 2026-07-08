@@ -52,10 +52,10 @@ The framing header is at least sixty-four bytes for unsigned modules and grows t
 | 44     | 4     | Operand pool length (u32 little-endian, multiple of 8) |
 | 48     | 4     | Auxiliary body offset (u32 little-endian, relative to start of file) |
 | 52     | 4     | Auxiliary body length (u32 little-endian) |
-| 56     | 4     | Reserved (u32, zero) |
-| 60     | 4     | Reserved (u32, zero) |
+| 56     | 4     | Auxiliary arena bytes (u32 little-endian). Backed by `Module::aux_arena_bytes`. |
+| 60     | 4     | Persistent composite bytes (u32 little-endian). Backed by `Module::persistent_composite_bytes`. |
 
-The reserved fields cover future section additions. A V0.2.x runtime that encounters non-zero reserved fields rejects the bytecode as `LoadError::Codec` to preserve forward-compatibility against future producers that adopt the same magic and version.
+The words at offsets 56 and 60 were reserved before B28 and are now live. Offset 56 carries the runtime auxiliary-arena byte size, the per-instance bookkeeping memory (the opaque registry and boxed-composite backing) that the runtime pre-sizes once inside the arena's top ephemeral region after each RESET rather than growing during an iteration; a host reads it to pre-size those lists. Offset 60 carries the persistent composite body pool byte size, the total storage that private `.data` slots holding flat composites require in the arena's persistent region so those bodies survive RESET in place; a host adds it to the arena's persistent capacity. A `0` value in either word leaves the header bytes identical to the prior reserved zero-fill, so a module needing neither figure is byte-unchanged. Any word that remains reserved for a future section addition holds zero, and a V0.2.x runtime that encounters a non-zero value in a still-reserved word rejects the bytecode as `LoadError::Codec` to preserve forward-compatibility against future producers that adopt the same magic and version.
 
 ### Signature extension (optional)
 
@@ -139,10 +139,21 @@ The operand semantics depend on the opcode variant. Inline operands cover these 
 
 The pool-referencing forms place their payload in the operand pool because it does not fit in three bytes:
 
-- **`(u16, u16)`.** Pool entry tag `0x01`. Three variants: `GetDataIndexed`, `SetDataIndexed`, `IsEnum`. The inline operand bytes carry a twenty-four-bit pool index little-endian.
+- **`(u16, u16)`.** Pool entry tag `0x01`. Two variants: `GetDataIndexed`, `SetDataIndexed`. The inline operand bytes carry a twenty-four-bit pool index little-endian. The tag also serves the `FlatNested` composite-access records described below.
 - **`(u16, u16, u8)`.** Pool entry tag `0x02`. One variant: `NewComposite`, used for the boxed form or when the flat field count exceeds sixty-two. Operand byte three holds the composite kind in its high two bits and the sentinel `0x3F` in its low six bits, so operand bytes one through two carry a sixteen-bit pool index rather than the twenty-four-bit index used by the `(u16, u16)` opcodes. The referenced entry carries `(count, byte_size-or-meta, boxed_flag)`.
+- **`(u16, u16, u16)`.** Pool entry tag `0x03`. One variant: `IsEnum`, which carries three constant indices, the enum name, the variant name, and the discriminant value. The inline operand bytes carry a twenty-four-bit pool index little-endian. The referenced entry carries the three `u16` values across bytes two through seven.
 
 A pool of up to 16,777,216 entries (no observed program approaches one tenth of this) covers the foreseeable case for the twenty-four-bit forms. A producer that exceeds the applicable limit emits a `CompileError`.
+
+### Baked composite-access records
+
+The four baked field and element access opcodes, `GetField` (id 38), `GetIndex` (id 39), `GetTupleField` (id 40), and `GetEnumField` (id 41), share one operand encoding family (B28 P2). Byte three of the record is a discriminator that selects one of three forms.
+
+- **Flat scalar access.** Byte three holds a scalar-kind tag in the range `0..=7`. For the three field forms, bytes one and two hold the little-endian flat byte offset of the field, and byte three names the scalar kind of the accessed value. For `GetIndex`, the homogeneous element kind is a scalar and byte one holds its tag directly.
+- **Boxed access.** Byte three holds `0xFF` (`TUPLE_FIELD_BOXED_SENTINEL`), which is distinguishable from a scalar-kind tag because scalar tags never exceed `7`. This marks an access against a boxed rather than a flat body. For `GetField`, bytes one and two hold the field-name constant index; for `GetTupleField` and `GetEnumField`, byte one holds the positional index. For `GetIndex`, the boxed form places `0xFF` in byte one with byte three zero.
+- **Nested-composite access.** Byte three holds a value in `0xF0..=0xF3` (`FLAT_NESTED_SENTINEL_BASE` with the low two bits carrying a `CompositeKind` tag). A nested composite cannot fit its `(offset, size)` in the two remaining operand bytes, so it spills to a tag `0x01` operand-pool entry. Bytes one and two hold the little-endian `u16` pool index; the pool entry holds `(offset, size)` for the three field forms and `(size, 0)` for `GetIndex` (a homogeneous array has no per-element offset because the element offset is `index * size`). A module whose nested access would reference a pool index beyond `u16::MAX` is rejected at encode time.
+
+The three sentinel spaces do not collide: scalar-kind tags occupy `0..=7`, the nested sentinels occupy `0xF0..=0xF3`, and the boxed sentinel is `0xFF`. A decoder reads byte three, tests for the boxed sentinel first, then for a nested sentinel through the `0xFC` mask, and otherwise decodes a scalar-kind tag; an unrecognised value surfaces as a decode error.
 
 ## Operand pool
 
@@ -150,16 +161,16 @@ The operand pool is a contiguous sequence of eight-byte entries. Each entry is s
 
 | Offset | Width | Field |
 |--------|-------|-------|
-| 0      | 1     | Type tag (`0x01` for `(u16, u16)`, `0x02` for `(u16, u16, u8)`). |
+| 0      | 1     | Type tag (`0x01` for `(u16, u16)`, `0x02` for `(u16, u16, u8)`, `0x03` for `(u16, u16, u16)`). |
 | 1      | 1     | Parity (XOR of bytes 0 and 2 through 7). |
 | 2      | 2     | First `u16` little-endian. |
 | 4      | 2     | Second `u16` little-endian. |
-| 6      | 1     | `u8` (for tag `0x02`) or zero (for tag `0x01`). |
-| 7      | 1     | Reserved (zero). |
+| 6      | 1     | For tag `0x02`, the `u8`. For tag `0x01`, zero. For tag `0x03`, the low byte of the third `u16`. |
+| 7      | 1     | For tag `0x03`, the high byte of the third `u16`. Otherwise reserved (zero). |
 
 The pool offset declared in the framing header is eight-byte aligned within the bytecode buffer. A consumer reading a pool entry validates the type tag against the expected tag for the consuming opcode and validates the parity against the rest of the entry. Tag and parity mismatches surface as `LoadError::CorruptOperandPool`.
 
-The reserved byte at offset seven is included so each entry occupies a full cache line within an eight-byte aligned region. The entry width is fixed at eight bytes regardless of the tag so a producer can compute pool offsets through `index * 8` arithmetic without consulting per-entry metadata.
+Byte seven is the high byte of the third `u16` for a tag `0x03` entry and is otherwise reserved zero so each entry occupies a full cache line within an eight-byte aligned region. The entry width is fixed at eight bytes regardless of the tag so a producer can compute pool offsets through `index * 8` arithmetic without consulting per-entry metadata.
 
 ## Section-partitioned body
 
@@ -167,7 +178,11 @@ The body of the bytecode partitions into three sections after the framing header
 
 1. **Opcode stream.** Concatenated four-byte records for every chunk in declaration order. Per-chunk boundaries live in the auxiliary body's chunk table.
 2. **Operand pool.** Concatenated eight-byte entries indexed by the inline pool index in the opcode records that reference them.
-3. **Auxiliary body.** Constant pool, struct templates, chunk table (name, op offset, op count, local count, parameter types, and an optional per-chunk debug metadata section), native names, data layout, entry point index, the per-enum-type layout table (`enum_layouts`, added under B37 with the variant discriminants and padded-body sizes), and the typed-verifier descriptor tables (Annex A.2.1) that seed the typed operand-stack pass: a per-chunk signature table (`signatures`, the flat shape of each parameter, the return, and the Stream resume), and a per-native return-shape table (`native_return_shapes`, parallel to the native names). The verifier tables are additive and carry no `BYTECODE_VERSION` change; an empty table reproduces the unseeded behaviour. The auxiliary body uses the existing rkyv archived encoding through V0.2.x and migrates to a custom encoding under a Phase 7c follow-on.
+3. **Auxiliary body.** Constant pool, struct templates, chunk table (name, op offset, op count, local count, parameter types, and an optional per-chunk debug metadata section), native names, data layout, entry point index, a `schema_hash` (u32), the per-enum-type layout table (`enum_layouts`, added under B37 with the variant discriminants and padded-body sizes), and the typed-verifier descriptor tables (Annex A.2.1) that seed the typed operand-stack pass: a per-chunk signature table (`signatures`, the flat shape of each parameter, the return, and the Stream resume), and a per-native return-shape table (`native_return_shapes`, parallel to the native names). The verifier tables are additive and carry no `BYTECODE_VERSION` change; an empty table reproduces the unseeded behaviour. The auxiliary body uses the existing rkyv archived encoding through V0.2.x and migrates to a custom encoding under a Phase 7c follow-on.
+
+   The `schema_hash` is a CRC-32 of the data-segment layout, computed from a canonical serialisation of each slot's name and visibility in declaration order (`Module::schema_hash`). The runtime uses it to gate hot-swap compatibility: `Vm::replace_module` rejects a swap against an incompatible schema before any data is loaded. A module with no data layout reports zero.
+
+   The data layout itself carries three parts (`DataLayout` in `src/bytecode.rs`). The first is `slots`, the named slots in declaration order, whose index corresponds to the `GetData`/`SetData` operand. The second is `shared_layout: Vec<SharedSlotLayout>`, one entry per shared slot in declaration order, each carrying a byte `offset` (u16) into the host buffer, a `kind` (u8) that is a scalar-kind tag when the `SHARED_SLOT_COMPOSITE_FLAG` high bit is clear or a composite-kind tag in the low bits when set, and a `len` (u16) that is the flat composite body length for a composite slot and zero for a scalar slot. This table is empty when there are no shared slots. The third is `private_composite_layout: Vec<PrivateCompositeSlot>`, one entry per private slot that holds a flat composite body (single composite fields and array-of-composite element slots alike), each carrying the unified data-slot index `slot` (u16) and the byte `offset` (u32) of the body within the persistent composite pool, sorted ascending by `slot` so the runtime resolves a slot by binary search. This table is empty for a module with no private composite slots, so the wire form of such a module is unchanged.
 
 The CRC-32 trailer covers the header and all three sections. The trailer's algebraic self-inclusion property holds: a consumer computing the CRC over the bytes from offset zero through the four-byte trailer obtains the residue constant `0x2144DF1C`. This property survives the section-partitioned body unchanged.
 
@@ -197,7 +212,7 @@ The V0.2.0 Phase 7a release ships the following types in `src/wire_format.rs`:
 - `WireFormatHeader` mirrors the sixty-four-byte framing header layout. Fields are `pub` for direct access; helpers encode and decode against `[u8; 64]`.
 - `OpcodeId` is a `u8` newtype carrying the seven-bit opcode identifier. The mapping table converts to and from the `Op` enum.
 - `OpcodeRecord` is a `[u8; 4]` newtype with constructors that take an `OpcodeId` and either inline operand bytes or a pool index, and that compute the parity bit before returning the record.
-- `OperandPoolEntry` is a `[u8; 8]` newtype with constructors for the `(u16, u16)` and `(u16, u16, u8)` tag variants and a decoder that returns the typed operand on parity success.
+- `OperandPoolEntry` is a `[u8; 8]` newtype with constructors for the `(u16, u16)`, `(u16, u16, u8)`, and `(u16, u16, u16)` tag variants and a decoder that returns the typed operand on parity success.
 
 The encoder accepts an `Op` and emits an `OpcodeRecord`, queueing pool entries through a `&mut Vec<OperandPoolEntry>` accumulator. The decoder accepts an `OpcodeRecord` and an `&[OperandPoolEntry]` and reconstructs the `Op`. Round-trip tests cover every variant.
 

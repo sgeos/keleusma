@@ -42,7 +42,7 @@ Structural verification at the bytecode level is implemented. See [STRUCTURAL_IS
 
 ````
 fn  yield  loop  break  let  for  in  if  else  match
-use  struct  enum  newtype  trait  impl  data  true  false  as  when
+use  external  struct  enum  newtype  trait  impl  data  true  false  as  when
 not  and  or  xor  andalso  orelse  pure  shared  private  const  ephemeral  signed  where
 overflow  underflow  saturate_max  saturate_min
 lsl  asl  lsr  asr
@@ -884,7 +884,7 @@ fn main() -> () {
 ### Signed Entry Function
 
 ````
-function_def    = { 'ephemeral' | 'signed' } (fn_def | yield_def | loop_def)
+function_def    = { 'ephemeral' | 'signed' } [ 'pure' ] (fn_def | yield_def | loop_def)
 ````
 
 The `signed` modifier on the entry function declaration sets the wire-format flag `FLAG_REQUIRES_SIGNATURE = 0x02` in the module header. A host that loads the bytecode must verify the attached Ed25519 signature against a trust matrix populated through `Vm::register_verifying_key` before the module runs. The signing operation itself is a toolchain step independent of the compiler; the surface keyword expresses the requirement, the compiler emits the flag, and the runtime enforces it. Hosts loading signed modules use `Vm::load_signed_bytes(bytes, arena, &keys)` for the initial load or `Vm::replace_module_from_bytes` for hot-swap; `Vm::load_bytes` rejects signed modules with a diagnostic pointing at the correct entry point.
@@ -1023,7 +1023,18 @@ program         = [ shebang_line ]
 shebang_line    = '#!' { ? any character except newline ? } newline
 
 (* Imports *)
-use_decl        = 'use' module_path '::' ( lower_ident | '*' )
+(* The optional `external` modifier marks the import as an external
+   native whose per-iteration cost is bounded by invocation count
+   rather than by an attested per-call budget. A single-segment path
+   (`use foo`) is admissible; the leading `module_path ::` prefix is
+   optional. The optional native-import signature clause declares the
+   parameter type list and return type of the imported native so the
+   type checker can validate call-site argument types and assign the
+   declared return type. *)
+use_decl        = 'use' [ 'external' ]
+                  ( [ module_path '::' ] lower_ident [ native_signature ]
+                  | module_path '::' '*' )
+native_signature = '(' [ type_list ] ')' '->' type_expr
 module_path     = lower_ident { '::' lower_ident }
 
 (* Type Definitions *)
@@ -1110,8 +1121,10 @@ multiword_type  = 'Multiword' '<' const_expr [ ',' const_expr ] '>'
 (* The `ephemeral` and `signed` modifiers are permitted only on
    the entry point. Either or both may appear in any order. The
    compiler rejects the modifier on a non-entry function with a
-   diagnostic naming the offending declaration. *)
-function_def    = { 'ephemeral' | 'signed' } (fn_def | yield_def | loop_def)
+   diagnostic naming the offending declaration. The optional `pure`
+   modifier follows any `ephemeral`/`signed` modifiers and is a
+   purity annotation on the definition. *)
+function_def    = { 'ephemeral' | 'signed' } [ 'pure' ] (fn_def | yield_def | loop_def)
 fn_def          = 'fn' lower_ident [ type_params ] '(' [ param_list ] ')' '->' type_expr
                   [ 'when' guard_expr ] '{' block '}'
 yield_def       = 'yield' lower_ident [ type_params ] '(' [ param_list ] ')' '->' type_expr
@@ -1192,6 +1205,7 @@ primary_expr    = literal
                 | yield_expr
                 | if_expr
                 | match_expr
+                | loop_block
                 | '(' ')'
                 | '(' expression ')'
                 | '(' expression ',' expression { ',' expression } [ ',' ] ')'
@@ -1234,9 +1248,20 @@ yield_expr      = 'yield' expression
 (* If / Else *)
 if_expr         = 'if' expression '{' block '}' [ 'else' '{' block '}' ]
 
+(* Loop block. A bare `loop { body }` is a primary expression yielding
+   a loop expression. It is admissible only in a `loop`-category entry
+   function, where it denotes the coroutine tick loop, and its body
+   must reach a `yield` on every path (see Section 5, "Loop
+   Statement", and Section 6.3). *)
+loop_block      = 'loop' '{' block '}'
+
 (* Match *)
+(* An arm carries an optional `when` guard, checked as `bool` after
+   the pattern matches; a false guard falls through to the next arm.
+   The arm-terminating comma is optional, so the final arm may omit
+   it. *)
 match_expr      = 'match' expression '{' { match_arm } '}'
-match_arm       = pattern '=>' expression ','
+match_arm       = pattern [ 'when' expression ] '=>' expression [ ',' ]
 
 (* Patterns *)
 pattern         = literal_pattern
@@ -1271,7 +1296,7 @@ block_comment   = '/*' { any_char } '*/'
 
 ### Notes on the EBNF
 
-The grammar is descriptive, not normative. The reference implementation is the parser at [`src/parser.rs`](../../src/parser.rs); when the two disagree, the parser wins and the EBNF should be updated.
+This grammar is the authoritative, normative specification of the surface syntax. The parser at [`src/parser.rs`](../../src/parser.rs) is expected to conform to it. A disagreement between the grammar and the parser is a defect to be resolved by correcting whichever side is wrong; the parser does not automatically win, and the grammar is not automatically deemed stale.
 
 The grammar describes the surface only. The verifier rejects programs whose Worst-Case Execution Time or Worst-Case Memory Usage cannot be statically bounded under the conservative-verification stance, and the type checker enforces additional constraints around generics, trait bounds, exhaustive match, and the data-segment fixed-size discipline. See [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md) for those layers.
 

@@ -34,10 +34,10 @@ Pure, total arithmetic and logic. No partial operations.
 
 | Instruction | Operands | Description |
 |:---|:---|:---|
-| IsEnum | u16 type, u16 variant | Pop value, push true if it matches the enum type and variant. |
-| IsStruct | u16 name | Pop value, push true if it matches the struct type. |
+| IsEnum | u16 enum-name, u16 variant-name, u16 discriminant-value (all constant indices) | Peek the top of the stack, push true if it matches the enum type and variant. |
+| IsStruct | u16 name | Peek the top of the stack, push true if it matches the struct type. |
 
-Type testing instructions push a boolean result onto the stack. They do not contain jump offsets. Conditional dispatch based on type tests uses the block-structured If/Else/EndIf control flow.
+Type testing instructions peek the scrutinee (they do not pop it) and push a boolean result onto the stack, a net stack growth of one slot. They do not contain jump offsets. Conditional dispatch based on type tests uses the block-structured If/Else/EndIf control flow.
 
 ## Control Flow
 

@@ -157,6 +157,12 @@ The `Shell` bundle registers shell-script utilities. It depends on the `shell` c
 | `shell::writeln_err` | `(Text) -> Unit` | Write to stderr with a trailing newline. |
 | `shell::arg_count` | `() -> Word` | Number of entries in the script argument vector: argument zero (the script path) plus the positional arguments the launcher passed after it. Falls back to the host process argv when no script argument vector is installed. |
 | `shell::arg` | `(Word) -> Option<Text>` | Script argument at the given index. Argument zero is the script path (`$0` semantics); argument one onward are the positional arguments. `Option::None` when out of range or negative. |
+| `shell::pid` | `() -> Word` | Return the current host process identifier. |
+| `shell::hostname` | `() -> Text` | Return the host name reported by the operating system (via the platform `hostname` command). Traps when the host name cannot be retrieved. |
+| `shell::setenv` | `(Text, Text) -> Unit` | Set the environment variable named by the first argument to the second argument in the host process. The change is process local and visible to subsequent subprocesses spawned through `shell::run`. |
+| `shell::pwd` | `() -> Text` | Return the current working directory. Traps when the directory cannot be read. |
+| `shell::cd` | `(Text) -> Unit` | Change the current working directory to the given path. Traps on failure. |
+| `shell::run_timeout` | `(Text, Word) -> (Word, Text)` | Execute a command through `sh -c` with a wall-clock deadline in milliseconds, returning exit code and captured stdout on completion. The timeout must be positive. Traps after killing the subprocess when the deadline is exceeded. |
 
 ## Type Flexibility
 

@@ -169,17 +169,17 @@ The `Option::None` sentinel and `Option::Some` wrap are handled through `PushImm
 
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
-| GetField | u16 name index | 3 | Pop struct, push named field value. |
-| GetIndex | none | 2 | Pop index and array, push element. |
-| GetTupleField | u8 index | 2 | Pop tuple, push element at index. |
-| GetEnumField | u8 index | 2 | Pop enum variant, push field at index. |
+| GetField | `StructField` (flat/nested/boxed) | 3 | Pop struct, push field value. The baked `StructField` operand selects a flat read at a byte offset, a nested-composite extraction, or a boxed positional/named lookup. |
+| GetIndex | `ArrayElem` (flat/nested/boxed) | 2 | Pop index and array, push element. The baked `ArrayElem` operand selects a flat read at `index * element_size`, a nested-composite extraction, or a boxed index. |
+| GetTupleField | `TupleField` (flat/nested/boxed) | 2 | Pop tuple, push element. The baked `TupleField` operand selects a flat read at a byte offset, a nested-composite extraction, or a boxed positional index. |
+| GetEnumField | `EnumField` (flat/nested/boxed) | 2 | Pop enum variant, push payload field. The baked `EnumField` operand selects a flat read past the discriminant word, a nested-composite extraction, or a boxed positional index. |
 | Len | none | 2 | Pop composite value (Array, Text, Tuple), push length as Int. |
 
 ## Type Testing
 
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
-| IsEnum | u16 type, u16 variant | 3 | Peek the top of the stack; push true if it matches the enum type and variant. |
+| IsEnum | u16 enum-name, u16 variant-name, u16 discriminant-value (all constant indices) | 3 | Peek the top of the stack; push true if it matches the enum type and variant. |
 | IsStruct | u16 name | 3 | Peek the top of the stack; push true if it matches the struct type. |
 
 ## Casting and Fixed-Point Arithmetic
@@ -205,16 +205,20 @@ The `Option::None` sentinel and `Option::Some` wrap are handled through `PushImm
 
 The instruction set contains 66 opcodes. The B28 consolidation retired the four V0.2.0 construct opcodes (`NewStruct`, `NewEnum`, `NewArray`, `NewTuple`, wire ids 34-37) in favour of the single `NewComposite` opcode (wire id 69). The retired ids are reserved and not reused; the maximum live wire id is 69. Operand shapes:
 
+The shapes below are the `Op`-variant operand types as defined in `src/bytecode.rs`, which differ from the flattened inline wire encodings documented in [WIRE_FORMAT.md](./WIRE_FORMAT.md). In particular the four baked field-and-element access opcodes carry bespoke operand structs rather than a plain integer.
+
 | Shape | Used by |
 |-------|---------|
-| None (zero-operand) | 34 opcodes (arithmetic, comparison, bit ops, type coercions, stack manipulation, streaming, coroutine, etc.) |
-| `u8` | 10 opcodes (`PushImmediate`, `PopN`, `GetTupleField`, `GetEnumField`, `WordToFixed`, `FixedToWord`, `FixedMul`, `FixedDiv`, `CheckedMul`, `CheckedDiv`) |
-| `u16` | 15 opcodes (`Const`, `GetLocal`, `SetLocal`, `GetData`, `SetData`, `GetField`, `IsStruct`, `If`, `Else`, `Loop`, `EndLoop`, `Break`, `BreakIf`, `BoundsCheck`, `Trap`) |
+| None (zero-operand) | 33 opcodes (arithmetic, comparison, bit ops, type coercions, stack manipulation, streaming, coroutine, etc.) |
+| `u8` | 8 opcodes (`PushImmediate`, `PopN`, `WordToFixed`, `FixedToWord`, `FixedMul`, `FixedDiv`, `CheckedMul`, `CheckedDiv`) |
+| `u16` | 14 opcodes (`Const`, `GetLocal`, `SetLocal`, `GetData`, `SetData`, `IsStruct`, `If`, `Else`, `Loop`, `EndLoop`, `Break`, `BreakIf`, `BoundsCheck`, `Trap`) |
 | `(u16, u8)` | 3 opcodes (`Call`, `CallVerifiedNative`, `CallExternalNative`) |
-| `(u16, u16)` | 3 opcodes (`GetDataIndexed`, `SetDataIndexed`, `IsEnum`) |
+| `(u16, u16)` | 2 opcodes (`GetDataIndexed`, `SetDataIndexed`) |
+| `(u16, u16, u16)` | 1 opcode (`IsEnum`, carrying the enum-name, variant-name, and discriminant-value constant indices) |
+| Baked access operand (bespoke) | 4 opcodes (`GetField(StructField)`, `GetIndex(ArrayElem)`, `GetTupleField(TupleField)`, `GetEnumField(EnumField)`). Each carries a bespoke B28 operand struct with a compiler-selected `Flat`, `FlatNested`, or `Boxed` form. The flat forms bake a byte offset and a scalar `kind` (or a nested composite `size` and `variant`); the boxed forms carry a positional index or a field-name constant index for the pre-B28 `Vec` body. See the `StructField`, `ArrayElem`, `TupleField`, and `EnumField` enums in `src/bytecode.rs`. |
 | NewComposite (bespoke) | 1 opcode (`NewComposite`). The flat form packs the composite kind, the operand-stack pop count (0 through 62), and the exact flat byte size into the three operand bytes of the record. The boxed form, or a flat field count above 62, spills a 24-bit operand-pool index to a `(u16, u16, u8)` entry carrying `(count, byte_size-or-meta, boxed_flag)`. |
 
-62 of the 66 opcodes always carry their operand inline in the 4-byte opcode record. Three opcodes (`GetDataIndexed`, `SetDataIndexed`, and `IsEnum`, all `(u16, u16)`) always reference an entry in the operand pool by index. `NewComposite` carries its operand inline in the common small flat form and references a `(u16, u16, u8)` operand-pool entry only for the boxed form or a flat field count above 62. The `(u16, u8)` opcodes (`Call`, `CallVerifiedNative`, `CallExternalNative`) fit inline because the `u8` lands in byte 3 of the record. See [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) and [WIRE_FORMAT.md](./WIRE_FORMAT.md) for the wire format that encodes these shapes.
+The wire encoding flattens these `Op`-level shapes: 62 of the 66 opcodes always carry their operand inline in the 4-byte opcode record. Three opcodes (`GetDataIndexed`, `SetDataIndexed`, and `IsEnum`) always reference an entry in the operand pool by index. `NewComposite` carries its operand inline in the common small flat form and references a `(u16, u16, u8)` operand-pool entry only for the boxed form or a flat field count above 62. The `(u16, u8)` opcodes (`Call`, `CallVerifiedNative`, `CallExternalNative`) fit inline because the `u8` lands in byte 3 of the record. The four baked access opcodes fit their compiler-selected operand form inline. See [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) and [WIRE_FORMAT.md](./WIRE_FORMAT.md) for the wire format that encodes these shapes.
 
 ## Cost Summary
 
@@ -234,12 +238,12 @@ WCMU costs are reported separately as stack slot growth, stack slot shrink, and 
 
 ### Stack growth (peak net delta during execution)
 
-The values reproduce `Op::stack_growth` in `src/bytecode.rs`. For multi-output opcodes the value is the net peak delta against the starting depth, not the raw push count: e.g. `CheckedAdd` pops two and pushes three, so the peak depth relative to the start is `+1`.
+The values reproduce `Op::stack_growth` in `src/bytecode.rs`. For multi-output opcodes the value is the net peak delta against the starting depth, not the raw push count: e.g. `CheckedAdd` pops two and pushes three, so the peak depth relative to the start is `+1`. `IsEnum` and `IsStruct` peek the scrutinee (no pop) and push a Bool, so their net delta is `+1`.
 
 | Growth | Instructions |
 |--------|--------------|
-| 0 | Not, Neg, Add, Sub, Mul, Div, Mod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, SetDataIndexed, BoundsCheck, If, BreakIf, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Yield, Return, GetField, GetIndex, GetTupleField, GetEnumField, Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap, PopN, BitAnd, BitOr, BitXor, Shl, Shr |
-| 1 | Const, PushImmediate, GetLocal, GetData, Dup, GetDataIndexed, CheckedAdd, CheckedSub, CheckedMul, CheckedDiv, CheckedMod, Call, CallVerifiedNative, CallExternalNative, NewComposite |
+| 0 | Not, Neg, Add, Sub, Mul, Div, Mod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, SetDataIndexed, BoundsCheck, If, BreakIf, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Yield, Return, GetField, GetIndex, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap, PopN, BitAnd, BitOr, BitXor, Shl, Shr |
+| 1 | Const, PushImmediate, GetLocal, GetData, Dup, GetDataIndexed, CheckedAdd, CheckedSub, CheckedMul, CheckedDiv, CheckedMod, Call, CallVerifiedNative, CallExternalNative, NewComposite, IsEnum, IsStruct |
 | 2 | CheckedNeg |
 
 ### Stack shrink (slots popped during execution)
