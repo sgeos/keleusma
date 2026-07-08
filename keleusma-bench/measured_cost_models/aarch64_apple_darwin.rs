@@ -105,7 +105,6 @@ pub fn measured_op_cycles(op: &keleusma::bytecode::Op) -> u32 {
         | Op::BoundsCheck(_)
         | Op::GetDataIndexed(_, _)
         | Op::SetDataIndexed(_, _)
-        | Op::SetDataComposite(_, _)
         | Op::Return => 164,
 
         // Division, field lookup, type checks (140 cycles).

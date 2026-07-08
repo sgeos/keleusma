@@ -2285,10 +2285,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
 
     /// The persistent composite pool offset for a private slot that holds a
     /// flat composite body recorded in the module's private-composite layout
-    /// table (B28 item 2 step 6A). `None` for a scalar slot, an empty composite
-    /// slot, or a single composite slot whose body is placed through the
-    /// `SetDataComposite` baked operand instead of this table. The table is
-    /// sorted ascending by slot, so this binary-searches it.
+    /// table (B28 item 2 step 6A). `None` for a scalar slot or an empty
+    /// composite slot, neither of which has a table entry. The table is sorted
+    /// ascending by slot, so this binary-searches it.
     fn private_composite_pool_offset(&self, slot: usize) -> Option<usize> {
         let dl = self.archived().data_layout.as_ref()?;
         let slot_u16 = u16::try_from(slot).ok()?;
@@ -2377,15 +2376,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             return self.write_shared_to_buffer(slot, value);
         }
         // A private slot holding a flat composite copies its body into the
-        // persistent composite pool at the compiler-baked offset and stores a
-        // region-aware handle that survives RESET in place (B28 item 2 step
-        // 6A), so no private composite write needs a global-heap owned body. An
-        // array-of-composite element or an offset-overflow single slot arrives
-        // here raw and is persisted by its table offset; a single composite
-        // field with a sixteen-bit offset took the `Op::SetDataComposite`
-        // operand path and arrives already persistent (its slot is absent from
-        // this table). A scalar, an empty composite, or a boxed value has no
-        // table entry and is stored directly.
+        // persistent composite pool at the offset the private-composite layout
+        // table records for the slot and stores a region-aware handle that
+        // survives RESET in place (B28 item 2 step 6A), so no private composite
+        // write needs a global-heap owned body. Every private composite slot,
+        // a single composite field and each array-of-composite element alike,
+        // has a table entry, so `SetData` and `SetDataIndexed` both persist
+        // through this one path. A scalar, an empty composite, or a boxed value
+        // has no table entry and is stored directly.
         let to_store = if crate::bytecode::flat_composite_ref(&value).is_some()
             && let Some(off) = self.private_composite_pool_offset(slot)
         {
@@ -4591,34 +4589,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     // body is needed; a scalar is stored directly.
                     let val = self.pop()?;
                     self.write_data_slot(idx, val)?;
-                }
-                Op::SetDataComposite(slot, rel_offset) => {
-                    // Store a flat composite into a private persistent slot by
-                    // copying its body into the arena persistent region at the
-                    // compiler-assigned fixed offset, then storing a
-                    // region-aware handle that survives RESET in place (B28 P3
-                    // item 5, item 3a). No global-heap Inline body.
-                    let idx = slot as usize;
-                    let total = self.data_len();
-                    if idx >= total {
-                        return Err(VmError::InvalidBytecode(format!(
-                            "data slot index {} out of bounds",
-                            idx
-                        )));
-                    }
-                    let val = self.pop()?;
-                    if crate::bytecode::flat_composite_ref(&val).is_some() {
-                        let persistent = self.persist_composite_body(val, rel_offset as usize)?;
-                        self.write_data_slot(idx, persistent)?;
-                    } else {
-                        // The compiler only emits this op for a flat composite
-                        // slot; a non-flat (boxed) value here is a defensive
-                        // fallback stored as-is. Its children are arena-resident
-                        // from construction; a boxed value placed in a persistent
-                        // slot resolves cleanly stale after a RESET rather than
-                        // dereferencing reclaimed memory (B28 item 2 step 6B).
-                        self.write_data_slot(idx, val)?;
-                    }
                 }
                 Op::GetDataIndexed(base, len) => {
                     let index = match self.pop()? {

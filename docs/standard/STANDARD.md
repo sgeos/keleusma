@@ -720,7 +720,7 @@ module magic is the four bytes `KELE`.
 
 ### 7.2 Instruction set and operational semantics
 
-The instruction set comprises 67 opcodes. The table below is the normative
+The instruction set comprises 66 opcodes. The table below is the normative
 inventory. For each opcode it gives the wire identifier, the operands, the operand-
 stack effect as the values consumed and produced, and the behavior. A blank effect
 denotes no net change. The identifiers 34 through 37 are reserved and MUST NOT be
@@ -742,8 +742,7 @@ emitted or accepted, being the retired separate composite constructors.
 | Id | Opcode | Operands | Effect | Behavior |
 |---|---|---|---|---|
 | 3 | GetData | slot | push 1 | push a data slot, bounds-checked at load |
-| 4 | SetData | slot | pop 1 | store into a data slot, persists across reset |
-| 70 | SetDataComposite | slot, byte offset | pop 1 | copy a flat composite body into the persistent pool, surviving reset in place |
+| 4 | SetData | slot | pop 1 | store into a data slot, persists across reset; a flat composite value copies its body into the persistent pool at the module table's offset for the slot |
 | 5 | GetDataIndexed | base, len | pop 1 push 1 | pop an index, push `data[base+index]` with a runtime bound |
 | 6 | SetDataIndexed | base, len | pop 2 | pop an index and a value, store with a runtime bound |
 | 7 | BoundsCheck | bound | | peek the top as an integer and fault if negative or at least the bound |
@@ -1230,15 +1229,17 @@ this document.
    type is no longer a special case in that respect. The overflow-capturing form of `asl` inside the
    checked-arithmetic construct still requires a compile-time-constant amount,
    because it lowers to a multiply by the constant `2^k`.
-3. The instruction count in prior project documents was recorded as 66. The instruction
-   set is 67, because the `SetDataComposite` opcode at identifier 70 is implemented,
-   dispatched, and verified but was undocumented. The issuing authority reconciles the
-   opcode budget at issuance.
-
 ### A.3 Documentation drift corrected against the code
 
 The following prior specification statements were stale and are superseded by this
-document, which uses the verified code as ground truth. The enumeration discriminant
+document, which uses the verified code as ground truth. The instruction set is 66
+opcodes with a maximum live wire identifier of 69. A `SetDataComposite` opcode at
+identifier 70 briefly existed in the reference implementation and baked a
+persistent-pool byte offset that duplicated the module's private-composite layout
+table. Under the minimal-instruction-set discipline it was retired into `SetData`,
+which now dispatches on the value at run time and reads the pool offset for a flat
+composite from that table, so no dedicated composite-write opcode exists and the
+64 KiB pool limit its `u16` operand imposed is gone. The enumeration discriminant
 is word-sized, not one byte. The `IsEnum` operand-pool entry is a triple of 16-bit
 values, not a pair. The wire header fields at offsets 56 and 60 carry the auxiliary
 arena byte count and the persistent composite byte count, not reserved zeros. The

@@ -45,7 +45,7 @@ The unified slot index space partitions into shared slots `[0, shared_count)` an
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
 | GetData | u16 slot | 1 | Push data segment slot value onto stack. |
-| SetData | u16 slot | 1 | Pop value and store into data segment slot. |
+| SetData | u16 slot | 1 | Pop value and store into a data segment slot. A scalar stores inline; a flat composite copies its body into the persistent composite pool at the offset the module's private-composite layout table records for the slot (no dedicated composite-write opcode). |
 | GetDataIndexed | u16 base, u16 len | 2 | Pop array index, bounds-check against `len`, push the value at `base + index`. |
 | SetDataIndexed | u16 base, u16 len | 2 | Pop array index then pop value, bounds-check against `len`, store into the slot at `base + index`. |
 | BoundsCheck | u16 bound | 2 | Peek the top of the stack as an `Int`, trap if outside `[0, bound)`. Emitted by the compiler between levels of a multi-dimensional indexed access. |

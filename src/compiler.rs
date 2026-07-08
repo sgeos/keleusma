@@ -171,14 +171,6 @@ struct FuncCompiler {
     /// another head's table overwrote), which is safe because the lookup then
     /// misses and the structural path runs.
     expr_types: BTreeMap<crate::token::Span, TypeExpr>,
-    /// Private composite data slots that store their body in the arena
-    /// persistent region, mapping the unified slot index to its fixed body
-    /// offset within the persistent composite pool (B28 P3 item 5, item 3a). A
-    /// write to a slot in this map compiles to [`Op::SetDataComposite`] with the
-    /// baked offset; a slot absent from it uses [`Op::SetData`] as before. This
-    /// is the same map across all functions in the module (the persistent
-    /// layout is module-wide).
-    persistent_composite_offsets: BTreeMap<u16, u16>,
     /// Map from local slot to its compile-time integer value, for
     /// the subset of let-bound locals whose value expression
     /// constant-folds to an integer. Used by the refinement-
@@ -488,7 +480,6 @@ impl FuncCompiler {
         const_fields: BTreeMap<String, BTreeMap<String, crate::bytecode::ConstValue>>,
         type_info: TypeInfo,
         expr_types: BTreeMap<crate::token::Span, TypeExpr>,
-        persistent_composite_offsets: BTreeMap<u16, u16>,
         emit_debug: bool,
     ) -> Self {
         Self {
@@ -514,7 +505,6 @@ impl FuncCompiler {
             const_fields,
             type_info,
             expr_types,
-            persistent_composite_offsets,
             local_const_values: BTreeMap::new(),
             local_ranges: BTreeMap::new(),
             emit_debug,
@@ -3424,36 +3414,29 @@ pub fn compile_with_options(
     let function_summaries = compute_function_return_ranges(program, &type_info);
     type_info.function_return_ranges = function_summaries;
 
-    // Lay out the persistent composite body pool and record each single
-    // composite private slot's fixed body offset (B28 P3 item 5, item 3a).
-    // Private slots take unified indices starting at `shared_count`, in the
-    // same declaration order the slot table used, so the unified index and the
+    // Lay out the persistent composite body pool and record each private
+    // composite slot's fixed body offset (B28 P3 item 5, item 3a). Private
+    // slots take unified indices starting at `shared_count`, in the same
+    // declaration order the slot table used, so the unified index and the
     // cumulative body offset are produced by one walk. The total sizes the
-    // pool, declared in the module header; the offset map drives the
-    // `SetDataComposite` emission below. A slot whose offset would exceed the
-    // sixteen-bit op operand is omitted and falls back to the inline path.
-    // Arrays are deferred (zero body bytes), so they neither size the pool nor
-    // enter the map. Computed before the codegen loop so the map is available
-    // to emission.
-    // Two cooperating placements drive the persistent composite pool, both
-    // copying a flat composite body into the pool through
-    // `persist_composite_body` so no private composite write needs a
-    // global-heap owned body (B28 item 2 step 6A). `persistent_composite_offsets`
-    // maps a single composite field whose offset fits the sixteen-bit
-    // `SetDataComposite` operand and drives that op's emission (item 3a, the
-    // common small case). `private_composite_layout` carries every other private
-    // composite slot, an array-of-composite element slot or an offset-overflow
-    // single slot, keyed by slot index with a `u32` offset the runtime reads at
-    // a flat-composite write through the plain `SetData`/`SetDataIndexed` path,
-    // with no baked operand. Both share one running `total` so the offsets never
-    // collide, and `total` sizes the pool declared in the module header. This is
-    // the linker-style fixed-address placement of program state: every private
+    // pool, declared in the module header. An array-of-scalar leaf reserves no
+    // pool (zero body bytes) and stores scalars inline. Computed before the
+    // codegen loop so the table is available for the WCMU pass.
+    // `private_composite_layout` is the single placement record for every
+    // private composite slot, a single composite field and each
+    // array-of-composite element slot alike, keyed by slot index with a `u32`
+    // pool offset (B28 item 2 step 6A). The runtime reads it at a flat-composite
+    // write through the plain `SetData`/`SetDataIndexed` path and copies the
+    // body into the pool through `persist_composite_body`, so no private
+    // composite write needs a global-heap owned body and no baked operand is
+    // required (the rad-hard minimal-ISA choice, prefer a module table over a
+    // dedicated opcode). One running `total` gives each slot a distinct offset
+    // and sizes the pool declared in the module header. This is the
+    // linker-style fixed-address placement of program state: every private
     // composite slot, array elements included, has a statically baked pool
-    // address. Computed before the codegen loop so the offset map is available
-    // to `SetDataComposite` emission.
-    let (persistent_composite_bytes, persistent_composite_offsets, private_composite_layout) = {
+    // address.
+    let (persistent_composite_bytes, private_composite_layout) = {
         let mut total: u32 = 0;
-        let mut offsets: BTreeMap<u16, u16> = BTreeMap::new();
         let mut table: Vec<crate::bytecode::PrivateCompositeSlot> = Vec::new();
         let mut slot_idx: u32 = shared_count;
         for decl in &program.data_decls {
@@ -3471,20 +3454,13 @@ pub fn compile_with_options(
                 let body = data_field_pool_bytes(leaf, &type_info);
                 if body > 0 {
                     if n == 1 {
-                        // A single composite field: prefer the sixteen-bit
-                        // `SetDataComposite` operand path; fall back to the
-                        // table when the offset would overflow `u16`.
-                        match (u16::try_from(slot_idx), u16::try_from(total)) {
-                            (Ok(slot_u16), Ok(off_u16)) => {
-                                offsets.insert(slot_u16, off_u16);
-                            }
-                            (Ok(slot_u16), Err(_)) => {
-                                table.push(crate::bytecode::PrivateCompositeSlot {
-                                    slot: slot_u16,
-                                    offset: total,
-                                });
-                            }
-                            _ => {}
+                        // A single composite field: record its pool offset in
+                        // the table, resolved by slot at the `SetData` write.
+                        if let Ok(slot_u16) = u16::try_from(slot_idx) {
+                            table.push(crate::bytecode::PrivateCompositeSlot {
+                                slot: slot_u16,
+                                offset: total,
+                            });
                         }
                         total = total.saturating_add(body as u32);
                     } else {
@@ -3506,7 +3482,7 @@ pub fn compile_with_options(
                 slot_idx = slot_idx.saturating_add(n);
             }
         }
-        (total, offsets, table)
+        (total, table)
     };
 
     // The shared data segment's flat byte total and its per-shared-slot layout
@@ -3584,7 +3560,6 @@ pub fn compile_with_options(
             &const_fields,
             &type_info,
             &program.fn_expr_types,
-            &persistent_composite_offsets,
             options.emit_debug,
             generic_origin,
         )?;
@@ -3639,9 +3614,6 @@ pub fn compile_with_options(
                 for op in &chunk.ops {
                     match op {
                         crate::bytecode::Op::SetData(slot) => {
-                            written.insert(*slot);
-                        }
-                        crate::bytecode::Op::SetDataComposite(slot, _) => {
                             written.insert(*slot);
                         }
                         crate::bytecode::Op::SetDataIndexed(base, len) => {
@@ -5083,7 +5055,6 @@ fn compile_function_group(
     const_fields: &BTreeMap<String, BTreeMap<String, crate::bytecode::ConstValue>>,
     type_info: &TypeInfo,
     fn_expr_types: &BTreeMap<String, BTreeMap<crate::token::Span, TypeExpr>>,
-    persistent_composite_offsets: &BTreeMap<u16, u16>,
     emit_debug: bool,
     generic_origin: Option<(&str, &str)>,
 ) -> Result<(Chunk, bool, crate::bytecode::ChunkSignature), CompileError> {
@@ -5144,9 +5115,6 @@ fn compile_function_group(
         // monomorphization). Absent for a group the recording pass did not
         // table, in which case the structural inference path runs.
         fn_expr_types.get(name).cloned().unwrap_or_default(),
-        // The module-wide private-composite persistent layout (B28 P3 item 5,
-        // item 3a); the same map for every function.
-        persistent_composite_offsets.clone(),
         emit_debug,
     );
     fc.chunk.param_count = param_count;
@@ -5390,14 +5358,12 @@ fn compile_data_field_assign(
             span,
         })?;
     compile_expr(fc, value)?;
-    // A private slot that holds a flat composite stores its body in the arena
-    // persistent region at a compiler-assigned fixed offset (B28 P3 item 5,
-    // item 3a); other slots use the inline `SetData` path.
-    if let Some(&rel_offset) = fc.persistent_composite_offsets.get(&slot) {
-        fc.emit(Op::SetDataComposite(slot, rel_offset));
-    } else {
-        fc.emit(Op::SetData(slot));
-    }
+    // `SetData` handles both a scalar slot and a private composite slot. The VM
+    // dispatches on the value at run time: a flat composite is copied into the
+    // persistent composite pool at the offset the module's private-composite
+    // layout table records for the slot (B28 P3 item 5, item 3a); a scalar is
+    // stored inline. No dedicated composite-write opcode is required.
+    fc.emit(Op::SetData(slot));
     Ok(())
 }
 

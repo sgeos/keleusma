@@ -4,11 +4,13 @@
 //!
 //! A private `.data` slot holding a flat composite (struct, tuple, enum) gets a
 //! fixed body offset assigned by the compiler within the persistent composite
-//! pool, which follows the private-slot `Value` array. `Op::SetDataComposite`
-//! copies the body once into that fixed `.data`-style location and stores a
-//! region-aware handle that survives RESET in place, with no global-heap
-//! `Inline` body. `GetData` reads it in place. These tests pin write-then-read
-//! within a call, survival across a RESET in a loop, and a nested composite.
+//! pool, which follows the private-slot `Value` array, and recorded in the
+//! module's private-composite layout table. `Op::SetData` dispatches on the
+//! value at run time: a flat composite copies its body once into that fixed
+//! `.data`-style location at the table offset and stores a region-aware handle
+//! that survives RESET in place, with no global-heap `Inline` body. `GetData`
+//! reads it in place. These tests pin write-then-read within a call, survival
+//! across a RESET in a loop, and a nested composite.
 
 extern crate alloc;
 
