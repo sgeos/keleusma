@@ -271,7 +271,7 @@ pub fn typed_check_chunk_with_sig(
     word_bytes: usize,
     float_bytes: usize,
 ) -> Result<(), TypedError> {
-    check_chunk_seeded(chunk, sig, &[], &[], word_bytes, float_bytes)
+    check_chunk_seeded(chunk, sig, &[], &[], &[], word_bytes, float_bytes)
 }
 
 /// Check every chunk of a module, seeding each from the module's per-chunk
@@ -309,6 +309,7 @@ pub fn typed_check_module(
             sig,
             &module.signatures,
             &enum_body_sizes,
+            &module.native_return_shapes,
             word_bytes,
             float_bytes,
         )?;
@@ -371,6 +372,7 @@ fn check_chunk_seeded(
     sig: &ChunkSig,
     module_sigs: &[ChunkSignature],
     enum_body_sizes: &[u32],
+    native_return_shapes: &[WireShape],
     word_bytes: usize,
     float_bytes: usize,
 ) -> Result<(), TypedError> {
@@ -379,6 +381,7 @@ fn check_chunk_seeded(
         sig,
         module_sigs,
         enum_body_sizes,
+        native_return_shapes,
         wb: word_bytes,
         fb: float_bytes,
     };
@@ -440,6 +443,11 @@ struct Ctx<'a> {
     /// Phase 4, audit finding B8). Empty when the chunk is checked in isolation
     /// or the module declares no enums, in which case the check defers.
     enum_body_sizes: &'a [u32],
+    /// Return-value flat shapes of the module's natives, indexed by native
+    /// index, used to seed a `CallVerifiedNative`/`CallExternalNative` result
+    /// (A.2.1 native-result seeding). Empty when the chunk is checked in
+    /// isolation, in which case a native result degrades to `Top`.
+    native_return_shapes: &'a [WireShape],
     /// Target word width in bytes (for scalar/composite sizing).
     wb: usize,
     /// Target float width in bytes.
@@ -873,6 +881,28 @@ fn apply_op(
             }
         }
 
+        // A native call pops its arguments (`n & 0x7F`) and pushes its result.
+        // The declared return shape seeds that result (A.2.1 native-result
+        // seeding); an undeclared native or an isolated chunk check leaves it
+        // `Top`. When the native has an error arm (`n & 0x80`) the reified call
+        // additionally pushes a scalar flag above the value, matching the
+        // compiler's `(value, flag)` sequence.
+        Op::CallVerifiedNative(idx, n) | Op::CallExternalNative(idx, n) => {
+            let argc = (*n & 0x7F) as usize;
+            for _ in 0..argc {
+                stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
+            }
+            let value = ctx
+                .native_return_shapes
+                .get(*idx as usize)
+                .map(AbsVal::from_wire)
+                .unwrap_or(AbsVal::Top);
+            stack.push(value);
+            if *n & 0x80 != 0 {
+                stack.push(AbsVal::Scalar(ScalarKind::Int));
+            }
+        }
+
         // Generic height-correct effect for every other op: pop `req`,
         // push `net + req` unknown values.
         _ => {
@@ -1037,6 +1067,7 @@ mod tests {
         Module {
             chunks,
             signatures,
+            native_return_shapes: Vec::new(),
             native_names: Vec::new(),
             entry_point: None,
             data_layout: None,
@@ -1892,6 +1923,88 @@ mod tests {
         ];
         let m = module(vec![callee, caller], sigs);
         assert!(typed_check_module(&m, 8, 8).is_ok());
+    }
+
+    // Native-result seeding: a native declared to return a struct seeds its
+    // `CallVerifiedNative` result, so a flat field access on the result is
+    // validated. In bounds accepts; out of bounds rejects.
+    fn native_struct_return_module(field_offset: u16) -> Module {
+        let ops = vec![
+            Op::CallVerifiedNative(0, 0), // returns the native's shape
+            Op::GetField(StructField::Flat {
+                offset: field_offset,
+                kind: ScalarKind::Int,
+            }),
+            Op::Return,
+        ];
+        let mut m = module(vec![chunk(ops, ints())], vec![]);
+        m.native_return_shapes = vec![WireShape::Flat {
+            kind: CompositeKind::Struct.to_tag(),
+            size: 16,
+        }];
+        m
+    }
+
+    #[test]
+    fn native_result_composite_field_access_validates() {
+        assert!(typed_check_module(&native_struct_return_module(8), 8, 8).is_ok());
+    }
+
+    #[test]
+    fn native_result_out_of_bounds_rejected() {
+        assert!(matches!(
+            typed_check_module(&native_struct_return_module(12), 8, 8),
+            Err(TypedError::OffsetOutOfBounds { .. })
+        ));
+    }
+
+    // A native with an error arm pushes `(value, flag)`; the value is beneath
+    // the scalar flag. Dropping the flag exposes the seeded composite result.
+    #[test]
+    fn native_result_with_error_arm_seeds_value_beneath_flag() {
+        let ops = vec![
+            Op::CallVerifiedNative(0, 0x80), // pushes [value, flag]
+            Op::PopN(1),                     // drop the flag -> [value]
+            Op::GetField(StructField::Flat {
+                offset: 12,
+                kind: ScalarKind::Int,
+            }), // out of bounds for the 16-byte struct
+            Op::Return,
+        ];
+        let mut m = module(vec![chunk(ops, ints())], vec![]);
+        m.native_return_shapes = vec![WireShape::Flat {
+            kind: CompositeKind::Struct.to_tag(),
+            size: 16,
+        }];
+        assert!(matches!(
+            typed_check_module(&m, 8, 8),
+            Err(TypedError::OffsetOutOfBounds { .. })
+        ));
+    }
+
+    // End to end: a signatured native returning a struct is seeded from the
+    // compiled module's `native_return_shapes`, so a field access on the
+    // result verifies.
+    #[cfg(feature = "compile")]
+    #[test]
+    fn native_result_seeding_end_to_end() {
+        use crate::compiler::compile;
+        use crate::lexer::tokenize;
+        use crate::parser::parse;
+
+        let src = "use make_point() -> Point\n\
+                   struct Point { x: Word, y: Word }\n\
+                   fn main() -> Word { let p = make_point(); p.x + p.y }";
+        let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        assert!(
+            m.native_return_shapes
+                .iter()
+                .any(|s| matches!(s, WireShape::Flat { .. })),
+            "the native's struct return must be recorded as a flat shape"
+        );
+        let wb = (1usize << m.word_bits_log2) / 8;
+        let fb = (1usize << m.float_bits_log2) / 8;
+        assert!(typed_check_module(&m, wb, fb).is_ok());
     }
 
     // A neutral loop body (pushes then pops) accepts; a non-neutral one

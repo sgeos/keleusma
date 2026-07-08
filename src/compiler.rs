@@ -3039,6 +3039,10 @@ pub fn compile_with_options(
     let program = &owned;
 
     let mut native_names: Vec<String> = Vec::new();
+    // Declared return type of each native, parallel to `native_names`, for the
+    // typed verifier's native-result seeding. `None` for a bare `use` without a
+    // signature; resolved to a flat shape once `type_info` is built.
+    let mut native_return_types: Vec<Option<TypeExpr>> = Vec::new();
     let mut native_map: BTreeMap<String, u16> = BTreeMap::new();
 
     // Collect native function names from use declarations.
@@ -3069,6 +3073,8 @@ pub fn compile_with_options(
                 native_map.insert(full.clone(), idx);
                 native_externals.insert(full.clone(), use_decl.is_external);
                 native_names.push(full);
+                native_return_types
+                    .push(use_decl.signature.as_ref().map(|s| s.return_type.clone()));
             }
             ImportItem::Wildcard => {
                 // Wildcard imports cannot be resolved at compile time.
@@ -3680,11 +3686,23 @@ pub fn compile_with_options(
     // survives RESET in place; a scalar slot stores its value inline and needs
     // no body. `program` here is the monomorphized program, so field types are
     // concrete and `type_info` resolves their layouts.
+    // Resolve each native's declared return type to a flat shape for the typed
+    // verifier's native-result seeding; an undeclared or unresolvable return is
+    // `Top` (deferred).
+    let native_return_shapes: Vec<crate::bytecode::WireShape> = native_return_types
+        .iter()
+        .map(|ret| match ret {
+            Some(ty) => wire_shape_of_type(ty, &type_info),
+            None => crate::bytecode::WireShape::Top,
+        })
+        .collect();
+
     #[cfg_attr(not(feature = "verify"), allow(unused_mut))]
     let mut module = Module {
         schema_hash: crate::bytecode::compute_schema_hash(data_layout.as_ref()),
         enum_layouts: build_enum_layouts(&type_info),
         signatures,
+        native_return_shapes,
         chunks,
         native_names,
         entry_point,

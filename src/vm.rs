@@ -10826,7 +10826,7 @@ mod tests {
         // Layout: 64-byte framing header + opcode stream (8 bytes:
         // PushImmediate(5) + Return as 4-byte records) + empty
         // operand pool + rkyv-archived WireAuxBody + 4-byte CRC.
-        // Total length: 300 bytes.
+        // Total length: 308 bytes.
         //
         // The aux body grew by the optional per-chunk
         // `WireChunk::debug_pool_bytes` field added for B29 (strippable
@@ -10850,12 +10850,14 @@ mod tests {
         // operand-stack verifier's per-chunk parameter, return, and resume
         // flat-shape descriptors), which for this one-chunk module carries one
         // signature (no parameters, a scalar `Word` return, `Top` resume),
-        // raising the total to 300 bytes. Per B28 the format may change freely
-        // without a BYTECODE_VERSION bump (no production traction; programs are
-        // recompiled).
+        // raising the total to 300 bytes, and again for the
+        // `WireAuxBody::native_return_shapes` table (A.2.1 native-result
+        // seeding), whose empty `ArchivedVec` adds 8 more bytes for a total of
+        // 308. Per B28 the format may change freely without a BYTECODE_VERSION
+        // bump (no production traction; programs are recompiled).
         let expected: alloc::vec::Vec<u8> = alloc::vec![
-            75, 69, 76, 69, 1, 0, 64, 0, 44, 1, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 224, 0,
+            75, 69, 76, 69, 1, 0, 64, 0, 52, 1, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 232, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 159, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 97, 105, 110, 255, 255, 255, 255, 200, 255, 255, 255,
@@ -10865,7 +10867,7 @@ mod tests {
             255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 152, 255, 255, 255, 0, 0, 0, 0, 144, 255, 255,
-            255, 1, 0, 0, 0, 57, 20, 244, 92,
+            255, 1, 0, 0, 0, 160, 255, 255, 255, 0, 0, 0, 0, 190, 251, 115, 118,
         ];
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
@@ -11318,6 +11320,7 @@ mod tests {
             schema_hash: 0,
             enum_layouts: alloc::vec::Vec::new(),
             signatures: alloc::vec::Vec::new(),
+            native_return_shapes: alloc::vec::Vec::new(),
             chunks: alloc::vec![chunk],
             native_names: alloc::vec![],
             entry_point: Some(0),
@@ -11362,6 +11365,7 @@ mod tests {
             schema_hash: 0,
             enum_layouts: alloc::vec::Vec::new(),
             signatures: alloc::vec::Vec::new(),
+            native_return_shapes: alloc::vec::Vec::new(),
             chunks: alloc::vec![chunk],
             native_names: alloc::vec![],
             entry_point: Some(0),
@@ -12563,6 +12567,7 @@ mod tests {
             schema_hash: 0,
             enum_layouts: alloc::vec::Vec::new(),
             signatures: alloc::vec::Vec::new(),
+            native_return_shapes: alloc::vec::Vec::new(),
             chunks: alloc::vec![text_returning_chunk, int_returning_chunk],
             native_names: alloc::vec::Vec::new(),
             entry_point: Some(0),

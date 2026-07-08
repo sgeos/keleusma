@@ -3367,6 +3367,14 @@ pub struct Module {
     /// than `chunks`) reproduces the unseeded behaviour: a chunk without an
     /// entry is checked with an all-`Top` signature. See [`ChunkSignature`].
     pub signatures: Vec<ChunkSignature>,
+    /// Return-value flat shape of each declared native, parallel to
+    /// [`Module::native_names`] by index, so the typed verifier pass can seed a
+    /// `CallVerifiedNative`/`CallExternalNative` result (A.2.1 native-result
+    /// seeding). A native declared without a `use ... -> R` signature, or one
+    /// whose return type does not resolve, records [`WireShape::Top`] and
+    /// defers. Empty (or shorter than `native_names`) reproduces the unseeded
+    /// behaviour.
+    pub native_return_shapes: Vec<WireShape>,
 }
 
 /// Bit flags defined for [`Module::flags`].

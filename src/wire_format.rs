@@ -1297,6 +1297,10 @@ pub struct WireAuxBody {
     /// auxiliary body alongside `enum_layouts`; empty for a module compiled
     /// without the descriptors, which the pass treats as all-`Top`.
     pub signatures: Vec<crate::bytecode::ChunkSignature>,
+    /// Native return-value flat shapes; mirrors `Module::native_return_shapes`,
+    /// parallel to `native_names`. Additive in the auxiliary body; empty for a
+    /// module compiled without the descriptors.
+    pub native_return_shapes: Vec<crate::bytecode::WireShape>,
 }
 
 /// Strip a `#!` shebang prefix from a byte slice. Wire-format
@@ -1569,6 +1573,7 @@ pub fn module_to_wire_bytes(module: &Module) -> Result<Vec<u8>, LoadError> {
         chunks: wire_chunks,
         enum_layouts: module.enum_layouts.clone(),
         signatures: module.signatures.clone(),
+        native_return_shapes: module.native_return_shapes.clone(),
         native_names: module.native_names.clone(),
         entry_point: module.entry_point,
         data_layout: module.data_layout.clone(),
@@ -1780,6 +1785,7 @@ pub fn module_to_signed_wire_bytes(
         chunks: wire_chunks,
         enum_layouts: module.enum_layouts.clone(),
         signatures: module.signatures.clone(),
+        native_return_shapes: module.native_return_shapes.clone(),
         native_names: module.native_names.clone(),
         entry_point: module.entry_point,
         data_layout: module.data_layout.clone(),
@@ -2491,6 +2497,7 @@ pub fn module_from_wire_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
         chunks,
         enum_layouts: aux.enum_layouts,
         signatures: aux.signatures,
+        native_return_shapes: aux.native_return_shapes,
         native_names: aux.native_names,
         entry_point: aux.entry_point,
         data_layout: aux.data_layout,
@@ -2944,6 +2951,8 @@ mod tests {
             ret: WireShape::Scalar { kind: 3 },
             resume: WireShape::Top,
         }];
+        module.native_return_shapes =
+            alloc::vec![WireShape::Flat { kind: 2, size: 24 }, WireShape::Top];
         // Byte-stable round trip (re-encoding the decode matches).
         module_roundtrip_through_wire_format(module.clone());
         // And the decoded shapes are exactly the encoded ones.
@@ -2955,6 +2964,12 @@ mod tests {
         assert!(matches!(s.params[0], WireShape::Flat { kind: 2, size: 16 }));
         assert!(matches!(s.ret, WireShape::Scalar { kind: 3 }));
         assert!(matches!(s.resume, WireShape::Top));
+        assert_eq!(decoded.native_return_shapes.len(), 2);
+        assert!(matches!(
+            decoded.native_return_shapes[0],
+            WireShape::Flat { kind: 2, size: 24 }
+        ));
+        assert!(matches!(decoded.native_return_shapes[1], WireShape::Top));
     }
 
     fn make_minimal_module() -> Module {
@@ -2975,6 +2990,7 @@ mod tests {
             native_names: alloc::vec::Vec::new(),
             enum_layouts: alloc::vec::Vec::new(),
             signatures: alloc::vec::Vec::new(),
+            native_return_shapes: alloc::vec::Vec::new(),
             entry_point: Some(0),
             data_layout: None,
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
@@ -3023,6 +3039,7 @@ mod tests {
             native_names: alloc::vec::Vec::new(),
             enum_layouts: alloc::vec::Vec::new(),
             signatures: alloc::vec::Vec::new(),
+            native_return_shapes: alloc::vec::Vec::new(),
             entry_point: None,
             data_layout: None,
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
@@ -3171,6 +3188,7 @@ mod tests {
             native_names: alloc::vec::Vec::new(),
             enum_layouts: alloc::vec::Vec::new(),
             signatures: alloc::vec::Vec::new(),
+            native_return_shapes: alloc::vec::Vec::new(),
             entry_point: Some(0),
             data_layout: None,
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
@@ -3225,6 +3243,7 @@ mod tests {
             native_names: alloc::vec::Vec::new(),
             enum_layouts: alloc::vec::Vec::new(),
             signatures: alloc::vec::Vec::new(),
+            native_return_shapes: alloc::vec::Vec::new(),
             entry_point: Some(0),
             data_layout: None,
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,
@@ -3270,6 +3289,7 @@ mod tests {
             native_names: alloc::vec::Vec::new(),
             enum_layouts: alloc::vec::Vec::new(),
             signatures: alloc::vec::Vec::new(),
+            native_return_shapes: alloc::vec::Vec::new(),
             entry_point: Some(0),
             data_layout: None,
             word_bits_log2: crate::bytecode::RUNTIME_WORD_BITS_LOG2,

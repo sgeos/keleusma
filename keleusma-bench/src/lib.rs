@@ -223,6 +223,7 @@ fn build_benchmark_chunk(pattern: &[Op], constants: &[ConstValue], repetitions: 
         // updated when the field was introduced.
         enum_layouts: Vec::new(),
         signatures: Vec::new(),
+        native_return_shapes: Vec::new(),
     }
 }
 
