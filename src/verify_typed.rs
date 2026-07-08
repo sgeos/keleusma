@@ -181,6 +181,30 @@ pub enum TypedError {
         /// The array body's byte size.
         array_size: u32,
     },
+    /// A shared data slot's byte extent (`offset + size`) reaches past the
+    /// module's shared-data buffer (A.2.1 Phase 4, audit finding B6). The
+    /// runtime reads and writes the slot at this offset, so an offset past the
+    /// buffer is a memory-safety surface.
+    SharedSlotOutOfBounds {
+        /// Zero-based shared-slot index.
+        slot: usize,
+        /// The carried byte offset.
+        offset: usize,
+        /// The slot's byte size (scalar width or composite body length).
+        size: usize,
+        /// The shared-data buffer's byte length.
+        buffer: u32,
+    },
+    /// A `NewComposite` that constructs a flat enum body carries a byte size
+    /// that matches no declared enum body size (`word_bytes + min_payload`)
+    /// in the module's enum-layout table (A.2.1 Phase 4, audit finding B8). A
+    /// mutated `min_payload` no longer matches the baked construction sizes.
+    EnumBodySizeMismatch {
+        /// Instruction index of the `NewComposite`.
+        ip: usize,
+        /// The baked flat enum body size.
+        baked: u32,
+    },
 }
 
 /// Per-chunk signature that seeds the abstract stack where the op stream
@@ -243,7 +267,7 @@ pub fn typed_check_chunk_with_sig(
     word_bytes: usize,
     float_bytes: usize,
 ) -> Result<(), TypedError> {
-    check_chunk_seeded(chunk, sig, &[], word_bytes, float_bytes)
+    check_chunk_seeded(chunk, sig, &[], &[], word_bytes, float_bytes)
 }
 
 /// Check every chunk of a module, seeding each from the module's per-chunk
@@ -256,21 +280,93 @@ pub fn typed_check_module(
     word_bytes: usize,
     float_bytes: usize,
 ) -> Result<(), TypedError> {
+    // Wire-table validation (A.2.1 Phase 4): the carried tables are trusted
+    // only because verified. B6: every shared slot lies within the shared-data
+    // buffer. B8 is enforced per-op below via the enum body-size cross-check.
+    validate_data_layout(module, word_bytes, float_bytes)?;
+
+    // The set of declared flat enum body sizes (`word_bytes + min_payload`),
+    // against which a flat-enum `NewComposite` size is cross-checked (B8). A
+    // mutated `min_payload` shifts this set away from the baked construction
+    // sizes. Empty when the module declares no enums, in which case the check
+    // defers.
+    let enum_body_sizes: Vec<u32> = module
+        .enum_layouts
+        .iter()
+        .map(|el| (word_bytes as u32).saturating_add(el.min_payload))
+        .collect();
+
     let default_sig = ChunkSig::default();
     for (i, chunk) in module.chunks.iter().enumerate() {
         let seeded = module.signatures.get(i).map(ChunkSig::from_signature);
         let sig = seeded.as_ref().unwrap_or(&default_sig);
-        check_chunk_seeded(chunk, sig, &module.signatures, word_bytes, float_bytes)?;
+        check_chunk_seeded(
+            chunk,
+            sig,
+            &module.signatures,
+            &enum_body_sizes,
+            word_bytes,
+            float_bytes,
+        )?;
     }
     Ok(())
 }
 
-/// Shared entry: interpret one chunk under a seeding signature and a module
-/// signature table (empty when the chunk is checked in isolation).
+/// Validate the shared-data slot layout (A.2.1 Phase 4, audit finding B6):
+/// every shared slot's byte extent must lie within the module's shared-data
+/// buffer. The runtime addresses each slot by its carried offset, so an offset
+/// or size that overruns the buffer is a memory-safety surface promoted here
+/// to a load-time MUST-REJECT.
+fn validate_data_layout(
+    module: &Module,
+    word_bytes: usize,
+    float_bytes: usize,
+) -> Result<(), TypedError> {
+    let Some(layout) = &module.data_layout else {
+        return Ok(());
+    };
+    let buffer = module.shared_data_bytes;
+    for (slot, sl) in layout.shared_layout.iter().enumerate() {
+        // A composite slot's size is its carried body length; a scalar slot's
+        // size follows from its kind tag at the module widths.
+        let size = if sl.kind & crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG != 0 {
+            usize::from(sl.len)
+        } else {
+            match ScalarKind::from_tag(sl.kind) {
+                Some(k) => k.size_in_bytes(word_bytes, float_bytes),
+                // An undecodable kind tag cannot be sized; treat as a corrupt
+                // table entry.
+                None => {
+                    return Err(TypedError::SharedSlotOutOfBounds {
+                        slot,
+                        offset: usize::from(sl.offset),
+                        size: 0,
+                        buffer,
+                    });
+                }
+            }
+        };
+        let need = usize::from(sl.offset) + size;
+        if need > buffer as usize {
+            return Err(TypedError::SharedSlotOutOfBounds {
+                slot,
+                offset: usize::from(sl.offset),
+                size,
+                buffer,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Shared entry: interpret one chunk under a seeding signature, a module
+/// signature table, and the set of declared flat enum body sizes (all empty
+/// when the chunk is checked in isolation).
 fn check_chunk_seeded(
     chunk: &Chunk,
     sig: &ChunkSig,
     module_sigs: &[ChunkSignature],
+    enum_body_sizes: &[u32],
     word_bytes: usize,
     float_bytes: usize,
 ) -> Result<(), TypedError> {
@@ -278,6 +374,7 @@ fn check_chunk_seeded(
         chunk,
         sig,
         module_sigs,
+        enum_body_sizes,
         wb: word_bytes,
         fb: float_bytes,
     };
@@ -334,6 +431,11 @@ struct Ctx<'a> {
     /// chunk is checked in isolation, in which case a `Call` result degrades
     /// to `Top` and arguments are not checked (A.2.1 Phase 2b).
     module_sigs: &'a [ChunkSignature],
+    /// The module's declared flat enum body sizes (`word_bytes + min_payload`),
+    /// against which a flat-enum `NewComposite` size is cross-checked (A.2.1
+    /// Phase 4, audit finding B8). Empty when the chunk is checked in isolation
+    /// or the module declares no enums, in which case the check defers.
+    enum_body_sizes: &'a [u32],
     /// Target word width in bytes (for scalar/composite sizing).
     wb: usize,
     /// Target float width in bytes.
@@ -590,14 +692,24 @@ fn apply_op(
                     None => all_known = false,
                 }
             }
-            // Enum bodies pad the payload to the largest variant, so their
-            // exact size is validated in Phase 4 against the enum-layout
-            // table. Non-enum flat bodies must pack exactly when every
-            // element size is known.
-            if all_known
-                && !matches!(kind, CompositeKind::Enum)
-                && computed != u32::from(*byte_size)
-            {
+            if matches!(kind, CompositeKind::Enum) {
+                // An enum body pads its payload to the largest variant, so its
+                // size is not the sum of the packed elements; instead it must
+                // match a declared flat enum body size (`word_bytes +
+                // min_payload`) from the module's enum-layout table (A.2.1
+                // Phase 4, audit finding B8). The check defers when the table
+                // is absent (an isolated chunk check or an enum-free module).
+                if !ctx.enum_body_sizes.is_empty()
+                    && !ctx.enum_body_sizes.contains(&u32::from(*byte_size))
+                {
+                    return Err(TypedError::EnumBodySizeMismatch {
+                        ip,
+                        baked: u32::from(*byte_size),
+                    });
+                }
+            } else if all_known && computed != u32::from(*byte_size) {
+                // A non-enum flat body must pack exactly when every element
+                // size is known.
                 return Err(TypedError::NewCompositeSizeMismatch {
                     ip,
                     baked: u32::from(*byte_size),
@@ -1060,6 +1172,109 @@ mod tests {
         assert!(matches!(
             typed_check_chunk(&chunk(ops, consts), 8, 8),
             Err(TypedError::ExpectedComposite { .. })
+        ));
+    }
+
+    // Phase 4 (B6): a shared data slot whose byte extent overruns the
+    // shared-data buffer is rejected at the module level; an in-bounds slot
+    // accepts.
+    #[test]
+    fn shared_slot_out_of_bounds_rejects() {
+        use crate::bytecode::{DataLayout, SharedSlotLayout};
+        let mut m = module(vec![chunk(vec![Op::Return], ints())], vec![]);
+        m.shared_data_bytes = 16;
+        m.data_layout = Some(DataLayout {
+            slots: Vec::new(),
+            // offset 12 + scalar Int size 8 = 20 > 16.
+            shared_layout: vec![SharedSlotLayout {
+                offset: 12,
+                kind: ScalarKind::Int.to_tag(),
+                len: 0,
+            }],
+            private_composite_layout: Vec::new(),
+        });
+        assert!(matches!(
+            typed_check_module(&m, 8, 8),
+            Err(TypedError::SharedSlotOutOfBounds { .. })
+        ));
+    }
+
+    #[test]
+    fn shared_slot_in_bounds_accepts() {
+        use crate::bytecode::{DataLayout, SharedSlotLayout};
+        let mut m = module(vec![chunk(vec![Op::Return], ints())], vec![]);
+        m.shared_data_bytes = 16;
+        m.data_layout = Some(DataLayout {
+            slots: Vec::new(),
+            shared_layout: vec![SharedSlotLayout {
+                offset: 8, // 8 + 8 = 16 <= 16
+                kind: ScalarKind::Int.to_tag(),
+                len: 0,
+            }],
+            private_composite_layout: Vec::new(),
+        });
+        assert!(typed_check_module(&m, 8, 8).is_ok());
+    }
+
+    // Phase 4 (B8): a flat-enum `NewComposite` whose baked body size matches no
+    // declared enum body size (`word_bytes + min_payload`) is rejected; a
+    // matching size accepts. A mutated `min_payload` shifts the declared set
+    // away from the baked construction size, which is how the mutation is
+    // caught.
+    fn enum_construct_chunk(byte_size: u16) -> Chunk {
+        chunk(
+            vec![
+                Op::Const(0), // discriminant word
+                Op::Const(1), // payload word
+                Op::NewComposite(NewCompositeOperand::Flat {
+                    kind: CompositeKind::Enum,
+                    count: 2,
+                    byte_size,
+                }),
+                Op::Return,
+            ],
+            ints(),
+        )
+    }
+
+    fn module_with_enum(byte_size: u16, min_payload: u32) -> Module {
+        use crate::bytecode::{EnumLayout, EnumVariantDisc};
+        let mut m = module(vec![enum_construct_chunk(byte_size)], vec![]);
+        m.enum_layouts = vec![EnumLayout {
+            type_name: String::from("E"),
+            variants: vec![EnumVariantDisc {
+                name: String::from("A"),
+                disc: 0,
+            }],
+            min_payload,
+        }];
+        m
+    }
+
+    #[test]
+    fn enum_body_size_matches_layout_accepts() {
+        // word_bytes 8 + min_payload 8 = 16; construct a 16-byte enum body.
+        assert!(typed_check_module(&module_with_enum(16, 8), 8, 8).is_ok());
+    }
+
+    #[test]
+    fn enum_body_size_mismatch_rejects() {
+        // Declared body size is 16 (8 + 8); a 24-byte construction matches no
+        // declared enum body size.
+        assert!(matches!(
+            typed_check_module(&module_with_enum(24, 8), 8, 8),
+            Err(TypedError::EnumBodySizeMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn mutated_min_payload_rejects_construction() {
+        // The bytecode was baked for min_payload 8 (a 16-byte body), but the
+        // carried table's min_payload is mutated to 4 (a 12-byte body). The
+        // 16-byte construction no longer matches the declared size.
+        assert!(matches!(
+            typed_check_module(&module_with_enum(16, 4), 8, 8),
+            Err(TypedError::EnumBodySizeMismatch { .. })
         ));
     }
 
