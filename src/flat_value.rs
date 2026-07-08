@@ -275,17 +275,28 @@ impl FlatComposite {
     pub fn nested_view(&self, offset: usize, len: usize, arena: &Arena) -> Result<Self, Stale> {
         let Self::Arena(handle) = self;
         let base = handle.get(arena)?;
-        debug_assert!(
-            offset + len <= base.len(),
-            "nested view out of bounds: {offset}+{len} > {}",
-            base.len()
-        );
+        // Bounds guard (audit finding B1). For compiler-produced bytecode the
+        // baked `offset`/`len` always lie within the body, and the A.2.1 typed
+        // operand-stack pass rejects an out-of-bounds `FlatNested` operand at
+        // load whenever it can reconstruct the parent's flat shape. That pass
+        // is not yet complete, though (an operand of unknown shape defers), so
+        // this remains a real runtime check rather than a `debug_assert`:
+        // untrusted or corrupt bytecode that slips a bad offset past the
+        // load-time pass must fault here, not perform out-of-bounds pointer
+        // arithmetic in a release build. An out-of-bounds range surfaces
+        // through the same `Stale` channel the caller already traps on. When
+        // the pass reaches completeness this guard may be lifted (A.2.1 Phase
+        // 6B, the zero-copy payoff).
+        if offset.checked_add(len).is_none_or(|end| end > base.len()) {
+            return Err(Stale);
+        }
         if len == 0 {
             return Ok(Self::empty());
         }
-        // SAFETY: `offset + len <= base.len()` (a compiler-baked field range),
-        // so `base.as_ptr().add(offset)` is in bounds and the `len`-byte
-        // sub-slice lies within the parent's allocation.
+        // SAFETY: the bounds guard above returned early unless
+        // `offset + len <= base.len()`, so `base.as_ptr().add(offset)` is in
+        // bounds and the `len`-byte sub-slice lies within the parent's
+        // allocation.
         let child_ptr = unsafe { base.as_ptr().add(offset) } as *mut u8;
         let raw: *mut [u8] = core::ptr::slice_from_raw_parts_mut(child_ptr, len);
         // SAFETY: `child_ptr` is derived from a non-null arena pointer.
@@ -629,6 +640,22 @@ mod tests {
             outer.resolve(&arena).unwrap(),
             &[0, 0, 1, 2, 3, 4, 0, 0, 0, 0]
         );
+    }
+
+    #[test]
+    fn nested_view_out_of_bounds_faults_not_ub() {
+        // A `FlatNested` offset/len past the parent body (untrusted or corrupt
+        // bytecode that slipped past the load-time typed pass) must fault
+        // rather than perform out-of-bounds pointer arithmetic (audit finding
+        // B1). The guard is a real runtime check, not a `debug_assert`, so this
+        // holds in release builds too.
+        let arena = test_arena();
+        let outer = arena_body(&arena, &[0, 1, 2, 3]); // 4-byte body
+        assert!(outer.nested_view(2, 4, &arena).is_err()); // 2 + 4 > 4
+        assert!(outer.nested_view(5, 0, &arena).is_err()); // offset past end
+        assert!(outer.nested_view(usize::MAX, 1, &arena).is_err()); // overflow
+        // An in-bounds range still succeeds.
+        assert!(outer.nested_view(1, 2, &arena).is_ok());
     }
 
     #[test]
