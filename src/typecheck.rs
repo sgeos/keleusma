@@ -1770,6 +1770,15 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
                 let mut fields = BTreeMap::new();
                 for f in &s.fields {
                     check_composite_dimensions(&f.type_expr)?;
+                    // A struct field is not one of the three boundary categories
+                    // where a negative information-flow label is admissible
+                    // (function parameter/return, shared data field, private data
+                    // field; STANDARD.md 4.5). Reject a negative label at any
+                    // position in a struct field type. Passing
+                    // `at_top_level_allowed_position = false` rejects a top-level
+                    // as well as a nested negative label; positive labels are
+                    // unaffected.
+                    validate_no_nested_negative_labels(&f.type_expr, false)?;
                     fields.insert(
                         f.name.clone(),
                         ctx.resolve_type_with_params(&f.type_expr, &tp_map),
@@ -1790,6 +1799,10 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
                 for v in &e.variants {
                     for t in &v.fields {
                         check_composite_dimensions(t)?;
+                        // An enum variant payload is not a boundary category, so
+                        // a negative label at any position in it is inadmissible
+                        // (STANDARD.md 4.5), the same rule as struct fields.
+                        validate_no_nested_negative_labels(t, false)?;
                     }
                     let payload: Vec<Type> = v
                         .fields
@@ -7830,6 +7843,32 @@ mod tests {
              fn main() -> Word { host::transmit(classify 0@Open); 0 }",
         )
         .expect("unrelated label admitted by negative param");
+    }
+
+    #[test]
+    fn negative_label_rejected_on_struct_and_enum_fields() {
+        // A negative label is admissible only at the three boundary categories
+        // (function parameter/return, shared data field, private data field;
+        // STANDARD.md 4.5). A struct or enum value-type field is not a boundary,
+        // so a negative label there is rejected, at the top level or nested.
+        assert!(
+            check_src("struct S { x: Word@!Secret }\nfn main() -> Word { 0 }").is_err(),
+            "a negative label on a struct field must be rejected"
+        );
+        assert!(
+            check_src("enum E { V(Word@!Secret) }\nfn main() -> Word { 0 }").is_err(),
+            "a negative label on an enum variant payload must be rejected"
+        );
+        assert!(
+            check_src("struct S { x: (Word, Word@!Secret) }\nfn main() -> Word { 0 }").is_err(),
+            "a negative label nested in a struct field must be rejected"
+        );
+        // A positive label on a struct field is unaffected.
+        check_src("struct S { x: Word@Secret }\nfn main() -> Word { 0 }")
+            .expect("a positive label on a struct field is admitted");
+        // A negative label remains admissible on a data field, a boundary.
+        check_src("data d { x: Word@!Secret }\nfn main() -> Word { 0 }")
+            .expect("a negative label on a shared data field is admitted");
     }
 
     #[test]

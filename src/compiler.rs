@@ -1448,6 +1448,32 @@ fn compile_multiword_variable_shift(
     fc.emit(Op::Const(log2_c));
     fc.emit(Op::Shr);
     fc.emit(Op::SetLocal(qv));
+    // Clamp a negative word offset (from a negative count) up to `n` so the
+    // per-limb bounds guards below shift every bit out to the fill. The spec
+    // (TYPE_SYSTEM.md Shift Operators) states a negative multi-word count, like
+    // an at-or-beyond-width count, shifts everything out to the fill. An
+    // over-width positive count already yields `q >= n` and is handled; only a
+    // negative count produces a negative `q` that would wrongly land the source
+    // indices back in range. This makes a negative count take the identical
+    // path as an over-width count with the same `(q, r)`. Branch-free: with
+    // `sign = q asr (wb - 1)` being 0 for a non-negative q and all-ones for a
+    // negative q, `q = (q band bnot sign) bor (n band sign)` leaves a
+    // non-negative q unchanged and replaces a negative q with `n`.
+    let qsignv = fc.declare_local("__mwv_qsign");
+    fc.emit(Op::GetLocal(qv));
+    fc.emit(Op::Const(wbm1_c));
+    fc.emit(Op::Shr);
+    fc.emit(Op::SetLocal(qsignv));
+    fc.emit(Op::GetLocal(qv));
+    fc.emit(Op::GetLocal(qsignv));
+    fc.emit(Op::Const(neg1));
+    fc.emit(Op::BitXor);
+    fc.emit(Op::BitAnd);
+    fc.emit(Op::Const(n_c));
+    fc.emit(Op::GetLocal(qsignv));
+    fc.emit(Op::BitAnd);
+    fc.emit(Op::BitOr);
+    fc.emit(Op::SetLocal(qv));
     // r = c band (wb - 1).
     let rv = fc.declare_local("__mwv_r");
     fc.emit(Op::GetLocal(cv));

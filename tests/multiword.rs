@@ -1309,6 +1309,57 @@ fn multiword_variable_shift_three_word() {
 }
 
 #[test]
+fn multiword_negative_runtime_shift_fills() {
+    // Spec (TYPE_SYSTEM.md, Shift Operators): a negative multi-word count, like
+    // an at-or-beyond-width count, shifts every bit out to the fill value, zero
+    // for a logical shift and the sign word for an arithmetic right shift. A
+    // runtime-variable negative count exercises the unrolled variable-shift
+    // lowering (a constant negative amount is rejected at compile time).
+    // Logical left, negative count: all limbs zero.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let c = 0 - 1; let m = (7, 3) as Multiword<2>; let s = m lsl c; s[0] }"
+        ),
+        0
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let c = 0 - 1; let m = (7, 3) as Multiword<2>; let s = m lsl c; s[1] }"
+        ),
+        0
+    );
+    // Logical right, negative count: all limbs zero.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let c = 0 - 1; let m = (7, 3) as Multiword<2>; let s = m lsr c; s[0] }"
+        ),
+        0
+    );
+    // Arithmetic right, negative count, negative value (high limb -1): every
+    // limb becomes the sign word, -1.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let c = 0 - 1; let m = (7, -1) as Multiword<2>; let s = m asr c; s[0] }"
+        ),
+        -1
+    );
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let c = 0 - 1; let m = (7, -1) as Multiword<2>; let s = m asr c; s[1] }"
+        ),
+        -1
+    );
+    // Arithmetic right, negative count, non-negative value (high limb 5): the
+    // sign word is zero, so every limb becomes zero.
+    assert_eq!(
+        run_to_int(
+            "fn main() -> Word { let c = 0 - 5; let m = (7, 5) as Multiword<2>; let s = m asr c; s[0] }"
+        ),
+        0
+    );
+}
+
+#[test]
 fn multiword_variable_shift_four_word() {
     // N = 4 (256-bit) exercises the unrolled path at the width the
     // constant tests cover. (1,0,0,0) lsl 128 = (0,0,1,0): two limbs up.

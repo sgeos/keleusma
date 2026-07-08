@@ -2436,16 +2436,27 @@ impl<'a> Parser<'a> {
                 }
                 let first = self.parse_expr()?;
                 if self.eat(&TokenKind::Comma) {
-                    // Tuple literal: (expr, expr, ...)
+                    // Tuple literal: (expr, expr, ...) with two or more elements.
+                    // A single element with a trailing comma, `(x,)`, is not a
+                    // one-element tuple; the language admits no one-tuple (a
+                    // one-element tuple is not surface syntax), and `(x)` is a
+                    // grouped expression. Require a second element after the
+                    // first comma.
+                    if self.at(&TokenKind::RParen) {
+                        return Err(ParseError {
+                            message: String::from(
+                                "a one-element tuple `(x,)` is not valid: a tuple has two or more elements, and `(x)` is a grouped expression",
+                            ),
+                            span: tok.span,
+                        });
+                    }
                     let mut elements = vec![first];
-                    if !self.at(&TokenKind::RParen) {
-                        elements.push(self.parse_expr()?);
-                        while self.eat(&TokenKind::Comma) {
-                            if self.at(&TokenKind::RParen) {
-                                break;
-                            }
-                            elements.push(self.parse_expr()?);
+                    elements.push(self.parse_expr()?);
+                    while self.eat(&TokenKind::Comma) {
+                        if self.at(&TokenKind::RParen) {
+                            break;
                         }
+                        elements.push(self.parse_expr()?);
                     }
                     let end = self.expect(&TokenKind::RParen)?;
                     Ok(Expr::TupleLiteral {
@@ -2898,18 +2909,38 @@ impl<'a> Parser<'a> {
                 }
             }
 
-            // Tuple pattern.
+            // Parenthesized pattern: `()` matches unit, `(p)` is a grouped
+            // pattern (transparent), and `(p, q, ...)` with two or more elements
+            // is a tuple pattern. A one-element `(p,)` is not a tuple, mirroring
+            // the tuple-literal rule; the language admits no one-element tuple.
             TokenKind::LParen => {
                 self.pos += 1;
-                let mut patterns = Vec::new();
-                if !self.at(&TokenKind::RParen) {
-                    patterns.push(self.parse_pattern()?);
-                    while self.eat(&TokenKind::Comma) {
-                        if self.at(&TokenKind::RParen) {
-                            break;
-                        }
-                        patterns.push(self.parse_pattern()?);
+                if self.at(&TokenKind::RParen) {
+                    // `()` matches the unit value (empty-tuple pattern).
+                    let end = self.expect(&TokenKind::RParen)?;
+                    return Ok(Pattern::Tuple(Vec::new(), merge_spans(tok.span, end)));
+                }
+                let first = self.parse_pattern()?;
+                if !self.eat(&TokenKind::Comma) {
+                    // `(p)` is a grouped pattern; parentheses are transparent.
+                    self.expect(&TokenKind::RParen)?;
+                    return Ok(first);
+                }
+                if self.at(&TokenKind::RParen) {
+                    return Err(ParseError {
+                        message: String::from(
+                            "a one-element tuple pattern `(p,)` is not valid: a tuple pattern has two or more elements, and `(p)` is a grouped pattern",
+                        ),
+                        span: tok.span,
+                    });
+                }
+                let mut patterns = vec![first];
+                patterns.push(self.parse_pattern()?);
+                while self.eat(&TokenKind::Comma) {
+                    if self.at(&TokenKind::RParen) {
+                        break;
                     }
+                    patterns.push(self.parse_pattern()?);
                 }
                 let end = self.expect(&TokenKind::RParen)?;
                 Ok(Pattern::Tuple(patterns, merge_spans(tok.span, end)))
@@ -3224,6 +3255,34 @@ mod tests {
             }
             _ => panic!("expected ArrayLiteral, got {:?}", expr),
         }
+    }
+
+    #[test]
+    fn one_element_tuple_forms_are_rejected_or_grouped() {
+        // The language admits no one-element tuple (GRAMMAR.md). `(x,)` is
+        // rejected, `(x)` is a grouped expression, and `(x, y)` is a tuple.
+        assert!(
+            parse_expr_str("(1,)").is_err(),
+            "a one-element tuple literal `(x,)` must be rejected"
+        );
+        match parse_expr_str("(1)").unwrap() {
+            Expr::Literal { .. } => {}
+            other => panic!("expected a grouped expression, got {:?}", other),
+        }
+        match parse_expr_str("(1, 2)").unwrap() {
+            Expr::TupleLiteral { ref elements, .. } => assert_eq!(elements.len(), 2),
+            other => panic!("expected a two-element tuple, got {:?}", other),
+        }
+        // Pattern forms: `(p,)` is rejected, `(p)` is a transparent grouped
+        // pattern.
+        assert!(
+            parse_str("fn main() -> Word { match 0 { (a,) => a, } }").is_err(),
+            "a one-element tuple pattern `(p,)` must be rejected"
+        );
+        assert!(
+            parse_str("fn main() -> Word { match 0 { (a) => a, } }").is_ok(),
+            "a grouped pattern `(p)` parses"
+        );
     }
 
     #[test]
