@@ -2,14 +2,54 @@
 
 > **Navigation**: [Process](./README.md) | [Documentation Root](../README.md)
 
-How to cut and publish a Keleusma workspace release. Keleusma's value proposition
-is *definitive* bounds; the release discipline is held to the same standard —
-**nothing ships red, nothing is published that the registry cannot resolve, and
-nothing is published without an explicit, current go-ahead.**
+How to cut and publish a Keleusma workspace release. Keleusma's value proposition is
+*definitive* bounds for mission-critical and rad-hard targets; the release discipline is
+held to the same standard. **A publish is an irreversible mission event.** This procedure
+is therefore run as a mission-assurance checklist, not a task list: a sequence of
+**Go/No-Go gates** converging on a single, clearly marked **point of no return**, with the
+irreversible action gated on independent human authorization and backed by a defined abort
+and rollback path.
+
+The governing invariants: **nothing ships red; nothing is published that the registry
+cannot resolve; nothing but the exact CI-proven commit is published; and nothing is
+published without an explicit, current go-ahead.**
 
 This document is the authoritative procedure. The everyday gate
 (`cargo test && cargo clippy`) is *not* sufficient for a release; run the full gate
-(`scripts/release-gate.sh`) and follow the steps below in order.
+(`scripts/release-gate.sh`) and follow the steps below in order. **No gate may be skipped,
+waived, reordered, or deferred; a single NO-GO halts the sequence until it is cleared.**
+
+## Release doctrine
+
+Five rules govern every release. They bind the human maintainer and any AI agent equally.
+
+1. **Go/No-Go, not best-effort.** Each numbered step is a gate with a binary verdict —
+   GO or NO-GO. Any NO-GO halts the sequence; you do not proceed "mostly green," "green
+   except," or "green enough." Clear the condition, re-verify, then continue.
+
+2. **The point of no return is the publish (step 9).** Steps 0–8 are entirely reversible:
+   a commit can be amended, `main` reset, a tag deleted and re-cut, a branch renamed, a
+   red CI run discarded — all at zero external cost. The publish cannot be undone: a
+   crates.io version is immutable, yankable but never deleted or replaced. Cross the point
+   of no return deliberately, never incidentally.
+
+3. **Independent authorization; no self-certification.** The two mandatory gates — CI
+   green (step 6) and authorization to publish (step 8) — are rendered by the human
+   maintainer, not self-attested by the party that prepared the release. The preparer
+   reports evidence (the CI run URL and conclusion, the version and commit SHA); the
+   maintainer reads it back and issues the GO. Preparation and go-ahead are separated
+   hands — the software analog of the two-person rule for an irreversible action.
+
+4. **Configuration control.** Exactly one artifact is releasable: the annotated-tag commit
+   SHA that CI proved green. Immediately before each `cargo publish`, confirm the working
+   tree *is* that SHA — clean `git status`, and `git rev-parse HEAD` equal to
+   `git rev-parse vX.Y.Z^{commit}`. Never publish a dirty tree, an untagged commit, or a
+   commit CI has not passed.
+
+5. **Every release leaves a record.** Complete the Release Record (§11) — version, commit
+   SHA, CI run URL, audit reference, authorizing person, and per-crate publish
+   confirmation with timestamps — and commit it. The record is the auditable provenance of
+   an irreversible act.
 
 ## The crates
 
@@ -25,36 +65,47 @@ Five crates publish to crates.io, in this dependency order:
 major-minor of `keleusma`. `keleusma-arena` has its own version and bumps only when
 its public API changes.
 
-## Checklist
+## Preflight checklist
+
+Run top to bottom. Each line is a gate; mark **GO** only when its condition is *fully*
+met. A single **NO-GO** halts the sequence. Do not cross the point-of-no-return rule
+until every preflight line above it is GO. The two `***` gates are human-confirmed and
+may not be self-certified by the preparer (doctrine rule 3).
 
 ```
+── PREFLIGHT · reversible · abort freely at any line ──────────────────────
 [ ] 0. Clean tree on the release branch; healthy stable toolchain.
 [ ] 1. Bump versions and stamp changelogs.
 [ ] 2. Local pre-check gate is GREEN (scripts/release-gate.sh, incl. cargo doc).
 [ ] 3. Registry-publishability check (dry-run in dependency order).
 [ ] 4. Operational-security scrub + tarball-contents check.
 [ ] 5. Commit; advance main; push the release commit AND the annotated tag.
-[ ] 6. *** CI IS GREEN ON THE RELEASE COMMIT *** (mandatory; the authoritative gate).
+[ ] 6. *** CI IS GREEN ON THE RELEASE COMMIT *** — human-confirmed (authoritative gate).
 [ ] 7. External release audit returns a clear GO (scope to the change for a patch).
-[ ] 8. *** EXPLICIT, CURRENT AUTHORIZATION TO PUBLISH THIS RELEASE *** (a prior
-       "expedite" or general go-ahead does not count; the irreversible-action gate).
+[ ] 8. *** EXPLICIT, CURRENT AUTHORIZATION TO PUBLISH THIS RELEASE *** — human-confirmed
+       (a prior "expedite" or general go-ahead does not count).
+[ ] 8a. CONFIG CONTROL: working tree == tagged, CI-green SHA (clean status; HEAD == tag).
+╔═══════════════ POINT OF NO RETURN — the publish is irreversible ═══════════════╗
 [ ] 9. Publish in dependency order.
+╚════════════════════════════════════════════════════════════════════════════════╝
+── POST · finalize ────────────────────────────────────────────────────────
 [ ] 10. Cut the GitHub Release; prune branches; verify crates.io + docs.rs.
+[ ] 11. Release Record completed and committed.
 ```
 
-**Two gates prevent a repeat.** *First, never publish, and never merge to `main`, on
-a red CI run (step 6).* The local gate (step 2) is a fast pre-check — it *cannot*
-replicate the cross-compilation jobs, the feature-combination builds, or the
-latest-stable toolchain that CI runs, which is exactly where every V0.2.1 CI failure
-hid (a broken doc link, a 32-bit `Value`-layout assertion, a `verify`-without-`floats`
-build, and stable-1.97 clippy lints). CI on the pushed release commit (step 6) is the
-gate that catches them; publishing (step 9) is downstream of it, not before it.
-*Second, never publish without an explicit, current, release-specific go-ahead (step
-8).* A crates.io version is irreversible, so the publish is not a step the agent may
-take on its own initiative: a prior directive to "expedite," a general blessing given
-before the release was even cut, or a request about a different artifact is **not**
-authorization to push it. Everything up to and including the tag and CI is reversible;
-the publish is not, and it waits for the word.
+**Two gates prevent a repeat, and neither is self-certified.** *First, never publish, and
+never merge to `main`, on a red CI run (step 6).* The local gate (step 2) is a fast
+pre-check — it *cannot* replicate the cross-compilation jobs, the feature-combination
+builds, or the latest-stable toolchain that CI runs, which is exactly where every V0.2.1
+CI failure hid (a broken doc link, a 32-bit `Value`-layout assertion, a
+`verify`-without-`floats` build, and stable-1.97 clippy lints). CI on the pushed release
+commit (step 6) is the gate that catches them; publishing (step 9) is downstream of it,
+not before it. *Second, never publish without an explicit, current, release-specific
+go-ahead (step 8).* A crates.io version is irreversible, so the publish is not a step the
+preparer takes on its own initiative: a prior directive to "expedite," a general blessing
+given before the release was even cut, or a request about a different artifact is **not**
+authorization to push it. Everything up to and including the tag and CI is reversible; the
+publish is not, and it waits for the maintainer's word.
 
 ## 0. Prerequisites
 
@@ -180,6 +231,11 @@ pre-check cannot be: it covers the cross-compilation jobs, the feature-combinati
 builds, the latest-stable toolchain, and the doc build. Publishing through a red CI
 run is the exact mistake that shipped with V0.2.1. Never do it.
 
+**This gate is human-confirmed (doctrine rule 3).** The preparer reports the CI run URL
+and its `conclusion`; the maintainer reads it back and renders the GO. A party that both
+ran the pipeline and declared it green has self-certified — precisely the coupling this
+rule forbids. Capture the run URL for the Release Record (§11).
+
 ## 7. External release audit
 
 A release audit must return a clear **GO** — no open critical, high, or medium
@@ -210,10 +266,12 @@ the maintainer, and the agent does not cross this line on its own initiative.
 - Authorization granted for a *prior* release. Each publish is its own gate.
 
 **What does authorize it:** a clear, current instruction to publish *this* version —
-"publish 0.2.3," "go ahead and publish," "ship it." If there is any doubt, **stop at
-the reversible boundary** (tag pushed, CI green, dry-runs clean) and ask. The reversible
-preparation in steps 0–7 may run freely and without prompting; the irreversible step
-waits for the word.
+"publish 0.2.3," "go ahead and publish," "ship it." The maintainer issues the GO after an
+explicit **readback of the version and commit SHA** to be published (doctrine rule 3);
+the preparer does not infer authorization from tone, momentum, or a prior message. If
+there is any doubt, **stop at the reversible boundary** (tag pushed, CI green, dry-runs
+clean) and ask. The reversible preparation in steps 0–7 may run freely and without
+prompting; the irreversible step waits for the word.
 
 > V0.2.2 lesson: an agent treated an earlier "V0.2.2 should be expedited" as standing
 > authorization and published all four crates, when the actual in-session request was
@@ -223,12 +281,24 @@ waits for the word.
 ## 9. Publish in dependency order
 
 Only after CI is green (step 6), the review is satisfied (step 7), **and the publish is
-explicitly authorized (step 8)**. Publish one crate at a time, waiting for each to be
-available before its dependents; modern
-`cargo publish` (1.66+) waits for registry availability before returning. **Skip any
-crate whose source is unchanged since its last published version** (a version-only
-bump does not require a re-publish, but a dependent may then keep the older
-dependency version — see step 1).
+explicitly authorized (step 8)**. This is the point of no return.
+
+**Configuration-control precheck (doctrine rule 4).** Immediately before the first
+publish, prove you are shipping the CI-green artifact and nothing else:
+
+```sh
+git status --porcelain                                        # must print nothing
+[ "$(git rev-parse HEAD)" = "$(git rev-parse vX.Y.Z^{commit})" ] && echo "HEAD == tag: OK"
+```
+
+Publish only if both hold. A dirty tree or a HEAD that has drifted from the tag means the
+CI-green proof no longer covers what you are about to upload — that is NO-GO.
+
+Publish one crate at a time, waiting for each to be available before its dependents;
+modern `cargo publish` (1.66+) waits for registry availability before returning. **Skip
+any crate whose source is unchanged since its last published version** (a version-only
+bump does not require a re-publish, but a dependent may then keep the older dependency
+version — see step 1).
 
 ```sh
 cargo publish -p keleusma-macros    # skip if unchanged at this version
@@ -264,6 +334,63 @@ A crate version, once published, is **immutable** — it can be yanked, never re
   tolerates the intra-doc-link warnings the CI Doc job rejects; the gate in step 2 and
   CI in step 6 are what keep those from existing in the first place).
 
+## 11. Release record
+
+Doctrine rule 5: every release leaves auditable provenance. Record the following and
+commit it — in the annotated tag message (durable and SHA-bound) and the GitHub Release
+body, and append a one-line entry to a release log if one is maintained. Fill every
+field; `n/a` is a valid value, blank is not.
+
+```
+Release:        Keleusma vX.Y.Z
+Commit SHA:     <full 40-char SHA of the tagged release commit>
+Crates:         keleusma X.Y.Z, keleusma-cli X.Y.Z, keleusma-bench X.Y.Z,
+                keleusma-macros X.Y.Z, keleusma-arena A.B.C
+CI run (green): <URL of the green CI run on the release commit>
+Local gate:     scripts/release-gate.sh [--miri] — PASS on <toolchain> <YYYY-MM-DD>
+Audit:          <report path / commit / "delta-scoped, maintainer discretion">
+Authorized by:  <maintainer>  at  <UTC timestamp>
+Published:      macros <ts>, arena <ts|skipped>, keleusma <ts>, bench <ts>, cli <ts>
+GitHub Release: <URL>
+Notes:          <anything the next releaser must know>
+```
+
+## Abort criteria — any one is NO-GO
+
+Conditions that mandate a halt, to be checked continuously through the preflight. Any one
+present before the point of no return means **do not proceed**:
+
+- Any CI job red on the release commit (step 6).
+- Publish authorization absent, stale, or scoped to a different artifact (step 8).
+- Working tree dirty, or `HEAD` ≠ tag, at the configuration-control check (step 8a / 9).
+- A dependency's published version lacks API the workspace uses — a dry-run fails (step 3).
+- An open critical / high / medium audit finding on the safe load path (step 7).
+- Tier 1 / Tier 2 vocabulary present in the shippable tree (step 4).
+- The stable toolchain is unhealthy and was not repaired (step 0).
+- **Any uncertainty about whether a gate is truly GO. Uncertainty is NO-GO.**
+
+Aborting before step 9 costs nothing: reset, fix, and re-run the affected gates from the
+earliest disturbed step. There is no penalty for holding; the only unrecoverable error is
+crossing the point of no return without cause.
+
+## Rollback and contingency — after the point of no return
+
+The publish cannot be reversed, but a defective published release has a defined recovery.
+A crates.io version is immutable; the available tools are *yank* (hide from new
+resolution — existing pins still resolve) and *supersede* (publish a fixed higher
+version). Choose by severity:
+
+- **Broken build / unsound / wrong artifact:** `cargo yank --version X.Y.Z -p <crate>` for
+  each affected crate, immediately, to stop new dependents from selecting it. Yank is
+  reversible (`--undo`) and is the *containment* step, not the fix.
+- **The fix:** cut a superseding patch (`X.Y.Z+1`) through this entire procedure from step
+  0 — you cannot replace the bad version, only supersede it. State in its changelog what
+  it supersedes and why (as V0.2.2 did for V0.2.1's cross-target breakage).
+- **Git-surface only (tag or Release wrong, crates fine):** the tag and GitHub Release are
+  reversible — delete and re-cut. Do **not** yank sound crates to fix a git-surface error.
+- **Record it:** append the incident and its disposition to the Release Record so the next
+  releaser inherits the context.
+
 ## Hard-won lessons (the "do not repeat these")
 
 - **Never publish, and never merge to `main`, on a red CI run (step 6).** V0.2.1
@@ -290,5 +417,13 @@ A crate version, once published, is **immutable** — it can be yanked, never re
   dependency's public API grows; otherwise the manifest claims a compatibility that
   does not exist.
 - **Stamp changelogs at the cut**, not "later"; the published tarball is immutable.
-- **Publishing is irreversible.** Gate it on green CI, a satisfied review, and passing
-  dry-runs — in that order.
+- **Publish only the CI-green SHA (configuration control).** Re-check `HEAD == tag` and a
+  clean tree at step 8a / step 9; a drifted or dirty tree voids the CI-green proof for
+  what you are actually uploading.
+- **No self-certification of the two hard gates.** The party that prepared the release
+  does not also render its GO; the maintainer confirms CI-green (step 6) and authorization
+  (step 8) from reported evidence and a version/SHA readback.
+- **Publishing is irreversible — but not without recourse.** Gate it on green CI, a
+  satisfied review, explicit authorization, and passing dry-runs — in that order — and if
+  a defective version does ship, contain it with `cargo yank` and supersede it with a
+  fixed patch (see *Rollback and contingency*).
