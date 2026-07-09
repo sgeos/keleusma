@@ -84,7 +84,7 @@ The program can also be compiled to a bytecode file:
 keleusma compile counters.kel -o counters.bin
 ````
 
-The tool prints a line such as `wrote counters.bin (532 bytes)`. Part
+The tool prints a line such as `wrote counters.bin (2716 bytes)`. Part
 VIII runs a more elaborate program that uses the data segment, a song,
 inside the piano roll.
 

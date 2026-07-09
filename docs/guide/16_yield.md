@@ -86,7 +86,7 @@ execution:
 keleusma compile echo.kel -o echo.bin
 ````
 
-The tool prints a line such as `wrote echo.bin (204 bytes)`. That line
+The tool prints a line such as `wrote echo.bin (2316 bytes)`. That line
 means the program lexed, parsed, type-checked, and passed the structural
 verifier.
 

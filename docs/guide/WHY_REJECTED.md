@@ -48,7 +48,7 @@ loop main(input: Word) -> Word {
 }
 ````
 
-The host must initialize `state.result` to a meaningful starting value through `vm.set_data(slot, value)` before driving the script.
+The host must initialize `state.result` to a meaningful starting value through the `initial_data` vector passed to `Vm::replace_module` (or through the script's own init block) before driving the script.
 
 The second is to register a host-side fold native and call it from a `fn`.
 

@@ -38,7 +38,7 @@ include!(concat!(env!("CARGO_MANIFEST_DIR"),
 
 use keleusma::verify::wcet_stream_iteration_with_cost_model;
 
-let cycles = wcet_stream_iteration_with_cost_model(chunk, &MEASURED_COST_MODEL)?;
+let cycles = wcet_stream_iteration_with_cost_model(chunk, &MEASURED_COST_MODEL, &[])?;
 ````
 
 The `keleusma-bench` crate documents the capture workflow for generating

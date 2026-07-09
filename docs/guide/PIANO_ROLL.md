@@ -104,7 +104,7 @@ The module-level documentation comment in the example lists ten substantial feat
 
 ### Data segment expansion caveats
 
-The host's `NUM_DATA_SLOTS` constant and the `data state` block declared in every song script must agree. The script declares the schema and the host writes the slot count it expects to initialize. A mismatch produces a compile error.
+The `data state` block declared in every song script defines the data-segment schema, and every song in the roster must declare the same schema. The script declares the layout; the host passes an empty `initial_data` vector to `replace_module` so the segment reinitialises to zero on each swap. A song whose `data state` schema differs from the currently loaded one is rejected at hot swap by the `replace_module` schema-hash check unless the host opts into `replace_module_unchecked`.
 
 The recommendation is to settle the data segment schema in advance, before any songs are written. The host author and the song author collaborate on what slots are needed for sequencer state, per-channel counters, and any application-specific bookkeeping. Once the schema is in place, every song targets it.
 

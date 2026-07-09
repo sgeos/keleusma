@@ -68,7 +68,7 @@ The output is `42`. The runtime checked the signature against
 Run it without the key, and the program does not load:
 
 ````
-error: load_signed_bytes: LoadError("bytecode signature did not verify against any registered key")
+error: verify_module_signature: InvalidSignature
 ````
 
 A `signed` program will not run unless its signature checks out. It is a

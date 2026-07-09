@@ -35,6 +35,7 @@ use symbols here and the habit carries over wrongly.
 
 - `and` is true when both sides are true.
 - `or` is true when at least one side is true.
+- `xor` is true when the two sides differ.
 - `not` flips true and false.
 
 ````
@@ -44,8 +45,47 @@ true
 false
 ````
 
-There is no `&&` and no `||` in Keleusma. The words are `and`, `or`, and
-`not`.
+There is no `&&` and no `||` in Keleusma. The words are `and`, `or`,
+`xor`, and `not`.
+
+These four evaluate both sides. Two more words, `andalso` and `orelse`,
+are their short-circuit forms. `andalso` produces `false` without looking
+at its right side once the left side is `false`, and `orelse` produces
+`true` without looking at its right side once the left side is `true`.
+Reach for them when the right side is only meaningful after the left has
+been checked, and for the everyday case reach for `and` and `or`.
+
+## Working with bits
+
+The words above act on a whole `bool`. Their bit-level cousins act on
+every bit of a `Word` or a `Byte` at once. `band`, `bor`, and `bxor`
+combine two values bit by bit, and `bnot` flips every bit of one value:
+
+````
+> 12 band 10
+8
+> 12 bor 10
+14
+> 12 bxor 10
+6
+````
+
+Four shifts move the bits of a value left or right by a count, named by
+their assembly mnemonics. `lsl` and `asl` shift left. `lsr` shifts right
+filling with zeros, the unsigned form; `asr` shifts right copying the
+sign bit, the signed form. The count may be a constant or a runtime
+value.
+
+````
+> 1 lsl 4
+16
+> 48 lsr 2
+12
+````
+
+These operators work on `Word` and `Byte` here, and on the multi-word
+`Multiword<N, F>` type of [Chapter 23](./23_big_numbers.md), which
+carries the same names.
 
 ## Choosing a value: if and else
 
@@ -123,8 +163,10 @@ a function you happen to have named `assert`.
 ## What you now know
 
 - Comparisons (`<`, `>`, `<=`, `>=`, `==`, `!=`) produce a `bool`.
-- Questions combine with the words `and`, `or`, and `not`, never with
-  symbols.
+- Questions combine with the words `and`, `or`, `xor`, and `not`, never
+  with symbols; `andalso` and `orelse` are the short-circuit forms.
+- Bit-level operators act on every bit of a `Word` or `Byte`: `band`,
+  `bor`, `bxor`, `bnot`, and the shifts `lsl`, `asl`, `lsr`, and `asr`.
 - `if condition { ... } else { ... }` chooses between two values.
 - `match` chooses among many cases, and `_` is the catch-all.
 - `assert condition` checks a development-time assumption; it is present

@@ -82,7 +82,7 @@ The same program can be compiled to a bytecode file for later execution:
 keleusma compile pulse.kel -o pulse.bin
 ````
 
-The tool prints `wrote pulse.bin (244 bytes)` confirming the program is
+The tool prints `wrote pulse.bin (2372 bytes)` confirming the program is
 valid. Part VIII runs a more elaborate `loop` program, a song, inside
 the piano roll.
 

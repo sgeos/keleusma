@@ -116,7 +116,9 @@ change. Music hook: a named motif you refer back to.
 hook: a function is a reusable phrase.
 
 **Ch 7. Making Decisions.** `if`/`else`, `match` expressions, comparison
-and logical operators.
+operators, the boolean words (`and`, `or`, `xor`, `not`, `andalso`,
+`orelse`), and the bit-level operators (`band`, `bor`, `bxor`, `bnot`,
+`lsl`, `asl`, `lsr`, `asr`).
 
 **Ch 8. Bounded Repetition.** `for`-in over ranges and arrays, and
 `break`. Draws on `04_for_in.kel`. Music hook: a repeat sign with a known
@@ -177,7 +179,8 @@ one beat, and a song must keep its pulse.
 ### Part VI — Going Deeper
 
 **Ch 21. Generics and Traits.** Type parameters, trait bounds, method
-dispatch. Draws on `08_method_dispatch.kel`.
+dispatch, and const generics (`<const n: Word>`, the turbofish
+`f::<7>()`). Draws on `08_method_dispatch.kel`.
 
 **Ch 22. Newtypes and Refinement Types.** Distinct named types and `where`
 predicates. Draws on `07_refinement.kel`. Music hook: a part written so a

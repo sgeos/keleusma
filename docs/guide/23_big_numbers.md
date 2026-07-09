@@ -112,11 +112,12 @@ top bit, turning it into the smallest `Word`, but no bit carries out of
 the low word, so the high word `s[1]` stays `0`. This is the correct
 unsigned multi-word carry, which is not the same as the signed-overflow
 report of the checked construct above. Addition, subtraction,
-and the six comparisons are available today, each lowered to the very
-carry and borrow cascade this chapter describes, so the type adds no new
-instructions. Multiplication and division, which will apply the
-fractional scale `F`, are a later increment. The type is tracked as B19
-in the backlog.
+and the six comparisons are lowered to the very carry and borrow cascade
+this chapter describes, so those operations add no new instructions.
+Integer and fixed-point multiplication, division, and modulo, which
+apply the fractional scale `F`, along with the four shifts `lsl`, `asl`,
+`lsr`, and `asr` and the per-limb bitwise operators `band`, `bor`,
+`bxor`, and `bnot`, are also available. The type was delivered as B19.
 
 ## Optional arms and the wrapping default
 
@@ -171,7 +172,8 @@ fn main() -> Byte {
 ````
 
 The sum `300` does not fit in a `Byte`, so the `overflow` arm runs and
-binds the wrapped result `w`, which is `44`. The supported operators are
+binds the wrapped result `w`, which is `44`; a `Byte` result prints as
+`Byte(44)`, the value tagged with its type. The supported operators are
 `+`, `-`, `*`, `/`, `%`, the arithmetic left shift `asl`, and unary `-`,
 with the admissible arms depending on the type. An unsigned `Byte`, for
 instance, can overflow on addition but can only go below zero on
@@ -195,7 +197,7 @@ fn main() -> Byte {
 }
 ````
 
-The output is `255`, the largest `Byte`. On `Word` the keywords are the
+The output is `Byte(255)`, the largest `Byte`. On `Word` the keywords are the
 word bounds, on `Float` the largest and most-negative finite value, and
 on `Fixed<N>` the extremal fixed-point value. When the result type is a
 refined newtype that declared a `with saturate_max` or `with

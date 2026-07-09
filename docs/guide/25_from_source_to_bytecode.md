@@ -38,7 +38,7 @@ keleusma compile tune.kel -o tune.kel.bin
 The tool prints:
 
 ````
-wrote tune.kel.bin (264 bytes)
+wrote tune.kel.bin (2400 bytes)
 ````
 
 `tune.kel.bin` is the compiled bytecode. Run it directly:

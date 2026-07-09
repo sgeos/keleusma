@@ -164,7 +164,7 @@ Information-flow control should not be conflated with two adjacent disciplines. 
 
 ## Cross-References
 
-- [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md) describes the design goals and four guarantees.
+- [LANGUAGE_DESIGN.md](../architecture/LANGUAGE_DESIGN.md) describes the design goals and five guarantees.
 - [EXECUTION_MODEL.md](../architecture/EXECUTION_MODEL.md) describes the two temporal domains and structural verification.
 - [STRUCTURAL_ISA.md](../spec/STRUCTURAL_ISA.md) specifies the structural ISA and verification rules.
 - [GRAMMAR.md](../spec/GRAMMAR.md) Section 13 compares Keleusma to related languages.

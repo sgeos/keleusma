@@ -91,9 +91,9 @@ nothing to hand back returns `()`.
 ()
 ````
 
-## Two more number types, met later
+## A few more number types, met later
 
-Keleusma has two further number types. Neither is needed in Part II, so
+Keleusma has three further number types. None is needed in Part II, so
 they are only named here.
 
 - `Byte` is an eight-bit whole number, used for byte-level work. It
@@ -101,6 +101,9 @@ they are only named here.
 - `Fixed` is a fractional number with fully deterministic, repeatable
   arithmetic, used where audio code must produce the exact same result
   every time. The piano roll uses it.
+- `Multiword<N, F>` is a fixed-width multi-word number, `N` words wide
+  with `F` fractional bits, for values too large for a single `Word`. It
+  appears in Chapter 23.
 
 ## Why types matter
 
@@ -118,6 +121,7 @@ a safety net stretched under the whole program.
 - `bool` is `true` or `false`.
 - `Text` is writing in double quotes.
 - `Unit`, written `()`, means no value.
-- `Byte` and `Fixed` are two more number types, met later.
+- `Byte`, `Fixed`, and `Multiword<N, F>` are further number types, met
+  later.
 
 The next chapter gives values names.

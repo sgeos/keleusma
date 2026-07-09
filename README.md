@@ -33,6 +33,9 @@ The compile pipeline (parse, type-check, monomorphize, hoist, emit) admits a bro
 - **Hot code swap** at RESET boundaries with persistent data segment.
 - **Hindley-Milner type inference** with generics, traits, and bounds.
 - **Compile-time monomorphization** of generic functions, structs, and enums.
+- **Const generics.** A `const` parameter (`fn f<const n: Word>()`, `struct Buf<const n: Word>`) usable as an array length, a `Multiword` dimension, and a `Word` value, with total const arithmetic over `+`, `-`, `*`. Const parameters are fully erased to literals at monomorphization, so the WCET and WCMU analyses see no symbolic constant.
+- **Full operator surface.** Bitwise `band`/`bor`/`bxor`/`bnot`, the assembly-mnemonic shifts `lsl`/`asl`/`lsr`/`asr`, and the boolean `and`/`or`/`xor`/`not` plus short-circuit `andalso`/`orelse`, over `Word`, `Byte`, and `Multiword`.
+- **Multi-word fixed-point** `Multiword<N, F>` with scale-independent add and subtract, the six comparisons, integer and fixed-point multiply, divide, and modulo, the four shifts, and per-limb bitwise operators.
 - **Static marshalling** through `KeleusmaType` derive for ergonomic native registration.
 - **`no_std + alloc` compatible** with a minimal dependency set.
 
