@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-08
+
+Published to crates.io as `keleusma-macros` 0.2.1.
+
 The crate version tracks the major-minor of `keleusma`; the 0.2.x line evolved the
 `KeleusmaType` derive for the V0.2.x flat-byte composite representation (B28) and
 added a second derive. These changes were not recorded at the 0.2.0 cut and are

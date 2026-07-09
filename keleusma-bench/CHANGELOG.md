@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-08
+
+Published to crates.io as `keleusma-bench` 0.2.1.
+
 ### Changed
 
 - The calibration tool and its benchmark `Module` are kept current with the V0.2.x runtime wire format and cost model: the 66-opcode instruction set and the `NewComposite` consolidation, the additive `enum_layouts` and `aux_arena_bytes` auxiliary-body fields, the persistent composite data region, and the length-dependent worst-case-execution-time cost term for string operations. No measurement-surface change; the crate version tracks the major-minor of `keleusma`.

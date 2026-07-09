@@ -11,7 +11,7 @@ debug = "line-tables-only"
 
 [package]
 name = "keleusma"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 publish = ["crates-io"]
 description = "Total Functional Stream Processor with definitive WCET and WCMU verification, targeting no_std + alloc embedded scripting"

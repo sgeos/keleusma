@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+V0.2.2 is in development on branch `v0.2.2`. Its theme is groundwork that supports
+an eventual self-hosted compiler (the V0.3.0 goal, a Keleusma compiler written in
+Keleusma) without achieving self-hosting in this release. Incremental language,
+standard-library, and tooling work that such a compiler will depend on lands here;
+no self-hosted compiler ships in 0.2.2.
+
+## [0.2.1] - 2026-07-08
+
+Published to crates.io as `keleusma` 0.2.1, `keleusma-cli` 0.2.1, `keleusma-bench`
+0.2.1, `keleusma-macros` 0.2.1, and `keleusma-arena` 0.3.1; tagged `v0.2.1`.
+
 ### Added
 
 - **Bitwise, shift, and boolean operator families (B19).** The surface language gains keyword operators for the five `Op::BitAnd`/`BitOr`/`BitXor`/`Shl`/`Shr` opcodes that V0.2.0 added but left without grammar, and a coherent boolean scheme alongside them. The bitwise operators are `band`, `bor`, `bxor`, and the prefix `bnot`, applying to `Word`, `Byte`, and `Multiword<N>` (limb by limb on a `Multiword`, with no cross-limb interaction; a `Byte` at the byte width, so `bnot 0Byte` is `255Byte`). The shift operators are the assembly mnemonics `lsl` (logical left), `asl` (arithmetic left), `lsr` (logical right), and `asr` (arithmetic right), replacing the unpublished symbolic forms; `asl` and `lsl` produce the same value, but `asl` denotes `x * 2^k` and so admits the `overflow`/`underflow` arms of the checked-arithmetic construct. Shifts apply to `Word`, `Byte`, and `Multiword<N>` values, and the amount may be a constant literal or a runtime-variable `Word`. A variable amount preserves the definitive worst-case bounds: the scalar case is a single opcode, and the multi-word case is unrolled over the compile-time word count with runtime index arithmetic and branch-free bounds guards, so there is no runtime loop. The boolean operators are the eager `and`, `or`, `xor`, and prefix `not`, which always evaluate both operands, plus the short-circuit `andalso` and `orelse`, which skip the right operand when the left already decides the result. An operation is selected by operator name and never inferred from operand type, so a program that wants the word-level bit operation and one that wants the truth-value operation are never disambiguated by whether an operand happens to be a `Word` or a `bool`. No opcode is added; every operator lowers to the existing instruction set. `MAX_PARSE_DEPTH` drops from 32 to 24 to keep the deeper precedence chain within the parser's stack-safety margin. General const generics for the `Multiword` word and fraction-bit parameters, once tracked as a separate feature under B40, are implemented in this same release and are described in their own entry below.

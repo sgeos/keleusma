@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-08
+
+Published to crates.io as `keleusma-cli` 0.2.1.
+
 ### Added
 
 - **Strict-mode signing and encryption execution policy.** An operator-configured trust store (the `KELEUSMA_TRUSTED_KEYS_DIR` directory of `*.pub` keys, the platform-conventional `/etc/keleusma/trusted_keys` or `%PROGRAMDATA%\keleusma\trusted_keys`, or the `KELEUSMA_REQUIRE_SIGNED=1` force flag) makes `run` reject source files and unsigned bytecode, admit signed bytecode only from an enrolled signer, and reject the `--verifying-key` flag so an unprivileged operator cannot relax the system list. A symmetric encryption policy (`KELEUSMA_DECRYPTION_KEYS_DIR` / `KELEUSMA_REQUIRE_ENCRYPTED`) admits only bytecode encrypted to an enrolled X25519 recipient and rejects the `--decryption-key` flag. The operator guide is [`docs/guide/SECURITY_POLICY.md`](../docs/guide/SECURITY_POLICY.md).
