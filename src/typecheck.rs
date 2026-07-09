@@ -2037,8 +2037,30 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
     // checking can verify that a generic function's `T: Trait`
     // constraint is satisfied by the actual argument type.
     for trait_def in &program.traits {
+        // A trait method signature is a function boundary (Standard 4.5
+        // category 1: function parameter and return type), so a top-level
+        // negative label on a parameter or return is admissible but a nested
+        // one is not. Validate with `at_top_level_allowed_position = true`,
+        // the same rule as free functions, native signatures, and impl
+        // methods. Without this the signature is cloned into `ctx.traits` and
+        // later resolved with the `NegativeLabelled` wrapper already dropped.
+        for method in &trait_def.methods {
+            for p in &method.params {
+                if let Some(t) = &p.type_expr {
+                    validate_no_nested_negative_labels(t, true)?;
+                }
+            }
+            validate_no_nested_negative_labels(&method.return_type, true)?;
+        }
         ctx.traits
             .insert(trait_def.name.clone(), trait_def.methods.clone());
+    }
+    // An `impl ... for T` target type is not a boundary category (Standard
+    // 4.5), so a negative label on it at any depth is inadmissible and must
+    // not be silently stripped by the `strip_labels(resolve_type(...))` in the
+    // impl-processing loops below. Validated once here for every impl.
+    for impl_block in &program.impls {
+        validate_no_nested_negative_labels(&impl_block.for_type, false)?;
     }
     for impl_block in &program.impls {
         let head = match strip_labels(ctx.resolve_type(&impl_block.for_type)) {
@@ -4876,6 +4898,14 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             // layout-pass backstop does not rescue the cast, since the compiler's
             // `layout_for` consumers swallow its error to a default.
             check_composite_dimensions(target)?;
+            // A cast target is never one of the three boundary categories
+            // (Standard 4.5), so a negative information-flow label on it, at
+            // any depth, is inadmissible: `0 as Word@!Secret` is rejected
+            // rather than silently dropping the label. This is the same rule
+            // and flag (`false`) as struct fields, enum payloads, and newtype
+            // underlying types. Every user-written cast form flows through this
+            // arm, including the enum-discriminant and Multiword sub-paths.
+            validate_no_nested_negative_labels(target, false)?;
             let from_ty_raw = type_of_expr(ctx, expr)?;
             let to_ty_raw = ctx.resolve_type(target);
             // Strip information-flow labels before the cast
@@ -5125,6 +5155,12 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             if let Expr::Cast { target, .. } = op_expr.as_ref()
                 && let Type::Enum(enum_name, _) = strip_labels(ctx.resolve_type(target))
             {
+                // The cast operand of a discriminant construct is a cast
+                // target and thus a non-boundary position (Standard 4.5). This
+                // path handles the cast inline rather than through the main
+                // `Expr::Cast` arm, so validate the target here too; otherwise
+                // `x as Enum@!Secret { ... }` would drop the label silently.
+                validate_no_nested_negative_labels(target, false)?;
                 let enum_name = enum_name.clone();
                 return check_checked_discriminant(ctx, op_expr, &enum_name, arms, span);
             }
@@ -7898,6 +7934,53 @@ mod tests {
         // A positive label on a newtype underlying type is unaffected.
         check_src("newtype Tagged = Word@Secret;\nfn main() -> Word { 0 }")
             .expect("a positive label on a newtype underlying type is admitted");
+    }
+
+    #[test]
+    fn negative_label_rejected_at_all_non_boundary_positions() {
+        // Class-complete regression for the 668c376 release audit. A negative
+        // information-flow label is admissible only at the top level of a
+        // boundary position (function parameter/return including native and
+        // trait/impl method signatures, shared data field, private data field;
+        // STANDARD.md 4.5). Every other type-bearing position must reject it,
+        // and a negative label nested below any position is always rejected.
+        // The audit found the newtype fix left siblings open at cast targets
+        // and trait method signatures; these positions are now all covered.
+
+        // Cast target: never a boundary. Top-level and nested both rejected.
+        assert!(
+            check_src("fn main() -> Word { 0 as Word@!Secret }").is_err(),
+            "a negative label on a cast target must be rejected"
+        );
+        assert!(
+            check_src(
+                "enum E { A = 0, B = 1 }\n\
+                 fn main() -> Word { let s = 1 as E@!Secret { invalid_discriminant(_) => E::A }; s as Word }"
+            )
+            .is_err(),
+            "a negative label on a discriminant-construct cast target must be rejected"
+        );
+
+        // Trait method signature: a function boundary, so a top-level label is
+        // admissible but a nested one is not.
+        assert!(
+            check_src("trait T { fn m(self) -> (Word, Word@!Secret); }\nfn main() -> Word { 0 }")
+                .is_err(),
+            "a negative label nested in a trait method return must be rejected"
+        );
+        check_src("trait T { fn m(x: Word@!Secret) -> Word; }\nfn main() -> Word { 0 }")
+            .expect("a top-level negative label on a trait method parameter is admitted");
+
+        // `impl ... for T` target: never a boundary.
+        assert!(
+            check_src(
+                "trait Foo { fn m(self) -> Word; }\n\
+                 impl Foo for Word@!Secret { fn m(self) -> Word { 0 } }\n\
+                 fn main() -> Word { 0 }"
+            )
+            .is_err(),
+            "a negative label on an impl target type must be rejected"
+        );
     }
 
     #[test]

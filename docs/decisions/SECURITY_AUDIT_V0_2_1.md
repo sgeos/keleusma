@@ -291,6 +291,35 @@ position, now closed. No wire-format, `BYTECODE_VERSION`, or instruction-set cha
 The gate is green on default, signatures, and all-features, with `clippy --tests
 --all-features -D warnings` and `fmt` clean.
 
+## Re-audit delta 7 (release audit, baseline 668c376)
+
+The second empirically executed release audit (`keleusma-release-audit-668c376.md`)
+confirmed the delta-6 newtype fix correct but found the negative-label class was not
+complete: the same silent-drop defect remained at two more non-boundary positions.
+Both are closed here, and the fix was extended to two further positions found by a
+class-complete enumeration of every site that resolves a user-written type, so the
+class is now closed rather than patched instance by instance.
+
+| # | Sev | Status | Note |
+|---|-----|--------|------|
+| Sibling 1 | Medium | Fixed | Trait method signatures were cloned into `ctx.traits` with no validation and later resolved with the `NegativeLabelled` wrapper already dropped, so `trait T { fn m(self) -> (Word, Word@!Secret); }` was accepted with the nested label lost. A trait method is a function boundary, so each parameter and the return type is now validated with `at_top_level_allowed_position = true` (top-level admitted, nested rejected), matching free functions, native signatures, and impl methods. |
+| Sibling 2 | Medium | Fixed | The main `Expr::Cast` arm resolved the target through `resolve_type` with no validation, so `0 as Word@!Secret` dropped the label. A cast target is never a boundary, so it is now validated with `false`. |
+| Sibling 3 (enumeration) | Medium | Fixed | The cast in a discriminant construct (`x as Enum { ... }`) is handled inline and calls `type_of_expr` on the inner expression, not the `Cast` node, so it bypassed the Sibling-2 fix. Its target is now validated with `false` at the construct dispatch. |
+| Sibling 4 (enumeration) | Low | Fixed | An `impl ... for T` target type resolved through `strip_labels(resolve_type(...))`, dropping a label on `impl Foo for Word@!Secret`. It is never a boundary, so it is now validated with `false` once for every impl. |
+
+The fix was driven by enumerating every `resolve_type`/`from_expr` call site that
+consumes a user-written type: function, native, impl-method, and trait-method
+signatures and data fields are boundaries validated with `true`; struct fields, enum
+payloads, newtype underlying types, cast targets (plain and discriminant-construct),
+`impl` targets, and let-binding annotations are non-boundaries validated with `false`.
+The let-binding annotation was already covered. The single regression test
+`negative_label_rejected_at_all_non_boundary_positions` exercises the cast target, the
+discriminant-construct cast, the nested trait-method return, the admitted top-level
+trait-method parameter, and the impl target. No wire-format, `BYTECODE_VERSION`, or
+instruction-set change; the memory-safety code is untouched. The gate is green on
+default, signatures, and all-features, with `clippy --tests --all-features -D warnings`
+and `fmt` clean.
+
 ## Severity and category distribution
 
 | Severity | Count |
