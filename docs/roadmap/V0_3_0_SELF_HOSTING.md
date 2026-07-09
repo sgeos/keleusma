@@ -315,6 +315,22 @@ The following are explicitly out of scope for this strategy document.
 
 - **Keleusma-host and Keleusma-VM self-hosting.** Compiling the runtime VM itself in Keleusma is a V0.5+ aspiration. It is mentioned here because V0.4.0's native-code-generation precondition opens the door, but the design is not within V0.3.0's scope.
 
+## Lessons from a contemporary partial self-hosting (Brief)
+
+The `brief-lang` project is a contemporary language that attempted self-hosting and reached, then stalled at, the frontier V0.3.0 approaches. A targeted review of it (fuller writeup retained outside the repository) yields several concrete lessons for this strategy. The observations reflect that project at a point in time and are cited for their engineering value, not as endorsement.
+
+- **The frontend is the achievable part; codegen and host output are the wall.** Brief has a working compiler frontend written in Brief (lexer, parser, typechecker, contract engine) but is *not* bootstrapped, because the frontend runs inside a host interpreter and its backends are unfinished. Sequence the V0.3.0 work so that **codegen and the emit-to-host boundary are treated as the high-risk stages and de-risked first**, not the lexer and parser. This reinforces the incremental-migration ordering above.
+
+- **The output capability must be a first-class host native from the start.** Brief's self-hosted compiler could read source but had no general facility to *write* its output, which is a hard blocker to a true bootstrap. Keleusma's host-native surface must expose a deliberate, bounded "emit compiled bytecode" capability to the self-hosted compiler as a designed feature, not an afterthought. See the bootstrap procedure and inter-stage data shapes.
+
+- **Divergent execution models are a bootstrap hazard.** Brief maintained a tree-walking interpreter and a compiled backend that drifted into *different* runtime semantics, silently miscompiling programs. Keleusma's bootstrap fixed point (kelc.0 → kelc.1 → kelc.2) is the guard against this: it converges only if the self-hosted compiler's output is stable across stages, so the byte-identical fixed-point check in the bootstrap procedure is load-bearing, not ceremonial. Avoid keeping two independently evolving semantics for the surface subset.
+
+- **The work-stack idiom is independently validated.** Brief's compiler used explicit work-stacks and threaded state (for example, iterative depth-first call-graph traversal) even though its language permits recursion. That a real compiler was written this way is external evidence that Keleusma's recursion-free, work-stack pipeline (R3.1) can express the compiler it needs to.
+
+- **Only admit surface syntax you will actually compile.** Brief accumulated parsed-but-uncodegened constructs, each becoming a maintenance stub that generated defects. Grow the self-hosted compiler feature-complete per increment: parse, typecheck, and generate for a construct together, or not at all. This aligns with the constrained-surface-language discipline above.
+
+- **Consume every analysis result on every path.** Brief repeatedly computed an analysis (liveness, convergence) and then failed to consume it in one of several codegen paths, losing the benefit and creating inconsistency. A staged self-hosted pipeline must ensure each stage consumes the descriptors the prior stage produced, everywhere they apply.
+
 ## References
 
 The strategy draws on the following published works. Citations include ISBN and ACM/IEEE catalog identifiers where applicable so readers can independently verify.
