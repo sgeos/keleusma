@@ -2473,7 +2473,7 @@ fn verify_chunk(
                                 "Else at {} targets {} which is {:?}, expected EndIf",
                                 ip,
                                 t,
-                                &ops[t]
+                                ops[t]
                             ),
                         });
                     }

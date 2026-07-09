@@ -1127,6 +1127,10 @@ fn const_abs(cv: Option<&ConstValue>) -> AbsVal {
         Some(ConstValue::Int(_)) => AbsVal::Scalar(ScalarKind::Int),
         Some(ConstValue::Byte(_)) => AbsVal::Scalar(ScalarKind::Byte),
         Some(ConstValue::Fixed(_)) => AbsVal::Scalar(ScalarKind::Fixed),
+        // `ConstValue::Float` and `ScalarKind::Float` exist only with the `floats`
+        // feature; without it (a `verify`-without-`floats` build, e.g. the RTOS
+        // demonstrator) a float constant cannot occur and the catch-all applies.
+        #[cfg(feature = "floats")]
         Some(ConstValue::Float(_)) => AbsVal::Scalar(ScalarKind::Float),
         // A static string pushes a fixed-size `Text` handle (A.2.1 Phase 3).
         Some(ConstValue::StaticStr(_)) => AbsVal::Scalar(ScalarKind::Text),

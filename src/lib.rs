@@ -1,5 +1,13 @@
 #![no_std]
 #![deny(missing_docs)]
+// The `Word::widen` extension-trait method (`src/word.rs`) collides by name with an
+// unstable integer method the standard library is adding; a recent stable toolchain
+// surfaces this as `unstable_name_collisions`, which `-D warnings` (the CI Clippy
+// job) turns into an error. Keleusma's method predates it and every call site
+// (`src/vm.rs`, `src/word.rs`) resolves to the trait method as intended. Allow the
+// forward-compatibility lint here; revisit (rename, or fully-qualify the calls) if
+// and when the standard-library method stabilizes.
+#![allow(unstable_name_collisions)]
 //! Keleusma is a Total Functional Stream Processor that compiles
 //! to bytecode and runs on a stack-based virtual machine. The crate
 //! targets `no_std + alloc` environments and is designed for embedded
