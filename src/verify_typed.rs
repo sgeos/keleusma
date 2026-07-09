@@ -1,7 +1,7 @@
 //! Typed operand-stack verifier pass (A.2.1) — the abstract interpreter.
 //!
 //! This pass is wired into [`crate::verify`] (`verify()` calls
-//! [`typed_check_module`] after the structural passes), so it runs on the safe
+//! [`typed_check_module`](crate::verify_typed::typed_check_module) after the structural passes), so it runs on the safe
 //! `Vm::new` load path and every hot swap. It walks a chunk's block-structured
 //! control flow over an *abstract state* — an operand stack and a local frame —
 //! whose slots carry the flat shape (composite kind and byte size) of each
@@ -28,7 +28,7 @@
 //! return, resume) and the local frame is then tracked precisely. Where a
 //! value's shape is still not known — an unseeded boundary such as a native
 //! result or a Reentrant resume, a loop-written local, or a composite
-//! constant — the slot is [`AbsVal::Top`] and shape-dependent checks defer
+//! constant — the slot is [`AbsVal::Top`](crate::verify_typed::AbsVal::Top) and shape-dependent checks defer
 //! (they will become MUST-REJECT once seeding is complete and the pass is
 //! wired in). Nothing here changes runtime behaviour.
 
@@ -246,7 +246,7 @@ pub enum TypedError {
 /// alone cannot determine a value's shape. Phase 2 consumes it; the
 /// compiler emitting it and the wire format carrying it (additively in the
 /// auxiliary body) is the Phase 2b plumbing. Absent, every seed point is
-/// [`AbsVal::Top`] and shape checks defer, which is exactly the Phase 1
+/// [`AbsVal::Top`](crate::verify_typed::AbsVal::Top) and shape checks defer, which is exactly the Phase 1
 /// behaviour.
 #[derive(Clone, Debug, Default)]
 pub struct ChunkSig {
