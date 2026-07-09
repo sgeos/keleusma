@@ -320,6 +320,36 @@ instruction-set change; the memory-safety code is untouched. The gate is green o
 default, signatures, and all-features, with `clippy --tests --all-features -D warnings`
 and `fmt` clean.
 
+### Addendum — the `e2cd978` audit returned GO; its two optional, non-blocking recommendations are carried out
+
+The `e2cd978` release audit (`keleusma-release-audit-e2cd978.md`) returned a clear go
+for publication, the first in the series, and confirmed the negative-label class
+closed by exhaustive enumeration of all nineteen type-parse sites. Its recommendation
+that the release notes frame the verifier as a pass of documented scope rather than a
+complete verifiable kernel was already satisfied in `CHANGELOG.md` and the README
+conservative-verification stance. The two optional, non-blocking recommendations are
+now carried out.
+
+- Maintainability (recommendation 4). `validate_no_nested_negative_labels` gains a
+  doc comment recording the Standard 4.5 boundary rule, the full set of covered
+  positions, and an explicit MAINTENANCE INVARIANT: the rule is enforced position by
+  position, so any newly added type-bearing syntactic position must add a matching
+  call or the negative-label rule silently regresses for it.
+- Miri coverage bound (recommendation 1). The audit's one honest empirical bound was
+  that executed Miri covered only the `flat_value` path under the no-crypto feature
+  set, with the null-pointer screen (C1), the checked flat read (C2), and the
+  composite-write bounds (D1, D4) confirmed by static reading and passing tests but
+  not by Miri. Those four regression tests were run under Miri with Tree Borrows on
+  the no-crypto default feature set and all pass with no undefined behavior reported:
+  `c1_null_text_pointer_marshals_to_empty_string_not_ub`,
+  `c2_flat_text_field_offset_overrun_rejected`,
+  `d1_shared_composite_over_length_write_faults`, and
+  `d4_private_composite_write_bounded_by_slot_region`. The memory-safety fixes are now
+  Miri-verified rather than static-reading-and-test confirmed, closing that bound.
+
+The doc-comment addition does not change behavior; `fmt` and `clippy --tests
+--all-features -D warnings` remain clean and the full gate remains green.
+
 ## Severity and category distribution
 
 | Severity | Count |

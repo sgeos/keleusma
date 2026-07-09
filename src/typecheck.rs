@@ -964,6 +964,30 @@ fn check_composite_dimensions(t: &TypeExpr) -> Result<(), TypeError> {
     }
 }
 
+/// Rejects a negative information-flow label (`T@!Label`) that appears at a
+/// position the Standard does not admit. A negative label is admissible only at
+/// the top level of a boundary (Standard 4.5): a function, native, trait, or
+/// impl method parameter or return type, a shared data field, or a private data
+/// field. Everywhere else, and nested below any position, it is inadmissible;
+/// left unchecked, [`Ctx::resolve_type`] silently discards the wrapper and the
+/// label is lost rather than enforced.
+///
+/// `at_top_level_allowed_position` selects the caller's boundary status: pass
+/// `true` at a boundary (a top-level negative is admitted, a nested one is
+/// still rejected) and `false` at a non-boundary (any negative is rejected).
+///
+/// MAINTENANCE INVARIANT. This rule is enforced position by position at every
+/// call site that resolves a user-written `TypeExpr`, not by a single
+/// program-wide traversal. The covered positions are: function, native, and
+/// impl/trait method signatures and data fields (boundaries, `true`); and
+/// struct fields, enum variant payloads, newtype underlying types, cast targets
+/// (plain and discriminant-construct), `impl ... for T` targets, and
+/// let-binding annotations (non-boundaries, `false`). Nested labels under
+/// tuples, arrays, options, and named generic arguments are covered by this
+/// function's own recursion. If a new type-bearing syntactic position is added
+/// to the language, add a matching call here or the negative-label rule will
+/// silently regress for it. The release audit at `e2cd978` verified this set is
+/// class-complete for the language as it stands.
 fn validate_no_nested_negative_labels(
     t: &TypeExpr,
     at_top_level_allowed_position: bool,
