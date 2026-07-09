@@ -36,7 +36,7 @@ its public API changes.
 [ ] 6. *** CI IS GREEN ON THE RELEASE COMMIT *** (mandatory; the authoritative gate).
 [ ] 7. External release audit returns a clear GO (scope to the change for a patch).
 [ ] 8. Publish in dependency order.
-[ ] 9. Finalize (prune branches) and post-publish verification.
+[ ] 9. Cut the GitHub Release; prune branches; verify crates.io + docs.rs.
 ```
 
 **The one rule that prevents a repeat:** never publish, and never merge to `main`, on
@@ -202,6 +202,20 @@ A crate version, once published, is **immutable** — it can be yanked, never re
 
 ## 9. Finalize and post-publish verification
 
+- **Cut the GitHub Release from the tag.** A git tag is *not* a GitHub Release; the tag
+  alone shows up under Tags but not under Releases. Create the Release with the
+  version's changelog section as the notes, matching the `Keleusma VX.Y.Z` title
+  convention:
+
+  ```sh
+  # extract this version's changelog section as the notes
+  awk '/^## \[X.Y.Z\]/{f=1;next} f&&/^## \[/{exit} f' CHANGELOG.md > /tmp/notes.md
+  gh release create vX.Y.Z --title "Keleusma VX.Y.Z" --notes-file /tmp/notes.md --verify-tag
+  gh release list   # confirm it exists and is marked Latest
+  ```
+
+  (V0.2.1 was published to crates.io and tagged but had no GitHub Release until it was
+  cut retroactively; this step closes that gap.)
 - Prune the merged release branch (the prior release exists only as a tag; the branch
   is retired after tagging). Delete the remote branch with an explicit `refs/heads/`
   refspec so the same-named tag is preserved: `git push origin :refs/heads/vX.Y.Z`.
