@@ -51,6 +51,10 @@ exclude = [
     # the crate tarball. Excluding it keeps the tarball small; the book source,
     # its build output, and the translation files all stay out.
     "book/",
+    # The self-hosted compiler subproject (the V0.3.0 goal) is a standalone
+    # package with its own detached workspace; it is developed alongside the
+    # V0.2.x line but is not part of the runtime a downstream embedder consumes.
+    "compiler/",
     # AI-agent and contributor operating instructions, not consumer
     # documentation (release audit v0.2.1: named as iffy for the tarball).
     "CLAUDE.md",
