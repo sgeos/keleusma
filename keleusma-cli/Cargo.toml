@@ -26,7 +26,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 # the CLI opts in because users expect the runner and REPL to handle
 # strings.
 keleusma = { path = "..", version = "0.2", features = ["shell", "signatures", "encryption"] }
-keleusma-arena = { path = "../keleusma-arena", version = "0.3" }
+keleusma-arena = { path = "../keleusma-arena", version = "0.3.1" }
 ed25519-dalek = { version = "2", default-features = false, features = ["alloc", "rand_core"] }
 # X25519 for the encryption gate at the CLI. The signing keypair
 # (Ed25519) and the encryption keypair (X25519) are distinct; the

@@ -37,7 +37,7 @@ floats = ["keleusma/floats"]
 # bare-metal binaries. The host CLI re-enables features through
 # the default `std` + `floats` feature on this crate.
 keleusma = { path = "..", version = "0.2", default-features = false }
-keleusma-arena = { path = "../keleusma-arena", version = "0.3" }
+keleusma-arena = { path = "../keleusma-arena", version = "0.3.1" }
 # `libm` provides f64 math (ceil) under no_std. The host build also
 # uses libm rather than std::f64 so the implementation is identical
 # across targets.

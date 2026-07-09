@@ -172,7 +172,7 @@ narrow-float-32 = []
 [dependencies]
 libm = "0.2"
 keleusma-macros = { path = "keleusma-macros", version = "0.2.1" }
-keleusma-arena = { version = "0.3", path = "keleusma-arena", features = ["alloc"] }
+keleusma-arena = { version = "0.3.1", path = "keleusma-arena", features = ["alloc"] }
 allocator-api2 = { version = "0.4", default-features = false, features = ["alloc"] }
 rkyv = { version = "0.8", default-features = false, features = ["alloc", "bytecheck"] }
 # Ed25519 signing and verification for the optional `signatures`
