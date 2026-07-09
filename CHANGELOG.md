@@ -7,11 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-V0.2.2 is in development on branch `v0.2.2`. Its theme is groundwork that supports
-an eventual self-hosted compiler (the V0.3.0 goal, a Keleusma compiler written in
-Keleusma) without achieving self-hosting in this release. Incremental language,
-standard-library, and tooling work that such a compiler will depend on lands here;
-no self-hosted compiler ships in 0.2.2.
+## [0.2.2] - 2026-07-09
+
+A build-fix and tooling release on the self-hosting-groundwork line. It repairs
+V0.2.1's cross-target and CI regressions and lands the learning guide as a book, the
+self-hosted-compiler subproject scaffold, and a codified release process. No
+wire-format or `BYTECODE_VERSION` change.
+
+### Fixed
+
+- **32-bit and `no_std` embedded builds.** The `Value`-slot 32-byte static assertion
+  described the 64-bit-pointer layout and panicked at const-eval on 32-bit targets
+  (`thumbv7em-none-eabihf`, `thumbv8m.main-none-eabihf`), so V0.2.1 did not compile
+  for the flagship Cortex-M embedded targets on a current toolchain. The assertion is
+  now scoped to `target_pointer_width = "64"`.
+- **The `verify`-without-`floats` feature combination.** The typed operand-stack pass
+  referenced the `floats`-gated `ConstValue::Float`/`ScalarKind::Float` variants
+  unconditionally, failing to compile (`E0599`). The arm is gated on the `floats`
+  feature; a float constant cannot occur without it.
+- **Documentation and lint CI.** Broken intra-doc links (surfaced by `cargo doc -D
+  warnings`) and new stable-toolchain clippy findings (a `Word::widen` name collision,
+  a redundant `format!` borrow, a `match`-to-`?` rewrite) are repaired.
+
+### Changed
+
+- **The learning guide is now an mdbook** at `book/`, bilingual — English source with
+  a Japanese `gettext` translation — replacing the loose `docs/guide/` markdown. It is
+  consumed as the hosted book (linked from the README) and excluded from the crate
+  tarball. Every runnable example is CI-executed against the built CLI.
+- **`keleusma-arena` 0.3.1** exposes the additive `addr_is_ephemeral`,
+  `try_with_capacity`, `zero_persistent_range`, and `ArenaHandle` length and pointer
+  accessors the runtime consumes; dependents now require `>= 0.3.1`.
+
+### Added
+
+- **The self-hosted-compiler subproject scaffold** at `compiler/` (the V0.3.0 goal):
+  the three-stage `loop` pipeline skeleton (`lexer`/`parser`/`codegen`), the Rust host
+  driver, and the release-by-release plan. No stage is implemented; the V0.2.x line
+  lands its prerequisites.
+- **A codified release process** — `docs/process/RELEASE_PROCESS.md` and
+  `scripts/release-gate.sh` (fmt, clippy, the test matrix, and `cargo doc -D
+  warnings`), with a mandatory green-CI gate on the release commit.
 
 ## [0.2.1] - 2026-07-08
 
