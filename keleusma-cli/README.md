@@ -249,7 +249,7 @@ In strict signing mode, the CLI rejects source files, unsigned bytecode, and byt
 
 In strict encryption mode, the CLI rejects unencrypted bytecode and artefacts encrypted to non-enrolled recipients. The `--decryption-key` argument is rejected. Set `KELEUSMA_REQUIRE_ENCRYPTED=1` to force strict mode.
 
-The two policies are independent: neither, signing only, encryption only, or both may be active. See [`docs/guide/SECURITY_POLICY.md`](../docs/guide/SECURITY_POLICY.md) for the full operator guide and deployment scenarios.
+The two policies are independent: neither, signing only, encryption only, or both may be active. See [`book/src/SECURITY_POLICY.md`](../book/src/SECURITY_POLICY.md) for the full operator guide and deployment scenarios.
 
 Reference design records: [R42 in RESOLVED.md](../docs/decisions/RESOLVED.md) (signing infrastructure), [R49](../docs/decisions/RESOLVED.md) (strict-mode signing gate), [R50](../docs/decisions/RESOLVED.md) (encryption layer).
 
@@ -294,11 +294,11 @@ The Keleusma repository ships several embedded host examples that exercise the r
 cargo run --release --example rogue --features sdl3-example
 ```
 
-See [`docs/guide/ROGUE.md`](../docs/guide/ROGUE.md) for the long-form companion manual covering gameplay rules, the host-and-twelve-script architecture, the dungeon generator, and the artificial-intelligence archetypes.
+See [`book/src/ROGUE.md`](../book/src/ROGUE.md) for the long-form companion manual covering gameplay rules, the host-and-twelve-script architecture, the dungeon generator, and the artificial-intelligence archetypes.
 
 Other notable examples:
 
-- **piano_roll** (`cargo run --release --example piano_roll --features sdl3-example`): an SDL3 audio synthesizer driven by Keleusma scripts. Hot-swaps songs across a roster while playback continues. Companion manual at [`docs/guide/PIANO_ROLL.md`](../docs/guide/PIANO_ROLL.md).
+- **piano_roll** (`cargo run --release --example piano_roll --features sdl3-example`): an SDL3 audio synthesizer driven by Keleusma scripts. Hot-swaps songs across a roster while playback continues. Companion manual at [`book/src/PIANO_ROLL.md`](../book/src/PIANO_ROLL.md).
 - **rtos** (`cd examples/rtos && cargo run --release --bin three-task-std`): a cooperative real-time microkernel. Standalone host binary plus an STM32N6570-DK target for embedded execution. Companion manual at [`examples/rtos/MANUAL.md`](../examples/rtos/MANUAL.md).
 - Standalone `.kel` scripts under [`examples/scripts/`](../examples/scripts/) demonstrate the language features in isolation.
 

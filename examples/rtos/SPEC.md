@@ -523,7 +523,7 @@ The roadmap reflects that the STM32N6570-DK is the only physical target availabl
 | 5. STM32N6570-DK factory firmware backup | 0.5 day | Download ST's published factory demo binary from the product page; verify hash; store outside the repo. The chip's security gate blocks debugger-driven dumps; the substitute is ST's distribution. See section 11.1. |
 | 6. embassy-stm32 N6 support investigation | 2-5 days | Determine whether `embassy-stm32` supports the N6 family at the level needed. If yes, proceed with the standard pattern. If no, either contribute support back or write a minimal board HAL against `cortex-m-rt`. The size of this phase depends on what the investigation finds. |
 | 7. Embassy platform implementation for the N6 | 5-10 days | `EmbassyPlatform<Stm32N6>` running on the dev board. Factory firmware re-flashable if anything goes wrong. |
-| 8. Manual chapter and cookbook recipe | 1 day | `docs/guide/RTOS.md` published; the cookbook gains a "Total cooperative scheduling" recipe. |
+| 8. Manual chapter and cookbook recipe | 1 day | `book/src/RTOS.md` published; the cookbook gains a "Total cooperative scheduling" recipe. |
 
 Total to "shippable demonstrator running on the N6": approximately three to four weeks of focused work for one engineer.
 
@@ -564,8 +564,8 @@ The following decisions are recorded for future reference once the work begins. 
 
 When this spec is promoted out of `tmp/`, it lands at `docs/architecture/RTOS_MICROKERNEL.md` with cross-links to:
 
-- `docs/guide/COOKBOOK.md` for the "total cooperative scheduling" recipe.
-- `docs/guide/RTOS.md` for the user-facing manual.
+- `book/src/COOKBOOK.md` for the "total cooperative scheduling" recipe.
+- `book/src/RTOS.md` for the user-facing manual.
 - `docs/architecture/LANGUAGE_DESIGN.md` for the WCET/WCMU bound origin.
 - `docs/architecture/EXECUTION_MODEL.md` for the loop main resume model.
 - `docs/decisions/RESOLVED.md` for the architectural decisions listed above.

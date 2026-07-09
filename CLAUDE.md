@@ -75,7 +75,7 @@ A knowledge graph is maintained in `docs/`. Start at [`docs/README.md`](docs/REA
 
 | Section | Path | Description |
 |---------|------|-------------|
-| Guide | [`docs/guide/`](docs/guide/README.md) | Onboarding for new users and embedders |
+| Guide | [`book/src/`](book/src/introduction.md) | Onboarding for new users and embedders |
 | Architecture | [`docs/architecture/`](docs/architecture/README.md) | Narrative descriptions of the implemented system |
 | Spec | [`docs/spec/`](docs/spec/README.md) | Authoritative specifications: grammar, type system, standard library, instruction set, structural ISA, wire format |
 | Decisions | [`docs/decisions/`](docs/decisions/README.md) | Architectural and design decisions |

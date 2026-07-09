@@ -17,7 +17,7 @@ Keleusma uses a static nominal type system with Rust syntax. There is no implici
 
 All numeric operations use `Word` or `Float`. When host structs contain integer types other than the runtime's word, those values are widened or truncated through `Word::to_i64` and `Word::from_i64_wrap` at the boundary between the host and the script.
 
-The `Word` and `Float` surface types refer to the runtime's chosen word and float widths. The bundled default runtime is `Vm<i64, u64, f64>`, which makes `Word` a 64-bit signed integer and `Float` a 64-bit IEEE-754 floating-point number; the sizes and alignments above reflect that default. Hosts that instantiate the parametric `GenericVm<W, A, F>` shape with narrower trait parameters change the underlying widths accordingly. The bytecode header's `word_bits_log2`, `addr_bits_log2`, and `float_bits_log2` fields record the declared widths so a runtime can reject mismatched bytecode at load time. See B16 in [BACKLOG.md](../decisions/BACKLOG.md) for the parametric-Vm cascade and `docs/guide/COOKBOOK.md` for the narrow-runtime type-alias recipe.
+The `Word` and `Float` surface types refer to the runtime's chosen word and float widths. The bundled default runtime is `Vm<i64, u64, f64>`, which makes `Word` a 64-bit signed integer and `Float` a 64-bit IEEE-754 floating-point number; the sizes and alignments above reflect that default. Hosts that instantiate the parametric `GenericVm<W, A, F>` shape with narrower trait parameters change the underlying widths accordingly. The bytecode header's `word_bits_log2`, `addr_bits_log2`, and `float_bits_log2` fields record the declared widths so a runtime can reject mismatched bytecode at load time. See B16 in [BACKLOG.md](../decisions/BACKLOG.md) for the parametric-Vm cascade and `book/src/COOKBOOK.md` for the narrow-runtime type-alias recipe.
 
 ## Multi-Word Fixed-Point Types
 
@@ -248,7 +248,7 @@ The runtime value carrying an opaque is `Value::Opaque(Arc<dyn HostOpaque>)`. Th
 
 ### Host registration pattern
 
-The host writes an `impl HostOpaque for MyType` block and registers native functions that produce and consume `Value::Opaque` directly. The script declares the type by name in signatures. See [EMBEDDING.md](../guide/EMBEDDING.md#opaque-host-types) for a worked example and [`examples/opaque_rust_string.rs`](../../examples/opaque_rust_string.rs) for a complete walkthrough exposing `std::string::String` to scripts.
+The host writes an `impl HostOpaque for MyType` block and registers native functions that produce and consume `Value::Opaque` directly. The script declares the type by name in signatures. See [EMBEDDING.md](../../book/src/EMBEDDING.md#opaque-host-types) for a worked example and [`examples/opaque_rust_string.rs`](../../examples/opaque_rust_string.rs) for a complete walkthrough exposing `std::string::String` to scripts.
 
 ## Type Coercion
 

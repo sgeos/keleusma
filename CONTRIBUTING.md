@@ -87,7 +87,7 @@ If your change touches the surface language (new keyword, new operator, new cons
 
 ## Verifier rejections
 
-If your program lexes and parses but `Vm::new` or `compile` rejects it, the rejection is intentional under the conservative-verification stance. Read [`docs/guide/WHY_REJECTED.md`](docs/guide/WHY_REJECTED.md) for the rejection taxonomy and proposed rewrites. If you believe the rejection is a verifier bug rather than a design choice, file a bug report with the rejecting program and the diagnostic message.
+If your program lexes and parses but `Vm::new` or `compile` rejects it, the rejection is intentional under the conservative-verification stance. Read [`book/src/WHY_REJECTED.md`](book/src/WHY_REJECTED.md) for the rejection taxonomy and proposed rewrites. If you believe the rejection is a verifier bug rather than a design choice, file a bug report with the rejecting program and the diagnostic message.
 
 ## Patches that touch verifier soundness
 

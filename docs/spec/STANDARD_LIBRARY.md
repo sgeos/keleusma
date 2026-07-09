@@ -133,7 +133,7 @@ V0.2.0 retired the `stddsl::Text` bundle and the bundled text-composition native
 |---|---|---|
 | `println` | `(T) -> Unit` | Debug print, registered through `keleusma::utility_natives::register_utility_natives`. No-op in `no_std` builds; hosts may override through `register_native_closure` to obtain output. |
 
-Hosts that need text composition register their own natives through `register_verified_native` or the `register_fn` marshalling layer. A typical pattern declares a `format` native that produces an arena-resident `Value::KStr`. See [EMBEDDING.md](../guide/EMBEDDING.md) under "Host-Defined String Helpers" for the recommended shape.
+Hosts that need text composition register their own natives through `register_verified_native` or the `register_fn` marshalling layer. A typical pattern declares a `format` native that produces an arena-resident `Value::KStr`. See [EMBEDDING.md](../../book/src/EMBEDDING.md) under "Host-Defined String Helpers" for the recommended shape.
 
 ## Shell Bundle
 

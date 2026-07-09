@@ -1,0 +1,65 @@
+name: Book
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Allow the deploy job to publish to GitHub Pages.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One in-flight Pages deployment at a time; do not cancel a running deploy.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  # The freshness guarantee: every book example that states an output is
+  # executed against the current CLI and compared. This is why the book lives
+  # in the main repo rather than a separate one.
+  verify-examples:
+    name: Verify examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release -p keleusma-cli
+      - run: python3 book/ci/verify_examples.py target/release/keleusma book/src
+
+  build:
+    name: Build (EN + JA)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook
+      - name: Install mdbook-i18n-helpers
+        run: cargo install mdbook-i18n-helpers --locked
+      - name: Build English (source) book
+        run: mdbook build book -d "$GITHUB_WORKSPACE/site"
+      - name: Build Japanese translation
+        run: MDBOOK_BOOK__LANGUAGE=ja mdbook build book -d "$GITHUB_WORKSPACE/site/ja"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: [build, verify-examples]
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

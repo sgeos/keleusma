@@ -155,11 +155,11 @@ This section is a **meta-prompt** for AI agents working with this documentation.
 
 | If you need... | Start here |
 |----------------|------------|
-| First-time setup and a working example | `guide/GETTING_STARTED.md` |
-| Embedding Keleusma in a Rust host | `guide/EMBEDDING.md` |
-| Recipes for common embedding patterns | `guide/COOKBOOK.md` |
-| A program rejected by the verifier | `guide/WHY_REJECTED.md` |
-| Surprises and rough edges | `guide/FAQ.md` |
+| First-time setup and a working example | `book/src/GETTING_STARTED.md` |
+| Embedding Keleusma in a Rust host | `book/src/EMBEDDING.md` |
+| Recipes for common embedding patterns | `book/src/COOKBOOK.md` |
+| A program rejected by the verifier | `book/src/WHY_REJECTED.md` |
+| Surprises and rough edges | `book/src/FAQ.md` |
 | Language overview | `architecture/LANGUAGE_DESIGN.md` |
 | Execution model and two temporal domains | `architecture/EXECUTION_MODEL.md` |
 | Compilation pipeline | `architecture/COMPILATION_PIPELINE.md` |

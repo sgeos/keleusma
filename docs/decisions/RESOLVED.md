@@ -286,7 +286,7 @@ Second, the per-call WCMU bound is hard to make tight. `BuildKStr(capacity)` let
 
 Third, the V0.2.0 publication target prioritized a stable, minimal ISA. Adding a builder family at the publication step would push the opcode count back above the 65-opcode aspirational target (V0.2.0 closes at 69 after preserving the `Byte` / `Fixed` / `Float` arithmetic family; the builder family would land at 74). The structural simplicity of the ISA is load-bearing on its own.
 
-Hosts that want the f-string-like ergonomic register a `format` native that takes a static-string template plus an argument list and produces a `Value::KStr`. The per-call WCMU attestation bounds the output length; the host's Rust implementation handles formatting through the standard library; the script consumes the result through a `use` declaration. The pattern is documented in [COOKBOOK.md](../guide/COOKBOOK.md#working-with-text) and [FAQ.md](../guide/FAQ.md#strings).
+Hosts that want the f-string-like ergonomic register a `format` native that takes a static-string template plus an argument list and produces a `Value::KStr`. The per-call WCMU attestation bounds the output length; the host's Rust implementation handles formatting through the standard library; the script consumes the result through a `use` declaration. The pattern is documented in [COOKBOOK.md](../../book/src/COOKBOOK.md#working-with-text) and [FAQ.md](../../book/src/FAQ.md#strings).
 
 This rejection does not preclude a future revisit. If a real workload demonstrates that host-registered text natives are insufficient (for example, a use case where the host is too resource-constrained to format strings and a script-side builder genuinely beats a native), the builder family can return as a V0.3 addition with the WCMU-attestation gap closed first.
 
@@ -415,7 +415,7 @@ Strict signing mode activates when the trust store is non-empty or the force-str
 - R42 (Ed25519 signing infrastructure).
 - R50 (encryption gate, the companion mechanism).
 - `tmp/enrolled_keys_execution.md` for the design spec.
-- `docs/guide/SECURITY_POLICY.md` for the operator-facing guide.
+- `book/src/SECURITY_POLICY.md` for the operator-facing guide.
 
 ## R50. Hybrid asymmetric encryption layer for compiled modules
 
@@ -467,7 +467,7 @@ The remaining residual risk is that an adversary with memory access on the runni
 - R49 (strict-mode signing gate, the companion mechanism).
 - B24 (hardware-isolation integration for Cortex-M targets, the next protective layer).
 - `tmp/encrypted_signed_modules.md` for the design spec.
-- `docs/guide/SECURITY_POLICY.md` for the operator-facing guide.
+- `book/src/SECURITY_POLICY.md` for the operator-facing guide.
 
 ## R51. Negative information-flow labels on data field types
 

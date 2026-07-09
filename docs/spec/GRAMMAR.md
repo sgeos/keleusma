@@ -981,7 +981,7 @@ vm.register_fn_fallible("game::get_relationship", |a: i64, b: i64| -> Result<f64
 });
 ````
 
-For functions that need to inspect arbitrary `Value` variants, the lower-level `register_native(name, fn(&[Value]) -> Result<Value, VmError>)` and `register_native_closure(name, Box<dyn Fn(...)>)` paths are also available. Native functions that allocate dynamic strings into the host-owned arena register through `register_native_with_ctx` and receive a `NativeCtx<'_>` carrying a borrow of the arena. See [EMBEDDING.md](../guide/EMBEDDING.md) for the complete registration surface.
+For functions that need to inspect arbitrary `Value` variants, the lower-level `register_native(name, fn(&[Value]) -> Result<Value, VmError>)` and `register_native_closure(name, Box<dyn Fn(...)>)` paths are also available. Native functions that allocate dynamic strings into the host-owned arena register through `register_native_with_ctx` and receive a `NativeCtx<'_>` carrying a borrow of the arena. See [EMBEDDING.md](../../book/src/EMBEDDING.md) for the complete registration surface.
 
 ### Type Validation
 
@@ -989,7 +989,7 @@ The compiler validates all native function calls against the registered set at c
 
 ### Opaque Types
 
-V0.2.0 introduced first-class opaque type support through the `HostOpaque` marker trait and the `Value::Opaque(Arc<dyn HostOpaque>)` runtime variant. The host registers a native that produces opaque values through `host_arc(...)`; native consumers extract a typed reference through `dyn HostOpaque::downcast_ref::<T>()`. The script declares the opaque type by name in function signatures and the type checker resolves the name as `Type::Opaque`. Opaque values are host-managed through `Arc`, have a lifetime independent of the arena, may cross the yield boundary in the dialogue type, and contribute zero to the script-side WCMU bound. See the "Opaque Host Types" section of [`docs/guide/EMBEDDING.md`](../guide/EMBEDDING.md) for the full host-side surface and [`examples/opaque_rust_string.rs`](../../examples/opaque_rust_string.rs) for a worked end-to-end example.
+V0.2.0 introduced first-class opaque type support through the `HostOpaque` marker trait and the `Value::Opaque(Arc<dyn HostOpaque>)` runtime variant. The host registers a native that produces opaque values through `host_arc(...)`; native consumers extract a typed reference through `dyn HostOpaque::downcast_ref::<T>()`. The script declares the opaque type by name in function signatures and the type checker resolves the name as `Type::Opaque`. Opaque values are host-managed through `Arc`, have a lifetime independent of the arena, may cross the yield boundary in the dialogue type, and contribute zero to the script-side WCMU bound. See the "Opaque Host Types" section of [`book/src/EMBEDDING.md`](../../book/src/EMBEDDING.md) for the full host-side surface and [`examples/opaque_rust_string.rs`](../../examples/opaque_rust_string.rs) for a worked end-to-end example.
 
 ````
 let ch: ChannelHandle = audio::get_channel(0);

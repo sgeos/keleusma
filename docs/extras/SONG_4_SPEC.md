@@ -14,7 +14,7 @@ target is high-energy gothic-classical-metal rather than
 generic 16-bit boss theme.
 
 See the long-form manual at
-[`docs/guide/PIANO_ROLL.md`](../guide/PIANO_ROLL.md) for the
+[`book/src/PIANO_ROLL.md`](../../book/src/PIANO_ROLL.md) for the
 broader piano-roll context, and the song 3 spec at
 [`SONG_3_SPEC.md`](./SONG_3_SPEC.md) for the prior full-matrix
 specification that song 4 builds on.
@@ -980,7 +980,7 @@ required for a script-author pass. The script will:
 
 - Add `include_str!("piano_roll_4.kel")` to `SONG_SOURCES` at index 4 in `examples/piano_roll.rs`.
 - Implement the sine-approximation tempo math, the four-iteration mutation state machine, the per-iteration channel reconfigurations, the chord-matrix lookups, and the percussion-mask swaps.
-- Update `docs/guide/PIANO_ROLL.md` to mention song 4.
+- Update `book/src/PIANO_ROLL.md` to mention song 4.
 - Update the module docstring in `examples/piano_roll.rs` to reflect the four-song-plus roster.
 - Verify via headless probe, lib tests, clippy, fmt, and release build per the established discipline.
 

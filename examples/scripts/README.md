@@ -28,5 +28,5 @@ The Rust embedding examples ship their own Keleusma script rosters in subdirecto
 
 | Directory | Companion host | Description |
 |-----------|---------------|-------------|
-| [`piano_roll/`](./piano_roll/) | [`examples/piano_roll.rs`](../piano_roll.rs) | Ten songs (`piano_roll_0.kel` through `piano_roll_9.kel`) for the SDL3 audio piano-roll example. See [`docs/guide/PIANO_ROLL.md`](../../docs/guide/PIANO_ROLL.md). |
-| [`rogue/`](./rogue/) | [`examples/rogue/main.rs`](../rogue/main.rs) | Nineteen scripts driving the SDL3 roguelike. Game-tick loop, dungeon generator, player artificial intelligence, combat math, book-keeping, autopickup decision, movement resolution, ten monster artificial-intelligence archetypes including three `loop main` archetypes (Boss, Tracker, Hunter), two item-effect scripts. See [`docs/guide/ROGUE.md`](../../docs/guide/ROGUE.md). |
+| [`piano_roll/`](./piano_roll/) | [`examples/piano_roll.rs`](../piano_roll.rs) | Ten songs (`piano_roll_0.kel` through `piano_roll_9.kel`) for the SDL3 audio piano-roll example. See [`book/src/PIANO_ROLL.md`](../../book/src/PIANO_ROLL.md). |
+| [`rogue/`](./rogue/) | [`examples/rogue/main.rs`](../rogue/main.rs) | Nineteen scripts driving the SDL3 roguelike. Game-tick loop, dungeon generator, player artificial intelligence, combat math, book-keeping, autopickup decision, movement resolution, ten monster artificial-intelligence archetypes including three `loop main` archetypes (Boss, Tracker, Hunter), two item-effect scripts. See [`book/src/ROGUE.md`](../../book/src/ROGUE.md). |

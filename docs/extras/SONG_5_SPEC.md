@@ -15,7 +15,7 @@ emerges from the deterministic-clock precision of the
 implementation engine.
 
 See the long-form manual at
-[`docs/guide/PIANO_ROLL.md`](../guide/PIANO_ROLL.md) for the
+[`book/src/PIANO_ROLL.md`](../../book/src/PIANO_ROLL.md) for the
 broader piano-roll context, and the prior specs at
 [`SONG_3_SPEC.md`](./SONG_3_SPEC.md) and
 [`SONG_4_SPEC.md`](./SONG_4_SPEC.md) for the maximalist
@@ -547,7 +547,7 @@ content required for the script-author pass. The script will:
 - Implement the pattern-lookup, register-offset, and drift-period helpers.
 - Implement the per-channel pattern-advance logic in the main loop body.
 - Implement the init block per the spec.
-- Update `docs/guide/PIANO_ROLL.md` to mention song 5.
+- Update `book/src/PIANO_ROLL.md` to mention song 5.
 - Update the module docstring in `examples/piano_roll.rs` to reflect the six-song roster.
 - Verify via headless probe, lib tests, clippy, fmt, and release build per the established discipline.
 

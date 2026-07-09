@@ -272,7 +272,7 @@ The signature is verified BEFORE the decryption step. This authenticates the art
 
 The encryption work is feature-gated on the `encryption` Cargo feature. Hosts built without the feature reject encrypted artefacts at the framing-level header-length check; the diagnostic is clear about the missing feature.
 
-See R49 and R50 in [`docs/decisions/RESOLVED.md`](../decisions/RESOLVED.md) for the design records, [`docs/spec/WIRE_FORMAT.md`](../spec/WIRE_FORMAT.md) for the encryption-metadata block layout, and [`docs/guide/SECURITY_POLICY.md`](../guide/SECURITY_POLICY.md) for the operator-facing guide.
+See R49 and R50 in [`docs/decisions/RESOLVED.md`](../decisions/RESOLVED.md) for the design records, [`docs/spec/WIRE_FORMAT.md`](../spec/WIRE_FORMAT.md) for the encryption-metadata block layout, and [`book/src/SECURITY_POLICY.md`](../../book/src/SECURITY_POLICY.md) for the operator-facing guide.
 
 ## Error Recovery
 

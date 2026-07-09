@@ -39,14 +39,18 @@ exclude = [
     "tmp/",
     "secret/",
     # Internal audit narrative and process logs are kept out of the published
-    # tarball (audit 8859acb publication review); user-facing docs/guide/,
-    # docs/reference/, docs/spec/, docs/architecture/, and docs/standard/ still
-    # ship.
+    # tarball (audit 8859acb publication review); user-facing docs/reference/,
+    # docs/spec/, docs/architecture/, and docs/standard/ still ship.
     "docs/decisions/",
     "docs/process/",
     # Forward development planning is contributor material, not consumer
     # documentation (release audit v0.2.1 tarball-contents decision).
     "docs/roadmap/",
+    # The learning guide is now the mdbook at book/; it is consumed as the
+    # rendered, hosted book (linked from the README), not as loose markdown in
+    # the crate tarball. Excluding it keeps the tarball small; the book source,
+    # its build output, and the translation files all stay out.
+    "book/",
     # AI-agent and contributor operating instructions, not consumer
     # documentation (release audit v0.2.1: named as iffy for the tarball).
     "CLAUDE.md",

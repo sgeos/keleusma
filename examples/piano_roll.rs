@@ -2,7 +2,7 @@
 //! control loop, with hot code reload between two songs.
 //!
 //! The long-form companion manual is
-//! `docs/guide/PIANO_ROLL.md`. The manual narrates the example
+//! `book/src/PIANO_ROLL.md`. The manual narrates the example
 //! for three reader populations (song authors, host developers
 //! lifting the example into another application, and host
 //! developers studying the example as an architectural reference

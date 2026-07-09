@@ -112,7 +112,7 @@ The `BYTECODE_VERSION` field remains 1. V0.2.0 runtimes reject V0.2.1 encrypted 
 
 The encryption work is feature-gated on the `encryption` Cargo feature, off by default. Hosts that do not need encrypted delivery pay no binary-size cost from the encryption crypto stack. Encrypted artefacts produced on a host with the feature on do not load on a host with the feature off; the loader returns a clear diagnostic.
 
-See `R50` in [`docs/decisions/RESOLVED.md`](../decisions/RESOLVED.md) for the design rationale, `R49` for the companion CLI policy gate, and `docs/guide/SECURITY_POLICY.md` for the operator-facing guide.
+See `R50` in [`docs/decisions/RESOLVED.md`](../decisions/RESOLVED.md) for the design rationale, `R49` for the companion CLI policy gate, and `book/src/SECURITY_POLICY.md` for the operator-facing guide.
 
 ## Opcode records
 

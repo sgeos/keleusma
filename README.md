@@ -15,6 +15,10 @@ The ecosystem value proposition is **definitive WCET and WCMU**. Programs whose 
 
 The name derives from the Greek word for a command or signal, specifically the rhythmic calls used by ancient Greek rowing masters to coordinate oar strokes.
 
+## The Keleusma Guide
+
+A book-length tutorial takes you from a first program to embedding the runtime in a Rust host. Read it online at [the hosted book](https://sgeos.github.io/keleusma/), or build it from source in [`book/`](book/) with `mdbook build book`. The book is bilingual: English is the source and a Japanese translation is maintained alongside it through gettext (`book/po/ja.po`); build the Japanese edition with `MDBOOK_BOOK__LANGUAGE=ja mdbook build book -d book/ja`.
+
 ## Conservative-Verification Stance
 
 The compile pipeline (parse, type-check, monomorphize, hoist, emit) admits a broader surface than the WCET and WCMU analyses can prove bounded. The verifier rejects programs whose bound is unprovable or whose bound is provable in principle but the analysis is not yet implemented. This rejection is intentional and defines the language's contract. See [`docs/architecture/LANGUAGE_DESIGN.md`](docs/architecture/LANGUAGE_DESIGN.md#conservative-verification) for the full statement.
@@ -294,10 +298,10 @@ See [docs/README.md](docs/README.md) for the full documentation knowledge graph.
 
 **Onboarding**
 
-- [Getting Started](docs/guide/GETTING_STARTED.md). Install the CLI, write a first script, embed it in a Rust host.
-- [Embedding](docs/guide/EMBEDDING.md). Native function registration, arena sizing, call and resume protocol, error recovery.
-- [Why Was My Program Rejected](docs/guide/WHY_REJECTED.md). Verifier rejection messages mapped to root causes and rewrites.
-- [FAQ](docs/guide/FAQ.md). Common rough edges and surprises: string handling, escape sequences, the immutable-locals constraint, and what changed from the V0.1.x pre-release line.
+- [Getting Started](book/src/GETTING_STARTED.md). Install the CLI, write a first script, embed it in a Rust host.
+- [Embedding](book/src/EMBEDDING.md). Native function registration, arena sizing, call and resume protocol, error recovery.
+- [Why Was My Program Rejected](book/src/WHY_REJECTED.md). Verifier rejection messages mapped to root causes and rewrites.
+- [FAQ](book/src/FAQ.md). Common rough edges and surprises: string handling, escape sequences, the immutable-locals constraint, and what changed from the V0.1.x pre-release line.
 - [Script Examples](examples/scripts/README.md). Standalone `.kel` files demonstrating language features.
 
 **Reference**

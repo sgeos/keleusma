@@ -10,7 +10,7 @@
 //! the parameter is carried anyway because the trait is required by
 //! the runtime's shape).
 //!
-//! The recipe is documented in `docs/guide/COOKBOOK.md`. The same
+//! The recipe is documented in `book/src/COOKBOOK.md`. The same
 //! narrow-runtime pattern appears in the integration test
 //! `tests/narrow_vm.rs`.
 //!
