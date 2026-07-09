@@ -7974,10 +7974,10 @@ fn eval_expr_to_range(
             // returning if) returns None because the if's value
             // type is then Unit, outside the lattice's domain.
             let then_range = block_tail_range(then_block, params, _type_info, known_summaries)?;
-            let else_range = match else_block {
-                Some(b) => block_tail_range(b, params, _type_info, known_summaries)?,
-                None => return None,
-            };
+            // A missing else (Unit-returning if) has no tail range, so the whole
+            // summary is None; `?` on the absent else block expresses that.
+            let else_range =
+                block_tail_range(else_block.as_ref()?, params, _type_info, known_summaries)?;
             Some(then_range.union(&else_range))
         }
         Expr::Match {
