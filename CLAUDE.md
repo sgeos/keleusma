@@ -131,9 +131,21 @@ cargo check
 cargo fmt
 cargo clippy -- -D warnings
 
-# Full verification
-cargo test && cargo clippy --tests -- -D warnings
+# Everyday verification
+cargo fmt --check && cargo clippy --tests --all-features -- -D warnings && cargo test
+
+# Documentation gate (broken/private intra-doc links fail here, not in test/clippy)
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+
+# Pre-release gate — mirrors CI; run whole before publishing (add --miri for a release)
+scripts/release-gate.sh
 ```
+
+The everyday verification omits the documentation build; a broken intra-doc link is
+invisible to `test`/`clippy` and only fails the CI `Doc` job. Before any publication,
+run the full `scripts/release-gate.sh` (which includes `cargo doc -D warnings`) and
+follow [`docs/process/RELEASE_PROCESS.md`](docs/process/RELEASE_PROCESS.md). Skipping
+the doc build is how V0.2.1 shipped with a red CI Doc job.
 
 ## Coding Conventions
 
