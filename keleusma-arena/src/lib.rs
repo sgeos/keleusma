@@ -846,8 +846,8 @@ impl Arena {
     /// Whether `addr` falls in the ephemeral dual-headed region, the range
     /// `[persistent_capacity, capacity)` that a reset reclaims.
     ///
-    /// This is the region-membership test [`Arena::addr_is_live`] uses to
-    /// decide which pointers are epoch-gated, exposed so a caller can reject a
+    /// This is the region-membership test the arena uses internally to decide
+    /// which pointers are epoch-gated, exposed so a caller can reject a
     /// pointer that would be reclaimed at the next reset before it is allowed
     /// to escape a reset boundary. A pointer into the persistent region, or
     /// into memory this arena does not own at all (host data or rodata reached
