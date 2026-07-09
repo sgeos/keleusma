@@ -16,7 +16,7 @@ pass are filled at implementation time from the chord matrix and
 the per-section character notes.
 
 See the long-form manual at
-[`docs/guide/PIANO_ROLL.md`](../guide/PIANO_ROLL.md) for the
+[`book/src/PIANO_ROLL.md`](../../book/src/PIANO_ROLL.md) for the
 broader piano-roll context.
 
 ## Role in the roster

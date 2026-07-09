@@ -15,7 +15,7 @@ in the spectral and microtonal traditions of the late
 twentieth century.
 
 See the long-form manual at
-[`docs/guide/PIANO_ROLL.md`](../guide/PIANO_ROLL.md) for the
+[`book/src/PIANO_ROLL.md`](../../book/src/PIANO_ROLL.md) for the
 broader piano-roll context, and the prior specs at
 [`SONG_3_SPEC.md`](./SONG_3_SPEC.md) through
 [`SONG_6_SPEC.md`](./SONG_6_SPEC.md) for the other long-form
@@ -567,7 +567,7 @@ content required for the script-author pass. The script will:
 - Add `include_str!("piano_roll_7.kel")` to `SONG_SOURCES` at index 7 in `examples/piano_roll.rs`.
 - Implement the init block per the schedule above, configuring all eight channels with their assigned waveform, ADSR, stereo position, and detune offset.
 - Implement the per-tick body with the eight section-onset triggers and the loop-boundary disable.
-- Update `docs/guide/PIANO_ROLL.md` to mention song 7.
+- Update `book/src/PIANO_ROLL.md` to mention song 7.
 - Update the module docstring in `examples/piano_roll.rs` to reflect the eight-song roster.
 - Verify via headless probe, lib tests, clippy, fmt, and release build per the established discipline.
 

@@ -12,7 +12,7 @@ and is deliberately unexperimental. The aesthetic target is
 bright, accessible, and pleasant to a broad audience.
 
 See the long-form manual at
-[`docs/guide/PIANO_ROLL.md`](../guide/PIANO_ROLL.md) for the
+[`book/src/PIANO_ROLL.md`](../../book/src/PIANO_ROLL.md) for the
 broader piano-roll context, and the prior specs at
 [`SONG_3_SPEC.md`](./SONG_3_SPEC.md) through
 [`SONG_7_SPEC.md`](./SONG_7_SPEC.md) for the experimental
@@ -871,7 +871,7 @@ content required for the script-author pass. The script will:
 - Implement the drum patterns for verse, chorus, bridge, and the modulation drum fill.
 - Implement the scale-aware diatonic-third and diatonic-sixth harmonization on channels 6 and 7 (similar to the song 3 parallel-interval implementation).
 - Apply the +1 semitone shift to all melody and chord pitches during the final chorus and outro to realise the half-step modulation.
-- Update `docs/guide/PIANO_ROLL.md` to mention song 8.
+- Update `book/src/PIANO_ROLL.md` to mention song 8.
 - Update the module docstring in `examples/piano_roll.rs` to reflect the nine-song roster.
 - Verify via headless probe, lib tests, clippy, fmt, and release build per the established discipline.
 

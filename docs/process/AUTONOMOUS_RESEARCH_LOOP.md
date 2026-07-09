@@ -50,7 +50,7 @@ Each firing follows a consistent shape. The numbered steps are mandatory. The ve
 2. Select the next backlog item by priority within the operator-stated ordering.
 3. Perform the research work for that item. The work consists of a verification phase followed by a drafting phase. The verification phase draws from three activities, chosen based on the question.
    - **Web search.** Search for prior art, recent literature, authoritative documentation, and reference implementations of the technique under study. This is the default first step when the question depends on facts established outside the project. Use `WebFetch` to read the most authoritative source directly when a search result identifies one.
-   - **Local-documentation reconciliation.** Read the relevant project documentation under `docs/architecture/`, `docs/spec/`, `docs/decisions/`, and `docs/guide/`. Identify any place the question intersects an existing decision, invariant, or design statement. A recommendation that contradicts the project's own published positions must surface the contradiction explicitly rather than glossing it.
+   - **Local-documentation reconciliation.** Read the relevant project documentation under `docs/architecture/`, `docs/spec/`, `docs/decisions/`, and `book/src/`. Identify any place the question intersects an existing decision, invariant, or design statement. A recommendation that contradicts the project's own published positions must surface the contradiction explicitly rather than glossing it.
    - **Test project.** When the question hinges on whether a technique compiles, runs, links, or interoperates, create a small Rust cargo project under `tmp/research/<id>_spike/`, implement the minimum that exercises the question, and run it. A successful build, a captured runtime output, and a reproducible recipe in the design document are the deliverable. The bundled `llvm_retcon_spike` directory under `tmp/research/` is a worked example of this pattern.
 4. Write the resulting design document with explicit confidence labelling. High confidence when verified directly against an authoritative source or a working test project. Medium confidence when verified against a secondary or older source. Low confidence when verification was not possible within the firing budget.
 5. Update `STATUS.md` with the firing outcome.
@@ -156,7 +156,7 @@ The following tools, from the Claude Code agent harness, are the standard set fo
 - [PROCESS_STRATEGY.md](./PROCESS_STRATEGY.md) describes the standard interactive workflow, which the autonomous loop substitutes for during its run.
 - [COMMUNICATION.md](./COMMUNICATION.md) describes the human-AI communication protocol that resumes when the loop stops.
 - [TASKLOG.md](./TASKLOG.md) records material revisions to this document.
-- [docs/guide/LLM_USAGE.md](../guide/LLM_USAGE.md) covers operator-facing guidance for AI sessions in this repository, including the read-AGENTS-first session protocol.
+- [book/src/LLM_USAGE.md](../../book/src/LLM_USAGE.md) covers operator-facing guidance for AI sessions in this repository, including the read-AGENTS-first session protocol.
 
 ## Versioning
 

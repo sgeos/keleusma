@@ -367,7 +367,7 @@ The runner is designed to be memory-resident for its operational lifetime. Two p
 
 **Steady-state allocation discipline**. After startup, the scheduler does not call the allocator during dispatch. Per-task arenas are allocated once at task admission. The event queue is a fixed-capacity ring buffer; `kernel::post_event` writes into a pre-allocated slot. The wakeup-reason value passed to a task is a stack-allocated `Value::Int`. The yielded tuple a task returns is allocated in the task's own arena. Task restarts reuse the existing arena rather than allocating a fresh one; the supervised-restart path resets the arena's transient region and re-instantiates the VM in-place. No path through the scheduler's main loop invokes the heap.
 
-Consequence: a deployment that admitted all its tasks at startup remains scheduled even when the kernel's memory subsystem cannot satisfy new allocations from any process. This is the property [`docs/guide/SECURITY_POLICY.md`](../guide/SECURITY_POLICY.md#memory-residency-as-a-feature) calls out for the single-task case; `run-tasks` extends it to multi-task deployments. Operators running diagnostic, recovery, or watchdog workloads on critical hardware can rely on the runner to stay scheduled and available regardless of system-wide memory pressure.
+Consequence: a deployment that admitted all its tasks at startup remains scheduled even when the kernel's memory subsystem cannot satisfy new allocations from any process. This is the property [`book/src/SECURITY_POLICY.md`](../../book/src/SECURITY_POLICY.md#memory-residency-as-a-feature) calls out for the single-task case; `run-tasks` extends it to multi-task deployments. Operators running diagnostic, recovery, or watchdog workloads on critical hardware can rely on the runner to stay scheduled and available regardless of system-wide memory pressure.
 
 A long-period task (`period = "1h"` or `period = "1d"`) consumes zero CPU between deadlines because the scheduler issues a blocking `sleep_until` against the earliest task deadline and is woken by the kernel's timer. Operators can deploy multi-task daemons that are operationally near-idle while remaining resident and ready to act on events.
 
@@ -596,7 +596,7 @@ These are explicit deferrals worth tracking but not blocking V0.2.x landing.
 
 - [`examples/rtos/SPEC.md`](../../examples/rtos/SPEC.md) for the cooperative scheduler reference design that this proposal lifts.
 - [`keleusma-cli/README.md`](../../keleusma-cli/README.md) for the existing single-script loop runner and the tick-interval rate limiter.
-- [`docs/guide/SECURITY_POLICY.md`](../guide/SECURITY_POLICY.md) for the strict-mode signing and encryption gates that apply to each task's bytecode.
-- [`docs/guide/SHELL_AUDIT.md`](../guide/SHELL_AUDIT.md) for the bundled shell natives the tasks rely on for filesystem and subprocess access.
+- [`book/src/SECURITY_POLICY.md`](../../book/src/SECURITY_POLICY.md) for the strict-mode signing and encryption gates that apply to each task's bytecode.
+- [`book/src/SHELL_AUDIT.md`](../../book/src/SHELL_AUDIT.md) for the bundled shell natives the tasks rely on for filesystem and subprocess access.
 - [`docs/architecture/EXECUTION_MODEL.md`](./EXECUTION_MODEL.md) for the per-Vm execution model that each task instantiates independently.
 - [`docs/architecture/SUB_COROUTINES.md`](./SUB_COROUTINES.md) for the V0.5.0+ sub-coroutine primitive that may eventually replace the current event-queue mechanism with a more structured concurrency model.

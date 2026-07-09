@@ -4,6 +4,8 @@
 
 **Status**: Strategy ready for implementation. Research pass complete; bootstrap procedure documented; inter-stage data shapes sketched; incremental migration ordering recommended (Lexer → Parser → Compiler); success criteria stated. Implementation not yet started.
 
+**Subproject**: The work happens in [`compiler/`](../../compiler/README.md), a standalone package scaffolded against this strategy. The three stages live in `compiler/kel/` (`lexer.kel`, `parser.kel`, `codegen.kel`) with shared shapes in `compiler/kel/prelude.kel`; the Rust host driver and bootstrap harness live in `compiler/src/`. The release-by-release plan mapping the V0.2.x line to V0.3.0 is [`compiler/MILESTONES.md`](../../compiler/MILESTONES.md). This document remains the authoritative design; the subproject is where it is realized.
+
 ## Goal
 
 A Keleusma compiler written in Keleusma source, compiled to Keleusma bytecode, running on the Keleusma virtual machine, producing Keleusma bytecode as output. The endpoint is a fixed point: the self-hosted compiler compiled by the Rust-hosted compiler produces bytecode identical (modulo non-essential ordering) to what the Rust-hosted compiler produces from the same source, and the self-hosted compiler compiled by itself reproduces its own bytecode.

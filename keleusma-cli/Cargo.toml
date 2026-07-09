@@ -1,6 +1,6 @@
 [package]
 name = "keleusma-cli"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 publish = ["crates-io"]
 rust-version = "1.88"

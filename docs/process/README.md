@@ -12,6 +12,7 @@ Development workflow, communication protocol, and task tracking for Keleusma.
 | [AUTONOMOUS_RESEARCH_LOOP.md](./AUTONOMOUS_RESEARCH_LOOP.md) | Self-firing research loop protocol for unattended AI sessions |
 | [COMMUNICATION.md](./COMMUNICATION.md) | Bidirectional human-AI communication protocol |
 | [GIT_STRATEGY.md](./GIT_STRATEGY.md) | Version control conventions |
+| [RELEASE_PROCESS.md](./RELEASE_PROCESS.md) | How to cut and publish a workspace release: the verification gate (including `cargo doc`), registry-publishability, the audit hold, and publish order |
 | [TASKLOG.md](./TASKLOG.md) | Current sprint source of truth (working document) |
 | [PROMPT.md](./PROMPT.md) | Human to AI instruction staging (working document) |
 | [REVERSE_PROMPT.md](./REVERSE_PROMPT.md) | AI to Human communication (working document) |

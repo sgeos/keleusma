@@ -11,7 +11,7 @@ debug = "line-tables-only"
 
 [package]
 name = "keleusma"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 publish = ["crates-io"]
 description = "Total Functional Stream Processor with definitive WCET and WCMU verification, targeting no_std + alloc embedded scripting"
@@ -39,14 +39,22 @@ exclude = [
     "tmp/",
     "secret/",
     # Internal audit narrative and process logs are kept out of the published
-    # tarball (audit 8859acb publication review); user-facing docs/guide/,
-    # docs/reference/, docs/spec/, docs/architecture/, and docs/standard/ still
-    # ship.
+    # tarball (audit 8859acb publication review); user-facing docs/reference/,
+    # docs/spec/, docs/architecture/, and docs/standard/ still ship.
     "docs/decisions/",
     "docs/process/",
     # Forward development planning is contributor material, not consumer
     # documentation (release audit v0.2.1 tarball-contents decision).
     "docs/roadmap/",
+    # The learning guide is now the mdbook at book/; it is consumed as the
+    # rendered, hosted book (linked from the README), not as loose markdown in
+    # the crate tarball. Excluding it keeps the tarball small; the book source,
+    # its build output, and the translation files all stay out.
+    "book/",
+    # The self-hosted compiler subproject (the V0.3.0 goal) is a standalone
+    # package with its own detached workspace; it is developed alongside the
+    # V0.2.x line but is not part of the runtime a downstream embedder consumes.
+    "compiler/",
     # AI-agent and contributor operating instructions, not consumer
     # documentation (release audit v0.2.1: named as iffy for the tarball).
     "CLAUDE.md",

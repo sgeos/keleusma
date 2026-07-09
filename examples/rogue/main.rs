@@ -2,7 +2,7 @@
 //! scripts for dungeon generation, monster artificial intelligence,
 //! and item effects.
 //!
-//! See `docs/guide/ROGUE.md` for the long-form manual once the
+//! See `book/src/ROGUE.md` for the long-form manual once the
 //! example is complete. This file is the host entry point. The
 //! supporting modules are declared below.
 //!
@@ -107,7 +107,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the audio device, share a voice array under an
     // `Arc<Mutex<_>>` with an SDL3 audio callback, and drive
     // note triggers from a `rogue_music.kel` script per turn or
-    // per floor. See Exercise 2.6 in `docs/guide/ROGUE.md`.
+    // per floor. See Exercise 2.6 in `book/src/ROGUE.md`.
 
     let window = video_subsystem
         .window("Keleusma Roguelike (work in progress)", WINDOW_W, WINDOW_H)

@@ -1,0 +1,26 @@
+// compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
+//
+// SCAFFOLDING — not yet implemented (roadmap Step 3, migrated last; the largest step,
+// possibly spanning several V0.2.x releases).
+//
+// Contract: a `loop` function. It consumes the `Declaration` stream from the parser
+// and yields bytecode chunks plus the auxiliary body the wire format expects. It emits
+// bytecode for each declaration immediately and forgets the declaration.
+//
+// This stage carries the compiler's cross-declaration state in its `data` segment,
+// bounded by the declared limits (R3.4) and reset at module boundaries (R5.3 separate
+// compilation): a string interner, a sorted-array `WordMap<V>` for the function table,
+// type registry, and monomorphization specialization table, and a linear `LocalScope`
+// for per-scope locals (all R3.2). Specialized chunks are emitted lazily as new call
+// sites are discovered; the specialization table grows with the number of distinct
+// specializations, not with program size.
+//
+// Type inference is bounded to per-declaration scope, and the compiler's own source is
+// written in the explicitly-annotated subset so that the compiler checking itself does
+// not stress its own Hindley-Milner inference.
+//
+// Validation gate (roadmap Step 3): byte-identical corpus output under the all-Keleusma
+// pipeline driven by the Rust host, behind `--compiler keleusma`. After this stage
+// ships, the per-stage toggles collapse into a single `--self-hosted` flag, and the
+// V0.3.0 bootstrap (Phases A, B, C) applies: cross-compile to kelc.0, self-compile to
+// kelc.1, reach the fixed point kelc.2 == kelc.1.

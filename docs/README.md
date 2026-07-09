@@ -8,7 +8,7 @@ This documentation is structured as a **knowledge graph** encoded in the file sy
 
 | Section | Path | Description |
 |---------|------|-------------|
-| Guide | [guide/](./guide/README.md) | Onboarding for new users and embedders |
+| Guide | [guide/](../book/src/introduction.md) | Onboarding for new users and embedders |
 | Architecture | [architecture/](./architecture/README.md) | Narrative descriptions of the implemented system |
 | Spec | [spec/](./spec/README.md) | Authoritative specifications: grammar, type system, standard library, instruction set, structural ISA, wire format |
 | Decisions | [decisions/](./decisions/README.md) | Resolved, priority, and backlog decisions |
@@ -21,14 +21,14 @@ This documentation is structured as a **knowledge graph** encoded in the file sy
 
 | If you need... | Start here |
 |----------------|------------|
-| First-time setup and a working example | [guide/GETTING_STARTED.md](./guide/GETTING_STARTED.md) |
-| Linear learning course (forty chapters) | [guide/README.md](./guide/README.md) |
-| Embedding Keleusma in a Rust host | [guide/EMBEDDING.md](./guide/EMBEDDING.md) |
-| Recipes for common embedding patterns | [guide/COOKBOOK.md](./guide/COOKBOOK.md) |
-| A program rejected by the verifier | [guide/WHY_REJECTED.md](./guide/WHY_REJECTED.md) |
-| Surprises and rough edges in V0.2.x | [guide/FAQ.md](./guide/FAQ.md) |
-| Strict-mode policies and daemon deployments | [guide/SECURITY_POLICY.md](./guide/SECURITY_POLICY.md) |
-| Binary, memory, and CPU footprint | [guide/METRICS.md](./guide/METRICS.md) |
+| First-time setup and a working example | [guide/GETTING_STARTED.md](../book/src/GETTING_STARTED.md) |
+| Linear learning course (forty chapters) | [guide/README.md](../book/src/introduction.md) |
+| Embedding Keleusma in a Rust host | [guide/EMBEDDING.md](../book/src/EMBEDDING.md) |
+| Recipes for common embedding patterns | [guide/COOKBOOK.md](../book/src/COOKBOOK.md) |
+| A program rejected by the verifier | [guide/WHY_REJECTED.md](../book/src/WHY_REJECTED.md) |
+| Surprises and rough edges in V0.2.x | [guide/FAQ.md](../book/src/FAQ.md) |
+| Strict-mode policies and daemon deployments | [guide/SECURITY_POLICY.md](../book/src/SECURITY_POLICY.md) |
+| Binary, memory, and CPU footprint | [guide/METRICS.md](../book/src/METRICS.md) |
 | Language overview | [architecture/LANGUAGE_DESIGN.md](./architecture/LANGUAGE_DESIGN.md) |
 | Execution model and two temporal domains | [architecture/EXECUTION_MODEL.md](./architecture/EXECUTION_MODEL.md) |
 | Compilation pipeline | [architecture/COMPILATION_PIPELINE.md](./architecture/COMPILATION_PIPELINE.md) |
@@ -49,7 +49,7 @@ This documentation is structured as a **knowledge graph** encoded in the file sy
 | Standalone scripts to run | [`examples/scripts/`](../examples/scripts) |
 | Rust embedding examples | [`examples/`](../examples) |
 | End-to-end SDL3 audio demo with hot swap | [`examples/piano_roll.rs`](../examples/piano_roll.rs) |
-| Manual for the piano-roll example | [guide/PIANO_ROLL.md](./guide/PIANO_ROLL.md) |
+| Manual for the piano-roll example | [guide/PIANO_ROLL.md](../book/src/PIANO_ROLL.md) |
 | Cooperative RTOS microkernel running on STM32N6570-DK | [`examples/rtos/`](../examples/rtos/README.md) |
 | Operator manual for the RTOS example | [`examples/rtos/MANUAL.md`](../examples/rtos/MANUAL.md) |
 | Architectural rationale for the RTOS microkernel | [`examples/rtos/SPEC.md`](../examples/rtos/SPEC.md) |

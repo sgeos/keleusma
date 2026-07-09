@@ -1,0 +1,29 @@
+[book]
+title = "The Keleusma Guide"
+authors = ["Brendan Sechter"]
+description = "A learning guide for Keleusma, a Total Functional Stream Processor with definitive WCET and WCMU verification."
+language = "en"
+src = "src"
+
+[rust]
+edition = "2024"
+
+[output.html]
+git-repository-url = "https://github.com/sgeos/keleusma"
+edit-url-template = "https://github.com/sgeos/keleusma/edit/main/book/{path}"
+default-theme = "rust"
+preferred-dark-theme = "ayu"
+
+[output.html.fold]
+enable = true
+level = 1
+
+# Internationalization via mdbook-i18n-helpers (gettext).
+# The source language is English; translations live in `po/<lang>.po`.
+# Build the source book with `mdbook build`.
+# Build a translation with, for example:
+#   MDBOOK_BOOK__LANGUAGE=ja mdbook build -d book/ja
+# The gettext preprocessor is a no-op for the source language (no po/en.po)
+# and applies po/<lang>.po for a translation build.
+[preprocessor.gettext]
+after = ["links"]

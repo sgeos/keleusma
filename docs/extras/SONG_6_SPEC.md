@@ -16,7 +16,7 @@ emerges from the alignment of the four voices rather than from
 a separate accompaniment layer.
 
 See the long-form manual at
-[`docs/guide/PIANO_ROLL.md`](../guide/PIANO_ROLL.md) for the
+[`book/src/PIANO_ROLL.md`](../../book/src/PIANO_ROLL.md) for the
 broader piano-roll context, and the prior specs at
 [`SONG_3_SPEC.md`](./SONG_3_SPEC.md),
 [`SONG_4_SPEC.md`](./SONG_4_SPEC.md), and
@@ -658,7 +658,7 @@ content required for the script-author pass. The script will:
 - Implement the per-voice subject-position computation with entry-time gating.
 - Implement the per-voice metric accent system.
 - Implement the sub-bass pedal, drone pads, and percussion support layers.
-- Update `docs/guide/PIANO_ROLL.md` to mention song 6.
+- Update `book/src/PIANO_ROLL.md` to mention song 6.
 - Update the module docstring in `examples/piano_roll.rs` to reflect the seven-song roster.
 - Verify via headless probe, lib tests, clippy, fmt, and release build per the established discipline.
 

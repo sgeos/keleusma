@@ -28,13 +28,13 @@ Run any example with `cargo run --release --example <name>`. Examples whose `req
 | [`yield_error.rs`](./yield_error.rs) | Error propagation through resume values across yield boundaries. |
 | [`measured_wcet.rs`](./measured_wcet.rs) | Use a measured `CostModel` from `keleusma-bench/measured_cost_models/` for CPU-cycle WCET on the target. |
 | [`zero_copy_include_bytes.rs`](./zero_copy_include_bytes.rs) | Embed precompiled bytecode in the binary via `include_bytes!` and execute zero-copy against an `AlignedVec<8>`. |
-| [`piano_roll.rs`](./piano_roll.rs) | End-to-end SDL3 audio host with hot code swap across a song roster. Feature-gated on `sdl3-example`. See [`docs/guide/PIANO_ROLL.md`](../docs/guide/PIANO_ROLL.md). |
+| [`piano_roll.rs`](./piano_roll.rs) | End-to-end SDL3 audio host with hot code swap across a song roster. Feature-gated on `sdl3-example`. See [`book/src/PIANO_ROLL.md`](../book/src/PIANO_ROLL.md). |
 
 ## Larger example crates
 
 | Path | What it is |
 |------|------------|
-| [`rogue/`](./rogue/) | End-to-end SDL3 video host driving a roguelike. Nineteen Keleusma scripts for dungeon generation, monster artificial intelligence, combat, and item effects. Feature-gated on `sdl3-example`. See [`docs/guide/ROGUE.md`](../docs/guide/ROGUE.md). |
+| [`rogue/`](./rogue/) | End-to-end SDL3 video host driving a roguelike. Nineteen Keleusma scripts for dungeon generation, monster artificial intelligence, combat, and item effects. Feature-gated on `sdl3-example`. See [`book/src/ROGUE.md`](../book/src/ROGUE.md). |
 | [`rtos/`](./rtos/) | Cooperative RTOS microkernel demonstrator. Standalone crate (not a workspace member) with `std-platform` and `stm32n6570dk-platform` builds. Includes the `bench_n6` cost-model calibration binary. See [`examples/rtos/README.md`](./rtos/README.md), [`examples/rtos/MANUAL.md`](./rtos/MANUAL.md), and [`examples/rtos/SPEC.md`](./rtos/SPEC.md). |
 
 ## Standalone Keleusma scripts
@@ -49,7 +49,7 @@ The `keleusma` CLI is installed via `cargo install --path keleusma-cli` (develop
 
 ## Companion documentation
 
-- [`docs/guide/`](../docs/guide/) — user-facing guides including embedding, RTOS, piano-roll, rogue, and cookbook recipes.
+- [`book/src/`](../book/src/) — user-facing guides including embedding, RTOS, piano-roll, rogue, and cookbook recipes.
 - [`docs/spec/`](../docs/spec/) — authoritative language and instruction-set specifications.
 - [`docs/architecture/`](../docs/architecture/) — narrative descriptions of the implemented system.
 - [`keleusma-bench/measured_cost_models/`](../keleusma-bench/measured_cost_models/) — pre-generated WCET cost models for supported host architectures and the STM32N6570-DK.

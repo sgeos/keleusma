@@ -1,0 +1,26 @@
+# The self-hosted Keleusma compiler driver.
+#
+# Standalone package with a detached [workspace] (like examples/rtos): it is NOT a
+# member of the parent workspace, so a half-built compiler stage never destabilizes
+# the released workspace, and it is excluded from the published keleusma tarball.
+# It depends on the parent keleusma runtime by path: the runtime's Rust-hosted
+# compiler produces the initial self-hosted bytecode (bootstrap Phase A), and its VM
+# runs the self-hosted compiler thereafter.
+[package]
+name = "keleusma-selfhost"
+version = "0.3.0-dev"
+edition = "2024"
+publish = false
+description = "Driver and bootstrap harness for the self-hosted Keleusma compiler (V0.3.0)."
+license = "0BSD"
+
+# Detached from the parent workspace.
+[workspace]
+
+[dependencies]
+keleusma = { path = "..", features = ["compile", "verify"] }
+keleusma-arena = { path = "../keleusma-arena", features = ["alloc"] }
+
+[[bin]]
+name = "keleusma-selfhost"
+path = "src/main.rs"

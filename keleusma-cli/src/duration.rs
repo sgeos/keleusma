@@ -13,7 +13,7 @@
 //! longer cadences should either use an external scheduler (cron,
 //! systemd timers) or implement noop yield cycles in the script
 //! that count internal ticks against the longer interval. See
-//! `docs/guide/SECURITY_POLICY.md` for guidance.
+//! `book/src/SECURITY_POLICY.md` for guidance.
 //!
 //! Composite forms like `1h30m` are NOT supported. Operators
 //! should express composite durations as a single unit

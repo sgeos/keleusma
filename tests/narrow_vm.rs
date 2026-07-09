@@ -5,7 +5,7 @@
 //! floating-point features at compile time, so the script side is
 //! purely integer; the `f32` float-trait parameter on the runtime is
 //! a no-op for this program. See `examples/narrow_runtime.rs` for the
-//! standalone example and `docs/guide/COOKBOOK.md` for the type-alias
+//! standalone example and `book/src/COOKBOOK.md` for the type-alias
 //! recipe.
 
 // The tests instantiate parametric runtimes such as
@@ -36,7 +36,7 @@ use keleusma::target::Target;
 use keleusma::vm::{GenericVm, GenericVmState};
 
 /// Host-defined narrow-runtime alias following the recipe in
-/// `docs/guide/COOKBOOK.md` (16-bit signed word, 16-bit unsigned
+/// `book/src/COOKBOOK.md` (16-bit signed word, 16-bit unsigned
 /// address, 32-bit float kept for future float opcodes even though
 /// the `embedded_16` target has `has_floats = false`).
 type NarrowVm<'a, 'arena> = GenericVm<'a, 'arena, i16, u16, f32>;

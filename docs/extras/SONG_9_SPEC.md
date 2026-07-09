@@ -16,7 +16,7 @@ sine modulation, with one "confusion zone" per iteration that
 destabilises the texture before resolving back into clarity.
 
 See the long-form manual at
-[`docs/guide/PIANO_ROLL.md`](../guide/PIANO_ROLL.md) for the
+[`book/src/PIANO_ROLL.md`](../../book/src/PIANO_ROLL.md) for the
 broader piano-roll context. Song 9 builds on techniques from
 all prior specs in the extras directory.
 
@@ -689,7 +689,7 @@ The script will:
 - Implement the per-iteration waveform reconfiguration on channel 1.
 - Implement the half-step modulation at each iteration's final chorus.
 - Implement the drum patterns per section.
-- Update `docs/guide/PIANO_ROLL.md` to mention song 9.
+- Update `book/src/PIANO_ROLL.md` to mention song 9.
 - Update the module docstring in `examples/piano_roll.rs` to reflect the ten-song roster.
 - Verify via headless probe, lib tests, clippy, fmt, and release build per the established discipline.
 

@@ -1,0 +1,56 @@
+// compiler/kel/prelude.kel — shared inter-stage data shapes for the self-hosted
+// compiler.
+//
+// SCAFFOLDING. These shapes follow docs/roadmap/V0_3_0_SELF_HOSTING.md, section
+// "Inter-stage data shapes". They are the contract between the lexer, parser, and
+// codegen stages and the Rust host driver, and will be refined during implementation.
+// Every stage yields values of these types; the host collects them and hands them to
+// the next stage.
+
+// A source location, carried on every token and declaration for diagnostics.
+struct Span {
+    start: Word,    // byte offset of the first byte
+    end: Word,      // byte offset one past the last byte
+    line: Word,
+    column: Word,
+}
+
+// The keyword set the lexer recognizes. STUB: extend to the full surface keyword set
+// (fn, yield, loop, let, if, else, match, for, struct, enum, use, data, trait, impl,
+// newtype, where, const, signed, ...).
+enum KeywordKind {
+    Fn,
+    Yield,
+    Loop,
+    Let,
+    If,
+    Else,
+    Match,
+    For,
+    Struct,
+    Enum,
+}
+
+// Lexer output: one Token per yield until Eof.
+enum TokenKind {
+    Identifier(Text),
+    Integer(Word),
+    Float(Float),
+    StringLiteral(Text),
+    Punctuation(Byte),        // '(', ')', '{', '}', ',', ';', ...
+    Keyword(KeywordKind),
+    Eof,
+}
+
+struct Token {
+    kind: TokenKind,
+    span: Span,
+}
+
+// Parser output: one Declaration per top-level declaration. STUB — the real variants
+// (function, struct, enum, use, data, trait, impl, ...) land with the parser stage
+// (roadmap Step 2). The parser yields each declaration as it completes; the whole-
+// program abstract syntax tree is never constructed.
+enum Declaration {
+    Placeholder,
+}

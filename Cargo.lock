@@ -339,7 +339,7 @@ dependencies = [
 
 [[package]]
 name = "keleusma"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "aes-gcm",
  "allocator-api2",
@@ -364,7 +364,7 @@ dependencies = [
 
 [[package]]
 name = "keleusma-bench"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "keleusma",
  "keleusma-arena",
@@ -373,7 +373,7 @@ dependencies = [
 
 [[package]]
 name = "keleusma-cli"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "ed25519-dalek",
  "keleusma",
@@ -387,7 +387,7 @@ dependencies = [
 
 [[package]]
 name = "keleusma-macros"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "proc-macro2",
  "quote",

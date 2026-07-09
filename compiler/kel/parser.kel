@@ -1,0 +1,21 @@
+// compiler/kel/parser.kel — Stage 2 of the self-hosted compiler.
+//
+// SCAFFOLDING — not yet implemented (roadmap Step 2, migrated second).
+//
+// Contract: a `loop` function. It consumes the `Token` stream produced by the lexer
+// (handed in by the host) and yields one `Declaration` (see prelude.kel) per top-level
+// declaration. The unit of work is a single top-level declaration, not the whole
+// program: the parser yields each declaration the moment it completes and forgets it,
+// so no whole-program abstract syntax tree is ever built.
+//
+// Keleusma forbids recursion in `fn` and `yield` categories, so recursive grammar
+// constructs (an expression containing sub-expressions, a type containing sub-types)
+// are walked with the explicit work-stack idiom (R3.1) rather than recursive calls:
+// a fixed-capacity stack in the `data` segment holds the pending parse goals, and the
+// loop pops a goal, matches tokens, and pushes sub-goals. Forward references are
+// resolved with bounded fixup tables. Whether to instead relax the recursion rule for
+// the compiler is the one open surface question; the default is explicit stacks.
+//
+// Validation gate (roadmap Step 2): byte-identical corpus output under Keleusma-lexer
+// + Keleusma-parser + Rust-compiler as under the all-Rust baseline. Wired in behind
+// the CLI `--parser keleusma` toggle.

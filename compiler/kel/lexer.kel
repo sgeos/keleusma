@@ -1,0 +1,26 @@
+// compiler/kel/lexer.kel — Stage 1 of the self-hosted compiler.
+//
+// SCAFFOLDING — not yet implemented (roadmap Step 1, migrated first).
+//
+// Contract: a `loop` function. The host hands source to the lexer as `[Byte; N]` and
+// resumes it; the lexer scans the bytes and yields one `Token` (see prelude.kel) per
+// token, ending with `TokenKind::Eof`. It is a finite-state byte scanner with a
+// static keyword table. No recursion is needed; a byte cursor plus line and column
+// live in the loop's `data` segment.
+//
+// Byte-level work uses array indexing on the `[Byte; N]` source directly. The three
+// residual `Text` operations use host natives (resolved by R3.3, no surface change):
+//   use compiler::intern_bytes     // intern a byte slice -> Word index
+//   use compiler::text_from_bytes  // build a Text from bytes
+//   use compiler::text_concat      // concatenate two Text values
+//
+// Validation gate (roadmap Step 1): every program in the regression corpus compiles
+// to byte-identical bytecode under Keleusma-lexer + Rust-parser + Rust-compiler as
+// under the all-Rust baseline. Wired in behind the CLI `--lexer keleusma` toggle.
+//
+// The real body scans one token per resume:
+//   1. skip whitespace and comments, advancing line/column;
+//   2. classify the byte at the cursor (letter -> identifier or keyword; digit ->
+//      integer or float; quote -> string literal; else -> punctuation);
+//   3. accumulate the lexeme, resolve keywords through the keyword table;
+//   4. yield the Token with its Span.
