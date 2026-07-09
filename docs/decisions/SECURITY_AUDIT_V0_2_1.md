@@ -272,6 +272,25 @@ one. No wire-format, `BYTECODE_VERSION`, or instruction-set change. The gate is
 green on default, signatures, and all-features, with `clippy --tests --all-features
 -D warnings` and `fmt` clean.
 
+## Re-audit delta 6 (release audit, baseline 5daf18d)
+
+The first empirically executed release-readiness audit (`keleusma-release-audit-v0.2.1.md`,
+HEAD `5daf18d`) ran the build, test, clippy, and Miri gate and confirmed the new
+commits since `8859acb` fixed-correctly (G1, both F2 residuals, conformance Defects
+A and C), with the spec corrections judged honest. It found one MEDIUM conformance
+blocker and two low items, all addressed here.
+
+| # | Sev | Status | Note |
+|---|-----|--------|------|
+| Release Finding 1 | Medium | Fixed | The Defect-B negative-label fix closed struct fields and enum variant payloads but left the newtype underlying type open: `resolve_type` silently dropped a `NegativeLabelled` wrapper, so `newtype Handle = Word@!Secret` was accepted with the secrecy label discarded, where Standard 4.5 requires rejection (a newtype underlying type is not a boundary category). `check` now runs `validate_no_nested_negative_labels(&n.underlying, false)` on every newtype underlying type in pass 1a', mirroring the struct-field and enum-payload rule, so a negative label at any position is rejected. Test `negative_label_rejected_on_newtype_underlying` covers the top-level and nested cases and confirms a positive label is unaffected. This closes the same close-the-instance-leave-a-sibling pattern on the label-boundary class. |
+| Release Low 1 | Low (info) | Fixed | The grouped-pattern production `(p)` (transparent grouping, an accepted form after the Defect-C fix) was absent from `GRAMMAR.md` Section 8. The Pattern Forms table and a disambiguation note now document `(p)` grouping, the two-or-more tuple pattern, and the `(p,)` rejection. Empirically confirmed that `()` is not a unit pattern (a unit value is matched with a wildcard or variable), so it is documented as such rather than added as a form. |
+| Release Low 2 | Low (info) | Confirmed (no change) | `UnaryOp::Neg` on a `Multiword` operand is rejected by the type checker (`cannot negate Multiword<N>`) before reaching the compiler's Multiword lowering, so it is not exposed to the Bnot-guard gap the audit flagged as unconfirmed. Verified end to end; no code change required. |
+
+The severity ceiling was medium for one conformance finding on a pre-existing
+position, now closed. No wire-format, `BYTECODE_VERSION`, or instruction-set change.
+The gate is green on default, signatures, and all-features, with `clippy --tests
+--all-features -D warnings` and `fmt` clean.
+
 ## Severity and category distribution
 
 | Severity | Count |

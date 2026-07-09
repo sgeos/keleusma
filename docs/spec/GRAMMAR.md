@@ -914,11 +914,14 @@ Patterns appear in function heads, `match` arms, and `let` bindings.
 | Enum variant | `Command::NoteOn(ch, note, vel)` | Variant with bindings |
 | Enum unit variant | `Command::Silence` | Variant without data |
 | Struct destructuring | `Note { channel, pitch }` | Struct with field bindings |
-| Tuple destructuring | `(a, b)` | Tuple with element bindings |
+| Tuple destructuring | `(a, b)` | Tuple with element bindings (two or more elements) |
+| Grouped | `(p)` | Identical to `p`; the parentheses group only |
 | Wildcard | `_` | Any value (ignored) |
 | Variable | `x` | Any value (bound to name) |
 | Option Some | `Option::Some(value)` | Non-None optional |
 | Option None | `Option::None` | None optional |
+
+A parenthesized pattern is disambiguated by its element count. A single parenthesized pattern `(p)` is a transparent grouping equivalent to `p`, and two or more comma-separated patterns `(a, b)` form a tuple pattern. A trailing-comma form `(p,)` is not a pattern and is rejected, mirroring the one-element tuple-literal rule in the expression grammar. A unit value is matched with a wildcard or a variable binding, not with `()`.
 
 ### Exhaustiveness
 

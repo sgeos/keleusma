@@ -1705,6 +1705,15 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
     // available at construction sites in pass 2.
     for type_def in &program.types {
         if let TypeDef::Newtype(n) = type_def {
+            // A newtype underlying type is not one of the three boundary
+            // categories where a negative information-flow label is admissible
+            // (function parameter/return, shared data field, private data
+            // field; STANDARD.md 4.5). Reject a negative label at any position
+            // in the underlying type, the same rule as struct fields and enum
+            // variant payloads. Without this, `resolve_type` silently drops the
+            // `NegativeLabelled` wrapper and the secrecy label is lost rather
+            // than enforced or rejected.
+            validate_no_nested_negative_labels(&n.underlying, false)?;
             let underlying = ctx.resolve_type(&n.underlying);
             ctx.newtypes.insert(n.name.clone(), underlying);
             if let Some(v) = n.saturate_max {
@@ -7869,6 +7878,26 @@ mod tests {
         // A negative label remains admissible on a data field, a boundary.
         check_src("data d { x: Word@!Secret }\nfn main() -> Word { 0 }")
             .expect("a negative label on a shared data field is admitted");
+    }
+
+    #[test]
+    fn negative_label_rejected_on_newtype_underlying() {
+        // A newtype underlying type is not one of the three boundary categories
+        // (STANDARD.md 4.5), so a negative label on it is rejected rather than
+        // silently dropped. Regression for the release-audit Finding 1: prior to
+        // the fix `resolve_type` discarded the `NegativeLabelled` wrapper and the
+        // declaration was accepted with the secrecy label lost.
+        assert!(
+            check_src("newtype Handle = Word@!Secret;\nfn main() -> Word { 0 }").is_err(),
+            "a negative label on a newtype underlying type must be rejected"
+        );
+        assert!(
+            check_src("newtype Pair = (Word, Word@!Secret);\nfn main() -> Word { 0 }").is_err(),
+            "a negative label nested in a newtype underlying type must be rejected"
+        );
+        // A positive label on a newtype underlying type is unaffected.
+        check_src("newtype Tagged = Word@Secret;\nfn main() -> Word { 0 }")
+            .expect("a positive label on a newtype underlying type is admitted");
     }
 
     #[test]
