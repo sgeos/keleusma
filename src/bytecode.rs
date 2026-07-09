@@ -125,6 +125,12 @@ pub type Value = GenericValue<i64, f64>;
 // pointer niche exposed for the body enums to reuse for their `Flat`/`Boxed`
 // discriminant; a second data-less variant would spend that niche and pin the
 // slot at 40. This static assertion fails the build if the layout regresses.
+//
+// The 32-byte figure is the 64-bit-pointer layout (`FlatComposite` carries an
+// 8-byte `NonNull`). On a 32-bit target (for example a `thumbv*-none-eabi*`
+// embedded build) the pointer, and therefore the slot, is naturally smaller, so
+// the guard is scoped to the 64-bit pointer width it describes.
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(
     core::mem::size_of::<Value>() == 32,
     "Value slot must be 32 bytes (B28 item 2 step 6B); a layout change regressed it"
