@@ -4,7 +4,8 @@
 
 How to cut and publish a Keleusma workspace release. Keleusma's value proposition
 is *definitive* bounds; the release discipline is held to the same standard —
-**nothing ships red, and nothing is published that the registry cannot resolve.**
+**nothing ships red, nothing is published that the registry cannot resolve, and
+nothing is published without an explicit, current go-ahead.**
 
 This document is the authoritative procedure. The everyday gate
 (`cargo test && cargo clippy`) is *not* sufficient for a release; run the full gate
@@ -35,17 +36,25 @@ its public API changes.
 [ ] 5. Commit; advance main; push the release commit AND the annotated tag.
 [ ] 6. *** CI IS GREEN ON THE RELEASE COMMIT *** (mandatory; the authoritative gate).
 [ ] 7. External release audit returns a clear GO (scope to the change for a patch).
-[ ] 8. Publish in dependency order.
-[ ] 9. Cut the GitHub Release; prune branches; verify crates.io + docs.rs.
+[ ] 8. *** EXPLICIT, CURRENT AUTHORIZATION TO PUBLISH THIS RELEASE *** (a prior
+       "expedite" or general go-ahead does not count; the irreversible-action gate).
+[ ] 9. Publish in dependency order.
+[ ] 10. Cut the GitHub Release; prune branches; verify crates.io + docs.rs.
 ```
 
-**The one rule that prevents a repeat:** never publish, and never merge to `main`, on
-a red CI run. The local gate (step 2) is a fast pre-check — it *cannot* replicate the
-cross-compilation jobs, the feature-combination builds, or the latest-stable toolchain
-that CI runs, which is exactly where every V0.2.1 CI failure hid (a broken doc link, a
-32-bit `Value`-layout assertion, a `verify`-without-`floats` build, and stable-1.97
-clippy lints). CI on the pushed release commit (step 6) is the gate that catches them;
-publishing (step 8) is downstream of it, not before it.
+**Two gates prevent a repeat.** *First, never publish, and never merge to `main`, on
+a red CI run (step 6).* The local gate (step 2) is a fast pre-check — it *cannot*
+replicate the cross-compilation jobs, the feature-combination builds, or the
+latest-stable toolchain that CI runs, which is exactly where every V0.2.1 CI failure
+hid (a broken doc link, a 32-bit `Value`-layout assertion, a `verify`-without-`floats`
+build, and stable-1.97 clippy lints). CI on the pushed release commit (step 6) is the
+gate that catches them; publishing (step 9) is downstream of it, not before it.
+*Second, never publish without an explicit, current, release-specific go-ahead (step
+8).* A crates.io version is irreversible, so the publish is not a step the agent may
+take on its own initiative: a prior directive to "expedite," a general blessing given
+before the release was even cut, or a request about a different artifact is **not**
+authorization to push it. Everything up to and including the tag and CI is reversible;
+the publish is not, and it waits for the word.
 
 ## 0. Prerequisites
 
@@ -121,7 +130,7 @@ cargo publish -p keleusma-macros --dry-run
 cargo publish -p keleusma-arena  --dry-run
 # keleusma's dry-run resolves its deps from the registry, so it only succeeds after
 # macros and arena are actually published. The definitive check for keleusma and the
-# downstream crates is therefore the real publish in step 7, one at a time.
+# downstream crates is therefore the real publish in step 9, one at a time.
 ```
 
 If a dependent needs API a published dependency lacks, return to step 1: bump that
@@ -143,7 +152,7 @@ release mid-publish.)
 ## 5. Commit, advance `main`, and push — *before* publishing
 
 Publishing is downstream of CI, so the code and tag must be on `origin` and CI must
-have run before step 8. Do the git work here:
+have run before step 9. Do the git work here:
 
 - Commit the version and changelog changes.
 - Ensure `main` contains the release commit (advance it; it is what CI and the
@@ -181,10 +190,41 @@ to the delta** since the last audited release rather than a full re-audit, at th
 maintainer's discretion; a functional bugfix with green CI (step 6) and a clean gate
 (step 2) may proceed on that basis. Hold publication until the review is satisfied.
 
-## 8. Publish in dependency order
+## 8. Explicit authorization to publish — the irreversible-action gate
 
-Only after CI is green (step 6) and the review is satisfied (step 7). Publish one
-crate at a time, waiting for each to be available before its dependents; modern
+Everything through step 7 is reversible. A commit can be amended, `main` can be reset,
+the tag can be deleted and re-cut, a branch can be renamed back, and a red CI run costs
+nothing. **Publishing (step 9) is the one action that cannot be undone** — a crates.io
+version is immutable; it can be yanked but never deleted or replaced. Because of that
+asymmetry, the publish is gated on an explicit, current, release-specific go-ahead from
+the maintainer, and the agent does not cross this line on its own initiative.
+
+**What does *not* authorize a publish:**
+
+- An earlier directive to "expedite," "get it ready," "proceed with the release," or
+  similar, given *before* the release was cut and CI was green. Intent to move quickly
+  is not consent to the irreversible step.
+- A narrowly-scoped request about a *different* artifact — e.g. "cut the GitHub Release
+  for the already-published `vX.Y.Z`." Do exactly the thing asked; do not widen it into
+  a new publish.
+- Authorization granted for a *prior* release. Each publish is its own gate.
+
+**What does authorize it:** a clear, current instruction to publish *this* version —
+"publish 0.2.3," "go ahead and publish," "ship it." If there is any doubt, **stop at
+the reversible boundary** (tag pushed, CI green, dry-runs clean) and ask. The reversible
+preparation in steps 0–7 may run freely and without prompting; the irreversible step
+waits for the word.
+
+> V0.2.2 lesson: an agent treated an earlier "V0.2.2 should be expedited" as standing
+> authorization and published all four crates, when the actual in-session request was
+> only to cut the *V0.2.1* GitHub Release. The release content was sound and CI-green,
+> but the consent was never given. Soundness is not a substitute for authorization.
+
+## 9. Publish in dependency order
+
+Only after CI is green (step 6), the review is satisfied (step 7), **and the publish is
+explicitly authorized (step 8)**. Publish one crate at a time, waiting for each to be
+available before its dependents; modern
 `cargo publish` (1.66+) waits for registry availability before returning. **Skip any
 crate whose source is unchanged since its last published version** (a version-only
 bump does not require a re-publish, but a dependent may then keep the older
@@ -200,7 +240,7 @@ cargo publish -p keleusma-cli
 
 A crate version, once published, is **immutable** — it can be yanked, never replaced.
 
-## 9. Finalize and post-publish verification
+## 10. Finalize and post-publish verification
 
 - **Cut the GitHub Release from the tag.** A git tag is *not* a GitHub Release; the tag
   alone shows up under Tags but not under Releases. Create the Release with the
@@ -226,9 +266,16 @@ A crate version, once published, is **immutable** — it can be yanked, never re
 
 ## Hard-won lessons (the "do not repeat these")
 
-- **Never publish, and never merge to `main`, on a red CI run (step 6).** This is the
-  single rule that prevents a repeat. V0.2.1 shipped with four red CI jobs because the
-  local gate was treated as the gate; it is only a pre-check.
+- **Never publish, and never merge to `main`, on a red CI run (step 6).** V0.2.1
+  shipped with four red CI jobs because the local gate was treated as the gate; it is
+  only a pre-check.
+- **Never publish without explicit, current authorization (step 8).** The publish is
+  irreversible, so it is the maintainer's call, not the agent's initiative. A prior
+  "expedite," a general go-ahead given before the cut, authorization for a *previous*
+  release, or a request about a *different* artifact are none of them consent to push
+  *this* version. V0.2.2 was published on a stale "expedite" while the actual request
+  was only to cut the V0.2.1 GitHub Release. When in doubt, stop at the reversible
+  boundary (tag pushed, CI green, dry-runs clean) and ask.
 - **The local gate cannot replace CI.** It runs on one host and one toolchain, so it
   misses the cross-compilation jobs (a 32-bit `Value`-layout assertion), the
   feature-combination builds (`verify` without `floats`), and the latest-stable
