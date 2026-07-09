@@ -375,21 +375,60 @@ crossing the point of no return without cause.
 
 ## Rollback and contingency — after the point of no return
 
-The publish cannot be reversed, but a defective published release has a defined recovery.
-A crates.io version is immutable; the available tools are *yank* (hide from new
-resolution — existing pins still resolve) and *supersede* (publish a fixed higher
-version). Choose by severity:
+A publish cannot be reversed, so this is the *containment* arm of the process, reached only
+when the preflight has already failed to stop a defect. **It is not part of the normal
+cadence.** Do not let its existence relax the gates: an operating procedure that treats
+"ship, then yank" as routine quietly teaches that a green gate is optional — the moral
+hazard this whole document exists to prevent. Roll forward by default; yank only when a
+version is genuinely unfit.
 
-- **Broken build / unsound / wrong artifact:** `cargo yank --version X.Y.Z -p <crate>` for
-  each affected crate, immediately, to stop new dependents from selecting it. Yank is
-  reversible (`--undo`) and is the *containment* step, not the fix.
-- **The fix:** cut a superseding patch (`X.Y.Z+1`) through this entire procedure from step
-  0 — you cannot replace the bad version, only supersede it. State in its changelog what
-  it supersedes and why (as V0.2.2 did for V0.2.1's cross-target breakage).
-- **Git-surface only (tag or Release wrong, crates fine):** the tag and GitHub Release are
-  reversible — delete and re-cut. Do **not** yank sound crates to fix a git-surface error.
-- **Record it:** append the incident and its disposition to the Release Record so the next
-  releaser inherits the context.
+A crates.io version is immutable. The two tools are **supersede** (publish a fixed higher
+version) and **yank** (hide a version from *new* resolution; existing lockfiles still
+resolve it). They are not interchangeable — supersede is the fix, yank is only containment
+— and the yank is governed by a fitness test, not by the fact that a mistake occurred.
+
+### When to yank, and when not to
+
+Yank on *unfitness*, never on mere supersession or a cosmetically-red CI run. A version
+that still builds and behaves correctly on its supported configurations stays published
+even if a better one now exists; semver carries range dependents forward on its own.
+Over-yanking also erodes the signal — if a yank comes to mean "merely old," it stops
+meaning "broken or dangerous," and a wall of yanked versions reads as a troubled project.
+
+| Condition of the published version | Action |
+|---|---|
+| Fails to build on a supported target; unsound; violates its WCET/WCMU contract; a security defect; or published entirely in error | **Supersede, then yank** |
+| Merely superseded, or red on *cosmetic* CI (doc link, new lint) but builds and behaves correctly on supported configs | **Supersede only — do not yank** |
+| Git surface wrong (tag or Release), crates fine | Delete and re-cut the tag/Release; **do not yank sound crates** |
+
+V0.2.1 met the first row: it did not compile for the Cortex-M `no_std` targets, so it was
+yanked once V0.2.2 was live. V0.1.0 likewise, for a wrong MSRV that 0.1.1 corrected. A
+release that was merely *premature*, or red for a doc-link or lint reason but otherwise
+correct, would be the second row — supersede and leave in place.
+
+### Procedure
+
+1. **Publish the compatible fix first (supersede).** Cut `X.Y.Z+1` through this entire
+   procedure from step 0 — you cannot replace the bad version, only supersede it. The fix
+   must be **semver-compatible** with the bad version so range dependents adopt it
+   automatically; if it needs a breaking change, yanking the predecessor can strand
+   `^`-dependents who cannot cross the boundary, and that case needs deliberate handling,
+   not a reflexive yank. State in the fix's changelog what it supersedes and why (as V0.2.2
+   did for V0.2.1's cross-target breakage).
+2. **Then yank the defective version.** `cargo yank --version X.Y.Z <crate>` (the crate is
+   a positional argument; there is no `-p` for yank). Publishing the fix first guarantees
+   no range dependent is ever left with no installable version. The one exception is an
+   *actively dangerous* defect — security, unsoundness, data corruption — with an older
+   compatible fallback already published; there you may yank immediately to stop the
+   bleeding, accept the fallback, then supersede. Yank is reversible with `cargo yank
+   --undo` if issued in error.
+3. **Scope the yank to the defective crate and version only.** Never yank an artifact a
+   live good release still depends on. `keleusma-arena` 0.3.1 is the standing example: it
+   shipped in the V0.2.1 cohort but is *also* required by V0.2.2, so it must not be yanked.
+   Yank the crate that holds the defect, not the whole release cohort.
+4. **Record it.** Note the yank, its reason, and its replacement in the changelog, the
+   affected GitHub Release body, and the Release Record (§11), so a human landing on the
+   yanked version is directed forward.
 
 ## Hard-won lessons (the "do not repeat these")
 
