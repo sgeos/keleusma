@@ -7,9 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-08
+
+Purely additive over 0.3.0. Seven new public methods, no removals or changes, so
+existing 0.3.0 callers compile unchanged. This release is consumed by the parent
+`keleusma` runtime, which uses the ephemeral-address predicate and the fallible
+constructor; it was published because `keleusma` 0.2.1 depends on this surface.
+
 ### Added
 
 - `Arena::resize_persistent_capacity(new_size) -> Result<(), ResizeError>`, a preserving in-place resize of the persistent region. Unlike `resize_persistent`, which fully resets the dual-headed region, this preserves the persistent prefix's contents and relocates the dual-headed (bottom) region by the size delta. It errors without mutation on a dual-headed overlap or an oversize request, and advances the epoch so any handle into the old dual-headed region fails closed. It supports growing or shrinking a live persistent region, for example a REPL restoring a saved session image.
+- `Arena::try_with_capacity(capacity) -> Result<Self, AllocError>`, the fallible counterpart of `with_capacity`. Returns the allocation error rather than panicking when the backing buffer cannot be allocated, for hosts that must handle allocation failure without unwinding. Requires the `alloc` feature, like `with_capacity`.
+- `Arena::zero_persistent_range(start, len) -> Result<(), ResizeError>`, zeroes the sub-range `[start, start + len)` of the persistent region and errors without mutation on an out-of-range request. A narrower form of `zero_persistent`, which zeroes the whole region; it does not touch the dual-headed region, the bump pointers, or the epoch.
+- `Arena::addr_is_ephemeral(addr) -> bool`, reports whether an address falls in the ephemeral dual-headed region rather than the persistent prefix. Lets a caller decide whether a stored raw address is cleared at the next reset.
+- `ArenaHandle::as_non_null() -> NonNull<T>`, returns the raw non-null pointer backing the handle, for callers that need pointer access without going through `get`.
+- `ArenaHandle::len() -> usize` and `ArenaHandle::is_empty() -> bool`, length accessors for a handle to a slice or string, reading the fat-pointer length without dereferencing.
+
+### Tested
+
+- The existing 0.3.0 tests continue to pass unchanged; the additions are covered by the parent runtime's suites and the arena unit tests.
 
 ## [0.3.0] - 2026-05-19
 
