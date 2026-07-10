@@ -1,5 +1,7 @@
 # Guide
 
+**Languages / 言語**: [English](https://sgeos.github.io/keleusma/) · [日本語](https://sgeos.github.io/keleusma/ja/) — the Japanese translation is in progress and falls back to English where it is not yet translated. 日本語訳は作成中で、未訳の箇所は英語のままです。
+
 > **Navigation**: [Documentation Root](../../docs/README.md)
 
 Onboarding-oriented documentation for new users and embedders. Where the
