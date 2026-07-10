@@ -1,6 +1,6 @@
 # Instruction Set
 
-This chapter is the bytecode reference. It lists every instruction the Keleusma virtual machine executes, so the disassembly shown in the [playground](playground/) bytecode view has a place to be looked up. It reproduces the authoritative `docs/spec/INSTRUCTION_SET.md` from the repository.
+This chapter is the bytecode reference. It lists every instruction the Keleusma virtual machine executes, so the disassembly shown in the [playground](https://sgeos.github.io/keleusma/playground/) bytecode view has a place to be looked up. It reproduces the authoritative `docs/spec/INSTRUCTION_SET.md` from the repository.
 
 The Keleusma VM executes a stack-based bytecode using block-structured control flow. All instructions operate on a value stack. This document lists every instruction with its operands, behavior, and cost contribution to the WCET (worst-case execution time) and WCMU (worst-case memory usage) analyses.
 
