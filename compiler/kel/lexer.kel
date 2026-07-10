@@ -1,26 +1,128 @@
 // compiler/kel/lexer.kel — Stage 1 of the self-hosted compiler.
 //
-// SCAFFOLDING — not yet implemented (roadmap Step 1, migrated first).
+// Increment 1: a streaming byte tokenizer. Real Keleusma code that compiles and
+// verifies on the current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and
+// compiler/MILESTONES.md (roadmap Step 1).
 //
-// Contract: a `loop` function. The host hands source to the lexer as `[Byte; N]` and
-// resumes it; the lexer scans the bytes and yields one `Token` (see prelude.kel) per
-// token, ending with `TokenKind::Eof`. It is a finite-state byte scanner with a
-// static keyword table. No recursion is needed; a byte cursor plus line and column
-// live in the loop's `data` segment.
+// Model. Keleusma forbids unbounded inner loops in `fn` and `yield`, so the one
+// top-level `loop` IS the scan over the source: one byte is processed per
+// iteration and the in-progress token is assembled in the `private data` state,
+// which persists across the loop's per-iteration RESET. A completed token is
+// yielded when a token boundary is reached; intermediate bytes yield a PENDING
+// marker that the host skips. This is the recursion-free, work-at-a-time
+// discipline the whole pipeline uses.
 //
-// Byte-level work uses array indexing on the `[Byte; N]` source directly. The three
-// residual `Text` operations use host natives (resolved by R3.3, no surface change):
-//   use compiler::intern_bytes     // intern a byte slice -> Word index
-//   use compiler::text_from_bytes  // build a Text from bytes
-//   use compiler::text_concat      // concatenate two Text values
+// Source. The host places the source in the `shared data` byte array `src.bytes`
+// and its length in `src.len`, then drives the loop with resume. Byte work is
+// plain array indexing (R3.3); no `Text` native is needed for this increment.
 //
-// Validation gate (roadmap Step 1): every program in the regression corpus compiles
-// to byte-identical bytecode under Keleusma-lexer + Rust-parser + Rust-compiler as
-// under the all-Rust baseline. Wired in behind the CLI `--lexer keleusma` toggle.
-//
-// The real body scans one token per resume:
-//   1. skip whitespace and comments, advancing line/column;
-//   2. classify the byte at the cursor (letter -> identifier or keyword; digit ->
-//      integer or float; quote -> string literal; else -> punctuation);
-//   3. accumulate the lexeme, resolve keywords through the keyword table;
-//   4. yield the Token with its Span.
+// Token wire (increment 1). Each yielded token is a single Word, `kind + value*16`:
+//   kind 0 PENDING  no complete token this iteration; the host skips it
+//   kind 1 EOF      end of source; value 0
+//   kind 2 IDENT    identifier run; value = its byte length
+//   kind 3 INT      integer literal; value = its parsed value
+//   kind 4 PUNCT    single-byte punctuation; value = the byte
+// Spans, string interning, keyword resolution, and the richer `Token` struct in
+// prelude.kel land in later increments once struct-valued yields are wired.
+
+shared data src {
+    len: Word,
+    bytes: [Byte; 4096],
+}
+
+// The scanner's cross-iteration state. `kind` is the token being built: 0 none,
+// 2 identifier, 3 integer. `start` is the byte offset the current token began at
+// and `val` accumulates its length (identifier) or value (integer).
+private data st {
+    cursor: Word,
+    kind: Word,
+    start: Word,
+    val: Word,
+}
+
+// Byte-class predicates. Atomic total `fn`, so bounded by construction.
+fn is_digit(b: Word) -> Word {
+    if b >= 48 { if b <= 57 { 1 } else { 0 } } else { 0 }
+}
+
+fn is_alpha(b: Word) -> Word {
+    if b >= 97 {
+        if b <= 122 { 1 } else { 0 }
+    } else {
+        if b >= 65 {
+            if b <= 90 { 1 } else { 0 }
+        } else {
+            if b == 95 { 1 } else { 0 }
+        }
+    }
+}
+
+fn is_space(b: Word) -> Word {
+    if b == 32 { 1 } else {
+    if b == 9 { 1 } else {
+    if b == 10 { 1 } else {
+    if b == 13 { 1 } else { 0 } } } }
+}
+
+loop main(resume: Word) -> Word {
+    if st.cursor >= src.len {
+        // End of source: flush a token still being built, then report EOF.
+        if st.kind == 0 {
+            yield 1
+        } else {
+            let k = st.kind;
+            let v = st.val;
+            st.kind = 0;
+            yield k + v * 16
+        }
+    } else {
+        let b = src.bytes[st.cursor] as Word;
+        if st.kind == 2 {
+            // Extending an identifier, or ending it at a non-identifier byte.
+            if is_alpha(b) == 1 {
+                st.cursor = st.cursor + 1;
+                st.val = st.val + 1;
+                yield 0
+            } else {
+                let v = st.val;
+                st.kind = 0;
+                yield 2 + v * 16
+            }
+        } else {
+        if st.kind == 3 {
+            // Extending an integer, or ending it at a non-digit byte.
+            if is_digit(b) == 1 {
+                st.cursor = st.cursor + 1;
+                st.val = st.val * 10 + (b - 48);
+                yield 0
+            } else {
+                let v = st.val;
+                st.kind = 0;
+                yield 3 + v * 16
+            }
+        } else {
+            // No token in progress: start one, skip whitespace, or emit punctuation.
+            if is_space(b) == 1 {
+                st.cursor = st.cursor + 1;
+                yield 0
+            } else {
+            if is_alpha(b) == 1 {
+                st.kind = 2;
+                st.start = st.cursor;
+                st.val = 1;
+                st.cursor = st.cursor + 1;
+                yield 0
+            } else {
+            if is_digit(b) == 1 {
+                st.kind = 3;
+                st.start = st.cursor;
+                st.val = b - 48;
+                st.cursor = st.cursor + 1;
+                yield 0
+            } else {
+                st.cursor = st.cursor + 1;
+                yield 4 + b * 16
+            } } }
+        } }
+    }
+}

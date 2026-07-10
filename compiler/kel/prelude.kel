@@ -6,6 +6,12 @@
 // codegen stages and the Rust host driver, and will be refined during implementation.
 // Every stage yields values of these types; the host collects them and hands them to
 // the next stage.
+//
+// INCREMENT STATUS. The Stage 1 lexer (lexer.kel) is at increment 1 and yields a
+// transitional single-Word token encoding (`kind + value*16`, documented in
+// lexer.kel) rather than the richer `Token` struct below. The struct and enum shapes
+// here are the target once struct-valued yields, spans, string interning, and keyword
+// resolution are wired in later increments.
 
 // A source location, carried on every token and declaration for diagnostics.
 struct Span {
