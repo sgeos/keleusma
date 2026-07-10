@@ -162,6 +162,8 @@
       const EXAMPLES = {
         "Echo loop (run this, then Resume)":
           "loop main(value: Word) -> Word {\n  yield value\n}\n",
+        "Yield (non-atomic total)":
+          "yield main() -> Word {\n  yield 1;\n  yield 2;\n  3\n}\n",
         "Counter (loop + private data)":
           "private data state { total: Word }\n\n" +
           "fn add(a: Word, b: Word) -> Word {\n  a + b\n}\n\n" +
@@ -310,11 +312,12 @@
         const r = JSON.parse(json);
         let text;
         let lines = [];
+        const shown = r.value ?? r.detail ?? "?";
         if (r.state === "yielded") {
-          text = `⏸ Yielded: ${r.value}`;
+          text = `⏸ Yielded: ${shown}`;
           lines = yieldLines(src.value);
         } else if (r.state === "finished") {
-          text = `■ Finished: ${r.value}`;
+          text = `■ Finished: ${shown}`;
         } else if (r.state === "reset") {
           text = "↺ Reset (loop iteration boundary)";
         } else {

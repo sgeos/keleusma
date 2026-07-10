@@ -188,14 +188,16 @@ pub fn keywords() -> Vec<String> {
         .collect()
 }
 
-/// One step of a run: the coroutine state and, for a scalar `Word`, its value.
+/// One step of a run: the coroutine state and a formatted value.
 #[derive(Serialize)]
 struct StepResult {
     /// `"yielded"`, `"reset"`, `"finished"`, or `"error"`.
     state: &'static str,
-    /// The `Word` value yielded or returned, when it is a scalar integer.
-    value: Option<i64>,
-    /// A human-readable detail: an error, or the debug form of a non-scalar value.
+    /// The yielded or returned value, formatted for display: a scalar (`Word`,
+    /// `Byte`, `bool`, `Float`, or a `Fixed` raw scaled integer). `null` for a
+    /// composite value, whose debug form goes in `detail`.
+    value: Option<String>,
+    /// A human-readable detail: an error, or the debug form of a composite value.
     detail: Option<String>,
     /// How many inputs have been fed (the initial call plus each resume).
     step: usize,
@@ -321,19 +323,27 @@ fn step_result(state: Option<GenericVmState<i64, f64>>, step: usize) -> StepResu
 }
 
 fn scalar_step(state: &'static str, value: Value, step: usize) -> StepResult {
-    match value {
-        Value::Int(n) => StepResult {
-            state,
-            value: Some(n),
-            detail: None,
-            step,
-        },
-        other => StepResult {
-            state,
-            value: None,
-            detail: Some(format!("{other:?}")),
-            step,
-        },
+    // Format every scalar type, not just `Word`. A `Fixed` value carries only its
+    // scaled integer at runtime (the fraction bits are a type-level parameter that
+    // the value does not retain), so it is shown as a labelled raw value.
+    let display = match &value {
+        Value::Int(n) => Some(n.to_string()),
+        Value::Byte(b) => Some(b.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        Value::Float(f) => Some(f.to_string()),
+        Value::Fixed(raw) => Some(format!("{raw} (fixed-point raw)")),
+        _ => None,
+    };
+    let detail = if display.is_none() {
+        Some(format!("{value:?}"))
+    } else {
+        None
+    };
+    StepResult {
+        state,
+        value: display,
+        detail,
+        step,
     }
 }
 
@@ -407,13 +417,13 @@ mod tests {
         // call(5) -> yields 5
         let a: serde_json::Value = serde_json::from_str(&s.step(5)).unwrap();
         assert_eq!(a["state"], "yielded");
-        assert_eq!(a["value"], 5);
+        assert_eq!(a["value"], "5");
         // resume -> Reset (loop body end), then resume with 9 -> yields 9
         let b: serde_json::Value = serde_json::from_str(&s.step(7)).unwrap();
         assert_eq!(b["state"], "reset");
         let c: serde_json::Value = serde_json::from_str(&s.step(9)).unwrap();
         assert_eq!(c["state"], "yielded");
-        assert_eq!(c["value"], 9);
+        assert_eq!(c["value"], "9");
     }
 
     #[test]
@@ -422,6 +432,22 @@ mod tests {
         let mut s = Session::new("fn main() -> Word { 40 + 2 }\n".to_string());
         let v: serde_json::Value = serde_json::from_str(&s.step(0)).unwrap();
         assert_eq!(v["state"], "finished");
-        assert_eq!(v["value"], 42);
+        assert_eq!(v["value"], "42");
+    }
+
+    #[test]
+    fn session_runs_a_reentrant_yield_fn() {
+        // A non-atomic total (`yield`) fn yields twice, then returns; no Reset.
+        let mut s =
+            Session::new("yield main() -> Word {\n  yield 1;\n  yield 2;\n  3\n}\n".to_string());
+        let a: serde_json::Value = serde_json::from_str(&s.step(0)).unwrap();
+        assert_eq!(a["state"], "yielded");
+        assert_eq!(a["value"], "1");
+        let b: serde_json::Value = serde_json::from_str(&s.step(0)).unwrap();
+        assert_eq!(b["state"], "yielded");
+        assert_eq!(b["value"], "2");
+        let c: serde_json::Value = serde_json::from_str(&s.step(0)).unwrap();
+        assert_eq!(c["state"], "finished");
+        assert_eq!(c["value"], "3");
     }
 }
