@@ -1,0 +1,26 @@
+[package]
+name = "keleusma-wasm"
+version = "0.2.2"
+edition = "2024"
+license = "0BSD"
+description = "WebAssembly bindings for the Keleusma compiler, powering the browser playground"
+repository = "https://github.com/sgeos/keleusma"
+publish = false
+
+# Detached from the parent workspace, like keleusma-lsp and examples/rtos. Keeps
+# wasm-bindgen and serde out of the core no_std workspace's dependency graph. The
+# core keleusma crate is no_std + alloc, which compiles small and clean to
+# wasm32-unknown-unknown; this crate is the thin std/wasm-bindgen wrapper.
+[workspace]
+
+[lib]
+# cdylib for the wasm artifact; rlib so the logic can be unit-tested natively.
+crate-type = ["cdylib", "rlib"]
+
+# Default features (compile, verify, floats) are all no_std-clean; the
+# std-pulling features (signatures, encryption, shell) are opt-in and omitted.
+[dependencies]
+keleusma = { path = ".." }
+wasm-bindgen = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

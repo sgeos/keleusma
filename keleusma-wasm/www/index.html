@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Keleusma Playground</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 60rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        line-height: 1.5;
+      }
+      h1 { margin-bottom: 0.25rem; }
+      p.tagline { margin-top: 0; opacity: 0.8; }
+      textarea {
+        width: 100%;
+        min-height: 16rem;
+        font-family: ui-monospace, monospace;
+        font-size: 0.95rem;
+        padding: 0.75rem;
+        box-sizing: border-box;
+      }
+      #status { font-weight: 600; margin: 0.75rem 0; }
+      .ok { color: #197a19; }
+      .err { color: #b00020; }
+      table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; }
+      th, td { border: 1px solid rgba(128, 128, 128, 0.4); padding: 0.35rem 0.6rem; text-align: right; }
+      th:first-child, td:first-child { text-align: left; }
+      ul.diagnostics { padding-left: 1.2rem; }
+      code { font-family: ui-monospace, monospace; }
+      footer { margin-top: 2rem; opacity: 0.7; font-size: 0.9rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Keleusma Playground</h1>
+    <p class="tagline">
+      A total-functional stream processor with <strong>definitive worst-case
+      execution time and memory bounds</strong>. Edit below; the program is
+      compiled and verified in your browser, and its per-chunk WCET and WCMU
+      bounds are reported.
+    </p>
+
+    <textarea id="src" spellcheck="false" aria-label="Keleusma source">
+fn add(a: Word, b: Word) -> Word {
+  a + b
+}
+
+fn main() -> Word {
+  let x = 40;
+  let y = 2;
+  add(x, y)
+}
+</textarea>
+
+    <p id="status">Loading compiler…</p>
+    <div id="results"></div>
+
+    <footer>
+      Runs the Keleusma compiler and verifier compiled to WebAssembly. Static
+      analysis only; the program is not executed. See the
+      <a href="https://github.com/sgeos/keleusma">project repository</a>.
+    </footer>
+
+    <script type="module">
+      import init, { check } from "../pkg/keleusma_wasm.js";
+
+      const status = document.getElementById("status");
+      const results = document.getElementById("results");
+      const src = document.getElementById("src");
+
+      function escapeHtml(s) {
+        return s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+      }
+
+      function render(json) {
+        const r = JSON.parse(json);
+        if (r.ok) {
+          status.className = "ok";
+          status.textContent = "✓ Compiles and verifies. Worst-case bounds:";
+          const rows = r.bounds
+            .map(
+              (b) =>
+                `<tr><td><code>${escapeHtml(b.chunk)}</code></td>` +
+                `<td>${b.wcet_cycles ?? "—"}</td>` +
+                `<td>${b.wcmu_stack_bytes ?? "—"}</td>` +
+                `<td>${b.wcmu_heap_bytes ?? "—"}</td></tr>`,
+            )
+            .join("");
+          results.innerHTML = r.bounds.length
+            ? `<table><thead><tr><th>Chunk</th><th>WCET (cycles)</th>` +
+              `<th>WCMU stack (bytes)</th><th>WCMU heap (bytes)</th></tr></thead>` +
+              `<tbody>${rows}</tbody></table>`
+            : "";
+        } else {
+          status.className = "err";
+          status.textContent = "✗ Rejected:";
+          results.innerHTML =
+            `<ul class="diagnostics">` +
+            r.diagnostics
+              .map((d) => `<li><code>${d.line}:${d.column}</code> ${escapeHtml(d.message)}</li>`)
+              .join("") +
+            `</ul>`;
+        }
+      }
+
+      function run() {
+        try {
+          render(check(src.value));
+        } catch (e) {
+          status.className = "err";
+          status.textContent = "Internal error: " + e;
+          results.innerHTML = "";
+        }
+      }
+
+      let timer;
+      src.addEventListener("input", () => {
+        clearTimeout(timer);
+        timer = setTimeout(run, 250);
+      });
+
+      init().then(() => {
+        status.className = "";
+        run();
+      });
+    </script>
+  </body>
+</html>
