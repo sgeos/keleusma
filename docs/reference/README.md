@@ -12,3 +12,4 @@ For authoritative specifications (grammar, type system, standard library, instru
 |----------|-------------|
 | [GLOSSARY.md](./GLOSSARY.md) | Key terminology and definitions |
 | [RELATED_WORK.md](./RELATED_WORK.md) | Academic and industrial related work with formal bibliography |
+| [INCREMENTAL_SELF_HOSTING.md](./INCREMENTAL_SELF_HOSTING.md) | A project-agnostic method for self-hosting a compiler by backward, stage-at-a-time migration; usable by any language author |

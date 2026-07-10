@@ -11,6 +11,11 @@ the load-bearing part.
 
 ## Migration strategy
 
+This section is the Keleusma instantiation of a general, project-agnostic method,
+[Incremental Self-Hosting by Backward Migration](../docs/reference/INCREMENTAL_SELF_HOSTING.md),
+which states the same strategy without Keleusma nouns for any language author to reuse.
+The subsections below apply it here.
+
 The self-hosted compiler has three streaming stages, lexer then parser then codegen,
 and it is ported from the last stage to the first. Codegen goes first, then the parser,
 then the lexer. The reason is risk. The emit and wire boundary is the wall that stalls
