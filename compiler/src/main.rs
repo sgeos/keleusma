@@ -69,8 +69,9 @@ fn status() {
         println!("  step {}: {name:<8} {path:<20} [{state}]", i + 1);
     }
     println!();
-    println!("status: porting backward, codegen first. Codegen increment 15, a");
-    println!("recursion-free work-stack walk that compiles nestable blocks of `let`");
+    println!("status: porting backward, codegen first. Codegen increment 16, a");
+    println!("recursion-free work-stack walk (node dispatch factored into per-kind");
+    println!("subroutines) that compiles nestable blocks of `let`");
     println!("bindings over the binary integer arithmetic set (+ - * / %), the six");
     println!("comparison operators, unary `not`, short-circuit `andalso`/`orelse`,");
     println!("`if`/`else` structured control flow with stage-resolved jump targets,");
