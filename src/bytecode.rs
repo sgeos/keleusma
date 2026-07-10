@@ -1642,6 +1642,31 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     /// when the runtime's word or float width is narrower than
     /// the bytecode's; programs whose constants do not fit are
     /// rejected at load time by the bytecode-header width check.
+    /// Materialize a **scalar** constant into a runtime value. Used to
+    /// initialize private data slots at load, the `.data`-section model:
+    /// the compiler bakes one scalar [`ConstValue`] per zero-initializable
+    /// private slot (its `= literal` initializer or the type's zero) and the
+    /// VM writes it through this. Composite variants are never baked into a
+    /// private slot (they retain write-before-read) and map to `Unit`, so this
+    /// never allocates or touches the arena. A `StaticStr` clones its bytes
+    /// onto the global heap rather than resting on rodata; private data does
+    /// not currently zero-initialize `Text`, so this arm is defensive only.
+    pub fn scalar_from_const(c: &ConstValue) -> Self {
+        match c {
+            ConstValue::Unit => Self::Unit,
+            ConstValue::Bool(b) => Self::Bool(*b),
+            ConstValue::Int(i) => Self::Int(W::from_i64_wrap(*i)),
+            ConstValue::Byte(b) => Self::Byte(*b),
+            ConstValue::Fixed(i) => Self::Fixed(W::from_i64_wrap(*i)),
+            #[cfg(feature = "floats")]
+            ConstValue::Float(f) => Self::Float(F::from_f64(*f)),
+            ConstValue::StaticStr(s) => Self::StaticStr(s.clone()),
+            // Composite constants are never baked into a private slot; the slot
+            // keeps the write-before-read contract and initializes to `Unit`.
+            _ => Self::Unit,
+        }
+    }
+
     pub fn from_const_archived(
         c: &ArchivedConstValue,
         word_bytes: usize,
@@ -3069,8 +3094,11 @@ pub struct PrivateCompositeSlot {
 /// Data segment layout declaration.
 ///
 /// Defines the fixed-size, fixed-layout set of persistent values that
-/// survive across RESET boundaries. The host initializes data slots
-/// before execution begins. Scripts read and write slots by index.
+/// survive across RESET boundaries. `shared` slots are host-initialized
+/// before execution begins and are read and written by index across the
+/// host boundary. `private` slots are invisible to the host and are
+/// initialized at load from [`Self::private_init`], the `.data`-section
+/// model; scripts read and write them by index.
 #[derive(Debug, Clone, Archive, Serialize, Deserialize)]
 pub struct DataLayout {
     /// Named slots in declaration order. Slot index corresponds to
@@ -3089,6 +3117,18 @@ pub struct DataLayout {
     /// from this table is an empty (zero-byte) composite that needs no pool
     /// home.
     pub private_composite_layout: Vec<PrivateCompositeSlot>,
+    /// Load-time initial value of each private slot, in private-slot order
+    /// (parallel to the private-slot suffix of `slots`, so entry `i`
+    /// initializes the `i`-th private slot). A scalar slot (`Word`, `Byte`,
+    /// `Bool`, `Fixed`, `Float`) carries its declared `= literal` initializer
+    /// or the type's zero; a composite or `Text` slot carries
+    /// [`ConstValue::Unit`], preserving the write-before-read contract for
+    /// those. Empty when the module has no private data, so the wire form is
+    /// unchanged for such modules. Unlike shared data, private data is
+    /// invisible to the host and initialized here, at load, exactly like an
+    /// assembler `.data` section; the values persist across RESET and are not
+    /// re-applied.
+    pub private_init: Vec<ConstValue>,
 }
 
 /// A compiled function.

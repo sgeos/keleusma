@@ -3166,19 +3166,29 @@ pub fn compile_with_options(
             DataVisibility::Shared | DataVisibility::Private => {
                 for field in &decl.fields {
                     if field.initializer.is_some() {
-                        return Err(CompileError {
-                            message: format!(
-                                "{} data field `{}.{}` has an initializer; only `const data` fields admit initializers",
-                                match decl.visibility {
-                                    DataVisibility::Shared => "shared",
-                                    DataVisibility::Private => "private",
+                        // Private scalar fields admit a `= literal` initializer
+                        // (the `.data`-section model): the value is baked and
+                        // written at load. Shared fields never do (the host
+                        // initializes them), and composite or `Text` private
+                        // fields do not yet (they retain write-before-read).
+                        let admits = matches!(decl.visibility, DataVisibility::Private)
+                            && matches!(&field.type_expr, TypeExpr::Prim(p, _) if prim_zero(p).is_some());
+                        if !admits {
+                            return Err(CompileError {
+                                message: match decl.visibility {
+                                    DataVisibility::Shared => format!(
+                                        "shared data field `{}.{}` has an initializer; shared data is host-initialized, so its fields do not admit `= literal` initializers",
+                                        decl.name, field.name
+                                    ),
+                                    DataVisibility::Private => format!(
+                                        "private data field `{}.{}` has an initializer, but only scalar private fields (`Word`, `Byte`, `Bool`, `Fixed`, `Float`) admit `= literal` initializers; a composite private field must be written before it is read",
+                                        decl.name, field.name
+                                    ),
                                     DataVisibility::Const => unreachable!(),
                                 },
-                                decl.name,
-                                field.name
-                            ),
-                            span: field.span,
-                        });
+                                span: field.span,
+                            });
+                        }
                     }
                 }
             }
@@ -3198,6 +3208,9 @@ pub fn compile_with_options(
     let mut data_fields: BTreeMap<String, Vec<(String, u16)>> = BTreeMap::new();
     let mut shared_slots: Vec<DataSlot> = Vec::new();
     let mut private_slots: Vec<DataSlot> = Vec::new();
+    // Load-time initial value of each private slot, in private-slot order,
+    // parallel to `private_slots`. Filled only during the private pass.
+    let mut private_init: Vec<crate::bytecode::ConstValue> = Vec::new();
     let mut data_slot_idx: u16 = 0;
     // Two-pass loop. Pass 0 processes shared declarations; pass 1
     // processes private declarations. The slot index counter is
@@ -3260,6 +3273,12 @@ pub fn compile_with_options(
                         ),
                         span: field.span,
                     })?;
+                // Bake the load-time initial value(s) for private slots, in the
+                // same slot order the slots were pushed, so `private_init[i]`
+                // initializes the `i`-th private slot.
+                if pass_visibility == DataVisibility::Private {
+                    private_init.extend(private_init_for_field(decl.name.as_str(), field)?);
+                }
             }
             data_fields.insert(decl.name.clone(), fields);
         }
@@ -3280,6 +3299,7 @@ pub fn compile_with_options(
             slots: data_layout_slots,
             shared_layout: Vec::new(),
             private_composite_layout: Vec::new(),
+            private_init,
         })
     };
 
@@ -4635,6 +4655,78 @@ fn slots_for_data_type(type_expr: &TypeExpr) -> u16 {
             total.min(u16::MAX as u32) as u16
         }
         _ => 1,
+    }
+}
+
+/// Load-time zero [`ConstValue`] for a scalar primitive that a private data
+/// slot can be initialized to, or `None` for `Text` (and, when the `floats`
+/// feature is off, `Float`), which retain the write-before-read contract and
+/// initialize to `Unit`.
+fn prim_zero(p: &PrimType) -> Option<crate::bytecode::ConstValue> {
+    use crate::bytecode::ConstValue;
+    Some(match p {
+        PrimType::Word => ConstValue::Int(0),
+        PrimType::Byte => ConstValue::Byte(0),
+        PrimType::Bool => ConstValue::Bool(false),
+        PrimType::Fixed(_) => ConstValue::Fixed(0),
+        #[cfg(feature = "floats")]
+        PrimType::Float => ConstValue::Float(0.0),
+        // `Text` (and `Float` without the feature) is not zero-initialized.
+        _ => return None,
+    })
+}
+
+/// Innermost scalar-element zero for an array element type, or `None` if the
+/// element bottoms out in a composite. Iterative so loop termination is
+/// verifiable by inspection: each step strips one `Array` layer.
+fn scalar_array_elem_zero(mut elem: &TypeExpr) -> Option<crate::bytecode::ConstValue> {
+    loop {
+        match elem {
+            TypeExpr::Prim(p, _) => return prim_zero(p),
+            TypeExpr::Array(inner, _, _) => elem = inner,
+            _ => return None,
+        }
+    }
+}
+
+/// Per-slot load-time initial values for a private data field, one entry per
+/// slot the field occupies (`slots_for_data_type`). A scalar field carries its
+/// `= literal` initializer or the primitive zero; a scalar array carries the
+/// element zero in every slot; every other shape carries `Unit`, preserving
+/// write-before-read for composite private slots.
+fn private_init_for_field(
+    data_name: &str,
+    field: &DataFieldDecl,
+) -> Result<Vec<crate::bytecode::ConstValue>, CompileError> {
+    use crate::bytecode::ConstValue;
+    let n = slots_for_data_type(&field.type_expr) as usize;
+    match &field.type_expr {
+        TypeExpr::Prim(p, _) => {
+            // A scalar occupies exactly one slot. A non-zero-initializable
+            // scalar (`Text`) keeps `Unit`; the initializer rejection above has
+            // already ensured such a field carries no `= literal`.
+            match prim_zero(p) {
+                Some(zero) => {
+                    let cv = match &field.initializer {
+                        Some(init) => const_value_from_literal_for_field(
+                            init,
+                            &field.type_expr,
+                            data_name,
+                            &field.name,
+                            field.span,
+                        )?,
+                        None => zero,
+                    };
+                    Ok(alloc::vec![cv])
+                }
+                None => Ok(alloc::vec![ConstValue::Unit; n]),
+            }
+        }
+        TypeExpr::Array(elem, _, _) => match scalar_array_elem_zero(elem) {
+            Some(zero) => Ok(alloc::vec![zero; n]),
+            None => Ok(alloc::vec![ConstValue::Unit; n]),
+        },
+        _ => Ok(alloc::vec![ConstValue::Unit; n]),
     }
 }
 

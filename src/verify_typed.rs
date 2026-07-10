@@ -1381,6 +1381,7 @@ mod tests {
                 len: 0,
             }],
             private_composite_layout: Vec::new(),
+            private_init: Vec::new(),
         });
         assert!(matches!(
             typed_check_module(&m, 8, 8),
@@ -1404,6 +1405,7 @@ mod tests {
                 len: 0,
             }],
             private_composite_layout: Vec::new(),
+            private_init: Vec::new(),
         });
         assert!(typed_check_module(&m, 8, 8).is_ok());
     }
@@ -1435,6 +1437,7 @@ mod tests {
                 len: 0,
             }],
             private_composite_layout: Vec::new(),
+            private_init: Vec::new(),
         });
         assert!(matches!(
             typed_check_module(&m, 8, 8),
@@ -1467,6 +1470,7 @@ mod tests {
                 len: 0,
             }],
             private_composite_layout: Vec::new(),
+            private_init: Vec::new(),
         });
         assert!(matches!(
             typed_check_module(&m, 8, 8),
@@ -1499,6 +1503,7 @@ mod tests {
                 slots: slots.clone(),
                 shared_layout: Vec::new(),
                 private_composite_layout: table,
+                private_init: Vec::new(),
             });
             m
         };

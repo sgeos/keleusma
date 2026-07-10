@@ -4385,6 +4385,7 @@ mod tests {
                 }],
                 shared_layout: Vec::new(),
                 private_composite_layout: Vec::new(),
+                private_init: Vec::new(),
             }),
         };
         let err = verify(&module).unwrap_err();
@@ -4459,6 +4460,7 @@ mod tests {
                     },
                 ],
                 private_composite_layout: Vec::new(),
+                private_init: Vec::new(),
             }),
         };
         assert!(verify(&module).is_ok());

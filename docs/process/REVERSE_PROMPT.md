@@ -8,7 +8,19 @@ AI to Human communication channel.
 
 ## Last Updated
 
-**Date**: 2026-07-08 (session 22)
+**Date**: 2026-07-09 (session 23)
+
+**PRIVATE-DATA `.data`-SECTION LOAD-TIME INITIALIZATION landed on `v0.2.3`; committed, merged to `main`, deployed to the playground.**
+
+Reported from the browser playground: the "Counter (loop + private data)" example faulted with `Op::CheckedAdd got Int and Unit`. Root cause: a private scalar slot read before its first write observed the `Unit` sentinel that both VM constructors wrote into every private slot. Fix: private data is now script-initialized at load, the assembler `.data`-section model, invisible to the host. `DataLayout` gained `private_init: Vec<ConstValue>` in private-slot order; the compiler bakes each scalar private slot's `= literal` initializer or the type's zero, zero-fills scalar arrays element-wise, and leaves composite/`Text` slots `Unit` (write-before-read retained). Private scalar fields now admit `= literal`; `shared` and composite private fields still reject one. Both constructors write the baked values; they persist across RESET and are not re-applied.
+
+**Verification.** Full gate green on default, `--features signatures`, and `--all-features`; clippy `--tests --all-features -D warnings` and fmt clean; the wasm playground crate compiles against the updated core. 17 new `tests/persistent_data.rs` tests, including the exact Counter across a RESET (yields 5 then 8). Golden fixture regenerated 308→316 bytes; the shared-rejection test's message assertion updated. Docs: `LANGUAGE_DESIGN.md`, `GRAMMAR.md`, `WIRE_FORMAT.md`.
+
+**Flags for the next session.** (1) Wire format changed without a `BYTECODE_VERSION` bump, per the operator's locked "additive, no bump" decision; a stale artifact fails rkyv bytecheck (safe rejection). (2) Scope is scalars only; composite private slots still require write-before-read and would need arena flat-packing at construction to zero-init. (3) The private-data "never mutated → use const data" lint is retained and still correct; a purely-read private block is const-equivalent.
+
+---
+
+### Prior handoff (session 22): DELTA RE-AUDIT (`f7a9ace`) REMEDIATION
 
 **DELTA RE-AUDIT (`f7a9ace`) REMEDIATION COMPLETE, MERGED to `v0.2.1`, PUSHED to `origin` at `7dafd42`. This entry is the handoff for the next auditor.**
 

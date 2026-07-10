@@ -1098,6 +1098,14 @@ scalar_literal     = [ '-' ] integer_lit
                    | 'true' | 'false'
                    | string_lit
                    | '(' ')'
+(* Initializer admissibility by visibility. A `const data` field requires an
+   initializer. A `private data` field admits an initializer only when its type
+   is a scalar (`Word`, `Byte`, `bool`, `Fixed`, `Float`); the value is baked
+   into the module and written at load, the `.data`-section model, and a scalar
+   private field with no initializer loads as the type's zero. A composite
+   private field must be written before it is read and admits no initializer. A
+   `shared data` field never admits an initializer because the host supplies its
+   value. *)
 
 (* Types *)
 type_expr       = prim_type | named_type | tuple_type | array_type | option_type

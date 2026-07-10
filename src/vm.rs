@@ -2019,10 +2019,25 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         }
         if private_count > 0 {
             let base = arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
+            // Private slots initialize from the module's `.data`-section
+            // initializer table (scalar zero or `= literal`); a slot with no
+            // entry, or a module predating the table, falls back to `Unit`.
+            let word_bytes = (1usize << archived.word_bits_log2) / 8;
+            let float_bytes = (1usize << archived.float_bits_log2) / 8;
+            let inits = archived
+                .data_layout
+                .as_ref()
+                .map(|dl| dl.private_init.as_slice());
             for i in 0..private_count as usize {
+                let value = match inits.and_then(|s| s.get(i)) {
+                    Some(cv) => {
+                        crate::bytecode::value_from_archived::<W, F>(cv, word_bytes, float_bytes)
+                    }
+                    None => crate::bytecode::GenericValue::Unit,
+                };
                 // SAFETY: same justification as in `Vm::construct`.
                 unsafe {
-                    base.add(i).write(crate::bytecode::GenericValue::Unit);
+                    base.add(i).write(value);
                 }
             }
         }
@@ -2189,23 +2204,33 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 module.persistent_composite_bytes,
             )));
         }
-        // Initialise each private slot to crate::bytecode::GenericValue::Unit via
-        // `ptr::write` so the bytes hold a valid Value before
-        // any subsequent reader clones or any subsequent writer
-        // drops the old occupant. The arena's persistent region
-        // is freshly zeroed when first resized, but those zero
-        // bytes are not a valid `Value`, so write through `write`
-        // not assignment.
+        // Initialise each private slot from the module's `.data`-section
+        // initializer table via `ptr::write` so the bytes hold a valid Value
+        // before any subsequent reader clones or any subsequent writer drops
+        // the old occupant. The arena's persistent region is freshly zeroed
+        // when first resized, but those zero bytes are not a valid `Value`, so
+        // write through `write` not assignment. A scalar slot receives its
+        // baked zero or `= literal`; a composite slot, a slot with no entry, or
+        // a module predating the table falls back to `Unit` (write-before-read).
         if private_count > 0 {
             let base = arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
+            let inits = module
+                .data_layout
+                .as_ref()
+                .map(|dl| dl.private_init.as_slice())
+                .unwrap_or(&[]);
             for i in 0..private_count as usize {
+                let value = match inits.get(i) {
+                    Some(cv) => crate::bytecode::GenericValue::<W, F>::scalar_from_const(cv),
+                    None => crate::bytecode::GenericValue::Unit,
+                };
                 // SAFETY: `i` is within the slot count just
                 // verified to fit in the persistent capacity; the
                 // arena owns the buffer for the VM's lifetime;
                 // `Value` is properly aligned at every multiple
                 // of its size on the 16-byte-aligned buffer base.
                 unsafe {
-                    base.add(i).write(crate::bytecode::GenericValue::Unit);
+                    base.add(i).write(value);
                 }
             }
         }
@@ -10913,7 +10938,7 @@ mod tests {
         // Layout: 64-byte framing header + opcode stream (8 bytes:
         // PushImmediate(5) + Return as 4-byte records) + empty
         // operand pool + rkyv-archived WireAuxBody + 4-byte CRC.
-        // Total length: 308 bytes.
+        // Total length: 316 bytes.
         //
         // The aux body grew by the optional per-chunk
         // `WireChunk::debug_pool_bytes` field added for B29 (strippable
@@ -10943,8 +10968,8 @@ mod tests {
         // 308. Per B28 the format may change freely without a BYTECODE_VERSION
         // bump (no production traction; programs are recompiled).
         let expected: alloc::vec::Vec<u8> = alloc::vec![
-            75, 69, 76, 69, 1, 0, 64, 0, 52, 1, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 232, 0,
+            75, 69, 76, 69, 1, 0, 64, 0, 60, 1, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 240, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 159, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 97, 105, 110, 255, 255, 255, 255, 200, 255, 255, 255,
@@ -10952,9 +10977,10 @@ mod tests {
             0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
             3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 176, 255, 255, 255, 1, 0, 0, 0, 224, 255,
             255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 152, 255, 255, 255, 0, 0, 0, 0, 144, 255, 255,
-            255, 1, 0, 0, 0, 160, 255, 255, 255, 0, 0, 0, 0, 190, 251, 115, 118,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 144, 255, 255, 255, 0,
+            0, 0, 0, 136, 255, 255, 255, 1, 0, 0, 0, 152, 255, 255, 255, 0, 0, 0, 0, 122, 91, 139,
+            23
         ];
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
@@ -13146,7 +13172,7 @@ mod tests {
         let program = parse(&tokens).expect("parse");
         let err = compile(&program).expect_err("compile should reject");
         assert!(
-            err.message.contains("initializer") && err.message.contains("const data"),
+            err.message.contains("shared data field") && err.message.contains("host-initialized"),
             "unexpected error: {}",
             err.message
         );

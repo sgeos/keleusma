@@ -198,3 +198,159 @@ fn private_array_of_struct_survives_reset() {
         other => panic!("iter 2 expected Yielded({want}), got {:?}", other),
     }
 }
+
+// --- Private-data `.data`-section load-time initialization ---------------
+//
+// A private scalar slot initializes at load to its declared `= literal` or the
+// type's zero, exactly like an assembler `.data` section, invisible to the
+// host. This makes read-before-write on a private scalar well-defined (it reads
+// the zero) rather than faulting on the old `Unit` sentinel. Composite private
+// slots keep the write-before-read contract (they initialize to `Unit`).
+
+/// Compile a program whose entry is a zero-argument `loop` and drive one
+/// iteration, returning the yielded `Word`. Mirrors `run_word` for the stream
+/// entry shape used by the counter idiom.
+fn compile_ok(src: &str) -> keleusma::bytecode::Module {
+    compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile")
+}
+
+// Each program below both reads and writes its private block, so the
+// "private data is never mutated; use const data" lint is satisfied; the
+// return value is the value *read before the write*, which is precisely the
+// load-time `.data` initialization under test.
+
+#[test]
+fn private_scalar_reads_zero_before_write() {
+    // The exact playground "Counter" bug: reading a private `Word` before any
+    // write must observe 0, not a `Unit` type fault.
+    let src = "private data d { total: Word }\n\
+               fn main() -> Word { let seen = d.total; d.total = 1; seen }";
+    assert_eq!(run_word(src), 0);
+}
+
+#[test]
+fn private_scalar_accumulates_from_a_zero_start() {
+    // Read-add-write against the zero-initialized slot within one call. The RHS
+    // reads the load-time zero, so the stored (and returned) value is 5.
+    let src = "private data d { total: Word }\n\
+               fn main() -> Word { d.total = d.total + 5; d.total }";
+    assert_eq!(run_word(src), 5);
+}
+
+#[test]
+fn private_scalar_explicit_initializer_is_baked() {
+    // An explicit `= literal` on a private scalar field is the load-time value.
+    let src = "private data d { total: Word = 42 }\n\
+               fn main() -> Word { let seen = d.total; d.total = 0; seen }";
+    assert_eq!(run_word(src), 42);
+}
+
+#[test]
+fn private_byte_reads_zero_before_write() {
+    let src = "private data d { b: Byte }\n\
+               fn main() -> Word { let seen = d.b as Word; d.b = 1 as Byte; seen }";
+    assert_eq!(run_word(src), 0);
+}
+
+#[test]
+fn private_bool_reads_false_before_write() {
+    let src = "private data d { flag: bool }\n\
+               fn main() -> Word { let seen = if d.flag { 1 } else { 0 }; d.flag = true; seen }";
+    assert_eq!(run_word(src), 0);
+}
+
+#[test]
+fn private_scalar_array_reads_zero_before_write() {
+    // Every element slot of a scalar array initializes to the element zero.
+    let src = "private data d { xs: [Word; 3] }\n\
+               fn main() -> Word { let sum = d.xs[0] + d.xs[1] + d.xs[2]; d.xs[0] = 1; sum }";
+    assert_eq!(run_word(src), 0);
+}
+
+#[test]
+fn private_scalar_zero_init_survives_the_zero_copy_path() {
+    // The zero-copy `view_bytes_zero_copy` constructor initializes private
+    // slots from the archived `.data` table, matching the owned-`Module` path.
+    let src = "private data d { total: Word = 9 }\n\
+               fn main() -> Word { let seen = d.total; d.total = 0; seen }";
+    let module = compile_ok(src);
+    let bytes = module.to_bytes().expect("serialize");
+    let mut aligned: rkyv::util::AlignedVec<8> = rkyv::util::AlignedVec::with_capacity(bytes.len());
+    aligned.extend_from_slice(&bytes);
+    // Persistent region must hold the private-slot array; size it from the
+    // owned module before it is consumed by serialization above (already done).
+    let need = required_persistent_capacity_for(&compile_ok(src));
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize_persistent");
+    let mut vm = unsafe { Vm::view_bytes_zero_copy(aligned.as_slice(), &arena) }.expect("view");
+    match vm.call(&[]).expect("call") {
+        VmState::Finished(Value::Int(n)) => assert_eq!(n, 9),
+        other => panic!("expected Int(9), got {:?}", other),
+    }
+}
+
+#[test]
+fn shared_field_initializer_is_rejected() {
+    // Shared data is host-initialized; a `= literal` on a shared field is an
+    // error (only private scalar fields admit initializers).
+    let src = "shared data d { total: Word = 1 }\n\
+               fn main() -> Word { 0 }";
+    let err = compile(&parse(&tokenize(src).expect("lex")).expect("parse"))
+        .expect_err("shared initializer must be rejected");
+    assert!(
+        err.message.contains("shared data field") && err.message.contains("host-initialized"),
+        "unexpected error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn private_composite_field_initializer_is_rejected() {
+    // A composite private field keeps write-before-read; an initializer on it
+    // is rejected (only scalar private fields admit `= literal`).
+    let src = "struct Point { x: Word, y: Word }\n\
+               private data d { p: Point = Point { x: 1, y: 2 } }\n\
+               fn main() -> Word { 0 }";
+    let err = compile(&parse(&tokenize(src).expect("lex")).expect("parse"))
+        .expect_err("composite private initializer must be rejected");
+    assert!(
+        err.message.contains("private data field") && err.message.contains("scalar"),
+        "unexpected error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn counter_loop_accumulates_from_zero_initialized_private_scalar() {
+    // The exact playground "Counter" scenario: a `loop` whose first iteration
+    // reads a private scalar before writing it. The read observes the load-time
+    // zero, so `add(value, state.total)` is well-defined on iteration one, and
+    // the accumulated total persists across the loop-body RESET.
+    let src = "private data state { total: Word }\n\
+               fn add(a: Word, b: Word) -> Word { a + b }\n\
+               loop main(value: Word) -> Word { \
+                   state.total = add(value, state.total); \
+                   yield state.total \
+               }";
+    let m = compile_ok(src);
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize_persistent");
+    let mut vm = Vm::new(m, &arena).expect("verify");
+    // Iteration 1: total = add(5, 0) = 5.
+    match vm.call(&[Value::Int(5)]).expect("call") {
+        VmState::Yielded(Value::Int(n)) => assert_eq!(n, 5),
+        other => panic!("iter 1 expected Yielded(5), got {:?}", other),
+    }
+    // Resume past the yield to the loop-body RESET.
+    match vm.resume(Value::Int(0)).expect("resume") {
+        VmState::Reset => {}
+        other => panic!("expected Reset at loop body end, got {:?}", other),
+    }
+    // Iteration 2 restarts with value = 3: total = add(3, 5) = 8, proving the
+    // private scalar survived the RESET and accumulated from the zero start.
+    match vm.resume(Value::Int(3)).expect("resume") {
+        VmState::Yielded(Value::Int(n)) => assert_eq!(n, 8, "private scalar must accumulate"),
+        other => panic!("iter 2 expected Yielded(8), got {:?}", other),
+    }
+}
