@@ -1,30 +1,39 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
-// Increment 5: the constant pool deduplicates. Increment 4 had the stage own an
-// append-only pool with one entry per literal occurrence, so it matched the
-// reference only for bodies whose literals were all distinct. The reference
-// compiler interns constants (compiler.rs `add_const_value` scans the pool and
-// reuses a matching index), so this increment mirrors that: before interning a
-// literal the stage scans the pool it has built and, on a match, emits
-// `Const(existing_index)` rather than appending a duplicate. The scan is a
-// bounded `for` over the pool's fixed capacity, guarded by the live count, with
-// the match index accumulated in a `data` field (locals are immutable, so the
-// accumulator must live in the data segment). Because the pool now holds no
-// duplicates, at most one slot matches, so no first-match tie-break is needed.
-// See compiler/MILESTONES.md and docs/reference/INCREMENTAL_SELF_HOSTING.md.
+// Increment 6: `let` bindings and multi-statement blocks. Increments through 5
+// compiled a single tail expression tree. This increment compiles a block: a
+// sequence of `let` statements followed by the tail expression. Each `let x = e;`
+// lowers to e's ops followed by `SetLocal(slot)`, where slots are assigned after
+// the parameters in declaration order (the reference compiler's lowering); an
+// identifier reference resolves to its parameter or `let` slot. The stage seeds
+// its work-stack (R3.1) with the tail deepest and each `let`'s (VISIT-expr,
+// EMIT-SetLocal) pair pushed from last to first, so the LIFO drain emits the
+// statements in source order, then the tail, then `Return`. The reverse push uses
+// a bounded `for` over the statement-list capacity. The host still supplies the
+// chunk header, so `local_count` is not emitted here; this increment widens only
+// the op stream. See compiler/MILESTONES.md and
+// docs/reference/INCREMENTAL_SELF_HOSTING.md.
 //
 // The self-hosted compiler is a full-width host tool; declare its word floor.
 require word >= 32;
 
-// Flattened expression tree from the codegen input adapter. `kinds` is 1 Literal,
-// 2 Local, 3 BinOp. `args` is the literal *value* for a Literal, the slot for a
-// Local, or the operator for a BinOp (1 Add, 2 Mul). `lhs`/`rhs` are child indices.
+// Flattened block from the codegen input adapter. The expression forest is a
+// structure-of-arrays: `kinds` is 1 Literal, 2 Local, 3 BinOp; `args` is the
+// literal *value* for a Literal, the slot for a Local, or the operator for a
+// BinOp (1 Add, 2 Mul); `lhs`/`rhs` are child node indices. `root` is the tail
+// expression's node index. The `let` statements are a parallel pair of arrays:
+// `stmt_expr[k]` is the k-th `let`'s value-expression node index and
+// `stmt_slot[k]` its target local slot, for `stmt_count` statements in source
+// order.
 shared data ast {
     root: Word,
     kinds: [Word; 64],
     args: [Word; 64],
     lhs: [Word; 64],
     rhs: [Word; 64],
+    stmt_count: Word,
+    stmt_expr: [Word; 32],
+    stmt_slot: [Word; 32],
 }
 
 // The work-stack (R3.1) plus the constant pool the stage builds. Each stack entry
@@ -44,15 +53,33 @@ private data st {
 }
 
 // Wire. During the walk a yielded op is `tag + operand*16`, 0 is PENDING:
-//   1 Const(index)  2 Return  3 GetLocal(slot)  4 CheckedMul(frac)  5 CheckedAdd  6 PopN(count)
+//   1 Const(index)  2 Return  3 GetLocal(slot)  4 CheckedMul(frac)  5 CheckedAdd
+//   6 PopN(count)  7 SetLocal(slot)
 // The op stream ends with Return. After Return the stage emits its constant pool:
 // first the pool size as a raw Word, then that many raw Word values. The host
 // reads ops until Return, then the size, then the values.
 
 loop main(resume: Word) -> Word {
     if st.started == 0 {
-        st.stack[st.sp] = 1 + ast.root * 4;   // VISIT the root
+        // Seed the work-stack so the drained op stream is, in source order:
+        //   stmt0.expr ops, SetLocal(slot0), stmt1.expr ops, SetLocal(slot1), ...,
+        //   tail.expr ops, [Return emitted on drain]. The stack is LIFO, so the
+        // tail is pushed deepest and each `let`'s (EMIT SetLocal, VISIT expr) pair
+        // is pushed from the last statement to the first; VISIT sits above its
+        // SetLocal so the expression fully expands before the store, and stmt0's
+        // pair ends up on top and is processed first.
+        st.stack[st.sp] = 1 + ast.root * 4;              // VISIT the tail (last)
         st.sp = st.sp + 1;
+        for i in 0..32 {
+            if i < ast.stmt_count {
+                let j = ast.stmt_count - 1 - i;          // reverse: last let first
+                let op = 7 + ast.stmt_slot[j] * 16;      // SetLocal(slot)
+                st.stack[st.sp] = 2 + op * 4;            // EMIT after the expr
+                st.sp = st.sp + 1;
+                st.stack[st.sp] = 1 + ast.stmt_expr[j] * 4;  // VISIT the let's expr
+                st.sp = st.sp + 1;
+            }
+        }
         st.started = 1;
         yield 0
     } else {

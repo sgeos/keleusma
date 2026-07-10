@@ -7,26 +7,32 @@
     not(feature = "narrow-word-32")
 ))]
 //! Stage 3 codegen (`compiler/kel/codegen.kel`). A throwaway adapter flattens the
-//! reference's expression tree into the shared-data node arrays with literals
-//! carrying their *value*, the Keleusma stage walks it recursion-free, interns
-//! each literal into its own constant pool, and emits the ops followed by the
-//! pool. The host builds the module from the stage's ops and pool, checks
-//! structural equality against the Rust compiler, and runs it. Increment 5 has the
-//! pool *deduplicate*, mirroring the reference compiler's constant interning, so a
-//! body with a repeated literal produces a single pool entry and aligned indices.
+//! reference's block into the shared-data node arrays and statement metadata, the
+//! Keleusma stage walks it recursion-free, interns each literal into its own
+//! deduplicating constant pool, and emits the ops followed by the pool. The host
+//! builds the module from the stage's ops and pool, checks structural equality
+//! against the Rust compiler, and runs it. Increment 6 compiles a block of `let`
+//! bindings and a tail expression: each `let x = e;` lowers to e's ops then
+//! `SetLocal(slot)`, and identifiers resolve to a parameter or `let` slot.
 
 use keleusma::Arena;
-use keleusma::ast::{BinOp, Expr, Literal, Param, Pattern};
+use keleusma::ast::{BinOp, Block, Expr, Literal, Param, Pattern, Stmt};
 use keleusma::bytecode::{ConstValue, Module, Op, Value};
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 
+// Shared-data slot offsets, mirroring the `ast` block's field order in codegen.kel
+// (one slot per scalar, arrays contiguous). root=0, then the four length-64 node
+// arrays, then the statement metadata.
 const KINDS: usize = 1;
 const ARGS: usize = 65;
 const LHS: usize = 129;
 const RHS: usize = 193;
+const STMT_COUNT: usize = 257;
+const STMT_EXPR: usize = 258;
+const STMT_SLOT: usize = 290;
 
 struct Node {
     kind: i64,
@@ -35,10 +41,27 @@ struct Node {
     rhs: i64,
 }
 
-/// The codegen input adapter (throwaway, Rust-side). Flattens the reference's
-/// expression tree; a literal carries its value (the stage builds the pool now),
-/// a parameter its slot. Returns the root node index.
-fn flatten(e: &Expr, params: &[Param], out: &mut Vec<Node>) -> i64 {
+/// A flattened block: the expression forest, the `let` statements as
+/// (value-expression root, target slot) pairs in source order, and the tail
+/// expression's node index.
+struct Body {
+    nodes: Vec<Node>,
+    stmts: Vec<(i64, i64)>,
+    tail: i64,
+}
+
+fn param_name(p: &Param) -> &str {
+    match &p.pattern {
+        Pattern::Variable(n, _) => n,
+        other => panic!("increment handles simple parameter patterns only, got {other:?}"),
+    }
+}
+
+/// The codegen input adapter (throwaway, Rust-side). Flattens one expression
+/// tree; a literal carries its value (the stage builds the pool), an identifier
+/// its slot resolved through `scope` (name -> slot, honouring shadowing by taking
+/// the last binding). Returns the root node index.
+fn flatten(e: &Expr, scope: &[(String, i64)], out: &mut Vec<Node>) -> i64 {
     match e {
         Expr::Literal {
             value: Literal::Int(n),
@@ -53,10 +76,12 @@ fn flatten(e: &Expr, params: &[Param], out: &mut Vec<Node>) -> i64 {
             (out.len() - 1) as i64
         }
         Expr::Ident { name, .. } => {
-            let slot = params
+            let slot = scope
                 .iter()
-                .position(|p| matches!(&p.pattern, Pattern::Variable(pn, _) if pn == name))
-                .expect("identifier must be a parameter") as i64;
+                .rev()
+                .find(|(nm, _)| nm == name)
+                .map(|(_, s)| *s)
+                .expect("identifier must be a parameter or a let binding in scope");
             out.push(Node {
                 kind: 2,
                 arg: slot,
@@ -68,8 +93,8 @@ fn flatten(e: &Expr, params: &[Param], out: &mut Vec<Node>) -> i64 {
         Expr::BinOp {
             op, left, right, ..
         } => {
-            let l = flatten(left, params, out);
-            let r = flatten(right, params, out);
+            let l = flatten(left, scope, out);
+            let r = flatten(right, scope, out);
             let opcode = match op {
                 BinOp::Add => 1,
                 BinOp::Mul => 2,
@@ -87,6 +112,45 @@ fn flatten(e: &Expr, params: &[Param], out: &mut Vec<Node>) -> i64 {
     }
 }
 
+/// Flatten a whole block: assign each `let` a slot after the parameters in
+/// declaration order, flatten its value expression under the scope visible at
+/// that point, then flatten the tail expression.
+fn build_body(block: &Block, params: &[Param]) -> Body {
+    let mut nodes = Vec::new();
+    let mut scope: Vec<(String, i64)> = params
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (param_name(p).to_string(), i as i64))
+        .collect();
+    let mut stmts = Vec::new();
+    let mut next_slot = params.len() as i64;
+    for st in &block.stmts {
+        match st {
+            Stmt::Let(l) => {
+                let root = flatten(&l.value, &scope, &mut nodes);
+                let name = match &l.pattern {
+                    Pattern::Variable(n, _) => n.clone(),
+                    other => panic!("increment handles simple let patterns only, got {other:?}"),
+                };
+                let slot = next_slot;
+                next_slot += 1;
+                scope.push((name, slot));
+                stmts.push((root, slot));
+            }
+            other => panic!("increment handles let statements only, got {other:?}"),
+        }
+    }
+    let tail = flatten(
+        block
+            .tail_expr
+            .as_ref()
+            .expect("block has a tail expression"),
+        &scope,
+        &mut nodes,
+    );
+    Body { nodes, stmts, tail }
+}
+
 fn decode_op(w: i64) -> Op {
     let (tag, operand) = (w % 16, w / 16);
     match tag {
@@ -96,6 +160,7 @@ fn decode_op(w: i64) -> Op {
         4 => Op::CheckedMul(operand as u8),
         5 => Op::CheckedAdd,
         6 => Op::PopN(operand as u8),
+        7 => Op::SetLocal(operand as u16),
         other => panic!("unknown op tag {other} (word {w})"),
     }
 }
@@ -127,7 +192,7 @@ fn next_word(vm: &mut Vm<'_, '_>, shared: &mut [u8]) -> i64 {
 }
 
 /// Drive the codegen; return its emitted ops and the constant pool it built.
-fn run_codegen(nodes: &[Node], root: i64) -> (Vec<Op>, Vec<i64>) {
+fn run_codegen(body: &Body) -> (Vec<Op>, Vec<i64>) {
     let src = std::fs::read_to_string("compiler/kel/codegen.kel").expect("read codegen.kel");
     let m = compile_src(&src);
     let need = required_persistent_capacity_for(&m);
@@ -136,9 +201,9 @@ fn run_codegen(nodes: &[Node], root: i64) -> (Vec<Op>, Vec<i64>) {
     let mut vm = Vm::new(m, &arena).expect("verify codegen.kel");
 
     let mut shared = vec![0u8; vm.shared_data_bytes()];
-    vm.set_shared(&mut shared, 0, Value::Int(root))
+    vm.set_shared(&mut shared, 0, Value::Int(body.tail))
         .expect("root");
-    for (i, n) in nodes.iter().enumerate() {
+    for (i, n) in body.nodes.iter().enumerate() {
         vm.set_shared(&mut shared, KINDS + i, Value::Int(n.kind))
             .expect("kind");
         vm.set_shared(&mut shared, ARGS + i, Value::Int(n.arg))
@@ -147,6 +212,14 @@ fn run_codegen(nodes: &[Node], root: i64) -> (Vec<Op>, Vec<i64>) {
             .expect("lhs");
         vm.set_shared(&mut shared, RHS + i, Value::Int(n.rhs))
             .expect("rhs");
+    }
+    vm.set_shared(&mut shared, STMT_COUNT, Value::Int(body.stmts.len() as i64))
+        .expect("stmt_count");
+    for (k, &(expr_root, slot)) in body.stmts.iter().enumerate() {
+        vm.set_shared(&mut shared, STMT_EXPR + k, Value::Int(expr_root))
+            .expect("stmt_expr");
+        vm.set_shared(&mut shared, STMT_SLOT + k, Value::Int(slot))
+            .expect("stmt_slot");
     }
 
     // Phase 1: ops until Return.
@@ -191,6 +264,19 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
         // Repeated literal: the pool must deduplicate to a single entry, matching
         // the reference compiler's constant interning (both `2`s use Const(0)).
         ("fn main(input: Word) -> Word { input * 2 + 2 }", 20, 42),
+        // `let` bindings: each lowers to its value's ops then SetLocal(slot), with
+        // slots assigned after the parameters; the tail reads a let-bound slot.
+        (
+            "fn main(input: Word) -> Word { let x = input + 1; x * 2 }",
+            20,
+            42,
+        ),
+        // Chained lets, later reading an earlier binding twice (slot reuse).
+        (
+            "fn main(input: Word) -> Word { let x = input + 1; let y = x + x; y }",
+            20,
+            42,
+        ),
     ];
     for &(src, arg, expected) in cases {
         let program = parse(&tokenize(src).expect("lex")).expect("parse");
@@ -203,15 +289,9 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
             .iter()
             .find(|f| f.name == "main")
             .expect("main fn");
-        let body = main_fn
-            .body
-            .tail_expr
-            .as_ref()
-            .expect("main has a tail expression");
-        let mut nodes = Vec::new();
-        let root = flatten(body, &main_fn.params, &mut nodes);
+        let body = build_body(&main_fn.body, &main_fn.params);
 
-        let (emitted, pool) = run_codegen(&nodes, root);
+        let (emitted, pool) = run_codegen(&body);
         assert_eq!(
             emitted, reference_ops,
             "emitted ops must match Rust for `{src}`"
