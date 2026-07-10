@@ -169,6 +169,9 @@
           "loop main(value: Word) -> Word {\n  yield value\n}\n",
         "Yield (non-atomic total)":
           "yield main() -> Word {\n  yield 1;\n  yield 2;\n  3\n}\n",
+        "Bounded yield (const data + for)":
+          "const data settings {\n  iteration_count: Word = 3,\n}\n\n" +
+          "yield main() -> Word {\n  for i in 0..settings.iteration_count {\n    yield i\n  }\n  settings.iteration_count\n}\n",
         "Counter (loop + private data)":
           "private data state { total: Word }\n\n" +
           "fn add(a: Word, b: Word) -> Word {\n  a + b\n}\n\n" +
