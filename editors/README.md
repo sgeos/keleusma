@@ -17,6 +17,15 @@ Editor and IDE integration for Keleusma. The contents of this directory are not 
 | Zed | pending | pending (tree-sitter) | n/a | n/a |
 | JetBrains IDEs | not provided | n/a | n/a | n/a |
 
+## Language server (live diagnostics)
+
+Beyond static highlighting, [`keleusma-lsp/`](../keleusma-lsp/) is a Language Server
+Protocol server that gives any LSP-capable editor **live diagnostics** — lex, parse, and
+type errors as you type — by reusing the compiler front end. Point your editor's LSP
+client at the built `keleusma-lsp` binary for `.kel` files; see that crate's README for
+per-editor wiring. Direct Visual Studio Code client wiring is in progress; until it lands,
+the `vscode/` extension provides highlighting without live diagnostics.
+
 ## Categorisation convention shared across integrations
 
 The opinionated bits of the Keleusma surface get their own highlight categories so a reader new to the language can build a mental model of the program model from the highlighting alone:

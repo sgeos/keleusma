@@ -223,6 +223,25 @@ jobs:
             --no-default-features \
             --features stm32n6570dk-platform
 
+  lsp:
+    name: LSP (keleusma-lsp)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # keleusma-lsp is a detached-workspace crate (its own [workspace]), so the
+      # --workspace jobs above do not cover it. Build, test, and lint it here so
+      # a change to the core compiler's public API cannot silently break the
+      # language server.
+      - name: Build, test, and lint the detached LSP crate
+        run: |
+          cd keleusma-lsp
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+
   miri:
     name: Miri
     runs-on: ubuntu-latest
