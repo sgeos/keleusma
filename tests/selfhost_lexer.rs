@@ -1,4 +1,15 @@
-#![cfg(all(feature = "compile", feature = "verify"))]
+// The self-hosted compiler is a full-width host tool. Its byte-level and
+// op-encoding arithmetic overflows a narrow declared word, and the compiler
+// rejects a target wider than the runtime, so these tests are meaningful only on
+// a 64-bit runtime, not under the `narrow-word-*` (embedded-target) feature
+// configs.
+#![cfg(all(
+    feature = "compile",
+    feature = "verify",
+    not(feature = "narrow-word-8"),
+    not(feature = "narrow-word-16"),
+    not(feature = "narrow-word-32")
+))]
 //! Regression test for the self-hosted compiler's Stage 1 lexer
 //! (`compiler/kel/lexer.kel`, increment 1). It compiles the lexer on the
 //! current runtime, drives it over a source held in shared data, and checks the
