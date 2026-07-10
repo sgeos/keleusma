@@ -1,26 +1,28 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
-// SCAFFOLDING — not yet implemented (roadmap Step 3, migrated last; the largest step,
-// possibly spanning several V0.2.x releases).
+// Increment 0: the emit-to-host spike. This is the first backward-migration step
+// (see compiler/MILESTONES.md and docs/reference/INCREMENTAL_SELF_HOSTING.md). It
+// proves the thesis-critical capability, that a Keleusma program can produce the
+// opcode stream of a runnable module and hand it across the emit boundary to the
+// host, which assembles the artifact and runs it.
 //
-// Contract: a `loop` function. It consumes the `Declaration` stream from the parser
-// and yields bytecode chunks plus the auxiliary body the wire format expects. It emits
-// bytecode for each declaration immediately and forgets the declaration.
+// Increment 0 has no input yet. It emits a hardcoded op stream for the reference
+// program `fn main() -> Word { 1 }`, whose compiled body is `Const(0)` (a load of
+// the constant-pool entry holding `Int(1)`) then `Return`. Later increments
+// consume declarations from the parser through the codegen input adapter and emit
+// accordingly, then push compile, monomorphization, and per-declaration typecheck
+// into this stage. The constant pool and the module frame are supplied by the
+// host in increment 0; emitting them from Keleusma is a later increment.
 //
-// This stage carries the compiler's cross-declaration state in its `data` segment,
-// bounded by the declared limits (R3.4) and reset at module boundaries (R5.3 separate
-// compilation): a string interner, a sorted-array `WordMap<V>` for the function table,
-// type registry, and monomorphization specialization table, and a linear `LocalScope`
-// for per-scope locals (all R3.2). Specialized chunks are emitted lazily as new call
-// sites are discovered; the specialization table grows with the number of distinct
-// specializations, not with program size.
-//
-// Type inference is bounded to per-declaration scope, and the compiler's own source is
-// written in the explicitly-annotated subset so that the compiler checking itself does
-// not stress its own Hindley-Milner inference.
-//
-// Validation gate (roadmap Step 3): byte-identical corpus output under the all-Keleusma
-// pipeline driven by the Rust host, behind `--compiler keleusma`. After this stage
-// ships, the per-stage toggles collapse into a single `--self-hosted` flag, and the
-// V0.3.0 bootstrap (Phases A, B, C) applies: cross-compile to kelc.0, self-compile to
-// kelc.1, reach the fixed point kelc.2 == kelc.1.
+// Emit wire (increment 0). Each yielded op is a single Word, `tag + operand*16`.
+// The host maps the logical tag to a real opcode, keeping the wire-format details
+// on the host side, since serialization is the host's job:
+//   tag 1  Const    operand is the constant-pool index
+//   tag 2  Return   operand 0
+// The stage yields its op stream and then finishes; the host stops at Finished.
+
+yield main() -> Word {
+    yield 1;   // Const(0): loads the pool entry holding Int(1)
+    yield 2;   // Return
+    0
+}

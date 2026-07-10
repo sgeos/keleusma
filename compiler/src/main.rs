@@ -69,9 +69,9 @@ fn status() {
         println!("  step {}: {name:<8} {path:<20} [{state}]", i + 1);
     }
     println!();
-    println!("status: Stage 1 (lexer) increment 1 is in progress — a streaming byte");
-    println!("tokenizer that compiles, verifies, and runs (try `lex <file>`). Parser and");
-    println!("codegen remain. Each V0.2.x release fills in a prerequisite or a stage;");
+    println!("status: porting backward, codegen first. Codegen increment 0, the");
+    println!("emit-to-host spike, and lexer increment 1, a streaming tokenizer, both");
+    println!("compile, verify, and run (see tests/selfhost_codegen.rs and `lex <file>`).");
     println!("V0.3.0 ships when the bootstrap reaches a fixed point. See MILESTONES.md.");
 }
 
