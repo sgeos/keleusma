@@ -1405,6 +1405,20 @@ impl<'a> Parser<'a> {
                         stmts.push(Stmt::Expr(expr));
                     } else if self.at(&TokenKind::RBrace) {
                         tail_expr = Some(Box::new(expr));
+                    } else if matches!(
+                        expr,
+                        Expr::If { .. } | Expr::Match { .. } | Expr::Loop { .. }
+                    ) {
+                        // A block-form expression (`if`, `if`/`else`, `match`,
+                        // `loop`) is admissible as a statement without a trailing
+                        // `;`, as in Rust. It is the block's tail only when it is
+                        // the last expression (the `RBrace` arm above); when more
+                        // follows it is an expression statement whose value is
+                        // discarded, and parsing continues with the next statement.
+                        // This lowers to the same control flow, so the verifier and
+                        // the WCET and WCMU analyses are unaffected and no opcode is
+                        // added.
+                        stmts.push(Stmt::Expr(expr));
                     } else {
                         return Err(self.error("expected ';' or '}' after expression"));
                     }

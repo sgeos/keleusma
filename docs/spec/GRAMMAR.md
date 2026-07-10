@@ -123,7 +123,7 @@ fn greet(name: Text) -> Text {
 
 ### Whitespace and Semicolons
 
-Whitespace (spaces, tabs, newlines) is not significant except as a token separator. Semicolons terminate statements, as in Rust. Multiple statements may appear on one line. The last expression in a block is the return value and does not require a trailing semicolon.
+Whitespace (spaces, tabs, newlines) is not significant except as a token separator. Semicolons terminate statements, as in Rust. Multiple statements may appear on one line. The last expression in a block is the return value and does not require a trailing semicolon. A block-form expression, that is an `if`, an `if`/`else`, a `match`, or a `loop` block, used as a statement also does not require a trailing semicolon, matching Rust; its value is discarded and parsing continues with the next statement.
 
 ## 3. Type System
 
@@ -1167,7 +1167,12 @@ break_stmt      = 'break' ';'
 data_field_assign       = lower_ident '.' lower_ident '=' expression ';'
 data_field_index_assign = lower_ident '.' lower_ident '[' expression ']'
                           { '[' expression ']' } '=' expression ';'
+(* A non-block-form expression statement ends in ';'. A block-form expression,
+   if_expr, match_expr, or loop_block, is a statement without a trailing ';', as
+   in Rust, and is the block's tail expression only when it is the last one. Its
+   value is discarded when it appears as a statement. *)
 expr_stmt       = expression ';'
+                | if_expr | match_expr | loop_block
 
 (* Expressions *)
 expression      = pipeline_expr
