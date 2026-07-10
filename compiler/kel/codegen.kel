@@ -1,37 +1,35 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
-// Increment 11: the stage emits `local_count`, the chunk's local-frame size. This
-// is the one chunk-header field codegen computes: the number of local slots is the
-// parameters plus one per `let` binding, `param_count + stmt_count`. The other
-// header fields (name, parameter arity and types, block type) are not codegen
-// products in any compiler; they come from the declaration the parser and type
-// checker produce, and remain input-adapter data. So emitting `local_count`
-// completes the codegen stage's own output for this grammar subset: the ops, the
-// constant pool, and the frame size. It is streamed as one raw Word after the
-// constant pool. Branches are restricted to a single expression (no inner `let`),
-// and `else` is required. See compiler/MILESTONES.md and
+// Increment 12: first-class, nestable blocks. Earlier increments carried a block's
+// `let` bindings in a top-level statement array, so `let` could appear only at the
+// function body's top level, never inside an `if`-branch. This increment folds
+// blocks into the node forest as a `LetIn` cons-list: `let x = e; rest` becomes a
+// `LetIn` node (kind 5, arg=slot, lhs=value, rhs=continuation) whose continuation
+// is the next `let` or the block's tail expression. The top-level body and each
+// `if`-branch are then the same thing: a block root, either a `LetIn` chain or a
+// bare expression. This lets `let` nest inside branches. Slots are assigned in
+// tree-walk order (the reference never reuses a slot across branches), so
+// `local_count` is the parameters plus the number of `LetIn` nodes the walk
+// processes, which the stage counts directly. See compiler/MILESTONES.md and
 // docs/reference/INCREMENTAL_SELF_HOSTING.md.
 //
 // The self-hosted compiler is a full-width host tool; declare its word floor.
 require word >= 32;
 
-// Flattened block from the codegen input adapter. The expression forest is a
-// structure-of-arrays: `kinds` is 1 Literal, 2 Local, 3 BinOp; `args` is the
-// literal *value* for a Literal, the slot for a Local, or the operator for a
-// BinOp (1 Add, 2 Mul); `lhs`/`rhs` are child node indices. `root` is the tail
-// expression's node index. The `let` statements are a parallel pair of arrays:
-// `stmt_expr[k]` is the k-th `let`'s value-expression node index and
-// `stmt_slot[k]` its target local slot, for `stmt_count` statements in source
-// order.
+// Flattened expression forest from the codegen input adapter, a structure-of-
+// arrays. `kinds` is 1 Literal, 2 Local, 3 BinOp, 4 If, 5 LetIn. `args` is the
+// literal *value* for a Literal, the slot for a Local, the operator for a BinOp,
+// the condition node for an If, or the bound slot for a LetIn. `lhs`/`rhs` are
+// child node indices: for a BinOp the two operands; for an If the then/else block
+// roots; for a LetIn the value expression and the continuation. `root` is the
+// function body's block root. `param_count` is the parameter arity (declaration
+// data the codegen threads into `local_count`).
 shared data ast {
     root: Word,
     kinds: [Word; 64],
     args: [Word; 64],
     lhs: [Word; 64],
     rhs: [Word; 64],
-    stmt_count: Word,
-    stmt_expr: [Word; 32],
-    stmt_slot: [Word; 32],
     param_count: Word,
 }
 
@@ -59,6 +57,7 @@ private data st {
     count_done: Word,
     pool_cursor: Word,
     header_done: Word,
+    let_count: Word,
     dup_idx: Word,
 }
 
@@ -76,25 +75,11 @@ private data st {
 
 loop main(resume: Word) -> Word {
     if st.started == 0 {
-        // Seed the work-stack so the drained op stream is, in source order:
-        //   stmt0.expr ops, SetLocal(slot0), stmt1.expr ops, SetLocal(slot1), ...,
-        //   tail.expr ops, [Return emitted on drain]. The stack is LIFO, so the
-        // tail is pushed deepest and each `let`'s (EMIT SetLocal, VISIT expr) pair
-        // is pushed from the last statement to the first; VISIT sits above its
-        // SetLocal so the expression fully expands before the store, and stmt0's
-        // pair ends up on top and is processed first.
-        st.stack[st.sp] = 1 + ast.root * 4;              // VISIT the tail (last)
+        // Seed the work-stack with the body's block root. A block is a `LetIn`
+        // chain (or a bare expression) in the node forest, so no statement-array
+        // pre-seeding is needed; the walk expands the chain.
+        st.stack[st.sp] = 1 + ast.root * 4;              // VISIT the block root
         st.sp = st.sp + 1;
-        for i in 0..32 {
-            if i < ast.stmt_count {
-                let j = ast.stmt_count - 1 - i;          // reverse: last let first
-                let op = 7 + ast.stmt_slot[j] * 32;      // SetLocal(slot)
-                st.stack[st.sp] = 2 + op * 4;            // EMIT after the expr
-                st.sp = st.sp + 1;
-                st.stack[st.sp] = 1 + ast.stmt_expr[j] * 4;  // VISIT the let's expr
-                st.sp = st.sp + 1;
-            }
-        }
         st.started = 1;
         yield 0
     } else {
@@ -210,14 +195,14 @@ loop main(resume: Word) -> Word {
                         st.sp = st.sp + 1;
                         yield 0
                         } else {
+                        if nk == 4 {
                             // If-expression (kind 4): emit the condition ops, an If
                             // marker, the then-branch ops, an Else marker, the
                             // else-branch ops, then EndIf. The If/Else targets are
-                            // placeholders (operand 0); the host assembler resolves
-                            // them by bracket-matching the nested markers. Moving
-                            // target resolution into the stage is a later increment.
-                            // Node layout: args = cond, lhs = then, rhs = else.
-                            // Push in reverse so the LIFO drain emits them in order.
+                            // backpatched in the op buffer as the markers are emitted
+                            // (see the EMIT branch). Node layout: args = cond,
+                            // lhs = then, rhs = else. Push in reverse so the LIFO
+                            // drain emits them in order.
                             st.stack[st.sp] = 2 + 19 * 4;                 // EMIT EndIf
                             st.sp = st.sp + 1;
                             st.stack[st.sp] = 1 + ast.rhs[payload] * 4;   // VISIT else
@@ -231,6 +216,22 @@ loop main(resume: Word) -> Word {
                             st.stack[st.sp] = 1 + ast.args[payload] * 4;  // VISIT cond
                             st.sp = st.sp + 1;
                             yield 0
+                        } else {
+                            // LetIn (kind 5): `let <slot> = <value>; <cont>`. Emit
+                            // the value ops, SetLocal(slot), then the continuation
+                            // ops. Count the binding for local_count. Node layout:
+                            // args = slot, lhs = value, rhs = continuation. Push in
+                            // reverse so the drain emits value, store, continuation.
+                            st.let_count = st.let_count + 1;
+                            st.stack[st.sp] = 1 + ast.rhs[payload] * 4;   // VISIT cont
+                            st.sp = st.sp + 1;
+                            let sop = 7 + ast.args[payload] * 32;         // SetLocal
+                            st.stack[st.sp] = 2 + sop * 4;                // EMIT store
+                            st.sp = st.sp + 1;
+                            st.stack[st.sp] = 1 + ast.lhs[payload] * 4;   // VISIT value
+                            st.sp = st.sp + 1;
+                            yield 0
+                        }
                         }
                     }
                 }
@@ -259,10 +260,11 @@ loop main(resume: Word) -> Word {
                             yield v           // a pool value (raw Word)
                         } else {
                             if st.header_done == 0 {
-                                // The local-frame size: parameters plus one slot
-                                // per `let`. The one header field codegen owns.
+                                // The local-frame size: parameters plus one slot per
+                                // `let`, counted from the LetIn nodes the walk saw.
+                                // The one header field codegen owns.
                                 st.header_done = 1;
-                                yield ast.param_count + ast.stmt_count
+                                yield ast.param_count + st.let_count
                             } else {
                                 yield 0       // fully drained
                             }

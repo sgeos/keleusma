@@ -11,10 +11,10 @@
 //! Keleusma stage walks it recursion-free, interns each literal into its own
 //! deduplicating constant pool, and emits the ops followed by the pool. The host
 //! builds the module from the stage's ops and pool, checks structural equality
-//! against the Rust compiler, and runs it. Increment 11 has the stage emit its own
-//! `local_count` (the local-frame size, `param_count + let count`) after the pool,
-//! the one chunk-header field codegen computes; the host builds the chunk with it
-//! instead of the reference's, and asserts the two agree.
+//! against the Rust compiler, and runs it. Increment 12 makes blocks first-class
+//! and nestable: the adapter folds each block into a `LetIn` cons-list in the node
+//! forest, so `let` bindings can appear inside `if`-branches, and the stage counts
+//! the `LetIn` nodes to compute `local_count`.
 
 use keleusma::Arena;
 use keleusma::ast::{BinOp, Block, Expr, Literal, Param, Pattern, Stmt};
@@ -26,15 +26,12 @@ use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capa
 
 // Shared-data slot offsets, mirroring the `ast` block's field order in codegen.kel
 // (one slot per scalar, arrays contiguous). root=0, then the four length-64 node
-// arrays, then the statement metadata.
+// arrays, then param_count.
 const KINDS: usize = 1;
 const ARGS: usize = 65;
 const LHS: usize = 129;
 const RHS: usize = 193;
-const STMT_COUNT: usize = 257;
-const STMT_EXPR: usize = 258;
-const STMT_SLOT: usize = 290;
-const PARAM_COUNT: usize = 322;
+const PARAM_COUNT: usize = 257;
 
 struct Node {
     kind: i64,
@@ -43,13 +40,10 @@ struct Node {
     rhs: i64,
 }
 
-/// A flattened block: the expression forest, the `let` statements as
-/// (value-expression root, target slot) pairs in source order, and the tail
-/// expression's node index.
+/// A flattened function body: the expression forest and the body's block root.
 struct Body {
     nodes: Vec<Node>,
-    stmts: Vec<(i64, i64)>,
-    tail: i64,
+    root: i64,
 }
 
 fn param_name(p: &Param) -> &str {
@@ -59,11 +53,17 @@ fn param_name(p: &Param) -> &str {
     }
 }
 
-/// The codegen input adapter (throwaway, Rust-side). Flattens one expression
-/// tree; a literal carries its value (the stage builds the pool), an identifier
-/// its slot resolved through `scope` (name -> slot, honouring shadowing by taking
-/// the last binding). Returns the root node index.
-fn flatten(e: &Expr, scope: &[(String, i64)], out: &mut Vec<Node>) -> i64 {
+/// The codegen input adapter (throwaway, Rust-side). Flattens one expression into
+/// the node forest, threading a lexical `scope` (name -> slot, latest binding wins)
+/// and a monotonic `next_slot` counter. A literal carries its value, an identifier
+/// its resolved slot; an `if` flattens each branch as a block. Returns the root
+/// node index.
+fn flatten(
+    e: &Expr,
+    scope: &mut Vec<(String, i64)>,
+    next_slot: &mut i64,
+    out: &mut Vec<Node>,
+) -> i64 {
     match e {
         Expr::Literal {
             value: Literal::Int(n),
@@ -95,8 +95,8 @@ fn flatten(e: &Expr, scope: &[(String, i64)], out: &mut Vec<Node>) -> i64 {
         Expr::BinOp {
             op, left, right, ..
         } => {
-            let l = flatten(left, scope, out);
-            let r = flatten(right, scope, out);
+            let l = flatten(left, scope, next_slot, out);
+            let r = flatten(right, scope, next_slot, out);
             let opcode = match op {
                 BinOp::Add => 1,
                 BinOp::Mul => 2,
@@ -128,22 +128,11 @@ fn flatten(e: &Expr, scope: &[(String, i64)], out: &mut Vec<Node>) -> i64 {
             let else_block = else_block
                 .as_ref()
                 .expect("increment requires an else branch");
-            assert!(
-                then_block.stmts.is_empty() && else_block.stmts.is_empty(),
-                "increment restricts if-branches to a single expression"
-            );
-            let then_e = then_block
-                .tail_expr
-                .as_ref()
-                .expect("then branch needs a tail expression");
-            let else_e = else_block
-                .tail_expr
-                .as_ref()
-                .expect("else branch needs a tail expression");
             // Node layout for an If (kind 4): arg = cond, lhs = then, rhs = else.
-            let cond = flatten(condition, scope, out);
-            let t = flatten(then_e, scope, out);
-            let el = flatten(else_e, scope, out);
+            // Each branch is a full block (it may bind its own locals).
+            let cond = flatten(condition, scope, next_slot, out);
+            let t = flatten_block(then_block, scope, next_slot, out);
+            let el = flatten_block(else_block, scope, next_slot, out);
             out.push(Node {
                 kind: 4,
                 arg: cond,
@@ -156,30 +145,30 @@ fn flatten(e: &Expr, scope: &[(String, i64)], out: &mut Vec<Node>) -> i64 {
     }
 }
 
-/// Flatten a whole block: assign each `let` a slot after the parameters in
-/// declaration order, flatten its value expression under the scope visible at
-/// that point, then flatten the tail expression.
-fn build_body(block: &Block, params: &[Param]) -> Body {
-    let mut nodes = Vec::new();
-    let mut scope: Vec<(String, i64)> = params
-        .iter()
-        .enumerate()
-        .map(|(i, p)| (param_name(p).to_string(), i as i64))
-        .collect();
-    let mut stmts = Vec::new();
-    let mut next_slot = params.len() as i64;
+/// Flatten a block into a `LetIn` cons-list ending in the tail expression, and
+/// return its root node index. Each `let` is flattened under the scope visible at
+/// that point and assigned the next monotonic slot; block-local bindings leave the
+/// scope on exit, but slots are never reused (matching the reference).
+fn flatten_block(
+    block: &Block,
+    scope: &mut Vec<(String, i64)>,
+    next_slot: &mut i64,
+    out: &mut Vec<Node>,
+) -> i64 {
+    let mark = scope.len();
+    let mut lets: Vec<(i64, i64)> = Vec::new();
     for st in &block.stmts {
         match st {
             Stmt::Let(l) => {
-                let root = flatten(&l.value, &scope, &mut nodes);
+                let value = flatten(&l.value, scope, next_slot, out);
                 let name = match &l.pattern {
                     Pattern::Variable(n, _) => n.clone(),
                     other => panic!("increment handles simple let patterns only, got {other:?}"),
                 };
-                let slot = next_slot;
-                next_slot += 1;
+                let slot = *next_slot;
+                *next_slot += 1;
                 scope.push((name, slot));
-                stmts.push((root, slot));
+                lets.push((slot, value));
             }
             other => panic!("increment handles let statements only, got {other:?}"),
         }
@@ -189,10 +178,37 @@ fn build_body(block: &Block, params: &[Param]) -> Body {
             .tail_expr
             .as_ref()
             .expect("block has a tail expression"),
-        &scope,
-        &mut nodes,
+        scope,
+        next_slot,
+        out,
     );
-    Body { nodes, stmts, tail }
+    // Fold the lets into a LetIn cons-list from the innermost (tail) outward.
+    let mut cont = tail;
+    for &(slot, value) in lets.iter().rev() {
+        out.push(Node {
+            kind: 5,
+            arg: slot,
+            lhs: value,
+            rhs: cont,
+        });
+        cont = (out.len() - 1) as i64;
+    }
+    scope.truncate(mark);
+    cont
+}
+
+/// Flatten a function body into the node forest, returning the forest and the
+/// body's block root. Parameters occupy the first slots.
+fn build_body(block: &Block, params: &[Param]) -> Body {
+    let mut nodes = Vec::new();
+    let mut scope: Vec<(String, i64)> = params
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (param_name(p).to_string(), i as i64))
+        .collect();
+    let mut next_slot = params.len() as i64;
+    let root = flatten_block(block, &mut scope, &mut next_slot, &mut nodes);
+    Body { nodes, root }
 }
 
 fn decode_op(w: i64) -> Op {
@@ -258,7 +274,7 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
     let mut vm = Vm::new(m, &arena).expect("verify codegen.kel");
 
     let mut shared = vec![0u8; vm.shared_data_bytes()];
-    vm.set_shared(&mut shared, 0, Value::Int(body.tail))
+    vm.set_shared(&mut shared, 0, Value::Int(body.root))
         .expect("root");
     for (i, n) in body.nodes.iter().enumerate() {
         vm.set_shared(&mut shared, KINDS + i, Value::Int(n.kind))
@@ -269,14 +285,6 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
             .expect("lhs");
         vm.set_shared(&mut shared, RHS + i, Value::Int(n.rhs))
             .expect("rhs");
-    }
-    vm.set_shared(&mut shared, STMT_COUNT, Value::Int(body.stmts.len() as i64))
-        .expect("stmt_count");
-    for (k, &(expr_root, slot)) in body.stmts.iter().enumerate() {
-        vm.set_shared(&mut shared, STMT_EXPR + k, Value::Int(expr_root))
-            .expect("stmt_expr");
-        vm.set_shared(&mut shared, STMT_SLOT + k, Value::Int(slot))
-            .expect("stmt_slot");
     }
     vm.set_shared(&mut shared, PARAM_COUNT, Value::Int(param_count as i64))
         .expect("param_count");
@@ -388,11 +396,24 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
             10,
             Int(9),
         ),
-        // Nested if in the else branch: exercises resolve_targets on nesting.
+        // Nested if in the else branch.
         (
             "fn main(a: Word) -> Word { if a < 5 { 1 } else { if a < 10 { 2 } else { 3 } } }",
             7,
             Int(2),
+        ),
+        // let inside each if-branch: slots assigned monotonically (y=1, z=2),
+        // local_count=3. The block-in-branch case the LetIn unification unlocks.
+        (
+            "fn main(a: Word) -> Word { if a < 5 { let y = a + 1; y } else { let z = a - 1; z } }",
+            3,
+            Int(4),
+        ),
+        // let outside, then an if whose branches each bind their own local.
+        (
+            "fn main(a: Word) -> Word { let x = a + 1; if x < 5 { let y = x + 1; y } else { let z = x - 1; z } }",
+            10,
+            Int(10),
         ),
     ];
     for &(src, arg, expected) in cases {
