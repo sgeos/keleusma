@@ -1,0 +1,23 @@
+[package]
+name = "keleusma-lsp"
+version = "0.2.2"
+edition = "2024"
+license = "0BSD"
+description = "Language Server Protocol server for the Keleusma language"
+repository = "https://github.com/sgeos/keleusma"
+publish = false
+
+# Detached from the parent workspace, like examples/rtos. This keeps tower-lsp,
+# tokio, and their minimum-supported-Rust-version out of the core no_std
+# workspace's dependency graph and MSRV job. The server is a host-side developer
+# tool; it depends on the core crate by path but is built and released separately.
+[workspace]
+
+[[bin]]
+name = "keleusma-lsp"
+path = "src/main.rs"
+
+[dependencies]
+keleusma = { path = ".." }
+tower-lsp = "0.20"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }

@@ -35,6 +35,11 @@ rust-version = "1.88"
 #     no value to a consumer downloading the tarball.
 exclude = [
     "editors/",
+    # Host-side developer tooling crates. They depend on the core crate but ship
+    # std/tokio/wasm-bindgen and are built and released separately (detached
+    # workspaces), so they stay out of the core crate tarball.
+    "keleusma-lsp/",
+    "keleusma-wasm/",
     "tools/",
     "tmp/",
     "secret/",
