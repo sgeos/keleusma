@@ -69,9 +69,9 @@ fn status() {
         println!("  step {}: {name:<8} {path:<20} [{state}]", i + 1);
     }
     println!();
-    println!("status: porting backward, codegen first. Codegen increment 0, the");
-    println!("emit-to-host spike, and lexer increment 1, a streaming tokenizer, both");
-    println!("compile, verify, and run (see tests/selfhost_codegen.rs and `lex <file>`).");
+    println!("status: porting backward, codegen first. Codegen increment 1, the emit");
+    println!("spike over `input * 2 + 1`, and lexer increment 1, a streaming tokenizer,");
+    println!("both compile, verify, and run (see tests/selfhost_codegen.rs, `lex <file>`).");
     println!("V0.3.0 ships when the bootstrap reaches a fixed point. See MILESTONES.md.");
 }
 

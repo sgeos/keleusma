@@ -1,28 +1,38 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
-// Increment 0: the emit-to-host spike. This is the first backward-migration step
-// (see compiler/MILESTONES.md and docs/reference/INCREMENTAL_SELF_HOSTING.md). It
-// proves the thesis-critical capability, that a Keleusma program can produce the
-// opcode stream of a runnable module and hand it across the emit boundary to the
-// host, which assembles the artifact and runs it.
+// Increment 1: the emit spike, grown to a parameterized arithmetic program. Still
+// a hardcoded transcription with no input to the stage yet; the point is to
+// exercise the op set a real emitter must produce before input is wired. See
+// compiler/MILESTONES.md and docs/reference/INCREMENTAL_SELF_HOSTING.md.
 //
-// Increment 0 has no input yet. It emits a hardcoded op stream for the reference
-// program `fn main() -> Word { 1 }`, whose compiled body is `Const(0)` (a load of
-// the constant-pool entry holding `Int(1)`) then `Return`. Later increments
-// consume declarations from the parser through the codegen input adapter and emit
-// accordingly, then push compile, monomorphization, and per-declaration typecheck
-// into this stage. The constant pool and the module frame are supplied by the
-// host in increment 0; emitting them from Keleusma is a later increment.
+// Target program: `fn main(input: Word) -> Word { input * 2 + 1 }`. Its compiled
+// body, and so the op stream this emits, is:
+//   GetLocal(0)     push the parameter `input`
+//   Const(0)        push the constant 2
+//   CheckedMul(0)   integer multiply; pushes low, high, and flag words
+//   PopN(2)         drop high and flag, leaving the wrapping product
+//   Const(1)        push the constant 1
+//   CheckedAdd      integer add; pushes low, high, and flag words
+//   PopN(2)         drop high and flag, leaving the wrapping sum
+//   Return
+// The checked-arithmetic-then-PopN(2) idiom is how `Int` multiply and add lower.
+// The constant pool holding 2 and 1, the parameter, and the module frame are
+// host-supplied in this increment; emitting them from Keleusma is a later step.
 //
-// Emit wire (increment 0). Each yielded op is a single Word, `tag + operand*16`.
-// The host maps the logical tag to a real opcode, keeping the wire-format details
-// on the host side, since serialization is the host's job:
-//   tag 1  Const    operand is the constant-pool index
-//   tag 2  Return   operand 0
+// Emit wire. Each yielded op is a single Word, `tag + operand*16`. The host lowers
+// the tag to a real opcode, keeping wire-format details on the host side:
+//   tag 1 Const(index)    tag 2 Return          tag 3 GetLocal(slot)
+//   tag 4 CheckedMul(frac) tag 5 CheckedAdd      tag 6 PopN(count)
 // The stage yields its op stream and then finishes; the host stops at Finished.
 
 yield main() -> Word {
-    yield 1;   // Const(0): loads the pool entry holding Int(1)
-    yield 2;   // Return
+    yield 3;             // GetLocal(0): push input
+    yield 1;             // Const(0): push 2
+    yield 4;             // CheckedMul(0): integer multiply
+    yield 6 + 2 * 16;    // PopN(2)
+    yield 1 + 1 * 16;    // Const(1): push 1
+    yield 5;             // CheckedAdd: integer add
+    yield 6 + 2 * 16;    // PopN(2)
+    yield 2;             // Return
     0
 }
