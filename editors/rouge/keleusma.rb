@@ -52,14 +52,19 @@ module Rouge
         )
       end
 
-      # Word-spelled operators.
+      # Word-spelled operators (B19): eager boolean (and, or, xor, not),
+      # short-circuit boolean (andalso, orelse), assembly-mnemonic shifts
+      # (lsl, asl, lsr, asr), and per-limb bitwise (band, bor, bxor, bnot).
       def self.word_operators
-        @word_operators ||= Set.new %w(and or not)
+        @word_operators ||= Set.new %w(
+          and or xor not andalso orelse
+          lsl asl lsr asr band bor bxor bnot
+        )
       end
 
       # Primitive value types.
       def self.builtin_types
-        @builtin_types ||= Set.new %w(Byte Word Fixed Float bool Text Option)
+        @builtin_types ||= Set.new %w(Multiword Byte Word Fixed Float bool Text Option)
       end
 
       # Checked-arithmetic match arms.

@@ -62,10 +62,16 @@
 
 (defconst keleusma-other-keywords
   '("let" "in" "use" "external" "struct" "enum" "newtype"
-    "trait" "impl" "data" "pure" "where"
-    "as" "not" "and" "or")
+    "trait" "impl" "data" "pure" "where" "as")
   "Reserved keywords that are neither function categories, storage
-modifiers, conditionals, nor checked-arithmetic arms.")
+modifiers, conditionals, checked-arithmetic arms, nor word operators.")
+
+(defconst keleusma-word-operator-keywords
+  '("and" "or" "xor" "not" "andalso" "orelse"
+    "lsl" "asl" "lsr" "asr" "band" "bor" "bxor" "bnot")
+  "B19 word-form operators: eager boolean (and, or, xor, not),
+short-circuit boolean (andalso, orelse), assembly-mnemonic shifts
+(lsl, asl, lsr, asr), and per-limb bitwise (band, bor, bxor, bnot).")
 
 (defconst keleusma-checked-arm-keywords
   '("ok" "overflow" "underflow" "saturate_max" "saturate_min")
@@ -82,7 +88,7 @@ user-defined functions `classify' or `declassify').")
   "Boolean literals.")
 
 (defconst keleusma-primitive-types
-  '("Byte" "Word" "Fixed" "Float" "bool" "Text" "Option")
+  '("Multiword" "Byte" "Word" "Fixed" "Float" "bool" "Text" "Option")
   "Primitive surface types per docs/spec/GRAMMAR.md Section 3.  Note
 that `bool' is lowercase per the grammar.")
 
@@ -112,6 +118,8 @@ that `bool' is lowercase per the grammar.")
     (,(keleusma--word-regexp keleusma-repeat-keywords) . font-lock-keyword-face)
     ;; Other reserved keywords
     (,(keleusma--word-regexp keleusma-other-keywords) . font-lock-keyword-face)
+    ;; Word-form operators (boolean, shift, per-limb bitwise)
+    (,(keleusma--word-regexp keleusma-word-operator-keywords) . font-lock-keyword-face)
     ;; Boolean literals
     (,(keleusma--word-regexp keleusma-boolean-keywords) . font-lock-constant-face)
     ;; Primitive types

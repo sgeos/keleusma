@@ -71,7 +71,15 @@ syn keyword keleusmaStorageClass signed ephemeral shared private const
 " modifiers, nor logical operators.
 syn keyword keleusmaKeyword let in use external struct enum newtype
 syn keyword keleusmaKeyword trait impl data pure where
-syn keyword keleusmaKeyword as not and or
+syn keyword keleusmaKeyword as
+
+" B19 word-form operators: eager boolean (and, or, xor, not),
+" short-circuit boolean (andalso, orelse), assembly-mnemonic
+" shifts (lsl, asl, lsr, asr), and per-limb bitwise (band, bor,
+" bxor, bnot). Linked to Operator so they read as operators
+" rather than generic keywords.
+syn keyword keleusmaWordOperator and or xor not andalso orelse
+syn keyword keleusmaWordOperator lsl asl lsr asr band bor bxor bnot
 
 " Numeric overflow construct's arm keywords. The construct is one
 " of Keleusma's headline V0.2 additions; highlighting the arm
@@ -95,7 +103,7 @@ syn keyword keleusmaIFCOp classify declassify
 " `Byte`, `Word`, `Fixed`, `Float`, `Text` are uppercase. The
 " `Fixed<N>` parameterised form is matched by the same rule
 " because Vim's keyword match stops at the identifier boundary.
-syn keyword keleusmaType Byte Word Fixed Float bool Text Option
+syn keyword keleusmaType Multiword Byte Word Fixed Float bool Text Option
 
 " Type-style identifiers (uppercase initial). Caught last so the
 " specific primitive list above takes priority.
@@ -153,6 +161,7 @@ hi def link keleusmaConditional       Conditional
 hi def link keleusmaRepeat            Repeat
 hi def link keleusmaStorageClass      StorageClass
 hi def link keleusmaKeyword           Keyword
+hi def link keleusmaWordOperator      Operator
 hi def link keleusmaCheckedArm        Special
 hi def link keleusmaBoolean           Boolean
 hi def link keleusmaIFCOp             Special

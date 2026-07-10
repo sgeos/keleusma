@@ -16,6 +16,7 @@
         { "include": "#repeat" },
         { "include": "#checked_arm" },
         { "include": "#boolean" },
+        { "include": "#word_operator" },
         { "include": "#keyword" },
         { "include": "#primitive_type" },
         { "include": "#pipeline" },
@@ -110,13 +111,18 @@
             "name": "constant.language.boolean.kel"
         },
         "keyword": {
-            "comment": "Reserved keywords that are neither function categories, storage modifiers, conditionals, nor checked-arithmetic arms.",
-            "match": "\\b(let|in|use|external|struct|enum|newtype|trait|impl|data|pure|where|as|not|and|or)\\b",
+            "comment": "Reserved keywords that are neither function categories, storage modifiers, conditionals, checked-arithmetic arms, nor word-form operators.",
+            "match": "\\b(let|in|use|external|struct|enum|newtype|trait|impl|data|pure|where|as)\\b",
             "name": "keyword.other.kel"
+        },
+        "word_operator": {
+            "comment": "B19 word-form operators: eager boolean (and, or, xor, not), short-circuit boolean (andalso, orelse), assembly-mnemonic shifts (lsl, asl, lsr, asr), and per-limb bitwise (band, bor, bxor, bnot). Longer alternatives are listed first so andalso/orelse win over and/or.",
+            "match": "\\b(andalso|orelse|and|or|xor|not|lsl|asl|lsr|asr|band|bor|bxor|bnot)\\b",
+            "name": "keyword.operator.word.kel"
         },
         "primitive_type": {
             "comment": "Primitive surface types per docs/spec/GRAMMAR.md Section 3. Note bool is lowercase.",
-            "match": "\\b(Byte|Word|Fixed|Float|bool|Text|Option)\\b",
+            "match": "\\b(Multiword|Byte|Word|Fixed|Float|bool|Text|Option)\\b",
             "name": "support.type.primitive.kel"
         },
         "pipeline": {
