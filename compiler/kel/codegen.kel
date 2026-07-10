@@ -22,6 +22,10 @@
 // the host lowers the tag to a real opcode:
 //   tag 1 Const(index)  tag 2 Return  tag 3 GetLocal(slot)
 
+// The self-hosted compiler is a full-width host tool; declare its word-width
+// floor so a narrow target is refused rather than silently miscompiled.
+require word >= 32;
+
 shared data decl {
     body_kind: Word,
     body_arg: Word,

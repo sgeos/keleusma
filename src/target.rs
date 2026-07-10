@@ -36,7 +36,9 @@ extern crate alloc;
 use alloc::format;
 use alloc::string::String;
 
-use crate::ast::{Expr, Literal, PrimType, Program, Stmt, TypeExpr};
+use crate::ast::{
+    Expr, Literal, PrimType, Program, RequireDecl, RequireLever, RequireOp, Stmt, TypeExpr,
+};
 use crate::bytecode::{RUNTIME_ADDRESS_BITS_LOG2, RUNTIME_FLOAT_BITS_LOG2, RUNTIME_WORD_BITS_LOG2};
 use crate::compiler::CompileError;
 use crate::token::Span;
@@ -221,10 +223,41 @@ impl Default for Target {
 /// the target. Walks the program's AST looking for float literals,
 /// float types, string literals, and string types, and reports the
 /// first violation as a `CompileError`.
+/// Enforce one `require` machine-property directive against the target. A
+/// violated requirement is a compile-time rejection with a diagnostic naming the
+/// requirement and the target's actual width, so a program that depends on a
+/// machine property is never silently miscompiled for a target that lacks it.
+fn check_require(req: &RequireDecl, target: &Target) -> Result<(), CompileError> {
+    match &req.lever {
+        RequireLever::Word { op, bits } => {
+            let have = target.word_bits();
+            let (ok, rel) = match op {
+                RequireOp::AtLeast => (have >= *bits, "at least"),
+                RequireOp::Exactly => (have == *bits, "exactly"),
+            };
+            if !ok {
+                return Err(CompileError {
+                    message: format!(
+                        "program requires a word width of {rel} {bits} bits, but the compilation target's word is {have} bits; compile for a wider target or relax the `require word` directive"
+                    ),
+                    span: req.span,
+                });
+            }
+            Ok(())
+        }
+    }
+}
+
 pub(crate) fn validate_program_for_target(
     program: &Program,
     target: &Target,
 ) -> Result<(), CompileError> {
+    // Machine-property `require` directives are checked against the target
+    // regardless of its capability flags, so this runs before the
+    // floats-and-strings fast path below.
+    for req in &program.requires {
+        check_require(req, target)?;
+    }
     if target.has_floats && target.has_strings {
         return Ok(());
     }

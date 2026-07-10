@@ -5,11 +5,51 @@ use alloc::vec::Vec;
 
 use crate::token::Span;
 
+/// The constraint operator of a `require` directive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequireOp {
+    /// `>=`. The target must be at least this wide. The portable floor.
+    AtLeast,
+    /// `==`. The target must be exactly this wide. An exact pin.
+    Exactly,
+}
+
+/// The machine lever a `require` directive constrains. Word width is the first
+/// lever; address width, float width, and the capability levers extend this the
+/// assembly way, one directive per machine property.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RequireLever {
+    /// `require word >= N` or `require word == N`.
+    Word {
+        /// The constraint operator, `>=` or `==`.
+        op: RequireOp,
+        /// The required word width in bits.
+        bits: u32,
+    },
+}
+
+/// A `require` directive: a machine-property constraint the program places on
+/// its compilation target, in the spirit of a portable assembler directive. The
+/// compiler refuses a target that violates any directive, so a program that
+/// depends on a machine property is rejected rather than silently miscompiled
+/// for a target that lacks it. The check is entirely at compile time and adds no
+/// opcode; the existing header widths and the runtime's load-time width check
+/// carry the guarantee through to a precompiled artifact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequireDecl {
+    /// The constrained machine lever.
+    pub lever: RequireLever,
+    /// Source span of the directive.
+    pub span: Span,
+}
+
 /// A complete Keleusma program.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     /// `use` import declarations.
     pub uses: Vec<UseDecl>,
+    /// Machine-property `require` directives (portable assembler directives).
+    pub requires: Vec<RequireDecl>,
     /// Type declarations: structs, enums, newtypes.
     pub types: Vec<TypeDef>,
     /// `data` block declarations.

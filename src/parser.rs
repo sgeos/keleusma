@@ -243,6 +243,7 @@ impl<'a> Parser<'a> {
     fn parse_program(&mut self) -> Result<Program, ParseError> {
         let start = self.peek_span();
         let mut uses = Vec::new();
+        let mut requires = Vec::new();
         let mut types = Vec::new();
         let mut data_decls = Vec::new();
         let mut functions = Vec::new();
@@ -272,9 +273,16 @@ impl<'a> Parser<'a> {
                 }
                 TokenKind::Trait => traits.push(self.parse_trait_def()?),
                 TokenKind::Impl => impls.push(self.parse_impl_block()?),
+                // `require` is a contextual keyword. An identifier cannot start
+                // any top-level item, so `require` at item position is
+                // unambiguously the machine-property directive and needs no
+                // reserved keyword.
+                TokenKind::LowerIdent(name) if name == "require" => {
+                    requires.push(self.parse_require_decl()?);
+                }
                 _ => {
                     return Err(self.error(
-                        "expected type definition, data declaration, function, trait, or impl",
+                        "expected type definition, data declaration, function, trait, impl, or `require` directive",
                     ));
                 }
             }
@@ -283,6 +291,7 @@ impl<'a> Parser<'a> {
         let end = self.peek_span();
         Ok(Program {
             uses,
+            requires,
             types,
             data_decls,
             functions,
@@ -293,6 +302,48 @@ impl<'a> Parser<'a> {
             // empty at parse time.
             fn_expr_types: alloc::collections::BTreeMap::new(),
         })
+    }
+
+    /// Parse a `require` machine-property directive. The contextual `require`
+    /// keyword is the current token. Grammar: `require word ('>=' | '==') INT ';'`.
+    fn parse_require_decl(&mut self) -> Result<RequireDecl, ParseError> {
+        let start = self.bump(); // consume `require`
+        let (lever_name, _) = self.expect_lower_ident()?;
+        let lever = match lever_name.as_str() {
+            "word" => {
+                let op = if self.eat(&TokenKind::GtEq) {
+                    RequireOp::AtLeast
+                } else if self.eat(&TokenKind::EqEq) {
+                    RequireOp::Exactly
+                } else {
+                    return Err(self.error("expected `>=` or `==` after `require word`"));
+                };
+                let bits = self.expect_word_bits()?;
+                RequireLever::Word { op, bits }
+            }
+            _ => {
+                return Err(self.error("unknown `require` lever; the only lever is `word`"));
+            }
+        };
+        let end = self.expect(&TokenKind::Semicolon)?;
+        Ok(RequireDecl {
+            lever,
+            span: merge_spans(start, end),
+        })
+    }
+
+    /// Parse and range-check the bit width of a `require word` directive.
+    fn expect_word_bits(&mut self) -> Result<u32, ParseError> {
+        if let TokenKind::IntLit(n) = self.peek() {
+            let n = *n;
+            self.bump();
+            if !(1..=64).contains(&n) {
+                return Err(self.error("`require word` bit width must be between 1 and 64"));
+            }
+            Ok(n as u32)
+        } else {
+            Err(self.error("expected a bit-width integer after `require word`"))
+        }
     }
 
     fn parse_trait_def(&mut self) -> Result<TraitDef, ParseError> {

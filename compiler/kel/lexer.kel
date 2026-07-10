@@ -25,6 +25,12 @@
 // Spans, string interning, keyword resolution, and the richer `Token` struct in
 // prelude.kel land in later increments once struct-valued yields are wired.
 
+// The self-hosted compiler is a full-width host tool. Its token encoding does
+// byte-level arithmetic that overflows a narrow word, so it declares a 32-bit
+// floor. Compiling it for a narrower target is refused rather than silently
+// miscompiled.
+require word >= 32;
+
 shared data src {
     len: Word,
     bytes: [Byte; 4096],

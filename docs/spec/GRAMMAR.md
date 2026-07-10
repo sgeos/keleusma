@@ -1018,7 +1018,19 @@ File extension is `.kel` for source files and `.kel.bin` for compiled bytecode.
 ````
 program         = [ shebang_line ]
                   { use_decl }
-                  { type_def | data_decl | trait_def | impl_block | function_def }
+                  { require_decl | type_def | data_decl | trait_def | impl_block | function_def }
+
+(* Machine-property directive. A `require` states a constraint the program places
+   on its compilation target, in the spirit of a portable assembler directive
+   such as NASM's `bits`. The compiler refuses a target that violates it, so a
+   program that depends on a machine property is rejected rather than silently
+   miscompiled for a target that lacks it, and the guarantee carries through a
+   precompiled artifact via the header widths and the runtime's load-time width
+   check. `>=` is a portable floor and `==` an exact pin. Word width is the only
+   lever at present; address and float widths and capability levers extend it the
+   same way, one directive per machine property. `require` is a contextual
+   keyword, recognised only at directive position. *)
+require_decl    = 'require' 'word' ( '>=' | '==' ) integer_lit ';'
 
 (* Shebang. The lexer skips a leading '#!...' line so source scripts may
    carry a Unix shebang. Line numbers in error messages start from line 2
