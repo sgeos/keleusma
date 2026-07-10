@@ -1,17 +1,13 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
-// Increment 6: `let` bindings and multi-statement blocks. Increments through 5
-// compiled a single tail expression tree. This increment compiles a block: a
-// sequence of `let` statements followed by the tail expression. Each `let x = e;`
-// lowers to e's ops followed by `SetLocal(slot)`, where slots are assigned after
-// the parameters in declaration order (the reference compiler's lowering); an
-// identifier reference resolves to its parameter or `let` slot. The stage seeds
-// its work-stack (R3.1) with the tail deepest and each `let`'s (VISIT-expr,
-// EMIT-SetLocal) pair pushed from last to first, so the LIFO drain emits the
-// statements in source order, then the tail, then `Return`. The reverse push uses
-// a bounded `for` over the statement-list capacity. The host still supplies the
-// chunk header, so `local_count` is not emitted here; this increment widens only
-// the op stream. See compiler/MILESTONES.md and
+// Increment 7: the full binary integer arithmetic set. Increments through 6
+// lowered only `+` and `*`. This increment adds `-`, `/`, and `%`, driven by a
+// per-operator lowering in the BinOp branch: the operator code selects the op
+// word and whether the result needs the two-word `PopN(2)` fixup. The three
+// checked operators (`+`->CheckedAdd, `*`->CheckedMul, `-`->CheckedSub) leave a
+// two-word result and take the `PopN`; `/`->Div and `%`->Mod leave a single word
+// and take none, matching the reference compiler's lowering. This widens only the
+// op stream; no new stage machinery. See compiler/MILESTONES.md and
 // docs/reference/INCREMENTAL_SELF_HOSTING.md.
 //
 // The self-hosted compiler is a full-width host tool; declare its word floor.
@@ -54,7 +50,7 @@ private data st {
 
 // Wire. During the walk a yielded op is `tag + operand*16`, 0 is PENDING:
 //   1 Const(index)  2 Return  3 GetLocal(slot)  4 CheckedMul(frac)  5 CheckedAdd
-//   6 PopN(count)  7 SetLocal(slot)
+//   6 PopN(count)  7 SetLocal(slot)  8 CheckedSub  9 Div  10 Mod
 // The op stream ends with Return. After Return the stage emits its constant pool:
 // first the pool size as a raw Word, then that many raw Word values. The host
 // reads ops until Return, then the size, then the values.
@@ -124,12 +120,36 @@ loop main(resume: Word) -> Word {
                         st.sp = st.sp + 1;
                         yield 0
                     } else {
-                        // BinOp: post-order schedule. Add -> CheckedAdd (tag 5),
-                        // Mul -> CheckedMul with 0 fraction bits (tag 4).
-                        let chk = if ast.args[payload] == 1 { 5 } else { 4 };
-                        st.stack[st.sp] = 2 + (6 + 2 * 16) * 4;      // EMIT PopN(2)
-                        st.sp = st.sp + 1;
-                        st.stack[st.sp] = 2 + chk * 4;               // EMIT the checked op
+                        // BinOp: post-order schedule. The operator code selects the
+                        // op word and whether the result needs a PopN(2) stack fixup:
+                        //   1 Add -> CheckedAdd (tag 5) + PopN
+                        //   2 Mul -> CheckedMul, 0 fraction bits (tag 4) + PopN
+                        //   3 Sub -> CheckedSub (tag 8) + PopN
+                        //   4 Div -> Div (tag 9)
+                        //   5 Mod -> Mod (tag 10)
+                        // The checked arithmetic ops leave a two-word result that the
+                        // PopN normalizes; Div and Mod leave a single word, so no PopN.
+                        let opc = ast.args[payload];
+                        let opw = if opc == 1 {
+                            5
+                        } else {
+                            if opc == 2 {
+                                4
+                            } else {
+                                if opc == 3 {
+                                    8
+                                } else {
+                                    if opc == 4 { 9 } else { 10 }
+                                }
+                            }
+                        };
+                        // Div (4) and Mod (5) do not need the PopN; the checked
+                        // arithmetic operators (1, 2, 3) do.
+                        if opc < 4 {
+                            st.stack[st.sp] = 2 + (6 + 2 * 16) * 4;  // EMIT PopN(2)
+                            st.sp = st.sp + 1;
+                        }
+                        st.stack[st.sp] = 2 + opw * 4;               // EMIT the operator
                         st.sp = st.sp + 1;
                         st.stack[st.sp] = 1 + ast.rhs[payload] * 4;  // VISIT rhs
                         st.sp = st.sp + 1;

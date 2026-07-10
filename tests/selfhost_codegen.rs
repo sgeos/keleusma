@@ -11,9 +11,9 @@
 //! Keleusma stage walks it recursion-free, interns each literal into its own
 //! deduplicating constant pool, and emits the ops followed by the pool. The host
 //! builds the module from the stage's ops and pool, checks structural equality
-//! against the Rust compiler, and runs it. Increment 6 compiles a block of `let`
-//! bindings and a tail expression: each `let x = e;` lowers to e's ops then
-//! `SetLocal(slot)`, and identifiers resolve to a parameter or `let` slot.
+//! against the Rust compiler, and runs it. Increment 7 lowers the full binary
+//! integer arithmetic set (`+ - * / %`): the three checked operators take a
+//! `PopN(2)` fixup, while `Div` and `Mod` leave a single word and take none.
 
 use keleusma::Arena;
 use keleusma::ast::{BinOp, Block, Expr, Literal, Param, Pattern, Stmt};
@@ -98,7 +98,10 @@ fn flatten(e: &Expr, scope: &[(String, i64)], out: &mut Vec<Node>) -> i64 {
             let opcode = match op {
                 BinOp::Add => 1,
                 BinOp::Mul => 2,
-                other => panic!("increment handles + and * only, got {other:?}"),
+                BinOp::Sub => 3,
+                BinOp::Div => 4,
+                BinOp::Mod => 5,
+                other => panic!("increment handles + - * / % only, got {other:?}"),
             };
             out.push(Node {
                 kind: 3,
@@ -161,6 +164,9 @@ fn decode_op(w: i64) -> Op {
         5 => Op::CheckedAdd,
         6 => Op::PopN(operand as u8),
         7 => Op::SetLocal(operand as u16),
+        8 => Op::CheckedSub,
+        9 => Op::Div,
+        10 => Op::Mod,
         other => panic!("unknown op tag {other} (word {w})"),
     }
 }
@@ -277,6 +283,13 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
             20,
             42,
         ),
+        // Subtraction: CheckedSub, same two-word-then-PopN shape as add.
+        ("fn main(a: Word) -> Word { a - 1 }", 43, 42),
+        // Division and modulo: single-word Div/Mod, no PopN fixup.
+        ("fn main(a: Word) -> Word { a / 2 }", 84, 42),
+        ("fn main(a: Word) -> Word { a % 5 }", 47, 2),
+        // Mixed: subtraction under division, exercising both shapes and nesting.
+        ("fn main(a: Word) -> Word { (a - 2) / 2 }", 86, 42),
     ];
     for &(src, arg, expected) in cases {
         let program = parse(&tokenize(src).expect("lex")).expect("parse");
