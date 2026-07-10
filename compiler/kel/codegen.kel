@@ -1,17 +1,17 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
-// Increment 4: the codegen owns its constant pool. Where increment 3 emitted
-// `Const(index)` using an index the adapter had pre-computed from the reference
-// module's pool, this increment removes that crutch. Literal nodes now carry
-// their value, the stage interns each into its own pool as it walks the tree,
-// and after the op stream it emits the pool so the host builds the module's
-// constant pool from the codegen's output rather than the reference's. This is
-// the first piece of the module frame the stage produces itself. See
-// compiler/MILESTONES.md and docs/reference/INCREMENTAL_SELF_HOSTING.md.
-//
-// The pool is append-only, one entry per literal occurrence, with no dedup yet;
-// dedup needs a bounded search and is a later increment. For a body with
-// distinct literals the pool matches the reference's, so op indices still align.
+// Increment 5: the constant pool deduplicates. Increment 4 had the stage own an
+// append-only pool with one entry per literal occurrence, so it matched the
+// reference only for bodies whose literals were all distinct. The reference
+// compiler interns constants (compiler.rs `add_const_value` scans the pool and
+// reuses a matching index), so this increment mirrors that: before interning a
+// literal the stage scans the pool it has built and, on a match, emits
+// `Const(existing_index)` rather than appending a duplicate. The scan is a
+// bounded `for` over the pool's fixed capacity, guarded by the live count, with
+// the match index accumulated in a `data` field (locals are immutable, so the
+// accumulator must live in the data segment). Because the pool now holds no
+// duplicates, at most one slot matches, so no first-match tie-break is needed.
+// See compiler/MILESTONES.md and docs/reference/INCREMENTAL_SELF_HOSTING.md.
 //
 // The self-hosted compiler is a full-width host tool; declare its word floor.
 require word >= 32;
@@ -40,6 +40,7 @@ private data st {
     pool_count: Word,
     count_done: Word,
     pool_cursor: Word,
+    dup_idx: Word,
 }
 
 // Wire. During the walk a yielded op is `tag + operand*16`, 0 is PENDING:
@@ -65,10 +66,25 @@ loop main(resume: Word) -> Word {
             } else {
                 let nk = ast.kinds[payload];
                 if nk == 1 {
-                    // Literal: intern the value (append), schedule Const(index).
-                    let idx = st.pool_count;
-                    st.pool[st.pool_count] = ast.args[payload];
-                    st.pool_count = st.pool_count + 1;
+                    // Literal: intern the value, deduplicating. Scan the pool for
+                    // a matching value; on a hit reuse its index, otherwise append.
+                    // The scan bound is the pool's fixed capacity (WCET-static);
+                    // the live-count guard skips unfilled slots. dup_idx starts at
+                    // pool_count as the "not found" sentinel and the append slot.
+                    let value = ast.args[payload];
+                    st.dup_idx = st.pool_count;
+                    for i in 0..64 {
+                        if i < st.pool_count {
+                            if st.pool[i] == value {
+                                st.dup_idx = i;
+                            }
+                        }
+                    }
+                    let idx = st.dup_idx;
+                    if idx == st.pool_count {
+                        st.pool[st.pool_count] = value;
+                        st.pool_count = st.pool_count + 1;
+                    }
                     let op = 1 + idx * 16;
                     st.stack[st.sp] = 2 + op * 4;
                     st.sp = st.sp + 1;

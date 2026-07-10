@@ -6,13 +6,14 @@
     not(feature = "narrow-word-16"),
     not(feature = "narrow-word-32")
 ))]
-//! Stage 3 codegen (`compiler/kel/codegen.kel`). Increment 4 has the stage own
-//! its constant pool: a throwaway adapter flattens the reference's expression tree
-//! into the shared-data node arrays with literals carrying their *value*, the
-//! Keleusma stage walks it recursion-free, interns each literal into its own pool,
-//! and emits the ops followed by the pool. The host builds the module from the
-//! stage's ops and pool, checks structural equality against the Rust compiler, and
-//! runs it.
+//! Stage 3 codegen (`compiler/kel/codegen.kel`). A throwaway adapter flattens the
+//! reference's expression tree into the shared-data node arrays with literals
+//! carrying their *value*, the Keleusma stage walks it recursion-free, interns
+//! each literal into its own constant pool, and emits the ops followed by the
+//! pool. The host builds the module from the stage's ops and pool, checks
+//! structural equality against the Rust compiler, and runs it. Increment 5 has the
+//! pool *deduplicate*, mirroring the reference compiler's constant interning, so a
+//! body with a repeated literal produces a single pool entry and aligned indices.
 
 use keleusma::Arena;
 use keleusma::ast::{BinOp, Expr, Literal, Param, Pattern};
@@ -187,6 +188,9 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
         ("fn main() -> Word { 1 + 2 }", 0, 3),
         ("fn main(input: Word) -> Word { input + 1 }", 41, 42),
         ("fn main(input: Word) -> Word { input * 2 + 1 }", 20, 41),
+        // Repeated literal: the pool must deduplicate to a single entry, matching
+        // the reference compiler's constant interning (both `2`s use Const(0)).
+        ("fn main(input: Word) -> Word { input * 2 + 2 }", 20, 42),
     ];
     for &(src, arg, expected) in cases {
         let program = parse(&tokenize(src).expect("lex")).expect("parse");
