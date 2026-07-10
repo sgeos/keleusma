@@ -130,6 +130,11 @@
       cannot run yet.
     </p>
 
+    <details style="margin-top: 1rem">
+      <summary style="cursor: pointer">Bytecode</summary>
+      <pre id="bytecode" style="overflow: auto; padding: 0.75rem; border: 1px solid rgba(128, 128, 128, 0.4); font-family: ui-monospace, monospace; font-size: 0.85rem"></pre>
+    </details>
+
     <footer>
       The Keleusma compiler, verifier, and virtual machine compiled to
       WebAssembly. See the
@@ -137,7 +142,7 @@
     </footer>
 
     <script type="module">
-      import init, { check, keywords, Session } from "./pkg/keleusma_wasm.js";
+      import init, { check, disasm, keywords, Session } from "./pkg/keleusma_wasm.js";
 
       const status = document.getElementById("status");
       const results = document.getElementById("results");
@@ -147,6 +152,7 @@
       const examplesSelect = document.getElementById("examples");
       const runVal = document.getElementById("runval");
       const runStatus = document.getElementById("runstatus");
+      const bytecode = document.getElementById("bytecode");
 
       // Primitive type names are a small, stable set (see keleusma-lsp for the
       // same rationale). Keywords come from the wasm module so they cannot drift.
@@ -253,6 +259,7 @@
         syncScroll();
         try {
           render(check(src.value));
+          bytecode.textContent = disasm(src.value);
         } catch (e) {
           status.className = "err";
           status.textContent = "Internal error: " + e;

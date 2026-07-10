@@ -149,6 +149,35 @@ pub fn check(src: &str) -> String {
     })
 }
 
+/// Disassemble `src` to a human-readable bytecode listing: one block per chunk
+/// (name, block type, local count) followed by its numbered opcodes. Returns a
+/// `; ...` comment line if the program does not compile.
+#[wasm_bindgen]
+pub fn disasm(src: &str) -> String {
+    let module = match tokenize(src)
+        .map_err(|e| e.message)
+        .and_then(|t| parse(&t).map_err(|e| e.message))
+        .and_then(|p| compile(&p).map_err(|e| e.message))
+    {
+        Ok(m) => m,
+        Err(e) => return format!("; does not compile: {e}\n"),
+    };
+    use core::fmt::Write as _;
+    let mut out = String::new();
+    for chunk in &module.chunks {
+        let _ = writeln!(
+            out,
+            "{} [{:?}]  locals={}",
+            chunk.name, chunk.block_type, chunk.local_count
+        );
+        for (i, op) in chunk.ops.iter().enumerate() {
+            let _ = writeln!(out, "  {i:>3}: {op:?}");
+        }
+        out.push('\n');
+    }
+    out
+}
+
 /// The authoritative keyword list, for the playground's syntax highlighter.
 /// Sourced from `keleusma::token::KEYWORDS` so it cannot drift from the lexer.
 #[wasm_bindgen]
@@ -362,6 +391,13 @@ mod tests {
         let k = keywords();
         assert_eq!(k.len(), keleusma::token::KEYWORDS.len());
         assert!(k.contains(&"loop".to_string()) && k.contains(&"yield".to_string()));
+    }
+
+    #[test]
+    fn disasm_lists_chunks_and_ops() {
+        let d = disasm("fn main() -> Word { 40 + 2 }\n");
+        assert!(d.contains("main") && d.contains("Return"), "{d}");
+        assert!(disasm("fn (").starts_with("; does not compile"));
     }
 
     #[test]
