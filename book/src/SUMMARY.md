@@ -76,6 +76,7 @@
 
 - [Getting Started](GETTING_STARTED.md)
 - [Embedding Reference](EMBEDDING.md)
+- [Instruction Set](INSTRUCTION_SET.md)
 - [Cookbook](COOKBOOK.md)
 - [Frequently Asked Questions](FAQ.md)
 - [Automation and Scripting](AUTOMATION_SCRIPTING.md)

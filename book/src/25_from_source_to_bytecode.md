@@ -100,5 +100,10 @@ outside the target's representable range is rejected at compile time.
 - Compiling ahead of time means the running machine needs only the
   runtime, and the program starts immediately.
 
+If you want to see the individual instructions the runtime executes, the
+[Instruction Set](INSTRUCTION_SET.md) reference lists every opcode with its
+operands, cost, and effect on the time and memory budgets. The playground
+shows the same disassembly for any program you write.
+
 The next chapter covers two more things that happen to a finished
 program: it can be signed, and it can be swapped.
