@@ -138,12 +138,15 @@ highlighters are the standing example: V0.2.1 added the B19 word-form operators 
 Rouge highlighters shipped without them and were only reconciled later. Close that gap at
 the cut, not after.
 
-Reconcile every keyword-based highlighter against the authoritative keyword set in
-`src/token.rs::keyword()` (and the primitive-type list). Each must be **complete** — no
-missing token — before the release proceeds:
+Reconcile every keyword-based highlighter against the authoritative keyword list
+`keleusma::token::KEYWORDS` in `src/token.rs` (and the primitive-type list). That const
+is the single source of truth for all grammar-mirroring tooling — the `keleusma-lsp`
+completion list already consumes it directly, so it cannot drift; the highlighters are
+plain text and must be reconciled here. Each must be **complete** — no missing token —
+before the release proceeds:
 
 ```sh
-KWS=$(sed -n '/pub fn keyword/,/^    }/p' src/token.rs | grep -oE '"[a-z_]+"' | tr -d '"' | sort -u)
+KWS=$(sed -n '/pub const KEYWORDS/,/];/p' src/token.rs | grep -oE '"[a-z_]+"' | tr -d '"' | sort -u)
 for f in editors/vscode/syntaxes/keleusma.tmLanguage.json \
          editors/vim/syntax/keleusma.vim \
          editors/emacs/keleusma-mode.el \

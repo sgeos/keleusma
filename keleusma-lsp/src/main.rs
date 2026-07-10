@@ -28,60 +28,11 @@ use keleusma::parser::parse;
 use keleusma::token::Span;
 use keleusma::verify::verify;
 
-/// The keyword vocabulary offered by completion. Kept aligned with
-/// `keleusma::token::TokenKind::keyword`; a unit test asserts every entry is a
-/// real keyword. The reverse direction (a newly added keyword missing here) is
-/// the same drift the editor highlighters are reconciled against at release; see
-/// docs/process/RELEASE_PROCESS.md step 1a.
-const KEYWORDS: &[&str] = &[
-    "and",
-    "andalso",
-    "as",
-    "asl",
-    "asr",
-    "band",
-    "bnot",
-    "bor",
-    "break",
-    "bxor",
-    "const",
-    "data",
-    "else",
-    "enum",
-    "ephemeral",
-    "external",
-    "false",
-    "fn",
-    "for",
-    "if",
-    "impl",
-    "in",
-    "let",
-    "loop",
-    "lsl",
-    "lsr",
-    "match",
-    "newtype",
-    "not",
-    "or",
-    "orelse",
-    "overflow",
-    "private",
-    "pure",
-    "saturate_max",
-    "saturate_min",
-    "shared",
-    "signed",
-    "struct",
-    "trait",
-    "true",
-    "underflow",
-    "use",
-    "when",
-    "where",
-    "xor",
-    "yield",
-];
+/// Completion draws its keyword vocabulary from the core crate's single
+/// authoritative list ([`keleusma::token::KEYWORDS`]), so the completion offering
+/// cannot drift from the lexer. Adding a keyword to the language updates this
+/// automatically.
+const KEYWORDS: &[&str] = keleusma::token::KEYWORDS;
 
 /// Primitive-type names offered by completion.
 const PRIMITIVE_TYPES: &[&str] = &[
@@ -419,13 +370,16 @@ mod tests {
     }
 
     #[test]
-    fn every_completion_keyword_is_a_real_keyword() {
-        // Guards the hardcoded list against a stale or misspelled entry by
-        // round-tripping it through the authoritative recognizer.
-        for kw in KEYWORDS {
+    fn completion_surfaces_every_core_keyword() {
+        // The keyword set itself is validated in the core crate; here we guard
+        // that completion actually offers every one of them, with the right kind.
+        let items = keyword_completions();
+        for kw in keleusma::token::KEYWORDS {
             assert!(
-                keleusma::token::TokenKind::keyword(kw).is_some(),
-                "`{kw}` is in the completion list but is not a keyword"
+                items
+                    .iter()
+                    .any(|i| i.label == *kw && i.kind == Some(CompletionItemKind::KEYWORD)),
+                "completion does not offer keyword `{kw}`"
             );
         }
     }

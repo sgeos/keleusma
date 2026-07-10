@@ -261,8 +261,27 @@ pub enum TokenKind {
     Eof,
 }
 
+/// The complete, authoritative list of reserved keyword spellings.
+///
+/// This is the single source of truth for tooling that must mirror the keyword
+/// vocabulary — the editor syntax highlighters, the `keleusma-lsp` completion
+/// list, and the release-preflight drift check (see
+/// `docs/process/RELEASE_PROCESS.md` step 1a). Every entry is recognized by
+/// [`TokenKind::keyword`] (a unit test enforces this). When adding a keyword,
+/// update both the [`TokenKind::keyword`] match **and** this list; they are kept
+/// adjacent so the pairing is obvious.
+pub const KEYWORDS: &[&str] = &[
+    "and", "andalso", "as", "asl", "asr", "band", "bnot", "bor", "break", "bxor", "const",
+    "data", "else", "enum", "ephemeral", "external", "false", "fn", "for", "if", "impl", "in",
+    "let", "loop", "lsl", "lsr", "match", "newtype", "not", "or", "orelse", "overflow", "private",
+    "pure", "saturate_max", "saturate_min", "shared", "signed", "struct", "trait", "true",
+    "underflow", "use", "when", "where", "xor", "yield",
+];
+
 impl TokenKind {
     /// Check if a string is a keyword and return the corresponding token kind.
+    ///
+    /// When adding an arm here, also add its spelling to [`KEYWORDS`].
     pub fn keyword(s: &str) -> Option<TokenKind> {
         match s {
             "fn" => Some(TokenKind::Fn),
@@ -322,5 +341,34 @@ impl TokenKind {
             "impl" => Some(TokenKind::Impl),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_listed_keyword_is_recognized() {
+        for kw in KEYWORDS {
+            assert!(
+                TokenKind::keyword(kw).is_some(),
+                "KEYWORDS lists `{kw}`, but TokenKind::keyword does not recognize it"
+            );
+        }
+    }
+
+    #[test]
+    fn keywords_list_has_no_duplicates() {
+        for (i, a) in KEYWORDS.iter().enumerate() {
+            for b in &KEYWORDS[i + 1..] {
+                assert_ne!(a, b, "KEYWORDS contains a duplicate: `{a}`");
+            }
+        }
+    }
+
+    #[test]
+    fn a_plain_identifier_is_not_a_keyword() {
+        assert!(TokenKind::keyword("frobnicate").is_none());
     }
 }
