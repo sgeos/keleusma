@@ -1,14 +1,14 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
-// Increment 7: the full binary integer arithmetic set. Increments through 6
-// lowered only `+` and `*`. This increment adds `-`, `/`, and `%`, driven by a
-// per-operator lowering in the BinOp branch: the operator code selects the op
-// word and whether the result needs the two-word `PopN(2)` fixup. The three
-// checked operators (`+`->CheckedAdd, `*`->CheckedMul, `-`->CheckedSub) leave a
-// two-word result and take the `PopN`; `/`->Div and `%`->Mod leave a single word
-// and take none, matching the reference compiler's lowering. This widens only the
-// op stream; no new stage machinery. See compiler/MILESTONES.md and
-// docs/reference/INCREMENTAL_SELF_HOSTING.md.
+// Increment 8: the six comparison operators. Building on the increment-7 binary
+// arithmetic, this adds `==`, `!=`, `<`, `>`, `<=`, `>=`, each lowering to a
+// single `Cmp*` op with no `PopN` (like `Div`/`Mod`), and each producing a
+// `bool`. Crossing sixteen op tags exceeds the old `tag + operand*16` op-word
+// radix (tag 16 would alias the `PENDING` marker 0), so the op-word radix widens
+// to 32 (`tag + operand*32`); this is a self-contained protocol change between
+// this stage and its host driver, with no runtime BYTECODE_VERSION impact. This
+// widens only the op stream and the encoding radix. See compiler/MILESTONES.md
+// and docs/reference/INCREMENTAL_SELF_HOSTING.md.
 //
 // The self-hosted compiler is a full-width host tool; declare its word floor.
 require word >= 32;
@@ -48,9 +48,10 @@ private data st {
     dup_idx: Word,
 }
 
-// Wire. During the walk a yielded op is `tag + operand*16`, 0 is PENDING:
+// Wire. During the walk a yielded op is `tag + operand*32`, 0 is PENDING:
 //   1 Const(index)  2 Return  3 GetLocal(slot)  4 CheckedMul(frac)  5 CheckedAdd
 //   6 PopN(count)  7 SetLocal(slot)  8 CheckedSub  9 Div  10 Mod
+//   11 CmpEq  12 CmpNe  13 CmpLt  14 CmpGt  15 CmpLe  16 CmpGe
 // The op stream ends with Return. After Return the stage emits its constant pool:
 // first the pool size as a raw Word, then that many raw Word values. The host
 // reads ops until Return, then the size, then the values.
@@ -69,7 +70,7 @@ loop main(resume: Word) -> Word {
         for i in 0..32 {
             if i < ast.stmt_count {
                 let j = ast.stmt_count - 1 - i;          // reverse: last let first
-                let op = 7 + ast.stmt_slot[j] * 16;      // SetLocal(slot)
+                let op = 7 + ast.stmt_slot[j] * 32;      // SetLocal(slot)
                 st.stack[st.sp] = 2 + op * 4;            // EMIT after the expr
                 st.sp = st.sp + 1;
                 st.stack[st.sp] = 1 + ast.stmt_expr[j] * 4;  // VISIT the let's expr
@@ -108,14 +109,14 @@ loop main(resume: Word) -> Word {
                         st.pool[st.pool_count] = value;
                         st.pool_count = st.pool_count + 1;
                     }
-                    let op = 1 + idx * 16;
+                    let op = 1 + idx * 32;
                     st.stack[st.sp] = 2 + op * 4;
                     st.sp = st.sp + 1;
                     yield 0
                 } else {
                     if nk == 2 {
                         // Local: schedule GetLocal(slot).
-                        let op = 3 + ast.args[payload] * 16;
+                        let op = 3 + ast.args[payload] * 32;
                         st.stack[st.sp] = 2 + op * 4;
                         st.sp = st.sp + 1;
                         yield 0
@@ -127,8 +128,10 @@ loop main(resume: Word) -> Word {
                         //   3 Sub -> CheckedSub (tag 8) + PopN
                         //   4 Div -> Div (tag 9)
                         //   5 Mod -> Mod (tag 10)
+                        //   6 Eq -> CmpEq (11) .. 11 GtEq -> CmpGe (16), i.e. tag opc+5
                         // The checked arithmetic ops leave a two-word result that the
-                        // PopN normalizes; Div and Mod leave a single word, so no PopN.
+                        // PopN normalizes; Div, Mod, and the comparisons leave a single
+                        // word, so they take no PopN.
                         let opc = ast.args[payload];
                         let opw = if opc == 1 {
                             5
@@ -139,14 +142,18 @@ loop main(resume: Word) -> Word {
                                 if opc == 3 {
                                     8
                                 } else {
-                                    if opc == 4 { 9 } else { 10 }
+                                    if opc == 4 {
+                                        9
+                                    } else {
+                                        if opc == 5 { 10 } else { opc + 5 }
+                                    }
                                 }
                             }
                         };
-                        // Div (4) and Mod (5) do not need the PopN; the checked
-                        // arithmetic operators (1, 2, 3) do.
+                        // Only the checked arithmetic operators (1, 2, 3) take the
+                        // PopN; Div, Mod, and every comparison leave a single word.
                         if opc < 4 {
-                            st.stack[st.sp] = 2 + (6 + 2 * 16) * 4;  // EMIT PopN(2)
+                            st.stack[st.sp] = 2 + (6 + 2 * 32) * 4;  // EMIT PopN(2)
                             st.sp = st.sp + 1;
                         }
                         st.stack[st.sp] = 2 + opw * 4;               // EMIT the operator

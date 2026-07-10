@@ -69,13 +69,13 @@ fn status() {
         println!("  step {}: {name:<8} {path:<20} [{state}]", i + 1);
     }
     println!();
-    println!("status: porting backward, codegen first. Codegen increment 7, a");
+    println!("status: porting backward, codegen first. Codegen increment 8, a");
     println!("recursion-free work-stack walk that compiles a block of `let` bindings");
-    println!("and a tail expression over the full binary integer arithmetic set");
-    println!("(+ - * / %) to a post-order op stream with its own deduplicating");
-    println!("constant pool, and lexer increment 1, a streaming tokenizer, both");
-    println!("compile, verify, and run (see tests/selfhost_codegen.rs and `lex");
-    println!("<file>`). V0.3.0 ships when the bootstrap reaches a fixed point.");
+    println!("and a tail expression over the binary integer arithmetic set (+ - * /");
+    println!("%) and the six comparison operators to a post-order op stream with its");
+    println!("own deduplicating constant pool, and lexer increment 1, a streaming");
+    println!("tokenizer, both compile, verify, and run (see tests/selfhost_codegen.rs");
+    println!("and `lex <file>`). V0.3.0 ships when the bootstrap reaches a fixed point.");
 }
 
 /// Run Stage 1 (the self-hosted lexer) over `path` and print the token stream.

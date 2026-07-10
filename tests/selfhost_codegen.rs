@@ -11,9 +11,9 @@
 //! Keleusma stage walks it recursion-free, interns each literal into its own
 //! deduplicating constant pool, and emits the ops followed by the pool. The host
 //! builds the module from the stage's ops and pool, checks structural equality
-//! against the Rust compiler, and runs it. Increment 7 lowers the full binary
-//! integer arithmetic set (`+ - * / %`): the three checked operators take a
-//! `PopN(2)` fixup, while `Div` and `Mod` leave a single word and take none.
+//! against the Rust compiler, and runs it. Increment 8 adds the six comparison
+//! operators, each a single `Cmp*` op with a `bool` result; crossing sixteen op
+//! tags widened the stage's op-word radix from 16 to 32.
 
 use keleusma::Arena;
 use keleusma::ast::{BinOp, Block, Expr, Literal, Param, Pattern, Stmt};
@@ -101,7 +101,13 @@ fn flatten(e: &Expr, scope: &[(String, i64)], out: &mut Vec<Node>) -> i64 {
                 BinOp::Sub => 3,
                 BinOp::Div => 4,
                 BinOp::Mod => 5,
-                other => panic!("increment handles + - * / % only, got {other:?}"),
+                BinOp::Eq => 6,
+                BinOp::NotEq => 7,
+                BinOp::Lt => 8,
+                BinOp::Gt => 9,
+                BinOp::LtEq => 10,
+                BinOp::GtEq => 11,
+                other => panic!("increment handles + - * / % and comparisons, got {other:?}"),
             };
             out.push(Node {
                 kind: 3,
@@ -155,7 +161,7 @@ fn build_body(block: &Block, params: &[Param]) -> Body {
 }
 
 fn decode_op(w: i64) -> Op {
-    let (tag, operand) = (w % 16, w / 16);
+    let (tag, operand) = (w % 32, w / 32);
     match tag {
         1 => Op::Const(operand as u16),
         2 => Op::Return,
@@ -167,6 +173,12 @@ fn decode_op(w: i64) -> Op {
         8 => Op::CheckedSub,
         9 => Op::Div,
         10 => Op::Mod,
+        11 => Op::CmpEq,
+        12 => Op::CmpNe,
+        13 => Op::CmpLt,
+        14 => Op::CmpGt,
+        15 => Op::CmpLe,
+        16 => Op::CmpGe,
         other => panic!("unknown op tag {other} (word {w})"),
     }
 }
@@ -261,35 +273,59 @@ fn run_codegen(body: &Body) -> (Vec<Op>, Vec<i64>) {
     (ops, pool)
 }
 
+/// Expected result of running a built module. Arithmetic bodies return a `Word`;
+/// comparison bodies return a `bool`.
+#[derive(Clone, Copy, Debug)]
+enum Expect {
+    Int(i64),
+    Bool(bool),
+}
+
 #[test]
 fn codegen_owns_its_constant_pool_and_matches_reference() {
-    let cases: &[(&str, i64, i64)] = &[
-        ("fn main() -> Word { 1 + 2 }", 0, 3),
-        ("fn main(input: Word) -> Word { input + 1 }", 41, 42),
-        ("fn main(input: Word) -> Word { input * 2 + 1 }", 20, 41),
+    use Expect::{Bool, Int};
+    let cases: &[(&str, i64, Expect)] = &[
+        ("fn main() -> Word { 1 + 2 }", 0, Int(3)),
+        ("fn main(input: Word) -> Word { input + 1 }", 41, Int(42)),
+        (
+            "fn main(input: Word) -> Word { input * 2 + 1 }",
+            20,
+            Int(41),
+        ),
         // Repeated literal: the pool must deduplicate to a single entry, matching
         // the reference compiler's constant interning (both `2`s use Const(0)).
-        ("fn main(input: Word) -> Word { input * 2 + 2 }", 20, 42),
+        (
+            "fn main(input: Word) -> Word { input * 2 + 2 }",
+            20,
+            Int(42),
+        ),
         // `let` bindings: each lowers to its value's ops then SetLocal(slot), with
         // slots assigned after the parameters; the tail reads a let-bound slot.
         (
             "fn main(input: Word) -> Word { let x = input + 1; x * 2 }",
             20,
-            42,
+            Int(42),
         ),
         // Chained lets, later reading an earlier binding twice (slot reuse).
         (
             "fn main(input: Word) -> Word { let x = input + 1; let y = x + x; y }",
             20,
-            42,
+            Int(42),
         ),
         // Subtraction: CheckedSub, same two-word-then-PopN shape as add.
-        ("fn main(a: Word) -> Word { a - 1 }", 43, 42),
+        ("fn main(a: Word) -> Word { a - 1 }", 43, Int(42)),
         // Division and modulo: single-word Div/Mod, no PopN fixup.
-        ("fn main(a: Word) -> Word { a / 2 }", 84, 42),
-        ("fn main(a: Word) -> Word { a % 5 }", 47, 2),
+        ("fn main(a: Word) -> Word { a / 2 }", 84, Int(42)),
+        ("fn main(a: Word) -> Word { a % 5 }", 47, Int(2)),
         // Mixed: subtraction under division, exercising both shapes and nesting.
-        ("fn main(a: Word) -> Word { (a - 2) / 2 }", 86, 42),
+        ("fn main(a: Word) -> Word { (a - 2) / 2 }", 86, Int(42)),
+        // The six comparison operators: each a single Cmp* op, no PopN, bool result.
+        ("fn main(a: Word) -> bool { a < 5 }", 3, Bool(true)),
+        ("fn main(a: Word) -> bool { a > 5 }", 3, Bool(false)),
+        ("fn main(a: Word) -> bool { a <= 5 }", 5, Bool(true)),
+        ("fn main(a: Word) -> bool { a >= 5 }", 4, Bool(false)),
+        ("fn main(a: Word) -> bool { a == 5 }", 5, Bool(true)),
+        ("fn main(a: Word) -> bool { a != 5 }", 5, Bool(false)),
     ];
     for &(src, arg, expected) in cases {
         let program = parse(&tokenize(src).expect("lex")).expect("parse");
@@ -323,9 +359,14 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
         } else {
             vec![Value::Int(arg)]
         };
-        match vm.call(&call_args).expect("call built") {
-            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "wrong for `{src}`"),
-            other => panic!("expected Int for `{src}`, got {other:?}"),
+        match (expected, vm.call(&call_args).expect("call built")) {
+            (Expect::Int(e), VmState::Finished(Value::Int(n))) => {
+                assert_eq!(n, e, "wrong for `{src}`")
+            }
+            (Expect::Bool(e), VmState::Finished(Value::Bool(b))) => {
+                assert_eq!(b, e, "wrong for `{src}`")
+            }
+            (exp, got) => panic!("result mismatch for `{src}`: expected {exp:?}, got {got:?}"),
         }
     }
 }
