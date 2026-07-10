@@ -11,8 +11,9 @@
 //! Keleusma stage walks it recursion-free, interns each literal into its own
 //! deduplicating constant pool, and emits the ops followed by the pool. The host
 //! builds the module from the stage's ops and pool, checks structural equality
-//! against the Rust compiler, and runs it. Increment 13 adds unary `not`, which
-//! lowers to the operand ops followed by a single `Not` op.
+//! against the Rust compiler, and runs it. Increment 15 adds short-circuit
+//! `andalso`/`orelse`, which reuse the structured control flow (`Dup` + `If`/`Else`/
+//! `EndIf`) and whose targets the existing backpatcher resolves.
 
 use keleusma::Arena;
 use keleusma::ast::{BinOp, Block, Expr, Literal, Param, Pattern, Stmt, UnaryOp};
@@ -29,7 +30,8 @@ const KINDS: usize = 1;
 const ARGS: usize = 65;
 const LHS: usize = 129;
 const RHS: usize = 193;
-const PARAM_COUNT: usize = 257;
+const CALL_ARGS: usize = 257;
+const PARAM_COUNT: usize = 321;
 
 struct Node {
     kind: i64,
@@ -38,9 +40,18 @@ struct Node {
     rhs: i64,
 }
 
-/// A flattened function body: the expression forest and the body's block root.
+/// Flattening context: the node forest, the packed call-argument node indices, and
+/// the callee chunk names (for resolving a call target to a chunk index).
+struct Ctx {
+    nodes: Vec<Node>,
+    call_args: Vec<i64>,
+    chunk_names: Vec<String>,
+}
+
+/// A flattened function body: the flattening context and the body's block root.
 struct Body {
     nodes: Vec<Node>,
+    call_args: Vec<i64>,
     root: i64,
 }
 
@@ -54,26 +65,22 @@ fn param_name(p: &Param) -> &str {
 /// The codegen input adapter (throwaway, Rust-side). Flattens one expression into
 /// the node forest, threading a lexical `scope` (name -> slot, latest binding wins)
 /// and a monotonic `next_slot` counter. A literal carries its value, an identifier
-/// its resolved slot; an `if` flattens each branch as a block. Returns the root
-/// node index.
-fn flatten(
-    e: &Expr,
-    scope: &mut Vec<(String, i64)>,
-    next_slot: &mut i64,
-    out: &mut Vec<Node>,
-) -> i64 {
+/// its resolved slot; an `if` flattens each branch as a block; a call resolves its
+/// callee name to a chunk index and packs its argument node indices. Returns the
+/// root node index.
+fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &mut Ctx) -> i64 {
     match e {
         Expr::Literal {
             value: Literal::Int(n),
             ..
         } => {
-            out.push(Node {
+            ctx.nodes.push(Node {
                 kind: 1,
                 arg: *n,
                 lhs: 0,
                 rhs: 0,
             });
-            (out.len() - 1) as i64
+            (ctx.nodes.len() - 1) as i64
         }
         Expr::Ident { name, .. } => {
             let slot = scope
@@ -82,40 +89,46 @@ fn flatten(
                 .find(|(nm, _)| nm == name)
                 .map(|(_, s)| *s)
                 .expect("identifier must be a parameter or a let binding in scope");
-            out.push(Node {
+            ctx.nodes.push(Node {
                 kind: 2,
                 arg: slot,
                 lhs: 0,
                 rhs: 0,
             });
-            (out.len() - 1) as i64
+            (ctx.nodes.len() - 1) as i64
         }
         Expr::BinOp {
             op, left, right, ..
         } => {
-            let l = flatten(left, scope, next_slot, out);
-            let r = flatten(right, scope, next_slot, out);
-            let opcode = match op {
-                BinOp::Add => 1,
-                BinOp::Mul => 2,
-                BinOp::Sub => 3,
-                BinOp::Div => 4,
-                BinOp::Mod => 5,
-                BinOp::Eq => 6,
-                BinOp::NotEq => 7,
-                BinOp::Lt => 8,
-                BinOp::Gt => 9,
-                BinOp::LtEq => 10,
-                BinOp::GtEq => 11,
-                other => panic!("increment handles + - * / % and comparisons, got {other:?}"),
+            let l = flatten(left, scope, next_slot, ctx);
+            let r = flatten(right, scope, next_slot, ctx);
+            // Most binary operators are kind 3 with an operator code; the
+            // short-circuit booleans are their own node kinds (8, 9).
+            let (kind, arg) = match op {
+                BinOp::Add => (3, 1),
+                BinOp::Mul => (3, 2),
+                BinOp::Sub => (3, 3),
+                BinOp::Div => (3, 4),
+                BinOp::Mod => (3, 5),
+                BinOp::Eq => (3, 6),
+                BinOp::NotEq => (3, 7),
+                BinOp::Lt => (3, 8),
+                BinOp::Gt => (3, 9),
+                BinOp::LtEq => (3, 10),
+                BinOp::GtEq => (3, 11),
+                BinOp::Andalso => (8, 0),
+                BinOp::Orelse => (9, 0),
+                other => panic!(
+                    "increment handles arithmetic, comparisons, andalso/orelse, got {other:?}"
+                ),
             };
-            out.push(Node {
-                kind: 3,
-                arg: opcode,
+            ctx.nodes.push(Node {
+                kind,
+                arg,
                 lhs: l,
                 rhs: r,
             });
-            (out.len() - 1) as i64
+            (ctx.nodes.len() - 1) as i64
         }
         Expr::If {
             condition,
@@ -128,16 +141,16 @@ fn flatten(
                 .expect("increment requires an else branch");
             // Node layout for an If (kind 4): arg = cond, lhs = then, rhs = else.
             // Each branch is a full block (it may bind its own locals).
-            let cond = flatten(condition, scope, next_slot, out);
-            let t = flatten_block(then_block, scope, next_slot, out);
-            let el = flatten_block(else_block, scope, next_slot, out);
-            out.push(Node {
+            let cond = flatten(condition, scope, next_slot, ctx);
+            let t = flatten_block(then_block, scope, next_slot, ctx);
+            let el = flatten_block(else_block, scope, next_slot, ctx);
+            ctx.nodes.push(Node {
                 kind: 4,
                 arg: cond,
                 lhs: t,
                 rhs: el,
             });
-            (out.len() - 1) as i64
+            (ctx.nodes.len() - 1) as i64
         }
         Expr::UnaryOp {
             op: UnaryOp::Not,
@@ -145,16 +158,40 @@ fn flatten(
             ..
         } => {
             // UnaryNot (kind 6): operand in lhs.
-            let operand = flatten(operand, scope, next_slot, out);
-            out.push(Node {
+            let operand = flatten(operand, scope, next_slot, ctx);
+            ctx.nodes.push(Node {
                 kind: 6,
                 arg: 0,
                 lhs: operand,
                 rhs: 0,
             });
-            (out.len() - 1) as i64
+            (ctx.nodes.len() - 1) as i64
         }
-        other => panic!("increment handles literal/local/binop/if/not only, got {other:?}"),
+        Expr::Call { name, args, .. } => {
+            let chunk = ctx
+                .chunk_names
+                .iter()
+                .position(|n| n == name)
+                .expect("callee must be a known chunk") as i64;
+            // Flatten the argument expressions first (a nested call appends its own
+            // call_args), then reserve a contiguous slice for this call's args.
+            let arg_nodes: Vec<i64> = args
+                .iter()
+                .map(|a| flatten(a, scope, next_slot, ctx))
+                .collect();
+            let start = ctx.call_args.len() as i64;
+            let count = arg_nodes.len() as i64;
+            ctx.call_args.extend(arg_nodes);
+            // Call (kind 7): arg = chunk index, lhs = args_start, rhs = arg count.
+            ctx.nodes.push(Node {
+                kind: 7,
+                arg: chunk,
+                lhs: start,
+                rhs: count,
+            });
+            (ctx.nodes.len() - 1) as i64
+        }
+        other => panic!("increment handles literal/local/binop/if/not/call only, got {other:?}"),
     }
 }
 
@@ -166,14 +203,14 @@ fn flatten_block(
     block: &Block,
     scope: &mut Vec<(String, i64)>,
     next_slot: &mut i64,
-    out: &mut Vec<Node>,
+    ctx: &mut Ctx,
 ) -> i64 {
     let mark = scope.len();
     let mut lets: Vec<(i64, i64)> = Vec::new();
     for st in &block.stmts {
         match st {
             Stmt::Let(l) => {
-                let value = flatten(&l.value, scope, next_slot, out);
+                let value = flatten(&l.value, scope, next_slot, ctx);
                 let name = match &l.pattern {
                     Pattern::Variable(n, _) => n.clone(),
                     other => panic!("increment handles simple let patterns only, got {other:?}"),
@@ -193,35 +230,44 @@ fn flatten_block(
             .expect("block has a tail expression"),
         scope,
         next_slot,
-        out,
+        ctx,
     );
     // Fold the lets into a LetIn cons-list from the innermost (tail) outward.
     let mut cont = tail;
     for &(slot, value) in lets.iter().rev() {
-        out.push(Node {
+        ctx.nodes.push(Node {
             kind: 5,
             arg: slot,
             lhs: value,
             rhs: cont,
         });
-        cont = (out.len() - 1) as i64;
+        cont = (ctx.nodes.len() - 1) as i64;
     }
     scope.truncate(mark);
     cont
 }
 
-/// Flatten a function body into the node forest, returning the forest and the
-/// body's block root. Parameters occupy the first slots.
-fn build_body(block: &Block, params: &[Param]) -> Body {
-    let mut nodes = Vec::new();
+/// Flatten a function body, returning the node forest, the packed call arguments,
+/// and the body's block root. Parameters occupy the first slots. `chunk_names` maps
+/// a call target to its chunk index by position.
+fn build_body(block: &Block, params: &[Param], chunk_names: Vec<String>) -> Body {
+    let mut ctx = Ctx {
+        nodes: Vec::new(),
+        call_args: Vec::new(),
+        chunk_names,
+    };
     let mut scope: Vec<(String, i64)> = params
         .iter()
         .enumerate()
         .map(|(i, p)| (param_name(p).to_string(), i as i64))
         .collect();
     let mut next_slot = params.len() as i64;
-    let root = flatten_block(block, &mut scope, &mut next_slot, &mut nodes);
-    Body { nodes, root }
+    let root = flatten_block(block, &mut scope, &mut next_slot, &mut ctx);
+    Body {
+        nodes: ctx.nodes,
+        call_args: ctx.call_args,
+        root,
+    }
 }
 
 fn decode_op(w: i64) -> Op {
@@ -247,6 +293,8 @@ fn decode_op(w: i64) -> Op {
         18 => Op::Else(operand as u16),
         19 => Op::EndIf,
         20 => Op::Not,
+        21 => Op::Call((operand % 65536) as u16, (operand / 65536) as u8),
+        22 => Op::Dup,
         other => panic!("unknown op tag {other} (word {w})"),
     }
 }
@@ -299,6 +347,10 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
             .expect("lhs");
         vm.set_shared(&mut shared, RHS + i, Value::Int(n.rhs))
             .expect("rhs");
+    }
+    for (k, &node) in body.call_args.iter().enumerate() {
+        vm.set_shared(&mut shared, CALL_ARGS + k, Value::Int(node))
+            .expect("call_arg");
     }
     vm.set_shared(&mut shared, PARAM_COUNT, Value::Int(param_count as i64))
         .expect("param_count");
@@ -432,19 +484,75 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
         // Unary not: operand ops then a single Not.
         ("fn main(a: Word) -> bool { not (a < 5) }", 3, Bool(false)),
         ("fn main(a: Word) -> bool { not (a < 5) }", 10, Bool(true)),
+        // Function calls: args pushed left-to-right, then Call(chunk, count).
+        (
+            "fn inc(x: Word) -> Word { x + 1 } fn main(a: Word) -> Word { inc(a) }",
+            41,
+            Int(42),
+        ),
+        (
+            "fn add(x: Word, y: Word) -> Word { x + y } fn main(a: Word) -> Word { add(a, 2) }",
+            40,
+            Int(42),
+        ),
+        // Nested call: inner result is the outer argument.
+        (
+            "fn inc(x: Word) -> Word { x + 1 } fn main(a: Word) -> Word { inc(inc(a)) }",
+            40,
+            Int(42),
+        ),
+        // Call bound in a let, then used.
+        (
+            "fn inc(x: Word) -> Word { x + 1 } fn main(a: Word) -> Word { let b = inc(a); b + 1 }",
+            40,
+            Int(42),
+        ),
+        // Short-circuit andalso: left, Dup, If, PopN(1), right, Else, EndIf.
+        (
+            "fn main(a: Word) -> bool { a < 5 andalso a > 1 }",
+            3,
+            Bool(true),
+        ),
+        (
+            "fn main(a: Word) -> bool { a < 5 andalso a > 1 }",
+            10,
+            Bool(false),
+        ),
+        (
+            "fn main(a: Word) -> bool { a < 5 andalso a > 1 }",
+            0,
+            Bool(false),
+        ),
+        // Short-circuit orelse: adds a Not after the Dup.
+        (
+            "fn main(a: Word) -> bool { a < 5 orelse a > 100 }",
+            3,
+            Bool(true),
+        ),
+        (
+            "fn main(a: Word) -> bool { a < 5 orelse a > 100 }",
+            50,
+            Bool(false),
+        ),
+        (
+            "fn main(a: Word) -> bool { a < 5 orelse a > 100 }",
+            200,
+            Bool(true),
+        ),
     ];
     for &(src, arg, expected) in cases {
         let program = parse(&tokenize(src).expect("lex")).expect("parse");
         let reference = compile_src(src);
         let idx = main_index(&reference);
         let reference_ops = reference.chunks[idx].ops.clone();
+        let chunk_names: Vec<String> = reference.chunks.iter().map(|c| c.name.clone()).collect();
 
         let main_fn = program
             .functions
             .iter()
             .find(|f| f.name == "main")
             .expect("main fn");
-        let body = build_body(&main_fn.body, &main_fn.params);
+        let body = build_body(&main_fn.body, &main_fn.params, chunk_names);
 
         // The stage resolves its own If/Else targets and emits its own local_count,
         // so the emitted stream plus local_count is a complete logical chunk body.

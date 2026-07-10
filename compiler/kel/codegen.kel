@@ -1,30 +1,37 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
-// Increment 13: unary `not`. A UnaryNot node (kind 6, lhs=operand) lowers to the
-// operand ops followed by a single `Not` op (tag 20), matching the reference. It
-// builds directly on the comparison and boolean-valued expression forms; the eager
-// `and`/`or` and short-circuit `andalso`/`orelse` booleans have more involved
-// lowerings (temporary slots, `Dup`, control flow) and are separate increments.
-// See compiler/MILESTONES.md and docs/reference/INCREMENTAL_SELF_HOSTING.md.
+// Increment 15: short-circuit `andalso`/`orelse`. These reuse the existing
+// structured control flow. An Andalso node (kind 8, lhs=left, rhs=right) lowers to
+// `left, Dup, If, PopN(1), right, Else, EndIf`; an Orelse node (kind 9) inserts a
+// `Not` after the `Dup`. The `If`/`Else` markers are backpatched by the same
+// bracket-matching the `if`-expression uses, which happens to produce exactly the
+// reference's targets (both point at the `EndIf`). No temporary slot is allocated,
+// so `local_count` is unaffected; the eager `and`/`or`/`xor`, which do allocate a
+// temporary, remain a separate future increment. See compiler/MILESTONES.md and
+// docs/reference/INCREMENTAL_SELF_HOSTING.md.
 //
 // The self-hosted compiler is a full-width host tool; declare its word floor.
 require word >= 32;
 
 // Flattened expression forest from the codegen input adapter, a structure-of-
-// arrays. `kinds` is 1 Literal, 2 Local, 3 BinOp, 4 If, 5 LetIn, 6 UnaryNot.
-// `args` is the literal *value* for a Literal, the slot for a Local, the operator
-// for a BinOp, the condition node for an If, or the bound slot for a LetIn.
-// `lhs`/`rhs` are child node indices: for a BinOp the two operands; for an If the
-// then/else block roots; for a LetIn the value expression and the continuation;
-// for a UnaryNot the operand in `lhs`. `root` is the
-// function body's block root. `param_count` is the parameter arity (declaration
-// data the codegen threads into `local_count`).
+// arrays. `kinds` is 1 Literal, 2 Local, 3 BinOp, 4 If, 5 LetIn, 6 UnaryNot,
+// 7 Call, 8 Andalso, 9 Orelse (the last two have lhs=left, rhs=right). `args` is
+// the literal *value* for a Literal, the slot for a Local, the
+// operator for a BinOp, the condition node for an If, the bound slot for a LetIn,
+// or the callee chunk index for a Call. `lhs`/`rhs` are child node indices: for a
+// BinOp the two operands; for an If the then/else block roots; for a LetIn the
+// value expression and the continuation; for a UnaryNot the operand in `lhs`; for
+// a Call the argument-list start (into `call_args`) in `lhs` and the argument
+// count in `rhs`. `call_args[k]` is the k-th call argument's expression node
+// index. `root` is the function body's block root. `param_count` is the parameter
+// arity (declaration data the codegen threads into `local_count`).
 shared data ast {
     root: Word,
     kinds: [Word; 64],
     args: [Word; 64],
     lhs: [Word; 64],
     rhs: [Word; 64],
+    call_args: [Word; 64],
     param_count: Word,
 }
 
@@ -63,6 +70,7 @@ private data st {
 //   6 PopN(count)  7 SetLocal(slot)  8 CheckedSub  9 Div  10 Mod
 //   11 CmpEq  12 CmpNe  13 CmpLt  14 CmpGt  15 CmpLe  16 CmpGe
 //   17 If(target)  18 Else(target)  19 EndIf   (targets already resolved)  20 Not
+//   21 Call(chunk, count)   operand packed as chunk + count*65536   22 Dup
 // The op stream ends with Return. After Return the stage emits its constant pool:
 // first the pool size as a raw Word, then that many raw Word values, and finally
 // `local_count` as one raw Word. The host reads ops until Return, then the pool
@@ -228,6 +236,7 @@ loop main(resume: Word) -> Word {
                             st.sp = st.sp + 1;
                             yield 0
                         } else {
+                        if nk == 6 {
                             // UnaryNot (kind 6): emit the operand ops then a single
                             // Not (tag 20). Operand is in lhs. Push in reverse.
                             st.stack[st.sp] = 2 + 20 * 4;                 // EMIT Not
@@ -235,6 +244,72 @@ loop main(resume: Word) -> Word {
                             st.stack[st.sp] = 1 + ast.lhs[payload] * 4;   // VISIT operand
                             st.sp = st.sp + 1;
                             yield 0
+                        } else {
+                        if nk == 7 {
+                            // Call (kind 7): emit the argument ops left to right,
+                            // then Call(chunk, count). Node: arg = chunk index,
+                            // lhs = args_start (into call_args), rhs = arg count.
+                            // The two Call operands pack into one operand word as
+                            // chunk + count*65536. Push EMIT Call first (bottom),
+                            // then the args in reverse so arg0 ends up on top.
+                            let chunk = ast.args[payload];
+                            let count = ast.rhs[payload];
+                            let start = ast.lhs[payload];
+                            let cop = 21 + (chunk + count * 65536) * 32;
+                            st.stack[st.sp] = 2 + cop * 4;                // EMIT Call
+                            st.sp = st.sp + 1;
+                            for i in 0..64 {
+                                if i < count {
+                                    let idx = start + count - 1 - i;
+                                    st.stack[st.sp] = 1 + ast.call_args[idx] * 4;
+                                    st.sp = st.sp + 1;
+                                }
+                            }
+                            yield 0
+                        } else {
+                        if nk == 8 {
+                            // Andalso (kind 8): left, Dup, If, PopN(1), right, Else,
+                            // EndIf. The If/Else markers are backpatched in the EMIT
+                            // branch; for this shape they both target the EndIf.
+                            // Push in reverse. PopN(1) op word is 6 + 1*32.
+                            st.stack[st.sp] = 2 + 19 * 4;                 // EMIT EndIf
+                            st.sp = st.sp + 1;
+                            st.stack[st.sp] = 2 + 18 * 4;                 // EMIT Else
+                            st.sp = st.sp + 1;
+                            st.stack[st.sp] = 1 + ast.rhs[payload] * 4;   // VISIT right
+                            st.sp = st.sp + 1;
+                            st.stack[st.sp] = 2 + (6 + 1 * 32) * 4;       // EMIT PopN(1)
+                            st.sp = st.sp + 1;
+                            st.stack[st.sp] = 2 + 17 * 4;                 // EMIT If
+                            st.sp = st.sp + 1;
+                            st.stack[st.sp] = 2 + 22 * 4;                 // EMIT Dup
+                            st.sp = st.sp + 1;
+                            st.stack[st.sp] = 1 + ast.lhs[payload] * 4;   // VISIT left
+                            st.sp = st.sp + 1;
+                            yield 0
+                        } else {
+                            // Orelse (kind 9): left, Dup, Not, If, PopN(1), right,
+                            // Else, EndIf. Same as Andalso with a Not after the Dup.
+                            st.stack[st.sp] = 2 + 19 * 4;                 // EMIT EndIf
+                            st.sp = st.sp + 1;
+                            st.stack[st.sp] = 2 + 18 * 4;                 // EMIT Else
+                            st.sp = st.sp + 1;
+                            st.stack[st.sp] = 1 + ast.rhs[payload] * 4;   // VISIT right
+                            st.sp = st.sp + 1;
+                            st.stack[st.sp] = 2 + (6 + 1 * 32) * 4;       // EMIT PopN(1)
+                            st.sp = st.sp + 1;
+                            st.stack[st.sp] = 2 + 17 * 4;                 // EMIT If
+                            st.sp = st.sp + 1;
+                            st.stack[st.sp] = 2 + 20 * 4;                 // EMIT Not
+                            st.sp = st.sp + 1;
+                            st.stack[st.sp] = 2 + 22 * 4;                 // EMIT Dup
+                            st.sp = st.sp + 1;
+                            st.stack[st.sp] = 1 + ast.lhs[payload] * 4;   // VISIT left
+                            st.sp = st.sp + 1;
+                            yield 0
+                        }
+                        }
+                        }
                         }
                         }
                         }
