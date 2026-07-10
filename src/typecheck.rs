@@ -1576,6 +1576,51 @@ fn type_to_expr_full(ty: &Type, span: crate::token::Span) -> Option<TypeExpr> {
     })
 }
 
+/// Upper bound on the number of nodes in a single inferred composite type.
+///
+/// A tuple literal is the one inference construct that unfolds a type in place:
+/// `Type::Tuple` stores each element's full type inline, so a chain of
+/// type-doubling bindings such as `let t1 = (t0, t0); let t2 = (t1, t1); ...`
+/// grows the inferred type exponentially in the source length, and the
+/// owned-tree clone makes type inference itself run in exponential time. Arrays
+/// store their element type once (`Array(elem, dim)`), and structs, enums, and
+/// options carry only their distinct type arguments, so none of those unfold.
+///
+/// Capping the tuple type's node count keeps the compiler front end bounded
+/// against pathological or machine-generated source, a compile-time
+/// denial-of-service surface distinct from the runtime WCET and WCMU bounds
+/// (the parser already caps recursion via `MAX_PARSE_DEPTH` and the
+/// monomorphizer via `SPECIALIZATION_LIMIT`; this closes the inference path).
+/// The cap is far above any real program's tuple type, which has a handful of
+/// elements over simple element types.
+const MAX_INFERRED_COMPOSITE_TYPE_NODES: usize = 100_000;
+
+/// Count the nodes of `ty`, stopping as soon as the running count exceeds
+/// `limit`. Returning `None` once the limit is passed makes the walk itself
+/// cost at most `O(limit)` rather than the type's (possibly exponential) true
+/// size, so it is safe to call on an adversarial type. The worklist is explicit
+/// so a deep type cannot overflow the host stack.
+fn bounded_type_node_count(ty: &Type, limit: usize) -> Option<usize> {
+    let mut count = 0usize;
+    let mut stack: Vec<&Type> = alloc::vec![ty];
+    while let Some(t) = stack.pop() {
+        count += 1;
+        if count > limit {
+            return None;
+        }
+        match t {
+            Type::Tuple(items) | Type::Struct(_, items) | Type::Enum(_, items) => {
+                stack.extend(items.iter());
+            }
+            Type::Array(elem, _) | Type::Option(elem) | Type::Labelled(elem, _) => {
+                stack.push(elem);
+            }
+            _ => {}
+        }
+    }
+    Some(count)
+}
+
 /// Target-aware type-check entry point. Identical to [`check`]
 /// except that the surface form `Fixed` without `<N>` resolves
 /// to the target's
@@ -4905,12 +4950,26 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                 ConstDim::Known(elements.len() as i64),
             ))
         }
-        Expr::TupleLiteral { elements, .. } => {
+        Expr::TupleLiteral { elements, span } => {
             let mut tys = Vec::with_capacity(elements.len());
             for e in elements {
                 tys.push(type_of_expr(ctx, e)?);
             }
-            Ok(Type::Tuple(tys))
+            let tuple = Type::Tuple(tys);
+            // Bound the inferred tuple type so a type-doubling binding chain
+            // cannot drive inference into exponential time and memory. The
+            // check itself is `O(MAX_INFERRED_COMPOSITE_TYPE_NODES)` because the
+            // count aborts at the cap, and it fires at the first over-cap tuple,
+            // whose size is at most twice the cap.
+            if bounded_type_node_count(&tuple, MAX_INFERRED_COMPOSITE_TYPE_NODES).is_none() {
+                return Err(TypeError::new(
+                    alloc::format!(
+                        "tuple type is too large: its inferred type exceeds the {MAX_INFERRED_COMPOSITE_TYPE_NODES}-node limit. This usually means a chain of type-doubling bindings such as `let t = (p, p)`; restructure so the tuple type stays small."
+                    ),
+                    *span,
+                ));
+            }
+            Ok(tuple)
         }
         Expr::Cast { expr, target, span } => {
             // Range-check any Multiword or array dimension in the cast target
