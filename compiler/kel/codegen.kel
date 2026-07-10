@@ -1,15 +1,13 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
-// Increment 16: refactor the node dispatch into subroutines. Increments through 15
-// grew the per-node scheduling into a nine-deep `if`/`else` chain in the `loop`
-// body, which is hard to read and easy to mis-brace. This increment extracts each
-// node kind's scheduling into its own `fn` that mutates the work-stack `data`, and
-// flattens the dispatch to a flat sequence of `if nk == K { push_kind(payload); }`
-// statements (exactly one fires). Two leaf helpers, `push_visit` and `push_emit`,
-// schedule a VISIT or EMIT work item, and `emit_op` appends an op word to the
-// buffer with control-flow backpatching. This is a pure refactor: the emitted op
-// stream, constant pool, and `local_count` are byte-identical to increment 15, as
-// the unchanged conformance suite confirms. See compiler/MILESTONES.md and
+// Increment 17: round out the operator surface. Adds unary negation (a UnaryNeg
+// node, kind 10, lowering the operand ops then `CheckedNeg` and `PopN(2)`) and the
+// per-limb bitwise operators `band`/`bor`/`bxor` (BinOp operator codes 12/13/14,
+// each a single `BitAnd`/`BitOr`/`BitXor` op with no `PopN`, like the comparisons).
+// The dispatch and lowering-table extensions are one line each thanks to the
+// increment-16 refactor. Not yet covered: the data segment (`GetData`/`SetData`,
+// indexed access), `for` loops, and statement-form blocks, which are the next and
+// larger frontier. See compiler/MILESTONES.md and
 // docs/reference/INCREMENTAL_SELF_HOSTING.md.
 //
 // The self-hosted compiler is a full-width host tool; declare its word floor.
@@ -17,7 +15,8 @@ require word >= 32;
 
 // Flattened expression forest from the codegen input adapter, a structure-of-
 // arrays. `kinds` is 1 Literal, 2 Local, 3 BinOp, 4 If, 5 LetIn, 6 UnaryNot,
-// 7 Call, 8 Andalso, 9 Orelse (the last two have lhs=left, rhs=right). `args` is
+// 7 Call, 8 Andalso, 9 Orelse (the last two have lhs=left, rhs=right), 10 UnaryNeg
+// (operand in lhs). `args` is
 // the literal *value* for a Literal, the slot for a Local, the
 // operator for a BinOp, the condition node for an If, the bound slot for a LetIn,
 // or the callee chunk index for a Call. `lhs`/`rhs` are child node indices: for a
@@ -73,6 +72,7 @@ private data st {
 //   11 CmpEq  12 CmpNe  13 CmpLt  14 CmpGt  15 CmpLe  16 CmpGe
 //   17 If(target)  18 Else(target)  19 EndIf   (targets already resolved)  20 Not
 //   21 Call(chunk, count)   operand packed as chunk + count*65536   22 Dup
+//   23 CheckedNeg  24 BitAnd  25 BitOr  26 BitXor
 // The op stream ends with Return. After Return the stage emits its constant pool:
 // first the pool size as a raw Word, then that many raw Word values, and finally
 // `local_count` as one raw Word. The host reads ops until Return, then the pool
@@ -148,6 +148,7 @@ fn push_local(p: Word) -> Word {
 //   1 Add -> CheckedAdd (5) + PopN   2 Mul -> CheckedMul,0 (4) + PopN
 //   3 Sub -> CheckedSub (8) + PopN   4 Div -> Div (9)   5 Mod -> Mod (10)
 //   6 Eq -> CmpEq (11) .. 11 GtEq -> CmpGe (16), i.e. tag opc+5
+//   12 band -> BitAnd (24), 13 bor -> BitOr (25), 14 bxor -> BitXor (26), tag opc+12
 // Only the checked arithmetic operators (1, 2, 3) take the PopN.
 fn push_binop(p: Word) -> Word {
     let opc = ast.args[p];
@@ -163,7 +164,11 @@ fn push_binop(p: Word) -> Word {
                 if opc == 4 {
                     9
                 } else {
-                    if opc == 5 { 10 } else { opc + 5 }
+                    if opc == 5 {
+                        10
+                    } else {
+                        if opc <= 11 { opc + 5 } else { opc + 12 }
+                    }
                 }
             }
         }
@@ -202,6 +207,14 @@ fn push_letin(p: Word) -> Word {
 // UnaryNot (kind 6): emit the operand ops then a single Not (tag 20). lhs = operand.
 fn push_not(p: Word) -> Word {
     push_emit(20);
+    push_visit(ast.lhs[p])
+}
+
+// UnaryNeg (kind 10): emit the operand ops then CheckedNeg and the PopN(2) fixup.
+// lhs = operand.
+fn push_neg(p: Word) -> Word {
+    push_emit(6 + 2 * 32);
+    push_emit(23);
     push_visit(ast.lhs[p])
 }
 
@@ -276,6 +289,7 @@ loop main(resume: Word) -> Word {
                 if nk == 7 { push_call(payload); }
                 if nk == 8 { push_andalso(payload); }
                 if nk == 9 { push_orelse(payload); }
+                if nk == 10 { push_neg(payload); }
             }
             yield 0
         } else {

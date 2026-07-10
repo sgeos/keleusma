@@ -69,13 +69,14 @@ fn status() {
         println!("  step {}: {name:<8} {path:<20} [{state}]", i + 1);
     }
     println!();
-    println!("status: porting backward, codegen first. Codegen increment 16, a");
+    println!("status: porting backward, codegen first. Codegen increment 17, a");
     println!("recursion-free work-stack walk (node dispatch factored into per-kind");
     println!("subroutines) that compiles nestable blocks of `let`");
     println!("bindings over the binary integer arithmetic set (+ - * / %), the six");
-    println!("comparison operators, unary `not`, short-circuit `andalso`/`orelse`,");
-    println!("`if`/`else` structured control flow with stage-resolved jump targets,");
-    println!("and function calls, into an op buffer it streams with its own");
+    println!("comparison operators, unary `not` and `-`, the bitwise band/bor/bxor,");
+    println!("short-circuit `andalso`/`orelse`, `if`/`else` structured control flow");
+    println!("with stage-resolved jump targets, and function calls, into an op");
+    println!("buffer it streams with its own");
     println!("deduplicating constant pool and counted local-frame size, and lexer");
     println!("increment 1, a streaming tokenizer, both compile, verify, and run (see");
     println!("tests/selfhost_codegen.rs and `lex <file>`). V0.3.0 ships when the");

@@ -11,9 +11,9 @@
 //! Keleusma stage walks it recursion-free, interns each literal into its own
 //! deduplicating constant pool, and emits the ops followed by the pool. The host
 //! builds the module from the stage's ops and pool, checks structural equality
-//! against the Rust compiler, and runs it. Increment 15 adds short-circuit
-//! `andalso`/`orelse`, which reuse the structured control flow (`Dup` + `If`/`Else`/
-//! `EndIf`) and whose targets the existing backpatcher resolves.
+//! against the Rust compiler, and runs it. Increment 17 rounds out the operator
+//! surface with unary negation (`CheckedNeg` + `PopN(2)`) and the per-limb bitwise
+//! operators `band`/`bor`/`bxor` (single-op, no `PopN`).
 
 use keleusma::Arena;
 use keleusma::ast::{BinOp, Block, Expr, Literal, Param, Pattern, Stmt, UnaryOp};
@@ -118,8 +118,11 @@ fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &
                 BinOp::GtEq => (3, 11),
                 BinOp::Andalso => (8, 0),
                 BinOp::Orelse => (9, 0),
+                BinOp::Band => (3, 12),
+                BinOp::Bor => (3, 13),
+                BinOp::Bxor => (3, 14),
                 other => panic!(
-                    "increment handles arithmetic, comparisons, andalso/orelse, got {other:?}"
+                    "increment handles arithmetic, comparisons, booleans, bitwise, got {other:?}"
                 ),
             };
             ctx.nodes.push(Node {
@@ -152,15 +155,16 @@ fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &
             });
             (ctx.nodes.len() - 1) as i64
         }
-        Expr::UnaryOp {
-            op: UnaryOp::Not,
-            operand,
-            ..
-        } => {
-            // UnaryNot (kind 6): operand in lhs.
+        Expr::UnaryOp { op, operand, .. } if matches!(op, UnaryOp::Not | UnaryOp::Neg) => {
+            // UnaryNot (kind 6) / UnaryNeg (kind 10): operand in lhs.
+            let kind = match op {
+                UnaryOp::Not => 6,
+                UnaryOp::Neg => 10,
+                _ => unreachable!(),
+            };
             let operand = flatten(operand, scope, next_slot, ctx);
             ctx.nodes.push(Node {
-                kind: 6,
+                kind,
                 arg: 0,
                 lhs: operand,
                 rhs: 0,
@@ -295,6 +299,10 @@ fn decode_op(w: i64) -> Op {
         20 => Op::Not,
         21 => Op::Call((operand % 65536) as u16, (operand / 65536) as u8),
         22 => Op::Dup,
+        23 => Op::CheckedNeg,
+        24 => Op::BitAnd,
+        25 => Op::BitOr,
+        26 => Op::BitXor,
         other => panic!("unknown op tag {other} (word {w})"),
     }
 }
@@ -539,6 +547,13 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
             200,
             Bool(true),
         ),
+        // Unary negation: CheckedNeg then PopN(2).
+        ("fn main(a: Word) -> Word { -a }", 5, Int(-5)),
+        ("fn main(a: Word) -> Word { 3 - -a }", 4, Int(7)),
+        // Per-limb bitwise operators: single-op, no PopN.
+        ("fn main(a: Word) -> Word { a band 6 }", 5, Int(4)),
+        ("fn main(a: Word) -> Word { a bor 1 }", 4, Int(5)),
+        ("fn main(a: Word) -> Word { a bxor 3 }", 5, Int(6)),
     ];
     for &(src, arg, expected) in cases {
         let program = parse(&tokenize(src).expect("lex")).expect("parse");
