@@ -1,18 +1,16 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
-// Increment 10: the stage resolves its own `If`/`Else` targets. Increment 9 emitted
-// the control-flow structure with placeholder targets and let the host assembler
-// bracket-match them, because a single post-order walk streaming one op per yield
-// cannot know the forward branch sizes when it emits a marker. This increment
-// removes that crutch: the stage no longer yields ops as it walks. It appends each
-// op word to a bounded `ops` buffer in the `data` segment, and as it appends an
-// `Else` (resp. `EndIf`) it backpatches the matching `If` (resp. `Else`) target in
-// place, using a small control-flow position stack (`cf_if`/`cf_else`/`cf_sp`).
-// Once the walk finishes it appends `Return` and then streams the resolved buffer.
-// Backpatching a fixed-size buffer keeps memory statically bounded (WCMU). The
-// host no longer post-processes targets. Branches are restricted to a single
-// expression (no inner `let`), and `else` is required. See compiler/MILESTONES.md
-// and docs/reference/INCREMENTAL_SELF_HOSTING.md.
+// Increment 11: the stage emits `local_count`, the chunk's local-frame size. This
+// is the one chunk-header field codegen computes: the number of local slots is the
+// parameters plus one per `let` binding, `param_count + stmt_count`. The other
+// header fields (name, parameter arity and types, block type) are not codegen
+// products in any compiler; they come from the declaration the parser and type
+// checker produce, and remain input-adapter data. So emitting `local_count`
+// completes the codegen stage's own output for this grammar subset: the ops, the
+// constant pool, and the frame size. It is streamed as one raw Word after the
+// constant pool. Branches are restricted to a single expression (no inner `let`),
+// and `else` is required. See compiler/MILESTONES.md and
+// docs/reference/INCREMENTAL_SELF_HOSTING.md.
 //
 // The self-hosted compiler is a full-width host tool; declare its word floor.
 require word >= 32;
@@ -34,6 +32,7 @@ shared data ast {
     stmt_count: Word,
     stmt_expr: [Word; 32],
     stmt_slot: [Word; 32],
+    param_count: Word,
 }
 
 // The work-stack (R3.1), the op buffer the stage backpatches, and the constant
@@ -59,6 +58,7 @@ private data st {
     pool_count: Word,
     count_done: Word,
     pool_cursor: Word,
+    header_done: Word,
     dup_idx: Word,
 }
 
@@ -70,8 +70,9 @@ private data st {
 //   11 CmpEq  12 CmpNe  13 CmpLt  14 CmpGt  15 CmpLe  16 CmpGe
 //   17 If(target)  18 Else(target)  19 EndIf   (targets already resolved)
 // The op stream ends with Return. After Return the stage emits its constant pool:
-// first the pool size as a raw Word, then that many raw Word values. The host
-// reads ops until Return, then the size, then the values.
+// first the pool size as a raw Word, then that many raw Word values, and finally
+// `local_count` as one raw Word. The host reads ops until Return, then the pool
+// size, then the values, then local_count.
 
 loop main(resume: Word) -> Word {
     if st.started == 0 {
@@ -257,7 +258,14 @@ loop main(resume: Word) -> Word {
                             st.pool_cursor = st.pool_cursor + 1;
                             yield v           // a pool value (raw Word)
                         } else {
-                            yield 0           // fully drained
+                            if st.header_done == 0 {
+                                // The local-frame size: parameters plus one slot
+                                // per `let`. The one header field codegen owns.
+                                st.header_done = 1;
+                                yield ast.param_count + ast.stmt_count
+                            } else {
+                                yield 0       // fully drained
+                            }
                         }
                     }
                 }

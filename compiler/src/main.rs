@@ -69,15 +69,15 @@ fn status() {
         println!("  step {}: {name:<8} {path:<20} [{state}]", i + 1);
     }
     println!();
-    println!("status: porting backward, codegen first. Codegen increment 10, a");
+    println!("status: porting backward, codegen first. Codegen increment 11, a");
     println!("recursion-free work-stack walk that compiles a block of `let` bindings");
     println!("and a tail expression over the binary integer arithmetic set (+ - * /");
     println!("%), the six comparison operators, and `if`/`else` structured control");
     println!("flow with stage-resolved jump targets, into an op buffer it streams");
-    println!("with its own deduplicating constant pool, and lexer increment 1, a");
-    println!("streaming tokenizer, both compile, verify, and run (see");
-    println!("tests/selfhost_codegen.rs and `lex <file>`). V0.3.0 ships when the");
-    println!("bootstrap reaches a fixed point.");
+    println!("with its own deduplicating constant pool and computed local-frame");
+    println!("size, and lexer increment 1, a streaming tokenizer, both compile,");
+    println!("verify, and run (see tests/selfhost_codegen.rs and `lex <file>`).");
+    println!("V0.3.0 ships when the bootstrap reaches a fixed point.");
 }
 
 /// Run Stage 1 (the self-hosted lexer) over `path` and print the token stream.

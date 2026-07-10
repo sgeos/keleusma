@@ -11,10 +11,10 @@
 //! Keleusma stage walks it recursion-free, interns each literal into its own
 //! deduplicating constant pool, and emits the ops followed by the pool. The host
 //! builds the module from the stage's ops and pool, checks structural equality
-//! against the Rust compiler, and runs it. Increment 10 has the stage resolve its
-//! own `If`/`Else` targets: it buffers the op stream and backpatches the markers in
-//! place, so no host `resolve_targets` step is needed and the emitted stream
-//! already carries the reference's absolute targets.
+//! against the Rust compiler, and runs it. Increment 11 has the stage emit its own
+//! `local_count` (the local-frame size, `param_count + let count`) after the pool,
+//! the one chunk-header field codegen computes; the host builds the chunk with it
+//! instead of the reference's, and asserts the two agree.
 
 use keleusma::Arena;
 use keleusma::ast::{BinOp, Block, Expr, Literal, Param, Pattern, Stmt};
@@ -34,6 +34,7 @@ const RHS: usize = 193;
 const STMT_COUNT: usize = 257;
 const STMT_EXPR: usize = 258;
 const STMT_SLOT: usize = 290;
+const PARAM_COUNT: usize = 322;
 
 struct Node {
     kind: i64,
@@ -246,8 +247,9 @@ fn next_word(vm: &mut Vm<'_, '_>, shared: &mut [u8]) -> i64 {
     }
 }
 
-/// Drive the codegen; return its emitted ops and the constant pool it built.
-fn run_codegen(body: &Body) -> (Vec<Op>, Vec<i64>) {
+/// Drive the codegen; return its emitted ops, the constant pool it built, and the
+/// local-frame size (`local_count`) it computed.
+fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
     let src = std::fs::read_to_string("compiler/kel/codegen.kel").expect("read codegen.kel");
     let m = compile_src(&src);
     let need = required_persistent_capacity_for(&m);
@@ -276,6 +278,8 @@ fn run_codegen(body: &Body) -> (Vec<Op>, Vec<i64>) {
         vm.set_shared(&mut shared, STMT_SLOT + k, Value::Int(slot))
             .expect("stmt_slot");
     }
+    vm.set_shared(&mut shared, PARAM_COUNT, Value::Int(param_count as i64))
+        .expect("param_count");
 
     // Phase 1: ops until Return.
     let mut ops = Vec::new();
@@ -307,7 +311,9 @@ fn run_codegen(body: &Body) -> (Vec<Op>, Vec<i64>) {
     let pool = (0..count)
         .map(|_| next_word(&mut vm, &mut shared))
         .collect();
-    (ops, pool)
+    // Phase 3: the local-frame size the stage computed.
+    let local_count = next_word(&mut vm, &mut shared);
+    (ops, pool, local_count)
 }
 
 /// Expected result of running a built module. Arithmetic bodies return a `Word`;
@@ -402,18 +408,23 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
             .expect("main fn");
         let body = build_body(&main_fn.body, &main_fn.params);
 
-        // The stage now resolves its own If/Else targets (backpatched in its op
-        // buffer), so the emitted stream is a complete logical module as-is.
-        let (emitted, pool) = run_codegen(&body);
+        // The stage resolves its own If/Else targets and emits its own local_count,
+        // so the emitted stream plus local_count is a complete logical chunk body.
+        let (emitted, pool, local_count) = run_codegen(&body, main_fn.params.len());
         assert_eq!(
             emitted, reference_ops,
             "emitted ops must match Rust for `{src}`"
         );
+        assert_eq!(
+            local_count, reference.chunks[idx].local_count as i64,
+            "emitted local_count must match Rust for `{src}`"
+        );
 
-        // Build the module from the stage's own ops and constant pool.
+        // Build the module from the stage's own ops, constant pool, and local_count.
         let mut built = compile_src(src);
         built.chunks[idx].ops = emitted;
         built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].local_count = local_count as u16;
         let need = required_persistent_capacity_for(&built);
         let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
         arena.resize_persistent(need).expect("resize");
