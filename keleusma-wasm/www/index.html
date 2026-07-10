@@ -84,15 +84,17 @@ fn main() -> Word {
             .map(
               (b) =>
                 `<tr><td><code>${escapeHtml(b.chunk)}</code></td>` +
+                `<td>per ${escapeHtml(b.basis)}</td>` +
                 `<td>${b.wcet_cycles ?? "—"}</td>` +
                 `<td>${b.wcmu_stack_bytes ?? "—"}</td>` +
                 `<td>${b.wcmu_heap_bytes ?? "—"}</td></tr>`,
             )
             .join("");
           results.innerHTML = r.bounds.length
-            ? `<table><thead><tr><th>Chunk</th><th>WCET (cycles)</th>` +
+            ? `<table><thead><tr><th>Chunk</th><th>Basis</th><th>WCET (cycles)</th>` +
               `<th>WCMU stack (bytes)</th><th>WCMU heap (bytes)</th></tr></thead>` +
-              `<tbody>${rows}</tbody></table>`
+              `<tbody>${rows}</tbody></table>` +
+              `<p style="opacity:0.75;font-size:0.9rem">A <code>loop</code> is bounded per stream iteration; a <code>fn</code> per call; a <code>yield</code> per resume.</p>`
             : "";
         } else {
           status.className = "err";

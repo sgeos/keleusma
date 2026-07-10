@@ -9,11 +9,14 @@
 //! This is static analysis only; it does not execute the program (running would
 //! require host-native registration and output capture, a later addition).
 
+use keleusma::bytecode::BlockType;
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
 use keleusma::token::Span;
-use keleusma::verify::{verify, wcet_stream_iteration, wcmu_stream_iteration};
+use keleusma::verify::{
+    verify, wcet_stream_iteration, wcet_whole_chunk, wcmu_stream_iteration, wcmu_whole_chunk,
+};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -39,12 +42,15 @@ impl Diagnostic {
 #[derive(Serialize)]
 struct Bound {
     chunk: String,
-    /// Worst-case execution time, in pipelined cycles per stream-to-reset slice,
-    /// under the nominal cost model. `null` if not computable for this chunk.
+    /// What the bounds are measured over: `"iteration"` for a `loop` (stream)
+    /// chunk, `"call"` for a `fn`, or `"resume"` for a `yield` chunk.
+    basis: &'static str,
+    /// Worst-case execution time in pipelined cycles, under the nominal cost
+    /// model. `null` if not computable for this chunk.
     wcet_cycles: Option<u32>,
-    /// Worst-case operand-stack bytes per slice. `null` if not computable.
+    /// Worst-case operand-stack bytes. `null` if not computable.
     wcmu_stack_bytes: Option<u32>,
-    /// Worst-case heap (arena) bytes per slice. `null` if not computable.
+    /// Worst-case heap (arena) bytes. `null` if not computable.
     wcmu_heap_bytes: Option<u32>,
 }
 
@@ -80,13 +86,34 @@ fn analyze(src: &str) -> CheckResult {
         .chunks
         .iter()
         .map(|chunk| {
-            let (stack, heap) = match wcmu_stream_iteration(chunk) {
-                Ok((s, h)) => (Some(s), Some(h)),
-                Err(_) => (None, None),
+            // A stream (`loop`) chunk's bounds are per stream-to-reset iteration;
+            // a `fn` or `yield` chunk's are for the whole chunk (per call / per
+            // resume). Calling the wrong one returns Err, so pick by block type.
+            let (basis, wcet, wcmu) = match chunk.block_type {
+                BlockType::Stream => (
+                    "iteration",
+                    wcet_stream_iteration(chunk).ok(),
+                    wcmu_stream_iteration(chunk).ok(),
+                ),
+                BlockType::Func => (
+                    "call",
+                    wcet_whole_chunk(chunk).ok(),
+                    wcmu_whole_chunk(chunk).ok(),
+                ),
+                BlockType::Reentrant => (
+                    "resume",
+                    wcet_whole_chunk(chunk).ok(),
+                    wcmu_whole_chunk(chunk).ok(),
+                ),
+            };
+            let (stack, heap) = match wcmu {
+                Some((s, h)) => (Some(s), Some(h)),
+                None => (None, None),
             };
             Bound {
                 chunk: chunk.name.clone(),
-                wcet_cycles: wcet_stream_iteration(chunk).ok(),
+                basis,
+                wcet_cycles: wcet,
                 wcmu_stack_bytes: stack,
                 wcmu_heap_bytes: heap,
             }
@@ -123,9 +150,40 @@ mod tests {
 
     #[test]
     fn clean_program_reports_ok_with_bounds() {
+        // `fn main` is a Func chunk; its WCET comes from wcet_whole_chunk (the
+        // stream-only path returns Err for a fn), so it must be reported.
         let json = check("fn main() -> Word { 1 }\n");
-        assert!(json.contains("\"ok\":true"), "{json}");
-        assert!(json.contains("\"bounds\""));
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["ok"], true, "{json}");
+        let bounds = v["bounds"].as_array().unwrap();
+        assert!(!bounds.is_empty());
+        assert_eq!(bounds[0]["basis"], "call");
+        assert!(
+            bounds[0]["wcet_cycles"].is_number(),
+            "fn chunk must report a WCET: {json}"
+        );
+    }
+
+    #[test]
+    fn helper_fn_and_loop_each_report_a_wcet() {
+        // The reported bug: a helper `fn` alongside a `loop` showed no WCET
+        // because only the stream chunk was measured. Now every chunk does.
+        let src = "private data state { total: Word }\n\
+                   fn add(a: Word, b: Word) -> Word { a + b }\n\
+                   loop main(value: Word) -> Word {\n\
+                     state.total = add(value, state.total);\n\
+                     yield state.total\n\
+                   }\n";
+        let json = check(src);
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["ok"], true, "{json}");
+        for b in v["bounds"].as_array().unwrap() {
+            assert!(
+                b["wcet_cycles"].is_number(),
+                "chunk {} has no WCET: {json}",
+                b["chunk"]
+            );
+        }
     }
 
     #[test]
