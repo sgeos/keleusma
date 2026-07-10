@@ -15,20 +15,61 @@
       }
       h1 { margin-bottom: 0.25rem; }
       p.tagline { margin-top: 0; opacity: 0.8; }
-      textarea {
+      .toolbar { margin: 0.75rem 0; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+      label { font-size: 0.9rem; opacity: 0.85; }
+      select { font: inherit; padding: 0.25rem 0.4rem; }
+
+      /* Overlay-highlighted editor: a <pre> shows colored tokens behind a
+         transparent-text <textarea> that owns the caret and input. Both must
+         share an identical box model, and their scroll is kept in sync. */
+      .editor { position: relative; height: 20rem; }
+      .editor pre,
+      .editor textarea {
+        margin: 0;
+        padding: 0.75rem;
+        border: 1px solid rgba(128, 128, 128, 0.4);
+        box-sizing: border-box;
+        position: absolute;
+        inset: 0;
         width: 100%;
-        min-height: 16rem;
+        height: 100%;
+        overflow: auto;
         font-family: ui-monospace, monospace;
         font-size: 0.95rem;
-        padding: 0.75rem;
-        box-sizing: border-box;
+        line-height: 1.5;
+        white-space: pre;
+        tab-size: 2;
       }
+      .editor pre { pointer-events: none; margin: 0; }
+      .editor textarea {
+        background: transparent;
+        color: transparent;
+        caret-color: currentColor;
+        resize: none;
+      }
+      .kel-keyword { color: #a626a4; font-weight: 600; }
+      .kel-type { color: #b26a00; }
+      .kel-string { color: #22863a; }
+      .kel-comment { color: #6a737d; font-style: italic; }
+      .kel-number { color: #b26a00; }
+      .kel-label { color: #0b7285; }
+      .kel-op { color: #0366d6; }
+      @media (prefers-color-scheme: dark) {
+        .kel-keyword { color: #c678dd; }
+        .kel-type { color: #e5c07b; }
+        .kel-string { color: #98c379; }
+        .kel-comment { color: #7f848e; }
+        .kel-number { color: #d19a66; }
+        .kel-label { color: #56b6c2; }
+        .kel-op { color: #61afef; }
+      }
+
       #status { font-weight: 600; margin: 0.75rem 0; }
       .ok { color: #197a19; }
       .err { color: #b00020; }
       table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; }
       th, td { border: 1px solid rgba(128, 128, 128, 0.4); padding: 0.35rem 0.6rem; text-align: right; }
-      th:first-child, td:first-child { text-align: left; }
+      th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
       ul.diagnostics { padding-left: 1.2rem; }
       code { font-family: ui-monospace, monospace; }
       footer { margin-top: 2rem; opacity: 0.7; font-size: 0.9rem; }
@@ -39,21 +80,18 @@
     <p class="tagline">
       A total-functional stream processor with <strong>definitive worst-case
       execution time and memory bounds</strong>. Edit below; the program is
-      compiled and verified in your browser, and its per-chunk WCET and WCMU
-      bounds are reported.
+      compiled and verified in your browser and its per-chunk bounds are shown.
     </p>
 
-    <textarea id="src" spellcheck="false" aria-label="Keleusma source">
-fn add(a: Word, b: Word) -> Word {
-  a + b
-}
+    <div class="toolbar">
+      <label for="examples">Example:</label>
+      <select id="examples" aria-label="Example programs"></select>
+    </div>
 
-fn main() -> Word {
-  let x = 40;
-  let y = 2;
-  add(x, y)
-}
-</textarea>
+    <div class="editor">
+      <pre aria-hidden="true"><code id="hl"></code></pre>
+      <textarea id="src" spellcheck="false" wrap="off" aria-label="Keleusma source"></textarea>
+    </div>
 
     <p id="status">Loading compiler…</p>
     <div id="results"></div>
@@ -65,14 +103,75 @@ fn main() -> Word {
     </footer>
 
     <script type="module">
-      import init, { check } from "./pkg/keleusma_wasm.js";
+      import init, { check, keywords } from "./pkg/keleusma_wasm.js";
 
       const status = document.getElementById("status");
       const results = document.getElementById("results");
       const src = document.getElementById("src");
+      const hl = document.getElementById("hl");
+      const examplesSelect = document.getElementById("examples");
+
+      // Primitive type names are a small, stable set (see keleusma-lsp for the
+      // same rationale). Keywords come from the wasm module so they cannot drift.
+      const TYPES = new Set(["Word", "Byte", "Multiword", "Fixed", "Float", "bool", "Text", "Option"]);
+      let KEYWORDS = new Set();
+
+      const EXAMPLES = {
+        "Counter (loop + private data)":
+          "private data state { total: Word }\n\n" +
+          "fn add(a: Word, b: Word) -> Word {\n  a + b\n}\n\n" +
+          "loop main(value: Word) -> Word {\n  state.total = add(value, state.total);\n  yield state.total\n}\n",
+        "Add function":
+          "fn add(a: Word, b: Word) -> Word {\n  a + b\n}\n\n" +
+          "fn main() -> Word {\n  add(40, 2)\n}\n",
+        "Enum and match":
+          "enum Color { Red, Green, Blue }\n\n" +
+          "fn rank(c: Color) -> Word {\n  match c {\n    Color::Red => 0,\n    Color::Green => 1,\n    Color::Blue => 2,\n  }\n}\n\n" +
+          "fn main() -> Word {\n  rank(Color::Green)\n}\n",
+        "Fixed-point":
+          "fn main() -> Fixed<16> {\n  let a = 1.5Fixed<16>;\n  let b = 2.25Fixed<16>;\n  a + b\n}\n",
+        "Rejected: type mismatch":
+          "fn main() -> Word {\n  true\n}\n",
+      };
 
       function escapeHtml(s) {
         return s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+      }
+
+      // One token at a time: comment, string, @label, number, identifier, or a
+      // multi-character operator. Everything else passes through escaped.
+      const TOKEN =
+        /(\/\/[^\n]*|\/\*[\s\S]*?\*\/|^#!.*)|("(?:[^"\\]|\\.)*")|(@!?(?:[A-Za-z_]\w*|\{[^}]*\}))|(\b0x[0-9a-fA-F_]+|\b0b[01_]+|\b\d[\d_]*(?:\.\d[\d_]*)?[A-Za-z_]*)|([A-Za-z_]\w*)|(\|>|->|=>|::|\.\.)/gm;
+
+      function renderHighlight(text) {
+        let out = "";
+        let last = 0;
+        let m;
+        TOKEN.lastIndex = 0;
+        while ((m = TOKEN.exec(text))) {
+          out += escapeHtml(text.slice(last, m.index));
+          let cls = "";
+          if (m[1]) cls = "kel-comment";
+          else if (m[2]) cls = "kel-string";
+          else if (m[3]) cls = "kel-label";
+          else if (m[4]) cls = "kel-number";
+          else if (m[5]) {
+            const w = m[5];
+            if (KEYWORDS.has(w)) cls = "kel-keyword";
+            else if (TYPES.has(w) || /^[A-Z]/.test(w)) cls = "kel-type";
+          } else if (m[6]) cls = "kel-op";
+          const tok = escapeHtml(m[0]);
+          out += cls ? `<span class="${cls}">${tok}</span>` : tok;
+          last = m.index + m[0].length;
+        }
+        out += escapeHtml(text.slice(last));
+        hl.innerHTML = out + "\n"; // trailing newline so the final line shows
+      }
+
+      function syncScroll() {
+        const pre = hl.parentElement;
+        pre.scrollTop = src.scrollTop;
+        pre.scrollLeft = src.scrollLeft;
       }
 
       function render(json) {
@@ -109,6 +208,8 @@ fn main() -> Word {
       }
 
       function run() {
+        renderHighlight(src.value);
+        syncScroll();
         try {
           render(check(src.value));
         } catch (e) {
@@ -120,13 +221,30 @@ fn main() -> Word {
 
       let timer;
       src.addEventListener("input", () => {
+        renderHighlight(src.value);
+        syncScroll();
         clearTimeout(timer);
         timer = setTimeout(run, 250);
       });
+      src.addEventListener("scroll", syncScroll);
+
+      function loadExample(name) {
+        src.value = EXAMPLES[name];
+        run();
+      }
+
+      for (const name of Object.keys(EXAMPLES)) {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name;
+        examplesSelect.appendChild(opt);
+      }
+      examplesSelect.addEventListener("change", () => loadExample(examplesSelect.value));
 
       init().then(() => {
+        KEYWORDS = new Set(keywords());
         status.className = "";
-        run();
+        loadExample(Object.keys(EXAMPLES)[0]);
       });
     </script>
   </body>

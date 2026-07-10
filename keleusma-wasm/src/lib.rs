@@ -144,6 +144,16 @@ pub fn check(src: &str) -> String {
     })
 }
 
+/// The authoritative keyword list, for the playground's syntax highlighter.
+/// Sourced from `keleusma::token::KEYWORDS` so it cannot drift from the lexer.
+#[wasm_bindgen]
+pub fn keywords() -> Vec<String> {
+    keleusma::token::KEYWORDS
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,5 +201,12 @@ mod tests {
         let json = check("fn (");
         assert!(json.contains("\"ok\":false"), "{json}");
         assert!(json.contains("\"message\""));
+    }
+
+    #[test]
+    fn keywords_match_the_core_list() {
+        let k = keywords();
+        assert_eq!(k.len(), keleusma::token::KEYWORDS.len());
+        assert!(k.contains(&"loop".to_string()) && k.contains(&"yield".to_string()));
     }
 }
