@@ -272,6 +272,7 @@
       // ---- Run mode -------------------------------------------------------
       let session = null;
       let activeLines = [];
+      let yieldCount = 0; // how many yields have occurred in the current run
 
       function freeSession() {
         if (session) {
@@ -280,10 +281,15 @@
         }
       }
 
-      function yieldLines(text) {
+      // Lines that begin a `yield <expr>` statement, in source order. Excludes a
+      // `yield main(...)` function declaration, where `yield` is the category
+      // keyword rather than a yield expression.
+      function yieldStatementLines(text) {
         const out = [];
         text.split("\n").forEach((line, i) => {
-          if (/\byield\b/.test(line)) out.push(i + 1);
+          if (/^\s*yield\b/.test(line) && !/^\s*yield\s+[A-Za-z_]\w*\s*\(/.test(line)) {
+            out.push(i + 1);
+          }
         });
         return out;
       }
@@ -315,7 +321,11 @@
         const shown = r.value ?? r.detail ?? "?";
         if (r.state === "yielded") {
           text = `⏸ Yielded: ${shown}`;
-          lines = yieldLines(src.value);
+          // Highlight only the current yield: the yieldCount-th yield statement,
+          // in source order. A loop's single yield stays on its one line.
+          const ys = yieldStatementLines(src.value);
+          if (ys.length) lines = [ys[Math.min(yieldCount, ys.length - 1)]];
+          yieldCount += 1;
         } else if (r.state === "finished") {
           text = `■ Finished: ${shown}`;
         } else if (r.state === "reset") {
@@ -334,15 +344,20 @@
 
       function doRun() {
         freeSession();
+        yieldCount = 0;
         session = new Session(src.value);
         showStep(session.step(inputValue()));
       }
       function doResume() {
-        if (!session) session = new Session(src.value);
+        if (!session) {
+          session = new Session(src.value);
+          yieldCount = 0;
+        }
         showStep(session.step(inputValue()));
       }
       function doRestart() {
         if (session) session.reset();
+        yieldCount = 0;
         runStatus.textContent = "";
         setActiveLines([]);
       }
@@ -355,6 +370,7 @@
       let timer;
       function invalidateRun() {
         freeSession();
+        yieldCount = 0;
         runStatus.textContent = "";
         setActiveLines([]);
       }
