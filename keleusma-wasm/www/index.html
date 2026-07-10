@@ -17,11 +17,13 @@
       p.tagline { margin-top: 0; opacity: 0.8; }
       .toolbar { margin: 0.75rem 0; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
       label { font-size: 0.9rem; opacity: 0.85; }
-      select { font: inherit; padding: 0.25rem 0.4rem; }
+      select, input, button { font: inherit; }
+      select { padding: 0.25rem 0.4rem; }
 
       /* Overlay-highlighted editor: a <pre> shows colored tokens behind a
-         transparent-text <textarea> that owns the caret and input. Both must
-         share an identical box model, and their scroll is kept in sync. */
+         transparent-text <textarea> that owns the caret and input, with an
+         optional active-line band behind both. All share an identical box model
+         and their scroll is kept in sync. */
       .editor { position: relative; height: 20rem; }
       .editor pre,
       .editor textarea {
@@ -40,12 +42,22 @@
         white-space: pre;
         tab-size: 2;
       }
-      .editor pre { pointer-events: none; margin: 0; }
+      .editor pre { pointer-events: none; margin: 0; z-index: 1; }
       .editor textarea {
         background: transparent;
         color: transparent;
         caret-color: currentColor;
         resize: none;
+        z-index: 2;
+      }
+      .editor .active-line {
+        position: absolute;
+        left: 0;
+        right: 0;
+        background: rgba(255, 196, 0, 0.28);
+        border-left: 3px solid rgba(230, 150, 0, 0.9);
+        pointer-events: none;
+        z-index: 0;
       }
       .kel-keyword { color: #a626a4; font-weight: 600; }
       .kel-type { color: #b26a00; }
@@ -72,6 +84,10 @@
       th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
       ul.diagnostics { padding-left: 1.2rem; }
       code { font-family: ui-monospace, monospace; }
+      .run { margin: 1rem 0 0.25rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+      .run input { width: 5rem; }
+      .run button { padding: 0.25rem 0.7rem; cursor: pointer; }
+      #runstatus { font-weight: 600; margin-left: 0.25rem; }
       footer { margin-top: 2rem; opacity: 0.7; font-size: 0.9rem; }
     </style>
   </head>
@@ -80,7 +96,8 @@
     <p class="tagline">
       A total-functional stream processor with <strong>definitive worst-case
       execution time and memory bounds</strong>. Edit below; the program is
-      compiled and verified in your browser and its per-chunk bounds are shown.
+      compiled and verified in your browser, its per-chunk bounds are shown, and
+      you can run it step by step.
     </p>
 
     <div class="toolbar">
@@ -96,20 +113,40 @@
     <p id="status">Loading compiler…</p>
     <div id="results"></div>
 
+    <div class="run">
+      <label for="runval">input:</label>
+      <input id="runval" type="number" value="0" aria-label="main parameter / resume value" />
+      <button id="run">Run ▶</button>
+      <button id="resume">Resume ⏭</button>
+      <button id="restart">Restart ⟲</button>
+      <span id="runstatus"></span>
+    </div>
+    <p style="opacity:0.7;font-size:0.9rem">
+      Run executes the program in your browser. <em>input</em> is the
+      <code>main</code> parameter, and each resume value. A <code>loop</code>
+      stops at each <code>yield</code> (highlighted) and at the iteration
+      <code>Reset</code>; a <code>fn</code> runs to <code>Finished</code>.
+      Programs that call host functions, or read private data before writing it,
+      cannot run yet.
+    </p>
+
     <footer>
-      Runs the Keleusma compiler and verifier compiled to WebAssembly. Static
-      analysis only; the program is not executed. See the
+      The Keleusma compiler, verifier, and virtual machine compiled to
+      WebAssembly. See the
       <a href="https://github.com/sgeos/keleusma">project repository</a>.
     </footer>
 
     <script type="module">
-      import init, { check, keywords } from "./pkg/keleusma_wasm.js";
+      import init, { check, keywords, Session } from "./pkg/keleusma_wasm.js";
 
       const status = document.getElementById("status");
       const results = document.getElementById("results");
       const src = document.getElementById("src");
       const hl = document.getElementById("hl");
+      const editor = document.querySelector(".editor");
       const examplesSelect = document.getElementById("examples");
+      const runVal = document.getElementById("runval");
+      const runStatus = document.getElementById("runstatus");
 
       // Primitive type names are a small, stable set (see keleusma-lsp for the
       // same rationale). Keywords come from the wasm module so they cannot drift.
@@ -117,6 +154,8 @@
       let KEYWORDS = new Set();
 
       const EXAMPLES = {
+        "Echo loop (run this, then Resume)":
+          "loop main(value: Word) -> Word {\n  yield value\n}\n",
         "Counter (loop + private data)":
           "private data state { total: Word }\n\n" +
           "fn add(a: Word, b: Word) -> Word {\n  a + b\n}\n\n" +
@@ -172,6 +211,7 @@
         const pre = hl.parentElement;
         pre.scrollTop = src.scrollTop;
         pre.scrollLeft = src.scrollLeft;
+        positionActiveLines();
       }
 
       function render(json) {
@@ -208,7 +248,7 @@
         }
       }
 
-      function run() {
+      function check_() {
         renderHighlight(src.value);
         syncScroll();
         try {
@@ -220,18 +260,107 @@
         }
       }
 
+      // ---- Run mode -------------------------------------------------------
+      let session = null;
+      let activeLines = [];
+
+      function freeSession() {
+        if (session) {
+          session.free();
+          session = null;
+        }
+      }
+
+      function yieldLines(text) {
+        const out = [];
+        text.split("\n").forEach((line, i) => {
+          if (/\byield\b/.test(line)) out.push(i + 1);
+        });
+        return out;
+      }
+
+      function positionActiveLines() {
+        editor.querySelectorAll(".active-line").forEach((e) => e.remove());
+        if (!activeLines.length) return;
+        const cs = getComputedStyle(src);
+        const lh = parseFloat(cs.lineHeight);
+        const pt = parseFloat(cs.paddingTop);
+        for (const ln of activeLines) {
+          const d = document.createElement("div");
+          d.className = "active-line";
+          d.style.top = pt + (ln - 1) * lh - src.scrollTop + "px";
+          d.style.height = lh + "px";
+          editor.appendChild(d);
+        }
+      }
+
+      function setActiveLines(lines) {
+        activeLines = lines;
+        positionActiveLines();
+      }
+
+      function showStep(json) {
+        const r = JSON.parse(json);
+        let text;
+        let lines = [];
+        if (r.state === "yielded") {
+          text = `⏸ Yielded: ${r.value}`;
+          lines = yieldLines(src.value);
+        } else if (r.state === "finished") {
+          text = `■ Finished: ${r.value}`;
+        } else if (r.state === "reset") {
+          text = "↺ Reset (loop iteration boundary)";
+        } else {
+          text = "✗ " + (r.detail ?? "error");
+        }
+        runStatus.textContent = `${text}  ·  step ${r.step}`;
+        setActiveLines(lines);
+      }
+
+      function inputValue() {
+        // `Session.step` takes an i64, which wasm-bindgen marshals as a BigInt.
+        return BigInt(parseInt(runVal.value || "0", 10) || 0);
+      }
+
+      function doRun() {
+        freeSession();
+        session = new Session(src.value);
+        showStep(session.step(inputValue()));
+      }
+      function doResume() {
+        if (!session) session = new Session(src.value);
+        showStep(session.step(inputValue()));
+      }
+      function doRestart() {
+        if (session) session.reset();
+        runStatus.textContent = "";
+        setActiveLines([]);
+      }
+
+      document.getElementById("run").addEventListener("click", doRun);
+      document.getElementById("resume").addEventListener("click", doResume);
+      document.getElementById("restart").addEventListener("click", doRestart);
+
+      // ---- Editing --------------------------------------------------------
       let timer;
+      function invalidateRun() {
+        freeSession();
+        runStatus.textContent = "";
+        setActiveLines([]);
+      }
       src.addEventListener("input", () => {
         renderHighlight(src.value);
         syncScroll();
+        invalidateRun();
         clearTimeout(timer);
-        timer = setTimeout(run, 250);
+        timer = setTimeout(check_, 250);
       });
       src.addEventListener("scroll", syncScroll);
 
       function loadExample(name) {
+        invalidateRun();
         src.value = EXAMPLES[name];
-        run();
+        check_();
       }
 
       for (const name of Object.keys(EXAMPLES)) {

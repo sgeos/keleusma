@@ -1,15 +1,19 @@
-//! WebAssembly bindings for the Keleusma compiler.
+//! WebAssembly bindings for the Keleusma compiler, powering the browser
+//! playground.
 //!
-//! Exposes a single `check` entry point that the browser playground calls: it
-//! runs the full static pipeline (`tokenize` → `parse` → `compile` → `verify`)
-//! and, on success, reports the per-chunk worst-case-execution-time and
-//! worst-case-memory-usage bounds. Surfacing definitive resource bounds in a
-//! playground is the feature no other language's playground offers.
+//! - [`check`] runs the full static pipeline (`tokenize` → `parse` → `compile`
+//!   → `verify`) and reports the per-chunk worst-case-execution-time and
+//!   worst-case-memory-usage bounds — the definitive bounds no other language's
+//!   playground shows.
+//! - [`keywords`] exposes the authoritative keyword list for the highlighter.
+//! - [`Session`] *runs* the program step by step, surfacing the
+//!   `Yielded`/`Reset`/`Finished` state and value at each step so the page can
+//!   drive a Resume button and a debugger-style indicator.
 //!
-//! This is static analysis only; it does not execute the program (running would
-//! require host-native registration and output capture, a later addition).
+//! Programs that call host-native functions cannot run here; a pure program can.
 
-use keleusma::bytecode::BlockType;
+use keleusma::Arena;
+use keleusma::bytecode::{BlockType, Value};
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
@@ -17,6 +21,7 @@ use keleusma::token::Span;
 use keleusma::verify::{
     verify, wcet_stream_iteration, wcet_whole_chunk, wcmu_stream_iteration, wcmu_whole_chunk,
 };
+use keleusma::vm::{DEFAULT_ARENA_CAPACITY, GenericVmState, Vm, required_persistent_capacity_for};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -154,6 +159,155 @@ pub fn keywords() -> Vec<String> {
         .collect()
 }
 
+/// One step of a run: the coroutine state and, for a scalar `Word`, its value.
+#[derive(Serialize)]
+struct StepResult {
+    /// `"yielded"`, `"reset"`, `"finished"`, or `"error"`.
+    state: &'static str,
+    /// The `Word` value yielded or returned, when it is a scalar integer.
+    value: Option<i64>,
+    /// A human-readable detail: an error, or the debug form of a non-scalar value.
+    detail: Option<String>,
+    /// How many inputs have been fed (the initial call plus each resume).
+    step: usize,
+}
+
+fn err_step(detail: String) -> StepResult {
+    StepResult {
+        state: "error",
+        value: None,
+        detail: Some(detail),
+        step: 0,
+    }
+}
+
+/// A stateful run of a program, driven one step at a time from the page.
+///
+/// Execution is deterministic replay: the session holds the source and the input
+/// history and, on each step, replays the whole history through a fresh VM. The
+/// VM and its arena are local to the call, so no VM borrow escapes. A program
+/// that reads private data before writing it currently fails at runtime (private
+/// data is not yet default-initialized); pure programs and stateless loops run.
+#[wasm_bindgen]
+pub struct Session {
+    src: String,
+    inputs: Vec<i64>,
+}
+
+#[wasm_bindgen]
+impl Session {
+    /// Create a run for `src`. Nothing executes until the first step.
+    #[wasm_bindgen(constructor)]
+    pub fn new(src: String) -> Session {
+        Session {
+            src,
+            inputs: Vec::new(),
+        }
+    }
+
+    /// Discard the run so the next step starts a fresh call from the top.
+    pub fn reset(&mut self) {
+        self.inputs.clear();
+    }
+
+    /// Feed the next input (the `main` parameter / resume value) and advance to
+    /// the next coroutine stop. Returns a [`StepResult`] as JSON.
+    pub fn step(&mut self, input: i64) -> String {
+        self.inputs.push(input);
+        serde_json::to_string(&self.replay()).unwrap_or_else(|_| {
+            r#"{"state":"error","value":null,"detail":"serialization error","step":0}"#.to_string()
+        })
+    }
+
+    fn replay(&self) -> StepResult {
+        let tokens = match tokenize(&self.src) {
+            Ok(t) => t,
+            Err(e) => return err_step(e.message),
+        };
+        let program = match parse(&tokens) {
+            Ok(p) => p,
+            Err(e) => return err_step(e.message),
+        };
+        // The entry `main` may take zero parameters (e.g. `fn main()`) or one
+        // (e.g. `loop main(value: Word)`); the initial call must match its arity,
+        // or the VM rejects the argument count.
+        let main_arity = program
+            .functions
+            .iter()
+            .find(|f| f.name == "main")
+            .map_or(0, |f| f.params.len());
+        let module = match compile(&program) {
+            Ok(m) => m,
+            Err(e) => return err_step(e.message),
+        };
+        // A local arena sized for the module's private (persistent) data, dropped
+        // together with the VM at the end of this call so no VM borrow escapes.
+        let need = required_persistent_capacity_for(&module);
+        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+        if let Err(e) = arena.resize_persistent(need) {
+            return err_step(format!("{e:?}"));
+        }
+        let mut vm = match Vm::new(module, &arena) {
+            Ok(vm) => vm,
+            Err(e) => return err_step(format!("{e:?}")),
+        };
+        let mut last = None;
+        for (i, &input) in self.inputs.iter().enumerate() {
+            let result = if i == 0 {
+                if main_arity == 0 {
+                    vm.call(&[])
+                } else {
+                    vm.call(&[Value::Int(input)])
+                }
+            } else {
+                vm.resume(Value::Int(input))
+            };
+            match result {
+                Ok(state) => last = Some(state),
+                Err(e) => return err_step(format!("{e:?}")),
+            }
+        }
+        step_result(last, self.inputs.len())
+    }
+}
+
+fn step_result(state: Option<GenericVmState<i64, f64>>, step: usize) -> StepResult {
+    match state {
+        Some(GenericVmState::Yielded(v)) => scalar_step("yielded", v, step),
+        Some(GenericVmState::Finished(v)) => scalar_step("finished", v, step),
+        Some(GenericVmState::Reset) => StepResult {
+            state: "reset",
+            value: None,
+            detail: None,
+            step,
+        },
+        Some(GenericVmState::BreakpointHit { .. }) => StepResult {
+            state: "reset",
+            value: None,
+            detail: Some("breakpoint".into()),
+            step,
+        },
+        None => err_step("no input".into()),
+    }
+}
+
+fn scalar_step(state: &'static str, value: Value, step: usize) -> StepResult {
+    match value {
+        Value::Int(n) => StepResult {
+            state,
+            value: Some(n),
+            detail: None,
+            step,
+        },
+        other => StepResult {
+            state,
+            value: None,
+            detail: Some(format!("{other:?}")),
+            step,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,5 +362,30 @@ mod tests {
         let k = keywords();
         assert_eq!(k.len(), keleusma::token::KEYWORDS.len());
         assert!(k.contains(&"loop".to_string()) && k.contains(&"yield".to_string()));
+    }
+
+    #[test]
+    fn session_runs_a_stateless_loop() {
+        let mut s =
+            Session::new("loop main(value: Word) -> Word {\n  yield value\n}\n".to_string());
+        // call(5) -> yields 5
+        let a: serde_json::Value = serde_json::from_str(&s.step(5)).unwrap();
+        assert_eq!(a["state"], "yielded");
+        assert_eq!(a["value"], 5);
+        // resume -> Reset (loop body end), then resume with 9 -> yields 9
+        let b: serde_json::Value = serde_json::from_str(&s.step(7)).unwrap();
+        assert_eq!(b["state"], "reset");
+        let c: serde_json::Value = serde_json::from_str(&s.step(9)).unwrap();
+        assert_eq!(c["state"], "yielded");
+        assert_eq!(c["value"], 9);
+    }
+
+    #[test]
+    fn session_runs_a_zero_arg_fn() {
+        // `fn main()` takes no parameters; the call must not pass the input.
+        let mut s = Session::new("fn main() -> Word { 40 + 2 }\n".to_string());
+        let v: serde_json::Value = serde_json::from_str(&s.step(0)).unwrap();
+        assert_eq!(v["state"], "finished");
+        assert_eq!(v["value"], 42);
     }
 }
