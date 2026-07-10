@@ -10,6 +10,14 @@ Keleusma is a Total Functional Stream Processing Language whose design is inform
 
 Keleusma emphasizes minimal, analyzable primitives. The language eliminates dynamic features such as dynamic dispatch, unbounded recursion, and heap fragmentation to ensure absolute predictability. Exciting system behavior emerges externally, not from language complexity. These design choices are shared with the synchronous reactive language family (Lustre, Esterel, Signal, SCADE) [SY1], which has demonstrated that deterministic, bounded-step languages are practical for real-time embedded applications.
 
+### Purity as spent optionality
+
+Keleusma admits only pure total functions, which makes evaluation referentially transparent. Referential transparency is a freedom that a language spends once, on some particular capability, and different languages spend the same freedom on different things.
+
+Keleusma spends it on definitive worst-case execution time and worst-case memory usage. Because the result of an expression does not depend on the order in which its parts are evaluated, the compiler fixes one deterministic evaluation order and the verifier bounds that order's cost exactly. A closely related pure functional language, Rex, spends the same referential transparency on implicit parallelism, evaluating independent subexpressions concurrently.
+
+These two uses pull against each other. Tight worst-case bounds want a single fixed schedule whose cost the verifier can compute ahead of time, whereas implicit parallelism wants a dynamic schedule whose timing depends on the runtime and the available cores. Keleusma therefore treats single-threaded deterministic execution as a deliberate choice that buys the bounds, not as a limitation to be removed. A future parallel mode without worst-case bounds would be a different product with a different guarantee rather than a missing feature of this one.
+
 ## Design Goals
 
 Keleusma pursues seven design goals drawn from its grammar specification.
