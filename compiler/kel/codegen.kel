@@ -1,13 +1,16 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
-// Increment 8: the six comparison operators. Building on the increment-7 binary
-// arithmetic, this adds `==`, `!=`, `<`, `>`, `<=`, `>=`, each lowering to a
-// single `Cmp*` op with no `PopN` (like `Div`/`Mod`), and each producing a
-// `bool`. Crossing sixteen op tags exceeds the old `tag + operand*16` op-word
-// radix (tag 16 would alias the `PENDING` marker 0), so the op-word radix widens
-// to 32 (`tag + operand*32`); this is a self-contained protocol change between
-// this stage and its host driver, with no runtime BYTECODE_VERSION impact. This
-// widens only the op stream and the encoding radix. See compiler/MILESTONES.md
+// Increment 9: `if`/`else` structured control flow (expression form). An If node
+// (kind 4, layout args=cond, lhs=then, rhs=else) lowers to the condition ops, an
+// `If` marker, the then-branch ops, an `Else` marker, the else-branch ops, then
+// `EndIf`, matching the reference's structured lowering. The `If`/`Else` operands
+// are absolute op indices the reference bakes in, but a single post-order walk
+// does not know the forward branch sizes when it emits the markers, so this
+// increment emits placeholder targets and the host assembler resolves them by
+// bracket-matching the nested markers. This mirrors how the constant pool first
+// arrived with host-supplied indices before the stage owned it; a later increment
+// moves target resolution into the stage. Branches are restricted to a single
+// expression (no inner `let`), and `else` is required. See compiler/MILESTONES.md
 // and docs/reference/INCREMENTAL_SELF_HOSTING.md.
 //
 // The self-hosted compiler is a full-width host tool; declare its word floor.
@@ -52,6 +55,7 @@ private data st {
 //   1 Const(index)  2 Return  3 GetLocal(slot)  4 CheckedMul(frac)  5 CheckedAdd
 //   6 PopN(count)  7 SetLocal(slot)  8 CheckedSub  9 Div  10 Mod
 //   11 CmpEq  12 CmpNe  13 CmpLt  14 CmpGt  15 CmpLe  16 CmpGe
+//   17 If(target)  18 Else(target)  19 EndIf   (If/Else emitted with target 0)
 // The op stream ends with Return. After Return the stage emits its constant pool:
 // first the pool size as a raw Word, then that many raw Word values. The host
 // reads ops until Return, then the size, then the values.
@@ -121,6 +125,7 @@ loop main(resume: Word) -> Word {
                         st.sp = st.sp + 1;
                         yield 0
                     } else {
+                        if nk == 3 {
                         // BinOp: post-order schedule. The operator code selects the
                         // op word and whether the result needs a PopN(2) stack fixup:
                         //   1 Add -> CheckedAdd (tag 5) + PopN
@@ -163,6 +168,29 @@ loop main(resume: Word) -> Word {
                         st.stack[st.sp] = 1 + ast.lhs[payload] * 4;  // VISIT lhs
                         st.sp = st.sp + 1;
                         yield 0
+                        } else {
+                            // If-expression (kind 4): emit the condition ops, an If
+                            // marker, the then-branch ops, an Else marker, the
+                            // else-branch ops, then EndIf. The If/Else targets are
+                            // placeholders (operand 0); the host assembler resolves
+                            // them by bracket-matching the nested markers. Moving
+                            // target resolution into the stage is a later increment.
+                            // Node layout: args = cond, lhs = then, rhs = else.
+                            // Push in reverse so the LIFO drain emits them in order.
+                            st.stack[st.sp] = 2 + 19 * 4;                 // EMIT EndIf
+                            st.sp = st.sp + 1;
+                            st.stack[st.sp] = 1 + ast.rhs[payload] * 4;   // VISIT else
+                            st.sp = st.sp + 1;
+                            st.stack[st.sp] = 2 + 18 * 4;                 // EMIT Else
+                            st.sp = st.sp + 1;
+                            st.stack[st.sp] = 1 + ast.lhs[payload] * 4;   // VISIT then
+                            st.sp = st.sp + 1;
+                            st.stack[st.sp] = 2 + 17 * 4;                 // EMIT If
+                            st.sp = st.sp + 1;
+                            st.stack[st.sp] = 1 + ast.args[payload] * 4;  // VISIT cond
+                            st.sp = st.sp + 1;
+                            yield 0
+                        }
                     }
                 }
             }

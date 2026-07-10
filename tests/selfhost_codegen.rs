@@ -11,9 +11,10 @@
 //! Keleusma stage walks it recursion-free, interns each literal into its own
 //! deduplicating constant pool, and emits the ops followed by the pool. The host
 //! builds the module from the stage's ops and pool, checks structural equality
-//! against the Rust compiler, and runs it. Increment 8 adds the six comparison
-//! operators, each a single `Cmp*` op with a `bool` result; crossing sixteen op
-//! tags widened the stage's op-word radix from 16 to 32.
+//! against the Rust compiler, and runs it. Increment 9 adds `if`/`else`
+//! structured control flow: the stage emits the `If`/`Else`/`EndIf` structure with
+//! placeholder targets, and the host `resolve_targets` step fills the absolute op
+//! indices by bracket-matching, matching the reference's baked targets.
 
 use keleusma::Arena;
 use keleusma::ast::{BinOp, Block, Expr, Literal, Param, Pattern, Stmt};
@@ -117,8 +118,67 @@ fn flatten(e: &Expr, scope: &[(String, i64)], out: &mut Vec<Node>) -> i64 {
             });
             (out.len() - 1) as i64
         }
-        other => panic!("increment handles literal/local/binop only, got {other:?}"),
+        Expr::If {
+            condition,
+            then_block,
+            else_block,
+            ..
+        } => {
+            let else_block = else_block
+                .as_ref()
+                .expect("increment requires an else branch");
+            assert!(
+                then_block.stmts.is_empty() && else_block.stmts.is_empty(),
+                "increment restricts if-branches to a single expression"
+            );
+            let then_e = then_block
+                .tail_expr
+                .as_ref()
+                .expect("then branch needs a tail expression");
+            let else_e = else_block
+                .tail_expr
+                .as_ref()
+                .expect("else branch needs a tail expression");
+            // Node layout for an If (kind 4): arg = cond, lhs = then, rhs = else.
+            let cond = flatten(condition, scope, out);
+            let t = flatten(then_e, scope, out);
+            let el = flatten(else_e, scope, out);
+            out.push(Node {
+                kind: 4,
+                arg: cond,
+                lhs: t,
+                rhs: el,
+            });
+            (out.len() - 1) as i64
+        }
+        other => panic!("increment handles literal/local/binop/if only, got {other:?}"),
     }
+}
+
+/// Resolve the placeholder `If`/`Else` targets the stage emits, by bracket-matching
+/// the properly-nested `If`/`Else`/`EndIf` markers. This is the host assembler step
+/// the stage defers to for now: `If`'s target becomes the op after its `Else` (the
+/// else-body start), and `Else`'s target becomes its `EndIf` index. Both are the
+/// absolute op indices the reference compiler bakes in.
+fn resolve_targets(ops: &mut [Op]) {
+    let mut stack: Vec<(usize, Option<usize>)> = Vec::new();
+    for i in 0..ops.len() {
+        match ops[i] {
+            Op::If(_) => stack.push((i, None)),
+            Op::Else(_) => {
+                let top = stack.last_mut().expect("Else without matching If");
+                ops[top.0] = Op::If((i + 1) as u16);
+                top.1 = Some(i);
+            }
+            Op::EndIf => {
+                let (_, else_idx) = stack.pop().expect("EndIf without matching If");
+                let e = else_idx.expect("EndIf without matching Else");
+                ops[e] = Op::Else(i as u16);
+            }
+            _ => {}
+        }
+    }
+    assert!(stack.is_empty(), "unbalanced If/Else/EndIf markers");
 }
 
 /// Flatten a whole block: assign each `let` a slot after the parameters in
@@ -179,6 +239,9 @@ fn decode_op(w: i64) -> Op {
         14 => Op::CmpGt,
         15 => Op::CmpLe,
         16 => Op::CmpGe,
+        17 => Op::If(operand as u16),
+        18 => Op::Else(operand as u16),
+        19 => Op::EndIf,
         other => panic!("unknown op tag {other} (word {w})"),
     }
 }
@@ -326,6 +389,31 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
         ("fn main(a: Word) -> bool { a >= 5 }", 4, Bool(false)),
         ("fn main(a: Word) -> bool { a == 5 }", 5, Bool(true)),
         ("fn main(a: Word) -> bool { a != 5 }", 5, Bool(false)),
+        // if/else expression: condition ops, If, then, Else, else, EndIf. The
+        // stage emits placeholder targets; resolve_targets fills the absolute
+        // indices by bracket-matching, matching the reference's baked targets.
+        (
+            "fn main(a: Word) -> Word { if a < 5 { 2 } else { 3 } }",
+            3,
+            Int(2),
+        ),
+        (
+            "fn main(a: Word) -> Word { if a < 5 { 2 } else { 3 } }",
+            10,
+            Int(3),
+        ),
+        // Arithmetic inside the branches.
+        (
+            "fn main(a: Word) -> Word { if a < 5 { a + 1 } else { a - 1 } }",
+            10,
+            Int(9),
+        ),
+        // Nested if in the else branch: exercises resolve_targets on nesting.
+        (
+            "fn main(a: Word) -> Word { if a < 5 { 1 } else { if a < 10 { 2 } else { 3 } } }",
+            7,
+            Int(2),
+        ),
     ];
     for &(src, arg, expected) in cases {
         let program = parse(&tokenize(src).expect("lex")).expect("parse");
@@ -340,7 +428,10 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
             .expect("main fn");
         let body = build_body(&main_fn.body, &main_fn.params);
 
-        let (emitted, pool) = run_codegen(&body);
+        let (mut emitted, pool) = run_codegen(&body);
+        // The stage emits placeholder If/Else targets; the host assembler resolves
+        // them before the op stream is a complete logical module.
+        resolve_targets(&mut emitted);
         assert_eq!(
             emitted, reference_ops,
             "emitted ops must match Rust for `{src}`"
