@@ -11,19 +11,26 @@ from its own directory.
 
 ## Status
 
-- **Milestone 1 (done): live diagnostics.** On open and on every edit, the server
-  runs `tokenize` → `parse` → `check` and publishes the first error, positioned
-  exactly from the `Span` each error carries. The pipeline is fail-fast, so at
-  most one diagnostic appears per pass.
+- **M1 + M2 (done).**
+  - **Live diagnostics over the full pipeline.** On open and on every edit the
+    server runs `tokenize` → `parse` → `compile` → `verify`, so lex, parse,
+    type, monomorphization, codegen, and — the signature feature — the
+    worst-case-execution-time and worst-case-memory-usage *verifier rejections*
+    surface as you type, positioned from the `Span` each error carries (verifier
+    faults, which carry a chunk name rather than a span, anchor at the document
+    start). The pipeline is fail-fast, so at most one diagnostic appears per pass.
+  - **Document symbols.** Functions (with their `fn`/`yield`/`loop` category),
+    structs, enums, newtypes, and traits.
+  - **Completion.** The keyword and primitive-type vocabulary.
+  - **Panic-safe.** A deep-compiler panic on half-written code degrades to "no
+    diagnostics this pass", never crashes the server.
 
 ## Roadmap
 
-- **M2 — more features.** Compile and verify diagnostics (surfacing the WCET and
-  WCMU rejections that are Keleusma's signature), document symbols from the AST,
-  keyword and in-scope completion, and hover where the typechecker can answer.
 - **M3 — VS Code client.** Wire the existing extension in `editors/vscode/` to
   this server with `vscode-languageclient`.
-- Multi-error recovery beyond the fail-fast first error.
+- **Later.** Hover (type at cursor), go-to-definition, in-scope identifier
+  completion, and multi-error recovery beyond the fail-fast first error.
 
 ## Build and run
 

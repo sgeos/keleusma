@@ -1,26 +1,99 @@
 //! Language Server Protocol server for the Keleusma language.
 //!
-//! Milestone 1 reuses the compiler front end (`tokenize` -> `parse` -> `check`)
-//! to publish live diagnostics as the user edits. The compiler is fail-fast, so
-//! at most one diagnostic is produced per analysis pass; multi-error recovery,
-//! the compile/verify (WCET and WCMU) diagnostics, document symbols, completion,
-//! and hover are later milestones.
+//! Reuses the core compiler to give editors live feedback:
 //!
-//! Transport is stdio, the convention every LSP client (VS Code, Neovim, Helix,
-//! Emacs) understands. The server holds full-text copies of open documents and
-//! re-analyses on every change.
+//! - **Diagnostics** run the full pipeline — `tokenize` -> `parse` -> `compile`
+//!   -> `verify` — so lex, parse, type, monomorphization, codegen, and the
+//!   worst-case-execution-time and worst-case-memory-usage *verifier rejections*
+//!   all surface as you type. The verifier diagnostics are Keleusma's signature:
+//!   no other language's LSP shows a resource-bound rejection live.
+//! - **Document symbols** list the functions, types, and traits in a file.
+//! - **Completion** offers the keyword and primitive-type vocabulary.
+//!
+//! The compiler is fail-fast, so at most one error diagnostic is produced per
+//! pass. Transport is stdio, the convention every LSP client understands.
 
 use std::collections::HashMap;
+use std::panic::AssertUnwindSafe;
 
 use tokio::sync::Mutex;
 use tower_lsp::jsonrpc::Result as RpcResult;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
+use keleusma::ast::{FunctionCategory, TypeDef};
+use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
 use keleusma::token::Span;
-use keleusma::typecheck::check;
+use keleusma::verify::verify;
+
+/// The keyword vocabulary offered by completion. Kept aligned with
+/// `keleusma::token::TokenKind::keyword`; a unit test asserts every entry is a
+/// real keyword. The reverse direction (a newly added keyword missing here) is
+/// the same drift the editor highlighters are reconciled against at release; see
+/// docs/process/RELEASE_PROCESS.md step 1a.
+const KEYWORDS: &[&str] = &[
+    "and",
+    "andalso",
+    "as",
+    "asl",
+    "asr",
+    "band",
+    "bnot",
+    "bor",
+    "break",
+    "bxor",
+    "const",
+    "data",
+    "else",
+    "enum",
+    "ephemeral",
+    "external",
+    "false",
+    "fn",
+    "for",
+    "if",
+    "impl",
+    "in",
+    "let",
+    "loop",
+    "lsl",
+    "lsr",
+    "match",
+    "newtype",
+    "not",
+    "or",
+    "orelse",
+    "overflow",
+    "private",
+    "pure",
+    "saturate_max",
+    "saturate_min",
+    "shared",
+    "signed",
+    "struct",
+    "trait",
+    "true",
+    "underflow",
+    "use",
+    "when",
+    "where",
+    "xor",
+    "yield",
+];
+
+/// Primitive-type names offered by completion.
+const PRIMITIVE_TYPES: &[&str] = &[
+    "Word",
+    "Byte",
+    "Multiword",
+    "Fixed",
+    "Float",
+    "bool",
+    "Text",
+    "Option",
+];
 
 /// Server state: the client handle and the set of open documents by URI.
 struct Backend {
@@ -74,9 +147,33 @@ fn error_diagnostic(text: &str, span: &Span, message: String) -> Diagnostic {
     }
 }
 
-/// Run lex -> parse -> typecheck and surface the first error, if any, as a
-/// diagnostic. Each stage carries a `Span`, so positions are exact.
-fn analyze(text: &str) -> Vec<Diagnostic> {
+/// A diagnostic anchored at the start of the document, for errors that carry no
+/// source span (the verifier reports a failing chunk name, not a position).
+fn document_diagnostic(message: String) -> Diagnostic {
+    Diagnostic {
+        range: Range {
+            start: Position {
+                line: 0,
+                character: 0,
+            },
+            end: Position {
+                line: 0,
+                character: 0,
+            },
+        },
+        severity: Some(DiagnosticSeverity::ERROR),
+        source: Some("keleusma".to_string()),
+        message,
+        ..Default::default()
+    }
+}
+
+/// Run the full pipeline and surface the first error, if any. `compile`
+/// internally type-checks, monomorphizes, re-type-checks, and generates code, so
+/// its `CompileError` covers type and codegen faults with a span; `verify`
+/// covers the worst-case-execution-time and worst-case-memory-usage rejections
+/// (which carry a chunk name rather than a span).
+fn analyze_inner(text: &str) -> Vec<Diagnostic> {
     let tokens = match tokenize(text) {
         Ok(tokens) => tokens,
         Err(e) => {
@@ -84,18 +181,113 @@ fn analyze(text: &str) -> Vec<Diagnostic> {
             return vec![error_diagnostic(text, &span, e.message)];
         }
     };
-    let mut program = match parse(&tokens) {
+    let program = match parse(&tokens) {
         Ok(program) => program,
         Err(e) => {
             let span = e.span;
             return vec![error_diagnostic(text, &span, e.message)];
         }
     };
-    if let Err(e) = check(&mut program) {
-        let span = e.span;
-        return vec![error_diagnostic(text, &span, e.message)];
+    let module = match compile(&program) {
+        Ok(module) => module,
+        Err(e) => {
+            let span = e.span;
+            return vec![error_diagnostic(text, &span, e.message)];
+        }
+    };
+    if let Err(e) = verify(&module) {
+        return vec![document_diagnostic(format!(
+            "verifier rejected `{}`: {}",
+            e.chunk_name, e.message
+        ))];
     }
     Vec::new()
+}
+
+/// Panic-safe wrapper. A language server processes half-written programs on every
+/// keystroke; an unexpected panic in a deep compiler path must degrade to "no
+/// diagnostics this pass", never crash the server.
+fn analyze(text: &str) -> Vec<Diagnostic> {
+    std::panic::catch_unwind(AssertUnwindSafe(|| analyze_inner(text))).unwrap_or_default()
+}
+
+#[allow(deprecated)] // `DocumentSymbol::deprecated` is a deprecated protocol field; set to None.
+fn symbol(
+    name: &str,
+    kind: SymbolKind,
+    detail: Option<String>,
+    text: &str,
+    span: &Span,
+) -> DocumentSymbol {
+    let range = span_to_range(text, span);
+    DocumentSymbol {
+        name: name.to_string(),
+        detail,
+        kind,
+        tags: None,
+        deprecated: None,
+        range,
+        selection_range: range,
+        children: None,
+    }
+}
+
+/// Extract top-level declarations (functions, types, traits) as document symbols.
+/// Returns empty if the document does not parse.
+fn document_symbols(text: &str) -> Vec<DocumentSymbol> {
+    let Ok(tokens) = tokenize(text) else {
+        return Vec::new();
+    };
+    let Ok(program) = parse(&tokens) else {
+        return Vec::new();
+    };
+    let mut symbols = Vec::new();
+    for f in &program.functions {
+        let detail = match f.category {
+            FunctionCategory::Fn => "fn",
+            FunctionCategory::Yield => "yield",
+            FunctionCategory::Loop => "loop",
+        };
+        symbols.push(symbol(
+            &f.name,
+            SymbolKind::FUNCTION,
+            Some(detail.to_string()),
+            text,
+            &f.span,
+        ));
+    }
+    for t in &program.types {
+        let (name, kind, span) = match t {
+            TypeDef::Struct(s) => (&s.name, SymbolKind::STRUCT, &s.span),
+            TypeDef::Enum(e) => (&e.name, SymbolKind::ENUM, &e.span),
+            TypeDef::Newtype(n) => (&n.name, SymbolKind::STRUCT, &n.span),
+        };
+        symbols.push(symbol(name, kind, None, text, span));
+    }
+    for tr in &program.traits {
+        symbols.push(symbol(
+            &tr.name,
+            SymbolKind::INTERFACE,
+            None,
+            text,
+            &tr.span,
+        ));
+    }
+    symbols
+}
+
+fn keyword_completions() -> Vec<CompletionItem> {
+    let kws = KEYWORDS.iter().map(|k| CompletionItem {
+        label: (*k).to_string(),
+        kind: Some(CompletionItemKind::KEYWORD),
+        ..Default::default()
+    });
+    let types = PRIMITIVE_TYPES.iter().map(|t| CompletionItem {
+        label: (*t).to_string(),
+        kind: Some(CompletionItemKind::CLASS),
+        ..Default::default()
+    });
+    kws.chain(types).collect()
 }
 
 #[tower_lsp::async_trait]
@@ -106,6 +298,8 @@ impl LanguageServer for Backend {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
                 )),
+                document_symbol_provider: Some(OneOf::Left(true)),
+                completion_provider: Some(CompletionOptions::default()),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -135,10 +329,26 @@ impl LanguageServer for Backend {
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         self.docs.lock().await.remove(&params.text_document.uri);
-        // Clear diagnostics for the closed document.
         self.client
             .publish_diagnostics(params.text_document.uri, Vec::new(), None)
             .await;
+    }
+
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> RpcResult<Option<DocumentSymbolResponse>> {
+        let text = self
+            .docs
+            .lock()
+            .await
+            .get(&params.text_document.uri)
+            .cloned();
+        Ok(text.map(|t| DocumentSymbolResponse::Nested(document_symbols(&t))))
+    }
+
+    async fn completion(&self, _: CompletionParams) -> RpcResult<Option<CompletionResponse>> {
+        Ok(Some(CompletionResponse::Array(keyword_completions())))
     }
 
     async fn shutdown(&self) -> RpcResult<()> {
@@ -164,7 +374,6 @@ mod tests {
     #[test]
     fn offset_to_position_handles_multibyte_and_newlines() {
         let text = "fn a() {}\nlet x = 1\n";
-        // Start of line 2 (byte offset 10) is line 1, character 0.
         assert_eq!(
             offset_to_position(text, 10),
             Position {
@@ -172,7 +381,6 @@ mod tests {
                 character: 0
             }
         );
-        // Offset 0 is the origin.
         assert_eq!(
             offset_to_position(text, 0),
             Position {
@@ -184,16 +392,41 @@ mod tests {
 
     #[test]
     fn clean_source_yields_no_diagnostics() {
-        // A trivially well-formed program should lex, parse, and typecheck.
-        let diags = analyze("fn main() -> Word { 1 }\n");
-        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        assert!(analyze("fn main() -> Word { 1 }\n").is_empty());
     }
 
     #[test]
-    fn lex_or_parse_error_yields_one_diagnostic() {
-        // An obviously malformed program should surface exactly one diagnostic.
+    fn parse_error_yields_one_diagnostic() {
         let diags = analyze("fn (");
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].severity, Some(DiagnosticSeverity::ERROR));
+    }
+
+    #[test]
+    fn type_error_is_reported_via_compile() {
+        // Parses, but the body's type does not match the declared return type,
+        // so `compile` (which type-checks internally) must reject it.
+        let diags = analyze("fn main() -> Word { true }\n");
+        assert_eq!(diags.len(), 1, "expected one diagnostic, got {diags:?}");
+    }
+
+    #[test]
+    fn document_symbols_lists_functions() {
+        let syms = document_symbols("fn main() -> Word { 1 }\n");
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].name, "main");
+        assert_eq!(syms[0].kind, SymbolKind::FUNCTION);
+    }
+
+    #[test]
+    fn every_completion_keyword_is_a_real_keyword() {
+        // Guards the hardcoded list against a stale or misspelled entry by
+        // round-tripping it through the authoritative recognizer.
+        for kw in KEYWORDS {
+            assert!(
+                keleusma::token::TokenKind::keyword(kw).is_some(),
+                "`{kw}` is in the completion list but is not a keyword"
+            );
+        }
     }
 }
