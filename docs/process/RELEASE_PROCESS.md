@@ -76,6 +76,7 @@ may not be self-certified by the preparer (doctrine rule 3).
 ── PREFLIGHT · reversible · abort freely at any line ──────────────────────
 [ ] 0. Clean tree on the release branch; healthy stable toolchain.
 [ ] 1. Bump versions and stamp changelogs.
+[ ] 1a. Sync grammar-derived tooling (editor highlighters vs src/token.rs; see step 1a).
 [ ] 2. Local pre-check gate is GREEN (scripts/release-gate.sh, incl. cargo doc).
 [ ] 3. Registry-publishability check (dry-run in dependency order).
 [ ] 4. Operational-security scrub + tarball-contents check.
@@ -127,6 +128,42 @@ publish is not, and it waits for the maintainer's word.
   `[X.Y.Z] - <YYYY-MM-DD>` and open a fresh empty `[Unreleased]` above it. The
   published tarball should carry a dated, stamped changelog, not `[Unreleased]`.
 - Update the `**Status**` line in `CLAUDE.md`.
+
+## 1a. Sync grammar-derived tooling
+
+Any artifact that *mirrors* the grammar drifts silently when a release adds or removes
+tokens, because nothing forces it to change with the compiler. The editor syntax
+highlighters are the standing example: V0.2.1 added the B19 word-form operators and the
+`Multiword` type, the grammar and the compiler had them, but the VS Code, Vim, Emacs, and
+Rouge highlighters shipped without them and were only reconciled later. Close that gap at
+the cut, not after.
+
+Reconcile every keyword-based highlighter against the authoritative keyword set in
+`src/token.rs::keyword()` (and the primitive-type list). Each must be **complete** — no
+missing token — before the release proceeds:
+
+```sh
+KWS=$(sed -n '/pub fn keyword/,/^    }/p' src/token.rs | grep -oE '"[a-z_]+"' | tr -d '"' | sort -u)
+for f in editors/vscode/syntaxes/keleusma.tmLanguage.json \
+         editors/vim/syntax/keleusma.vim \
+         editors/emacs/keleusma-mode.el \
+         editors/rouge/keleusma.rb; do
+  miss=""; for kw in $KWS; do grep -qwF "$kw" "$f" || miss="$miss $kw"; done
+  [ -z "$miss" ] && echo "COMPLETE $f" || echo "MISSING[$miss] $f"
+done
+```
+
+Notes:
+- **Helix** is a registration-only stub (no keyword list until a tree-sitter grammar
+  exists), so it is exempt from the token reconciliation.
+- **`keleusma-lsp`** reuses the compiler front end, so its diagnostics track the grammar
+  automatically and need no token check; only its feature surface is a manual concern.
+- These artifacts live under `editors/` and are excluded from the crate tarball, but they
+  are part of the release's public surface (the VS Code extension, the hosted highlighters),
+  so their drift is a release concern even though they do not ship in the crate.
+
+This is a manual gate today. The stronger form — generating a reference token list from
+`src/token.rs` and failing CI on any highlighter diff — is the tracked follow-up.
 
 ## 2. The local pre-check gate
 
@@ -456,6 +493,11 @@ correct, would be the second row — supersede and leave in place.
   dependency's public API grows; otherwise the manifest claims a compatibility that
   does not exist.
 - **Stamp changelogs at the cut**, not "later"; the published tarball is immutable.
+- **Sync grammar-derived tooling at the cut (step 1a).** Artifacts that mirror the grammar
+  — the editor highlighters above all — do not change themselves when a release adds
+  tokens. V0.2.1 added the B19 operators and `Multiword`; the highlighters shipped without
+  them and lagged until a later reconciliation. Reconcile them against `src/token.rs`
+  before the release, not after.
 - **Publish only the CI-green SHA (configuration control).** Re-check `HEAD == tag` and a
   clean tree at step 8a / step 9; a drifted or dirty tree voids the CI-green proof for
   what you are actually uploading.
