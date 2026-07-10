@@ -1,3 +1,4 @@
+<!-- GENERATED FILE. Do not edit. Source: docs/spec/INSTRUCTION_SET.md. Regenerate with: python3 scripts/gen-book-instruction-set.py. CI fails on drift. -->
 # Instruction Set
 
 This chapter is the bytecode reference. It lists every instruction the Keleusma virtual machine executes, so the disassembly shown in the [playground](https://sgeos.github.io/keleusma/playground/) bytecode view has a place to be looked up. It reproduces the authoritative `docs/spec/INSTRUCTION_SET.md` from the repository.

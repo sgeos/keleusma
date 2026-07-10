@@ -307,3 +307,11 @@ jobs:
       # relative Markdown link fails to resolve.
       - name: Check relative Markdown links
         run: cargo run -q -p keleusma-cli -- run scripts/check-md-links.kel
+      # The book's Instruction Set chapter is generated from the authoritative
+      # spec (docs/spec/INSTRUCTION_SET.md). Regenerate and fail on any diff so
+      # the two copies can never drift (Rex-review lesson: generate reference
+      # material from source and gate drift in CI).
+      - name: Instruction Set chapter is in sync with the spec
+        run: |
+          python3 scripts/gen-book-instruction-set.py
+          git diff --exit-code book/src/INSTRUCTION_SET.md
