@@ -7,6 +7,8 @@ Onboarding-oriented documentation for new users and embedders. Where the
 [reference](../../docs/reference/README.md) sections describe what Keleusma is,
 this section describes how to use it.
 
+You can try Keleusma in your browser at [the playground](https://sgeos.github.io/keleusma/playground/): it compiles and verifies your program with the compiler running as WebAssembly and reports its worst-case execution-time and memory bounds live, no installation required.
+
 The guide is in two layers. The first is a linear course of forty
 chapters that teaches Keleusma from scratch, sized for video presentation
 and ordered as a single learning arc. The second is a set of reference

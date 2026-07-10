@@ -260,6 +260,27 @@ jobs:
           node --check extension.js
           npm ci
 
+  wasm:
+    name: WASM playground crate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      # keleusma-wasm is a detached-workspace crate. Lint and unit-test it
+      # natively, then confirm it still compiles to wasm32 — the actual playground
+      # target — so a core-API change cannot silently break the browser build.
+      # The full wasm-pack bundle + Pages deploy live in the Book workflow.
+      - name: Lint, test, and build to wasm32
+        run: |
+          cd keleusma-wasm
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+          cargo build --target wasm32-unknown-unknown
+
   miri:
     name: Miri
     runs-on: ubuntu-latest

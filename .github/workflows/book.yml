@@ -39,15 +39,27 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
       - uses: taiki-e/install-action@v2
         with:
-          tool: mdbook
+          tool: mdbook,wasm-pack
       - name: Install mdbook-i18n-helpers
         run: cargo install mdbook-i18n-helpers --locked
       - name: Build English (source) book
         run: mdbook build book -d "$GITHUB_WORKSPACE/site"
       - name: Build Japanese translation
         run: MDBOOK_BOOK__LANGUAGE=ja mdbook build book -d "$GITHUB_WORKSPACE/site/ja"
+      # Build the WebAssembly playground (release, wasm-opt) into its self-contained
+      # www/ directory and place it at /playground on the same Pages site.
+      - name: Build the WebAssembly playground
+        run: |
+          cd keleusma-wasm
+          wasm-pack build --target web --release --out-dir www/pkg
+      - name: Add the playground to the site
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/site/playground"
+          cp -r keleusma-wasm/www/. "$GITHUB_WORKSPACE/site/playground/"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site

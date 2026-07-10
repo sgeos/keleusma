@@ -19,6 +19,8 @@ The name derives from the Greek word for a command or signal, specifically the r
 
 A book-length tutorial takes you from a first program to embedding the runtime in a Rust host. Read it online at [the hosted book](https://sgeos.github.io/keleusma/), or build it from source in [`book/`](book/) with `mdbook build book`. The book is bilingual: English is the source and a Japanese translation is maintained alongside it through gettext (`book/po/ja.po`); build the Japanese edition with `MDBOOK_BOOK__LANGUAGE=ja mdbook build book -d book/ja`.
 
+Try the language in your browser at [the playground](https://sgeos.github.io/keleusma/playground/): it compiles and verifies your program with the compiler running as WebAssembly and reports its worst-case execution-time and memory bounds live. Editor integration (five highlighters plus a `keleusma-lsp` language server) lives in [`editors/`](editors/) and [`keleusma-lsp/`](keleusma-lsp/).
+
 ## Conservative-Verification Stance
 
 The compile pipeline (parse, type-check, monomorphize, hoist, emit) admits a broader surface than the WCET and WCMU analyses can prove bounded. The verifier rejects programs whose bound is unprovable or whose bound is provable in principle but the analysis is not yet implemented. This rejection is intentional and defines the language's contract. See [`docs/architecture/LANGUAGE_DESIGN.md`](docs/architecture/LANGUAGE_DESIGN.md#conservative-verification) for the full statement.

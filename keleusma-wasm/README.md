@@ -36,26 +36,27 @@ unavailable, force a known-good toolchain:
 
 ```sh
 cd keleusma-wasm
-rustup run 1.92 wasm-pack build --target web            # release (small, wasm-opt)
-rustup run 1.92 wasm-pack build --target web --dev      # fast, unoptimized
+# Build into www/pkg so the page and its wasm are a self-contained directory.
+rustup run 1.92 wasm-pack build --target web --out-dir www/pkg          # release
+rustup run 1.92 wasm-pack build --target web --out-dir www/pkg --dev    # fast, unoptimized
 ```
 
-Output lands in `keleusma-wasm/pkg/` (git-ignored; it is a build artifact).
+Output lands in `keleusma-wasm/www/pkg/` (git-ignored; it is a build artifact).
 
 ## Run the playground locally
 
-Serve the crate directory so the page and the `pkg/` output are both reachable,
-then open the playground:
+Serve the `www/` directory and open it:
 
 ```sh
-cd keleusma-wasm
+cd keleusma-wasm/www
 python3 -m http.server 8000
-# then browse to http://localhost:8000/www/
+# then browse to http://localhost:8000/
 ```
 
-The page (`www/index.html`) imports `../pkg/keleusma_wasm.js`, calls `check` on
-every edit (debounced), and renders either the diagnostics or the WCET/WCMU
-bounds table.
+The page (`index.html`) imports `./pkg/keleusma_wasm.js`, calls `check` on every
+edit (debounced), and renders either the diagnostics or the WCET/WCMU bounds
+table. The same self-contained `www/` directory is what the Pages deploy copies
+to `/playground/`.
 
 ## Roadmap
 
