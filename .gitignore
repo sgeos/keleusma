@@ -5,6 +5,11 @@
 keleusma-lsp/target/
 keleusma-wasm/target/
 
+# VS Code extension build artifacts. node_modules is restored by `npm install`
+# from the committed package-lock.json; the packaged .vsix is a build output.
+editors/vscode/node_modules/
+editors/vscode/*.vsix
+
 # Claude Code agent runtime state. Contains session lock files that
 # carry the agent's process identifier and acquisition timestamp.
 # Local to each contributor's session; not project content.

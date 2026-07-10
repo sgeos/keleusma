@@ -1,8 +1,8 @@
 {
     "name": "keleusma",
     "displayName": "Keleusma",
-    "description": "Syntax highlighting and file-type configuration for the Keleusma scripting language",
-    "version": "0.2.0",
+    "description": "Language support for Keleusma: syntax highlighting, file-type configuration, and live diagnostics, document symbols, and completion via the keleusma-lsp language server",
+    "version": "0.2.2",
     "publisher": "sgeos",
     "license": "0BSD",
     "repository": {
@@ -15,6 +15,10 @@
     },
     "categories": [
         "Programming Languages"
+    ],
+    "main": "./extension.js",
+    "activationEvents": [
+        "onLanguage:keleusma"
     ],
     "contributes": {
         "languages": [
@@ -31,6 +35,24 @@
                 "scopeName": "source.kel",
                 "path": "./syntaxes/keleusma.tmLanguage.json"
             }
-        ]
+        ],
+        "configuration": {
+            "title": "Keleusma",
+            "properties": {
+                "keleusma.server.enable": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Run the keleusma-lsp language server for live diagnostics, document symbols, and completion. Disable to use syntax highlighting only."
+                },
+                "keleusma.server.path": {
+                    "type": "string",
+                    "default": "keleusma-lsp",
+                    "description": "Path to the keleusma-lsp binary. Defaults to `keleusma-lsp` on PATH. Build it with `cargo build --release` in the keleusma-lsp/ directory and set this to the absolute path of target/release/keleusma-lsp, or install it with `cargo install --path keleusma-lsp`."
+                }
+            }
+        }
+    },
+    "dependencies": {
+        "vscode-languageclient": "^8.1.0"
     }
 }
