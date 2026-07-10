@@ -46,7 +46,11 @@
       .editor textarea {
         background: transparent;
         color: transparent;
-        caret-color: currentColor;
+        /* The textarea text is transparent so the highlighted <pre> shows
+           through, which also makes `currentColor` (and thus a
+           `caret-color: currentColor`) transparent. Pin an explicit caret
+           color per color scheme so the cursor stays visible. */
+        caret-color: #1b1b1b;
         resize: none;
         z-index: 2;
       }
@@ -67,6 +71,7 @@
       .kel-label { color: #0b7285; }
       .kel-op { color: #0366d6; }
       @media (prefers-color-scheme: dark) {
+        .editor textarea { caret-color: #e8e8e8; }
         .kel-keyword { color: #c678dd; }
         .kel-type { color: #e5c07b; }
         .kel-string { color: #98c379; }
