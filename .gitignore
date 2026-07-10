@@ -1,5 +1,10 @@
 /target/
 
+# Build directories of the detached-workspace developer-tool crates
+# (their own Cargo target dirs are not caught by the anchored /target/ above).
+keleusma-lsp/target/
+keleusma-wasm/target/
+
 # Claude Code agent runtime state. Contains session lock files that
 # carry the agent's process identifier and acquisition timestamp.
 # Local to each contributor's session; not project content.
