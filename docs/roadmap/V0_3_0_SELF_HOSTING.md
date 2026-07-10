@@ -96,6 +96,8 @@ If V0.3.0 implementation surfaces a real reason to prefer the integrated form (f
 
 ## Incremental migration ordering
 
+> **Superseded by the backward strategy.** The forward, lexer-first ordering below is retained for its rationale, but the operator-decided migration strategy now runs the stages **last to first**, codegen then parser then lexer, so the emit and wire boundary is de-risked first. It uses one moving throwaway adapter at the Rust-to-Keleusma frontier, abandons byte-identity in favour of structural module equality since rkyv is only a means, and tracks intermediate deviations in a deferral ledger that is driven to empty at completion. The authoritative statement of the strategy is [`compiler/MILESTONES.md`](../../compiler/MILESTONES.md); this section documents the earlier reasoning and the per-stage validation idea that the strategy still uses.
+
 Reaching the all-Keleusma pipeline is a non-atomic transition. The recommended strategy is to migrate the stages one at a time, validating the regression corpus at each intermediate state. The Bootstrap procedure documented in the next section applies to the final migration step, not to each step.
 
 **Step 1. Replace the lexer.** Implement `compiler/lexer.kel`. Wire it into the existing Rust-hosted pipeline through a native interface: the Rust parser consumes tokens emitted by the Keleusma lexer. The token-value handoff crosses the native boundary either as values that match the existing Rust `Token` shape directly, or as a small wire format that the Rust parser deserialises. Validation: every program in the regression corpus compiles to byte-identical bytecode under the Keleusma-lexer-plus-Rust-parser-plus-Rust-compiler configuration as under the all-Rust baseline.
