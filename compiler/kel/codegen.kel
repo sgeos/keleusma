@@ -1,27 +1,22 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
-// Increment 12: first-class, nestable blocks. Earlier increments carried a block's
-// `let` bindings in a top-level statement array, so `let` could appear only at the
-// function body's top level, never inside an `if`-branch. This increment folds
-// blocks into the node forest as a `LetIn` cons-list: `let x = e; rest` becomes a
-// `LetIn` node (kind 5, arg=slot, lhs=value, rhs=continuation) whose continuation
-// is the next `let` or the block's tail expression. The top-level body and each
-// `if`-branch are then the same thing: a block root, either a `LetIn` chain or a
-// bare expression. This lets `let` nest inside branches. Slots are assigned in
-// tree-walk order (the reference never reuses a slot across branches), so
-// `local_count` is the parameters plus the number of `LetIn` nodes the walk
-// processes, which the stage counts directly. See compiler/MILESTONES.md and
-// docs/reference/INCREMENTAL_SELF_HOSTING.md.
+// Increment 13: unary `not`. A UnaryNot node (kind 6, lhs=operand) lowers to the
+// operand ops followed by a single `Not` op (tag 20), matching the reference. It
+// builds directly on the comparison and boolean-valued expression forms; the eager
+// `and`/`or` and short-circuit `andalso`/`orelse` booleans have more involved
+// lowerings (temporary slots, `Dup`, control flow) and are separate increments.
+// See compiler/MILESTONES.md and docs/reference/INCREMENTAL_SELF_HOSTING.md.
 //
 // The self-hosted compiler is a full-width host tool; declare its word floor.
 require word >= 32;
 
 // Flattened expression forest from the codegen input adapter, a structure-of-
-// arrays. `kinds` is 1 Literal, 2 Local, 3 BinOp, 4 If, 5 LetIn. `args` is the
-// literal *value* for a Literal, the slot for a Local, the operator for a BinOp,
-// the condition node for an If, or the bound slot for a LetIn. `lhs`/`rhs` are
-// child node indices: for a BinOp the two operands; for an If the then/else block
-// roots; for a LetIn the value expression and the continuation. `root` is the
+// arrays. `kinds` is 1 Literal, 2 Local, 3 BinOp, 4 If, 5 LetIn, 6 UnaryNot.
+// `args` is the literal *value* for a Literal, the slot for a Local, the operator
+// for a BinOp, the condition node for an If, or the bound slot for a LetIn.
+// `lhs`/`rhs` are child node indices: for a BinOp the two operands; for an If the
+// then/else block roots; for a LetIn the value expression and the continuation;
+// for a UnaryNot the operand in `lhs`. `root` is the
 // function body's block root. `param_count` is the parameter arity (declaration
 // data the codegen threads into `local_count`).
 shared data ast {
@@ -67,7 +62,7 @@ private data st {
 //   1 Const(index)  2 Return  3 GetLocal(slot)  4 CheckedMul(frac)  5 CheckedAdd
 //   6 PopN(count)  7 SetLocal(slot)  8 CheckedSub  9 Div  10 Mod
 //   11 CmpEq  12 CmpNe  13 CmpLt  14 CmpGt  15 CmpLe  16 CmpGe
-//   17 If(target)  18 Else(target)  19 EndIf   (targets already resolved)
+//   17 If(target)  18 Else(target)  19 EndIf   (targets already resolved)  20 Not
 // The op stream ends with Return. After Return the stage emits its constant pool:
 // first the pool size as a raw Word, then that many raw Word values, and finally
 // `local_count` as one raw Word. The host reads ops until Return, then the pool
@@ -217,6 +212,7 @@ loop main(resume: Word) -> Word {
                             st.sp = st.sp + 1;
                             yield 0
                         } else {
+                        if nk == 5 {
                             // LetIn (kind 5): `let <slot> = <value>; <cont>`. Emit
                             // the value ops, SetLocal(slot), then the continuation
                             // ops. Count the binding for local_count. Node layout:
@@ -231,6 +227,15 @@ loop main(resume: Word) -> Word {
                             st.stack[st.sp] = 1 + ast.lhs[payload] * 4;   // VISIT value
                             st.sp = st.sp + 1;
                             yield 0
+                        } else {
+                            // UnaryNot (kind 6): emit the operand ops then a single
+                            // Not (tag 20). Operand is in lhs. Push in reverse.
+                            st.stack[st.sp] = 2 + 20 * 4;                 // EMIT Not
+                            st.sp = st.sp + 1;
+                            st.stack[st.sp] = 1 + ast.lhs[payload] * 4;   // VISIT operand
+                            st.sp = st.sp + 1;
+                            yield 0
+                        }
                         }
                         }
                     }

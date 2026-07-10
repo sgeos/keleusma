@@ -11,13 +11,11 @@
 //! Keleusma stage walks it recursion-free, interns each literal into its own
 //! deduplicating constant pool, and emits the ops followed by the pool. The host
 //! builds the module from the stage's ops and pool, checks structural equality
-//! against the Rust compiler, and runs it. Increment 12 makes blocks first-class
-//! and nestable: the adapter folds each block into a `LetIn` cons-list in the node
-//! forest, so `let` bindings can appear inside `if`-branches, and the stage counts
-//! the `LetIn` nodes to compute `local_count`.
+//! against the Rust compiler, and runs it. Increment 13 adds unary `not`, which
+//! lowers to the operand ops followed by a single `Not` op.
 
 use keleusma::Arena;
-use keleusma::ast::{BinOp, Block, Expr, Literal, Param, Pattern, Stmt};
+use keleusma::ast::{BinOp, Block, Expr, Literal, Param, Pattern, Stmt, UnaryOp};
 use keleusma::bytecode::{ConstValue, Module, Op, Value};
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
@@ -141,7 +139,22 @@ fn flatten(
             });
             (out.len() - 1) as i64
         }
-        other => panic!("increment handles literal/local/binop/if only, got {other:?}"),
+        Expr::UnaryOp {
+            op: UnaryOp::Not,
+            operand,
+            ..
+        } => {
+            // UnaryNot (kind 6): operand in lhs.
+            let operand = flatten(operand, scope, next_slot, out);
+            out.push(Node {
+                kind: 6,
+                arg: 0,
+                lhs: operand,
+                rhs: 0,
+            });
+            (out.len() - 1) as i64
+        }
+        other => panic!("increment handles literal/local/binop/if/not only, got {other:?}"),
     }
 }
 
@@ -233,6 +246,7 @@ fn decode_op(w: i64) -> Op {
         17 => Op::If(operand as u16),
         18 => Op::Else(operand as u16),
         19 => Op::EndIf,
+        20 => Op::Not,
         other => panic!("unknown op tag {other} (word {w})"),
     }
 }
@@ -415,6 +429,9 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
             10,
             Int(10),
         ),
+        // Unary not: operand ops then a single Not.
+        ("fn main(a: Word) -> bool { not (a < 5) }", 3, Bool(false)),
+        ("fn main(a: Word) -> bool { not (a < 5) }", 10, Bool(true)),
     ];
     for &(src, arg, expected) in cases {
         let program = parse(&tokenize(src).expect("lex")).expect("parse");
