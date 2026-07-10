@@ -1,44 +1,101 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
-// Increment 2: the first real codegen, driven by input. Where increments 0 and 1
-// transcribed a fixed op stream to prove the emit boundary and the op vocabulary,
-// this increment gives the stage its first input and computes the ops from it.
-// See compiler/MILESTONES.md and docs/reference/INCREMENTAL_SELF_HOSTING.md.
+// Increment 3: real codegen over a nested expression, driven by the explicit
+// work-stack idiom (R3.1). Keleusma forbids the recursive tree walk a normal
+// compiler would use, so the single top-level `loop` drains an explicit
+// work-stack, one work item per iteration, emitting a post-order op stream. This
+// is the recursion-free discipline the whole pipeline rests on, and this
+// increment is its first real use. See compiler/MILESTONES.md and
+// docs/reference/INCREMENTAL_SELF_HOSTING.md.
 //
-// The one new axis is input consumption and data-driven emit. To isolate it, the
-// declaration body is a single expression node, either a literal or a parameter
-// reference, with no arithmetic. Nested expression bodies, which need the
-// work-stack idiom, come in later increments.
+// It handles a general binary-arithmetic body of literals, parameters, and the
+// `+` and `*` operators, which is enough to compile `input * 2 + 1` from its
+// tree rather than a transcribed op stream. The module frame, constant pool, and
+// parameter layout are still host-supplied.
 //
-// Input channel. The codegen input adapter, the first throwaway adapter, delivers
-// one declaration into the `shared data` block: the body expression's kind and its
-// argument. In this increment the module frame, constant pool, and parameter
-// layout are still host-supplied; the codegen produces the body ops and wraps them
-// with the function's Return.
-//   body_kind 1  Literal   body_arg is the constant-pool index
-//   body_kind 2  Local     body_arg is the parameter or local slot
-//
-// Emit wire (unchanged). Each yielded op is a single Word, `tag + operand*16`, and
-// the host lowers the tag to a real opcode:
-//   tag 1 Const(index)  tag 2 Return  tag 3 GetLocal(slot)
-
-// The self-hosted compiler is a full-width host tool; declare its word-width
-// floor so a narrow target is refused rather than silently miscompiled.
+// The self-hosted compiler is a full-width host tool; declare its word floor.
 require word >= 32;
 
-shared data decl {
-    body_kind: Word,
-    body_arg: Word,
+// Flattened expression tree from the codegen input adapter, as parallel per-node
+// arrays. `kinds` is 1 Literal, 2 Local, 3 BinOp. `args` is the constant-pool
+// index for a Literal, the slot for a Local, or the operator for a BinOp
+// (1 Add, 2 Mul). `lhs` and `rhs` are the child node indices of a BinOp.
+shared data ast {
+    root: Word,
+    kinds: [Word; 64],
+    args: [Word; 64],
+    lhs: [Word; 64],
+    rhs: [Word; 64],
 }
 
-yield main() -> Word {
-    // Compute the single-node body op, then emit it and the function's Return.
-    let body_op = if decl.body_kind == 1 {
-        1 + decl.body_arg * 16      // Literal -> Const(index)
+// The work-stack. Each entry is a work item, `kind + payload*4`: kind 1 VISIT a
+// node (payload is its index), kind 2 EMIT an op (payload is the op wire word).
+// Persists across the loop's per-iteration RESET.
+private data st {
+    stack: [Word; 256],
+    sp: Word,
+    started: Word,
+    ret_done: Word,
+}
+
+// Emit wire (unchanged). A yielded op is `tag + operand*16`, and 0 is a PENDING
+// marker the host skips:
+//   1 Const(index)  2 Return  3 GetLocal(slot)  4 CheckedMul(frac)  5 CheckedAdd  6 PopN(count)
+// The op stream ends with Return; the host stops there.
+
+loop main(resume: Word) -> Word {
+    if st.started == 0 {
+        st.stack[st.sp] = 1 + ast.root * 4;   // VISIT the root
+        st.sp = st.sp + 1;
+        st.started = 1;
+        yield 0
     } else {
-        3 + decl.body_arg * 16      // Local   -> GetLocal(slot)
-    };
-    yield body_op;
-    yield 2;                        // Return
-    0
+        if st.sp > 0 {
+            st.sp = st.sp - 1;
+            let item = st.stack[st.sp];
+            let ikind = item % 4;
+            let payload = item / 4;
+            if ikind == 2 {
+                yield payload                 // EMIT: the op word is the payload
+            } else {
+                let nk = ast.kinds[payload];
+                if nk == 1 {
+                    // Literal: schedule Const(index)
+                    let op = 1 + ast.args[payload] * 16;
+                    st.stack[st.sp] = 2 + op * 4;
+                    st.sp = st.sp + 1;
+                    yield 0
+                } else {
+                    if nk == 2 {
+                        // Local: schedule GetLocal(slot)
+                        let op = 3 + ast.args[payload] * 16;
+                        st.stack[st.sp] = 2 + op * 4;
+                        st.sp = st.sp + 1;
+                        yield 0
+                    } else {
+                        // BinOp: post-order schedule, so the pop order is
+                        // lhs, rhs, checked op, PopN(2). Add lowers to CheckedAdd
+                        // (tag 5), Mul to CheckedMul with 0 fraction bits (tag 4).
+                        let chk = if ast.args[payload] == 1 { 5 } else { 4 };
+                        st.stack[st.sp] = 2 + (6 + 2 * 16) * 4;      // EMIT PopN(2)
+                        st.sp = st.sp + 1;
+                        st.stack[st.sp] = 2 + chk * 4;               // EMIT the checked op
+                        st.sp = st.sp + 1;
+                        st.stack[st.sp] = 1 + ast.rhs[payload] * 4;  // VISIT rhs
+                        st.sp = st.sp + 1;
+                        st.stack[st.sp] = 1 + ast.lhs[payload] * 4;  // VISIT lhs
+                        st.sp = st.sp + 1;
+                        yield 0
+                    }
+                }
+            }
+        } else {
+            if st.ret_done == 0 {
+                st.ret_done = 1;
+                yield 2                       // Return, the last op
+            } else {
+                yield 0                       // drained; the host stopped at Return
+            }
+        }
+    }
 }
