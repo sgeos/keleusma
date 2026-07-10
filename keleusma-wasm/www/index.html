@@ -193,7 +193,8 @@
             ? `<table><thead><tr><th>Chunk</th><th>Basis</th><th>WCET (cycles)</th>` +
               `<th>WCMU stack (bytes)</th><th>WCMU heap (bytes)</th></tr></thead>` +
               `<tbody>${rows}</tbody></table>` +
-              `<p style="opacity:0.75;font-size:0.9rem">A <code>loop</code> is bounded per stream iteration; a <code>fn</code> per call; a <code>yield</code> per resume.</p>`
+              `<p style="opacity:0.75;font-size:0.9rem">A <code>loop</code> is bounded per stream iteration; a <code>fn</code> per call; a <code>yield</code> per resume. ` +
+              `WCMU counts <em>slots</em> (local frame + operand-stack peak) times the value-slot size, and WCET uses the nominal cost model — both computed for a <strong>32-bit target</strong> here (the WebAssembly build). Absolute numbers scale with the deployment target's word width and a calibrated cost model; a 64-bit host uses 32-byte slots, so its WCMU is larger.</p>`
             : "";
         } else {
           status.className = "err";
