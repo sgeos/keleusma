@@ -242,6 +242,24 @@ jobs:
           cargo clippy --all-targets -- -D warnings
           cargo test
 
+  vscode-extension:
+    name: VS Code extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      # Guard the language client: the manifest must parse, the client script
+      # must be syntactically valid, and the committed lockfile must install
+      # cleanly against the manifest.
+      - name: Validate the extension manifest, client, and lockfile
+        run: |
+          cd editors/vscode
+          node -e "require('./package.json')"
+          node --check extension.js
+          npm ci
+
   miri:
     name: Miri
     runs-on: ubuntu-latest

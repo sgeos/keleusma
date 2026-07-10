@@ -34,7 +34,11 @@ use keleusma::verify::verify;
 /// automatically.
 const KEYWORDS: &[&str] = keleusma::token::KEYWORDS;
 
-/// Primitive-type names offered by completion.
+/// Primitive-type names offered by completion. Unlike [`KEYWORDS`], the core
+/// crate exposes no single canonical list of these (they are `Type` enum
+/// variants named in scattered match arms), and the surface type vocabulary
+/// churns rarely — `Multiword` was the last addition. Kept as a small local list
+/// and reconciled against the highlighters at release (RELEASE_PROCESS.md 1a).
 const PRIMITIVE_TYPES: &[&str] = &[
     "Word",
     "Byte",
