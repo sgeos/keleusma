@@ -1,25 +1,24 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
-// Increment 3: real codegen over a nested expression, driven by the explicit
-// work-stack idiom (R3.1). Keleusma forbids the recursive tree walk a normal
-// compiler would use, so the single top-level `loop` drains an explicit
-// work-stack, one work item per iteration, emitting a post-order op stream. This
-// is the recursion-free discipline the whole pipeline rests on, and this
-// increment is its first real use. See compiler/MILESTONES.md and
-// docs/reference/INCREMENTAL_SELF_HOSTING.md.
+// Increment 4: the codegen owns its constant pool. Where increment 3 emitted
+// `Const(index)` using an index the adapter had pre-computed from the reference
+// module's pool, this increment removes that crutch. Literal nodes now carry
+// their value, the stage interns each into its own pool as it walks the tree,
+// and after the op stream it emits the pool so the host builds the module's
+// constant pool from the codegen's output rather than the reference's. This is
+// the first piece of the module frame the stage produces itself. See
+// compiler/MILESTONES.md and docs/reference/INCREMENTAL_SELF_HOSTING.md.
 //
-// It handles a general binary-arithmetic body of literals, parameters, and the
-// `+` and `*` operators, which is enough to compile `input * 2 + 1` from its
-// tree rather than a transcribed op stream. The module frame, constant pool, and
-// parameter layout are still host-supplied.
+// The pool is append-only, one entry per literal occurrence, with no dedup yet;
+// dedup needs a bounded search and is a later increment. For a body with
+// distinct literals the pool matches the reference's, so op indices still align.
 //
 // The self-hosted compiler is a full-width host tool; declare its word floor.
 require word >= 32;
 
-// Flattened expression tree from the codegen input adapter, as parallel per-node
-// arrays. `kinds` is 1 Literal, 2 Local, 3 BinOp. `args` is the constant-pool
-// index for a Literal, the slot for a Local, or the operator for a BinOp
-// (1 Add, 2 Mul). `lhs` and `rhs` are the child node indices of a BinOp.
+// Flattened expression tree from the codegen input adapter. `kinds` is 1 Literal,
+// 2 Local, 3 BinOp. `args` is the literal *value* for a Literal, the slot for a
+// Local, or the operator for a BinOp (1 Add, 2 Mul). `lhs`/`rhs` are child indices.
 shared data ast {
     root: Word,
     kinds: [Word; 64],
@@ -28,20 +27,26 @@ shared data ast {
     rhs: [Word; 64],
 }
 
-// The work-stack. Each entry is a work item, `kind + payload*4`: kind 1 VISIT a
-// node (payload is its index), kind 2 EMIT an op (payload is the op wire word).
-// Persists across the loop's per-iteration RESET.
+// The work-stack (R3.1) plus the constant pool the stage builds. Each stack entry
+// is a work item, `kind + payload*4`: kind 1 VISIT a node (payload is its index),
+// kind 2 EMIT an op (payload is the op wire word). All persist across the loop's
+// per-iteration RESET.
 private data st {
     stack: [Word; 256],
     sp: Word,
     started: Word,
     ret_done: Word,
+    pool: [Word; 64],
+    pool_count: Word,
+    count_done: Word,
+    pool_cursor: Word,
 }
 
-// Emit wire (unchanged). A yielded op is `tag + operand*16`, and 0 is a PENDING
-// marker the host skips:
+// Wire. During the walk a yielded op is `tag + operand*16`, 0 is PENDING:
 //   1 Const(index)  2 Return  3 GetLocal(slot)  4 CheckedMul(frac)  5 CheckedAdd  6 PopN(count)
-// The op stream ends with Return; the host stops there.
+// The op stream ends with Return. After Return the stage emits its constant pool:
+// first the pool size as a raw Word, then that many raw Word values. The host
+// reads ops until Return, then the size, then the values.
 
 loop main(resume: Word) -> Word {
     if st.started == 0 {
@@ -60,22 +65,24 @@ loop main(resume: Word) -> Word {
             } else {
                 let nk = ast.kinds[payload];
                 if nk == 1 {
-                    // Literal: schedule Const(index)
-                    let op = 1 + ast.args[payload] * 16;
+                    // Literal: intern the value (append), schedule Const(index).
+                    let idx = st.pool_count;
+                    st.pool[st.pool_count] = ast.args[payload];
+                    st.pool_count = st.pool_count + 1;
+                    let op = 1 + idx * 16;
                     st.stack[st.sp] = 2 + op * 4;
                     st.sp = st.sp + 1;
                     yield 0
                 } else {
                     if nk == 2 {
-                        // Local: schedule GetLocal(slot)
+                        // Local: schedule GetLocal(slot).
                         let op = 3 + ast.args[payload] * 16;
                         st.stack[st.sp] = 2 + op * 4;
                         st.sp = st.sp + 1;
                         yield 0
                     } else {
-                        // BinOp: post-order schedule, so the pop order is
-                        // lhs, rhs, checked op, PopN(2). Add lowers to CheckedAdd
-                        // (tag 5), Mul to CheckedMul with 0 fraction bits (tag 4).
+                        // BinOp: post-order schedule. Add -> CheckedAdd (tag 5),
+                        // Mul -> CheckedMul with 0 fraction bits (tag 4).
                         let chk = if ast.args[payload] == 1 { 5 } else { 4 };
                         st.stack[st.sp] = 2 + (6 + 2 * 16) * 4;      // EMIT PopN(2)
                         st.sp = st.sp + 1;
@@ -94,7 +101,18 @@ loop main(resume: Word) -> Word {
                 st.ret_done = 1;
                 yield 2                       // Return, the last op
             } else {
-                yield 0                       // drained; the host stopped at Return
+                if st.count_done == 0 {
+                    st.count_done = 1;
+                    yield st.pool_count       // the constant-pool size (raw Word)
+                } else {
+                    if st.pool_cursor < st.pool_count {
+                        let v = st.pool[st.pool_cursor];
+                        st.pool_cursor = st.pool_cursor + 1;
+                        yield v               // a pool value (raw Word)
+                    } else {
+                        yield 0               // fully drained
+                    }
+                }
             }
         }
     }

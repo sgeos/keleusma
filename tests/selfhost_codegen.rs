@@ -1,5 +1,4 @@
-// The self-hosted codegen is a full-width host tool, gated to a 64-bit runtime
-// like the other self-hosted tests.
+// The self-hosted codegen is a full-width host tool, gated to a 64-bit runtime.
 #![cfg(all(
     feature = "compile",
     feature = "verify",
@@ -7,11 +6,13 @@
     not(feature = "narrow-word-16"),
     not(feature = "narrow-word-32")
 ))]
-//! Stage 3 codegen (`compiler/kel/codegen.kel`). Increment 3 is real codegen over
-//! a nested expression, driven by the explicit work-stack idiom. A throwaway
-//! adapter flattens the Rust reference's expression tree into the shared-data node
-//! arrays; the Keleusma stage walks it recursion-free and emits a post-order op
-//! stream, checked for structural equality against the Rust compiler and run.
+//! Stage 3 codegen (`compiler/kel/codegen.kel`). Increment 4 has the stage own
+//! its constant pool: a throwaway adapter flattens the reference's expression tree
+//! into the shared-data node arrays with literals carrying their *value*, the
+//! Keleusma stage walks it recursion-free, interns each literal into its own pool,
+//! and emits the ops followed by the pool. The host builds the module from the
+//! stage's ops and pool, checks structural equality against the Rust compiler, and
+//! runs it.
 
 use keleusma::Arena;
 use keleusma::ast::{BinOp, Expr, Literal, Param, Pattern};
@@ -21,7 +22,6 @@ use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 
-// Shared-data slot bases: root at 0, then four 64-entry arrays.
 const KINDS: usize = 1;
 const ARGS: usize = 65;
 const LHS: usize = 129;
@@ -34,24 +34,18 @@ struct Node {
     rhs: i64,
 }
 
-/// The codegen input adapter (throwaway, Rust-side). Recursion here is fine; only
-/// the Keleusma stage must be recursion-free. Flattens the reference's expression
-/// tree into parallel node arrays, mapping literals to their constant-pool index
-/// and parameters to their slot. Returns the root node index.
-fn flatten(e: &Expr, params: &[Param], consts: &[ConstValue], out: &mut Vec<Node>) -> i64 {
+/// The codegen input adapter (throwaway, Rust-side). Flattens the reference's
+/// expression tree; a literal carries its value (the stage builds the pool now),
+/// a parameter its slot. Returns the root node index.
+fn flatten(e: &Expr, params: &[Param], out: &mut Vec<Node>) -> i64 {
     match e {
         Expr::Literal {
             value: Literal::Int(n),
             ..
         } => {
-            let idx = consts
-                .iter()
-                .position(|c| matches!(c, ConstValue::Int(v) if v == n))
-                .expect("literal must be in the reference constant pool")
-                as i64;
             out.push(Node {
                 kind: 1,
-                arg: idx,
+                arg: *n,
                 lhs: 0,
                 rhs: 0,
             });
@@ -73,12 +67,12 @@ fn flatten(e: &Expr, params: &[Param], consts: &[ConstValue], out: &mut Vec<Node
         Expr::BinOp {
             op, left, right, ..
         } => {
-            let l = flatten(left, params, consts, out);
-            let r = flatten(right, params, consts, out);
+            let l = flatten(left, params, out);
+            let r = flatten(right, params, out);
             let opcode = match op {
                 BinOp::Add => 1,
                 BinOp::Mul => 2,
-                other => panic!("increment 3 handles + and * only, got {other:?}"),
+                other => panic!("increment handles + and * only, got {other:?}"),
             };
             out.push(Node {
                 kind: 3,
@@ -88,7 +82,7 @@ fn flatten(e: &Expr, params: &[Param], consts: &[ConstValue], out: &mut Vec<Node
             });
             (out.len() - 1) as i64
         }
-        other => panic!("increment 3 handles literal/local/binop only, got {other:?}"),
+        other => panic!("increment handles literal/local/binop only, got {other:?}"),
     }
 }
 
@@ -116,8 +110,23 @@ fn main_index(m: &Module) -> usize {
         .expect("main")
 }
 
-/// Drive the Keleusma codegen with a flattened tree in shared data; return its ops.
-fn run_codegen(nodes: &[Node], root: i64) -> Vec<Op> {
+/// Resume until the next yielded word, skipping the loop RESET. Used for the raw
+/// pool metadata, where a yielded 0 is a real value, not a PENDING marker.
+fn next_word(vm: &mut Vm<'_, '_>, shared: &mut [u8]) -> i64 {
+    loop {
+        match vm
+            .resume_with_shared(shared, Value::Int(0))
+            .expect("resume")
+        {
+            VmState::Yielded(Value::Int(w)) => return w,
+            VmState::Reset => continue,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+}
+
+/// Drive the codegen; return its emitted ops and the constant pool it built.
+fn run_codegen(nodes: &[Node], root: i64) -> (Vec<Op>, Vec<i64>) {
     let src = std::fs::read_to_string("compiler/kel/codegen.kel").expect("read codegen.kel");
     let m = compile_src(&src);
     let need = required_persistent_capacity_for(&m);
@@ -139,6 +148,7 @@ fn run_codegen(nodes: &[Node], root: i64) -> Vec<Op> {
             .expect("rhs");
     }
 
+    // Phase 1: ops until Return.
     let mut ops = Vec::new();
     let mut st = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
@@ -162,12 +172,17 @@ fn run_codegen(nodes: &[Node], root: i64) -> Vec<Op> {
             .resume_with_shared(&mut shared, Value::Int(0))
             .expect("resume");
     }
-    ops
+
+    // Phase 2: the pool the stage built. Size, then that many raw values.
+    let count = next_word(&mut vm, &mut shared);
+    let pool = (0..count)
+        .map(|_| next_word(&mut vm, &mut shared))
+        .collect();
+    (ops, pool)
 }
 
 #[test]
-fn codegen_walks_nested_arithmetic_and_matches_reference() {
-    // (source, call argument, expected result)
+fn codegen_owns_its_constant_pool_and_matches_reference() {
     let cases: &[(&str, i64, i64)] = &[
         ("fn main() -> Word { 1 + 2 }", 0, 3),
         ("fn main(input: Word) -> Word { input + 1 }", 41, 42),
@@ -190,22 +205,18 @@ fn codegen_walks_nested_arithmetic_and_matches_reference() {
             .as_ref()
             .expect("main has a tail expression");
         let mut nodes = Vec::new();
-        let root = flatten(
-            body,
-            &main_fn.params,
-            &reference.chunks[idx].constants,
-            &mut nodes,
-        );
+        let root = flatten(body, &main_fn.params, &mut nodes);
 
-        let emitted = run_codegen(&nodes, root);
+        let (emitted, pool) = run_codegen(&nodes, root);
         assert_eq!(
             emitted, reference_ops,
             "emitted ops must match Rust for `{src}`"
         );
 
-        // Build and run.
+        // Build the module from the stage's own ops and constant pool.
         let mut built = compile_src(src);
         built.chunks[idx].ops = emitted;
+        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
         let need = required_persistent_capacity_for(&built);
         let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
         arena.resize_persistent(need).expect("resize");
