@@ -1,6 +1,6 @@
 # Guide
 
-**Languages / 言語**: [English](https://sgeos.github.io/keleusma/) · [日本語](https://sgeos.github.io/keleusma/ja/) — the Japanese translation is in progress and falls back to English where it is not yet translated. 日本語訳は作成中で、未訳の箇所は英語のままです。
+**Languages / 言語**: [English](https://sgeos.github.io/keleusma/) · [日本語](https://sgeos.github.io/keleusma/ja/) — the Japanese edition is a complete machine-assisted translation under review; corrections are welcome. 日本語版は機械翻訳を基にした全訳で、レビューを進めています。修正のご提案を歓迎します。
 
 > **Navigation**: [Documentation Root](../../docs/README.md)
 
