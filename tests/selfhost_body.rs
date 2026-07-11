@@ -1,8 +1,10 @@
-//! Body-expression parser (`compiler/kel/body.kel`), increment 12: a function body over
+//! Body-expression parser (`compiler/kel/body.kel`), increment 16: a function body over
 //! the full operator-precedence expression grammar, scalar and indexed data-field
 //! reads, `let` bindings and scalar data-field assignments, the `if`/`else` conditional
-//! with nested statement-block branches, and function calls — lowered to the
-//! abstract-syntax node forest codegen consumes, with a `call_args` side array.
+//! with nested statement-block branches, function calls, the bounded
+//! `for v in start..end limit CAP { body }` loop, and a statement-only block whose
+//! implicit value is Unit — lowered to the abstract-syntax node forest codegen consumes,
+//! with `call_args` and `limit_parts` side arrays.
 //!
 //! A throwaway adapter tokenises the program, feeds the function body's tokens, the
 //! parameter-name table, and the data-field layout (computed from the compiled
@@ -281,9 +283,10 @@ fn run_body_inner(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, i64) {
                 let arg = w.div_euclid(64);
                 match kind {
                     0 => {} // PENDING
-                    1 | 2 | 11 => {
-                        // A leaf node: Literal (1), Local (2), or DataRead (11). Push
-                        // it and its index.
+                    1 | 2 | 11 | 20 => {
+                        // A leaf node: Literal (1), Local (2), DataRead (11), or Unit
+                        // (20, a statement-only block's implicit unit value). Push it and
+                        // its index.
                         nodes.push(Node {
                             kind,
                             arg,
@@ -857,20 +860,29 @@ fn flatten_block(
             ),
         }
     }
-    let tail = block
-        .tail_expr
-        .as_ref()
-        .expect("a block has a tail expression this increment");
-    let mut cont = flatten(
-        tail,
-        scope,
-        nodes,
-        data_slots,
-        chunk_names,
-        call_args,
-        next_slot,
-        limit_parts,
-    );
+    // A block with no trailing expression (a statement-only block, such as an effectful
+    // `for` body) has the unit value, emitted as a Unit node (kind 20).
+    let mut cont = match &block.tail_expr {
+        Some(tail) => flatten(
+            tail,
+            scope,
+            nodes,
+            data_slots,
+            chunk_names,
+            call_args,
+            next_slot,
+            limit_parts,
+        ),
+        None => {
+            nodes.push(Node {
+                kind: 20,
+                arg: 0,
+                lhs: 0,
+                rhs: 0,
+            });
+            (nodes.len() - 1) as i64
+        }
+    };
     for &(kind, arg, value) in stmts.iter().rev() {
         nodes.push(Node {
             kind,
@@ -1820,4 +1832,62 @@ fn two_sequential_for_limit_loops_have_disjoint_slots() {
     // First loop: slots 0..5. Second loop: slots 5..10.
     assert_eq!(&limit_parts[0..5], &[0, 1, 2, 3, 4]);
     assert_eq!(&limit_parts[12..17], &[5, 6, 7, 8, 9]);
+}
+
+// A statement-only `for` body (an effectful data-field assignment with no trailing
+// expression) folds its statements around a Unit tail (kind 20) into the body node.
+#[test]
+fn a_for_limit_body_may_be_statement_only() {
+    let src = "shared data acc { sum: Word } \
+        fn run() -> Word { for i in 0..3 limit 4 { acc.sum = acc.sum + i; } 0 }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _call_args, limit_parts, _root) = run_body(src);
+    assert_eq!(limit_parts.len(), 12);
+    // The body node (limit_parts[7]) is a DataFieldAssignIn (kind 12) whose continuation
+    // is a Unit node (kind 20).
+    let body = nodes[limit_parts[7] as usize];
+    assert_eq!(body.kind, 12);
+    assert_eq!(nodes[body.rhs as usize].kind, 20);
+    // Its value is the Add of the data read and the loop variable.
+    assert_eq!(nodes[body.lhs as usize].kind, 3);
+    assert_eq!(nodes[body.lhs as usize].arg, 1); // Add
+}
+
+// A `for` body may carry a `let` binding before its tail expression; the body fold
+// wraps the tail in the LetIn just as a top-level block does, and the loop variable and
+// the body `let` occupy distinct monotonic slots.
+#[test]
+fn a_for_limit_body_may_bind_a_let() {
+    let src = "fn ramp() -> Word { for i in 0..3 limit 4 { let d = i * 2; d } 0 }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _call_args, limit_parts, _root) = run_body(src);
+    // The loop variable is slot 0; the four anon slots 1..4; the body `let d` is slot 5.
+    assert_eq!(&limit_parts[0..5], &[0, 1, 2, 3, 4]);
+    let body = nodes[limit_parts[7] as usize];
+    assert_eq!(body.kind, 5); // LetIn
+    assert_eq!(body.arg, 5); // d at slot 5 (after the loop's five slots)
+    // The bound value is i * 2 (Mul of Local(0) and Literal 2).
+    assert_eq!(nodes[body.lhs as usize].arg, 2); // Mul
+    // The continuation is the tail `d`, a Local at slot 5.
+    assert_eq!(nodes[body.rhs as usize].kind, 2);
+    assert_eq!(nodes[body.rhs as usize].arg, 5);
+}
+
+// A statement-only `for` body with two statements folds both around the Unit tail in
+// source order (last statement innermost).
+#[test]
+fn a_for_limit_body_may_have_several_statements() {
+    let src = "shared data acc { a: Word, b: Word } \
+        fn run() -> Word { for i in 0..3 limit 4 { acc.a = i; acc.b = i; } 0 }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _call_args, limit_parts, _root) = run_body(src);
+    let body = nodes[limit_parts[7] as usize];
+    // Outer assignment is acc.a (slot 0); its continuation is the acc.b assignment
+    // (slot 1); whose continuation is Unit.
+    assert_eq!(body.kind, 12);
+    assert_eq!(body.arg, 0); // acc.a
+    let inner = nodes[body.rhs as usize];
+    assert_eq!(inner.kind, 12);
+    assert_eq!(inner.arg, 1); // acc.b
+    assert_eq!(nodes[inner.rhs as usize].kind, 20); // Unit
 }
