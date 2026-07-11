@@ -1,19 +1,22 @@
-//! Body-expression parser (`compiler/kel/body.kel`), increment 4: an expression body
+//! Body-expression parser (`compiler/kel/body.kel`), increment 5: an expression body
 //! over integer literals, parameter references, the binary arithmetic and comparison
-//! operators, parenthesised grouping, and the unary prefix operators `-` and `not`,
-//! lowered by operator precedence to the abstract-syntax node forest the codegen stage
-//! consumes.
+//! operators, the bitwise (`band`/`bor`/`bxor`) and short-circuit boolean
+//! (`andalso`/`orelse`) operators, parenthesised grouping, and the unary prefix
+//! operators `-` and `not`, lowered by operator precedence to the abstract-syntax node
+//! forest the codegen stage consumes.
 //!
 //! A throwaway adapter tokenises a function, feeds the body's tokens (from the opening
 //! `{`) and the function's parameter-name table to the `body.kel` `loop`, and decodes
 //! the postorder node-record stream into a node forest. Each leaf record (Literal,
-//! Local) pushes a node and its index onto a stack; an interior BinOp record pops its
-//! two operands and a unary record (Not, Neg) pops one, pushing the combined node. The
-//! forest is checked against a reference flattening of the same body's tail expression,
-//! with parameters occupying the first frame slots — the same lowering the codegen
-//! conformance harness performs — so operator precedence, left-associativity of the
-//! binary operators, and the prefix binding and right-associative nesting of the unary
-//! operators are all verified against the reference parser's own tree.
+//! Local) pushes a node and its index onto a stack; an interior binary record (BinOp,
+//! Andalso, Orelse) pops its two operands and a unary record (Not, Neg) pops one,
+//! pushing the combined node. The forest is checked against a reference flattening of
+//! the same body's tail expression, with parameters occupying the first frame slots —
+//! the same lowering the codegen conformance harness performs — so the full operator
+//! precedence chain (unary, multiplicative, additive, bitwise, comparison,
+//! short-circuit), the left-associativity of the binary operators, and the prefix
+//! binding and right-associative nesting of the unary operators are all verified
+//! against the reference parser's own tree.
 
 #![cfg(all(
     feature = "compile",
@@ -100,6 +103,11 @@ fn run_body(func_src: &str) -> (Vec<Node>, i64) {
             TokenKind::LtEq => (30, 0),
             TokenKind::GtEq => (31, 0),
             TokenKind::Not => (32, 0),
+            TokenKind::Band => (33, 0),
+            TokenKind::Bor => (34, 0),
+            TokenKind::Bxor => (35, 0),
+            TokenKind::Andalso => (36, 0),
+            TokenKind::Orelse => (37, 0),
             TokenKind::Eof => continue,
             _ => (4, 0),
         };
@@ -163,10 +171,11 @@ fn run_body(func_src: &str) -> (Vec<Node>, i64) {
                         });
                         stack.push((nodes.len() - 1) as i64);
                     }
-                    3 => {
-                        // An interior BinOp node: pop the two operands (rhs then lhs).
-                        let rhs = stack.pop().expect("BinOp needs a right operand");
-                        let lhs = stack.pop().expect("BinOp needs a left operand");
+                    3 | 8 | 9 => {
+                        // An interior binary node: BinOp (3), Andalso (8), or Orelse
+                        // (9). Pop the two operands (rhs then lhs).
+                        let rhs = stack.pop().expect("a binary node needs a right operand");
+                        let lhs = stack.pop().expect("a binary node needs a left operand");
                         nodes.push(Node {
                             kind,
                             arg,
@@ -240,22 +249,31 @@ fn flatten(expr: &Expr, scope: &[&str], nodes: &mut Vec<Node>) -> i64 {
         } => {
             let lhs = flatten(left, scope, nodes);
             let rhs = flatten(right, scope, nodes);
-            let code = match op {
-                BinOp::Add => 1,
-                BinOp::Mul => 2,
-                BinOp::Sub => 3,
-                BinOp::Div => 4,
-                BinOp::Mod => 5,
-                BinOp::Eq => 6,
-                BinOp::NotEq => 7,
-                BinOp::Lt => 8,
-                BinOp::Gt => 9,
-                BinOp::LtEq => 10,
-                BinOp::GtEq => 11,
-                other => panic!("increment handles arithmetic and comparison, got {other:?}"),
+            // Most operators are a BinOp node (kind 3) with an operator code; the
+            // short-circuit booleans are their own node kinds (8 Andalso, 9 Orelse).
+            let (kind, code) = match op {
+                BinOp::Add => (3, 1),
+                BinOp::Mul => (3, 2),
+                BinOp::Sub => (3, 3),
+                BinOp::Div => (3, 4),
+                BinOp::Mod => (3, 5),
+                BinOp::Eq => (3, 6),
+                BinOp::NotEq => (3, 7),
+                BinOp::Lt => (3, 8),
+                BinOp::Gt => (3, 9),
+                BinOp::LtEq => (3, 10),
+                BinOp::GtEq => (3, 11),
+                BinOp::Band => (3, 12),
+                BinOp::Bor => (3, 13),
+                BinOp::Bxor => (3, 14),
+                BinOp::Andalso => (8, 0),
+                BinOp::Orelse => (9, 0),
+                other => panic!(
+                    "increment handles arithmetic, comparison, bitwise, and short-circuit, got {other:?}"
+                ),
             };
             nodes.push(Node {
-                kind: 3,
+                kind,
                 arg: code,
                 lhs,
                 rhs,
@@ -551,4 +569,70 @@ fn unary_operators_nest() {
     let outer = nodes[root as usize];
     assert_eq!(outer.kind, 10);
     assert_eq!(nodes[outer.lhs as usize].kind, 10); // inner Neg
+}
+
+// The bitwise operators are BinOp codes 12 (band), 13 (bor), 14 (bxor).
+#[test]
+fn bitwise_operators_are_recognised() {
+    let src = "fn f(a: Word, b: Word) -> Word { a band b }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    assert_eq!(
+        nodes[root as usize],
+        Node {
+            kind: 3,
+            arg: 12,
+            lhs: 0,
+            rhs: 1
+        }
+    );
+}
+
+// Within the bitwise level `band` binds tighter than `bor`: `a bor b band c` is
+// `a bor (b band c)`.
+#[test]
+fn band_binds_tighter_than_bor() {
+    let src = "fn f(a: Word, b: Word, c: Word) -> Word { a bor b band c }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let bor = nodes[root as usize];
+    assert_eq!(bor.arg, 13); // Bor
+    assert_eq!(nodes[bor.rhs as usize].arg, 12); // Band on the right
+}
+
+// The bitwise operators bind tighter than comparison: `a band b == c` is
+// `(a band b) == c`.
+#[test]
+fn bitwise_binds_tighter_than_comparison() {
+    let src = "fn f(a: Word, b: Word, c: Word) -> bool { a band b == c }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let eq = nodes[root as usize];
+    assert_eq!(eq.arg, 6); // Eq
+    assert_eq!(nodes[eq.lhs as usize].arg, 12); // Band
+}
+
+// The short-circuit booleans are their own node kinds (8 andalso, 9 orelse) and are
+// looser than comparison: `a == b andalso c == d`.
+#[test]
+fn short_circuit_and_is_looser_than_comparison() {
+    let src = "fn f(a: Word, b: Word, c: Word, d: Word) -> bool { a == b andalso c == d }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let andalso = nodes[root as usize];
+    assert_eq!(andalso.kind, 8); // Andalso
+    assert_eq!(nodes[andalso.lhs as usize].arg, 6); // Eq on the left
+    assert_eq!(nodes[andalso.rhs as usize].arg, 6); // Eq on the right
+}
+
+// `andalso` binds tighter than `orelse`: `a andalso b orelse c` is
+// `(a andalso b) orelse c`.
+#[test]
+fn andalso_binds_tighter_than_orelse() {
+    let src = "fn f(a: bool, b: bool, c: bool) -> bool { a andalso b orelse c }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let orelse = nodes[root as usize];
+    assert_eq!(orelse.kind, 9); // Orelse
+    assert_eq!(nodes[orelse.lhs as usize].kind, 8); // Andalso
 }
