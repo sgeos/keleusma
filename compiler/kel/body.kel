@@ -1,13 +1,13 @@
 // compiler/kel/body.kel — the body-expression parser, a sub-component of Stage 2.
 //
-// Increment 17: a function body over the full operator-precedence expression grammar,
+// Increment 18: a function body over the full operator-precedence expression grammar,
 // scalar and indexed data-field reads, `let` bindings and scalar data-field
 // assignments, the bare expression statement `expr;`, the `if`/`else` conditional with
-// nested statement-block branches, function calls, the bounded
-// `for v in start..end limit CAP { body }` loop, and a statement-only block whose
-// implicit value is Unit. Real Keleusma code that compiles and verifies on the current
-// runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md (roadmap
-// Step 2).
+// nested statement-block branches, function calls, the `yield e` reentrant expression,
+// the bounded `for v in start..end limit CAP { body }` loop, and a statement-only block
+// whose implicit value is Unit. Real Keleusma code that compiles and verifies on the
+// current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md
+// (roadmap Step 2).
 //
 // Model. Stage 2's declaration parser (parser.kel) reads a function's signature and
 // brace-matches its body. This companion loop reads that body's tokens and produces
@@ -261,8 +261,10 @@ private data bs {
 // multiplicative (2 Mul, 4 Div, 5 Mod) 8, additive (1 Add, 3 Sub) 7, bitwise-and
 // (12 Band) 6, bitwise-xor (14 Bxor) 5, bitwise-or (13 Bor) 4, comparison (6..11) 3,
 // short-circuit-and (18 Andalso) 2, short-circuit-or (19 Orelse) 1, and the
-// parenthesis marker (15) 0, so no real operator ever pops across it. The bitwise and
-// logical orderings match the reference (`band > bxor > bor`, `andalso > orelse`).
+// precedence-0 markers (15 parenthesis, 20 index, 21 call, 22 yield) 0, so no real
+// operator ever pops across one. The bitwise and logical orderings match the reference
+// (`band > bxor > bor`, `andalso > orelse`); `yield` binds loosest, taking the whole
+// following expression as its operand.
 fn prec_of(op: Word) -> Word {
     if op == 16 {
         9
@@ -277,6 +279,9 @@ fn prec_of(op: Word) -> Word {
         0
     } else {
     if op == 21 {
+        0
+    } else {
+    if op == 22 {
         0
     } else {
     if op == 2 {
@@ -310,12 +315,13 @@ fn prec_of(op: Word) -> Word {
         1
     } else {
         3
-    } } } } } } } } } } } } } } }
+    } } } } } } } } } } } } } } } }
 }
 
 // The record word for a stacked operator: a unary Neg (16) or Not (17) emits its node
-// kind (10, 6) directly, and the short-circuit Andalso (18) and Orelse (19) emit their
-// own node kinds (8, 9); every other code is a binary operator emitted as a BinOp.
+// kind (10, 6) directly, the short-circuit Andalso (18) and Orelse (19) emit their own
+// node kinds (8, 9), and the yield marker (22) emits a YieldExpr (kind 24, unary over
+// its single operand); every other code is a binary operator emitted as a BinOp.
 fn emit_op(op: Word) -> Word {
     if op == 16 {
         10
@@ -329,8 +335,11 @@ fn emit_op(op: Word) -> Word {
     if op == 19 {
         9
     } else {
+    if op == 22 {
+        24
+    } else {
         3 + op * 64
-    } } } }
+    } } } } }
 }
 
 // The operator code for a token kind, or 0 when the token is not a binary operator.
@@ -746,6 +755,14 @@ fn step_op(k: Word) -> Word {
         bs.expect_operand = 1;
         0
     } else {
+    if k == 5 {
+        // `yield` is a loosest-binding prefix: push its marker (code 22) so no operator
+        // pops across it and the whole following expression becomes its operand.
+        bs.opstack[bs.opsp] = 22;
+        bs.opsp = bs.opsp + 1;
+        bs.expect_operand = 1;
+        0
+    } else {
     if k == 22 andalso bs.expect_operand == 1 {
         bs.opstack[bs.opsp] = 16;
         bs.opsp = bs.opsp + 1;
@@ -762,7 +779,7 @@ fn step_op(k: Word) -> Word {
         } else {
             0
         }
-    } } } } }
+    } } } } } }
 }
 
 // The `for` loop header, phases 1 (variable name), 2 (`in`), 3 (start range, drained
