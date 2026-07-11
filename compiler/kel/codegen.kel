@@ -1,5 +1,16 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
+// Increment 31: the `loop` wrapper. The stage now emits a function's category
+// wrapper: a `loop` (productive divergent) function opens with a `Stream` marker
+// before the body and closes by discarding the body value and resetting the
+// stream (`PopN(1); Reset`) instead of returning, while an `fn`/`yield` still
+// ends in `Return`. The category rides in a new `ast.category` field (0 fn,
+// 1 yield, 2 loop) alongside `param_count`. This is the first non-atomic support:
+// `loop main(resume) { emit_next(resume) }` now self-compiles byte-identically
+// (the call's yield propagates through the stream). The multiheaded `yield
+// emit_next` heads remain the only self-compile gap. `yield` expressions and the
+// multiheaded guard dispatch are the next increment.
+//
 // Increment 30: `for ... limit` bounded-runtime-range loops. The stage now lowers
 // a bare `for i in start..end limit CAP { body }` (a ForLimit node, kind 23),
 // reproducing the reference `compile_for_limit` byte for byte: a compile-time
@@ -153,6 +164,9 @@ const data wire {
     mloop: Word = 39,
     mendloop: Word = 40,
     mbreakif: Word = 41,
+    yieldop: Word = 42,
+    stream: Word = 43,
+    reset: Word = 44,
     radix: Word = 64,
     item: Word = 4,
     pack: Word = 65536,
@@ -162,6 +176,7 @@ const data wire {
     looplimit: Word = 7,
     ocok: Word = 1,
     ocbreak: Word = 2,
+    catloop: Word = 2,
 }
 
 // Flattened expression forest from the codegen input adapter, a structure-of-
@@ -194,6 +209,7 @@ shared data ast {
     match_parts: [Word; 64],
     limit_parts: [Word; 64],
     param_count: Word,
+    category: Word,
 }
 
 // The work-stack (R3.1), the op buffer the stage backpatches, and the constant
@@ -726,6 +742,12 @@ fn push_match(p: Word) -> Word {
 // chain (or a bare expression) in the node forest, so no statement-array
 // pre-seeding is needed; the walk expands the chain. Yields the PENDING 0.
 fn seed_step() -> Word {
+    // A `loop` function opens the productive-divergent stream with a `Stream`
+    // marker before the body ops (the body's value is discarded and the stream
+    // resets, see `drain_return`).
+    if ast.category == wire.catloop {
+        emit_op(wire.stream);
+    }
     push_visit(ast.root);
     st.started = 1;
     0
@@ -773,8 +795,19 @@ fn walk_step() -> Word {
 // Phase 2: the walk is done; append Return to close the op stream. Yields the
 // PENDING 0.
 fn drain_return() -> Word {
-    st.ops[st.op_count] = wire.ret;
-    st.op_count = st.op_count + 1;
+    // A `loop` function closes its body by discarding the body value and
+    // resetting the stream (`PopN(1); Reset`) rather than returning; an `fn` or
+    // `yield` function returns.
+    if ast.category == wire.catloop {
+        st.ops[st.op_count] = wire.popn + 1 * wire.radix;
+        st.op_count = st.op_count + 1;
+        st.ops[st.op_count] = wire.reset;
+        st.op_count = st.op_count + 1;
+    }
+    if ast.category != wire.catloop {
+        st.ops[st.op_count] = wire.ret;
+        st.op_count = st.op_count + 1;
+    }
     st.ret_done = 1;
     0
 }

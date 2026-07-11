@@ -41,6 +41,7 @@ const FOR_PARTS: usize = 2113;
 const MATCH_PARTS: usize = 2177;
 const LIMIT_PARTS: usize = 2241;
 const PARAM_COUNT: usize = 2305;
+const CATEGORY: usize = 2306;
 
 struct Node {
     kind: i64,
@@ -119,6 +120,7 @@ struct Body {
     for_parts: Vec<i64>,
     match_parts: Vec<i64>,
     limit_parts: Vec<i64>,
+    category: i64,
     root: i64,
 }
 
@@ -563,6 +565,7 @@ fn flatten_block(
 fn build_body(
     block: &Block,
     params: &[Param],
+    category: i64,
     chunk_names: Vec<String>,
     data_slots: Vec<String>,
     const_data: Vec<(String, i64)>,
@@ -590,6 +593,7 @@ fn build_body(
         for_parts: ctx.for_parts,
         match_parts: ctx.match_parts,
         limit_parts: ctx.limit_parts,
+        category,
         root,
     }
 }
@@ -645,6 +649,10 @@ fn decode_op(w: i64) -> Op {
         // exit; its own stage tag lets `emit_op` set its exit target while
         // preserving the `BreakIf` decode.
         41 => Op::BreakIf(operand as u16),
+        // The `yield`/`loop` machinery.
+        42 => Op::Yield,
+        43 => Op::Stream,
+        44 => Op::Reset,
         other => panic!("unknown op tag {other} (word {w})"),
     }
 }
@@ -716,6 +724,8 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
     }
     vm.set_shared(&mut shared, PARAM_COUNT, Value::Int(param_count as i64))
         .expect("param_count");
+    vm.set_shared(&mut shared, CATEGORY, Value::Int(body.category))
+        .expect("category");
 
     // Phase 1: ops until Return.
     let mut ops = Vec::new();
@@ -727,7 +737,10 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
             VmState::Yielded(Value::Int(w)) => {
                 if w != 0 {
                     let op = decode_op(w);
-                    let done = op == Op::Return;
+                    // The op stream terminates with `Return` for an `fn`/`yield`
+                    // body and with `Reset` for a `loop` body; both close the
+                    // buffer, after which the pool and local_count stream.
+                    let done = op == Op::Return || op == Op::Reset;
                     ops.push(op);
                     if done {
                         break;
@@ -1091,9 +1104,11 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
             .iter()
             .find(|f| f.name == "main")
             .expect("main fn");
+        // The conformance cases are all atomic `fn` bodies (category 0).
         let body = build_body(
             &main_fn.body,
             &main_fn.params,
+            0,
             chunk_names,
             data_slots,
             const_data,
@@ -1176,18 +1191,25 @@ fn self_compile_codegen_atomic_functions() {
     let mut ok: Vec<String> = Vec::new();
     let mut gaps: Vec<(String, String)> = Vec::new();
     for f in &program.functions {
-        if f.category != FunctionCategory::Fn {
-            gaps.push((
-                f.name.clone(),
-                "non-atomic (yield/loop) function".to_string(),
-            ));
-            continue;
-        }
+        // Atomic `fn` (category 0) and a single-headed `loop` (category 2, the
+        // `Stream`/`Reset` wrapper) are supported; a multiheaded `yield`
+        // (guarded heads) is not yet lowered by the stage.
+        let cat = match f.category {
+            FunctionCategory::Fn => 0_i64,
+            FunctionCategory::Loop if f.guard.is_none() => 2_i64,
+            _ => {
+                gaps.push((
+                    f.name.clone(),
+                    "non-atomic (multiheaded yield/loop) function".to_string(),
+                ));
+                continue;
+            }
+        };
         let cn = chunk_names.clone();
         let ds = data_slots.clone();
         let cd = const_data.clone();
         let result = catch_unwind(AssertUnwindSafe(|| {
-            let body = build_body(&f.body, &f.params, cn, ds, cd);
+            let body = build_body(&f.body, &f.params, cat, cn, ds, cd);
             if body.nodes.len() > 512
                 || body.for_parts.len() > 64
                 || body.call_args.len() > 64
@@ -1211,7 +1233,17 @@ fn self_compile_codegen_atomic_functions() {
             if emitted == ref_ops {
                 Ok(())
             } else {
-                Err("op stream differs from the reference".to_string())
+                let diff = (0..emitted.len().max(ref_ops.len()))
+                    .find(|&i| emitted.get(i) != ref_ops.get(i))
+                    .unwrap_or(0);
+                Err(format!(
+                    "op stream differs at {} (emitted {:?} vs ref {:?}); lens {}/{}",
+                    diff,
+                    emitted.get(diff),
+                    ref_ops.get(diff),
+                    emitted.len(),
+                    ref_ops.len()
+                ))
             }
         }));
         match result {
@@ -1231,7 +1263,7 @@ fn self_compile_codegen_atomic_functions() {
     std::panic::set_hook(prev_hook);
 
     eprintln!(
-        "\n=== self-compile probe: {} atomic fns compile byte-identically ===",
+        "\n=== self-compile probe: {} functions compile byte-identically ===",
         ok.len()
     );
     for n in &ok {
@@ -1243,6 +1275,6 @@ fn self_compile_codegen_atomic_functions() {
     }
     assert!(
         !ok.is_empty(),
-        "expected at least some atomic fns of codegen.kel to self-compile"
+        "expected at least some functions of codegen.kel to self-compile"
     );
 }
