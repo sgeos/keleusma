@@ -1,10 +1,10 @@
-//! Body-expression parser (`compiler/kel/body.kel`), increment 16: a function body over
+//! Body-expression parser (`compiler/kel/body.kel`), increment 17: a function body over
 //! the full operator-precedence expression grammar, scalar and indexed data-field
-//! reads, `let` bindings and scalar data-field assignments, the `if`/`else` conditional
-//! with nested statement-block branches, function calls, the bounded
-//! `for v in start..end limit CAP { body }` loop, and a statement-only block whose
-//! implicit value is Unit — lowered to the abstract-syntax node forest codegen consumes,
-//! with `call_args` and `limit_parts` side arrays.
+//! reads, `let` bindings and scalar data-field assignments, the bare expression
+//! statement `expr;`, the `if`/`else` conditional with nested statement-block branches,
+//! function calls, the bounded `for v in start..end limit CAP { body }` loop, and a
+//! statement-only block whose implicit value is Unit — lowered to the abstract-syntax
+//! node forest codegen consumes, with `call_args` and `limit_parts` side arrays.
 //!
 //! A throwaway adapter tokenises the program, feeds the function body's tokens, the
 //! parameter-name table, and the data-field layout (computed from the compiled
@@ -345,10 +345,11 @@ fn run_body_inner(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, i64) {
                         });
                         stack.push((nodes.len() - 1) as i64);
                     }
-                    5 | 12 => {
-                        // A statement node: LetIn (5) or DataFieldAssignIn (12). Pop the
-                        // continuation (rhs) and the bound/assigned value (lhs); arg is
-                        // the local or data slot.
+                    5 | 12 | 21 => {
+                        // A statement node: LetIn (5), DataFieldAssignIn (12), or ExprStmt
+                        // (21, a bare expression whose value is discarded). Pop the
+                        // continuation (rhs) and the bound/assigned/discarded value (lhs);
+                        // arg is the local or data slot (0 for an ExprStmt).
                         let rhs = stack.pop().expect("a statement node needs a continuation");
                         let lhs = stack.pop().expect("a statement node needs a value");
                         nodes.push(Node {
@@ -767,6 +768,21 @@ fn flatten_block(
                 let slot = data_slot(data_slots, data_name, field);
                 stmts.push((12, slot, value_node));
             }
+            Stmt::Expr(expr) => {
+                // A bare expression statement (a call for effect): ExprStmt (kind 21),
+                // whose value node is discarded via the continuation link.
+                let expr_node = flatten(
+                    expr,
+                    scope,
+                    nodes,
+                    data_slots,
+                    chunk_names,
+                    call_args,
+                    next_slot,
+                    limit_parts,
+                );
+                stmts.push((21, 0, expr_node));
+            }
             Stmt::For(fs) if fs.limit.is_some() => {
                 // A bare `for v in start..end limit CAP { body }`. Mirrors the codegen
                 // conformance harness: the loop variable, the end, the counter, the cap,
@@ -856,7 +872,7 @@ fn flatten_block(
                 stmts.push((23, lp_start, 0));
             }
             other => panic!(
-                "increment handles let, data-assign, and for-limit statements, got {other:?}"
+                "increment handles let, data-assign, expr, and for-limit statements, got {other:?}"
             ),
         }
     }
@@ -1890,4 +1906,72 @@ fn a_for_limit_body_may_have_several_statements() {
     assert_eq!(inner.kind, 12);
     assert_eq!(inner.arg, 1); // acc.b
     assert_eq!(nodes[inner.rhs as usize].kind, 20); // Unit
+}
+
+// A bare call statement `g(n);` (a call for effect whose value is discarded) lowers to
+// an ExprStmt (kind 21) wrapping the block tail.
+#[test]
+fn a_bare_call_is_an_expr_statement() {
+    let src = "fn g(x: Word) -> Word { x } fn f(n: Word) -> Word { g(n); n }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    // The root is the ExprStmt; lhs is the discarded Call, rhs the tail Local.
+    let expr_stmt = nodes[root as usize];
+    assert_eq!(expr_stmt.kind, 21);
+    assert_eq!(expr_stmt.arg, 0);
+    assert_eq!(nodes[expr_stmt.lhs as usize].kind, 7); // the discarded Call
+    assert_eq!(nodes[expr_stmt.rhs as usize].kind, 2); // the tail Local n
+}
+
+// Several bare expression statements fold in source order (last innermost), each
+// discarding its value.
+#[test]
+fn several_expr_statements_fold_in_order() {
+    let src = "fn g(x: Word) -> Word { x } \
+        fn f(n: Word) -> Word { g(n); g(n); n }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let outer = nodes[root as usize];
+    assert_eq!(outer.kind, 21); // first g(n)
+    let inner = nodes[outer.rhs as usize];
+    assert_eq!(inner.kind, 21); // second g(n)
+    assert_eq!(nodes[inner.rhs as usize].kind, 2); // tail Local
+}
+
+// THE BASELINE TORTURE TEST. An expression statement nested inside a `let`'s value
+// (`let a = if c { g(n); n } else { 0 };`) must be recognised as an ExprStmt without
+// clobbering the enclosing `let`: the outer statement must still lower to a LetIn (kind
+// 5) and only the inner `g(n);` to an ExprStmt (kind 21). Getting the pending-statement
+// baseline wrong would mis-commit the outer `let` as an expression statement, a silent
+// miscompile that still produces a valid forest, so this is asserted structurally.
+#[test]
+fn an_expr_statement_nested_in_a_let_value_keeps_the_let() {
+    let src = "fn g(x: Word) -> Word { x } \
+        fn f(c: Word, n: Word) -> Word { let a = if c { g(n); n } else { 0 }; a }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    // The root is the outer LetIn (the `let a`), not an ExprStmt.
+    let letin = nodes[root as usize];
+    assert_eq!(letin.kind, 5);
+    // Its bound value is the If; the If's then branch is an ExprStmt wrapping the call.
+    let iff = nodes[letin.lhs as usize];
+    assert_eq!(iff.kind, 4);
+    let then = nodes[iff.lhs as usize];
+    assert_eq!(then.kind, 21); // ExprStmt g(n)
+    assert_eq!(nodes[then.lhs as usize].kind, 7); // the Call
+    assert_eq!(nodes[then.rhs as usize].kind, 2); // the then tail Local n
+}
+
+// A statement-only `for` body may be a bare call for effect (ExprStmt over a Unit tail),
+// the loop-body counterpart of the data-assignment accumulator.
+#[test]
+fn a_for_limit_body_may_be_a_bare_call() {
+    let src = "fn g(x: Word) -> Word { x } \
+        fn run() -> Word { for i in 0..3 limit 4 { g(i); } 0 }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _call_args, limit_parts, _root) = run_body(src);
+    let body = nodes[limit_parts[7] as usize];
+    assert_eq!(body.kind, 21); // ExprStmt
+    assert_eq!(nodes[body.lhs as usize].kind, 7); // the Call
+    assert_eq!(nodes[body.rhs as usize].kind, 20); // Unit tail
 }
