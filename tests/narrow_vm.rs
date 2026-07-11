@@ -947,3 +947,54 @@ fn narrow_multiword_shift_arithmetic_vs_logical() {
         5_i16
     );
 }
+// --- `for ... limit` bounded-runtime-range loop at the 16-bit word width ---
+//
+// Exercises the limit-loop lowering (compile-time counter, outcome dispatch,
+// the count == cap boundary fixup, and the fail-loud trap) on the i16 runtime,
+// confirming the feature is width-correct and not host-64-bit specific. These
+// programs carry private data, so the arena's persistent region is sized first.
+
+/// Run a private-data program on the i16 runtime, returning the result or the error.
+fn run_i16_data(src: &str) -> Result<i16, keleusma::vm::VmError> {
+    use keleusma::vm::required_persistent_capacity_for;
+    let program = parse(&tokenize(src).expect("lex")).expect("parse");
+    let module = compile_with_target(&program, &Target::embedded_16()).expect("compile");
+    let need = required_persistent_capacity_for(&module);
+    let mut arena = Arena::with_capacity(4096 + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm: NarrowVm<'_, '_> = NarrowVm::new(module, &arena).expect("new");
+    match vm.call(&[])? {
+        GenericVmState::Finished(GenericValue::Int(n)) => Ok(n),
+        other => panic!("unexpected: {:?}", other),
+    }
+}
+
+// A runtime range under a cap completes and accumulates correctly at i16.
+#[test]
+fn limit_loop_completes_on_16bit() {
+    // `d.n` is a runtime range end (5); capped at 8, so the range is exhausted.
+    // Sum 0 + 1 + 2 + 3 + 4 = 10.
+    let src = "private data d { n: Word, s: Word } \
+        fn main() -> Word { d.n = 5; for i in 0..d.n limit 8 { d.s = d.s + i; } d.s }";
+    assert_eq!(run_i16_data(src).unwrap(), 10_i16);
+}
+
+// The count == cap boundary completes (does not trap) at i16.
+#[test]
+fn limit_loop_count_equals_cap_completes_on_16bit() {
+    // Range length 8 equals the cap 8: all eight iterations run, 0..7 sums to 28.
+    let src = "private data d { n: Word, s: Word } \
+        fn main() -> Word { d.n = 8; for i in 0..d.n limit 8 { d.s = d.s + i; } d.s }";
+    assert_eq!(run_i16_data(src).unwrap(), 28_i16);
+}
+
+// An overrun traps loud at i16, the same fail-loud default as the host runtime.
+#[test]
+fn limit_loop_traps_on_overrun_on_16bit() {
+    let src = "private data d { n: Word, s: Word } \
+        fn main() -> Word { d.n = 100; for i in 0..d.n limit 8 { d.s = d.s + i; } d.s }";
+    assert!(matches!(
+        run_i16_data(src),
+        Err(keleusma::vm::VmError::LoopLimitExceeded)
+    ));
+}

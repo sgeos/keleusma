@@ -144,6 +144,18 @@ fn a_const_parameter_is_erased_in_an_arm_guard() {
     assert_eq!(run(src, 3).unwrap(), 9);
 }
 
+// A body that allocates a composite each iteration still verifies: the cap
+// bounds the worst-case memory usage, so strict `Vm::new` admits it (an
+// unbounded per-iteration allocation would be rejected).
+#[test]
+fn an_allocating_body_is_wcmu_bounded_by_the_cap() {
+    let src = "struct P { x: Word, y: Word } private data d { s: Word } \
+        fn main(n: Word) -> Word { for i in 0..n limit 8 { let p = P { x: i, y: i }; \
+        d.s = d.s + p.x + p.y; } on { ok => { }, limit => { }, } d.s }";
+    // Capped at eight: sum of (i + i) for i in 0..8 = 2 * 28 = 56.
+    assert_eq!(run(src, 100).unwrap(), 56);
+}
+
 // --- Rejections ---
 
 // An `on` block without a `limit` clause is rejected.
