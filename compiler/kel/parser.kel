@@ -1,8 +1,9 @@
 // compiler/kel/parser.kel — Stage 2 of the self-hosted compiler.
 //
-// Increment 5: the full declaration signature, including array types. Real
-// Keleusma code that compiles and verifies on the current runtime. See
-// docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md (roadmap Step 2).
+// Increment 6: the function signature (including array types) and the shared and
+// private `data` block declaration. Real Keleusma code that compiles and verifies on
+// the current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and
+// compiler/MILESTONES.md (roadmap Step 2).
 //
 // Model. Keleusma forbids unbounded inner loops in `fn` and `yield`, so the one
 // top-level `loop` IS the scan over the token stream: one token is consumed per
@@ -30,6 +31,13 @@
 // walk of the sub-type and is a later increment. A generic `Foo<T>`, a tuple
 // `(A, B)`, and an `Option<T>` are likewise later increments.
 //
+// Increment 6 recognises the `shared` and `private` `data` block declaration, the
+// runtime's own state segments (parser.kel's own `toks` and `ps` blocks are two).
+// A `data` block is `<shared|private> data NAME { field: type, ... }`. Its fields
+// are `name: type` pairs read with the same PARAM/PTYPE/ASIZE machinery as function
+// parameters, including array-typed fields (`[Word; 2048]`). A `const data` block,
+// whose fields carry `= initializer` values, is a later increment.
+//
 // Input. The host (or, in the test harness, a throwaway adapter that maps the
 // reference tokenizer's output) places the token stream in the `shared data`
 // arrays `toks.kinds`/`toks.vals` with the token count in `toks.len`, then drives
@@ -47,6 +55,9 @@
 //   kind 10 COMMA  `,`
 //   kind 11 LBRACK `[`; opens an array type in a type position
 //   kind 12 INT    an integer literal; value = the integer (the array length here)
+//   kind 13 DATA   the `data` keyword; opens a data block declaration
+//   kind 14 SHARED the `shared` visibility modifier on a data block
+//   kind 15 PRIV   the `private` visibility modifier on a data block
 // The `;` and `]` of an array type carry no state and arrive as OTHER (kind 4).
 //
 // Declaration record wire (increment 4). Each element is one Word, `dkind + val*16`:
@@ -57,11 +68,14 @@
 //   dkind 6        PTYPE; the type name of the parameter just emitted
 //   dkind 7        RETTYPE; the return type name
 //   dkind 8        ASIZE; upgrades the type just emitted to an array of this length
+//   dkind 9        DSTART; a data block; val = name*4 + visibility (0 shared, 1 private)
 //   dkind 15       DONE; the token stream is exhausted, no further declarations
-// A declaration is START, then for each value parameter a PARAM followed by its
-// PTYPE, then a RETTYPE, then END. A PTYPE or RETTYPE whose type is an array is
-// immediately followed by an ASIZE carrying the array length. The remaining nested
-// type structure and the parsed body handed to codegen land in later increments.
+// A function declaration is START, then for each value parameter a PARAM followed by
+// its PTYPE, then a RETTYPE, then END. A data block declaration is DSTART, then for
+// each field a PARAM followed by its PTYPE, then END; it has no RETTYPE. A PTYPE or
+// RETTYPE whose type is an array is immediately followed by an ASIZE carrying the
+// array length. The remaining nested type structure, the parsed body handed to
+// codegen, and the const data block land in later increments.
 //
 // The self-hosted compiler is a full-width host tool. Its record encoding does
 // arithmetic (`val*16`) that overflows a narrow word, so it declares a 32-bit
@@ -79,7 +93,11 @@ shared data toks {
 // The parser's cross-iteration state. `mode` is the parse phase: 0 expect the
 // category keyword, 1 expect the declaration name (and emit START), 2 scan the
 // signature emitting PARAM/PTYPE/RETTYPE, 3 skip the body by brace-matching (and
-// emit END). `dkind` is the category (1 fn, 2 yield, 3 loop). `pdepth` is the
+// emit END). Modes 4 through 7 handle a data block: 4 expect the `data` keyword after
+// a visibility modifier, 5 expect the data name (and emit DSTART), 6 expect the
+// opening `{`, 7 scan the field list emitting PARAM/PTYPE/ASIZE (and emit END on the
+// closing `}`). `dvis` is the data-block visibility (0 shared, 1 private). `dkind`
+// is the function category (1 fn, 2 yield, 3 loop). `pdepth` is the
 // parenthesis depth in the signature scan; `pdone` records that the value-parameter
 // parentheses have closed. `pname` is armed when the next identifier begins a
 // parameter, `ptype` when the next identifier is a parameter's type, `rtype` when
@@ -92,6 +110,7 @@ private data ps {
     cursor: Word,
     mode: Word,
     dkind: Word,
+    dvis: Word,
     pdepth: Word,
     pdone: Word,
     pname: Word,
@@ -111,17 +130,35 @@ loop main(resume: Word) -> Word {
         let v = toks.vals[ps.cursor];
         ps.cursor = ps.cursor + 1;
         if ps.mode == 0 {
-            // The category keyword: `fn` (kind 0), `yield` (5), or `loop` (6).
-            if k == 5 {
-                ps.dkind = 2;
+            // The opening keyword. A `shared` (14) or `private` (15) modifier, or a
+            // bare `data` (13) keyword, opens a data block; otherwise it is a function
+            // category keyword: `yield` (5), `loop` (6), or `fn` (anything else).
+            if k == 14 {
+                ps.dvis = 0;
+                ps.mode = 4;
+                yield 0
             } else {
-            if k == 6 {
-                ps.dkind = 3;
+            if k == 15 {
+                ps.dvis = 1;
+                ps.mode = 4;
+                yield 0
             } else {
-                ps.dkind = 1;
-            } }
-            ps.mode = 1;
-            yield 0
+            if k == 13 {
+                ps.dvis = 0;
+                ps.mode = 5;
+                yield 0
+            } else {
+                if k == 5 {
+                    ps.dkind = 2;
+                } else {
+                if k == 6 {
+                    ps.dkind = 3;
+                } else {
+                    ps.dkind = 1;
+                } }
+                ps.mode = 1;
+                yield 0
+            } } }
         } else {
         if ps.mode == 1 {
             // The declaration name (kind 1 ident); emit START and begin the
@@ -240,6 +277,7 @@ loop main(resume: Word) -> Word {
                 yield 0
             } } } } } } } }
         } else {
+        if ps.mode == 3 {
             // Body skip: brace-match to the `}` that returns the depth to zero,
             // then emit END.
             if k == 2 {
@@ -257,6 +295,84 @@ loop main(resume: Word) -> Word {
             } else {
                 yield 0
             } }
+        } else {
+        if ps.mode == 4 {
+            // A visibility modifier was seen; expect the `data` keyword.
+            if k == 13 {
+                ps.mode = 5;
+            }
+            yield 0
+        } else {
+        if ps.mode == 5 {
+            // The data block name; emit DSTART carrying the name and visibility, then
+            // reset the field-scan flags.
+            if k == 1 {
+                ps.pname = 0;
+                ps.ptype = 0;
+                ps.arr = 0;
+                ps.mode = 6;
+                yield 9 + (v * 4 + ps.dvis) * 16
+            } else {
+                yield 0
+            }
+        } else {
+        if ps.mode == 6 {
+            // Expect the opening `{`; arm the first field name.
+            if k == 2 {
+                ps.pname = 1;
+                ps.mode = 7;
+            }
+            yield 0
+        } else {
+            // Field list: a PARAM per field name and a PTYPE (with an ASIZE for an
+            // array field) per field type; the closing `}` ends the block. Data
+            // fields are param-like, so the array element is always a PTYPE.
+            if k == 1 {
+                if ps.arr == 1 {
+                    ps.arr = 2;
+                    yield 6 + v * 16
+                } else {
+                if ps.pname == 1 {
+                    ps.pname = 0;
+                    yield 4 + v * 16
+                } else {
+                if ps.ptype == 1 {
+                    ps.ptype = 0;
+                    yield 6 + v * 16
+                } else {
+                    yield 0
+                } } }
+            } else {
+            if k == 11 {
+                if ps.ptype == 1 {
+                    ps.ptype = 0;
+                    ps.arr = 1;
+                }
+                yield 0
+            } else {
+            if k == 12 {
+                if ps.arr == 2 {
+                    ps.arr = 0;
+                    yield 8 + v * 16
+                } else {
+                    yield 0
+                }
+            } else {
+            if k == 9 {
+                ps.ptype = 1;
+                yield 0
+            } else {
+            if k == 10 {
+                ps.pname = 1;
+                yield 0
+            } else {
+            if k == 3 {
+                ps.mode = 0;
+                yield 5
+            } else {
+                yield 0
+            } } } } } }
+        } } } }
         } } }
     }
 }
