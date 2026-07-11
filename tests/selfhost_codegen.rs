@@ -17,8 +17,8 @@
 
 use keleusma::Arena;
 use keleusma::ast::{
-    BinOp, Block, ConstInitializer, DataVisibility, Expr, Iterable, Literal, Param, Pattern, Stmt,
-    UnaryOp,
+    BinOp, Block, ConstInitializer, DataVisibility, Expr, FunctionCategory, Iterable, Literal,
+    Param, Pattern, Stmt, UnaryOp,
 };
 use keleusma::bytecode::{ConstValue, Module, Op, Value};
 use keleusma::compiler::compile;
@@ -892,4 +892,107 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
             (exp, got) => panic!("result mismatch for `{src}`: expected {exp:?}, got {got:?}"),
         }
     }
+}
+
+/// Milestone probe: attempt to compile `codegen.kel`'s own atomic `fn`s through the
+/// stage, one function body at a time, and report which compile byte-identically
+/// against the Rust reference and which hit a not-yet-supported construct. This is
+/// a coverage report toward self-hosting, not a pass/fail gate on full coverage; it
+/// only asserts that the covered functions stay covered.
+#[test]
+fn self_compile_codegen_atomic_functions() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let src = std::fs::read_to_string("compiler/kel/codegen.kel").expect("read codegen.kel");
+    let program = parse(&tokenize(&src).expect("lex codegen.kel")).expect("parse codegen.kel");
+    let reference = compile_src(&src);
+    let chunk_names: Vec<String> = reference.chunks.iter().map(|c| c.name.clone()).collect();
+    let data_slots: Vec<String> = reference
+        .data_layout
+        .as_ref()
+        .map(|dl| dl.slots.iter().map(|s| s.name.clone()).collect())
+        .unwrap_or_default();
+    let const_data: Vec<(String, i64)> = program
+        .data_decls
+        .iter()
+        .filter(|d| d.visibility == DataVisibility::Const)
+        .flat_map(|d| {
+            d.fields.iter().filter_map(move |f| match &f.initializer {
+                Some(ConstInitializer::Scalar(Literal::Int(n))) => {
+                    Some((format!("{}.{}", d.name, f.name), *n))
+                }
+                _ => None,
+            })
+        })
+        .collect();
+
+    // Silence per-attempt panic backtraces; the summary below is the report.
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+
+    let mut ok: Vec<String> = Vec::new();
+    let mut gaps: Vec<(String, String)> = Vec::new();
+    for f in &program.functions {
+        if f.category != FunctionCategory::Fn {
+            gaps.push((
+                f.name.clone(),
+                "non-atomic (yield/loop) function".to_string(),
+            ));
+            continue;
+        }
+        let cn = chunk_names.clone();
+        let ds = data_slots.clone();
+        let cd = const_data.clone();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let body = build_body(&f.body, &f.params, cn, ds, cd);
+            if body.nodes.len() > 64 || body.for_parts.len() > 64 || body.call_args.len() > 64 {
+                return Err(format!(
+                    "exceeds the 64-slot adapter arrays ({} nodes)",
+                    body.nodes.len()
+                ));
+            }
+            let (emitted, _pool, _lc) = run_codegen(&body, f.params.len());
+            let ref_ops = reference
+                .chunks
+                .iter()
+                .find(|c| c.name == f.name)
+                .map(|c| c.ops.clone())
+                .unwrap_or_default();
+            if emitted == ref_ops {
+                Ok(())
+            } else {
+                Err("op stream differs from the reference".to_string())
+            }
+        }));
+        match result {
+            Ok(Ok(())) => ok.push(f.name.clone()),
+            Ok(Err(reason)) => gaps.push((f.name.clone(), reason)),
+            Err(payload) => {
+                let msg = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+                    .unwrap_or_else(|| "panic".to_string());
+                gaps.push((f.name.clone(), msg));
+            }
+        }
+    }
+
+    std::panic::set_hook(prev_hook);
+
+    eprintln!(
+        "\n=== self-compile probe: {} atomic fns compile byte-identically ===",
+        ok.len()
+    );
+    for n in &ok {
+        eprintln!("  OK   {n}");
+    }
+    eprintln!("=== {} functions with gaps ===", gaps.len());
+    for (n, r) in &gaps {
+        eprintln!("  GAP  {n}: {r}");
+    }
+    assert!(
+        !ok.is_empty(),
+        "expected at least some atomic fns of codegen.kel to self-compile"
+    );
 }
