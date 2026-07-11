@@ -1,5 +1,12 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
+// Increment 27: statement-form expressions. A block statement that is a bare
+// expression (a call for effect, `push_emit(19);`, or a statement-form `if`) is an
+// ExprStmtIn node (kind 21): the expression ops then `PopN(1)` to discard the
+// value, then the continuation. A statement-form `if` without an `else` synthesizes
+// a Unit else block (both branches produce `PushImmediate(0)`), reusing the
+// if-expression path. These are the two most common gaps in the self-compile probe.
+//
 // Increment 25: `for` loops over a range. A ForIn node (kind 16) lowers
 // `for i in start..limit { body }` to: the start ops and SetLocal(i), the limit
 // ops and SetLocal(limit), a Loop marker, the condition `i >= limit` and BreakIf,
@@ -323,6 +330,16 @@ fn push_unit(p: Word) -> Word {
     push_emit(34)
 }
 
+// ExprStmtIn (kind 21): `<expr>; <cont>`. Emit the expression ops, then PopN(1) to
+// discard the expression's value, then the continuation. This is how a bare call
+// statement and a statement-form `if` (both `Stmt::Expr`) lower. lhs = expression,
+// rhs = continuation.
+fn push_exprstmt(p: Word) -> Word {
+    push_visit(ast.rhs[p]);
+    push_emit(6 + 1 * 64);
+    push_visit(ast.lhs[p])
+}
+
 // ForIn (kind 16): `for i in start..limit { body } <cont>`. Emits, in order: the
 // start ops and SetLocal(i), the limit ops and SetLocal(limit), the Loop marker,
 // the condition (i >= limit) and BreakIf, the body ops (which end in the block's
@@ -437,6 +454,7 @@ fn walk_step() -> Word {
             15 => push_index_store(payload),
             16 => push_forin(payload),
             20 => push_unit(payload),
+            21 => push_exprstmt(payload),
             _ => 0,
         };
     }
