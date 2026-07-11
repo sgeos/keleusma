@@ -39,7 +39,8 @@ const RHS: usize = 1537;
 const CALL_ARGS: usize = 2049;
 const FOR_PARTS: usize = 2113;
 const MATCH_PARTS: usize = 2177;
-const PARAM_COUNT: usize = 2241;
+const LIMIT_PARTS: usize = 2241;
+const PARAM_COUNT: usize = 2305;
 
 struct Node {
     kind: i64,
@@ -56,6 +57,7 @@ struct Ctx {
     call_args: Vec<i64>,
     for_parts: Vec<i64>,
     match_parts: Vec<i64>,
+    limit_parts: Vec<i64>,
     chunk_names: Vec<String>,
     data_slots: Vec<String>,
     /// `const data` scalar fields by `name.field` -> value. A read of one of these
@@ -116,6 +118,7 @@ struct Body {
     call_args: Vec<i64>,
     for_parts: Vec<i64>,
     match_parts: Vec<i64>,
+    limit_parts: Vec<i64>,
     root: i64,
 }
 
@@ -428,6 +431,63 @@ fn flatten_block(
                 // IndexAssignIn (kind 14): arg = base + len*65536, value = store node.
                 stmts.push((14, base + len * 65536, store_node));
             }
+            Stmt::For(fs) if fs.limit.is_some() => {
+                // A `for i in start..end limit CAP { body }` in the bare form.
+                // Mirrors the reference `compile_for_limit` local order: the loop
+                // variable, the end, the counter, the cap, and the outcome are
+                // five consecutive locals (the variable first, allocated after
+                // the start ops and before the end ops).
+                assert!(
+                    fs.on_arms.is_empty(),
+                    "the self-host stage supports the bare `limit` form only"
+                );
+                let (start_expr, end_expr) = match &fs.iterable {
+                    Iterable::Range(s, e) => (s.as_ref(), e.as_ref()),
+                    other => panic!("a `limit` clause requires a range loop, got {other:?}"),
+                };
+                let cap = match &fs.limit {
+                    Some(Expr::Literal {
+                        value: Literal::Int(n),
+                        ..
+                    }) => *n,
+                    Some(Expr::FieldAccess { object, field, .. }) => match object.as_ref() {
+                        Expr::Ident { name, .. } => const_data_value(ctx, name, field)
+                            .unwrap_or_else(|| panic!("`limit` must be a const-data field")),
+                        other => panic!("`limit` must be a constant, got {other:?}"),
+                    },
+                    other => panic!("`limit` must be a compile-time constant, got {other:?}"),
+                };
+                let start_node = flatten(start_expr, scope, next_slot, ctx);
+                let var = *next_slot;
+                *next_slot += 1;
+                let end_node = flatten(end_expr, scope, next_slot, ctx);
+                let end_slot = *next_slot;
+                *next_slot += 1;
+                let ctr = *next_slot;
+                *next_slot += 1;
+                let cap_slot = *next_slot;
+                *next_slot += 1;
+                let oc = *next_slot;
+                *next_slot += 1;
+                scope.push((fs.var.clone(), var));
+                let body_node = flatten_block(&fs.body, scope, next_slot, ctx);
+                scope.pop();
+                let cap_node = node(ctx, 1, cap, 0, 0);
+                let zero_node = node(ctx, 1, 0, 0, 0);
+                let one_node = node(ctx, 1, 1, 0, 0);
+                let two_node = node(ctx, 1, 2, 0, 0);
+                // The 12-word limit_parts entry: the five slots, then the start,
+                // end, and body nodes, then the cap/0/1/2 literal nodes.
+                let lp_start = ctx.limit_parts.len() as i64;
+                for v in [
+                    var, end_slot, ctr, cap_slot, oc, start_node, end_node, body_node, cap_node,
+                    zero_node, one_node, two_node,
+                ] {
+                    ctx.limit_parts.push(v);
+                }
+                // ForLimit (kind 23): arg = limit_parts entry start; lhs unused.
+                stmts.push((23, lp_start, 0));
+            }
             Stmt::For(fs) => {
                 let (start_expr, limit_expr) = match &fs.iterable {
                     Iterable::Range(s, l) => (s.as_ref(), l.as_ref()),
@@ -512,6 +572,7 @@ fn build_body(
         call_args: Vec::new(),
         for_parts: Vec::new(),
         match_parts: Vec::new(),
+        limit_parts: Vec::new(),
         chunk_names,
         data_slots,
         const_data,
@@ -528,6 +589,7 @@ fn build_body(
         call_args: ctx.call_args,
         for_parts: ctx.for_parts,
         match_parts: ctx.match_parts,
+        limit_parts: ctx.limit_parts,
         root,
     }
 }
@@ -579,6 +641,10 @@ fn decode_op(w: i64) -> Op {
         38 => Op::EndIf,
         39 => Op::Loop(operand as u16),
         40 => Op::EndLoop(operand as u16),
+        // The `for ... limit` counter header is a conditional break to the loop
+        // exit; its own stage tag lets `emit_op` set its exit target while
+        // preserving the `BreakIf` decode.
+        41 => Op::BreakIf(operand as u16),
         other => panic!("unknown op tag {other} (word {w})"),
     }
 }
@@ -643,6 +709,10 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
     for (k, &part) in body.match_parts.iter().enumerate() {
         vm.set_shared(&mut shared, MATCH_PARTS + k, Value::Int(part))
             .expect("match_part");
+    }
+    for (k, &part) in body.limit_parts.iter().enumerate() {
+        vm.set_shared(&mut shared, LIMIT_PARTS + k, Value::Int(part))
+            .expect("limit_part");
     }
     vm.set_shared(&mut shared, PARAM_COUNT, Value::Int(param_count as i64))
         .expect("param_count");
@@ -965,6 +1035,29 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
             "fn main(a: Word) -> Word { match a { 5 => a + 5, _ => a } }",
             5,
             Int(10),
+        ),
+        // Bare `for ... limit` over a runtime range: the counter header, the range
+        // exit, the two increments, the boundary and break reclassifications, and
+        // the dead limit trap, reproduced byte for byte. Completes within the cap.
+        (
+            "private data d { s: Word } \
+             fn main(n: Word) -> Word { for i in 0..n limit 8 { d.s = d.s + i; } d.s }",
+            3,
+            Int(3),
+        ),
+        // The count == cap boundary completes (does not trap) at exactly the cap.
+        (
+            "private data d { s: Word } \
+             fn main(n: Word) -> Word { for i in 0..n limit 8 { d.s = d.s + i; } d.s }",
+            8,
+            Int(28),
+        ),
+        // A limit loop whose body guards on the loop variable, the codegen idiom.
+        (
+            "private data d { xs: [Word; 8], s: Word } \
+             fn main(n: Word) -> Word { for i in 0..n limit 8 { if i < 3 { d.s = d.s + d.xs[i]; } } d.s }",
+            2,
+            Int(0),
         ),
     ];
     for &(src, arg, expected) in cases {

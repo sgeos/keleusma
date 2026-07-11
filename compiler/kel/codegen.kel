@@ -1,5 +1,22 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
+// Increment 30: `for ... limit` bounded-runtime-range loops. The stage now lowers
+// a bare `for i in start..end limit CAP { body }` (a ForLimit node, kind 23),
+// reproducing the reference `compile_for_limit` byte for byte: a compile-time
+// counter `0..CAP` gives the verifier the bound, the runtime range is tested
+// alongside, an outcome local records why the loop ended, and after the loop the
+// count==cap boundary and an unhandled break reclassify to OK before an
+// unhandled overrun traps. The counter header is a new conditional-break tag
+// (`mbreakif`) patched to the loop exit like the match `mbreak`s, and the
+// `mendloop` patch was made tag-preserving so the header keeps its `BreakIf`
+// decode. With the lowering in place, this file's own four scan loops were
+// rewritten from `for i in 0..64 { if i < n { ... } }` to `for i in 0..n limit
+// 64 { ... }` (and the `emit_op` break-patch loop to `for i in bstart..cf_mbc
+// limit 64`), which is both idiomatic and self-compiles: all 30 atomic functions
+// still round-trip byte-identically, and the count==cap boundary fixup is what
+// makes a full pool or arg list (exactly 64) complete rather than trap. Bare form
+// only; the outcome-block forms are a later increment.
+//
 // Increment 29: node-array capacity. The four flat-node arrays (`kinds`, `args`,
 // `lhs`, `rhs`) and the op buffer and work-stack grew from 64/256 to 512 so the
 // stage's own largest functions fit: `emit_op` flattens to 308 nodes and emits
@@ -135,12 +152,16 @@ const data wire {
     mendif: Word = 38,
     mloop: Word = 39,
     mendloop: Word = 40,
+    mbreakif: Word = 41,
     radix: Word = 64,
     item: Word = 4,
     pack: Word = 65536,
     visit: Word = 1,
     emit: Word = 2,
     nomatch: Word = 2,
+    looplimit: Word = 7,
+    ocok: Word = 1,
+    ocbreak: Word = 2,
 }
 
 // Flattened expression forest from the codegen input adapter, a structure-of-
@@ -171,6 +192,7 @@ shared data ast {
     call_args: [Word; 64],
     for_parts: [Word; 64],
     match_parts: [Word; 64],
+    limit_parts: [Word; 64],
     param_count: Word,
 }
 
@@ -305,7 +327,15 @@ fn emit_op(word: Word) -> Word {
         st.cf_mbstart[st.cf_mlsp] = st.cf_mbc;
         st.cf_mlsp = st.cf_mlsp + 1;
     }
+    // Both `mbreak` (unconditional) and `mbreakif` (the `for ... limit` counter
+    // header, conditional) record their slot against the open loop; the
+    // `mendloop` patch below preserves each one's own tag while setting its exit
+    // target, so an `mbreakif` stays a `BreakIf`.
     if tag == wire.mbreak {
+        st.cf_mbreak[st.cf_mbc] = pos;
+        st.cf_mbc = st.cf_mbc + 1;
+    }
+    if tag == wire.mbreakif {
         st.cf_mbreak[st.cf_mbc] = pos;
         st.cf_mbc = st.cf_mbc + 1;
     }
@@ -315,14 +345,12 @@ fn emit_op(word: Word) -> Word {
         let after = pos + 1;
         st.ops[lp] = wire.mloop + after * wire.radix;
         // Patch every break of this loop (the contiguous slice [bstart, cf_mbc) of
-        // the break list). The scan bound is the break-list capacity; the two
-        // guards select this loop's slice.
-        for i in 0..64 {
-            if i >= bstart {
-                if i < st.cf_mbc {
-                    st.ops[st.cf_mbreak[i]] = wire.mbreak + after * wire.radix;
-                }
-            }
+        // the break list) to exit past this `mendloop`, preserving each break's
+        // own tag. The scan bound is the break-list capacity; the two guards
+        // select this loop's slice.
+        for i in bstart..st.cf_mbc limit 64 {
+            let bt = st.ops[st.cf_mbreak[i]] % wire.radix;
+            st.ops[st.cf_mbreak[i]] = bt + after * wire.radix;
         }
         st.ops[pos] = wire.mendloop + (lp + 1) * wire.radix;
         st.cf_mbc = bstart;
@@ -337,11 +365,9 @@ fn emit_op(word: Word) -> Word {
 fn push_literal(p: Word) -> Word {
     let value = ast.args[p];
     st.dup_idx = st.pool_count;
-    for i in 0..64 {
-        if i < st.pool_count {
-            if st.pool[i] == value {
-                st.dup_idx = i;
-            }
+    for i in 0..st.pool_count limit 64 {
+        if st.pool[i] == value {
+            st.dup_idx = i;
         }
     }
     let idx = st.dup_idx;
@@ -514,6 +540,107 @@ fn push_forin(p: Word) -> Word {
     push_visit(start)                 // start value
 }
 
+// ForLimit (kind 23): `for i in start..end limit CAP { body } <cont>` in the bare
+// form (no `on` block), reproducing the reference lowering byte for byte. The
+// runtime range does not bound iteration; a compile-time counter `ctr` from 0 to
+// CAP does (the canonical header the verifier reads). The exit reason rides in
+// `oc` (0 LIMIT default, 1 OK, 2 BREAK); after the loop the count==cap boundary
+// and an unhandled break are reclassified to OK, then an outcome still LIMIT
+// traps as LoopLimitExceeded. The five locals (loop var, end, counter, cap,
+// outcome) grow local_count by five. The counter header is a conditional
+// `mbreakif`, the range exit an unconditional `mbreak`, both patched to the loop
+// exit by `mendloop`; the post-loop tests are bare `mif`/`mendif`. args = the
+// limit_parts entry start; rhs = the continuation. Bare form only (the loops in
+// this file need no outcome block); see src/compiler.rs `compile_for_limit`.
+fn push_forlimit(p: Word) -> Word {
+    let base = ast.args[p];
+    let var = ast.limit_parts[base];
+    let end_slot = ast.limit_parts[base + 1];
+    let ctr = ast.limit_parts[base + 2];
+    let cap_slot = ast.limit_parts[base + 3];
+    let oc = ast.limit_parts[base + 4];
+    let start = ast.limit_parts[base + 5];
+    let end = ast.limit_parts[base + 6];
+    let body = ast.limit_parts[base + 7];
+    let cap = ast.limit_parts[base + 8];
+    let zero = ast.limit_parts[base + 9];
+    let one = ast.limit_parts[base + 10];
+    let two = ast.limit_parts[base + 11];
+    let cont = ast.rhs[p];
+    st.let_count = st.let_count + 5;
+    // Pushed in reverse; the drain emits the forward sequence.
+    push_visit(cont);
+    // LIMIT dispatch: if oc == 0 { Trap }.
+    push_emit(wire.mendif);
+    push_emit(wire.trap + wire.looplimit * wire.radix);
+    push_emit(wire.mif);
+    push_emit(wire.cmpeq);
+    push_visit(zero);
+    push_emit(wire.getlocal + oc * wire.radix);
+    // break -> ok reclassify: if oc == 2 { oc = 1 }.
+    push_emit(wire.mendif);
+    push_emit(wire.setlocal + oc * wire.radix);
+    push_visit(one);
+    push_emit(wire.mif);
+    push_emit(wire.cmpeq);
+    push_visit(two);
+    push_emit(wire.getlocal + oc * wire.radix);
+    // boundary fixup: if oc == 0 { if var >= end { oc = 1 } }.
+    push_emit(wire.mendif);
+    push_emit(wire.mendif);
+    push_emit(wire.setlocal + oc * wire.radix);
+    push_visit(one);
+    push_emit(wire.mif);
+    push_emit(wire.cmpge);
+    push_emit(wire.getlocal + end_slot * wire.radix);
+    push_emit(wire.getlocal + var * wire.radix);
+    push_emit(wire.mif);
+    push_emit(wire.cmpeq);
+    push_visit(zero);
+    push_emit(wire.getlocal + oc * wire.radix);
+    // EndLoop, then the counter and loop-var increments (emitted before it).
+    push_emit(wire.mendloop);
+    push_emit(wire.setlocal + ctr * wire.radix);
+    push_emit(wire.popn + 2 * wire.radix);
+    push_emit(wire.checkedadd);
+    push_visit(one);
+    push_emit(wire.getlocal + ctr * wire.radix);
+    push_emit(wire.setlocal + var * wire.radix);
+    push_emit(wire.popn + 2 * wire.radix);
+    push_emit(wire.checkedadd);
+    push_visit(one);
+    push_emit(wire.getlocal + var * wire.radix);
+    // body ops then PopN(1).
+    push_emit(wire.popn + 1 * wire.radix);
+    push_visit(body);
+    // range exit: if var >= end { oc = 1; Break }.
+    push_emit(wire.mendif);
+    push_emit(wire.mbreak);
+    push_emit(wire.setlocal + oc * wire.radix);
+    push_visit(one);
+    push_emit(wire.mif);
+    push_emit(wire.cmpge);
+    push_emit(wire.getlocal + end_slot * wire.radix);
+    push_emit(wire.getlocal + var * wire.radix);
+    // counter header: if ctr >= cap { Break } (BreakIf).
+    push_emit(wire.mbreakif);
+    push_emit(wire.cmpge);
+    push_emit(wire.getlocal + cap_slot * wire.radix);
+    push_emit(wire.getlocal + ctr * wire.radix);
+    push_emit(wire.mloop);
+    // local inits: oc = 0, cap = CAP, ctr = 0, end = <end>, var = <start>.
+    push_emit(wire.setlocal + oc * wire.radix);
+    push_visit(zero);
+    push_emit(wire.setlocal + cap_slot * wire.radix);
+    push_visit(cap);
+    push_emit(wire.setlocal + ctr * wire.radix);
+    push_visit(zero);
+    push_emit(wire.setlocal + end_slot * wire.radix);
+    push_visit(end);
+    push_emit(wire.setlocal + var * wire.radix);
+    push_visit(start)
+}
+
 // Call (kind 7): emit the argument ops left to right, then Call(chunk, count),
 // with the two Call operands packed as chunk + count*65536. args = chunk index,
 // lhs = args_start (into call_args), rhs = arg count. Push EMIT Call first, then
@@ -523,11 +650,9 @@ fn push_call(p: Word) -> Word {
     let count = ast.rhs[p];
     let start = ast.lhs[p];
     push_emit(wire.call + (chunk + count * wire.pack) * wire.radix);
-    for i in 0..64 {
-        if i < count {
-            let idx = start + count - 1 - i;
-            push_visit(ast.call_args[idx]);
-        }
+    for i in 0..count limit 64 {
+        let idx = start + count - 1 - i;
+        push_visit(ast.call_args[idx]);
     }
     0
 }
@@ -582,17 +707,15 @@ fn push_match(p: Word) -> Word {
     push_visit(wc);
     // Push the arms in reverse (arm n-1 first) so the LIFO drain emits arm 0 first.
     // The scan bound is the match_parts capacity; the guard selects the live arms.
-    for j in 0..64 {
-        if j < n {
-            let k = n - 1 - j;
-            push_emit(wire.mendif);
-            push_emit(wire.mbreak);
-            push_visit(ast.match_parts[base + 3 + 2 * k]);
-            push_emit(wire.mif);
-            push_emit(wire.cmpeq);
-            push_visit(ast.match_parts[base + 2 + 2 * k]);
-            push_emit(wire.getlocal + temp * wire.radix);
-        }
+    for j in 0..n limit 64 {
+        let k = n - 1 - j;
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_visit(ast.match_parts[base + 3 + 2 * k]);
+        push_emit(wire.mif);
+        push_emit(wire.cmpeq);
+        push_visit(ast.match_parts[base + 2 + 2 * k]);
+        push_emit(wire.getlocal + temp * wire.radix);
     }
     push_emit(wire.mloop);
     push_emit(wire.setlocal + temp * wire.radix);
@@ -640,6 +763,7 @@ fn walk_step() -> Word {
             20 => push_unit(payload),
             21 => push_exprstmt(payload),
             22 => push_match(payload),
+            23 => push_forlimit(payload),
             _ => 0,
         };
     }
