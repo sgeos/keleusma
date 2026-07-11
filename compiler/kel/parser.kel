@@ -1,25 +1,34 @@
 // compiler/kel/parser.kel — Stage 2 of the self-hosted compiler.
 //
-// Increment 2: the top-level declaration header. Real Keleusma code that compiles
-// and verifies on the current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and
-// compiler/MILESTONES.md (roadmap Step 2).
+// Increment 3: the top-level declaration header and its parameter names, streamed
+// as a per-declaration record. Real Keleusma code that compiles and verifies on the
+// current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md
+// (roadmap Step 2).
 //
 // Model. Keleusma forbids unbounded inner loops in `fn` and `yield`, so the one
 // top-level `loop` IS the scan over the token stream: one token is consumed per
 // iteration and the in-progress declaration is assembled in the `private data`
-// state, which persists across the loop's per-iteration RESET. A completed
-// declaration is yielded at its closing brace; intermediate tokens yield a PENDING
-// marker the host skips. This is the same recursion-free, work-at-a-time discipline
-// the lexer and codegen stages use. The unit of work yielded to the host is a
-// single top-level declaration, never a whole-program abstract syntax tree.
+// state, which persists across the loop's per-iteration RESET. Tokens that do not
+// complete a record element yield a PENDING marker the host skips. This is the same
+// recursion-free, work-at-a-time discipline the lexer and codegen stages use. The
+// unit of work yielded to the host is a single top-level declaration, streamed as a
+// small record, never a whole-program abstract syntax tree.
 //
-// Increment 1 recognised the declaration boundary and name. Increment 2 reads the
-// declaration header: the function category (from the `fn`/`yield`/`loop` keyword)
-// and the value-parameter count. The count is the number of `:` type annotations
-// inside the value-parameter parentheses; type-parameter and trait-bound colons sit
-// before the parentheses (parenthesis depth zero) and are not counted, and Keleusma
-// types carry no `:`, so the count is exact. The parameters' names and types, the
-// return type, the guard, and the body are still skipped, not parsed.
+// Increments 1 and 2 recognised the declaration boundary, name, category, and
+// value-parameter count. Increment 3 moves to a record-per-declaration stream and
+// extracts each value parameter's name: a START element opens the declaration with
+// its category and name, one PARAM element follows per value parameter carrying its
+// name, and an END element closes it. Only the parameter *names* are extracted this
+// increment; their types, the return type, the guard, and the body are still
+// skipped, not parsed. The record model is the shape the body-node stream of later
+// increments will reuse.
+//
+// A parameter name is the first identifier of each value parameter, the identifier
+// that follows the value-parameter `(` or a top-level `,` inside it. Type-parameter
+// names and trait bounds sit before the value parentheses, and a return-type tuple
+// opens its own parentheses after the parameter list closes; neither is mistaken
+// for a value parameter, because extraction is armed only inside the first
+// parenthesis group and disarmed once that group closes.
 //
 // Input. The host (or, in the test harness, a throwaway adapter that maps the
 // reference tokenizer's output) places the token stream in the `shared data`
@@ -35,19 +44,19 @@
 //   kind 7 LPAREN  `(`
 //   kind 8 RPAREN  `)`
 //   kind 9 COLON   `:`
+//   kind 10 COMMA  `,`
 //
-// Declaration wire (increment 2). Each completed declaration is one Word,
-// `dkind + pcount*16 + name*1024`:
-//   dkind 0        PENDING; no declaration completed this iteration; host skips it
-//   dkind 1/2/3    a function of category fn / yield / loop; `pcount` (bits 4-9) is
-//                  its value-parameter count and the high bits carry the name id
+// Declaration record wire (increment 3). Each element is one Word, `dkind + val*16`:
+//   dkind 0        PENDING; nothing this iteration; host skips it
+//   dkind 1/2/3    START of a fn / yield / loop declaration; val = its name id
+//   dkind 4        PARAM; a value parameter; val = its name id
+//   dkind 5        END; the current declaration is complete
 //   dkind 15       DONE; the token stream is exhausted, no further declarations
-// The richer `Declaration` shapes in prelude.kel (each parameter's name and type,
-// the return type, the guard, and the parsed body handed to codegen) land in later
-// increments once the signature and body are parsed rather than skipped.
+// A declaration is the sequence START, zero or more PARAM, END. The parameter types,
+// return type, guard, and parsed body handed to codegen land in later increments.
 //
-// The self-hosted compiler is a full-width host tool. Its header encoding does
-// arithmetic (`name*1024`) that overflows a narrow word, so it declares a 32-bit
+// The self-hosted compiler is a full-width host tool. Its record encoding does
+// arithmetic (`val*16`) that overflows a narrow word, so it declares a 32-bit
 // floor; compiling it for a narrower target is refused rather than miscompiled.
 require word >= 32;
 
@@ -60,19 +69,20 @@ shared data toks {
 }
 
 // The parser's cross-iteration state. `mode` is the parse phase: 0 expect the
-// category keyword, 1 expect the declaration name, 2 scan the signature counting
-// value parameters, 3 skip the body by brace-matching. `dkind` is the category
-// (1 fn, 2 yield, 3 loop), `dname` the interned name id, `pcount` the value-
-// parameter count. `pdepth` is the parenthesis depth in the signature scan (a `:`
-// counts only inside the value parentheses); `depth` is the brace depth in the body
-// skip, so the declaration ends at the `}` that returns it to zero.
+// category keyword, 1 expect the declaration name (and emit START), 2 scan the
+// signature emitting a PARAM per value-parameter name, 3 skip the body by
+// brace-matching (and emit END). `dkind` is the category (1 fn, 2 yield, 3 loop).
+// `pdepth` is the parenthesis depth in the signature scan; `pdone` records that the
+// value-parameter parentheses have closed, so a return-type tuple is not mistaken
+// for parameters; `pname` is armed when the next identifier begins a parameter.
+// `depth` is the brace depth in the body skip.
 private data ps {
     cursor: Word,
     mode: Word,
     dkind: Word,
-    dname: Word,
-    pcount: Word,
     pdepth: Word,
+    pdone: Word,
+    pname: Word,
     depth: Word,
 }
 
@@ -98,27 +108,54 @@ loop main(resume: Word) -> Word {
             yield 0
         } else {
         if ps.mode == 1 {
-            // The declaration name (kind 1 ident); begin the signature scan.
-            ps.dname = v;
-            ps.pcount = 0;
+            // The declaration name (kind 1 ident); emit START and begin the
+            // signature scan.
+            let kind = ps.dkind;
             ps.pdepth = 0;
+            ps.pdone = 0;
+            ps.pname = 0;
             ps.mode = 2;
-            yield 0
+            yield kind + v * 16
         } else {
         if ps.mode == 2 {
-            // Signature: count a `:` inside the value parentheses as one parameter;
-            // the first `{` at parenthesis depth zero opens the body.
+            // Signature: arm parameter extraction inside the first parenthesis
+            // group and emit a PARAM per parameter name; the first `{` at
+            // parenthesis depth zero opens the body.
             if k == 7 {
                 ps.pdepth = ps.pdepth + 1;
+                if ps.pdepth == 1 {
+                    if ps.pdone == 0 {
+                        ps.pname = 1;
+                    }
+                }
                 yield 0
             } else {
             if k == 8 {
                 ps.pdepth = ps.pdepth - 1;
+                if ps.pdepth == 0 {
+                    ps.pdone = 1;
+                }
                 yield 0
             } else {
-            if k == 9 {
-                if ps.pdepth >= 1 {
-                    ps.pcount = ps.pcount + 1;
+            if k == 1 {
+                if ps.pdepth == 1 {
+                    if ps.pname == 1 {
+                        ps.pname = 0;
+                        yield 4 + v * 16
+                    } else {
+                        yield 0
+                    }
+                } else {
+                    yield 0
+                }
+            } else {
+            if k == 10 {
+                // COMMA: re-arm parameter extraction for the next value parameter
+                // when at the top level of the value parentheses.
+                if ps.pdepth == 1 {
+                    if ps.pdone == 0 {
+                        ps.pname = 1;
+                    }
                 }
                 yield 0
             } else {
@@ -130,9 +167,10 @@ loop main(resume: Word) -> Word {
                 yield 0
             } else {
                 yield 0
-            } } } }
+            } } } } }
         } else {
-            // Body skip: brace-match to the `}` that returns the depth to zero.
+            // Body skip: brace-match to the `}` that returns the depth to zero,
+            // then emit END.
             if k == 2 {
                 ps.depth = ps.depth + 1;
                 yield 0
@@ -140,11 +178,8 @@ loop main(resume: Word) -> Word {
             if k == 3 {
                 ps.depth = ps.depth - 1;
                 if ps.depth == 0 {
-                    let kind = ps.dkind;
-                    let pc = ps.pcount;
-                    let name = ps.dname;
                     ps.mode = 0;
-                    yield kind + pc * 16 + name * 1024
+                    yield 5
                 } else {
                     yield 0
                 }
