@@ -1,10 +1,11 @@
-//! Body-expression parser (`compiler/kel/body.kel`), increment 17: a function body over
+//! Body-expression parser (`compiler/kel/body.kel`), increment 18: a function body over
 //! the full operator-precedence expression grammar, scalar and indexed data-field
 //! reads, `let` bindings and scalar data-field assignments, the bare expression
 //! statement `expr;`, the `if`/`else` conditional with nested statement-block branches,
-//! function calls, the bounded `for v in start..end limit CAP { body }` loop, and a
-//! statement-only block whose implicit value is Unit — lowered to the abstract-syntax
-//! node forest codegen consumes, with `call_args` and `limit_parts` side arrays.
+//! function calls, the `yield e` reentrant expression, the bounded
+//! `for v in start..end limit CAP { body }` loop, and a statement-only block whose
+//! implicit value is Unit — lowered to the abstract-syntax node forest codegen consumes,
+//! with `call_args` and `limit_parts` side arrays.
 //!
 //! A throwaway adapter tokenises the program, feeds the function body's tokens, the
 //! parameter-name table, and the data-field layout (computed from the compiled
@@ -179,11 +180,22 @@ fn run_body_inner(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, i64) {
         kinds.push(kind);
         vals.push(val);
     }
-    // The caller's body opens at the first `{` after the last function keyword.
-    let fn_kw = kinds
-        .iter()
-        .rposition(|&k| k == 0 || k == 5 || k == 6)
-        .expect("a function keyword");
+    // The caller's body opens at the first `{` after the last function keyword. The
+    // declaration keyword must be found at brace depth zero: a body may now itself
+    // contain a `yield` token (kind 5), so a plain last-occurrence scan would latch onto
+    // an in-body `yield` rather than the function's declaration keyword.
+    let mut depth = 0i64;
+    let mut fn_kw_opt: Option<usize> = None;
+    for (i, &k) in kinds.iter().enumerate() {
+        if k == 2 {
+            depth += 1;
+        } else if k == 3 {
+            depth -= 1;
+        } else if depth == 0 && (k == 0 || k == 5 || k == 6) {
+            fn_kw_opt = Some(i);
+        }
+    }
+    let fn_kw = fn_kw_opt.expect("a top-level function keyword");
     let body_rel = kinds[fn_kw..]
         .iter()
         .position(|&k| k == 2)
@@ -308,8 +320,9 @@ fn run_body_inner(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, i64) {
                         });
                         stack.push((nodes.len() - 1) as i64);
                     }
-                    6 | 10 => {
-                        // A unary node: Not (6) or Neg (10). Pop one operand into `lhs`.
+                    6 | 10 | 24 => {
+                        // A unary node: Not (6), Neg (10), or YieldExpr (24, the yielded
+                        // expression). Pop one operand into `lhs`.
                         let operand = stack.pop().expect("a unary operator needs an operand");
                         nodes.push(Node {
                             kind,
@@ -566,6 +579,27 @@ fn flatten(
             };
             nodes.push(Node {
                 kind,
+                arg: 0,
+                lhs: child,
+                rhs: 0,
+            });
+            (nodes.len() - 1) as i64
+        }
+        Expr::Yield { value, .. } => {
+            // A `yield e` is a YieldExpr (kind 24), a unary node holding the yielded
+            // expression in `lhs`.
+            let child = flatten(
+                value,
+                scope,
+                nodes,
+                data_slots,
+                chunk_names,
+                call_args,
+                next_slot,
+                limit_parts,
+            );
+            nodes.push(Node {
+                kind: 24,
                 arg: 0,
                 lhs: child,
                 rhs: 0,
@@ -1974,4 +2008,61 @@ fn a_for_limit_body_may_be_a_bare_call() {
     assert_eq!(body.kind, 21); // ExprStmt
     assert_eq!(nodes[body.lhs as usize].kind, 7); // the Call
     assert_eq!(nodes[body.rhs as usize].kind, 20); // Unit tail
+}
+
+// A `yield e` tail lowers to a YieldExpr (kind 24) holding the yielded expression in
+// `lhs`. The self-hosted stages' own `loop main(resume) { yield step() }` shape.
+#[test]
+fn a_yield_tail_lowers_to_a_yield_expr() {
+    let src = "fn step() -> Word { 0 } loop main(resume: Word) -> Word { yield step() }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let y = nodes[root as usize];
+    assert_eq!(y.kind, 24);
+    assert_eq!(y.arg, 0);
+    assert_eq!(nodes[y.lhs as usize].kind, 7); // the yielded Call
+}
+
+// `yield` binds looser than every operator: `yield a + b` yields the whole sum, so the
+// YieldExpr's operand is the Add rather than the yield capturing only `a`.
+#[test]
+fn yield_binds_looser_than_arithmetic() {
+    let src = "yield f(a: Word, b: Word) -> Word { yield a + b }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let y = nodes[root as usize];
+    assert_eq!(y.kind, 24);
+    let inner = nodes[y.lhs as usize];
+    assert_eq!(inner.kind, 3); // BinOp
+    assert_eq!(inner.arg, 1); // Add
+}
+
+// A `yield` may be a `let`'s value; the binding still lowers to a LetIn whose value is
+// the YieldExpr.
+#[test]
+fn a_yield_may_be_a_let_value() {
+    let src = "fn g(x: Word) -> Word { x } \
+        yield f(a: Word) -> Word { let x = yield g(a); x }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let letin = nodes[root as usize];
+    assert_eq!(letin.kind, 5);
+    assert_eq!(nodes[letin.lhs as usize].kind, 24); // the YieldExpr value
+}
+
+// A real `yield` function with a private data block: a data-field assignment statement
+// followed by a `yield` tail. This compiles and verifies on the current runtime, so the
+// data-layout resolution and the YieldExpr lowering are exercised end to end.
+#[test]
+fn a_yield_function_with_data_compiles() {
+    let src = "private data d { count: Word } \
+        yield tick(cmd: Word) -> Word { d.count = d.count + 1; yield d.count }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    // The root is the DataFieldAssignIn wrapping the yield tail.
+    let assign = nodes[root as usize];
+    assert_eq!(assign.kind, 12);
+    let y = nodes[assign.rhs as usize];
+    assert_eq!(y.kind, 24); // yield d.count
+    assert_eq!(nodes[y.lhs as usize].kind, 11); // DataRead
 }
