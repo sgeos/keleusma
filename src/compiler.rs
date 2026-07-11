@@ -7334,6 +7334,25 @@ fn compile_for_limit(
     }
     fc.exit_loop();
 
+    // Boundary reclassification. When the range length equals the cap exactly,
+    // the counter reaches the cap on the same iteration the range end is
+    // reached; the counter header is tested first, so it pre-empts the range
+    // test and the outcome is left at LIMIT even though the range was in fact
+    // exhausted. Reclassify a LIMIT outcome whose loop variable reached the
+    // range end as OK, so `count == cap` completes rather than overrunning.
+    let outer = emit_outcome_test(fc, oc_slot, LOOP_OUTCOME_LIMIT);
+    fc.emit(Op::GetLocal(var_slot));
+    fc.emit(Op::GetLocal(end_slot));
+    fc.emit(Op::CmpGe);
+    let inner = fc.emit_jump(Op::If(0));
+    let ok_code = fc.add_constant(Value::Int(LOOP_OUTCOME_OK));
+    fc.emit(Op::Const(ok_code));
+    fc.emit(Op::SetLocal(oc_slot));
+    fc.patch_jump(inner);
+    fc.emit(Op::EndIf);
+    fc.patch_jump(outer);
+    fc.emit(Op::EndIf);
+
     compile_loop_outcome_dispatch(fc, for_stmt, var_slot, ctr_slot, oc_slot)
 }
 
@@ -7350,10 +7369,14 @@ fn emit_outcome_test(fc: &mut FuncCompiler, oc_slot: u16, code: i64) -> usize {
 
 /// Compile one outcome arm's body, binding its pattern to `bind_slot` when the
 /// pattern is a variable. The arm is a statement block; its value is discarded.
+/// An optional `when` guard is checked first: on a false guard the outcome is
+/// unhandled, so `LIMIT` (`default_trap`) falls through to the fail-loud trap
+/// and `OK`/`BREAK` to a noop. Both branches of the guard net zero on the stack.
 fn compile_loop_arm_body(
     fc: &mut FuncCompiler,
     arm: &crate::ast::LoopArm,
     bind_slot: u16,
+    default_trap: bool,
 ) -> Result<(), CompileError> {
     fc.begin_scope();
     if let Some(Pattern::Variable(name, _)) = loop_arm_binding(&arm.kind) {
@@ -7361,8 +7384,27 @@ fn compile_loop_arm_body(
         fc.emit(Op::GetLocal(bind_slot));
         fc.emit(Op::SetLocal(local));
     }
-    compile_block(fc, &arm.body)?;
-    fc.emit(Op::PopN(1));
+    match &arm.guard {
+        None => {
+            compile_block(fc, &arm.body)?;
+            fc.emit(Op::PopN(1));
+        }
+        Some(guard) => {
+            compile_expr(fc, guard)?;
+            let if_addr = fc.emit_jump(Op::If(0));
+            compile_block(fc, &arm.body)?;
+            fc.emit(Op::PopN(1));
+            let else_addr = fc.emit_jump(Op::Else(0));
+            fc.patch_jump(if_addr);
+            if default_trap {
+                fc.emit(Op::Trap(
+                    crate::bytecode::TrapKind::LoopLimitExceeded.code(),
+                ));
+            }
+            fc.patch_jump(else_addr);
+            fc.emit(Op::EndIf);
+        }
+    }
     fc.end_scope();
     Ok(())
 }
@@ -7384,10 +7426,11 @@ fn compile_loop_outcome_dispatch(
     let break_arm = find(|k| matches!(k, LoopArmKind::Break(_)));
     let limit_arm = find(|k| matches!(k, LoopArmKind::Limit(_)));
 
-    // LIMIT: the arm, or the fail-loud trap.
+    // LIMIT: the arm, or the fail-loud trap. A guarded arm whose guard is false
+    // also falls through to the trap.
     let if_addr = emit_outcome_test(fc, oc_slot, LOOP_OUTCOME_LIMIT);
     match limit_arm {
-        Some(arm) => compile_loop_arm_body(fc, arm, var_slot)?,
+        Some(arm) => compile_loop_arm_body(fc, arm, var_slot, true)?,
         None => {
             fc.emit(Op::Trap(
                 crate::bytecode::TrapKind::LoopLimitExceeded.code(),
@@ -7400,7 +7443,7 @@ fn compile_loop_outcome_dispatch(
     // OK: optional arm, count bound to the counter.
     if let Some(arm) = ok_arm {
         let if_addr = emit_outcome_test(fc, oc_slot, LOOP_OUTCOME_OK);
-        compile_loop_arm_body(fc, arm, ctr_slot)?;
+        compile_loop_arm_body(fc, arm, ctr_slot, false)?;
         fc.patch_jump(if_addr);
         fc.emit(Op::EndIf);
     }
@@ -7408,7 +7451,7 @@ fn compile_loop_outcome_dispatch(
     // BREAK: optional arm, index bound to the loop variable.
     if let Some(arm) = break_arm {
         let if_addr = emit_outcome_test(fc, oc_slot, LOOP_OUTCOME_BREAK);
-        compile_loop_arm_body(fc, arm, var_slot)?;
+        compile_loop_arm_body(fc, arm, var_slot, false)?;
         fc.patch_jump(if_addr);
         fc.emit(Op::EndIf);
     }

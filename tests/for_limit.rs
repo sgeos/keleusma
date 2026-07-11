@@ -145,22 +145,87 @@ fn a_non_positive_cap_is_rejected() {
     assert!(msg.contains("positive"), "got: {msg}");
 }
 
-// The `overflow` arm is not yet implemented and is rejected.
+// The `overflow` arm is inadmissible: the range bound and the cap keep the
+// index below the type maximum, so the increment cannot overflow.
 #[test]
-fn overflow_arm_is_rejected_as_unimplemented() {
+fn overflow_arm_is_rejected_as_inadmissible() {
     let msg = compile_err(
         "fn main(hi: Word) -> Word { for i in 0..hi limit 4 { } \
         on { ok => { }, overflow => { }, } 0 }",
     );
+    assert!(msg.contains("inadmissible"), "got: {msg}");
     assert!(msg.contains("overflow"), "got: {msg}");
 }
 
-// A `when` guard on an outcome arm is not yet implemented and is rejected.
+// --- The count == cap boundary (the case the compiler refactor relies on) ---
+
+// When the range length equals the cap exactly, the loop completes rather than
+// reporting an overrun. The bare form must not trap.
 #[test]
-fn guard_on_outcome_arm_is_rejected_as_unimplemented() {
+fn count_equal_to_cap_completes_and_does_not_trap() {
+    let src = "private data d { s: Word } \
+        fn main(n: Word) -> Word { for i in 0..n limit 8 { d.s = d.s + i; } d.s }";
+    // n == cap == 8: all eight iterations run, 0 + ... + 7 = 28, no trap.
+    assert_eq!(run(src, 8).unwrap(), 28);
+    // n just over the cap traps.
+    assert!(matches!(run(src, 9), Err(VmError::LoopLimitExceeded)));
+}
+
+// The same boundary through the `on` block reports `ok`, not `limit`.
+#[test]
+fn count_equal_to_cap_reports_ok_not_limit() {
+    let src = "private data d { w: Word } \
+        fn main(n: Word) -> Word { for i in 0..n limit 8 { } \
+        on { ok => { d.w = 1; }, limit => { d.w = 2; }, } d.w }";
+    assert_eq!(run(src, 8).unwrap(), 1); // exactly the cap: ok
+    assert_eq!(run(src, 9).unwrap(), 2); // over the cap: limit
+    assert_eq!(run(src, 5).unwrap(), 1); // under the cap: ok
+}
+
+// --- `when` guards on outcome arms ---
+
+// A guard that holds runs the arm.
+#[test]
+fn a_true_guard_runs_the_arm() {
+    let src = "private data d { w: Word } \
+        fn main(n: Word) -> Word { for i in 0..n limit 9 { } \
+        on { ok(c) when c == 3 => { d.w = 7; }, limit => { }, } d.w }";
+    assert_eq!(run(src, 3).unwrap(), 7);
+}
+
+// A guard that fails leaves an intended outcome (`ok`) a noop.
+#[test]
+fn a_false_guard_on_ok_is_a_noop() {
+    let src = "private data d { w: Word } \
+        fn main(n: Word) -> Word { for i in 0..n limit 9 { } \
+        on { ok(c) when c == 3 => { d.w = 7; }, limit => { }, } d.w }";
+    assert_eq!(run(src, 5).unwrap(), 0);
+}
+
+// A guard that fails leaves the defensive outcome (`limit`) unhandled, so it
+// traps, exactly as an absent arm would.
+#[test]
+fn a_false_guard_on_limit_traps() {
+    let src = "fn main(n: Word) -> Word { for i in 0..n limit 5 { } \
+        on { ok => { }, limit(si) when si > 100 => { }, } 0 }";
+    assert!(matches!(run(src, 100), Err(VmError::LoopLimitExceeded)));
+}
+
+// A guard that holds on `limit` handles the overrun.
+#[test]
+fn a_true_guard_on_limit_handles_the_overrun() {
+    let src = "private data d { w: Word } \
+        fn main(n: Word) -> Word { for i in 0..n limit 5 { } \
+        on { ok => { }, limit(si) when si > 3 => { d.w = 1; }, } d.w }";
+    assert_eq!(run(src, 100).unwrap(), 1);
+}
+
+// A non-Bool guard is rejected.
+#[test]
+fn a_non_bool_guard_is_rejected() {
     let msg = compile_err(
-        "fn main(hi: Word) -> Word { for i in 0..hi limit 4 { } \
-        on { ok => { }, limit when hi > 0 => { }, } 0 }",
+        "fn main(n: Word) -> Word { for i in 0..n limit 4 { } \
+        on { ok when n => { }, limit => { }, } 0 }",
     );
-    assert!(msg.contains("guard"), "got: {msg}");
+    assert!(msg.contains("Bool"), "got: {msg}");
 }

@@ -488,7 +488,11 @@ for i in min..max limit cp.hard_limit {
 }
 ````
 
-The outcomes split into two tiers. `ok` and `break` are intended, non-trapping exits; an absent `break` arm falls through to `ok`, and a break never traps. `limit` is a defensive exit; an absent `limit` arm traps as above. Each arm optionally binds a single `Word`: the completed iteration count for `ok`, the loop variable at the exit for `break` and `limit`. Every arm and binding is optional, since the loop is a statement and its outcomes need no value. The `overflow` outcome, for an induction increment that overflows the index type, and a `when` guard on an outcome arm, are reserved in the grammar but not yet implemented; the compiler rejects both explicitly. The increment currently wraps, as a plain `for` loop does, and the compile-time counter still bounds the iteration count regardless.
+The outcomes split into two tiers. `ok` and `break` are intended, non-trapping exits; an absent `break` arm falls through to `ok`, and a break never traps. `limit` is a defensive exit; an absent `limit` arm traps as above. Each arm optionally binds a single `Word`: the completed iteration count for `ok`, the loop variable at the exit for `break` and `limit`. Every arm and binding is optional, since the loop is a statement and its outcomes need no value. When the range length equals the cap exactly, the loop completes as `ok` rather than reporting `limit`, so a range that fits the cap exactly never traps.
+
+An arm may carry a `when` guard, checked as `Bool` in the scope of the arm's binding, mirroring the checked-arithmetic arms. When the outcome matches but the guard is false the outcome is unhandled: an intended outcome (`ok`, `break`) becomes a noop, and the defensive `limit` falls through to the trap exactly as an absent arm would.
+
+The `overflow` outcome, for an induction increment that overflows the index type, is reserved in the grammar but is inadmissible on a `limit` loop, and the compiler rejects an `overflow` arm. The outcome cannot arise: the range test runs before the body, so the body executes only while the index is below the range end, which is at most the type maximum, and the cap bounds the counter likewise, so the increment never overflows. This mirrors the checked-arithmetic rule that rejects an arm whose outcome cannot occur.
 
 ### Break Statement
 

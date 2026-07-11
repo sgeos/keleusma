@@ -3848,19 +3848,22 @@ fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
             }
             // Each outcome arm is checked in its own scope, with the optional
             // binding bound as a `Word` (an index for `break`/`limit`, the
-            // completed count for `ok`). The `overflow` arm and `when` guards
-            // are not yet implemented and are rejected explicitly.
+            // completed count for `ok`) and its optional `when` guard checked as
+            // a `Bool` in that scope. The `overflow` outcome cannot arise: the
+            // range test runs before the body, so the body runs only while the
+            // index is below the range end, which is at most the type maximum,
+            // and the cap bounds the counter likewise, so the increment never
+            // overflows. An `overflow` arm is therefore inadmissible, mirroring
+            // the checked-arithmetic rule that rejects an unreachable arm.
             for arm in for_stmt.on_arms.iter_mut() {
                 use crate::ast::LoopArmKind;
                 if matches!(arm.kind, LoopArmKind::Overflow(_)) {
                     return Err(TypeError::new(
-                        String::from("`overflow` capture on a `limit` loop is not yet implemented"),
-                        arm.span,
-                    ));
-                }
-                if arm.guard.is_some() {
-                    return Err(TypeError::new(
-                        String::from("`when` guards on loop outcome arms are not yet implemented"),
+                        String::from(
+                            "an `overflow` arm is inadmissible on a `limit` loop: the range \
+                             bound and the cap keep the index below the type maximum, so the \
+                             increment cannot overflow",
+                        ),
                         arm.span,
                     ));
                 }
@@ -3879,6 +3882,18 @@ fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
                     Some(_) => {
                         return Err(TypeError::new(
                             String::from("a loop outcome binding must be an identifier or `_`"),
+                            arm.span,
+                        ));
+                    }
+                }
+                if let Some(guard) = arm.guard.as_mut() {
+                    let gt = type_of_expr(ctx, guard)?;
+                    if !types_compatible(ctx, &gt, &Type::Bool) {
+                        return Err(TypeError::new(
+                            format!(
+                                "a loop outcome `when` guard must be Bool, got {}",
+                                gt.display()
+                            ),
                             arm.span,
                         ));
                     }
