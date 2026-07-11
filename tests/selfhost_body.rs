@@ -1,11 +1,12 @@
-//! Body-expression parser (`compiler/kel/body.kel`), increment 18: a function body over
+//! Body-expression parser (`compiler/kel/body.kel`), increment 19: a function body over
 //! the full operator-precedence expression grammar, scalar and indexed data-field
 //! reads, `let` bindings and scalar data-field assignments, the bare expression
 //! statement `expr;`, the `if`/`else` conditional with nested statement-block branches,
-//! function calls, the `yield e` reentrant expression, the bounded
+//! function calls, the `yield e` reentrant expression, the `match` expression over
+//! integer-literal arms and a trailing wildcard, the bounded
 //! `for v in start..end limit CAP { body }` loop, and a statement-only block whose
 //! implicit value is Unit — lowered to the abstract-syntax node forest codegen consumes,
-//! with `call_args` and `limit_parts` side arrays.
+//! with `call_args`, `limit_parts`, and `match_parts` side arrays.
 //!
 //! A throwaway adapter tokenises the program, feeds the function body's tokens, the
 //! parameter-name table, and the data-field layout (computed from the compiled
@@ -104,14 +105,14 @@ fn with_big_stack<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) 
 
 /// Drive `body.kel` over the caller's body in `func_src`, returning the node forest,
 /// the `call_args` side array, and the root index.
-fn run_body(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, i64) {
+fn run_body(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, Vec<i64>, i64) {
     let src = func_src.to_string();
     with_big_stack(move || run_body_inner(&src))
 }
 
 /// The body of [`run_body`]; identifier names are interned so the parameter table and
 /// the body's identifier tokens share ids.
-fn run_body_inner(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, i64) {
+fn run_body_inner(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, Vec<i64>, i64) {
     let program = parse(&tokenize(func_src).expect("lex")).expect("parse");
     // The caller whose body is parsed is the last function; the chunk table is every
     // function name in declaration order (matching the compiler's chunk indices).
@@ -147,6 +148,9 @@ fn run_body_inner(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, i64) {
             TokenKind::For => (45, 0),
             TokenKind::In => (46, 0),
             TokenKind::DotDot => (47, 0),
+            TokenKind::Match => (48, 0),
+            TokenKind::FatArrow => (49, 0),
+            TokenKind::Underscore => (50, 0),
             TokenKind::LowerIdent(s) | TokenKind::UpperIdent(s) => (1, intern(s)),
             TokenKind::LBrace => (2, 0),
             TokenKind::RBrace => (3, 0),
@@ -279,6 +283,7 @@ fn run_body_inner(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, i64) {
     let mut nodes: Vec<Node> = Vec::new();
     let mut call_args: Vec<i64> = Vec::new();
     let mut limit_parts: Vec<i64> = Vec::new();
+    let mut match_parts: Vec<i64> = Vec::new();
     let mut slot_buf: Vec<i64> = Vec::new();
     let mut stack: Vec<i64> = Vec::new();
     let mut state = vm
@@ -420,10 +425,37 @@ fn run_body_inner(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, i64) {
                         limit_parts.extend(&popped);
                         slot_buf.clear();
                     }
+                    34 => {
+                        // Match build signal: arg packs the scrutinee temp slot and the
+                        // literal-arm count as `temp * 1024 + count`. Pop the wildcard
+                        // result, the `count` (literal node, result) pairs, and the
+                        // scrutinee; assemble the match_parts entry (temp, wildcard, then
+                        // the pairs in source order) and emit the MatchIn node (kind 22:
+                        // arg = entry start, lhs = scrutinee, rhs = literal-arm count).
+                        let arm_count = arg.rem_euclid(1024);
+                        let temp = arg.div_euclid(1024);
+                        let wc = stack.pop().expect("match needs a wildcard result");
+                        let mut arm_nodes: Vec<i64> = (0..2 * arm_count)
+                            .map(|_| stack.pop().expect("a match arm node"))
+                            .collect();
+                        arm_nodes.reverse();
+                        let scrut = stack.pop().expect("match needs a scrutinee");
+                        let base = match_parts.len() as i64;
+                        match_parts.push(temp);
+                        match_parts.push(wc);
+                        match_parts.extend(&arm_nodes);
+                        nodes.push(Node {
+                            kind: 22,
+                            arg: base,
+                            lhs: scrut,
+                            rhs: arm_count,
+                        });
+                        stack.push((nodes.len() - 1) as i64);
+                    }
                     15 => {
                         // DONE: the single remaining stack entry is the body root.
                         assert_eq!(stack.len(), 1, "the body has exactly one root node");
-                        return (nodes, call_args, limit_parts, stack[0]);
+                        return (nodes, call_args, limit_parts, match_parts, stack[0]);
                     }
                     other => panic!("unexpected node kind {other}"),
                 }
@@ -474,6 +506,7 @@ fn flatten(
     call_args: &mut Vec<i64>,
     next_slot: &mut i64,
     limit_parts: &mut Vec<i64>,
+    match_parts: &mut Vec<i64>,
 ) -> i64 {
     match expr {
         Expr::Literal {
@@ -519,6 +552,7 @@ fn flatten(
                 call_args,
                 next_slot,
                 limit_parts,
+                match_parts,
             );
             let rhs = flatten(
                 right,
@@ -529,6 +563,7 @@ fn flatten(
                 call_args,
                 next_slot,
                 limit_parts,
+                match_parts,
             );
             // Most operators are a BinOp node (kind 3) with an operator code; the
             // short-circuit booleans are their own node kinds (8 Andalso, 9 Orelse).
@@ -571,6 +606,7 @@ fn flatten(
                 call_args,
                 next_slot,
                 limit_parts,
+                match_parts,
             );
             let kind = match op {
                 UnaryOp::Not => 6,
@@ -597,12 +633,97 @@ fn flatten(
                 call_args,
                 next_slot,
                 limit_parts,
+                match_parts,
             );
             nodes.push(Node {
                 kind: 24,
                 arg: 0,
                 lhs: child,
                 rhs: 0,
+            });
+            (nodes.len() - 1) as i64
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            // A `match` lowers to a MatchIn (kind 22). The scrutinee is stashed in a
+            // fresh temp local (allocated right after it, mirroring the reference's
+            // `declare_local("__match")`), and the arms split into integer-literal arms
+            // and a single trailing wildcard. The match_parts entry is the temp slot,
+            // the wildcard result, then one (literal node, result node) pair per literal
+            // arm; the node carries arg = entry start, lhs = scrutinee, rhs = arm count.
+            let scrut = flatten(
+                scrutinee,
+                scope,
+                nodes,
+                data_slots,
+                chunk_names,
+                call_args,
+                next_slot,
+                limit_parts,
+                match_parts,
+            );
+            let temp = *next_slot;
+            *next_slot += 1;
+            let mut lit_arms: Vec<(i64, i64)> = Vec::new();
+            let mut wildcard: Option<i64> = None;
+            for arm in arms {
+                assert!(arm.guard.is_none(), "increment handles unguarded arms only");
+                match &arm.pattern {
+                    Pattern::Literal(Literal::Int(v), _) => {
+                        nodes.push(Node {
+                            kind: 1,
+                            arg: *v,
+                            lhs: 0,
+                            rhs: 0,
+                        });
+                        let lit_node = (nodes.len() - 1) as i64;
+                        let res_node = flatten(
+                            &arm.expr,
+                            scope,
+                            nodes,
+                            data_slots,
+                            chunk_names,
+                            call_args,
+                            next_slot,
+                            limit_parts,
+                            match_parts,
+                        );
+                        lit_arms.push((lit_node, res_node));
+                    }
+                    Pattern::Wildcard(_) => {
+                        assert!(wildcard.is_none(), "increment handles one wildcard arm");
+                        wildcard = Some(flatten(
+                            &arm.expr,
+                            scope,
+                            nodes,
+                            data_slots,
+                            chunk_names,
+                            call_args,
+                            next_slot,
+                            limit_parts,
+                            match_parts,
+                        ));
+                    }
+                    other => {
+                        panic!("increment handles integer-literal and wildcard arms, got {other:?}")
+                    }
+                }
+            }
+            let wc = wildcard.expect("match needs a wildcard arm");
+            let base = match_parts.len() as i64;
+            match_parts.push(temp);
+            match_parts.push(wc);
+            for (lit_node, res_node) in &lit_arms {
+                match_parts.push(*lit_node);
+                match_parts.push(*res_node);
+            }
+            let arm_count = lit_arms.len() as i64;
+            nodes.push(Node {
+                kind: 22,
+                arg: base,
+                lhs: scrut,
+                rhs: arm_count,
             });
             (nodes.len() - 1) as i64
         }
@@ -645,6 +766,7 @@ fn flatten(
                 call_args,
                 next_slot,
                 limit_parts,
+                match_parts,
             );
             nodes.push(Node {
                 kind: 13,
@@ -671,6 +793,7 @@ fn flatten(
                 call_args,
                 next_slot,
                 limit_parts,
+                match_parts,
             );
             let then = flatten_block(
                 then_block,
@@ -681,6 +804,7 @@ fn flatten(
                 call_args,
                 next_slot,
                 limit_parts,
+                match_parts,
             );
             let els = match else_block {
                 Some(eb) => flatten_block(
@@ -692,6 +816,7 @@ fn flatten(
                     call_args,
                     next_slot,
                     limit_parts,
+                    match_parts,
                 ),
                 None => panic!("increment requires an else branch"),
             };
@@ -723,6 +848,7 @@ fn flatten(
                         call_args,
                         next_slot,
                         limit_parts,
+                        match_parts,
                     )
                 })
                 .collect();
@@ -758,6 +884,7 @@ fn flatten_block(
     call_args: &mut Vec<i64>,
     next_slot: &mut i64,
     limit_parts: &mut Vec<i64>,
+    match_parts: &mut Vec<i64>,
 ) -> i64 {
     // Each entry is (statement node kind, arg, value node index).
     let mut stmts: Vec<(i64, i64, i64)> = Vec::new();
@@ -773,6 +900,7 @@ fn flatten_block(
                     call_args,
                     next_slot,
                     limit_parts,
+                    match_parts,
                 );
                 let name = match &l.pattern {
                     Pattern::Variable(n, _) => n.clone(),
@@ -798,6 +926,7 @@ fn flatten_block(
                     call_args,
                     next_slot,
                     limit_parts,
+                    match_parts,
                 );
                 let slot = data_slot(data_slots, data_name, field);
                 stmts.push((12, slot, value_node));
@@ -814,6 +943,7 @@ fn flatten_block(
                     call_args,
                     next_slot,
                     limit_parts,
+                    match_parts,
                 );
                 stmts.push((21, 0, expr_node));
             }
@@ -850,6 +980,7 @@ fn flatten_block(
                     call_args,
                     next_slot,
                     limit_parts,
+                    match_parts,
                 );
                 let var = *next_slot;
                 *next_slot += 1;
@@ -862,6 +993,7 @@ fn flatten_block(
                     call_args,
                     next_slot,
                     limit_parts,
+                    match_parts,
                 );
                 let end_slot = *next_slot;
                 *next_slot += 1;
@@ -881,6 +1013,7 @@ fn flatten_block(
                     call_args,
                     next_slot,
                     limit_parts,
+                    match_parts,
                 );
                 scope.pop();
                 let mut lit = |v: i64| -> i64 {
@@ -922,6 +1055,7 @@ fn flatten_block(
             call_args,
             next_slot,
             limit_parts,
+            match_parts,
         ),
         None => {
             nodes.push(Node {
@@ -949,12 +1083,12 @@ fn flatten_block(
 /// tail expression, with parameters occupying the first frame slots and each binding
 /// the next slot, then wrap the tail in a LetIn cons-list innermost (last) binding
 /// first — the same lowering the codegen conformance harness performs.
-fn reference_body(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, i64) {
+fn reference_body(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, Vec<i64>, i64) {
     let src = func_src.to_string();
     with_big_stack(move || reference_body_inner(&src))
 }
 
-fn reference_body_inner(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, i64) {
+fn reference_body_inner(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, Vec<i64>, i64) {
     let program = parse(&tokenize(func_src).expect("lex")).expect("parse");
     let data_slots = data_slot_names(&program);
     let chunk_names: Vec<String> = program.functions.iter().map(|f| f.name.clone()).collect();
@@ -969,6 +1103,7 @@ fn reference_body_inner(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, i64) 
     let mut nodes = Vec::new();
     let mut call_args = Vec::new();
     let mut limit_parts = Vec::new();
+    let mut match_parts = Vec::new();
     let root = flatten_block(
         &f.body,
         &mut scope,
@@ -978,8 +1113,9 @@ fn reference_body_inner(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, i64) 
         &mut call_args,
         &mut next_slot,
         &mut limit_parts,
+        &mut match_parts,
     );
-    (nodes, call_args, limit_parts, root)
+    (nodes, call_args, limit_parts, match_parts, root)
 }
 
 // A body that is a single integer literal is one Literal node.
@@ -987,7 +1123,7 @@ fn reference_body_inner(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, i64) 
 fn a_literal_body_is_one_literal_node() {
     let src = "fn answer() -> Word { 42 }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     assert_eq!(root, 0);
     assert_eq!(
         nodes,
@@ -1006,7 +1142,7 @@ fn a_literal_body_is_one_literal_node() {
 fn a_parameter_reference_resolves_to_its_slot() {
     let src = "fn second(a: Word, b: Word) -> Word { b }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     assert_eq!(root, 0);
     assert_eq!(
         nodes,
@@ -1024,7 +1160,7 @@ fn a_parameter_reference_resolves_to_its_slot() {
 fn the_first_parameter_resolves_to_slot_zero() {
     let src = "fn ident(x: Word) -> Word { x }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, _root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, _root) = run_body(src);
     assert_eq!(
         nodes,
         vec![Node {
@@ -1041,7 +1177,7 @@ fn the_first_parameter_resolves_to_slot_zero() {
 fn a_zero_literal_round_trips() {
     let src = "fn zero() -> Word { 0 }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, _root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, _root) = run_body(src);
     assert_eq!(
         nodes,
         vec![Node {
@@ -1058,7 +1194,7 @@ fn a_zero_literal_round_trips() {
 fn a_binary_operator_combines_two_operands() {
     let src = "fn sum(a: Word, b: Word) -> Word { a + b }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     // Postorder: Local a (0), Local b (1), BinOp Add (2, lhs 0, rhs 1).
     assert_eq!(root, 2);
     assert_eq!(
@@ -1077,7 +1213,7 @@ fn a_binary_operator_combines_two_operands() {
 fn multiplication_binds_tighter_than_addition() {
     let src = "fn f(a: Word, b: Word, c: Word) -> Word { a + b * c }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     // The root is Add; its right child is the Mul of b and c.
     let add = nodes[root as usize];
     assert_eq!(add.arg, 1); // Add
@@ -1090,7 +1226,7 @@ fn multiplication_binds_tighter_than_addition() {
 fn subtraction_is_left_associative() {
     let src = "fn f(a: Word, b: Word, c: Word) -> Word { a - b - c }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     // The root is a Sub whose left child is itself a Sub (left association).
     let outer = nodes[root as usize];
     assert_eq!(outer.arg, 3); // Sub
@@ -1103,7 +1239,7 @@ fn subtraction_is_left_associative() {
 fn comparison_binds_loosest() {
     let src = "fn f(a: Word, b: Word, c: Word) -> bool { a + b == c }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let eq = nodes[root as usize];
     assert_eq!(eq.arg, 6); // Eq
     let add = nodes[eq.lhs as usize];
@@ -1123,7 +1259,7 @@ fn a_mixed_precedence_expression_matches_the_reference() {
 fn parentheses_override_precedence() {
     let src = "fn f(a: Word, b: Word, c: Word) -> Word { (a + b) * c }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let mul = nodes[root as usize];
     assert_eq!(mul.arg, 2); // Mul
     let add = nodes[mul.lhs as usize];
@@ -1135,7 +1271,7 @@ fn parentheses_override_precedence() {
 fn parentheses_on_the_right_group_the_addition() {
     let src = "fn f(a: Word, b: Word, c: Word) -> Word { a * (b + c) }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let mul = nodes[root as usize];
     assert_eq!(mul.arg, 2); // Mul
     let add = nodes[mul.rhs as usize];
@@ -1147,7 +1283,7 @@ fn parentheses_on_the_right_group_the_addition() {
 fn nested_parentheses_collapse() {
     let src = "fn f(x: Word) -> Word { ((x)) }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, _root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, _root) = run_body(src);
     assert_eq!(
         nodes,
         vec![Node {
@@ -1164,7 +1300,7 @@ fn nested_parentheses_collapse() {
 fn two_parenthesised_groups_combine() {
     let src = "fn f(a: Word, b: Word, c: Word, d: Word) -> Word { (a + b) * (c - d) }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let mul = nodes[root as usize];
     assert_eq!(mul.arg, 2); // Mul
     assert_eq!(nodes[mul.lhs as usize].arg, 1); // Add
@@ -1176,7 +1312,7 @@ fn two_parenthesised_groups_combine() {
 fn unary_minus_is_negation() {
     let src = "fn f(x: Word) -> Word { -x }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let neg = nodes[root as usize];
     assert_eq!(neg.kind, 10);
     assert_eq!(
@@ -1195,7 +1331,7 @@ fn unary_minus_is_negation() {
 fn not_is_a_prefix_unary() {
     let src = "fn f(a: Word, b: Word) -> bool { not a == b }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     // `not` binds tighter than `==`, so the root is Eq and its left child is Not.
     let eq = nodes[root as usize];
     assert_eq!(eq.arg, 6); // Eq
@@ -1207,7 +1343,7 @@ fn not_is_a_prefix_unary() {
 fn unary_minus_binds_tighter_than_multiplication() {
     let src = "fn f(a: Word, b: Word) -> Word { -a * b }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let mul = nodes[root as usize];
     assert_eq!(mul.arg, 2); // Mul
     assert_eq!(nodes[mul.lhs as usize].kind, 10); // Neg
@@ -1218,7 +1354,7 @@ fn unary_minus_binds_tighter_than_multiplication() {
 fn binary_and_unary_minus_coexist() {
     let src = "fn f(a: Word, b: Word) -> Word { a - -b }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let sub = nodes[root as usize];
     assert_eq!(sub.kind, 3);
     assert_eq!(sub.arg, 3); // Sub
@@ -1230,7 +1366,7 @@ fn binary_and_unary_minus_coexist() {
 fn unary_operators_nest() {
     let src = "fn f(x: Word) -> Word { - -x }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let outer = nodes[root as usize];
     assert_eq!(outer.kind, 10);
     assert_eq!(nodes[outer.lhs as usize].kind, 10); // inner Neg
@@ -1241,7 +1377,7 @@ fn unary_operators_nest() {
 fn bitwise_operators_are_recognised() {
     let src = "fn f(a: Word, b: Word) -> Word { a band b }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     assert_eq!(
         nodes[root as usize],
         Node {
@@ -1259,7 +1395,7 @@ fn bitwise_operators_are_recognised() {
 fn band_binds_tighter_than_bor() {
     let src = "fn f(a: Word, b: Word, c: Word) -> Word { a bor b band c }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let bor = nodes[root as usize];
     assert_eq!(bor.arg, 13); // Bor
     assert_eq!(nodes[bor.rhs as usize].arg, 12); // Band on the right
@@ -1271,7 +1407,7 @@ fn band_binds_tighter_than_bor() {
 fn bitwise_binds_tighter_than_comparison() {
     let src = "fn f(a: Word, b: Word, c: Word) -> bool { a band b == c }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let eq = nodes[root as usize];
     assert_eq!(eq.arg, 6); // Eq
     assert_eq!(nodes[eq.lhs as usize].arg, 12); // Band
@@ -1283,7 +1419,7 @@ fn bitwise_binds_tighter_than_comparison() {
 fn short_circuit_and_is_looser_than_comparison() {
     let src = "fn f(a: Word, b: Word, c: Word, d: Word) -> bool { a == b andalso c == d }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let andalso = nodes[root as usize];
     assert_eq!(andalso.kind, 8); // Andalso
     assert_eq!(nodes[andalso.lhs as usize].arg, 6); // Eq on the left
@@ -1296,7 +1432,7 @@ fn short_circuit_and_is_looser_than_comparison() {
 fn andalso_binds_tighter_than_orelse() {
     let src = "fn f(a: bool, b: bool, c: bool) -> bool { a andalso b orelse c }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let orelse = nodes[root as usize];
     assert_eq!(orelse.kind, 9); // Orelse
     assert_eq!(nodes[orelse.lhs as usize].kind, 8); // Andalso
@@ -1308,7 +1444,7 @@ fn andalso_binds_tighter_than_orelse() {
 fn a_single_let_binding_wraps_the_tail() {
     let src = "fn f(a: Word) -> Word { let b = a + 1; b }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let letin = nodes[root as usize];
     assert_eq!(letin.kind, 5);
     assert_eq!(letin.arg, 1); // slot 1 (after the single parameter a at slot 0)
@@ -1331,7 +1467,7 @@ fn a_single_let_binding_wraps_the_tail() {
 fn a_typed_let_binding_is_read() {
     let src = "fn f() -> Word { let x: Word = 7; x }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let letin = nodes[root as usize];
     assert_eq!(letin.kind, 5);
     assert_eq!(letin.arg, 0); // slot 0 (no parameters)
@@ -1343,7 +1479,7 @@ fn a_typed_let_binding_is_read() {
 fn multiple_let_bindings_nest() {
     let src = "fn f() -> Word { let a = 1; let b = a + 2; let c = b * 3; a + b + c }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     // Root is the LetIn for a (slot 0); its continuation is the LetIn for b (slot 1);
     // then c (slot 2); then the tail.
     let la = nodes[root as usize];
@@ -1360,7 +1496,7 @@ fn multiple_let_bindings_nest() {
 fn a_later_binding_shadows_an_earlier_one() {
     let src = "fn f() -> Word { let x = 1; let x = x + 1; x }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     // The tail `x` resolves to the second binding's slot (1), not the first (0).
     let outer = nodes[root as usize]; // LetIn slot 0
     let inner = nodes[outer.rhs as usize]; // LetIn slot 1
@@ -1381,7 +1517,7 @@ fn a_later_binding_shadows_an_earlier_one() {
 fn a_scalar_data_read_uses_the_field_slot() {
     let src = "shared data d { x: Word, y: Word } fn f() -> Word { d.y }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     // `d.y` is the second field, slot 1.
     assert_eq!(
         nodes[root as usize],
@@ -1399,7 +1535,7 @@ fn a_scalar_data_read_uses_the_field_slot() {
 fn a_data_read_is_an_operand() {
     let src = "shared data st { count: Word } fn f(n: Word) -> Word { st.count + n }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let add = nodes[root as usize];
     assert_eq!(add.arg, 1); // Add
     assert_eq!(nodes[add.lhs as usize].kind, 11); // DataRead st.count
@@ -1411,7 +1547,7 @@ fn a_data_read_is_an_operand() {
 fn distinct_fields_resolve_to_distinct_slots() {
     let src = "shared data d { p: Word, q: Word, r: Word } fn f() -> Word { d.p + d.r }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let add = nodes[root as usize];
     // d.p is slot 0; d.r is slot 2 (after d.p at 0 and d.q at 1).
     assert_eq!(nodes[add.lhs as usize].arg, 0);
@@ -1425,7 +1561,7 @@ fn distinct_fields_resolve_to_distinct_slots() {
 fn a_data_read_binds_into_a_let() {
     let src = "shared data d { v: Word } fn f() -> Word { let c = d.v + 1; c }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let letin = nodes[root as usize];
     assert_eq!(letin.kind, 5);
     // The bound value is `d.v + 1`, an Add whose left is the DataRead.
@@ -1440,7 +1576,7 @@ fn a_data_read_binds_into_a_let() {
 fn an_indexed_data_read_is_an_index_read() {
     let src = "shared data d { xs: [Word; 4] } fn f(i: Word) -> Word { d.xs[i] }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let idx = nodes[root as usize];
     assert_eq!(idx.kind, 13);
     // xs is the only field, so base 0 and length 4: arg = 0 + 4*65536.
@@ -1462,7 +1598,7 @@ fn an_indexed_data_read_is_an_index_read() {
 fn the_index_is_a_full_expression() {
     let src = "shared data d { xs: [Word; 8] } fn f(i: Word) -> Word { d.xs[i + 1] }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let idx = nodes[root as usize];
     assert_eq!(idx.kind, 13);
     // The index child is the Add of i and 1.
@@ -1474,7 +1610,7 @@ fn the_index_is_a_full_expression() {
 fn a_data_read_nests_inside_an_index() {
     let src = "shared data d { xs: [Word; 16], i: Word } fn f() -> Word { d.xs[d.i] }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let idx = nodes[root as usize];
     assert_eq!(idx.kind, 13);
     // The index is a scalar DataRead of d.i (slot 16, after the 16 xs elements).
@@ -1494,7 +1630,7 @@ fn a_data_read_nests_inside_an_index() {
 fn an_indexed_read_is_an_operand() {
     let src = "shared data d { xs: [Word; 4] } fn f(i: Word) -> Word { d.xs[i] + 1 }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let add = nodes[root as usize];
     assert_eq!(add.arg, 1); // Add
     assert_eq!(nodes[add.lhs as usize].kind, 13); // IndexRead
@@ -1506,7 +1642,7 @@ fn an_indexed_read_is_an_operand() {
 fn a_scalar_data_assignment_is_a_statement() {
     let src = "shared data d { x: Word } fn f() -> Word { d.x = 5; d.x }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let assign = nodes[root as usize];
     assert_eq!(assign.kind, 12);
     assert_eq!(assign.arg, 0); // d.x is slot 0
@@ -1528,7 +1664,7 @@ fn a_scalar_data_assignment_is_a_statement() {
 fn an_assignment_value_is_an_expression() {
     let src = "shared data d { x: Word } fn f(n: Word) -> Word { d.x = n * 2 + d.x; n }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let assign = nodes[root as usize];
     assert_eq!(assign.kind, 12);
     // The value is `n * 2 + d.x`, an Add.
@@ -1540,7 +1676,7 @@ fn an_assignment_value_is_an_expression() {
 fn assignments_and_lets_mix_in_a_block() {
     let src = "shared data d { x: Word } fn f(n: Word) -> Word { let a = n + 1; d.x = a; a }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     // Root is the LetIn for `a` (slot 1, after parameter n at 0); its continuation is
     // the DataFieldAssignIn for d.x (slot 0).
     let letin = nodes[root as usize];
@@ -1565,7 +1701,7 @@ fn assignments_and_lets_mix_in_a_block() {
 fn an_if_expression_is_an_if_node() {
     let src = "fn f(x: Word) -> Word { if x > 0 { x } else { 0 } }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let iff = nodes[root as usize];
     assert_eq!(iff.kind, 4);
     assert_eq!(nodes[iff.arg as usize].arg, 9); // Gt condition
@@ -1594,7 +1730,7 @@ fn an_if_expression_is_an_if_node() {
 fn if_branches_are_expressions() {
     let src = "fn f(a: Word, b: Word) -> Word { if a + b == 3 { a * b } else { a - b } }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let iff = nodes[root as usize];
     assert_eq!(iff.kind, 4);
     assert_eq!(nodes[iff.arg as usize].arg, 6); // Eq condition
@@ -1607,7 +1743,7 @@ fn if_branches_are_expressions() {
 fn conditionals_nest_in_the_then_branch() {
     let src = "fn f(x: Word) -> Word { if x > 0 { if x > 5 { 2 } else { 1 } } else { 0 } }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let outer = nodes[root as usize];
     assert_eq!(outer.kind, 4);
     // The then branch is itself an If.
@@ -1629,7 +1765,7 @@ fn conditionals_nest_in_the_then_branch() {
 fn conditionals_nest_in_the_else_branch() {
     let src = "fn f(x: Word) -> Word { if x > 5 { 2 } else { if x > 0 { 1 } else { 0 } } }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let outer = nodes[root as usize];
     assert_eq!(outer.kind, 4);
     // The else branch is itself an If.
@@ -1641,7 +1777,7 @@ fn conditionals_nest_in_the_else_branch() {
 fn a_conditional_binds_and_combines() {
     let src = "fn f(x: Word) -> Word { let m = if x > 0 { x } else { 0 }; m + 1 }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let letin = nodes[root as usize];
     assert_eq!(letin.kind, 5);
     // The bound value is the If.
@@ -1654,7 +1790,7 @@ fn a_conditional_binds_and_combines() {
 fn an_if_branch_is_a_statement_block() {
     let src = "fn f(x: Word) -> Word { if x > 0 { let y = x + 1; y } else { 0 } }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let iff = nodes[root as usize];
     assert_eq!(iff.kind, 4);
     // The then branch is a LetIn (the block's cons-list root), not a bare expression.
@@ -1679,7 +1815,7 @@ fn an_if_branch_is_a_statement_block() {
 fn both_branches_carry_statements() {
     let src = "fn f(x: Word) -> Word { if x > 0 { let a = x; a } else { let b = 0; b } }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let iff = nodes[root as usize];
     // then: LetIn a at slot 1; else: LetIn b at slot 2 (monotonic, not reused).
     assert_eq!(
@@ -1699,7 +1835,7 @@ fn a_branch_block_with_an_assignment() {
     let src = "shared data d { x: Word } \
         fn f(n: Word) -> Word { let a = if n > 0 { d.x = n; n } else { 0 }; a }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     // Outer LetIn binds `a` to the If; the If's then branch is a DataFieldAssignIn.
     let letin = nodes[root as usize];
     assert_eq!(letin.kind, 5);
@@ -1715,7 +1851,7 @@ fn a_statement_follows_a_conditional() {
     let src = "shared data d { x: Word } \
         fn f(n: Word) -> Word { let a = if n > 0 { n } else { 0 }; d.x = a; a }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     // Root LetIn(a=If); continuation DataFieldAssignIn(d.x = a); then tail a.
     let letin = nodes[root as usize];
     assert_eq!((letin.kind, letin.arg), (5, 1));
@@ -1729,7 +1865,7 @@ fn a_statement_follows_a_conditional() {
 fn a_call_is_a_call_node() {
     let src = "fn helper(x: Word) -> Word { x + 1 } fn main(n: Word) -> Word { helper(n) }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, call_args, _limit_parts, root) = run_body(src);
+    let (nodes, call_args, _limit_parts, _match_parts, root) = run_body(src);
     let call = nodes[root as usize];
     assert_eq!(call.kind, 7);
     assert_eq!(call.arg, 0); // helper is chunk 0
@@ -1752,7 +1888,7 @@ fn a_call_is_a_call_node() {
 fn a_no_argument_call() {
     let src = "fn zero() -> Word { 0 } fn main() -> Word { zero() }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let call = nodes[root as usize];
     assert_eq!(call.kind, 7);
     assert_eq!(call.rhs, 0); // no arguments
@@ -1764,7 +1900,7 @@ fn multiple_arguments_in_order() {
     let src = "fn add3(a: Word, b: Word, c: Word) -> Word { a + b + c } \
         fn main(n: Word) -> Word { add3(n, n + 1, n * 2) }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, call_args, _limit_parts, root) = run_body(src);
+    let (nodes, call_args, _limit_parts, _match_parts, root) = run_body(src);
     let call = nodes[root as usize];
     assert_eq!(call.rhs, 3);
     // call_args[start..start+3] are n, (n+1), (n*2) in order.
@@ -1782,7 +1918,7 @@ fn a_call_is_an_operand_and_nests() {
     let src = "fn helper(x: Word) -> Word { x + 1 } \
         fn main(n: Word) -> Word { helper(helper(n)) + 2 }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     // Root Add; left is the outer Call whose argument is the inner Call.
     let add = nodes[root as usize];
     assert_eq!(add.arg, 1); // Add
@@ -1795,7 +1931,7 @@ fn a_call_binds_and_reads_data() {
     let src = "shared data d { v: Word } fn helper(x: Word) -> Word { x + 1 } \
         fn main() -> Word { let r = helper(d.v); r }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, call_args, _limit_parts, root) = run_body(src);
+    let (nodes, call_args, _limit_parts, _match_parts, root) = run_body(src);
     let letin = nodes[root as usize];
     assert_eq!(letin.kind, 5);
     let call = nodes[letin.lhs as usize];
@@ -1812,7 +1948,7 @@ fn a_call_binds_and_reads_data() {
 fn a_for_limit_loop_lowers_to_a_forlimit_statement() {
     let src = "fn count() -> Word { for i in 0..10 limit 100 { i } 0 }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, limit_parts, root) = run_body(src);
+    let (nodes, _call_args, limit_parts, _match_parts, root) = run_body(src);
     // The root is the ForLimit statement wrapping the tail literal 0.
     let forlimit = nodes[root as usize];
     assert_eq!(forlimit.kind, 23);
@@ -1840,7 +1976,7 @@ fn a_for_limit_loop_lowers_to_a_forlimit_statement() {
 fn a_for_limit_body_uses_the_variable_and_parameter_bounds() {
     let src = "fn ramp(n: Word) -> Word { for i in 0..n limit 50 { i * 2 + 1 } n }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, limit_parts, _root) = run_body(src);
+    let (nodes, _call_args, limit_parts, _match_parts, _root) = run_body(src);
     assert_eq!(limit_parts.len(), 12);
     // The end bound (node index limit_parts[6]) is the parameter n at slot 0.
     let end = nodes[limit_parts[6] as usize];
@@ -1859,7 +1995,7 @@ fn a_for_limit_body_uses_the_variable_and_parameter_bounds() {
 fn a_let_before_a_for_limit_shifts_the_loop_slots() {
     let src = "fn shifted() -> Word { let base = 7; for i in 0..3 limit 8 { base + i } base }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, limit_parts, _root) = run_body(src);
+    let (nodes, _call_args, limit_parts, _match_parts, _root) = run_body(src);
     assert_eq!(limit_parts.len(), 12);
     // base is slot 0; the loop variable is slot 1, the four anon slots 2..5.
     assert_eq!(&limit_parts[0..5], &[1, 2, 3, 4, 5]);
@@ -1877,7 +2013,7 @@ fn a_let_before_a_for_limit_shifts_the_loop_slots() {
 fn two_sequential_for_limit_loops_have_disjoint_slots() {
     let src = "fn twice() -> Word { for i in 0..3 limit 4 { i } for j in 0..5 limit 6 { j } 0 }";
     assert_eq!(run_body(src), reference_body(src));
-    let (_nodes, _call_args, limit_parts, _root) = run_body(src);
+    let (_nodes, _call_args, limit_parts, _match_parts, _root) = run_body(src);
     assert_eq!(limit_parts.len(), 24);
     // First loop: slots 0..5. Second loop: slots 5..10.
     assert_eq!(&limit_parts[0..5], &[0, 1, 2, 3, 4]);
@@ -1891,7 +2027,7 @@ fn a_for_limit_body_may_be_statement_only() {
     let src = "shared data acc { sum: Word } \
         fn run() -> Word { for i in 0..3 limit 4 { acc.sum = acc.sum + i; } 0 }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, limit_parts, _root) = run_body(src);
+    let (nodes, _call_args, limit_parts, _match_parts, _root) = run_body(src);
     assert_eq!(limit_parts.len(), 12);
     // The body node (limit_parts[7]) is a DataFieldAssignIn (kind 12) whose continuation
     // is a Unit node (kind 20).
@@ -1910,7 +2046,7 @@ fn a_for_limit_body_may_be_statement_only() {
 fn a_for_limit_body_may_bind_a_let() {
     let src = "fn ramp() -> Word { for i in 0..3 limit 4 { let d = i * 2; d } 0 }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, limit_parts, _root) = run_body(src);
+    let (nodes, _call_args, limit_parts, _match_parts, _root) = run_body(src);
     // The loop variable is slot 0; the four anon slots 1..4; the body `let d` is slot 5.
     assert_eq!(&limit_parts[0..5], &[0, 1, 2, 3, 4]);
     let body = nodes[limit_parts[7] as usize];
@@ -1930,7 +2066,7 @@ fn a_for_limit_body_may_have_several_statements() {
     let src = "shared data acc { a: Word, b: Word } \
         fn run() -> Word { for i in 0..3 limit 4 { acc.a = i; acc.b = i; } 0 }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, limit_parts, _root) = run_body(src);
+    let (nodes, _call_args, limit_parts, _match_parts, _root) = run_body(src);
     let body = nodes[limit_parts[7] as usize];
     // Outer assignment is acc.a (slot 0); its continuation is the acc.b assignment
     // (slot 1); whose continuation is Unit.
@@ -1948,7 +2084,7 @@ fn a_for_limit_body_may_have_several_statements() {
 fn a_bare_call_is_an_expr_statement() {
     let src = "fn g(x: Word) -> Word { x } fn f(n: Word) -> Word { g(n); n }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     // The root is the ExprStmt; lhs is the discarded Call, rhs the tail Local.
     let expr_stmt = nodes[root as usize];
     assert_eq!(expr_stmt.kind, 21);
@@ -1964,7 +2100,7 @@ fn several_expr_statements_fold_in_order() {
     let src = "fn g(x: Word) -> Word { x } \
         fn f(n: Word) -> Word { g(n); g(n); n }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let outer = nodes[root as usize];
     assert_eq!(outer.kind, 21); // first g(n)
     let inner = nodes[outer.rhs as usize];
@@ -1983,7 +2119,7 @@ fn an_expr_statement_nested_in_a_let_value_keeps_the_let() {
     let src = "fn g(x: Word) -> Word { x } \
         fn f(c: Word, n: Word) -> Word { let a = if c { g(n); n } else { 0 }; a }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     // The root is the outer LetIn (the `let a`), not an ExprStmt.
     let letin = nodes[root as usize];
     assert_eq!(letin.kind, 5);
@@ -2003,7 +2139,7 @@ fn a_for_limit_body_may_be_a_bare_call() {
     let src = "fn g(x: Word) -> Word { x } \
         fn run() -> Word { for i in 0..3 limit 4 { g(i); } 0 }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, limit_parts, _root) = run_body(src);
+    let (nodes, _call_args, limit_parts, _match_parts, _root) = run_body(src);
     let body = nodes[limit_parts[7] as usize];
     assert_eq!(body.kind, 21); // ExprStmt
     assert_eq!(nodes[body.lhs as usize].kind, 7); // the Call
@@ -2016,7 +2152,7 @@ fn a_for_limit_body_may_be_a_bare_call() {
 fn a_yield_tail_lowers_to_a_yield_expr() {
     let src = "fn step() -> Word { 0 } loop main(resume: Word) -> Word { yield step() }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let y = nodes[root as usize];
     assert_eq!(y.kind, 24);
     assert_eq!(y.arg, 0);
@@ -2029,7 +2165,7 @@ fn a_yield_tail_lowers_to_a_yield_expr() {
 fn yield_binds_looser_than_arithmetic() {
     let src = "yield f(a: Word, b: Word) -> Word { yield a + b }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let y = nodes[root as usize];
     assert_eq!(y.kind, 24);
     let inner = nodes[y.lhs as usize];
@@ -2044,7 +2180,7 @@ fn a_yield_may_be_a_let_value() {
     let src = "fn g(x: Word) -> Word { x } \
         yield f(a: Word) -> Word { let x = yield g(a); x }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     let letin = nodes[root as usize];
     assert_eq!(letin.kind, 5);
     assert_eq!(nodes[letin.lhs as usize].kind, 24); // the YieldExpr value
@@ -2058,11 +2194,76 @@ fn a_yield_function_with_data_compiles() {
     let src = "private data d { count: Word } \
         yield tick(cmd: Word) -> Word { d.count = d.count + 1; yield d.count }";
     assert_eq!(run_body(src), reference_body(src));
-    let (nodes, _call_args, _limit_parts, root) = run_body(src);
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
     // The root is the DataFieldAssignIn wrapping the yield tail.
     let assign = nodes[root as usize];
     assert_eq!(assign.kind, 12);
     let y = nodes[assign.rhs as usize];
     assert_eq!(y.kind, 24); // yield d.count
     assert_eq!(nodes[y.lhs as usize].kind, 11); // DataRead
+}
+
+// A `match` over integer-literal arms and a trailing wildcard lowers to a MatchIn (kind
+// 22): arg = the match_parts entry start, lhs = the scrutinee, rhs = the literal-arm
+// count. The entry is [temp slot, wildcard result, then (literal node, result node) per
+// literal arm].
+#[test]
+fn a_match_lowers_to_a_match_in() {
+    let src = "fn f(n: Word) -> Word { match n { 1 => 10, 2 => 20, _ => 0 } }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _c, _l, match_parts, root) = run_body(src);
+    let m = nodes[root as usize];
+    assert_eq!(m.kind, 22);
+    assert_eq!(m.arg, 0); // the sole entry starts at match_parts[0]
+    assert_eq!(nodes[m.lhs as usize].kind, 2); // scrutinee: Local n
+    assert_eq!(m.rhs, 2); // two literal arms
+    assert_eq!(match_parts.len(), 6); // temp, wc, (l,r), (l,r)
+    // match_parts[0] is the temp slot (1, right after the one parameter); [1] the
+    // wildcard result (literal 0); [2..] the literal-arm pairs.
+    assert_eq!(match_parts[0], 1);
+    assert_eq!(nodes[match_parts[1] as usize].arg, 0); // wildcard result 0
+    assert_eq!(nodes[match_parts[2] as usize].arg, 1); // first literal pattern 1
+    assert_eq!(nodes[match_parts[3] as usize].arg, 10); // first result 10
+    assert_eq!(nodes[match_parts[4] as usize].arg, 2); // second literal pattern 2
+    assert_eq!(nodes[match_parts[5] as usize].arg, 20); // second result 20
+}
+
+// A match arm result may be a call whose internal argument commas are distinguished from
+// the arm-separating comma by the open call context.
+#[test]
+fn a_match_arm_result_may_be_a_call() {
+    let src = "fn g(x: Word, y: Word) -> Word { x } \
+        fn f(n: Word) -> Word { match n { 1 => g(n, n), _ => 0 } }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _c, _l, match_parts, _root) = run_body(src);
+    // The single literal arm's result (match_parts[3]) is a Call node with two arguments.
+    let res = nodes[match_parts[3] as usize];
+    assert_eq!(res.kind, 7);
+    assert_eq!(res.rhs, 2); // two call arguments
+}
+
+// A `match` composes as an operand: it may be a `let`'s value.
+#[test]
+fn a_match_may_be_a_let_value() {
+    let src = "fn f(n: Word) -> Word { let r = match n { 0 => 1, _ => 2 }; r }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _c, _l, _m, root) = run_body(src);
+    let letin = nodes[root as usize];
+    assert_eq!(letin.kind, 5);
+    assert_eq!(nodes[letin.lhs as usize].kind, 22); // the MatchIn value
+}
+
+// A real `match` on a data field, compiled and verified on the current runtime: the
+// scrutinee is a data read and the arms select a constant.
+#[test]
+fn a_match_on_data_compiles() {
+    let src = "shared data d { sel: Word } \
+        fn classify() -> Word { match d.sel { 0 => 100, 1 => 200, _ => 300 } }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _c, _l, match_parts, root) = run_body(src);
+    let m = nodes[root as usize];
+    assert_eq!(m.kind, 22);
+    assert_eq!(nodes[m.lhs as usize].kind, 11); // scrutinee: DataRead
+    assert_eq!(m.rhs, 2); // two literal arms plus the wildcard
+    assert_eq!(match_parts.len(), 6);
 }

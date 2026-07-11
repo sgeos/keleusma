@@ -1,13 +1,14 @@
 // compiler/kel/body.kel — the body-expression parser, a sub-component of Stage 2.
 //
-// Increment 18: a function body over the full operator-precedence expression grammar,
+// Increment 19: a function body over the full operator-precedence expression grammar,
 // scalar and indexed data-field reads, `let` bindings and scalar data-field
 // assignments, the bare expression statement `expr;`, the `if`/`else` conditional with
 // nested statement-block branches, function calls, the `yield e` reentrant expression,
-// the bounded `for v in start..end limit CAP { body }` loop, and a statement-only block
-// whose implicit value is Unit. Real Keleusma code that compiles and verifies on the
-// current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md
-// (roadmap Step 2).
+// the `match` expression over integer-literal arms and a trailing wildcard, the bounded
+// `for v in start..end limit CAP { body }` loop, and a statement-only block whose
+// implicit value is Unit. Real Keleusma code that compiles and verifies on the current
+// runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md (roadmap
+// Step 2).
 //
 // Model. Stage 2's declaration parser (parser.kel) reads a function's signature and
 // brace-matches its body. This companion loop reads that body's tokens and produces
@@ -255,6 +256,12 @@ private data bs {
     for_emit: Word,
     for_emit_i: Word,
     for_stmt_start: Word,
+    match_phase: [Word; 8],
+    match_temp: [Word; 8],
+    match_argcount: [Word; 8],
+    match_call_base: [Word; 8],
+    match_sp: Word,
+    match_build: Word,
 }
 
 // The precedence of an operator code, tightest to loosest: unary (16 Neg, 17 Not) 9,
@@ -588,6 +595,7 @@ fn step_draining() -> Word {
             bs.draining = 0;
             0
         } else {
+        if bs.drain_reason == 7 {
             // reason 7: the loop body is drained; fold its statements around the body
             // value (fold_cont 3 then starts the ForLimit emission).
             bs.draining = 0;
@@ -596,8 +604,29 @@ fn step_draining() -> Word {
             bs.fold_start = bs.for_stmt_start;
             bs.fold_cont = 3;
             0
+        } else {
+        if bs.drain_reason == 8 {
+            // reason 8: the match scrutinee is drained; reserve its temp slot (right
+            // after the scrutinee's own locals, mirroring the reference) and move to the
+            // arm patterns.
+            bs.match_temp[bs.match_sp - 1] = src.param_count + bs.slot_count;
+            bs.slot_count = bs.slot_count + 1;
+            bs.match_phase[bs.match_sp - 1] = 2;
+            bs.draining = 0;
+            0
+        } else {
+        if bs.drain_reason == 9 {
+            // reason 9: an arm result is drained; expect the next arm's pattern.
+            bs.match_phase[bs.match_sp - 1] = 2;
+            bs.draining = 0;
+            0
+        } else {
+            // reason 10: the last arm result is drained; build the match.
+            bs.match_build = 1;
+            bs.draining = 0;
+            0
         } } } }
-        } } }
+        } } } } } }
     }
 }
 
@@ -763,6 +792,14 @@ fn step_op(k: Word) -> Word {
         bs.expect_operand = 1;
         0
     } else {
+    if k == 48 {
+        // `match` opens a scrutinee-then-arms context; its scrutinee is an operand.
+        bs.match_phase[bs.match_sp] = 1;
+        bs.match_argcount[bs.match_sp] = 0;
+        bs.match_sp = bs.match_sp + 1;
+        bs.expect_operand = 1;
+        0
+    } else {
     if k == 22 andalso bs.expect_operand == 1 {
         bs.opstack[bs.opsp] = 16;
         bs.opsp = bs.opsp + 1;
@@ -779,7 +816,7 @@ fn step_op(k: Word) -> Word {
         } else {
             0
         }
-    } } } } } }
+    } } } } } } }
 }
 
 // The `for` loop header, phases 1 (variable name), 2 (`in`), 3 (start range, drained
@@ -998,8 +1035,12 @@ fn step_normal(k: Word, v: Word) -> Word {
     } } } } } } }
 }
 
-// Dispatch a just-read token by parse phase: before the body, a `let` binding's name
-// or `=`, a `data.field` phase, or the normal expression dispatch.
+// Dispatch a just-read token by parse phase. When a `match` is open, its structural
+// tokens route to step_match; a pattern (phase 2) or `=>` (phase 3) unconditionally, a
+// scrutinee's opening `{` (phase 1), the arms' closing `}` (phase 4), or a match-level
+// `,` separating arms (phase 4, when no call argument list is open above the arm's
+// baseline). Every other token, including a scrutinee or arm-result expression,
+// dispatches normally.
 fn step_dispatch(k: Word, v: Word) -> Word {
     if bs.started == 0 {
         if k == 2 {
@@ -1009,6 +1050,26 @@ fn step_dispatch(k: Word, v: Word) -> Word {
         }
         0
     } else {
+        if bs.match_sp > 0 andalso bs.da_phase == 0 {
+            // A pending data-field read (da_phase nonzero) must flush before a match
+            // boundary is claimed, so the scrutinee or arm-result DataRead lands on the
+            // host stack before the drain; step_daindex emits it and pushes the boundary
+            // token back for reinterpretation here.
+            let mp = bs.match_phase[bs.match_sp - 1];
+            if mp == 2 orelse mp == 3 orelse (mp == 1 andalso k == 2) orelse (mp == 4 andalso k == 3) orelse (mp == 4 andalso k == 10 andalso bs.call_sp == bs.match_call_base[bs.match_sp - 1]) {
+                step_match(k, v)
+            } else {
+                step_dispatch_normal(k, v)
+            }
+        } else {
+            step_dispatch_normal(k, v)
+        }
+    }
+}
+
+// The normal parse-phase dispatch: a `let` binding's name or `=`, a `data.field` phase,
+// a `for` header, or the ordinary expression dispatch.
+fn step_dispatch_normal(k: Word, v: Word) -> Word {
     if bs.let_phase == 2 {
         if k == 17 {
             bs.let_phase = 0;
@@ -1058,7 +1119,72 @@ fn step_dispatch(k: Word, v: Word) -> Word {
         } else {
             step_normal(k, v)
         }
-    } } } } } } }
+    } } } } } }
+}
+
+// The `match` structural tokens. Phase 1 awaits the scrutinee's `{` (drain reason 8,
+// which reserves the scrutinee temp slot and moves to the arm patterns); phase 2 reads
+// an arm pattern (an integer literal, emitted as a Literal node and counted, a `_`
+// wildcard, or `}` ending the arms with a trailing comma); phase 3 awaits `=>`; phase 4
+// reads the arm-result expression, ended by a match-level `,` (drain reason 9, next arm)
+// or the closing `}` (drain reason 10, build the match).
+fn step_match(k: Word, v: Word) -> Word {
+    let sp = bs.match_sp - 1;
+    let mp = bs.match_phase[sp];
+    if mp == 1 {
+        bs.drain_reason = 8;
+        bs.draining = 1;
+        0
+    } else {
+    if mp == 2 {
+        if k == 12 {
+            // A literal arm: emit its Literal node, count it, then await `=>`.
+            bs.match_argcount[sp] = bs.match_argcount[sp] + 1;
+            bs.match_phase[sp] = 3;
+            1 + v * 64
+        } else {
+        if k == 50 {
+            // The wildcard arm: no node; its result becomes the default. Await `=>`.
+            bs.match_phase[sp] = 3;
+            0
+        } else {
+            // k == 3: the arms end (a trailing comma preceded this `}`); build.
+            bs.match_build = 1;
+            0
+        } }
+    } else {
+    if mp == 3 {
+        if k == 49 {
+            bs.match_phase[sp] = 4;
+            bs.match_call_base[sp] = bs.call_sp;
+            bs.expect_operand = 1;
+        }
+        0
+    } else {
+        if k == 10 {
+            bs.drain_reason = 9;
+            bs.draining = 1;
+            0
+        } else {
+            bs.drain_reason = 10;
+            bs.draining = 1;
+            0
+        }
+    } } }
+}
+
+// Emit the match build record: kind 34 packs the scrutinee temp slot and the literal-arm
+// count as `temp * 1024 + count`. The host pops the wildcard result, the literal-arm
+// (Literal node, result) pairs, and the scrutinee, assembles the match_parts entry, and
+// emits the MatchIn node. The match is now an operand, so expect_operand clears.
+fn step_match_build() -> Word {
+    bs.match_build = 0;
+    let sp = bs.match_sp - 1;
+    let temp = bs.match_temp[sp];
+    let ac = bs.match_argcount[sp];
+    bs.match_sp = sp;
+    bs.expect_operand = 0;
+    34 + (temp * 1024 + ac) * 64
 }
 
 // Read the next token and dispatch it, or begin the final drain at end of input.
@@ -1100,8 +1226,11 @@ fn step() -> Word {
     if bs.for_emit == 1 {
         step_for_emit()
     } else {
+    if bs.match_build == 1 {
+        step_match_build()
+    } else {
         step_read()
-    } } } } } } } }
+    } } } } } } } } }
 }
 
 loop main(resume: Word) -> Word {
