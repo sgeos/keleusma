@@ -1,17 +1,17 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
-// Increment 19: flatten the loop into a phase dispatch. The `loop` body was a
-// nested `if`/`else` state machine (seed, walk, and five drain phases nested five
-// deep, because a `match` arm cannot hold a multi-statement `yield` body and the
-// surface has no `else if`). This increment moves each phase's work into its own
-// `fn` and selects the phase with `main_phase`, a guarded `match` (guards do work
-// in a `match`, unlike on a function head). The `loop` body is then one flat
-// `match main_phase() { k => yield step_k(), ... }`: the `yield` stays in the
-// Stream block, as the verifier requires, while the per-phase work lives in the
-// steps. Pure refactor: the conformance suite confirms byte-identical output. Not
-// yet covered: the data segment (`GetData`/`SetData`, indexed access), `for`
-// loops, and statement-form blocks, the next and larger frontier. See
-// compiler/MILESTONES.md and docs/reference/INCREMENTAL_SELF_HOSTING.md.
+// Increment 20: the loop is a multiheaded function with guards. Keleusma supports
+// multiheaded functions with `when` guards in all three categories, including
+// `loop` (the guard follows the return type: `-> Word when cond`). So the phase
+// state machine is one `loop main` head per phase, selected by a guard on the
+// `data` state; the heads are tried top to bottom and the first satisfied guard
+// wins, which is the phase order. Each head yields directly, satisfying the Stream
+// block requirement, so no `match main_phase()` indirection is needed; the
+// per-phase work stays in the `fn` steps. Pure refactor: the conformance suite
+// confirms byte-identical output. Not yet covered: the data segment
+// (`GetData`/`SetData`, indexed access), `for` loops, and statement-form blocks,
+// the next and larger frontier. See compiler/MILESTONES.md and
+// docs/reference/INCREMENTAL_SELF_HOSTING.md.
 //
 // The self-hosted compiler is a full-width host tool; declare its word floor.
 require word >= 32;
@@ -255,24 +255,6 @@ fn push_orelse(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
-// Which phase the loop is in. The guards are evaluated top to bottom, so the first
-// satisfied one wins, exactly as the earlier nested `if`/`else` chain did:
-//   0 seed the work-stack   1 process one work item (walk)
-//   2 append Return   3 stream a buffered op   4 the pool size
-//   5 stream a pool value   6 the local-frame size   7 fully drained
-fn main_phase() -> Word {
-    match 0 {
-        _ when st.started == 0 => 0,
-        _ when st.sp > 0 => 1,
-        _ when st.ret_done == 0 => 2,
-        _ when st.emit_cursor < st.op_count => 3,
-        _ when st.count_done == 0 => 4,
-        _ when st.pool_cursor < st.pool_count => 5,
-        _ when st.header_done == 0 => 6,
-        _ => 7,
-    }
-}
-
 // Phase 0: seed the work-stack with the body's block root. A block is a `LetIn`
 // chain (or a bare expression) in the node forest, so no statement-array
 // pre-seeding is needed; the walk expands the chain. Yields the PENDING 0.
@@ -346,19 +328,40 @@ fn drain_header() -> Word {
     ast.param_count + st.let_count
 }
 
-// The whole loop body is a flat phase dispatch: `main_phase` selects the phase and
-// each arm computes its output (advancing the state) and yields it directly. The
-// `yield` lives in the loop, as the Stream block requires; the per-phase work is in
-// the `fn` steps above.
+// The loop is multiheaded: one head per phase, selected by a `when` guard. The
+// heads are tried top to bottom and the first satisfied guard wins, so the guard
+// order is the phase order. Each head yields directly (as the Stream block
+// requires) the result of its phase step; the seed, walk, and return steps return
+// the PENDING 0. Guards read only `data` fields and comparisons, never call a
+// function, as the guard grammar requires.
+loop main(resume: Word) -> Word when st.started == 0 {
+    yield seed_step()
+}
+
+loop main(resume: Word) -> Word when st.sp > 0 {
+    yield walk_step()
+}
+
+loop main(resume: Word) -> Word when st.ret_done == 0 {
+    yield drain_return()
+}
+
+loop main(resume: Word) -> Word when st.emit_cursor < st.op_count {
+    yield drain_buffer()
+}
+
+loop main(resume: Word) -> Word when st.count_done == 0 {
+    yield drain_count()
+}
+
+loop main(resume: Word) -> Word when st.pool_cursor < st.pool_count {
+    yield drain_pool()
+}
+
+loop main(resume: Word) -> Word when st.header_done == 0 {
+    yield drain_header()
+}
+
 loop main(resume: Word) -> Word {
-    match main_phase() {
-        0 => yield seed_step(),
-        1 => yield walk_step(),
-        2 => yield drain_return(),
-        3 => yield drain_buffer(),
-        4 => yield drain_count(),
-        5 => yield drain_pool(),
-        6 => yield drain_header(),
-        _ => yield 0,
-    }
+    yield 0
 }
