@@ -1,10 +1,10 @@
 // compiler/kel/body.kel — the body-expression parser, a sub-component of Stage 2.
 //
-// Increment 3: an expression body over integer literals, parameter references, the
-// binary arithmetic and comparison operators, and parenthesised grouping, parsed by
-// operator precedence. Real Keleusma code that compiles and verifies on the current
-// runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md
-// (roadmap Step 2).
+// Increment 4: an expression body over integer literals, parameter references, the
+// binary arithmetic and comparison operators, parenthesised grouping, and the unary
+// prefix operators `-` (negation) and `not`, parsed by operator precedence. Real
+// Keleusma code that compiles and verifies on the current runtime. See
+// docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md (roadmap Step 2).
 //
 // Model. Stage 2's declaration parser (parser.kel) reads a function's signature and
 // brace-matches its body. This companion loop reads that body's tokens and produces
@@ -26,15 +26,25 @@
 //
 // The node kinds match the codegen contract exactly: 1 Literal (arg = value), 2 Local
 // (arg = the parameter's frame slot), 3 BinOp (arg = the operator code, `lhs`/`rhs`
-// the operands). The operator codes also match codegen: 1 Add, 2 Mul, 3 Sub, 4 Div,
-// 5 Mod, 6 Eq, 7 NotEq, 8 Lt, 9 Gt, 10 LtEq, 11 GtEq. Precedence binds multiplicative
-// (Mul/Div/Mod) tighter than additive (Add/Sub) tighter than comparison; every
-// operator here is left-associative, so a pending operator pops a stacked operator of
-// equal or higher precedence. A parenthesised subexpression pushes a marker (operator
-// code 15, precedence 0, below every real operator) that no precedence comparison
-// ever pops; the closing `)` flushes the operators stacked above the marker and then
-// discards it. The boolean and bitwise operators and the unary operators are later
-// increments.
+// the operands), 6 Not and 10 Neg (unary, the single operand in `lhs`). The binary
+// operator codes also match codegen: 1 Add, 2 Mul, 3 Sub, 4 Div, 5 Mod, 6 Eq,
+// 7 NotEq, 8 Lt, 9 Gt, 10 LtEq, 11 GtEq. Precedence binds unary tighter than
+// multiplicative (Mul/Div/Mod) tighter than additive (Add/Sub) tighter than
+// comparison; the binary operators are left-associative, so a pending binary operator
+// pops a stacked operator of equal or higher precedence. A parenthesised subexpression
+// pushes a marker (operator code 15, precedence 0, below every real operator) that no
+// precedence comparison ever pops; the closing `)` flushes the operators stacked above
+// the marker and then discards it.
+//
+// The unary operators are prefix, so `-` in operand position (the start of an
+// expression, or just after an operator or `(`) is negation, while `-` in operator
+// position (just after an operand or `)`) is subtraction; `bs.expect_operand` tracks
+// which position the scan is in. A unary operator is pushed straight onto the operator
+// stack (it is not settled by precedence, being prefix), where it carries an internal
+// code, 16 for Neg and 17 for Not, both at precedence 4; because a following unary
+// never pops it, the unary operators nest right-associatively. When popped it emits
+// its node kind (Neg 10, Not 6) and the host pops a single operand. The boolean and
+// bitwise operators are later increments.
 //
 // Input. The host places the body's token stream in `src.kinds`/`src.vals` with the
 // count in `src.len`, and the function's parameter names (interned ids, slot = index)
@@ -48,6 +58,7 @@
 //   kind 8 RPAREN  `)`; closes a parenthesised subexpression
 //   kind 21 PLUS   kind 22 MINUS  kind 23 STAR   kind 24 SLASH  kind 25 PERCENT
 //   kind 26 EQEQ   kind 27 NOTEQ  kind 28 LT     kind 29 GT     kind 30 LTEQ  kind 31 GTEQ
+//   kind 32 NOT    the `not` prefix operator
 // Any other token is ignored this increment.
 //
 // Node record wire. Each element is one Word, `kind + arg*16`:
@@ -55,6 +66,8 @@
 //   kind 1         Literal; arg = the integer value
 //   kind 2         Local; arg = the parameter frame slot
 //   kind 3         BinOp; arg = the operator code; host pops two children
+//   kind 6         Not; host pops one child into `lhs`
+//   kind 10        Neg; host pops one child into `lhs`
 //   kind 15        DONE; the body is complete, its root is the remaining stack node
 // The remaining interior node kinds (If, LetIn, Call, and the rest) and the statement
 // forms land in later increments.
@@ -78,7 +91,8 @@ shared data src {
 // carries an operator-code stack `opstack`/`opsp`; `pending_op`/`pending_prec` hold a
 // just-read operator while `resolving` pops the higher- or equal-precedence operators
 // ahead of pushing it; `draining` flushes the remaining operators at end of body;
-// `closing` flushes the operators above a parenthesis marker at a `)`.
+// `closing` flushes the operators above a parenthesis marker at a `)`;
+// `expect_operand` is 1 when the scan is in operand position (so `-` is unary).
 private data bs {
     cursor: Word,
     started: Word,
@@ -91,11 +105,19 @@ private data bs {
     resolving: Word,
     draining: Word,
     closing: Word,
+    expect_operand: Word,
 }
 
-// The precedence of an operator code: multiplicative 3, additive 2, comparison 1, and
-// the parenthesis marker (code 15) 0, so no real operator ever pops across it.
+// The precedence of an operator code: unary (16 Neg, 17 Not) 4, multiplicative 3,
+// additive 2, comparison 1, and the parenthesis marker (code 15) 0, so no real
+// operator ever pops across it.
 fn prec_of(op: Word) -> Word {
+    if op == 16 {
+        4
+    } else {
+    if op == 17 {
+        4
+    } else {
     if op == 15 {
         0
     } else {
@@ -115,7 +137,20 @@ fn prec_of(op: Word) -> Word {
         2
     } else {
         1
-    } } } } } }
+    } } } } } } } }
+}
+
+// The record word for a stacked operator: a unary Neg (16) or Not (17) emits its node
+// kind (10, 6) directly; every other code is a binary operator emitted as a BinOp.
+fn emit_op(op: Word) -> Word {
+    if op == 16 {
+        10
+    } else {
+    if op == 17 {
+        6
+    } else {
+        3 + op * 16
+    } }
 }
 
 // The operator code for a token kind, or 0 when the token is not a binary operator.
@@ -168,7 +203,7 @@ loop main(resume: Word) -> Word {
         if bs.opsp > 0 andalso prec_of(bs.opstack[bs.opsp - 1]) >= bs.pending_prec {
             bs.opsp = bs.opsp - 1;
             let op = bs.opstack[bs.opsp];
-            yield 3 + op * 16
+            yield emit_op(op)
         } else {
             bs.opstack[bs.opsp] = bs.pending_op;
             bs.opsp = bs.opsp + 1;
@@ -187,7 +222,7 @@ loop main(resume: Word) -> Word {
                 yield 0
             } else {
                 bs.opsp = bs.opsp - 1;
-                yield 3 + top * 16
+                yield emit_op(top)
             }
         } else {
             bs.closing = 0;
@@ -199,7 +234,7 @@ loop main(resume: Word) -> Word {
         if bs.opsp > 0 {
             bs.opsp = bs.opsp - 1;
             let op = bs.opstack[bs.opsp];
-            yield 3 + op * 16
+            yield emit_op(op)
         } else {
             bs.done = 1;
             yield 15
@@ -217,6 +252,7 @@ loop main(resume: Word) -> Word {
             // Before the body opens, consume tokens until the `{`.
             if k == 2 {
                 bs.started = 1;
+                bs.expect_operand = 1;
             }
             yield 0
         } else {
@@ -226,19 +262,23 @@ loop main(resume: Word) -> Word {
                 yield 0
             } else {
             if k == 12 {
-                // An integer literal is a Literal node (kind 1).
+                // An integer literal is a Literal node (kind 1), an operand.
+                bs.expect_operand = 0;
                 yield 1 + v * 16
             } else {
             if k == 7 {
                 // `(` pushes a parenthesis marker (code 15) that blocks precedence
-                // popping until its matching `)`.
+                // popping until its matching `)`; inside it an operand is expected.
                 bs.opstack[bs.opsp] = 15;
                 bs.opsp = bs.opsp + 1;
+                bs.expect_operand = 1;
                 yield 0
             } else {
             if k == 8 {
-                // `)` flushes the operators above the marker, then removes it.
+                // `)` flushes the operators above the marker, then removes it; the
+                // parenthesised group is itself an operand.
                 bs.closing = 1;
+                bs.expect_operand = 0;
                 yield 0
             } else {
             if k == 1 {
@@ -250,19 +290,36 @@ loop main(resume: Word) -> Word {
                         bs.found = i;
                     }
                 }
+                bs.expect_operand = 0;
                 yield 2 + bs.found * 16
             } else {
-                // A binary operator settles its precedence over the following
-                // iterations; a non-operator token is ignored.
-                let op = opcode_of(k);
-                if op > 0 {
-                    bs.pending_op = op;
-                    bs.pending_prec = prec_of(op);
-                    bs.resolving = 1;
+                if k == 32 {
+                    // `not` is always a prefix unary operator; push it (code 17).
+                    bs.opstack[bs.opsp] = 17;
+                    bs.opsp = bs.opsp + 1;
+                    bs.expect_operand = 1;
                     yield 0
                 } else {
+                if k == 22 andalso bs.expect_operand == 1 {
+                    // Unary minus (Neg, code 16) in operand position.
+                    bs.opstack[bs.opsp] = 16;
+                    bs.opsp = bs.opsp + 1;
+                    bs.expect_operand = 1;
                     yield 0
-                }
+                } else {
+                    // A binary operator settles its precedence over the following
+                    // iterations; a non-operator token is ignored.
+                    let op = opcode_of(k);
+                    if op > 0 {
+                        bs.pending_op = op;
+                        bs.pending_prec = prec_of(op);
+                        bs.resolving = 1;
+                        bs.expect_operand = 1;
+                        yield 0
+                    } else {
+                        yield 0
+                    }
+                } }
             } } } } }
         }
     } } } } }

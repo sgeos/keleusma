@@ -1,17 +1,19 @@
-//! Body-expression parser (`compiler/kel/body.kel`), increment 3: an expression body
+//! Body-expression parser (`compiler/kel/body.kel`), increment 4: an expression body
 //! over integer literals, parameter references, the binary arithmetic and comparison
-//! operators, and parenthesised grouping, lowered by operator precedence to the
-//! abstract-syntax node forest the codegen stage consumes.
+//! operators, parenthesised grouping, and the unary prefix operators `-` and `not`,
+//! lowered by operator precedence to the abstract-syntax node forest the codegen stage
+//! consumes.
 //!
 //! A throwaway adapter tokenises a function, feeds the body's tokens (from the opening
 //! `{`) and the function's parameter-name table to the `body.kel` `loop`, and decodes
 //! the postorder node-record stream into a node forest. Each leaf record (Literal,
 //! Local) pushes a node and its index onto a stack; an interior BinOp record pops its
-//! two operands and pushes the combined node. The forest is checked against a
-//! reference flattening of the same body's tail expression, with parameters occupying
-//! the first frame slots — the same lowering the codegen conformance harness performs
-//! — so operator precedence and left-associativity are verified against the reference
-//! parser's own tree.
+//! two operands and a unary record (Not, Neg) pops one, pushing the combined node. The
+//! forest is checked against a reference flattening of the same body's tail expression,
+//! with parameters occupying the first frame slots — the same lowering the codegen
+//! conformance harness performs — so operator precedence, left-associativity of the
+//! binary operators, and the prefix binding and right-associative nesting of the unary
+//! operators are all verified against the reference parser's own tree.
 
 #![cfg(all(
     feature = "compile",
@@ -22,7 +24,7 @@
 ))]
 
 use keleusma::Arena;
-use keleusma::ast::{BinOp, Expr, Literal, Pattern};
+use keleusma::ast::{BinOp, Expr, Literal, Pattern, UnaryOp};
 use keleusma::bytecode::Value;
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
@@ -97,6 +99,7 @@ fn run_body(func_src: &str) -> (Vec<Node>, i64) {
             TokenKind::Gt => (29, 0),
             TokenKind::LtEq => (30, 0),
             TokenKind::GtEq => (31, 0),
+            TokenKind::Not => (32, 0),
             TokenKind::Eof => continue,
             _ => (4, 0),
         };
@@ -169,6 +172,17 @@ fn run_body(func_src: &str) -> (Vec<Node>, i64) {
                             arg,
                             lhs,
                             rhs,
+                        });
+                        stack.push((nodes.len() - 1) as i64);
+                    }
+                    6 | 10 => {
+                        // A unary node: Not (6) or Neg (10). Pop one operand into `lhs`.
+                        let operand = stack.pop().expect("a unary operator needs an operand");
+                        nodes.push(Node {
+                            kind,
+                            arg: 0,
+                            lhs: operand,
+                            rhs: 0,
                         });
                         stack.push((nodes.len() - 1) as i64);
                     }
@@ -248,9 +262,24 @@ fn flatten(expr: &Expr, scope: &[&str], nodes: &mut Vec<Node>) -> i64 {
             });
             (nodes.len() - 1) as i64
         }
-        other => {
-            panic!("increment handles literals, parameters, and binary operators, got {other:?}")
+        Expr::UnaryOp { op, operand, .. } if matches!(op, UnaryOp::Not | UnaryOp::Neg) => {
+            let child = flatten(operand, scope, nodes);
+            let kind = match op {
+                UnaryOp::Not => 6,
+                UnaryOp::Neg => 10,
+                _ => unreachable!(),
+            };
+            nodes.push(Node {
+                kind,
+                arg: 0,
+                lhs: child,
+                rhs: 0,
+            });
+            (nodes.len() - 1) as i64
         }
+        other => panic!(
+            "increment handles literals, parameters, and unary and binary operators, got {other:?}"
+        ),
     }
 }
 
@@ -457,4 +486,69 @@ fn two_parenthesised_groups_combine() {
     assert_eq!(mul.arg, 2); // Mul
     assert_eq!(nodes[mul.lhs as usize].arg, 1); // Add
     assert_eq!(nodes[mul.rhs as usize].arg, 3); // Sub
+}
+
+// Unary minus in operand position is Neg (kind 10) with the operand in `lhs`.
+#[test]
+fn unary_minus_is_negation() {
+    let src = "fn f(x: Word) -> Word { -x }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let neg = nodes[root as usize];
+    assert_eq!(neg.kind, 10);
+    assert_eq!(
+        nodes[neg.lhs as usize],
+        Node {
+            kind: 2,
+            arg: 0,
+            lhs: 0,
+            rhs: 0
+        }
+    );
+}
+
+// `not` is a prefix unary Not (kind 6).
+#[test]
+fn not_is_a_prefix_unary() {
+    let src = "fn f(a: Word, b: Word) -> bool { not a == b }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    // `not` binds tighter than `==`, so the root is Eq and its left child is Not.
+    let eq = nodes[root as usize];
+    assert_eq!(eq.arg, 6); // Eq
+    assert_eq!(nodes[eq.lhs as usize].kind, 6); // Not
+}
+
+// Unary minus binds tighter than a binary operator: `-a * b` is `(-a) * b`.
+#[test]
+fn unary_minus_binds_tighter_than_multiplication() {
+    let src = "fn f(a: Word, b: Word) -> Word { -a * b }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let mul = nodes[root as usize];
+    assert_eq!(mul.arg, 2); // Mul
+    assert_eq!(nodes[mul.lhs as usize].kind, 10); // Neg
+}
+
+// Binary minus is still recognised after an operand: `a - -b` is `a - (-b)`.
+#[test]
+fn binary_and_unary_minus_coexist() {
+    let src = "fn f(a: Word, b: Word) -> Word { a - -b }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let sub = nodes[root as usize];
+    assert_eq!(sub.kind, 3);
+    assert_eq!(sub.arg, 3); // Sub
+    assert_eq!(nodes[sub.rhs as usize].kind, 10); // Neg on the right
+}
+
+// Unary operators nest right-associatively: `- -x` is `-(-x)`.
+#[test]
+fn unary_operators_nest() {
+    let src = "fn f(x: Word) -> Word { - -x }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let outer = nodes[root as usize];
+    assert_eq!(outer.kind, 10);
+    assert_eq!(nodes[outer.lhs as usize].kind, 10); // inner Neg
 }
