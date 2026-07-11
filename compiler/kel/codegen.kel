@@ -1,13 +1,14 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
-// Increment 17: round out the operator surface. Adds unary negation (a UnaryNeg
-// node, kind 10, lowering the operand ops then `CheckedNeg` and `PopN(2)`) and the
-// per-limb bitwise operators `band`/`bor`/`bxor` (BinOp operator codes 12/13/14,
-// each a single `BitAnd`/`BitOr`/`BitXor` op with no `PopN`, like the comparisons).
-// The dispatch and lowering-table extensions are one line each thanks to the
-// increment-16 refactor. Not yet covered: the data segment (`GetData`/`SetData`,
-// indexed access), `for` loops, and statement-form blocks, which are the next and
-// larger frontier. See compiler/MILESTONES.md and
+// Increment 18: replace the value dispatches with `match`. Two spots still used
+// nested `if`/`else`: the node dispatch in the `loop` body and the operator-word
+// mapping in `push_binop`. Both are single-expression dispatches on an integer, so
+// each becomes a flat `match`. (The drain state machine keeps nested `if`s: its
+// arms are multi-statement with `yield`, which a `match` arm cannot hold, and the
+// surface has no `else if`.) Pure refactor: the conformance suite confirms
+// byte-identical output. Not yet covered: the data segment (`GetData`/`SetData`,
+// indexed access), `for` loops, and statement-form blocks, the next and larger
+// frontier. See compiler/MILESTONES.md and
 // docs/reference/INCREMENTAL_SELF_HOSTING.md.
 //
 // The self-hosted compiler is a full-width host tool; declare its word floor.
@@ -152,26 +153,18 @@ fn push_local(p: Word) -> Word {
 // Only the checked arithmetic operators (1, 2, 3) take the PopN.
 fn push_binop(p: Word) -> Word {
     let opc = ast.args[p];
-    let opw = if opc == 1 {
-        5
-    } else {
-        if opc == 2 {
-            4
-        } else {
-            if opc == 3 {
-                8
-            } else {
-                if opc == 4 {
-                    9
-                } else {
-                    if opc == 5 {
-                        10
-                    } else {
-                        if opc <= 11 { opc + 5 } else { opc + 12 }
-                    }
-                }
-            }
-        }
+    // Arithmetic and bitwise are explicit; the wildcard covers the comparisons
+    // (6..11 -> CmpEq..CmpGe, i.e. opc + 5).
+    let opw = match opc {
+        1 => 5,
+        2 => 4,
+        3 => 8,
+        4 => 9,
+        5 => 10,
+        12 => 24,
+        13 => 25,
+        14 => 26,
+        _ => opc + 5,
     };
     if opc < 4 {
         push_emit(6 + 2 * 32);
@@ -278,18 +271,22 @@ loop main(resume: Word) -> Word {
                 emit_op(payload);
             }
             if ikind == 1 {
-                // Flat node dispatch: exactly one handler fires.
+                // Node dispatch: the handler for the node's kind schedules its
+                // children and ops onto the work-stack.
                 let nk = ast.kinds[payload];
-                if nk == 1 { push_literal(payload); }
-                if nk == 2 { push_local(payload); }
-                if nk == 3 { push_binop(payload); }
-                if nk == 4 { push_if(payload); }
-                if nk == 5 { push_letin(payload); }
-                if nk == 6 { push_not(payload); }
-                if nk == 7 { push_call(payload); }
-                if nk == 8 { push_andalso(payload); }
-                if nk == 9 { push_orelse(payload); }
-                if nk == 10 { push_neg(payload); }
+                match nk {
+                    1 => push_literal(payload),
+                    2 => push_local(payload),
+                    3 => push_binop(payload),
+                    4 => push_if(payload),
+                    5 => push_letin(payload),
+                    6 => push_not(payload),
+                    7 => push_call(payload),
+                    8 => push_andalso(payload),
+                    9 => push_orelse(payload),
+                    10 => push_neg(payload),
+                    _ => 0,
+                };
             }
             yield 0
         } else {

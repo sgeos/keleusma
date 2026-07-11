@@ -69,8 +69,8 @@ fn status() {
         println!("  step {}: {name:<8} {path:<20} [{state}]", i + 1);
     }
     println!();
-    println!("status: porting backward, codegen first. Codegen increment 17, a");
-    println!("recursion-free work-stack walk (node dispatch factored into per-kind");
+    println!("status: porting backward, codegen first. Codegen increment 18, a");
+    println!("recursion-free work-stack walk (node dispatch: a `match` over per-kind");
     println!("subroutines) that compiles nestable blocks of `let`");
     println!("bindings over the binary integer arithmetic set (+ - * / %), the six");
     println!("comparison operators, unary `not` and `-`, the bitwise band/bor/bxor,");
