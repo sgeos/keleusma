@@ -1,9 +1,9 @@
 // compiler/kel/parser.kel — Stage 2 of the self-hosted compiler.
 //
-// Increment 7: the function signature (including array types) and the shared,
-// private, and const `data` block declaration. Real Keleusma code that compiles and
-// verifies on the current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and
-// compiler/MILESTONES.md (roadmap Step 2).
+// Increment 8: the function signature (including array types), the shared, private,
+// and const `data` block declaration, and the bare `use path::name` native import.
+// Real Keleusma code that compiles and verifies on the current runtime. See
+// docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md (roadmap Step 2).
 //
 // Model. Keleusma forbids unbounded inner loops in `fn` and `yield`, so the one
 // top-level `loop` IS the scan over the token stream: one token is consumed per
@@ -46,6 +46,15 @@
 // whole. Capturing the initializer VALUES, which codegen bakes as constant loads,
 // is a later increment; this increment reads the const block's shape only.
 //
+// Increment 8 adds the bare `use path::name` native import (`use audio::play_note`),
+// the natives contract every host-embedding program depends on. A `use` declaration
+// has no closing delimiter, so it ends when the token after the last path segment is
+// not `::`; that terminating token is pushed back (the cursor steps back one) and
+// re-read as the start of the next declaration. Every `::`-separated identifier is
+// emitted as a UPATH element; the host takes the last as the imported name and the
+// rest as the module path. The `external` modifier, a `::*` wildcard, and a
+// parenthesised native signature are later increments.
+//
 // Input. The host (or, in the test harness, a throwaway adapter that maps the
 // reference tokenizer's output) places the token stream in the `shared data`
 // arrays `toks.kinds`/`toks.vals` with the token count in `toks.len`, then drives
@@ -69,6 +78,8 @@
 //   kind 16 CONST  the `const` visibility modifier on a data block
 //   kind 17 EQ     `=`; opens a const data field initializer
 //   kind 18 RBRACK `]`; closes an array type or const initializer (depth tracking)
+//   kind 19 USE    the `use` keyword; opens a native import declaration
+//   kind 20 PATHSEP `::`; separates the segments of a `use` path
 // The `;` of an array type carries no state and arrives as OTHER (kind 4).
 //
 // Declaration record wire (increment 4). Each element is one Word, `dkind + val*16`:
@@ -80,14 +91,18 @@
 //   dkind 7        RETTYPE; the return type name
 //   dkind 8        ASIZE; upgrades the type just emitted to an array of this length
 //   dkind 9        DSTART; a data block; val = name*4 + visibility (0 shared, 1 private, 2 const)
+//   dkind 10       USTART; a `use` native import declaration begins
+//   dkind 11       UPATH; one `::`-separated path segment of a use; val = its name id
 //   dkind 15       DONE; the token stream is exhausted, no further declarations
 // A function declaration is START, then for each value parameter a PARAM followed by
 // its PTYPE, then a RETTYPE, then END. A data block declaration is DSTART, then for
 // each field a PARAM followed by its PTYPE, then END; it has no RETTYPE. A const data
-// field's `= initializer` value is skipped and emits nothing. A PTYPE or RETTYPE
-// whose type is an array is immediately followed by an ASIZE carrying the array
-// length. The remaining nested type structure, the parsed body handed to codegen, and
-// the const field initializer values land in later increments.
+// field's `= initializer` value is skipped and emits nothing. A use import is USTART,
+// then one UPATH per path segment, then END; the last UPATH is the imported name and
+// the rest are the module path. A PTYPE or RETTYPE whose type is an array is
+// immediately followed by an ASIZE carrying the array length. The remaining nested
+// type structure, the parsed body handed to codegen, the const field initializer
+// values, and the use signature/wildcard/external forms land in later increments.
 //
 // The self-hosted compiler is a full-width host tool. Its record encoding does
 // arithmetic (`val*16`) that overflows a narrow word, so it declares a 32-bit
@@ -108,7 +123,9 @@ shared data toks {
 // emit END). Modes 4 through 7 handle a data block: 4 expect the `data` keyword after
 // a visibility modifier, 5 expect the data name (and emit DSTART), 6 expect the
 // opening `{`, 7 scan the field list emitting PARAM/PTYPE/ASIZE (and emit END on the
-// closing `}`). `dvis` is the data-block visibility (0 shared, 1 private, 2 const).
+// closing `}`). Mode 8 scans a `use` path, emitting one UPATH per segment and ending
+// (END) when a non-`::` token follows, which is pushed back for the next declaration.
+// `dvis` is the data-block visibility (0 shared, 1 private, 2 const).
 // `init` is armed while skipping a const field's initializer, with `idepth` the
 // `()`/`[]`/`{}` nesting depth of that skip. `dkind`
 // is the function category (1 fn, 2 yield, 3 loop). `pdepth` is the
@@ -139,8 +156,15 @@ private data ps {
 
 loop main(resume: Word) -> Word {
     if ps.cursor >= toks.len {
-        // The stream is exhausted; report DONE (dkind 15) so the host stops.
-        yield 15
+        // The stream is exhausted. A `use` declaration has no closing delimiter, so
+        // one running to end-of-input is closed here before DONE; otherwise report
+        // DONE (dkind 15) so the host stops.
+        if ps.mode == 8 {
+            ps.mode = 0;
+            yield 5
+        } else {
+            yield 15
+        }
     } else {
         let k = toks.kinds[ps.cursor];
         let v = toks.vals[ps.cursor];
@@ -170,6 +194,11 @@ loop main(resume: Word) -> Word {
                 ps.mode = 5;
                 yield 0
             } else {
+            if k == 19 {
+                // `use`; a native import declaration. Emit USTART and scan the path.
+                ps.mode = 8;
+                yield 10
+            } else {
                 if k == 5 {
                     ps.dkind = 2;
                 } else {
@@ -180,7 +209,7 @@ loop main(resume: Word) -> Word {
                 } }
                 ps.mode = 1;
                 yield 0
-            } } } }
+            } } } } }
         } else {
         if ps.mode == 1 {
             // The declaration name (kind 1 ident); emit START and begin the
@@ -348,6 +377,7 @@ loop main(resume: Word) -> Word {
             }
             yield 0
         } else {
+        if ps.mode == 7 {
             if ps.init == 1 {
                 // Skipping a const field initializer, depth-aware: the top-level `,`
                 // ends the field and the top-level `}` ends the block, while `()`,
@@ -452,6 +482,20 @@ loop main(resume: Word) -> Word {
                     yield 0
                 } } } } } } }
             }
+        } else {
+            // Use path scan: emit a UPATH per `::`-separated segment. A non-`::` token
+            // ends the declaration; push it back so it opens the next declaration.
+            if k == 1 {
+                yield 11 + v * 16
+            } else {
+            if k == 20 {
+                yield 0
+            } else {
+                ps.cursor = ps.cursor - 1;
+                ps.mode = 0;
+                yield 5
+            } }
+        }
         } } } }
         } } }
     }
