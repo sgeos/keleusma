@@ -1,9 +1,10 @@
 // compiler/kel/body.kel — the body-expression parser, a sub-component of Stage 2.
 //
-// Increment 2: an expression body over integer literals, parameter references, and
-// the binary arithmetic and comparison operators, parsed by operator precedence. Real
-// Keleusma code that compiles and verifies on the current runtime. See
-// docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md (roadmap Step 2).
+// Increment 3: an expression body over integer literals, parameter references, the
+// binary arithmetic and comparison operators, and parenthesised grouping, parsed by
+// operator precedence. Real Keleusma code that compiles and verifies on the current
+// runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md
+// (roadmap Step 2).
 //
 // Model. Stage 2's declaration parser (parser.kel) reads a function's signature and
 // brace-matches its body. This companion loop reads that body's tokens and produces
@@ -29,8 +30,11 @@
 // 5 Mod, 6 Eq, 7 NotEq, 8 Lt, 9 Gt, 10 LtEq, 11 GtEq. Precedence binds multiplicative
 // (Mul/Div/Mod) tighter than additive (Add/Sub) tighter than comparison; every
 // operator here is left-associative, so a pending operator pops a stacked operator of
-// equal or higher precedence. Parentheses, the boolean and bitwise operators, and the
-// unary operators are later increments.
+// equal or higher precedence. A parenthesised subexpression pushes a marker (operator
+// code 15, precedence 0, below every real operator) that no precedence comparison
+// ever pops; the closing `)` flushes the operators stacked above the marker and then
+// discards it. The boolean and bitwise operators and the unary operators are later
+// increments.
 //
 // Input. The host places the body's token stream in `src.kinds`/`src.vals` with the
 // count in `src.len`, and the function's parameter names (interned ids, slot = index)
@@ -40,6 +44,8 @@
 //   kind 2 LBRACE  `{`; opens the body
 //   kind 3 RBRACE  `}`; closes the body
 //   kind 12 INT    an integer literal; value = the integer
+//   kind 7 LPAREN  `(`; opens a parenthesised subexpression
+//   kind 8 RPAREN  `)`; closes a parenthesised subexpression
 //   kind 21 PLUS   kind 22 MINUS  kind 23 STAR   kind 24 SLASH  kind 25 PERCENT
 //   kind 26 EQEQ   kind 27 NOTEQ  kind 28 LT     kind 29 GT     kind 30 LTEQ  kind 31 GTEQ
 // Any other token is ignored this increment.
@@ -71,7 +77,8 @@ shared data src {
 // parameter resolution; `done` latches once the body is complete. The shunting-yard
 // carries an operator-code stack `opstack`/`opsp`; `pending_op`/`pending_prec` hold a
 // just-read operator while `resolving` pops the higher- or equal-precedence operators
-// ahead of pushing it; `draining` flushes the remaining operators at end of body.
+// ahead of pushing it; `draining` flushes the remaining operators at end of body;
+// `closing` flushes the operators above a parenthesis marker at a `)`.
 private data bs {
     cursor: Word,
     started: Word,
@@ -83,10 +90,15 @@ private data bs {
     pending_prec: Word,
     resolving: Word,
     draining: Word,
+    closing: Word,
 }
 
-// The precedence of an operator code: multiplicative 3, additive 2, comparison 1.
+// The precedence of an operator code: multiplicative 3, additive 2, comparison 1, and
+// the parenthesis marker (code 15) 0, so no real operator ever pops across it.
 fn prec_of(op: Word) -> Word {
+    if op == 15 {
+        0
+    } else {
     if op == 2 {
         3
     } else {
@@ -103,7 +115,7 @@ fn prec_of(op: Word) -> Word {
         2
     } else {
         1
-    } } } } }
+    } } } } } }
 }
 
 // The operator code for a token kind, or 0 when the token is not a binary operator.
@@ -164,6 +176,24 @@ loop main(resume: Word) -> Word {
             yield 0
         }
     } else {
+    if bs.closing == 1 {
+        // A `)`: flush the operators stacked above the parenthesis marker, one per
+        // iteration, then discard the marker.
+        if bs.opsp > 0 {
+            let top = bs.opstack[bs.opsp - 1];
+            if top == 15 {
+                bs.opsp = bs.opsp - 1;
+                bs.closing = 0;
+                yield 0
+            } else {
+                bs.opsp = bs.opsp - 1;
+                yield 3 + top * 16
+            }
+        } else {
+            bs.closing = 0;
+            yield 0
+        }
+    } else {
     if bs.draining == 1 {
         // End of body: flush the remaining operators, then report DONE.
         if bs.opsp > 0 {
@@ -199,6 +229,18 @@ loop main(resume: Word) -> Word {
                 // An integer literal is a Literal node (kind 1).
                 yield 1 + v * 16
             } else {
+            if k == 7 {
+                // `(` pushes a parenthesis marker (code 15) that blocks precedence
+                // popping until its matching `)`.
+                bs.opstack[bs.opsp] = 15;
+                bs.opsp = bs.opsp + 1;
+                yield 0
+            } else {
+            if k == 8 {
+                // `)` flushes the operators above the marker, then removes it.
+                bs.closing = 1;
+                yield 0
+            } else {
             if k == 1 {
                 // An identifier is a parameter reference, a Local node (kind 2).
                 // Resolve the interned name to its parameter slot by a bounded scan.
@@ -221,7 +263,7 @@ loop main(resume: Word) -> Word {
                 } else {
                     yield 0
                 }
-            } } }
+            } } } } }
         }
-    } } } }
+    } } } } }
 }

@@ -1,7 +1,7 @@
-//! Body-expression parser (`compiler/kel/body.kel`), increment 2: an expression body
-//! over integer literals, parameter references, and the binary arithmetic and
-//! comparison operators, lowered by operator precedence to the abstract-syntax node
-//! forest the codegen stage consumes.
+//! Body-expression parser (`compiler/kel/body.kel`), increment 3: an expression body
+//! over integer literals, parameter references, the binary arithmetic and comparison
+//! operators, and parenthesised grouping, lowered by operator precedence to the
+//! abstract-syntax node forest the codegen stage consumes.
 //!
 //! A throwaway adapter tokenises a function, feeds the body's tokens (from the opening
 //! `{`) and the function's parameter-name table to the `body.kel` `loop`, and decodes
@@ -83,6 +83,8 @@ fn run_body(func_src: &str) -> (Vec<Node>, i64) {
             TokenKind::LowerIdent(s) | TokenKind::UpperIdent(s) => (1, intern(s)),
             TokenKind::LBrace => (2, 0),
             TokenKind::RBrace => (3, 0),
+            TokenKind::LParen => (7, 0),
+            TokenKind::RParen => (8, 0),
             TokenKind::IntLit(n) => (12, *n),
             TokenKind::Plus => (21, 0),
             TokenKind::Minus => (22, 0),
@@ -401,4 +403,58 @@ fn comparison_binds_loosest() {
 fn a_mixed_precedence_expression_matches_the_reference() {
     let src = "fn f(a: Word, b: Word) -> Word { a * 2 + b / 3 - 1 }";
     assert_eq!(run_body(src), reference_body(src));
+}
+
+// Parentheses override precedence: `(a + b) * c` parses as `(a + b) * c`, so the root
+// is the Mul and its left child is the Add.
+#[test]
+fn parentheses_override_precedence() {
+    let src = "fn f(a: Word, b: Word, c: Word) -> Word { (a + b) * c }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let mul = nodes[root as usize];
+    assert_eq!(mul.arg, 2); // Mul
+    let add = nodes[mul.lhs as usize];
+    assert_eq!(add.arg, 1); // Add
+}
+
+// A parenthesised group on the right of a tighter operator: `a * (b + c)`.
+#[test]
+fn parentheses_on_the_right_group_the_addition() {
+    let src = "fn f(a: Word, b: Word, c: Word) -> Word { a * (b + c) }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let mul = nodes[root as usize];
+    assert_eq!(mul.arg, 2); // Mul
+    let add = nodes[mul.rhs as usize];
+    assert_eq!(add.arg, 1); // Add
+}
+
+// Nested and redundant parentheses collapse to the inner expression.
+#[test]
+fn nested_parentheses_collapse() {
+    let src = "fn f(x: Word) -> Word { ((x)) }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _) = run_body(src);
+    assert_eq!(
+        nodes,
+        vec![Node {
+            kind: 2,
+            arg: 0,
+            lhs: 0,
+            rhs: 0
+        }]
+    );
+}
+
+// Two parenthesised groups combine under a single operator: `(a + b) * (c - d)`.
+#[test]
+fn two_parenthesised_groups_combine() {
+    let src = "fn f(a: Word, b: Word, c: Word, d: Word) -> Word { (a + b) * (c - d) }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let mul = nodes[root as usize];
+    assert_eq!(mul.arg, 2); // Mul
+    assert_eq!(nodes[mul.lhs as usize].arg, 1); // Add
+    assert_eq!(nodes[mul.rhs as usize].arg, 3); // Sub
 }
