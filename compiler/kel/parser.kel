@@ -1,8 +1,8 @@
 // compiler/kel/parser.kel — Stage 2 of the self-hosted compiler.
 //
-// Increment 1: top-level function-declaration recognition. Real Keleusma code that
-// compiles and verifies on the current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md
-// and compiler/MILESTONES.md (roadmap Step 2).
+// Increment 2: the top-level declaration header. Real Keleusma code that compiles
+// and verifies on the current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and
+// compiler/MILESTONES.md (roadmap Step 2).
 //
 // Model. Keleusma forbids unbounded inner loops in `fn` and `yield`, so the one
 // top-level `loop` IS the scan over the token stream: one token is consumed per
@@ -13,29 +13,41 @@
 // the lexer and codegen stages use. The unit of work yielded to the host is a
 // single top-level declaration, never a whole-program abstract syntax tree.
 //
+// Increment 1 recognised the declaration boundary and name. Increment 2 reads the
+// declaration header: the function category (from the `fn`/`yield`/`loop` keyword)
+// and the value-parameter count. The count is the number of `:` type annotations
+// inside the value-parameter parentheses; type-parameter and trait-bound colons sit
+// before the parentheses (parenthesis depth zero) and are not counted, and Keleusma
+// types carry no `:`, so the count is exact. The parameters' names and types, the
+// return type, the guard, and the body are still skipped, not parsed.
+//
 // Input. The host (or, in the test harness, a throwaway adapter that maps the
 // reference tokenizer's output) places the token stream in the `shared data`
 // arrays `toks.kinds`/`toks.vals` with the token count in `toks.len`, then drives
 // the loop with resume. Each token is a (kind, value) pair:
-//   kind 0 FN      the `fn` keyword; starts a declaration
+//   kind 0 FN      the `fn` keyword; starts an atomic declaration
 //   kind 1 IDENT   an identifier; value = the interned name id
 //   kind 2 LBRACE  `{`
 //   kind 3 RBRACE  `}`
-//   kind 4 OTHER   any other token (parameters, return type, body interior); the
-//                  brace-matching skip ignores it this increment
+//   kind 4 OTHER   any other token; ignored except structurally
+//   kind 5 YIELD   the `yield` keyword; starts a non-atomic declaration
+//   kind 6 LOOP    the `loop` keyword; starts a productive-divergent declaration
+//   kind 7 LPAREN  `(`
+//   kind 8 RPAREN  `)`
+//   kind 9 COLON   `:`
 //
-// Declaration wire (increment 1). Each completed declaration is one Word,
-// `dkind + name*16`:
+// Declaration wire (increment 2). Each completed declaration is one Word,
+// `dkind + pcount*16 + name*1024`:
 //   dkind 0        PENDING; no declaration completed this iteration; host skips it
-//   dkind 1        a function declaration; the high bits carry its interned name id
+//   dkind 1/2/3    a function of category fn / yield / loop; `pcount` (bits 4-9) is
+//                  its value-parameter count and the high bits carry the name id
 //   dkind 15       DONE; the token stream is exhausted, no further declarations
-// The richer `Declaration` shapes in prelude.kel (parameters, return type, the
-// parsed body handed to codegen) land in later increments once the body is parsed
-// rather than brace-skipped. This increment recognises the declaration boundary and
-// kind, the parser's analogue of the lexer's increment-1 token boundary and kind.
+// The richer `Declaration` shapes in prelude.kel (each parameter's name and type,
+// the return type, the guard, and the parsed body handed to codegen) land in later
+// increments once the signature and body are parsed rather than skipped.
 //
-// The self-hosted compiler is a full-width host tool. Its name encoding does
-// arithmetic (`name*16`) that overflows a narrow word, so it declares a 32-bit
+// The self-hosted compiler is a full-width host tool. Its header encoding does
+// arithmetic (`name*1024`) that overflows a narrow word, so it declares a 32-bit
 // floor; compiling it for a narrower target is refused rather than miscompiled.
 require word >= 32;
 
@@ -47,18 +59,21 @@ shared data toks {
     vals: [Word; 2048],
 }
 
-// The parser's cross-iteration state. `mode` is the parse phase: 0 expect the `fn`
-// keyword that starts a declaration, 1 expect the declaration name, 2 skip the
-// parameters, return type, and body by brace-matching. `dname` is the current
-// declaration's interned name id. `depth` is the brace nesting depth and `seen`
-// records whether the body's opening brace has been reached, so the declaration
-// ends at the `}` that returns the depth to zero.
+// The parser's cross-iteration state. `mode` is the parse phase: 0 expect the
+// category keyword, 1 expect the declaration name, 2 scan the signature counting
+// value parameters, 3 skip the body by brace-matching. `dkind` is the category
+// (1 fn, 2 yield, 3 loop), `dname` the interned name id, `pcount` the value-
+// parameter count. `pdepth` is the parenthesis depth in the signature scan (a `:`
+// counts only inside the value parentheses); `depth` is the brace depth in the body
+// skip, so the declaration ends at the `}` that returns it to zero.
 private data ps {
     cursor: Word,
     mode: Word,
+    dkind: Word,
     dname: Word,
+    pcount: Word,
+    pdepth: Word,
     depth: Word,
-    seen: Word,
 }
 
 loop main(resume: Word) -> Word {
@@ -70,42 +85,72 @@ loop main(resume: Word) -> Word {
         let v = toks.vals[ps.cursor];
         ps.cursor = ps.cursor + 1;
         if ps.mode == 0 {
-            // Expecting the `fn` keyword (kind 0) that opens a declaration.
+            // The category keyword: `fn` (kind 0), `yield` (5), or `loop` (6).
+            if k == 5 {
+                ps.dkind = 2;
+            } else {
+            if k == 6 {
+                ps.dkind = 3;
+            } else {
+                ps.dkind = 1;
+            } }
             ps.mode = 1;
             yield 0
         } else {
         if ps.mode == 1 {
-            // Expecting the declaration name (kind 1 ident); record it and begin
-            // the brace-matching skip of the parameters, return type, and body.
+            // The declaration name (kind 1 ident); begin the signature scan.
             ps.dname = v;
+            ps.pcount = 0;
+            ps.pdepth = 0;
             ps.mode = 2;
-            ps.depth = 0;
-            ps.seen = 0;
             yield 0
         } else {
-            // Skip mode: track brace depth; the declaration ends at the `}` that
-            // returns the depth to zero after the body's `{` was seen.
+        if ps.mode == 2 {
+            // Signature: count a `:` inside the value parentheses as one parameter;
+            // the first `{` at parenthesis depth zero opens the body.
+            if k == 7 {
+                ps.pdepth = ps.pdepth + 1;
+                yield 0
+            } else {
+            if k == 8 {
+                ps.pdepth = ps.pdepth - 1;
+                yield 0
+            } else {
+            if k == 9 {
+                if ps.pdepth >= 1 {
+                    ps.pcount = ps.pcount + 1;
+                }
+                yield 0
+            } else {
+            if k == 2 {
+                if ps.pdepth == 0 {
+                    ps.depth = 1;
+                    ps.mode = 3;
+                }
+                yield 0
+            } else {
+                yield 0
+            } } } }
+        } else {
+            // Body skip: brace-match to the `}` that returns the depth to zero.
             if k == 2 {
                 ps.depth = ps.depth + 1;
-                ps.seen = 1;
                 yield 0
             } else {
             if k == 3 {
                 ps.depth = ps.depth - 1;
                 if ps.depth == 0 {
-                    if ps.seen == 1 {
-                        let name = ps.dname;
-                        ps.mode = 0;
-                        yield 1 + name * 16
-                    } else {
-                        yield 0
-                    }
+                    let kind = ps.dkind;
+                    let pc = ps.pcount;
+                    let name = ps.dname;
+                    ps.mode = 0;
+                    yield kind + pc * 16 + name * 1024
                 } else {
                     yield 0
                 }
             } else {
                 yield 0
             } }
-        } }
+        } } }
     }
 }
