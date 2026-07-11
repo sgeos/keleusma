@@ -1,9 +1,10 @@
 // compiler/kel/body.kel — the body-expression parser, a sub-component of Stage 2.
 //
-// Increment 4: an expression body over integer literals, parameter references, the
-// binary arithmetic and comparison operators, parenthesised grouping, and the unary
-// prefix operators `-` (negation) and `not`, parsed by operator precedence. Real
-// Keleusma code that compiles and verifies on the current runtime. See
+// Increment 5: an expression body over integer literals, parameter references, the
+// binary arithmetic and comparison operators, the bitwise (`band`/`bor`/`bxor`) and
+// short-circuit boolean (`andalso`/`orelse`) operators, parenthesised grouping, and
+// the unary prefix operators `-` (negation) and `not`, parsed by operator precedence.
+// Real Keleusma code that compiles and verifies on the current runtime. See
 // docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md (roadmap Step 2).
 //
 // Model. Stage 2's declaration parser (parser.kel) reads a function's signature and
@@ -59,6 +60,7 @@
 //   kind 21 PLUS   kind 22 MINUS  kind 23 STAR   kind 24 SLASH  kind 25 PERCENT
 //   kind 26 EQEQ   kind 27 NOTEQ  kind 28 LT     kind 29 GT     kind 30 LTEQ  kind 31 GTEQ
 //   kind 32 NOT    the `not` prefix operator
+//   kind 33 BAND   kind 34 BOR    kind 35 BXOR   kind 36 ANDALSO  kind 37 ORELSE
 // Any other token is ignored this increment.
 //
 // Node record wire. Each element is one Word, `kind + arg*16`:
@@ -67,6 +69,8 @@
 //   kind 2         Local; arg = the parameter frame slot
 //   kind 3         BinOp; arg = the operator code; host pops two children
 //   kind 6         Not; host pops one child into `lhs`
+//   kind 8         Andalso; host pops two children
+//   kind 9         Orelse; host pops two children
 //   kind 10        Neg; host pops one child into `lhs`
 //   kind 15        DONE; the body is complete, its root is the remaining stack node
 // The remaining interior node kinds (If, LetIn, Call, and the rest) and the statement
@@ -108,40 +112,59 @@ private data bs {
     expect_operand: Word,
 }
 
-// The precedence of an operator code: unary (16 Neg, 17 Not) 4, multiplicative 3,
-// additive 2, comparison 1, and the parenthesis marker (code 15) 0, so no real
-// operator ever pops across it.
+// The precedence of an operator code, tightest to loosest: unary (16 Neg, 17 Not) 9,
+// multiplicative (2 Mul, 4 Div, 5 Mod) 8, additive (1 Add, 3 Sub) 7, bitwise-and
+// (12 Band) 6, bitwise-xor (14 Bxor) 5, bitwise-or (13 Bor) 4, comparison (6..11) 3,
+// short-circuit-and (18 Andalso) 2, short-circuit-or (19 Orelse) 1, and the
+// parenthesis marker (15) 0, so no real operator ever pops across it. The bitwise and
+// logical orderings match the reference (`band > bxor > bor`, `andalso > orelse`).
 fn prec_of(op: Word) -> Word {
     if op == 16 {
-        4
+        9
     } else {
     if op == 17 {
-        4
+        9
     } else {
     if op == 15 {
         0
     } else {
     if op == 2 {
-        3
+        8
     } else {
     if op == 4 {
-        3
+        8
     } else {
     if op == 5 {
-        3
+        8
     } else {
     if op == 1 {
-        2
+        7
     } else {
     if op == 3 {
+        7
+    } else {
+    if op == 12 {
+        6
+    } else {
+    if op == 14 {
+        5
+    } else {
+    if op == 13 {
+        4
+    } else {
+    if op == 18 {
         2
     } else {
+    if op == 19 {
         1
-    } } } } } } } }
+    } else {
+        3
+    } } } } } } } } } } } } }
 }
 
 // The record word for a stacked operator: a unary Neg (16) or Not (17) emits its node
-// kind (10, 6) directly; every other code is a binary operator emitted as a BinOp.
+// kind (10, 6) directly, and the short-circuit Andalso (18) and Orelse (19) emit their
+// own node kinds (8, 9); every other code is a binary operator emitted as a BinOp.
 fn emit_op(op: Word) -> Word {
     if op == 16 {
         10
@@ -149,11 +172,19 @@ fn emit_op(op: Word) -> Word {
     if op == 17 {
         6
     } else {
+    if op == 18 {
+        8
+    } else {
+    if op == 19 {
+        9
+    } else {
         3 + op * 16
-    } }
+    } } } }
 }
 
 // The operator code for a token kind, or 0 when the token is not a binary operator.
+// Codes 1..11 are arithmetic and comparison, 12..14 the bitwise operators, and 18..19
+// the short-circuit booleans (whose codes emit their own node kinds).
 fn opcode_of(k: Word) -> Word {
     if k == 21 {
         1
@@ -188,8 +219,23 @@ fn opcode_of(k: Word) -> Word {
     if k == 31 {
         11
     } else {
+    if k == 33 {
+        12
+    } else {
+    if k == 34 {
+        13
+    } else {
+    if k == 35 {
+        14
+    } else {
+    if k == 36 {
+        18
+    } else {
+    if k == 37 {
+        19
+    } else {
         0
-    } } } } } } } } } } }
+    } } } } } } } } } } } } } } } }
 }
 
 loop main(resume: Word) -> Word {
