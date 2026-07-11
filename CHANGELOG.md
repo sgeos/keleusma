@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The category-call discipline is now enforced.** GRAMMAR.md §6.1–6.3 specify that
+  an atomic total (`fn`) may call only atomic totals, a non-atomic total (`yield`)
+  may call any total (`fn` or `yield`) but not a `loop`, and a productive divergent
+  (`loop`) may call anything, but the type checker did not enforce the rule. Because
+  the VM propagates a `Yield` executed inside a callee up through the call stack as a
+  coroutine suspension, an atomic `fn` that called a `yield` function would
+  transitively yield, silently breaking atomicity. The type checker now rejects a
+  call whose callee category the caller may not invoke, with a diagnostic naming both
+  categories. Natives are treated as atomic totals (a host function returns a value
+  and cannot yield). This may reject programs that previously compiled but violated
+  the documented discipline. No wire-format or `BYTECODE_VERSION` change.
+
 ## [0.2.2] - 2026-07-09
 
 A build-fix and tooling release on the self-hosting-groundwork line. It repairs

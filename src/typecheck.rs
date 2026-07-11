@@ -1133,6 +1133,13 @@ struct FnSig {
     /// the function body whose value's positive labels intersect
     /// this set is rejected.
     return_negative_labels: BTreeSet<String>,
+    /// Function category (`fn`, `yield`, `loop`). Consulted at each
+    /// call site to enforce the category-call discipline: an atomic
+    /// total (`fn`) may call only atomic totals, a non-atomic total
+    /// (`yield`) may call any total (`fn` or `yield`), and a
+    /// productive divergent (`loop`) may call anything. This keeps a
+    /// `fn` from transitively yielding through a called `yield`.
+    category: crate::ast::FunctionCategory,
 }
 
 /// A type-check error with source location.
@@ -1269,6 +1276,10 @@ struct Ctx {
     /// types is recorded in `fn_type_conflicts` and omitted, preserving the
     /// accurate-or-None guarantee.
     current_fn_types: BTreeMap<crate::token::Span, TypeExpr>,
+    /// Category of the function currently being checked. Seeded per
+    /// function by [`check_function`] and consulted at each call site to
+    /// enforce the category-call discipline (see [`FnSig::category`]).
+    current_category: crate::ast::FunctionCategory,
     /// Spans in the current function that received conflicting concrete types
     /// and are therefore excluded from the authoritative table.
     fn_type_conflicts: BTreeSet<crate::token::Span>,
@@ -1306,6 +1317,7 @@ impl Ctx {
             fixed_default_frac_bits: DEFAULT_FIXED_FRAC_BITS,
             record_types: false,
             current_fn_types: BTreeMap::new(),
+            current_category: crate::ast::FunctionCategory::Fn,
             fn_type_conflicts: BTreeSet::new(),
             fn_tables: BTreeMap::new(),
         }
@@ -1955,6 +1967,10 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
                 ctx.native_signatures.insert(
                     full.clone(),
                     FnSig {
+                        // Natives are host functions that return a value; they
+                        // cannot yield, so they are atomic totals for the
+                        // category-call discipline.
+                        category: crate::ast::FunctionCategory::Fn,
                         type_params: Vec::new(),
                         const_params: Vec::new(),
                         type_param_vars: Vec::new(),
@@ -2022,6 +2038,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
         ctx.functions.insert(
             func.name.clone(),
             FnSig {
+                category: func.category,
                 type_params: tp_names,
                 const_params: func.const_params.iter().map(|c| c.name.clone()).collect(),
                 type_param_vars: tp_vars,
@@ -2215,6 +2232,7 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
             ctx.functions.insert(
                 mangled,
                 FnSig {
+                    category: method.category,
                     type_params: tp_names,
                     const_params: const_param_names,
                     type_param_vars: tp_vars,
@@ -2392,6 +2410,34 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
     Ok(())
 }
 
+/// The category-call discipline: which callee categories a caller of the
+/// given category may invoke. A productive divergent (`loop`) may call
+/// anything; a non-atomic total (`yield`) may call any total (`fn` or
+/// `yield`) but not a `loop`; an atomic total (`fn`) may call only atomic
+/// totals. This keeps a `fn` from transitively yielding through a `yield`
+/// callee, which the VM would propagate as a coroutine suspension.
+fn category_can_call(
+    caller: crate::ast::FunctionCategory,
+    callee: crate::ast::FunctionCategory,
+) -> bool {
+    use crate::ast::FunctionCategory::{Fn, Loop, Yield};
+    match caller {
+        Loop => true,
+        Yield => !matches!(callee, Loop),
+        Fn => matches!(callee, Fn),
+    }
+}
+
+/// A human-readable noun for a function category, for diagnostics.
+fn category_noun(category: crate::ast::FunctionCategory) -> &'static str {
+    use crate::ast::FunctionCategory::{Fn, Loop, Yield};
+    match category {
+        Fn => "an atomic total (`fn`) function",
+        Yield => "a non-atomic total (`yield`) function",
+        Loop => "a productive divergent (`loop`) function",
+    }
+}
+
 fn check_function(ctx: &mut Ctx, func: &mut FunctionDef) -> Result<(), TypeError> {
     // The `ephemeral` modifier is only meaningful on the entry
     // point. The verifier's ephemerality proof is a whole-module
@@ -2407,6 +2453,10 @@ fn check_function(ctx: &mut Ctx, func: &mut FunctionDef) -> Result<(), TypeError
             func.span,
         ));
     }
+    // Seed the caller category for the category-call discipline. Functions
+    // are not nested in the surface, so a plain assignment per function is
+    // sufficient; there is no caller context to save and restore.
+    ctx.current_category = func.category;
     // Snapshot the substitution at function entry so the per-function
     // resolution does not pollute later functions with this function's
     // local type variables. The vargen counter continues monotonically
@@ -4362,6 +4412,23 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                     ));
                 }
             };
+            // Category-call discipline. An atomic total (`fn`) may call only
+            // atomic totals; a non-atomic total (`yield`) may call any total
+            // (`fn` or `yield`) but not a `loop`; a productive divergent
+            // (`loop`) may call anything. This prevents a `fn` from
+            // transitively yielding through a called `yield`, which the VM
+            // would otherwise propagate as a suspension.
+            if !category_can_call(ctx.current_category, sig.category) {
+                return Err(TypeError::new(
+                    format!(
+                        "{} may not call {} `{}`",
+                        category_noun(ctx.current_category),
+                        category_noun(sig.category),
+                        name
+                    ),
+                    *span,
+                ));
+            }
             if args.len() != sig.params.len() {
                 return Err(TypeError::new(
                     format!(
@@ -6874,6 +6941,60 @@ mod tests {
             check_src("fn double(x: Word) -> Word { x * 2 }\nfn main() -> Word { double(true) }")
                 .unwrap_err();
         assert!(err.message.contains("expects Word"));
+    }
+
+    #[test]
+    fn category_fn_may_not_call_yield() {
+        // Atomic total (`fn`) calling a non-atomic total (`yield`) is rejected;
+        // otherwise the `fn` would transitively yield through the callee, which
+        // the VM propagates as a suspension, breaking atomicity.
+        let err = check_src(
+            "yield g() -> Word { yield 7 }\nfn f() -> Word { g() }\nfn main() -> Word { f() }",
+        )
+        .unwrap_err();
+        assert!(err.message.contains("may not call"), "{}", err.message);
+        assert!(err.message.contains("atomic total"), "{}", err.message);
+    }
+
+    #[test]
+    fn category_yield_may_not_call_loop() {
+        // A non-atomic total (`yield`) may call any total, but not a productive
+        // divergent (`loop`), which is not total.
+        let err = check_src(
+            "loop g(r: Word) -> Word { yield 1 }\nyield h() -> Word { let x = g(0); yield x }\nfn main() -> Word { 0 }",
+        )
+        .unwrap_err();
+        assert!(err.message.contains("may not call"), "{}", err.message);
+        assert!(
+            err.message.contains("productive divergent"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn category_yield_may_call_fn_and_yield() {
+        check_src(
+            "fn a() -> Word { 1 }\nyield b() -> Word { yield 2 }\nyield h() -> Word { let x = a(); let y = b(); yield x + y }\nfn main() -> Word { 0 }",
+        )
+        .expect("yield may call fn and yield");
+    }
+
+    #[test]
+    fn category_loop_may_call_yield() {
+        // The delegation case: a `loop` may call a `yield`. (Whether the
+        // productivity verifier then accepts delegation as the sole yield is a
+        // separate, later step; here the loop also yields directly.)
+        check_src(
+            "yield g() -> Word { yield 7 }\nloop main(r: Word) -> Word { let x = g(); yield x }",
+        )
+        .expect("loop may call yield");
+    }
+
+    #[test]
+    fn category_fn_may_call_fn() {
+        check_src("fn g() -> Word { 7 }\nfn f() -> Word { g() }\nfn main() -> Word { f() }")
+            .expect("fn may call fn");
     }
 
     #[test]
