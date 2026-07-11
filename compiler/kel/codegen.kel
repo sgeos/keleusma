@@ -1,16 +1,18 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
-// Increment 20: the loop is a multiheaded function with guards. Keleusma supports
-// multiheaded functions with `when` guards in all three categories, including
-// `loop` (the guard follows the return type: `-> Word when cond`). So the phase
-// state machine is one `loop main` head per phase, selected by a guard on the
-// `data` state; the heads are tried top to bottom and the first satisfied guard
-// wins, which is the phase order. Each head yields directly, satisfying the Stream
-// block requirement, so no `match main_phase()` indirection is needed; the
-// per-phase work stays in the `fn` steps. Pure refactor: the conformance suite
-// confirms byte-identical output. Not yet covered: the data segment
-// (`GetData`/`SetData`, indexed access), `for` loops, and statement-form blocks,
-// the next and larger frontier. See compiler/MILESTONES.md and
+// Increment 21: the loop delegates its yield to a multiheaded `yield` function.
+// The phase state machine, previously the heads of `loop main`, is now the
+// multiheaded `yield emit_next`, one head per phase selected by a `when` guard on
+// the `data` state; each head yields directly, so every path through `emit_next`
+// yields. `loop main` is then just `emit_next(resume)`: it delegates its single
+// yield to `emit_next`, and the runtime propagates that yield up as the loop's
+// suspension. This is admissible because the productivity verifier now recognizes
+// delegation to an always-yielding callee (see `src/verify.rs`), which this file's
+// own structure exercises end to end. The yield contract (Word in, Word out)
+// matches across the call. Pure refactor: the conformance suite confirms
+// byte-identical output. Not yet covered: the data segment (`GetData`/`SetData`,
+// indexed access), `for` loops, and statement-form blocks, the next and larger
+// frontier. See compiler/MILESTONES.md and
 // docs/reference/INCREMENTAL_SELF_HOSTING.md.
 //
 // The self-hosted compiler is a full-width host tool; declare its word floor.
@@ -328,40 +330,50 @@ fn drain_header() -> Word {
     ast.param_count + st.let_count
 }
 
-// The loop is multiheaded: one head per phase, selected by a `when` guard. The
-// heads are tried top to bottom and the first satisfied guard wins, so the guard
-// order is the phase order. Each head yields directly (as the Stream block
-// requires) the result of its phase step; the seed, walk, and return steps return
+// The phase machine is a multiheaded `yield` function: one head per phase,
+// selected by a `when` guard. The heads are tried top to bottom and the first
+// satisfied guard wins, so the guard order is the phase order. Each head yields
+// directly the result of its phase step; the seed, walk, and return steps return
 // the PENDING 0. Guards read only `data` fields and comparisons, never call a
-// function, as the guard grammar requires.
-loop main(resume: Word) -> Word when st.started == 0 {
+// function, as the guard grammar requires. Because every path through this
+// function yields, it yields on every one of its paths.
+yield emit_next(resume: Word) -> Word when st.started == 0 {
     yield seed_step()
 }
 
-loop main(resume: Word) -> Word when st.sp > 0 {
+yield emit_next(resume: Word) -> Word when st.sp > 0 {
     yield walk_step()
 }
 
-loop main(resume: Word) -> Word when st.ret_done == 0 {
+yield emit_next(resume: Word) -> Word when st.ret_done == 0 {
     yield drain_return()
 }
 
-loop main(resume: Word) -> Word when st.emit_cursor < st.op_count {
+yield emit_next(resume: Word) -> Word when st.emit_cursor < st.op_count {
     yield drain_buffer()
 }
 
-loop main(resume: Word) -> Word when st.count_done == 0 {
+yield emit_next(resume: Word) -> Word when st.count_done == 0 {
     yield drain_count()
 }
 
-loop main(resume: Word) -> Word when st.pool_cursor < st.pool_count {
+yield emit_next(resume: Word) -> Word when st.pool_cursor < st.pool_count {
     yield drain_pool()
 }
 
-loop main(resume: Word) -> Word when st.header_done == 0 {
+yield emit_next(resume: Word) -> Word when st.header_done == 0 {
     yield drain_header()
 }
 
-loop main(resume: Word) -> Word {
+yield emit_next(resume: Word) -> Word {
     yield 0
+}
+
+// The loop delegates its single yield to `emit_next`. Because `emit_next` yields
+// on every path, the productivity obligation is satisfied by delegation, and the
+// runtime propagates the callee's yield up as the loop's suspension. The yield
+// contract (Word in, Word out) matches, so the yield transparently reaches the
+// host.
+loop main(resume: Word) -> Word {
+    emit_next(resume)
 }
