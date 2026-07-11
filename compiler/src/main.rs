@@ -69,7 +69,7 @@ fn status() {
         println!("  step {}: {name:<8} {path:<20} [{state}]", i + 1);
     }
     println!();
-    println!("status: porting backward, codegen first. Codegen increment 28, a");
+    println!("status: porting backward, codegen first. Codegen increment 29, a");
     println!("recursion-free work-stack walk (a `loop` that delegates its yield to a");
     println!("multiheaded guarded `yield` phase machine over per-kind subroutines)");
     println!("that compiles blocks of `let`, data-field assignments, and range");
@@ -81,7 +81,9 @@ fn status() {
     println!("indexed data-segment reads and writes, into an op buffer it streams with its own");
     println!("deduplicating constant pool and counted local-frame size, and lexer");
     println!("increment 1, a streaming tokenizer, both compile, verify, and run (see");
-    println!("tests/selfhost_codegen.rs and `lex <file>`). V0.3.0 ships when the");
+    println!("tests/selfhost_codegen.rs and `lex <file>`). Every one of the codegen");
+    println!("stage's 29 atomic functions now self-compiles byte-identically; only");
+    println!("its multiheaded `yield`/`loop` machinery remains. V0.3.0 ships when the");
     println!("bootstrap reaches a fixed point.");
 }
 

@@ -28,16 +28,18 @@ use keleusma::parser::parse;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 
 // Shared-data slot offsets, mirroring the `ast` block's field order in codegen.kel
-// (one slot per scalar, arrays contiguous). root=0, then the four length-64 node
-// arrays, then param_count.
+// (one slot per scalar, arrays contiguous). root=0, then the four length-512 node
+// arrays (`kinds`/`args`/`lhs`/`rhs`, sized for the stage's largest own function),
+// then the length-64 `call_args`/`for_parts`/`match_parts` side arrays, then
+// param_count.
 const KINDS: usize = 1;
-const ARGS: usize = 65;
-const LHS: usize = 129;
-const RHS: usize = 193;
-const CALL_ARGS: usize = 257;
-const FOR_PARTS: usize = 321;
-const MATCH_PARTS: usize = 385;
-const PARAM_COUNT: usize = 449;
+const ARGS: usize = 513;
+const LHS: usize = 1025;
+const RHS: usize = 1537;
+const CALL_ARGS: usize = 2049;
+const FOR_PARTS: usize = 2113;
+const MATCH_PARTS: usize = 2177;
+const PARAM_COUNT: usize = 2241;
 
 struct Node {
     kind: i64,
@@ -1093,10 +1095,17 @@ fn self_compile_codegen_atomic_functions() {
         let cd = const_data.clone();
         let result = catch_unwind(AssertUnwindSafe(|| {
             let body = build_body(&f.body, &f.params, cn, ds, cd);
-            if body.nodes.len() > 64 || body.for_parts.len() > 64 || body.call_args.len() > 64 {
+            if body.nodes.len() > 512
+                || body.for_parts.len() > 64
+                || body.call_args.len() > 64
+                || body.match_parts.len() > 64
+            {
                 return Err(format!(
-                    "exceeds the 64-slot adapter arrays ({} nodes)",
-                    body.nodes.len()
+                    "exceeds the adapter arrays ({} nodes, {} for_parts, {} call_args, {} match_parts)",
+                    body.nodes.len(),
+                    body.for_parts.len(),
+                    body.call_args.len(),
+                    body.match_parts.len()
                 ));
             }
             let (emitted, _pool, _lc) = run_codegen(&body, f.params.len());
