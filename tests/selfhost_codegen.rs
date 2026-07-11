@@ -11,9 +11,10 @@
 //! Keleusma stage walks it recursion-free, interns each literal into its own
 //! deduplicating constant pool, and emits the ops followed by the pool. The host
 //! builds the module from the stage's ops and pool, checks structural equality
-//! against the Rust compiler, and runs it. Increment 26 adds `const data` field
-//! reads, which inline to the field's literal value (a `Const`), so a `for` loop
-//! bounded by a `const data` field is statically bounded and runs.
+//! against the Rust compiler, and runs it. Increment 27 adds statement-form
+//! expressions: a bare call or a statement-form `if` (both `Stmt::Expr`) lowers to
+//! the expression ops then `PopN(1)`; an `if` without `else` synthesizes a Unit
+//! else so both branches produce a unit value.
 
 use keleusma::Arena;
 use keleusma::ast::{
@@ -197,14 +198,16 @@ fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &
             else_block,
             ..
         } => {
-            let else_block = else_block
-                .as_ref()
-                .expect("increment requires an else branch");
             // Node layout for an If (kind 4): arg = cond, lhs = then, rhs = else.
-            // Each branch is a full block (it may bind its own locals).
+            // Each branch is a full block (it may bind its own locals). A
+            // statement-form `if` without an `else` synthesizes a Unit else block,
+            // so both branches produce a unit value.
             let cond = flatten(condition, scope, next_slot, ctx);
             let t = flatten_block(then_block, scope, next_slot, ctx);
-            let el = flatten_block(else_block, scope, next_slot, ctx);
+            let el = match else_block {
+                Some(eb) => flatten_block(eb, scope, next_slot, ctx),
+                None => node(ctx, 20, 0, 0, 0),
+            };
             ctx.nodes.push(Node {
                 kind: 4,
                 arg: cond,
@@ -401,7 +404,13 @@ fn flatten_block(
                 // ForIn (kind 16): arg = for_parts entry start; lhs unused.
                 stmts.push((16, fp_start, 0));
             }
-            other => panic!("increment handles let/data-assign/for statements, got {other:?}"),
+            Stmt::Expr(expr) => {
+                // A bare expression statement (a call for effect or a
+                // statement-form `if`): ExprStmtIn (kind 21), lhs = expression.
+                let expr_node = flatten(expr, scope, next_slot, ctx);
+                stmts.push((21, 0, expr_node));
+            }
+            other => panic!("increment handles let/data-assign/for/expr statements, got {other:?}"),
         }
     }
     // A statement-only block (no tail expression) has the unit value, emitted as a
@@ -815,6 +824,24 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
             "const data cd { n: Word = 4 } private data d { s: Word } fn main() -> Word { for i in 0..cd.n { d.s = d.s + i; } d.s }",
             0,
             Int(6),
+        ),
+        // bare call statement (expression statement): its value is discarded.
+        (
+            "fn bump(x: Word) -> Word { x + 1 } fn main(v: Word) -> Word { bump(v); bump(v); v + 2 }",
+            40,
+            Int(42),
+        ),
+        // statement-form if without else, for effect.
+        (
+            "private data d { s: Word } fn main(v: Word) -> Word { if v > 0 { d.s = 42; } d.s }",
+            1,
+            Int(42),
+        ),
+        // statement-form if with else, for effect.
+        (
+            "private data d { s: Word } fn main(v: Word) -> Word { if v > 0 { d.s = 1; } else { d.s = 2; } d.s }",
+            0,
+            Int(2),
         ),
     ];
     for &(src, arg, expected) in cases {
