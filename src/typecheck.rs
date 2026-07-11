@@ -4526,45 +4526,90 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             span,
         } => {
             let left_ty = type_of_expr(ctx, left)?;
-            // A pipeline desugars to func(left, args...). For the
-            // checker we look up func by name and validate args+1.
+            // A pipeline desugars to a call. The piped value is inserted at the
+            // sole `_` placeholder if the argument list has one, otherwise it is
+            // prepended as the first argument. This mirrors the compiler's
+            // desugar (compiler.rs `Expr::Pipeline`), so the type check must
+            // account for the placeholder rather than always adding one argument.
             if let Some(sig) = ctx.functions.get(func).cloned() {
-                if sig.params.len() != args.len() + 1 {
+                let placeholder_count = args
+                    .iter()
+                    .filter(|a| matches!(a, Expr::Placeholder { .. }))
+                    .count();
+                if placeholder_count > 1 {
+                    return Err(TypeError::new(
+                        format!(
+                            "pipeline target `{}` has more than one `_` placeholder",
+                            func
+                        ),
+                        *span,
+                    ));
+                }
+                let effective_arity = if placeholder_count == 1 {
+                    args.len()
+                } else {
+                    args.len() + 1
+                };
+                if sig.params.len() != effective_arity {
                     return Err(TypeError::new(
                         format!(
                             "pipeline target `{}` expects {} arguments, got {}",
                             func,
                             sig.params.len(),
-                            args.len() + 1
+                            effective_arity
                         ),
-                        expr.span(),
+                        *span,
                     ));
                 }
-                if let Some(first_param) = sig.params.first()
-                    && !types_compatible(ctx, &left_ty, first_param)
-                {
-                    return Err(TypeError::new(
-                        format!(
-                            "pipeline left side has type {} but `{}` expects {}",
-                            left_ty.display(),
-                            func,
-                            first_param.display()
-                        ),
-                        expr.span(),
-                    ));
-                }
-                for (arg, param_ty) in args.iter_mut().zip(sig.params.iter().skip(1)) {
-                    let arg_ty = type_of_expr(ctx, arg)?;
-                    if !types_compatible(ctx, &arg_ty, param_ty) {
+                if placeholder_count == 1 {
+                    // Arguments map one-to-one to parameters; the placeholder
+                    // position takes the piped value's type, the rest their own.
+                    for (arg, param_ty) in args.iter_mut().zip(sig.params.iter()) {
+                        let arg_ty = if matches!(arg, Expr::Placeholder { .. }) {
+                            left_ty.clone()
+                        } else {
+                            type_of_expr(ctx, arg)?
+                        };
+                        if !types_compatible(ctx, &arg_ty, param_ty) {
+                            return Err(TypeError::new(
+                                format!(
+                                    "argument to `{}` expects {}, got {}",
+                                    func,
+                                    param_ty.display(),
+                                    arg_ty.display()
+                                ),
+                                arg.span(),
+                            ));
+                        }
+                    }
+                } else {
+                    // The piped value is the first parameter; the arguments follow.
+                    if let Some(first_param) = sig.params.first()
+                        && !types_compatible(ctx, &left_ty, first_param)
+                    {
                         return Err(TypeError::new(
                             format!(
-                                "argument to `{}` expects {}, got {}",
+                                "pipeline left side has type {} but `{}` expects {}",
+                                left_ty.display(),
                                 func,
-                                param_ty.display(),
-                                arg_ty.display()
+                                first_param.display()
                             ),
-                            arg.span(),
+                            *span,
                         ));
+                    }
+                    for (arg, param_ty) in args.iter_mut().zip(sig.params.iter().skip(1)) {
+                        let arg_ty = type_of_expr(ctx, arg)?;
+                        if !types_compatible(ctx, &arg_ty, param_ty) {
+                            return Err(TypeError::new(
+                                format!(
+                                    "argument to `{}` expects {}, got {}",
+                                    func,
+                                    param_ty.display(),
+                                    arg_ty.display()
+                                ),
+                                arg.span(),
+                            ));
+                        }
                     }
                 }
                 Ok(sig.return_type)
@@ -6995,6 +7040,30 @@ mod tests {
     fn category_fn_may_call_fn() {
         check_src("fn g() -> Word { 7 }\nfn f() -> Word { g() }\nfn main() -> Word { f() }")
             .expect("fn may call fn");
+    }
+
+    #[test]
+    fn pipeline_placeholder_fills_position() {
+        // The piped value fills the `_` placeholder rather than being prepended,
+        // so a two-parameter target with one explicit argument and one
+        // placeholder type-checks at the right arity.
+        check_src(
+            "fn sub(a: Word, b: Word) -> Word { a - b }\nfn main() -> Word { 5 |> sub(10, _) }",
+        )
+        .expect("placeholder pipeline type-checks");
+        check_src(
+            "fn sub(a: Word, b: Word) -> Word { a - b }\nfn main() -> Word { 5 |> sub(_, 10) }",
+        )
+        .expect("leading-placeholder pipeline type-checks");
+    }
+
+    #[test]
+    fn pipeline_two_placeholders_rejected() {
+        let err = check_src(
+            "fn sub(a: Word, b: Word) -> Word { a - b }\nfn main() -> Word { 5 |> sub(_, _) }",
+        )
+        .unwrap_err();
+        assert!(err.message.contains("placeholder"), "{}", err.message);
     }
 
     #[test]

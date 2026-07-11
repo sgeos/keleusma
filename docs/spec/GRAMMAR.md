@@ -327,7 +327,7 @@ value |> transform() |> filter(threshold) |> output();
 output(filter(transform(value), threshold));
 ````
 
-**Placeholder behavior**: When `_` appears in the argument list, the piped value is inserted at that position instead.
+**Placeholder behavior**: When `_` appears in the argument list, the piped value is inserted at that position instead. At most one `_` placeholder is permitted in a pipeline target; a second is ambiguous and rejected.
 
 ````
 value |> insert(collection, _);
@@ -336,7 +336,22 @@ value |> insert(collection, _);
 insert(collection, value);
 ````
 
-Only function calls are valid pipeline targets. The pipeline operator is left-associative with lower precedence than all other operators.
+**Pipeline into `match`**: A pipeline target may be a `match` block written without a scrutinee. The piped value becomes the match scrutinee.
+
+````
+value |> classify() |> match {
+  0 => "zero",
+  _ => "nonzero",
+};
+
+// Equivalent to:
+match classify(value) {
+  0 => "zero",
+  _ => "nonzero",
+}
+````
+
+A function call and a `match` block are the valid pipeline targets. The pipeline operator is left-associative with lower precedence than all other operators.
 
 ### Yield Expressions
 

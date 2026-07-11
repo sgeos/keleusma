@@ -1752,23 +1752,67 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parse a match arm block `{ pat [when guard] => expr, ... }`, assuming the
+    /// scrutinee has already been consumed. Returns the arms and the span of the
+    /// closing brace. Shared by the `match` expression and the `|> match` pipeline
+    /// target.
+    fn parse_match_arms(&mut self) -> Result<(Vec<MatchArm>, Span), ParseError> {
+        self.expect(&TokenKind::LBrace)?;
+        let mut arms = Vec::new();
+        while !self.at(&TokenKind::RBrace) {
+            let pattern = self.parse_pattern()?;
+            let guard = if self.eat(&TokenKind::When) {
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
+            self.expect(&TokenKind::FatArrow)?;
+            let expr = self.parse_expr()?;
+            let arm_span = merge_spans(pattern.span(), expr.span());
+            arms.push(MatchArm {
+                pattern,
+                guard,
+                expr,
+                span: arm_span,
+            });
+            self.eat(&TokenKind::Comma);
+        }
+        let end = self.expect(&TokenKind::RBrace)?;
+        Ok((arms, end))
+    }
+
     fn parse_pipeline_expr(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.parse_logical_expr()?;
 
         while self.eat(&TokenKind::Pipe) {
-            // Parse qualified function call after |>.
-            let (func, func_span) = self.parse_qualified_name()?;
-            self.expect(&TokenKind::LParen)?;
-            let args = self.parse_arg_list()?;
-            let end = self.expect(&TokenKind::RParen)?;
-            let span = merge_spans(left.span(), end);
-            let _ = func_span;
-            left = Expr::Pipeline {
-                left: Box::new(left),
-                func,
-                args,
-                span,
-            };
+            if self.at(&TokenKind::Match) {
+                // `left |> match { arms }` pipes the left value in as the match
+                // scrutinee. It desugars to `match left { arms }`, reusing the
+                // match expression, so the type checker and compiler need no
+                // pipeline-specific handling for this form.
+                self.pos += 1;
+                let (arms, end) = self.parse_match_arms()?;
+                let span = merge_spans(left.span(), end);
+                left = Expr::Match {
+                    scrutinee: Box::new(left),
+                    arms,
+                    span,
+                };
+            } else {
+                // Parse qualified function call after |>.
+                let (func, func_span) = self.parse_qualified_name()?;
+                self.expect(&TokenKind::LParen)?;
+                let args = self.parse_arg_list()?;
+                let end = self.expect(&TokenKind::RParen)?;
+                let span = merge_spans(left.span(), end);
+                let _ = func_span;
+                left = Expr::Pipeline {
+                    left: Box::new(left),
+                    func,
+                    args,
+                    span,
+                };
+            }
         }
 
         Ok(left)
@@ -2453,27 +2497,7 @@ impl<'a> Parser<'a> {
             TokenKind::Match => {
                 self.pos += 1;
                 let scrutinee = self.parse_expr()?;
-                self.expect(&TokenKind::LBrace)?;
-                let mut arms = Vec::new();
-                while !self.at(&TokenKind::RBrace) {
-                    let pattern = self.parse_pattern()?;
-                    let guard = if self.eat(&TokenKind::When) {
-                        Some(self.parse_expr()?)
-                    } else {
-                        None
-                    };
-                    self.expect(&TokenKind::FatArrow)?;
-                    let expr = self.parse_expr()?;
-                    let arm_span = merge_spans(pattern.span(), expr.span());
-                    arms.push(MatchArm {
-                        pattern,
-                        guard,
-                        expr,
-                        span: arm_span,
-                    });
-                    self.eat(&TokenKind::Comma);
-                }
-                let end = self.expect(&TokenKind::RBrace)?;
+                let (arms, end) = self.parse_match_arms()?;
                 Ok(Expr::Match {
                     scrutinee: Box::new(scrutinee),
                     arms,
@@ -3824,6 +3848,36 @@ mod tests {
                 assert!(matches!(args[1], Expr::Placeholder { .. }));
             }
             _ => panic!("expected Pipeline, got {:?}", expr),
+        }
+    }
+
+    #[test]
+    fn parse_pipe_into_match() {
+        // `x |> match { arms }` desugars to a match with `x` as the scrutinee.
+        let expr = parse_expr_str("x |> match { 1 => 10, _ => 0 }").unwrap();
+        match expr {
+            Expr::Match {
+                ref scrutinee,
+                ref arms,
+                ..
+            } => {
+                assert!(matches!(**scrutinee, Expr::Ident { .. }));
+                assert_eq!(arms.len(), 2);
+            }
+            _ => panic!("expected Match, got {:?}", expr),
+        }
+    }
+
+    #[test]
+    fn parse_pipe_chain_into_match() {
+        // A pipeline chain ending in a match: the match scrutinee is the whole
+        // upstream pipeline.
+        let expr = parse_expr_str("x |> f() |> match { 1 => 10, _ => 0 }").unwrap();
+        match expr {
+            Expr::Match { ref scrutinee, .. } => {
+                assert!(matches!(**scrutinee, Expr::Pipeline { .. }));
+            }
+            _ => panic!("expected Match, got {:?}", expr),
         }
     }
 

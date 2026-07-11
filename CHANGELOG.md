@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Pipeline into `match`.** A `|>` pipeline target may now be a `match` block
+  written without a scrutinee; the piped value becomes the scrutinee. `x |> f() |>
+  match { ... }` desugars to `match f(x) { ... }`. This is a parser desugar that
+  reuses the existing match expression, so the type checker and compiler are
+  unchanged. No wire-format or `BYTECODE_VERSION` change.
+
 - **Productivity by delegation.** A `loop` (or `yield`) function may now satisfy its
   productivity obligation by delegating its yield to a called `yield` function that
   yields on every one of its own paths, rather than only by a direct `Yield`. The
@@ -22,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `BYTECODE_VERSION` change.
 
 ### Fixed
+
+- **The `_` pipeline placeholder is now honored by the type checker.** GRAMMAR
+  documents that `value |> f(a, _)` inserts the piped value at the `_` position
+  rather than prepending it, and the compiler already desugared this way, but the
+  type checker always validated the target as if the piped value were prepended
+  (`args + 1`), so any pipeline with a placeholder failed with a spurious arity
+  error. The type check now mirrors the compiler: it fills the sole `_` when
+  present and prepends otherwise, and rejects a target with more than one `_`.
 
 - **The category-call discipline is now enforced.** GRAMMAR.md §6.1–6.3 specify that
   an atomic total (`fn`) may call only atomic totals, a non-atomic total (`yield`)
