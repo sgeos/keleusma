@@ -69,7 +69,7 @@ fn status() {
         println!("  step {}: {name:<8} {path:<20} [{state}]", i + 1);
     }
     println!();
-    println!("status: porting backward, codegen first. Codegen increment 25, a");
+    println!("status: porting backward, codegen first. Codegen increment 26, a");
     println!("recursion-free work-stack walk (a `loop` that delegates its yield to a");
     println!("multiheaded guarded `yield` phase machine over per-kind subroutines)");
     println!("that compiles blocks of `let`, data-field assignments, and range");

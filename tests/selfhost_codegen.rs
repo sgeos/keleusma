@@ -11,13 +11,15 @@
 //! Keleusma stage walks it recursion-free, interns each literal into its own
 //! deduplicating constant pool, and emits the ops followed by the pool. The host
 //! builds the module from the stage's ops and pool, checks structural equality
-//! against the Rust compiler, and runs it. Increment 25 adds `for` loops over a
-//! range: `for i in start..limit { body }` lowers to the loop-variable and limit
-//! initialization, a `Loop`/`BreakIf`/`EndLoop` frame with backpatched targets, the
-//! body, and a synthetic `i >= limit` condition and `i + 1` increment.
+//! against the Rust compiler, and runs it. Increment 26 adds `const data` field
+//! reads, which inline to the field's literal value (a `Const`), so a `for` loop
+//! bounded by a `const data` field is statically bounded and runs.
 
 use keleusma::Arena;
-use keleusma::ast::{BinOp, Block, Expr, Iterable, Literal, Param, Pattern, Stmt, UnaryOp};
+use keleusma::ast::{
+    BinOp, Block, ConstInitializer, DataVisibility, Expr, Iterable, Literal, Param, Pattern, Stmt,
+    UnaryOp,
+};
 use keleusma::bytecode::{ConstValue, Module, Op, Value};
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
@@ -51,6 +53,19 @@ struct Ctx {
     for_parts: Vec<i64>,
     chunk_names: Vec<String>,
     data_slots: Vec<String>,
+    /// `const data` scalar fields by `name.field` -> value. A read of one of these
+    /// inlines to a constant, exactly as the reference compiler does, and never
+    /// occupies a runtime data slot.
+    const_data: Vec<(String, i64)>,
+}
+
+/// If `data_name.field` is a scalar `const data` field, return its value.
+fn const_data_value(ctx: &Ctx, data_name: &str, field: &str) -> Option<i64> {
+    let key = format!("{data_name}.{field}");
+    ctx.const_data
+        .iter()
+        .find(|(k, _)| k == &key)
+        .map(|(_, v)| *v)
 }
 
 /// Append a node to the forest and return its index.
@@ -239,19 +254,19 @@ fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &
             (ctx.nodes.len() - 1) as i64
         }
         Expr::FieldAccess { object, field, .. } => {
-            // A `d.field` read of a data block. DataRead (kind 11): arg = data slot.
             let data_name = match object.as_ref() {
                 Expr::Ident { name, .. } => name,
                 other => panic!("increment handles data field access only, got {other:?}"),
             };
-            let slot = data_slot(ctx, data_name, field);
-            ctx.nodes.push(Node {
-                kind: 11,
-                arg: slot,
-                lhs: 0,
-                rhs: 0,
-            });
-            (ctx.nodes.len() - 1) as i64
+            // A `const data` field read inlines to a constant (Literal, kind 1);
+            // a `private`/`shared` field read is a DataRead (kind 11) of its slot.
+            match const_data_value(ctx, data_name, field) {
+                Some(value) => node(ctx, 1, value, 0, 0),
+                None => {
+                    let slot = data_slot(ctx, data_name, field);
+                    node(ctx, 11, slot, 0, 0)
+                }
+            }
         }
         Expr::ArrayIndex { object, index, .. } => {
             // A `d.arr[i]` read. IndexRead (kind 13): arg = base + len*65536,
@@ -418,6 +433,7 @@ fn build_body(
     params: &[Param],
     chunk_names: Vec<String>,
     data_slots: Vec<String>,
+    const_data: Vec<(String, i64)>,
 ) -> Body {
     let mut ctx = Ctx {
         nodes: Vec::new(),
@@ -425,6 +441,7 @@ fn build_body(
         for_parts: Vec::new(),
         chunk_names,
         data_slots,
+        const_data,
     };
     let mut scope: Vec<(String, i64)> = params
         .iter()
@@ -787,6 +804,18 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
             10,
             Int(30),
         ),
+        // const data read: inlines to the field's literal value.
+        (
+            "const data cd { k: Word = 7 } fn main(v: Word) -> Word { v + cd.k }",
+            35,
+            Int(42),
+        ),
+        // for loop bounded by a const data field: statically bounded, so it runs.
+        (
+            "const data cd { n: Word = 4 } private data d { s: Word } fn main() -> Word { for i in 0..cd.n { d.s = d.s + i; } d.s }",
+            0,
+            Int(6),
+        ),
     ];
     for &(src, arg, expected) in cases {
         let program = parse(&tokenize(src).expect("lex")).expect("parse");
@@ -799,13 +828,33 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
             .as_ref()
             .map(|dl| dl.slots.iter().map(|s| s.name.clone()).collect())
             .unwrap_or_default();
+        // Scalar `const data` fields, resolved to their literal values.
+        let const_data: Vec<(String, i64)> = program
+            .data_decls
+            .iter()
+            .filter(|d| d.visibility == DataVisibility::Const)
+            .flat_map(|d| {
+                d.fields.iter().filter_map(move |f| match &f.initializer {
+                    Some(ConstInitializer::Scalar(Literal::Int(n))) => {
+                        Some((format!("{}.{}", d.name, f.name), *n))
+                    }
+                    _ => None,
+                })
+            })
+            .collect();
 
         let main_fn = program
             .functions
             .iter()
             .find(|f| f.name == "main")
             .expect("main fn");
-        let body = build_body(&main_fn.body, &main_fn.params, chunk_names, data_slots);
+        let body = build_body(
+            &main_fn.body,
+            &main_fn.params,
+            chunk_names,
+            data_slots,
+            const_data,
+        );
 
         // The stage resolves its own If/Else targets and emits its own local_count,
         // so the emitted stream plus local_count is a complete logical chunk body.
