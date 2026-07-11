@@ -36,7 +36,8 @@ const LHS: usize = 129;
 const RHS: usize = 193;
 const CALL_ARGS: usize = 257;
 const FOR_PARTS: usize = 321;
-const PARAM_COUNT: usize = 385;
+const MATCH_PARTS: usize = 385;
+const PARAM_COUNT: usize = 449;
 
 struct Node {
     kind: i64,
@@ -52,6 +53,7 @@ struct Ctx {
     nodes: Vec<Node>,
     call_args: Vec<i64>,
     for_parts: Vec<i64>,
+    match_parts: Vec<i64>,
     chunk_names: Vec<String>,
     data_slots: Vec<String>,
     /// `const data` scalar fields by `name.field` -> value. A read of one of these
@@ -111,6 +113,7 @@ struct Body {
     nodes: Vec<Node>,
     call_args: Vec<i64>,
     for_parts: Vec<i64>,
+    match_parts: Vec<i64>,
     root: i64,
 }
 
@@ -295,6 +298,64 @@ fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &
             });
             (ctx.nodes.len() - 1) as i64
         }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            // The reference lowers a `match` by stashing the scrutinee in a fresh
+            // temp local, so declare it right after the scrutinee (mirroring
+            // `compile_expr`'s `declare_local("__match")`) and before the arm
+            // results. Slots are monotonic, matching the reference's high-water
+            // `local_count`.
+            let scrut = flatten(scrutinee, scope, next_slot, ctx);
+            let temp = *next_slot;
+            *next_slot += 1;
+            // Split the literal arms from the single trailing wildcard.
+            let mut lit_arms: Vec<(i64, i64)> = Vec::new();
+            let mut wildcard: Option<i64> = None;
+            for arm in arms {
+                assert!(
+                    arm.guard.is_none(),
+                    "increment handles unguarded match arms only"
+                );
+                match &arm.pattern {
+                    Pattern::Literal(Literal::Int(v), _) => {
+                        let lit_node = node(ctx, 1, *v, 0, 0);
+                        let res_node = flatten(&arm.expr, scope, next_slot, ctx);
+                        lit_arms.push((lit_node, res_node));
+                    }
+                    Pattern::Wildcard(_) => {
+                        assert!(
+                            wildcard.is_none(),
+                            "increment handles a single wildcard arm"
+                        );
+                        wildcard = Some(flatten(&arm.expr, scope, next_slot, ctx));
+                    }
+                    other => panic!(
+                        "increment handles integer-literal and wildcard match arms, got {other:?}"
+                    ),
+                }
+            }
+            let wc = wildcard.expect("match needs a wildcard arm");
+            // The match_parts entry: temp slot at [0], wildcard result at [1], then
+            // one (literal node, result node) pair per literal arm from [2].
+            let base = ctx.match_parts.len() as i64;
+            ctx.match_parts.push(temp);
+            ctx.match_parts.push(wc);
+            for (lit_node, res_node) in &lit_arms {
+                ctx.match_parts.push(*lit_node);
+                ctx.match_parts.push(*res_node);
+            }
+            let arm_count = lit_arms.len() as i64;
+            // MatchIn (kind 22): arg = match_parts entry start, lhs = scrutinee,
+            // rhs = literal-arm count.
+            ctx.nodes.push(Node {
+                kind: 22,
+                arg: base,
+                lhs: scrut,
+                rhs: arm_count,
+            });
+            (ctx.nodes.len() - 1) as i64
+        }
         other => {
             panic!("increment handles literal/local/binop/if/not/call/data-read, got {other:?}")
         }
@@ -448,6 +509,7 @@ fn build_body(
         nodes: Vec::new(),
         call_args: Vec::new(),
         for_parts: Vec::new(),
+        match_parts: Vec::new(),
         chunk_names,
         data_slots,
         const_data,
@@ -463,6 +525,7 @@ fn build_body(
         nodes: ctx.nodes,
         call_args: ctx.call_args,
         for_parts: ctx.for_parts,
+        match_parts: ctx.match_parts,
         root,
     }
 }
@@ -504,6 +567,16 @@ fn decode_op(w: i64) -> Op {
         32 => Op::BreakIf(operand as u16),
         33 => Op::EndLoop(operand as u16),
         34 => Op::PushImmediate(operand as u8),
+        // Match control flow. The stage gives these their own op-word tags so
+        // `emit_op` can backpatch a bare `If`/`EndIf` and multiple unconditional
+        // `Break`s, but they decode to the same reference ops as the structured
+        // forms (an `mif` is an `Op::If`, an `mloop` an `Op::Loop`, and so on).
+        35 => Op::Break(operand as u16),
+        36 => Op::Trap(operand as u16),
+        37 => Op::If(operand as u16),
+        38 => Op::EndIf,
+        39 => Op::Loop(operand as u16),
+        40 => Op::EndLoop(operand as u16),
         other => panic!("unknown op tag {other} (word {w})"),
     }
 }
@@ -564,6 +637,10 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
     for (k, &part) in body.for_parts.iter().enumerate() {
         vm.set_shared(&mut shared, FOR_PARTS + k, Value::Int(part))
             .expect("for_part");
+    }
+    for (k, &part) in body.match_parts.iter().enumerate() {
+        vm.set_shared(&mut shared, MATCH_PARTS + k, Value::Int(part))
+            .expect("match_part");
     }
     vm.set_shared(&mut shared, PARAM_COUNT, Value::Int(param_count as i64))
         .expect("param_count");
@@ -842,6 +919,50 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
             "private data d { s: Word } fn main(v: Word) -> Word { if v > 0 { d.s = 1; } else { d.s = 2; } d.s }",
             0,
             Int(2),
+        ),
+        // match over an integer scrutinee: the reference lowers it to a virtual
+        // loop of GetLocal/Const/CmpEq/If tests, each arm ending in a Break, then a
+        // dead Trap tail. A literal arm hit.
+        (
+            "fn main(input: Word) -> Word { match input { 0 => 10, 1 => 20, 2 => 30, _ => 99 } }",
+            1,
+            Int(20),
+        ),
+        // The same match, falling through every literal arm to the wildcard.
+        (
+            "fn main(input: Word) -> Word { match input { 0 => 10, 1 => 20, 2 => 30, _ => 99 } }",
+            5,
+            Int(99),
+        ),
+        // Arithmetic in an arm result and in the wildcard.
+        (
+            "fn main(a: Word) -> Word { match a { 2 => a * 10, _ => a + 5 } }",
+            2,
+            Int(20),
+        ),
+        (
+            "fn main(a: Word) -> Word { match a { 2 => a * 10, _ => a + 5 } }",
+            3,
+            Int(8),
+        ),
+        // match in value position, bound in a let, then used: the temp local for the
+        // scrutinee sits before the let-bound slot, matching the reference numbering.
+        (
+            "fn main(a: Word) -> Word { let x = match a { 7 => 1, _ => a + 100 }; x + 1 }",
+            7,
+            Int(2),
+        ),
+        (
+            "fn main(a: Word) -> Word { let x = match a { 7 => 1, _ => a + 100 }; x + 1 }",
+            40,
+            Int(141),
+        ),
+        // A repeated literal across pattern and result interns to one pool entry, as
+        // the reference does (the `5` pattern and the `5` addend share a slot).
+        (
+            "fn main(a: Word) -> Word { match a { 5 => a + 5, _ => a } }",
+            5,
+            Int(10),
         ),
     ];
     for &(src, arg, expected) in cases {
