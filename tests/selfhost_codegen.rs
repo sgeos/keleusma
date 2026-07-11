@@ -18,8 +18,8 @@
 
 use keleusma::Arena;
 use keleusma::ast::{
-    BinOp, Block, ConstInitializer, DataVisibility, Expr, FunctionCategory, Iterable, Literal,
-    Param, Pattern, Stmt, UnaryOp,
+    BinOp, Block, ConstInitializer, DataVisibility, Expr, FunctionCategory, FunctionDef, Iterable,
+    Literal, Param, Pattern, Stmt, UnaryOp,
 };
 use keleusma::bytecode::{ConstValue, Module, Op, Value};
 use keleusma::compiler::compile;
@@ -40,8 +40,9 @@ const CALL_ARGS: usize = 2049;
 const FOR_PARTS: usize = 2113;
 const MATCH_PARTS: usize = 2177;
 const LIMIT_PARTS: usize = 2241;
-const PARAM_COUNT: usize = 2305;
-const CATEGORY: usize = 2306;
+const HEAD_PARTS: usize = 2305;
+const PARAM_COUNT: usize = 2369;
+const CATEGORY: usize = 2370;
 
 struct Node {
     kind: i64,
@@ -59,6 +60,7 @@ struct Ctx {
     for_parts: Vec<i64>,
     match_parts: Vec<i64>,
     limit_parts: Vec<i64>,
+    head_parts: Vec<i64>,
     chunk_names: Vec<String>,
     data_slots: Vec<String>,
     /// `const data` scalar fields by `name.field` -> value. A read of one of these
@@ -120,6 +122,7 @@ struct Body {
     for_parts: Vec<i64>,
     match_parts: Vec<i64>,
     limit_parts: Vec<i64>,
+    head_parts: Vec<i64>,
     category: i64,
     root: i64,
 }
@@ -363,6 +366,11 @@ fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &
             });
             (ctx.nodes.len() - 1) as i64
         }
+        Expr::Yield { value, .. } => {
+            // YieldExpr (kind 24): the yielded expression in lhs.
+            let inner = flatten(value, scope, next_slot, ctx);
+            node(ctx, 24, 0, inner, 0)
+        }
         other => {
             panic!("increment handles literal/local/binop/if/not/call/data-read, got {other:?}")
         }
@@ -576,6 +584,7 @@ fn build_body(
         for_parts: Vec::new(),
         match_parts: Vec::new(),
         limit_parts: Vec::new(),
+        head_parts: Vec::new(),
         chunk_names,
         data_slots,
         const_data,
@@ -593,7 +602,72 @@ fn build_body(
         for_parts: ctx.for_parts,
         match_parts: ctx.match_parts,
         limit_parts: ctx.limit_parts,
+        head_parts: ctx.head_parts,
         category,
+        root,
+    }
+}
+
+/// Flatten a multiheaded function (its heads share a name), building the MultiHead
+/// dispatch (category 3). Each head copies the parameters into fresh consecutive
+/// locals (mirroring the reference's per-head param binding), then flattens its
+/// optional `when` guard and its `yield`-expression body in the scope of those
+/// copies. The 4-word head_parts entry is (param-copy start slot, guarded flag,
+/// guard node, body node).
+fn build_multihead(
+    heads: &[&FunctionDef],
+    params: &[Param],
+    chunk_names: Vec<String>,
+    data_slots: Vec<String>,
+    const_data: Vec<(String, i64)>,
+) -> Body {
+    let mut ctx = Ctx {
+        nodes: Vec::new(),
+        call_args: Vec::new(),
+        for_parts: Vec::new(),
+        match_parts: Vec::new(),
+        limit_parts: Vec::new(),
+        head_parts: Vec::new(),
+        chunk_names,
+        data_slots,
+        const_data,
+    };
+    let pc = params.len() as i64;
+    // The parameters occupy slots 0..pc; each head's copies and body lets follow.
+    let mut next_slot = pc;
+    let mut entries: Vec<(i64, i64, i64, i64)> = Vec::new();
+    for head in heads {
+        let param_start = next_slot;
+        next_slot += pc;
+        // The parameters resolve to this head's copies for its guard and body.
+        let mut scope: Vec<(String, i64)> = params
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (param_name(p).to_string(), param_start + i as i64))
+            .collect();
+        let (guarded, guard_node) = match &head.guard {
+            Some(g) => (1, flatten(g, &mut scope, &mut next_slot, &mut ctx)),
+            None => (0, 0),
+        };
+        let body_node = flatten_block(&head.body, &mut scope, &mut next_slot, &mut ctx);
+        entries.push((param_start, guarded, guard_node, body_node));
+    }
+    for (ps, g, gn, bn) in &entries {
+        ctx.head_parts.push(*ps);
+        ctx.head_parts.push(*g);
+        ctx.head_parts.push(*gn);
+        ctx.head_parts.push(*bn);
+    }
+    // MultiHead (kind 25): arg = head_parts base (0), rhs = head count.
+    let root = node(&mut ctx, 25, 0, 0, heads.len() as i64);
+    Body {
+        nodes: ctx.nodes,
+        call_args: ctx.call_args,
+        for_parts: ctx.for_parts,
+        match_parts: ctx.match_parts,
+        limit_parts: ctx.limit_parts,
+        head_parts: ctx.head_parts,
+        category: 3,
         root,
     }
 }
@@ -722,6 +796,10 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
         vm.set_shared(&mut shared, LIMIT_PARTS + k, Value::Int(part))
             .expect("limit_part");
     }
+    for (k, &part) in body.head_parts.iter().enumerate() {
+        vm.set_shared(&mut shared, HEAD_PARTS + k, Value::Int(part))
+            .expect("head_part");
+    }
     vm.set_shared(&mut shared, PARAM_COUNT, Value::Int(param_count as i64))
         .expect("param_count");
     vm.set_shared(&mut shared, CATEGORY, Value::Int(body.category))
@@ -737,10 +815,16 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
             VmState::Yielded(Value::Int(w)) => {
                 if w != 0 {
                     let op = decode_op(w);
-                    // The op stream terminates with `Return` for an `fn`/`yield`
-                    // body and with `Reset` for a `loop` body; both close the
-                    // buffer, after which the pool and local_count stream.
-                    let done = op == Op::Return || op == Op::Reset;
+                    // The op stream's terminator depends on the function category:
+                    // an `fn` ends in `Return`, a `loop` in `Reset`, and a
+                    // multiheaded dispatch in `Trap(NoMatchingHead=1)`. A
+                    // multihead's per-head `Return`s are interior ops, so it must
+                    // read past them to the final trap.
+                    let done = match body.category {
+                        2 => op == Op::Reset,
+                        3 => op == Op::Trap(1),
+                        _ => op == Op::Return,
+                    };
                     ops.push(op);
                     if done {
                         break;
@@ -1190,44 +1274,59 @@ fn self_compile_codegen_atomic_functions() {
 
     let mut ok: Vec<String> = Vec::new();
     let mut gaps: Vec<(String, String)> = Vec::new();
+    // Group functions by name (order-preserving); a multiheaded function's heads
+    // share a name and are compiled together as one MultiHead dispatch.
+    let mut names_ordered: Vec<String> = Vec::new();
     for f in &program.functions {
-        // Atomic `fn` (category 0) and a single-headed `loop` (category 2, the
-        // `Stream`/`Reset` wrapper) are supported; a multiheaded `yield`
-        // (guarded heads) is not yet lowered by the stage.
-        let cat = match f.category {
-            FunctionCategory::Fn => 0_i64,
-            FunctionCategory::Loop if f.guard.is_none() => 2_i64,
-            _ => {
-                gaps.push((
-                    f.name.clone(),
-                    "non-atomic (multiheaded yield/loop) function".to_string(),
-                ));
-                continue;
-            }
-        };
+        if !names_ordered.contains(&f.name) {
+            names_ordered.push(f.name.clone());
+        }
+    }
+    for name in &names_ordered {
+        let heads: Vec<&FunctionDef> = program
+            .functions
+            .iter()
+            .filter(|f| &f.name == name)
+            .collect();
+        let first = heads[0];
         let cn = chunk_names.clone();
         let ds = data_slots.clone();
         let cd = const_data.clone();
+        let name_c = name.clone();
+        let heads_ref = &heads;
         let result = catch_unwind(AssertUnwindSafe(|| {
-            let body = build_body(&f.body, &f.params, cat, cn, ds, cd);
+            // Multiheaded (any category) -> MultiHead dispatch (category 3); a
+            // single atomic `fn` -> category 0; a single-headed `loop` -> the
+            // Stream/Reset wrapper (category 2). A lone single-head `yield` is not
+            // exercised by codegen.kel and is not yet lowered.
+            let body = if heads_ref.len() > 1 {
+                build_multihead(heads_ref, &first.params, cn, ds, cd)
+            } else {
+                match first.category {
+                    FunctionCategory::Fn => build_body(&first.body, &first.params, 0, cn, ds, cd),
+                    FunctionCategory::Loop if first.guard.is_none() => {
+                        build_body(&first.body, &first.params, 2, cn, ds, cd)
+                    }
+                    _ => return Err("non-atomic single-head (yield) function".to_string()),
+                }
+            };
             if body.nodes.len() > 512
                 || body.for_parts.len() > 64
                 || body.call_args.len() > 64
                 || body.match_parts.len() > 64
+                || body.head_parts.len() > 64
+                || body.limit_parts.len() > 64
             {
                 return Err(format!(
-                    "exceeds the adapter arrays ({} nodes, {} for_parts, {} call_args, {} match_parts)",
-                    body.nodes.len(),
-                    body.for_parts.len(),
-                    body.call_args.len(),
-                    body.match_parts.len()
+                    "exceeds the adapter arrays ({} nodes)",
+                    body.nodes.len()
                 ));
             }
-            let (emitted, _pool, _lc) = run_codegen(&body, f.params.len());
+            let (emitted, _pool, _lc) = run_codegen(&body, first.params.len());
             let ref_ops = reference
                 .chunks
                 .iter()
-                .find(|c| c.name == f.name)
+                .find(|c| c.name == name_c)
                 .map(|c| c.ops.clone())
                 .unwrap_or_default();
             if emitted == ref_ops {
@@ -1247,15 +1346,15 @@ fn self_compile_codegen_atomic_functions() {
             }
         }));
         match result {
-            Ok(Ok(())) => ok.push(f.name.clone()),
-            Ok(Err(reason)) => gaps.push((f.name.clone(), reason)),
+            Ok(Ok(())) => ok.push(name.clone()),
+            Ok(Err(reason)) => gaps.push((name.clone(), reason)),
             Err(payload) => {
                 let msg = payload
                     .downcast_ref::<String>()
                     .cloned()
                     .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
                     .unwrap_or_else(|| "panic".to_string());
-                gaps.push((f.name.clone(), msg));
+                gaps.push((name.clone(), msg));
             }
         }
     }
