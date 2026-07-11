@@ -22,12 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `on { ... }` block, mirroring the checked-arithmetic arm block, captures the
   outcome: `ok(count)` for a completed range, `break(index)` for a body `break`,
   and `limit(index)` for the overrun; each arm and binding is optional, and an
-  absent `break` arm falls through to `ok`. `limit` and `on` are contextual
-  keywords, so both remain usable as identifiers. The `overflow` outcome and
-  `when` guards on outcome arms are reserved in the grammar but not yet
-  implemented and are rejected explicitly; the increment currently wraps as a
-  plain `for` loop does. See GRAMMAR.md "Bounded Repetition with a Limit". No
-  wire-format or `BYTECODE_VERSION` change (the trap reuses `Op::Trap`).
+  absent `break` arm falls through to `ok`. A range whose length equals the cap
+  exactly completes as `ok` rather than reporting an overrun, so it never traps.
+  An arm may carry a `when` guard, checked as `Bool`; on a false guard an
+  intended outcome (`ok`/`break`) is a noop and the defensive `limit` falls
+  through to the trap. `limit` and `on` are contextual keywords, so both remain
+  usable as identifiers. The `overflow` outcome is reserved in the grammar but
+  inadmissible on a `limit` loop, because the range test runs before the body and
+  the cap bounds the counter, so the index stays below the type maximum and the
+  increment cannot overflow; an `overflow` arm is rejected, mirroring the
+  checked-arithmetic unreachable-arm rule. See GRAMMAR.md "Bounded Repetition with
+  a Limit". No wire-format or `BYTECODE_VERSION` change (the trap reuses `Op::Trap`).
 
 - **Pipeline into `match`.** A `|>` pipeline target may now be a `match` block
   written without a scrutinee; the piped value becomes the scrutinee. `x |> f() |>
