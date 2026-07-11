@@ -1,5 +1,19 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
+// Increment 28: `match` over an integer scrutinee (a MatchIn node, kind 22, with
+// integer-literal arms and a trailing wildcard). The reference lowers it to a
+// virtual loop: the scrutinee is stashed in a fresh temp local, each arm tests it
+// with `GetLocal(temp) Const(lit) CmpEq If(fail)`, emits its result and an
+// unconditional `Break`, and closes with `EndIf`; the wildcard result and its
+// `Break` follow, then a dead `Trap(NoMatchingArm)` tail and `EndLoop`. The bare
+// `If`/`EndIf` (no `Else`) and the multiple per-loop `Break`s are a new control-
+// flow shape, so the stage gives them their own op-word tags (`mif`/`mendif`/
+// `mloop`/`mbreak`/`mendloop`) and dedicated backpatch stacks in `emit_op`; they
+// decode to the same reference ops as the structured forms. The temp occupies one
+// local, so `local_count` grows by one. This unblocks `push_binop`'s operator
+// table (self-compiled byte-identically). Not yet covered: a binding or guarded
+// arm; the largest functions still exceed the 64-slot node arrays.
+//
 // Named wire constants. The op-word tags, encoding radices, and work-stack item
 // kinds that were bare integer literals throughout the handlers are now read from
 // the single `const data wire` block below (the language admits at most one const
@@ -103,11 +117,18 @@ const data wire {
     breakif: Word = 32,
     endloop: Word = 33,
     pushimm: Word = 34,
+    mbreak: Word = 35,
+    trap: Word = 36,
+    mif: Word = 37,
+    mendif: Word = 38,
+    mloop: Word = 39,
+    mendloop: Word = 40,
     radix: Word = 64,
     item: Word = 4,
     pack: Word = 65536,
     visit: Word = 1,
     emit: Word = 2,
+    nomatch: Word = 2,
 }
 
 // Flattened expression forest from the codegen input adapter, a structure-of-
@@ -137,6 +158,7 @@ shared data ast {
     rhs: [Word; 64],
     call_args: [Word; 64],
     for_parts: [Word; 64],
+    match_parts: [Word; 64],
     param_count: Word,
 }
 
@@ -162,6 +184,13 @@ private data st {
     cf_loop: [Word; 32],
     cf_breakif: [Word; 32],
     cf_lsp: Word,
+    cf_mif: [Word; 16],
+    cf_mifsp: Word,
+    cf_mloop: [Word; 16],
+    cf_mbstart: [Word; 16],
+    cf_mlsp: Word,
+    cf_mbreak: [Word; 64],
+    cf_mbc: Word,
     pool: [Word; 64],
     pool_count: Word,
     count_done: Word,
@@ -241,6 +270,51 @@ fn emit_op(word: Word) -> Word {
         st.ops[bp] = wire.breakif + (pos + 1) * wire.radix;
         st.ops[pos] = wire.endloop + (lp + 1) * wire.radix;
         st.cf_lsp = st.cf_lsp - 1;
+    }
+    // Match backpatching. A `match` lowers to a virtual loop whose arms each test
+    // the scrutinee with a bare `If`/`EndIf` (no `Else`) and exit through an
+    // unconditional `Break`; the wildcard arm and a dead `Trap` tail follow. An
+    // `mif` records its slot; the matching `mendif` sets the `mif`'s false target to
+    // its own slot. An `mloop` records its slot and the break-list watermark; each
+    // `mbreak` appends its slot to the break list; the `mendloop` resolves the
+    // `mloop` and every break of this loop to the op past this `mendloop`, sets its
+    // own back-edge to the op after the `mloop`, and rewinds the break list.
+    if tag == wire.mif {
+        st.cf_mif[st.cf_mifsp] = pos;
+        st.cf_mifsp = st.cf_mifsp + 1;
+    }
+    if tag == wire.mendif {
+        let mp = st.cf_mif[st.cf_mifsp - 1];
+        st.ops[mp] = wire.mif + pos * wire.radix;
+        st.cf_mifsp = st.cf_mifsp - 1;
+    }
+    if tag == wire.mloop {
+        st.cf_mloop[st.cf_mlsp] = pos;
+        st.cf_mbstart[st.cf_mlsp] = st.cf_mbc;
+        st.cf_mlsp = st.cf_mlsp + 1;
+    }
+    if tag == wire.mbreak {
+        st.cf_mbreak[st.cf_mbc] = pos;
+        st.cf_mbc = st.cf_mbc + 1;
+    }
+    if tag == wire.mendloop {
+        let lp = st.cf_mloop[st.cf_mlsp - 1];
+        let bstart = st.cf_mbstart[st.cf_mlsp - 1];
+        let after = pos + 1;
+        st.ops[lp] = wire.mloop + after * wire.radix;
+        // Patch every break of this loop (the contiguous slice [bstart, cf_mbc) of
+        // the break list). The scan bound is the break-list capacity; the two
+        // guards select this loop's slice.
+        for i in 0..64 {
+            if i >= bstart {
+                if i < st.cf_mbc {
+                    st.ops[st.cf_mbreak[i]] = wire.mbreak + after * wire.radix;
+                }
+            }
+        }
+        st.ops[pos] = wire.mendloop + (lp + 1) * wire.radix;
+        st.cf_mbc = bstart;
+        st.cf_mlsp = st.cf_mlsp - 1;
     }
     0
 }
@@ -470,6 +544,49 @@ fn push_orelse(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
+// Match (kind 22): `match scrutinee { lit0 => r0, .., _ => rw }` over an integer
+// scrutinee with literal-integer arms and a wildcard default, mirroring the
+// reference lowering. It stashes the scrutinee in a fresh temp local, wraps the
+// arms in a virtual loop, tests each arm with `GetLocal(temp) Const(lit) CmpEq
+// If(fail)`, emits the arm result and an unconditional `Break`, then closes the
+// arm with `EndIf`; the wildcard result and its `Break` follow, then a dead
+// `Trap(NoMatchingArm)` tail and `EndLoop`. The `If`/`EndIf`, `Loop`/`EndLoop`,
+// and `Break` markers are backpatched in `emit_op` through the match control-flow
+// stacks. The temp occupies one local, so `local_count` grows by one. Node: args =
+// the match_parts entry start, lhs = scrutinee, rhs = arm count. The entry holds
+// the temp slot at [0], the wildcard result node at [1], then arm_count pairs of
+// (literal node, result node) from [2]. Pushed in reverse so the drain emits
+// forward. Literal arms only; a binding or guarded arm is a later increment.
+fn push_match(p: Word) -> Word {
+    let base = ast.args[p];
+    let temp = ast.match_parts[base];
+    let wc = ast.match_parts[base + 1];
+    let n = ast.rhs[p];
+    let scrut = ast.lhs[p];
+    st.let_count = st.let_count + 1;
+    push_emit(wire.mendloop);
+    push_emit(wire.trap + wire.nomatch * wire.radix);
+    push_emit(wire.mbreak);
+    push_visit(wc);
+    // Push the arms in reverse (arm n-1 first) so the LIFO drain emits arm 0 first.
+    // The scan bound is the match_parts capacity; the guard selects the live arms.
+    for j in 0..64 {
+        if j < n {
+            let k = n - 1 - j;
+            push_emit(wire.mendif);
+            push_emit(wire.mbreak);
+            push_visit(ast.match_parts[base + 3 + 2 * k]);
+            push_emit(wire.mif);
+            push_emit(wire.cmpeq);
+            push_visit(ast.match_parts[base + 2 + 2 * k]);
+            push_emit(wire.getlocal + temp * wire.radix);
+        }
+    }
+    push_emit(wire.mloop);
+    push_emit(wire.setlocal + temp * wire.radix);
+    push_visit(scrut)
+}
+
 // Phase 0: seed the work-stack with the body's block root. A block is a `LetIn`
 // chain (or a bare expression) in the node forest, so no statement-array
 // pre-seeding is needed; the walk expands the chain. Yields the PENDING 0.
@@ -510,6 +627,7 @@ fn walk_step() -> Word {
             16 => push_forin(payload),
             20 => push_unit(payload),
             21 => push_exprstmt(payload),
+            22 => push_match(payload),
             _ => 0,
         };
     }

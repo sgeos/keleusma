@@ -69,14 +69,15 @@ fn status() {
         println!("  step {}: {name:<8} {path:<20} [{state}]", i + 1);
     }
     println!();
-    println!("status: porting backward, codegen first. Codegen increment 27, a");
+    println!("status: porting backward, codegen first. Codegen increment 28, a");
     println!("recursion-free work-stack walk (a `loop` that delegates its yield to a");
     println!("multiheaded guarded `yield` phase machine over per-kind subroutines)");
     println!("that compiles blocks of `let`, data-field assignments, and range");
     println!("`for` loops over the binary integer arithmetic set (+ - * / %), the six");
     println!("comparison operators, unary `not` and `-`, the bitwise band/bor/bxor,");
     println!("short-circuit `andalso`/`orelse`, `if`/`else` structured control flow");
-    println!("with stage-resolved jump targets, function calls, and scalar and");
+    println!("with stage-resolved jump targets, `match` over an integer scrutinee,");
+    println!("function calls, and scalar and");
     println!("indexed data-segment reads and writes, into an op buffer it streams with its own");
     println!("deduplicating constant pool and counted local-frame size, and lexer");
     println!("increment 1, a streaming tokenizer, both compile, verify, and run (see");
