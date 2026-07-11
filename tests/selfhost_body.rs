@@ -1,6 +1,6 @@
-//! Body-expression parser (`compiler/kel/body.kel`), increment 19: a function body over
+//! Body-expression parser (`compiler/kel/body.kel`), increment 20: a function body over
 //! the full operator-precedence expression grammar, scalar and indexed data-field
-//! reads, `let` bindings and scalar data-field assignments, the bare expression
+//! reads, `let` bindings, scalar and indexed data-field assignments, the bare expression
 //! statement `expr;`, the `if`/`else` conditional with nested statement-block branches,
 //! function calls, the `yield e` reentrant expression, the `match` expression over
 //! integer-literal arms and a trailing wildcard, the bounded
@@ -363,9 +363,10 @@ fn run_body_inner(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, Vec<i64>, i
                         });
                         stack.push((nodes.len() - 1) as i64);
                     }
-                    5 | 12 | 21 => {
-                        // A statement node: LetIn (5), DataFieldAssignIn (12), or ExprStmt
-                        // (21, a bare expression whose value is discarded). Pop the
+                    5 | 12 | 21 | 14 => {
+                        // A statement node: LetIn (5), DataFieldAssignIn (12), ExprStmt
+                        // (21, a bare expression whose value is discarded), or
+                        // IndexAssignIn (14, whose value is an IndexStore node). Pop the
                         // continuation (rhs) and the bound/assigned/discarded value (lhs);
                         // arg is the local or data slot (0 for an ExprStmt).
                         let rhs = stack.pop().expect("a statement node needs a continuation");
@@ -449,6 +450,21 @@ fn run_body_inner(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, Vec<i64>, i
                             arg: base,
                             lhs: scrut,
                             rhs: arm_count,
+                        });
+                        stack.push((nodes.len() - 1) as i64);
+                    }
+                    36 => {
+                        // IndexStore build signal: pop the value (top) and the index
+                        // (below) and emit an IndexStore node (kind 15: lhs = value,
+                        // rhs = index). The parser reads the index before the value, so
+                        // the value is on top.
+                        let value = stack.pop().expect("IndexStore needs a value");
+                        let index = stack.pop().expect("IndexStore needs an index");
+                        nodes.push(Node {
+                            kind: 15,
+                            arg: 0,
+                            lhs: value,
+                            rhs: index,
                         });
                         stack.push((nodes.len() - 1) as i64);
                     }
@@ -930,6 +946,50 @@ fn flatten_block(
                 );
                 let slot = data_slot(data_slots, data_name, field);
                 stmts.push((12, slot, value_node));
+            }
+            Stmt::DataFieldIndexAssign {
+                data_name,
+                field,
+                indices,
+                value,
+                ..
+            } => {
+                // `d.f[i] = e` — an IndexAssignIn (kind 14) whose value is an IndexStore
+                // (kind 15, lhs = value, rhs = index). The self-host stage reads the
+                // index before the value, so flatten the index first to match its node
+                // order; the arg packs the array base and length as base + len*65536.
+                assert_eq!(indices.len(), 1, "single-dimension array assignment only");
+                let index_node = flatten(
+                    &indices[0],
+                    scope,
+                    nodes,
+                    data_slots,
+                    chunk_names,
+                    call_args,
+                    next_slot,
+                    limit_parts,
+                    match_parts,
+                );
+                let value_node = flatten(
+                    value,
+                    scope,
+                    nodes,
+                    data_slots,
+                    chunk_names,
+                    call_args,
+                    next_slot,
+                    limit_parts,
+                    match_parts,
+                );
+                nodes.push(Node {
+                    kind: 15,
+                    arg: 0,
+                    lhs: value_node,
+                    rhs: index_node,
+                });
+                let store_node = (nodes.len() - 1) as i64;
+                let (base, len) = array_base_len(data_slots, data_name, field);
+                stmts.push((14, base + len * 65536, store_node));
             }
             Stmt::Expr(expr) => {
                 // A bare expression statement (a call for effect): ExprStmt (kind 21),
@@ -2266,4 +2326,71 @@ fn a_match_on_data_compiles() {
     assert_eq!(nodes[m.lhs as usize].kind, 11); // scrutinee: DataRead
     assert_eq!(m.rhs, 2); // two literal arms plus the wildcard
     assert_eq!(match_parts.len(), 6);
+}
+
+// An indexed data assignment `d.f[i] = e;` lowers to an IndexAssignIn (kind 14, arg =
+// base + len*65536) whose value is an IndexStore (kind 15, lhs = value, rhs = index).
+// This compiles and verifies on the current runtime.
+#[test]
+fn an_indexed_assignment_lowers_to_index_store_and_assign() {
+    let src = "shared data d { xs: [Word; 4] } fn store() -> Word { d.xs[1] = 5; 0 }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _c, _l, _m, root) = run_body(src);
+    // The root is the IndexAssignIn wrapping the tail; its value is the IndexStore.
+    let assign = nodes[root as usize];
+    assert_eq!(assign.kind, 14);
+    assert_eq!(assign.arg, 4 * 65536); // base 0, len 4
+    let store = nodes[assign.lhs as usize];
+    assert_eq!(store.kind, 15);
+    assert_eq!(nodes[store.lhs as usize].arg, 5); // value literal 5
+    assert_eq!(nodes[store.rhs as usize].arg, 1); // index literal 1
+    assert_eq!(nodes[assign.rhs as usize].arg, 0); // the tail literal 0
+}
+
+// The index and the value may both be expressions; the index is flattened before the
+// value, matching the streaming parser's read order.
+#[test]
+fn an_indexed_assignment_index_and_value_may_be_expressions() {
+    let src = "shared data d { xs: [Word; 8], n: Word } \
+        fn store() -> Word { d.xs[d.n + 1] = d.n * 2; 0 }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _c, _l, _m, root) = run_body(src);
+    let assign = nodes[root as usize];
+    assert_eq!(assign.kind, 14);
+    let store = nodes[assign.lhs as usize];
+    assert_eq!(store.kind, 15);
+    assert_eq!(nodes[store.lhs as usize].arg, 2); // value is a Mul (op code 2)
+    assert_eq!(nodes[store.rhs as usize].arg, 1); // index is an Add (op code 1)
+}
+
+// An indexed read still lowers to an IndexRead (kind 13) — the deferred-emit lookahead
+// resolves a `]` not followed by `=` back to a read — and may be the value of an
+// indexed assignment (`d.xs[0] = d.xs[1];`).
+#[test]
+fn an_indexed_read_may_be_the_value_of_an_indexed_assignment() {
+    let src = "shared data d { xs: [Word; 4] } fn copy() -> Word { d.xs[0] = d.xs[1]; 0 }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _c, _l, _m, root) = run_body(src);
+    let assign = nodes[root as usize];
+    assert_eq!(assign.kind, 14);
+    let store = nodes[assign.lhs as usize];
+    // The stored value is an IndexRead of d.xs[1].
+    assert_eq!(nodes[store.lhs as usize].kind, 13);
+    assert_eq!(nodes[store.rhs as usize].arg, 0); // the assignment index 0
+}
+
+// An indexed assignment folds among other statements in source order.
+#[test]
+fn an_indexed_assignment_folds_among_statements() {
+    let src = "shared data d { xs: [Word; 4], k: Word } \
+        fn run() -> Word { d.k = 2; d.xs[0] = d.k; d.k }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _c, _l, _m, root) = run_body(src);
+    // Outer statement is the scalar assign d.k = 2; its continuation is the indexed
+    // assignment, whose continuation is the tail d.k.
+    let outer = nodes[root as usize];
+    assert_eq!(outer.kind, 12); // DataFieldAssignIn (d.k = 2)
+    let inner = nodes[outer.rhs as usize];
+    assert_eq!(inner.kind, 14); // IndexAssignIn (d.xs[0] = d.k)
+    assert_eq!(nodes[inner.rhs as usize].kind, 11); // tail d.k is a DataRead
 }
