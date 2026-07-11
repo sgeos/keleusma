@@ -1,14 +1,21 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
+// Increment 24: array indexed data access. Reading `d.arr[i]` lowers to the index
+// ops then `GetDataIndexed(base, len)` (IndexRead, kind 13), and `d.arr[i] = v`
+// lowers to the value ops, the index ops, then `SetDataIndexed(base, len)`
+// (IndexAssignIn, kind 14, with an IndexStore child, kind 15, sequencing value
+// then index). `base` is the element-0 data slot and `len` the array length, both
+// resolved by name by the input adapter and packed as base + len*65536. Single
+// dimension only; multi-dimensional arrays are a later increment.
+//
 // Increment 23: scalar data-segment access. Adds a DataRead node (kind 11, args =
 // data slot) that emits `GetData(slot)`, and a DataAssignIn block statement (kind
 // 12, args = data slot, lhs = value, rhs = continuation) that emits the value ops
 // then `SetData(slot)` before the continuation, generalizing the block from a
 // `let`-only cons-list to a sequence of `let` and data-assignment statements. The
 // data slot is the field's index in the module data layout, resolved by name by
-// the input adapter (layout data, like the parameter arity). Array access remains
-// a later increment. The dispatch in walk_step below pipes the kind field into a
-// `match` (increment 22's idiom).
+// the input adapter (layout data, like the parameter arity). The dispatch in
+// walk_step below pipes the kind field into a `match` (increment 22's idiom).
 //
 // Increment 21: the loop delegates its yield to a multiheaded `yield` function.
 // The phase state machine, previously the heads of `loop main`, is now the
@@ -32,7 +39,9 @@ require word >= 32;
 // arrays. `kinds` is 1 Literal, 2 Local, 3 BinOp, 4 If, 5 LetIn, 6 UnaryNot,
 // 7 Call, 8 Andalso, 9 Orelse (the last two have lhs=left, rhs=right), 10 UnaryNeg
 // (operand in lhs), 11 DataRead (args = data slot), 12 DataAssignIn (args = data
-// slot, lhs = value, rhs = continuation). `args` is
+// slot, lhs = value, rhs = continuation), 13 IndexRead (args = base + len*65536,
+// lhs = index), 14 IndexAssignIn (args = base + len*65536, lhs = IndexStore node,
+// rhs = continuation), 15 IndexStore (lhs = value, rhs = index). `args` is
 // the literal *value* for a Literal, the slot for a Local, the
 // operator for a BinOp, the condition node for an If, the bound slot for a LetIn,
 // or the callee chunk index for a Call. `lhs`/`rhs` are child node indices: for a
@@ -89,6 +98,7 @@ private data st {
 //   17 If(target)  18 Else(target)  19 EndIf   (targets already resolved)  20 Not
 //   21 Call(chunk, count)   operand packed as chunk + count*65536   22 Dup
 //   23 CheckedNeg  24 BitAnd  25 BitOr  26 BitXor  27 GetData(slot)  28 SetData(slot)
+//   29 GetDataIndexed(base,len)  30 SetDataIndexed(base,len)   base + len*65536 packed
 // The op stream ends with Return. After Return the stage emits its constant pool:
 // first the pool size as a raw Word, then that many raw Word values, and finally
 // `local_count` as one raw Word. The host reads ops until Return, then the pool
@@ -242,6 +252,32 @@ fn push_data_assign(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
+// IndexRead (kind 13): read `d.arr[i]`. Emit the index ops, then GetDataIndexed
+// with the element-0 slot and array length packed as base + len*65536 in args.
+// Node: args = base + len*65536, lhs = index expression.
+fn push_index_read(p: Word) -> Word {
+    push_emit(29 + ast.args[p] * 32);
+    push_visit(ast.lhs[p])
+}
+
+// IndexStore (kind 15): schedules the value ops then the index ops of an indexed
+// assignment, emitting nothing itself. SetDataIndexed pops [value, index] with the
+// index on top. Node: lhs = value, rhs = index.
+fn push_index_store(p: Word) -> Word {
+    push_visit(ast.rhs[p]);
+    push_visit(ast.lhs[p])
+}
+
+// IndexAssignIn (kind 14): `d.arr[i] = v; <cont>`. Emit the value and index ops
+// (via the IndexStore child), then SetDataIndexed(base, len), then the
+// continuation. Node: args = base + len*65536, lhs = IndexStore node, rhs =
+// continuation.
+fn push_index_assign(p: Word) -> Word {
+    push_visit(ast.rhs[p]);
+    push_emit(30 + ast.args[p] * 32);
+    push_visit(ast.lhs[p])
+}
+
 // Call (kind 7): emit the argument ops left to right, then Call(chunk, count),
 // with the two Call operands packed as chunk + count*65536. args = chunk index,
 // lhs = args_start (into call_args), rhs = arg count. Push EMIT Call first, then
@@ -318,6 +354,9 @@ fn walk_step() -> Word {
             10 => push_neg(payload),
             11 => push_data_read(payload),
             12 => push_data_assign(payload),
+            13 => push_index_read(payload),
+            14 => push_index_assign(payload),
+            15 => push_index_store(payload),
             _ => 0,
         };
     }

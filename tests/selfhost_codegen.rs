@@ -11,10 +11,10 @@
 //! Keleusma stage walks it recursion-free, interns each literal into its own
 //! deduplicating constant pool, and emits the ops followed by the pool. The host
 //! builds the module from the stage's ops and pool, checks structural equality
-//! against the Rust compiler, and runs it. Increment 23 adds scalar data-segment
-//! access: a `d.field` read lowers to `GetData(slot)`, and a `d.field = e`
-//! statement lowers to the value ops then `SetData(slot)`, with the slot resolved
-//! by name from the reference module's data layout.
+//! against the Rust compiler, and runs it. Increment 24 adds array indexed
+//! data access: `d.arr[i]` lowers to the index ops then `GetDataIndexed(base,
+//! len)`, and `d.arr[i] = e` to the value ops, the index ops, then
+//! `SetDataIndexed(base, len)`, with base and len resolved from the data layout.
 
 use keleusma::Arena;
 use keleusma::ast::{BinOp, Block, Expr, Literal, Param, Pattern, Stmt, UnaryOp};
@@ -58,6 +58,23 @@ fn data_slot(ctx: &Ctx, data_name: &str, field: &str) -> i64 {
         .iter()
         .position(|n| n == &slot_name)
         .unwrap_or_else(|| panic!("no data slot named `{slot_name}`")) as i64
+}
+
+/// Resolve a `data.field[..]` array reference to its element-0 slot (base) and its
+/// length, from the per-element slot names `data.field[0]`, `data.field[1]`, ...
+fn array_base_len(ctx: &Ctx, data_name: &str, field: &str) -> (i64, i64) {
+    let prefix = format!("{data_name}.{field}[");
+    let base =
+        ctx.data_slots
+            .iter()
+            .position(|n| n.starts_with(&prefix))
+            .unwrap_or_else(|| panic!("no array data slot with prefix `{prefix}`")) as i64;
+    let len = ctx
+        .data_slots
+        .iter()
+        .filter(|n| n.starts_with(&prefix))
+        .count() as i64;
+    (base, len)
 }
 
 /// A flattened function body: the flattening context and the body's block root.
@@ -222,6 +239,30 @@ fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &
             });
             (ctx.nodes.len() - 1) as i64
         }
+        Expr::ArrayIndex { object, index, .. } => {
+            // A `d.arr[i]` read. IndexRead (kind 13): arg = base + len*65536,
+            // lhs = index. The object is a `d.arr` field access.
+            let (data_name, field) = match object.as_ref() {
+                Expr::FieldAccess {
+                    object: inner,
+                    field,
+                    ..
+                } => match inner.as_ref() {
+                    Expr::Ident { name, .. } => (name, field),
+                    other => panic!("increment handles data array access only, got {other:?}"),
+                },
+                other => panic!("increment handles data array access only, got {other:?}"),
+            };
+            let (base, len) = array_base_len(ctx, data_name, field);
+            let index_node = flatten(index, scope, next_slot, ctx);
+            ctx.nodes.push(Node {
+                kind: 13,
+                arg: base + len * 65536,
+                lhs: index_node,
+                rhs: 0,
+            });
+            (ctx.nodes.len() - 1) as i64
+        }
         other => {
             panic!("increment handles literal/local/binop/if/not/call/data-read, got {other:?}")
         }
@@ -265,6 +306,32 @@ fn flatten_block(
                 let value_node = flatten(value, scope, next_slot, ctx);
                 let slot = data_slot(ctx, data_name, field);
                 stmts.push((12, slot, value_node));
+            }
+            Stmt::DataFieldIndexAssign {
+                data_name,
+                field,
+                indices,
+                value,
+                ..
+            } => {
+                assert_eq!(
+                    indices.len(),
+                    1,
+                    "increment handles single-dimension array assignment"
+                );
+                let value_node = flatten(value, scope, next_slot, ctx);
+                let index_node = flatten(&indices[0], scope, next_slot, ctx);
+                // IndexStore (kind 15): sequences value then index.
+                ctx.nodes.push(Node {
+                    kind: 15,
+                    arg: 0,
+                    lhs: value_node,
+                    rhs: index_node,
+                });
+                let store_node = (ctx.nodes.len() - 1) as i64;
+                let (base, len) = array_base_len(ctx, data_name, field);
+                // IndexAssignIn (kind 14): arg = base + len*65536, value = store node.
+                stmts.push((14, base + len * 65536, store_node));
             }
             other => panic!("increment handles let and data-assign statements, got {other:?}"),
         }
@@ -353,6 +420,8 @@ fn decode_op(w: i64) -> Op {
         26 => Op::BitXor,
         27 => Op::GetData(operand as u16),
         28 => Op::SetData(operand as u16),
+        29 => Op::GetDataIndexed((operand % 65536) as u16, (operand / 65536) as u16),
+        30 => Op::SetDataIndexed((operand % 65536) as u16, (operand / 65536) as u16),
         other => panic!("unknown op tag {other} (word {w})"),
     }
 }
@@ -619,6 +688,24 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
         // Data write interleaved with a let, and a read in the tail.
         (
             "private data d { x: Word } fn main(v: Word) -> Word { let y = v * 2; d.x = y; d.x + 1 }",
+            20,
+            Int(41),
+        ),
+        // Array indexed write then read (constant index).
+        (
+            "private data d { xs: [Word; 4] } fn main(v: Word) -> Word { d.xs[2] = v; d.xs[2] }",
+            42,
+            Int(42),
+        ),
+        // Array indexed write/read with a runtime index expression.
+        (
+            "private data d { xs: [Word; 4] } fn main(i: Word) -> Word { d.xs[i] = i + 10; d.xs[i] }",
+            3,
+            Int(13),
+        ),
+        // Array element used in arithmetic in the tail.
+        (
+            "private data d { xs: [Word; 4] } fn main(v: Word) -> Word { d.xs[0] = v; d.xs[1] = v + 1; d.xs[0] + d.xs[1] }",
             20,
             Int(41),
         ),
