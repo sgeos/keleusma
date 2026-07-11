@@ -30,6 +30,7 @@ Each partial operation has an opt-in source-level construct, a match block over 
 | Newtype construction | newtype construction | `ok`, `invalid_newtype` | trap |
 | Discriminant-to-enum | discriminant conversion | `ok`, `payload_discriminant`, `invalid_discriminant` | trap |
 | Native call | native error | `ok`, `error` | propagate the host failure |
+| `for ... limit` overrun | loop outcome block | `ok`, `break`, `limit`; `overflow` is inadmissible | trap |
 
 Overflow and underflow on the wrapping arithmetic operators default to two's-complement wrapping rather than a trap, so an arithmetic construct that omits those arms is equivalent to the bare wrapping operation. Every other unhandled partial outcome traps on the virtual machine.
 
@@ -46,6 +47,7 @@ The virtual machine surfaces each unhandled partial operation through a specific
 | Native failure with a reported code, unhandled | `NativeErrorCode { code, message }` |
 | Native failure with a message only, unhandled | `NativeError(message)` |
 | Debug `assert` condition false (debug build only) | `AssertionFailed` |
+| `for ... limit` reached the cap before the range end, unhandled | `LoopLimitExceeded` |
 
 The compiler-emitted traps for partial operations whose unhandled case has no in-band result are encoded through the `TrapKind` encoding, distinct from the data faults above that already carry their own variant. The `assert` trap is also a `TrapKind` (`AssertionFailed`), but it is reachable only in debug builds, which compile the assert check in; a release build compiles the check out entirely. The failing assertion's source span and message, when present, ride in the strippable `AssertionContext` debug record (B29), not in the `VmError`. Restoring the dropped dynamic detail, namely the failing predicate, newtype, or function name, is tracked under the debug-information work and is independent of this contract.
 

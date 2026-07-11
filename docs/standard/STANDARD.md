@@ -681,6 +681,7 @@ returned to the host, not a process abort.
 | CheckedArithNoArm | soft, script | runtime-admissible, guarded arms only |
 | EnumVariantUnmapped | soft, script | runtime-admissible, host-constructed enum only |
 | AssertionFailed | soft, script | debug build only |
+| LoopLimitExceeded | soft, script | runtime-admissible, `for ... limit` overrun with no `limit` arm |
 | NativeError | soft, host | runtime-admissible host failure |
 | NativeErrorCode | soft, host | runtime-admissible host failure |
 | OutOfArena | halt | runtime-admissible arena exhaustion |
@@ -846,7 +847,7 @@ indirect call and no first-class function.
 
 | Id | Opcode | Operands | Behavior |
 |---|---|---|---|
-| 53 | Trap | kind code | halt with a trap kind, being refinement failed, no matching head, no matching arm, checked arithmetic no arm, enum variant unmapped, zero divisor, or assertion failed |
+| 53 | Trap | kind code | halt with a trap kind, being refinement failed, no matching head, no matching arm, checked arithmetic no arm, enum variant unmapped, zero divisor, assertion failed, or loop limit exceeded |
 
 ### 7.3 Structural constraints
 
