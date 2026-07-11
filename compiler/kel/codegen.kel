@@ -1,15 +1,17 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
-// Increment 18: replace the value dispatches with `match`. Two spots still used
-// nested `if`/`else`: the node dispatch in the `loop` body and the operator-word
-// mapping in `push_binop`. Both are single-expression dispatches on an integer, so
-// each becomes a flat `match`. (The drain state machine keeps nested `if`s: its
-// arms are multi-statement with `yield`, which a `match` arm cannot hold, and the
-// surface has no `else if`.) Pure refactor: the conformance suite confirms
-// byte-identical output. Not yet covered: the data segment (`GetData`/`SetData`,
-// indexed access), `for` loops, and statement-form blocks, the next and larger
-// frontier. See compiler/MILESTONES.md and
-// docs/reference/INCREMENTAL_SELF_HOSTING.md.
+// Increment 19: flatten the loop into a phase dispatch. The `loop` body was a
+// nested `if`/`else` state machine (seed, walk, and five drain phases nested five
+// deep, because a `match` arm cannot hold a multi-statement `yield` body and the
+// surface has no `else if`). This increment moves each phase's work into its own
+// `fn` and selects the phase with `main_phase`, a guarded `match` (guards do work
+// in a `match`, unlike on a function head). The `loop` body is then one flat
+// `match main_phase() { k => yield step_k(), ... }`: the `yield` stays in the
+// Stream block, as the verifier requires, while the per-phase work lives in the
+// steps. Pure refactor: the conformance suite confirms byte-identical output. Not
+// yet covered: the data segment (`GetData`/`SetData`, indexed access), `for`
+// loops, and statement-form blocks, the next and larger frontier. See
+// compiler/MILESTONES.md and docs/reference/INCREMENTAL_SELF_HOSTING.md.
 //
 // The self-hosted compiler is a full-width host tool; declare its word floor.
 require word >= 32;
@@ -253,77 +255,110 @@ fn push_orelse(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
+// Which phase the loop is in. The guards are evaluated top to bottom, so the first
+// satisfied one wins, exactly as the earlier nested `if`/`else` chain did:
+//   0 seed the work-stack   1 process one work item (walk)
+//   2 append Return   3 stream a buffered op   4 the pool size
+//   5 stream a pool value   6 the local-frame size   7 fully drained
+fn main_phase() -> Word {
+    match 0 {
+        _ when st.started == 0 => 0,
+        _ when st.sp > 0 => 1,
+        _ when st.ret_done == 0 => 2,
+        _ when st.emit_cursor < st.op_count => 3,
+        _ when st.count_done == 0 => 4,
+        _ when st.pool_cursor < st.pool_count => 5,
+        _ when st.header_done == 0 => 6,
+        _ => 7,
+    }
+}
+
+// Phase 0: seed the work-stack with the body's block root. A block is a `LetIn`
+// chain (or a bare expression) in the node forest, so no statement-array
+// pre-seeding is needed; the walk expands the chain. Yields the PENDING 0.
+fn seed_step() -> Word {
+    push_visit(ast.root);
+    st.started = 1;
+    0
+}
+
+// Phase 1: process one work item. An EMIT appends to the op buffer; a VISIT
+// dispatches to the handler for the node's kind. Yields the PENDING 0.
+fn walk_step() -> Word {
+    st.sp = st.sp - 1;
+    let item = st.stack[st.sp];
+    let ikind = item % 4;
+    let payload = item / 4;
+    if ikind == 2 {
+        emit_op(payload);
+    }
+    if ikind == 1 {
+        let nk = ast.kinds[payload];
+        match nk {
+            1 => push_literal(payload),
+            2 => push_local(payload),
+            3 => push_binop(payload),
+            4 => push_if(payload),
+            5 => push_letin(payload),
+            6 => push_not(payload),
+            7 => push_call(payload),
+            8 => push_andalso(payload),
+            9 => push_orelse(payload),
+            10 => push_neg(payload),
+            _ => 0,
+        };
+    }
+    0
+}
+
+// Phase 2: the walk is done; append Return to close the op stream. Yields the
+// PENDING 0.
+fn drain_return() -> Word {
+    st.ops[st.op_count] = 2;
+    st.op_count = st.op_count + 1;
+    st.ret_done = 1;
+    0
+}
+
+// Phase 3: stream one resolved op word from the buffer.
+fn drain_buffer() -> Word {
+    let w = st.ops[st.emit_cursor];
+    st.emit_cursor = st.emit_cursor + 1;
+    w
+}
+
+// Phase 4: the constant-pool size (raw Word).
+fn drain_count() -> Word {
+    st.count_done = 1;
+    st.pool_count
+}
+
+// Phase 5: stream one constant-pool value (raw Word).
+fn drain_pool() -> Word {
+    let v = st.pool[st.pool_cursor];
+    st.pool_cursor = st.pool_cursor + 1;
+    v
+}
+
+// Phase 6: the local-frame size, parameters plus one slot per `let`.
+fn drain_header() -> Word {
+    st.header_done = 1;
+    ast.param_count + st.let_count
+}
+
+// The whole loop body is a flat phase dispatch: `main_phase` selects the phase and
+// each arm computes its output (advancing the state) and yields it directly. The
+// `yield` lives in the loop, as the Stream block requires; the per-phase work is in
+// the `fn` steps above.
 loop main(resume: Word) -> Word {
-    if st.started == 0 {
-        // Seed the work-stack with the body's block root. A block is a `LetIn`
-        // chain (or a bare expression) in the node forest, so no statement-array
-        // pre-seeding is needed; the walk expands the chain.
-        push_visit(ast.root);
-        st.started = 1;
-        yield 0
-    } else {
-        if st.sp > 0 {
-            st.sp = st.sp - 1;
-            let item = st.stack[st.sp];
-            let ikind = item % 4;
-            let payload = item / 4;
-            if ikind == 2 {
-                emit_op(payload);
-            }
-            if ikind == 1 {
-                // Node dispatch: the handler for the node's kind schedules its
-                // children and ops onto the work-stack.
-                let nk = ast.kinds[payload];
-                match nk {
-                    1 => push_literal(payload),
-                    2 => push_local(payload),
-                    3 => push_binop(payload),
-                    4 => push_if(payload),
-                    5 => push_letin(payload),
-                    6 => push_not(payload),
-                    7 => push_call(payload),
-                    8 => push_andalso(payload),
-                    9 => push_orelse(payload),
-                    10 => push_neg(payload),
-                    _ => 0,
-                };
-            }
-            yield 0
-        } else {
-            if st.ret_done == 0 {
-                // Walk done: append Return, closing the op stream in the buffer.
-                st.ops[st.op_count] = 2;      // Return (tag 2)
-                st.op_count = st.op_count + 1;
-                st.ret_done = 1;
-                yield 0
-            } else {
-                if st.emit_cursor < st.op_count {
-                    // Stream the resolved buffer one op word at a time.
-                    let w = st.ops[st.emit_cursor];
-                    st.emit_cursor = st.emit_cursor + 1;
-                    yield w
-                } else {
-                    if st.count_done == 0 {
-                        st.count_done = 1;
-                        yield st.pool_count   // the constant-pool size (raw Word)
-                    } else {
-                        if st.pool_cursor < st.pool_count {
-                            let v = st.pool[st.pool_cursor];
-                            st.pool_cursor = st.pool_cursor + 1;
-                            yield v           // a pool value (raw Word)
-                        } else {
-                            if st.header_done == 0 {
-                                // The local-frame size: parameters plus one slot per
-                                // `let`, counted from the LetIn nodes the walk saw.
-                                st.header_done = 1;
-                                yield ast.param_count + st.let_count
-                            } else {
-                                yield 0       // fully drained
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    match main_phase() {
+        0 => yield seed_step(),
+        1 => yield walk_step(),
+        2 => yield drain_return(),
+        3 => yield drain_buffer(),
+        4 => yield drain_count(),
+        5 => yield drain_pool(),
+        6 => yield drain_header(),
+        _ => yield 0,
     }
 }
