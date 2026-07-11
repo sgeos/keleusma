@@ -1,6 +1,6 @@
-//! Stage 2 parser (`compiler/kel/parser.kel`), increment 7: the function signature
-//! (including array types) and the shared, private, and const `data` block
-//! declaration, streamed as a per-declaration record.
+//! Stage 2 parser (`compiler/kel/parser.kel`), increment 8: the function signature
+//! (including array types), the shared, private, and const `data` block declaration,
+//! and the bare `use path::name` native import, streamed as a per-declaration record.
 //!
 //! A throwaway adapter maps the reference tokenizer's output into the parser
 //! stage's `(kind, value)` token stream, the Keleusma `loop` consumes it one token
@@ -12,17 +12,20 @@
 //! interned name), then per field a `PARAM` and a `PTYPE`, then `END`; it has no
 //! `RETTYPE`. A const field's `= initializer` value is skipped (a depth-aware scan
 //! that consumes a nested array, tuple, or struct initializer whole) and emits
-//! nothing this increment. A `PTYPE` or `RETTYPE` naming an array element is
+//! nothing this increment. A use import is a `USTART` element, then one `UPATH` per
+//! `::`-separated path segment, then `END`; the last segment is the imported name and
+//! the rest the module path. A `PTYPE` or `RETTYPE` naming an array element is
 //! immediately followed by an `ASIZE` carrying the literal length, so the host
 //! reconstructs `[T; N]`. The element type is a simple named type and the length a
 //! literal this increment; an arbitrarily nested element, a const length, the other
-//! nested types (generics, tuples), the parsed body, and the const initializer values
-//! are later increments. The host reassembles each record and checks the function
-//! declarations and data block declarations against the reference parse's two
-//! collections, including a const-generic type parameter that must not be mistaken
-//! for a value parameter, multiheaded functions whose heads are separate
-//! declarations, array-typed fields, and a const block whose initializers are
-//! skipped.
+//! nested types (generics, tuples), the parsed body, the const initializer values,
+//! and the use signature/wildcard/external forms are later increments. The host
+//! reassembles each record and checks the function, data block, and use import
+//! declarations against the reference parse's three collections, including a
+//! const-generic type parameter that must not be mistaken for a value parameter,
+//! multiheaded functions whose heads are separate declarations, array-typed fields, a
+//! const block whose initializers are skipped, and a multi-segment use path whose
+//! delimiter-free end is pushed back for the next declaration.
 
 #![cfg(all(
     feature = "compile",
@@ -33,7 +36,7 @@
 ))]
 
 use keleusma::Arena;
-use keleusma::ast::{DataVisibility, FunctionCategory, Pattern, PrimType, TypeExpr};
+use keleusma::ast::{DataVisibility, FunctionCategory, ImportItem, Pattern, PrimType, TypeExpr};
 use keleusma::bytecode::Value;
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
@@ -83,6 +86,8 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
             TokenKind::Const => (16, 0),
             TokenKind::Eq => (17, 0),
             TokenKind::RBracket => (18, 0),
+            TokenKind::Use => (19, 0),
+            TokenKind::ColonColon => (20, 0),
             TokenKind::Eof => continue,
             _ => (4, 0),
         };
@@ -110,12 +115,17 @@ type Decl = (i64, i64, Vec<(i64, TypeRepr)>, TypeRepr);
 /// name id, and its fields as (name id, type) in order.
 type DataBlock = (i64, i64, Vec<(i64, TypeRepr)>);
 
-/// Everything the parser yields, in the two collections the reference AST keeps them
-/// in: function declarations and data block declarations.
+/// A parsed `use` native import: the module path segment ids and the imported name
+/// id, mirroring the reference `UseDecl`'s `path` and `import` name.
+type UseImport = (Vec<i64>, i64);
+
+/// Everything the parser yields, in the collections the reference AST keeps them in:
+/// function declarations, data block declarations, and use imports.
 #[derive(Debug, Default, PartialEq)]
 struct Parsed {
     funcs: Vec<Decl>,
     data: Vec<DataBlock>,
+    uses: Vec<UseImport>,
 }
 
 /// Which type an `ASIZE` element upgrades to an array: the last parameter's type, or
@@ -128,11 +138,13 @@ enum ArrTarget {
 }
 
 /// The declaration currently being assembled from the record stream: a function
-/// (opened by START) or a data block (opened by DSTART). Both carry a field/parameter
-/// list; only a function carries a return type.
+/// (opened by START), a data block (opened by DSTART), or a use import (opened by
+/// USTART). A function and a data block carry a field/parameter list; only a function
+/// carries a return type; a use accumulates its raw path segments.
 enum Cur {
     Func(Decl),
     Data(DataBlock),
+    Use(Vec<i64>),
 }
 
 impl Cur {
@@ -141,6 +153,7 @@ impl Cur {
         match self {
             Cur::Func(d) => &mut d.2,
             Cur::Data(d) => &mut d.2,
+            Cur::Use(_) => panic!("a use import has no field list"),
         }
     }
 }
@@ -194,6 +207,16 @@ fn run_parser(src: &str, names: &mut Vec<String>) -> Parsed {
                         cur = Some(Cur::Data((vis, name, Vec::new())));
                         arr_target = ArrTarget::None;
                     }
+                    10 => {
+                        // USTART of a use import.
+                        cur = Some(Cur::Use(Vec::new()));
+                        arr_target = ArrTarget::None;
+                    }
+                    11 => match cur.as_mut().expect("UPATH before USTART") {
+                        // UPATH: one path segment of the current use import.
+                        Cur::Use(segments) => segments.push(val),
+                        _ => panic!("UPATH outside a use import"),
+                    },
                     4 => cur
                         .as_mut()
                         .expect("PARAM before START/DSTART")
@@ -213,7 +236,7 @@ fn run_parser(src: &str, names: &mut Vec<String>) -> Parsed {
                         // RETTYPE; a function only.
                         match cur.as_mut().expect("RETTYPE before START") {
                             Cur::Func(d) => d.3 = TypeRepr::Named(val),
-                            Cur::Data(_) => panic!("RETTYPE inside a data block"),
+                            _ => panic!("RETTYPE outside a function"),
                         }
                         arr_target = ArrTarget::Ret;
                     }
@@ -238,15 +261,20 @@ fn run_parser(src: &str, names: &mut Vec<String>) -> Parsed {
                                     };
                                     d.3 = TypeRepr::Array(elem, val);
                                 }
-                                Cur::Data(_) => panic!("return-type ASIZE inside a data block"),
+                                _ => panic!("return-type ASIZE outside a function"),
                             },
                             ArrTarget::None => panic!("ASIZE with no pending type"),
                         }
                         arr_target = ArrTarget::None;
                     }
-                    5 => match cur.take().expect("END before START/DSTART") {
+                    5 => match cur.take().expect("END before START/DSTART/USTART") {
                         Cur::Func(d) => parsed.funcs.push(d),
                         Cur::Data(d) => parsed.data.push(d),
+                        Cur::Use(mut segments) => {
+                            // The last segment is the imported name; the rest is the path.
+                            let name = segments.pop().expect("use import has a name");
+                            parsed.uses.push((segments, name));
+                        }
                     }, // END
                     15 => {
                         assert!(cur.is_none(), "DONE mid-declaration");
@@ -354,7 +382,24 @@ fn reference(src: &str, names: &[String]) -> Parsed {
             (vis, id_of(&d.name), fields)
         })
         .collect();
-    Parsed { funcs, data }
+    let uses = program
+        .uses
+        .iter()
+        .map(|u| {
+            assert!(
+                u.signature.is_none(),
+                "use signatures are a later increment"
+            );
+            assert!(!u.is_external, "external use is a later increment");
+            let name = match &u.import {
+                ImportItem::Name(n) => id_of(n),
+                ImportItem::Wildcard => panic!("use wildcard is a later increment"),
+            };
+            let path = u.path.iter().map(|s| id_of(s)).collect();
+            (path, name)
+        })
+        .collect();
+    Parsed { funcs, data, uses }
 }
 
 // A single function: the parser recognises one declaration and yields its name.
@@ -573,4 +618,29 @@ fn const_data_blocks_skip_initializers() {
             ]
         )
     );
+}
+
+// Bare `use path::name` native imports are recognised, with the module path and the
+// imported name, including a multi-segment path. The two imports and a following
+// function prove the terminating token (a use has no delimiter) is pushed back and
+// re-read as the next declaration: the first use ends at the second `use`, the second
+// at `fn`. The reference grammar requires imports before functions.
+#[test]
+fn use_imports_are_recognised() {
+    let src = "use audio::play_note \
+        use game::world::spawn \
+        fn tick(x: Word) -> Word { x }";
+    let mut names = Vec::new();
+    let got = run_parser(src, &mut names);
+    let want = reference(src, &names);
+    assert_eq!(got, want);
+    let id = |s: &str| names.iter().position(|n| n == s).unwrap() as i64;
+    // The function between the two imports is recognised, and both imports carry their
+    // module path and name.
+    assert_eq!(got.funcs.len(), 1);
+    assert_eq!(got.uses.len(), 2);
+    // `use audio::play_note`: path [audio], name play_note.
+    assert_eq!(got.uses[0], (vec![id("audio")], id("play_note")));
+    // `use game::world::spawn`: path [game, world], name spawn.
+    assert_eq!(got.uses[1], (vec![id("game"), id("world")], id("spawn")));
 }
