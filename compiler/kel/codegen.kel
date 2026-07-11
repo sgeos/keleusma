@@ -1,9 +1,14 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
-// Increment 22 adopts the pipeline idiom where it reads well: the node dispatch in
-// `walk_step` pipes the kind field straight into a `match` (`ast.kinds[payload] |>
-// match { ... }`), exercising the parent crate's `|> match` support. Otherwise
-// unchanged from increment 21 below; the conformance suite stays byte-identical.
+// Increment 23: scalar data-segment access. Adds a DataRead node (kind 11, args =
+// data slot) that emits `GetData(slot)`, and a DataAssignIn block statement (kind
+// 12, args = data slot, lhs = value, rhs = continuation) that emits the value ops
+// then `SetData(slot)` before the continuation, generalizing the block from a
+// `let`-only cons-list to a sequence of `let` and data-assignment statements. The
+// data slot is the field's index in the module data layout, resolved by name by
+// the input adapter (layout data, like the parameter arity). Array access remains
+// a later increment. The dispatch in walk_step below pipes the kind field into a
+// `match` (increment 22's idiom).
 //
 // Increment 21: the loop delegates its yield to a multiheaded `yield` function.
 // The phase state machine, previously the heads of `loop main`, is now the
@@ -26,7 +31,8 @@ require word >= 32;
 // Flattened expression forest from the codegen input adapter, a structure-of-
 // arrays. `kinds` is 1 Literal, 2 Local, 3 BinOp, 4 If, 5 LetIn, 6 UnaryNot,
 // 7 Call, 8 Andalso, 9 Orelse (the last two have lhs=left, rhs=right), 10 UnaryNeg
-// (operand in lhs). `args` is
+// (operand in lhs), 11 DataRead (args = data slot), 12 DataAssignIn (args = data
+// slot, lhs = value, rhs = continuation). `args` is
 // the literal *value* for a Literal, the slot for a Local, the
 // operator for a BinOp, the condition node for an If, the bound slot for a LetIn,
 // or the callee chunk index for a Call. `lhs`/`rhs` are child node indices: for a
@@ -82,7 +88,7 @@ private data st {
 //   11 CmpEq  12 CmpNe  13 CmpLt  14 CmpGt  15 CmpLe  16 CmpGe
 //   17 If(target)  18 Else(target)  19 EndIf   (targets already resolved)  20 Not
 //   21 Call(chunk, count)   operand packed as chunk + count*65536   22 Dup
-//   23 CheckedNeg  24 BitAnd  25 BitOr  26 BitXor
+//   23 CheckedNeg  24 BitAnd  25 BitOr  26 BitXor  27 GetData(slot)  28 SetData(slot)
 // The op stream ends with Return. After Return the stage emits its constant pool:
 // first the pool size as a raw Word, then that many raw Word values, and finally
 // `local_count` as one raw Word. The host reads ops until Return, then the pool
@@ -220,6 +226,22 @@ fn push_neg(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
+// DataRead (kind 11): read a scalar data field. Schedule GetData(slot); args is the
+// data slot (its index in the module's data layout).
+fn push_data_read(p: Word) -> Word {
+    push_emit(27 + ast.args[p] * 32)
+}
+
+// DataAssignIn (kind 12): `<data-slot> = <value>; <cont>`. Like a LetIn but the
+// value is stored to a data slot with SetData rather than to a local, and it binds
+// no name so it does not add to local_count. Node: args = data slot, lhs = value,
+// rhs = continuation.
+fn push_data_assign(p: Word) -> Word {
+    push_visit(ast.rhs[p]);
+    push_emit(28 + ast.args[p] * 32);
+    push_visit(ast.lhs[p])
+}
+
 // Call (kind 7): emit the argument ops left to right, then Call(chunk, count),
 // with the two Call operands packed as chunk + count*65536. args = chunk index,
 // lhs = args_start (into call_args), rhs = arg count. Push EMIT Call first, then
@@ -294,6 +316,8 @@ fn walk_step() -> Word {
             8 => push_andalso(payload),
             9 => push_orelse(payload),
             10 => push_neg(payload),
+            11 => push_data_read(payload),
+            12 => push_data_assign(payload),
             _ => 0,
         };
     }

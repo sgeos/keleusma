@@ -11,9 +11,10 @@
 //! Keleusma stage walks it recursion-free, interns each literal into its own
 //! deduplicating constant pool, and emits the ops followed by the pool. The host
 //! builds the module from the stage's ops and pool, checks structural equality
-//! against the Rust compiler, and runs it. Increment 17 rounds out the operator
-//! surface with unary negation (`CheckedNeg` + `PopN(2)`) and the per-limb bitwise
-//! operators `band`/`bor`/`bxor` (single-op, no `PopN`).
+//! against the Rust compiler, and runs it. Increment 23 adds scalar data-segment
+//! access: a `d.field` read lowers to `GetData(slot)`, and a `d.field = e`
+//! statement lowers to the value ops then `SetData(slot)`, with the slot resolved
+//! by name from the reference module's data layout.
 
 use keleusma::Arena;
 use keleusma::ast::{BinOp, Block, Expr, Literal, Param, Pattern, Stmt, UnaryOp};
@@ -40,12 +41,23 @@ struct Node {
     rhs: i64,
 }
 
-/// Flattening context: the node forest, the packed call-argument node indices, and
-/// the callee chunk names (for resolving a call target to a chunk index).
+/// Flattening context: the node forest, the packed call-argument node indices, the
+/// callee chunk names (for resolving a call target to a chunk index), and the data
+/// slot names (for resolving a `d.field` access to its data-layout slot index).
 struct Ctx {
     nodes: Vec<Node>,
     call_args: Vec<i64>,
     chunk_names: Vec<String>,
+    data_slots: Vec<String>,
+}
+
+/// Resolve a `data.field` reference to its slot index in the module data layout.
+fn data_slot(ctx: &Ctx, data_name: &str, field: &str) -> i64 {
+    let slot_name = format!("{data_name}.{field}");
+    ctx.data_slots
+        .iter()
+        .position(|n| n == &slot_name)
+        .unwrap_or_else(|| panic!("no data slot named `{slot_name}`")) as i64
 }
 
 /// A flattened function body: the flattening context and the body's block root.
@@ -195,14 +207,32 @@ fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &
             });
             (ctx.nodes.len() - 1) as i64
         }
-        other => panic!("increment handles literal/local/binop/if/not/call only, got {other:?}"),
+        Expr::FieldAccess { object, field, .. } => {
+            // A `d.field` read of a data block. DataRead (kind 11): arg = data slot.
+            let data_name = match object.as_ref() {
+                Expr::Ident { name, .. } => name,
+                other => panic!("increment handles data field access only, got {other:?}"),
+            };
+            let slot = data_slot(ctx, data_name, field);
+            ctx.nodes.push(Node {
+                kind: 11,
+                arg: slot,
+                lhs: 0,
+                rhs: 0,
+            });
+            (ctx.nodes.len() - 1) as i64
+        }
+        other => {
+            panic!("increment handles literal/local/binop/if/not/call/data-read, got {other:?}")
+        }
     }
 }
 
-/// Flatten a block into a `LetIn` cons-list ending in the tail expression, and
-/// return its root node index. Each `let` is flattened under the scope visible at
-/// that point and assigned the next monotonic slot; block-local bindings leave the
-/// scope on exit, but slots are never reused (matching the reference).
+/// Flatten a block into a cons-list of statements ending in the tail expression,
+/// and return its root node index. Each statement becomes a link: a `let` becomes a
+/// `LetIn` (kind 5, slot is a fresh local), a data assignment becomes a
+/// `DataAssignIn` (kind 12, slot is the data-layout slot). `let`s are assigned the
+/// next monotonic slot and leave the scope on exit; slots are never reused.
 fn flatten_block(
     block: &Block,
     scope: &mut Vec<(String, i64)>,
@@ -210,7 +240,9 @@ fn flatten_block(
     ctx: &mut Ctx,
 ) -> i64 {
     let mark = scope.len();
-    let mut lets: Vec<(i64, i64)> = Vec::new();
+    // Each entry is (node kind, slot, value node): kind 5 LetIn (local slot) or
+    // kind 12 DataAssignIn (data slot).
+    let mut stmts: Vec<(i64, i64, i64)> = Vec::new();
     for st in &block.stmts {
         match st {
             Stmt::Let(l) => {
@@ -222,9 +254,19 @@ fn flatten_block(
                 let slot = *next_slot;
                 *next_slot += 1;
                 scope.push((name, slot));
-                lets.push((slot, value));
+                stmts.push((5, slot, value));
             }
-            other => panic!("increment handles let statements only, got {other:?}"),
+            Stmt::DataFieldAssign {
+                data_name,
+                field,
+                value,
+                ..
+            } => {
+                let value_node = flatten(value, scope, next_slot, ctx);
+                let slot = data_slot(ctx, data_name, field);
+                stmts.push((12, slot, value_node));
+            }
+            other => panic!("increment handles let and data-assign statements, got {other:?}"),
         }
     }
     let tail = flatten(
@@ -236,11 +278,11 @@ fn flatten_block(
         next_slot,
         ctx,
     );
-    // Fold the lets into a LetIn cons-list from the innermost (tail) outward.
+    // Fold the statements into a cons-list from the innermost (tail) outward.
     let mut cont = tail;
-    for &(slot, value) in lets.iter().rev() {
+    for &(kind, slot, value) in stmts.iter().rev() {
         ctx.nodes.push(Node {
-            kind: 5,
+            kind,
             arg: slot,
             lhs: value,
             rhs: cont,
@@ -254,11 +296,17 @@ fn flatten_block(
 /// Flatten a function body, returning the node forest, the packed call arguments,
 /// and the body's block root. Parameters occupy the first slots. `chunk_names` maps
 /// a call target to its chunk index by position.
-fn build_body(block: &Block, params: &[Param], chunk_names: Vec<String>) -> Body {
+fn build_body(
+    block: &Block,
+    params: &[Param],
+    chunk_names: Vec<String>,
+    data_slots: Vec<String>,
+) -> Body {
     let mut ctx = Ctx {
         nodes: Vec::new(),
         call_args: Vec::new(),
         chunk_names,
+        data_slots,
     };
     let mut scope: Vec<(String, i64)> = params
         .iter()
@@ -303,6 +351,8 @@ fn decode_op(w: i64) -> Op {
         24 => Op::BitAnd,
         25 => Op::BitOr,
         26 => Op::BitXor,
+        27 => Op::GetData(operand as u16),
+        28 => Op::SetData(operand as u16),
         other => panic!("unknown op tag {other} (word {w})"),
     }
 }
@@ -554,6 +604,24 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
         ("fn main(a: Word) -> Word { a band 6 }", 5, Int(4)),
         ("fn main(a: Word) -> Word { a bor 1 }", 4, Int(5)),
         ("fn main(a: Word) -> Word { a bxor 3 }", 5, Int(6)),
+        // Scalar data read/write: SetData then GetData.
+        (
+            "private data d { x: Word } fn main(v: Word) -> Word { d.x = v; d.x }",
+            42,
+            Int(42),
+        ),
+        // Two data fields, written then read and combined.
+        (
+            "private data d { a: Word, b: Word } fn main(v: Word) -> Word { d.a = v; d.b = v + 1; d.a + d.b }",
+            20,
+            Int(41),
+        ),
+        // Data write interleaved with a let, and a read in the tail.
+        (
+            "private data d { x: Word } fn main(v: Word) -> Word { let y = v * 2; d.x = y; d.x + 1 }",
+            20,
+            Int(41),
+        ),
     ];
     for &(src, arg, expected) in cases {
         let program = parse(&tokenize(src).expect("lex")).expect("parse");
@@ -561,13 +629,18 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
         let idx = main_index(&reference);
         let reference_ops = reference.chunks[idx].ops.clone();
         let chunk_names: Vec<String> = reference.chunks.iter().map(|c| c.name.clone()).collect();
+        let data_slots: Vec<String> = reference
+            .data_layout
+            .as_ref()
+            .map(|dl| dl.slots.iter().map(|s| s.name.clone()).collect())
+            .unwrap_or_default();
 
         let main_fn = program
             .functions
             .iter()
             .find(|f| f.name == "main")
             .expect("main fn");
-        let body = build_body(&main_fn.body, &main_fn.params, chunk_names);
+        let body = build_body(&main_fn.body, &main_fn.params, chunk_names, data_slots);
 
         // The stage resolves its own If/Else targets and emits its own local_count,
         // so the emitted stream plus local_count is a complete logical chunk body.
