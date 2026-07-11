@@ -1,22 +1,22 @@
-//! Body-expression parser (`compiler/kel/body.kel`), increment 5: an expression body
-//! over integer literals, parameter references, the binary arithmetic and comparison
-//! operators, the bitwise (`band`/`bor`/`bxor`) and short-circuit boolean
-//! (`andalso`/`orelse`) operators, parenthesised grouping, and the unary prefix
-//! operators `-` and `not`, lowered by operator precedence to the abstract-syntax node
-//! forest the codegen stage consumes.
+//! Body-expression parser (`compiler/kel/body.kel`), increment 6: a function body that
+//! is a block of `let` bindings followed by a tail expression, over the full
+//! operator-precedence expression grammar (literals, parameter and local references,
+//! the arithmetic, comparison, bitwise, and short-circuit operators, grouping, and the
+//! unary prefix operators), lowered to the abstract-syntax node forest codegen
+//! consumes.
 //!
 //! A throwaway adapter tokenises a function, feeds the body's tokens (from the opening
 //! `{`) and the function's parameter-name table to the `body.kel` `loop`, and decodes
 //! the postorder node-record stream into a node forest. Each leaf record (Literal,
 //! Local) pushes a node and its index onto a stack; an interior binary record (BinOp,
-//! Andalso, Orelse) pops its two operands and a unary record (Not, Neg) pops one,
-//! pushing the combined node. The forest is checked against a reference flattening of
-//! the same body's tail expression, with parameters occupying the first frame slots —
+//! Andalso, Orelse) pops two operands, a unary record (Not, Neg) pops one, and a LetIn
+//! record pops the running continuation and the bound value — each pushing the combined
+//! node. The forest is checked against a reference flattening of the same body's block,
+//! with parameters occupying the first frame slots and each `let` binding the next —
 //! the same lowering the codegen conformance harness performs — so the full operator
-//! precedence chain (unary, multiplicative, additive, bitwise, comparison,
-//! short-circuit), the left-associativity of the binary operators, and the prefix
-//! binding and right-associative nesting of the unary operators are all verified
-//! against the reference parser's own tree.
+//! precedence chain, the associativity of every operator, and the `let` slot allocation,
+//! scope resolution (a later binding shadowing an earlier one or a parameter), and
+//! LetIn cons-list are all verified against the reference parser's own tree.
 
 #![cfg(all(
     feature = "compile",
@@ -27,7 +27,7 @@
 ))]
 
 use keleusma::Arena;
-use keleusma::ast::{BinOp, Expr, Literal, Pattern, UnaryOp};
+use keleusma::ast::{BinOp, Expr, Literal, Pattern, Stmt, UnaryOp};
 use keleusma::bytecode::Value;
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
@@ -108,6 +108,10 @@ fn run_body(func_src: &str) -> (Vec<Node>, i64) {
             TokenKind::Bxor => (35, 0),
             TokenKind::Andalso => (36, 0),
             TokenKind::Orelse => (37, 0),
+            TokenKind::Let => (38, 0),
+            TokenKind::Semicolon => (39, 0),
+            TokenKind::Eq => (17, 0),
+            TokenKind::Colon => (9, 0),
             TokenKind::Eof => continue,
             _ => (4, 0),
         };
@@ -152,9 +156,10 @@ fn run_body(func_src: &str) -> (Vec<Node>, i64) {
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
     // Each token yields at least once, and an operator spreads its shunting-yard
-    // pops and push across extra iterations; with a Reset between every yield, the
-    // state budget is a generous multiple of the token count.
-    for _ in 0..(body_kinds.len() * 8 + 64) {
+    // pops and push, a `let` its drain, and the tail its LetIn fold, across extra
+    // iterations; with a Reset between every yield, the state budget is a generous
+    // multiple of the token count.
+    for _ in 0..(body_kinds.len() * 12 + 128) {
         match state {
             VmState::Yielded(Value::Int(w)) => {
                 let kind = w.rem_euclid(16);
@@ -195,6 +200,19 @@ fn run_body(func_src: &str) -> (Vec<Node>, i64) {
                         });
                         stack.push((nodes.len() - 1) as i64);
                     }
+                    5 => {
+                        // A LetIn node: pop the continuation (rhs) and the bound value
+                        // (lhs); arg is the binding slot.
+                        let rhs = stack.pop().expect("LetIn needs a continuation");
+                        let lhs = stack.pop().expect("LetIn needs a bound value");
+                        nodes.push(Node {
+                            kind,
+                            arg,
+                            lhs,
+                            rhs,
+                        });
+                        stack.push((nodes.len() - 1) as i64);
+                    }
                     15 => {
                         // DONE: the single remaining stack entry is the body root.
                         assert_eq!(stack.len(), 1, "the body has exactly one root node");
@@ -217,7 +235,7 @@ fn run_body(func_src: &str) -> (Vec<Node>, i64) {
 /// node. This mirrors the codegen conformance harness's `flatten` for the subset the
 /// body parser handles so far: integer literals, parameter references, and the binary
 /// arithmetic and comparison operators.
-fn flatten(expr: &Expr, scope: &[&str], nodes: &mut Vec<Node>) -> i64 {
+fn flatten(expr: &Expr, scope: &[String], nodes: &mut Vec<Node>) -> i64 {
     match expr {
         Expr::Literal {
             value: Literal::Int(n),
@@ -232,10 +250,13 @@ fn flatten(expr: &Expr, scope: &[&str], nodes: &mut Vec<Node>) -> i64 {
             (nodes.len() - 1) as i64
         }
         Expr::Ident { name, .. } => {
+            // The scope holds names at their frame slots (parameters first, then `let`
+            // bindings); the most recent binding of a name wins.
             let slot = scope
                 .iter()
-                .position(|n| n == name)
-                .expect("identifier is a parameter this increment") as i64;
+                .rposition(|n| n == name)
+                .expect("identifier is a parameter or a let binding this increment")
+                as i64;
             nodes.push(Node {
                 kind: 2,
                 arg: slot,
@@ -301,20 +322,48 @@ fn flatten(expr: &Expr, scope: &[&str], nodes: &mut Vec<Node>) -> i64 {
     }
 }
 
-/// The reference forest for a body: flatten the function's tail expression, with
-/// parameters occupying the first frame slots.
+/// The reference forest for a body: flatten the function's block of `let` bindings and
+/// tail expression, with parameters occupying the first frame slots and each binding
+/// the next slot, then wrap the tail in a LetIn cons-list innermost (last) binding
+/// first — the same lowering the codegen conformance harness performs.
 fn reference_body(func_src: &str) -> (Vec<Node>, i64) {
     let program = parse(&tokenize(func_src).expect("lex")).expect("parse");
     let f = &program.functions[0];
-    let scope: Vec<&str> = f.params.iter().map(param_name).collect();
+    let mut scope: Vec<String> = f.params.iter().map(|p| param_name(p).to_string()).collect();
+    let mut nodes = Vec::new();
+    // Each entry is (binding slot, bound-value node index).
+    let mut stmts: Vec<(i64, i64)> = Vec::new();
+    for st in &f.body.stmts {
+        match st {
+            Stmt::Let(l) => {
+                let value = flatten(&l.value, &scope, &mut nodes);
+                let name = match &l.pattern {
+                    Pattern::Variable(n, _) => n.clone(),
+                    other => panic!("test uses simple let patterns only, got {other:?}"),
+                };
+                let slot = scope.len() as i64;
+                scope.push(name);
+                stmts.push((slot, value));
+            }
+            other => panic!("increment handles let statements only, got {other:?}"),
+        }
+    }
     let tail = f
         .body
         .tail_expr
         .as_ref()
-        .expect("a body is a single tail expression this increment");
-    let mut nodes = Vec::new();
-    let root = flatten(tail, &scope, &mut nodes);
-    (nodes, root)
+        .expect("a body has a tail expression this increment");
+    let mut cont = flatten(tail, &scope, &mut nodes);
+    for &(slot, value) in stmts.iter().rev() {
+        nodes.push(Node {
+            kind: 5,
+            arg: slot,
+            lhs: value,
+            rhs: cont,
+        });
+        cont = (nodes.len() - 1) as i64;
+    }
+    (nodes, cont)
 }
 
 // A body that is a single integer literal is one Literal node.
@@ -635,4 +684,78 @@ fn andalso_binds_tighter_than_orelse() {
     let orelse = nodes[root as usize];
     assert_eq!(orelse.kind, 9); // Orelse
     assert_eq!(nodes[orelse.lhs as usize].kind, 8); // Andalso
+}
+
+// A single `let` binding wraps the tail in a LetIn node; the binding takes the slot
+// after the parameters, and the tail references it as a Local.
+#[test]
+fn a_single_let_binding_wraps_the_tail() {
+    let src = "fn f(a: Word) -> Word { let b = a + 1; b }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let letin = nodes[root as usize];
+    assert_eq!(letin.kind, 5);
+    assert_eq!(letin.arg, 1); // slot 1 (after the single parameter a at slot 0)
+    // The continuation is the tail Local referring to slot 1.
+    assert_eq!(
+        nodes[letin.rhs as usize],
+        Node {
+            kind: 2,
+            arg: 1,
+            lhs: 0,
+            rhs: 0
+        }
+    );
+    // The bound value is `a + 1`, an Add.
+    assert_eq!(nodes[letin.lhs as usize].arg, 1); // Add
+}
+
+// A binding with a type annotation is read the same; the annotation is skipped.
+#[test]
+fn a_typed_let_binding_is_read() {
+    let src = "fn f() -> Word { let x: Word = 7; x }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let letin = nodes[root as usize];
+    assert_eq!(letin.kind, 5);
+    assert_eq!(letin.arg, 0); // slot 0 (no parameters)
+}
+
+// Several bindings nest as a cons-list, outermost binding first, each referencing the
+// prior ones.
+#[test]
+fn multiple_let_bindings_nest() {
+    let src = "fn f() -> Word { let a = 1; let b = a + 2; let c = b * 3; a + b + c }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    // Root is the LetIn for a (slot 0); its continuation is the LetIn for b (slot 1);
+    // then c (slot 2); then the tail.
+    let la = nodes[root as usize];
+    assert_eq!((la.kind, la.arg), (5, 0));
+    let lb = nodes[la.rhs as usize];
+    assert_eq!((lb.kind, lb.arg), (5, 1));
+    let lc = nodes[lb.rhs as usize];
+    assert_eq!((lc.kind, lc.arg), (5, 2));
+}
+
+// A later binding of a name shadows an earlier binding: the tail resolves to the most
+// recent slot.
+#[test]
+fn a_later_binding_shadows_an_earlier_one() {
+    let src = "fn f() -> Word { let x = 1; let x = x + 1; x }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    // The tail `x` resolves to the second binding's slot (1), not the first (0).
+    let outer = nodes[root as usize]; // LetIn slot 0
+    let inner = nodes[outer.rhs as usize]; // LetIn slot 1
+    assert_eq!(inner.arg, 1);
+    assert_eq!(
+        nodes[inner.rhs as usize],
+        Node {
+            kind: 2,
+            arg: 1,
+            lhs: 0,
+            rhs: 0
+        }
+    );
 }
