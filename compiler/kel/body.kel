@@ -1,12 +1,13 @@
 // compiler/kel/body.kel — the body-expression parser, a sub-component of Stage 2.
 //
-// Increment 16: a function body over the full operator-precedence expression grammar,
+// Increment 17: a function body over the full operator-precedence expression grammar,
 // scalar and indexed data-field reads, `let` bindings and scalar data-field
-// assignments, the `if`/`else` conditional with nested statement-block branches,
-// function calls, the bounded `for v in start..end limit CAP { body }` loop, and a
-// statement-only block whose implicit value is Unit. Real Keleusma code that compiles
-// and verifies on the current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and
-// compiler/MILESTONES.md (roadmap Step 2).
+// assignments, the bare expression statement `expr;`, the `if`/`else` conditional with
+// nested statement-block branches, function calls, the bounded
+// `for v in start..end limit CAP { body }` loop, and a statement-only block whose
+// implicit value is Unit. Real Keleusma code that compiles and verifies on the current
+// runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md (roadmap
+// Step 2).
 //
 // Model. Stage 2's declaration parser (parser.kel) reads a function's signature and
 // brace-matches its body. This companion loop reads that body's tokens and produces
@@ -218,6 +219,9 @@ private data bs {
     pstmt_name: [Word; 16],
     pstmt_arg: [Word; 16],
     pstmt_sp: Word,
+    stmt_base: Word,
+    pbase: [Word; 16],
+    pbase_sp: Word,
     folding: Word,
     fold_i: Word,
     da_phase: Word,
@@ -477,24 +481,34 @@ fn step_draining() -> Word {
         emit_op(op)
     } else {
         if bs.drain_reason == 0 {
-            // Commit the innermost pending statement (a nested statement inside this
-            // one's value has already committed and popped itself).
-            bs.pstmt_sp = bs.pstmt_sp - 1;
-            if bs.pstmt_kind[bs.pstmt_sp] == 0 {
-                // A `let`: claim the next frame slot from the monotonic counter and
-                // bind its name to that slot (the counter also advances for a loop's
-                // anonymous slots, so the slot is stored explicitly, not derived).
-                let slot = src.param_count + bs.slot_count;
-                bs.slot_count = bs.slot_count + 1;
-                bs.stmt_kind[bs.stmt_count] = 5;
-                bs.stmt_arg[bs.stmt_count] = slot;
-                bs.let_names[bs.let_count] = bs.pstmt_name[bs.pstmt_sp];
-                bs.scope_slot[bs.let_count] = slot;
-                bs.let_count = bs.let_count + 1;
+            // Commit the current statement at its `;`. A pending statement above the
+            // current block's baseline is a `let` or an assignment (its `=` pushed it);
+            // otherwise the statement is a bare expression whose value is discarded. A
+            // nested statement inside this one's value has already committed and popped
+            // itself, so the innermost pending entry, if any, is this statement's own.
+            if bs.pstmt_sp > bs.stmt_base {
+                bs.pstmt_sp = bs.pstmt_sp - 1;
+                if bs.pstmt_kind[bs.pstmt_sp] == 0 {
+                    // A `let`: claim the next frame slot from the monotonic counter and
+                    // bind its name to that slot (the counter also advances for a loop's
+                    // anonymous slots, so the slot is stored explicitly, not derived).
+                    let slot = src.param_count + bs.slot_count;
+                    bs.slot_count = bs.slot_count + 1;
+                    bs.stmt_kind[bs.stmt_count] = 5;
+                    bs.stmt_arg[bs.stmt_count] = slot;
+                    bs.let_names[bs.let_count] = bs.pstmt_name[bs.pstmt_sp];
+                    bs.scope_slot[bs.let_count] = slot;
+                    bs.let_count = bs.let_count + 1;
+                } else {
+                    // A scalar data assignment: write the target field's slot.
+                    bs.stmt_kind[bs.stmt_count] = 12;
+                    bs.stmt_arg[bs.stmt_count] = bs.pstmt_arg[bs.pstmt_sp];
+                }
             } else {
-                // A scalar data assignment: write the target field's slot.
-                bs.stmt_kind[bs.stmt_count] = 12;
-                bs.stmt_arg[bs.stmt_count] = bs.pstmt_arg[bs.pstmt_sp];
+                // A bare expression statement (ExprStmt, kind 21): its value node rests
+                // on the host stack, to be discarded by the fold's continuation link.
+                bs.stmt_kind[bs.stmt_count] = 21;
+                bs.stmt_arg[bs.stmt_count] = 0;
             }
             bs.stmt_count = bs.stmt_count + 1;
             bs.draining = 0;
@@ -511,9 +525,14 @@ fn step_draining() -> Word {
             0
         } else {
         if bs.drain_reason == 2 {
-            // The condition is drained; enter the then branch, recording its start.
+            // The condition is drained; enter the then branch, recording its start and
+            // pushing the pending-statement baseline (its statements' `let`/assignment
+            // entries sit above the enclosing statement's).
             bs.if_phase[bs.if_sp - 1] = 2;
             bs.if_stmt_start[bs.if_sp - 1] = bs.stmt_count;
+            bs.pbase[bs.pbase_sp] = bs.stmt_base;
+            bs.pbase_sp = bs.pbase_sp + 1;
+            bs.stmt_base = bs.pstmt_sp;
             bs.draining = 0;
             bs.expect_operand = 1;
             0
@@ -584,6 +603,12 @@ fn step_folding() -> Word {
     } else {
         bs.stmt_count = bs.fold_start;
         bs.folding = 0;
+        // Leaving the just-folded block restores the enclosing pending-statement
+        // baseline (the body, fold_cont 0, is the outermost block and never pushed).
+        if bs.fold_cont > 0 {
+            bs.pbase_sp = bs.pbase_sp - 1;
+            bs.stmt_base = bs.pbase[bs.pbase_sp];
+        }
         if bs.fold_cont == 0 {
             bs.done = 1;
             15
@@ -793,6 +818,9 @@ fn step_forheader(k: Word, v: Word) -> Word {
             bs.let_count = bs.let_count + 1;
             bs.for_phase = 7;
             bs.for_stmt_start = bs.stmt_count;
+            bs.pbase[bs.pbase_sp] = bs.stmt_base;
+            bs.pbase_sp = bs.pbase_sp + 1;
+            bs.stmt_base = bs.pstmt_sp;
             bs.expect_operand = 1;
         }
         0
@@ -880,6 +908,9 @@ fn step_if(k: Word) -> Word {
             } else {
                 bs.if_phase[bs.if_sp - 1] = 5;
                 bs.if_stmt_start[bs.if_sp - 1] = bs.stmt_count;
+                bs.pbase[bs.pbase_sp] = bs.stmt_base;
+                bs.pbase_sp = bs.pbase_sp + 1;
+                bs.stmt_base = bs.pstmt_sp;
                 bs.expect_operand = 1;
             }
         }
@@ -956,6 +987,7 @@ fn step_dispatch(k: Word, v: Word) -> Word {
     if bs.started == 0 {
         if k == 2 {
             bs.started = 1;
+            bs.stmt_base = 0;
             bs.expect_operand = 1;
         }
         0
