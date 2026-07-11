@@ -1,8 +1,8 @@
-//! Body-expression parser (`compiler/kel/body.kel`), increment 10: a function body that
-//! is a block of `let` bindings and scalar data-field assignments followed by a tail
-//! expression, over the full operator-precedence expression grammar plus scalar and
-//! indexed data-field reads and the `if`/`else` conditional with expression branches,
-//! lowered to the abstract-syntax node forest codegen consumes.
+//! Body-expression parser (`compiler/kel/body.kel`), increment 11: a function body over
+//! the full operator-precedence expression grammar, scalar and indexed data-field
+//! reads, `let` bindings and scalar data-field assignments, and the `if`/`else`
+//! conditional whose branches are now full nested statement blocks — lowered to the
+//! abstract-syntax node forest codegen consumes.
 //!
 //! A throwaway adapter tokenises the program, feeds the function body's tokens, the
 //! parameter-name table, and the data-field layout (computed from the compiled
@@ -378,7 +378,12 @@ fn array_base_len(data_slots: &[String], data: &str, field: &str) -> (i64, i64) 
 /// node. This mirrors the codegen conformance harness's `flatten` for the subset the
 /// body parser handles so far: integer literals, parameter and local references, the
 /// unary and binary operators, and scalar data-field reads.
-fn flatten(expr: &Expr, scope: &[String], nodes: &mut Vec<Node>, data_slots: &[String]) -> i64 {
+fn flatten(
+    expr: &Expr,
+    scope: &mut Vec<String>,
+    nodes: &mut Vec<Node>,
+    data_slots: &[String],
+) -> i64 {
     match expr {
         Expr::Literal {
             value: Literal::Int(n),
@@ -505,11 +510,11 @@ fn flatten(expr: &Expr, scope: &[String], nodes: &mut Vec<Node>, data_slots: &[S
             ..
         } => {
             // An If (kind 4): arg = condition, lhs = then branch, rhs = else branch.
-            // This increment's branches are single expressions (no statements).
+            // Each branch is a full statement block.
             let cond = flatten(condition, scope, nodes, data_slots);
-            let then = flatten_branch(then_block, scope, nodes, data_slots);
+            let then = flatten_block(then_block, scope, nodes, data_slots);
             let els = match else_block {
-                Some(eb) => flatten_branch(eb, scope, nodes, data_slots),
+                Some(eb) => flatten_block(eb, scope, nodes, data_slots),
                 None => panic!("increment requires an else branch"),
             };
             nodes.push(Node {
@@ -526,23 +531,60 @@ fn flatten(expr: &Expr, scope: &[String], nodes: &mut Vec<Node>, data_slots: &[S
     }
 }
 
-/// Flatten an `if` branch, which this increment requires to be a single tail
-/// expression (no `let` or assignment statements).
-fn flatten_branch(
+/// Flatten a block — an `if` branch or the function body — into `nodes`, returning its
+/// cons-list root: its `let` and data-assignment statements (each a LetIn or
+/// DataFieldAssignIn) wrap the tail, last to first. A `let` claims the next frame slot
+/// (`scope.len()`, monotonic since the scope is never truncated) and extends the scope,
+/// so the body parser's last-wins resolution over the full binding list matches for
+/// every admissible program.
+fn flatten_block(
     block: &Block,
-    scope: &[String],
+    scope: &mut Vec<String>,
     nodes: &mut Vec<Node>,
     data_slots: &[String],
 ) -> i64 {
-    assert!(
-        block.stmts.is_empty(),
-        "increment requires expression-only if branches"
-    );
+    // Each entry is (statement node kind, arg, value node index).
+    let mut stmts: Vec<(i64, i64, i64)> = Vec::new();
+    for st in &block.stmts {
+        match st {
+            Stmt::Let(l) => {
+                let value = flatten(&l.value, scope, nodes, data_slots);
+                let name = match &l.pattern {
+                    Pattern::Variable(n, _) => n.clone(),
+                    other => panic!("test uses simple let patterns only, got {other:?}"),
+                };
+                let slot = scope.len() as i64;
+                scope.push(name);
+                stmts.push((5, slot, value));
+            }
+            Stmt::DataFieldAssign {
+                data_name,
+                field,
+                value,
+                ..
+            } => {
+                let value_node = flatten(value, scope, nodes, data_slots);
+                let slot = data_slot(data_slots, data_name, field);
+                stmts.push((12, slot, value_node));
+            }
+            other => panic!("increment handles let and data-assign statements, got {other:?}"),
+        }
+    }
     let tail = block
         .tail_expr
         .as_ref()
-        .expect("an if branch has a tail expression");
-    flatten(tail, scope, nodes, data_slots)
+        .expect("a block has a tail expression this increment");
+    let mut cont = flatten(tail, scope, nodes, data_slots);
+    for &(kind, arg, value) in stmts.iter().rev() {
+        nodes.push(Node {
+            kind,
+            arg,
+            lhs: value,
+            rhs: cont,
+        });
+        cont = (nodes.len() - 1) as i64;
+    }
+    cont
 }
 
 /// The reference forest for a body: flatten the function's block of `let` bindings and
@@ -560,51 +602,8 @@ fn reference_body_inner(func_src: &str) -> (Vec<Node>, i64) {
     let f = &program.functions[0];
     let mut scope: Vec<String> = f.params.iter().map(|p| param_name(p).to_string()).collect();
     let mut nodes = Vec::new();
-    // Each entry is (statement node kind, arg, value node index).
-    let mut stmts: Vec<(i64, i64, i64)> = Vec::new();
-    for st in &f.body.stmts {
-        match st {
-            Stmt::Let(l) => {
-                let value = flatten(&l.value, &scope, &mut nodes, &data_slots);
-                let name = match &l.pattern {
-                    Pattern::Variable(n, _) => n.clone(),
-                    other => panic!("test uses simple let patterns only, got {other:?}"),
-                };
-                let slot = scope.len() as i64;
-                scope.push(name);
-                // LetIn (kind 5): arg = the local slot.
-                stmts.push((5, slot, value));
-            }
-            Stmt::DataFieldAssign {
-                data_name,
-                field,
-                value,
-                ..
-            } => {
-                let value_node = flatten(value, &scope, &mut nodes, &data_slots);
-                let slot = data_slot(&data_slots, data_name, field);
-                // DataFieldAssignIn (kind 12): arg = the data slot.
-                stmts.push((12, slot, value_node));
-            }
-            other => panic!("increment handles let and data-assign statements, got {other:?}"),
-        }
-    }
-    let tail = f
-        .body
-        .tail_expr
-        .as_ref()
-        .expect("a body has a tail expression this increment");
-    let mut cont = flatten(tail, &scope, &mut nodes, &data_slots);
-    for &(kind, arg, value) in stmts.iter().rev() {
-        nodes.push(Node {
-            kind,
-            arg,
-            lhs: value,
-            rhs: cont,
-        });
-        cont = (nodes.len() - 1) as i64;
-    }
-    (nodes, cont)
+    let root = flatten_block(&f.body, &mut scope, &mut nodes, &data_slots);
+    (nodes, root)
 }
 
 // A body that is a single integer literal is one Literal node.
@@ -1271,4 +1270,79 @@ fn a_conditional_binds_and_combines() {
     assert_eq!(letin.kind, 5);
     // The bound value is the If.
     assert_eq!(nodes[letin.lhs as usize].kind, 4);
+}
+
+// A branch is a full statement block: its `let` binding folds into a cons-list root,
+// which is the branch of the If.
+#[test]
+fn an_if_branch_is_a_statement_block() {
+    let src = "fn f(x: Word) -> Word { if x > 0 { let y = x + 1; y } else { 0 } }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let iff = nodes[root as usize];
+    assert_eq!(iff.kind, 4);
+    // The then branch is a LetIn (the block's cons-list root), not a bare expression.
+    let then = nodes[iff.lhs as usize];
+    assert_eq!(then.kind, 5);
+    // The binding's slot is 1 (after the parameter x at slot 0).
+    assert_eq!(then.arg, 1);
+    // The else branch is the bare literal 0.
+    assert_eq!(
+        nodes[iff.rhs as usize],
+        Node {
+            kind: 1,
+            arg: 0,
+            lhs: 0,
+            rhs: 0
+        }
+    );
+}
+
+// Both branches carry statements, and the slots continue monotonically across them.
+#[test]
+fn both_branches_carry_statements() {
+    let src = "fn f(x: Word) -> Word { if x > 0 { let a = x; a } else { let b = 0; b } }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let iff = nodes[root as usize];
+    // then: LetIn a at slot 1; else: LetIn b at slot 2 (monotonic, not reused).
+    assert_eq!(
+        (nodes[iff.lhs as usize].kind, nodes[iff.lhs as usize].arg),
+        (5, 1)
+    );
+    assert_eq!(
+        (nodes[iff.rhs as usize].kind, nodes[iff.rhs as usize].arg),
+        (5, 2)
+    );
+}
+
+// A branch block writes data and reads a parameter, then a later statement resumes the
+// enclosing block correctly.
+#[test]
+fn a_branch_block_with_an_assignment() {
+    let src = "shared data d { x: Word } \
+        fn f(n: Word) -> Word { let a = if n > 0 { d.x = n; n } else { 0 }; a }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    // Outer LetIn binds `a` to the If; the If's then branch is a DataFieldAssignIn.
+    let letin = nodes[root as usize];
+    assert_eq!(letin.kind, 5);
+    let iff = nodes[letin.lhs as usize];
+    assert_eq!(iff.kind, 4);
+    assert_eq!(nodes[iff.lhs as usize].kind, 12); // then branch: DataFieldAssignIn
+}
+
+// A statement follows the conditional in the enclosing block: the block state resumes
+// after the branches fold.
+#[test]
+fn a_statement_follows_a_conditional() {
+    let src = "shared data d { x: Word } \
+        fn f(n: Word) -> Word { let a = if n > 0 { n } else { 0 }; d.x = a; a }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    // Root LetIn(a=If); continuation DataFieldAssignIn(d.x = a); then tail a.
+    let letin = nodes[root as usize];
+    assert_eq!((letin.kind, letin.arg), (5, 1));
+    assert_eq!(nodes[letin.lhs as usize].kind, 4); // If
+    assert_eq!(nodes[letin.rhs as usize].kind, 12); // DataFieldAssignIn
 }
