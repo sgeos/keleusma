@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Bounded repetition with a `limit` and an `on` outcome block.** A range `for`
+  loop may now carry a `limit <const>` clause that caps its iteration count with a
+  compile-time constant (an integer literal, a const-data field, or a const
+  parameter). This admits a runtime range that strict verification would otherwise
+  reject, because the worst-case iteration count is the cap rather than the range
+  width; the loop lowers to a compile-time counter `0..limit`, the canonical
+  bounded header the verifier already recognizes, so no verifier change is needed.
+  An unhandled overrun, where the loop reaches the cap before the range is
+  exhausted, traps as the new `TrapKind::LoopLimitExceeded` / `VmError::LoopLimitExceeded`,
+  the fail-loud default consistent with the other capture constructs. An optional
+  `on { ... }` block, mirroring the checked-arithmetic arm block, captures the
+  outcome: `ok(count)` for a completed range, `break(index)` for a body `break`,
+  and `limit(index)` for the overrun; each arm and binding is optional, and an
+  absent `break` arm falls through to `ok`. `limit` and `on` are contextual
+  keywords, so both remain usable as identifiers. The `overflow` outcome and
+  `when` guards on outcome arms are reserved in the grammar but not yet
+  implemented and are rejected explicitly; the increment currently wraps as a
+  plain `for` loop does. See GRAMMAR.md "Bounded Repetition with a Limit". No
+  wire-format or `BYTECODE_VERSION` change (the trap reuses `Op::Trap`).
+
 - **Pipeline into `match`.** A `|>` pipeline target may now be a `match` block
   written without a scrutinee; the piped value becomes the scrutinee. `x |> f() |>
   match { ... }` desugars to `match f(x) { ... }`. This is a parser desugar that

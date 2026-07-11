@@ -1812,6 +1812,11 @@ pub enum TrapKind {
     /// only by debug builds (B29); release builds compile the assert
     /// out entirely.
     AssertionFailed,
+    /// A `for ... limit` loop reached its compile-time iteration cap
+    /// before its range was exhausted, and no `limit` outcome arm
+    /// handled the overrun. Fail-loud by default, consistent with the
+    /// other capture constructs whose unhandled defensive outcome traps.
+    LoopLimitExceeded,
 }
 
 impl TrapKind {
@@ -1825,6 +1830,7 @@ impl TrapKind {
             TrapKind::EnumVariantUnmapped => 4,
             TrapKind::ZeroDivisor => 5,
             TrapKind::AssertionFailed => 6,
+            TrapKind::LoopLimitExceeded => 7,
         }
     }
 
@@ -1840,6 +1846,7 @@ impl TrapKind {
             4 => Some(TrapKind::EnumVariantUnmapped),
             5 => Some(TrapKind::ZeroDivisor),
             6 => Some(TrapKind::AssertionFailed),
+            7 => Some(TrapKind::LoopLimitExceeded),
             _ => None,
         }
     }

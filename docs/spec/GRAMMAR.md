@@ -462,6 +462,34 @@ The loop variable is immutable within each iteration. Ranges use `..` for exclus
 
 All host-provided iterable types are assumed finite by contract. The compiler checks that only iterable types are used with `for..in`. The host is responsible for not providing infinite iterators.
 
+### Bounded Repetition with a Limit
+
+A range `for` loop over runtime endpoints is normally rejected by strict verification, because the worst-case iteration count cannot be extracted from the bytecode. A `limit` clause supplies that bound explicitly: it caps the iteration count at a compile-time constant, so the loop is admitted and its worst-case-execution-time and worst-case-memory-usage bounds are the cap rather than the range width.
+
+````
+for i in min..max limit cp.hard_limit {
+  // body
+}
+````
+
+The `limit` expression must reduce to a positive `Word` constant by compile time: an integer literal, a const-data field, or a const parameter (the last two erased to a literal by const-data inlining and monomorphization). The runtime range still governs the actual iteration count; the cap only bounds it from above. The loop lowers to a compile-time counter `0..limit`, which is the canonical bounded header the verifier recognizes, alongside the runtime range test.
+
+An unhandled overrun, where the loop reaches its cap before the range is exhausted, traps as `LoopLimitExceeded`. This fail-loud default matches the other capture constructs, whose unhandled defensive outcome traps rather than passing silently.
+
+An optional `on` block captures how the loop ended, mirroring the checked-arithmetic arm block. `limit` and `on` are contextual keywords recognised only in these positions, so both remain usable as identifiers elsewhere.
+
+````
+for i in min..max limit cp.hard_limit {
+  // body, may `break`
+} on {
+  ok(count)      => { /* the range was exhausted */ },
+  break(i)       => { /* the body executed `break`; i is the index */ },
+  limit(stopped) => { /* the cap was hit before the range end */ },
+}
+````
+
+The outcomes split into two tiers. `ok` and `break` are intended, non-trapping exits; an absent `break` arm falls through to `ok`, and a break never traps. `limit` is a defensive exit; an absent `limit` arm traps as above. Each arm optionally binds a single `Word`: the completed iteration count for `ok`, the loop variable at the exit for `break` and `limit`. Every arm and binding is optional, since the loop is a statement and its outcomes need no value. The `overflow` outcome, for an induction increment that overflows the index type, and a `when` guard on an outcome arm, are reserved in the grammar but not yet implemented; the compiler rejects both explicitly. The increment currently wraps, as a plain `for` loop does, and the compile-time counter still bounds the iteration count regardless.
+
 ### Break Statement
 
 The `break` keyword exits a `for` loop early. It is valid only inside `for` loops.
@@ -1187,7 +1215,11 @@ statement       = let_stmt | for_stmt | break_stmt | assert_stmt
                 | expr_stmt
 let_stmt        = 'let' pattern [ ':' type_expr ] '=' expression ';'
 assert_stmt     = 'assert' expression [ ',' string_lit ] ';'
-for_stmt        = 'for' lower_ident 'in' iterable '{' block '}'
+for_stmt        = 'for' lower_ident 'in' iterable [ 'limit' expression ]
+                  '{' block '}' [ 'on' '{' loop_arm { ',' loop_arm } [ ',' ] '}' ]
+loop_arm        = loop_outcome [ '(' arm_pattern ')' ] [ 'when' expression ]
+                  '=>' '{' block '}'
+loop_outcome    = 'ok' | 'break' | 'limit' | 'overflow'
 iterable        = expression
                 | expression '..' expression
 break_stmt      = 'break' ';'

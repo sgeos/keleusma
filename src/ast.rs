@@ -698,10 +698,66 @@ pub struct ForStmt {
     pub var: String,
     /// Iterable expression (range or array-shaped expression).
     pub iterable: Iterable,
+    /// Optional compile-time iteration cap introduced by a `limit`
+    /// clause. When present, the loop iterates its range under this
+    /// constant cap, so the worst-case-execution-time bound is the
+    /// cap rather than the range endpoints, which admits a runtime
+    /// range that strict verification would otherwise reject. The
+    /// expression must reduce to a `Word` constant by compile time (a
+    /// literal, a const-data field, or a const parameter, the last two
+    /// erased to a literal by const-data inlining and monomorphization
+    /// respectively). See the `on_arms` outcome block.
+    pub limit: Option<Expr>,
     /// Loop body.
     pub body: Block,
+    /// Outcome arms from an optional `on { ... }` block that captures
+    /// how the loop ended. Empty when no block is written. Only
+    /// admissible together with a `limit` clause. See [`LoopArmKind`].
+    pub on_arms: Vec<LoopArm>,
     /// Span of the for statement.
     pub span: Span,
+}
+
+/// One arm of a `for ... limit ... on { ... }` outcome block. The arm
+/// runs, for effect, when the loop ends for the corresponding reason.
+/// The loop is a statement, so an arm body is a statement block.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoopArm {
+    /// Outcome class plus an optional binding.
+    pub kind: LoopArmKind,
+    /// Optional `when` guard, mirroring the checked-arithmetic arms.
+    pub guard: Option<Expr>,
+    /// Statement block evaluated when the arm fires.
+    pub body: Block,
+    /// Span of the arm.
+    pub span: Span,
+}
+
+/// The outcome class of a [`LoopArm`]. The four outcomes split into two
+/// tiers. `Ok` and `Break` are intended, non-trapping exits; an absent
+/// `Break` arm falls through to `Ok`, and a break never traps. `Limit`
+/// and `Overflow` are defensive exits; an unhandled one traps. The
+/// optional pattern binds a `Word`, an index for `Break` and `Limit`,
+/// and is admissible on every class.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LoopArmKind {
+    /// `ok` or `ok(count)`: the range was exhausted, the loop variable
+    /// reached the range end. The mandatory catch-all when a block is
+    /// present. The optional binding is the completed iteration count.
+    Ok(Option<Pattern>),
+    /// `break` or `break(i)`: the body executed a `break`. The optional
+    /// binding is the loop variable's value at the break. Admissible
+    /// only when the body contains a `break`.
+    Break(Option<Pattern>),
+    /// `limit` or `limit(stopped_at)`: the loop stopped at the cap
+    /// before the range was exhausted. The optional binding is the loop
+    /// variable's value at the stop. Unhandled, the loop traps as
+    /// `LoopLimitExceeded`.
+    Limit(Option<Pattern>),
+    /// `overflow`: the induction increment overflowed the index type.
+    /// Admissible only where the index type and bounds permit it.
+    /// Unhandled, the loop traps.
+    Overflow(Option<Pattern>),
 }
 
 /// The iterable in a `for` loop.

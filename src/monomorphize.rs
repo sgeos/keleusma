@@ -1836,7 +1836,18 @@ fn subst_in_stmt(stmt: &Stmt, subst: &BTreeMap<String, TypeExpr>) -> Stmt {
         Stmt::For(f) => Stmt::For(ForStmt {
             var: f.var.clone(),
             iterable: subst_in_iterable(&f.iterable, subst),
+            limit: f.limit.as_ref().map(|e| subst_in_expr(e, subst)),
             body: subst_in_block(&f.body, subst),
+            on_arms: f
+                .on_arms
+                .iter()
+                .map(|a| crate::ast::LoopArm {
+                    kind: a.kind.clone(),
+                    guard: a.guard.as_ref().map(|g| subst_in_expr(g, subst)),
+                    body: subst_in_block(&a.body, subst),
+                    span: a.span,
+                })
+                .collect(),
             span: f.span,
         }),
         Stmt::Break(span) => Stmt::Break(*span),

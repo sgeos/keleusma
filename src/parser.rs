@@ -1533,14 +1533,119 @@ impl<'a> Parser<'a> {
         let (var, _) = self.expect_lower_ident()?;
         self.expect(&TokenKind::In)?;
         let iterable = self.parse_iterable()?;
+        // Optional `limit <expr>` iteration cap. `limit` is a
+        // contextual keyword recognised only here, so it stays usable
+        // as an identifier elsewhere. The cap is a general expression
+        // that must reduce to a `Word` constant by compile time; it is
+        // parsed with the same expression parser as the range end, so
+        // the loop body `{` is not consumed.
+        let limit = if self.at_lower("limit") {
+            self.bump();
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
         let body = self.parse_block()?;
-        let end = body.span;
+        let body_span = body.span;
+        // Optional `on { <arms> }` outcome block. `on` is a contextual
+        // keyword recognised only when it directly precedes a `{` after
+        // a `for` body, so it stays usable as an identifier elsewhere.
+        let on_arms = if self.at_lower("on") && matches!(self.peek_ahead(1), TokenKind::LBrace) {
+            self.bump();
+            self.parse_loop_on_arms()?
+        } else {
+            alloc::vec::Vec::new()
+        };
+        let end = on_arms.last().map(|a| a.span).unwrap_or(body_span);
         Ok(ForStmt {
             var,
             iterable,
+            limit,
             body,
+            on_arms,
             span: merge_spans(start, end),
         })
+    }
+
+    /// Parse the arms of a `for ... on { ... }` outcome block. Each arm
+    /// is an outcome class with an optional single binding, an optional
+    /// `when` guard, then `=>` and a statement block, mirroring the
+    /// checked-arithmetic arm block.
+    fn parse_loop_on_arms(&mut self) -> Result<alloc::vec::Vec<crate::ast::LoopArm>, ParseError> {
+        self.expect(&TokenKind::LBrace)?;
+        let mut arms: alloc::vec::Vec<crate::ast::LoopArm> = alloc::vec::Vec::new();
+        while !self.at(&TokenKind::RBrace) {
+            let arm_start = self.peek_span();
+            let kind = self.parse_loop_arm_kind()?;
+            let guard = if self.eat(&TokenKind::When) {
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
+            self.expect(&TokenKind::FatArrow)?;
+            let body = self.parse_block()?;
+            let arm_end = body.span;
+            arms.push(crate::ast::LoopArm {
+                kind,
+                guard,
+                body,
+                span: merge_spans(arm_start, arm_end),
+            });
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(&TokenKind::RBrace)?;
+        Ok(arms)
+    }
+
+    /// Parse one loop outcome class and its optional single binding:
+    /// `ok`, `break`, `limit`, or `overflow`, each optionally `(pat)`.
+    fn parse_loop_arm_kind(&mut self) -> Result<crate::ast::LoopArmKind, ParseError> {
+        use crate::ast::LoopArmKind;
+        let tok = self.peek().clone();
+        match tok {
+            TokenKind::Break => {
+                self.bump();
+                Ok(LoopArmKind::Break(self.parse_optional_loop_arm_binding()?))
+            }
+            TokenKind::Overflow => {
+                self.bump();
+                Ok(LoopArmKind::Overflow(
+                    self.parse_optional_loop_arm_binding()?,
+                ))
+            }
+            TokenKind::LowerIdent(ref name) if name == "ok" => {
+                self.bump();
+                Ok(LoopArmKind::Ok(self.parse_optional_loop_arm_binding()?))
+            }
+            TokenKind::LowerIdent(ref name) if name == "limit" => {
+                self.bump();
+                Ok(LoopArmKind::Limit(self.parse_optional_loop_arm_binding()?))
+            }
+            other => Err(ParseError {
+                message: alloc::format!(
+                    "expected `ok`, `break`, `limit`, or `overflow` loop outcome arm, found {:?}",
+                    other
+                ),
+                span: self.peek_span(),
+            }),
+        }
+    }
+
+    /// Parse an optional `(pat)` binding after a loop outcome keyword,
+    /// reusing the checked-arm pattern subset (wildcard, binder, int).
+    fn parse_optional_loop_arm_binding(
+        &mut self,
+    ) -> Result<Option<crate::ast::Pattern>, ParseError> {
+        if self.at(&TokenKind::LParen) {
+            self.bump();
+            let p = self.parse_checked_arm_pattern()?;
+            self.expect(&TokenKind::RParen)?;
+            Ok(Some(p))
+        } else {
+            Ok(None)
+        }
     }
 
     fn parse_iterable(&mut self) -> Result<Iterable, ParseError> {
@@ -3416,9 +3521,50 @@ mod tests {
             Stmt::For(f) => {
                 assert_eq!(f.var, "i");
                 assert!(matches!(f.iterable, Iterable::Range(_, _)));
+                assert!(f.limit.is_none());
+                assert!(f.on_arms.is_empty());
             }
             _ => panic!("expected For"),
         }
+    }
+
+    #[test]
+    fn parse_for_limit_with_on_block() {
+        use crate::ast::LoopArmKind;
+        let src = "fn test(n: Word) -> Word { \
+            for i in 0..n limit 8 { if i == 3 { break; } } \
+            on { ok(c) => { }, break(bi) => { }, limit => { }, } 0 }";
+        let program = parse_str(src).unwrap();
+        match &program.functions[0].body.stmts[0] {
+            Stmt::For(f) => {
+                assert!(f.limit.is_some(), "limit clause parsed");
+                assert_eq!(f.on_arms.len(), 3);
+                assert!(matches!(f.on_arms[0].kind, LoopArmKind::Ok(Some(_))));
+                assert!(matches!(f.on_arms[1].kind, LoopArmKind::Break(Some(_))));
+                assert!(matches!(f.on_arms[2].kind, LoopArmKind::Limit(None)));
+            }
+            _ => panic!("expected For"),
+        }
+    }
+
+    #[test]
+    fn parse_for_limit_without_on_block() {
+        let src = "fn test(n: Word) -> Word { for i in 0..n limit 4 { foo(i); } 0 }";
+        let program = parse_str(src).unwrap();
+        match &program.functions[0].body.stmts[0] {
+            Stmt::For(f) => {
+                assert!(f.limit.is_some());
+                assert!(f.on_arms.is_empty());
+            }
+            _ => panic!("expected For"),
+        }
+    }
+
+    // `limit` and `on` are contextual, so they stay usable as identifiers.
+    #[test]
+    fn limit_and_on_remain_usable_as_identifiers() {
+        let src = "fn test() -> Word { let limit = 3; let on = 4; limit + on }";
+        assert!(parse_str(src).is_ok());
     }
 
     #[test]

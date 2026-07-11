@@ -64,7 +64,16 @@ pub trait MutVisitor {
             Stmt::Let(l) => self.visit_expr(&mut l.value),
             Stmt::For(f) => {
                 self.visit_iterable(&mut f.iterable);
+                if let Some(limit) = f.limit.as_mut() {
+                    self.visit_expr(limit);
+                }
                 self.visit_block(&mut f.body);
+                for arm in f.on_arms.iter_mut() {
+                    if let Some(guard) = arm.guard.as_mut() {
+                        self.visit_expr(guard);
+                    }
+                    self.visit_block(&mut arm.body);
+                }
             }
             Stmt::Break(_) => {}
             Stmt::DataFieldAssign { value, .. } => self.visit_expr(value),
@@ -233,7 +242,16 @@ pub trait Visitor {
             Stmt::Let(l) => self.visit_expr(&l.value),
             Stmt::For(f) => {
                 self.visit_iterable(&f.iterable);
+                if let Some(limit) = f.limit.as_ref() {
+                    self.visit_expr(limit);
+                }
                 self.visit_block(&f.body);
+                for arm in f.on_arms.iter() {
+                    if let Some(guard) = arm.guard.as_ref() {
+                        self.visit_expr(guard);
+                    }
+                    self.visit_block(&arm.body);
+                }
             }
             Stmt::Break(_) => {}
             Stmt::DataFieldAssign { value, .. } => self.visit_expr(value),
