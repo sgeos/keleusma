@@ -1,16 +1,17 @@
-//! Stage 2 parser (`compiler/kel/parser.kel`), increment 3: the top-level
-//! declaration header and parameter names, streamed as a per-declaration record.
+//! Stage 2 parser (`compiler/kel/parser.kel`), increment 4: the full declaration
+//! signature, streamed as a per-declaration record.
 //!
 //! A throwaway adapter maps the reference tokenizer's output into the parser
 //! stage's `(kind, value)` token stream, the Keleusma `loop` consumes it one token
 //! per iteration, and it emits a small record per top-level declaration: a `START`
-//! element with the category (from the `fn`/`yield`/`loop` keyword) and the interned
-//! name, one `PARAM` element per value parameter carrying its name, and an `END`
-//! element. The parameter types, return type, guard, and body are still skipped
-//! rather than parsed (a later increment). The host reassembles each record and
-//! checks its (category, name, parameter names) against the reference parse's
-//! functions, including const-generic and tuple types that must not be mistaken for
-//! parameters and multiheaded functions whose heads are separate declarations.
+//! element (category from the `fn`/`yield`/`loop` keyword, interned name), then per
+//! value parameter a `PARAM` (its name) and a `PTYPE` (its type name), then a
+//! `RETTYPE` (the return type name), then `END`. Types are simple named types this
+//! increment; nested types (generics, arrays, tuples) and the parsed body are later
+//! increments. The host reassembles each record and checks its (category, name,
+//! parameter names and types, return type) against the reference parse's functions,
+//! including a const-generic type parameter that must not be mistaken for a value
+//! parameter and multiheaded functions whose heads are separate declarations.
 
 #![cfg(all(
     feature = "compile",
@@ -21,7 +22,7 @@
 ))]
 
 use keleusma::Arena;
-use keleusma::ast::{FunctionCategory, Pattern};
+use keleusma::ast::{FunctionCategory, Pattern, PrimType, TypeExpr};
 use keleusma::bytecode::Value;
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
@@ -73,8 +74,9 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
 }
 
 /// A parsed declaration: its category (1 fn, 2 yield, 3 loop), interned name id,
-/// and the interned name ids of its value parameters in order.
-type Decl = (i64, i64, Vec<i64>);
+/// and its value parameters as (name id, type name id) in order, plus the return
+/// type name id.
+type Decl = (i64, i64, Vec<(i64, i64)>, i64);
 
 /// Drive the parser stage over `src`, decoding the START/PARAM/END record stream
 /// into one [`Decl`] per top-level declaration.
@@ -110,10 +112,20 @@ fn run_parser(src: &str, names: &mut Vec<String>) -> Vec<Decl> {
                 let dkind = w.rem_euclid(16);
                 let val = w.div_euclid(16);
                 match dkind {
-                    0 => {}                                                     // PENDING
-                    1..=3 => cur = Some((dkind, val, Vec::new())),              // START
-                    4 => cur.as_mut().expect("PARAM before START").2.push(val), // PARAM
-                    5 => decls.push(cur.take().expect("END before START")),     // END
+                    0 => {}                                                           // PENDING
+                    1..=3 => cur = Some((dkind, val, Vec::new(), -1)),                // START
+                    4 => cur.as_mut().expect("PARAM before START").2.push((val, -1)), // PARAM name
+                    6 => {
+                        // PTYPE: fill the type of the parameter just emitted.
+                        cur.as_mut()
+                            .expect("PTYPE before START")
+                            .2
+                            .last_mut()
+                            .expect("PTYPE before PARAM")
+                            .1 = val;
+                    }
+                    7 => cur.as_mut().expect("RETTYPE before START").3 = val, // RETTYPE
+                    5 => decls.push(cur.take().expect("END before START")),   // END
                     15 => {
                         assert!(cur.is_none(), "DONE mid-declaration");
                         return decls;
@@ -131,9 +143,27 @@ fn run_parser(src: &str, names: &mut Vec<String>) -> Vec<Decl> {
     panic!("parser did not reach DONE within the iteration budget");
 }
 
-/// The reference parse's top-level functions, in order, as [`Decl`]s (category,
-/// interned name id, and the interned ids of the value-parameter names). The
-/// category encoding matches the stage's dkind: fn 1, yield 2, loop 3.
+/// The surface name of a simple primitive type, matching the identifier token the
+/// adapter interned. The increment-4 tests use primitive types; a named struct or
+/// enum type and the nested types are exercised in later increments.
+fn type_name(t: &TypeExpr) -> &'static str {
+    match t {
+        TypeExpr::Prim(p, _) => match p {
+            PrimType::Byte => "Byte",
+            PrimType::Word => "Word",
+            PrimType::Fixed(_) => "Fixed",
+            PrimType::Float => "Float",
+            PrimType::Bool => "bool",
+            PrimType::Text => "Text",
+        },
+        other => panic!("test uses primitive types only this increment, got {other:?}"),
+    }
+}
+
+/// The reference parse's top-level functions, in order, as [`Decl`]s: category,
+/// interned name id, value parameters as (name id, type name id), and the return
+/// type name id. The category encoding matches the stage's dkind: fn 1, yield 2,
+/// loop 3.
 fn reference_functions(src: &str, names: &[String]) -> Vec<Decl> {
     let id_of = |s: &str| -> i64 {
         names
@@ -154,12 +184,25 @@ fn reference_functions(src: &str, names: &[String]) -> Vec<Decl> {
             let params = f
                 .params
                 .iter()
-                .map(|p| match &p.pattern {
-                    Pattern::Variable(n, _) => id_of(n),
-                    other => panic!("test uses simple parameter patterns only, got {other:?}"),
+                .map(|p| {
+                    let name = match &p.pattern {
+                        Pattern::Variable(n, _) => id_of(n),
+                        other => {
+                            panic!("test uses simple parameter patterns only, got {other:?}")
+                        }
+                    };
+                    let ty = id_of(type_name(
+                        p.type_expr.as_ref().expect("annotated parameter"),
+                    ));
+                    (name, ty)
                 })
                 .collect();
-            (cat, id_of(&f.name), params)
+            (
+                cat,
+                id_of(&f.name),
+                params,
+                id_of(type_name(&f.return_type)),
+            )
         })
         .collect()
 }
@@ -223,13 +266,12 @@ fn categories_are_distinguished() {
     assert_eq!(got.iter().map(|d| d.0).collect::<Vec<_>>(), vec![1, 2, 3]);
 }
 
-// The value parameters and their names are read from the parameter parentheses,
-// in order.
+// The value parameters — names and types — and the return type are read, in order.
 #[test]
-fn parameter_names_are_read() {
+fn parameter_names_types_and_return_type_are_read() {
     let src = "fn a() -> Word { 0 } \
-        fn b(x: Word) -> Word { x } \
-        fn c(x: Word, y: Word, z: Word) -> Word { x + y + z }";
+        fn b(x: Byte) -> bool { x == x } \
+        fn c(x: Word, y: Byte, z: bool) -> Word { 0 }";
     let mut names = Vec::new();
     let got = run_parser(src, &mut names);
     let want = reference_functions(src, &names);
@@ -239,30 +281,35 @@ fn parameter_names_are_read() {
         got.iter().map(|d| d.2.len()).collect::<Vec<_>>(),
         vec![0, 1, 3]
     );
-    // The names of `c`'s parameters are x, y, z in order.
-    let x = names.iter().position(|n| n == "x").unwrap() as i64;
-    let y = names.iter().position(|n| n == "y").unwrap() as i64;
-    let z = names.iter().position(|n| n == "z").unwrap() as i64;
-    assert_eq!(got[2].2, vec![x, y, z]);
+    // `c`'s parameters are x: Word, y: Byte, z: bool; its return type is Word.
+    let id = |s: &str| names.iter().position(|n| n == s).unwrap() as i64;
+    assert_eq!(
+        got[2].2,
+        vec![
+            (id("x"), id("Word")),
+            (id("y"), id("Byte")),
+            (id("z"), id("bool")),
+        ]
+    );
+    assert_eq!(got[2].3, id("Word"));
+    // `b`'s return type is bool.
+    assert_eq!(got[1].3, id("bool"));
 }
 
-// A type parameter's colon and a tuple-typed parameter do not add spurious
-// parameters: only the value parameters are extracted.
+// A type parameter before the value parentheses is not mistaken for a value
+// parameter, and the value parameter's simple type is read.
 #[test]
-fn type_parameters_and_tuple_types_are_not_mistaken_for_parameters() {
-    let src = "fn h<const n: Word>(x: Word) -> Word { x } \
-        fn t(p: (Word, Word)) -> Word { 0 }";
+fn type_parameters_are_not_mistaken_for_parameters() {
+    let src = "fn h<const n: Word>(x: Word) -> Word { x }";
     let mut names = Vec::new();
     let got = run_parser(src, &mut names);
     let want = reference_functions(src, &names);
     assert_eq!(got, want);
-    // h has one value parameter (x); the `const n` type parameter sits before the
-    // parentheses. t has one value parameter (p) whose tuple type opens its own
-    // parentheses after the parameter list has closed.
-    assert_eq!(
-        got.iter().map(|d| d.2.len()).collect::<Vec<_>>(),
-        vec![1, 1]
-    );
+    // h has one value parameter (x: Word); the `const n` type parameter sits before
+    // the value parentheses.
+    assert_eq!(got[0].2.len(), 1);
+    let id = |s: &str| names.iter().position(|n| n == s).unwrap() as i64;
+    assert_eq!(got[0].2, vec![(id("x"), id("Word"))]);
 }
 
 // Each head of a multiheaded function is a separate declaration; the reference
