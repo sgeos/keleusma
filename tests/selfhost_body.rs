@@ -266,8 +266,8 @@ fn run_body_inner(func_src: &str) -> (Vec<Node>, Vec<i64>, i64) {
     for _ in 0..(body_kinds.len() * 12 + 128) {
         match state {
             VmState::Yielded(Value::Int(w)) => {
-                let kind = w.rem_euclid(16);
-                let arg = w.div_euclid(16);
+                let kind = w.rem_euclid(64);
+                let arg = w.div_euclid(64);
                 match kind {
                     0 => {} // PENDING
                     1 | 2 | 11 => {

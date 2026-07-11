@@ -125,7 +125,7 @@
 // The `{`/`}` of a branch reuse kinds 2/3 and the `(`/`)` of a call reuse 7/8. Any
 // other token is ignored.
 //
-// Node record wire. Each element is one Word, `kind + arg*16`:
+// Node record wire. Each element is one Word, `kind + arg*64`:
 //   kind 0         PENDING; nothing this iteration; host skips it
 //   kind 1         Literal; arg = the integer value
 //   kind 2         Local; arg = the parameter frame slot
@@ -149,7 +149,7 @@
 // forms land in later increments.
 //
 // The self-hosted compiler is a full-width host tool. Its record encoding does
-// arithmetic (`arg*16`) that overflows a narrow word, so it declares a 32-bit floor.
+// arithmetic (`arg*64`) that overflows a narrow word, so it declares a 32-bit floor.
 require word >= 32;
 
 // The host-provided body token stream, parameter-name table, and data-field layout.
@@ -308,7 +308,7 @@ fn emit_op(op: Word) -> Word {
     if op == 19 {
         9
     } else {
-        3 + op * 16
+        3 + op * 64
     } } } }
 }
 
@@ -407,7 +407,7 @@ fn step_closing() -> Word {
             }
             bs.call_sp = bs.call_sp - 1;
             bs.expect_operand = 0;
-            7 + (bs.call_chunk[bs.call_sp] + bs.call_count[bs.call_sp] * 256) * 16
+            7 + (bs.call_chunk[bs.call_sp] + bs.call_count[bs.call_sp] * 256) * 64
         } else {
             bs.opsp = bs.opsp - 1;
             emit_op(top)
@@ -446,7 +446,7 @@ fn step_iclosing() -> Word {
         let arg = bs.idx_base[bs.idx_sp] + bs.idx_len[bs.idx_sp] * 65536;
         bs.iclosing = 0;
         bs.expect_operand = 0;
-        13 + arg * 16
+        13 + arg * 64
     }
 }
 
@@ -523,7 +523,7 @@ fn step_draining() -> Word {
 fn step_folding() -> Word {
     if bs.fold_i > bs.fold_start {
         bs.fold_i = bs.fold_i - 1;
-        bs.stmt_kind[bs.fold_i] + bs.stmt_arg[bs.fold_i] * 16
+        bs.stmt_kind[bs.fold_i] + bs.stmt_arg[bs.fold_i] * 64
     } else {
         bs.stmt_count = bs.fold_start;
         bs.folding = 0;
@@ -583,7 +583,7 @@ fn step_daindex(k: Word) -> Word {
         bs.cursor = bs.cursor - 1;
         bs.da_phase = 0;
         bs.expect_operand = 0;
-        11 + bs.da_base * 16
+        11 + bs.da_base * 64
     } }
 }
 
@@ -629,7 +629,7 @@ fn step_ident(v: Word) -> Word {
             }
         }
         bs.expect_operand = 0;
-        2 + bs.found * 16
+        2 + bs.found * 64
     }
     }
 }
@@ -721,7 +721,7 @@ fn step_normal(k: Word, v: Word) -> Word {
     } else {
     if k == 12 {
         bs.expect_operand = 0;
-        1 + v * 16
+        1 + v * 64
     } else {
     if k == 7 {
         bs.opstack[bs.opsp] = 15;
