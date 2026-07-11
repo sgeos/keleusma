@@ -1,10 +1,10 @@
 // compiler/kel/body.kel — the body-expression parser, a sub-component of Stage 2.
 //
-// Increment 7: a function body that is a block of `let` bindings followed by a tail
-// expression, over the full operator-precedence expression grammar plus scalar
-// data-field reads (`d.f`). Real Keleusma code that compiles and verifies on the
-// current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md
-// (roadmap Step 2).
+// Increment 8: a function body that is a block of `let` bindings followed by a tail
+// expression, over the full operator-precedence expression grammar plus scalar and
+// indexed data-field reads (`d.f`, `d.f[i]`). Real Keleusma code that compiles and
+// verifies on the current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and
+// compiler/MILESTONES.md (roadmap Step 2).
 //
 // Model. Stage 2's declaration parser (parser.kel) reads a function's signature and
 // brace-matches its body. This companion loop reads that body's tokens and produces
@@ -54,11 +54,16 @@
 // first, folding the tail into the cons-list the codegen stage expects; each LetIn
 // pops its value (left on the stack in binding order) and the running continuation.
 //
-// A `data.field` scalar read is a DataRead operand (kind 1... no, kind 11): when an
-// identifier that names a data block is read, `da_phase` awaits the `.` and then the
-// field name, whose slot is looked up in the field layout and emitted as a DataRead
-// (kind 11, arg = slot). An indexed read `d.f[i]`, the `for`, `if`, `match`, and
-// `yield` statements, data-field assignment, and calls are later increments.
+// A `data.field` read: when an identifier that names a data block is read, `da_phase`
+// awaits the `.` and then the field name, whose element-0 slot and length are looked
+// up in the field layout. If a `[` follows, the read is indexed: the field's base and
+// length are pushed on a small `idx` stack, an index marker (operator code 20) blocks
+// precedence across the index sub-expression, and the closing `]` flushes that
+// sub-expression and emits an IndexRead (kind 13, arg = base + len*65536, `lhs` the
+// index). The `idx` stack allows a data read to appear inside the index, as in
+// `a.xs[b.i]`. Otherwise the read is scalar: a DataRead (kind 11, arg = slot) is
+// emitted and the non-`[` token is pushed back. The `for`, `if`, `match`, and `yield`
+// statements, data-field assignment, and calls are later increments.
 //
 // Input. The host places the body's token stream in `src.kinds`/`src.vals` with the
 // count in `src.len`, and the function's parameter names (interned ids, slot = index)
@@ -79,6 +84,8 @@
 //   kind 17 EQ     `=`; separates a `let` binding's name from its value
 //   kind 9 COLON   `:`; opens a `let` binding's optional type annotation (skipped)
 //   kind 40 DOT    `.`; separates a data block name from its field
+//   kind 41 LBRACK `[`; opens the index of a data array read
+//   kind 42 RBRACK `]`; closes the index of a data array read
 // Any other token is ignored this increment.
 //
 // Node record wire. Each element is one Word, `kind + arg*16`:
@@ -93,6 +100,7 @@
 //   kind 5         LetIn; arg = the binding slot; host pops the continuation (`rhs`)
 //                  and the bound value (`lhs`)
 //   kind 11        DataRead; arg = the data-segment slot; a leaf
+//   kind 13        IndexRead; arg = base + len*65536; host pops the index (`lhs`)
 //   kind 15        DONE; the body is complete, its root is the remaining stack node
 // The remaining interior node kinds (If, LetIn, Call, and the rest) and the statement
 // forms land in later increments.
@@ -157,6 +165,12 @@ private data bs {
     fold_i: Word,
     da_phase: Word,
     da_data: Word,
+    da_base: Word,
+    da_len: Word,
+    idx_base: [Word; 8],
+    idx_len: [Word; 8],
+    idx_sp: Word,
+    iclosing: Word,
 }
 
 // The precedence of an operator code, tightest to loosest: unary (16 Neg, 17 Not) 9,
@@ -173,6 +187,9 @@ fn prec_of(op: Word) -> Word {
         9
     } else {
     if op == 15 {
+        0
+    } else {
+    if op == 20 {
         0
     } else {
     if op == 2 {
@@ -206,7 +223,7 @@ fn prec_of(op: Word) -> Word {
         1
     } else {
         3
-    } } } } } } } } } } } } }
+    } } } } } } } } } } } } } }
 }
 
 // The record word for a stacked operator: a unary Neg (16) or Not (17) emits its node
@@ -285,239 +302,315 @@ fn opcode_of(k: Word) -> Word {
     } } } } } } } } } } } } } } } }
 }
 
-loop main(resume: Word) -> Word {
-    if bs.done == 1 {
-        // The body is complete; report DONE idempotently.
-        yield 15
+// The parser is structured as a set of shallow `fn` steps rather than one deeply
+// nested loop: each returns the record word to yield and mutates `bs`, and the `loop`
+// simply yields one step per iteration. Splitting the dispatch across functions keeps
+// each within the reference parser's recursion-depth limit as the stage grows.
+
+// Settle a just-read operator: pop one stacked operator of equal or higher precedence
+// (emitting it), or, when none remains, push the pending operator.
+fn step_resolving() -> Word {
+    if bs.opsp > 0 andalso prec_of(bs.opstack[bs.opsp - 1]) >= bs.pending_prec {
+        bs.opsp = bs.opsp - 1;
+        let op = bs.opstack[bs.opsp];
+        emit_op(op)
     } else {
-    if bs.resolving == 1 {
-        // Settle a just-read operator: pop one stacked operator of equal or higher
-        // precedence (emitting it), or, when none remains, push the pending operator.
-        if bs.opsp > 0 andalso prec_of(bs.opstack[bs.opsp - 1]) >= bs.pending_prec {
+        bs.opstack[bs.opsp] = bs.pending_op;
+        bs.opsp = bs.opsp + 1;
+        bs.resolving = 0;
+        0
+    }
+}
+
+// A `)`: flush the operators above the parenthesis marker, then discard the marker.
+fn step_closing() -> Word {
+    if bs.opsp > 0 {
+        let top = bs.opstack[bs.opsp - 1];
+        if top == 15 {
             bs.opsp = bs.opsp - 1;
-            let op = bs.opstack[bs.opsp];
-            yield emit_op(op)
-        } else {
-            bs.opstack[bs.opsp] = bs.pending_op;
-            bs.opsp = bs.opsp + 1;
-            bs.resolving = 0;
-            yield 0
-        }
-    } else {
-    if bs.closing == 1 {
-        // A `)`: flush the operators stacked above the parenthesis marker, one per
-        // iteration, then discard the marker.
-        if bs.opsp > 0 {
-            let top = bs.opstack[bs.opsp - 1];
-            if top == 15 {
-                bs.opsp = bs.opsp - 1;
-                bs.closing = 0;
-                yield 0
-            } else {
-                bs.opsp = bs.opsp - 1;
-                yield emit_op(top)
-            }
-        } else {
             bs.closing = 0;
-            yield 0
+            0
+        } else {
+            bs.opsp = bs.opsp - 1;
+            emit_op(top)
         }
     } else {
-    if bs.draining == 1 {
-        // Flush the current expression's remaining operators, one per iteration.
-        if bs.opsp > 0 {
-            bs.opsp = bs.opsp - 1;
-            let op = bs.opstack[bs.opsp];
-            yield emit_op(op)
+        bs.closing = 0;
+        0
+    }
+}
+
+// A `]`: flush the operators above the index marker (20), then pop the marker and the
+// `idx` stack and emit the IndexRead over the index node left on the host stack.
+fn step_iclosing() -> Word {
+    if bs.opsp > 0 andalso bs.opstack[bs.opsp - 1] != 20 {
+        bs.opsp = bs.opsp - 1;
+        let op = bs.opstack[bs.opsp];
+        emit_op(op)
+    } else {
+        bs.opsp = bs.opsp - 1;
+        bs.idx_sp = bs.idx_sp - 1;
+        let arg = bs.idx_base[bs.idx_sp] + bs.idx_len[bs.idx_sp] * 65536;
+        bs.iclosing = 0;
+        bs.expect_operand = 0;
+        13 + arg * 16
+    }
+}
+
+// Flush the current expression's operators. Emptied, a `;` (reason 0) commits a `let`
+// binding whose value rests on the host stack, and a `}` (reason 1) begins the fold.
+fn step_draining() -> Word {
+    if bs.opsp > 0 {
+        bs.opsp = bs.opsp - 1;
+        let op = bs.opstack[bs.opsp];
+        emit_op(op)
+    } else {
+        if bs.drain_reason == 0 {
+            bs.let_names[bs.let_count] = bs.pending_let_name;
+            bs.let_count = bs.let_count + 1;
+            bs.draining = 0;
+            bs.expect_operand = 1;
+            0
         } else {
-            // The expression is complete. A `;` (reason 0) committed a `let` binding,
-            // whose value now rests on the host stack; the `}` (reason 1) ends the
-            // tail and begins the LetIn fold.
-            if bs.drain_reason == 0 {
-                bs.let_names[bs.let_count] = bs.pending_let_name;
-                bs.let_count = bs.let_count + 1;
-                bs.draining = 0;
-                bs.expect_operand = 1;
-                yield 0
-            } else {
-                bs.draining = 0;
-                bs.folding = 1;
-                bs.fold_i = bs.let_count;
-                yield 0
+            bs.draining = 0;
+            bs.folding = 1;
+            bs.fold_i = bs.let_count;
+            0
+        }
+    }
+}
+
+// Wrap the tail in a LetIn for each binding, last to first, then report DONE.
+fn step_folding() -> Word {
+    if bs.fold_i > 0 {
+        bs.fold_i = bs.fold_i - 1;
+        let slot = src.param_count + bs.fold_i;
+        5 + slot * 16
+    } else {
+        bs.done = 1;
+        15
+    }
+}
+
+// The data field name: resolve `da_data.field` to its element-0 slot and length, then
+// await a `[` (indexed) or not (scalar).
+fn step_dafield(k: Word, v: Word) -> Word {
+    if k == 1 {
+        bs.da_base = 0;
+        bs.da_len = 1;
+        for i in 0..src.field_count limit 64 {
+            if src.fdata[i] == bs.da_data andalso src.ffield[i] == v {
+                bs.da_base = src.fbase[i];
+                bs.da_len = src.flen[i];
             }
         }
+        bs.da_phase = 3;
+    }
+    0
+}
+
+// After a field: a `[` opens an indexed read; any other token is a scalar read (whose
+// token is pushed back for re-reading).
+fn step_daindex(k: Word) -> Word {
+    if k == 41 {
+        bs.idx_base[bs.idx_sp] = bs.da_base;
+        bs.idx_len[bs.idx_sp] = bs.da_len;
+        bs.idx_sp = bs.idx_sp + 1;
+        bs.opstack[bs.opsp] = 20;
+        bs.opsp = bs.opsp + 1;
+        bs.da_phase = 0;
+        bs.expect_operand = 1;
+        0
     } else {
-    if bs.folding == 1 {
-        // Wrap the tail in a LetIn (kind 5) for each binding, last to first, each
-        // popping the running continuation and its bound value; then report DONE.
-        if bs.fold_i > 0 {
-            bs.fold_i = bs.fold_i - 1;
-            let slot = src.param_count + bs.fold_i;
-            yield 5 + slot * 16
-        } else {
-            bs.done = 1;
-            yield 15
+        bs.cursor = bs.cursor - 1;
+        bs.da_phase = 0;
+        bs.expect_operand = 0;
+        11 + bs.da_base * 16
+    }
+}
+
+// An identifier: a data block name opens a `data.field` read; otherwise it is a Local,
+// resolved against the `let` bindings (most recent wins, shadowing a parameter) then
+// the parameters.
+fn step_ident(v: Word) -> Word {
+    bs.found_flag = 0;
+    for i in 0..src.field_count limit 64 {
+        if src.fdata[i] == v {
+            bs.found_flag = 1;
         }
+    }
+    if bs.found_flag == 1 {
+        bs.da_data = v;
+        bs.da_phase = 1;
+        0
     } else {
-    if bs.cursor >= src.len {
-        // Defensive: the stream ran out before a closing `}`. Flush and finish.
+        bs.found = 0;
+        bs.found_flag = 0;
+        for i in 0..bs.let_count limit 64 {
+            if bs.let_names[i] == v {
+                bs.found = src.param_count + i;
+                bs.found_flag = 1;
+            }
+        }
+        if bs.found_flag == 0 {
+            for i in 0..src.param_count limit 32 {
+                if src.params[i] == v {
+                    bs.found = i;
+                }
+            }
+        }
+        bs.expect_operand = 0;
+        2 + bs.found * 16
+    }
+}
+
+// A `let`, a `;`, or an operator (unary `not`/`-` pushed straight onto the stack, a
+// binary operator settled by precedence, any other token ignored).
+fn step_op(k: Word) -> Word {
+    if k == 38 {
+        bs.let_phase = 1;
+        0
+    } else {
+    if k == 39 {
+        bs.drain_reason = 0;
         bs.draining = 1;
-        yield 0
+        0
+    } else {
+    if k == 32 {
+        bs.opstack[bs.opsp] = 17;
+        bs.opsp = bs.opsp + 1;
+        bs.expect_operand = 1;
+        0
+    } else {
+    if k == 22 andalso bs.expect_operand == 1 {
+        bs.opstack[bs.opsp] = 16;
+        bs.opsp = bs.opsp + 1;
+        bs.expect_operand = 1;
+        0
+    } else {
+        let op = opcode_of(k);
+        if op > 0 {
+            bs.pending_op = op;
+            bs.pending_prec = prec_of(op);
+            bs.resolving = 1;
+            bs.expect_operand = 1;
+            0
+        } else {
+            0
+        }
+    } } } }
+}
+
+// The token-kind dispatch in normal (expression) position.
+fn step_normal(k: Word, v: Word) -> Word {
+    if k == 3 {
+        bs.drain_reason = 1;
+        bs.draining = 1;
+        0
+    } else {
+    if k == 12 {
+        bs.expect_operand = 0;
+        1 + v * 16
+    } else {
+    if k == 7 {
+        bs.opstack[bs.opsp] = 15;
+        bs.opsp = bs.opsp + 1;
+        bs.expect_operand = 1;
+        0
+    } else {
+    if k == 8 {
+        bs.closing = 1;
+        bs.expect_operand = 0;
+        0
+    } else {
+    if k == 42 {
+        bs.iclosing = 1;
+        0
+    } else {
+    if k == 1 {
+        step_ident(v)
+    } else {
+        step_op(k)
+    } } } } } }
+}
+
+// Dispatch a just-read token by parse phase: before the body, a `let` binding's name
+// or `=`, a `data.field` phase, or the normal expression dispatch.
+fn step_dispatch(k: Word, v: Word) -> Word {
+    if bs.started == 0 {
+        if k == 2 {
+            bs.started = 1;
+            bs.expect_operand = 1;
+        }
+        0
+    } else {
+    if bs.let_phase == 2 {
+        if k == 17 {
+            bs.let_phase = 0;
+            bs.expect_operand = 1;
+        }
+        0
+    } else {
+    if bs.let_phase == 1 {
+        if k == 1 {
+            bs.pending_let_name = v;
+            bs.let_phase = 2;
+        }
+        0
+    } else {
+    if bs.da_phase == 1 {
+        if k == 40 {
+            bs.da_phase = 2;
+        }
+        0
+    } else {
+    if bs.da_phase == 2 {
+        step_dafield(k, v)
+    } else {
+    if bs.da_phase == 3 {
+        step_daindex(k)
+    } else {
+        step_normal(k, v)
+    } } } } } }
+}
+
+// Read the next token and dispatch it, or begin the final drain at end of input.
+fn step_read() -> Word {
+    if bs.cursor >= src.len {
+        bs.draining = 1;
+        0
     } else {
         let k = src.kinds[bs.cursor];
         let v = src.vals[bs.cursor];
         bs.cursor = bs.cursor + 1;
-        if bs.started == 0 {
-            // Before the body opens, consume tokens until the `{`.
-            if k == 2 {
-                bs.started = 1;
-                bs.expect_operand = 1;
-            }
-            yield 0
-        } else {
-        if bs.let_phase == 2 {
-            // Awaiting the `=`, skipping an optional type annotation.
-            if k == 17 {
-                bs.let_phase = 0;
-                bs.expect_operand = 1;
-            }
-            yield 0
-        } else {
-        if bs.let_phase == 1 {
-            // The `let` binding name; recorded, committed at the `;`.
-            if k == 1 {
-                bs.pending_let_name = v;
-                bs.let_phase = 2;
-            }
-            yield 0
-        } else {
-        if bs.da_phase == 1 {
-            // After a data block name, await the `.`.
-            if k == 40 {
-                bs.da_phase = 2;
-            }
-            yield 0
-        } else {
-        if bs.da_phase == 2 {
-            // The data field name; resolve `da_data.field` to its slot and emit a
-            // DataRead (kind 11) operand.
-            if k == 1 {
-                bs.found = 0;
-                for i in 0..src.field_count limit 64 {
-                    if src.fdata[i] == bs.da_data andalso src.ffield[i] == v {
-                        bs.found = src.fbase[i];
-                    }
-                }
-                bs.da_phase = 0;
-                bs.expect_operand = 0;
-                yield 11 + bs.found * 16
-            } else {
-                yield 0
-            }
-        } else {
-            if k == 3 {
-                // The closing `}` ends the tail; drain, then fold the LetIns.
-                bs.drain_reason = 1;
-                bs.draining = 1;
-                yield 0
-            } else {
-            if k == 12 {
-                // An integer literal is a Literal node (kind 1), an operand.
-                bs.expect_operand = 0;
-                yield 1 + v * 16
-            } else {
-            if k == 7 {
-                // `(` pushes a parenthesis marker (code 15) that blocks precedence
-                // popping until its matching `)`; inside it an operand is expected.
-                bs.opstack[bs.opsp] = 15;
-                bs.opsp = bs.opsp + 1;
-                bs.expect_operand = 1;
-                yield 0
-            } else {
-            if k == 8 {
-                // `)` flushes the operators above the marker, then removes it; the
-                // parenthesised group is itself an operand.
-                bs.closing = 1;
-                bs.expect_operand = 0;
-                yield 0
-            } else {
-            if k == 1 {
-                // An identifier names either a data block (opening a `data.field`
-                // read) or a value. Detect a data-block name by a bounded scan of the
-                // field layout.
-                bs.found_flag = 0;
-                for i in 0..src.field_count limit 64 {
-                    if src.fdata[i] == v {
-                        bs.found_flag = 1;
-                    }
-                }
-                if bs.found_flag == 1 {
-                    // A data block name; its `.field` follows.
-                    bs.da_data = v;
-                    bs.da_phase = 1;
-                    yield 0
-                } else {
-                    // A Local node (kind 2). Resolve to a slot: the `let` bindings
-                    // first (a later binding shadows an earlier one and a parameter),
-                    // then the parameters, both by a bounded scan.
-                    bs.found = 0;
-                    bs.found_flag = 0;
-                    for i in 0..bs.let_count limit 64 {
-                        if bs.let_names[i] == v {
-                            bs.found = src.param_count + i;
-                            bs.found_flag = 1;
-                        }
-                    }
-                    if bs.found_flag == 0 {
-                        for i in 0..src.param_count limit 32 {
-                            if src.params[i] == v {
-                                bs.found = i;
-                            }
-                        }
-                    }
-                    bs.expect_operand = 0;
-                    yield 2 + bs.found * 16
-                }
-            } else {
-                if k == 38 {
-                    // `let` opens a binding statement; its name follows.
-                    bs.let_phase = 1;
-                    yield 0
-                } else {
-                if k == 39 {
-                    // `;` ends a `let` value: drain it (its node stays on the stack),
-                    // then commit the binding.
-                    bs.drain_reason = 0;
-                    bs.draining = 1;
-                    yield 0
-                } else {
-                if k == 32 {
-                    // `not` is always a prefix unary operator; push it (code 17).
-                    bs.opstack[bs.opsp] = 17;
-                    bs.opsp = bs.opsp + 1;
-                    bs.expect_operand = 1;
-                    yield 0
-                } else {
-                if k == 22 andalso bs.expect_operand == 1 {
-                    // Unary minus (Neg, code 16) in operand position.
-                    bs.opstack[bs.opsp] = 16;
-                    bs.opsp = bs.opsp + 1;
-                    bs.expect_operand = 1;
-                    yield 0
-                } else {
-                    // A binary operator settles its precedence over the following
-                    // iterations; a non-operator token is ignored.
-                    let op = opcode_of(k);
-                    if op > 0 {
-                        bs.pending_op = op;
-                        bs.pending_prec = prec_of(op);
-                        bs.resolving = 1;
-                        bs.expect_operand = 1;
-                        yield 0
-                    } else {
-                        yield 0
-                    }
-                } } } }
-            } } } } }
-        } } } } }
+        step_dispatch(k, v)
+    }
+}
+
+// One step of the parser: the active sub-state, or reading the next token.
+fn step() -> Word {
+    if bs.done == 1 {
+        15
+    } else {
+    if bs.resolving == 1 {
+        step_resolving()
+    } else {
+    if bs.closing == 1 {
+        step_closing()
+    } else {
+    if bs.iclosing == 1 {
+        step_iclosing()
+    } else {
+    if bs.draining == 1 {
+        step_draining()
+    } else {
+    if bs.folding == 1 {
+        step_folding()
+    } else {
+        step_read()
     } } } } } }
+}
+
+loop main(resume: Word) -> Word {
+    yield step()
 }
