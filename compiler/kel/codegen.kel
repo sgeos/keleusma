@@ -1,5 +1,10 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
+// Increment 22 adopts the pipeline idiom where it reads well: the node dispatch in
+// `walk_step` pipes the kind field straight into a `match` (`ast.kinds[payload] |>
+// match { ... }`), exercising the parent crate's `|> match` support. Otherwise
+// unchanged from increment 21 below; the conformance suite stays byte-identical.
+//
 // Increment 21: the loop delegates its yield to a multiheaded `yield` function.
 // The phase state machine, previously the heads of `loop main`, is now the
 // multiheaded `yield emit_next`, one head per phase selected by a `when` guard on
@@ -277,8 +282,8 @@ fn walk_step() -> Word {
         emit_op(payload);
     }
     if ikind == 1 {
-        let nk = ast.kinds[payload];
-        match nk {
+        // Dispatch on the node kind: pipe the kind field straight into the match.
+        ast.kinds[payload] |> match {
             1 => push_literal(payload),
             2 => push_local(payload),
             3 => push_binop(payload),
