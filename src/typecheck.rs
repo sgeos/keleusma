@@ -3846,32 +3846,71 @@ fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
                     for_stmt.span,
                 ));
             }
-            // Each outcome arm is checked in its own scope, with the optional
-            // binding bound as a `Word` (an index for `break`/`limit`, the
-            // completed count for `ok`) and its optional `when` guard checked as
-            // a `Bool` in that scope. The `overflow` outcome cannot arise: the
-            // range test runs before the body, so the body runs only while the
-            // index is below the range end, which is at most the type maximum,
-            // and the cap bounds the counter likewise, so the increment never
-            // overflows. An `overflow` arm is therefore inadmissible, mirroring
-            // the checked-arithmetic rule that rejects an unreachable arm.
+            // The outcome block follows the same discipline as every other
+            // capture construct: an unguarded `ok` catch-all is mandatory, and
+            // the defensive/optional outcomes may carry a `when` guard. Each
+            // outcome appears at most once (the loop has a fixed, finite set of
+            // outcomes, so a single arm per outcome suffices). The `overflow`
+            // outcome cannot arise: the range test runs before the body, so the
+            // body runs only while the index is below the range end, which is at
+            // most the type maximum, and the cap bounds the counter likewise, so
+            // the increment never overflows. An `overflow` arm is therefore
+            // inadmissible, mirroring the rule that rejects an unreachable arm.
+            let mut has_ok = false;
+            let mut has_break = false;
+            let mut has_limit = false;
             for arm in for_stmt.on_arms.iter_mut() {
                 use crate::ast::LoopArmKind;
-                if matches!(arm.kind, LoopArmKind::Overflow(_)) {
-                    return Err(TypeError::new(
-                        String::from(
-                            "an `overflow` arm is inadmissible on a `limit` loop: the range \
-                             bound and the cap keep the index below the type maximum, so the \
-                             increment cannot overflow",
-                        ),
-                        arm.span,
-                    ));
-                }
                 let binding = match &arm.kind {
-                    LoopArmKind::Ok(p)
-                    | LoopArmKind::Break(p)
-                    | LoopArmKind::Limit(p)
-                    | LoopArmKind::Overflow(p) => p.as_ref(),
+                    LoopArmKind::Overflow(_) => {
+                        return Err(TypeError::new(
+                            String::from(
+                                "an `overflow` arm is inadmissible on a `limit` loop: the \
+                                 range bound and the cap keep the index below the type \
+                                 maximum, so the increment cannot overflow",
+                            ),
+                            arm.span,
+                        ));
+                    }
+                    LoopArmKind::Ok(p) => {
+                        if has_ok {
+                            return Err(TypeError::new(
+                                String::from("duplicate `ok` arm in a `for` outcome block"),
+                                arm.span,
+                            ));
+                        }
+                        has_ok = true;
+                        if arm.guard.is_some() {
+                            return Err(TypeError::new(
+                                String::from(
+                                    "the `ok` catch-all arm of a `for` outcome block must be \
+                                     unguarded",
+                                ),
+                                arm.span,
+                            ));
+                        }
+                        p.as_ref()
+                    }
+                    LoopArmKind::Break(p) => {
+                        if has_break {
+                            return Err(TypeError::new(
+                                String::from("duplicate `break` arm in a `for` outcome block"),
+                                arm.span,
+                            ));
+                        }
+                        has_break = true;
+                        p.as_ref()
+                    }
+                    LoopArmKind::Limit(p) => {
+                        if has_limit {
+                            return Err(TypeError::new(
+                                String::from("duplicate `limit` arm in a `for` outcome block"),
+                                arm.span,
+                            ));
+                        }
+                        has_limit = true;
+                        p.as_ref()
+                    }
                 };
                 ctx.push_scope();
                 match binding {
@@ -3900,6 +3939,14 @@ fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
                 }
                 let _ = type_of_block(ctx, &mut arm.body)?;
                 ctx.pop_scope();
+            }
+            if !for_stmt.on_arms.is_empty() && !has_ok {
+                return Err(TypeError::new(
+                    String::from(
+                        "a `for` outcome `on` block must have an unguarded `ok` catch-all arm",
+                    ),
+                    for_stmt.span,
+                ));
             }
             Ok(())
         }

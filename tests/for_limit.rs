@@ -137,11 +137,11 @@ fn a_const_parameter_is_an_admissible_cap() {
 #[test]
 fn a_const_parameter_is_erased_in_an_arm_guard() {
     let src = "private data d { w: Word } \
-        fn go<const c: Word>(hi: Word) -> Word { for i in 0..hi limit c { } \
-        on { ok(k) when k == c => { d.w = 9; }, limit => { }, } d.w } \
+        fn go<const c: Word>(hi: Word) -> Word { for i in 0..hi limit 9 { if i == c { break; } } \
+        on { ok => { }, break(k) when k == c => { d.w = 9; }, } d.w } \
         fn main(hi: Word) -> Word { go::<3>(hi) }";
-    // hi = 3, count = 3 == c = 3, so the guard holds.
-    assert_eq!(run(src, 3).unwrap(), 9);
+    // The body breaks at i == c == 3, and the guard k == c holds.
+    assert_eq!(run(src, 100).unwrap(), 9);
 }
 
 // A body that allocates a composite each iteration still verifies: the cap
@@ -219,21 +219,23 @@ fn count_equal_to_cap_reports_ok_not_limit() {
 
 // --- `when` guards on outcome arms ---
 
-// A guard that holds runs the arm.
+// A guard that holds runs the (guardable) arm; a break at index 2 with a guard
+// that holds binds the index.
 #[test]
-fn a_true_guard_runs_the_arm() {
+fn a_true_guard_on_break_runs_the_arm() {
     let src = "private data d { w: Word } \
-        fn main(n: Word) -> Word { for i in 0..n limit 9 { } \
-        on { ok(c) when c == 3 => { d.w = 7; }, limit => { }, } d.w }";
-    assert_eq!(run(src, 3).unwrap(), 7);
+        fn main(n: Word) -> Word { for i in 0..n limit 9 { if i == 2 { break; } } \
+        on { ok => { }, break(bi) when bi == 2 => { d.w = 7; }, } d.w }";
+    assert_eq!(run(src, 5).unwrap(), 7);
 }
 
-// A guard that fails leaves an intended outcome (`ok`) a noop.
+// A guard that fails leaves an intended outcome (`break`) a noop; it does not
+// fall through to `ok`, since a `break` arm is present.
 #[test]
-fn a_false_guard_on_ok_is_a_noop() {
+fn a_false_guard_on_break_is_a_noop() {
     let src = "private data d { w: Word } \
-        fn main(n: Word) -> Word { for i in 0..n limit 9 { } \
-        on { ok(c) when c == 3 => { d.w = 7; }, limit => { }, } d.w }";
+        fn main(n: Word) -> Word { for i in 0..n limit 9 { if i == 2 { break; } } \
+        on { ok => { d.w = 1; }, break(bi) when bi == 5 => { d.w = 7; }, } d.w }";
     assert_eq!(run(src, 5).unwrap(), 0);
 }
 
@@ -255,12 +257,52 @@ fn a_true_guard_on_limit_handles_the_overrun() {
     assert_eq!(run(src, 100).unwrap(), 1);
 }
 
-// A non-Bool guard is rejected.
+// A non-Bool guard is rejected (on a guardable arm).
 #[test]
 fn a_non_bool_guard_is_rejected() {
     let msg = compile_err(
         "fn main(n: Word) -> Word { for i in 0..n limit 4 { } \
-        on { ok when n => { }, limit => { }, } 0 }",
+        on { ok => { }, limit when n => { }, } 0 }",
     );
     assert!(msg.contains("Bool"), "got: {msg}");
+}
+
+// --- The family discipline: an unguarded `ok` catch-all is mandatory ---
+
+// An `on` block without an `ok` arm is rejected.
+#[test]
+fn on_block_requires_an_ok_catch_all() {
+    let msg = compile_err(
+        "fn main(n: Word) -> Word { for i in 0..n limit 4 { } on { limit => { }, } 0 }",
+    );
+    assert!(msg.contains("`ok` catch-all"), "got: {msg}");
+}
+
+// A guarded `ok` arm is rejected: the catch-all must be unguarded.
+#[test]
+fn a_guarded_ok_arm_is_rejected() {
+    let msg = compile_err(
+        "fn main(n: Word) -> Word { for i in 0..n limit 4 { } \
+        on { ok(c) when c == 0 => { }, limit => { }, } 0 }",
+    );
+    assert!(msg.contains("unguarded"), "got: {msg}");
+}
+
+// A duplicate arm of the same outcome is rejected.
+#[test]
+fn a_duplicate_outcome_arm_is_rejected() {
+    let msg = compile_err(
+        "fn main(n: Word) -> Word { for i in 0..n limit 4 { } \
+        on { ok => { }, limit => { }, limit => { }, } 0 }",
+    );
+    assert!(msg.contains("duplicate"), "got: {msg}");
+}
+
+// With no `break` arm, a `break` falls through to the `ok` catch-all.
+#[test]
+fn a_break_falls_through_to_ok_when_no_break_arm() {
+    let src = "private data d { w: Word } \
+        fn main(n: Word) -> Word { for i in 0..n limit 9 { if i == 2 { break; } } \
+        on { ok => { d.w = 42; }, } d.w }";
+    assert_eq!(run(src, 5).unwrap(), 42);
 }
