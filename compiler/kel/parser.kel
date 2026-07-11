@@ -1,9 +1,8 @@
 // compiler/kel/parser.kel — Stage 2 of the self-hosted compiler.
 //
-// Increment 3: the top-level declaration header and its parameter names, streamed
-// as a per-declaration record. Real Keleusma code that compiles and verifies on the
-// current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md
-// (roadmap Step 2).
+// Increment 4: the full declaration signature. Real Keleusma code that compiles and
+// verifies on the current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and
+// compiler/MILESTONES.md (roadmap Step 2).
 //
 // Model. Keleusma forbids unbounded inner loops in `fn` and `yield`, so the one
 // top-level `loop` IS the scan over the token stream: one token is consumed per
@@ -14,21 +13,18 @@
 // unit of work yielded to the host is a single top-level declaration, streamed as a
 // small record, never a whole-program abstract syntax tree.
 //
-// Increments 1 and 2 recognised the declaration boundary, name, category, and
-// value-parameter count. Increment 3 moves to a record-per-declaration stream and
-// extracts each value parameter's name: a START element opens the declaration with
-// its category and name, one PARAM element follows per value parameter carrying its
-// name, and an END element closes it. Only the parameter *names* are extracted this
-// increment; their types, the return type, the guard, and the body are still
-// skipped, not parsed. The record model is the shape the body-node stream of later
-// increments will reuse.
+// Increments 1 through 3 recognised the declaration boundary, category, name, and
+// parameter names. Increment 4 completes the signature: it also emits each value
+// parameter's type name and the return type name. A parameter is `name: type`; the
+// name is the first identifier of the parameter and the type is the first identifier
+// after the `:`. The return type is the first identifier at parenthesis depth zero
+// once the parameter parentheses have closed, that is the identifier after `->`.
 //
-// A parameter name is the first identifier of each value parameter, the identifier
-// that follows the value-parameter `(` or a top-level `,` inside it. Type-parameter
-// names and trait bounds sit before the value parentheses, and a return-type tuple
-// opens its own parentheses after the parameter list closes; neither is mistaken
-// for a value parameter, because extraction is armed only inside the first
-// parenthesis group and disarmed once that group closes.
+// Types are simple named types this increment (`Word`, `bool`, a struct or enum
+// name). A nested type -- a generic `Foo<T>`, an array `[Word; n]`, a tuple
+// `(A, B)`, an `Option<T>` -- would need the work-stack walk of its sub-types and is
+// the next increment; this increment emits only the leading type name for such a
+// type, which the tests avoid.
 //
 // Input. The host (or, in the test harness, a throwaway adapter that maps the
 // reference tokenizer's output) places the token stream in the `shared data`
@@ -46,14 +42,17 @@
 //   kind 9 COLON   `:`
 //   kind 10 COMMA  `,`
 //
-// Declaration record wire (increment 3). Each element is one Word, `dkind + val*16`:
+// Declaration record wire (increment 4). Each element is one Word, `dkind + val*16`:
 //   dkind 0        PENDING; nothing this iteration; host skips it
 //   dkind 1/2/3    START of a fn / yield / loop declaration; val = its name id
 //   dkind 4        PARAM; a value parameter; val = its name id
 //   dkind 5        END; the current declaration is complete
+//   dkind 6        PTYPE; the type name of the parameter just emitted
+//   dkind 7        RETTYPE; the return type name
 //   dkind 15       DONE; the token stream is exhausted, no further declarations
-// A declaration is the sequence START, zero or more PARAM, END. The parameter types,
-// return type, guard, and parsed body handed to codegen land in later increments.
+// A declaration is START, then for each value parameter a PARAM followed by its
+// PTYPE, then a RETTYPE, then END. The nested type structure and the parsed body
+// handed to codegen land in later increments.
 //
 // The self-hosted compiler is a full-width host tool. Its record encoding does
 // arithmetic (`val*16`) that overflows a narrow word, so it declares a 32-bit
@@ -70,12 +69,13 @@ shared data toks {
 
 // The parser's cross-iteration state. `mode` is the parse phase: 0 expect the
 // category keyword, 1 expect the declaration name (and emit START), 2 scan the
-// signature emitting a PARAM per value-parameter name, 3 skip the body by
-// brace-matching (and emit END). `dkind` is the category (1 fn, 2 yield, 3 loop).
-// `pdepth` is the parenthesis depth in the signature scan; `pdone` records that the
-// value-parameter parentheses have closed, so a return-type tuple is not mistaken
-// for parameters; `pname` is armed when the next identifier begins a parameter.
-// `depth` is the brace depth in the body skip.
+// signature emitting PARAM/PTYPE/RETTYPE, 3 skip the body by brace-matching (and
+// emit END). `dkind` is the category (1 fn, 2 yield, 3 loop). `pdepth` is the
+// parenthesis depth in the signature scan; `pdone` records that the value-parameter
+// parentheses have closed. `pname` is armed when the next identifier begins a
+// parameter, `ptype` when the next identifier is a parameter's type, `rtype` when
+// the next parenthesis-depth-zero identifier is the return type. `depth` is the
+// brace depth in the body skip.
 private data ps {
     cursor: Word,
     mode: Word,
@@ -83,6 +83,8 @@ private data ps {
     pdepth: Word,
     pdone: Word,
     pname: Word,
+    ptype: Word,
+    rtype: Word,
     depth: Word,
 }
 
@@ -114,13 +116,36 @@ loop main(resume: Word) -> Word {
             ps.pdepth = 0;
             ps.pdone = 0;
             ps.pname = 0;
+            ps.ptype = 0;
+            ps.rtype = 0;
             ps.mode = 2;
             yield kind + v * 16
         } else {
         if ps.mode == 2 {
-            // Signature: arm parameter extraction inside the first parenthesis
-            // group and emit a PARAM per parameter name; the first `{` at
-            // parenthesis depth zero opens the body.
+            // Signature: emit a PARAM per parameter name, a PTYPE per parameter
+            // type, and a RETTYPE for the return type; the first `{` at parenthesis
+            // depth zero opens the body.
+            if k == 1 {
+                if ps.pdepth == 1 {
+                    if ps.pname == 1 {
+                        ps.pname = 0;
+                        yield 4 + v * 16
+                    } else {
+                    if ps.ptype == 1 {
+                        ps.ptype = 0;
+                        yield 6 + v * 16
+                    } else {
+                        yield 0
+                    } }
+                } else {
+                    if ps.rtype == 1 {
+                        ps.rtype = 0;
+                        yield 7 + v * 16
+                    } else {
+                        yield 0
+                    }
+                }
+            } else {
             if k == 7 {
                 ps.pdepth = ps.pdepth + 1;
                 if ps.pdepth == 1 {
@@ -134,24 +159,17 @@ loop main(resume: Word) -> Word {
                 ps.pdepth = ps.pdepth - 1;
                 if ps.pdepth == 0 {
                     ps.pdone = 1;
+                    ps.rtype = 1;
                 }
                 yield 0
             } else {
-            if k == 1 {
+            if k == 9 {
                 if ps.pdepth == 1 {
-                    if ps.pname == 1 {
-                        ps.pname = 0;
-                        yield 4 + v * 16
-                    } else {
-                        yield 0
-                    }
-                } else {
-                    yield 0
+                    ps.ptype = 1;
                 }
+                yield 0
             } else {
             if k == 10 {
-                // COMMA: re-arm parameter extraction for the next value parameter
-                // when at the top level of the value parentheses.
                 if ps.pdepth == 1 {
                     if ps.pdone == 0 {
                         ps.pname = 1;
@@ -167,7 +185,7 @@ loop main(resume: Word) -> Word {
                 yield 0
             } else {
                 yield 0
-            } } } } }
+            } } } } } }
         } else {
             // Body skip: brace-match to the `}` that returns the depth to zero,
             // then emit END.
