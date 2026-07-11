@@ -1,5 +1,18 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
+// Increment 32: multiheaded `yield` dispatch and `yield` expressions — the codegen
+// stage is now FULLY SELF-HOSTING. A `yield <expr>` lowers to the expression ops
+// then `Yield` (a YieldExpr node, kind 24). A multiheaded function lowers to the
+// per-head dispatch (a MultiHead node, kind 25, category 3): each head copies the
+// parameters into fresh locals, a guarded head tests its `when` guard with a bare
+// `If`/`EndIf` and on a match runs its body and returns while the final unguarded
+// head returns directly, and an unmatched dispatch falls through to a dead
+// `Trap(NoMatchingHead)`. The multiheaded `yield emit_next` (eight heads) now
+// self-compiles byte-identically, so every one of this file's 34 functions
+// round-trips through itself byte for byte. The self-compile probe groups heads
+// by name and reads a multihead's op stream to its terminating trap (its per-head
+// returns are interior ops). See tests/selfhost_codegen.rs and MILESTONES.md.
+//
 // Increment 31: the `loop` wrapper. The stage now emits a function's category
 // wrapper: a `loop` (productive divergent) function opens with a `Stream` marker
 // before the body and closes by discarding the body value and resetting the
@@ -177,6 +190,8 @@ const data wire {
     ocok: Word = 1,
     ocbreak: Word = 2,
     catloop: Word = 2,
+    catmulti: Word = 3,
+    nomatchhead: Word = 1,
 }
 
 // Flattened expression forest from the codegen input adapter, a structure-of-
@@ -208,6 +223,7 @@ shared data ast {
     for_parts: [Word; 64],
     match_parts: [Word; 64],
     limit_parts: [Word; 64],
+    head_parts: [Word; 64],
     param_count: Word,
     category: Word,
 }
@@ -738,6 +754,59 @@ fn push_match(p: Word) -> Word {
     push_visit(scrut)
 }
 
+// YieldExpr (kind 24): `yield <expr>` emits the expression ops then `Yield`.
+// lhs = the yielded expression.
+fn push_yield(p: Word) -> Word {
+    push_emit(wire.yieldop);
+    push_visit(ast.lhs[p])
+}
+
+// MultiHead (kind 25): the dispatch of a multiheaded function, reproducing the
+// reference lowering. Each head first copies the parameters into fresh locals,
+// then a guarded head tests its `when` guard with a bare `If`/`EndIf` and on a
+// match runs its body and returns, while the final unguarded head runs its body
+// and returns directly; an unmatched dispatch falls through to a dead
+// `Trap(NoMatchingHead)`. The body of each head is a `yield` expression. The
+// parameter copies grow local_count by head_count * param_count. args = the
+// head_parts entry start, rhs = head count; each 4-word entry is (param-copy
+// start slot, guarded flag, guard node, body node). Pushed in reverse so the
+// drain emits head 0 first.
+fn push_multihead(p: Word) -> Word {
+    let base = ast.args[p];
+    let n = ast.rhs[p];
+    let pc = ast.param_count;
+    st.let_count = st.let_count + n * pc;
+    // The dead NoMatchingHead trap tail (last in the stream, pushed first).
+    push_emit(wire.trap + wire.nomatchhead * wire.radix);
+    for hj in 0..n limit 64 {
+        let h = n - 1 - hj;
+        let hb = base + h * 4;
+        let param_start = ast.head_parts[hb];
+        let guarded = ast.head_parts[hb + 1];
+        let guard_node = ast.head_parts[hb + 2];
+        let body_node = ast.head_parts[hb + 3];
+        // Guarded: guard; If; body; Return; EndIf. Unguarded: body; Return.
+        if guarded == 1 {
+            push_emit(wire.mendif);
+            push_emit(wire.ret);
+            push_visit(body_node);
+            push_emit(wire.mif);
+            push_visit(guard_node);
+        }
+        if guarded == 0 {
+            push_emit(wire.ret);
+            push_visit(body_node);
+        }
+        // Parameter copies in reverse: forward is GetLocal(i); SetLocal(start+i).
+        for ij in 0..pc limit 8 {
+            let i = pc - 1 - ij;
+            push_emit(wire.setlocal + (param_start + i) * wire.radix);
+            push_emit(wire.getlocal + i * wire.radix);
+        }
+    }
+    0
+}
+
 // Phase 0: seed the work-stack with the body's block root. A block is a `LetIn`
 // chain (or a bare expression) in the node forest, so no statement-array
 // pre-seeding is needed; the walk expands the chain. Yields the PENDING 0.
@@ -786,6 +855,8 @@ fn walk_step() -> Word {
             21 => push_exprstmt(payload),
             22 => push_match(payload),
             23 => push_forlimit(payload),
+            24 => push_yield(payload),
+            25 => push_multihead(payload),
             _ => 0,
         };
     }
@@ -804,7 +875,10 @@ fn drain_return() -> Word {
         st.ops[st.op_count] = wire.reset;
         st.op_count = st.op_count + 1;
     }
-    if ast.category != wire.catloop {
+    // Categories 0 (`fn`) and 1 (single-head `yield`) close with `Return`. A
+    // multiheaded function (category 3) emits nothing here: each head carries its
+    // own `Return` and the dispatch ends in `Trap(NoMatchingHead)`.
+    if ast.category < wire.catloop {
         st.ops[st.op_count] = wire.ret;
         st.op_count = st.op_count + 1;
     }

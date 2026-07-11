@@ -69,7 +69,7 @@ fn status() {
         println!("  step {}: {name:<8} {path:<20} [{state}]", i + 1);
     }
     println!();
-    println!("status: porting backward, codegen first. Codegen increment 30, a");
+    println!("status: porting backward, codegen first. Codegen increment 32, a");
     println!("recursion-free work-stack walk (a `loop` that delegates its yield to a");
     println!("multiheaded guarded `yield` phase machine over per-kind subroutines)");
     println!("that compiles blocks of `let`, data-field assignments, and range");
@@ -82,10 +82,10 @@ fn status() {
     println!("indexed data-segment reads and writes, into an op buffer it streams with its own");
     println!("deduplicating constant pool and counted local-frame size, and lexer");
     println!("increment 1, a streaming tokenizer, both compile, verify, and run (see");
-    println!("tests/selfhost_codegen.rs and `lex <file>`). The stage's own scan loops");
-    println!("now use `for .. limit`, and all 30 atomic functions self-compile");
-    println!("byte-identically; only its multiheaded `yield`/`loop` machinery");
-    println!("remains. V0.3.0 ships when the bootstrap reaches a fixed point.");
+    println!("tests/selfhost_codegen.rs and `lex <file>`). The codegen stage is now");
+    println!("FULLY SELF-HOSTING: all 34 of its functions, including the multiheaded");
+    println!("`yield emit_next` dispatch and the `loop main`, compile themselves");
+    println!("byte-identically. V0.3.0 ships when the bootstrap reaches a fixed point.");
 }
 
 /// Run Stage 1 (the self-hosted lexer) over `path` and print the token stream.
