@@ -1,5 +1,17 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
+// Increment 29: node-array capacity. The four flat-node arrays (`kinds`, `args`,
+// `lhs`, `rhs`) and the op buffer and work-stack grew from 64/256 to 512 so the
+// stage's own largest functions fit: `emit_op` flattens to 308 nodes and emits
+// 367 ops. With that headroom every one of the stage's 29 atomic functions now
+// self-compiles byte-identically (including `emit_op`, `walk_step`, `push_match`,
+// and `push_forin`); only the multiheaded `yield`/`loop` machinery remains. The
+// `call_args`/`for_parts`/`match_parts` side arrays stay at 64 (no single function
+// has more than a handful of calls, one `for`, or one `match`), and the `for
+// i in 0..64` scan loops are bound to the pool/call-args/arm/break-list, not the
+// node arrays, so they are unchanged. Sizing only, no behavior change; the
+// conformance suite stays byte-identical.
+//
 // Increment 28: `match` over an integer scrutinee (a MatchIn node, kind 22, with
 // integer-literal arms and a trailing wildcard). The reference lowers it to a
 // virtual loop: the scrutinee is stashed in a fresh temp local, each arm tests it
@@ -152,10 +164,10 @@ const data wire {
 // and rhs = the continuation; a Unit node (kind 20) emits PushImmediate(0).
 shared data ast {
     root: Word,
-    kinds: [Word; 64],
-    args: [Word; 64],
-    lhs: [Word; 64],
-    rhs: [Word; 64],
+    kinds: [Word; 512],
+    args: [Word; 512],
+    lhs: [Word; 512],
+    rhs: [Word; 512],
     call_args: [Word; 64],
     for_parts: [Word; 64],
     match_parts: [Word; 64],
@@ -171,11 +183,11 @@ shared data ast {
 // position stack (depth `cf_sp`) recording where the open `If`/`Else` markers
 // sit in `ops`. All persist across the loop's per-iteration RESET.
 private data st {
-    stack: [Word; 256],
+    stack: [Word; 512],
     sp: Word,
     started: Word,
     ret_done: Word,
-    ops: [Word; 256],
+    ops: [Word; 512],
     op_count: Word,
     emit_cursor: Word,
     cf_if: [Word; 32],
