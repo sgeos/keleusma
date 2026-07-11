@@ -1,8 +1,8 @@
-//! Body-expression parser (`compiler/kel/body.kel`), increment 9: a function body that
+//! Body-expression parser (`compiler/kel/body.kel`), increment 10: a function body that
 //! is a block of `let` bindings and scalar data-field assignments followed by a tail
 //! expression, over the full operator-precedence expression grammar plus scalar and
-//! indexed data-field reads, lowered to the abstract-syntax node forest codegen
-//! consumes.
+//! indexed data-field reads and the `if`/`else` conditional with expression branches,
+//! lowered to the abstract-syntax node forest codegen consumes.
 //!
 //! A throwaway adapter tokenises the program, feeds the function body's tokens, the
 //! parameter-name table, and the data-field layout (computed from the compiled
@@ -29,7 +29,7 @@
 ))]
 
 use keleusma::Arena;
-use keleusma::ast::{BinOp, Expr, Literal, Pattern, Stmt, UnaryOp};
+use keleusma::ast::{BinOp, Block, Expr, Literal, Pattern, Stmt, UnaryOp};
 use keleusma::bytecode::Value;
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
@@ -132,6 +132,8 @@ fn run_body_inner(func_src: &str) -> (Vec<Node>, i64) {
             TokenKind::Dot => (40, 0),
             TokenKind::LBracket => (41, 0),
             TokenKind::RBracket => (42, 0),
+            TokenKind::If => (43, 0),
+            TokenKind::Else => (44, 0),
             TokenKind::LowerIdent(s) | TokenKind::UpperIdent(s) => (1, intern(s)),
             TokenKind::LBrace => (2, 0),
             TokenKind::RBrace => (3, 0),
@@ -300,6 +302,20 @@ fn run_body_inner(func_src: &str) -> (Vec<Node>, i64) {
                             arg,
                             lhs: index,
                             rhs: 0,
+                        });
+                        stack.push((nodes.len() - 1) as i64);
+                    }
+                    4 => {
+                        // An If: pop the three sub-nodes (else, then, cond). The
+                        // condition goes in `arg`, then in `lhs`, else in `rhs`.
+                        let els = stack.pop().expect("If needs an else branch");
+                        let then = stack.pop().expect("If needs a then branch");
+                        let cond = stack.pop().expect("If needs a condition");
+                        nodes.push(Node {
+                            kind,
+                            arg: cond,
+                            lhs: then,
+                            rhs: els,
                         });
                         stack.push((nodes.len() - 1) as i64);
                     }
@@ -482,10 +498,51 @@ fn flatten(expr: &Expr, scope: &[String], nodes: &mut Vec<Node>, data_slots: &[S
             });
             (nodes.len() - 1) as i64
         }
+        Expr::If {
+            condition,
+            then_block,
+            else_block,
+            ..
+        } => {
+            // An If (kind 4): arg = condition, lhs = then branch, rhs = else branch.
+            // This increment's branches are single expressions (no statements).
+            let cond = flatten(condition, scope, nodes, data_slots);
+            let then = flatten_branch(then_block, scope, nodes, data_slots);
+            let els = match else_block {
+                Some(eb) => flatten_branch(eb, scope, nodes, data_slots),
+                None => panic!("increment requires an else branch"),
+            };
+            nodes.push(Node {
+                kind: 4,
+                arg: cond,
+                lhs: then,
+                rhs: els,
+            });
+            (nodes.len() - 1) as i64
+        }
         other => panic!(
-            "increment handles literals, references, unary and binary operators, and data reads, got {other:?}"
+            "increment handles literals, references, operators, data reads, and if, got {other:?}"
         ),
     }
+}
+
+/// Flatten an `if` branch, which this increment requires to be a single tail
+/// expression (no `let` or assignment statements).
+fn flatten_branch(
+    block: &Block,
+    scope: &[String],
+    nodes: &mut Vec<Node>,
+    data_slots: &[String],
+) -> i64 {
+    assert!(
+        block.stmts.is_empty(),
+        "increment requires expression-only if branches"
+    );
+    let tail = block
+        .tail_expr
+        .as_ref()
+        .expect("an if branch has a tail expression");
+    flatten(tail, scope, nodes, data_slots)
 }
 
 /// The reference forest for a body: flatten the function's block of `let` bindings and
@@ -1125,4 +1182,93 @@ fn assignments_and_lets_mix_in_a_block() {
             rhs: 0
         }
     );
+}
+
+// An `if`/`else` conditional is an If node with the condition in arg and the branches
+// in lhs/rhs.
+#[test]
+fn an_if_expression_is_an_if_node() {
+    let src = "fn f(x: Word) -> Word { if x > 0 { x } else { 0 } }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let iff = nodes[root as usize];
+    assert_eq!(iff.kind, 4);
+    assert_eq!(nodes[iff.arg as usize].arg, 9); // Gt condition
+    assert_eq!(
+        nodes[iff.lhs as usize],
+        Node {
+            kind: 2,
+            arg: 0,
+            lhs: 0,
+            rhs: 0
+        }
+    ); // then: x
+    assert_eq!(
+        nodes[iff.rhs as usize],
+        Node {
+            kind: 1,
+            arg: 0,
+            lhs: 0,
+            rhs: 0
+        }
+    ); // else: 0
+}
+
+// The condition and branches may be full expressions.
+#[test]
+fn if_branches_are_expressions() {
+    let src = "fn f(a: Word, b: Word) -> Word { if a + b == 3 { a * b } else { a - b } }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let iff = nodes[root as usize];
+    assert_eq!(iff.kind, 4);
+    assert_eq!(nodes[iff.arg as usize].arg, 6); // Eq condition
+    assert_eq!(nodes[iff.lhs as usize].arg, 2); // then: Mul
+    assert_eq!(nodes[iff.rhs as usize].arg, 3); // else: Sub
+}
+
+// A conditional nests in the then branch; the inner If is the outer If's then child.
+#[test]
+fn conditionals_nest_in_the_then_branch() {
+    let src = "fn f(x: Word) -> Word { if x > 0 { if x > 5 { 2 } else { 1 } } else { 0 } }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let outer = nodes[root as usize];
+    assert_eq!(outer.kind, 4);
+    // The then branch is itself an If.
+    assert_eq!(nodes[outer.lhs as usize].kind, 4);
+    // The else branch is the literal 0.
+    assert_eq!(
+        nodes[outer.rhs as usize],
+        Node {
+            kind: 1,
+            arg: 0,
+            lhs: 0,
+            rhs: 0
+        }
+    );
+}
+
+// A conditional nests in the else branch (an else-if chain).
+#[test]
+fn conditionals_nest_in_the_else_branch() {
+    let src = "fn f(x: Word) -> Word { if x > 5 { 2 } else { if x > 0 { 1 } else { 0 } } }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let outer = nodes[root as usize];
+    assert_eq!(outer.kind, 4);
+    // The else branch is itself an If.
+    assert_eq!(nodes[outer.rhs as usize].kind, 4);
+}
+
+// A conditional binds into a `let` and combines under an operator.
+#[test]
+fn a_conditional_binds_and_combines() {
+    let src = "fn f(x: Word) -> Word { let m = if x > 0 { x } else { 0 }; m + 1 }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let letin = nodes[root as usize];
+    assert_eq!(letin.kind, 5);
+    // The bound value is the If.
+    assert_eq!(nodes[letin.lhs as usize].kind, 4);
 }

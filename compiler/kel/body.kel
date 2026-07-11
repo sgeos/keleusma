@@ -1,10 +1,11 @@
 // compiler/kel/body.kel — the body-expression parser, a sub-component of Stage 2.
 //
-// Increment 9: a function body that is a block of `let` bindings and scalar data-field
+// Increment 10: a function body that is a block of `let` bindings and scalar data-field
 // assignments followed by a tail expression, over the full operator-precedence
-// expression grammar plus scalar and indexed data-field reads. Real Keleusma code that
-// compiles and verifies on the current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md
-// and compiler/MILESTONES.md (roadmap Step 2).
+// expression grammar plus scalar and indexed data-field reads and the `if`/`else`
+// conditional expression with expression branches. Real Keleusma code that compiles and
+// verifies on the current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and
+// compiler/MILESTONES.md (roadmap Step 2).
 //
 // Model. Stage 2's declaration parser (parser.kel) reads a function's signature and
 // brace-matches its body. This companion loop reads that body's tokens and produces
@@ -59,6 +60,18 @@
 // and argument for the fold. Indexed assignment `d.f[i] = e;` reorders the value ahead
 // of the index and is a later increment.
 //
+// An `if cond { then } else { else }` conditional is an If node (kind 4, arg = the
+// condition node, `lhs` the then branch, `rhs` the else branch); the host pops the
+// three sub-nodes off its stack (cond, then, else), emitted in that order. An
+// `if`-context stack `if_phase`/`if_sp` tracks each pending conditional's phase (1
+// condition, 2 then, 3 awaiting `else`, 4 awaiting the else `{`, 5 else), so nested
+// conditionals resolve their `{`, `}`, and `else` against the innermost. The condition
+// and each branch are ordinary expressions drained at the delimiter that ends them (the
+// `{` after the condition via drain reason 2, a branch's `}` via reason 3 then or 4
+// else), and the else branch's `}` emits the If. This increment's branches are single
+// expressions; a branch that binds its own `let` locals needs a nested statement block
+// and is a later increment.
+//
 // A `data.field` read: when an identifier that names a data block is read, `da_phase`
 // awaits the `.` and then the field name, whose element-0 slot and length are looked
 // up in the field layout. If a `[` follows, the read is indexed: the field's base and
@@ -91,7 +104,9 @@
 //   kind 40 DOT    `.`; separates a data block name from its field
 //   kind 41 LBRACK `[`; opens the index of a data array read
 //   kind 42 RBRACK `]`; closes the index of a data array read
-// Any other token is ignored this increment.
+//   kind 43 IF     the `if` keyword; opens a conditional
+//   kind 44 ELSE   the `else` keyword; separates the branches
+// The `{` and `}` of a branch reuse kinds 2 and 3. Any other token is ignored.
 //
 // Node record wire. Each element is one Word, `kind + arg*16`:
 //   kind 0         PENDING; nothing this iteration; host skips it
@@ -107,6 +122,8 @@
 //   kind 11        DataRead; arg = the data-segment slot; a leaf
 //   kind 12        DataFieldAssignIn; arg = the data slot; host pops the continuation
 //                  (`rhs`) and the assigned value (`lhs`)
+//   kind 4         If; host pops three nodes (else, then, cond); cond -> arg,
+//                  then -> `lhs`, else -> `rhs`
 //   kind 13        IndexRead; arg = base + len*65536; host pops the index (`lhs`)
 //   kind 15        DONE; the body is complete, its root is the remaining stack node
 // The remaining interior node kinds (If, LetIn, Call, and the rest) and the statement
@@ -183,6 +200,8 @@ private data bs {
     idx_len: [Word; 8],
     idx_sp: Word,
     iclosing: Word,
+    if_phase: [Word; 16],
+    if_sp: Word,
 }
 
 // The precedence of an operator code, tightest to loosest: unary (16 Neg, 17 Not) 9,
@@ -395,11 +414,31 @@ fn step_draining() -> Word {
             bs.expect_operand = 1;
             0
         } else {
+        if bs.drain_reason == 1 {
             bs.draining = 0;
             bs.folding = 1;
             bs.fold_i = bs.stmt_count;
             0
-        }
+        } else {
+        if bs.drain_reason == 2 {
+            // The condition is drained; enter the then branch.
+            bs.if_phase[bs.if_sp - 1] = 2;
+            bs.draining = 0;
+            bs.expect_operand = 1;
+            0
+        } else {
+        if bs.drain_reason == 3 {
+            // The then branch is drained; await `else`.
+            bs.if_phase[bs.if_sp - 1] = 3;
+            bs.draining = 0;
+            0
+        } else {
+            // reason 4: the else branch is drained; emit the If and pop the context.
+            bs.if_sp = bs.if_sp - 1;
+            bs.draining = 0;
+            bs.expect_operand = 0;
+            4
+        } } } }
     }
 }
 
@@ -531,12 +570,52 @@ fn step_op(k: Word) -> Word {
     } } } }
 }
 
-// The token-kind dispatch in normal (expression) position.
-fn step_normal(k: Word, v: Word) -> Word {
-    if k == 3 {
-        bs.drain_reason = 1;
+// The conditional tokens `{`, `}`, `if`, and `else`. A `{` after a condition drains
+// it (reason 2) then enters the then branch; a `{` after `else` enters the else branch;
+// a `}` drains a branch (reason 3 then, 4 else) or, with no pending conditional, the
+// body (reason 1); `if` pushes a context and `else` advances one.
+fn step_if(k: Word) -> Word {
+    if k == 43 {
+        bs.if_phase[bs.if_sp] = 1;
+        bs.if_sp = bs.if_sp + 1;
+        bs.expect_operand = 1;
+        0
+    } else {
+    if k == 44 {
+        bs.if_phase[bs.if_sp - 1] = 4;
+        0
+    } else {
+    if k == 2 {
+        if bs.if_sp > 0 {
+            if bs.if_phase[bs.if_sp - 1] == 1 {
+                bs.drain_reason = 2;
+                bs.draining = 1;
+            } else {
+                bs.if_phase[bs.if_sp - 1] = 5;
+                bs.expect_operand = 1;
+            }
+        }
+        0
+    } else {
+        // k == 3: close a branch, or the body when no conditional is pending.
+        if bs.if_sp > 0 {
+            if bs.if_phase[bs.if_sp - 1] == 2 {
+                bs.drain_reason = 3;
+            } else {
+                bs.drain_reason = 4;
+            }
+        } else {
+            bs.drain_reason = 1;
+        }
         bs.draining = 1;
         0
+    } } }
+}
+
+// The token-kind dispatch in normal (expression) position.
+fn step_normal(k: Word, v: Word) -> Word {
+    if k == 2 orelse k == 3 orelse k == 43 orelse k == 44 {
+        step_if(k)
     } else {
     if k == 12 {
         bs.expect_operand = 0;
