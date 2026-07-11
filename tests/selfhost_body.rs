@@ -1,14 +1,17 @@
-//! Body-expression parser (`compiler/kel/body.kel`), increment 1: an atomic function
-//! body — one expression that is a single integer literal or a single parameter
-//! reference — lowered to the abstract-syntax node forest the codegen stage consumes.
+//! Body-expression parser (`compiler/kel/body.kel`), increment 2: an expression body
+//! over integer literals, parameter references, and the binary arithmetic and
+//! comparison operators, lowered by operator precedence to the abstract-syntax node
+//! forest the codegen stage consumes.
 //!
 //! A throwaway adapter tokenises a function, feeds the body's tokens (from the opening
 //! `{`) and the function's parameter-name table to the `body.kel` `loop`, and decodes
-//! the postorder node-record stream into a node forest. Each leaf record pushes a node
-//! and its index onto a stack; an interior node (a later increment) pops its children.
-//! The forest is checked against a reference flattening of the same body's tail
-//! expression, with parameters occupying the first frame slots — the same lowering the
-//! codegen conformance harness performs.
+//! the postorder node-record stream into a node forest. Each leaf record (Literal,
+//! Local) pushes a node and its index onto a stack; an interior BinOp record pops its
+//! two operands and pushes the combined node. The forest is checked against a
+//! reference flattening of the same body's tail expression, with parameters occupying
+//! the first frame slots — the same lowering the codegen conformance harness performs
+//! — so operator precedence and left-associativity are verified against the reference
+//! parser's own tree.
 
 #![cfg(all(
     feature = "compile",
@@ -19,7 +22,7 @@
 ))]
 
 use keleusma::Arena;
-use keleusma::ast::{Expr, Literal, Pattern};
+use keleusma::ast::{BinOp, Expr, Literal, Pattern};
 use keleusma::bytecode::Value;
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
@@ -81,6 +84,17 @@ fn run_body(func_src: &str) -> (Vec<Node>, i64) {
             TokenKind::LBrace => (2, 0),
             TokenKind::RBrace => (3, 0),
             TokenKind::IntLit(n) => (12, *n),
+            TokenKind::Plus => (21, 0),
+            TokenKind::Minus => (22, 0),
+            TokenKind::Star => (23, 0),
+            TokenKind::Slash => (24, 0),
+            TokenKind::Percent => (25, 0),
+            TokenKind::EqEq => (26, 0),
+            TokenKind::NotEq => (27, 0),
+            TokenKind::Lt => (28, 0),
+            TokenKind::Gt => (29, 0),
+            TokenKind::LtEq => (30, 0),
+            TokenKind::GtEq => (31, 0),
             TokenKind::Eof => continue,
             _ => (4, 0),
         };
@@ -124,7 +138,10 @@ fn run_body(func_src: &str) -> (Vec<Node>, i64) {
     let mut state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
-    for _ in 0..(body_kinds.len() * 2 + 16) {
+    // Each token yields at least once, and an operator spreads its shunting-yard
+    // pops and push across extra iterations; with a Reset between every yield, the
+    // state budget is a generous multiple of the token count.
+    for _ in 0..(body_kinds.len() * 8 + 64) {
         match state {
             VmState::Yielded(Value::Int(w)) => {
                 let kind = w.rem_euclid(16);
@@ -138,6 +155,18 @@ fn run_body(func_src: &str) -> (Vec<Node>, i64) {
                             arg,
                             lhs: 0,
                             rhs: 0,
+                        });
+                        stack.push((nodes.len() - 1) as i64);
+                    }
+                    3 => {
+                        // An interior BinOp node: pop the two operands (rhs then lhs).
+                        let rhs = stack.pop().expect("BinOp needs a right operand");
+                        let lhs = stack.pop().expect("BinOp needs a left operand");
+                        nodes.push(Node {
+                            kind,
+                            arg,
+                            lhs,
+                            rhs,
                         });
                         stack.push((nodes.len() - 1) as i64);
                     }
@@ -159,9 +188,72 @@ fn run_body(func_src: &str) -> (Vec<Node>, i64) {
     panic!("body parser did not reach DONE within the iteration budget");
 }
 
-/// The reference forest for an atomic body: flatten the function's tail expression,
-/// with parameters occupying the first frame slots. Increment 1 handles a lone integer
-/// literal (Literal, kind 1) or a lone parameter reference (Local, kind 2).
+/// Flatten an expression into `nodes` in postorder, returning the index of its root
+/// node. This mirrors the codegen conformance harness's `flatten` for the subset the
+/// body parser handles so far: integer literals, parameter references, and the binary
+/// arithmetic and comparison operators.
+fn flatten(expr: &Expr, scope: &[&str], nodes: &mut Vec<Node>) -> i64 {
+    match expr {
+        Expr::Literal {
+            value: Literal::Int(n),
+            ..
+        } => {
+            nodes.push(Node {
+                kind: 1,
+                arg: *n,
+                lhs: 0,
+                rhs: 0,
+            });
+            (nodes.len() - 1) as i64
+        }
+        Expr::Ident { name, .. } => {
+            let slot = scope
+                .iter()
+                .position(|n| n == name)
+                .expect("identifier is a parameter this increment") as i64;
+            nodes.push(Node {
+                kind: 2,
+                arg: slot,
+                lhs: 0,
+                rhs: 0,
+            });
+            (nodes.len() - 1) as i64
+        }
+        Expr::BinOp {
+            op, left, right, ..
+        } => {
+            let lhs = flatten(left, scope, nodes);
+            let rhs = flatten(right, scope, nodes);
+            let code = match op {
+                BinOp::Add => 1,
+                BinOp::Mul => 2,
+                BinOp::Sub => 3,
+                BinOp::Div => 4,
+                BinOp::Mod => 5,
+                BinOp::Eq => 6,
+                BinOp::NotEq => 7,
+                BinOp::Lt => 8,
+                BinOp::Gt => 9,
+                BinOp::LtEq => 10,
+                BinOp::GtEq => 11,
+                other => panic!("increment handles arithmetic and comparison, got {other:?}"),
+            };
+            nodes.push(Node {
+                kind: 3,
+                arg: code,
+                lhs,
+                rhs,
+            });
+            (nodes.len() - 1) as i64
+        }
+        other => {
+            panic!("increment handles literals, parameters, and binary operators, got {other:?}")
+        }
+    }
+}
+
+/// The reference forest for a body: flatten the function's tail expression, with
+/// parameters occupying the first frame slots.
 fn reference_body(func_src: &str) -> (Vec<Node>, i64) {
     let program = parse(&tokenize(func_src).expect("lex")).expect("parse");
     let f = &program.functions[0];
@@ -170,32 +262,10 @@ fn reference_body(func_src: &str) -> (Vec<Node>, i64) {
         .body
         .tail_expr
         .as_ref()
-        .expect("an atomic body is a single tail expression");
-    let node = match tail.as_ref() {
-        Expr::Literal {
-            value: Literal::Int(n),
-            ..
-        } => Node {
-            kind: 1,
-            arg: *n,
-            lhs: 0,
-            rhs: 0,
-        },
-        Expr::Ident { name, .. } => {
-            let slot = scope
-                .iter()
-                .position(|n| n == name)
-                .expect("identifier is a parameter this increment") as i64;
-            Node {
-                kind: 2,
-                arg: slot,
-                lhs: 0,
-                rhs: 0,
-            }
-        }
-        other => panic!("increment handles a literal or parameter reference, got {other:?}"),
-    };
-    (vec![node], 0)
+        .expect("a body is a single tail expression this increment");
+    let mut nodes = Vec::new();
+    let root = flatten(tail, &scope, &mut nodes);
+    (nodes, root)
 }
 
 // A body that is a single integer literal is one Literal node.
@@ -267,4 +337,68 @@ fn a_zero_literal_round_trips() {
             rhs: 0
         }]
     );
+}
+
+// A single binary operator over two parameters is one BinOp node over two Locals.
+#[test]
+fn a_binary_operator_combines_two_operands() {
+    let src = "fn sum(a: Word, b: Word) -> Word { a + b }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    // Postorder: Local a (0), Local b (1), BinOp Add (2, lhs 0, rhs 1).
+    assert_eq!(root, 2);
+    assert_eq!(
+        nodes[2],
+        Node {
+            kind: 3,
+            arg: 1,
+            lhs: 0,
+            rhs: 1
+        }
+    );
+}
+
+// Multiplication binds tighter than addition: `a + b * c` parses as `a + (b * c)`.
+#[test]
+fn multiplication_binds_tighter_than_addition() {
+    let src = "fn f(a: Word, b: Word, c: Word) -> Word { a + b * c }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    // The root is Add; its right child is the Mul of b and c.
+    let add = nodes[root as usize];
+    assert_eq!(add.arg, 1); // Add
+    let mul = nodes[add.rhs as usize];
+    assert_eq!(mul.arg, 2); // Mul
+}
+
+// Subtraction is left-associative: `a - b - c` parses as `(a - b) - c`.
+#[test]
+fn subtraction_is_left_associative() {
+    let src = "fn f(a: Word, b: Word, c: Word) -> Word { a - b - c }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    // The root is a Sub whose left child is itself a Sub (left association).
+    let outer = nodes[root as usize];
+    assert_eq!(outer.arg, 3); // Sub
+    let inner = nodes[outer.lhs as usize];
+    assert_eq!(inner.arg, 3); // Sub
+}
+
+// Comparison binds loosest: `a + b == c` parses as `(a + b) == c`.
+#[test]
+fn comparison_binds_loosest() {
+    let src = "fn f(a: Word, b: Word, c: Word) -> bool { a + b == c }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let eq = nodes[root as usize];
+    assert_eq!(eq.arg, 6); // Eq
+    let add = nodes[eq.lhs as usize];
+    assert_eq!(add.arg, 1); // Add
+}
+
+// A literal operand mixes with parameters across every arithmetic precedence level.
+#[test]
+fn a_mixed_precedence_expression_matches_the_reference() {
+    let src = "fn f(a: Word, b: Word) -> Word { a * 2 + b / 3 - 1 }";
+    assert_eq!(run_body(src), reference_body(src));
 }

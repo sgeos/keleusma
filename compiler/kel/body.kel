@@ -1,9 +1,9 @@
 // compiler/kel/body.kel — the body-expression parser, a sub-component of Stage 2.
 //
-// Increment 1: an atomic function body, one expression that is a single integer
-// literal or a single parameter reference. Real Keleusma code that compiles and
-// verifies on the current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and
-// compiler/MILESTONES.md (roadmap Step 2).
+// Increment 2: an expression body over integer literals, parameter references, and
+// the binary arithmetic and comparison operators, parsed by operator precedence. Real
+// Keleusma code that compiles and verifies on the current runtime. See
+// docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md (roadmap Step 2).
 //
 // Model. Stage 2's declaration parser (parser.kel) reads a function's signature and
 // brace-matches its body. This companion loop reads that body's tokens and produces
@@ -14,30 +14,43 @@
 //
 // The forest is emitted in POSTORDER: each node is yielded after its children, so the
 // host reconstructs the parent/child links (`lhs`, `rhs`) with a single node-index
-// stack -- a leaf pushes its new index, an interior node pops its children and pushes
-// itself. This increment emits only leaves; the operators that pop children arrive in
-// the next increment (a shunting-yard over the operator-precedence grammar).
+// stack -- a leaf pushes its new index, an interior node pops its two children and
+// pushes itself. This is Reverse Polish order, and the parser produces it from the
+// infix source by the shunting-yard algorithm: an operator-precedence stack held in
+// `bs.opstack` decides when a pending operator forces the higher- or equal-precedence
+// operators already stacked to be emitted. Because the loop yields one record per
+// iteration, the shunting-yard's inner "pop while" loop is spread across iterations:
+// `bs.resolving` marks that a just-read operator is settling its precedence (one pop
+// per iteration, then the push), and `bs.draining` marks the end-of-body flush.
 //
 // The node kinds match the codegen contract exactly: 1 Literal (arg = value), 2 Local
-// (arg = the parameter's frame slot). A parameter reference is resolved to its slot by
-// a bounded linear scan of the parameter-name table the host supplies.
+// (arg = the parameter's frame slot), 3 BinOp (arg = the operator code, `lhs`/`rhs`
+// the operands). The operator codes also match codegen: 1 Add, 2 Mul, 3 Sub, 4 Div,
+// 5 Mod, 6 Eq, 7 NotEq, 8 Lt, 9 Gt, 10 LtEq, 11 GtEq. Precedence binds multiplicative
+// (Mul/Div/Mod) tighter than additive (Add/Sub) tighter than comparison; every
+// operator here is left-associative, so a pending operator pops a stacked operator of
+// equal or higher precedence. Parentheses, the boolean and bitwise operators, and the
+// unary operators are later increments.
 //
 // Input. The host places the body's token stream in `src.kinds`/`src.vals` with the
 // count in `src.len`, and the function's parameter names (interned ids, slot = index)
 // in `src.params` with the count in `src.param_count`. Each token is a (kind, value)
-// pair using the same kinds as parser.kel:
+// pair using the same kinds as parser.kel, plus the operator kinds:
 //   kind 1 IDENT   an identifier; value = the interned name id
 //   kind 2 LBRACE  `{`; opens the body
 //   kind 3 RBRACE  `}`; closes the body
 //   kind 12 INT    an integer literal; value = the integer
+//   kind 21 PLUS   kind 22 MINUS  kind 23 STAR   kind 24 SLASH  kind 25 PERCENT
+//   kind 26 EQEQ   kind 27 NOTEQ  kind 28 LT     kind 29 GT     kind 30 LTEQ  kind 31 GTEQ
 // Any other token is ignored this increment.
 //
 // Node record wire. Each element is one Word, `kind + arg*16`:
 //   kind 0         PENDING; nothing this iteration; host skips it
 //   kind 1         Literal; arg = the integer value
 //   kind 2         Local; arg = the parameter frame slot
+//   kind 3         BinOp; arg = the operator code; host pops two children
 //   kind 15        DONE; the body is complete, its root is the remaining stack node
-// The interior node kinds (BinOp, If, LetIn, Call, and the rest) and the statement
+// The remaining interior node kinds (If, LetIn, Call, and the rest) and the statement
 // forms land in later increments.
 //
 // The self-hosted compiler is a full-width host tool. Its record encoding does
@@ -55,12 +68,81 @@ shared data src {
 
 // The parser's cross-iteration state. `cursor` is the token index; `started` records
 // that the opening `{` has been consumed; `found` holds the slot from the last
-// parameter resolution; `done` latches once the closing `}` is reached.
+// parameter resolution; `done` latches once the body is complete. The shunting-yard
+// carries an operator-code stack `opstack`/`opsp`; `pending_op`/`pending_prec` hold a
+// just-read operator while `resolving` pops the higher- or equal-precedence operators
+// ahead of pushing it; `draining` flushes the remaining operators at end of body.
 private data bs {
     cursor: Word,
     started: Word,
     found: Word,
     done: Word,
+    opstack: [Word; 64],
+    opsp: Word,
+    pending_op: Word,
+    pending_prec: Word,
+    resolving: Word,
+    draining: Word,
+}
+
+// The precedence of an operator code: multiplicative 3, additive 2, comparison 1.
+fn prec_of(op: Word) -> Word {
+    if op == 2 {
+        3
+    } else {
+    if op == 4 {
+        3
+    } else {
+    if op == 5 {
+        3
+    } else {
+    if op == 1 {
+        2
+    } else {
+    if op == 3 {
+        2
+    } else {
+        1
+    } } } } }
+}
+
+// The operator code for a token kind, or 0 when the token is not a binary operator.
+fn opcode_of(k: Word) -> Word {
+    if k == 21 {
+        1
+    } else {
+    if k == 22 {
+        3
+    } else {
+    if k == 23 {
+        2
+    } else {
+    if k == 24 {
+        4
+    } else {
+    if k == 25 {
+        5
+    } else {
+    if k == 26 {
+        6
+    } else {
+    if k == 27 {
+        7
+    } else {
+    if k == 28 {
+        8
+    } else {
+    if k == 29 {
+        9
+    } else {
+    if k == 30 {
+        10
+    } else {
+    if k == 31 {
+        11
+    } else {
+        0
+    } } } } } } } } } } }
 }
 
 loop main(resume: Word) -> Word {
@@ -68,10 +150,35 @@ loop main(resume: Word) -> Word {
         // The body is complete; report DONE idempotently.
         yield 15
     } else {
+    if bs.resolving == 1 {
+        // Settle a just-read operator: pop one stacked operator of equal or higher
+        // precedence (emitting it), or, when none remains, push the pending operator.
+        if bs.opsp > 0 andalso prec_of(bs.opstack[bs.opsp - 1]) >= bs.pending_prec {
+            bs.opsp = bs.opsp - 1;
+            let op = bs.opstack[bs.opsp];
+            yield 3 + op * 16
+        } else {
+            bs.opstack[bs.opsp] = bs.pending_op;
+            bs.opsp = bs.opsp + 1;
+            bs.resolving = 0;
+            yield 0
+        }
+    } else {
+    if bs.draining == 1 {
+        // End of body: flush the remaining operators, then report DONE.
+        if bs.opsp > 0 {
+            bs.opsp = bs.opsp - 1;
+            let op = bs.opstack[bs.opsp];
+            yield 3 + op * 16
+        } else {
+            bs.done = 1;
+            yield 15
+        }
+    } else {
     if bs.cursor >= src.len {
-        // Defensive: the stream ran out before a closing `}`. Close the body.
-        bs.done = 1;
-        yield 15
+        // Defensive: the stream ran out before a closing `}`. Flush and finish.
+        bs.draining = 1;
+        yield 0
     } else {
         let k = src.kinds[bs.cursor];
         let v = src.vals[bs.cursor];
@@ -84,9 +191,9 @@ loop main(resume: Word) -> Word {
             yield 0
         } else {
             if k == 3 {
-                // The closing `}` ends the body.
-                bs.done = 1;
-                yield 15
+                // The closing `}` ends the body; begin the operator flush.
+                bs.draining = 1;
+                yield 0
             } else {
             if k == 12 {
                 // An integer literal is a Literal node (kind 1).
@@ -103,8 +210,18 @@ loop main(resume: Word) -> Word {
                 }
                 yield 2 + bs.found * 16
             } else {
-                yield 0
+                // A binary operator settles its precedence over the following
+                // iterations; a non-operator token is ignored.
+                let op = opcode_of(k);
+                if op > 0 {
+                    bs.pending_op = op;
+                    bs.pending_prec = prec_of(op);
+                    bs.resolving = 1;
+                    yield 0
+                } else {
+                    yield 0
+                }
             } } }
         }
-    } }
+    } } } }
 }
