@@ -108,6 +108,10 @@ pub enum VmError {
     /// assertion's source location and message, when present, live in
     /// the chunk's strippable `AssertionContext` debug record.
     AssertionFailed,
+    /// A `for ... limit` loop reached its compile-time iteration cap
+    /// before its range was exhausted, and no `limit` outcome arm
+    /// handled the overrun.
+    LoopLimitExceeded,
     /// Structural verification failed at load time.
     VerifyError(String),
     /// Bytecode load failure encountered before verification could run,
@@ -202,7 +206,8 @@ impl VmError {
             | VmError::NoMatchingArm
             | VmError::CheckedArithNoArm
             | VmError::EnumVariantUnmapped
-            | VmError::AssertionFailed => VmErrorCategory::SoftScript,
+            | VmError::AssertionFailed
+            | VmError::LoopLimitExceeded => VmErrorCategory::SoftScript,
             // Soft host: a native returned an error. The host owns
             // the policy.
             VmError::NativeError(_) | VmError::NativeErrorCode { .. } => VmErrorCategory::SoftHost,
@@ -6124,6 +6129,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         // division by zero produces.
                         Some(TrapKind::ZeroDivisor) => VmError::DivisionByZero,
                         Some(TrapKind::AssertionFailed) => VmError::AssertionFailed,
+                        Some(TrapKind::LoopLimitExceeded) => VmError::LoopLimitExceeded,
                         None => VmError::InvalidBytecode(alloc::format!(
                             "Op::Trap carried an unknown trap-kind code {}",
                             kind_code

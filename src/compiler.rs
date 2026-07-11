@@ -137,6 +137,13 @@ struct FuncCompiler {
     next_slot: u16,
     /// Stack of loop contexts: each entry holds pending break jump addresses.
     loop_breaks: Vec<Vec<usize>>,
+    /// Parallel to `loop_breaks`: for a `for ... limit` loop it holds
+    /// `Some(outcome_slot)`, the local that records why the loop ended,
+    /// so a `break` statement targeting that loop stamps the break
+    /// outcome before jumping. `None` for every other loop, so a break
+    /// in a plain loop lowers unchanged. Pushed and popped in lockstep
+    /// with `loop_breaks`.
+    limit_oc_stack: Vec<Option<u16>>,
     /// Map from function name to chunk index (shared across all functions).
     function_map: BTreeMap<String, u16>,
     /// Map from native function name to native registry index.
@@ -498,6 +505,7 @@ impl FuncCompiler {
             scope_depth: 0,
             next_slot: 0,
             loop_breaks: Vec::new(),
+            limit_oc_stack: Vec::new(),
             function_map,
             native_map,
             native_externals,
@@ -919,13 +927,24 @@ impl FuncCompiler {
 
     fn enter_loop(&mut self) {
         self.loop_breaks.push(Vec::new());
+        self.limit_oc_stack.push(None);
     }
 
     fn exit_loop(&mut self) {
+        self.limit_oc_stack.pop();
         if let Some(breaks) = self.loop_breaks.pop() {
             for addr in breaks {
                 self.patch_jump(addr);
             }
+        }
+    }
+
+    /// Mark the innermost open loop as a `for ... limit` loop whose exit
+    /// reason is recorded in local `oc`, so a `break` targeting it stamps
+    /// the break outcome before jumping.
+    fn set_current_loop_oc(&mut self, oc: u16) {
+        if let Some(top) = self.limit_oc_stack.last_mut() {
+            *top = Some(oc);
         }
     }
 
@@ -5546,6 +5565,15 @@ fn compile_stmt(fc: &mut FuncCompiler, stmt: &Stmt) -> Result<(), CompileError> 
                     span: *span,
                 });
             }
+            // When the innermost loop is a `for ... limit` loop, stamp the
+            // break outcome (`LOOP_OUTCOME_BREAK`) into its outcome local
+            // before jumping, so the post-loop dispatch can run the `break`
+            // arm rather than the `limit` trap.
+            if let Some(Some(oc)) = fc.limit_oc_stack.last().copied() {
+                let code = fc.add_constant(Value::Int(LOOP_OUTCOME_BREAK));
+                fc.emit(Op::Const(code));
+                fc.emit(Op::SetLocal(oc));
+            }
             let addr = fc.emit_jump(Op::Break(0));
             if let Some(breaks) = fc.loop_breaks.last_mut() {
                 breaks.push(addr);
@@ -7144,7 +7172,260 @@ fn compile_for_in_data_array(
     Ok(())
 }
 
+/// Outcome codes stamped into a `for ... limit` loop's outcome local and
+/// tested by the post-loop dispatch. `LIMIT` is the default: the loop ran to
+/// its cap without the range being exhausted. `OK` is set when the loop
+/// variable reached the range end. `BREAK` is set by a `break` in the body.
+const LOOP_OUTCOME_LIMIT: i64 = 0;
+const LOOP_OUTCOME_OK: i64 = 1;
+const LOOP_OUTCOME_BREAK: i64 = 2;
+
+/// Evaluate a `for ... limit` cap to a compile-time `Word` constant. By this
+/// point const parameters are erased to literals (monomorphization) and
+/// const-data fields are still field accesses the compiler folds here, so the
+/// cap is either an integer literal or a const-data field read. Anything else,
+/// or a non-positive cap, is rejected.
+fn eval_limit_const(fc: &FuncCompiler, limit: &Expr) -> Result<i64, CompileError> {
+    let value = match limit {
+        Expr::Literal {
+            value: Literal::Int(n),
+            ..
+        } => Some(*n),
+        Expr::FieldAccess { object, field, .. } => match object.as_ref() {
+            Expr::Ident { name, .. } if fc.is_const_data_block(name) => {
+                match fc.const_data_field_value(name, field) {
+                    Some(crate::bytecode::ConstValue::Int(n)) => Some(n),
+                    _ => None,
+                }
+            }
+            _ => None,
+        },
+        _ => None,
+    };
+    match value {
+        Some(n) if n >= 1 => Ok(n),
+        Some(_) => Err(CompileError {
+            message: String::from("a `for` loop `limit` must be a positive `Word` constant"),
+            span: limit.span(),
+        }),
+        None => Err(CompileError {
+            message: String::from(
+                "a `for` loop `limit` must be a compile-time `Word` constant \
+                 (an integer literal, a const-data field, or a const parameter)",
+            ),
+            span: limit.span(),
+        }),
+    }
+}
+
+/// The pattern binding of a loop outcome arm, if any.
+fn loop_arm_binding(kind: &crate::ast::LoopArmKind) -> Option<&Pattern> {
+    use crate::ast::LoopArmKind;
+    match kind {
+        LoopArmKind::Ok(p)
+        | LoopArmKind::Break(p)
+        | LoopArmKind::Limit(p)
+        | LoopArmKind::Overflow(p) => p.as_ref(),
+    }
+}
+
+/// Lower a `for i in min..max limit L { body } on { ... }` loop.
+///
+/// The runtime range endpoints do not bound iteration; a compile-time counter
+/// `0..L` does, so strict verification reads the worst-case iteration count
+/// from the counter and the loop is admitted despite a runtime range. Each
+/// iteration first tests the counter against `L` (the canonical for-range
+/// header the verifier recognizes, which keeps `LIMIT` as the default
+/// outcome), then tests the range and, on reaching `max`, stamps `OK` and
+/// breaks. A `break` in the body stamps `BREAK` (see `compile_stmt`). After
+/// the loop the outcome local selects the arm; an unhandled `LIMIT` traps as
+/// `LoopLimitExceeded`.
+fn compile_for_limit(
+    fc: &mut FuncCompiler,
+    for_stmt: &ForStmt,
+    start: &Expr,
+    end: &Expr,
+    cap: i64,
+) -> Result<(), CompileError> {
+    // i = min (the loop variable).
+    compile_expr(fc, start)?;
+    let var_slot = fc.declare_local(&for_stmt.var);
+    fc.emit(Op::SetLocal(var_slot));
+
+    // mx = max (the runtime range end).
+    compile_expr(fc, end)?;
+    let end_slot = fc.declare_local("__for_end");
+    fc.emit(Op::SetLocal(end_slot));
+
+    // c = 0 (the counter that gives the verifier the iteration bound).
+    let zero = fc.add_constant(Value::Int(0));
+    fc.emit(Op::Const(zero));
+    let ctr_slot = fc.declare_local("__for_ctr");
+    fc.emit(Op::SetLocal(ctr_slot));
+
+    // cap in a local, the canonical end bound; it traces to `Const(cap)`.
+    let cap_const = fc.add_constant(Value::Int(cap));
+    fc.emit(Op::Const(cap_const));
+    let cap_slot = fc.declare_local("__for_cap");
+    fc.emit(Op::SetLocal(cap_slot));
+
+    // outcome = LIMIT (the default when the loop runs to the cap).
+    let oc_init = fc.add_constant(Value::Int(LOOP_OUTCOME_LIMIT));
+    fc.emit(Op::Const(oc_init));
+    let oc_slot = fc.declare_local("__for_outcome");
+    fc.emit(Op::SetLocal(oc_slot));
+
+    let loop_addr = fc.emit(Op::Loop(0));
+    fc.enter_loop();
+    fc.set_current_loop_oc(oc_slot);
+
+    // Canonical counter header: break if c >= cap (the verifier reads the
+    // bound here). The outcome stays LIMIT.
+    fc.emit(Op::GetLocal(ctr_slot));
+    fc.emit(Op::GetLocal(cap_slot));
+    fc.emit(Op::CmpGe);
+    let cap_break = fc.emit(Op::BreakIf(0));
+
+    // Range exit: if i >= mx, stamp OK and break.
+    fc.emit(Op::GetLocal(var_slot));
+    fc.emit(Op::GetLocal(end_slot));
+    fc.emit(Op::CmpGe);
+    let ok_if = fc.emit_jump(Op::If(0));
+    let ok_const = fc.add_constant(Value::Int(LOOP_OUTCOME_OK));
+    fc.emit(Op::Const(ok_const));
+    fc.emit(Op::SetLocal(oc_slot));
+    let ok_break = fc.emit_jump(Op::Break(0));
+    if let Some(breaks) = fc.loop_breaks.last_mut() {
+        breaks.push(ok_break);
+    }
+    fc.patch_jump(ok_if);
+    fc.emit(Op::EndIf);
+
+    // Body. A `break;` inside stamps BREAK before its jump.
+    fc.begin_scope();
+    compile_block(fc, &for_stmt.body)?;
+    fc.emit(Op::PopN(1));
+    fc.end_scope();
+
+    // Increment i (wrapping) and the counter c.
+    let one = fc.add_constant(Value::Int(1));
+    fc.emit(Op::GetLocal(var_slot));
+    fc.emit(Op::Const(one));
+    fc.emit(Op::CheckedAdd);
+    fc.emit(Op::PopN(2));
+    fc.emit(Op::SetLocal(var_slot));
+    fc.emit(Op::GetLocal(ctr_slot));
+    fc.emit(Op::Const(one));
+    fc.emit(Op::CheckedAdd);
+    fc.emit(Op::PopN(2));
+    fc.emit(Op::SetLocal(ctr_slot));
+
+    let endloop_addr = fc.emit(Op::EndLoop(0));
+    let after_endloop = fc.chunk.ops.len() as u16;
+    if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
+        *a = after_endloop;
+    }
+    if let Op::BreakIf(a) = &mut fc.chunk.ops[cap_break] {
+        *a = after_endloop;
+    }
+    let after_loop = (loop_addr + 1) as u16;
+    if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
+        *a = after_loop;
+    }
+    fc.exit_loop();
+
+    compile_loop_outcome_dispatch(fc, for_stmt, var_slot, ctr_slot, oc_slot)
+}
+
+/// Emit `GetLocal(oc); Const(code); CmpEq; If(0)` and return the `If`
+/// placeholder address, so the caller can emit the handler and then close it
+/// with `patch_jump` + `EndIf`.
+fn emit_outcome_test(fc: &mut FuncCompiler, oc_slot: u16, code: i64) -> usize {
+    fc.emit(Op::GetLocal(oc_slot));
+    let c = fc.add_constant(Value::Int(code));
+    fc.emit(Op::Const(c));
+    fc.emit(Op::CmpEq);
+    fc.emit_jump(Op::If(0))
+}
+
+/// Compile one outcome arm's body, binding its pattern to `bind_slot` when the
+/// pattern is a variable. The arm is a statement block; its value is discarded.
+fn compile_loop_arm_body(
+    fc: &mut FuncCompiler,
+    arm: &crate::ast::LoopArm,
+    bind_slot: u16,
+) -> Result<(), CompileError> {
+    fc.begin_scope();
+    if let Some(Pattern::Variable(name, _)) = loop_arm_binding(&arm.kind) {
+        let local = fc.declare_local(name);
+        fc.emit(Op::GetLocal(bind_slot));
+        fc.emit(Op::SetLocal(local));
+    }
+    compile_block(fc, &arm.body)?;
+    fc.emit(Op::PopN(1));
+    fc.end_scope();
+    Ok(())
+}
+
+/// Emit the post-loop dispatch on the outcome local. LIMIT runs its arm or
+/// traps; OK and BREAK run their arms when present and are otherwise noops.
+/// The `ok` binding is the completed count (`ctr_slot`); the `break` and
+/// `limit` bindings are the loop variable at the exit (`var_slot`).
+fn compile_loop_outcome_dispatch(
+    fc: &mut FuncCompiler,
+    for_stmt: &ForStmt,
+    var_slot: u16,
+    ctr_slot: u16,
+    oc_slot: u16,
+) -> Result<(), CompileError> {
+    use crate::ast::LoopArmKind;
+    let find = |pred: fn(&LoopArmKind) -> bool| for_stmt.on_arms.iter().find(|a| pred(&a.kind));
+    let ok_arm = find(|k| matches!(k, LoopArmKind::Ok(_)));
+    let break_arm = find(|k| matches!(k, LoopArmKind::Break(_)));
+    let limit_arm = find(|k| matches!(k, LoopArmKind::Limit(_)));
+
+    // LIMIT: the arm, or the fail-loud trap.
+    let if_addr = emit_outcome_test(fc, oc_slot, LOOP_OUTCOME_LIMIT);
+    match limit_arm {
+        Some(arm) => compile_loop_arm_body(fc, arm, var_slot)?,
+        None => {
+            fc.emit(Op::Trap(
+                crate::bytecode::TrapKind::LoopLimitExceeded.code(),
+            ));
+        }
+    }
+    fc.patch_jump(if_addr);
+    fc.emit(Op::EndIf);
+
+    // OK: optional arm, count bound to the counter.
+    if let Some(arm) = ok_arm {
+        let if_addr = emit_outcome_test(fc, oc_slot, LOOP_OUTCOME_OK);
+        compile_loop_arm_body(fc, arm, ctr_slot)?;
+        fc.patch_jump(if_addr);
+        fc.emit(Op::EndIf);
+    }
+
+    // BREAK: optional arm, index bound to the loop variable.
+    if let Some(arm) = break_arm {
+        let if_addr = emit_outcome_test(fc, oc_slot, LOOP_OUTCOME_BREAK);
+        compile_loop_arm_body(fc, arm, var_slot)?;
+        fc.patch_jump(if_addr);
+        fc.emit(Op::EndIf);
+    }
+    Ok(())
+}
+
 fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileError> {
+    if let Some(limit) = &for_stmt.limit {
+        let Iterable::Range(start, end) = &for_stmt.iterable else {
+            return Err(CompileError {
+                message: String::from("a `limit` clause requires a range `for` loop"),
+                span: for_stmt.span,
+            });
+        };
+        let cap = eval_limit_const(fc, limit)?;
+        return compile_for_limit(fc, for_stmt, start, end, cap);
+    }
     match &for_stmt.iterable {
         Iterable::Range(start, end) => {
             // Compile range bounds.

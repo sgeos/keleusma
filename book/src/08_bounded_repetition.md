@@ -79,6 +79,48 @@ after `break`. Because `break` can stop the loop early, the count is
 still bounded: the loop runs at most its full count, and possibly fewer
 passes, but never more.
 
+## A cap for a runtime range
+
+Every loop so far has had a count known before the loop begins, either a
+literal like `0..8` or the fixed length of an array. A loop whose end
+comes from a value computed at run time, like `0..n` where `n` is a
+parameter, is rejected, because the tool cannot see how many passes it
+will take and so cannot bound its time and memory.
+
+You can supply that bound yourself with a `limit`. The loop then runs
+over its real range, but never more times than the cap you name:
+
+```
+for i in 0..n limit 64 {
+    // runs at most 64 times, and stops early when i reaches n
+}
+```
+
+The cap must be a constant the tool can read at compile time, so a plain
+number, a const-data field, or a const parameter. The worst-case count is
+the cap, which is what makes the loop admissible even though `n` is only
+known at run time.
+
+If the range is longer than the cap, the loop stops at the cap. By
+default that is treated as a mistake and the program stops with a loud
+error, rather than quietly leaving work undone. If stopping at the cap is
+something you want to handle, add an `on` block that names the outcomes:
+
+```
+for i in 0..n limit 64 {
+    // body, may break
+} on {
+    ok(count)   => { /* the range finished */ },
+    break(at)   => { /* the body ran break; at is the index */ },
+    limit(at)   => { /* the cap was reached first; at is the index */ },
+}
+```
+
+Each arm is optional. Without an `on` block, reaching the cap is the loud
+error just described, while finishing the range or breaking simply ends
+the loop. The bound is the cap in every case, so the loop always has a
+worst-case count the tool can prove.
+
 ## What you now know
 
 - `for name in 0..n { ... }` loops over a range of numbers.
@@ -87,5 +129,7 @@ passes, but never more.
 - Inside an atomic `fn`, a loop cannot accumulate a result, because
   bindings do not change. The loop does real work in Part IV.
 - `break;` leaves a loop early.
+- `limit` puts a compile-time cap on a runtime range, and an `on` block
+  captures how the loop ended (`ok`, `break`, or `limit`).
 
 The next chapter threads a value through a chain of functions.

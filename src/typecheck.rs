@@ -3821,6 +3821,71 @@ fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
             ctx.add_local(for_stmt.var.clone(), elem_ty);
             let _ = type_of_block(ctx, &mut for_stmt.body)?;
             ctx.pop_scope();
+
+            // A `limit` clause caps the iteration count so a runtime range is
+            // admitted; it must be a `Word` on a range loop and reduce to a
+            // constant, the latter checked at compile time.
+            if let Some(limit) = for_stmt.limit.as_mut() {
+                let lt = type_of_expr(ctx, limit)?;
+                if !types_compatible(ctx, &lt, &Type::Word) {
+                    return Err(TypeError::new(
+                        format!("a `for` loop `limit` must be Word, got {}", lt.display()),
+                        for_stmt.span,
+                    ));
+                }
+                if !matches!(for_stmt.iterable, Iterable::Range(_, _)) {
+                    return Err(TypeError::new(
+                        String::from("a `limit` clause requires a range `for` loop"),
+                        for_stmt.span,
+                    ));
+                }
+            }
+            if !for_stmt.on_arms.is_empty() && for_stmt.limit.is_none() {
+                return Err(TypeError::new(
+                    String::from("a `for` outcome `on` block requires a `limit` clause"),
+                    for_stmt.span,
+                ));
+            }
+            // Each outcome arm is checked in its own scope, with the optional
+            // binding bound as a `Word` (an index for `break`/`limit`, the
+            // completed count for `ok`). The `overflow` arm and `when` guards
+            // are not yet implemented and are rejected explicitly.
+            for arm in for_stmt.on_arms.iter_mut() {
+                use crate::ast::LoopArmKind;
+                if matches!(arm.kind, LoopArmKind::Overflow(_)) {
+                    return Err(TypeError::new(
+                        String::from("`overflow` capture on a `limit` loop is not yet implemented"),
+                        arm.span,
+                    ));
+                }
+                if arm.guard.is_some() {
+                    return Err(TypeError::new(
+                        String::from("`when` guards on loop outcome arms are not yet implemented"),
+                        arm.span,
+                    ));
+                }
+                let binding = match &arm.kind {
+                    LoopArmKind::Ok(p)
+                    | LoopArmKind::Break(p)
+                    | LoopArmKind::Limit(p)
+                    | LoopArmKind::Overflow(p) => p.as_ref(),
+                };
+                ctx.push_scope();
+                match binding {
+                    Some(Pattern::Variable(name, _)) => {
+                        ctx.add_local(name.clone(), Type::Word);
+                    }
+                    Some(Pattern::Wildcard(_)) | None => {}
+                    Some(_) => {
+                        return Err(TypeError::new(
+                            String::from("a loop outcome binding must be an identifier or `_`"),
+                            arm.span,
+                        ));
+                    }
+                }
+                let _ = type_of_block(ctx, &mut arm.body)?;
+                ctx.pop_scope();
+            }
             Ok(())
         }
         Stmt::Break(_) => Ok(()),
