@@ -1,11 +1,10 @@
 // compiler/kel/body.kel — the body-expression parser, a sub-component of Stage 2.
 //
-// Increment 6: a function body that is a block of `let` bindings followed by a tail
-// expression, over the full operator-precedence expression grammar (integer literals,
-// parameter and local references, the arithmetic, comparison, bitwise, and
-// short-circuit boolean operators, parenthesised grouping, and the unary prefix
-// operators). Real Keleusma code that compiles and verifies on the current runtime.
-// See docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md (roadmap Step 2).
+// Increment 7: a function body that is a block of `let` bindings followed by a tail
+// expression, over the full operator-precedence expression grammar plus scalar
+// data-field reads (`d.f`). Real Keleusma code that compiles and verifies on the
+// current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md
+// (roadmap Step 2).
 //
 // Model. Stage 2's declaration parser (parser.kel) reads a function's signature and
 // brace-matches its body. This companion loop reads that body's tokens and produces
@@ -54,8 +53,12 @@
 // value, `rhs` the continuation) is emitted for each binding from the last to the
 // first, folding the tail into the cons-list the codegen stage expects; each LetIn
 // pops its value (left on the stack in binding order) and the running continuation.
-// The `for`, `if`, `match`, and `yield` statements, data-field assignment, calls, and
-// data reads are later increments.
+//
+// A `data.field` scalar read is a DataRead operand (kind 1... no, kind 11): when an
+// identifier that names a data block is read, `da_phase` awaits the `.` and then the
+// field name, whose slot is looked up in the field layout and emitted as a DataRead
+// (kind 11, arg = slot). An indexed read `d.f[i]`, the `for`, `if`, `match`, and
+// `yield` statements, data-field assignment, and calls are later increments.
 //
 // Input. The host places the body's token stream in `src.kinds`/`src.vals` with the
 // count in `src.len`, and the function's parameter names (interned ids, slot = index)
@@ -75,6 +78,7 @@
 //   kind 39 SEMI   `;`; ends a `let` binding statement
 //   kind 17 EQ     `=`; separates a `let` binding's name from its value
 //   kind 9 COLON   `:`; opens a `let` binding's optional type annotation (skipped)
+//   kind 40 DOT    `.`; separates a data block name from its field
 // Any other token is ignored this increment.
 //
 // Node record wire. Each element is one Word, `kind + arg*16`:
@@ -88,6 +92,7 @@
 //   kind 10        Neg; host pops one child into `lhs`
 //   kind 5         LetIn; arg = the binding slot; host pops the continuation (`rhs`)
 //                  and the bound value (`lhs`)
+//   kind 11        DataRead; arg = the data-segment slot; a leaf
 //   kind 15        DONE; the body is complete, its root is the remaining stack node
 // The remaining interior node kinds (If, LetIn, Call, and the rest) and the statement
 // forms land in later increments.
@@ -96,13 +101,21 @@
 // arithmetic (`arg*16`) that overflows a narrow word, so it declares a 32-bit floor.
 require word >= 32;
 
-// The host-provided body token stream and parameter-name table.
+// The host-provided body token stream, parameter-name table, and data-field layout.
+// A `data.field` access is resolved through the parallel field arrays: `fdata`/
+// `ffield` are the interned data-block and field names, `fbase` the field's element-0
+// slot in the flat data segment, and `flen` its slot count (1 for a scalar).
 shared data src {
     len: Word,
     kinds: [Word; 512],
     vals: [Word; 512],
     param_count: Word,
     params: [Word; 32],
+    field_count: Word,
+    fdata: [Word; 64],
+    ffield: [Word; 64],
+    fbase: [Word; 64],
+    flen: [Word; 64],
 }
 
 // The parser's cross-iteration state. `cursor` is the token index; `started` records
@@ -142,6 +155,8 @@ private data bs {
     let_count: Word,
     folding: Word,
     fold_i: Word,
+    da_phase: Word,
+    da_data: Word,
 }
 
 // The precedence of an operator code, tightest to loosest: unary (16 Neg, 17 Not) 9,
@@ -375,6 +390,30 @@ loop main(resume: Word) -> Word {
             }
             yield 0
         } else {
+        if bs.da_phase == 1 {
+            // After a data block name, await the `.`.
+            if k == 40 {
+                bs.da_phase = 2;
+            }
+            yield 0
+        } else {
+        if bs.da_phase == 2 {
+            // The data field name; resolve `da_data.field` to its slot and emit a
+            // DataRead (kind 11) operand.
+            if k == 1 {
+                bs.found = 0;
+                for i in 0..src.field_count limit 64 {
+                    if src.fdata[i] == bs.da_data andalso src.ffield[i] == v {
+                        bs.found = src.fbase[i];
+                    }
+                }
+                bs.da_phase = 0;
+                bs.expect_operand = 0;
+                yield 11 + bs.found * 16
+            } else {
+                yield 0
+            }
+        } else {
             if k == 3 {
                 // The closing `}` ends the tail; drain, then fold the LetIns.
                 bs.drain_reason = 1;
@@ -402,26 +441,42 @@ loop main(resume: Word) -> Word {
                 yield 0
             } else {
             if k == 1 {
-                // An identifier is a Local node (kind 2). Resolve it to a slot: the
-                // `let` bindings first (a later binding shadows an earlier one and a
-                // parameter), then the parameters, both by a bounded scan.
-                bs.found = 0;
+                // An identifier names either a data block (opening a `data.field`
+                // read) or a value. Detect a data-block name by a bounded scan of the
+                // field layout.
                 bs.found_flag = 0;
-                for i in 0..bs.let_count limit 64 {
-                    if bs.let_names[i] == v {
-                        bs.found = src.param_count + i;
+                for i in 0..src.field_count limit 64 {
+                    if src.fdata[i] == v {
                         bs.found_flag = 1;
                     }
                 }
-                if bs.found_flag == 0 {
-                    for i in 0..src.param_count limit 32 {
-                        if src.params[i] == v {
-                            bs.found = i;
+                if bs.found_flag == 1 {
+                    // A data block name; its `.field` follows.
+                    bs.da_data = v;
+                    bs.da_phase = 1;
+                    yield 0
+                } else {
+                    // A Local node (kind 2). Resolve to a slot: the `let` bindings
+                    // first (a later binding shadows an earlier one and a parameter),
+                    // then the parameters, both by a bounded scan.
+                    bs.found = 0;
+                    bs.found_flag = 0;
+                    for i in 0..bs.let_count limit 64 {
+                        if bs.let_names[i] == v {
+                            bs.found = src.param_count + i;
+                            bs.found_flag = 1;
                         }
                     }
+                    if bs.found_flag == 0 {
+                        for i in 0..src.param_count limit 32 {
+                            if src.params[i] == v {
+                                bs.found = i;
+                            }
+                        }
+                    }
+                    bs.expect_operand = 0;
+                    yield 2 + bs.found * 16
                 }
-                bs.expect_operand = 0;
-                yield 2 + bs.found * 16
             } else {
                 if k == 38 {
                     // `let` opens a binding statement; its name follows.
@@ -463,6 +518,6 @@ loop main(resume: Word) -> Word {
                     }
                 } } } }
             } } } } }
-        } } }
+        } } } } }
     } } } } } }
 }

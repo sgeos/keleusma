@@ -1,22 +1,23 @@
-//! Body-expression parser (`compiler/kel/body.kel`), increment 6: a function body that
+//! Body-expression parser (`compiler/kel/body.kel`), increment 7: a function body that
 //! is a block of `let` bindings followed by a tail expression, over the full
-//! operator-precedence expression grammar (literals, parameter and local references,
-//! the arithmetic, comparison, bitwise, and short-circuit operators, grouping, and the
-//! unary prefix operators), lowered to the abstract-syntax node forest codegen
-//! consumes.
+//! operator-precedence expression grammar plus scalar data-field reads (`d.f`), lowered
+//! to the abstract-syntax node forest codegen consumes.
 //!
-//! A throwaway adapter tokenises a function, feeds the body's tokens (from the opening
-//! `{`) and the function's parameter-name table to the `body.kel` `loop`, and decodes
-//! the postorder node-record stream into a node forest. Each leaf record (Literal,
-//! Local) pushes a node and its index onto a stack; an interior binary record (BinOp,
-//! Andalso, Orelse) pops two operands, a unary record (Not, Neg) pops one, and a LetIn
-//! record pops the running continuation and the bound value — each pushing the combined
-//! node. The forest is checked against a reference flattening of the same body's block,
-//! with parameters occupying the first frame slots and each `let` binding the next —
-//! the same lowering the codegen conformance harness performs — so the full operator
-//! precedence chain, the associativity of every operator, and the `let` slot allocation,
-//! scope resolution (a later binding shadowing an earlier one or a parameter), and
-//! LetIn cons-list are all verified against the reference parser's own tree.
+//! A throwaway adapter tokenises the program, feeds the function body's tokens, the
+//! parameter-name table, and the data-field layout (computed from the compiled
+//! program's flat data segment) to the `body.kel` `loop`, and decodes the postorder
+//! node-record stream into a node forest. Each leaf record (Literal, Local, DataRead)
+//! pushes a node and its index onto a stack; an interior binary record (BinOp, Andalso,
+//! Orelse) pops two operands, a unary record (Not, Neg) pops one, and a LetIn record
+//! pops the running continuation and the bound value — each pushing the combined node.
+//! The forest is checked against a reference flattening of the same body's block, with
+//! parameters occupying the first frame slots and each `let` binding the next, and a
+//! `d.f` read resolved to its data-segment slot — the same lowering the codegen
+//! conformance harness performs — so the operator grammar, the `let` slot allocation
+//! and scope resolution, the LetIn cons-list, and the data-field slot resolution are all
+//! verified against the reference. The drivers run on a wider-stack thread because the
+//! host compiler's recursive-descent parse of the deeply nested stage overflows the
+//! default test-thread stack.
 
 #![cfg(all(
     feature = "compile",
@@ -36,12 +37,18 @@ use keleusma::token::TokenKind;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 
 // Shared-data slot offsets, mirroring the `src` block in body.kel: len at 0, the two
-// length-512 token arrays, the parameter count, then the length-32 parameter table.
+// length-512 token arrays, the parameter count, the length-32 parameter table, then
+// the field count and the four length-64 field-layout arrays.
 const LEN: usize = 0;
 const KINDS: usize = 1;
 const VALS: usize = 1 + 512;
 const PARAM_COUNT: usize = 1 + 512 + 512;
 const PARAMS: usize = 1 + 512 + 512 + 1;
+const FIELD_COUNT: usize = 1 + 512 + 512 + 1 + 32;
+const FDATA: usize = 1 + 512 + 512 + 1 + 32 + 1;
+const FFIELD: usize = 1 + 512 + 512 + 1 + 32 + 1 + 64;
+const FBASE: usize = 1 + 512 + 512 + 1 + 32 + 1 + 64 + 64;
+const FLEN: usize = 1 + 512 + 512 + 1 + 32 + 1 + 64 + 64 + 64;
 
 /// One node of the abstract-syntax forest: the codegen contract's `(kind, arg, lhs,
 /// rhs)`. A leaf has `lhs == rhs == 0`.
@@ -53,6 +60,21 @@ struct Node {
     rhs: i64,
 }
 
+/// The flat data-segment slot names of `program`, from the compiled data layout. A
+/// program with no `data` block has no layout, and is deliberately not compiled so a
+/// body exercising a construct the compiler cannot yet lower remains testable.
+fn data_slot_names(program: &keleusma::ast::Program) -> Vec<String> {
+    if program.data_decls.is_empty() {
+        return Vec::new();
+    }
+    compile(program)
+        .expect("compile program")
+        .data_layout
+        .as_ref()
+        .map(|dl| dl.slots.iter().map(|s| s.name.clone()).collect())
+        .unwrap_or_default()
+}
+
 /// The parameter name at a slot, for the reference scope.
 fn param_name(p: &keleusma::ast::Param) -> &str {
     match &p.pattern {
@@ -61,10 +83,28 @@ fn param_name(p: &keleusma::ast::Param) -> &str {
     }
 }
 
+/// Run `work` on a thread with a generous stack. `body.kel`'s deeply nested statement
+/// dispatch makes the host compiler's recursive-descent parse of it exceed the default
+/// test-thread stack; a wider stack keeps the drivers robust as the stage grows.
+fn with_big_stack<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(work)
+        .expect("spawn")
+        .join()
+        .expect("join")
+}
+
 /// Drive `body.kel` over the body of the single function in `func_src`, returning the
-/// node forest and its root index. Identifier names are interned so the parameter
-/// table and the body's identifier tokens share ids.
+/// node forest and its root index.
 fn run_body(func_src: &str) -> (Vec<Node>, i64) {
+    let src = func_src.to_string();
+    with_big_stack(move || run_body_inner(&src))
+}
+
+/// The body of [`run_body`]; identifier names are interned so the parameter table and
+/// the body's identifier tokens share ids.
+fn run_body_inner(func_src: &str) -> (Vec<Node>, i64) {
     let program = parse(&tokenize(func_src).expect("lex")).expect("parse");
     let f = &program.functions[0];
     let param_names: Vec<String> = f.params.iter().map(|p| param_name(p).to_string()).collect();
@@ -85,6 +125,10 @@ fn run_body(func_src: &str) -> (Vec<Node>, i64) {
     let mut vals = Vec::new();
     for tok in &tokens {
         let (kind, val) = match &tok.kind {
+            TokenKind::Fn => (0, 0),
+            TokenKind::Yield => (5, 0),
+            TokenKind::Loop => (6, 0),
+            TokenKind::Dot => (40, 0),
             TokenKind::LowerIdent(s) | TokenKind::UpperIdent(s) => (1, intern(s)),
             TokenKind::LBrace => (2, 0),
             TokenKind::RBrace => (3, 0),
@@ -118,13 +162,44 @@ fn run_body(func_src: &str) -> (Vec<Node>, i64) {
         kinds.push(kind);
         vals.push(val);
     }
-    let body_start = kinds
+    // The function body opens at the first `{` after the function keyword; a data
+    // block declaration before it has its own braces, so the search starts at the
+    // `fn`/`yield`/`loop` keyword.
+    let fn_kw = kinds
+        .iter()
+        .position(|&k| k == 0 || k == 5 || k == 6)
+        .expect("a function keyword");
+    let body_rel = kinds[fn_kw..]
         .iter()
         .position(|&k| k == 2)
         .expect("a function body opens with `{`");
+    let body_start = fn_kw + body_rel;
     let body_kinds = &kinds[body_start..];
     let body_vals = &vals[body_start..];
     let param_ids: Vec<i64> = param_names.iter().map(|n| intern(n)).collect();
+
+    // The data-field layout, from the compiled program's flat data segment. Each slot
+    // name is `data.field` (scalar) or `data.field[k]` (array element); the field
+    // table records, per distinct `(data, field)`, its element-0 slot and slot count.
+    // A program with no data blocks needs no layout (and is only parsed, not compiled,
+    // so a body exercising a not-yet-compilable construct is still testable).
+    let data_slots = data_slot_names(&program);
+    // (data id, field id, base slot, length).
+    let mut fields: Vec<(i64, i64, i64, i64)> = Vec::new();
+    for (i, slot) in data_slots.iter().enumerate() {
+        let (data, rest) = slot.split_once('.').expect("a data slot name has a dot");
+        let field = rest.split('[').next().unwrap();
+        let did = intern(data);
+        let fid = intern(field);
+        if let Some(e) = fields
+            .iter_mut()
+            .find(|(d, f, _, _)| *d == did && *f == fid)
+        {
+            e.3 += 1;
+        } else {
+            fields.push((did, fid, i as i64, 1));
+        }
+    }
 
     let stage = std::fs::read_to_string("compiler/kel/body.kel").expect("read body.kel");
     let module = compile(&parse(&tokenize(&stage).expect("lex body.kel")).expect("parse body.kel"))
@@ -149,6 +224,18 @@ fn run_body(func_src: &str) -> (Vec<Node>, i64) {
         vm.set_shared(&mut shared, PARAMS + i, Value::Int(id))
             .expect("param");
     }
+    vm.set_shared(&mut shared, FIELD_COUNT, Value::Int(fields.len() as i64))
+        .expect("field_count");
+    for (i, &(did, fid, base, len)) in fields.iter().enumerate() {
+        vm.set_shared(&mut shared, FDATA + i, Value::Int(did))
+            .expect("fdata");
+        vm.set_shared(&mut shared, FFIELD + i, Value::Int(fid))
+            .expect("ffield");
+        vm.set_shared(&mut shared, FBASE + i, Value::Int(base))
+            .expect("fbase");
+        vm.set_shared(&mut shared, FLEN + i, Value::Int(len))
+            .expect("flen");
+    }
 
     let mut nodes: Vec<Node> = Vec::new();
     let mut stack: Vec<i64> = Vec::new();
@@ -166,8 +253,9 @@ fn run_body(func_src: &str) -> (Vec<Node>, i64) {
                 let arg = w.div_euclid(16);
                 match kind {
                     0 => {} // PENDING
-                    1 | 2 => {
-                        // A leaf node: Literal (1) or Local (2). Push it and its index.
+                    1 | 2 | 11 => {
+                        // A leaf node: Literal (1), Local (2), or DataRead (11). Push
+                        // it and its index.
                         nodes.push(Node {
                             kind,
                             arg,
@@ -231,11 +319,21 @@ fn run_body(func_src: &str) -> (Vec<Node>, i64) {
     panic!("body parser did not reach DONE within the iteration budget");
 }
 
+/// The flat data-segment slot of a scalar `data.field`, its position in the compiled
+/// data-layout slot names.
+fn data_slot(data_slots: &[String], data: &str, field: &str) -> i64 {
+    let name = format!("{data}.{field}");
+    data_slots
+        .iter()
+        .position(|n| n == &name)
+        .unwrap_or_else(|| panic!("no data slot named `{name}`")) as i64
+}
+
 /// Flatten an expression into `nodes` in postorder, returning the index of its root
 /// node. This mirrors the codegen conformance harness's `flatten` for the subset the
-/// body parser handles so far: integer literals, parameter references, and the binary
-/// arithmetic and comparison operators.
-fn flatten(expr: &Expr, scope: &[String], nodes: &mut Vec<Node>) -> i64 {
+/// body parser handles so far: integer literals, parameter and local references, the
+/// unary and binary operators, and scalar data-field reads.
+fn flatten(expr: &Expr, scope: &[String], nodes: &mut Vec<Node>, data_slots: &[String]) -> i64 {
     match expr {
         Expr::Literal {
             value: Literal::Int(n),
@@ -268,8 +366,8 @@ fn flatten(expr: &Expr, scope: &[String], nodes: &mut Vec<Node>) -> i64 {
         Expr::BinOp {
             op, left, right, ..
         } => {
-            let lhs = flatten(left, scope, nodes);
-            let rhs = flatten(right, scope, nodes);
+            let lhs = flatten(left, scope, nodes, data_slots);
+            let rhs = flatten(right, scope, nodes, data_slots);
             // Most operators are a BinOp node (kind 3) with an operator code; the
             // short-circuit booleans are their own node kinds (8 Andalso, 9 Orelse).
             let (kind, code) = match op {
@@ -302,7 +400,7 @@ fn flatten(expr: &Expr, scope: &[String], nodes: &mut Vec<Node>) -> i64 {
             (nodes.len() - 1) as i64
         }
         Expr::UnaryOp { op, operand, .. } if matches!(op, UnaryOp::Not | UnaryOp::Neg) => {
-            let child = flatten(operand, scope, nodes);
+            let child = flatten(operand, scope, nodes, data_slots);
             let kind = match op {
                 UnaryOp::Not => 6,
                 UnaryOp::Neg => 10,
@@ -316,8 +414,23 @@ fn flatten(expr: &Expr, scope: &[String], nodes: &mut Vec<Node>) -> i64 {
             });
             (nodes.len() - 1) as i64
         }
+        Expr::FieldAccess { object, field, .. } => {
+            // A scalar `data.field` read is a DataRead (kind 11) of the field's slot.
+            let data = match object.as_ref() {
+                Expr::Ident { name, .. } => name,
+                other => panic!("increment handles data field access only, got {other:?}"),
+            };
+            let slot = data_slot(data_slots, data, field);
+            nodes.push(Node {
+                kind: 11,
+                arg: slot,
+                lhs: 0,
+                rhs: 0,
+            });
+            (nodes.len() - 1) as i64
+        }
         other => panic!(
-            "increment handles literals, parameters, and unary and binary operators, got {other:?}"
+            "increment handles literals, references, unary and binary operators, and data reads, got {other:?}"
         ),
     }
 }
@@ -327,7 +440,13 @@ fn flatten(expr: &Expr, scope: &[String], nodes: &mut Vec<Node>) -> i64 {
 /// the next slot, then wrap the tail in a LetIn cons-list innermost (last) binding
 /// first — the same lowering the codegen conformance harness performs.
 fn reference_body(func_src: &str) -> (Vec<Node>, i64) {
+    let src = func_src.to_string();
+    with_big_stack(move || reference_body_inner(&src))
+}
+
+fn reference_body_inner(func_src: &str) -> (Vec<Node>, i64) {
     let program = parse(&tokenize(func_src).expect("lex")).expect("parse");
+    let data_slots = data_slot_names(&program);
     let f = &program.functions[0];
     let mut scope: Vec<String> = f.params.iter().map(|p| param_name(p).to_string()).collect();
     let mut nodes = Vec::new();
@@ -336,7 +455,7 @@ fn reference_body(func_src: &str) -> (Vec<Node>, i64) {
     for st in &f.body.stmts {
         match st {
             Stmt::Let(l) => {
-                let value = flatten(&l.value, &scope, &mut nodes);
+                let value = flatten(&l.value, &scope, &mut nodes, &data_slots);
                 let name = match &l.pattern {
                     Pattern::Variable(n, _) => n.clone(),
                     other => panic!("test uses simple let patterns only, got {other:?}"),
@@ -353,7 +472,7 @@ fn reference_body(func_src: &str) -> (Vec<Node>, i64) {
         .tail_expr
         .as_ref()
         .expect("a body has a tail expression this increment");
-    let mut cont = flatten(tail, &scope, &mut nodes);
+    let mut cont = flatten(tail, &scope, &mut nodes, &data_slots);
     for &(slot, value) in stmts.iter().rev() {
         nodes.push(Node {
             kind: 5,
@@ -758,4 +877,62 @@ fn a_later_binding_shadows_an_earlier_one() {
             rhs: 0
         }
     );
+}
+
+// A scalar `data.field` read is a DataRead node at the field's data-segment slot.
+#[test]
+fn a_scalar_data_read_uses_the_field_slot() {
+    let src = "shared data d { x: Word, y: Word } fn f() -> Word { d.y }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    // `d.y` is the second field, slot 1.
+    assert_eq!(
+        nodes[root as usize],
+        Node {
+            kind: 11,
+            arg: 1,
+            lhs: 0,
+            rhs: 0
+        }
+    );
+}
+
+// A data read is an ordinary operand: it combines with parameters under operators.
+#[test]
+fn a_data_read_is_an_operand() {
+    let src = "shared data st { count: Word } fn f(n: Word) -> Word { st.count + n }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let add = nodes[root as usize];
+    assert_eq!(add.arg, 1); // Add
+    assert_eq!(nodes[add.lhs as usize].kind, 11); // DataRead st.count
+    assert_eq!(nodes[add.rhs as usize].kind, 2); // Local n
+}
+
+// Distinct fields resolve to distinct slots by declaration order.
+#[test]
+fn distinct_fields_resolve_to_distinct_slots() {
+    let src = "shared data d { p: Word, q: Word, r: Word } fn f() -> Word { d.p + d.r }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let add = nodes[root as usize];
+    // d.p is slot 0; d.r is slot 2 (after d.p at 0 and d.q at 1).
+    assert_eq!(nodes[add.lhs as usize].arg, 0);
+    assert_eq!(nodes[add.lhs as usize].kind, 11);
+    assert_eq!(nodes[add.rhs as usize].arg, 2);
+    assert_eq!(nodes[add.rhs as usize].kind, 11);
+}
+
+// A data read binds into a `let`, and the tail references the binding.
+#[test]
+fn a_data_read_binds_into_a_let() {
+    let src = "shared data d { v: Word } fn f() -> Word { let c = d.v + 1; c }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let letin = nodes[root as usize];
+    assert_eq!(letin.kind, 5);
+    // The bound value is `d.v + 1`, an Add whose left is the DataRead.
+    let add = nodes[letin.lhs as usize];
+    assert_eq!(add.arg, 1); // Add
+    assert_eq!(nodes[add.lhs as usize].kind, 11); // DataRead d.v
 }
