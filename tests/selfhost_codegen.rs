@@ -11,13 +11,13 @@
 //! Keleusma stage walks it recursion-free, interns each literal into its own
 //! deduplicating constant pool, and emits the ops followed by the pool. The host
 //! builds the module from the stage's ops and pool, checks structural equality
-//! against the Rust compiler, and runs it. Increment 24 adds array indexed
-//! data access: `d.arr[i]` lowers to the index ops then `GetDataIndexed(base,
-//! len)`, and `d.arr[i] = e` to the value ops, the index ops, then
-//! `SetDataIndexed(base, len)`, with base and len resolved from the data layout.
+//! against the Rust compiler, and runs it. Increment 25 adds `for` loops over a
+//! range: `for i in start..limit { body }` lowers to the loop-variable and limit
+//! initialization, a `Loop`/`BreakIf`/`EndLoop` frame with backpatched targets, the
+//! body, and a synthetic `i >= limit` condition and `i + 1` increment.
 
 use keleusma::Arena;
-use keleusma::ast::{BinOp, Block, Expr, Literal, Param, Pattern, Stmt, UnaryOp};
+use keleusma::ast::{BinOp, Block, Expr, Iterable, Literal, Param, Pattern, Stmt, UnaryOp};
 use keleusma::bytecode::{ConstValue, Module, Op, Value};
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
@@ -32,7 +32,8 @@ const ARGS: usize = 65;
 const LHS: usize = 129;
 const RHS: usize = 193;
 const CALL_ARGS: usize = 257;
-const PARAM_COUNT: usize = 321;
+const FOR_PARTS: usize = 321;
+const PARAM_COUNT: usize = 385;
 
 struct Node {
     kind: i64,
@@ -47,8 +48,20 @@ struct Node {
 struct Ctx {
     nodes: Vec<Node>,
     call_args: Vec<i64>,
+    for_parts: Vec<i64>,
     chunk_names: Vec<String>,
     data_slots: Vec<String>,
+}
+
+/// Append a node to the forest and return its index.
+fn node(ctx: &mut Ctx, kind: i64, arg: i64, lhs: i64, rhs: i64) -> i64 {
+    ctx.nodes.push(Node {
+        kind,
+        arg,
+        lhs,
+        rhs,
+    });
+    (ctx.nodes.len() - 1) as i64
 }
 
 /// Resolve a `data.field` reference to its slot index in the module data layout.
@@ -81,6 +94,7 @@ fn array_base_len(ctx: &Ctx, data_name: &str, field: &str) -> (i64, i64) {
 struct Body {
     nodes: Vec<Node>,
     call_args: Vec<i64>,
+    for_parts: Vec<i64>,
     root: i64,
 }
 
@@ -333,18 +347,54 @@ fn flatten_block(
                 // IndexAssignIn (kind 14): arg = base + len*65536, value = store node.
                 stmts.push((14, base + len * 65536, store_node));
             }
-            other => panic!("increment handles let and data-assign statements, got {other:?}"),
+            Stmt::For(fs) => {
+                let (start_expr, limit_expr) = match &fs.iterable {
+                    Iterable::Range(s, l) => (s.as_ref(), l.as_ref()),
+                    other => panic!("increment handles range for-loops only, got {other:?}"),
+                };
+                // The loop variable and the limit are two monotonic locals (i first).
+                let i_slot = *next_slot;
+                *next_slot += 1;
+                let lim_slot = *next_slot;
+                *next_slot += 1;
+                // The bounds are evaluated before the loop, with i not yet in scope.
+                let start_node = flatten(start_expr, scope, next_slot, ctx);
+                let limit_node = flatten(limit_expr, scope, next_slot, ctx);
+                // i is in scope for the condition, body, and increment.
+                scope.push((fs.var.clone(), i_slot));
+                // Synthetic condition `i >= limit` (BinOp GtEq, operator code 11).
+                let i_a = node(ctx, 2, i_slot, 0, 0);
+                let lim_a = node(ctx, 2, lim_slot, 0, 0);
+                let cond_node = node(ctx, 3, 11, i_a, lim_a);
+                let body_node = flatten_block(&fs.body, scope, next_slot, ctx);
+                // Synthetic increment `i + 1` (BinOp Add, operator code 1).
+                let i_b = node(ctx, 2, i_slot, 0, 0);
+                let one = node(ctx, 1, 1, 0, 0);
+                let incr_node = node(ctx, 3, 1, i_b, one);
+                scope.pop();
+                // Reserve the 7-word for_parts entry: i_slot, limit slot, start,
+                // limit, condition, body, increment. The continuation is threaded
+                // by the cons-list fold (via rhs), not stored here.
+                let fp_start = ctx.for_parts.len() as i64;
+                ctx.for_parts.push(i_slot);
+                ctx.for_parts.push(lim_slot);
+                ctx.for_parts.push(start_node);
+                ctx.for_parts.push(limit_node);
+                ctx.for_parts.push(cond_node);
+                ctx.for_parts.push(body_node);
+                ctx.for_parts.push(incr_node);
+                // ForIn (kind 16): arg = for_parts entry start; lhs unused.
+                stmts.push((16, fp_start, 0));
+            }
+            other => panic!("increment handles let/data-assign/for statements, got {other:?}"),
         }
     }
-    let tail = flatten(
-        block
-            .tail_expr
-            .as_ref()
-            .expect("block has a tail expression"),
-        scope,
-        next_slot,
-        ctx,
-    );
+    // A statement-only block (no tail expression) has the unit value, emitted as a
+    // Unit node (PushImmediate(0)); this is the body of a `for` loop.
+    let tail = match &block.tail_expr {
+        Some(t) => flatten(t, scope, next_slot, ctx),
+        None => node(ctx, 20, 0, 0, 0),
+    };
     // Fold the statements into a cons-list from the innermost (tail) outward.
     let mut cont = tail;
     for &(kind, slot, value) in stmts.iter().rev() {
@@ -372,6 +422,7 @@ fn build_body(
     let mut ctx = Ctx {
         nodes: Vec::new(),
         call_args: Vec::new(),
+        for_parts: Vec::new(),
         chunk_names,
         data_slots,
     };
@@ -385,12 +436,13 @@ fn build_body(
     Body {
         nodes: ctx.nodes,
         call_args: ctx.call_args,
+        for_parts: ctx.for_parts,
         root,
     }
 }
 
 fn decode_op(w: i64) -> Op {
-    let (tag, operand) = (w % 32, w / 32);
+    let (tag, operand) = (w % 64, w / 64);
     match tag {
         1 => Op::Const(operand as u16),
         2 => Op::Return,
@@ -422,6 +474,10 @@ fn decode_op(w: i64) -> Op {
         28 => Op::SetData(operand as u16),
         29 => Op::GetDataIndexed((operand % 65536) as u16, (operand / 65536) as u16),
         30 => Op::SetDataIndexed((operand % 65536) as u16, (operand / 65536) as u16),
+        31 => Op::Loop(operand as u16),
+        32 => Op::BreakIf(operand as u16),
+        33 => Op::EndLoop(operand as u16),
+        34 => Op::PushImmediate(operand as u8),
         other => panic!("unknown op tag {other} (word {w})"),
     }
 }
@@ -478,6 +534,10 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
     for (k, &node) in body.call_args.iter().enumerate() {
         vm.set_shared(&mut shared, CALL_ARGS + k, Value::Int(node))
             .expect("call_arg");
+    }
+    for (k, &part) in body.for_parts.iter().enumerate() {
+        vm.set_shared(&mut shared, FOR_PARTS + k, Value::Int(part))
+            .expect("for_part");
     }
     vm.set_shared(&mut shared, PARAM_COUNT, Value::Int(param_count as i64))
         .expect("param_count");
@@ -708,6 +768,24 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
             "private data d { xs: [Word; 4] } fn main(v: Word) -> Word { d.xs[0] = v; d.xs[1] = v + 1; d.xs[0] + d.xs[1] }",
             20,
             Int(41),
+        ),
+        // for loop over a constant range accumulating into a scalar data field.
+        (
+            "private data d { s: Word } fn main() -> Word { for i in 0..4 { d.s = d.s + i; } d.s }",
+            0,
+            Int(6),
+        ),
+        // for loop writing each array element by its index.
+        (
+            "private data d { xs: [Word; 4] } fn main() -> Word { for i in 0..4 { d.xs[i] = i * 2; } d.xs[3] }",
+            0,
+            Int(6),
+        ),
+        // Nested-ish: a let before the loop, the loop accumulating into the field.
+        (
+            "private data d { s: Word } fn main(v: Word) -> Word { let base = v; for i in 0..3 { d.s = d.s + base; } d.s }",
+            10,
+            Int(30),
         ),
     ];
     for &(src, arg, expected) in cases {

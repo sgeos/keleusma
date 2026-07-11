@@ -1,5 +1,18 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
+// Increment 25: `for` loops over a range. A ForIn node (kind 16) lowers
+// `for i in start..limit { body }` to: the start ops and SetLocal(i), the limit
+// ops and SetLocal(limit), a Loop marker, the condition `i >= limit` and BreakIf,
+// the body ops (a statement block ending in a Unit, PushImmediate(0)) and PopN(1),
+// the increment `i + 1` and SetLocal(i), an EndLoop marker, then the continuation.
+// The condition and increment are synthetic expression trees the adapter builds
+// from the loop var and limit; the loop var and limit occupy two locals, so
+// local_count grows by two. Loop/BreakIf/EndLoop targets are backpatched in the op
+// buffer by `emit_op` (the Loop and BreakIf exit to after EndLoop, the EndLoop
+// back-edges to after the Loop) using a control-flow loop stack. The seven
+// per-loop pieces ride in a `for_parts` side array. Range for-loops only; array
+// iteration is a later increment.
+//
 // Increment 24: array indexed data access. Reading `d.arr[i]` lowers to the index
 // ops then `GetDataIndexed(base, len)` (IndexRead, kind 13), and `d.arr[i] = v`
 // lowers to the value ops, the index ops, then `SetDataIndexed(base, len)`
@@ -50,7 +63,10 @@ require word >= 32;
 // a Call the argument-list start (into `call_args`) in `lhs` and the argument
 // count in `rhs`. `call_args[k]` is the k-th call argument's expression node
 // index. `root` is the function body's block root. `param_count` is the parameter
-// arity (declaration data the codegen threads into `local_count`).
+// arity (declaration data the codegen threads into `local_count`). A ForIn node
+// (kind 16) has args = the start of its 7-word entry in `for_parts`
+// (loop-var slot, limit slot, start expr, limit expr, condition, body, increment)
+// and rhs = the continuation; a Unit node (kind 20) emits PushImmediate(0).
 shared data ast {
     root: Word,
     kinds: [Word; 64],
@@ -58,6 +74,7 @@ shared data ast {
     lhs: [Word; 64],
     rhs: [Word; 64],
     call_args: [Word; 64],
+    for_parts: [Word; 64],
     param_count: Word,
 }
 
@@ -80,6 +97,9 @@ private data st {
     cf_if: [Word; 32],
     cf_else: [Word; 32],
     cf_sp: Word,
+    cf_loop: [Word; 32],
+    cf_breakif: [Word; 32],
+    cf_lsp: Word,
     pool: [Word; 64],
     pool_count: Word,
     count_done: Word,
@@ -89,7 +109,7 @@ private data st {
     dup_idx: Word,
 }
 
-// Wire. The stage buffers ops, then streams each as `tag + operand*32`, 0 is
+// Wire. The stage buffers ops, then streams each as `tag + operand*64`, 0 is
 // PENDING. While the walk runs, every yield is PENDING; the real op words come
 // out only once the buffer is streamed:
 //   1 Const(index)  2 Return  3 GetLocal(slot)  4 CheckedMul(frac)  5 CheckedAdd
@@ -99,6 +119,7 @@ private data st {
 //   21 Call(chunk, count)   operand packed as chunk + count*65536   22 Dup
 //   23 CheckedNeg  24 BitAnd  25 BitOr  26 BitXor  27 GetData(slot)  28 SetData(slot)
 //   29 GetDataIndexed(base,len)  30 SetDataIndexed(base,len)   base + len*65536 packed
+//   31 Loop(exit)  32 BreakIf(exit)  33 EndLoop(back)  (targets backpatched)  34 PushImmediate(v)
 // The op stream ends with Return. After Return the stage emits its constant pool:
 // first the pool size as a raw Word, then that many raw Word values, and finally
 // `local_count` as one raw Word. The host reads ops until Return, then the pool
@@ -125,20 +146,39 @@ fn emit_op(word: Word) -> Word {
     let pos = st.op_count;
     st.ops[pos] = word;
     st.op_count = pos + 1;
-    let tag = word % 32;
+    let tag = word % 64;
     if tag == 17 {
         st.cf_if[st.cf_sp] = pos;
         st.cf_sp = st.cf_sp + 1;
     }
     if tag == 18 {
         let ip = st.cf_if[st.cf_sp - 1];
-        st.ops[ip] = 17 + (pos + 1) * 32;
+        st.ops[ip] = 17 + (pos + 1) * 64;
         st.cf_else[st.cf_sp - 1] = pos;
     }
     if tag == 19 {
         let ep = st.cf_else[st.cf_sp - 1];
-        st.ops[ep] = 18 + pos * 32;
+        st.ops[ep] = 18 + pos * 64;
         st.cf_sp = st.cf_sp - 1;
+    }
+    // Loop backpatching. A `Loop` records its slot; a `BreakIf` records its slot
+    // against the open loop; an `EndLoop` resolves all three targets: the `Loop`
+    // and `BreakIf` exit to the op after this `EndLoop`, and this `EndLoop`'s
+    // back-edge to the op after the `Loop` (its condition).
+    if tag == 31 {
+        st.cf_loop[st.cf_lsp] = pos;
+        st.cf_lsp = st.cf_lsp + 1;
+    }
+    if tag == 32 {
+        st.cf_breakif[st.cf_lsp - 1] = pos;
+    }
+    if tag == 33 {
+        let lp = st.cf_loop[st.cf_lsp - 1];
+        let bp = st.cf_breakif[st.cf_lsp - 1];
+        st.ops[lp] = 31 + (pos + 1) * 64;
+        st.ops[bp] = 32 + (pos + 1) * 64;
+        st.ops[pos] = 33 + (lp + 1) * 64;
+        st.cf_lsp = st.cf_lsp - 1;
     }
     0
 }
@@ -161,12 +201,12 @@ fn push_literal(p: Word) -> Word {
         st.pool[st.pool_count] = value;
         st.pool_count = st.pool_count + 1;
     }
-    push_emit(1 + idx * 32)
+    push_emit(1 + idx * 64)
 }
 
 // Local (kind 2): schedule GetLocal(slot).
 fn push_local(p: Word) -> Word {
-    push_emit(3 + ast.args[p] * 32)
+    push_emit(3 + ast.args[p] * 64)
 }
 
 // BinOp (kind 3): post-order schedule. The operator code selects the op word and
@@ -192,7 +232,7 @@ fn push_binop(p: Word) -> Word {
         _ => opc + 5,
     };
     if opc < 4 {
-        push_emit(6 + 2 * 32);
+        push_emit(6 + 2 * 64);
     }
     push_emit(opw);
     push_visit(ast.rhs[p]);
@@ -218,7 +258,7 @@ fn push_if(p: Word) -> Word {
 fn push_letin(p: Word) -> Word {
     st.let_count = st.let_count + 1;
     push_visit(ast.rhs[p]);
-    push_emit(7 + ast.args[p] * 32);
+    push_emit(7 + ast.args[p] * 64);
     push_visit(ast.lhs[p])
 }
 
@@ -231,7 +271,7 @@ fn push_not(p: Word) -> Word {
 // UnaryNeg (kind 10): emit the operand ops then CheckedNeg and the PopN(2) fixup.
 // lhs = operand.
 fn push_neg(p: Word) -> Word {
-    push_emit(6 + 2 * 32);
+    push_emit(6 + 2 * 64);
     push_emit(23);
     push_visit(ast.lhs[p])
 }
@@ -239,7 +279,7 @@ fn push_neg(p: Word) -> Word {
 // DataRead (kind 11): read a scalar data field. Schedule GetData(slot); args is the
 // data slot (its index in the module's data layout).
 fn push_data_read(p: Word) -> Word {
-    push_emit(27 + ast.args[p] * 32)
+    push_emit(27 + ast.args[p] * 64)
 }
 
 // DataAssignIn (kind 12): `<data-slot> = <value>; <cont>`. Like a LetIn but the
@@ -248,7 +288,7 @@ fn push_data_read(p: Word) -> Word {
 // rhs = continuation.
 fn push_data_assign(p: Word) -> Word {
     push_visit(ast.rhs[p]);
-    push_emit(28 + ast.args[p] * 32);
+    push_emit(28 + ast.args[p] * 64);
     push_visit(ast.lhs[p])
 }
 
@@ -256,7 +296,7 @@ fn push_data_assign(p: Word) -> Word {
 // with the element-0 slot and array length packed as base + len*65536 in args.
 // Node: args = base + len*65536, lhs = index expression.
 fn push_index_read(p: Word) -> Word {
-    push_emit(29 + ast.args[p] * 32);
+    push_emit(29 + ast.args[p] * 64);
     push_visit(ast.lhs[p])
 }
 
@@ -274,8 +314,46 @@ fn push_index_store(p: Word) -> Word {
 // continuation.
 fn push_index_assign(p: Word) -> Word {
     push_visit(ast.rhs[p]);
-    push_emit(30 + ast.args[p] * 32);
+    push_emit(30 + ast.args[p] * 64);
     push_visit(ast.lhs[p])
+}
+
+// Unit (kind 20): the value of a statement-only block, PushImmediate(0).
+fn push_unit(p: Word) -> Word {
+    push_emit(34)
+}
+
+// ForIn (kind 16): `for i in start..limit { body } <cont>`. Emits, in order: the
+// start ops and SetLocal(i), the limit ops and SetLocal(limit), the Loop marker,
+// the condition (i >= limit) and BreakIf, the body ops (which end in the block's
+// Unit, PushImmediate(0)) and PopN(1), the increment (i + 1) and SetLocal(i), the
+// EndLoop marker, then the continuation. The loop var and limit are two locals, so
+// local_count grows by two. args = the 7-word for_parts entry start; rhs = the
+// continuation. Pushed in reverse so the drain emits them in order.
+fn push_forin(p: Word) -> Word {
+    let fp = ast.args[p];
+    let i_slot = ast.for_parts[fp];
+    let lim_slot = ast.for_parts[fp + 1];
+    let start = ast.for_parts[fp + 2];
+    let limit = ast.for_parts[fp + 3];
+    let cond = ast.for_parts[fp + 4];
+    let body = ast.for_parts[fp + 5];
+    let incr = ast.for_parts[fp + 6];
+    let cont = ast.rhs[p];
+    st.let_count = st.let_count + 2;
+    push_visit(cont);
+    push_emit(33);                    // EndLoop
+    push_emit(7 + i_slot * 64);       // SetLocal(i)  (store the increment)
+    push_visit(incr);                 // i + 1
+    push_emit(6 + 1 * 64);            // PopN(1)  (discard the body's unit)
+    push_visit(body);                 // body ops, ending in PushImmediate(0)
+    push_emit(32);                    // BreakIf(exit)
+    push_visit(cond);                 // i >= limit
+    push_emit(31);                    // Loop(exit)
+    push_emit(7 + lim_slot * 64);     // SetLocal(limit)
+    push_visit(limit);                // limit value
+    push_emit(7 + i_slot * 64);       // SetLocal(i)
+    push_visit(start)                 // start value
 }
 
 // Call (kind 7): emit the argument ops left to right, then Call(chunk, count),
@@ -286,7 +364,7 @@ fn push_call(p: Word) -> Word {
     let chunk = ast.args[p];
     let count = ast.rhs[p];
     let start = ast.lhs[p];
-    push_emit(21 + (chunk + count * 65536) * 32);
+    push_emit(21 + (chunk + count * 65536) * 64);
     for i in 0..64 {
         if i < count {
             let idx = start + count - 1 - i;
@@ -302,7 +380,7 @@ fn push_andalso(p: Word) -> Word {
     push_emit(19);
     push_emit(18);
     push_visit(ast.rhs[p]);
-    push_emit(6 + 1 * 32);
+    push_emit(6 + 1 * 64);
     push_emit(17);
     push_emit(22);
     push_visit(ast.lhs[p])
@@ -313,7 +391,7 @@ fn push_orelse(p: Word) -> Word {
     push_emit(19);
     push_emit(18);
     push_visit(ast.rhs[p]);
-    push_emit(6 + 1 * 32);
+    push_emit(6 + 1 * 64);
     push_emit(17);
     push_emit(20);
     push_emit(22);
@@ -357,6 +435,8 @@ fn walk_step() -> Word {
             13 => push_index_read(payload),
             14 => push_index_assign(payload),
             15 => push_index_store(payload),
+            16 => push_forin(payload),
+            20 => push_unit(payload),
             _ => 0,
         };
     }
