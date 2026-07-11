@@ -1,7 +1,8 @@
-//! Body-expression parser (`compiler/kel/body.kel`), increment 8: a function body that
-//! is a block of `let` bindings followed by a tail expression, over the full
-//! operator-precedence expression grammar plus scalar and indexed data-field reads
-//! (`d.f`, `d.f[i]`), lowered to the abstract-syntax node forest codegen consumes.
+//! Body-expression parser (`compiler/kel/body.kel`), increment 9: a function body that
+//! is a block of `let` bindings and scalar data-field assignments followed by a tail
+//! expression, over the full operator-precedence expression grammar plus scalar and
+//! indexed data-field reads, lowered to the abstract-syntax node forest codegen
+//! consumes.
 //!
 //! A throwaway adapter tokenises the program, feeds the function body's tokens, the
 //! parameter-name table, and the data-field layout (computed from the compiled
@@ -302,11 +303,12 @@ fn run_body_inner(func_src: &str) -> (Vec<Node>, i64) {
                         });
                         stack.push((nodes.len() - 1) as i64);
                     }
-                    5 => {
-                        // A LetIn node: pop the continuation (rhs) and the bound value
-                        // (lhs); arg is the binding slot.
-                        let rhs = stack.pop().expect("LetIn needs a continuation");
-                        let lhs = stack.pop().expect("LetIn needs a bound value");
+                    5 | 12 => {
+                        // A statement node: LetIn (5) or DataFieldAssignIn (12). Pop the
+                        // continuation (rhs) and the bound/assigned value (lhs); arg is
+                        // the local or data slot.
+                        let rhs = stack.pop().expect("a statement node needs a continuation");
+                        let lhs = stack.pop().expect("a statement node needs a value");
                         nodes.push(Node {
                             kind,
                             arg,
@@ -501,8 +503,8 @@ fn reference_body_inner(func_src: &str) -> (Vec<Node>, i64) {
     let f = &program.functions[0];
     let mut scope: Vec<String> = f.params.iter().map(|p| param_name(p).to_string()).collect();
     let mut nodes = Vec::new();
-    // Each entry is (binding slot, bound-value node index).
-    let mut stmts: Vec<(i64, i64)> = Vec::new();
+    // Each entry is (statement node kind, arg, value node index).
+    let mut stmts: Vec<(i64, i64, i64)> = Vec::new();
     for st in &f.body.stmts {
         match st {
             Stmt::Let(l) => {
@@ -513,9 +515,21 @@ fn reference_body_inner(func_src: &str) -> (Vec<Node>, i64) {
                 };
                 let slot = scope.len() as i64;
                 scope.push(name);
-                stmts.push((slot, value));
+                // LetIn (kind 5): arg = the local slot.
+                stmts.push((5, slot, value));
             }
-            other => panic!("increment handles let statements only, got {other:?}"),
+            Stmt::DataFieldAssign {
+                data_name,
+                field,
+                value,
+                ..
+            } => {
+                let value_node = flatten(value, &scope, &mut nodes, &data_slots);
+                let slot = data_slot(&data_slots, data_name, field);
+                // DataFieldAssignIn (kind 12): arg = the data slot.
+                stmts.push((12, slot, value_node));
+            }
+            other => panic!("increment handles let and data-assign statements, got {other:?}"),
         }
     }
     let tail = f
@@ -524,10 +538,10 @@ fn reference_body_inner(func_src: &str) -> (Vec<Node>, i64) {
         .as_ref()
         .expect("a body has a tail expression this increment");
     let mut cont = flatten(tail, &scope, &mut nodes, &data_slots);
-    for &(slot, value) in stmts.iter().rev() {
+    for &(kind, arg, value) in stmts.iter().rev() {
         nodes.push(Node {
-            kind: 5,
-            arg: slot,
+            kind,
+            arg,
             lhs: value,
             rhs: cont,
         });
@@ -1052,4 +1066,63 @@ fn an_indexed_read_is_an_operand() {
     let add = nodes[root as usize];
     assert_eq!(add.arg, 1); // Add
     assert_eq!(nodes[add.lhs as usize].kind, 13); // IndexRead
+}
+
+// A scalar data assignment is a statement: a DataFieldAssignIn node wrapping the tail,
+// with the assigned value in `lhs` and the target field's slot in `arg`.
+#[test]
+fn a_scalar_data_assignment_is_a_statement() {
+    let src = "shared data d { x: Word } fn f() -> Word { d.x = 5; d.x }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let assign = nodes[root as usize];
+    assert_eq!(assign.kind, 12);
+    assert_eq!(assign.arg, 0); // d.x is slot 0
+    // The assigned value is the literal 5; the continuation is the tail read of d.x.
+    assert_eq!(
+        nodes[assign.lhs as usize],
+        Node {
+            kind: 1,
+            arg: 5,
+            lhs: 0,
+            rhs: 0
+        }
+    );
+    assert_eq!(nodes[assign.rhs as usize].kind, 11); // DataRead d.x
+}
+
+// The assigned value is a full expression that may read data and parameters.
+#[test]
+fn an_assignment_value_is_an_expression() {
+    let src = "shared data d { x: Word } fn f(n: Word) -> Word { d.x = n * 2 + d.x; n }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let assign = nodes[root as usize];
+    assert_eq!(assign.kind, 12);
+    // The value is `n * 2 + d.x`, an Add.
+    assert_eq!(nodes[assign.lhs as usize].arg, 1); // Add
+}
+
+// Assignments and `let` bindings mix in one block, folded outermost binding first.
+#[test]
+fn assignments_and_lets_mix_in_a_block() {
+    let src = "shared data d { x: Word } fn f(n: Word) -> Word { let a = n + 1; d.x = a; a }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    // Root is the LetIn for `a` (slot 1, after parameter n at 0); its continuation is
+    // the DataFieldAssignIn for d.x (slot 0).
+    let letin = nodes[root as usize];
+    assert_eq!((letin.kind, letin.arg), (5, 1));
+    let assign = nodes[letin.rhs as usize];
+    assert_eq!((assign.kind, assign.arg), (12, 0));
+    // The assigned value is the Local `a` (slot 1).
+    assert_eq!(
+        nodes[assign.lhs as usize],
+        Node {
+            kind: 2,
+            arg: 1,
+            lhs: 0,
+            rhs: 0
+        }
+    );
 }

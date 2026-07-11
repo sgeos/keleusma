@@ -1,10 +1,10 @@
 // compiler/kel/body.kel — the body-expression parser, a sub-component of Stage 2.
 //
-// Increment 8: a function body that is a block of `let` bindings followed by a tail
-// expression, over the full operator-precedence expression grammar plus scalar and
-// indexed data-field reads (`d.f`, `d.f[i]`). Real Keleusma code that compiles and
-// verifies on the current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and
-// compiler/MILESTONES.md (roadmap Step 2).
+// Increment 9: a function body that is a block of `let` bindings and scalar data-field
+// assignments followed by a tail expression, over the full operator-precedence
+// expression grammar plus scalar and indexed data-field reads. Real Keleusma code that
+// compiles and verifies on the current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md
+// and compiler/MILESTONES.md (roadmap Step 2).
 //
 // Model. Stage 2's declaration parser (parser.kel) reads a function's signature and
 // brace-matches its body. This companion loop reads that body's tokens and produces
@@ -45,14 +45,19 @@
 // never pops it, the unary operators nest right-associatively. When popped it emits
 // its node kind (Neg 10, Not 6) and the host pops a single operand.
 //
-// A body is a block: zero or more `let name = value;` bindings, then a tail
-// expression. Each `let` value is an ordinary expression drained at its `;`, leaving
-// its node on the host's stack; the binding claims the next frame slot (`param_count`
-// upward) and joins the scope, so a later value or the tail resolves it as a Local.
-// The tail is drained at the `}`, then a LetIn node (kind 5, arg = slot, `lhs` the
-// value, `rhs` the continuation) is emitted for each binding from the last to the
-// first, folding the tail into the cons-list the codegen stage expects; each LetIn
-// pops its value (left on the stack in binding order) and the running continuation.
+// A body is a block: zero or more statements, then a tail expression. A statement is a
+// `let name = value;` binding or a scalar data assignment `data.field = value;`. Each
+// statement's value is an ordinary expression drained at its `;`, leaving its node on
+// the host's stack; a `let` also claims the next frame slot (`param_count` upward) and
+// joins the scope, so a later value or the tail resolves it as a Local, while an
+// assignment records the target field's data slot. The tail is drained at the `}`,
+// then a statement node is emitted for each statement from the last to the first,
+// folding the tail into the cons-list the codegen stage expects: a LetIn (kind 5,
+// arg = the local slot) or a DataFieldAssignIn (kind 12, arg = the data slot), each
+// with `lhs` its value (left on the stack in statement order) and `rhs` the running
+// continuation. The `stmt_kind`/`stmt_arg` arrays record each statement's node kind
+// and argument for the fold. Indexed assignment `d.f[i] = e;` reorders the value ahead
+// of the index and is a later increment.
 //
 // A `data.field` read: when an identifier that names a data block is read, `da_phase`
 // awaits the `.` and then the field name, whose element-0 slot and length are looked
@@ -100,6 +105,8 @@
 //   kind 5         LetIn; arg = the binding slot; host pops the continuation (`rhs`)
 //                  and the bound value (`lhs`)
 //   kind 11        DataRead; arg = the data-segment slot; a leaf
+//   kind 12        DataFieldAssignIn; arg = the data slot; host pops the continuation
+//                  (`rhs`) and the assigned value (`lhs`)
 //   kind 13        IndexRead; arg = base + len*65536; host pops the index (`lhs`)
 //   kind 15        DONE; the body is complete, its root is the remaining stack node
 // The remaining interior node kinds (If, LetIn, Call, and the rest) and the statement
@@ -161,6 +168,11 @@ private data bs {
     pending_let_name: Word,
     let_names: [Word; 64],
     let_count: Word,
+    stmt_kind: [Word; 64],
+    stmt_arg: [Word; 64],
+    stmt_count: Word,
+    pending_stmt: Word,
+    pending_arg: Word,
     folding: Word,
     fold_i: Word,
     da_phase: Word,
@@ -357,8 +369,9 @@ fn step_iclosing() -> Word {
     }
 }
 
-// Flush the current expression's operators. Emptied, a `;` (reason 0) commits a `let`
-// binding whose value rests on the host stack, and a `}` (reason 1) begins the fold.
+// Flush the current expression's operators. Emptied, a `;` (reason 0) commits the
+// pending statement whose value rests on the host stack, and a `}` (reason 1) begins
+// the fold over all statements.
 fn step_draining() -> Word {
     if bs.opsp > 0 {
         bs.opsp = bs.opsp - 1;
@@ -366,26 +379,36 @@ fn step_draining() -> Word {
         emit_op(op)
     } else {
         if bs.drain_reason == 0 {
-            bs.let_names[bs.let_count] = bs.pending_let_name;
-            bs.let_count = bs.let_count + 1;
+            if bs.pending_stmt == 0 {
+                // A `let`: claim a local slot (`param_count` + let index) and bind it.
+                bs.stmt_kind[bs.stmt_count] = 5;
+                bs.stmt_arg[bs.stmt_count] = src.param_count + bs.let_count;
+                bs.let_names[bs.let_count] = bs.pending_let_name;
+                bs.let_count = bs.let_count + 1;
+            } else {
+                // A scalar data assignment: write the target field's slot.
+                bs.stmt_kind[bs.stmt_count] = 12;
+                bs.stmt_arg[bs.stmt_count] = bs.pending_arg;
+            }
+            bs.stmt_count = bs.stmt_count + 1;
             bs.draining = 0;
             bs.expect_operand = 1;
             0
         } else {
             bs.draining = 0;
             bs.folding = 1;
-            bs.fold_i = bs.let_count;
+            bs.fold_i = bs.stmt_count;
             0
         }
     }
 }
 
-// Wrap the tail in a LetIn for each binding, last to first, then report DONE.
+// Wrap the tail in each statement's node (LetIn or DataFieldAssignIn), last to first,
+// then report DONE.
 fn step_folding() -> Word {
     if bs.fold_i > 0 {
         bs.fold_i = bs.fold_i - 1;
-        let slot = src.param_count + bs.fold_i;
-        5 + slot * 16
+        bs.stmt_kind[bs.fold_i] + bs.stmt_arg[bs.fold_i] * 16
     } else {
         bs.done = 1;
         15
@@ -409,8 +432,8 @@ fn step_dafield(k: Word, v: Word) -> Word {
     0
 }
 
-// After a field: a `[` opens an indexed read; any other token is a scalar read (whose
-// token is pushed back for re-reading).
+// After a field: a `[` opens an indexed read, a `=` a scalar assignment (whose target
+// is the field's slot); any other token is a scalar read (whose token is pushed back).
 fn step_daindex(k: Word) -> Word {
     if k == 41 {
         bs.idx_base[bs.idx_sp] = bs.da_base;
@@ -422,11 +445,18 @@ fn step_daindex(k: Word) -> Word {
         bs.expect_operand = 1;
         0
     } else {
+    if k == 17 {
+        bs.pending_stmt = 1;
+        bs.pending_arg = bs.da_base;
+        bs.da_phase = 0;
+        bs.expect_operand = 1;
+        0
+    } else {
         bs.cursor = bs.cursor - 1;
         bs.da_phase = 0;
         bs.expect_operand = 0;
         11 + bs.da_base * 16
-    }
+    } }
 }
 
 // An identifier: a data block name opens a `data.field` read; otherwise it is a Local,
@@ -547,6 +577,7 @@ fn step_dispatch(k: Word, v: Word) -> Word {
     if bs.let_phase == 2 {
         if k == 17 {
             bs.let_phase = 0;
+            bs.pending_stmt = 0;
             bs.expect_operand = 1;
         }
         0
