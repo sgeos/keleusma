@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Productivity by delegation.** A `loop` (or `yield`) function may now satisfy its
+  productivity obligation by delegating its yield to a called `yield` function that
+  yields on every one of its own paths, rather than only by a direct `Yield`. The
+  runtime already propagates a callee's `Yield` up the call stack as a suspension, so
+  a delegated yield is as reliable as a direct one; the structural verifier's
+  productivity pass was simply intra-procedural. It now classifies which chunks yield
+  on every path (a monotone fixpoint that follows `Call` into an always-yielding
+  callee) and counts a call to such a chunk as a guaranteed yield. Delegating to a
+  function that yields on only some paths is still rejected, so no non-productive loop
+  is admitted and the worst-case-execution-time bound is preserved. No wire-format or
+  `BYTECODE_VERSION` change.
+
 ### Fixed
 
 - **The category-call discipline is now enforced.** GRAMMAR.md §6.1–6.3 specify that

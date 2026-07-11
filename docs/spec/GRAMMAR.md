@@ -530,7 +530,7 @@ loop main(cmd: AudioCommand) -> AudioAction {
 }
 ````
 
-The implicit loop behavior means the function body restarts from the beginning after its last statement executes. The compiler guarantees that at least one `yield` occurs on every path through the body.
+The implicit loop behavior means the function body restarts from the beginning after its last statement executes. The compiler guarantees that at least one `yield` occurs on every path through the body, either directly or by delegating to a called `yield` function that itself yields on every one of its paths. Because the runtime propagates a callee's `yield` up the call stack as a suspension, a delegated yield is as reliable as a direct one. Delegating to a function that yields on only some paths does not satisfy the productivity obligation and is rejected.
 
 Productive divergent functions may call:
 - Any atomic function (`fn`).

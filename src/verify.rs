@@ -1,4 +1,5 @@
 extern crate alloc;
+use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -33,6 +34,7 @@ fn analyze_yield_coverage(
     start: usize,
     end: usize,
     initial: bool,
+    always: &BTreeSet<usize>,
     break_states: &mut Vec<bool>,
 ) -> Option<bool> {
     let mut has_yielded = initial;
@@ -67,10 +69,22 @@ fn analyze_yield_coverage(
                     } else {
                         unreachable!()
                     };
-                    let then_result =
-                        analyze_yield_coverage(ops, ip + 1, target - 1, has_yielded, break_states);
-                    let else_result =
-                        analyze_yield_coverage(ops, target, endif_pos, has_yielded, break_states);
+                    let then_result = analyze_yield_coverage(
+                        ops,
+                        ip + 1,
+                        target - 1,
+                        has_yielded,
+                        always,
+                        break_states,
+                    );
+                    let else_result = analyze_yield_coverage(
+                        ops,
+                        target,
+                        endif_pos,
+                        has_yielded,
+                        always,
+                        break_states,
+                    );
                     match (then_result, else_result) {
                         (Some(a), Some(b)) => has_yielded = a && b,
                         (Some(a), None) => has_yielded = a,
@@ -80,8 +94,14 @@ fn analyze_yield_coverage(
                     ip = endif_pos + 1;
                 } else {
                     // If-EndIf without Else (pattern matching).
-                    let then_result =
-                        analyze_yield_coverage(ops, ip + 1, target, has_yielded, break_states);
+                    let then_result = analyze_yield_coverage(
+                        ops,
+                        ip + 1,
+                        target,
+                        has_yielded,
+                        always,
+                        break_states,
+                    );
                     match then_result {
                         Some(a) => has_yielded = a && has_yielded,
                         None => {
@@ -98,8 +118,14 @@ fn analyze_yield_coverage(
                 // valid input always has exit >= 1, so this is unchanged there.
                 let endloop_ip = loop_exit_target.saturating_sub(1);
                 let mut loop_breaks: Vec<bool> = Vec::new();
-                let _body_result =
-                    analyze_yield_coverage(ops, ip + 1, endloop_ip, has_yielded, &mut loop_breaks);
+                let _body_result = analyze_yield_coverage(
+                    ops,
+                    ip + 1,
+                    endloop_ip,
+                    has_yielded,
+                    always,
+                    &mut loop_breaks,
+                );
                 if loop_breaks.is_empty() {
                     return None;
                 }
@@ -111,6 +137,16 @@ fn analyze_yield_coverage(
             Op::Else(_) | Op::EndIf | Op::EndLoop(_) => {
                 ip += 1;
             }
+            // A call to a function that yields on every one of its own paths
+            // guarantees a yield here too, because the VM propagates a callee's
+            // Yield up the call stack as a suspension. Delegating a yield to such
+            // a function is therefore as good as a direct Yield for productivity.
+            // A call to a function that only sometimes (or never) yields does not
+            // guarantee a yield and is not counted.
+            Op::Call(callee, _) if always.contains(&(*callee as usize)) => {
+                has_yielded = true;
+                ip += 1;
+            }
             _ => {
                 ip += 1;
             }
@@ -118,6 +154,45 @@ fn analyze_yield_coverage(
     }
 
     Some(has_yielded)
+}
+
+/// Classify which chunks yield on *every* path from entry to return, accounting
+/// for delegation. A chunk is in the returned set when every path through it
+/// passes a `Yield` or a `Call` to a chunk already in the set. This is the
+/// inter-procedural extension of [`analyze_yield_coverage`]: a `loop` may
+/// delegate its productivity obligation to a callee, but only if that callee is
+/// guaranteed to yield on every path, so a delegated yield is as reliable as a
+/// direct one.
+///
+/// The computation is a monotone fixpoint from the empty set. Each round adds any
+/// newly always-yielding chunk, using the set from prior rounds for the `Call`
+/// contribution. The set only grows and is bounded by the chunk count, so it
+/// converges. Monotonicity keeps it sound under call cycles, though the surface
+/// forbids recursion, so the call graph is acyclic in practice. The category-call
+/// discipline guarantees that a `fn` never yields, directly or transitively, so
+/// no `Func` chunk is ever classified as always-yielding.
+fn compute_always_yielding(module: &Module) -> BTreeSet<usize> {
+    let mut always: BTreeSet<usize> = BTreeSet::new();
+    loop {
+        let mut changed = false;
+        for (i, chunk) in module.chunks.iter().enumerate() {
+            if always.contains(&i) {
+                continue;
+            }
+            let ops = &chunk.ops;
+            let mut break_states: Vec<bool> = Vec::new();
+            if let Some(true) =
+                analyze_yield_coverage(ops, 0, ops.len(), false, &always, &mut break_states)
+            {
+                always.insert(i);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    always
 }
 
 /// Compute the worst-case execution cost of a region of instructions `[start, end)`.
@@ -156,8 +231,13 @@ fn loop_body_all_paths_yield_no_inner_loop(ops: &[Op], start: usize, end: usize)
         return false;
     }
     let mut break_states: Vec<bool> = Vec::new();
+    // This helper feeds the worst-case-execution-time iteration bound, not the
+    // productivity gate. Passing an empty always-yielding set means a delegated
+    // yield is not counted here, which only keeps the iteration bound more
+    // conservative (sound); the precise inter-procedural set is reserved for the
+    // productivity check.
     matches!(
-        analyze_yield_coverage(ops, start, end, false, &mut break_states),
+        analyze_yield_coverage(ops, start, end, false, &BTreeSet::new(), &mut break_states),
         Some(true)
     )
 }
@@ -2063,10 +2143,11 @@ pub fn chunk_verification_obligations(
     module: &Module,
 ) -> alloc::vec::Vec<VerificationObligation> {
     let mut obligations: alloc::vec::Vec<VerificationObligation> = alloc::vec::Vec::new();
+    let always = compute_always_yielding(module);
     // The Result is ignored: on success the trace is complete; on
     // failure it is truncated at the first failing check, which is the
     // documented contract. Callers gate completeness on a prior verify.
-    let _ = verify_chunk(chunk, module, Some(&mut obligations));
+    let _ = verify_chunk(chunk, module, &always, Some(&mut obligations));
     obligations
 }
 
@@ -2086,8 +2167,13 @@ pub fn chunk_verification_obligations(
 /// 5. Productivity rule (Stream chunks only): All control flow paths from
 ///    Stream to Reset pass through at least one Yield.
 pub fn verify(module: &Module) -> Result<(), VerifyError> {
+    // Inter-procedural productivity classification, computed once for the module:
+    // which chunks yield on every path (directly or by delegating to another
+    // always-yielding chunk). A Stream chunk may satisfy its productivity
+    // obligation by delegating to such a chunk.
+    let always = compute_always_yielding(module);
     for chunk in &module.chunks {
-        verify_chunk(chunk, module, None)?;
+        verify_chunk(chunk, module, &always, None)?;
         verify_stack_depth(chunk)?;
     }
     // Typed operand-stack pass (A.2.1): reconstructs per-slot flat shapes and
@@ -2346,6 +2432,7 @@ fn verify_depth_region(
 fn verify_chunk(
     chunk: &Chunk,
     module: &Module,
+    always: &BTreeSet<usize>,
     mut sink: Option<&mut alloc::vec::Vec<VerificationObligation>>,
 ) -> Result<(), VerifyError> {
     const P1: &str = "block-nesting-and-offsets";
@@ -2965,6 +3052,16 @@ fn verify_chunk(
             }
         }
 
+        // Whether the chunk delegates a yield to an always-yielding callee. Such
+        // a call is as good as a direct Yield for the "contains a yield"
+        // preconditions below, because the VM propagates the callee's Yield up as
+        // a suspension. The all-paths obligation is still checked separately by
+        // the productivity pass.
+        let calls_always_yielder = ops
+            .iter()
+            .any(|op| matches!(op, Op::Call(g, _) if always.contains(&(*g as usize))));
+        let has_effective_yield = yield_count > 0 || calls_always_yielder;
+
         // Positions of the marker ops, for keying the obligations to
         // the construct each block-type constraint concerns.
         let first_yield = ops.iter().position(|op| matches!(op, Op::Yield));
@@ -3005,10 +3102,13 @@ fn verify_chunk(
                 record(0, P2, "func-has-no-reset");
             }
             BlockType::Reentrant => {
-                if yield_count == 0 {
+                if !has_effective_yield {
                     return Err(VerifyError {
                         chunk_name: name.clone(),
-                        message: String::from("Reentrant block must contain at least one Yield"),
+                        message: String::from(
+                            "Reentrant block must contain at least one Yield, directly or by \
+                             delegating to an always-yielding function",
+                        ),
                     });
                 }
                 record(first_yield.unwrap_or(0), P2, "reentrant-has-yield");
@@ -3058,10 +3158,13 @@ fn verify_chunk(
                     });
                 }
                 record(first_reset.unwrap_or(0), P2, "stream-has-exactly-one-reset");
-                if yield_count == 0 {
+                if !has_effective_yield {
                     return Err(VerifyError {
                         chunk_name: name.clone(),
-                        message: String::from("Stream block must contain at least one Yield"),
+                        message: String::from(
+                            "Stream block must contain at least one Yield, directly or by \
+                             delegating to an always-yielding function",
+                        ),
                     });
                 }
                 record(first_yield.unwrap_or(0), P2, "stream-has-yield");
@@ -3074,13 +3177,15 @@ fn verify_chunk(
             let reset_pos = ops.iter().position(|op| matches!(op, Op::Reset));
             if let (Some(s), Some(r)) = (stream_pos, reset_pos) {
                 let mut break_states: Vec<bool> = Vec::new();
-                let result = analyze_yield_coverage(ops, s + 1, r, false, &mut break_states);
+                let result =
+                    analyze_yield_coverage(ops, s + 1, r, false, always, &mut break_states);
                 if let Some(false) = result {
                     return Err(VerifyError {
                         chunk_name: name.clone(),
                         message: String::from(
-                            "productivity violation: some path from Stream to Reset \
-                             does not pass through any Yield",
+                            "productivity violation: some path from Stream to Reset does not \
+                             pass through any Yield, directly or by delegating to an \
+                             always-yielding function",
                         ),
                     });
                 }
@@ -4227,6 +4332,51 @@ mod tests {
         let program = parse(&tokens).expect("parse error");
         let module = compile(&program).expect("compile error");
         assert!(verify(&module).is_ok());
+    }
+
+    #[test]
+    fn productivity_loop_delegates_to_always_yielder() {
+        // A loop may satisfy its productivity obligation by delegating its only
+        // yield to a function that yields on every path. The VM propagates the
+        // callee's yield up as a suspension, so the loop is productive.
+        use crate::compiler::compile;
+        use crate::lexer::tokenize;
+        use crate::parser::parse;
+
+        let src = "yield g() -> Word { yield 7 }\nloop main(r: Word) -> Word { g() }";
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        let module = compile(&program).expect("delegated loop compiles and verifies");
+        assert!(verify(&module).is_ok());
+    }
+
+    #[test]
+    fn productivity_loop_delegates_transitively() {
+        // The always-yielding classification is a fixpoint, so delegation chains
+        // through an intermediate function that itself only delegates.
+        use crate::compiler::compile;
+        use crate::lexer::tokenize;
+        use crate::parser::parse;
+
+        let src = "yield g() -> Word { yield 7 }\nyield h() -> Word { g() }\nloop main(r: Word) -> Word { h() }";
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        let module = compile(&program).expect("transitive delegation compiles and verifies");
+        assert!(verify(&module).is_ok());
+    }
+
+    #[test]
+    fn productivity_loop_delegating_to_sometimes_yielder_rejected() {
+        // The soundness gate: delegating to a function that yields on only some
+        // paths does not guarantee a yield, so the loop is not productive and is
+        // rejected. Admitting it would break the worst-case-execution-time bound.
+        use crate::compiler::compile;
+        use crate::lexer::tokenize;
+        use crate::parser::parse;
+
+        let src = "yield g(x: Word) -> Word { if x > 0 { yield 7 } else { 0 } }\nloop main(r: Word) -> Word { g(r) }";
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        let err = compile(&program)
+            .expect_err("delegating to a sometimes-yielder must be rejected as non-productive");
+        assert!(err.message.contains("Yield"), "{}", err.message);
     }
 
     // -- WCET cost table tests --
