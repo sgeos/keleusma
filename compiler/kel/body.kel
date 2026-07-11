@@ -1,11 +1,10 @@
 // compiler/kel/body.kel — the body-expression parser, a sub-component of Stage 2.
 //
-// Increment 11: a function body over the full operator-precedence expression grammar,
+// Increment 12: a function body over the full operator-precedence expression grammar,
 // scalar and indexed data-field reads, `let` bindings and scalar data-field
-// assignments, and the `if`/`else` conditional whose branches are now full nested
-// statement blocks. Real Keleusma code that compiles and verifies on the current
-// runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md
-// (roadmap Step 2).
+// assignments, the `if`/`else` conditional with nested statement-block branches, and
+// function calls. Real Keleusma code that compiles and verifies on the current runtime.
+// See docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md (roadmap Step 2).
 //
 // Model. Stage 2's declaration parser (parser.kel) reads a function's signature and
 // brace-matches its body. This companion loop reads that body's tokens and produces
@@ -78,6 +77,16 @@
 // resolution over the full binding list matches the reference for every admissible
 // program.
 //
+// A call `f(a, b)` is a Call node (kind 7, arg = the callee's chunk index; the host
+// records the argument node indices in a `call_args` side array and points `lhs` at
+// their start and `rhs` at the count). When an identifier names a chunk, `call_phase`
+// awaits the `(`, which pushes a call context (chunk index and a running argument
+// count) and a call marker (operator code 21) that blocks precedence across the
+// arguments. Each `,` drains the current argument's operators down to the marker and
+// counts it (the `cdraining` sub-state); the closing `)` drains the last argument,
+// counts it when one is present, and emits the Call. Nested calls stack their contexts
+// and markers. The Call record packs the chunk index and count as `chunk + count*256`.
+//
 // A `data.field` read: when an identifier that names a data block is read, `da_phase`
 // awaits the `.` and then the field name, whose element-0 slot and length are looked
 // up in the field layout. If a `[` follows, the read is indexed: the field's base and
@@ -112,7 +121,9 @@
 //   kind 42 RBRACK `]`; closes the index of a data array read
 //   kind 43 IF     the `if` keyword; opens a conditional
 //   kind 44 ELSE   the `else` keyword; separates the branches
-// The `{` and `}` of a branch reuse kinds 2 and 3. Any other token is ignored.
+//   kind 10 COMMA  `,`; separates call arguments
+// The `{`/`}` of a branch reuse kinds 2/3 and the `(`/`)` of a call reuse 7/8. Any
+// other token is ignored.
 //
 // Node record wire. Each element is one Word, `kind + arg*16`:
 //   kind 0         PENDING; nothing this iteration; host skips it
@@ -130,6 +141,8 @@
 //                  (`rhs`) and the assigned value (`lhs`)
 //   kind 4         If; host pops three nodes (else, then, cond); cond -> arg,
 //                  then -> `lhs`, else -> `rhs`
+//   kind 7         Call; arg = chunk + count*256; host pops `count` argument nodes
+//                  into the `call_args` side array; `lhs` = start, `rhs` = count
 //   kind 13        IndexRead; arg = base + len*65536; host pops the index (`lhs`)
 //   kind 15        DONE; the body is complete, its root is the remaining stack node
 // The remaining interior node kinds (If, LetIn, Call, and the rest) and the statement
@@ -154,6 +167,8 @@ shared data src {
     ffield: [Word; 64],
     fbase: [Word; 64],
     flen: [Word; 64],
+    chunk_count: Word,
+    chunks: [Word; 64],
 }
 
 // The parser's cross-iteration state. `cursor` is the token index; `started` records
@@ -213,6 +228,12 @@ private data bs {
     if_sp: Word,
     fold_start: Word,
     fold_cont: Word,
+    call_chunk: [Word; 8],
+    call_count: [Word; 8],
+    call_sp: Word,
+    call_pending: Word,
+    call_phase: Word,
+    cdraining: Word,
 }
 
 // The precedence of an operator code, tightest to loosest: unary (16 Neg, 17 Not) 9,
@@ -232,6 +253,9 @@ fn prec_of(op: Word) -> Word {
         0
     } else {
     if op == 20 {
+        0
+    } else {
+    if op == 21 {
         0
     } else {
     if op == 2 {
@@ -265,7 +289,7 @@ fn prec_of(op: Word) -> Word {
         1
     } else {
         3
-    } } } } } } } } } } } } } }
+    } } } } } } } } } } } } } } }
 }
 
 // The record word for a stacked operator: a unary Neg (16) or Not (17) emits its node
@@ -364,20 +388,47 @@ fn step_resolving() -> Word {
     }
 }
 
-// A `)`: flush the operators above the parenthesis marker, then discard the marker.
+// A `)`: flush the operators above the marker. A parenthesis marker (15) is discarded;
+// a call marker (21) counts the last argument (if any) and emits the Call.
 fn step_closing() -> Word {
     if bs.opsp > 0 {
         let top = bs.opstack[bs.opsp - 1];
         if top == 15 {
             bs.opsp = bs.opsp - 1;
             bs.closing = 0;
+            bs.expect_operand = 0;
             0
+        } else {
+        if top == 21 {
+            bs.opsp = bs.opsp - 1;
+            bs.closing = 0;
+            if bs.expect_operand == 0 {
+                bs.call_count[bs.call_sp - 1] = bs.call_count[bs.call_sp - 1] + 1;
+            }
+            bs.call_sp = bs.call_sp - 1;
+            bs.expect_operand = 0;
+            7 + (bs.call_chunk[bs.call_sp] + bs.call_count[bs.call_sp] * 256) * 16
         } else {
             bs.opsp = bs.opsp - 1;
             emit_op(top)
-        }
+        } }
     } else {
         bs.closing = 0;
+        0
+    }
+}
+
+// A `,`: flush the current call argument's operators down to the call marker (20 is the
+// index marker, 21 the call marker), then count the argument.
+fn step_cdraining() -> Word {
+    if bs.opsp > 0 andalso bs.opstack[bs.opsp - 1] != 21 {
+        bs.opsp = bs.opsp - 1;
+        let op = bs.opstack[bs.opsp];
+        emit_op(op)
+    } else {
+        bs.cdraining = 0;
+        bs.call_count[bs.call_sp - 1] = bs.call_count[bs.call_sp - 1] + 1;
+        bs.expect_operand = 1;
         0
     }
 }
@@ -536,10 +587,21 @@ fn step_daindex(k: Word) -> Word {
     } }
 }
 
-// An identifier: a data block name opens a `data.field` read; otherwise it is a Local,
-// resolved against the `let` bindings (most recent wins, shadowing a parameter) then
-// the parameters.
+// An identifier: a chunk name opens a call, a data block name opens a `data.field`
+// read; otherwise it is a Local, resolved against the `let` bindings (most recent wins,
+// shadowing a parameter) then the parameters.
 fn step_ident(v: Word) -> Word {
+    bs.found_flag = 0;
+    for i in 0..src.chunk_count limit 64 {
+        if src.chunks[i] == v {
+            bs.call_pending = i;
+            bs.found_flag = 1;
+        }
+    }
+    if bs.found_flag == 1 {
+        bs.call_phase = 1;
+        0
+    } else {
     bs.found_flag = 0;
     for i in 0..src.field_count limit 64 {
         if src.fdata[i] == v {
@@ -568,6 +630,7 @@ fn step_ident(v: Word) -> Word {
         }
         bs.expect_operand = 0;
         2 + bs.found * 16
+    }
     }
 }
 
@@ -667,19 +730,26 @@ fn step_normal(k: Word, v: Word) -> Word {
         0
     } else {
     if k == 8 {
+        // `)` closes a parenthesised group or a call; step_closing needs the pre-`)`
+        // `expect_operand` to tell whether a final call argument is present, so it is
+        // left unchanged here and cleared there.
         bs.closing = 1;
-        bs.expect_operand = 0;
         0
     } else {
     if k == 42 {
         bs.iclosing = 1;
         0
     } else {
+    if k == 10 {
+        // `,` ends a call argument; drain it to the call marker and count it.
+        bs.cdraining = 1;
+        0
+    } else {
     if k == 1 {
         step_ident(v)
     } else {
         step_op(k)
-    } } } } } }
+    } } } } } } }
 }
 
 // Dispatch a just-read token by parse phase: before the body, a `let` binding's name
@@ -721,8 +791,21 @@ fn step_dispatch(k: Word, v: Word) -> Word {
     if bs.da_phase == 3 {
         step_daindex(k)
     } else {
+    if bs.call_phase == 1 {
+        // A call name was read; the `(` opens the argument list.
+        if k == 7 {
+            bs.call_chunk[bs.call_sp] = bs.call_pending;
+            bs.call_count[bs.call_sp] = 0;
+            bs.call_sp = bs.call_sp + 1;
+            bs.opstack[bs.opsp] = 21;
+            bs.opsp = bs.opsp + 1;
+            bs.call_phase = 0;
+            bs.expect_operand = 1;
+        }
+        0
+    } else {
         step_normal(k, v)
-    } } } } } }
+    } } } } } } }
 }
 
 // Read the next token and dispatch it, or begin the final drain at end of input.
@@ -752,6 +835,9 @@ fn step() -> Word {
     if bs.iclosing == 1 {
         step_iclosing()
     } else {
+    if bs.cdraining == 1 {
+        step_cdraining()
+    } else {
     if bs.draining == 1 {
         step_draining()
     } else {
@@ -759,7 +845,7 @@ fn step() -> Word {
         step_folding()
     } else {
         step_read()
-    } } } } } }
+    } } } } } } }
 }
 
 loop main(resume: Word) -> Word {
