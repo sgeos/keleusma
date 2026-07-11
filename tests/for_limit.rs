@@ -121,6 +121,29 @@ fn a_const_data_field_is_an_admissible_cap() {
     assert_eq!(run(src, 100).unwrap(), 6);
 }
 
+// A const parameter is an admissible cap; it is erased to a literal at
+// monomorphization, in the cap position and inside outcome arms alike.
+#[test]
+fn a_const_parameter_is_an_admissible_cap() {
+    let src = "private data d { s: Word } \
+        fn go<const c: Word>(hi: Word) -> Word { for i in 0..hi limit c { d.s = d.s + i; } \
+        on { ok => { }, limit => { }, } d.s } \
+        fn main(hi: Word) -> Word { go::<4>(hi) }";
+    // Capped at four: 0 + 1 + 2 + 3 = 6.
+    assert_eq!(run(src, 100).unwrap(), 6);
+}
+
+// A const parameter used in the cap is also erased inside an arm guard.
+#[test]
+fn a_const_parameter_is_erased_in_an_arm_guard() {
+    let src = "private data d { w: Word } \
+        fn go<const c: Word>(hi: Word) -> Word { for i in 0..hi limit c { } \
+        on { ok(k) when k == c => { d.w = 9; }, limit => { }, } d.w } \
+        fn main(hi: Word) -> Word { go::<3>(hi) }";
+    // hi = 3, count = 3 == c = 3, so the guard holds.
+    assert_eq!(run(src, 3).unwrap(), 9);
+}
+
 // --- Rejections ---
 
 // An `on` block without a `limit` clause is rejected.
