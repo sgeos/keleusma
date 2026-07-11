@@ -1,17 +1,21 @@
-//! Stage 2 parser (`compiler/kel/parser.kel`), increment 4: the full declaration
-//! signature, streamed as a per-declaration record.
+//! Stage 2 parser (`compiler/kel/parser.kel`), increment 5: the full declaration
+//! signature including array types, streamed as a per-declaration record.
 //!
 //! A throwaway adapter maps the reference tokenizer's output into the parser
 //! stage's `(kind, value)` token stream, the Keleusma `loop` consumes it one token
 //! per iteration, and it emits a small record per top-level declaration: a `START`
 //! element (category from the `fn`/`yield`/`loop` keyword, interned name), then per
 //! value parameter a `PARAM` (its name) and a `PTYPE` (its type name), then a
-//! `RETTYPE` (the return type name), then `END`. Types are simple named types this
-//! increment; nested types (generics, arrays, tuples) and the parsed body are later
-//! increments. The host reassembles each record and checks its (category, name,
-//! parameter names and types, return type) against the reference parse's functions,
-//! including a const-generic type parameter that must not be mistaken for a value
-//! parameter and multiheaded functions whose heads are separate declarations.
+//! `RETTYPE` (the return type name), then `END`. A `PTYPE` or `RETTYPE` naming an
+//! array element is immediately followed by an `ASIZE` carrying the literal length,
+//! so the host reconstructs `[T; N]`. The element type is a simple named type and
+//! the length a literal this increment; an arbitrarily nested element, a const
+//! length, and the other nested types (generics, tuples) with the parsed body are
+//! later increments. The host reassembles each record and checks its (category,
+//! name, parameter names and types, return type) against the reference parse's
+//! functions, including a const-generic type parameter that must not be mistaken
+//! for a value parameter and multiheaded functions whose heads are separate
+//! declarations.
 
 #![cfg(all(
     feature = "compile",
@@ -64,6 +68,8 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
             TokenKind::RParen => (8, 0),
             TokenKind::Colon => (9, 0),
             TokenKind::Comma => (10, 0),
+            TokenKind::LBracket => (11, 0),
+            TokenKind::IntLit(n) => (12, *n),
             TokenKind::Eof => continue,
             _ => (4, 0),
         };
@@ -73,10 +79,28 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
     (kinds, vals)
 }
 
-/// A parsed declaration: its category (1 fn, 2 yield, 3 loop), interned name id,
-/// and its value parameters as (name id, type name id) in order, plus the return
-/// type name id.
-type Decl = (i64, i64, Vec<(i64, i64)>, i64);
+/// A parsed type: a simple named type (its name id), or an array of a named element
+/// type with a literal length. `Missing` is the placeholder before a type is read,
+/// used for the return type of a declaration whose RETTYPE has not yet arrived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TypeRepr {
+    Missing,
+    Named(i64),
+    Array(i64, i64),
+}
+
+/// A parsed declaration: its category (1 fn, 2 yield, 3 loop), interned name id, its
+/// value parameters as (name id, type) in order, and the return type.
+type Decl = (i64, i64, Vec<(i64, TypeRepr)>, TypeRepr);
+
+/// Which type an `ASIZE` element upgrades to an array: the last parameter's type, or
+/// the return type. Set by the preceding PTYPE or RETTYPE.
+#[derive(Clone, Copy)]
+enum ArrTarget {
+    None,
+    Param,
+    Ret,
+}
 
 /// Drive the parser stage over `src`, decoding the START/PARAM/END record stream
 /// into one [`Decl`] per top-level declaration.
@@ -103,6 +127,8 @@ fn run_parser(src: &str, names: &mut Vec<String>) -> Vec<Decl> {
 
     let mut decls: Vec<Decl> = Vec::new();
     let mut cur: Option<Decl> = None;
+    // The type the next ASIZE upgrades to an array, set by the preceding PTYPE/RETTYPE.
+    let mut arr_target = ArrTarget::None;
     let mut state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
@@ -112,20 +138,56 @@ fn run_parser(src: &str, names: &mut Vec<String>) -> Vec<Decl> {
                 let dkind = w.rem_euclid(16);
                 let val = w.div_euclid(16);
                 match dkind {
-                    0 => {}                                                           // PENDING
-                    1..=3 => cur = Some((dkind, val, Vec::new(), -1)),                // START
-                    4 => cur.as_mut().expect("PARAM before START").2.push((val, -1)), // PARAM name
+                    0 => {} // PENDING
+                    1..=3 => {
+                        // START
+                        cur = Some((dkind, val, Vec::new(), TypeRepr::Missing));
+                        arr_target = ArrTarget::None;
+                    }
+                    4 => cur
+                        .as_mut()
+                        .expect("PARAM before START")
+                        .2
+                        .push((val, TypeRepr::Missing)), // PARAM name
                     6 => {
-                        // PTYPE: fill the type of the parameter just emitted.
+                        // PTYPE: the type of the parameter just emitted.
                         cur.as_mut()
                             .expect("PTYPE before START")
                             .2
                             .last_mut()
                             .expect("PTYPE before PARAM")
-                            .1 = val;
+                            .1 = TypeRepr::Named(val);
+                        arr_target = ArrTarget::Param;
                     }
-                    7 => cur.as_mut().expect("RETTYPE before START").3 = val, // RETTYPE
-                    5 => decls.push(cur.take().expect("END before START")),   // END
+                    7 => {
+                        // RETTYPE.
+                        cur.as_mut().expect("RETTYPE before START").3 = TypeRepr::Named(val);
+                        arr_target = ArrTarget::Ret;
+                    }
+                    8 => {
+                        // ASIZE: upgrade the type just emitted to an array of this length.
+                        let d = cur.as_mut().expect("ASIZE before START");
+                        match arr_target {
+                            ArrTarget::Param => {
+                                let slot = &mut d.2.last_mut().expect("ASIZE before PARAM").1;
+                                let elem = match *slot {
+                                    TypeRepr::Named(e) => e,
+                                    _ => panic!("ASIZE without a preceding element type"),
+                                };
+                                *slot = TypeRepr::Array(elem, val);
+                            }
+                            ArrTarget::Ret => {
+                                let elem = match d.3 {
+                                    TypeRepr::Named(e) => e,
+                                    _ => panic!("ASIZE without a preceding element type"),
+                                };
+                                d.3 = TypeRepr::Array(elem, val);
+                            }
+                            ArrTarget::None => panic!("ASIZE with no pending type"),
+                        }
+                        arr_target = ArrTarget::None;
+                    }
+                    5 => decls.push(cur.take().expect("END before START")), // END
                     15 => {
                         assert!(cur.is_none(), "DONE mid-declaration");
                         return decls;
@@ -143,10 +205,11 @@ fn run_parser(src: &str, names: &mut Vec<String>) -> Vec<Decl> {
     panic!("parser did not reach DONE within the iteration budget");
 }
 
-/// The surface name of a simple primitive type, matching the identifier token the
-/// adapter interned. The increment-4 tests use primitive types; a named struct or
-/// enum type and the nested types are exercised in later increments.
-fn type_name(t: &TypeExpr) -> &'static str {
+/// The surface name of a simple named type, matching the identifier token the
+/// adapter interned. Primitive types map to their surface spelling; a named struct
+/// or enum type keeps its name. Array and the other nested types are handled by
+/// [`type_repr`]; a nested element type is a later increment.
+fn type_name(t: &TypeExpr) -> String {
     match t {
         TypeExpr::Prim(p, _) => match p {
             PrimType::Byte => "Byte",
@@ -155,21 +218,35 @@ fn type_name(t: &TypeExpr) -> &'static str {
             PrimType::Float => "Float",
             PrimType::Bool => "bool",
             PrimType::Text => "Text",
-        },
-        other => panic!("test uses primitive types only this increment, got {other:?}"),
+        }
+        .to_string(),
+        TypeExpr::Named(n, _, _, _) => n.clone(),
+        other => panic!("test uses simple named types only this increment, got {other:?}"),
     }
 }
 
 /// The reference parse's top-level functions, in order, as [`Decl`]s: category,
-/// interned name id, value parameters as (name id, type name id), and the return
-/// type name id. The category encoding matches the stage's dkind: fn 1, yield 2,
-/// loop 3.
+/// interned name id, value parameters as (name id, type), and the return type. The
+/// category encoding matches the stage's dkind: fn 1, yield 2, loop 3.
 fn reference_functions(src: &str, names: &[String]) -> Vec<Decl> {
     let id_of = |s: &str| -> i64 {
         names
             .iter()
             .position(|n| n == s)
             .unwrap_or_else(|| panic!("name `{s}` was interned")) as i64
+    };
+    // A simple named type or an array of one with a literal length; the two forms the
+    // stage reads this increment.
+    let type_repr = |t: &TypeExpr| -> TypeRepr {
+        match t {
+            TypeExpr::Array(elem, len, _) => {
+                let n = len
+                    .as_lit()
+                    .expect("test uses literal array lengths only this increment");
+                TypeRepr::Array(id_of(&type_name(elem)), n)
+            }
+            other => TypeRepr::Named(id_of(&type_name(other))),
+        }
     };
     let program = parse(&tokenize(src).expect("lex")).expect("parse");
     program
@@ -191,18 +268,11 @@ fn reference_functions(src: &str, names: &[String]) -> Vec<Decl> {
                             panic!("test uses simple parameter patterns only, got {other:?}")
                         }
                     };
-                    let ty = id_of(type_name(
-                        p.type_expr.as_ref().expect("annotated parameter"),
-                    ));
+                    let ty = type_repr(p.type_expr.as_ref().expect("annotated parameter"));
                     (name, ty)
                 })
                 .collect();
-            (
-                cat,
-                id_of(&f.name),
-                params,
-                id_of(type_name(&f.return_type)),
-            )
+            (cat, id_of(&f.name), params, type_repr(&f.return_type))
         })
         .collect()
 }
@@ -286,14 +356,14 @@ fn parameter_names_types_and_return_type_are_read() {
     assert_eq!(
         got[2].2,
         vec![
-            (id("x"), id("Word")),
-            (id("y"), id("Byte")),
-            (id("z"), id("bool")),
+            (id("x"), TypeRepr::Named(id("Word"))),
+            (id("y"), TypeRepr::Named(id("Byte"))),
+            (id("z"), TypeRepr::Named(id("bool"))),
         ]
     );
-    assert_eq!(got[2].3, id("Word"));
+    assert_eq!(got[2].3, TypeRepr::Named(id("Word")));
     // `b`'s return type is bool.
-    assert_eq!(got[1].3, id("bool"));
+    assert_eq!(got[1].3, TypeRepr::Named(id("bool")));
 }
 
 // A type parameter before the value parentheses is not mistaken for a value
@@ -309,7 +379,30 @@ fn type_parameters_are_not_mistaken_for_parameters() {
     // the value parentheses.
     assert_eq!(got[0].2.len(), 1);
     let id = |s: &str| names.iter().position(|n| n == s).unwrap() as i64;
-    assert_eq!(got[0].2, vec![(id("x"), id("Word"))]);
+    assert_eq!(got[0].2, vec![(id("x"), TypeRepr::Named(id("Word")))]);
+}
+
+// An array type `[T; N]` is read as an array of the element type with the literal
+// length, in both a parameter position and the return position.
+#[test]
+fn array_types_are_read() {
+    let src = "fn a(buf: [Word; 2048]) -> Word { 0 } \
+        fn b(x: Word) -> [Byte; 16] { x }";
+    let mut names = Vec::new();
+    let got = run_parser(src, &mut names);
+    let want = reference_functions(src, &names);
+    assert_eq!(got, want);
+    let id = |s: &str| names.iter().position(|n| n == s).unwrap() as i64;
+    // `a`'s single parameter is an array `[Word; 2048]`; its return type is a simple
+    // Word.
+    assert_eq!(
+        got[0].2,
+        vec![(id("buf"), TypeRepr::Array(id("Word"), 2048))]
+    );
+    assert_eq!(got[0].3, TypeRepr::Named(id("Word")));
+    // `b`'s parameter is a simple Word; its return type is an array `[Byte; 16]`.
+    assert_eq!(got[1].2, vec![(id("x"), TypeRepr::Named(id("Word")))]);
+    assert_eq!(got[1].3, TypeRepr::Array(id("Byte"), 16));
 }
 
 // Each head of a multiheaded function is a separate declaration; the reference
