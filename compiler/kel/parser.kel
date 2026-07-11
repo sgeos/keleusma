@@ -1,8 +1,8 @@
 // compiler/kel/parser.kel — Stage 2 of the self-hosted compiler.
 //
-// Increment 6: the function signature (including array types) and the shared and
-// private `data` block declaration. Real Keleusma code that compiles and verifies on
-// the current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and
+// Increment 7: the function signature (including array types) and the shared,
+// private, and const `data` block declaration. Real Keleusma code that compiles and
+// verifies on the current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and
 // compiler/MILESTONES.md (roadmap Step 2).
 //
 // Model. Keleusma forbids unbounded inner loops in `fn` and `yield`, so the one
@@ -35,8 +35,16 @@
 // runtime's own state segments (parser.kel's own `toks` and `ps` blocks are two).
 // A `data` block is `<shared|private> data NAME { field: type, ... }`. Its fields
 // are `name: type` pairs read with the same PARAM/PTYPE/ASIZE machinery as function
-// parameters, including array-typed fields (`[Word; 2048]`). A `const data` block,
-// whose fields carry `= initializer` values, is a later increment.
+// parameters, including array-typed fields (`[Word; 2048]`).
+//
+// Increment 7 adds the `const data` block, whose fields carry a `= initializer`
+// value (`const data k { a: Word = 2, b: Word = 3 }`). Its name and field types are
+// read exactly as a shared or private block; the initializer is skipped by a
+// depth-aware scan from the `=` to the field-terminating `,` or the block-closing
+// `}`, tracking `()`, `[]`, and `{}` so a nested tuple, array, or struct initializer
+// (whose commas would otherwise be mistaken for field separators) is consumed
+// whole. Capturing the initializer VALUES, which codegen bakes as constant loads,
+// is a later increment; this increment reads the const block's shape only.
 //
 // Input. The host (or, in the test harness, a throwaway adapter that maps the
 // reference tokenizer's output) places the token stream in the `shared data`
@@ -58,7 +66,10 @@
 //   kind 13 DATA   the `data` keyword; opens a data block declaration
 //   kind 14 SHARED the `shared` visibility modifier on a data block
 //   kind 15 PRIV   the `private` visibility modifier on a data block
-// The `;` and `]` of an array type carry no state and arrive as OTHER (kind 4).
+//   kind 16 CONST  the `const` visibility modifier on a data block
+//   kind 17 EQ     `=`; opens a const data field initializer
+//   kind 18 RBRACK `]`; closes an array type or const initializer (depth tracking)
+// The `;` of an array type carries no state and arrives as OTHER (kind 4).
 //
 // Declaration record wire (increment 4). Each element is one Word, `dkind + val*16`:
 //   dkind 0        PENDING; nothing this iteration; host skips it
@@ -68,14 +79,15 @@
 //   dkind 6        PTYPE; the type name of the parameter just emitted
 //   dkind 7        RETTYPE; the return type name
 //   dkind 8        ASIZE; upgrades the type just emitted to an array of this length
-//   dkind 9        DSTART; a data block; val = name*4 + visibility (0 shared, 1 private)
+//   dkind 9        DSTART; a data block; val = name*4 + visibility (0 shared, 1 private, 2 const)
 //   dkind 15       DONE; the token stream is exhausted, no further declarations
 // A function declaration is START, then for each value parameter a PARAM followed by
 // its PTYPE, then a RETTYPE, then END. A data block declaration is DSTART, then for
-// each field a PARAM followed by its PTYPE, then END; it has no RETTYPE. A PTYPE or
-// RETTYPE whose type is an array is immediately followed by an ASIZE carrying the
-// array length. The remaining nested type structure, the parsed body handed to
-// codegen, and the const data block land in later increments.
+// each field a PARAM followed by its PTYPE, then END; it has no RETTYPE. A const data
+// field's `= initializer` value is skipped and emits nothing. A PTYPE or RETTYPE
+// whose type is an array is immediately followed by an ASIZE carrying the array
+// length. The remaining nested type structure, the parsed body handed to codegen, and
+// the const field initializer values land in later increments.
 //
 // The self-hosted compiler is a full-width host tool. Its record encoding does
 // arithmetic (`val*16`) that overflows a narrow word, so it declares a 32-bit
@@ -96,7 +108,9 @@ shared data toks {
 // emit END). Modes 4 through 7 handle a data block: 4 expect the `data` keyword after
 // a visibility modifier, 5 expect the data name (and emit DSTART), 6 expect the
 // opening `{`, 7 scan the field list emitting PARAM/PTYPE/ASIZE (and emit END on the
-// closing `}`). `dvis` is the data-block visibility (0 shared, 1 private). `dkind`
+// closing `}`). `dvis` is the data-block visibility (0 shared, 1 private, 2 const).
+// `init` is armed while skipping a const field's initializer, with `idepth` the
+// `()`/`[]`/`{}` nesting depth of that skip. `dkind`
 // is the function category (1 fn, 2 yield, 3 loop). `pdepth` is the
 // parenthesis depth in the signature scan; `pdone` records that the value-parameter
 // parentheses have closed. `pname` is armed when the next identifier begins a
@@ -118,6 +132,8 @@ private data ps {
     rtype: Word,
     arr: Word,
     arr_ret: Word,
+    init: Word,
+    idepth: Word,
     depth: Word,
 }
 
@@ -130,9 +146,10 @@ loop main(resume: Word) -> Word {
         let v = toks.vals[ps.cursor];
         ps.cursor = ps.cursor + 1;
         if ps.mode == 0 {
-            // The opening keyword. A `shared` (14) or `private` (15) modifier, or a
-            // bare `data` (13) keyword, opens a data block; otherwise it is a function
-            // category keyword: `yield` (5), `loop` (6), or `fn` (anything else).
+            // The opening keyword. A `shared` (14), `private` (15), or `const` (16)
+            // modifier, or a bare `data` (13) keyword, opens a data block; otherwise
+            // it is a function category keyword: `yield` (5), `loop` (6), or `fn`
+            // (anything else).
             if k == 14 {
                 ps.dvis = 0;
                 ps.mode = 4;
@@ -140,6 +157,11 @@ loop main(resume: Word) -> Word {
             } else {
             if k == 15 {
                 ps.dvis = 1;
+                ps.mode = 4;
+                yield 0
+            } else {
+            if k == 16 {
+                ps.dvis = 2;
                 ps.mode = 4;
                 yield 0
             } else {
@@ -158,7 +180,7 @@ loop main(resume: Word) -> Word {
                 } }
                 ps.mode = 1;
                 yield 0
-            } } }
+            } } } }
         } else {
         if ps.mode == 1 {
             // The declaration name (kind 1 ident); emit START and begin the
@@ -310,6 +332,8 @@ loop main(resume: Word) -> Word {
                 ps.pname = 0;
                 ps.ptype = 0;
                 ps.arr = 0;
+                ps.init = 0;
+                ps.idepth = 0;
                 ps.mode = 6;
                 yield 9 + (v * 4 + ps.dvis) * 16
             } else {
@@ -324,54 +348,110 @@ loop main(resume: Word) -> Word {
             }
             yield 0
         } else {
-            // Field list: a PARAM per field name and a PTYPE (with an ASIZE for an
-            // array field) per field type; the closing `}` ends the block. Data
-            // fields are param-like, so the array element is always a PTYPE.
-            if k == 1 {
-                if ps.arr == 1 {
-                    ps.arr = 2;
-                    yield 6 + v * 16
+            if ps.init == 1 {
+                // Skipping a const field initializer, depth-aware: the top-level `,`
+                // ends the field and the top-level `}` ends the block, while `()`,
+                // `[]`, and `{}` nest so a tuple, array, or struct initializer is
+                // consumed whole rather than its commas splitting the field list.
+                if k == 2 {
+                    ps.idepth = ps.idepth + 1;
+                    yield 0
                 } else {
-                if ps.pname == 1 {
-                    ps.pname = 0;
-                    yield 4 + v * 16
+                if k == 7 {
+                    ps.idepth = ps.idepth + 1;
+                    yield 0
                 } else {
-                if ps.ptype == 1 {
-                    ps.ptype = 0;
-                    yield 6 + v * 16
+                if k == 11 {
+                    ps.idepth = ps.idepth + 1;
+                    yield 0
+                } else {
+                if k == 8 {
+                    if ps.idepth > 0 {
+                        ps.idepth = ps.idepth - 1;
+                    }
+                    yield 0
+                } else {
+                if k == 18 {
+                    if ps.idepth > 0 {
+                        ps.idepth = ps.idepth - 1;
+                    }
+                    yield 0
+                } else {
+                if k == 10 {
+                    if ps.idepth == 0 {
+                        ps.init = 0;
+                        ps.pname = 1;
+                    }
+                    yield 0
+                } else {
+                if k == 3 {
+                    if ps.idepth == 0 {
+                        ps.init = 0;
+                        ps.mode = 0;
+                        yield 5
+                    } else {
+                        ps.idepth = ps.idepth - 1;
+                        yield 0
+                    }
                 } else {
                     yield 0
-                } } }
+                } } } } } } }
             } else {
-            if k == 11 {
-                if ps.ptype == 1 {
-                    ps.ptype = 0;
-                    ps.arr = 1;
-                }
-                yield 0
-            } else {
-            if k == 12 {
-                if ps.arr == 2 {
-                    ps.arr = 0;
-                    yield 8 + v * 16
+                // Field list: a PARAM per field name and a PTYPE (with an ASIZE for an
+                // array field) per field type. A const field's `=` opens an
+                // initializer skip; the closing `}` ends the block. Data fields are
+                // param-like, so the array element is always a PTYPE.
+                if k == 1 {
+                    if ps.arr == 1 {
+                        ps.arr = 2;
+                        yield 6 + v * 16
+                    } else {
+                    if ps.pname == 1 {
+                        ps.pname = 0;
+                        yield 4 + v * 16
+                    } else {
+                    if ps.ptype == 1 {
+                        ps.ptype = 0;
+                        yield 6 + v * 16
+                    } else {
+                        yield 0
+                    } } }
+                } else {
+                if k == 11 {
+                    if ps.ptype == 1 {
+                        ps.ptype = 0;
+                        ps.arr = 1;
+                    }
+                    yield 0
+                } else {
+                if k == 12 {
+                    if ps.arr == 2 {
+                        ps.arr = 0;
+                        yield 8 + v * 16
+                    } else {
+                        yield 0
+                    }
+                } else {
+                if k == 9 {
+                    ps.ptype = 1;
+                    yield 0
+                } else {
+                if k == 10 {
+                    ps.pname = 1;
+                    yield 0
+                } else {
+                if k == 17 {
+                    ps.init = 1;
+                    ps.idepth = 0;
+                    yield 0
+                } else {
+                if k == 3 {
+                    ps.mode = 0;
+                    yield 5
                 } else {
                     yield 0
-                }
-            } else {
-            if k == 9 {
-                ps.ptype = 1;
-                yield 0
-            } else {
-            if k == 10 {
-                ps.pname = 1;
-                yield 0
-            } else {
-            if k == 3 {
-                ps.mode = 0;
-                yield 5
-            } else {
-                yield 0
-            } } } } } }
+                } } } } } } }
+            }
         } } } }
         } } }
     }

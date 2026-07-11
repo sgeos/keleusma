@@ -1,6 +1,6 @@
-//! Stage 2 parser (`compiler/kel/parser.kel`), increment 6: the function signature
-//! (including array types) and the shared and private `data` block declaration,
-//! streamed as a per-declaration record.
+//! Stage 2 parser (`compiler/kel/parser.kel`), increment 7: the function signature
+//! (including array types) and the shared, private, and const `data` block
+//! declaration, streamed as a per-declaration record.
 //!
 //! A throwaway adapter maps the reference tokenizer's output into the parser
 //! stage's `(kind, value)` token stream, the Keleusma `loop` consumes it one token
@@ -8,17 +8,21 @@
 //! is a `START` element (category from the `fn`/`yield`/`loop` keyword, interned
 //! name), then per value parameter a `PARAM` (its name) and a `PTYPE` (its type
 //! name), then a `RETTYPE` (the return type name), then `END`. A data block is a
-//! `DSTART` element (visibility from the `shared`/`private` modifier, interned name),
-//! then per field a `PARAM` and a `PTYPE`, then `END`; it has no `RETTYPE`. A `PTYPE`
-//! or `RETTYPE` naming an array element is immediately followed by an `ASIZE`
-//! carrying the literal length, so the host reconstructs `[T; N]`. The element type
-//! is a simple named type and the length a literal this increment; an arbitrarily
-//! nested element, a const length, the other nested types (generics, tuples), the
-//! parsed body, and the const data block are later increments. The host reassembles
-//! each record and checks the function declarations and data block declarations
-//! against the reference parse's two collections, including a const-generic type
-//! parameter that must not be mistaken for a value parameter, multiheaded functions
-//! whose heads are separate declarations, and array-typed fields.
+//! `DSTART` element (visibility from the `shared`/`private`/`const` modifier,
+//! interned name), then per field a `PARAM` and a `PTYPE`, then `END`; it has no
+//! `RETTYPE`. A const field's `= initializer` value is skipped (a depth-aware scan
+//! that consumes a nested array, tuple, or struct initializer whole) and emits
+//! nothing this increment. A `PTYPE` or `RETTYPE` naming an array element is
+//! immediately followed by an `ASIZE` carrying the literal length, so the host
+//! reconstructs `[T; N]`. The element type is a simple named type and the length a
+//! literal this increment; an arbitrarily nested element, a const length, the other
+//! nested types (generics, tuples), the parsed body, and the const initializer values
+//! are later increments. The host reassembles each record and checks the function
+//! declarations and data block declarations against the reference parse's two
+//! collections, including a const-generic type parameter that must not be mistaken
+//! for a value parameter, multiheaded functions whose heads are separate
+//! declarations, array-typed fields, and a const block whose initializers are
+//! skipped.
 
 #![cfg(all(
     feature = "compile",
@@ -76,6 +80,9 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
             TokenKind::Data => (13, 0),
             TokenKind::Shared => (14, 0),
             TokenKind::Private => (15, 0),
+            TokenKind::Const => (16, 0),
+            TokenKind::Eq => (17, 0),
+            TokenKind::RBracket => (18, 0),
             TokenKind::Eof => continue,
             _ => (4, 0),
         };
@@ -337,7 +344,7 @@ fn reference(src: &str, names: &[String]) -> Parsed {
             let vis = match d.visibility {
                 DataVisibility::Shared => 0,
                 DataVisibility::Private => 1,
-                DataVisibility::Const => panic!("const data is a later increment"),
+                DataVisibility::Const => 2,
             };
             let fields = d
                 .fields
@@ -534,6 +541,35 @@ fn data_blocks_are_recognised() {
             vec![
                 (id("cursor"), TypeRepr::Named(id("Word"))),
                 (id("flag"), TypeRepr::Named(id("bool"))),
+            ]
+        )
+    );
+}
+
+// A const data block is recognised with visibility 2; its field names and types are
+// read while the `= initializer` values are skipped, and a bracketed array
+// initializer's commas do not split the field list (the depth-aware skip).
+#[test]
+fn const_data_blocks_skip_initializers() {
+    let src = "const data k { a: Word = 2, b: Word = 3, xs: [Word; 3] = [1, 2, 3] }";
+    let mut names = Vec::new();
+    let got = run_parser(src, &mut names);
+    let want = reference(src, &names);
+    assert_eq!(got, want);
+    let id = |s: &str| names.iter().position(|n| n == s).unwrap() as i64;
+    assert_eq!(got.funcs.len(), 0);
+    assert_eq!(got.data.len(), 1);
+    // Visibility 2 (const); three fields with their types, the last an array. The
+    // initializer values are not part of this increment's record.
+    assert_eq!(
+        got.data[0],
+        (
+            2,
+            id("k"),
+            vec![
+                (id("a"), TypeRepr::Named(id("Word"))),
+                (id("b"), TypeRepr::Named(id("Word"))),
+                (id("xs"), TypeRepr::Array(id("Word"), 3)),
             ]
         )
     );
