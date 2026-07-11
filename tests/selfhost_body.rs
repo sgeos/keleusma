@@ -1,7 +1,7 @@
-//! Body-expression parser (`compiler/kel/body.kel`), increment 7: a function body that
+//! Body-expression parser (`compiler/kel/body.kel`), increment 8: a function body that
 //! is a block of `let` bindings followed by a tail expression, over the full
-//! operator-precedence expression grammar plus scalar data-field reads (`d.f`), lowered
-//! to the abstract-syntax node forest codegen consumes.
+//! operator-precedence expression grammar plus scalar and indexed data-field reads
+//! (`d.f`, `d.f[i]`), lowered to the abstract-syntax node forest codegen consumes.
 //!
 //! A throwaway adapter tokenises the program, feeds the function body's tokens, the
 //! parameter-name table, and the data-field layout (computed from the compiled
@@ -129,6 +129,8 @@ fn run_body_inner(func_src: &str) -> (Vec<Node>, i64) {
             TokenKind::Yield => (5, 0),
             TokenKind::Loop => (6, 0),
             TokenKind::Dot => (40, 0),
+            TokenKind::LBracket => (41, 0),
+            TokenKind::RBracket => (42, 0),
             TokenKind::LowerIdent(s) | TokenKind::UpperIdent(s) => (1, intern(s)),
             TokenKind::LBrace => (2, 0),
             TokenKind::RBrace => (3, 0),
@@ -288,6 +290,18 @@ fn run_body_inner(func_src: &str) -> (Vec<Node>, i64) {
                         });
                         stack.push((nodes.len() - 1) as i64);
                     }
+                    13 => {
+                        // An IndexRead: pop the index expression into `lhs`; arg is the
+                        // packed base + len*65536.
+                        let index = stack.pop().expect("IndexRead needs an index");
+                        nodes.push(Node {
+                            kind,
+                            arg,
+                            lhs: index,
+                            rhs: 0,
+                        });
+                        stack.push((nodes.len() - 1) as i64);
+                    }
                     5 => {
                         // A LetIn node: pop the continuation (rhs) and the bound value
                         // (lhs); arg is the binding slot.
@@ -327,6 +341,19 @@ fn data_slot(data_slots: &[String], data: &str, field: &str) -> i64 {
         .iter()
         .position(|n| n == &name)
         .unwrap_or_else(|| panic!("no data slot named `{name}`")) as i64
+}
+
+/// The element-0 slot (base) and length of an array `data.field`, from its per-element
+/// slot names `data.field[0]`, `data.field[1]`, ...
+fn array_base_len(data_slots: &[String], data: &str, field: &str) -> (i64, i64) {
+    let prefix = format!("{data}.{field}[");
+    let base = data_slots
+        .iter()
+        .position(|n| n.starts_with(&prefix))
+        .unwrap_or_else(|| panic!("no array data slot with prefix `{prefix}`"))
+        as i64;
+    let len = data_slots.iter().filter(|n| n.starts_with(&prefix)).count() as i64;
+    (base, len)
 }
 
 /// Flatten an expression into `nodes` in postorder, returning the index of its root
@@ -425,6 +452,30 @@ fn flatten(expr: &Expr, scope: &[String], nodes: &mut Vec<Node>, data_slots: &[S
                 kind: 11,
                 arg: slot,
                 lhs: 0,
+                rhs: 0,
+            });
+            (nodes.len() - 1) as i64
+        }
+        Expr::ArrayIndex { object, index, .. } => {
+            // A `data.field[i]` read is an IndexRead (kind 13): arg = base + len*65536,
+            // lhs = the index expression. The object is a `data.field` access.
+            let (data, field) = match object.as_ref() {
+                Expr::FieldAccess {
+                    object: inner,
+                    field,
+                    ..
+                } => match inner.as_ref() {
+                    Expr::Ident { name, .. } => (name, field),
+                    other => panic!("increment handles data array access only, got {other:?}"),
+                },
+                other => panic!("increment handles data array access only, got {other:?}"),
+            };
+            let (base, len) = array_base_len(data_slots, data, field);
+            let index_node = flatten(index, scope, nodes, data_slots);
+            nodes.push(Node {
+                kind: 13,
+                arg: base + len * 65536,
+                lhs: index_node,
                 rhs: 0,
             });
             (nodes.len() - 1) as i64
@@ -935,4 +986,70 @@ fn a_data_read_binds_into_a_let() {
     let add = nodes[letin.lhs as usize];
     assert_eq!(add.arg, 1); // Add
     assert_eq!(nodes[add.lhs as usize].kind, 11); // DataRead d.v
+}
+
+// An indexed `data.arr[i]` read is an IndexRead node; its arg packs base and length,
+// and its child is the index expression.
+#[test]
+fn an_indexed_data_read_is_an_index_read() {
+    let src = "shared data d { xs: [Word; 4] } fn f(i: Word) -> Word { d.xs[i] }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let idx = nodes[root as usize];
+    assert_eq!(idx.kind, 13);
+    // xs is the only field, so base 0 and length 4: arg = 0 + 4*65536.
+    assert_eq!(idx.arg, 4 * 65536);
+    // The index is the Local i (slot 0).
+    assert_eq!(
+        nodes[idx.lhs as usize],
+        Node {
+            kind: 2,
+            arg: 0,
+            lhs: 0,
+            rhs: 0
+        }
+    );
+}
+
+// The index may be an expression, parsed with full precedence inside the brackets.
+#[test]
+fn the_index_is_a_full_expression() {
+    let src = "shared data d { xs: [Word; 8] } fn f(i: Word) -> Word { d.xs[i + 1] }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let idx = nodes[root as usize];
+    assert_eq!(idx.kind, 13);
+    // The index child is the Add of i and 1.
+    assert_eq!(nodes[idx.lhs as usize].arg, 1); // Add
+}
+
+// A data read may appear inside the index, exercising the nested index stack.
+#[test]
+fn a_data_read_nests_inside_an_index() {
+    let src = "shared data d { xs: [Word; 16], i: Word } fn f() -> Word { d.xs[d.i] }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let idx = nodes[root as usize];
+    assert_eq!(idx.kind, 13);
+    // The index is a scalar DataRead of d.i (slot 16, after the 16 xs elements).
+    assert_eq!(
+        nodes[idx.lhs as usize],
+        Node {
+            kind: 11,
+            arg: 16,
+            lhs: 0,
+            rhs: 0
+        }
+    );
+}
+
+// An indexed read combines with an operator as an ordinary operand.
+#[test]
+fn an_indexed_read_is_an_operand() {
+    let src = "shared data d { xs: [Word; 4] } fn f(i: Word) -> Word { d.xs[i] + 1 }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, root) = run_body(src);
+    let add = nodes[root as usize];
+    assert_eq!(add.arg, 1); // Add
+    assert_eq!(nodes[add.lhs as usize].kind, 13); // IndexRead
 }
