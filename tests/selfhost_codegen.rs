@@ -1236,6 +1236,48 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
     }
 }
 
+/// Hard-gated multihead conformance. The multiheaded `yield` dispatch (increment
+/// 32) is the newest and historically most fragile path, and its only real subject
+/// so far is `emit_next` through the non-gating self-compile probe. This pins a
+/// hand-written multihead in the byte-identity corpus, and deliberately uses a
+/// parameter-referencing guard (`when r == 0`) rather than the data-field guards
+/// `emit_next` uses, so the head parameter-copy and guard-dispatch fall-through are
+/// exercised on a distinct guard shape.
+#[test]
+fn a_synthetic_multiheaded_function_compiles_byte_identically() {
+    let src = "yield g(r: Word) -> Word when r == 0 { yield r } \
+        yield g(r: Word) -> Word when r > 5 { yield r } \
+        yield g(r: Word) -> Word { yield 0 } \
+        loop main(r: Word) -> Word { g(r) }";
+    let reference = compile_src(src);
+    let program = parse(&tokenize(src).expect("lex")).expect("parse");
+    let chunk_names: Vec<String> = reference.chunks.iter().map(|c| c.name.clone()).collect();
+
+    // The three `g` heads compile to a single reference chunk; drive the stage over
+    // them and require the emitted ops to match it byte for byte.
+    let heads: Vec<&FunctionDef> = program.functions.iter().filter(|f| f.name == "g").collect();
+    assert_eq!(heads.len(), 3, "the multihead has three heads");
+    let body = build_multihead(
+        &heads,
+        &heads[0].params,
+        chunk_names,
+        Vec::new(),
+        Vec::new(),
+    );
+    let (emitted, _pool, _lc) = run_codegen(&body, heads[0].params.len());
+    let ref_ops = reference
+        .chunks
+        .iter()
+        .find(|c| c.name == "g")
+        .expect("g chunk")
+        .ops
+        .clone();
+    assert_eq!(
+        emitted, ref_ops,
+        "synthetic multihead ops diverged from the reference"
+    );
+}
+
 /// Milestone probe: attempt to compile `codegen.kel`'s own atomic `fn`s through the
 /// stage, one function body at a time, and report which compile byte-identically
 /// against the Rust reference and which hit a not-yet-supported construct. This is
@@ -1372,8 +1414,21 @@ fn self_compile_codegen_atomic_functions() {
     for (n, r) in &gaps {
         eprintln!("  GAP  {n}: {r}");
     }
+    // Regression gate. The codegen stage is fully self-hosting: every one of its
+    // functions round-trips through itself byte-identically. Assert that no
+    // function gaps and pin the count, so a silent partial regression (a function
+    // that stops self-compiling, or one that disappears) fails the test rather than
+    // passing unnoticed once attention moves to the parser. If codegen.kel gains or
+    // loses a function deliberately, update EXPECTED_SELF_COMPILE below.
+    const EXPECTED_SELF_COMPILE: usize = 34;
     assert!(
-        !ok.is_empty(),
-        "expected at least some functions of codegen.kel to self-compile"
+        gaps.is_empty(),
+        "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
+    );
+    assert_eq!(
+        ok.len(),
+        EXPECTED_SELF_COMPILE,
+        "codegen self-compile count changed (expected {EXPECTED_SELF_COMPILE}); \
+         update the gate deliberately if codegen.kel changed. self-compiled: {ok:?}"
     );
 }
