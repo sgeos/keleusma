@@ -21,12 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the fail-loud default consistent with the other capture constructs. An optional
   `on { ... }` block, mirroring the checked-arithmetic arm block, captures the
   outcome: `ok(count)` for a completed range, `break(index)` for a body `break`,
-  and `limit(index)` for the overrun; each arm and binding is optional, and an
-  absent `break` arm falls through to `ok`. A range whose length equals the cap
-  exactly completes as `ok` rather than reporting an overrun, so it never traps.
-  An arm may carry a `when` guard, checked as `Bool`; on a false guard an
-  intended outcome (`ok`/`break`) is a noop and the defensive `limit` falls
-  through to the trap. `limit` and `on` are contextual keywords, so both remain
+  and `limit(index)` for the overrun. Following the same discipline as the other
+  capture constructs, an `on` block must carry an unguarded `ok` catch-all and
+  each outcome appears at most once; an absent `break` arm falls through to `ok`.
+  A range whose length equals the cap exactly completes as `ok` rather than
+  reporting an overrun, so it never traps. The `break` and `limit` arms may carry
+  a `when` guard, checked as `Bool`; on a false guard an intended `break` is a
+  noop and the defensive `limit` falls through to the trap. `limit` and `on` are
+  contextual keywords, so both remain
   usable as identifiers. The `overflow` outcome is reserved in the grammar but
   inadmissible on a `limit` loop, because the range test runs before the body and
   the cap bounds the counter, so the index stays below the type maximum and the

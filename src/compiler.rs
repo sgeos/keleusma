@@ -7410,9 +7410,10 @@ fn compile_loop_arm_body(
 }
 
 /// Emit the post-loop dispatch on the outcome local. LIMIT runs its arm or
-/// traps; OK and BREAK run their arms when present and are otherwise noops.
-/// The `ok` binding is the completed count (`ctr_slot`); the `break` and
-/// `limit` bindings are the loop variable at the exit (`var_slot`).
+/// traps; OK runs the mandatory catch-all when a block is present; BREAK runs
+/// its arm when present and otherwise falls through to `ok`. The `ok` binding
+/// is the completed count (`ctr_slot`); the `break` and `limit` bindings are the
+/// loop variable at the exit (`var_slot`).
 fn compile_loop_outcome_dispatch(
     fc: &mut FuncCompiler,
     for_stmt: &ForStmt,
@@ -7425,6 +7426,19 @@ fn compile_loop_outcome_dispatch(
     let ok_arm = find(|k| matches!(k, LoopArmKind::Ok(_)));
     let break_arm = find(|k| matches!(k, LoopArmKind::Break(_)));
     let limit_arm = find(|k| matches!(k, LoopArmKind::Limit(_)));
+
+    // A `break` with no `break` arm is an intended, non-trapping exit, so it
+    // falls through to the mandatory `ok` catch-all. Reclassify it before the
+    // dispatch. (In the bare form there is no `ok` arm either, so it is a noop
+    // in both encodings.)
+    if break_arm.is_none() {
+        let if_addr = emit_outcome_test(fc, oc_slot, LOOP_OUTCOME_BREAK);
+        let ok_code = fc.add_constant(Value::Int(LOOP_OUTCOME_OK));
+        fc.emit(Op::Const(ok_code));
+        fc.emit(Op::SetLocal(oc_slot));
+        fc.patch_jump(if_addr);
+        fc.emit(Op::EndIf);
+    }
 
     // LIMIT: the arm, or the fail-loud trap. A guarded arm whose guard is false
     // also falls through to the trap.

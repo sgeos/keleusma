@@ -116,10 +116,12 @@ for i in 0..n limit 64 {
 }
 ```
 
-Each arm is optional. Without an `on` block, reaching the cap is the loud
-error just described, while finishing the range or breaking simply ends
-the loop. The bound is the cap in every case, so the loop always has a
-worst-case count the tool can prove.
+An `on` block always names an `ok` arm, the same catch-all every other
+handling block in the language requires; the `break` and `limit` arms are
+optional, and a `break` you do not name runs the `ok` arm. Without an `on`
+block at all, reaching the cap is the loud error just described, while
+finishing the range or breaking simply ends the loop. The bound is the cap
+in every case, so the loop always has a worst-case count the tool can prove.
 
 ## What you now know
 
