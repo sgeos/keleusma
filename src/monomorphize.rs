@@ -1687,8 +1687,8 @@ impl crate::visitor::MutVisitor for ConstValueSubstitutor {
                 }
             }
             Stmt::For(f) => {
-                // The iterable is evaluated in the outer scope; the loop
-                // variable shadows within the body.
+                // The iterable and the `limit` cap are evaluated in the outer
+                // scope; the loop variable shadows within the body.
                 match &mut f.iterable {
                     Iterable::Expr(e) => self.visit_expr(e),
                     Iterable::Range(a, b) => {
@@ -1696,11 +1696,37 @@ impl crate::visitor::MutVisitor for ConstValueSubstitutor {
                         self.visit_expr(b);
                     }
                 }
+                if let Some(limit) = f.limit.as_mut() {
+                    self.visit_expr(limit);
+                }
                 let var = f.var.clone();
                 self.shadowed.push(BTreeSet::new());
                 self.shadow_if_const(&var);
                 self.visit_block(&mut f.body);
                 self.shadowed.pop();
+                // Outcome arms run after the loop, so the loop variable is not
+                // in scope; each arm's binding shadows within that arm.
+                for arm in f.on_arms.iter_mut() {
+                    self.shadowed.push(BTreeSet::new());
+                    let binding = match &arm.kind {
+                        crate::ast::LoopArmKind::Ok(p)
+                        | crate::ast::LoopArmKind::Break(p)
+                        | crate::ast::LoopArmKind::Limit(p)
+                        | crate::ast::LoopArmKind::Overflow(p) => p.as_ref(),
+                    };
+                    if let Some(pat) = binding {
+                        let mut names = Vec::new();
+                        collect_pattern_bindings(pat, &mut names);
+                        for name in names {
+                            self.shadow_if_const(&name);
+                        }
+                    }
+                    if let Some(g) = arm.guard.as_mut() {
+                        self.visit_expr(g);
+                    }
+                    self.visit_block(&mut arm.body);
+                    self.shadowed.pop();
+                }
             }
             _ => self.walk_stmt(stmt),
         }
