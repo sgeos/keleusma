@@ -1,10 +1,12 @@
 // compiler/kel/body.kel — the body-expression parser, a sub-component of Stage 2.
 //
-// Increment 12: a function body over the full operator-precedence expression grammar,
+// Increment 16: a function body over the full operator-precedence expression grammar,
 // scalar and indexed data-field reads, `let` bindings and scalar data-field
-// assignments, the `if`/`else` conditional with nested statement-block branches, and
-// function calls. Real Keleusma code that compiles and verifies on the current runtime.
-// See docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md (roadmap Step 2).
+// assignments, the `if`/`else` conditional with nested statement-block branches,
+// function calls, the bounded `for v in start..end limit CAP { body }` loop, and a
+// statement-only block whose implicit value is Unit. Real Keleusma code that compiles
+// and verifies on the current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and
+// compiler/MILESTONES.md (roadmap Step 2).
 //
 // Model. Stage 2's declaration parser (parser.kel) reads a function's signature and
 // brace-matches its body. This companion loop reads that body's tokens and produces
@@ -248,6 +250,7 @@ private data bs {
     forlimit_count: Word,
     for_emit: Word,
     for_emit_i: Word,
+    for_stmt_start: Word,
 }
 
 // The precedence of an operator code, tightest to loosest: unary (16 Neg, 17 Not) 9,
@@ -557,10 +560,13 @@ fn step_draining() -> Word {
             bs.draining = 0;
             0
         } else {
-            // reason 7: the loop body is drained; emit the ForLimit parts.
+            // reason 7: the loop body is drained; fold its statements around the body
+            // value (fold_cont 3 then starts the ForLimit emission).
             bs.draining = 0;
-            bs.for_emit = 1;
-            bs.for_emit_i = 0;
+            bs.folding = 1;
+            bs.fold_i = bs.stmt_count;
+            bs.fold_start = bs.for_stmt_start;
+            bs.fold_cont = 3;
             0
         } } } }
         } } }
@@ -586,10 +592,17 @@ fn step_folding() -> Word {
             bs.if_phase[bs.if_sp - 1] = 3;
             0
         } else {
+        if bs.fold_cont == 2 {
             bs.if_sp = bs.if_sp - 1;
             bs.expect_operand = 0;
             4
-        } }
+        } else {
+            // fold_cont == 3: the `for` body is folded; its value rests on the host
+            // stack. Start the ForLimit parts emission.
+            bs.for_emit = 1;
+            bs.for_emit_i = 0;
+            0
+        } } }
     }
 }
 
@@ -779,6 +792,7 @@ fn step_forheader(k: Word, v: Word) -> Word {
             bs.scope_slot[bs.let_count] = bs.for_vslot;
             bs.let_count = bs.let_count + 1;
             bs.for_phase = 7;
+            bs.for_stmt_start = bs.stmt_count;
             bs.expect_operand = 1;
         }
         0
@@ -886,7 +900,15 @@ fn step_if(k: Word) -> Word {
             }
         }
         bs.draining = 1;
-        0
+        // A block that closes while an operand is still expected has no tail expression
+        // (it is statement-only): its value is Unit (node kind 20), emitted now so the
+        // fold wraps it. Clearing expect_operand lets the drain proceed to the fold.
+        if bs.expect_operand == 1 {
+            bs.expect_operand = 0;
+            20
+        } else {
+            0
+        }
     } } }
 }
 
