@@ -842,8 +842,10 @@ fn walk_step() -> Word {
         emit_op(payload);
     }
     if ikind == wire.visit {
-        // Dispatch on the node kind: pipe the kind field straight into the match.
-        ast.kinds[payload] |> match {
+        // Dispatch on the node kind. Written as a plain `match` on the kind field
+        // rather than the `|>` pipe sugar so the stage stays within the grammar the
+        // self-hosted parser bridges (the pipe desugars to exactly this `match`).
+        match ast.kinds[payload] {
             1 => push_literal(payload),
             2 => push_local(payload),
             3 => push_binop(payload),

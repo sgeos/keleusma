@@ -195,8 +195,12 @@ private data stmt {
     scope_slot: [Word; 64],
     let_count: Word,
     slot_count: Word,
-    stmt_kind: [Word; 64],
-    stmt_arg: [Word; 64],
+    // A block's folded-statement table. Sized to the largest stage function body: a
+    // codegen.kel emitter such as `push_forlimit` is a single flat block of about 78
+    // statements, so 64 is too small; 256 covers the stage files with headroom. These
+    // are private (persistent-arena) slots, not part of the 64KB shared segment.
+    stmt_kind: [Word; 256],
+    stmt_arg: [Word; 256],
     stmt_count: Word,
     pstmt_kind: [Word; 16],
     pstmt_name: [Word; 16],

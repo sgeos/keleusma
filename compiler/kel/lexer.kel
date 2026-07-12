@@ -59,11 +59,14 @@ require word >= 32;
 // name's bytes in `bytes`, so the host recovers the id-to-spelling map the parser
 // stage's `limit`/`require`/chunk-name inputs are expressed in without re-lexing.
 // The table lives in shared data (not private) precisely so the host can read it.
+// Sized to hold the codegen.kel stage source (42KB, ~896 distinct identifiers): a
+// Byte occupies one slot and a Word eight, so `bytes` plus two Word intern arrays of
+// 1024 stays under the flat 64KB shared-segment ceiling (46080 + 2*1024*8 + 16 bytes).
 shared data src {
     len: Word,
-    bytes: [Byte; 24576],
-    istart: [Word; 512],
-    ilen: [Word; 512],
+    bytes: [Byte; 46080],
+    istart: [Word; 1024],
+    ilen: [Word; 1024],
     icount: Word,
 }
 
@@ -79,7 +82,7 @@ private data st {
 
 // Scratch accumulators for the interning content comparison (increment 4), which
 // cannot use immutable locals. The intern table itself (`istart`/`ilen`/`icount`)
-// lives in the shared `src` block so the host can read it back; capacity 512
+// lives in the shared `src` block so the host can read it back; capacity 1024
 // distinct identifiers, and a source that exceeds it fails closed at the interning
 // scan's `limit` rather than aliasing.
 private data intern {
@@ -247,7 +250,7 @@ fn keyword_code(start: Word, len: Word) -> Word {
 // unique, so the last (and only) matching index the scan records is the answer.
 fn intern_id(start: Word, len: Word) -> Word {
     intern.found = 0 - 1;
-    for i in 0..src.icount limit 512 {
+    for i in 0..src.icount limit 1024 {
         if src.ilen[i] == len {
             intern.mism = 0;
             for j in 0..len limit 64 {

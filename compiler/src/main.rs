@@ -156,7 +156,7 @@ fn run_lexer(path: &str) {
 
     let cap = vm.shared_data_bytes();
     // The increment-1 lexer holds up to 65536 source bytes in its shared array.
-    if input.len() > 24576 {
+    if input.len() > 46080 {
         eprintln!(
             "input is {} bytes; the increment-1 lexer caps source at 65536",
             input.len()
@@ -285,9 +285,9 @@ fn run_parse_pipeline(path: &str) {
     use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 
     // Lexer `src` block slot layout: len(1) + bytes(65536) then the intern table.
-    const LEX_ISTART: usize = 1 + 24576;
-    const LEX_ILEN: usize = 1 + 24576 + 512;
-    const LEX_ICOUNT: usize = 1 + 24576 + 512 + 512;
+    const LEX_ISTART: usize = 1 + 46080;
+    const LEX_ILEN: usize = 1 + 46080 + 1024;
+    const LEX_ICOUNT: usize = 1 + 46080 + 1024 + 1024;
     // Parser `toks` block slot layout: the token stream is one packed `tok+payload*64`
     // word per token (not two `kinds`/`vals` arrays), which halves its byte cost.
     const P_LEN: usize = 0;
@@ -301,7 +301,7 @@ fn run_parse_pipeline(path: &str) {
         eprintln!("cannot read {path}: {e}");
         std::process::exit(1);
     });
-    if input.len() > 24576 {
+    if input.len() > 46080 {
         eprintln!(
             "input is {} bytes; the increment-1 lexer caps source at 65536",
             input.len()
