@@ -1,9 +1,9 @@
-//! Merged parser stage (`compiler/kel/parse.kel`), increment 10a: one streaming `loop`
-//! that parses a whole top-level function declaration, the `data` block declaration, the
-//! `enum` declaration, and the body's full expression, statement, control-flow,
-//! data-access, and function-call grammar. Data fields resolve against the accumulated
-//! field-layout table; calls against a host-supplied chunk-name table; and the enum table
-//! is accumulated as each `enum` block is parsed, for the body enum folds of increment 10b.
+//! Merged parser stage (`compiler/kel/parse.kel`), increment 10b: one streaming `loop`
+//! that parses a whole top-level function declaration, the `data` and `enum` declarations,
+//! and the body's full expression, statement, control-flow, data-access, function-call,
+//! and enum grammar. Data fields resolve against the accumulated field-layout table, calls
+//! against a host-supplied chunk-name table, and the `Enum::Variant() as Word` cast and the
+//! unit-variant match pattern fold to discriminants using the accumulated enum table.
 //!
 //! A throwaway adapter maps the reference tokenizer into the stage's unified `(kind,
 //! value)` token stream. The stage emits header records `dkind + val*64` (1/2/3 START of a
@@ -172,6 +172,24 @@ fn array_base_len(data_slots: &[String], data: &str, field: &str) -> (i64, i64) 
     (base, len)
 }
 
+/// The enum table (enum name, variant name, discriminant) from the program's enum
+/// declarations, mirroring the discriminant values the compiler resolves.
+fn enum_table(program: &keleusma::ast::Program) -> Vec<(String, String, i64)> {
+    let mut t = Vec::new();
+    for ty in &program.types {
+        if let keleusma::ast::TypeDef::Enum(ed) = ty {
+            for variant in &ed.variants {
+                t.push((
+                    ed.name.clone(),
+                    variant.name.clone(),
+                    variant.discriminant_value,
+                ));
+            }
+        }
+    }
+    t
+}
+
 fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
     let (kinds, vals) = adapt_tokens(src, names);
     let module = compile_parse_stage();
@@ -301,6 +319,7 @@ fn flatten(
     forlim: &mut i64,
     data_slots: &[String],
     chunk_names: &[String],
+    enum_table: &[(String, String, i64)],
     out: &mut Vec<(i64, i64)>,
 ) {
     match e {
@@ -322,7 +341,16 @@ fn flatten(
         Expr::BinOp {
             op, left, right, ..
         } => {
-            flatten(left, scope, next_slot, forlim, data_slots, chunk_names, out);
+            flatten(
+                left,
+                scope,
+                next_slot,
+                forlim,
+                data_slots,
+                chunk_names,
+                enum_table,
+                out,
+            );
             flatten(
                 right,
                 scope,
@@ -330,6 +358,7 @@ fn flatten(
                 forlim,
                 data_slots,
                 chunk_names,
+                enum_table,
                 out,
             );
             let (kind, code) = match op {
@@ -361,6 +390,7 @@ fn flatten(
                 forlim,
                 data_slots,
                 chunk_names,
+                enum_table,
                 out,
             );
             let kind = match op {
@@ -386,6 +416,7 @@ fn flatten(
                 forlim,
                 data_slots,
                 chunk_names,
+                enum_table,
                 out,
             );
             flatten_block(
@@ -395,12 +426,20 @@ fn flatten(
                 forlim,
                 data_slots,
                 chunk_names,
+                enum_table,
                 out,
             );
             match else_block {
-                Some(eb) => {
-                    flatten_block(eb, scope, next_slot, forlim, data_slots, chunk_names, out)
-                }
+                Some(eb) => flatten_block(
+                    eb,
+                    scope,
+                    next_slot,
+                    forlim,
+                    data_slots,
+                    chunk_names,
+                    enum_table,
+                    out,
+                ),
                 None => out.push((20, 0)), // synthesized empty else: a Unit
             }
             out.push((4, 0));
@@ -414,6 +453,7 @@ fn flatten(
                 forlim,
                 data_slots,
                 chunk_names,
+                enum_table,
                 out,
             );
             out.push((24, 0));
@@ -456,6 +496,7 @@ fn flatten(
                 forlim,
                 data_slots,
                 chunk_names,
+                enum_table,
                 out,
             );
             out.push((13, base + len * 65536));
@@ -474,6 +515,7 @@ fn flatten(
                 forlim,
                 data_slots,
                 chunk_names,
+                enum_table,
                 out,
             );
             let temp = *next_slot;
@@ -494,6 +536,30 @@ fn flatten(
                             forlim,
                             data_slots,
                             chunk_names,
+                            enum_table,
+                            out,
+                        );
+                        lit_count += 1;
+                    }
+                    Pattern::Enum(enum_name, variant, sub_pats, _) if sub_pats.is_empty() => {
+                        // A unit enum-variant pattern folds to the variant's discriminant
+                        // literal, the same arm an integer literal forms.
+                        let disc = enum_table
+                            .iter()
+                            .find(|(e, v, _)| e == enum_name && v == variant)
+                            .map(|(_, _, d)| *d)
+                            .unwrap_or_else(|| {
+                                panic!("no discriminant for {enum_name}::{variant}")
+                            });
+                        out.push((1, disc));
+                        flatten(
+                            &arm.expr,
+                            scope,
+                            next_slot,
+                            forlim,
+                            data_slots,
+                            chunk_names,
+                            enum_table,
                             out,
                         );
                         lit_count += 1;
@@ -506,6 +572,7 @@ fn flatten(
                             forlim,
                             data_slots,
                             chunk_names,
+                            enum_table,
                             out,
                         );
                     }
@@ -520,7 +587,16 @@ fn flatten(
             // the callee's position in the function declaration order (the last, matching
             // the stage's scan, so a repeated name resolves identically).
             for arg in args {
-                flatten(arg, scope, next_slot, forlim, data_slots, chunk_names, out);
+                flatten(
+                    arg,
+                    scope,
+                    next_slot,
+                    forlim,
+                    data_slots,
+                    chunk_names,
+                    enum_table,
+                    out,
+                );
             }
             let chunk = chunk_names
                 .iter()
@@ -529,6 +605,24 @@ fn flatten(
                 as i64;
             out.push((7, chunk + args.len() as i64 * 256));
         }
+        Expr::Cast { expr: inner, .. } => match inner.as_ref() {
+            // A `Enum::Variant() as Word` cast of a no-payload variant folds to the
+            // variant's discriminant literal (kind 1).
+            Expr::EnumVariant {
+                enum_name,
+                variant,
+                args,
+                ..
+            } if args.is_empty() => {
+                let disc = enum_table
+                    .iter()
+                    .find(|(e, v, _)| e == enum_name && v == variant)
+                    .map(|(_, _, d)| *d)
+                    .unwrap_or_else(|| panic!("no discriminant for {enum_name}::{variant}"));
+                out.push((1, disc));
+            }
+            other => panic!("increment 10 handles `Enum::Variant() as Word` casts, got {other:?}"),
+        },
         other => panic!("increment does not handle expression {other:?}"),
     }
 }
@@ -546,6 +640,7 @@ fn flatten_block(
     forlim: &mut i64,
     data_slots: &[String],
     chunk_names: &[String],
+    enum_table: &[(String, String, i64)],
     out: &mut Vec<(i64, i64)>,
 ) {
     let mut local = scope.to_vec();
@@ -560,6 +655,7 @@ fn flatten_block(
                     forlim,
                     data_slots,
                     chunk_names,
+                    enum_table,
                     out,
                 );
                 let name = match &l.pattern {
@@ -572,7 +668,16 @@ fn flatten_block(
                 stmt_nodes.push((5, slot)); // LetIn
             }
             Stmt::Expr(e) => {
-                flatten(e, &local, next_slot, forlim, data_slots, chunk_names, out);
+                flatten(
+                    e,
+                    &local,
+                    next_slot,
+                    forlim,
+                    data_slots,
+                    chunk_names,
+                    enum_table,
+                    out,
+                );
                 stmt_nodes.push((21, 0)); // ExprStmt
             }
             Stmt::DataFieldAssign {
@@ -590,6 +695,7 @@ fn flatten_block(
                     forlim,
                     data_slots,
                     chunk_names,
+                    enum_table,
                     out,
                 );
                 let name = format!("{data_name}.{field}");
@@ -617,6 +723,7 @@ fn flatten_block(
                     forlim,
                     data_slots,
                     chunk_names,
+                    enum_table,
                     out,
                 );
                 flatten(
@@ -626,6 +733,7 @@ fn flatten_block(
                     forlim,
                     data_slots,
                     chunk_names,
+                    enum_table,
                     out,
                 );
                 let (base, len) = array_base_len(data_slots, data_name, field);
@@ -649,7 +757,16 @@ fn flatten_block(
                     }) => *n,
                     other => panic!("the stage requires a literal `limit`, got {other:?}"),
                 };
-                flatten(low, &local, next_slot, forlim, data_slots, chunk_names, out);
+                flatten(
+                    low,
+                    &local,
+                    next_slot,
+                    forlim,
+                    data_slots,
+                    chunk_names,
+                    enum_table,
+                    out,
+                );
                 let vslot = *next_slot;
                 *next_slot += 1;
                 flatten(
@@ -659,6 +776,7 @@ fn flatten_block(
                     forlim,
                     data_slots,
                     chunk_names,
+                    enum_table,
                     out,
                 );
                 let end_slot = *next_slot;
@@ -678,6 +796,7 @@ fn flatten_block(
                     forlim,
                     data_slots,
                     chunk_names,
+                    enum_table,
                     out,
                 );
                 out.push((1, cap));
@@ -706,6 +825,7 @@ fn flatten_block(
             forlim,
             data_slots,
             chunk_names,
+            enum_table,
             out,
         ),
         None => out.push((20, 0)), // statement-only block: implicit Unit
@@ -727,6 +847,7 @@ fn reference(src: &str, names: &[String]) -> Parsed {
     let program = parse(&tokenize(src).expect("lex")).expect("parse");
     let data_slots = data_slot_names(&program);
     let chunk_names: Vec<String> = program.functions.iter().map(|f| f.name.clone()).collect();
+    let enum_table = enum_table(&program);
     let mut funcs = Vec::new();
     for f in &program.functions {
         let cat = match f.category {
@@ -759,6 +880,7 @@ fn reference(src: &str, names: &[String]) -> Parsed {
             &mut forlim,
             &data_slots,
             &chunk_names,
+            &enum_table,
             &mut body,
         );
         funcs.push((cat, id(&f.name), params, body));
@@ -1245,4 +1367,50 @@ fn enums_with_explicit_discriminants_interleave() {
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
     assert_eq!(got.funcs.len(), 2);
+}
+
+// An `Enum::Variant() as Word` cast folds to the variant's discriminant literal.
+#[test]
+fn an_enum_cast_folds_to_a_discriminant() {
+    let src = "enum Op { Add, Mul, Sub } fn f() -> Word { Op::Mul() as Word }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    // Op::Mul is discriminant 1.
+    assert_eq!(got.funcs[0].3, vec![(1, 1)]);
+}
+
+// A cast with an explicit discriminant folds to that value.
+#[test]
+fn an_enum_cast_uses_explicit_discriminants() {
+    let src = "enum Tag { A = 5, B } fn f() -> Word { Tag::B() as Word }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    // A = 5, so B = 6.
+    assert_eq!(got.funcs[0].3, vec![(1, 6)]);
+}
+
+// A unit enum-variant match pattern folds to the same integer-match forest an integer arm
+// would, mixing with integer arms.
+#[test]
+fn an_enum_match_pattern_folds_to_a_discriminant() {
+    let src = "enum Tok { Ident, Int, Eq } \
+        fn f(k: Word) -> Word { match k { Tok::Ident() => k, 5 => k, _ => k } }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    // scrut k(0); Tok::Ident disc 0, k(0); Lit 5, k(0); wildcard k(0); MatchBuild(temp*1024+2).
+    assert_eq!(
+        got.funcs[0].3,
+        vec![
+            (2, 0),
+            (1, 0),
+            (2, 0),
+            (1, 5),
+            (2, 0),
+            (2, 0),
+            (34, 1024 + 2)
+        ]
+    );
 }
