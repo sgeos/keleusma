@@ -1,19 +1,19 @@
 // compiler/kel/parse.kel — the merged declaration-and-body parser (roadmap Step 2).
 //
-// Increment 3: a single streaming `loop` that parses a whole top-level function
-// declaration whose body is a BLOCK — zero or more `let name = value;` bindings followed
-// by a tail expression (or, statement-only, an implicit Unit) — in one pass. Increment 1
-// proved the merge architecture on an atomic body and increment 2 brought the operator
-// grammar; this increment brings body.kel's statement and block-fold machinery. The
-// `if`/`for`/`match` forms, data reads and writes, calls, and the data/enum/use
-// declaration kinds are later increments. See compiler/MERGE_PLAN.md.
+// Increment 4: a single streaming `loop` that parses a whole top-level function
+// declaration whose body may now contain the `if cond { then } else { else }`
+// conditional with nested statement-block branches, in one pass. Increments 1 through 3
+// built the atomic body, the operator grammar, and `let` blocks; this increment brings
+// body.kel's conditional machinery, including the block-form `if` statement, the `if`
+// without `else`, and the pending-statement baseline that keeps a nested block's
+// statements from clobbering the enclosing one. The `for`/`match` forms, data reads and
+// writes, calls, and the data/enum/use declaration kinds are later increments. See
+// compiler/MERGE_PLAN.md.
 //
-// Block model. Each `let` value is an ordinary expression drained at its `;` (its node
-// left on the host stack); the binding claims the next frame slot (`ps.pcount` upward)
-// and joins the scope, so a later value or the tail resolves it as a Local. At the `}` the
-// tail is drained and then a LetIn node (kind 5, arg = slot) is emitted for each binding
-// from last to first, folding the tail into the cons-list codegen expects. A block that
-// closes while an operand is still expected has no tail: its value is Unit (kind 20).
+// An If node (kind 4) holds the condition in arg and the branches in lhs/rhs. A branch is
+// a full statement block folded, like the body, into a cons-list. An absent `else`
+// synthesizes an empty Unit branch. A completed If that a statement-starter follows was a
+// statement, committed as an ExprStmt (kind 21); a terminator leaves it the block tail.
 //
 // Record wire and token vocabulary are unchanged from increment 2.
 
@@ -58,6 +58,8 @@ enum Tok {
     Orelse = 37,
     Let = 38,
     Semi = 39,
+    If = 43,
+    Else = 44,
 }
 
 // The node-record kinds the body walk yields (a subset of body.kel's `enum Node`).
@@ -65,6 +67,7 @@ enum Node {
     Literal = 1,
     Local = 2,
     BinOp = 3,
+    If = 4,
     LetIn = 5,
     Not = 6,
     Andalso = 8,
@@ -72,6 +75,7 @@ enum Node {
     Neg = 10,
     Done = 15,
     Unit = 20,
+    ExprStmt = 21,
 }
 
 // The shunting-yard operator codes.
@@ -97,9 +101,7 @@ enum OpCode {
     Orelse = 19,
 }
 
-// The merged parser state. Header fields drive the signature scan (increment 1);
-// `in_body`/`started`/`pend_end` bracket the body; `pcount`/`pnames` are the parameter
-// table; `found`/`found_flag` carry an identifier resolution.
+// The merged parser state.
 private data ps {
     cursor: Word,
     mode: Word,
@@ -120,8 +122,9 @@ private data ps {
     found_flag: Word,
 }
 
-// The shunting-yard operator stack. `drain_reason` selects what the empty-stack drain
-// does: 0 commit a statement at its `;`, 1 fold the block at its `}`.
+// The shunting-yard operator stack. `drain_reason` selects the empty-stack drain: 0 commit
+// a statement at its `;`, 1 fold the block at its `}`, 2 the drained `if` condition, 3 a
+// then branch's tail, 4 an else branch's tail.
 private data ops {
     opstack: [Word; 64],
     opsp: Word,
@@ -134,13 +137,10 @@ private data ops {
     expect_operand: Word,
 }
 
-// The statement, binding, and block-fold machinery. `let_phase` reads a `let` binding's
-// name (1) then awaits its `=` (2); `pending_let_name` holds the name until the `=`
-// commits a pending-statement entry. `let_names`/`scope_slot`/`let_count` are the scope;
-// `slot_count` the monotonic frame-slot counter. `stmt_kind`/`stmt_arg`/`stmt_count` are
-// the emitted statement nodes; `pstmt_*` the pending statements awaiting a value drain.
-// `folding`/`fold_i`/`fold_start` drive the block fold that wraps the tail, last binding
-// first.
+// The statement, binding, and block-fold machinery. `pbase`/`pbase_sp`/`stmt_base` are the
+// per-block pending-statement baselines pushed when a branch opens; `blockform` marks a
+// just-completed block-form operand; `fold_cont` selects what the fold does when it
+// finishes (0 the body's Done, 1 a then branch's phase advance, 2 an else branch's If).
 private data stmt {
     let_phase: Word,
     pending_let_name: Word,
@@ -154,13 +154,27 @@ private data stmt {
     pstmt_kind: [Word; 16],
     pstmt_name: [Word; 16],
     pstmt_sp: Word,
+    stmt_base: Word,
+    pbase: [Word; 16],
+    pbase_sp: Word,
     folding: Word,
     fold_i: Word,
     fold_start: Word,
+    fold_cont: Word,
+    blockform: Word,
 }
 
-// Resolve an identifier to its frame slot: the `let` bindings first (most recent wins,
-// shadowing a parameter), then the parameters.
+// The `if`/`else` context stack: `if_phase` per pending conditional (1 condition, 2 then,
+// 3 awaiting `else`, 4 awaiting the else `{`, 5 else), `if_stmt_start` its branch's
+// statement baseline, `if_sp` the nesting depth.
+private data branch {
+    if_phase: [Word; 16],
+    if_stmt_start: [Word; 16],
+    if_sp: Word,
+}
+
+// Resolve an identifier to its frame slot: the `let` bindings first (most recent wins),
+// then the parameters.
 fn step_local(v: Word) -> Word {
     ps.found = 0;
     ps.found_flag = 0;
@@ -258,8 +272,7 @@ fn step_closing() -> Word {
     }
 }
 
-// An operator or statement token: `let` opens a binding, `;` commits the current
-// statement, `not`/`-` are unary prefixes, any other token a binary operator.
+// An operator or statement token.
 fn step_op(k: Word) -> Word {
     if k == Tok::Let() as Word {
         stmt.let_phase = 1;
@@ -295,24 +308,87 @@ fn step_op(k: Word) -> Word {
     } } } }
 }
 
-// The body's closing `}`: begin the block fold. A block that closes while an operand is
-// still expected has no tail expression, so its value is Unit, emitted now for the fold
-// to wrap.
-fn step_close_body() -> Word {
-    ops.drain_reason = 1;
+// The conditional tokens `{`, `}`, `if`, `else`. A `{` after a condition drains it
+// (reason 2) then enters the then branch; a `{` after `else` enters the else branch; a
+// `}` drains a branch (reason 3 then, 4 else) or, with no pending conditional, the body
+// (reason 1); `if` pushes a context and `else` advances one. A block closing while an
+// operand is still expected has no tail, so its Unit value is emitted for the fold.
+fn step_if(k: Word) -> Word {
+    if k == Tok::If() as Word {
+        branch.if_phase[branch.if_sp] = 1;
+        branch.if_sp = branch.if_sp + 1;
+        ops.expect_operand = 1;
+        0
+    } else {
+    if k == Tok::Else() as Word {
+        branch.if_phase[branch.if_sp - 1] = 4;
+        0
+    } else {
+    if k == Tok::LBrace() as Word {
+        if branch.if_sp > 0 {
+            if branch.if_phase[branch.if_sp - 1] == 1 {
+                ops.drain_reason = 2;
+                ops.draining = 1;
+            } else {
+                branch.if_phase[branch.if_sp - 1] = 5;
+                branch.if_stmt_start[branch.if_sp - 1] = stmt.stmt_count;
+                stmt.pbase[stmt.pbase_sp] = stmt.stmt_base;
+                stmt.pbase_sp = stmt.pbase_sp + 1;
+                stmt.stmt_base = stmt.pstmt_sp;
+                ops.expect_operand = 1;
+            }
+        }
+        0
+    } else {
+        if branch.if_sp > 0 {
+            if branch.if_phase[branch.if_sp - 1] == 2 {
+                ops.drain_reason = 3;
+            } else {
+                ops.drain_reason = 4;
+            }
+        } else {
+            ops.drain_reason = 1;
+        }
+        ops.draining = 1;
+        if ops.expect_operand == 1 {
+            ops.expect_operand = 0;
+            Node::Unit() as Word
+        } else {
+            0
+        }
+    } } }
+}
+
+// The `if` without `else`: when the then branch has folded (phase 3) and no `else`
+// follows, synthesize an empty else block whose Unit tail the fold wraps into the If, and
+// push the triggering token back for reprocessing.
+fn synth_empty_else() -> Word {
+    ps.cursor = ps.cursor - 1;
+    branch.if_phase[branch.if_sp - 1] = 5;
+    branch.if_stmt_start[branch.if_sp - 1] = stmt.stmt_count;
+    stmt.pbase[stmt.pbase_sp] = stmt.stmt_base;
+    stmt.pbase_sp = stmt.pbase_sp + 1;
+    stmt.stmt_base = stmt.pstmt_sp;
+    ops.drain_reason = 4;
     ops.draining = 1;
-    if ops.expect_operand == 1 {
-        ops.expect_operand = 0;
-        Node::Unit() as Word
+    ops.expect_operand = 0;
+    Node::Unit() as Word
+}
+
+// A token that starts a statement (so a completed block-form operand before it was a
+// statement, not the block tail).
+fn is_stmt_start(k: Word) -> Word {
+    if k == Tok::Ident() as Word orelse k == Tok::IntLit() as Word orelse k == Tok::If() as Word orelse k == Tok::Let() as Word {
+        1
     } else {
         0
     }
 }
 
-// The expression-position token dispatch.
+// The expression-position token dispatch: the conditional tokens route to step_if.
 fn step_normal(k: Word, v: Word) -> Word {
-    if k == Tok::RBrace() as Word {
-        step_close_body()
+    if k == Tok::LBrace() as Word orelse k == Tok::RBrace() as Word orelse k == Tok::If() as Word orelse k == Tok::Else() as Word {
+        step_if(k)
     } else {
     if k == Tok::IntLit() as Word {
         ops.expect_operand = 0;
@@ -335,9 +411,9 @@ fn step_normal(k: Word, v: Word) -> Word {
     } } } } }
 }
 
-// Dispatch a body token by parse phase: a `let` binding's name or `=`, else an
-// expression token.
-fn step_body_dispatch(k: Word, v: Word) -> Word {
+// The normal parse-phase dispatch: a `let` binding's name or `=`, else an expression
+// token.
+fn step_dispatch_normal(k: Word, v: Word) -> Word {
     if stmt.let_phase == 2 {
         if k == Tok::Eq() as Word {
             stmt.let_phase = 0;
@@ -359,9 +435,27 @@ fn step_body_dispatch(k: Word, v: Word) -> Word {
     } }
 }
 
-// Flush the expression's operators; emptied, a `;` (reason 0) commits the pending `let`
-// (claiming a frame slot and recording a LetIn statement), and a `}` (reason 1) begins
-// the fold over all statements.
+// Dispatch a body token: the else-less `if` synthesis and the block-form-statement commit
+// come first, then the normal phase dispatch.
+fn step_body_dispatch(k: Word, v: Word) -> Word {
+    if branch.if_sp > 0 andalso branch.if_phase[branch.if_sp - 1] == 3 andalso k != Tok::Else() as Word {
+        synth_empty_else()
+    } else {
+        if stmt.blockform == 1 {
+            stmt.blockform = 0;
+            if is_stmt_start(k) == 1 {
+                stmt.stmt_kind[stmt.stmt_count] = Node::ExprStmt() as Word;
+                stmt.stmt_arg[stmt.stmt_count] = 0;
+                stmt.stmt_count = stmt.stmt_count + 1;
+                ops.expect_operand = 1;
+            }
+        }
+        step_dispatch_normal(k, v)
+    }
+}
+
+// Flush the expression's operators; emptied, commit a statement (`;`), fold the block
+// (`}`), enter the then branch (a drained condition), or fold a branch (its `}`).
 fn step_draining() -> Word {
     if ops.opsp > 0 {
         ops.opsp = ops.opsp - 1;
@@ -369,30 +463,66 @@ fn step_draining() -> Word {
         emit_op(op)
     } else {
         if ops.drain_reason == 0 {
-            stmt.pstmt_sp = stmt.pstmt_sp - 1;
-            let slot = ps.pcount + stmt.slot_count;
-            stmt.slot_count = stmt.slot_count + 1;
-            stmt.stmt_kind[stmt.stmt_count] = Node::LetIn() as Word;
-            stmt.stmt_arg[stmt.stmt_count] = slot;
-            stmt.let_names[stmt.let_count] = stmt.pstmt_name[stmt.pstmt_sp];
-            stmt.scope_slot[stmt.let_count] = slot;
-            stmt.let_count = stmt.let_count + 1;
-            stmt.stmt_count = stmt.stmt_count + 1;
+            if stmt.pstmt_sp > stmt.stmt_base {
+                stmt.pstmt_sp = stmt.pstmt_sp - 1;
+                let slot = ps.pcount + stmt.slot_count;
+                stmt.slot_count = stmt.slot_count + 1;
+                stmt.stmt_kind[stmt.stmt_count] = Node::LetIn() as Word;
+                stmt.stmt_arg[stmt.stmt_count] = slot;
+                stmt.let_names[stmt.let_count] = stmt.pstmt_name[stmt.pstmt_sp];
+                stmt.scope_slot[stmt.let_count] = slot;
+                stmt.let_count = stmt.let_count + 1;
+                stmt.stmt_count = stmt.stmt_count + 1;
+                ops.draining = 0;
+                ops.expect_operand = 1;
+                0
+            } else {
+                stmt.stmt_kind[stmt.stmt_count] = Node::ExprStmt() as Word;
+                stmt.stmt_arg[stmt.stmt_count] = 0;
+                stmt.stmt_count = stmt.stmt_count + 1;
+                ops.draining = 0;
+                ops.expect_operand = 1;
+                0
+            }
+        } else {
+        if ops.drain_reason == 1 {
+            ops.draining = 0;
+            stmt.folding = 1;
+            stmt.fold_i = stmt.stmt_count;
+            stmt.fold_start = 0;
+            stmt.fold_cont = 0;
+            0
+        } else {
+        if ops.drain_reason == 2 {
+            branch.if_phase[branch.if_sp - 1] = 2;
+            branch.if_stmt_start[branch.if_sp - 1] = stmt.stmt_count;
+            stmt.pbase[stmt.pbase_sp] = stmt.stmt_base;
+            stmt.pbase_sp = stmt.pbase_sp + 1;
+            stmt.stmt_base = stmt.pstmt_sp;
             ops.draining = 0;
             ops.expect_operand = 1;
+            0
+        } else {
+        if ops.drain_reason == 3 {
+            ops.draining = 0;
+            stmt.folding = 1;
+            stmt.fold_i = stmt.stmt_count;
+            stmt.fold_start = branch.if_stmt_start[branch.if_sp - 1];
+            stmt.fold_cont = 1;
             0
         } else {
             ops.draining = 0;
             stmt.folding = 1;
             stmt.fold_i = stmt.stmt_count;
-            stmt.fold_start = 0;
+            stmt.fold_start = branch.if_stmt_start[branch.if_sp - 1];
+            stmt.fold_cont = 2;
             0
-        }
+        } } } }
     }
 }
 
-// Wrap the block's tail in each statement node (LetIn), last to first, then emit the
-// forest's terminal Done and return control to the header for the next declaration.
+// Wrap the block's tail in each statement node, last to first, then do the fold
+// continuation: the body's Done, a then branch's phase advance, or an else branch's If.
 fn step_folding() -> Word {
     if stmt.fold_i > stmt.fold_start {
         stmt.fold_i = stmt.fold_i - 1;
@@ -400,9 +530,24 @@ fn step_folding() -> Word {
     } else {
         stmt.stmt_count = stmt.fold_start;
         stmt.folding = 0;
-        ps.in_body = 0;
-        ps.pend_end = 1;
-        Node::Done() as Word
+        if stmt.fold_cont > 0 {
+            stmt.pbase_sp = stmt.pbase_sp - 1;
+            stmt.stmt_base = stmt.pbase[stmt.pbase_sp];
+        }
+        if stmt.fold_cont == 0 {
+            ps.in_body = 0;
+            ps.pend_end = 1;
+            Node::Done() as Word
+        } else {
+        if stmt.fold_cont == 1 {
+            branch.if_phase[branch.if_sp - 1] = 3;
+            0
+        } else {
+            branch.if_sp = branch.if_sp - 1;
+            ops.expect_operand = 0;
+            stmt.blockform = 1;
+            Node::If() as Word
+        } }
     }
 }
 
@@ -446,7 +591,11 @@ fn arm_body() -> Word {
     stmt.slot_count = 0;
     stmt.stmt_count = 0;
     stmt.pstmt_sp = 0;
+    stmt.stmt_base = 0;
+    stmt.pbase_sp = 0;
     stmt.folding = 0;
+    stmt.blockform = 0;
+    branch.if_sp = 0;
     16
 }
 
