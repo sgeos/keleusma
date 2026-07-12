@@ -3032,6 +3032,43 @@ pub fn compile_with_options(
     target.validate_against_runtime()?;
     crate::target::validate_program_for_target(program, target)?;
     let mut owned = program.clone();
+
+    // R28 (revised): at most one *shared* data block per program, because the shared
+    // segment is mirrored to the host as a single coherent context type T
+    // (`marshal_shared_into::<T>` / `unmarshal_shared::<T>`). Private and const data
+    // cross no host boundary — private lives in the arena's persistent region and const
+    // inlines to constant loads with no runtime slot — so a program may declare any
+    // number of named private or const blocks, organising its state and constants into
+    // cohesive groups. The block-name-qualified layout (`data_fields` keyed by block
+    // name) and field resolution (`resolve_data_field(name, field)`) already keep
+    // multiple blocks distinct; the only new requirement is that two blocks may not
+    // share a name, since that name is the layout key. This runs before the type checker
+    // so a duplicate name surfaces its own clear diagnostic rather than a downstream
+    // "no such field" error from the block that the name-keyed tables silently dropped.
+    let mut seen_names: Vec<&str> = Vec::new();
+    let mut seen_shared_span: Option<crate::token::Span> = None;
+    for decl in &owned.data_decls {
+        if seen_names.contains(&decl.name.as_str()) {
+            return Err(CompileError {
+                message: format!("duplicate data block name `{}`", decl.name),
+                span: decl.span,
+            });
+        }
+        seen_names.push(decl.name.as_str());
+        if decl.visibility == DataVisibility::Shared {
+            if seen_shared_span.is_some() {
+                return Err(CompileError {
+                    message: format!(
+                        "at most one shared data block per program (R28); found duplicate `{}`. The shared segment is a single host-facing context type; use one block, or make the extra state private.",
+                        decl.name
+                    ),
+                    span: decl.span,
+                });
+            }
+            seen_shared_span = Some(decl.span);
+        }
+    }
+
     // Resolve the surface form `Fixed` (no explicit `<N>`) to the
     // target's Q-format default before the type checker observes
     // the program. The compiler downstream reads the resolved
@@ -3116,37 +3153,6 @@ pub fn compile_with_options(
                 // The VM must resolve them at runtime. For now, skip.
             }
         }
-    }
-
-    // R28: at most one data block per visibility class. The
-    // original rule said "at most one data block per program";
-    // with shared, private, and const visibility introduced in
-    // V0.2.x a program may declare one of each. Two blocks of
-    // the same visibility remain rejected.
-    let mut seen_shared_span: Option<crate::token::Span> = None;
-    let mut seen_private_span: Option<crate::token::Span> = None;
-    let mut seen_const_span: Option<crate::token::Span> = None;
-    for decl in &program.data_decls {
-        let dup_slot = match decl.visibility {
-            DataVisibility::Shared => &mut seen_shared_span,
-            DataVisibility::Private => &mut seen_private_span,
-            DataVisibility::Const => &mut seen_const_span,
-        };
-        if dup_slot.is_some() {
-            return Err(CompileError {
-                message: format!(
-                    "at most one {} data block per program (R28); found duplicate `{}`",
-                    match decl.visibility {
-                        DataVisibility::Shared => "shared",
-                        DataVisibility::Private => "private",
-                        DataVisibility::Const => "const",
-                    },
-                    decl.name
-                ),
-                span: decl.span,
-            });
-        }
-        *dup_slot = Some(decl.span);
     }
 
     // Const data validation. Every const data field must carry a
@@ -12743,24 +12749,51 @@ mod tests {
     }
 
     #[test]
-    fn multiple_data_blocks_same_visibility_rejected() {
-        // Two shared blocks remain rejected under R28. One shared
-        // plus one private would be accepted; see
-        // `mixed_data_partitions_correctly` in vm.rs tests.
+    fn two_shared_data_blocks_rejected() {
+        // Two shared blocks remain rejected under R28, because the shared segment is a
+        // single host-facing context type. One shared plus any number of private/const
+        // blocks is accepted; see `mixed_data_partitions_correctly` and
+        // `multiple_private_and_const_data_blocks_run` in vm.rs tests.
         let src = "data ctx_a { x: Word }\n\
                    data ctx_b { y: Word }\n\
                    fn main() -> () { () }";
         let err = compile_str(src).unwrap_err();
-        assert!(err.message.contains("R28") || err.message.contains("one"));
+        assert!(err.message.contains("R28") || err.message.contains("shared"));
     }
 
     #[test]
-    fn two_private_data_blocks_rejected() {
+    fn multiple_private_data_blocks_accepted() {
+        // Private data crosses no host boundary, so several named private blocks are
+        // admitted (R28 relaxed). A private block must be written before read, so both
+        // are assigned before the sum.
         let src = "private data ctx_a { x: Word }\n\
                    private data ctx_b { y: Word }\n\
-                   fn main() -> () { () }";
+                   fn main() -> Word { ctx_a.x = 3; ctx_b.y = 4; ctx_a.x + ctx_b.y }";
+        assert!(compile_str(src).is_ok());
+    }
+
+    #[test]
+    fn multiple_const_data_blocks_accepted() {
+        // Const data inlines to constant loads with no runtime slot, so several named
+        // const blocks are admitted.
+        let src = "const data a { one: Word = 1 }\n\
+                   const data b { two: Word = 2 }\n\
+                   fn main() -> Word { a.one + b.two }";
+        assert!(compile_str(src).is_ok());
+    }
+
+    #[test]
+    fn duplicate_data_block_name_rejected() {
+        // Two blocks may not share a name, since the layout keys fields by block name.
+        let src = "const data d { x: Word = 1 }\n\
+                   private data d { y: Word }\n\
+                   fn main() -> Word { d.x }";
         let err = compile_str(src).unwrap_err();
-        assert!(err.message.contains("R28") || err.message.contains("private"));
+        assert!(
+            err.message.contains("duplicate data block name"),
+            "got: {}",
+            err.message
+        );
     }
 
     #[test]

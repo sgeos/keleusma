@@ -69,10 +69,11 @@
 //
 // Named wire constants. The op-word tags, encoding radices, and work-stack item
 // kinds that were bare integer literals throughout the handlers are now read from
-// the single `const data wire` block below (the language admits at most one const
-// data block per program, R28). Const-data fields inline to `Const` literals at
+// the `const data wire` block below. Const-data fields inline to `Const` literals at
 // compile time, so the emitted bytecode is byte-identical to before the rename;
-// the conformance suite confirms this. Readability only, no behavior change.
+// the conformance suite confirms this. Readability only, no behavior change. (R28
+// once limited a program to one const data block; it now admits any number of named
+// private and const blocks, so these could later split into cohesive groups.)
 //
 // Increment 27: statement-form expressions. A block statement that is a bare
 // expression (a call for effect, `push_emit(wire.endif);`, or a statement-form `if`) is an
@@ -129,8 +130,8 @@
 // The self-hosted compiler is a full-width host tool; declare its word floor.
 require word >= 32;
 
-// Named wire constants. The language admits at most one const data block per
-// program (R28), so the op-word tags and the encoding radices share one block.
+// Named wire constants. The op-word tags and the encoding radices share this one
+// `wire` block (R28 now admits several named const blocks, but one here is enough).
 // An op word is `tag + operand*wire.radix`; the tags match the wire table below
 // and the reference bytecode's opcodes. `radix` is the op-word radix; `item` the
 // work-item radix (`kind + payload*item`); `pack` the base for packing two
