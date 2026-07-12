@@ -1,13 +1,13 @@
-//! Body-expression parser (`compiler/kel/body.kel`), increment 21: a function body over
+//! Body-expression parser (`compiler/kel/body.kel`), increment 22: a function body over
 //! the full operator-precedence expression grammar, scalar and indexed data-field
 //! reads, `let` bindings, scalar and indexed data-field assignments, the bare expression
 //! statement `expr;`, the `if`/`else` conditional with nested statement-block branches,
 //! function calls, the `yield e` reentrant expression, the `match` expression over
-//! integer-literal arms and a trailing wildcard, the `Enum::Variant() as Word` cast
-//! folded to the variant's discriminant literal, the bounded
-//! `for v in start..end limit CAP { body }` loop, and a statement-only block whose
-//! implicit value is Unit — lowered to the abstract-syntax node forest codegen consumes,
-//! with `call_args`, `limit_parts`, and `match_parts` side arrays.
+//! integer-literal and unit enum-variant discriminant arms with a trailing wildcard, the
+//! `Enum::Variant() as Word` cast folded to the variant's discriminant literal, the
+//! bounded `for v in start..end limit CAP { body }` loop, and a statement-only block
+//! whose implicit value is Unit — lowered to the abstract-syntax node forest codegen
+//! consumes, with `call_args`, `limit_parts`, and `match_parts` side arrays.
 //!
 //! A throwaway adapter tokenises the program, feeds the function body's tokens, the
 //! parameter-name table, and the data-field layout (computed from the compiled
@@ -752,6 +752,38 @@ fn flatten(
                         nodes.push(Node {
                             kind: 1,
                             arg: *v,
+                            lhs: 0,
+                            rhs: 0,
+                        });
+                        let lit_node = (nodes.len() - 1) as i64;
+                        let res_node = flatten(
+                            &arm.expr,
+                            scope,
+                            nodes,
+                            data_slots,
+                            chunk_names,
+                            call_args,
+                            next_slot,
+                            limit_parts,
+                            match_parts,
+                            enum_table,
+                        );
+                        lit_arms.push((lit_node, res_node));
+                    }
+                    Pattern::Enum(enum_name, variant, sub_pats, _) if sub_pats.is_empty() => {
+                        // A unit enum-variant pattern over a Word scrutinee folds to the
+                        // variant's discriminant literal, the same arm an integer literal
+                        // would form (the discriminant match, mirroring the runtime).
+                        let disc = enum_table
+                            .iter()
+                            .find(|(e, v, _)| e == enum_name && v == variant)
+                            .map(|(_, _, d)| *d)
+                            .unwrap_or_else(|| {
+                                panic!("no discriminant for {enum_name}::{variant}")
+                            });
+                        nodes.push(Node {
+                            kind: 1,
+                            arg: disc,
                             lhs: 0,
                             rhs: 0,
                         });
@@ -2540,4 +2572,48 @@ fn an_enum_cast_names_a_token_comparison() {
     assert_eq!(cond.arg, 6); // Eq
     // The right operand is the folded discriminant 21.
     assert_eq!(nodes[cond.rhs as usize].arg, 21);
+}
+
+// A unit enum-variant pattern over a Word scrutinee is a discriminant match: the body
+// parser folds each pattern to the variant's discriminant, producing the same integer
+// MatchIn forest an integer-literal match would. The clean enum-dispatch idiom.
+#[test]
+fn a_discriminant_match_folds_variant_patterns_to_literals() {
+    let src = "enum Tok { Fn = 0, Ident = 1, Plus = 21 } \
+        fn f(k: Word) -> Word { match k { Tok::Ident() => 10, Tok::Plus() => 20, _ => 0 } }";
+    // Byte-identical to the equivalent integer match.
+    let int_src = "fn f(k: Word) -> Word { match k { 1 => 10, 21 => 20, _ => 0 } }";
+    assert_eq!(run_body(src), reference_body(src));
+    assert_eq!(run_body(src).0, run_body(int_src).0);
+    let (nodes, _c, _l, match_parts, root) = run_body(src);
+    let m = nodes[root as usize];
+    assert_eq!(m.kind, 22); // MatchIn
+    assert_eq!(m.rhs, 2); // two literal arms
+    // The folded discriminants 1 and 21 are the literal patterns.
+    assert_eq!(nodes[match_parts[2] as usize].arg, 1);
+    assert_eq!(nodes[match_parts[4] as usize].arg, 21);
+}
+
+// Enum-variant patterns and integer-literal patterns may mix in one discriminant match.
+#[test]
+fn a_discriminant_match_may_mix_variant_and_integer_patterns() {
+    let src = "enum Tok { Fn = 0, Ident = 1 } \
+        fn f(k: Word) -> Word { match k { Tok::Ident() => 1, 5 => 2, _ => 0 } }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _c, _l, match_parts, _root) = run_body(src);
+    assert_eq!(nodes[match_parts[2] as usize].arg, 1); // Tok::Ident folded
+    assert_eq!(nodes[match_parts[4] as usize].arg, 5); // integer literal
+}
+
+// A discriminant match on a host-fed Word data field, compiled and verified on the
+// current runtime: the dispatch idiom the self-hosted stages adopt for token kinds.
+#[test]
+fn a_discriminant_match_on_data_compiles() {
+    let src = "enum Tok { Fn = 0, Ident = 1, Plus = 21 } \
+        shared data s { k: Word } \
+        fn classify() -> Word { match s.k { Tok::Ident() => 1, Tok::Plus() => 2, _ => 0 } }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _c, _l, _m, root) = run_body(src);
+    assert_eq!(nodes[root as usize].kind, 22); // MatchIn
+    assert_eq!(nodes[nodes[root as usize].lhs as usize].kind, 11); // scrutinee DataRead
 }

@@ -1,15 +1,15 @@
 // compiler/kel/body.kel — the body-expression parser, a sub-component of Stage 2.
 //
-// Increment 21: a function body over the full operator-precedence expression grammar,
+// Increment 22: a function body over the full operator-precedence expression grammar,
 // scalar and indexed data-field reads, `let` bindings, scalar and indexed data-field
 // assignments, the bare expression statement `expr;`, the `if`/`else` conditional with
 // nested statement-block branches, function calls, the `yield e` reentrant expression,
-// the `match` expression over integer-literal arms and a trailing wildcard, the
-// `Enum::Variant() as Word` cast folded to the variant's discriminant literal, the
-// bounded `for v in start..end limit CAP { body }` loop, and a statement-only block
-// whose implicit value is Unit. Real Keleusma code that compiles and verifies on the
-// current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md
-// (roadmap Step 2).
+// the `match` expression over integer-literal and unit enum-variant discriminant arms
+// with a trailing wildcard, the `Enum::Variant() as Word` cast folded to the variant's
+// discriminant literal, the bounded `for v in start..end limit CAP { body }` loop, and
+// a statement-only block whose implicit value is Unit. Real Keleusma code that compiles
+// and verifies on the current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and
+// compiler/MILESTONES.md (roadmap Step 2).
 //
 // Model. Stage 2's declaration parser (parser.kel) reads a function's signature and
 // brace-matches its body. This companion loop reads that body's tokens and produces
@@ -324,6 +324,7 @@ private data bs {
     enum_phase: Word,
     enum_name: Word,
     enum_disc: Word,
+    mpat_phase: Word,
 }
 
 // The precedence of an operator code, tightest to loosest: unary (16 Neg, 17 Not) 9,
@@ -1171,6 +1172,10 @@ fn step_dispatch(k: Word, v: Word) -> Word {
             // The token after a `]` decides read versus indexed assignment.
             step_post_index(k)
         } else {
+        if bs.mpat_phase >= 1 {
+            // An open enum-variant match pattern (`Name::Variant()`) consumes its tokens.
+            step_mpat(k, v)
+        } else {
         if bs.match_sp > 0 andalso bs.da_phase == 0 {
             // A pending data-field read (da_phase nonzero) must flush before a match
             // boundary is claimed, so the scrutinee or arm-result DataRead lands on the
@@ -1184,6 +1189,7 @@ fn step_dispatch(k: Word, v: Word) -> Word {
             }
         } else {
             step_dispatch_normal(k, v)
+        }
         }
         }
     }
@@ -1274,10 +1280,27 @@ fn step_match(k: Word, v: Word) -> Word {
             bs.match_phase[sp] = 3;
             0
         } else {
+        if k == tok.ident {
+            // A unit enum-variant pattern `Name::Variant()` over a Word scrutinee is a
+            // discriminant match: fold it to the variant's discriminant literal, the
+            // same arm an integer literal would form. Recognise the enum name, then read
+            // the `::Variant()` in step_mpat.
+            bs.found_flag = 0;
+            for i in 0..src.enum_count limit 64 {
+                if src.edata[i] == v {
+                    bs.found_flag = 1;
+                }
+            }
+            if bs.found_flag == 1 {
+                bs.enum_name = v;
+                bs.mpat_phase = 1;
+            }
+            0
+        } else {
             // k == tok.rbrace: the arms end (a trailing comma preceded this `}`); build.
             bs.match_build = 1;
             0
-        } }
+        } } }
     } else {
     if mp == 3 {
         if k == tok.fatarrow {
@@ -1296,6 +1319,43 @@ fn step_match(k: Word, v: Word) -> Word {
             bs.draining = 1;
             0
         }
+    } } }
+}
+
+// The `::Variant()` of a unit enum-variant match pattern, folded to the variant's
+// discriminant literal. Phase 1 awaits `::`, phase 2 the variant (whose discriminant is
+// looked up in the host enum tables), phase 3 the `(`, and phase 4 the `)`, after which
+// the discriminant Literal node is emitted as the arm's pattern and the arm advances to
+// its `=>`, exactly as an integer-literal arm would.
+fn step_mpat(k: Word, v: Word) -> Word {
+    if bs.mpat_phase == 1 {
+        if k == tok.colcol {
+            bs.mpat_phase = 2;
+        }
+        0
+    } else {
+    if bs.mpat_phase == 2 {
+        if k == tok.ident {
+            bs.enum_disc = 0;
+            for i in 0..src.enum_count limit 64 {
+                if src.edata[i] == bs.enum_name andalso src.evar[i] == v {
+                    bs.enum_disc = src.edisc[i];
+                }
+            }
+            bs.mpat_phase = 3;
+        }
+        0
+    } else {
+    if bs.mpat_phase == 3 {
+        if k == tok.lparen {
+            bs.mpat_phase = 4;
+        }
+        0
+    } else {
+        bs.mpat_phase = 0;
+        bs.match_argcount[bs.match_sp - 1] = bs.match_argcount[bs.match_sp - 1] + 1;
+        bs.match_phase[bs.match_sp - 1] = 3;
+        1 + bs.enum_disc * 64
     } } }
 }
 
