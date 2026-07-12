@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The host per-slot API can seed a discriminant-only enum shared field.** A
+  discriminant-only enum occupies a single word holding its variant discriminant,
+  byte-identical to a `Word` slot, so `Vm::set_shared` now accepts a discriminant
+  integer for such a field, and the script matches it by variant. An enum-typed
+  shared array, a token stream keyed by an `enum TokenKind`, can therefore be filled
+  through the ordinary per-slot host API. Any other composite (a payload-carrying
+  enum, a struct, a tuple, or an array) still carries fields the per-slot scalar
+  write cannot express and is written from a script or seeded whole with
+  `marshal_shared_into`; a non-integer value for an enum slot is still rejected. No
+  wire-format or `BYTECODE_VERSION` change.
+
 - **`Enum::Variant() as Word` constant-folds for a known unit variant.** A cast of
   a literal no-payload variant constructor to `Word` now compiles to a single load
   of the variant's discriminant, with no construction and no chain of variant tests.

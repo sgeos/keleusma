@@ -2796,12 +2796,27 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         value: crate::bytecode::GenericValue<W, F>,
     ) -> Result<(), VmError> {
         self.check_host_shared_slot(buf, slot)?;
-        let (offset, kind, _len) = self.shared_layout_entry(slot);
+        let (offset, kind, len) = self.shared_layout_entry(slot);
         if kind & crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG != 0 {
-            return Err(VmError::NativeError(format!(
-                "shared slot {} is a composite; composite shared fields are written from the script, not the per-slot host API",
-                slot
-            )));
+            // A discriminant-only flat enum occupies a single word that holds the
+            // variant discriminant, byte-identical to a `Word` slot. The host may
+            // therefore seed such a field with the discriminant integer, so an
+            // enum-typed shared array (a token stream keyed by an `enum TokenKind`)
+            // can be filled through the ordinary per-slot API. Any other composite
+            // (a payload-carrying enum, a struct, a tuple, or an array) still carries
+            // fields the per-slot scalar write cannot express and must be written from
+            // a script or seeded whole with `marshal_shared_into`.
+            let composite_kind = crate::value_layout::CompositeKind::from_tag(
+                kind & !crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG,
+            );
+            let is_unit_enum = composite_kind == Some(crate::value_layout::CompositeKind::Enum)
+                && len == self.module_word_bytes();
+            if !(is_unit_enum && matches!(value, crate::bytecode::GenericValue::Int(_))) {
+                return Err(VmError::NativeError(format!(
+                    "shared slot {} is a composite; only a discriminant-only enum accepts a host discriminant write, larger composites are written from the script or with marshal_shared_into",
+                    slot
+                )));
+            }
         }
         value.write_scalar_le(
             buf,
@@ -10217,6 +10232,35 @@ mod tests {
             VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
             other => panic!("expected finished, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn host_writes_discriminant_only_enum_shared_field() {
+        // A discriminant-only enum is a single word holding its discriminant, so the
+        // host may seed an enum-typed shared field with the discriminant integer and the
+        // script matches it by variant. This lets an enum-keyed token stream be filled
+        // through the ordinary per-slot host API.
+        let src = "\
+            enum Tk { Aa = 1, Bb = 2, Cc = 21 }\n\
+            shared data d { sel: Tk }\n\
+            fn main() -> Word { match d.sel { Tk::Aa => 100, Tk::Bb => 200, Tk::Cc => 300, _ => 0 } }";
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        let module = compile(&program).expect("compile");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).unwrap();
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        // Seed the enum-typed slot with the raw discriminant 21 (Cc).
+        vm.set_shared(&mut shared, 0, Value::Int(21))
+            .expect("host may write a discriminant-only enum field");
+        match vm.call_with_shared(&mut shared, &[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(300)),
+            other => panic!("expected Finished(Int(300)), got {:?}", other),
+        }
+        // A non-integer value is still rejected for the enum slot.
+        assert!(
+            vm.set_shared(&mut shared, 0, Value::None).is_err(),
+            "only an integer discriminant may seed an enum slot"
+        );
     }
 
     #[test]
