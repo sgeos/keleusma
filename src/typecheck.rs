@@ -3500,6 +3500,33 @@ fn check_pattern_against_type(
             match scrutinee_ty {
                 Type::Enum(scrutinee_name, _) if scrutinee_name == enum_name => {}
                 Type::Var(_) => return Ok(()),
+                Type::Word => {
+                    // A unit enum-variant pattern against a `Word` scrutinee is a
+                    // discriminant match: it tests the word against the variant's
+                    // discriminant, a zero-cost switch on a tag. The variant must exist
+                    // and carry no payload, since a `Word` has no payload to bind. This
+                    // lets host-fed tagged data (a token stream keyed by an
+                    // `enum TokenKind`) dispatch by variant name without an enum-typed
+                    // value; the compiler folds the pattern to the discriminant literal.
+                    match ctx.enums.get(enum_name).and_then(|vs| vs.get(variant)) {
+                        Some(payload) if payload.is_empty() => return Ok(()),
+                        Some(_) => {
+                            return Err(TypeError::new(
+                                format!(
+                                    "variant `{}::{}` carries a payload and cannot match a `Word` scrutinee",
+                                    enum_name, variant
+                                ),
+                                *span,
+                            ));
+                        }
+                        None => {
+                            return Err(TypeError::new(
+                                format!("enum `{}` has no variant `{}`", enum_name, variant),
+                                *span,
+                            ));
+                        }
+                    }
+                }
                 _ => {
                     return Err(TypeError::new(
                         format!(
