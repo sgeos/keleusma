@@ -1,9 +1,10 @@
-//! Merged parser stage (`compiler/kel/parse.kel`), increment 6a: one streaming `loop` that
-//! parses a whole top-level function declaration (its header and full body over the
-//! expression, `let`, `if`/`else`, `yield`, `for .. limit`, and `match` grammar) and now
-//! also the `shared`/`private`/`const` `data` block declaration, in a single pass. The
-//! data block is consumed by the header; its field-table accumulation and the body
-//! `data.field` reads that use it land in increment 6b.
+//! Merged parser stage (`compiler/kel/parse.kel`), increment 6b: one streaming `loop` that
+//! parses a whole top-level function declaration (its header and full body) and the
+//! `data` block declaration, and now accumulates the field-layout table as it parses each
+//! block so a body scalar `data.field` read resolves to its flat-segment slot with no
+//! host-supplied table (the strategy-B name resolution). The resolved slot is validated
+//! against the compiler's `data_layout.slots`. Scalar assignment and indexed access are
+//! later increments.
 //!
 //! A throwaway adapter maps the reference tokenizer into the stage's unified `(kind,
 //! value)` token stream. The stage emits header records `dkind + val*64` (1/2/3 START of a
@@ -97,6 +98,7 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
             TokenKind::Orelse => (37, 0),
             TokenKind::Let => (38, 0),
             TokenKind::Semicolon => (39, 0),
+            TokenKind::Dot => (40, 0),
             TokenKind::If => (43, 0),
             TokenKind::Else => (44, 0),
             TokenKind::For => (45, 0),
@@ -137,6 +139,20 @@ fn compile_parse_stage() -> keleusma::bytecode::Module {
         .expect("spawn")
         .join()
         .expect("join")
+}
+
+/// The flat data-slot names in layout order (`data.field` for a scalar, `data.field[i]`
+/// per array element), from compiling the program; empty when it has no data blocks.
+fn data_slot_names(program: &keleusma::ast::Program) -> Vec<String> {
+    if program.data_decls.is_empty() {
+        return Vec::new();
+    }
+    compile(program)
+        .expect("compile program")
+        .data_layout
+        .as_ref()
+        .map(|dl| dl.slots.iter().map(|s| s.name.clone()).collect())
+        .unwrap_or_default()
 }
 
 fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
@@ -237,6 +253,7 @@ fn flatten(
     scope: &[(String, i64)],
     next_slot: &mut i64,
     forlim: &mut i64,
+    data_slots: &[String],
     out: &mut Vec<(i64, i64)>,
 ) {
     match e {
@@ -258,8 +275,8 @@ fn flatten(
         Expr::BinOp {
             op, left, right, ..
         } => {
-            flatten(left, scope, next_slot, forlim, out);
-            flatten(right, scope, next_slot, forlim, out);
+            flatten(left, scope, next_slot, forlim, data_slots, out);
+            flatten(right, scope, next_slot, forlim, data_slots, out);
             let (kind, code) = match op {
                 BinOp::Add => (3, 1),
                 BinOp::Mul => (3, 2),
@@ -282,7 +299,7 @@ fn flatten(
             out.push((kind, code));
         }
         Expr::UnaryOp { op, operand, .. } => {
-            flatten(operand, scope, next_slot, forlim, out);
+            flatten(operand, scope, next_slot, forlim, data_slots, out);
             let kind = match op {
                 UnaryOp::Not => 6,
                 UnaryOp::Neg => 10,
@@ -299,18 +316,34 @@ fn flatten(
             // Postorder: the condition, the then branch (a folded block), the else branch
             // (a folded block, or a synthesized Unit when absent), then the If node
             // (kind 4). Slots are monotonic across branches, so `next_slot` is threaded.
-            flatten(condition, scope, next_slot, forlim, out);
-            flatten_block(then_block, scope, next_slot, forlim, out);
+            flatten(condition, scope, next_slot, forlim, data_slots, out);
+            flatten_block(then_block, scope, next_slot, forlim, data_slots, out);
             match else_block {
-                Some(eb) => flatten_block(eb, scope, next_slot, forlim, out),
+                Some(eb) => flatten_block(eb, scope, next_slot, forlim, data_slots, out),
                 None => out.push((20, 0)), // synthesized empty else: a Unit
             }
             out.push((4, 0));
         }
         Expr::Yield { value, .. } => {
             // `yield e` is a unary YieldExpr (kind 24) over its operand.
-            flatten(value, scope, next_slot, forlim, out);
+            flatten(value, scope, next_slot, forlim, data_slots, out);
             out.push((24, 0));
+        }
+        Expr::FieldAccess { object, field, .. } => {
+            // A scalar `data.field` read is a DataRead (kind 11) over the field's element-0
+            // slot in the flat data layout. The stage resolves it from its own accumulated
+            // table; the reference resolves it from the compiler's `data_layout.slots`.
+            let data = match object.as_ref() {
+                Expr::Ident { name, .. } => name.as_str(),
+                other => panic!("a data read's object must be a block name, got {other:?}"),
+            };
+            let name = format!("{data}.{field}");
+            let slot = data_slots
+                .iter()
+                .position(|n| n == &name)
+                .unwrap_or_else(|| panic!("no data slot named `{name}`"))
+                as i64;
+            out.push((11, slot));
         }
         Expr::Match {
             scrutinee, arms, ..
@@ -319,7 +352,7 @@ fn flatten(
             // result, then the trailing wildcard's result, then a MatchBuild (kind 34)
             // packing the scrutinee temp slot and the literal-arm count as
             // `temp * 1024 + count`. The temp slot is reserved right after the scrutinee.
-            flatten(scrutinee, scope, next_slot, forlim, out);
+            flatten(scrutinee, scope, next_slot, forlim, data_slots, out);
             let temp = *next_slot;
             *next_slot += 1;
             let mut lit_count = 0i64;
@@ -331,11 +364,11 @@ fn flatten(
                 match &arm.pattern {
                     Pattern::Literal(Literal::Int(v), _) => {
                         out.push((1, *v));
-                        flatten(&arm.expr, scope, next_slot, forlim, out);
+                        flatten(&arm.expr, scope, next_slot, forlim, data_slots, out);
                         lit_count += 1;
                     }
                     Pattern::Wildcard(_) => {
-                        flatten(&arm.expr, scope, next_slot, forlim, out);
+                        flatten(&arm.expr, scope, next_slot, forlim, data_slots, out);
                     }
                     other => panic!("increment 5 handles integer and wildcard arms, got {other:?}"),
                 }
@@ -357,6 +390,7 @@ fn flatten_block(
     scope: &[(String, i64)],
     next_slot: &mut i64,
     forlim: &mut i64,
+    data_slots: &[String],
     out: &mut Vec<(i64, i64)>,
 ) {
     let mut local = scope.to_vec();
@@ -364,7 +398,7 @@ fn flatten_block(
     for st in &block.stmts {
         match st {
             Stmt::Let(l) => {
-                flatten(&l.value, &local, next_slot, forlim, out);
+                flatten(&l.value, &local, next_slot, forlim, data_slots, out);
                 let name = match &l.pattern {
                     Pattern::Variable(n, _) => n.clone(),
                     other => panic!("test uses simple let patterns only, got {other:?}"),
@@ -375,7 +409,7 @@ fn flatten_block(
                 stmt_nodes.push((5, slot)); // LetIn
             }
             Stmt::Expr(e) => {
-                flatten(e, &local, next_slot, forlim, out);
+                flatten(e, &local, next_slot, forlim, data_slots, out);
                 stmt_nodes.push((21, 0)); // ExprStmt
             }
             Stmt::For(fs) if fs.limit.is_some() => {
@@ -395,10 +429,10 @@ fn flatten_block(
                     }) => *n,
                     other => panic!("the stage requires a literal `limit`, got {other:?}"),
                 };
-                flatten(low, &local, next_slot, forlim, out);
+                flatten(low, &local, next_slot, forlim, data_slots, out);
                 let vslot = *next_slot;
                 *next_slot += 1;
-                flatten(high, &local, next_slot, forlim, out);
+                flatten(high, &local, next_slot, forlim, data_slots, out);
                 let end_slot = *next_slot;
                 *next_slot += 1;
                 let ctr = *next_slot;
@@ -409,7 +443,7 @@ fn flatten_block(
                 *next_slot += 1;
                 let mut body_scope = local.clone();
                 body_scope.push((fs.var.clone(), vslot));
-                flatten_block(&fs.body, &body_scope, next_slot, forlim, out);
+                flatten_block(&fs.body, &body_scope, next_slot, forlim, data_slots, out);
                 out.push((1, cap));
                 out.push((1, 0));
                 out.push((1, 1));
@@ -429,7 +463,7 @@ fn flatten_block(
         }
     }
     match &block.tail_expr {
-        Some(tail) => flatten(tail, &local, next_slot, forlim, out),
+        Some(tail) => flatten(tail, &local, next_slot, forlim, data_slots, out),
         None => out.push((20, 0)), // statement-only block: implicit Unit
     }
     for (kind, arg) in stmt_nodes.iter().rev() {
@@ -447,6 +481,7 @@ fn reference(src: &str, names: &[String]) -> Parsed {
             .unwrap_or_else(|| panic!("name {s} not interned")) as i64
     };
     let program = parse(&tokenize(src).expect("lex")).expect("parse");
+    let data_slots = data_slot_names(&program);
     let mut funcs = Vec::new();
     for f in &program.functions {
         let cat = match f.category {
@@ -477,6 +512,7 @@ fn reference(src: &str, names: &[String]) -> Parsed {
             &param_scope,
             &mut next_slot,
             &mut forlim,
+            &data_slots,
             &mut body,
         );
         funcs.push((cat, id(&f.name), params, body));
@@ -804,7 +840,7 @@ fn a_data_block_before_a_function_parses() {
 // data block whose initializers are skipped.
 #[test]
 fn functions_interleave_with_data_blocks() {
-    let src = "private data ps { xs: [Word; 4], n: Word } \
+    let src = "shared data ps { xs: [Word; 4], n: Word } \
         fn f(a: Word) -> Word { a } \
         const data k { radix: Word = 64, pack: Word = 65536 } \
         fn g(b: Word) -> Word { b }";
@@ -812,4 +848,39 @@ fn functions_interleave_with_data_blocks() {
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
     assert_eq!(got.funcs.len(), 2);
+}
+
+// A scalar `data.field` read resolves to its element-0 slot, accumulated by the header
+// and validated against the compiler's flat data layout.
+#[test]
+fn a_scalar_data_read_resolves_its_slot() {
+    let src = "shared data d { a: Word, b: Word } fn f() -> Word { d.b }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    // d.b is the second field, slot 1.
+    assert_eq!(got.funcs[0].3, vec![(11, 1)]);
+}
+
+// A data read composes with the operator grammar and preceding array-field widths: the
+// base counter is a prefix-sum over field slot counts.
+#[test]
+fn data_reads_account_for_array_widths() {
+    let src = "shared data d { xs: [Word; 3], n: Word } fn f(p: Word) -> Word { d.n + p }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    // d.xs occupies slots 0..2, so d.n is slot 3; then p (slot 0), Add.
+    assert_eq!(got.funcs[0].3, vec![(11, 3), (2, 0), (3, 1)]);
+}
+
+// A const data block carries no runtime slots, so it does not advance the base counter;
+// a following shared field starts where the shared layout left off.
+#[test]
+fn const_blocks_do_not_consume_slots() {
+    let src = "const data k { z: Word = 9 } shared data d { a: Word } fn f() -> Word { d.a }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    assert_eq!(got.funcs[0].3, vec![(11, 0)]);
 }

@@ -63,6 +63,7 @@ enum Tok {
     Orelse = 37,
     Let = 38,
     Semi = 39,
+    Dot = 40,
     If = 43,
     Else = 44,
     For = 45,
@@ -83,6 +84,7 @@ enum Node {
     If = 4,
     LetIn = 5,
     Not = 6,
+    DataRead = 11,
     Andalso = 8,
     Orelse = 9,
     Neg = 10,
@@ -228,6 +230,36 @@ private data mat {
     match_build: Word,
 }
 
+// The data-field layout table, accumulated by the header as each `data` block is parsed
+// (strategy B): `fdata`/`ffield` are the interned block and field names, `fbase` the
+// field's element-0 slot in the flat data segment, and `flen` its slot count (1 for a
+// scalar, N for an array). `base_ctr` is the running slot counter across all non-const
+// blocks in declaration order; const blocks carry no runtime slots and are skipped. The
+// `cur_*`/`has_field` fields hold the field under construction until its length is known
+// (a scalar at its type, an array at its ASIZE), committed at the next field or the `}`.
+private data fields {
+    fdata: [Word; 64],
+    ffield: [Word; 64],
+    fbase: [Word; 64],
+    flen: [Word; 64],
+    field_count: Word,
+    base_ctr: Word,
+    cur_block: Word,
+    cur_field: Word,
+    cur_len: Word,
+    has_field: Word,
+}
+
+// A `data.field` scalar read in the body: `da_phase` awaits the `.` (1) then the field
+// name (2) then the token after the field (3); `da_data` is the block name, `da_base`/
+// `da_len` the resolved field slot and length.
+private data da {
+    da_phase: Word,
+    da_data: Word,
+    da_base: Word,
+    da_len: Word,
+}
+
 // Resolve an identifier to its frame slot: the `let` bindings first (most recent wins),
 // then the parameters.
 fn step_local(v: Word) -> Word {
@@ -248,6 +280,51 @@ fn step_local(v: Word) -> Word {
     }
     ops.expect_operand = 0;
     Node::Local() as Word + ps.found * 64
+}
+
+// An identifier in operand position: a data-block name opens a `data.field` read; any
+// other identifier is a Local (a `let` binding or a parameter).
+fn step_ident(v: Word) -> Word {
+    ps.found_flag = 0;
+    for i in 0..fields.field_count limit 64 {
+        if fields.fdata[i] == v {
+            ps.found_flag = 1;
+        }
+    }
+    if ps.found_flag == 1 {
+        da.da_data = v;
+        da.da_phase = 1;
+        0
+    } else {
+        step_local(v)
+    }
+}
+
+// The data-field name: resolve `da_data.field` to its element-0 slot and length in the
+// accumulated table, then await the token after the field.
+fn step_dafield(k: Word, v: Word) -> Word {
+    if k == 1 {
+        da.da_base = 0;
+        da.da_len = 1;
+        for i in 0..fields.field_count limit 64 {
+            if fields.fdata[i] == da.da_data andalso fields.ffield[i] == v {
+                da.da_base = fields.fbase[i];
+                da.da_len = fields.flen[i];
+            }
+        }
+        da.da_phase = 3;
+    }
+    0
+}
+
+// The token after a data field: a scalar read this increment. Emit a DataRead over the
+// field's element-0 slot and push the token back for reinterpretation (an assignment `=`
+// and an indexed `[` are later increments).
+fn step_daindex() -> Word {
+    ps.cursor = ps.cursor - 1;
+    da.da_phase = 0;
+    ops.expect_operand = 0;
+    Node::DataRead() as Word + da.da_base * 64
 }
 
 fn prec_of(op: Word) -> Word {
@@ -651,7 +728,7 @@ fn step_normal(k: Word, v: Word) -> Word {
         Node::Literal() as Word + v * 64
     } else {
     if k == Tok::Ident() as Word {
-        step_local(v)
+        step_ident(v)
     } else {
     if k == Tok::LParen() as Word {
         ops.opstack[ops.opsp] = OpCode::Paren() as Word;
@@ -687,11 +764,23 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         }
         0
     } else {
+    if da.da_phase == 1 {
+        if k == Tok::Dot() as Word {
+            da.da_phase = 2;
+        }
+        0
+    } else {
+    if da.da_phase == 2 {
+        step_dafield(k, v)
+    } else {
+    if da.da_phase == 3 {
+        step_daindex()
+    } else {
     if forst.for_phase >= 1 andalso forst.for_phase <= 6 {
         step_forheader(k, v)
     } else {
         step_normal(k, v)
-    } } }
+    } } } } } }
 }
 
 // Dispatch a body token: the else-less `if` synthesis and the block-form-statement commit
@@ -938,6 +1027,7 @@ fn arm_body() -> Word {
     forst.forlimit_count = 0;
     mat.match_sp = 0;
     mat.match_build = 0;
+    da.da_phase = 0;
     16
 }
 
@@ -1019,6 +1109,8 @@ fn header_data(k: Word, v: Word) -> Word {
             ps.arr = 0;
             ps.init = 0;
             ps.idepth = 0;
+            fields.cur_block = v;
+            fields.has_field = 0;
             ps.mode = 6;
             9 + (v * 4 + ps.dvis) * 64
         } else {
@@ -1075,8 +1167,26 @@ fn header_field_skip(k: Word) -> Word {
     } } } }
 }
 
+// Record the pending field's layout in the accumulated table, unless there is no pending
+// field or it belongs to a const block (whose fields inline to their value and carry no
+// runtime slot). The element-0 slot is the running counter; the counter then advances by
+// the field's slot count.
+fn commit_field() -> Word {
+    if fields.has_field == 1 andalso ps.dvis != 2 {
+        fields.fdata[fields.field_count] = fields.cur_block;
+        fields.ffield[fields.field_count] = fields.cur_field;
+        fields.fbase[fields.field_count] = fields.base_ctr;
+        fields.flen[fields.field_count] = fields.cur_len;
+        fields.field_count = fields.field_count + 1;
+        fields.base_ctr = fields.base_ctr + fields.cur_len;
+    }
+    0
+}
+
 // The field list: a PARAM per field name, a PTYPE per type (with an ASIZE for an array
-// field), a const `=` opening an initializer skip, the closing `}` ending the block.
+// field), a const `=` opening an initializer skip, the closing `}` ending the block. Each
+// field name commits the previous field to the layout table and opens a new one (default
+// length 1); an ASIZE sets its length; the `}` commits the last field.
 fn header_field(k: Word, v: Word) -> Word {
     if k == 1 {
         if ps.arr == 1 {
@@ -1084,6 +1194,10 @@ fn header_field(k: Word, v: Word) -> Word {
             6 + v * 64
         } else {
         if ps.pname == 1 {
+            commit_field();
+            fields.cur_field = v;
+            fields.cur_len = 1;
+            fields.has_field = 1;
             ps.pname = 0;
             4 + v * 64
         } else {
@@ -1105,6 +1219,7 @@ fn header_field(k: Word, v: Word) -> Word {
     if k == 12 {
         if ps.arr == 2 {
             ps.arr = 0;
+            fields.cur_len = v;
             8 + v * 64
         } else {
             0
@@ -1124,6 +1239,8 @@ fn header_field(k: Word, v: Word) -> Word {
         0
     } else {
     if k == 3 {
+        commit_field();
+        fields.has_field = 0;
         ps.mode = 0;
         5
     } else {
