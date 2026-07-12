@@ -2731,3 +2731,88 @@ fn parse_into_codegen_multihead_matches_the_reference() {
         "emit",
     );
 }
+
+/// Self-host-compile a whole program: drive the pipeline over every function, reconstruct
+/// each into its codegen Body (grouping same-named heads into one multihead), run
+/// codegen.kel, and splice the self-hosted ops, constant pool, and local_count into the
+/// reference module chunk of that name. Native chunks (absent from the source) keep the
+/// reference's ops. The result is a runnable module whose every source-defined chunk was
+/// emitted by the self-hosted pipeline.
+fn self_host_compile(src: &str) -> Module {
+    let (fns, names) = parse_functions(src);
+    let mut module = compile_src(src);
+    let mut i = 0;
+    while i < fns.len() {
+        let name = names[fns[i].name as usize].clone();
+        // Group consecutive same-named heads (a multiheaded function is one chunk).
+        let mut group: Vec<&ParsedFn> = vec![&fns[i]];
+        let mut j = i + 1;
+        while j < fns.len() && names[fns[j].name as usize] == name {
+            group.push(&fns[j]);
+            j += 1;
+        }
+        i = j;
+        let pc = group[0].params;
+        // A yield head compiles as a multihead chunk; a fn or loop as a single body.
+        let body = if group[0].cat == 2 {
+            build_multihead_bridge(&group, pc)
+        } else {
+            let category = if group[0].cat == 3 { 2 } else { 0 };
+            reconstruct_body(&group[0].body, category)
+        };
+        let (ops, pool, lc) = run_codegen(&body, pc);
+        let idx = module
+            .chunks
+            .iter()
+            .position(|c| c.name == name)
+            .unwrap_or_else(|| panic!("no chunk named `{name}`"));
+        module.chunks[idx].ops = ops;
+        module.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        module.chunks[idx].local_count = lc as u16;
+    }
+    module
+}
+
+// The bootstrap's first increment: a whole multi-declaration program self-compiled. Every
+// source-defined chunk -- a plain `fn`, a multiheaded `yield`, and a `loop` -- is emitted
+// by the self-hosted pipeline (lexer.kel, parse.kel, the forest reconstruction, and
+// codegen.kel), assembled into one module. Every chunk's ops, constant pool, and
+// local_count must be byte-identical to the Rust-hosted compiler's, and the assembled
+// module must run correctly (its `loop main` calling the self-hosted `clamp`).
+#[test]
+fn self_host_compiles_a_whole_program_byte_identically() {
+    let src = "shared data st { pos: Word, len: Word } \
+        fn clamp(x: Word) -> Word { if x > 8 { 8 } else { x } } \
+        yield emit(r: Word) -> Word when st.pos < st.len { yield st.pos } \
+        yield emit(r: Word) -> Word { yield 0 } \
+        loop main(r: Word) -> Word { yield clamp(r) }";
+    let module = self_host_compile(src);
+    let reference = compile_src(src);
+
+    assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");
+    for (m, r) in module.chunks.iter().zip(reference.chunks.iter()) {
+        assert_eq!(m.name, r.name, "chunk order");
+        assert_eq!(m.ops, r.ops, "ops for chunk `{}`", r.name);
+        assert_eq!(m.constants, r.constants, "pool for chunk `{}`", r.name);
+        assert_eq!(
+            m.local_count, r.local_count,
+            "local_count for chunk `{}`",
+            r.name
+        );
+    }
+
+    // The self-hosted module runs: `loop main` yields clamp(r). The module has a shared
+    // data block, so it is driven through call_with_shared with a zeroed buffer.
+    let need = required_persistent_capacity_for(&module);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(module, &arena).expect("verify self-hosted module");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    match vm
+        .call_with_shared(&mut shared, &[Value::Int(10)])
+        .expect("call")
+    {
+        VmState::Yielded(Value::Int(n)) => assert_eq!(n, 8, "clamp(10) = 8"),
+        other => panic!("unexpected result: {other:?}"),
+    }
+}
