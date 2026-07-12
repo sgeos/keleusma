@@ -3701,3 +3701,202 @@ fn assembled_data_slots_match_the_reference() {
         }
     }
 }
+
+/// Assemble the per-shared-slot byte layout (offset, kind tag, len) from parse.kel's
+/// data-block records. The shared segment is the single shared block's fields expanded
+/// to one entry per element at consecutive byte offsets; the stage data fields are all
+/// `Word` (ScalarKind::Int, tag 3, eight bytes at the 64-bit reference width) or `Byte`
+/// (tag 2, one byte), and each is a scalar (len 0).
+fn assemble_shared_layout(
+    data_records: &[(i64, i64)],
+    names: &[String],
+) -> Vec<keleusma::bytecode::SharedSlotLayout> {
+    use keleusma::bytecode::SharedSlotLayout;
+    struct Blk {
+        vis: i64,
+        fields: Vec<(i64, i64)>, // (type name id, element count)
+    }
+    let mut blocks: Vec<Blk> = Vec::new();
+    for &(code, val) in data_records {
+        match code {
+            9 => blocks.push(Blk {
+                vis: val % 4,
+                fields: Vec::new(),
+            }),
+            4 => blocks.last_mut().unwrap().fields.push((0, 1)),
+            6 => blocks.last_mut().unwrap().fields.last_mut().unwrap().0 = val,
+            8 => blocks.last_mut().unwrap().fields.last_mut().unwrap().1 = val,
+            _ => {}
+        }
+    }
+    let scalar = |type_id: i64| -> (u8, u32) {
+        match names[type_id as usize].as_str() {
+            "Word" => (3, 8),
+            "Byte" => (2, 1),
+            other => panic!("unhandled shared field type `{other}`"),
+        }
+    };
+    let mut layout = Vec::new();
+    let mut offset: u32 = 0;
+    for b in blocks.iter().filter(|b| b.vis == 0) {
+        for &(tid, count) in &b.fields {
+            let (tag, size) = scalar(tid);
+            for _ in 0..count {
+                layout.push(SharedSlotLayout {
+                    offset,
+                    kind: tag,
+                    len: 0,
+                });
+                offset += size;
+            }
+        }
+    }
+    layout
+}
+
+// The per-shared-slot byte layout the driver assembles from parse.kel's records equals
+// the reference compiler's, offset/kind/len for every element slot, for all four stage
+// sources (including lexer.kel's 73728-byte buffer whose later fields sit past 64 KB).
+#[test]
+fn assembled_shared_layout_matches_the_reference() {
+    let cases = [
+        "compiler/kel/lexer.kel",
+        "compiler/kel/reconstruct.kel",
+        "compiler/kel/codegen.kel",
+        "compiler/kel/parse.kel",
+    ];
+    for path in cases {
+        let src = std::fs::read_to_string(path).expect("read stage");
+        let (_fns, names, data_records) = parse_functions(&src);
+        let layout = assemble_shared_layout(&data_records, &names);
+        let reference = compile_src(&src);
+        let ref_layout = &reference
+            .data_layout
+            .as_ref()
+            .expect("data layout")
+            .shared_layout;
+        assert_eq!(
+            layout.len(),
+            ref_layout.len(),
+            "shared_layout len for {path}"
+        );
+        for (i, (a, b)) in layout.iter().zip(ref_layout.iter()).enumerate() {
+            assert_eq!(
+                (a.offset, a.kind, a.len),
+                (b.offset, b.kind, b.len),
+                "shared_layout entry {i} for {path}"
+            );
+        }
+    }
+}
+
+/// Assemble the per-private-slot load-time initial values from parse.kel's records:
+/// one entry per private slot (arrays expanded), the type's zero -- `Int(0)` for a
+/// `Word` slot, `Byte(0)` for a `Byte` slot. The stage private fields carry no
+/// `= literal` initializer, so every entry is a zero.
+fn assemble_private_init(
+    data_records: &[(i64, i64)],
+    names: &[String],
+) -> Vec<keleusma::bytecode::ConstValue> {
+    use keleusma::bytecode::ConstValue;
+    struct Blk {
+        vis: i64,
+        fields: Vec<(i64, i64)>, // (type name id, element count)
+    }
+    let mut blocks: Vec<Blk> = Vec::new();
+    for &(code, val) in data_records {
+        match code {
+            9 => blocks.push(Blk {
+                vis: val % 4,
+                fields: Vec::new(),
+            }),
+            4 => blocks.last_mut().unwrap().fields.push((0, 1)),
+            6 => blocks.last_mut().unwrap().fields.last_mut().unwrap().0 = val,
+            8 => blocks.last_mut().unwrap().fields.last_mut().unwrap().1 = val,
+            _ => {}
+        }
+    }
+    let mut init = Vec::new();
+    for b in blocks.iter().filter(|b| b.vis == 1) {
+        for &(tid, count) in &b.fields {
+            let zero = match names[tid as usize].as_str() {
+                "Word" => ConstValue::Int(0),
+                "Byte" => ConstValue::Byte(0),
+                other => panic!("unhandled private field type `{other}`"),
+            };
+            for _ in 0..count {
+                init.push(zero.clone());
+            }
+        }
+    }
+    init
+}
+
+/// Assemble a whole `DataLayout` from parse.kel's data-block records. The stages have
+/// no private composite fields, so `private_composite_layout` is empty.
+fn assemble_data_layout(
+    data_records: &[(i64, i64)],
+    names: &[String],
+) -> keleusma::bytecode::DataLayout {
+    keleusma::bytecode::DataLayout {
+        slots: assemble_data_slots(data_records, names),
+        shared_layout: assemble_shared_layout(data_records, names),
+        private_composite_layout: Vec::new(),
+        private_init: assemble_private_init(data_records, names),
+    }
+}
+
+// The whole DataLayout the driver assembles from parse.kel's records -- slot table,
+// per-shared-slot byte layout, and per-private-slot initial values -- is byte-identical
+// to the reference compiler's for every stage source, so the driver no longer needs the
+// reference for the module's data layout.
+#[test]
+fn assembled_data_layout_matches_the_reference() {
+    let cases = [
+        "compiler/kel/lexer.kel",
+        "compiler/kel/reconstruct.kel",
+        "compiler/kel/codegen.kel",
+        "compiler/kel/parse.kel",
+    ];
+    for path in cases {
+        let src = std::fs::read_to_string(path).expect("read stage");
+        let (_fns, names, data_records) = parse_functions(&src);
+        let dl = assemble_data_layout(&data_records, &names);
+        let reference = compile_src(&src);
+        let ref_dl = reference.data_layout.as_ref().expect("data layout");
+        assert_eq!(dl.slots.len(), ref_dl.slots.len(), "slot count for {path}");
+        for (i, (a, b)) in dl.slots.iter().zip(ref_dl.slots.iter()).enumerate() {
+            assert_eq!(
+                (&a.name, a.visibility),
+                (&b.name, b.visibility),
+                "slot {i} for {path}"
+            );
+        }
+        assert_eq!(
+            dl.shared_layout.len(),
+            ref_dl.shared_layout.len(),
+            "shared_layout len for {path}"
+        );
+        for (i, (a, b)) in dl
+            .shared_layout
+            .iter()
+            .zip(ref_dl.shared_layout.iter())
+            .enumerate()
+        {
+            assert_eq!(
+                (a.offset, a.kind, a.len),
+                (b.offset, b.kind, b.len),
+                "shared_layout {i} for {path}"
+            );
+        }
+        assert_eq!(
+            dl.private_composite_layout.len(),
+            ref_dl.private_composite_layout.len(),
+            "private_composite_layout for {path}"
+        );
+        assert_eq!(
+            dl.private_init, ref_dl.private_init,
+            "private_init for {path}"
+        );
+    }
+}
