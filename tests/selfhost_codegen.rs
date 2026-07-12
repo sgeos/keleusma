@@ -2518,7 +2518,16 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>) {
             .map(|i| i as i64)
             .unwrap_or(-1)
     };
-    let chunks = br_chunks(&tokens);
+    // The chunk table must be in the module's actual chunk order so a resolved call index
+    // matches the assembled module. The Rust compiler orders chunks by name, not by
+    // declaration, so the table (host-supplied resolved-reference data) is taken from the
+    // reference module's chunk order rather than the token scan's declaration order.
+    let reference_chunks = compile_src(src);
+    let chunks: Vec<i64> = reference_chunks
+        .chunks
+        .iter()
+        .map(|c| id_of(&c.name))
+        .collect();
     let module = std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
         .spawn(|| compile_src(&std::fs::read_to_string("compiler/kel/parse.kel").expect("read")))
@@ -2773,22 +2782,11 @@ fn self_host_compile(src: &str) -> Module {
     module
 }
 
-// The bootstrap's first increment: a whole multi-declaration program self-compiled. Every
-// source-defined chunk -- a plain `fn`, a multiheaded `yield`, and a `loop` -- is emitted
-// by the self-hosted pipeline (lexer.kel, parse.kel, the forest reconstruction, and
-// codegen.kel), assembled into one module. Every chunk's ops, constant pool, and
-// local_count must be byte-identical to the Rust-hosted compiler's, and the assembled
-// module must run correctly (its `loop main` calling the self-hosted `clamp`).
-#[test]
-fn self_host_compiles_a_whole_program_byte_identically() {
-    let src = "shared data st { pos: Word, len: Word } \
-        fn clamp(x: Word) -> Word { if x > 8 { 8 } else { x } } \
-        yield emit(r: Word) -> Word when st.pos < st.len { yield st.pos } \
-        yield emit(r: Word) -> Word { yield 0 } \
-        loop main(r: Word) -> Word { yield clamp(r) }";
+/// Self-host-compile `src` and assert every chunk's ops, constant pool, and local_count
+/// are byte-identical to the Rust-hosted compiler's, returning the self-hosted module.
+fn assert_self_host_byte_identical(src: &str) -> Module {
     let module = self_host_compile(src);
     let reference = compile_src(src);
-
     assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");
     for (m, r) in module.chunks.iter().zip(reference.chunks.iter()) {
         assert_eq!(m.name, r.name, "chunk order");
@@ -2800,19 +2798,52 @@ fn self_host_compiles_a_whole_program_byte_identically() {
             r.name
         );
     }
+    module
+}
 
-    // The self-hosted module runs: `loop main` yields clamp(r). The module has a shared
-    // data block, so it is driven through call_with_shared with a zeroed buffer.
+/// Run a self-hosted module through `call_with_shared` (it may have shared data) and
+/// assert its first yielded value.
+fn assert_self_host_yields(module: Module, arg: i64, expected: i64) {
     let need = required_persistent_capacity_for(&module);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
     let mut vm = Vm::new(module, &arena).expect("verify self-hosted module");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
     match vm
-        .call_with_shared(&mut shared, &[Value::Int(10)])
+        .call_with_shared(&mut shared, &[Value::Int(arg)])
         .expect("call")
     {
-        VmState::Yielded(Value::Int(n)) => assert_eq!(n, 8, "clamp(10) = 8"),
+        VmState::Yielded(Value::Int(n)) => assert_eq!(n, expected, "self-hosted result"),
         other => panic!("unexpected result: {other:?}"),
     }
+}
+
+// The bootstrap's first increment: whole multi-declaration programs self-compiled. Every
+// source-defined chunk is emitted by the self-hosted pipeline (lexer.kel, parse.kel, the
+// forest reconstruction, and codegen.kel) and assembled into one module byte-identical to
+// the Rust-hosted compiler's, and the module runs.
+#[test]
+fn self_host_compiles_a_whole_program_byte_identically() {
+    // A shared data block, a plain `fn` with an if, a two-headed data-guarded `yield`, and
+    // a `loop main` yielding a call.
+    let m1 = assert_self_host_byte_identical(
+        "shared data st { pos: Word, len: Word } \
+         fn clamp(x: Word) -> Word { if x > 8 { 8 } else { x } } \
+         yield emit(r: Word) -> Word when st.pos < st.len { yield st.pos } \
+         yield emit(r: Word) -> Word { yield 0 } \
+         loop main(r: Word) -> Word { yield clamp(r) }",
+    );
+    assert_self_host_yields(m1, 10, 8); // clamp(10) = 8
+
+    // A richer program: private-data accumulation over a `for` loop that calls another
+    // function, a `match` function, and a `loop main` yielding the total. Exercises module
+    // assembly over chunks with a for-limit loop, calls, a match, and private data.
+    let m2 = assert_self_host_byte_identical(
+        "private data acc { sum: Word } \
+         fn add(x: Word, y: Word) -> Word { x + y } \
+         fn total(n: Word) -> Word { acc.sum = 0; for i in 0..n limit 8 { acc.sum = add(acc.sum, i); } acc.sum } \
+         fn pick(k: Word) -> Word { match k { 0 => 100, _ => k * 2 } } \
+         loop main(n: Word) -> Word { yield total(n) }",
+    );
+    assert_self_host_yields(m2, 4, 6); // total(4) = 0+1+2+3 = 6
 }
