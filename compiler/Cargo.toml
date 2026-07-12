@@ -21,6 +21,10 @@ license = "0BSD"
 keleusma = { path = "..", features = ["compile", "verify"] }
 keleusma-arena = { path = "../keleusma-arena", features = ["alloc"] }
 
+[lib]
+name = "keleusma_selfhost"
+path = "src/lib.rs"
+
 [[bin]]
 name = "keleusma-selfhost"
 path = "src/main.rs"
