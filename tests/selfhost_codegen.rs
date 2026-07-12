@@ -817,7 +817,7 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
     let mut st = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
-    for _ in 0..4096 {
+    for _ in 0..65536 {
         match st {
             VmState::Yielded(Value::Int(w)) => {
                 if w != 0 {
@@ -1454,18 +1454,18 @@ fn self_compile_codegen_atomic_functions() {
 // reconstruction to the control-flow, data-access, call, and yield kinds.
 // ---------------------------------------------------------------------------
 
-// Lexer `src` block slots: len(1) + bytes(4096) then the intern table.
-const BR_LEX_ISTART: usize = 1 + 4096;
-const BR_LEX_ILEN: usize = 1 + 4096 + 512;
-const BR_LEX_ICOUNT: usize = 1 + 4096 + 512 + 512;
+// Lexer `src` block slots: len(1) + bytes(65536) then the intern table.
+const BR_LEX_ISTART: usize = 1 + 24576;
+const BR_LEX_ILEN: usize = 1 + 24576 + 512;
+const BR_LEX_ICOUNT: usize = 1 + 24576 + 512 + 512;
 // Parser `toks` block slots.
 const BR_P_LEN: usize = 0;
 const BR_P_KINDS: usize = 1;
-const BR_P_VALS: usize = 1 + 2048;
-const BR_P_LIMIT_ID: usize = 1 + 2048 + 2048;
-const BR_P_CHUNK_COUNT: usize = 1 + 2048 + 2048 + 1;
-const BR_P_CHUNKS: usize = 1 + 2048 + 2048 + 2;
-const BR_P_REQUIRE_ID: usize = 1 + 2048 + 2048 + 2 + 256;
+const BR_P_VALS: usize = 1 + 3072;
+const BR_P_LIMIT_ID: usize = 1 + 3072 + 3072;
+const BR_P_CHUNK_COUNT: usize = 1 + 3072 + 3072 + 1;
+const BR_P_CHUNKS: usize = 1 + 3072 + 3072 + 2;
+const BR_P_REQUIRE_ID: usize = 1 + 3072 + 3072 + 2 + 256;
 
 fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
     match vm.get_shared(buf, slot).expect("get_shared") {

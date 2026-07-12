@@ -21,8 +21,8 @@ require word >= 32;
 
 shared data toks {
     len: Word,
-    kinds: [Word; 2048],
-    vals: [Word; 2048],
+    kinds: [Word; 3072],
+    vals: [Word; 3072],
     limit_id: Word,
     chunk_count: Word,
     chunks: [Word; 256],

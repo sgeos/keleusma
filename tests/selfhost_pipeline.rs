@@ -117,10 +117,10 @@ fn reference_stream_and_names(src: &str) -> (Vec<(i64, i64)>, Vec<String>) {
 }
 
 // Flat shared-data slot indices of the lexer's intern table, in the `src` block's
-// declaration order: len (1 slot) then bytes (4096) precede it.
-const LEX_ISTART: usize = 1 + 4096;
-const LEX_ILEN: usize = 1 + 4096 + 512;
-const LEX_ICOUNT: usize = 1 + 4096 + 512 + 512;
+// declaration order: len (1 slot) then bytes (24576) precede it.
+const LEX_ISTART: usize = 1 + 24576;
+const LEX_ILEN: usize = 1 + 24576 + 512;
+const LEX_ICOUNT: usize = 1 + 24576 + 512 + 512;
 
 fn shared_word(vm: &Vm, buf: &[u8], slot: usize) -> i64 {
     match vm.get_shared(buf, slot).expect("get_shared") {
@@ -144,8 +144,8 @@ fn lex_full(src: &str) -> (Vec<(i64, i64)>, Vec<String>) {
     let mut vm = Vm::new(m, &arena).expect("verify");
 
     assert!(
-        bytes.len() <= 4096,
-        "source exceeds the lexer's 4096-byte cap"
+        bytes.len() <= 24576,
+        "source exceeds the lexer's 24576-byte cap"
     );
     let mut shared = vec![0u8; vm.shared_data_bytes()];
     vm.set_shared(&mut shared, 0, Value::Int(bytes.len() as i64))
@@ -340,15 +340,15 @@ fn host_recovers_parser_metadata_from_lexer_output() {
 }
 
 // Flat shared-data slot indices of parse.kel's `toks` block, matching the parser
-// harness: len, kinds[2048], vals[2048], limit_id, chunk_count, chunks[256],
+// harness: len, kinds[3072], vals[3072], limit_id, chunk_count, chunks[256],
 // require_id, in declaration order.
 const P_LEN: usize = 0;
 const P_KINDS: usize = 1;
-const P_VALS: usize = 1 + 2048;
-const P_LIMIT_ID: usize = 1 + 2048 + 2048;
-const P_CHUNK_COUNT: usize = 1 + 2048 + 2048 + 1;
-const P_CHUNKS: usize = 1 + 2048 + 2048 + 2;
-const P_REQUIRE_ID: usize = 1 + 2048 + 2048 + 2 + 256;
+const P_VALS: usize = 1 + 3072;
+const P_LIMIT_ID: usize = 1 + 3072 + 3072;
+const P_CHUNK_COUNT: usize = 1 + 3072 + 3072 + 1;
+const P_CHUNKS: usize = 1 + 3072 + 3072 + 2;
+const P_REQUIRE_ID: usize = 1 + 3072 + 3072 + 2 + 256;
 
 /// Compile parse.kel on a 64MB thread; its deeply nested source overflows the
 /// default 2MB test-thread stack in the host compiler's recursive-descent parse.
