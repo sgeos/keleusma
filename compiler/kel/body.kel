@@ -29,11 +29,12 @@
 // `bs.resolving` marks that a just-read operator is settling its precedence (one pop
 // per iteration, then the push), and `bs.draining` marks the end-of-body flush.
 //
-// The node kinds match the codegen contract exactly: 1 Literal (arg = value), 2 Local
-// (arg = the parameter's frame slot), 3 BinOp (arg = the operator code, `lhs`/`rhs`
-// the operands), 6 Not and 10 Neg (unary, the single operand in `lhs`). The binary
-// operator codes also match codegen: 1 Add, 2 Mul, 3 Sub, 4 Div, 5 Mod, 6 Eq,
-// 7 NotEq, 8 Lt, 9 Gt, 10 LtEq, 11 GtEq. Precedence binds unary tighter than
+// The node kinds match the codegen contract exactly and are named by the `enum Node`:
+// Node::Literal (arg = value), Node::Local (arg = the parameter's frame slot),
+// Node::BinOp (arg = the operator code, `lhs`/`rhs` the operands), Node::Not and
+// Node::Neg (unary, the single operand in `lhs`). The binary operator codes are the
+// `enum OpCode`: Add, Mul, Sub, Div, Mod, Eq, NotEq, Lt, Gt, LtEq, GtEq. Precedence
+// binds unary tighter than
 // multiplicative (Mul/Div/Mod) tighter than additive (Add/Sub) tighter than
 // comparison; the binary operators are left-associative, so a pending binary operator
 // pops a stacked operator of equal or higher precedence. A parenthesised subexpression
@@ -433,6 +434,42 @@ enum OpCode {
     YieldMark = 22,
 }
 
+// The node-record kinds this loop yields, the contract the host adapter decodes into the
+// abstract-syntax forest (`kind + arg * enc.radix`). The kinds fall in three groups:
+// leaf and interior AST nodes (Literal through IndexAssignIn), the terminal Done signal,
+// and the host-directed build signals that assemble a multi-part node from stacked pieces
+// (SlotRecord and ForBuild for a `for` limit, MatchBuild for a `match`, IndexStore for an
+// indexed assignment). The host synthesises the internal Match (22) and IndexStore (15)
+// nodes from MatchBuild and IndexStore signals, so this loop never emits those two values.
+// Variant names are upper-case, so `If`, `Not`, `Andalso`, and `Orelse` do not collide
+// with the reserved words. The gaps in the discriminant sequence are intentional: the
+// numbering is shared with the host decode and must not be renumbered.
+enum Node {
+    Literal = 1,
+    Local = 2,
+    BinOp = 3,
+    If = 4,
+    LetIn = 5,
+    Not = 6,
+    Call = 7,
+    Andalso = 8,
+    Orelse = 9,
+    Neg = 10,
+    DataRead = 11,
+    DataAssignIn = 12,
+    IndexRead = 13,
+    IndexAssignIn = 14,
+    Done = 15,
+    Unit = 20,
+    ExprStmt = 21,
+    ForLimit = 23,
+    YieldExpr = 24,
+    SlotRecord = 32,
+    ForBuild = 33,
+    MatchBuild = 34,
+    IndexStore = 36,
+}
+
 // The precedence of an operator code, tightest to loosest: unary (Neg, Not) 9,
 // multiplicative (Mul, Div, Mod) 8, additive (Add, Sub) 7, bitwise-and (Band) 6,
 // bitwise-xor (Bxor) 5, bitwise-or (Bor) 4, comparison 3, short-circuit-and (Andalso) 2,
@@ -469,12 +506,12 @@ fn prec_of(op: Word) -> Word {
 // its operator code.
 fn emit_op(op: Word) -> Word {
     match op {
-        OpCode::Neg() => 10,
-        OpCode::Not() => 6,
-        OpCode::Andalso() => 8,
-        OpCode::Orelse() => 9,
-        OpCode::YieldMark() => 24,
-        _ => 3 + op * enc.radix,
+        OpCode::Neg() => Node::Neg() as Word,
+        OpCode::Not() => Node::Not() as Word,
+        OpCode::Andalso() => Node::Andalso() as Word,
+        OpCode::Orelse() => Node::Orelse() as Word,
+        OpCode::YieldMark() => Node::YieldExpr() as Word,
+        _ => Node::BinOp() as Word + op * enc.radix,
     }
 }
 
@@ -544,7 +581,7 @@ fn step_closing() -> Word {
             }
             bs.call_sp = bs.call_sp - 1;
             bs.expect_operand = 0;
-            7 + (bs.call_chunk[bs.call_sp] + bs.call_count[bs.call_sp] * enc.callmul) * enc.radix
+            Node::Call() as Word + (bs.call_chunk[bs.call_sp] + bs.call_count[bs.call_sp] * enc.callmul) * enc.radix
         } else {
             bs.opsp = bs.opsp - 1;
             emit_op(top)
@@ -606,7 +643,7 @@ fn step_post_index(k: Word) -> Word {
     } else {
         bs.cursor = bs.cursor - 1;
         bs.expect_operand = 0;
-        13 + (bs.pidx_base + bs.pidx_len * enc.pack) * enc.radix
+        Node::IndexRead() as Word + (bs.pidx_base + bs.pidx_len * enc.pack) * enc.radix
     }
 }
 
@@ -633,7 +670,7 @@ fn step_draining() -> Word {
                     // anonymous slots, so the slot is stored explicitly, not derived).
                     let slot = src.param_count + bs.slot_count;
                     bs.slot_count = bs.slot_count + 1;
-                    bs.stmt_kind[bs.stmt_count] = 5;
+                    bs.stmt_kind[bs.stmt_count] = Node::LetIn() as Word;
                     bs.stmt_arg[bs.stmt_count] = slot;
                     bs.let_names[bs.let_count] = bs.pstmt_name[bs.pstmt_sp];
                     bs.scope_slot[bs.let_count] = slot;
@@ -645,7 +682,7 @@ fn step_draining() -> Word {
                 } else {
                 if bs.pstmt_kind[bs.pstmt_sp] == 1 {
                     // A scalar data assignment: write the target field's slot.
-                    bs.stmt_kind[bs.stmt_count] = 12;
+                    bs.stmt_kind[bs.stmt_count] = Node::DataAssignIn() as Word;
                     bs.stmt_arg[bs.stmt_count] = bs.pstmt_arg[bs.pstmt_sp];
                     bs.stmt_count = bs.stmt_count + 1;
                     bs.draining = 0;
@@ -659,12 +696,12 @@ fn step_draining() -> Word {
                     bs.store_arg = bs.pstmt_arg[bs.pstmt_sp];
                     bs.store_emit = 1;
                     bs.draining = 0;
-                    36
+                    Node::IndexStore() as Word
                 } }
             } else {
                 // A bare expression statement (ExprStmt, kind 21): its value node rests
                 // on the host stack, to be discarded by the fold's continuation link.
-                bs.stmt_kind[bs.stmt_count] = 21;
+                bs.stmt_kind[bs.stmt_count] = Node::ExprStmt() as Word;
                 bs.stmt_arg[bs.stmt_count] = 0;
                 bs.stmt_count = bs.stmt_count + 1;
                 bs.draining = 0;
@@ -790,7 +827,7 @@ fn step_folding() -> Word {
         }
         if bs.fold_cont == phase.fold_body {
             bs.done = 1;
-            15
+            Node::Done() as Word
         } else {
         if bs.fold_cont == phase.fold_then {
             bs.if_phase[bs.if_sp - 1] = 3;
@@ -799,7 +836,7 @@ fn step_folding() -> Word {
         if bs.fold_cont == phase.fold_else {
             bs.if_sp = bs.if_sp - 1;
             bs.expect_operand = 0;
-            4
+            Node::If() as Word
         } else {
             // fold_cont == phase.fold_forbody: the `for` body is folded; its value rests on the host
             // stack. Start the ForLimit parts emission.
@@ -851,7 +888,7 @@ fn step_daindex(k: Word) -> Word {
         bs.cursor = bs.cursor - 1;
         bs.da_phase = phase.da_idle;
         bs.expect_operand = 0;
-        11 + bs.da_base * enc.radix
+        Node::DataRead() as Word + bs.da_base * enc.radix
     } }
 }
 
@@ -910,7 +947,7 @@ fn step_ident(v: Word) -> Word {
             }
         }
         bs.expect_operand = 0;
-        2 + bs.found * enc.radix
+        Node::Local() as Word + bs.found * enc.radix
     }
     }
     }
@@ -1045,45 +1082,45 @@ fn step_forheader(k: Word, v: Word) -> Word {
 fn step_for_emit() -> Word {
     if bs.for_emit_i == 0 {
         bs.for_emit_i = 1;
-        1 + bs.for_cap * enc.radix
+        Node::Literal() as Word + bs.for_cap * enc.radix
     } else {
     if bs.for_emit_i == 1 {
         bs.for_emit_i = 2;
-        1
+        Node::Literal() as Word
     } else {
     if bs.for_emit_i == 2 {
         bs.for_emit_i = 3;
-        1 + 1 * enc.radix
+        Node::Literal() as Word + 1 * enc.radix
     } else {
     if bs.for_emit_i == 3 {
         bs.for_emit_i = 4;
-        1 + 2 * enc.radix
+        Node::Literal() as Word + 2 * enc.radix
     } else {
     if bs.for_emit_i == 4 {
         bs.for_emit_i = 5;
-        32 + bs.for_vslot * enc.radix
+        Node::SlotRecord() as Word + bs.for_vslot * enc.radix
     } else {
     if bs.for_emit_i == 5 {
         bs.for_emit_i = 6;
-        32 + bs.for_end_slot * enc.radix
+        Node::SlotRecord() as Word + bs.for_end_slot * enc.radix
     } else {
     if bs.for_emit_i == 6 {
         bs.for_emit_i = 7;
-        32 + bs.for_ctr * enc.radix
+        Node::SlotRecord() as Word + bs.for_ctr * enc.radix
     } else {
     if bs.for_emit_i == 7 {
         bs.for_emit_i = 8;
-        32 + bs.for_cap_slot * enc.radix
+        Node::SlotRecord() as Word + bs.for_cap_slot * enc.radix
     } else {
     if bs.for_emit_i == 8 {
         bs.for_emit_i = 9;
-        32 + bs.for_oc * enc.radix
+        Node::SlotRecord() as Word + bs.for_oc * enc.radix
     } else {
     if bs.for_emit_i == 9 {
         bs.for_emit_i = 10;
-        33
+        Node::ForBuild() as Word
     } else {
-        bs.stmt_kind[bs.stmt_count] = 23;
+        bs.stmt_kind[bs.stmt_count] = Node::ForLimit() as Word;
         bs.stmt_arg[bs.stmt_count] = 12 * bs.forlimit_count;
         bs.stmt_count = bs.stmt_count + 1;
         bs.forlimit_count = bs.forlimit_count + 1;
@@ -1145,7 +1182,7 @@ fn step_if(k: Word) -> Word {
         // fold wraps it. Clearing expect_operand lets the drain proceed to the fold.
         if bs.expect_operand == 1 {
             bs.expect_operand = 0;
-            20
+            Node::Unit() as Word
         } else {
             0
         }
@@ -1159,7 +1196,7 @@ fn step_normal(k: Word, v: Word) -> Word {
     } else {
     if k == Tok::IntLit() as Word {
         bs.expect_operand = 0;
-        1 + v * enc.radix
+        Node::Literal() as Word + v * enc.radix
     } else {
     if k == Tok::LParen() as Word {
         bs.opstack[bs.opsp] = OpCode::Paren() as Word;
@@ -1310,7 +1347,7 @@ fn step_match(k: Word, v: Word) -> Word {
             // A literal arm: emit its Literal node, count it, then await `=>`.
             bs.match_argcount[sp] = bs.match_argcount[sp] + 1;
             bs.match_phase[sp] = 3;
-            1 + v * enc.radix
+            Node::Literal() as Word + v * enc.radix
         } else {
         if k == Tok::Underscore() as Word {
             // The wildcard arm: no node; its result becomes the default. Await `=>`.
@@ -1392,7 +1429,7 @@ fn step_mpat(k: Word, v: Word) -> Word {
         bs.mpat_phase = phase.mpat_idle;
         bs.match_argcount[bs.match_sp - 1] = bs.match_argcount[bs.match_sp - 1] + 1;
         bs.match_phase[bs.match_sp - 1] = 3;
-        1 + bs.enum_disc * enc.radix
+        Node::Literal() as Word + bs.enum_disc * enc.radix
     } } }
 }
 
@@ -1407,14 +1444,14 @@ fn step_match_build() -> Word {
     let ac = bs.match_argcount[sp];
     bs.match_sp = sp;
     bs.expect_operand = 0;
-    34 + (temp * enc.matchmul + ac) * enc.radix
+    Node::MatchBuild() as Word + (temp * enc.matchmul + ac) * enc.radix
 }
 
 // After the IndexStore signal, record the IndexAssignIn statement (kind 14, arg =
 // base + len*65536) so the block fold wraps the store node as the assignment.
 fn step_store_finalize() -> Word {
     bs.store_emit = 0;
-    bs.stmt_kind[bs.stmt_count] = 14;
+    bs.stmt_kind[bs.stmt_count] = Node::IndexAssignIn() as Word;
     bs.stmt_arg[bs.stmt_count] = bs.store_arg;
     bs.stmt_count = bs.stmt_count + 1;
     bs.expect_operand = 1;
@@ -1466,7 +1503,7 @@ fn step_enum(k: Word, v: Word) -> Word {
     } else {
         bs.enum_phase = phase.enum_idle;
         bs.expect_operand = 0;
-        1 + bs.enum_disc * enc.radix
+        Node::Literal() as Word + bs.enum_disc * enc.radix
     } } } } }
 }
 
@@ -1486,7 +1523,7 @@ fn step_read() -> Word {
 // One step of the parser: the active sub-state, or reading the next token.
 fn step() -> Word {
     if bs.done == 1 {
-        15
+        Node::Done() as Word
     } else {
     if bs.resolving == 1 {
         step_resolving()
