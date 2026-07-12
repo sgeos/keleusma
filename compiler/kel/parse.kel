@@ -1131,7 +1131,22 @@ fn step_body_dispatch(k: Word, v: Word) -> Word {
 // Flush the expression's operators; emptied, commit a statement (`;`), fold the block
 // (`}`), enter the then branch (a drained condition), or fold a branch (its `}`).
 fn step_draining() -> Word {
-    if ops.opsp > 0 {
+    // A grouping marker (Paren, IndexMark, CallMark) delimits an enclosing context and
+    // is consumed by its own bracket handler, never by a sub-expression drain, so
+    // draining stops at it rather than emitting it as a spurious operator. The
+    // YieldMark is the exception: at a statement (reason 0) or block-tail (reason 1)
+    // drain the whole yield expression is complete, so the marker is drained there as
+    // the YieldExpr; at any inner boundary (an if condition, a match scrutinee, an arm
+    // result) it, too, blocks so the yield spans the whole following expression.
+    let has_op = ops.opsp > 0;
+    let top = if has_op { ops.opstack[ops.opsp - 1] } else { 0 };
+    let marker = top == OpCode::Paren() as Word
+        orelse top == OpCode::IndexMark() as Word
+        orelse top == OpCode::CallMark() as Word;
+    let yield_blocks = top == OpCode::YieldMark() as Word
+        andalso ops.drain_reason != 0
+        andalso ops.drain_reason != 1;
+    if has_op andalso not marker andalso not yield_blocks {
         ops.opsp = ops.opsp - 1;
         let op = ops.opstack[ops.opsp];
         emit_op(op)
