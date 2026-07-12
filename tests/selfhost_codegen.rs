@@ -4120,3 +4120,40 @@ fn assembled_schema_hash_matches_the_reference() {
         assert_eq!(hash, reference.schema_hash, "schema hash for {path}");
     }
 }
+
+// -- integration: the self-assembled scaffold serializes byte-identically ------
+//
+// Each analytical scaffold component (DataLayout, enum-layout table, typed-verifier
+// signatures, schema hash) was proved byte-identical to the reference as a struct. This
+// splices all of them, together with the self-hosted chunk ops, into a module and
+// serializes it, asserting the wire bytes equal the reference compiler's -- so the
+// assembled components agree not only field by field but through the wire encoding.
+// The chunk-table metadata and the two WCET/WCMU declared-bound numbers still ride the
+// self_host_compile scaffold (the WCET/WCMU cost analysis, whose true self-hosted form
+// is a Keleusma stage, is the last piece); everything else is driver-assembled.
+#[test]
+fn self_assembled_scaffold_serializes_byte_identically() {
+    for path in [
+        "compiler/kel/lexer.kel",
+        "compiler/kel/reconstruct.kel",
+        "compiler/kel/codegen.kel",
+        "compiler/kel/parse.kel",
+    ] {
+        let src = std::fs::read_to_string(path).expect("read stage");
+        let (fns, names, data_records, enum_records) = parse_functions(&src);
+        // The self-hosted chunk ops, with the reference scaffold; then splice in the
+        // driver-assembled components.
+        let mut module = self_host_compile(&src);
+        let dl = assemble_data_layout(&data_records, &names);
+        module.schema_hash = keleusma::bytecode::compute_schema_hash(Some(&dl));
+        module.data_layout = Some(dl);
+        module.enum_layouts = assemble_enum_layouts(&enum_records, &names);
+        module.signatures = assemble_signatures(&fns, &names);
+
+        let self_bytes = module.to_bytes().expect("serialize self-assembled module");
+        let ref_bytes = compile_src(&src)
+            .to_bytes()
+            .expect("serialize reference module");
+        assert_eq!(self_bytes, ref_bytes, "serialized module for {path}");
+    }
+}
