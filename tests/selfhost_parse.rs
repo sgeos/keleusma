@@ -1,9 +1,8 @@
-//! Merged parser stage (`compiler/kel/parse.kel`), increment 10b: one streaming `loop`
-//! that parses a whole top-level function declaration, the `data` and `enum` declarations,
-//! and the body's full expression, statement, control-flow, data-access, function-call,
-//! and enum grammar. Data fields resolve against the accumulated field-layout table, calls
-//! against a host-supplied chunk-name table, and the `Enum::Variant() as Word` cast and the
-//! unit-variant match pattern fold to discriminants using the accumulated enum table.
+//! Merged parser stage (`compiler/kel/parse.kel`), increment 11: one streaming `loop` that
+//! parses a whole top-level declaration — a function (its header and full body), a `data`
+//! block, an `enum`, or a `use` native import — in a single pass. This covers every
+//! declaration form and body construct the compiler stages use. Data fields and enums
+//! resolve by strategy-B accumulation; calls against a host-supplied chunk-name table.
 //!
 //! A throwaway adapter maps the reference tokenizer into the stage's unified `(kind,
 //! value)` token stream. The stage emits header records `dkind + val*64` (1/2/3 START of a
@@ -78,6 +77,7 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
             TokenKind::Private => (15, 0),
             TokenKind::Const => (16, 0),
             TokenKind::Eq => (17, 0),
+            TokenKind::Use => (19, 0),
             TokenKind::LBracket => (41, 0),
             TokenKind::RBracket => (42, 0),
             TokenKind::Plus => (21, 0),
@@ -248,6 +248,7 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
     // fields are not compared, only that the block is consumed without breaking the stream.
     let mut in_data = false;
     let mut in_enum = false;
+    let mut in_use = false;
     let mut state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
@@ -276,6 +277,11 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                         5 => in_enum = false, // the enum's END
                         _ => {}               // its variants, skipped this increment
                     }
+                } else if in_use {
+                    match code {
+                        5 => in_use = false, // the use import's END
+                        _ => {}              // its path segments, skipped this increment
+                    }
                 } else {
                     match code {
                         0 => {} // PENDING
@@ -283,6 +289,7 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                         4 => cur.as_mut().expect("PARAM before START").2.push(val),
                         6 | 7 | 8 => {} // PTYPE/RETTYPE/ASIZE: not checked this increment
                         9 => in_data = true, // DSTART: a data block, skipped this increment
+                        10 => in_use = true, // USTART: a use import, skipped this increment
                         12 => in_enum = true, // ENUMSTART: an enum, skipped this increment
                         16 => in_body = true, // BSTART: a body forest follows
                         5 => {
@@ -1413,4 +1420,26 @@ fn an_enum_match_pattern_folds_to_a_discriminant() {
             (34, 1024 + 2)
         ]
     );
+}
+
+// A `use path::name` native import before a function: the import is consumed and the
+// function still parses.
+#[test]
+fn a_use_import_before_a_function_parses() {
+    let src = "use math::sqrt fn f(n: Word) -> Word { n }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    assert_eq!(got.funcs.len(), 1);
+}
+
+// A `use` running to end of input has no closing delimiter, so it is closed before DONE.
+// A multi-segment path exercises the `::`-separated scan.
+#[test]
+fn a_use_import_at_end_of_input_is_closed() {
+    let src = "use std::math::floor";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    assert_eq!(got.funcs.len(), 0);
 }
