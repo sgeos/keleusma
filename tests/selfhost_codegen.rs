@@ -2361,3 +2361,85 @@ fn parse_into_codegen_yield_in_a_loop_matches_the_reference() {
         }
     }
 }
+
+// Harden the bridge on combined and nested constructs: the individual kinds each
+// pass, but their compositions exercise the reconstruction's stack discipline
+// under interaction. These five compose cleanly -- an if inside a for body, a call
+// in a for body, a match over a let value, a call inside an if branch, and a data
+// read as a match arm result -- and are byte-identical to the reference.
+//
+// Two compositions are deliberately absent because they surface parse.kel record
+// bugs (not codegen-bridge bugs), each tracked as a separate finding:
+//   1. `yield if c { .. } else { .. }`: parse.kel drains the yield marker after the
+//      if's condition rather than over the whole if, so the Yield emits before the
+//      branch instead of after.
+//   2. `f(match x { .. })` (a match as a call argument): parse.kel drains the call
+//      marker as a spurious BinOp (OpCode CallMark=21 -> record (3, 21)) and never
+//      emits the Call node, so the argument's match displaces the call.
+// Both are call/yield-marker interactions in parse.kel's shunting-yard; the
+// bridge reconstruction is correct for every composition parse.kel emits soundly.
+#[test]
+fn parse_into_codegen_combined_constructs_match_the_reference() {
+    let cases: &[(&str, i64, i64)] = &[
+        // an if inside a for-limit body, accumulating conditionally.
+        (
+            "private data d { s: Word } fn main(n: Word) -> Word { for i in 0..n limit 8 { if i > 1 { d.s = d.s + i; } } d.s }",
+            4,
+            5,
+        ),
+        // a call in a for-limit body.
+        (
+            "fn add1(x: Word) -> Word { x + 1 } private data d { s: Word } fn main(n: Word) -> Word { for i in 0..n limit 8 { d.s = add1(d.s); } d.s }",
+            4,
+            4,
+        ),
+        // a match over a let value with a wildcard reading it.
+        (
+            "fn main(n: Word) -> Word { let c = n + 1; match c { 3 => 100, _ => c * 2 } }",
+            1,
+            4,
+        ),
+        // a call inside an if branch.
+        (
+            "fn dbl(x: Word) -> Word { x * 2 } fn main(n: Word) -> Word { if n < 10 { dbl(n) } else { n } }",
+            5,
+            10,
+        ),
+        // a data read as a match arm result.
+        (
+            "private data d { k: Word } fn main(n: Word) -> Word { d.k = 7; match n { 0 => d.k, _ => d.k + n } }",
+            3,
+            10,
+        ),
+    ];
+    for &(src, input, expected) in cases {
+        let (records, param_count, category) = parse_function_records(src);
+        let body = reconstruct_body(&records, category);
+        let (emitted, pool, local_count) = run_codegen(&body, param_count);
+
+        let reference = compile_src(src);
+        let idx = reference
+            .chunks
+            .iter()
+            .position(|c| c.name == "main")
+            .unwrap();
+        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
+        assert_eq!(
+            local_count, reference.chunks[idx].local_count as i64,
+            "local_count for `{src}`"
+        );
+
+        let mut built = compile_src(src);
+        built.chunks[idx].ops = emitted;
+        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].local_count = local_count as u16;
+        let need = required_persistent_capacity_for(&built);
+        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+        arena.resize_persistent(need).expect("resize");
+        let mut vm = Vm::new(built, &arena).expect("verify built");
+        match vm.call(&[Value::Int(input)]).expect("call built") {
+            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
+            other => panic!("unexpected result for `{src}`: {other:?}"),
+        }
+    }
+}
