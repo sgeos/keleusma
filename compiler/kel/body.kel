@@ -207,6 +207,17 @@ enum Tok {
     As = 52,
 }
 
+// The record and packing radices the host decode agrees on: the node-record radix
+// (`kind + arg*radix`), the index-read base+len pack (`base + len*pack`), the call
+// chunk+count pack (`chunk + count*callmul`), and the match temp+count pack
+// (`temp*matchmul + count`). Named so the encoding reads as intent rather than magic.
+const data enc {
+    radix: Word = 64,
+    pack: Word = 65536,
+    callmul: Word = 256,
+    matchmul: Word = 1024,
+}
+
 // The host-provided body token stream, parameter-name table, and data-field layout.
 // A `data.field` access is resolved through the parallel field arrays: `fdata`/
 // `ffield` are the interned data-block and field names, `fbase` the field's element-0
@@ -328,89 +339,78 @@ private data bs {
     mpat_phase: Word,
 }
 
-// The precedence of an operator code, tightest to loosest: unary (16 Neg, 17 Not) 9,
-// multiplicative (2 Mul, 4 Div, 5 Mod) 8, additive (1 Add, 3 Sub) 7, bitwise-and
-// (12 Band) 6, bitwise-xor (14 Bxor) 5, bitwise-or (13 Bor) 4, comparison (6..11) 3,
-// short-circuit-and (18 Andalso) 2, short-circuit-or (19 Orelse) 1, and the
-// precedence-0 markers (15 parenthesis, 20 index, 21 call, 22 yield) 0, so no real
-// operator ever pops across one. The bitwise and logical orderings match the reference
-// (`band > bxor > bor`, `andalso > orelse`); `yield` binds loosest, taking the whole
-// following expression as its operand.
-fn prec_of(op: Word) -> Word {
-    if op == 16 {
-        9
-    } else {
-    if op == 17 {
-        9
-    } else {
-    if op == 15 {
-        0
-    } else {
-    if op == 20 {
-        0
-    } else {
-    if op == 21 {
-        0
-    } else {
-    if op == 22 {
-        0
-    } else {
-    if op == 2 {
-        8
-    } else {
-    if op == 4 {
-        8
-    } else {
-    if op == 5 {
-        8
-    } else {
-    if op == 1 {
-        7
-    } else {
-    if op == 3 {
-        7
-    } else {
-    if op == 12 {
-        6
-    } else {
-    if op == 14 {
-        5
-    } else {
-    if op == 13 {
-        4
-    } else {
-    if op == 18 {
-        2
-    } else {
-    if op == 19 {
-        1
-    } else {
-        3
-    } } } } } } } } } } } } } } } }
+// The shunting-yard operator codes. Codes 1..14 are the binary operators (their code is
+// also the BinOp node's operator argument); 15..22 are the prefix and marker codes the
+// stack carries. A stacked operator is a `Word`, so each `OpCode` variant folds to its
+// code.
+enum OpCode {
+    Add = 1,
+    Mul = 2,
+    Sub = 3,
+    Div = 4,
+    Mod = 5,
+    Eq = 6,
+    NotEq = 7,
+    Lt = 8,
+    Gt = 9,
+    LtEq = 10,
+    GtEq = 11,
+    Band = 12,
+    Bor = 13,
+    Bxor = 14,
+    Paren = 15,
+    Neg = 16,
+    Not = 17,
+    Andalso = 18,
+    Orelse = 19,
+    IndexMark = 20,
+    CallMark = 21,
+    YieldMark = 22,
 }
 
-// The record word for a stacked operator: a unary Neg (16) or Not (17) emits its node
-// kind (10, 6) directly, the short-circuit Andalso (18) and Orelse (19) emit their own
-// node kinds (8, 9), and the yield marker (22) emits a YieldExpr (kind 24, unary over
-// its single operand); every other code is a binary operator emitted as a BinOp.
+// The precedence of an operator code, tightest to loosest: unary (Neg, Not) 9,
+// multiplicative (Mul, Div, Mod) 8, additive (Add, Sub) 7, bitwise-and (Band) 6,
+// bitwise-xor (Bxor) 5, bitwise-or (Bor) 4, comparison 3, short-circuit-and (Andalso) 2,
+// short-circuit-or (Orelse) 1, and the markers (Paren, IndexMark, CallMark, YieldMark) 0,
+// so no real operator ever pops across one. The bitwise and logical orderings match the
+// reference (`band > bxor > bor`, `andalso > orelse`); `yield` binds loosest, taking the
+// whole following expression as its operand.
+fn prec_of(op: Word) -> Word {
+    match op {
+        OpCode::Neg() => 9,
+        OpCode::Not() => 9,
+        OpCode::Paren() => 0,
+        OpCode::IndexMark() => 0,
+        OpCode::CallMark() => 0,
+        OpCode::YieldMark() => 0,
+        OpCode::Mul() => 8,
+        OpCode::Div() => 8,
+        OpCode::Mod() => 8,
+        OpCode::Add() => 7,
+        OpCode::Sub() => 7,
+        OpCode::Band() => 6,
+        OpCode::Bxor() => 5,
+        OpCode::Bor() => 4,
+        OpCode::Andalso() => 2,
+        OpCode::Orelse() => 1,
+        _ => 3,
+    }
+}
+
+// The record word for a stacked operator: a unary Neg or Not emits its node kind
+// (10, 6) directly, the short-circuit Andalso and Orelse emit their own node kinds
+// (8, 9), and the yield marker emits a YieldExpr (kind 24, unary over its single
+// operand); every other code is a binary operator emitted as a BinOp (kind 3) carrying
+// its operator code.
 fn emit_op(op: Word) -> Word {
-    if op == 16 {
-        10
-    } else {
-    if op == 17 {
-        6
-    } else {
-    if op == 18 {
-        8
-    } else {
-    if op == 19 {
-        9
-    } else {
-    if op == 22 {
-        24
-    } else {
-        3 + op * 64
-    } } } } }
+    match op {
+        OpCode::Neg() => 10,
+        OpCode::Not() => 6,
+        OpCode::Andalso() => 8,
+        OpCode::Orelse() => 9,
+        OpCode::YieldMark() => 24,
+        _ => 3 + op * enc.radix,
+    }
 }
 
 // The operator code for a token kind, or 0 when the token is not a binary operator.
@@ -420,22 +420,22 @@ fn emit_op(op: Word) -> Word {
 // lowers to the same integer dispatch a table of literals would.
 fn opcode_of(k: Word) -> Word {
     match k {
-        Tok::Plus() => 1,
-        Tok::Minus() => 3,
-        Tok::Star() => 2,
-        Tok::Slash() => 4,
-        Tok::Percent() => 5,
-        Tok::EqEq() => 6,
-        Tok::NotEq() => 7,
-        Tok::Lt() => 8,
-        Tok::Gt() => 9,
-        Tok::LtEq() => 10,
-        Tok::GtEq() => 11,
-        Tok::Band() => 12,
-        Tok::Bor() => 13,
-        Tok::Bxor() => 14,
-        Tok::Andalso() => 18,
-        Tok::Orelse() => 19,
+        Tok::Plus() => OpCode::Add() as Word,
+        Tok::Minus() => OpCode::Sub() as Word,
+        Tok::Star() => OpCode::Mul() as Word,
+        Tok::Slash() => OpCode::Div() as Word,
+        Tok::Percent() => OpCode::Mod() as Word,
+        Tok::EqEq() => OpCode::Eq() as Word,
+        Tok::NotEq() => OpCode::NotEq() as Word,
+        Tok::Lt() => OpCode::Lt() as Word,
+        Tok::Gt() => OpCode::Gt() as Word,
+        Tok::LtEq() => OpCode::LtEq() as Word,
+        Tok::GtEq() => OpCode::GtEq() as Word,
+        Tok::Band() => OpCode::Band() as Word,
+        Tok::Bor() => OpCode::Bor() as Word,
+        Tok::Bxor() => OpCode::Bxor() as Word,
+        Tok::Andalso() => OpCode::Andalso() as Word,
+        Tok::Orelse() => OpCode::Orelse() as Word,
         _ => 0,
     }
 }
@@ -465,13 +465,13 @@ fn step_resolving() -> Word {
 fn step_closing() -> Word {
     if bs.opsp > 0 {
         let top = bs.opstack[bs.opsp - 1];
-        if top == 15 {
+        if top == OpCode::Paren() as Word {
             bs.opsp = bs.opsp - 1;
             bs.closing = 0;
             bs.expect_operand = 0;
             0
         } else {
-        if top == 21 {
+        if top == OpCode::CallMark() as Word {
             bs.opsp = bs.opsp - 1;
             bs.closing = 0;
             if bs.expect_operand == 0 {
@@ -479,7 +479,7 @@ fn step_closing() -> Word {
             }
             bs.call_sp = bs.call_sp - 1;
             bs.expect_operand = 0;
-            7 + (bs.call_chunk[bs.call_sp] + bs.call_count[bs.call_sp] * 256) * 64
+            7 + (bs.call_chunk[bs.call_sp] + bs.call_count[bs.call_sp] * enc.callmul) * enc.radix
         } else {
             bs.opsp = bs.opsp - 1;
             emit_op(top)
@@ -493,7 +493,7 @@ fn step_closing() -> Word {
 // A `,`: flush the current call argument's operators down to the call marker (20 is the
 // index marker, 21 the call marker), then count the argument.
 fn step_cdraining() -> Word {
-    if bs.opsp > 0 andalso bs.opstack[bs.opsp - 1] != 21 {
+    if bs.opsp > 0 andalso bs.opstack[bs.opsp - 1] != OpCode::CallMark() as Word {
         bs.opsp = bs.opsp - 1;
         let op = bs.opstack[bs.opsp];
         emit_op(op)
@@ -510,7 +510,7 @@ fn step_cdraining() -> Word {
 // a read and an indexed assignment (`d.f[i] = e`), so the base and length are held in a
 // one-slot lookahead (post_index) that step_post_index resolves on the next token.
 fn step_iclosing() -> Word {
-    if bs.opsp > 0 andalso bs.opstack[bs.opsp - 1] != 20 {
+    if bs.opsp > 0 andalso bs.opstack[bs.opsp - 1] != OpCode::IndexMark() as Word {
         bs.opsp = bs.opsp - 1;
         let op = bs.opstack[bs.opsp];
         emit_op(op)
@@ -534,14 +534,14 @@ fn step_post_index(k: Word) -> Word {
     bs.post_index = 0;
     if k == Tok::Eq() as Word {
         bs.pstmt_kind[bs.pstmt_sp] = 2;
-        bs.pstmt_arg[bs.pstmt_sp] = bs.pidx_base + bs.pidx_len * 65536;
+        bs.pstmt_arg[bs.pstmt_sp] = bs.pidx_base + bs.pidx_len * enc.pack;
         bs.pstmt_sp = bs.pstmt_sp + 1;
         bs.expect_operand = 1;
         0
     } else {
         bs.cursor = bs.cursor - 1;
         bs.expect_operand = 0;
-        13 + (bs.pidx_base + bs.pidx_len * 65536) * 64
+        13 + (bs.pidx_base + bs.pidx_len * enc.pack) * enc.radix
     }
 }
 
@@ -713,7 +713,7 @@ fn step_draining() -> Word {
 fn step_folding() -> Word {
     if bs.fold_i > bs.fold_start {
         bs.fold_i = bs.fold_i - 1;
-        bs.stmt_kind[bs.fold_i] + bs.stmt_arg[bs.fold_i] * 64
+        bs.stmt_kind[bs.fold_i] + bs.stmt_arg[bs.fold_i] * enc.radix
     } else {
         bs.stmt_count = bs.fold_start;
         bs.folding = 0;
@@ -769,7 +769,7 @@ fn step_daindex(k: Word) -> Word {
         bs.idx_base[bs.idx_sp] = bs.da_base;
         bs.idx_len[bs.idx_sp] = bs.da_len;
         bs.idx_sp = bs.idx_sp + 1;
-        bs.opstack[bs.opsp] = 20;
+        bs.opstack[bs.opsp] = OpCode::IndexMark() as Word;
         bs.opsp = bs.opsp + 1;
         bs.da_phase = 0;
         bs.expect_operand = 1;
@@ -786,7 +786,7 @@ fn step_daindex(k: Word) -> Word {
         bs.cursor = bs.cursor - 1;
         bs.da_phase = 0;
         bs.expect_operand = 0;
-        11 + bs.da_base * 64
+        11 + bs.da_base * enc.radix
     } }
 }
 
@@ -845,7 +845,7 @@ fn step_ident(v: Word) -> Word {
             }
         }
         bs.expect_operand = 0;
-        2 + bs.found * 64
+        2 + bs.found * enc.radix
     }
     }
     }
@@ -869,7 +869,7 @@ fn step_op(k: Word) -> Word {
         0
     } else {
     if k == Tok::Not() as Word {
-        bs.opstack[bs.opsp] = 17;
+        bs.opstack[bs.opsp] = OpCode::Not() as Word;
         bs.opsp = bs.opsp + 1;
         bs.expect_operand = 1;
         0
@@ -877,7 +877,7 @@ fn step_op(k: Word) -> Word {
     if k == Tok::Yield() as Word {
         // `yield` is a loosest-binding prefix: push its marker (code 22) so no operator
         // pops across it and the whole following expression becomes its operand.
-        bs.opstack[bs.opsp] = 22;
+        bs.opstack[bs.opsp] = OpCode::YieldMark() as Word;
         bs.opsp = bs.opsp + 1;
         bs.expect_operand = 1;
         0
@@ -891,7 +891,7 @@ fn step_op(k: Word) -> Word {
         0
     } else {
     if k == Tok::Minus() as Word andalso bs.expect_operand == 1 {
-        bs.opstack[bs.opsp] = 16;
+        bs.opstack[bs.opsp] = OpCode::Neg() as Word;
         bs.opsp = bs.opsp + 1;
         bs.expect_operand = 1;
         0
@@ -980,7 +980,7 @@ fn step_forheader(k: Word, v: Word) -> Word {
 fn step_for_emit() -> Word {
     if bs.for_emit_i == 0 {
         bs.for_emit_i = 1;
-        1 + bs.for_cap * 64
+        1 + bs.for_cap * enc.radix
     } else {
     if bs.for_emit_i == 1 {
         bs.for_emit_i = 2;
@@ -988,31 +988,31 @@ fn step_for_emit() -> Word {
     } else {
     if bs.for_emit_i == 2 {
         bs.for_emit_i = 3;
-        1 + 1 * 64
+        1 + 1 * enc.radix
     } else {
     if bs.for_emit_i == 3 {
         bs.for_emit_i = 4;
-        1 + 2 * 64
+        1 + 2 * enc.radix
     } else {
     if bs.for_emit_i == 4 {
         bs.for_emit_i = 5;
-        32 + bs.for_vslot * 64
+        32 + bs.for_vslot * enc.radix
     } else {
     if bs.for_emit_i == 5 {
         bs.for_emit_i = 6;
-        32 + bs.for_end_slot * 64
+        32 + bs.for_end_slot * enc.radix
     } else {
     if bs.for_emit_i == 6 {
         bs.for_emit_i = 7;
-        32 + bs.for_ctr * 64
+        32 + bs.for_ctr * enc.radix
     } else {
     if bs.for_emit_i == 7 {
         bs.for_emit_i = 8;
-        32 + bs.for_cap_slot * 64
+        32 + bs.for_cap_slot * enc.radix
     } else {
     if bs.for_emit_i == 8 {
         bs.for_emit_i = 9;
-        32 + bs.for_oc * 64
+        32 + bs.for_oc * enc.radix
     } else {
     if bs.for_emit_i == 9 {
         bs.for_emit_i = 10;
@@ -1094,10 +1094,10 @@ fn step_normal(k: Word, v: Word) -> Word {
     } else {
     if k == Tok::IntLit() as Word {
         bs.expect_operand = 0;
-        1 + v * 64
+        1 + v * enc.radix
     } else {
     if k == Tok::LParen() as Word {
-        bs.opstack[bs.opsp] = 15;
+        bs.opstack[bs.opsp] = OpCode::Paren() as Word;
         bs.opsp = bs.opsp + 1;
         bs.expect_operand = 1;
         0
@@ -1205,7 +1205,7 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
             bs.call_chunk[bs.call_sp] = bs.call_pending;
             bs.call_count[bs.call_sp] = 0;
             bs.call_sp = bs.call_sp + 1;
-            bs.opstack[bs.opsp] = 21;
+            bs.opstack[bs.opsp] = OpCode::CallMark() as Word;
             bs.opsp = bs.opsp + 1;
             bs.call_phase = 0;
             bs.expect_operand = 1;
@@ -1245,7 +1245,7 @@ fn step_match(k: Word, v: Word) -> Word {
             // A literal arm: emit its Literal node, count it, then await `=>`.
             bs.match_argcount[sp] = bs.match_argcount[sp] + 1;
             bs.match_phase[sp] = 3;
-            1 + v * 64
+            1 + v * enc.radix
         } else {
         if k == Tok::Underscore() as Word {
             // The wildcard arm: no node; its result becomes the default. Await `=>`.
@@ -1327,12 +1327,12 @@ fn step_mpat(k: Word, v: Word) -> Word {
         bs.mpat_phase = 0;
         bs.match_argcount[bs.match_sp - 1] = bs.match_argcount[bs.match_sp - 1] + 1;
         bs.match_phase[bs.match_sp - 1] = 3;
-        1 + bs.enum_disc * 64
+        1 + bs.enum_disc * enc.radix
     } } }
 }
 
 // Emit the match build record: kind 34 packs the scrutinee temp slot and the literal-arm
-// count as `temp * 1024 + count`. The host pops the wildcard result, the literal-arm
+// count as `temp * enc.matchmul + count`. The host pops the wildcard result, the literal-arm
 // (Literal node, result) pairs, and the scrutinee, assembles the match_parts entry, and
 // emits the MatchIn node. The match is now an operand, so expect_operand clears.
 fn step_match_build() -> Word {
@@ -1342,7 +1342,7 @@ fn step_match_build() -> Word {
     let ac = bs.match_argcount[sp];
     bs.match_sp = sp;
     bs.expect_operand = 0;
-    34 + (temp * 1024 + ac) * 64
+    34 + (temp * enc.matchmul + ac) * enc.radix
 }
 
 // After the IndexStore signal, record the IndexAssignIn statement (kind 14, arg =
@@ -1401,7 +1401,7 @@ fn step_enum(k: Word, v: Word) -> Word {
     } else {
         bs.enum_phase = 0;
         bs.expect_operand = 0;
-        1 + bs.enum_disc * 64
+        1 + bs.enum_disc * enc.radix
     } } } } }
 }
 
