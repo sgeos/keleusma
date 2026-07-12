@@ -86,7 +86,8 @@ fn status() {
     println!("function calls, and scalar and");
     println!("indexed data-segment reads and writes, into an op buffer it streams with its own");
     println!("deduplicating constant pool and counted local-frame size, and lexer");
-    println!("increment 1, a streaming tokenizer, both compile, verify, and run (see");
+    println!("increment 2, a streaming tokenizer with maximal munch over the two-byte");
+    println!("operators, both compile, verify, and run (see");
     println!("tests/selfhost_codegen.rs and `lex <file>`). The codegen stage is now");
     println!("FULLY SELF-HOSTING: all 34 of its functions, including the multiheaded");
     println!("`yield emit_next` dispatch and the `loop main`, compile themselves");
@@ -103,8 +104,9 @@ fn status() {
 ///
 /// This drives `kel/lexer.kel` on the current runtime: it compiles the lexer,
 /// places the input source in the loop's `shared data` byte array, and resumes
-/// it, decoding the increment-1 `kind + value*16` token wire. It is the first
-/// end-to-end proof that the host can drive a self-hosted pipeline stage.
+/// it, decoding the `kind + value*16` token wire (through increment 2, which adds
+/// the OP2 two-byte-operator kind). It is the first end-to-end proof that the host
+/// can drive a self-hosted pipeline stage.
 fn run_lexer(path: &str) {
     use keleusma::Arena;
     use keleusma::bytecode::Value;
@@ -168,6 +170,20 @@ fn run_lexer(path: &str) {
                     2 => println!("  IDENT   len {value}"),
                     3 => println!("  INT     {value}"),
                     4 => println!("  PUNCT   {:?}", value as u8 as char),
+                    5 => {
+                        // A two-byte operator (increment 2); value is its compound code.
+                        let op = match value {
+                            0 => "==",
+                            1 => "!=",
+                            2 => "<=",
+                            3 => ">=",
+                            4 => "::",
+                            5 => "..",
+                            6 => "=>",
+                            _ => "?op",
+                        };
+                        println!("  OP2     {op}");
+                    }
                     other => println!("  ?kind {other} value {value}"),
                 }
             }
