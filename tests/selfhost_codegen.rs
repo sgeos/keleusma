@@ -2870,3 +2870,62 @@ fn self_host_compiles_a_whole_program_byte_identically() {
     );
     assert_self_host_yields(m4, 5, 40); // bump(5)=15; stride(15)=15*2+10=40
 }
+
+// Nested `for .. limit`: the loop-context stack lets an inner loop nest in an outer
+// loop's body without displacing it. Byte-identical to the reference, and the built
+// module computes the doubly-nested accumulation.
+#[test]
+fn parse_into_codegen_nested_for_matches_the_reference() {
+    let cases: &[(&str, i64, i64)] = &[
+        // inner loop accumulates a scalar; n*n increments.
+        (
+            "private data d { s: Word } fn main(n: Word) -> Word { for i in 0..n limit 4 { for j in 0..n limit 4 { d.s = d.s + 1; } } d.s }",
+            3,
+            9,
+        ),
+        // the inner loop's bound and body use the outer variable.
+        (
+            "private data d { s: Word } fn main(n: Word) -> Word { for i in 0..n limit 4 { for j in 0..i limit 4 { d.s = d.s + i; } } d.s }",
+            3,
+            5,
+        ),
+        // a statement before the nested loops, and a scalar write after the inner loop.
+        (
+            "private data d { s: Word } fn main(n: Word) -> Word { d.s = 1; for i in 0..n limit 4 { for j in 0..n limit 4 { d.s = d.s + 1; } d.s = d.s + 10; } d.s }",
+            2,
+            25,
+        ),
+    ];
+    for &(src, input, expected) in cases {
+        let (records, param_count, category) = parse_function_records(src);
+        let body = reconstruct_body(&records, category);
+        let (emitted, pool, local_count) = run_codegen(&body, param_count);
+        let reference = compile_src(src);
+        let idx = reference
+            .chunks
+            .iter()
+            .position(|c| c.name == "main")
+            .unwrap();
+        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
+        assert_eq!(
+            local_count, reference.chunks[idx].local_count as i64,
+            "local_count for `{src}`"
+        );
+        let mut built = compile_src(src);
+        built.chunks[idx].ops = emitted;
+        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].local_count = local_count as u16;
+        let need = required_persistent_capacity_for(&built);
+        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+        arena.resize_persistent(need).expect("resize");
+        let mut vm = Vm::new(built, &arena).expect("verify built");
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        match vm
+            .call_with_shared(&mut shared, &[Value::Int(input)])
+            .expect("call")
+        {
+            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
+            other => panic!("unexpected result for `{src}`: {other:?}"),
+        }
+    }
+}
