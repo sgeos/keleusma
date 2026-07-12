@@ -2774,11 +2774,15 @@ fn self_host_compile(src: &str) -> Module {
         i = j;
         let pc = group[0].params;
         // A yield head compiles as a multihead chunk; a fn or loop as a single body.
+        // The reconstruction runs through the self-hosted reconstruct.kel stage rather
+        // than the Rust `reconstruct_into`, so the whole self-host compile path is
+        // Keleusma from lexing through code generation and the host only moves data
+        // between stages.
         let body = if group[0].cat == 2 {
-            build_multihead_bridge(&group, pc)
+            reconstruct_via_kel_multihead(&group, pc)
         } else {
             let category = if group[0].cat == 3 { 2 } else { 0 };
-            reconstruct_body(&group[0].body, category)
+            reconstruct_via_kel(&group[0].body, category, pc)
         };
         let (ops, pool, lc) = run_codegen(&body, pc);
         let idx = module
@@ -3265,10 +3269,22 @@ const RC_HEAD_BODY_LEN: usize = RC_HEAD_COUNT + 1 + 16 * 3;
 /// Drive reconstruct.kel over one function's postorder records and read back the
 /// reconstructed forest as a `Body`. This increment reads only the node arrays and
 /// the root/category; the side arrays (call/for/match) arrive with those kinds.
+// Compile reconstruct.kel once and clone the module per call: `self_host_compile`
+// drives it for every function, so recompiling each time dominates the runtime.
+fn reconstruct_kel_module() -> Module {
+    static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| {
+            compile_src(
+                &std::fs::read_to_string("compiler/kel/reconstruct.kel")
+                    .expect("read reconstruct.kel"),
+            )
+        })
+        .clone()
+}
+
 fn reconstruct_via_kel(records: &[(i64, i64)], category: i64, param_count: usize) -> Body {
-    let src =
-        std::fs::read_to_string("compiler/kel/reconstruct.kel").expect("read reconstruct.kel");
-    let m = compile_src(&src);
+    let m = reconstruct_kel_module();
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
@@ -3442,9 +3458,7 @@ fn reconstruct_via_kel_multihead(heads: &[&ParsedFn], pc: usize) -> Body {
         recs.extend_from_slice(&h.body);
     }
 
-    let src =
-        std::fs::read_to_string("compiler/kel/reconstruct.kel").expect("read reconstruct.kel");
-    let m = compile_src(&src);
+    let m = reconstruct_kel_module();
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
