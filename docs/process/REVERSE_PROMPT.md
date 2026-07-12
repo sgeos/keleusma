@@ -8,7 +8,23 @@ AI to Human communication channel.
 
 ## Last Updated
 
-**Date**: 2026-07-09 (session 23)
+**Date**: 2026-07-12 (session 24)
+
+**SELF-HOSTED MODULE-SCAFFOLD ASSEMBLY COMPLETE except the WCET/WCMU cost numbers; `reconstruct.kel` (a fourth Keleusma stage) self-compiles; landed on `v0.2.3`.**
+
+Two threads landed this session. First, reconstruction moved into Keleusma. `compiler/kel/reconstruct.kel` is a new fourth pipeline stage, a postorder stack machine that bridges `parse.kel`'s `(kind, arg)` record stream to `codegen.kel`'s random-access `(kind, arg, lhs, rhs)` forest, replacing the host-side Rust `reconstruct_into`. It covers the whole grammar (atomics, operators, blocks, `if`, calls, indexed writes, `for .. limit`, `match`, multiheaded dispatch) and self-compiles byte-identically, so all four stage files now self-compile.
+
+Second, the host driver now assembles every module-scaffold field from `parse.kel`'s records plus the self-hosted `codegen.kel` output, each proven byte-identical to the reference compiler as a struct and then, end to end, through wire serialization. Assembled and proven this session: the `DataLayout` (slots, shared and private-composite layout, private init), the enum-layout table (name-ordered), the typed-verifier `ChunkSignature` table (Word/Byte stage boundaries map to `WireShape::Scalar`), the `schema_hash` (via the public `compute_schema_hash`), and the chunk-table metadata (`param_count`, `block_type` from the category, `param_types` as `TypeTag`). The capstone test `self_assembled_scaffold_serializes_byte_identically` splices all of these plus the self-hosted ops into a module and asserts `to_bytes()` equals the reference for all four stages.
+
+**The sole remaining reference-borrowed piece** is the two WCET/WCMU declared-bound numbers per module (`wcet_cycles`, `wcmu_bytes`). The cost model itself is already public (`Op::cost`, `Op::stack_growth`), so no cost table needs replication; what remains is the control-flow-aware max-cost traversal over each Stream chunk's op region (`verify.rs::wcet_region` and `extract_loop_iteration_bound`, roughly 285 lines). Its true self-hosted form is a Keleusma WCET/WCMU stage, a large distinct effort of V0.3.x scope; a driver-side Rust reimplementation would be pure duplication of `verify.rs` and was judged low value.
+
+**Verification.** `selfhost_codegen` suite green (35 tests) under `--features "compile verify"`; fmt clean. All four `.kel` stages self-compile byte-identically. No wire-format, `BYTECODE_VERSION`, or ISA change this session (the earlier u32 shared-offset widening to `BYTECODE_VERSION = 2` and `parse.kel` self-compile were the preceding sessions).
+
+**Intended next step (operator decision).** The self-hosted scaffold assembly is a complete milestone. The WCET/WCMU cost analysis is the natural next unit but is not an incremental green-commit-sized slice; it wants either (a) a scoped Keleusma WCET/WCMU stage (the honest self-hosted form, V0.3.x effort) or (b) an explicit decision to leave the two numbers driver-derived from the reference for now. Awaiting operator direction on which, and on whether to fold `reconstruct.kel` and the scaffold-assembly narrative into `V0_3_0_SELF_HOSTING.md` as the current state of record.
+
+---
+
+### Prior handoff (session 23): PRIVATE-DATA `.data`-SECTION LOAD-TIME INITIALIZATION
 
 **PRIVATE-DATA `.data`-SECTION LOAD-TIME INITIALIZATION landed on `v0.2.3`; committed, merged to `main`, deployed to the playground.**
 
