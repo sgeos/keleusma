@@ -61,7 +61,7 @@ require word >= 32;
 // The table lives in shared data (not private) precisely so the host can read it.
 shared data src {
     len: Word,
-    bytes: [Byte; 4096],
+    bytes: [Byte; 24576],
     istart: [Word; 512],
     ilen: [Word; 512],
     icount: Word,

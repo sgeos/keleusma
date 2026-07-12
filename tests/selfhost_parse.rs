@@ -38,11 +38,11 @@ use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capa
 // Shared-data slot offsets, mirroring the `toks` block in parse.kel.
 const LEN: usize = 0;
 const KINDS: usize = 1;
-const VALS: usize = 1 + 2048;
-const LIMIT_ID: usize = 1 + 2048 + 2048;
-const CHUNK_COUNT: usize = 1 + 2048 + 2048 + 1;
-const CHUNKS: usize = 1 + 2048 + 2048 + 2;
-const REQUIRE_ID: usize = 1 + 2048 + 2048 + 2 + 256;
+const VALS: usize = 1 + 3072;
+const LIMIT_ID: usize = 1 + 3072 + 3072;
+const CHUNK_COUNT: usize = 1 + 3072 + 3072 + 1;
+const CHUNKS: usize = 1 + 3072 + 3072 + 2;
+const REQUIRE_ID: usize = 1 + 3072 + 3072 + 2 + 256;
 
 /// Map the reference token stream into the stage's unified `(kind, value)` pairs. The
 /// operator codes are body.kel's (`Plus` 21 upward); the header keywords and punctuation
