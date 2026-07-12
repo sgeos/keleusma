@@ -1619,18 +1619,23 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize) {
     panic!("parse.kel did not reach DONE");
 }
 
-/// Rebuild the codegen node forest from parse.kel's postorder record stream. A
-/// leaf (Literal 1, Local 2) pushes itself; a binary operator (BinOp 3, Andalso 8,
-/// Orelse 9) pops its right then left child; a unary operator (Not 6, Neg 10) pops
-/// its single operand into `lhs`. The root is the one node left on the stack. This
-/// increment covers the arithmetic, comparison, bitwise, unary, and short-circuit
-/// kinds; a record of any other kind is rejected until a later increment adds it.
+/// Rebuild the codegen node forest from parse.kel's postorder record stream with a
+/// node-index stack, the inverse of the reference flatten. A leaf (Literal 1,
+/// Local 2, Unit 20) pushes itself. A binary node pops its right then left child:
+/// the operators (BinOp 3, Andalso 8, Orelse 9), and the block-fold statements
+/// LetIn (5, whose `arg` is the local slot) and ExprStmt (21), whose left child is
+/// the value and right child the continuation. A unary operator (Not 6, Neg 10)
+/// pops its single operand into `lhs`. An If (4) pops its else, then, and cond
+/// children and takes the cond node index as its `arg` (the record's `arg` is 0).
+/// The root is the one node left on the stack. This increment covers the
+/// arithmetic, comparison, bitwise, unary, short-circuit, block, and if kinds; a
+/// record of any other kind is rejected until a later increment adds it.
 fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
     let mut nodes: Vec<Node> = Vec::new();
     let mut stack: Vec<i64> = Vec::new();
     for &(kind, arg) in records {
         let idx = match kind {
-            1 | 2 => {
+            1 | 2 | 20 => {
                 nodes.push(Node {
                     kind,
                     arg,
@@ -1639,7 +1644,7 @@ fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
                 });
                 (nodes.len() - 1) as i64
             }
-            3 | 8 | 9 => {
+            3 | 5 | 8 | 9 | 21 => {
                 let r = stack.pop().expect("binary rhs");
                 let l = stack.pop().expect("binary lhs");
                 nodes.push(Node {
@@ -1660,7 +1665,19 @@ fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
                 });
                 (nodes.len() - 1) as i64
             }
-            other => panic!("reconstruct_body: unsupported node kind {other} (arithmetic subset)"),
+            4 => {
+                let el = stack.pop().expect("if else");
+                let th = stack.pop().expect("if then");
+                let cond = stack.pop().expect("if cond");
+                nodes.push(Node {
+                    kind: 4,
+                    arg: cond,
+                    lhs: th,
+                    rhs: el,
+                });
+                (nodes.len() - 1) as i64
+            }
+            other => panic!("reconstruct_body: unsupported node kind {other}"),
         };
         stack.push(idx);
     }
@@ -1697,6 +1714,92 @@ fn parse_into_codegen_arithmetic_matches_the_reference() {
         ("fn main(a: Word) -> Word { a band 6 }", 5, 4),
         ("fn main(a: Word) -> Word { a bor 1 }", 4, 5),
         ("fn main(a: Word) -> Word { a bxor 3 }", 5, 6),
+    ];
+    for &(src, input, expected) in cases {
+        let (records, param_count) = parse_function_records(src);
+        let body = reconstruct_body(&records, 0);
+        let (emitted, pool, local_count) = run_codegen(&body, param_count);
+
+        let reference = compile_src(src);
+        let idx = reference
+            .chunks
+            .iter()
+            .position(|c| c.name == "main")
+            .unwrap();
+        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
+        assert_eq!(
+            local_count, reference.chunks[idx].local_count as i64,
+            "local_count for `{src}`"
+        );
+
+        let mut built = compile_src(src);
+        built.chunks[idx].ops = emitted;
+        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].local_count = local_count as u16;
+        let need = required_persistent_capacity_for(&built);
+        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+        arena.resize_persistent(need).expect("resize");
+        let mut vm = Vm::new(built, &arena).expect("verify built");
+        match vm.call(&[Value::Int(input)]).expect("call built") {
+            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
+            other => panic!("unexpected result for `{src}`: {other:?}"),
+        }
+    }
+}
+
+// The bridge over the block and control-flow node kinds: `let` bindings (LetIn),
+// bare expression statements (ExprStmt), the statement-only-block Unit, and
+// `if`/`else` including an else-less form and nesting. Same self-hosted path and
+// byte-identity check as the arithmetic bridge.
+#[test]
+fn parse_into_codegen_blocks_and_control_flow_match_the_reference() {
+    let cases: &[(&str, i64, i64)] = &[
+        // let bindings: value ops then SetLocal, tail reads the slot.
+        (
+            "fn main(input: Word) -> Word { let x = input + 1; x * 2 }",
+            20,
+            42,
+        ),
+        (
+            "fn main(input: Word) -> Word { let x = input + 1; let y = x + x; y }",
+            20,
+            42,
+        ),
+        // if/else as the tail, both branches taken across inputs.
+        (
+            "fn main(a: Word) -> Word { if a < 5 { 2 } else { 3 } }",
+            3,
+            2,
+        ),
+        (
+            "fn main(a: Word) -> Word { if a < 5 { 2 } else { 3 } }",
+            10,
+            3,
+        ),
+        // arithmetic in the branches.
+        (
+            "fn main(a: Word) -> Word { if a < 5 { a + 1 } else { a - 1 } }",
+            10,
+            9,
+        ),
+        // nested if in the else branch.
+        (
+            "fn main(a: Word) -> Word { if a < 5 { 1 } else { if a < 10 { 2 } else { 3 } } }",
+            7,
+            2,
+        ),
+        // a let bound inside each branch (monotonic slots).
+        (
+            "fn main(a: Word) -> Word { if a < 5 { let y = a + 1; y } else { let z = a - 1; z } }",
+            3,
+            4,
+        ),
+        // a let outside, then an if whose branches each bind a local.
+        (
+            "fn main(a: Word) -> Word { let x = a + 1; if x < 5 { let y = x + 1; y } else { let z = x - 1; z } }",
+            10,
+            10,
+        ),
     ];
     for &(src, input, expected) in cases {
         let (records, param_count) = parse_function_records(src);
