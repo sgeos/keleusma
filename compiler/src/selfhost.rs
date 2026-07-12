@@ -1,17 +1,17 @@
 //! The self-hosted compile pipeline as a reusable library.
 //!
-//! This ports the reconstruction bridge and stage drivers that prove the
-//! self-hosted stages self-compile (`../tests/selfhost_codegen.rs` in the parent
-//! `keleusma` crate) into the compiler subproject, so the `compile` command and the
-//! driver-level fixed-point test share one implementation. It drives
-//! `kel/lexer.kel` and `kel/parse.kel` over a source, reconstructs each function's
-//! (kind, arg, lhs, rhs) node forest from parse.kel's postorder record stream, and
-//! drives `kel/codegen.kel` to emit each chunk's ops, splicing them into a module
-//! whose data layout and chunk table come from the Rust-hosted reference compiler
-//! (`compile_src`). Two limitations remain on the road to full self-hosting, both
-//! documented in `MILESTONES.md`: the reconstruction is host-side Rust rather than a
-//! Keleusma stage, and the module scaffold (data layout, constant-pool metadata,
-//! auxiliary body) is taken from the reference rather than assembled from the stages.
+//! This ports the stage drivers that prove the self-hosted stages self-compile
+//! (`../tests/selfhost_codegen.rs` in the parent `keleusma` crate) into the compiler
+//! subproject, so the `compile` command and the driver-level fixed-point test share
+//! one implementation. It drives all four Keleusma stages over a source:
+//! `kel/lexer.kel` tokenizes, `kel/parse.kel` emits a postorder record stream,
+//! `kel/reconstruct.kel` folds that into the (kind, arg, lhs, rhs) node forest, and
+//! `kel/codegen.kel` emits each chunk's ops, which are spliced into a module. The
+//! host only moves data between stages; the compile logic is Keleusma end to end.
+//! One limitation remains on the road to full self-hosting, documented in
+//! `MILESTONES.md`: the module scaffold (data layout, constant-pool metadata,
+//! auxiliary body) is taken from the Rust-hosted reference compiler (`compile_src`)
+//! rather than assembled from the stage output.
 //!
 //! The stage sources are read relative to the current directory, trying the
 //! package-local `kel/...` path then the repo-root `compiler/kel/...` path, so the
@@ -321,240 +321,6 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
     (ops, pool, local_count)
 }
 
-/// Rebuild the codegen node forest from parse.kel's postorder record stream with a
-/// node-index stack, the inverse of the reference flatten. A leaf (Literal 1,
-/// Local 2, Unit 20) pushes itself. A binary node pops its right then left child:
-/// the operators (BinOp 3, Andalso 8, Orelse 9), and the block-fold statements
-/// LetIn (5, whose `arg` is the local slot) and ExprStmt (21), whose left child is
-/// the value and right child the continuation. A unary operator (Not 6, Neg 10)
-/// pops its single operand into `lhs`. An If (4) pops its else, then, and cond
-/// children and takes the cond node index as its `arg` (the record's `arg` is 0).
-/// The root is the one node left on the stack. The data-access kinds fit the same
-/// groups: a scalar DataRead (11) is a leaf carrying its slot; a DataAssign (12)
-/// folds like a LetIn carrying its slot; and an IndexRead (13) is unary over the
-/// index, carrying `base + len*2^24` in `arg`. A Call (7) packs `chunk + count*256`
-/// in its record `arg`; it pops its `count` argument nodes, reverses them to source
-/// order into the `call_args` side array, and takes that slice's start as `lhs` and
-/// the count as `rhs`. An indexed write pairs an IndexStore signal (36), which
-/// folds the value and index into a kind-15 node (value in lhs, index in rhs),
-/// with an IndexAssign (14) that folds like a LetIn carrying `base + len*2^24`.
-/// A `for .. limit` loop streams its start, end, body, and the four literals cap/
-/// 0/1/2 as nodes, then five SlotRecords (32) carrying its frame slots, then a
-/// ForBuild (33) that assembles the 12-word limit_parts entry (the five slots then
-/// the start, end, body, cap, 0, 1, 2 node indices); the ForLimit statement (23)
-/// folds into the block popping only the continuation. A `match` streams its
-/// scrutinee, a (literal, result) pair per literal arm, and the wildcard result,
-/// then a MatchBuild (34) packing `temp*1024 + lit_count`, which assembles the
-/// match_parts entry (temp, wildcard, then the pairs) and builds the MatchIn node.
-/// A YieldExpr (24) is unary, holding the yielded expression in `lhs`. This
-/// increment covers the arithmetic, comparison, bitwise, unary, short-circuit,
-/// block, if, scalar and indexed data-access, call, for-limit, integer-match, and
-/// yield kinds; a record of any other kind is rejected until a later increment adds
-/// it (the multiheaded dispatch and its head_parts remain).
-fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
-    let mut nodes: Vec<Node> = Vec::new();
-    let mut call_args: Vec<i64> = Vec::new();
-    let mut limit_parts: Vec<i64> = Vec::new();
-    let mut match_parts: Vec<i64> = Vec::new();
-    let root = reconstruct_into(
-        records,
-        &mut nodes,
-        &mut call_args,
-        &mut limit_parts,
-        &mut match_parts,
-    );
-    Body {
-        nodes,
-        call_args,
-        for_parts: Vec::new(),
-        match_parts,
-        limit_parts,
-        head_parts: Vec::new(),
-        category,
-        root,
-    }
-}
-
-/// Reconstruct one postorder record forest into the shared `nodes` array (and the
-/// shared side arrays), returning the root node index. Node indices are absolute in
-/// `nodes`, so several forests -- a multihead's per-head guards and bodies -- can be
-/// reconstructed into one array and referenced by `head_parts`.
-fn reconstruct_into(
-    records: &[(i64, i64)],
-    nodes: &mut Vec<Node>,
-    call_args: &mut Vec<i64>,
-    limit_parts: &mut Vec<i64>,
-    match_parts: &mut Vec<i64>,
-) -> i64 {
-    let mut stack: Vec<i64> = Vec::new();
-    let mut pending_slots: Vec<i64> = Vec::new();
-    for &(kind, arg) in records {
-        // A SlotRecord (32) carries a frame slot for the pending `for` loop, and a
-        // ForBuild (33) assembles the 12-word limit_parts entry from the five
-        // collected slots and the seven loop nodes on the stack. Neither is a node.
-        if kind == 32 {
-            pending_slots.push(arg);
-            continue;
-        }
-        if kind == 33 {
-            let two = stack.pop().expect("for two");
-            let one = stack.pop().expect("for one");
-            let zero = stack.pop().expect("for zero");
-            let cap = stack.pop().expect("for cap");
-            let body = stack.pop().expect("for body");
-            let end = stack.pop().expect("for end");
-            let start = stack.pop().expect("for start");
-            assert_eq!(pending_slots.len(), 5, "a for loop has five SlotRecords");
-            limit_parts.extend([
-                pending_slots[0],
-                pending_slots[1],
-                pending_slots[2],
-                pending_slots[3],
-                pending_slots[4],
-                start,
-                end,
-                body,
-                cap,
-                zero,
-                one,
-                two,
-            ]);
-            pending_slots.clear();
-            continue;
-        }
-        let idx = match kind {
-            1 | 2 | 11 | 20 => {
-                nodes.push(Node {
-                    kind,
-                    arg,
-                    lhs: 0,
-                    rhs: 0,
-                });
-                (nodes.len() - 1) as i64
-            }
-            3 | 5 | 8 | 9 | 12 | 14 | 21 => {
-                let r = stack.pop().expect("binary rhs");
-                let l = stack.pop().expect("binary lhs");
-                nodes.push(Node {
-                    kind,
-                    arg,
-                    lhs: l,
-                    rhs: r,
-                });
-                (nodes.len() - 1) as i64
-            }
-            36 => {
-                // IndexStore signal: fold the value and index already on the stack
-                // into a kind-15 IndexStore node (value in lhs, index in rhs). The
-                // record kind is 36 because 15 collides with the record DONE marker;
-                // the node it produces is a real kind-15.
-                let value = stack.pop().expect("index-store value");
-                let index = stack.pop().expect("index-store index");
-                nodes.push(Node {
-                    kind: 15,
-                    arg: 0,
-                    lhs: value,
-                    rhs: index,
-                });
-                (nodes.len() - 1) as i64
-            }
-            23 => {
-                // ForLimit statement: arg is the limit_parts entry start (already
-                // assembled at the ForBuild). It folds into the block popping only
-                // the continuation; its lhs is unused.
-                let cont = stack.pop().expect("forlimit continuation");
-                nodes.push(Node {
-                    kind: 23,
-                    arg,
-                    lhs: 0,
-                    rhs: cont,
-                });
-                (nodes.len() - 1) as i64
-            }
-            34 => {
-                // MatchBuild signal: arg packs `temp*1024 + lit_count`. The stack
-                // holds the scrutinee, then a (literal, result) pair per literal arm,
-                // then the wildcard result on top. Assemble the match_parts entry
-                // (temp, wildcard, then the literal/result pairs) and build the
-                // MatchIn node (kind 22): arg = entry start, lhs = scrutinee, rhs =
-                // literal-arm count. Unlike the for loop, the build signal itself
-                // produces the value node.
-                let temp = arg.div_euclid(1024);
-                let lit_count = arg.rem_euclid(1024);
-                let wc = stack.pop().expect("match wildcard result");
-                let mut pairs: Vec<(i64, i64)> = Vec::new();
-                for _ in 0..lit_count {
-                    let res = stack.pop().expect("match arm result");
-                    let lit = stack.pop().expect("match arm literal");
-                    pairs.push((lit, res));
-                }
-                pairs.reverse();
-                let scrut = stack.pop().expect("match scrutinee");
-                let base = match_parts.len() as i64;
-                match_parts.push(temp);
-                match_parts.push(wc);
-                for (lit, res) in &pairs {
-                    match_parts.push(*lit);
-                    match_parts.push(*res);
-                }
-                nodes.push(Node {
-                    kind: 22,
-                    arg: base,
-                    lhs: scrut,
-                    rhs: lit_count,
-                });
-                (nodes.len() - 1) as i64
-            }
-            6 | 10 | 13 | 24 | 26 => {
-                let c = stack.pop().expect("unary operand");
-                nodes.push(Node {
-                    kind,
-                    arg,
-                    lhs: c,
-                    rhs: 0,
-                });
-                (nodes.len() - 1) as i64
-            }
-            4 => {
-                let el = stack.pop().expect("if else");
-                let th = stack.pop().expect("if then");
-                let cond = stack.pop().expect("if cond");
-                nodes.push(Node {
-                    kind: 4,
-                    arg: cond,
-                    lhs: th,
-                    rhs: el,
-                });
-                (nodes.len() - 1) as i64
-            }
-            7 => {
-                // Call: arg packs `chunk + count*256`. Pop the count argument node
-                // indices (last-pushed is the last argument), reverse them to source
-                // order, and append them to the packed call_args side array. The Call
-                // node's lhs is that slice's start and rhs the argument count.
-                let chunk = arg.rem_euclid(256);
-                let count = arg.div_euclid(256);
-                let mut popped: Vec<i64> =
-                    (0..count).map(|_| stack.pop().expect("call arg")).collect();
-                popped.reverse();
-                let args_start = call_args.len() as i64;
-                call_args.extend(popped);
-                nodes.push(Node {
-                    kind: 7,
-                    arg: chunk,
-                    lhs: args_start,
-                    rhs: count,
-                });
-                (nodes.len() - 1) as i64
-            }
-            other => panic!("reconstruct_body: unsupported node kind {other}"),
-        };
-        stack.push(idx);
-    }
-    assert_eq!(stack.len(), 1, "exactly one root node remains");
-    stack[0]
-}
-
 /// Drive lexer.kel then parse.kel over `src` and return every function it yields, each
 /// with its guard and body records, plus the interned-name table. Multiheaded functions
 /// appear as several same-named entries in declaration order.
@@ -667,77 +433,6 @@ pub fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>) {
     panic!("parse.kel did not reach DONE");
 }
 
-/// Combine the heads of a multiheaded function into the codegen Body codegen.kel's
-/// multihead dispatch consumes. Each head's guard and body are reconstructed into one
-/// shared node array, its frame slots remapped by the head's `param_start` -- the heads'
-/// parameter copies occupy `(i+1)*pc .. (i+2)*pc` (this covers heads whose only frame
-/// slots are the parameters; heads with their own lets or loops need the additional
-/// per-head temp offset, a later refinement). Each head contributes a four-word
-/// head_parts entry (param_start, guarded, guard node, body node), and a MultiHead node
-/// (kind 25, rhs = head count) is the root; the category is 3.
-fn build_multihead_bridge(heads: &[&ParsedFn], pc: usize) -> Body {
-    let mut nodes: Vec<Node> = Vec::new();
-    let mut call_args: Vec<i64> = Vec::new();
-    let mut limit_parts: Vec<i64> = Vec::new();
-    let mut match_parts: Vec<i64> = Vec::new();
-    let mut head_parts: Vec<i64> = Vec::new();
-    let mut entries: Vec<(i64, i64, i64, i64)> = Vec::new();
-    for (i, h) in heads.iter().enumerate() {
-        let base = ((i + 1) * pc) as i64;
-        // Remap frame-slot references (Local) into this head's parameter window.
-        let remap = |recs: &[(i64, i64)]| -> Vec<(i64, i64)> {
-            recs.iter()
-                .map(|&(k, a)| if k == 2 { (k, a + base) } else { (k, a) })
-                .collect()
-        };
-        let (guarded, guard_node) = if h.guard.is_empty() {
-            (0i64, 0i64)
-        } else {
-            let g = remap(&h.guard);
-            let root = reconstruct_into(
-                &g,
-                &mut nodes,
-                &mut call_args,
-                &mut limit_parts,
-                &mut match_parts,
-            );
-            (1i64, root)
-        };
-        let b = remap(&h.body);
-        let body_node = reconstruct_into(
-            &b,
-            &mut nodes,
-            &mut call_args,
-            &mut limit_parts,
-            &mut match_parts,
-        );
-        entries.push((base, guarded, guard_node, body_node));
-    }
-    for (ps, g, gn, bn) in &entries {
-        head_parts.push(*ps);
-        head_parts.push(*g);
-        head_parts.push(*gn);
-        head_parts.push(*bn);
-    }
-    nodes.push(Node {
-        kind: 25,
-        arg: 0,
-        lhs: 0,
-        rhs: heads.len() as i64,
-    });
-    let root = (nodes.len() - 1) as i64;
-    Body {
-        nodes,
-        call_args,
-        for_parts: Vec::new(),
-        match_parts,
-        limit_parts,
-        head_parts,
-        category: 3,
-        root,
-    }
-}
-
 /// Self-host-compile a whole program: drive the pipeline over every function, reconstruct
 /// each into its codegen Body (grouping same-named heads into one multihead), run
 /// codegen.kel, and splice the self-hosted ops, constant pool, and local_count into the
@@ -760,11 +455,13 @@ pub fn self_host_compile(src: &str) -> Module {
         i = j;
         let pc = group[0].params;
         // A yield head compiles as a multihead chunk; a fn or loop as a single body.
+        // The reconstruction runs through the self-hosted reconstruct.kel stage, so the
+        // whole compile path is Keleusma and the host only moves data between stages.
         let body = if group[0].cat == 2 {
-            build_multihead_bridge(&group, pc)
+            reconstruct_via_kel_multihead(&group, pc)
         } else {
             let category = if group[0].cat == 3 { 2 } else { 0 };
-            reconstruct_body(&group[0].body, category)
+            reconstruct_via_kel(&group[0].body, category, pc)
         };
         let (ops, pool, lc) = run_codegen(&body, pc);
         let idx = module
@@ -777,4 +474,184 @@ pub fn self_host_compile(src: &str) -> Module {
         module.chunks[idx].local_count = lc as u16;
     }
     module
+}
+
+// -- reconstruct.kel drivers (ported from tests/selfhost_codegen.rs) --------
+
+// Flat shared-slot offsets of reconstruct.kel's single `io` block: the record
+// input, then the codegen.kel-mirroring forest output, then the multihead input.
+const RC_REC_COUNT: usize = 0;
+const RC_IN_CATEGORY: usize = 1;
+const RC_IN_PARAM: usize = 2;
+const RC_REC_KIND: usize = 3;
+const RC_REC_ARG: usize = 3 + 1024;
+const RC_AST_BASE: usize = 3 + 1024 * 2;
+const RC_AST_ROOT: usize = RC_AST_BASE;
+const RC_AST_KINDS: usize = RC_AST_BASE + 1;
+const RC_AST_ARGS: usize = RC_AST_BASE + 1 + 1024;
+const RC_AST_LHS: usize = RC_AST_BASE + 1 + 1024 * 2;
+const RC_AST_RHS: usize = RC_AST_BASE + 1 + 1024 * 3;
+const RC_AST_CALL_ARGS: usize = RC_AST_BASE + 1 + 1024 * 4;
+const RC_AST_MATCH_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 2;
+const RC_AST_LIMIT_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 3;
+const RC_AST_HEAD_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 4;
+const RC_AST_CATEGORY: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 5 + 1;
+const RC_HEAD_COUNT: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 5 + 2;
+const RC_HEAD_GUARD_START: usize = RC_HEAD_COUNT + 1;
+const RC_HEAD_GUARD_LEN: usize = RC_HEAD_COUNT + 1 + 16;
+const RC_HEAD_BODY_START: usize = RC_HEAD_COUNT + 1 + 16 * 2;
+const RC_HEAD_BODY_LEN: usize = RC_HEAD_COUNT + 1 + 16 * 3;
+
+/// Drive reconstruct.kel over one function's postorder records and read back the
+/// reconstructed forest as a `Body`. This increment reads only the node arrays and
+/// the root/category; the side arrays (call/for/match) arrive with those kinds.
+// Compile reconstruct.kel once and clone the module per call: `self_host_compile`
+// drives it for every function, so recompiling each time dominates the runtime.
+fn reconstruct_kel_module() -> Module {
+    static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| compile_src(&read_stage("kel/reconstruct.kel")))
+        .clone()
+}
+
+fn reconstruct_via_kel(records: &[(i64, i64)], category: i64, param_count: usize) -> Body {
+    let m = reconstruct_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify reconstruct.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.set_shared(&mut shared, RC_REC_COUNT, Value::Int(records.len() as i64))
+        .unwrap();
+    vm.set_shared(&mut shared, RC_IN_CATEGORY, Value::Int(category))
+        .unwrap();
+    vm.set_shared(&mut shared, RC_IN_PARAM, Value::Int(param_count as i64))
+        .unwrap();
+    for (i, &(k, a)) in records.iter().enumerate() {
+        vm.set_shared(&mut shared, RC_REC_KIND + i, Value::Int(k))
+            .unwrap();
+        vm.set_shared(&mut shared, RC_REC_ARG + i, Value::Int(a))
+            .unwrap();
+    }
+    let node_count = match vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call")
+    {
+        VmState::Yielded(Value::Int(n)) => n as usize,
+        other => panic!("unexpected reconstruct.kel state: {other:?}"),
+    };
+    let rd = |vm: &Vm<'_, '_>, shared: &[u8], slot: usize| -> i64 {
+        match vm.get_shared(shared, slot).unwrap() {
+            Value::Int(n) => n,
+            o => panic!("expected Int at {slot}, got {o:?}"),
+        }
+    };
+    let root = rd(&vm, &shared, RC_AST_ROOT);
+    let mut nodes = Vec::with_capacity(node_count);
+    for i in 0..node_count {
+        nodes.push(Node {
+            kind: rd(&vm, &shared, RC_AST_KINDS + i),
+            arg: rd(&vm, &shared, RC_AST_ARGS + i),
+            lhs: rd(&vm, &shared, RC_AST_LHS + i),
+            rhs: rd(&vm, &shared, RC_AST_RHS + i),
+        });
+    }
+    // Read each 64-entry side array in full; the caller compares only the prefix the
+    // Rust reconstruction populated.
+    let read_side = |vm: &Vm<'_, '_>, shared: &[u8], base: usize| -> Vec<i64> {
+        (0..64).map(|k| rd(vm, shared, base + k)).collect()
+    };
+    let call_args = read_side(&vm, &shared, RC_AST_CALL_ARGS);
+    let match_parts = read_side(&vm, &shared, RC_AST_MATCH_PARTS);
+    let limit_parts = read_side(&vm, &shared, RC_AST_LIMIT_PARTS);
+    Body {
+        nodes,
+        call_args,
+        for_parts: Vec::new(),
+        match_parts,
+        limit_parts,
+        head_parts: Vec::new(),
+        category: rd(&vm, &shared, RC_AST_CATEGORY),
+        root,
+    }
+}
+
+/// Drive reconstruct.kel over a group of same-named heads (a multiheaded function),
+/// feeding each head's guard and body record ranges, and read back the reconstructed
+/// multihead `Body`.
+fn reconstruct_via_kel_multihead(heads: &[&ParsedFn], pc: usize) -> Body {
+    // Concatenate every head's guard then body records, tracking the per-head offsets.
+    let mut recs: Vec<(i64, i64)> = Vec::new();
+    let mut gs = Vec::new();
+    let mut gl = Vec::new();
+    let mut bs = Vec::new();
+    let mut bl = Vec::new();
+    for h in heads {
+        gs.push(recs.len());
+        gl.push(h.guard.len());
+        recs.extend_from_slice(&h.guard);
+        bs.push(recs.len());
+        bl.push(h.body.len());
+        recs.extend_from_slice(&h.body);
+    }
+
+    let m = reconstruct_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify reconstruct.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let set = |vm: &mut Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
+        vm.set_shared(shared, slot, Value::Int(v)).unwrap();
+    };
+    set(&mut vm, &mut shared, RC_REC_COUNT, recs.len() as i64);
+    set(&mut vm, &mut shared, RC_IN_CATEGORY, 3);
+    set(&mut vm, &mut shared, RC_IN_PARAM, pc as i64);
+    for (i, &(k, a)) in recs.iter().enumerate() {
+        set(&mut vm, &mut shared, RC_REC_KIND + i, k);
+        set(&mut vm, &mut shared, RC_REC_ARG + i, a);
+    }
+    set(&mut vm, &mut shared, RC_HEAD_COUNT, heads.len() as i64);
+    for h in 0..heads.len() {
+        set(&mut vm, &mut shared, RC_HEAD_GUARD_START + h, gs[h] as i64);
+        set(&mut vm, &mut shared, RC_HEAD_GUARD_LEN + h, gl[h] as i64);
+        set(&mut vm, &mut shared, RC_HEAD_BODY_START + h, bs[h] as i64);
+        set(&mut vm, &mut shared, RC_HEAD_BODY_LEN + h, bl[h] as i64);
+    }
+    let node_count = match vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call")
+    {
+        VmState::Yielded(Value::Int(n)) => n as usize,
+        other => panic!("unexpected reconstruct.kel state: {other:?}"),
+    };
+    let rd = |vm: &Vm<'_, '_>, shared: &[u8], slot: usize| -> i64 {
+        match vm.get_shared(shared, slot).unwrap() {
+            Value::Int(n) => n,
+            o => panic!("expected Int at {slot}, got {o:?}"),
+        }
+    };
+    let root = rd(&vm, &shared, RC_AST_ROOT);
+    let mut nodes = Vec::with_capacity(node_count);
+    for i in 0..node_count {
+        nodes.push(Node {
+            kind: rd(&vm, &shared, RC_AST_KINDS + i),
+            arg: rd(&vm, &shared, RC_AST_ARGS + i),
+            lhs: rd(&vm, &shared, RC_AST_LHS + i),
+            rhs: rd(&vm, &shared, RC_AST_RHS + i),
+        });
+    }
+    let read_side = |vm: &Vm<'_, '_>, shared: &[u8], base: usize| -> Vec<i64> {
+        (0..64).map(|k| rd(vm, shared, base + k)).collect()
+    };
+    Body {
+        nodes,
+        call_args: read_side(&vm, &shared, RC_AST_CALL_ARGS),
+        for_parts: Vec::new(),
+        match_parts: read_side(&vm, &shared, RC_AST_MATCH_PARTS),
+        limit_parts: read_side(&vm, &shared, RC_AST_LIMIT_PARTS),
+        head_parts: read_side(&vm, &shared, RC_AST_HEAD_PARTS),
+        category: rd(&vm, &shared, RC_AST_CATEGORY),
+        root,
+    }
 }

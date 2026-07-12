@@ -1,29 +1,29 @@
 //! Driver and bootstrap harness for the self-hosted Keleusma compiler (V0.3.0).
 //!
-//! The three pipeline stages live in Keleusma source under `kel/` (`lexer.kel`,
-//! `parse.kel`, `codegen.kel`), and each self-compiles byte-identically to the
-//! Rust-hosted reference compiler. The `compile <file>` command drives all three end
-//! to end through the shared `keleusma_selfhost::selfhost` library to emit bytecode
-//! and check the fixed-point property; `lex` and `parse` run the first one and two
-//! stages. Two gaps remain before full self-hosting (both in `selfhost.rs` and
-//! `MILESTONES.md`): the postorder-record-to-forest reconstruction between the parser
-//! and code generator is still host-side Rust, and the emitted module borrows its data
-//! layout and auxiliary body from the reference rather than assembling them from the
-//! stages. See `README.md` and `MILESTONES.md`; the authoritative design is
+//! The four pipeline stages live in Keleusma source under `kel/` (`lexer.kel`,
+//! `parse.kel`, `reconstruct.kel`, `codegen.kel`), and each self-compiles
+//! byte-identically to the Rust-hosted reference compiler. The `compile <file>`
+//! command drives all four end to end through the shared `keleusma_selfhost::selfhost`
+//! library to emit bytecode and check the fixed-point property, with the host only
+//! moving data between stages; `lex` and `parse` run the first one and two stages.
+//! One gap remains before full self-hosting (both in `selfhost.rs` and
+//! `MILESTONES.md`): the emitted module borrows its data layout and auxiliary body
+//! from the reference rather than assembling them from the stages. See `README.md`
+//! and `MILESTONES.md`; the authoritative design is
 //! `docs/roadmap/V0_3_0_SELF_HOSTING.md`.
 
 /// The bytecode format the self-hosted compiler must emit. Sourced from the parent
 /// runtime so the two compilers cannot drift on the wire format.
 const TARGET_BYTECODE_VERSION: u16 = keleusma::bytecode::BYTECODE_VERSION;
 
-/// The three pipeline stages, in migration order (roadmap Steps 1, 2, 3). The parser
-/// stage is the merged `parse.kel`, which parses a whole top-level declaration including
-/// its function body in one pass; the earlier split `parser.kel` and body `body.kel`
-/// loops are retained as the reference implementations and broader test coverage until
-/// `parse.kel` is composed into an end-to-end pipeline with matching coverage.
+/// The four pipeline stages, in pipeline order. The parser stage is the merged
+/// `parse.kel`, which parses a whole top-level declaration including its function body
+/// in one pass, emitting a postorder record stream; `reconstruct.kel` folds that into
+/// the node forest the codegen stage consumes.
 const STAGES: &[(&str, &str)] = &[
     ("lexer", "kel/lexer.kel"),
     ("parser", "kel/parse.kel"),
+    ("reconstruct", "kel/reconstruct.kel"),
     ("codegen", "kel/codegen.kel"),
 ];
 
@@ -135,15 +135,16 @@ fn status() {
     println!("body, a data block, an enum, or a use import -- in a single pass, folding");
     println!("body.kel's node-forest walk into parser.kel's declaration scan and");
     println!("resolving data fields and enums by accumulating their tables as it parses");
-    println!("(see tests/selfhost_parse.rs). ALL THREE STAGES NOW SELF-COMPILE");
-    println!("byte-identically (lexer.kel, codegen.kel, parse.kel), and the `compile");
-    println!("<file>` command drives the whole lexer/parser/codegen pipeline end to end");
-    println!("to bytecode, checking the fixed-point property (compiler/tests/fixed_point.rs).");
-    println!("Two gaps remain before full self-hosting: the record-to-forest reconstruction");
-    println!("between the parser and code generator is still host-side Rust, and the emitted");
-    println!("module borrows its data layout and auxiliary body from the reference rather");
-    println!("than assembling them from the stages. V0.3.0 ships when those close and the");
-    println!("bootstrap reaches the Phase B/C fixed point.");
+    println!("(see tests/selfhost_parse.rs). ALL FOUR STAGES NOW SELF-COMPILE");
+    println!("byte-identically (lexer.kel, parse.kel, reconstruct.kel, codegen.kel): the");
+    println!("record-to-forest reconstruction, once host-side Rust, is now the Keleusma");
+    println!("stage reconstruct.kel. The `compile <file>` command drives the whole four-stage");
+    println!("pipeline end to end to bytecode, checking the fixed-point property");
+    println!("(compiler/tests/fixed_point.rs), with the host only moving data between stages.");
+    println!("One gap remains before full self-hosting: the emitted module borrows its data");
+    println!("layout and auxiliary body from the reference rather than assembling them from");
+    println!("the stages. V0.3.0 ships when that closes and the bootstrap reaches the Phase");
+    println!("B/C fixed point.");
 }
 
 /// Run Stage 1 (the self-hosted lexer) over `path` and print the token stream.
@@ -581,14 +582,15 @@ fn compile_stage(src: &str, name: &str, deep: bool) -> keleusma::bytecode::Modul
 
 /// Run the whole self-hosted pipeline over `path` and report the emitted module.
 ///
-/// Drives `kel/lexer.kel`, `kel/parse.kel`, and `kel/codegen.kel` through the shared
+/// Drives the four Keleusma stages (`kel/lexer.kel`, `kel/parse.kel`,
+/// `kel/reconstruct.kel`, `kel/codegen.kel`) through the shared
 /// `keleusma_selfhost::selfhost` library to emit each chunk's ops, splicing them into
 /// a module whose data layout and chunk table come from the Rust-hosted reference
 /// (the same interim scaffold the fixed-point test uses). It then verifies the module
 /// loads and reports whether its ops, constant pool, and local-frame sizes are
 /// byte-identical to the reference compiler's -- the fixed-point property for this
-/// source. When `out` is set, the assembled bytecode is written there. Reconstruction
-/// remains host-side Rust; see `MILESTONES.md`.
+/// source. When `out` is set, the assembled bytecode is written there. See
+/// `MILESTONES.md`.
 fn run_compile_pipeline(path: &str, out: Option<&str>) {
     use keleusma::Arena;
     use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, required_persistent_capacity_for};
