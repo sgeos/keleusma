@@ -76,6 +76,7 @@ enum Node {
     Done = 15,
     Unit = 20,
     ExprStmt = 21,
+    YieldExpr = 24,
 }
 
 // The shunting-yard operator codes.
@@ -99,6 +100,7 @@ enum OpCode {
     Not = 17,
     Andalso = 18,
     Orelse = 19,
+    YieldMark = 22,
 }
 
 // The merged parser state.
@@ -200,6 +202,7 @@ fn prec_of(op: Word) -> Word {
         OpCode::Neg() => 9,
         OpCode::Not() => 9,
         OpCode::Paren() => 0,
+        OpCode::YieldMark() => 0,
         OpCode::Mul() => 8,
         OpCode::Div() => 8,
         OpCode::Mod() => 8,
@@ -220,6 +223,7 @@ fn emit_op(op: Word) -> Word {
         OpCode::Not() => Node::Not() as Word,
         OpCode::Andalso() => Node::Andalso() as Word,
         OpCode::Orelse() => Node::Orelse() as Word,
+        OpCode::YieldMark() => Node::YieldExpr() as Word,
         _ => Node::BinOp() as Word + op * 64,
     }
 }
@@ -283,6 +287,14 @@ fn step_op(k: Word) -> Word {
         ops.draining = 1;
         0
     } else {
+    if k == Tok::Yield() as Word {
+        // `yield` is a loosest-binding prefix: push its marker (precedence 0) so no
+        // operator pops across it and the whole following expression becomes its operand.
+        ops.opstack[ops.opsp] = OpCode::YieldMark() as Word;
+        ops.opsp = ops.opsp + 1;
+        ops.expect_operand = 1;
+        0
+    } else {
     if k == Tok::Not() as Word {
         ops.opstack[ops.opsp] = OpCode::Not() as Word;
         ops.opsp = ops.opsp + 1;
@@ -305,7 +317,7 @@ fn step_op(k: Word) -> Word {
         } else {
             0
         }
-    } } } }
+    } } } } }
 }
 
 // The conditional tokens `{`, `}`, `if`, `else`. A `{` after a condition drains it
@@ -378,7 +390,7 @@ fn synth_empty_else() -> Word {
 // A token that starts a statement (so a completed block-form operand before it was a
 // statement, not the block tail).
 fn is_stmt_start(k: Word) -> Word {
-    if k == Tok::Ident() as Word orelse k == Tok::IntLit() as Word orelse k == Tok::If() as Word orelse k == Tok::Let() as Word {
+    if k == Tok::Ident() as Word orelse k == Tok::IntLit() as Word orelse k == Tok::If() as Word orelse k == Tok::Let() as Word orelse k == Tok::Yield() as Word {
         1
     } else {
         0

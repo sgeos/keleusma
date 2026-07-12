@@ -266,7 +266,12 @@ fn flatten(e: &Expr, scope: &[(String, i64)], next_slot: &mut i64, out: &mut Vec
             }
             out.push((4, 0));
         }
-        other => panic!("increment 4 does not handle expression {other:?}"),
+        Expr::Yield { value, .. } => {
+            // `yield e` is a unary YieldExpr (kind 24) over its operand.
+            flatten(value, scope, next_slot, out);
+            out.push((24, 0));
+        }
+        other => panic!("increment does not handle expression {other:?}"),
     }
 }
 
@@ -532,4 +537,28 @@ fn a_block_form_if_statement_is_an_expr_stmt() {
             (21, 0)
         ]
     );
+}
+
+// A `yield e` tail is a YieldExpr over its operand; the operand may be a whole expression
+// since `yield` binds loosest.
+#[test]
+fn a_yield_expression_binds_loosest() {
+    let src = "yield gen(a: Word) -> Word { yield a + a }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    // a, a, BinOp(Add), YieldExpr.
+    assert_eq!(got.funcs[0].3, vec![(2, 0), (2, 0), (3, 1), (24, 0)]);
+    assert_eq!(got.funcs[0].0, 2); // yield category
+}
+
+// A `yield` as a `let` value composes as an ordinary operand.
+#[test]
+fn a_yield_may_be_a_let_value() {
+    let src = "yield gen(a: Word) -> Word { let x = yield a; x }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    // a, YieldExpr [value]; x=slot1 [tail]; LetIn(slot1).
+    assert_eq!(got.funcs[0].3, vec![(2, 0), (24, 0), (2, 1), (5, 1)]);
 }
