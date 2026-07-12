@@ -3227,3 +3227,128 @@ fn self_host_compiles_parse_kel_byte_identically() {
         );
     }
 }
+
+// -- reconstruct.kel: the self-hosted reconstruction stage --------------------
+//
+// parse.kel emits postorder (kind, arg) records; codegen.kel consumes a
+// random-access (kind, arg, lhs, rhs) forest. `reconstruct.kel` is the Keleusma
+// stage that bridges them, replacing the host-side Rust `reconstruct_into`. These
+// tests drive it and assert its `ast` output equals the Rust `reconstruct_body` for
+// the same records, grown construct by construct.
+
+// Flat shared-slot offsets of reconstruct.kel's `rin` then `ast` blocks (declaration
+// order). `rin` = rec_count(1) + in_category(1) + in_param_count(1) + rec_kind[1024]
+// + rec_arg[1024]; `ast` mirrors codegen.kel's block.
+const RC_REC_COUNT: usize = 0;
+const RC_IN_CATEGORY: usize = 1;
+const RC_IN_PARAM: usize = 2;
+const RC_REC_KIND: usize = 3;
+const RC_REC_ARG: usize = 3 + 1024;
+const RC_AST_BASE: usize = 3 + 1024 * 2;
+const RC_AST_ROOT: usize = RC_AST_BASE;
+const RC_AST_KINDS: usize = RC_AST_BASE + 1;
+const RC_AST_ARGS: usize = RC_AST_BASE + 1 + 1024;
+const RC_AST_LHS: usize = RC_AST_BASE + 1 + 1024 * 2;
+const RC_AST_RHS: usize = RC_AST_BASE + 1 + 1024 * 3;
+const RC_AST_CATEGORY: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 5 + 1;
+
+/// Drive reconstruct.kel over one function's postorder records and read back the
+/// reconstructed forest as a `Body`. This increment reads only the node arrays and
+/// the root/category; the side arrays (call/for/match) arrive with those kinds.
+fn reconstruct_via_kel(records: &[(i64, i64)], category: i64, param_count: usize) -> Body {
+    let src =
+        std::fs::read_to_string("compiler/kel/reconstruct.kel").expect("read reconstruct.kel");
+    let m = compile_src(&src);
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify reconstruct.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.set_shared(&mut shared, RC_REC_COUNT, Value::Int(records.len() as i64))
+        .unwrap();
+    vm.set_shared(&mut shared, RC_IN_CATEGORY, Value::Int(category))
+        .unwrap();
+    vm.set_shared(&mut shared, RC_IN_PARAM, Value::Int(param_count as i64))
+        .unwrap();
+    for (i, &(k, a)) in records.iter().enumerate() {
+        vm.set_shared(&mut shared, RC_REC_KIND + i, Value::Int(k))
+            .unwrap();
+        vm.set_shared(&mut shared, RC_REC_ARG + i, Value::Int(a))
+            .unwrap();
+    }
+    let node_count = match vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call")
+    {
+        VmState::Yielded(Value::Int(n)) => n as usize,
+        other => panic!("unexpected reconstruct.kel state: {other:?}"),
+    };
+    let rd = |vm: &Vm<'_, '_>, shared: &[u8], slot: usize| -> i64 {
+        match vm.get_shared(shared, slot).unwrap() {
+            Value::Int(n) => n,
+            o => panic!("expected Int at {slot}, got {o:?}"),
+        }
+    };
+    let root = rd(&vm, &shared, RC_AST_ROOT);
+    let mut nodes = Vec::with_capacity(node_count);
+    for i in 0..node_count {
+        nodes.push(Node {
+            kind: rd(&vm, &shared, RC_AST_KINDS + i),
+            arg: rd(&vm, &shared, RC_AST_ARGS + i),
+            lhs: rd(&vm, &shared, RC_AST_LHS + i),
+            rhs: rd(&vm, &shared, RC_AST_RHS + i),
+        });
+    }
+    Body {
+        nodes,
+        call_args: Vec::new(),
+        for_parts: Vec::new(),
+        match_parts: Vec::new(),
+        limit_parts: Vec::new(),
+        head_parts: Vec::new(),
+        category: rd(&vm, &shared, RC_AST_CATEGORY),
+        root,
+    }
+}
+
+/// Assert reconstruct.kel and the Rust reconstruction agree for `src`'s body.
+fn assert_reconstruct_kel_matches(src: &str) {
+    let (records, pc, cat) = parse_function_records(src);
+    let via_kel = reconstruct_via_kel(&records, cat, pc);
+    let via_rust = reconstruct_body(&records, cat);
+    assert_eq!(
+        via_kel.nodes.len(),
+        via_rust.nodes.len(),
+        "node count for `{src}`"
+    );
+    for (i, (a, b)) in via_kel.nodes.iter().zip(via_rust.nodes.iter()).enumerate() {
+        assert_eq!(
+            (a.kind, a.arg, a.lhs, a.rhs),
+            (b.kind, b.arg, b.lhs, b.rhs),
+            "node {i} for `{src}`"
+        );
+    }
+    assert_eq!(via_kel.root, via_rust.root, "root for `{src}`");
+    assert_eq!(via_kel.category, via_rust.category, "category for `{src}`");
+}
+
+// reconstruct.kel increment 1: the atomic, operator, block, and `if` node kinds --
+// leaves (Literal/Local/DataRead/Unit), binaries (BinOp/LetIn/Andalso/Orelse/
+// DataAssignIn/ExprStmt), unaries (Not/Neg/Cast), and If -- reconstruct to the same
+// forest the Rust bridge builds.
+#[test]
+fn reconstruct_kel_matches_rust_for_atomic_and_if_bodies() {
+    let cases: &[&str] = &[
+        "fn main(x: Word) -> Word { x + 1 }",
+        "fn main(x: Word) -> Word { let y = x + 1; y * 2 }",
+        "fn main(x: Word) -> Word { if x > 2 { x } else { 0 } }",
+        "fn main(x: Word) -> Word { let y = x + 1; if y > 2 { y } else { 0 } }",
+        "fn main(x: Word) -> Word { if not (x > 0) { 0 - x } else { x } }",
+        "fn main(x: Word) -> Word { (x > 0) andalso (x < 10) }",
+        "fn main(x: Word) -> Word { (x < 0) orelse (x > 10) }",
+        "fn main(x: Word) -> Word { if x > 0 { if x > 10 { 2 } else { 1 } } else { 0 } }",
+    ];
+    for src in cases {
+        assert_reconstruct_kel_matches(src);
+    }
+}

@@ -1,0 +1,139 @@
+// compiler/kel/reconstruct.kel -- the reconstruction stage of the self-hosted
+// compiler.
+//
+// parse.kel emits a function body as a postorder stream of (kind, arg) node
+// records; codegen.kel consumes a random-access (kind, arg, lhs, rhs) node forest.
+// This stage bridges the two, replacing the host-side Rust `reconstruct_into` so the
+// pipeline is record-driven end to end and the host is pure glue. It is a postorder
+// stack machine: a leaf record pushes a node, a binary or unary operator pops its
+// operand node indices, and the structural signals assemble the side arrays. Each
+// input record's `arg` is copied through unchanged, so a packed value such as an
+// IndexRead's `base + len*2^24` needs no unpacking here.
+//
+// The host writes one function's records into the `rin` block, runs this loop once,
+// and copies the `ast` output block (which mirrors codegen.kel's `ast` input block
+// slot for slot) straight into codegen.kel. This increment covers the atomic,
+// operator, block, and `if` node kinds; calls, `for .. limit`, `match`, indexed
+// writes, and the multiheaded dispatch land in later increments.
+//
+// The self-hosted compiler is a full-width host tool.
+require word >= 32;
+
+// The one host-facing block (R28 admits a single shared block per program). Its
+// first fields are the input -- one function's postorder records, written by the
+// host before the run -- and the remainder is the reconstructed forest, laid out so
+// the output portion (from `root` onward) mirrors codegen.kel's `ast` block slot for
+// slot, letting the host copy that slot range straight across: the four parallel
+// node arrays, the five length-64 side arrays, then the parameter count and category.
+shared data io {
+    rec_count: Word,
+    in_category: Word,
+    in_param_count: Word,
+    rec_kind: [Word; 1024],
+    rec_arg: [Word; 1024],
+    root: Word,
+    kinds: [Word; 1024],
+    args: [Word; 1024],
+    lhs: [Word; 1024],
+    rhs: [Word; 1024],
+    call_args: [Word; 64],
+    for_parts: [Word; 64],
+    match_parts: [Word; 64],
+    limit_parts: [Word; 64],
+    head_parts: [Word; 64],
+    out_param_count: Word,
+    out_category: Word,
+}
+
+// The node-index work stack and the running array counts. `node_count` is the next
+// free node slot; `sp` the stack depth. All reset at the start of each run.
+private data rs {
+    node_count: Word,
+    sp: Word,
+    stack: [Word; 1024],
+}
+
+// Push a node index onto the work stack.
+fn push(idx: Word) -> Word {
+    rs.stack[rs.sp] = idx;
+    rs.sp = rs.sp + 1;
+    idx
+}
+
+// Pop a node index off the work stack.
+fn pop() -> Word {
+    rs.sp = rs.sp - 1;
+    rs.stack[rs.sp]
+}
+
+// Append a node with the given fields, push its index, and return it.
+fn emit(k: Word, a: Word, l: Word, r: Word) -> Word {
+    let idx = rs.node_count;
+    io.kinds[idx] = k;
+    io.args[idx] = a;
+    io.lhs[idx] = l;
+    io.rhs[idx] = r;
+    rs.node_count = idx + 1;
+    push(idx)
+}
+
+// The three kind groups that share a shape. A leaf (Literal 1, Local 2, DataRead 11,
+// Unit 20) carries no operand; a binary node (BinOp 3, LetIn 5, Andalso 8, Orelse 9,
+// DataAssignIn 12, IndexAssignIn 14, ExprStmt 21) pops its right then left child; a
+// unary node (Not 6, Neg 10, IndexRead 13, YieldExpr 24, Cast 26) pops one operand.
+fn is_leaf(k: Word) -> Word {
+    if k == 1 orelse k == 2 orelse k == 11 orelse k == 20 { 1 } else { 0 }
+}
+
+fn is_binary(k: Word) -> Word {
+    if k == 3 orelse k == 5 orelse k == 8 orelse k == 9 orelse k == 12 orelse k == 14 orelse k == 21 {
+        1
+    } else {
+        0
+    }
+}
+
+fn is_unary(k: Word) -> Word {
+    if k == 6 orelse k == 10 orelse k == 13 orelse k == 24 orelse k == 26 { 1 } else { 0 }
+}
+
+// Process one record, folding it into a node and leaving that node's index on the
+// stack. An If (4) pops its else, then, and cond children, storing cond in `arg` and
+// the branches in lhs/rhs.
+fn step(k: Word, a: Word) -> Word {
+    if is_leaf(k) == 1 {
+        emit(k, a, 0, 0)
+    } else {
+    if is_binary(k) == 1 {
+        let r = pop();
+        let l = pop();
+        emit(k, a, l, r)
+    } else {
+    if is_unary(k) == 1 {
+        let c = pop();
+        emit(k, a, c, 0)
+    } else {
+    if k == 4 {
+        let el = pop();
+        let th = pop();
+        let cond = pop();
+        emit(4, cond, th, el)
+    } else {
+        0
+    } } } }
+}
+
+// Reconstruct the whole record stream in one call: reset the state, fold each record,
+// then publish the single remaining stack entry as the root and pass the category and
+// parameter count through. Yields the node count as a completion signal.
+loop main(resume: Word) -> Word {
+    rs.node_count = 0;
+    rs.sp = 0;
+    for i in 0..io.rec_count limit 1024 {
+        step(io.rec_kind[i], io.rec_arg[i]);
+    }
+    io.root = rs.stack[0];
+    io.out_param_count = io.in_param_count;
+    io.out_category = io.in_category;
+    yield rs.node_count
+}
