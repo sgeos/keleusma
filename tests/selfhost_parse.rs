@@ -1,10 +1,9 @@
-//! Merged parser stage (`compiler/kel/parse.kel`), increment 6b: one streaming `loop` that
-//! parses a whole top-level function declaration (its header and full body) and the
-//! `data` block declaration, and now accumulates the field-layout table as it parses each
-//! block so a body scalar `data.field` read resolves to its flat-segment slot with no
-//! host-supplied table (the strategy-B name resolution). The resolved slot is validated
-//! against the compiler's `data_layout.slots`. Scalar assignment and indexed access are
-//! later increments.
+//! Merged parser stage (`compiler/kel/parse.kel`), increment 7: one streaming `loop` that
+//! parses a whole top-level function declaration and the `data` block declaration,
+//! accumulating the field-layout table so a body scalar `data.field` read (DataRead) and a
+//! scalar `data.field = e` assignment (DataAssignIn) resolve to their flat-segment slots
+//! with no host-supplied table, validated against the compiler's `data_layout.slots`.
+//! Indexed access is a later increment.
 //!
 //! A throwaway adapter maps the reference tokenizer into the stage's unified `(kind,
 //! value)` token stream. The stage emits header records `dkind + val*64` (1/2/3 START of a
@@ -411,6 +410,23 @@ fn flatten_block(
             Stmt::Expr(e) => {
                 flatten(e, &local, next_slot, forlim, data_slots, out);
                 stmt_nodes.push((21, 0)); // ExprStmt
+            }
+            Stmt::DataFieldAssign {
+                data_name,
+                field,
+                value,
+                ..
+            } => {
+                // `d.f = e` — the value, then a DataAssignIn (kind 12) carrying the field's
+                // slot, folded in like a LetIn.
+                flatten(value, &local, next_slot, forlim, data_slots, out);
+                let name = format!("{data_name}.{field}");
+                let slot = data_slots
+                    .iter()
+                    .position(|n| n == &name)
+                    .unwrap_or_else(|| panic!("no data slot named `{name}`"))
+                    as i64;
+                stmt_nodes.push((12, slot));
             }
             Stmt::For(fs) if fs.limit.is_some() => {
                 // A `for v in lo..hi limit CAP { body }`. The loop variable, the high slot,
@@ -883,4 +899,27 @@ fn const_blocks_do_not_consume_slots() {
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
     assert_eq!(got.funcs[0].3, vec![(11, 0)]);
+}
+
+// A scalar `data.field = e` assignment is a DataAssignIn statement carrying the field's
+// slot, folded around the tail.
+#[test]
+fn a_scalar_data_assignment_parses() {
+    let src = "shared data d { a: Word } fn f(x: Word) -> Word { d.a = x; d.a }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    // value x(slot0); tail d.a (DataRead slot 0); DataAssignIn(slot 0).
+    assert_eq!(got.funcs[0].3, vec![(2, 0), (11, 0), (12, 0)]);
+}
+
+// A shared and a private data block together: the base counter spans both in declaration
+// order, matching the compiler's flat layout. The private block is mutated so it compiles.
+#[test]
+fn shared_and_private_blocks_share_the_slot_space() {
+    let src = "shared data s { a: Word } private data p { b: Word } \
+        fn f(x: Word) -> Word { p.b = x; s.a }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
 }

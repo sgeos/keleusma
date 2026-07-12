@@ -85,6 +85,7 @@ enum Node {
     LetIn = 5,
     Not = 6,
     DataRead = 11,
+    DataAssignIn = 12,
     Andalso = 8,
     Orelse = 9,
     Neg = 10,
@@ -177,6 +178,7 @@ private data stmt {
     stmt_count: Word,
     pstmt_kind: [Word; 16],
     pstmt_name: [Word; 16],
+    pstmt_arg: [Word; 16],
     pstmt_sp: Word,
     stmt_base: Word,
     pbase: [Word; 16],
@@ -317,14 +319,24 @@ fn step_dafield(k: Word, v: Word) -> Word {
     0
 }
 
-// The token after a data field: a scalar read this increment. Emit a DataRead over the
-// field's element-0 slot and push the token back for reinterpretation (an assignment `=`
-// and an indexed `[` are later increments).
-fn step_daindex() -> Word {
-    ps.cursor = ps.cursor - 1;
-    da.da_phase = 0;
-    ops.expect_operand = 0;
-    Node::DataRead() as Word + da.da_base * 64
+// The token after a data field: a `=` opens a scalar assignment (whose target is the
+// field's slot, recorded as a pending statement); any other token is a scalar read (emit a
+// DataRead over the field's element-0 slot and push the token back). An indexed `[` is a
+// later increment.
+fn step_daindex(k: Word) -> Word {
+    if k == Tok::Eq() as Word {
+        stmt.pstmt_kind[stmt.pstmt_sp] = 1;
+        stmt.pstmt_arg[stmt.pstmt_sp] = da.da_base;
+        stmt.pstmt_sp = stmt.pstmt_sp + 1;
+        da.da_phase = 0;
+        ops.expect_operand = 1;
+        0
+    } else {
+        ps.cursor = ps.cursor - 1;
+        da.da_phase = 0;
+        ops.expect_operand = 0;
+        Node::DataRead() as Word + da.da_base * 64
+    }
 }
 
 fn prec_of(op: Word) -> Word {
@@ -774,7 +786,7 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         step_dafield(k, v)
     } else {
     if da.da_phase == 3 {
-        step_daindex()
+        step_daindex(k)
     } else {
     if forst.for_phase >= 1 andalso forst.for_phase <= 6 {
         step_forheader(k, v)
@@ -825,14 +837,22 @@ fn step_draining() -> Word {
         if ops.drain_reason == 0 {
             if stmt.pstmt_sp > stmt.stmt_base {
                 stmt.pstmt_sp = stmt.pstmt_sp - 1;
-                let slot = ps.pcount + stmt.slot_count;
-                stmt.slot_count = stmt.slot_count + 1;
-                stmt.stmt_kind[stmt.stmt_count] = Node::LetIn() as Word;
-                stmt.stmt_arg[stmt.stmt_count] = slot;
-                stmt.let_names[stmt.let_count] = stmt.pstmt_name[stmt.pstmt_sp];
-                stmt.scope_slot[stmt.let_count] = slot;
-                stmt.let_count = stmt.let_count + 1;
-                stmt.stmt_count = stmt.stmt_count + 1;
+                if stmt.pstmt_kind[stmt.pstmt_sp] == 0 {
+                    // A `let`: claim the next frame slot and bind its name.
+                    let slot = ps.pcount + stmt.slot_count;
+                    stmt.slot_count = stmt.slot_count + 1;
+                    stmt.stmt_kind[stmt.stmt_count] = Node::LetIn() as Word;
+                    stmt.stmt_arg[stmt.stmt_count] = slot;
+                    stmt.let_names[stmt.let_count] = stmt.pstmt_name[stmt.pstmt_sp];
+                    stmt.scope_slot[stmt.let_count] = slot;
+                    stmt.let_count = stmt.let_count + 1;
+                    stmt.stmt_count = stmt.stmt_count + 1;
+                } else {
+                    // A scalar data assignment: write the target field's slot.
+                    stmt.stmt_kind[stmt.stmt_count] = Node::DataAssignIn() as Word;
+                    stmt.stmt_arg[stmt.stmt_count] = stmt.pstmt_arg[stmt.pstmt_sp];
+                    stmt.stmt_count = stmt.stmt_count + 1;
+                }
                 ops.draining = 0;
                 ops.expect_operand = 1;
                 0
