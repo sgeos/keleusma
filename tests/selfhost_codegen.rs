@@ -4234,22 +4234,29 @@ fn assembled_chunk_metadata_matches_the_reference() {
     }
 }
 
-// -- self-hosted WCET analysis (analyze.kel) ----------------------------------
+// -- self-hosted WCET/WCMU analysis (analyze.kel) -----------------------------
 //
-// analyze.kel reformulates the reference verifier's recursive `wcet_region` max-cost
-// traversal as an explicit region-frame stack, computing a Stream chunk's per-iteration
-// WCET from a marshalled op table. The per-op cost is the authoritative `Op::cost()`; the
-// stage self-hosts only the control-flow algorithm. This increment covers the loop-free
-// structured forms (straight-line, `if`/`else`, bare `if`, `break`/`trap`), which is exact
-// for the four stages' Stream bodies; `loop` regions land in a later increment.
+// analyze.kel reformulates the reference verifier's recursive `wcet_region`/`wcmu_region`
+// max traversals as one explicit region-frame stack, computing a Stream chunk's
+// per-iteration WCET and WCMU from a marshalled op table. Each per-op quantity is the
+// authoritative `Op::cost()`/`stack_growth()`/`stack_shrink()`/`heap_alloc()`; the stage
+// self-hosts only the control-flow algorithm. This increment covers the loop-free structured
+// forms (straight-line, `if`/`else`, bare `if`, `break`/`trap`), exact for the four stages'
+// loop-free Stream bodies; `loop` regions land in a later increment.
 const WA_OP_COUNT: usize = 0;
 const WA_STREAM_POS: usize = 1;
 const WA_RESET_POS: usize = 2;
-const WA_COST: usize = 3;
-const WA_CLASS: usize = 3 + 1024;
-const WA_ARG: usize = 3 + 1024 * 2;
-#[allow(dead_code)]
-const WA_OUT_WCET: usize = 3 + 1024 * 3;
+const WA_LOCAL_COUNT: usize = 3;
+const WA_VSB: usize = 4;
+const WA_COST: usize = 5;
+const WA_CLASS: usize = 5 + 1024;
+const WA_ARG: usize = 5 + 1024 * 2;
+const WA_GROWTH: usize = 5 + 1024 * 3;
+const WA_SHRINK: usize = 5 + 1024 * 4;
+const WA_HEAP: usize = 5 + 1024 * 5;
+const WA_OUT_WCET: usize = 5 + 1024 * 6;
+const WA_OUT_STACK: usize = 5 + 1024 * 6 + 1;
+const WA_OUT_HEAP: usize = 5 + 1024 * 6 + 2;
 
 fn analyze_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
@@ -4280,8 +4287,11 @@ fn analyze_class(op: &keleusma::bytecode::Op) -> (i64, i64) {
     }
 }
 
-/// Compute a Stream chunk's per-iteration WCET by running analyze.kel over its op table.
-fn wcet_via_kel(chunk: &keleusma::bytecode::Chunk) -> i64 {
+/// Compute a Stream chunk's per-iteration bounds `(wcet, stack_bytes, heap_bytes)` by
+/// running analyze.kel over its op table. The stage takes the empty-resolver shallow form,
+/// so a chunk with a `Loop` (not yet handled) or a native call (whose reference WCMU arm
+/// diverges from the generic stack-effect model) is out of scope and rejected here.
+fn analyze_via_kel(chunk: &keleusma::bytecode::Chunk) -> (i64, i64, i64) {
     use keleusma::bytecode::Op;
     let sp = chunk
         .ops
@@ -4294,40 +4304,62 @@ fn wcet_via_kel(chunk: &keleusma::bytecode::Chunk) -> i64 {
         .position(|o| matches!(o, Op::Reset))
         .expect("Reset op");
     assert!(chunk.ops.len() <= 1024, "analyze.kel op-table capacity");
+    assert!(
+        !chunk.ops.iter().any(|o| matches!(
+            o,
+            Op::Loop(_) | Op::CallVerifiedNative(..) | Op::CallExternalNative(..)
+        )),
+        "analyze.kel increment handles loop-free, native-free Stream bodies only"
+    );
     let m = analyze_kel_module();
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
     let mut vm = Vm::new(m, &arena).expect("verify analyze.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
-    vm.set_shared(&mut shared, WA_OP_COUNT, Value::Int(chunk.ops.len() as i64))
-        .unwrap();
-    vm.set_shared(&mut shared, WA_STREAM_POS, Value::Int(sp as i64))
-        .unwrap();
-    vm.set_shared(&mut shared, WA_RESET_POS, Value::Int(rp as i64))
-        .unwrap();
+    let set = |vm: &Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
+        vm.set_shared(shared, slot, Value::Int(v)).unwrap();
+    };
+    set(&vm, &mut shared, WA_OP_COUNT, chunk.ops.len() as i64);
+    set(&vm, &mut shared, WA_STREAM_POS, sp as i64);
+    set(&vm, &mut shared, WA_RESET_POS, rp as i64);
+    set(&vm, &mut shared, WA_LOCAL_COUNT, chunk.local_count as i64);
+    set(
+        &vm,
+        &mut shared,
+        WA_VSB,
+        keleusma::bytecode::VALUE_SLOT_SIZE_BYTES as i64,
+    );
     for (i, op) in chunk.ops.iter().enumerate() {
         let (class, arg) = analyze_class(op);
-        vm.set_shared(&mut shared, WA_COST + i, Value::Int(op.cost() as i64))
-            .unwrap();
-        vm.set_shared(&mut shared, WA_CLASS + i, Value::Int(class))
-            .unwrap();
-        vm.set_shared(&mut shared, WA_ARG + i, Value::Int(arg))
-            .unwrap();
+        set(&vm, &mut shared, WA_COST + i, op.cost() as i64);
+        set(&vm, &mut shared, WA_CLASS + i, class);
+        set(&vm, &mut shared, WA_ARG + i, arg);
+        set(&vm, &mut shared, WA_GROWTH + i, op.stack_growth() as i64);
+        set(&vm, &mut shared, WA_SHRINK + i, op.stack_shrink() as i64);
+        set(&vm, &mut shared, WA_HEAP + i, op.heap_alloc(chunk) as i64);
     }
     match vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call analyze.kel")
     {
-        VmState::Yielded(Value::Int(n)) => n,
+        VmState::Yielded(Value::Int(_)) => {}
         other => panic!("unexpected analyze.kel state: {other:?}"),
     }
+    let rd = |slot: usize| -> i64 {
+        match vm.get_shared(&shared, slot).unwrap() {
+            Value::Int(n) => n,
+            o => panic!("expected Int at {slot}, got {o:?}"),
+        }
+    };
+    (rd(WA_OUT_WCET), rd(WA_OUT_STACK), rd(WA_OUT_HEAP))
 }
 
-// analyze.kel reproduces `wcet_stream_iteration` exactly for every stage's loop-free Stream
-// chunk. The reference values are 154 (lexer), 43 (reconstruct), and 14 (codegen, parse).
+// analyze.kel reproduces both `wcet_stream_iteration` and `wcmu_stream_iteration` exactly for
+// every stage's loop-free Stream chunk. Reference WCET is 154/43/14/14 and WCMU stack bytes
+// 288/128/96/64 (heap 0) for lexer/reconstruct/codegen/parse.
 #[test]
-fn wcet_via_kel_matches_the_reference() {
+fn analyze_via_kel_matches_the_reference() {
     for path in [
         "compiler/kel/lexer.kel",
         "compiler/kel/reconstruct.kel",
@@ -4340,10 +4372,18 @@ fn wcet_via_kel_matches_the_reference() {
             if c.block_type != keleusma::bytecode::BlockType::Stream {
                 continue;
             }
-            let via_kel = wcet_via_kel(c);
-            let reference =
+            let (wcet, stack, heap) = analyze_via_kel(c);
+            let ref_wcet =
                 keleusma::verify::wcet_stream_iteration(c).expect("reference wcet") as i64;
-            assert_eq!(via_kel, reference, "wcet for {path} chunk `{}`", c.name);
+            let (ref_stack, ref_heap) =
+                keleusma::verify::wcmu_stream_iteration(c).expect("reference wcmu");
+            assert_eq!(wcet, ref_wcet, "wcet for {path} chunk `{}`", c.name);
+            assert_eq!(
+                stack, ref_stack as i64,
+                "wcmu stack for {path} `{}`",
+                c.name
+            );
+            assert_eq!(heap, ref_heap as i64, "wcmu heap for {path} `{}`", c.name);
         }
     }
 }
