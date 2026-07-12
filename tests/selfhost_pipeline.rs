@@ -414,6 +414,7 @@ fn parse_via_lexer(src: &str) -> (usize, usize) {
     let mut funcs = 0usize;
     let mut body_nodes = 0usize;
     let (mut in_body, mut in_data, mut in_enum, mut in_use) = (false, false, false, false);
+    let mut in_guard = false;
     let mut open_decl = false;
     let mut state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
@@ -426,6 +427,10 @@ fn parse_via_lexer(src: &str) -> (usize, usize) {
                     0 => {}
                     15 => in_body = false,
                     _ => body_nodes += 1,
+                }
+            } else if in_guard {
+                if code == 15 {
+                    in_guard = false; // the guard forest's Done
                 }
             } else if in_data {
                 if code == 5 {
@@ -448,6 +453,7 @@ fn parse_via_lexer(src: &str) -> (usize, usize) {
                     10 => in_use = true,
                     12 => in_enum = true,
                     16 => in_body = true,
+                    17 => in_guard = true, // GSTART: a `when` guard forest, skipped here
                     5 => {
                         assert!(open_decl, "END before START");
                         open_decl = false;

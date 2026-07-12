@@ -1590,6 +1590,7 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
     // yield 2 -> 3 (multihead), loop 3 -> 2.
     let mut cur_cat = 0i64;
     let (mut in_body, mut in_data, mut in_enum, mut in_use) = (false, false, false, false);
+    let mut in_guard = false;
     let mut state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
@@ -1602,6 +1603,8 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
                     15 => in_body = false,
                     _ => records.push((code, val)),
                 }
+            } else if in_guard {
+                in_guard = code != 15; // skip the `when` guard forest until its Done
             } else if in_data {
                 in_data = code != 5;
             } else if in_enum {
@@ -1624,6 +1627,7 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
                     10 => in_use = true,
                     12 => in_enum = true,
                     16 => in_body = true,
+                    17 => in_guard = true,
                     5 => last = (std::mem::take(&mut records), params, cur_cat),
                     15 => return last,
                     _ => {}

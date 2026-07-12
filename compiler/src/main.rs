@@ -411,6 +411,7 @@ fn run_parse_pipeline(path: &str) {
 
     // Decode the record stream and print one line per declaration.
     let (mut in_body, mut in_data, mut in_enum, mut in_use) = (false, false, false, false);
+    let mut in_guard = false;
     let (mut cat, mut nm, mut params, mut body) = (0i64, 0i64, 0i64, 0i64);
     let (mut nfuncs, mut ndata, mut nenum, mut nuse) = (0, 0, 0, 0);
     let mut state = pvm
@@ -424,6 +425,10 @@ fn run_parse_pipeline(path: &str) {
                     0 => {}
                     15 => in_body = false,
                     _ => body += 1,
+                }
+            } else if in_guard {
+                if code == 15 {
+                    in_guard = false; // the `when` guard forest's Done
                 }
             } else if in_data {
                 if code == 5 {
@@ -461,6 +466,7 @@ fn run_parse_pipeline(path: &str) {
                         nenum += 1;
                     }
                     16 => in_body = true,
+                    17 => in_guard = true, // GSTART: a `when` guard forest, skipped in the summary
                     5 => {
                         let kw = match cat {
                             1 => "fn",

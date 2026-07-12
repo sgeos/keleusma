@@ -122,9 +122,9 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
 }
 
 /// A parsed function: its category (1 fn, 2 yield, 3 loop), interned name id, its value
-/// parameter name ids in order, and its body's postorder node record sequence as
-/// (kind, arg) pairs.
-type Func = (i64, i64, Vec<i64>, Vec<(i64, i64)>);
+/// parameter name ids in order, its body's postorder node record sequence as (kind, arg)
+/// pairs, and a `when` guard's postorder node records (empty when the head is unguarded).
+type Func = (i64, i64, Vec<i64>, Vec<(i64, i64)>, Vec<(i64, i64)>);
 
 #[derive(Debug, Default, PartialEq)]
 struct Parsed {
@@ -251,9 +251,11 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
     }
 
     let mut parsed = Parsed::default();
-    // The declaration under construction: (category, name, params, body records).
-    let mut cur: Option<(i64, i64, Vec<i64>, Vec<(i64, i64)>)> = None;
+    // The declaration under construction: (category, name, params, body records, guard
+    // records).
+    let mut cur: Option<(i64, i64, Vec<i64>, Vec<(i64, i64)>, Vec<(i64, i64)>)> = None;
     let mut in_body = false;
+    let mut in_guard = false;
     // A data block is skipped this increment: DSTART opens it and its END closes it; its
     // fields are not compared, only that the block is consumed without breaking the stream.
     let mut in_data = false;
@@ -277,6 +279,16 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                             .3
                             .push((code, val)),
                     }
+                } else if in_guard {
+                    match code {
+                        0 => {}                 // PENDING
+                        15 => in_guard = false, // the guard's Done ends guard mode
+                        _ => cur
+                            .as_mut()
+                            .expect("guard node before START")
+                            .4
+                            .push((code, val)),
+                    }
                 } else if in_data {
                     match code {
                         5 => in_data = false, // the data block's END
@@ -295,13 +307,14 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                 } else {
                     match code {
                         0 => {} // PENDING
-                        1..=3 => cur = Some((code, val, Vec::new(), Vec::new())),
+                        1..=3 => cur = Some((code, val, Vec::new(), Vec::new(), Vec::new())),
                         4 => cur.as_mut().expect("PARAM before START").2.push(val),
                         6 | 7 | 8 => {} // PTYPE/RETTYPE/ASIZE: not checked this increment
                         9 => in_data = true, // DSTART: a data block, skipped this increment
                         10 => in_use = true, // USTART: a use import, skipped this increment
                         12 => in_enum = true, // ENUMSTART: an enum, skipped this increment
                         16 => in_body = true, // BSTART: a body forest follows
+                        17 => in_guard = true, // GSTART: a `when` guard forest follows
                         5 => {
                             let f = cur.take().expect("END before START");
                             parsed.funcs.push(f);
@@ -887,6 +900,24 @@ fn reference(src: &str, names: &[String]) -> Parsed {
             .enumerate()
             .map(|(i, n)| (n.to_string(), i as i64))
             .collect();
+        // A `when` guard is a single expression sharing the parameter frame; the stage
+        // resets the frame between the guard and the body, so the guard flattens with its
+        // own slot counter starting after the parameters, independent of the body's.
+        let mut guard = Vec::new();
+        if let Some(g) = &f.guard {
+            let mut gslot = param_names.len() as i64;
+            let mut gforlim = 0i64;
+            flatten(
+                g,
+                &param_scope,
+                &mut gslot,
+                &mut gforlim,
+                &data_slots,
+                &chunk_names,
+                &enum_table,
+                &mut guard,
+            );
+        }
         let mut body = Vec::new();
         let mut next_slot = param_names.len() as i64;
         let mut forlim = 0i64;
@@ -900,7 +931,7 @@ fn reference(src: &str, names: &[String]) -> Parsed {
             &enum_table,
             &mut body,
         );
-        funcs.push((cat, id(&f.name), params, body));
+        funcs.push((cat, id(&f.name), params, body, guard));
     }
     Parsed { funcs }
 }
@@ -1466,8 +1497,9 @@ fn a_require_directive_is_skipped() {
     assert_eq!(got.funcs[0].3, vec![(2, 0), (2, 0), (3, 1)]);
 }
 
-// A multiheaded function with a `when` guard: each head is a separate declaration, and
-// the guard (between the return type and the body) is skipped, matching the reference.
+// A multiheaded function with a `when` guard: each head is a separate declaration, and the
+// guard (between the return type and the body) is now emitted as its own bracketed forest
+// (GSTART, the guard's postorder records, its Done), matching the reference.
 #[test]
 fn a_when_guarded_multihead_parses() {
     let src = "yield step(r: Word) -> Word when r > 0 { yield r } \
@@ -1477,7 +1509,9 @@ fn a_when_guarded_multihead_parses() {
     assert_eq!(got, reference(src, &names));
     assert_eq!(got.funcs.len(), 2);
     assert_eq!(got.funcs[0].0, 2); // yield category
-    assert_eq!(got.funcs[0].3, vec![(2, 0), (24, 0)]); // yield r (Local 0, YieldExpr)
+    assert_eq!(got.funcs[0].3, vec![(2, 0), (24, 0)]); // body: yield r (Local 0, YieldExpr)
+    assert_eq!(got.funcs[0].4, vec![(2, 0), (1, 0), (3, 9)]); // guard: r > 0 (Local, Lit 0, Gt)
+    assert!(got.funcs[1].4.is_empty()); // the unguarded head has no guard records
 }
 
 // A realistic body mixing a data blocks, a let, a data assignment, an indexed read, an
