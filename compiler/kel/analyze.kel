@@ -1,0 +1,211 @@
+// compiler/kel/analyze.kel -- the worst-case-execution-time analysis stage of the
+// self-hosted compiler.
+//
+// The reference verifier computes a Stream chunk's per-iteration WCET by a recursive
+// max-cost traversal of its structured control flow (`verify.rs::wcet_region`): straight
+// -line ops accumulate cost, an `if`/`else` takes the maximum of its two branch costs, a
+// bare `if` takes the maximum of its then-branch and the zero-cost fall-through, and a
+// `break`/`trap` ends a path. Keleusma is total and admits no arbitrary recursion, so this
+// stage reformulates that recursion as an explicit region-frame stack walked by a single
+// bounded work loop, the same shape `reconstruct.kel` uses for its postorder walk.
+//
+// The cost of each individual op is the authoritative calibrated value: the host marshals
+// `Op::cost()` per op into `wa.cost`, so this stage replicates only the control-flow
+// algorithm, not the cost model. This increment covers the straight-line, `if`/`else`, and
+// bare-`if` forms plus `break`/`trap` path exits, which is exact for a loop-free Stream
+// body; `loop` regions and their iteration-bound extraction land in a later increment.
+//
+// The host writes the chunk's op table (`op_count`, `stream_pos`, `reset_pos`, and the
+// per-op `cost`/`class`/`arg` arrays) into `wa`, runs this loop once, and reads back
+// `out_wcet`, the per-iteration worst-case cycle count matching `wcet_stream_iteration`.
+//
+// The self-hosted compiler is a full-width host tool.
+require word >= 32;
+
+// The one host-facing block (R28 admits a single shared block per program). `class` tags
+// each op: 0 plain, 1 If (arg = branch target), 2 Else (arg = the matching EndIf position),
+// 3 EndIf, 4 Loop, 5 EndLoop, 6 Break, 7 BreakIf, 8 Trap. `cost` is the op's calibrated
+// cycle cost. `arg` carries the branch target for If and the EndIf position for Else.
+shared data wa {
+    op_count: Word,
+    stream_pos: Word,
+    reset_pos: Word,
+    cost: [Word; 1024],
+    class: [Word; 1024],
+    arg: [Word; 1024],
+    out_wcet: Word,
+}
+
+// The region-frame work stack. Each frame is one invocation of the reference's recursive
+// `wcet_region` over `[f_ip, f_end)`: `f_cost` its running cost, `f_broke` whether the
+// region hit a `break`/`trap` (the reference's `None`). While a frame waits on a child
+// region it sets `f_pa` (pending active) and records how to fold the child back in:
+// `f_pk` 0 for a bare `if`, 1 for an `if`/`else`; `f_ps` the `if`/`else` stage (0 awaiting
+// the then-branch, 1 awaiting the else-branch); `f_pj` the op index to resume at once the
+// `if` is resolved; `f_es`/`f_ei` the else-branch start and EndIf position; `f_ptc`/`f_ptb`
+// the stashed then-branch cost and broke flag. `child_cost`/`child_broke` hold the result a
+// just-completed frame delivers to its parent.
+private data an {
+    sp: Word,
+    f_ip: [Word; 64],
+    f_end: [Word; 64],
+    f_cost: [Word; 64],
+    f_broke: [Word; 64],
+    f_pa: [Word; 64],
+    f_pk: [Word; 64],
+    f_pj: [Word; 64],
+    f_ps: [Word; 64],
+    f_ptc: [Word; 64],
+    f_ptb: [Word; 64],
+    f_es: [Word; 64],
+    f_ei: [Word; 64],
+    child_cost: Word,
+    child_broke: Word,
+}
+
+// Push a fresh region frame spanning `[ip, end)` and return its index.
+fn push_frame(ip: Word, end: Word) -> Word {
+    let j = an.sp;
+    an.f_ip[j] = ip;
+    an.f_end[j] = end;
+    an.f_cost[j] = 0;
+    an.f_broke[j] = 0;
+    an.f_pa[j] = 0;
+    an.sp = j + 1;
+    j
+}
+
+// Advance the analysis by one transition on the top frame. Either it resolves a pending
+// `if` using the last child's result, completes and pops a frame (delivering its result to
+// the parent through `child_cost`/`child_broke`), or consumes one op of the current region.
+fn analyze_step() -> Word {
+    let i = an.sp - 1;
+    if an.f_pa[i] == 1 {
+        if an.f_pk[i] == 0 {
+            // Bare `if`: fold the then-branch. A broken then-branch adds nothing (the
+            // false path falls through at zero cost); otherwise add its cost.
+            if an.child_broke == 0 {
+                an.f_cost[i] = an.f_cost[i] + an.child_cost;
+            }
+            an.f_ip[i] = an.f_pj[i];
+            an.f_pa[i] = 0;
+            0
+        } else {
+            if an.f_ps[i] == 0 {
+                // `if`/`else`: the then-branch just completed. Stash it and launch the
+                // else-branch region `[f_es, f_ei)`.
+                an.f_ptc[i] = an.child_cost;
+                an.f_ptb[i] = an.child_broke;
+                an.f_ps[i] = 1;
+                push_frame(an.f_es[i], an.f_ei[i])
+            } else {
+                // Both branches done: add the max of the two branch costs, treating a
+                // broken branch as absent. If both broke the whole region breaks.
+                let tb = an.f_ptb[i];
+                let tc = an.f_ptc[i];
+                let eb = an.child_broke;
+                let ec = an.child_cost;
+                if tb == 0 andalso eb == 0 {
+                    if tc > ec {
+                        an.f_cost[i] = an.f_cost[i] + tc;
+                    } else {
+                        an.f_cost[i] = an.f_cost[i] + ec;
+                    }
+                    an.f_ip[i] = an.f_pj[i];
+                    an.f_pa[i] = 0;
+                } else {
+                if tb == 0 andalso eb == 1 {
+                    an.f_cost[i] = an.f_cost[i] + tc;
+                    an.f_ip[i] = an.f_pj[i];
+                    an.f_pa[i] = 0;
+                } else {
+                if tb == 1 andalso eb == 0 {
+                    an.f_cost[i] = an.f_cost[i] + ec;
+                    an.f_ip[i] = an.f_pj[i];
+                    an.f_pa[i] = 0;
+                } else {
+                    an.f_broke[i] = 1;
+                    an.f_ip[i] = an.f_end[i];
+                    an.f_pa[i] = 0;
+                } } }
+                0
+            }
+        }
+    } else {
+        if an.f_ip[i] >= an.f_end[i] {
+            // Region exhausted: deliver its result to the parent and pop.
+            an.child_cost = an.f_cost[i];
+            an.child_broke = an.f_broke[i];
+            an.sp = an.sp - 1;
+            0
+        } else {
+            let ip = an.f_ip[i];
+            let c = wa.class[ip];
+            if c == 1 {
+                // If: account the branch op, then spawn the then-branch. An `if`/`else` is
+                // recognized by an Else immediately before the target; its EndIf position
+                // comes from that Else's `arg`.
+                an.f_cost[i] = an.f_cost[i] + wa.cost[ip];
+                let target = wa.arg[ip];
+                if target > 0 andalso wa.class[target - 1] == 2 {
+                    let endif = wa.arg[target - 1];
+                    an.f_pk[i] = 1;
+                    an.f_es[i] = target;
+                    an.f_ei[i] = endif;
+                    an.f_pj[i] = endif + 1;
+                    an.f_ps[i] = 0;
+                    an.f_pa[i] = 1;
+                    push_frame(ip + 1, target - 1)
+                } else {
+                    an.f_pk[i] = 0;
+                    an.f_pj[i] = target + 1;
+                    an.f_pa[i] = 1;
+                    push_frame(ip + 1, target)
+                }
+            } else {
+            if c == 6 orelse c == 8 {
+                // Break or Trap: account the op and end this path.
+                an.f_cost[i] = an.f_cost[i] + wa.cost[ip];
+                an.f_broke[i] = 1;
+                an.f_ip[i] = an.f_end[i];
+                0
+            } else {
+            if c == 2 orelse c == 3 orelse c == 5 {
+                // Else / EndIf / EndLoop: structural markers, no cost, step over.
+                an.f_ip[i] = ip + 1;
+                0
+            } else {
+                // Plain op or BreakIf: account the op and advance.
+                an.f_cost[i] = an.f_cost[i] + wa.cost[ip];
+                an.f_ip[i] = ip + 1;
+                0
+            } } }
+        }
+    }
+}
+
+// Walk the Stream body `[stream_pos + 1, reset_pos)` to a fixed point and return the
+// per-iteration WCET: the Stream and Reset op costs plus the region cost (zero if the whole
+// body breaks, matching the reference's `body_cost.unwrap_or(0)`). The work loop is bounded
+// by a generous static cap and exits the moment the frame stack empties.
+fn run() -> Word {
+    an.sp = 0;
+    an.child_cost = 0;
+    an.child_broke = 0;
+    push_frame(wa.stream_pos + 1, wa.reset_pos);
+    for step in 0..16384 limit 16384 {
+        if an.sp == 0 {
+            break;
+        } else {
+            analyze_step();
+        }
+    }
+    let region = if an.child_broke == 1 { 0 } else { an.child_cost };
+    wa.cost[wa.stream_pos] + wa.cost[wa.reset_pos] + region
+}
+
+// Compute the chunk's WCET in one call and yield it.
+loop main(resume: Word) -> Word {
+    wa.out_wcet = run();
+    yield wa.out_wcet
+}
