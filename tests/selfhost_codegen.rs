@@ -2515,6 +2515,10 @@ struct ParsedFn {
     cat: i64,
     name: i64,
     params: usize,
+    // The type-name id of each value parameter (from the header PTYPE records) and of
+    // the return (the RETTYPE record), for the driver's own chunk-signature assembly.
+    param_types: Vec<i64>,
+    return_type: i64,
     guard: Vec<(i64, i64)>,
     body: Vec<(i64, i64)>,
 }
@@ -2624,11 +2628,15 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
                             cat: code,
                             name: val,
                             params: 0,
+                            param_types: Vec::new(),
+                            return_type: 0,
                             guard: Vec::new(),
                             body: Vec::new(),
                         })
                     }
                     4 => cur.as_mut().unwrap().params += 1,
+                    6 => cur.as_mut().unwrap().param_types.push(val),
+                    7 => cur.as_mut().unwrap().return_type = val,
                     9 => {
                         in_data = true;
                         data_records.push((9, val));
@@ -3996,6 +4004,99 @@ fn assembled_enum_layouts_match_the_reference() {
                     "variant for {path}"
                 );
             }
+        }
+    }
+}
+
+// -- chunk-signature assembly from parse.kel's header records -----------------
+//
+// The typed-verifier per-chunk signature is the flat shape of each parameter, the
+// return, and (for a Stream chunk) the resume value. For the stages every boundary
+// value is a scalar `Word` or `Byte`, so the shapes are the corresponding ScalarKind
+// tags; only a `loop` (Stream) chunk resumes with its first parameter's shape, an `fn`
+// or `yield` records `Top`. Signatures are parallel to the module chunks, ordered by
+// chunk name; a multiheaded function is one chunk described by its first head.
+
+/// The flat shape of a stage boundary type: `Word` -> Int scalar (tag 3), `Byte` ->
+/// Byte scalar (tag 2), anything else the conservative `Top` the reference records for
+/// an unresolvable type.
+fn wire_shape_of(type_id: i64, names: &[String]) -> keleusma::bytecode::WireShape {
+    use keleusma::bytecode::WireShape;
+    match names.get(type_id as usize).map(String::as_str) {
+        Some("Word") => WireShape::Scalar { kind: 3 },
+        Some("Byte") => WireShape::Scalar { kind: 2 },
+        _ => WireShape::Top,
+    }
+}
+
+/// Assemble the per-chunk signature table from the parsed functions, grouping
+/// same-named heads into one chunk and ordering by chunk name to match the module.
+fn assemble_signatures(
+    fns: &[ParsedFn],
+    names: &[String],
+) -> Vec<keleusma::bytecode::ChunkSignature> {
+    use keleusma::bytecode::{ChunkSignature, WireShape};
+    let mut chunks: Vec<(String, ChunkSignature)> = Vec::new();
+    let mut i = 0;
+    while i < fns.len() {
+        let name = names[fns[i].name as usize].clone();
+        let first = &fns[i];
+        // Skip the rest of this head group.
+        let mut j = i + 1;
+        while j < fns.len() && names[fns[j].name as usize] == name {
+            j += 1;
+        }
+        i = j;
+        let params: Vec<WireShape> = first
+            .param_types
+            .iter()
+            .map(|&t| wire_shape_of(t, names))
+            .collect();
+        let ret = wire_shape_of(first.return_type, names);
+        // Only a `loop` (category 3, a Stream chunk) resumes with its first parameter.
+        let resume = if first.cat == 3 {
+            params.first().copied().unwrap_or(WireShape::Top)
+        } else {
+            WireShape::Top
+        };
+        chunks.push((
+            name,
+            ChunkSignature {
+                params,
+                ret,
+                resume,
+            },
+        ));
+    }
+    chunks.sort_by(|a, b| a.0.cmp(&b.0));
+    chunks.into_iter().map(|(_, s)| s).collect()
+}
+
+// The per-chunk signature table the driver assembles equals the reference compiler's --
+// parameter shapes, return shape, and resume shape, in chunk-name order -- for every
+// stage source.
+#[test]
+fn assembled_signatures_match_the_reference() {
+    let cases = [
+        "compiler/kel/lexer.kel",
+        "compiler/kel/reconstruct.kel",
+        "compiler/kel/codegen.kel",
+        "compiler/kel/parse.kel",
+    ];
+    for path in cases {
+        let src = std::fs::read_to_string(path).expect("read stage");
+        let (fns, names, _data, _enums) = parse_functions(&src);
+        let sigs = assemble_signatures(&fns, &names);
+        let reference = compile_src(&src);
+        assert_eq!(
+            sigs.len(),
+            reference.signatures.len(),
+            "signature count for {path}"
+        );
+        for (i, (a, b)) in sigs.iter().zip(reference.signatures.iter()).enumerate() {
+            assert_eq!(a.params, b.params, "params of chunk {i} for {path}");
+            assert_eq!(a.ret, b.ret, "ret of chunk {i} for {path}");
+            assert_eq!(a.resume, b.resume, "resume of chunk {i} for {path}");
         }
     }
 }
