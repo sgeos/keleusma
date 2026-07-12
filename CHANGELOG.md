@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Enum::Variant() as Word` constant-folds for a known unit variant.** A cast of
+  a literal no-payload variant constructor to `Word` now compiles to a single load
+  of the variant's discriminant, with no construction and no chain of variant tests.
+  A cast of a value whose variant is not statically known keeps the general
+  variant-test chain, and a payload constructor is never folded, since its argument
+  expressions may carry side effects. This makes an enum with explicit discriminants
+  a zero-cost replacement for a table of named integer constants, the idiom the
+  self-hosted compiler stages adopt for their token, node, and opcode codes. The
+  fold strictly reduces the emitted op count and control-flow depth, so the
+  worst-case-execution-time and worst-case-memory-usage bounds only tighten. No
+  wire-format or `BYTECODE_VERSION` change.
+
 - **Bounded repetition with a `limit` and an `on` outcome block.** A range `for`
   loop may now carry a `limit <const>` clause that caps its iteration count with a
   compile-time constant (an integer literal, a const-data field, or a const

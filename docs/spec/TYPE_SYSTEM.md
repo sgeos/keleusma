@@ -178,7 +178,9 @@ fn main() -> Word {
 }
 ```
 
-The cast compiles to a chain of variant tests; on a match it pushes the variant's discriminant as a `Word`. Implicit and explicit discriminants both round-trip correctly. Casts on enum values whose variant is not declared in the source (constructed by host code outside the declaration) trap at runtime; this is an enforced invariant of the type system rather than a fall-through return.
+A cast of a value whose variant is not known at compile time compiles to a chain of variant tests; on a match it pushes the variant's discriminant as a `Word`. Implicit and explicit discriminants both round-trip correctly. Casts on enum values whose variant is not declared in the source (constructed by host code outside the declaration) trap at runtime; this is an enforced invariant of the type system rather than a fall-through return.
+
+A cast of a literal unit-variant constructor, `Enum::Variant() as Word`, is a compile-time constant and folds to a single load of the discriminant with no construction and no variant-test chain. This makes an enum with explicit discriminants a first-class replacement for a table of named integer constants: a variant reference cast to `Word` costs exactly what a literal would. Only the no-payload form folds, since a payload constructor's argument expressions may carry side effects that must still run.
 
 ### Tuples
 
