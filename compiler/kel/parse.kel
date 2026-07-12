@@ -1,56 +1,115 @@
 // compiler/kel/parse.kel — the merged declaration-and-body parser (roadmap Step 2).
 //
-// Increment 1: a single streaming `loop` that parses a whole top-level function
-// declaration INCLUDING an atomic body (one integer literal or one parameter
-// reference) in one pass, rather than the two composed loops (parser.kel finding
-// declarations and body.kel parsing each body) the host currently chains. This proves
-// the merge architecture: a combined state machine with an `in_body` mode switch, a
-// shared token stream and cursor, a param table the header itself accumulates, and a
-// bracket protocol that lets the host decode the header and body record streams
-// without changing either encoding. See compiler/MERGE_PLAN.md and MILESTONES.md.
+// Increment 2: a single streaming `loop` that parses a whole top-level function
+// declaration whose body is an operator-precedence EXPRESSION over integer literals and
+// parameter references (arithmetic, comparison, the bitwise operators, the short-circuit
+// booleans, parentheses, and the unary prefixes `-` and `not`), in one pass. Increment 1
+// proved the merge architecture on an atomic body; this increment brings body.kel's
+// shunting-yard operator core into the merged stage and reconciles the two token
+// vocabularies onto one. Statements, the `let`/`if`/`for`/`match` forms, and the
+// data/enum/use declaration kinds are later increments. See compiler/MERGE_PLAN.md.
 //
-// Structure. `main` reads one token per iteration from the shared `toks` stream at
-// `ps.cursor` and delegates to `header_step` (the declaration scan, parser.kel's mode
-// machine) or `body_step` (the body walk, body.kel's forest emission) by the `ps.in_body`
-// flag. The header, on the function body's opening `{`, arms the body (emits a BSTART
-// bracket, sets `in_body`) rather than brace-matching it. The body, on its closing `}`,
-// emits the forest's terminal Done and requests the declaration's END, returning control
-// to the header for the next declaration.
+// Structure. `step` reads one token per iteration and, by `ps.in_body`, delegates to the
+// declaration scan (`header_step`) or the body walk. The body walk is body.kel's
+// shunting-yard: an operator-precedence stack in `ops.opstack` settles each just-read
+// operator (`resolving`), a `)` flushes the operators above a parenthesis marker
+// (`closing`), and the body's closing `}` flushes the rest (`draining`) and emits the
+// forest's terminal Done, which returns control to the header for the next declaration.
 //
-// Record wire. Header records are `dkind + val*64`; body records are `kind + arg*64`
-// (the body.kel node encoding). Both use radix 64, so the host disambiguates them by the
-// bracket: a BSTART (dkind 16) switches the host decoder into body mode, and the body's
-// terminal Done (kind 15) switches it back. Header dkinds: 1/2/3 START of a fn/yield/loop
-// (val = name id), 4 PARAM (val = its name id), 5 END, 6 PTYPE, 7 RETTYPE, 8 ASIZE,
-// 15 DONE (stream exhausted), 16 BSTART (a body's forest follows). Body kinds are the
-// `enum Node` codes (1 Literal, 2 Local, 15 Done, ...).
+// Record wire. Header records are `dkind + val*64`; body node records are `kind + arg*64`
+// (the `enum Node` codes). A BSTART (dkind 16) switches the host decoder into body mode
+// and the body's Done (kind 15) switches it back.
 //
-// Increment 1 handles only the atomic body and a functions-only header; the operator
-// grammar, statements, and the data/enum/use declaration kinds land in later increments.
-// The two vocabularies already agree on every token an atomic body uses (Ident 1, IntLit
-// 12, `{` 2, `}` 3), so this increment needs no token re-coding; the reconciliation to
-// one unified vocabulary lands with the operators in increment 2.
+// Token vocabulary. One unified set, body.kel's `enum Tok` extended with the declaration
+// keywords the header needs (`Fn`, `Loop`, `Colon`). The two originals agreed on every
+// token increment 1 used; increment 2's operators are body.kel's codes (`Plus` 21 upward),
+// which appear only inside a body, so they do not collide with the functions-only header.
 
-// The self-hosted compiler is a full-width host tool whose record arithmetic (`val*64`)
-// overflows a narrow word, so it declares a 32-bit floor.
 require word >= 32;
 
-// The host-provided token stream. `kinds[i]`/`vals[i]` are the i-th token; `len` is the
-// token count.
+// The host-provided token stream.
 shared data toks {
     len: Word,
     kinds: [Word; 2048],
     vals: [Word; 2048],
 }
 
-// The merged parser state. The header fields (`mode` the declaration phase, `dkind` the
-// function category 1 fn / 2 yield / 3 loop, `pdepth` the signature parenthesis depth,
-// `pname`/`ptype`/`rtype` the armed type positions, `arr`/`arr_ret` an array type) drive
-// the signature scan. `in_body` selects the body walk; `started` records that the body's
-// opening `{` was consumed; `pend_end` requests the declaration's END on the iteration
-// after the body's Done. `pcount`/`pnames` are the current function's parameter table,
-// accumulated as each PARAM is emitted so the body resolves an identifier to its frame
-// slot without a host-supplied table.
+// The token kinds the adapter assigns, the unified vocabulary. Header keywords (Fn, Loop,
+// Colon) and the body operators and punctuation share one space; a keyword spelling like
+// `Yield` does not collide with a reserved word because variant names are upper-case.
+enum Tok {
+    Fn = 0,
+    Ident = 1,
+    LBrace = 2,
+    RBrace = 3,
+    Yield = 5,
+    Loop = 6,
+    LParen = 7,
+    RParen = 8,
+    Colon = 9,
+    Comma = 10,
+    IntLit = 12,
+    Plus = 21,
+    Minus = 22,
+    Star = 23,
+    Slash = 24,
+    Percent = 25,
+    EqEq = 26,
+    NotEq = 27,
+    Lt = 28,
+    Gt = 29,
+    LtEq = 30,
+    GtEq = 31,
+    Not = 32,
+    Band = 33,
+    Bor = 34,
+    Bxor = 35,
+    Andalso = 36,
+    Orelse = 37,
+}
+
+// The node-record kinds the body walk yields (a subset of body.kel's `enum Node`; the
+// remaining kinds arrive with the statements and control-flow forms of later increments).
+enum Node {
+    Literal = 1,
+    Local = 2,
+    BinOp = 3,
+    Not = 6,
+    Andalso = 8,
+    Orelse = 9,
+    Neg = 10,
+    Done = 15,
+}
+
+// The shunting-yard operator codes: 1..14 the binary operators (their code is also the
+// BinOp node's argument), 15 the parenthesis marker, 16/17 the unary prefixes, 18/19 the
+// short-circuit booleans (which emit their own node kinds).
+enum OpCode {
+    Add = 1,
+    Mul = 2,
+    Sub = 3,
+    Div = 4,
+    Mod = 5,
+    Eq = 6,
+    NotEq = 7,
+    Lt = 8,
+    Gt = 9,
+    LtEq = 10,
+    GtEq = 11,
+    Band = 12,
+    Bor = 13,
+    Bxor = 14,
+    Paren = 15,
+    Neg = 16,
+    Not = 17,
+    Andalso = 18,
+    Orelse = 19,
+}
+
+// The merged parser state. The header fields drive the signature scan (see increment 1);
+// `in_body`/`started`/`pend_end` bracket the body; `pcount`/`pnames`/`found_slot` are the
+// current function's parameter table, accumulated by the header so the body resolves an
+// identifier to its frame slot with no host-supplied table.
 private data ps {
     cursor: Word,
     mode: Word,
@@ -70,9 +129,23 @@ private data ps {
     found_slot: Word,
 }
 
+// The shunting-yard operator stack and its sub-state flags: `pending_op`/`pending_prec`
+// hold a just-read operator while `resolving` settles it, `closing` flushes above a
+// parenthesis marker at a `)`, `draining` flushes the rest at the body's `}`, and
+// `expect_operand` is 1 in operand position (so `-` is unary).
+private data ops {
+    opstack: [Word; 64],
+    opsp: Word,
+    pending_op: Word,
+    pending_prec: Word,
+    resolving: Word,
+    closing: Word,
+    draining: Word,
+    expect_operand: Word,
+}
+
 // Resolve an identifier's interned id to its frame slot by scanning the accumulated
-// parameter table; a parameter's slot is its position. An unresolved identifier yields
-// slot 0 (no other identifier binding exists in an atomic body).
+// parameter table; a parameter's slot is its position.
 fn resolve_param(v: Word) -> Word {
     ps.found_slot = 0;
     for i in 0..ps.pcount limit 32 {
@@ -83,11 +156,196 @@ fn resolve_param(v: Word) -> Word {
     ps.found_slot
 }
 
-// The declaration scan (header). Mode 0 reads the category keyword (`yield` 5, `loop` 6,
-// otherwise `fn`); mode 1 the declaration name, emitting START and resetting the param
-// table; mode 2 the signature, emitting a PARAM per parameter name (and accumulating it),
-// a PTYPE per parameter type, and a RETTYPE for the return type, until the first `{` at
-// parenthesis depth zero arms the body.
+// The precedence of an operator code, tightest to loosest: unary 9, multiplicative 8,
+// additive 7, bitwise (band 6, bxor 5, bor 4), comparison 3, andalso 2, orelse 1, and the
+// parenthesis marker 0 so no real operator pops across it.
+fn prec_of(op: Word) -> Word {
+    match op {
+        OpCode::Neg() => 9,
+        OpCode::Not() => 9,
+        OpCode::Paren() => 0,
+        OpCode::Mul() => 8,
+        OpCode::Div() => 8,
+        OpCode::Mod() => 8,
+        OpCode::Add() => 7,
+        OpCode::Sub() => 7,
+        OpCode::Band() => 6,
+        OpCode::Bxor() => 5,
+        OpCode::Bor() => 4,
+        OpCode::Andalso() => 2,
+        OpCode::Orelse() => 1,
+        _ => 3,
+    }
+}
+
+// The record for a stacked operator: unary Neg/Not and the short-circuit Andalso/Orelse
+// emit their own node kinds; every other code is a BinOp carrying its operator code.
+fn emit_op(op: Word) -> Word {
+    match op {
+        OpCode::Neg() => Node::Neg() as Word,
+        OpCode::Not() => Node::Not() as Word,
+        OpCode::Andalso() => Node::Andalso() as Word,
+        OpCode::Orelse() => Node::Orelse() as Word,
+        _ => Node::BinOp() as Word + op * 64,
+    }
+}
+
+// The operator code for a token kind, or 0 when the token is not a binary operator.
+fn opcode_of(k: Word) -> Word {
+    match k {
+        Tok::Plus() => OpCode::Add() as Word,
+        Tok::Minus() => OpCode::Sub() as Word,
+        Tok::Star() => OpCode::Mul() as Word,
+        Tok::Slash() => OpCode::Div() as Word,
+        Tok::Percent() => OpCode::Mod() as Word,
+        Tok::EqEq() => OpCode::Eq() as Word,
+        Tok::NotEq() => OpCode::NotEq() as Word,
+        Tok::Lt() => OpCode::Lt() as Word,
+        Tok::Gt() => OpCode::Gt() as Word,
+        Tok::LtEq() => OpCode::LtEq() as Word,
+        Tok::GtEq() => OpCode::GtEq() as Word,
+        Tok::Band() => OpCode::Band() as Word,
+        Tok::Bor() => OpCode::Bor() as Word,
+        Tok::Bxor() => OpCode::Bxor() as Word,
+        Tok::Andalso() => OpCode::Andalso() as Word,
+        Tok::Orelse() => OpCode::Orelse() as Word,
+        _ => 0,
+    }
+}
+
+// Settle a just-read operator: pop one stacked operator of equal or higher precedence
+// (emitting it), or, when none remains, push the pending operator.
+fn step_resolving() -> Word {
+    if ops.opsp > 0 andalso prec_of(ops.opstack[ops.opsp - 1]) >= ops.pending_prec {
+        ops.opsp = ops.opsp - 1;
+        let op = ops.opstack[ops.opsp];
+        emit_op(op)
+    } else {
+        ops.opstack[ops.opsp] = ops.pending_op;
+        ops.opsp = ops.opsp + 1;
+        ops.resolving = 0;
+        0
+    }
+}
+
+// A `)`: flush the operators above the parenthesis marker, then discard the marker.
+fn step_closing() -> Word {
+    if ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] != OpCode::Paren() as Word {
+        ops.opsp = ops.opsp - 1;
+        let op = ops.opstack[ops.opsp];
+        emit_op(op)
+    } else {
+        ops.opsp = ops.opsp - 1;
+        ops.closing = 0;
+        ops.expect_operand = 0;
+        0
+    }
+}
+
+// An operator token: a unary `not` or `-` (in operand position) is pushed straight onto
+// the stack; a binary operator is settled by precedence.
+fn step_op(k: Word) -> Word {
+    if k == Tok::Not() as Word {
+        ops.opstack[ops.opsp] = OpCode::Not() as Word;
+        ops.opsp = ops.opsp + 1;
+        ops.expect_operand = 1;
+        0
+    } else {
+    if k == Tok::Minus() as Word andalso ops.expect_operand == 1 {
+        ops.opstack[ops.opsp] = OpCode::Neg() as Word;
+        ops.opsp = ops.opsp + 1;
+        ops.expect_operand = 1;
+        0
+    } else {
+        let op = opcode_of(k);
+        if op > 0 {
+            ops.pending_op = op;
+            ops.pending_prec = prec_of(op);
+            ops.resolving = 1;
+            ops.expect_operand = 1;
+            0
+        } else {
+            0
+        }
+    } }
+}
+
+// The expression-position token dispatch: an integer literal (Literal), a parameter
+// reference (Local, its slot resolved), a `(` marker, a `)` (closing), or an operator.
+fn step_normal(k: Word, v: Word) -> Word {
+    if k == Tok::IntLit() as Word {
+        ops.expect_operand = 0;
+        Node::Literal() as Word + v * 64
+    } else {
+    if k == Tok::Ident() as Word {
+        ops.expect_operand = 0;
+        Node::Local() as Word + resolve_param(v) * 64
+    } else {
+    if k == Tok::LParen() as Word {
+        ops.opstack[ops.opsp] = OpCode::Paren() as Word;
+        ops.opsp = ops.opsp + 1;
+        ops.expect_operand = 1;
+        0
+    } else {
+    if k == Tok::RParen() as Word {
+        ops.closing = 1;
+        0
+    } else {
+        step_op(k)
+    } } } }
+}
+
+// Dispatch a body token: the body's closing `}` begins the final drain; every other token
+// is an expression token.
+fn step_body_dispatch(k: Word, v: Word) -> Word {
+    if k == Tok::RBrace() as Word {
+        ops.draining = 1;
+        0
+    } else {
+        step_normal(k, v)
+    }
+}
+
+// Flush the expression's operators at the body's `}`; emptied, the tail expression is the
+// forest root, so emit Done and return control to the header for the next declaration.
+fn step_draining() -> Word {
+    if ops.opsp > 0 {
+        ops.opsp = ops.opsp - 1;
+        let op = ops.opstack[ops.opsp];
+        emit_op(op)
+    } else {
+        ops.draining = 0;
+        ps.in_body = 0;
+        ps.pend_end = 1;
+        Node::Done() as Word
+    }
+}
+
+// One step of the body walk: the active shunting-yard sub-state, or the next body token.
+fn body_step() -> Word {
+    if ops.resolving == 1 {
+        step_resolving()
+    } else {
+    if ops.closing == 1 {
+        step_closing()
+    } else {
+    if ops.draining == 1 {
+        step_draining()
+    } else {
+        if ps.cursor >= toks.len {
+            ops.draining = 1;
+            0
+        } else {
+            let k = toks.kinds[ps.cursor];
+            let v = toks.vals[ps.cursor];
+            ps.cursor = ps.cursor + 1;
+            step_body_dispatch(k, v)
+        }
+    } } }
+}
+
+// The declaration scan (header). Mode 0 reads the category keyword; mode 1 the name
+// (emitting START and resetting the param table); mode 2 the signature.
 fn header_step(k: Word, v: Word) -> Word {
     if ps.mode == 0 {
         if k == 5 {
@@ -121,9 +379,9 @@ fn header_step(k: Word, v: Word) -> Word {
     } }
 }
 
-// Mode 2 in a helper so the header's if-else nesting stays under the parser's
-// recursion-depth limit. The signature scan: PARAM/PTYPE/RETTYPE emission and array
-// types, ending when the first `{` at depth zero arms the body (BSTART).
+// Mode 2 in a helper so the header's if-else nesting stays shallow. The signature scan:
+// PARAM/PTYPE/RETTYPE emission and array types, ending when the first `{` at depth zero
+// arms the body walk (BSTART).
 fn header_sig(k: Word, v: Word) -> Word {
     if k == 1 {
         if ps.arr == 1 {
@@ -211,10 +469,10 @@ fn header_sig(k: Word, v: Word) -> Word {
     } else {
     if k == 2 {
         if ps.pdepth == 0 {
-            // The body's opening `{`: arm the body walk rather than brace-match it. Emit
-            // the BSTART bracket; the body walk consumes the body's own tokens next.
+            // The body's opening `{`: arm the body walk rather than brace-match it.
             ps.in_body = 1;
             ps.started = 1;
+            ops.expect_operand = 1;
             16
         } else {
             0
@@ -224,44 +482,29 @@ fn header_sig(k: Word, v: Word) -> Word {
     } } } } } } } }
 }
 
-// The body walk (atomic bodies only this increment). The opening `{` is already consumed
-// (started set at the arm). An integer literal emits a Literal node (kind 1, arg = its
-// value); an identifier a Local node (kind 2, arg = its resolved frame slot); the closing
-// `}` emits the forest's terminal Done (kind 15) and requests the declaration's END.
-fn body_step(k: Word, v: Word) -> Word {
-    if k == 12 {
-        1 + v * 64
+// One step of the merged parser: close a just-finished body's declaration (pend_end), run
+// the body walk when in a body, report DONE at end of input, or read the next header
+// token.
+fn step() -> Word {
+    if ps.pend_end == 1 {
+        ps.pend_end = 0;
+        ps.mode = 0;
+        5
     } else {
-    if k == 1 {
-        2 + resolve_param(v) * 64
+    if ps.in_body == 1 {
+        body_step()
     } else {
-    if k == 3 {
-        ps.in_body = 0;
-        ps.pend_end = 1;
-        15
-    } else {
-        0
-    } } }
+        if ps.cursor >= toks.len {
+            15
+        } else {
+            let k = toks.kinds[ps.cursor];
+            let v = toks.vals[ps.cursor];
+            ps.cursor = ps.cursor + 1;
+            header_step(k, v)
+        }
+    } }
 }
 
 loop main(resume: Word) -> Word {
-    if ps.pend_end == 1 {
-        // The body's Done was emitted last iteration; close the declaration with END and
-        // return to the header for the next declaration, consuming no token.
-        ps.pend_end = 0;
-        ps.mode = 0;
-        yield 5
-    } else {
-    if ps.cursor >= toks.len {
-        yield 15
-    } else {
-        let k = toks.kinds[ps.cursor];
-        let v = toks.vals[ps.cursor];
-        ps.cursor = ps.cursor + 1;
-        if ps.in_body == 1 {
-            yield body_step(k, v)
-        } else {
-            yield header_step(k, v)
-        }
-    } }
+    yield step()
 }

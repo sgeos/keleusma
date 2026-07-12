@@ -1,19 +1,19 @@
-//! Merged parser stage (`compiler/kel/parse.kel`), increment 1: one streaming `loop`
-//! that parses a whole top-level function declaration INCLUDING an atomic body (a single
-//! integer literal or a parameter reference) in a single pass, rather than the two
-//! composed loops (parser.kel finding declarations and body.kel parsing each body) the
-//! host currently chains.
+//! Merged parser stage (`compiler/kel/parse.kel`), increment 2: one streaming `loop` that
+//! parses a whole top-level function declaration whose body is an operator-precedence
+//! expression over integer literals and parameter references (arithmetic, comparison,
+//! bitwise, short-circuit, parentheses, and the unary `-`/`not`), in a single pass.
 //!
-//! A throwaway adapter maps the reference tokenizer into the stage's `(kind, value)`
-//! token stream. The stage emits header records `dkind + val*64` (1/2/3 START of a
+//! A throwaway adapter maps the reference tokenizer into the stage's unified `(kind,
+//! value)` token stream. The stage emits header records `dkind + val*64` (1/2/3 START of a
 //! fn/yield/loop, 4 PARAM, 5 END, 6 PTYPE, 7 RETTYPE, 8 ASIZE, 15 DONE, 16 BSTART) and,
 //! bracketed by a BSTART and the body's terminal Done, body node records `kind + arg*64`
-//! (the body.kel `enum Node` codes: 1 Literal, 2 Local, 15 Done). The host decode keeps
-//! an `in_body` flag mirroring the stage's: a BSTART switches it into body mode, the
-//! body's Done switches it back. Each function is checked against the reference parse for
-//! its category, name, parameter names, and the atomic body node. Types are not checked
-//! here; they are covered by the separate parser-stage test. Later increments add the
-//! operator grammar, statements, and the data/enum/use declaration kinds.
+//! in POSTORDER (the `enum Node` codes: 1 Literal, 2 Local, 3 BinOp, 6 Not, 8 Andalso,
+//! 9 Orelse, 10 Neg, 15 Done). The host decode keeps an `in_body` flag mirroring the
+//! stage's. Each function is checked against the reference parse for its category, name,
+//! parameter names, and the postorder body record sequence; two postorder traversals are
+//! equal exactly when the node forests are, so the flat sequence is a sound equivalence.
+//! Types are covered by the separate parser-stage test. Later increments add statements,
+//! the control-flow forms, and the data/enum/use declaration kinds.
 
 #![cfg(all(
     feature = "compile",
@@ -24,7 +24,7 @@
 ))]
 
 use keleusma::Arena;
-use keleusma::ast::{Expr, FunctionCategory, Literal, Pattern};
+use keleusma::ast::{BinOp, Expr, FunctionCategory, Literal, Pattern, UnaryOp};
 use keleusma::bytecode::Value;
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
@@ -37,9 +37,10 @@ const LEN: usize = 0;
 const KINDS: usize = 1;
 const VALS: usize = 1 + 2048;
 
-/// Map the reference token stream into the stage's `(kind, value)` pairs, interning
-/// identifier names into `names`. The trailing `Eof` is dropped so the token count is
-/// exactly the real tokens.
+/// Map the reference token stream into the stage's unified `(kind, value)` pairs. The
+/// operator codes are body.kel's (`Plus` 21 upward); the header keywords and punctuation
+/// keep their parser.kel codes, which agree with the body vocabulary on every shared
+/// token. The trailing `Eof` is dropped.
 fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
     let mut intern = |s: &str| -> i64 {
         if let Some(i) = names.iter().position(|n| n == s) {
@@ -64,9 +65,24 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
             TokenKind::RParen => (8, 0),
             TokenKind::Colon => (9, 0),
             TokenKind::Comma => (10, 0),
-            TokenKind::LBracket => (11, 0),
             TokenKind::IntLit(n) => (12, *n),
-            TokenKind::RBracket => (18, 0),
+            TokenKind::Plus => (21, 0),
+            TokenKind::Minus => (22, 0),
+            TokenKind::Star => (23, 0),
+            TokenKind::Slash => (24, 0),
+            TokenKind::Percent => (25, 0),
+            TokenKind::EqEq => (26, 0),
+            TokenKind::NotEq => (27, 0),
+            TokenKind::Lt => (28, 0),
+            TokenKind::Gt => (29, 0),
+            TokenKind::LtEq => (30, 0),
+            TokenKind::GtEq => (31, 0),
+            TokenKind::Not => (32, 0),
+            TokenKind::Band => (33, 0),
+            TokenKind::Bor => (34, 0),
+            TokenKind::Bxor => (35, 0),
+            TokenKind::Andalso => (36, 0),
+            TokenKind::Orelse => (37, 0),
             TokenKind::Eof => continue,
             _ => (4, 0),
         };
@@ -76,13 +92,10 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
     (kinds, vals)
 }
 
-/// A body node: its kind (1 Literal, 2 Local) and argument (a literal value or a frame
-/// slot). Atomic bodies are a single node.
-type BodyNode = (i64, i64);
-
 /// A parsed function: its category (1 fn, 2 yield, 3 loop), interned name id, its value
-/// parameter name ids in order, and its atomic body node.
-type Func = (i64, i64, Vec<i64>, BodyNode);
+/// parameter name ids in order, and its body's postorder node record sequence as
+/// (kind, arg) pairs.
+type Func = (i64, i64, Vec<i64>, Vec<(i64, i64)>);
 
 #[derive(Debug, Default, PartialEq)]
 struct Parsed {
@@ -123,43 +136,37 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
     }
 
     let mut parsed = Parsed::default();
-    // The declaration under construction: (category, name, params, optional body node).
-    let mut cur: Option<(i64, i64, Vec<i64>, Option<BodyNode>)> = None;
+    // The declaration under construction: (category, name, params, body records).
+    let mut cur: Option<(i64, i64, Vec<i64>, Vec<(i64, i64)>)> = None;
     let mut in_body = false;
     let mut state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
-    for _ in 0..(kinds.len() * 3 + 16) {
+    for _ in 0..(kinds.len() * 4 + 16) {
         match state {
             VmState::Yielded(Value::Int(w)) => {
                 let code = w.rem_euclid(64);
                 let val = w.div_euclid(64);
                 if in_body {
-                    // Body mode: atomic node records, ended by the body's Done.
                     match code {
-                        0 => {} // PENDING
-                        1 | 2 => {
-                            // A Literal (1) or Local (2) leaf; the atomic body's root.
-                            cur.as_mut().expect("body node before START").3 = Some((code, val));
-                        }
+                        0 => {}                // PENDING (a shunting-yard push, no record)
                         15 => in_body = false, // the body's Done ends body mode
-                        other => panic!("unexpected body node kind {other}"),
+                        _ => cur
+                            .as_mut()
+                            .expect("body node before START")
+                            .3
+                            .push((code, val)),
                     }
                 } else {
                     match code {
                         0 => {} // PENDING
-                        1..=3 => cur = Some((code, val, Vec::new(), None)),
+                        1..=3 => cur = Some((code, val, Vec::new(), Vec::new())),
                         4 => cur.as_mut().expect("PARAM before START").2.push(val),
                         6 | 7 | 8 => {} // PTYPE/RETTYPE/ASIZE: not checked this increment
                         16 => in_body = true, // BSTART: a body forest follows
                         5 => {
-                            let (cat, name, params, body) = cur.take().expect("END before START");
-                            parsed.funcs.push((
-                                cat,
-                                name,
-                                params,
-                                body.expect("a body before END"),
-                            ));
+                            let f = cur.take().expect("END before START");
+                            parsed.funcs.push(f);
                         }
                         15 => {
                             assert!(cur.is_none(), "DONE mid-declaration");
@@ -179,8 +186,66 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
     panic!("parser did not reach DONE within the iteration budget");
 }
 
+/// Flatten an expression into its postorder node record sequence, mirroring the stage's
+/// shunting-yard emission: operands before operators, a BinOp (kind 3) carrying its
+/// operator code, the short-circuit booleans their own kinds (8 Andalso, 9 Orelse), and
+/// the unary prefixes 6 Not / 10 Neg. Parenthesised grouping is structural in the AST, so
+/// it contributes no node, exactly as the stage discards its parenthesis marker.
+fn flatten(e: &Expr, params: &[&str], out: &mut Vec<(i64, i64)>) {
+    match e {
+        Expr::Literal {
+            value: Literal::Int(n),
+            ..
+        } => out.push((1, *n)),
+        Expr::Ident { name, .. } => {
+            let slot = params
+                .iter()
+                .position(|p| *p == name.as_str())
+                .unwrap_or_else(|| panic!("identifier {name} is not a parameter"))
+                as i64;
+            out.push((2, slot));
+        }
+        Expr::BinOp {
+            op, left, right, ..
+        } => {
+            flatten(left, params, out);
+            flatten(right, params, out);
+            let (kind, code) = match op {
+                BinOp::Add => (3, 1),
+                BinOp::Mul => (3, 2),
+                BinOp::Sub => (3, 3),
+                BinOp::Div => (3, 4),
+                BinOp::Mod => (3, 5),
+                BinOp::Eq => (3, 6),
+                BinOp::NotEq => (3, 7),
+                BinOp::Lt => (3, 8),
+                BinOp::Gt => (3, 9),
+                BinOp::LtEq => (3, 10),
+                BinOp::GtEq => (3, 11),
+                BinOp::Band => (3, 12),
+                BinOp::Bor => (3, 13),
+                BinOp::Bxor => (3, 14),
+                BinOp::Andalso => (8, 0),
+                BinOp::Orelse => (9, 0),
+                other => panic!("increment 2 does not handle operator {other:?}"),
+            };
+            out.push((kind, code));
+        }
+        Expr::UnaryOp { op, operand, .. } => {
+            flatten(operand, params, out);
+            let kind = match op {
+                UnaryOp::Not => 6,
+                UnaryOp::Neg => 10,
+                other => panic!("increment 2 handles only `-` and `not`, got {other:?}"),
+            };
+            out.push((kind, 0));
+        }
+        other => panic!("increment 2 handles operator expressions, got {other:?}"),
+    }
+}
+
 /// Build the same `Parsed` from the reference parse, interning names to match the stage's
-/// ids. Only atomic bodies (a literal or a parameter reference tail) are modeled.
+/// ids.
 fn reference(src: &str, names: &[String]) -> Parsed {
     let id = |s: &str| -> i64 {
         names
@@ -205,79 +270,87 @@ fn reference(src: &str, names: &[String]) -> Parsed {
             })
             .collect();
         let params: Vec<i64> = param_names.iter().map(|n| id(n)).collect();
-        // The atomic body: the block's tail expression is a literal or a parameter ref.
         let tail = f
             .body
             .tail_expr
             .as_ref()
-            .expect("an atomic body has a tail");
-        let node: BodyNode = match &**tail {
-            Expr::Literal {
-                value: Literal::Int(n),
-                ..
-            } => (1, *n),
-            Expr::Ident { name, .. } => {
-                let slot = param_names
-                    .iter()
-                    .position(|p| *p == name.as_str())
-                    .unwrap_or_else(|| panic!("identifier {name} is not a parameter"))
-                    as i64;
-                (2, slot)
-            }
-            other => panic!("increment 1 handles only an atomic body, got {other:?}"),
-        };
-        funcs.push((cat, id(&f.name), params, node));
+            .expect("an expression body has a tail");
+        let mut body = Vec::new();
+        flatten(tail, &param_names, &mut body);
+        funcs.push((cat, id(&f.name), params, body));
     }
     Parsed { funcs }
 }
 
-// A function whose body is a single integer literal: START, RETTYPE, BSTART, the Literal
-// node, the body Done, END.
+// An atomic literal body (the increment-1 case) still parses: one Literal record.
 #[test]
-fn an_atomic_literal_body_parses_in_one_pass() {
+fn an_atomic_literal_body_still_parses() {
     let src = "fn answer() -> Word { 42 }";
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
-    let want = reference(src, &names);
-    assert_eq!(got, want);
-    assert_eq!(got.funcs.len(), 1);
-    assert_eq!(got.funcs[0].3, (1, 42)); // Literal 42
+    assert_eq!(got, reference(src, &names));
+    assert_eq!(got.funcs[0].3, vec![(1, 42)]);
 }
 
-// A function whose body is a parameter reference resolves to that parameter's frame slot.
+// A single binary operator over two parameters is postorder Local, Local, BinOp.
 #[test]
-fn an_atomic_param_body_resolves_the_slot() {
-    let src = "fn second(a: Word, b: Word) -> Word { b }";
+fn a_binary_operator_body_parses() {
+    let src = "fn add(a: Word, b: Word) -> Word { a + b }";
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
-    let want = reference(src, &names);
-    assert_eq!(got, want);
-    assert_eq!(got.funcs[0].3, (2, 1)); // Local slot 1 (the second parameter)
-    assert_eq!(got.funcs[0].2.len(), 2); // two parameters
+    assert_eq!(got, reference(src, &names));
+    assert_eq!(got.funcs[0].3, vec![(2, 0), (2, 1), (3, 1)]); // a, b, BinOp(Add)
 }
 
-// The body walk returns control to the header for the next declaration: two functions,
-// each with an atomic body, parse in sequence.
+// Precedence binds `*` tighter than `+`: `a + b * c` is a, b, c, Mul, Add.
 #[test]
-fn the_body_walk_returns_to_the_header() {
-    let src = "fn one() -> Word { 1 } fn ident(x: Word) -> Word { x }";
+fn precedence_is_respected() {
+    let src = "fn f(a: Word, b: Word, c: Word) -> Word { a + b * c }";
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
-    let want = reference(src, &names);
-    assert_eq!(got, want);
+    assert_eq!(got, reference(src, &names));
+    assert_eq!(got.funcs[0].3, vec![(2, 0), (2, 1), (2, 2), (3, 2), (3, 1)]);
+}
+
+// Parentheses override precedence: `(a + b) * c` is a, b, Add, c, Mul.
+#[test]
+fn parentheses_override_precedence() {
+    let src = "fn f(a: Word, b: Word, c: Word) -> Word { (a + b) * c }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    assert_eq!(got.funcs[0].3, vec![(2, 0), (2, 1), (3, 1), (2, 2), (3, 2)]);
+}
+
+// The unary prefixes and a comparison: `not a == b` and `-a`.
+#[test]
+fn unary_and_comparison_parse() {
+    let src = "fn f(a: Word, b: Word) -> Word { -a + b }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+}
+
+// The bitwise and short-circuit operators parse to their node kinds.
+#[test]
+fn bitwise_and_short_circuit_parse() {
+    let src = "fn f(a: Word, b: Word, c: Word) -> Word { a band b orelse c }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    // a, b, BinOp(Band), c, Orelse.
+    assert_eq!(
+        got.funcs[0].3,
+        vec![(2, 0), (2, 1), (3, 12), (2, 2), (9, 0)]
+    );
+}
+
+// Two functions with expression bodies parse in sequence, proving the handoff.
+#[test]
+fn two_expression_bodies_in_sequence() {
+    let src = "fn f(a: Word) -> Word { a + a } fn g(b: Word) -> Word { b * b }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
     assert_eq!(got.funcs.len(), 2);
-    assert_eq!(got.funcs[0].3, (1, 1)); // first: Literal 1
-    assert_eq!(got.funcs[1].3, (2, 0)); // second: Local slot 0
-}
-
-// A `yield` function category is carried through the merged parse.
-#[test]
-fn a_yield_function_category_is_carried() {
-    let src = "yield gen(r: Word) -> Word { r }";
-    let mut names = Vec::new();
-    let got = run_parse(src, &mut names);
-    let want = reference(src, &names);
-    assert_eq!(got, want);
-    assert_eq!(got.funcs[0].0, 2); // yield category
-    assert_eq!(got.funcs[0].3, (2, 0)); // Local slot 0
 }
