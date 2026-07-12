@@ -204,14 +204,25 @@ private data stmt {
     fold_start: Word,
     fold_cont: Word,
     blockform: Word,
+    // A monotonic sequence stamped on each block body as it opens (a then/else branch or
+    // a for body). A closing `}` closes the innermost open block, which is the one with
+    // the largest stamp, so nested `for` and `if` blocks close in the correct order.
+    open_seq: Word,
 }
 
 // The `if`/`else` context stack: `if_phase` per pending conditional (1 condition, 2 then,
 // 3 awaiting `else`, 4 awaiting the else `{`, 5 else), `if_stmt_start` its branch's
 // statement baseline, `if_sp` the nesting depth.
+// `if_opbase` records the operator-stack depth at each branch body's open, so the
+// branch-tail fold can tell a `yield` written inside the branch (`if c { yield a }`,
+// whose YieldMark sits above the base and must drain into the branch) from a `yield`
+// wrapping the whole conditional (`yield if c { a }`, whose YieldMark was pushed
+// before the branch opened and must keep spanning the built If).
 private data branch {
     if_phase: [Word; 16],
     if_stmt_start: [Word; 16],
+    if_opbase: [Word; 16],
+    if_seq: [Word; 16],
     if_sp: Word,
 }
 
@@ -237,6 +248,7 @@ private data forst {
     for_oc: [Word; 8],
     for_cap: [Word; 8],
     for_stmt_start: [Word; 8],
+    for_seq: [Word; 8],
     for_sp: Word,
     forlimit_count: Word,
     for_emit: Word,
@@ -808,6 +820,9 @@ fn step_if(k: Word) -> Word {
             } else {
                 branch.if_phase[branch.if_sp - 1] = 5;
                 branch.if_stmt_start[branch.if_sp - 1] = stmt.stmt_count;
+                branch.if_opbase[branch.if_sp - 1] = ops.opsp;
+                branch.if_seq[branch.if_sp - 1] = stmt.open_seq;
+                stmt.open_seq = stmt.open_seq + 1;
                 stmt.pbase[stmt.pbase_sp] = stmt.stmt_base;
                 stmt.pbase_sp = stmt.pbase_sp + 1;
                 stmt.stmt_base = stmt.pstmt_sp;
@@ -816,15 +831,24 @@ fn step_if(k: Word) -> Word {
         }
         0
     } else {
-        if branch.if_sp > 0 {
-            if branch.if_phase[branch.if_sp - 1] == 2 {
-                ops.drain_reason = 3;
-            } else {
-                ops.drain_reason = 4;
-            }
+        // Close the innermost open block. A pending if-branch and an active for body can
+        // both want this `}`; the one opened most recently (the larger `open_seq` stamp)
+        // is the inner one, so a `for` written inside an `if` branch closes as a for body
+        // (reason 7) rather than being mistaken for the branch's `}` (reason 3 or 4).
+        let if_open = branch.if_sp > 0;
+        let for_open = forst.for_sp > 0 andalso forst.for_phase[forst.for_sp - 1] == 7;
+        let if_seq = if if_open { branch.if_seq[branch.if_sp - 1] } else { 0 };
+        let for_seq = if for_open { forst.for_seq[forst.for_sp - 1] } else { 0 };
+        let close_for = for_open andalso (not if_open orelse for_seq > if_seq);
+        if close_for {
+            ops.drain_reason = 7;
         } else {
-            if forst.for_sp > 0 andalso forst.for_phase[forst.for_sp - 1] == 7 {
-                ops.drain_reason = 7;
+            if if_open {
+                if branch.if_phase[branch.if_sp - 1] == 2 {
+                    ops.drain_reason = 3;
+                } else {
+                    ops.drain_reason = 4;
+                }
             } else {
                 ops.drain_reason = 1;
             }
@@ -846,6 +870,9 @@ fn synth_empty_else() -> Word {
     ps.cursor = ps.cursor - 1;
     branch.if_phase[branch.if_sp - 1] = 5;
     branch.if_stmt_start[branch.if_sp - 1] = stmt.stmt_count;
+    branch.if_opbase[branch.if_sp - 1] = ops.opsp;
+    branch.if_seq[branch.if_sp - 1] = stmt.open_seq;
+    stmt.open_seq = stmt.open_seq + 1;
     stmt.pbase[stmt.pbase_sp] = stmt.stmt_base;
     stmt.pbase_sp = stmt.pbase_sp + 1;
     stmt.stmt_base = stmt.pstmt_sp;
@@ -992,6 +1019,8 @@ fn step_forheader(k: Word, v: Word) -> Word {
             stmt.let_count = stmt.let_count + 1;
             forst.for_phase[fp] = 7;
             forst.for_stmt_start[fp] = stmt.stmt_count;
+            forst.for_seq[fp] = stmt.open_seq;
+            stmt.open_seq = stmt.open_seq + 1;
             stmt.pbase[stmt.pbase_sp] = stmt.stmt_base;
             stmt.pbase_sp = stmt.pbase_sp + 1;
             stmt.stmt_base = stmt.pstmt_sp;
@@ -1240,9 +1269,24 @@ fn step_draining() -> Word {
     let marker = top == OpCode::Paren() as Word
         orelse top == OpCode::IndexMark() as Word
         orelse top == OpCode::CallMark() as Word;
-    let yield_blocks = top == OpCode::YieldMark() as Word
-        andalso ops.drain_reason != 0
-        andalso ops.drain_reason != 1;
+    // A YieldMark completes (drains as its YieldExpr) at a statement (reason 0) or the
+    // body tail (reason 1), and also at an if-branch fold (reason 3 or 4) when the
+    // `yield` was written inside that branch. The latter is true when the YieldMark
+    // sits above the operator-stack depth captured at the branch's open: a `yield`
+    // pushed inside the branch raises `opsp` past `if_opbase`, while a `yield`
+    // wrapping the whole conditional was pushed before the branch opened and so is at
+    // or below the base, where it must keep blocking so the built If becomes its operand.
+    let base = if branch.if_sp > 0 {
+        branch.if_opbase[branch.if_sp - 1]
+    } else {
+        0
+    };
+    let is_branch_fold = ops.drain_reason == 3 orelse ops.drain_reason == 4;
+    let branch_tail = is_branch_fold andalso ops.opsp > base;
+    let yield_completes = ops.drain_reason == 0
+        orelse ops.drain_reason == 1
+        orelse branch_tail;
+    let yield_blocks = top == OpCode::YieldMark() as Word andalso not yield_completes;
     if has_op andalso not marker andalso not yield_blocks {
         ops.opsp = ops.opsp - 1;
         let op = ops.opstack[ops.opsp];
@@ -1303,6 +1347,9 @@ fn step_draining() -> Word {
         if ops.drain_reason == 2 {
             branch.if_phase[branch.if_sp - 1] = 2;
             branch.if_stmt_start[branch.if_sp - 1] = stmt.stmt_count;
+            branch.if_opbase[branch.if_sp - 1] = ops.opsp;
+            branch.if_seq[branch.if_sp - 1] = stmt.open_seq;
+            stmt.open_seq = stmt.open_seq + 1;
             stmt.pbase[stmt.pbase_sp] = stmt.stmt_base;
             stmt.pbase_sp = stmt.pbase_sp + 1;
             stmt.stmt_base = stmt.pstmt_sp;
@@ -1485,6 +1532,7 @@ fn arm_body() -> Word {
     stmt.pbase_sp = 0;
     stmt.folding = 0;
     stmt.blockform = 0;
+    stmt.open_seq = 0;
     branch.if_sp = 0;
     forst.for_sp = 0;
     forst.for_emit = 0;

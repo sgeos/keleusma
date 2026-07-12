@@ -2995,3 +2995,138 @@ fn parse_into_codegen_byte_cast_matches_the_reference() {
         }
     }
 }
+
+// The whole of lexer.kel, the tokenizer stage, self-compiled: every one of its chunks is
+// emitted by the self-hosted pipeline (lexer.kel tokenizing, parse.kel parsing, the forest
+// reconstruction, and codegen.kel) byte-identically to the Rust-hosted compiler. This is
+// the first whole stage-file self-compile, and it exercises the full body grammar the
+// tokenizer uses: yields inside if branches, `for .. limit` loops nested inside `if`
+// branches inside outer loops, Byte-as-Word casts, private and shared data, and calls.
+#[test]
+fn self_host_compiles_lexer_kel_byte_identically() {
+    let src = std::fs::read_to_string("compiler/kel/lexer.kel").expect("read lexer.kel");
+    let module = self_host_compile(&src);
+    let reference = compile_src(&src);
+    assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");
+    for (m, r) in module.chunks.iter().zip(reference.chunks.iter()) {
+        assert_eq!(m.name, r.name, "chunk order");
+        assert_eq!(m.ops, r.ops, "ops for chunk `{}`", r.name);
+        assert_eq!(m.constants, r.constants, "pool for chunk `{}`", r.name);
+        assert_eq!(
+            m.local_count, r.local_count,
+            "local_count for chunk `{}`",
+            r.name
+        );
+    }
+}
+
+// A `yield` written as the tail of an if branch (`if c { yield a } else { yield b }`) folds
+// its YieldExpr into that branch, not around the whole conditional. parse.kel captures the
+// operator-stack depth at each branch open and drains the YieldMark at the branch fold only
+// when the `yield` was pushed inside the branch, distinguishing this from the outer form
+// `yield if c { a } else { b }` (covered elsewhere) where the whole If is the yield operand.
+// This was the lexer.kel `main` blocker.
+#[test]
+fn parse_into_codegen_yield_in_if_branch_matches_the_reference() {
+    let cases: &[(&str, i64, i64)] = &[
+        (
+            "loop main(r: Word) -> Word { if r == 0 { yield 62 } else { yield 63 } }",
+            0,
+            62,
+        ),
+        (
+            "loop main(r: Word) -> Word { if r == 0 { yield 62 } else { yield 63 } }",
+            1,
+            63,
+        ),
+        // nested: a yield in each branch of an if nested in the else branch.
+        (
+            "loop main(r: Word) -> Word { if r == 0 { yield 62 } else { if r == 1 { yield 63 } else { yield 64 } } }",
+            2,
+            64,
+        ),
+        // a yield tail preceded by a let and a data-assign statement, inside a branch.
+        (
+            "shared data st { k: Word, v: Word } loop main(r: Word) -> Word { if r == 0 { let x = st.v; st.k = 0; yield 12 + x * 64 } else { yield 62 } }",
+            0,
+            12,
+        ),
+    ];
+    for &(src, input, expected) in cases {
+        let (records, param_count, category) = parse_function_records(src);
+        let body = reconstruct_body(&records, category);
+        let (emitted, pool, local_count) = run_codegen(&body, param_count);
+        let reference = compile_src(src);
+        let idx = main_index(&reference);
+        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
+        let mut built = compile_src(src);
+        built.chunks[idx].ops = emitted;
+        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].local_count = local_count as u16;
+        let need = required_persistent_capacity_for(&built);
+        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+        arena.resize_persistent(need).expect("resize");
+        let mut vm = Vm::new(built, &arena).expect("verify built");
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        match vm
+            .call_with_shared(&mut shared, &[Value::Int(input)])
+            .expect("call")
+        {
+            VmState::Yielded(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
+            other => panic!("unexpected result for `{src}`: {other:?}"),
+        }
+    }
+}
+
+// A `for .. limit` loop written inside an `if` branch closes as a for body, not the branch,
+// so its parts and ForLimit statement stream inside the branch. parse.kel stamps each block
+// open with a monotonic sequence and closes the innermost (largest-stamp) block at each `}`.
+// This was the lexer.kel `intern_id` blocker, whose outer-loop body is an `if` guarding a
+// nested `for`.
+#[test]
+fn parse_into_codegen_for_in_if_branch_matches_the_reference() {
+    let cases: &[(&str, i64, i64)] = &[
+        // a for as the sole content of an if-then branch (no else).
+        (
+            "private data d { s: Word } fn main(n: Word) -> Word { if n > 0 { for j in 0..n limit 8 { d.s = d.s + 1; } } d.s }",
+            3,
+            3,
+        ),
+        // a for as an if-then branch with an explicit else.
+        (
+            "private data d { s: Word } fn main(n: Word) -> Word { if n > 0 { for j in 0..n limit 8 { d.s = d.s + 1; } } else { d.s = 9; } d.s }",
+            0,
+            9,
+        ),
+        // an if (no else) holding a nested for, inside an outer for -- the intern_id shape.
+        (
+            "private data d { s: Word } fn main(n: Word) -> Word { d.s = 0; for i in 0..n limit 4 { if i > 0 { for j in 0..n limit 4 { d.s = d.s + 1; } } } d.s }",
+            3,
+            6,
+        ),
+    ];
+    for &(src, input, expected) in cases {
+        let (records, param_count, category) = parse_function_records(src);
+        let body = reconstruct_body(&records, category);
+        let (emitted, pool, local_count) = run_codegen(&body, param_count);
+        let reference = compile_src(src);
+        let idx = main_index(&reference);
+        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
+        let mut built = compile_src(src);
+        built.chunks[idx].ops = emitted;
+        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].local_count = local_count as u16;
+        let need = required_persistent_capacity_for(&built);
+        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+        arena.resize_persistent(need).expect("resize");
+        let mut vm = Vm::new(built, &arena).expect("verify built");
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        match vm
+            .call_with_shared(&mut shared, &[Value::Int(input)])
+            .expect("call")
+        {
+            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
+            other => panic!("unexpected result for `{src}`: {other:?}"),
+        }
+    }
+}
