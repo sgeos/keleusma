@@ -95,6 +95,9 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
             TokenKind::For => (45, 0),
             TokenKind::In => (46, 0),
             TokenKind::DotDot => (47, 0),
+            TokenKind::Match => (48, 0),
+            TokenKind::FatArrow => (49, 0),
+            TokenKind::Underscore => (50, 0),
             TokenKind::Eof => continue,
             _ => (4, 0),
         };
@@ -292,6 +295,36 @@ fn flatten(
             // `yield e` is a unary YieldExpr (kind 24) over its operand.
             flatten(value, scope, next_slot, forlim, out);
             out.push((24, 0));
+        }
+        Expr::Match {
+            scrutinee, arms, ..
+        } => {
+            // Postorder: the scrutinee, then per integer-literal arm a Literal node and its
+            // result, then the trailing wildcard's result, then a MatchBuild (kind 34)
+            // packing the scrutinee temp slot and the literal-arm count as
+            // `temp * 1024 + count`. The temp slot is reserved right after the scrutinee.
+            flatten(scrutinee, scope, next_slot, forlim, out);
+            let temp = *next_slot;
+            *next_slot += 1;
+            let mut lit_count = 0i64;
+            for arm in arms {
+                assert!(
+                    arm.guard.is_none(),
+                    "increment 5 handles unguarded arms only"
+                );
+                match &arm.pattern {
+                    Pattern::Literal(Literal::Int(v), _) => {
+                        out.push((1, *v));
+                        flatten(&arm.expr, scope, next_slot, forlim, out);
+                        lit_count += 1;
+                    }
+                    Pattern::Wildcard(_) => {
+                        flatten(&arm.expr, scope, next_slot, forlim, out);
+                    }
+                    other => panic!("increment 5 handles integer and wildcard arms, got {other:?}"),
+                }
+            }
+            out.push((34, temp * 1024 + lit_count));
         }
         other => panic!("increment does not handle expression {other:?}"),
     }
@@ -681,6 +714,60 @@ fn the_loop_variable_is_in_scope() {
             (33, 0), // ForBuild
             (1, 0),  // tail 0
             (23, 0)  // ForLimit statement
+        ]
+    );
+}
+
+// A `match` over integer-literal arms with a trailing wildcard is a MatchBuild signal
+// packing the scrutinee temp slot and the literal-arm count.
+#[test]
+fn a_match_expression_parses() {
+    let src = "fn f(n: Word) -> Word { match n { 1 => n, 2 => n, _ => n } }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    // scrut n(0); Lit 1, n(0); Lit 2, n(0); wildcard n(0); MatchBuild(temp 1 * 1024 + 2).
+    assert_eq!(
+        got.funcs[0].3,
+        vec![
+            (2, 0),
+            (1, 1),
+            (2, 0),
+            (1, 2),
+            (2, 0),
+            (2, 0),
+            (34, 1 * 1024 + 2)
+        ]
+    );
+}
+
+// A `match` may be a `let` value; the temp slot follows the binding's own slots.
+#[test]
+fn a_match_may_be_a_let_value() {
+    let src = "fn f(n: Word) -> Word { let r = match n { 0 => n, _ => n }; r }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+}
+
+// A block-form `match` statement followed by a tail is committed as an ExprStmt.
+#[test]
+fn a_block_form_match_statement_is_an_expr_stmt() {
+    let src = "fn f(n: Word) -> Word { match n { 1 => n, _ => n } n }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    // scrut, Lit 1, n, wildcard n, MatchBuild, n [tail], ExprStmt.
+    assert_eq!(
+        got.funcs[0].3,
+        vec![
+            (2, 0),
+            (1, 1),
+            (2, 0),
+            (2, 0),
+            (34, 1 * 1024 + 1),
+            (2, 0),
+            (21, 0)
         ]
     );
 }

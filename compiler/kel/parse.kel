@@ -64,6 +64,9 @@ enum Tok {
     For = 45,
     In = 46,
     DotDot = 47,
+    Match = 48,
+    FatArrow = 49,
+    Underscore = 50,
 }
 
 // The node-record kinds the body walk yields (a subset of body.kel's `enum Node`).
@@ -84,6 +87,7 @@ enum Node {
     YieldExpr = 24,
     SlotRecord = 32,
     ForBuild = 33,
+    MatchBuild = 34,
 }
 
 // The shunting-yard operator codes.
@@ -201,6 +205,18 @@ private data forst {
     for_emit: Word,
     for_emit_i: Word,
     for_stmt_start: Word,
+}
+
+// The `match scrut { arms }` context stack: `match_phase` per pending match (1 the
+// scrutinee's `{`, 2 an arm pattern, 3 the `=>`, 4 the arm result), `match_temp` the
+// scrutinee's reserved temp slot, `match_argcount` the literal-arm count, `match_sp` the
+// nesting depth, `match_build` the pending build signal.
+private data mat {
+    match_phase: [Word; 8],
+    match_temp: [Word; 8],
+    match_argcount: [Word; 8],
+    match_sp: Word,
+    match_build: Word,
 }
 
 // Resolve an identifier to its frame slot: the `let` bindings first (most recent wins),
@@ -327,6 +343,14 @@ fn step_op(k: Word) -> Word {
         ops.expect_operand = 1;
         0
     } else {
+    if k == Tok::Match() as Word {
+        // `match` opens a scrutinee-then-arms context; its scrutinee is an operand.
+        mat.match_phase[mat.match_sp] = 1;
+        mat.match_argcount[mat.match_sp] = 0;
+        mat.match_sp = mat.match_sp + 1;
+        ops.expect_operand = 1;
+        0
+    } else {
     if k == Tok::Not() as Word {
         ops.opstack[ops.opsp] = OpCode::Not() as Word;
         ops.opsp = ops.opsp + 1;
@@ -349,7 +373,7 @@ fn step_op(k: Word) -> Word {
         } else {
             0
         }
-    } } } } } }
+    } } } } } } }
 }
 
 // The conditional tokens `{`, `}`, `if`, `else`. A `{` after a condition drains it
@@ -426,11 +450,71 @@ fn synth_empty_else() -> Word {
 // A token that starts a statement (so a completed block-form operand before it was a
 // statement, not the block tail).
 fn is_stmt_start(k: Word) -> Word {
-    if k == Tok::Ident() as Word orelse k == Tok::IntLit() as Word orelse k == Tok::If() as Word orelse k == Tok::Let() as Word orelse k == Tok::Yield() as Word orelse k == Tok::For() as Word {
+    if k == Tok::Ident() as Word orelse k == Tok::IntLit() as Word orelse k == Tok::If() as Word orelse k == Tok::Let() as Word orelse k == Tok::Yield() as Word orelse k == Tok::For() as Word orelse k == Tok::Match() as Word {
         1
     } else {
         0
     }
+}
+
+// The `match` structural tokens. Phase 1 awaits the scrutinee's `{` (drain reason 8, which
+// reserves the scrutinee temp slot and moves to the arm patterns); phase 2 reads an arm
+// pattern (an integer literal emitted as a Literal node and counted, a `_` wildcard, or
+// `}` ending the arms); phase 3 awaits `=>`; phase 4 reads the arm result, ended by a
+// match-level `,` (reason 9, next arm) or the closing `}` (reason 10, build).
+fn step_match(k: Word, v: Word) -> Word {
+    let sp = mat.match_sp - 1;
+    let mp = mat.match_phase[sp];
+    if mp == 1 {
+        ops.drain_reason = 8;
+        ops.draining = 1;
+        0
+    } else {
+    if mp == 2 {
+        if k == Tok::IntLit() as Word {
+            mat.match_argcount[sp] = mat.match_argcount[sp] + 1;
+            mat.match_phase[sp] = 3;
+            Node::Literal() as Word + v * 64
+        } else {
+        if k == Tok::Underscore() as Word {
+            mat.match_phase[sp] = 3;
+            0
+        } else {
+            mat.match_build = 1;
+            0
+        } }
+    } else {
+    if mp == 3 {
+        if k == Tok::FatArrow() as Word {
+            mat.match_phase[sp] = 4;
+            ops.expect_operand = 1;
+        }
+        0
+    } else {
+        if k == Tok::Comma() as Word {
+            ops.drain_reason = 9;
+            ops.draining = 1;
+            0
+        } else {
+            ops.drain_reason = 10;
+            ops.draining = 1;
+            0
+        }
+    } } }
+}
+
+// Emit the match build record (kind 34): its arg packs the scrutinee temp slot and the
+// literal-arm count as `temp * 1024 + count`. The match is now a completed block-form
+// operand, so blockform marks it and expect_operand clears.
+fn step_match_build() -> Word {
+    mat.match_build = 0;
+    let sp = mat.match_sp - 1;
+    let temp = mat.match_temp[sp];
+    let ac = mat.match_argcount[sp];
+    mat.match_sp = sp;
+    ops.expect_operand = 0;
+    stmt.blockform = 1;
+    Node::MatchBuild() as Word + (temp * 1024 + ac) * 64
 }
 
 // The `for` loop header: phase 1 the variable name, 2 the `in`, 3 the low bound (drained
@@ -616,7 +700,19 @@ fn step_body_dispatch(k: Word, v: Word) -> Word {
                 ops.expect_operand = 1;
             }
         }
-        step_dispatch_normal(k, v)
+        if mat.match_sp > 0 {
+            // Route the match structural tokens (a pattern, `=>`, the scrutinee's `{`, the
+            // arms' `}`, or a match-level `,`) to step_match; the scrutinee and arm results
+            // dispatch normally.
+            let mp = mat.match_phase[mat.match_sp - 1];
+            if mp == 2 orelse mp == 3 orelse (mp == 1 andalso k == Tok::LBrace() as Word) orelse (mp == 4 andalso k == Tok::RBrace() as Word) orelse (mp == 4 andalso k == Tok::Comma() as Word) {
+                step_match(k, v)
+            } else {
+                step_dispatch_normal(k, v)
+            }
+        } else {
+            step_dispatch_normal(k, v)
+        }
     }
 }
 
@@ -708,15 +804,35 @@ fn step_draining() -> Word {
             ops.draining = 0;
             0
         } else {
-            // reason 7: the loop body is drained; fold its statements around the body value,
-            // then start the ForLimit parts emission (fold continuation 3).
+        if ops.drain_reason == 7 {
+            // The loop body is drained; fold its statements around the body value, then
+            // start the ForLimit parts emission (fold continuation 3).
             ops.draining = 0;
             stmt.folding = 1;
             stmt.fold_i = stmt.stmt_count;
             stmt.fold_start = forst.for_stmt_start;
             stmt.fold_cont = 3;
             0
-        } } } } } } }
+        } else {
+        if ops.drain_reason == 8 {
+            // The match scrutinee is drained; reserve its temp slot and read arm patterns.
+            mat.match_temp[mat.match_sp - 1] = ps.pcount + stmt.slot_count;
+            stmt.slot_count = stmt.slot_count + 1;
+            mat.match_phase[mat.match_sp - 1] = 2;
+            ops.draining = 0;
+            0
+        } else {
+        if ops.drain_reason == 9 {
+            // An arm result is drained; expect the next arm's pattern.
+            mat.match_phase[mat.match_sp - 1] = 2;
+            ops.draining = 0;
+            0
+        } else {
+            // reason 10: the last arm result is drained; build the match.
+            mat.match_build = 1;
+            ops.draining = 0;
+            0
+        } } } } } } } } } }
     }
 }
 
@@ -774,6 +890,9 @@ fn body_step() -> Word {
     if forst.for_emit == 1 {
         step_for_emit()
     } else {
+    if mat.match_build == 1 {
+        step_match_build()
+    } else {
         if ps.cursor >= toks.len {
             ops.draining = 1;
             0
@@ -783,7 +902,7 @@ fn body_step() -> Word {
             ps.cursor = ps.cursor + 1;
             step_body_dispatch(k, v)
         }
-    } } } } }
+    } } } } } }
 }
 
 // Reset the body-walk state for a fresh function body.
@@ -808,6 +927,8 @@ fn arm_body() -> Word {
     forst.for_phase = 0;
     forst.for_emit = 0;
     forst.forlimit_count = 0;
+    mat.match_sp = 0;
+    mat.match_build = 0;
     16
 }
 
