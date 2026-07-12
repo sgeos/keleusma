@@ -494,3 +494,23 @@ fn lexer_into_parser_pipeline_parses_a_multi_declaration_program() {
     assert_eq!(funcs, 3); // clamp, emit, scan
     assert!(body_nodes > 0, "parse.kel produced a body forest");
 }
+
+// Comment skipping: `//` line comments must be dropped exactly as the runtime
+// tokenizer drops them, so the lexer's stream over commented source equals the
+// adapter's over the same source. Real stage files are comment-dense, so this is a
+// prerequisite for self-compiling one.
+#[test]
+fn lexer_skips_line_comments_like_the_adapter() {
+    assert_lexer_matches_adapter(
+        "fn f(x: Word) -> Word { // a leading comment\n \
+            let y = x + 1; // trailing comment\n \
+            y // just an identifier then a comment\n }",
+    );
+    // A comment with punctuation and keywords inside must not tokenize.
+    assert_lexer_matches_adapter(
+        "// fn not_real(a: Word) { yield a } == != <= :: \n \
+         fn g(a: Word) -> Word { a }",
+    );
+    // A comment running to end of input with no trailing newline.
+    assert_lexer_matches_adapter("fn h(a: Word) -> Word { a } // final comment no newline");
+}
