@@ -269,6 +269,19 @@ private data fields {
     cur_field: Word,
     cur_len: Word,
     has_field: Word,
+    cur_cval: Word,
+}
+
+// The const-data field values. A `const data` block carries no runtime slot; instead each
+// scalar field inlines to its integer-literal initializer, exactly as the reference
+// compiler folds it to a `Const`. `cblock`/`cfield`/`cval` are the block name, field name,
+// and captured value; a body read `block.field` of one emits that value as a Literal.
+private data cdata {
+    cblock: [Word; 256],
+    cfield: [Word; 256],
+    cval: [Word; 256],
+    ccount: Word,
+    cfound: Word,
 }
 
 // A `data.field` scalar read in the body: `da_phase` awaits the `.` (1) then the field
@@ -288,6 +301,8 @@ private data da {
     pidx_len: Word,
     store_emit: Word,
     store_arg: Word,
+    cda_phase: Word,
+    cda_block: Word,
 }
 
 // A function call context stack: `call_chunk`/`call_count` per pending call (the callee's
@@ -366,6 +381,18 @@ fn step_ident(v: Word) -> Word {
         0
     } else {
     ps.found_flag = 0;
+    for i in 0..cdata.ccount limit 256 {
+        if cdata.cblock[i] == v {
+            ps.found_flag = 1;
+        }
+    }
+    if ps.found_flag == 1 {
+        // A const-data block name opens a `block.field` read that inlines to a Literal.
+        da.cda_block = v;
+        da.cda_phase = 1;
+        0
+    } else {
+    ps.found_flag = 0;
     for i in 0..enums.enum_count limit 256 {
         if enums.edata[i] == v {
             ps.found_flag = 1;
@@ -378,7 +405,26 @@ fn step_ident(v: Word) -> Word {
         0
     } else {
         step_local(v)
-    } } }
+    } } } }
+}
+
+// A const-data field name: look its value up in the const-field table and emit it as a
+// Literal, exactly as the reference compiler inlines a const-data read. Const fields are
+// scalar and immutable, so no index or assignment lookahead follows.
+fn step_cfield(k: Word, v: Word) -> Word {
+    da.cda_phase = 0;
+    if k == 1 {
+        cdata.cfound = 0;
+        for i in 0..cdata.ccount limit 256 {
+            if cdata.cblock[i] == da.cda_block andalso cdata.cfield[i] == v {
+                cdata.cfound = cdata.cval[i];
+            }
+        }
+        ops.expect_operand = 0;
+        Node::Literal() as Word + cdata.cfound * 64
+    } else {
+        0
+    }
 }
 
 // A `Name::Variant() as Word` cast, folded to the variant's discriminant literal. Phase 1
@@ -1053,6 +1099,15 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         }
         0
     } else {
+    if da.cda_phase == 1 {
+        if k == Tok::Dot() as Word {
+            da.cda_phase = 2;
+        }
+        0
+    } else {
+    if da.cda_phase == 2 {
+        step_cfield(k, v)
+    } else {
     if da.da_phase == 1 {
         if k == Tok::Dot() as Word {
             da.da_phase = 2;
@@ -1086,7 +1141,7 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         step_forheader(k, v)
     } else {
         step_normal(k, v)
-    } } } } } } } }
+    } } } } } } } } } }
 }
 
 // Dispatch a body token: the else-less `if` synthesis and the block-form-statement commit
@@ -1409,6 +1464,7 @@ fn arm_body() -> Word {
     mat.enum_phase = 0;
     mat.mpat_phase = 0;
     da.da_phase = 0;
+    da.cda_phase = 0;
     da.idx_sp = 0;
     da.post_index = 0;
     da.iclosing = 0;
@@ -1635,7 +1691,7 @@ fn header_data(k: Word, v: Word) -> Word {
         0
     } else {
         if ps.init == 1 {
-            header_field_skip(k)
+            header_field_skip(k, v)
         } else {
             header_field(k, v)
         }
@@ -1645,7 +1701,13 @@ fn header_data(k: Word, v: Word) -> Word {
 // A const field's initializer skip, depth-aware over `()`/`[]`/`{}` so a nested tuple,
 // array, or struct initializer is consumed whole; a top-level `,` ends the field and a
 // top-level `}` ends the block.
-fn header_field_skip(k: Word) -> Word {
+fn header_field_skip(k: Word, v: Word) -> Word {
+    if k == 12 andalso ps.idepth == 0 {
+        // A top-level integer literal is the const field's value; capture it for the
+        // const-field table. A non-literal or nested initializer leaves cur_cval at 0.
+        fields.cur_cval = v;
+        0
+    } else {
     if k == 2 orelse k == 7 orelse k == 41 {
         ps.idepth = ps.idepth + 1;
         0
@@ -1665,6 +1727,10 @@ fn header_field_skip(k: Word) -> Word {
     } else {
     if k == 3 {
         if ps.idepth == 0 {
+            // The `}` closes the block while skipping the last field's initializer; commit
+            // that field (its captured value) before ending the block.
+            commit_field();
+            fields.has_field = 0;
             ps.init = 0;
             ps.mode = 0;
             5
@@ -1674,7 +1740,7 @@ fn header_field_skip(k: Word) -> Word {
         }
     } else {
         0
-    } } } }
+    } } } } }
 }
 
 // Record the pending field's layout in the accumulated table, unless there is no pending
@@ -1682,13 +1748,22 @@ fn header_field_skip(k: Word) -> Word {
 // runtime slot). The element-0 slot is the running counter; the counter then advances by
 // the field's slot count.
 fn commit_field() -> Word {
-    if fields.has_field == 1 andalso ps.dvis != 2 {
-        fields.fdata[fields.field_count] = fields.cur_block;
-        fields.ffield[fields.field_count] = fields.cur_field;
-        fields.fbase[fields.field_count] = fields.base_ctr;
-        fields.flen[fields.field_count] = fields.cur_len;
-        fields.field_count = fields.field_count + 1;
-        fields.base_ctr = fields.base_ctr + fields.cur_len;
+    if fields.has_field == 1 {
+        if ps.dvis == 2 {
+            // A const field inlines to its captured integer value; record it in the
+            // const-field table rather than the runtime-slot layout.
+            cdata.cblock[cdata.ccount] = fields.cur_block;
+            cdata.cfield[cdata.ccount] = fields.cur_field;
+            cdata.cval[cdata.ccount] = fields.cur_cval;
+            cdata.ccount = cdata.ccount + 1;
+        } else {
+            fields.fdata[fields.field_count] = fields.cur_block;
+            fields.ffield[fields.field_count] = fields.cur_field;
+            fields.fbase[fields.field_count] = fields.base_ctr;
+            fields.flen[fields.field_count] = fields.cur_len;
+            fields.field_count = fields.field_count + 1;
+            fields.base_ctr = fields.base_ctr + fields.cur_len;
+        }
     }
     0
 }
@@ -1707,6 +1782,7 @@ fn header_field(k: Word, v: Word) -> Word {
             commit_field();
             fields.cur_field = v;
             fields.cur_len = 1;
+            fields.cur_cval = 0;
             fields.has_field = 1;
             ps.pname = 0;
             4 + v * 64

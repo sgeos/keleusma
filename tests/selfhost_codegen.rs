@@ -2850,12 +2850,6 @@ fn self_host_compiles_a_whole_program_byte_identically() {
     // An enum program: enum-variant casts (`Kind::Lo() as Word`), a match over the cast
     // result, and calls. parse.kel accumulates the enum table and folds each cast to its
     // discriminant literal, so the whole program self-compiles at module scope.
-    //
-    // Const-data field reads (`cfg.base`, which the reference inlines to the field's
-    // literal) are NOT yet handled: parse.kel skips const blocks, so a const-field read
-    // leaves an unbalanced forest. codegen.kel's own `const data wire` opcode constants
-    // rely on this inlining, so it is the next required feature before a whole stage file
-    // self-compiles.
     let m3 = assert_self_host_byte_identical(
         "enum Kind { Lo = 0, Hi = 1 } \
          fn classify(n: Word) -> Word { if n < 10 { Kind::Lo() as Word } else { Kind::Hi() as Word } } \
@@ -2863,4 +2857,16 @@ fn self_host_compiles_a_whole_program_byte_identically() {
          loop main(n: Word) -> Word { yield pick(classify(n)) }",
     );
     assert_self_host_yields(m3, 5, 100); // classify(5)=Lo=0 -> pick(0)=100
+
+    // A const-data program: a `const data` block whose scalar fields inline to their
+    // integer-literal values when read (`cfg.base`, `cfg.step`), exactly as the reference
+    // compiler folds them to `Const`. This is the shape codegen.kel's own `const data wire`
+    // opcode table uses throughout, and is required to self-compile the codegen stage.
+    let m4 = assert_self_host_byte_identical(
+        "const data cfg { base: Word = 10, step: Word = 2 } \
+         fn bump(x: Word) -> Word { x + cfg.base } \
+         fn stride(x: Word) -> Word { x * cfg.step + cfg.base } \
+         loop main(x: Word) -> Word { yield stride(bump(x)) }",
+    );
+    assert_self_host_yields(m4, 5, 40); // bump(5)=15; stride(15)=15*2+10=40
 }
