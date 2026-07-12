@@ -1499,3 +1499,60 @@ fn a_realistic_stage_like_body_parses() {
     assert_eq!(got, reference(src, &names));
     assert_eq!(got.funcs.len(), 2);
 }
+
+// Data reads as call arguments: each read flushes before the `,` or `)` boundary.
+#[test]
+fn data_reads_as_call_arguments() {
+    let src = "fn g(a: Word, b: Word) -> Word { a } shared data d { x: Word, y: Word } \
+        fn f() -> Word { g(d.x, d.y) }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+}
+
+// A data read as a match scrutinee flushes before the scrutinee's `{`.
+#[test]
+fn a_data_read_match_scrutinee() {
+    let src = "shared data d { sel: Word } fn f() -> Word { match d.sel { 1 => 10, _ => 20 } }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+}
+
+// A data read inside an `if` condition flushes before the comparison operator.
+#[test]
+fn a_data_read_in_an_if_condition() {
+    let src = "shared data d { flag: Word } fn f() -> Word { if d.flag > 0 { 1 } else { 0 } }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+}
+
+// Nested matches: an inner match is an arm result of an outer match.
+#[test]
+fn nested_matches() {
+    let src = "fn f(n: Word) -> Word { match n { 1 => match n { 2 => n, _ => n }, _ => n } }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+}
+
+// A `for .. limit` body that reads and writes data, indexing an array by the loop var.
+#[test]
+fn a_for_limit_body_with_data_access() {
+    let src = "shared data d { acc: Word, xs: [Word; 4] } \
+        fn f(n: Word) -> Word { for i in 0..n limit 4 { d.acc = d.acc + d.xs[i]; } d.acc }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+}
+
+// An enum cast as a call argument flushes before the `)`.
+#[test]
+fn an_enum_cast_as_call_argument() {
+    let src = "enum E { A, B } fn g(a: Word) -> Word { a } \
+        fn f() -> Word { g(E::B() as Word) }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+}
