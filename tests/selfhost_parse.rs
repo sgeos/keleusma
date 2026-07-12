@@ -1556,3 +1556,28 @@ fn an_enum_cast_as_call_argument() {
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
 }
+
+// A dispatch function shaped like the compiler's own step functions: nested if/else with
+// enum-cast conditions, data writes, an indexed read, and a match with a data-read result.
+#[test]
+fn a_stage_shaped_dispatch_function_parses() {
+    let src = "enum Tok { A, B, C } \
+        shared data src { kinds: [Word; 8] } \
+        private data ps { cursor: Word, state: Word } \
+        fn step(k: Word) -> Word { \
+            if k == Tok::A() as Word { \
+                ps.state = 1; \
+                0 \
+            } else { \
+                if k == Tok::B() as Word { \
+                    ps.cursor = ps.cursor + 1; \
+                    src.kinds[ps.cursor] \
+                } else { \
+                    match k { 1 => ps.state, _ => 0 } \
+                } \
+            } \
+        }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+}
