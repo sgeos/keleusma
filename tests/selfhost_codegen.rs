@@ -1579,6 +1579,10 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize) {
             .unwrap();
     }
 
+    // Track each function's records and value-parameter count, keeping the last
+    // one at DONE. Multi-function sources (a callee then `main`) supply the whole
+    // chunk table so parse.kel resolves the call, and `main` is the last function.
+    let mut last: (Vec<(i64, i64)>, usize) = (Vec::new(), 0);
     let mut records: Vec<(i64, i64)> = Vec::new();
     let mut params = 0usize;
     let (mut in_body, mut in_data, mut in_enum, mut in_use) = (false, false, false, false);
@@ -1602,12 +1606,17 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize) {
                 in_use = code != 5;
             } else {
                 match code {
+                    1..=3 => {
+                        records = Vec::new();
+                        params = 0;
+                    }
                     4 => params += 1,
                     9 => in_data = true,
                     10 => in_use = true,
                     12 => in_enum = true,
                     16 => in_body = true,
-                    15 => return (records, params),
+                    5 => last = (std::mem::take(&mut records), params),
+                    15 => return last,
                     _ => {}
                 }
             }
@@ -1630,13 +1639,16 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize) {
 /// The root is the one node left on the stack. The data-access kinds fit the same
 /// groups: a scalar DataRead (11) is a leaf carrying its slot; a DataAssign (12)
 /// folds like a LetIn carrying its slot; and an IndexRead (13) is unary over the
-/// index, carrying `base + len*65536` in `arg`. This increment covers the
-/// arithmetic, comparison, bitwise, unary, short-circuit, block, if, and
-/// scalar/indexed-read data kinds; a record of any other kind is rejected until a
-/// later increment adds it.
+/// index, carrying `base + len*65536` in `arg`. A Call (7) packs `chunk + count*256`
+/// in its record `arg`; it pops its `count` argument nodes, reverses them to source
+/// order into the `call_args` side array, and takes that slice's start as `lhs` and
+/// the count as `rhs`. This increment covers the arithmetic, comparison, bitwise,
+/// unary, short-circuit, block, if, scalar/indexed-read data, and call kinds; a
+/// record of any other kind is rejected until a later increment adds it.
 fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
     let mut nodes: Vec<Node> = Vec::new();
     let mut stack: Vec<i64> = Vec::new();
+    let mut call_args: Vec<i64> = Vec::new();
     for &(kind, arg) in records {
         let idx = match kind {
             1 | 2 | 11 | 20 => {
@@ -1681,6 +1693,26 @@ fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
                 });
                 (nodes.len() - 1) as i64
             }
+            7 => {
+                // Call: arg packs `chunk + count*256`. Pop the count argument node
+                // indices (last-pushed is the last argument), reverse them to source
+                // order, and append them to the packed call_args side array. The Call
+                // node's lhs is that slice's start and rhs the argument count.
+                let chunk = arg.rem_euclid(256);
+                let count = arg.div_euclid(256);
+                let mut popped: Vec<i64> =
+                    (0..count).map(|_| stack.pop().expect("call arg")).collect();
+                popped.reverse();
+                let args_start = call_args.len() as i64;
+                call_args.extend(popped);
+                nodes.push(Node {
+                    kind: 7,
+                    arg: chunk,
+                    lhs: args_start,
+                    rhs: count,
+                });
+                (nodes.len() - 1) as i64
+            }
             other => panic!("reconstruct_body: unsupported node kind {other}"),
         };
         stack.push(idx);
@@ -1688,7 +1720,7 @@ fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
     assert_eq!(stack.len(), 1, "exactly one root node remains");
     Body {
         nodes,
-        call_args: Vec::new(),
+        call_args,
         for_parts: Vec::new(),
         match_parts: Vec::new(),
         limit_parts: Vec::new(),
@@ -1883,6 +1915,71 @@ fn parse_into_codegen_data_access_reads_match_the_reference() {
             "private data d { xs: [Word; 4], n: Word } fn main(i: Word) -> Word { d.n = 7; d.xs[i] + d.n }",
             1,
             7,
+        ),
+    ];
+    for &(src, input, expected) in cases {
+        let (records, param_count) = parse_function_records(src);
+        let body = reconstruct_body(&records, 0);
+        let (emitted, pool, local_count) = run_codegen(&body, param_count);
+
+        let reference = compile_src(src);
+        let idx = reference
+            .chunks
+            .iter()
+            .position(|c| c.name == "main")
+            .unwrap();
+        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
+        assert_eq!(
+            local_count, reference.chunks[idx].local_count as i64,
+            "local_count for `{src}`"
+        );
+
+        let mut built = compile_src(src);
+        built.chunks[idx].ops = emitted;
+        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].local_count = local_count as u16;
+        let need = required_persistent_capacity_for(&built);
+        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+        arena.resize_persistent(need).expect("resize");
+        let mut vm = Vm::new(built, &arena).expect("verify built");
+        match vm.call(&[Value::Int(input)]).expect("call built") {
+            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
+            other => panic!("unexpected result for `{src}`: {other:?}"),
+        }
+    }
+}
+
+// The bridge over function calls: `main` calls a callee, so parse.kel resolves the
+// call target against the chunk table (recovered from the token stream) and packs
+// the chunk index and argument count into the Call record; the host rebuilds the
+// call_args side array. Same self-hosted path and byte-identity check, now over a
+// multi-function source where `main` is the last function.
+#[test]
+fn parse_into_codegen_calls_match_the_reference() {
+    let cases: &[(&str, i64, i64)] = &[
+        // single-argument call.
+        (
+            "fn inc(x: Word) -> Word { x + 1 } fn main(a: Word) -> Word { inc(a) }",
+            41,
+            42,
+        ),
+        // two-argument call, arguments pushed left to right.
+        (
+            "fn add(x: Word, y: Word) -> Word { x + y } fn main(a: Word) -> Word { add(a, 2) }",
+            40,
+            42,
+        ),
+        // nested call: the inner result is the outer argument.
+        (
+            "fn inc(x: Word) -> Word { x + 1 } fn main(a: Word) -> Word { inc(inc(a)) }",
+            40,
+            42,
+        ),
+        // a call whose argument is an expression, plus arithmetic around it.
+        (
+            "fn dbl(x: Word) -> Word { x * 2 } fn main(a: Word) -> Word { dbl(a + 1) + 1 }",
+            20,
+            43,
         ),
     ];
     for &(src, input, expected) in cases {
