@@ -76,6 +76,9 @@ enum Tok {
     Underscore = 50,
     LBracket = 41,
     RBracket = 42,
+    ColCol = 51,
+    As = 52,
+    Enum = 53,
 }
 
 // The node-record kinds the body walk yields (a subset of body.kel's `enum Node`).
@@ -290,6 +293,20 @@ private data call {
     call_pending: Word,
     call_phase: Word,
     cdraining: Word,
+}
+
+// The enum table, accumulated by the header as each `enum` block is parsed: `edata`/`evar`
+// are the interned enum and variant names and `edisc` the variant's discriminant. The
+// discriminant follows the implicit-increment rule (zero for the first variant, the
+// previous plus one otherwise) unless an explicit `= N` overrides it and reseeds the
+// running `next_disc`. `cur_enum` is the enum under construction.
+private data enums {
+    edata: [Word; 64],
+    evar: [Word; 64],
+    edisc: [Word; 64],
+    enum_count: Word,
+    cur_enum: Word,
+    next_disc: Word,
 }
 
 // Resolve an identifier to its frame slot: the `let` bindings first (most recent wins),
@@ -1262,6 +1279,11 @@ fn header_step(k: Word, v: Word) -> Word {
             ps.mode = 5;
             0
         } else {
+        if k == 53 {
+            // `enum`: an enum declaration. The name follows in mode 9.
+            ps.mode = 9;
+            0
+        } else {
             if k == 5 {
                 ps.dkind = 2;
             } else {
@@ -1272,7 +1294,7 @@ fn header_step(k: Word, v: Word) -> Word {
             } }
             ps.mode = 1;
             0
-        } } } }
+        } } } } }
     } else {
     if ps.mode == 1 {
         if k == 1 {
@@ -1293,8 +1315,77 @@ fn header_step(k: Word, v: Word) -> Word {
     if ps.mode == 2 {
         header_sig(k, v)
     } else {
+    if ps.mode >= 4 andalso ps.mode <= 7 {
         header_data(k, v)
-    } } }
+    } else {
+        header_enum(k, v)
+    } } } }
+}
+
+// The enum declaration modes: 9 the enum name (emit ENUMSTART, dkind 12, and open the
+// accumulation), 10 the opening `{`, 11 a variant name (emit EVARIANT, dkind 13, and
+// record it with the running discriminant) or `}` ending the enum, 12 an explicit `= N`
+// discriminant, the next variant on `,`, or the `}`, and 13 the explicit discriminant
+// literal (emit EDISC, dkind 14, and reseed the running discriminant).
+fn header_enum(k: Word, v: Word) -> Word {
+    if ps.mode == 9 {
+        if k == 1 {
+            enums.cur_enum = v;
+            enums.next_disc = 0;
+            ps.mode = 10;
+            12 + v * 64
+        } else {
+            0
+        }
+    } else {
+    if ps.mode == 10 {
+        if k == 2 {
+            ps.mode = 11;
+        }
+        0
+    } else {
+    if ps.mode == 11 {
+        if k == 1 {
+            enums.edata[enums.enum_count] = enums.cur_enum;
+            enums.evar[enums.enum_count] = v;
+            enums.edisc[enums.enum_count] = enums.next_disc;
+            enums.enum_count = enums.enum_count + 1;
+            enums.next_disc = enums.next_disc + 1;
+            ps.mode = 12;
+            13 + v * 64
+        } else {
+        if k == 3 {
+            ps.mode = 0;
+            5
+        } else {
+            0
+        } }
+    } else {
+    if ps.mode == 12 {
+        if k == 17 {
+            ps.mode = 13;
+            0
+        } else {
+        if k == 10 {
+            ps.mode = 11;
+            0
+        } else {
+        if k == 3 {
+            ps.mode = 0;
+            5
+        } else {
+            0
+        } } }
+    } else {
+        if k == 12 {
+            enums.edisc[enums.enum_count - 1] = v;
+            enums.next_disc = v + 1;
+            ps.mode = 12;
+            14 + v * 64
+        } else {
+            0
+        }
+    } } } }
 }
 
 // The data-block declaration modes: 4 expect `data` after a modifier, 5 the block name

@@ -1,9 +1,9 @@
-//! Merged parser stage (`compiler/kel/parse.kel`), increment 9: one streaming `loop` that
-//! parses a whole top-level function declaration, the `data` block declaration, and the
-//! body's full expression, statement, control-flow, data-access, and now function-call
-//! grammar. Data fields resolve against the accumulated field-layout table; a call `f(..)`
-//! resolves its callee against a host-supplied chunk-name table (resolved-reference data
-//! that stays host-supplied, since a forward call cannot resolve in a single pass).
+//! Merged parser stage (`compiler/kel/parse.kel`), increment 10a: one streaming `loop`
+//! that parses a whole top-level function declaration, the `data` block declaration, the
+//! `enum` declaration, and the body's full expression, statement, control-flow,
+//! data-access, and function-call grammar. Data fields resolve against the accumulated
+//! field-layout table; calls against a host-supplied chunk-name table; and the enum table
+//! is accumulated as each `enum` block is parsed, for the body enum folds of increment 10b.
 //!
 //! A throwaway adapter maps the reference tokenizer into the stage's unified `(kind,
 //! value)` token stream. The stage emits header records `dkind + val*64` (1/2/3 START of a
@@ -108,6 +108,9 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
             TokenKind::Match => (48, 0),
             TokenKind::FatArrow => (49, 0),
             TokenKind::Underscore => (50, 0),
+            TokenKind::ColonColon => (51, 0),
+            TokenKind::As => (52, 0),
+            TokenKind::Enum => (53, 0),
             TokenKind::Eof => continue,
             _ => (4, 0),
         };
@@ -226,6 +229,7 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
     // A data block is skipped this increment: DSTART opens it and its END closes it; its
     // fields are not compared, only that the block is consumed without breaking the stream.
     let mut in_data = false;
+    let mut in_enum = false;
     let mut state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
@@ -249,6 +253,11 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                         5 => in_data = false, // the data block's END
                         _ => {}               // its fields, skipped this increment
                     }
+                } else if in_enum {
+                    match code {
+                        5 => in_enum = false, // the enum's END
+                        _ => {}               // its variants, skipped this increment
+                    }
                 } else {
                     match code {
                         0 => {} // PENDING
@@ -256,6 +265,7 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                         4 => cur.as_mut().expect("PARAM before START").2.push(val),
                         6 | 7 | 8 => {} // PTYPE/RETTYPE/ASIZE: not checked this increment
                         9 => in_data = true, // DSTART: a data block, skipped this increment
+                        12 => in_enum = true, // ENUMSTART: an enum, skipped this increment
                         16 => in_body = true, // BSTART: a body forest follows
                         5 => {
                             let f = cur.take().expect("END before START");
@@ -1212,4 +1222,27 @@ fn a_nested_call_parses() {
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
+}
+
+// An `enum` declaration before a function: the enum is consumed by the header (and its
+// table accumulated) and the function still parses.
+#[test]
+fn an_enum_before_a_function_parses() {
+    let src = "enum Color { Red, Green, Blue } fn f(n: Word) -> Word { n }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    assert_eq!(got.funcs.len(), 1);
+}
+
+// An enum with explicit discriminants interleaved with functions.
+#[test]
+fn enums_with_explicit_discriminants_interleave() {
+    let src = "fn f(a: Word) -> Word { a } \
+        enum Tag { A = 5, B, C = 10 } \
+        fn g(b: Word) -> Word { b }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    assert_eq!(got.funcs.len(), 2);
 }
