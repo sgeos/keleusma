@@ -1642,9 +1642,12 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize) {
 /// index, carrying `base + len*65536` in `arg`. A Call (7) packs `chunk + count*256`
 /// in its record `arg`; it pops its `count` argument nodes, reverses them to source
 /// order into the `call_args` side array, and takes that slice's start as `lhs` and
-/// the count as `rhs`. This increment covers the arithmetic, comparison, bitwise,
-/// unary, short-circuit, block, if, scalar/indexed-read data, and call kinds; a
-/// record of any other kind is rejected until a later increment adds it.
+/// the count as `rhs`. An indexed write pairs an IndexStore signal (36), which
+/// folds the value and index into a kind-15 node (value in lhs, index in rhs),
+/// with an IndexAssign (14) that folds like a LetIn carrying `base + len*65536`.
+/// This increment covers the arithmetic, comparison, bitwise, unary, short-circuit,
+/// block, if, scalar and indexed data-access, and call kinds; a record of any other
+/// kind is rejected until a later increment adds it.
 fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
     let mut nodes: Vec<Node> = Vec::new();
     let mut stack: Vec<i64> = Vec::new();
@@ -1660,7 +1663,7 @@ fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
                 });
                 (nodes.len() - 1) as i64
             }
-            3 | 5 | 8 | 9 | 12 | 21 => {
+            3 | 5 | 8 | 9 | 12 | 14 | 21 => {
                 let r = stack.pop().expect("binary rhs");
                 let l = stack.pop().expect("binary lhs");
                 nodes.push(Node {
@@ -1668,6 +1671,21 @@ fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
                     arg,
                     lhs: l,
                     rhs: r,
+                });
+                (nodes.len() - 1) as i64
+            }
+            36 => {
+                // IndexStore signal: fold the value and index already on the stack
+                // into a kind-15 IndexStore node (value in lhs, index in rhs). The
+                // record kind is 36 because 15 collides with the record DONE marker;
+                // the node it produces is a real kind-15.
+                let value = stack.pop().expect("index-store value");
+                let index = stack.pop().expect("index-store index");
+                nodes.push(Node {
+                    kind: 15,
+                    arg: 0,
+                    lhs: value,
+                    rhs: index,
                 });
                 (nodes.len() - 1) as i64
             }
@@ -1980,6 +1998,63 @@ fn parse_into_codegen_calls_match_the_reference() {
             "fn dbl(x: Word) -> Word { x * 2 } fn main(a: Word) -> Word { dbl(a + 1) + 1 }",
             20,
             43,
+        ),
+    ];
+    for &(src, input, expected) in cases {
+        let (records, param_count) = parse_function_records(src);
+        let body = reconstruct_body(&records, 0);
+        let (emitted, pool, local_count) = run_codegen(&body, param_count);
+
+        let reference = compile_src(src);
+        let idx = reference
+            .chunks
+            .iter()
+            .position(|c| c.name == "main")
+            .unwrap();
+        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
+        assert_eq!(
+            local_count, reference.chunks[idx].local_count as i64,
+            "local_count for `{src}`"
+        );
+
+        let mut built = compile_src(src);
+        built.chunks[idx].ops = emitted;
+        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].local_count = local_count as u16;
+        let need = required_persistent_capacity_for(&built);
+        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+        arena.resize_persistent(need).expect("resize");
+        let mut vm = Vm::new(built, &arena).expect("verify built");
+        match vm.call(&[Value::Int(input)]).expect("call built") {
+            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
+            other => panic!("unexpected result for `{src}`: {other:?}"),
+        }
+    }
+}
+
+// The bridge over the indexed write, completing the data-access family: an
+// IndexStore signal folds the value and index into a kind-15 node, and IndexAssign
+// folds it into the block. Same self-hosted path and byte-identity check.
+#[test]
+fn parse_into_codegen_indexed_writes_match_the_reference() {
+    let cases: &[(&str, i64, i64)] = &[
+        // constant index write then read.
+        (
+            "private data d { xs: [Word; 4] } fn main(v: Word) -> Word { d.xs[2] = v; d.xs[2] }",
+            42,
+            42,
+        ),
+        // runtime index write (value an expression) then read.
+        (
+            "private data d { xs: [Word; 4] } fn main(i: Word) -> Word { d.xs[i] = i + 10; d.xs[i] }",
+            3,
+            13,
+        ),
+        // two element writes then a combined read.
+        (
+            "private data d { xs: [Word; 4] } fn main(v: Word) -> Word { d.xs[0] = v; d.xs[1] = v + 1; d.xs[0] + d.xs[1] }",
+            20,
+            41,
         ),
     ];
     for &(src, input, expected) in cases {
