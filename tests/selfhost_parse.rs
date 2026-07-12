@@ -1,8 +1,8 @@
-//! Merged parser stage (`compiler/kel/parse.kel`), increment 4: one streaming `loop` that
-//! parses a whole top-level function declaration whose body may contain the
-//! `if cond { then } else { else }` conditional with nested statement-block branches (and
-//! the block-form `if` statement and the `if` without `else`), over the `let` blocks and
-//! operator grammar of increments 2 and 3, in a single pass.
+//! Merged parser stage (`compiler/kel/parse.kel`), increment 5: one streaming `loop` that
+//! parses a whole top-level function declaration whose body may contain the `if`/`else`
+//! conditional, the `yield e` reentrant expression, and the bounded
+//! `for v in lo..hi limit CAP { body }` loop, over the `let` blocks and operator grammar
+//! of the earlier increments, in a single pass.
 //!
 //! A throwaway adapter maps the reference tokenizer into the stage's unified `(kind,
 //! value)` token stream. The stage emits header records `dkind + val*64` (1/2/3 START of a
@@ -25,7 +25,9 @@
 ))]
 
 use keleusma::Arena;
-use keleusma::ast::{BinOp, Block, Expr, FunctionCategory, Literal, Pattern, Stmt, UnaryOp};
+use keleusma::ast::{
+    BinOp, Block, Expr, FunctionCategory, Iterable, Literal, Pattern, Stmt, UnaryOp,
+};
 use keleusma::bytecode::Value;
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
@@ -37,6 +39,7 @@ use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capa
 const LEN: usize = 0;
 const KINDS: usize = 1;
 const VALS: usize = 1 + 2048;
+const LIMIT_ID: usize = 1 + 2048 + 2048;
 
 /// Map the reference token stream into the stage's unified `(kind, value)` pairs. The
 /// operator codes are body.kel's (`Plus` 21 upward); the header keywords and punctuation
@@ -89,6 +92,9 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
             TokenKind::Semicolon => (39, 0),
             TokenKind::If => (43, 0),
             TokenKind::Else => (44, 0),
+            TokenKind::For => (45, 0),
+            TokenKind::In => (46, 0),
+            TokenKind::DotDot => (47, 0),
             TokenKind::Eof => continue,
             _ => (4, 0),
         };
@@ -134,6 +140,16 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
     let mut shared = vec![0u8; vm.shared_data_bytes()];
     vm.set_shared(&mut shared, LEN, Value::Int(kinds.len() as i64))
         .expect("len");
+    // `limit` is a lowercase identifier, not a keyword, so the stage recognizes the
+    // `for .. limit` clause by comparing an identifier to the interned id of "limit". It is
+    // interned when the clause's `limit` token appears; -1 when there is no `for` loop.
+    let limit_id = names
+        .iter()
+        .position(|n| n == "limit")
+        .map(|i| i as i64)
+        .unwrap_or(-1);
+    vm.set_shared(&mut shared, LIMIT_ID, Value::Int(limit_id))
+        .expect("limit_id");
     for (i, (&k, &v)) in kinds.iter().zip(vals.iter()).enumerate() {
         vm.set_shared(&mut shared, KINDS + i, Value::Int(k))
             .expect("kind");
@@ -197,7 +213,13 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
 /// operator code, the short-circuit booleans their own kinds (8 Andalso, 9 Orelse), and
 /// the unary prefixes 6 Not / 10 Neg. Parenthesised grouping is structural in the AST, so
 /// it contributes no node, exactly as the stage discards its parenthesis marker.
-fn flatten(e: &Expr, scope: &[(String, i64)], next_slot: &mut i64, out: &mut Vec<(i64, i64)>) {
+fn flatten(
+    e: &Expr,
+    scope: &[(String, i64)],
+    next_slot: &mut i64,
+    forlim: &mut i64,
+    out: &mut Vec<(i64, i64)>,
+) {
     match e {
         Expr::Literal {
             value: Literal::Int(n),
@@ -217,8 +239,8 @@ fn flatten(e: &Expr, scope: &[(String, i64)], next_slot: &mut i64, out: &mut Vec
         Expr::BinOp {
             op, left, right, ..
         } => {
-            flatten(left, scope, next_slot, out);
-            flatten(right, scope, next_slot, out);
+            flatten(left, scope, next_slot, forlim, out);
+            flatten(right, scope, next_slot, forlim, out);
             let (kind, code) = match op {
                 BinOp::Add => (3, 1),
                 BinOp::Mul => (3, 2),
@@ -241,7 +263,7 @@ fn flatten(e: &Expr, scope: &[(String, i64)], next_slot: &mut i64, out: &mut Vec
             out.push((kind, code));
         }
         Expr::UnaryOp { op, operand, .. } => {
-            flatten(operand, scope, next_slot, out);
+            flatten(operand, scope, next_slot, forlim, out);
             let kind = match op {
                 UnaryOp::Not => 6,
                 UnaryOp::Neg => 10,
@@ -258,17 +280,17 @@ fn flatten(e: &Expr, scope: &[(String, i64)], next_slot: &mut i64, out: &mut Vec
             // Postorder: the condition, the then branch (a folded block), the else branch
             // (a folded block, or a synthesized Unit when absent), then the If node
             // (kind 4). Slots are monotonic across branches, so `next_slot` is threaded.
-            flatten(condition, scope, next_slot, out);
-            flatten_block(then_block, scope, next_slot, out);
+            flatten(condition, scope, next_slot, forlim, out);
+            flatten_block(then_block, scope, next_slot, forlim, out);
             match else_block {
-                Some(eb) => flatten_block(eb, scope, next_slot, out),
+                Some(eb) => flatten_block(eb, scope, next_slot, forlim, out),
                 None => out.push((20, 0)), // synthesized empty else: a Unit
             }
             out.push((4, 0));
         }
         Expr::Yield { value, .. } => {
             // `yield e` is a unary YieldExpr (kind 24) over its operand.
-            flatten(value, scope, next_slot, out);
+            flatten(value, scope, next_slot, forlim, out);
             out.push((24, 0));
         }
         other => panic!("increment does not handle expression {other:?}"),
@@ -285,6 +307,7 @@ fn flatten_block(
     block: &Block,
     scope: &[(String, i64)],
     next_slot: &mut i64,
+    forlim: &mut i64,
     out: &mut Vec<(i64, i64)>,
 ) {
     let mut local = scope.to_vec();
@@ -292,7 +315,7 @@ fn flatten_block(
     for st in &block.stmts {
         match st {
             Stmt::Let(l) => {
-                flatten(&l.value, &local, next_slot, out);
+                flatten(&l.value, &local, next_slot, forlim, out);
                 let name = match &l.pattern {
                     Pattern::Variable(n, _) => n.clone(),
                     other => panic!("test uses simple let patterns only, got {other:?}"),
@@ -303,14 +326,61 @@ fn flatten_block(
                 stmt_nodes.push((5, slot)); // LetIn
             }
             Stmt::Expr(e) => {
-                flatten(e, &local, next_slot, out);
+                flatten(e, &local, next_slot, forlim, out);
                 stmt_nodes.push((21, 0)); // ExprStmt
             }
-            other => panic!("increment 4 handles `let` and expression statements, got {other:?}"),
+            Stmt::For(fs) if fs.limit.is_some() => {
+                // A `for v in lo..hi limit CAP { body }`. The loop variable, the high slot,
+                // the counter, the cap slot, and the outcome are five consecutive monotonic
+                // frame slots (the variable allocated after the low bound and before the
+                // high). The stage then streams the four literal nodes (cap, 0, 1, 2), the
+                // five SlotRecords, and a ForBuild, and records a ForLimit statement.
+                let (low, high) = match &fs.iterable {
+                    Iterable::Range(s, e) => (s.as_ref(), e.as_ref()),
+                    other => panic!("a `limit` clause requires a range, got {other:?}"),
+                };
+                let cap = match fs.limit.as_ref() {
+                    Some(Expr::Literal {
+                        value: Literal::Int(n),
+                        ..
+                    }) => *n,
+                    other => panic!("the stage requires a literal `limit`, got {other:?}"),
+                };
+                flatten(low, &local, next_slot, forlim, out);
+                let vslot = *next_slot;
+                *next_slot += 1;
+                flatten(high, &local, next_slot, forlim, out);
+                let end_slot = *next_slot;
+                *next_slot += 1;
+                let ctr = *next_slot;
+                *next_slot += 1;
+                let cap_slot = *next_slot;
+                *next_slot += 1;
+                let oc = *next_slot;
+                *next_slot += 1;
+                let mut body_scope = local.clone();
+                body_scope.push((fs.var.clone(), vslot));
+                flatten_block(&fs.body, &body_scope, next_slot, forlim, out);
+                out.push((1, cap));
+                out.push((1, 0));
+                out.push((1, 1));
+                out.push((1, 2));
+                out.push((32, vslot));
+                out.push((32, end_slot));
+                out.push((32, ctr));
+                out.push((32, cap_slot));
+                out.push((32, oc));
+                out.push((33, 0));
+                stmt_nodes.push((23, 12 * *forlim)); // ForLimit
+                *forlim += 1;
+            }
+            other => panic!(
+                "increment 5 handles let, expression, and for-limit statements, got {other:?}"
+            ),
         }
     }
     match &block.tail_expr {
-        Some(tail) => flatten(tail, &local, next_slot, out),
+        Some(tail) => flatten(tail, &local, next_slot, forlim, out),
         None => out.push((20, 0)), // statement-only block: implicit Unit
     }
     for (kind, arg) in stmt_nodes.iter().rev() {
@@ -352,7 +422,14 @@ fn reference(src: &str, names: &[String]) -> Parsed {
             .collect();
         let mut body = Vec::new();
         let mut next_slot = param_names.len() as i64;
-        flatten_block(&f.body, &param_scope, &mut next_slot, &mut body);
+        let mut forlim = 0i64;
+        flatten_block(
+            &f.body,
+            &param_scope,
+            &mut next_slot,
+            &mut forlim,
+            &mut body,
+        );
         funcs.push((cat, id(&f.name), params, body));
     }
     Parsed { funcs }
@@ -561,4 +638,49 @@ fn a_yield_may_be_a_let_value() {
     assert_eq!(got, reference(src, &names));
     // a, YieldExpr [value]; x=slot1 [tail]; LetIn(slot1).
     assert_eq!(got.funcs[0].3, vec![(2, 0), (24, 0), (2, 1), (5, 1)]);
+}
+
+// A `for v in lo..hi limit CAP { body }` accumulator loop over a data-free body: the loop
+// is a ForLimit statement, its parts streamed after the body.
+#[test]
+fn a_for_limit_loop_parses() {
+    let src = "fn f(n: Word) -> Word { for i in 0..n limit 8 { let x = i; } 0 }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+}
+
+// The loop body may reference the loop variable, bound to its frame slot.
+#[test]
+fn the_loop_variable_is_in_scope() {
+    let src = "fn f(n: Word) -> Word { for i in 0..n limit 8 { let x = i + i; } 0 }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    // low 0; high n(slot0); body: i(slot1)+i(slot1) Add, LetIn(slot6); then the parts.
+    // Slots: var=1, end=2, ctr=3, cap=4, oc=5, then body let x=6.
+    assert_eq!(
+        got.funcs[0].3,
+        vec![
+            (1, 0),  // low 0
+            (2, 0),  // high n
+            (2, 1),  // i
+            (2, 1),  // i
+            (3, 1),  // Add
+            (20, 0), // body Unit tail
+            (5, 6),  // LetIn x (slot 6)
+            (1, 8),  // cap
+            (1, 0),  // 0
+            (1, 1),  // 1
+            (1, 2),  // 2
+            (32, 1), // SlotRecord var
+            (32, 2), // end
+            (32, 3), // ctr
+            (32, 4), // cap slot
+            (32, 5), // oc
+            (33, 0), // ForBuild
+            (1, 0),  // tail 0
+            (23, 0)  // ForLimit statement
+        ]
+    );
 }
