@@ -50,10 +50,13 @@ fn main() {
                 std::process::exit(2);
             }
         },
-        "compile" => not_yet(
-            cmd,
-            "run the whole lexer/parser/codegen pipeline to bytecode",
-        ),
+        "compile" => match args.get(1) {
+            Some(path) => run_compile_pipeline(path),
+            None => {
+                eprintln!("usage: keleusma-selfhost compile <file>");
+                std::process::exit(2);
+            }
+        },
         "-h" | "--help" | "help" => help(),
         other => {
             eprintln!("unknown command: {other}");
@@ -551,6 +554,62 @@ fn compile_stage(src: &str, name: &str, deep: bool) -> keleusma::bytecode::Modul
     }
 }
 
+/// Run the whole self-hosted pipeline over `path` and report the emitted module.
+///
+/// Drives `kel/lexer.kel`, `kel/parse.kel`, and `kel/codegen.kel` through the shared
+/// `keleusma_selfhost::selfhost` library to emit each chunk's ops, splicing them into
+/// a module whose data layout and chunk table come from the Rust-hosted reference
+/// (the same interim scaffold the fixed-point test uses). It then verifies the module
+/// loads and reports whether its ops, constant pool, and local-frame sizes are
+/// byte-identical to the reference compiler's -- the fixed-point property for this
+/// source. Reconstruction remains host-side Rust; see `MILESTONES.md`.
+fn run_compile_pipeline(path: &str) {
+    use keleusma::Arena;
+    use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, required_persistent_capacity_for};
+    use keleusma_selfhost::selfhost::{compile_src, self_host_compile};
+
+    let src = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        eprintln!("cannot read {path}: {e}");
+        std::process::exit(1);
+    });
+    let module = self_host_compile(&src);
+    let reference = compile_src(&src);
+
+    // Report byte-identity chunk by chunk.
+    let mut mismatched = 0usize;
+    for (m, r) in module.chunks.iter().zip(reference.chunks.iter()) {
+        if m.ops != r.ops || m.constants != r.constants || m.local_count != r.local_count {
+            mismatched += 1;
+            eprintln!("  chunk `{}` differs from the reference", r.name);
+        }
+    }
+
+    // Verify the assembled module loads on the VM.
+    let need = required_persistent_capacity_for(&module);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let total_ops: usize = module.chunks.iter().map(|c| c.ops.len()).sum();
+    match Vm::new(module, &arena) {
+        Ok(_) => println!(
+            "compiled {path}: {} chunks, {} ops, {}",
+            reference.chunks.len(),
+            total_ops,
+            if mismatched == 0 {
+                "byte-identical to the reference compiler".to_string()
+            } else {
+                format!("{mismatched} chunk(s) differ from the reference")
+            }
+        ),
+        Err(e) => {
+            eprintln!("compiled {path} but the module failed to verify: {e:?}");
+            std::process::exit(1);
+        }
+    }
+    if mismatched != 0 {
+        std::process::exit(1);
+    }
+}
+
 fn not_yet(cmd: &str, what: &str) {
     eprintln!("`{cmd}` is not yet implemented (scaffolding).");
     eprintln!("when built, it will: {what}.");
@@ -564,7 +623,7 @@ fn help() {
     println!("  status          show the pipeline scaffold state (default)");
     println!("  lex <file>      run Stage 1 (the self-hosted lexer) and print tokens");
     println!("  parse <file>    run Stages 1+2 (lexer into parser) and print declarations");
-    println!("  compile         run the whole pipeline to bytecode (planned)");
+    println!("  compile <file>  run the whole pipeline to bytecode and check the fixed point");
     println!("  bootstrap       cross-compile, self-compile, reach fixed point (planned)");
     println!(
         "  verify-corpus   assert byte-identical output vs the Rust-hosted compiler (planned)"
