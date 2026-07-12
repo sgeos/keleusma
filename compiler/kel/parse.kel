@@ -46,6 +46,7 @@ enum Tok {
     Private = 15,
     Const = 16,
     Eq = 17,
+    Use = 19,
     Plus = 21,
     Minus = 22,
     Star = 23,
@@ -1409,6 +1410,11 @@ fn header_step(k: Word, v: Word) -> Word {
             ps.mode = 9;
             0
         } else {
+        if k == 19 {
+            // `use`: a native import declaration. Emit USTART and scan the path.
+            ps.mode = 8;
+            10
+        } else {
             if k == 5 {
                 ps.dkind = 2;
             } else {
@@ -1419,7 +1425,7 @@ fn header_step(k: Word, v: Word) -> Word {
             } }
             ps.mode = 1;
             0
-        } } } } }
+        } } } } } }
     } else {
     if ps.mode == 1 {
         if k == 1 {
@@ -1443,8 +1449,26 @@ fn header_step(k: Word, v: Word) -> Word {
     if ps.mode >= 4 andalso ps.mode <= 7 {
         header_data(k, v)
     } else {
+    if ps.mode == 8 {
+        header_use(k, v)
+    } else {
         header_enum(k, v)
-    } } } }
+    } } } } }
+}
+
+// The `use path::name` native import: emit a UPATH per `::`-separated segment; a non-`::`
+// token ends the declaration (emit END) and is pushed back to open the next declaration.
+fn header_use(k: Word, v: Word) -> Word {
+    if k == 1 {
+        11 + v * 64
+    } else {
+    if k == 51 {
+        0
+    } else {
+        ps.cursor = ps.cursor - 1;
+        ps.mode = 0;
+        5
+    } }
 }
 
 // The enum declaration modes: 9 the enum name (emit ENUMSTART, dkind 12, and open the
@@ -1778,7 +1802,14 @@ fn step() -> Word {
         body_step()
     } else {
         if ps.cursor >= toks.len {
-            15
+            // A `use` running to end-of-input has no closing delimiter, so it is closed
+            // here (END) before DONE; otherwise the stream is exhausted.
+            if ps.mode == 8 {
+                ps.mode = 0;
+                5
+            } else {
+                15
+            }
         } else {
             let k = toks.kinds[ps.cursor];
             let v = toks.vals[ps.cursor];
