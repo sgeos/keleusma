@@ -23,11 +23,11 @@
 // stack -- a leaf pushes its new index, an interior node pops its two children and
 // pushes itself. This is Reverse Polish order, and the parser produces it from the
 // infix source by the shunting-yard algorithm: an operator-precedence stack held in
-// `bs.opstack` decides when a pending operator forces the higher- or equal-precedence
+// `ops.opstack` decides when a pending operator forces the higher- or equal-precedence
 // operators already stacked to be emitted. Because the loop yields one record per
 // iteration, the shunting-yard's inner "pop while" loop is spread across iterations:
-// `bs.resolving` marks that a just-read operator is settling its precedence (one pop
-// per iteration, then the push), and `bs.draining` marks the end-of-body flush.
+// `ops.resolving` marks that a just-read operator is settling its precedence (one pop
+// per iteration, then the push), and `ops.draining` marks the end-of-body flush.
 //
 // The node kinds match the codegen contract exactly and are named by the `enum Node`:
 // Node::Literal (arg = value), Node::Local (arg = the parameter's frame slot),
@@ -44,7 +44,7 @@
 //
 // The unary operators are prefix, so `-` in operand position (the start of an
 // expression, or just after an operator or `(`) is negation, while `-` in operator
-// position (just after an operand or `)`) is subtraction; `bs.expect_operand` tracks
+// position (just after an operand or `)`) is subtraction; `ops.expect_operand` tracks
 // which position the scan is in. A unary operator is pushed straight onto the operator
 // stack (it is not settled by precedence, being prefix), where it carries an internal
 // code, 16 for Neg and 17 for Not, both at precedence 9; because a following unary
@@ -219,7 +219,7 @@ const data enc {
     matchmul: Word = 1024,
 }
 
-// The drain reasons: why the operator flush at `bs.drain_reason` was started, selecting
+// The drain reasons: why the operator flush at `ops.drain_reason` was started, selecting
 // what step_draining does once the operator stack is empty. A dedicated `const data`
 // block names the state-machine codes (R28 admits several named const blocks).
 const data reason {
@@ -333,28 +333,27 @@ shared data src {
     edisc: [Word; 64],
 }
 
-// The parser's cross-iteration state. `cursor` is the token index; `started` records
-// that the opening `{` has been consumed; `found`/`found_flag` hold the slot and hit
-// from the last identifier resolution; `done` latches once the body is complete. The
-// shunting-yard carries an operator-code stack `opstack`/`opsp`; `pending_op`/
-// `pending_prec` hold a just-read operator while `resolving` pops the higher- or
-// equal-precedence operators ahead of pushing it; `draining` flushes the remaining
-// operators (at a `;` when `drain_reason` is 0, at the `}` when it is 1); `closing`
-// flushes the operators above a parenthesis marker at a `)`; `expect_operand` is 1
-// when the scan is in operand position (so `-` is unary).
+// The parser's cross-iteration state, decomposed into one private block per subsystem so
+// each may be reasoned about locally (R28 admits several named private blocks). Every
+// field is a persistent `Word` (or `Word` array) latched across yields.
 //
-// The block machinery: `let_phase` is 0 in an expression, 1 expecting a `let` binding
-// name, 2 awaiting the `=` (skipping an optional type annotation); `pending_let_name`
-// holds the binding name until the `;` commits it; `let_names`/`let_count` record the
-// committed `let` bindings, whose frame slots are `param_count + index`. At the `}`,
-// `folding`/`fold_i` emit the LetIn nodes that wrap the tail, innermost (last) `let`
-// first.
-private data bs {
+// `ctrl` is the read cursor and terminal state: `cursor` the token index, `started` that
+// the opening `{` was consumed, `found`/`found_flag` the slot and hit of the last
+// identifier resolution, `done` latched once the body is complete.
+private data ctrl {
     cursor: Word,
     started: Word,
     found: Word,
     found_flag: Word,
     done: Word,
+}
+
+// `ops` is the shunting-yard operator machinery: the operator-code stack `opstack`/`opsp`;
+// `pending_op`/`pending_prec` hold a just-read operator while `resolving` pops the higher-
+// or equal-precedence operators ahead of pushing it; `draining` flushes the remaining
+// operators (selected by `drain_reason`); `closing` flushes above a parenthesis marker at
+// a `)`; `expect_operand` is 1 in operand position (so `-` is unary).
+private data ops {
     opstack: [Word; 64],
     opsp: Word,
     pending_op: Word,
@@ -364,6 +363,16 @@ private data bs {
     drain_reason: Word,
     closing: Word,
     expect_operand: Word,
+}
+
+// `stmt` is the statement, binding, and block-fold machinery: `let_phase`/
+// `pending_let_name` read a `let` binding whose name commits at the `;`; `let_names`/
+// `scope_slot`/`let_count` record the committed bindings (frame slot `param_count +
+// index`); `stmt_kind`/`stmt_arg`/`stmt_count` the emitted statement nodes; the `pstmt_*`
+// arrays the pending statements awaiting their value drain; `pbase`/`pbase_sp`/`stmt_base`
+// the per-block statement baselines; `folding`/`fold_i`/`fold_start`/`fold_cont` drive the
+// block fold that wraps the tail, innermost (last) statement first.
+private data stmt {
     let_phase: Word,
     pending_let_name: Word,
     let_names: [Word; 64],
@@ -382,6 +391,15 @@ private data bs {
     pbase_sp: Word,
     folding: Word,
     fold_i: Word,
+    fold_start: Word,
+    fold_cont: Word,
+}
+
+// `da` is the `data.field` (and `data.field[index]`) access machinery: `da_phase`/
+// `da_data`/`da_base`/`da_len` the scalar read; the `idx_*` stack and `iclosing` the index
+// sub-expression; `post_index`/`pidx_*` the resolved indexed read; `store_emit`/`store_arg`
+// the indexed-assignment store.
+private data da {
     da_phase: Word,
     da_data: Word,
     da_base: Word,
@@ -395,17 +413,34 @@ private data bs {
     pidx_len: Word,
     store_emit: Word,
     store_arg: Word,
+}
+
+// `branch` is the `if`/`else` conditional context stack: `if_phase` the per-conditional
+// phase, `if_stmt_start` its branch's statement baseline, `if_sp` the nesting depth.
+private data branch {
     if_phase: [Word; 16],
     if_stmt_start: [Word; 16],
     if_sp: Word,
-    fold_start: Word,
-    fold_cont: Word,
+}
+
+// `call` is the function-call context stack: `call_chunk`/`call_count` per pending call,
+// `call_sp` the depth, `call_pending`/`call_phase` the call name awaiting its `(`, and
+// `cdraining` the per-argument operator drain at each `,`.
+private data call {
     call_chunk: [Word; 8],
     call_count: [Word; 8],
     call_sp: Word,
     call_pending: Word,
     call_phase: Word,
     cdraining: Word,
+}
+
+// `forst` is the `for` loop header and ForLimit emission state: `for_phase` the header
+// phase; `for_var`/`for_vslot` the loop variable and its slot; `for_end_slot`/`for_ctr`/
+// `for_cap_slot`/`for_oc` the ForLimit's reserved slots; `for_cap` the literal cap;
+// `forlimit_count` the emitted-loop count; `for_emit`/`for_emit_i` the parts-emission
+// sub-step; `for_stmt_start` the body's statement baseline.
+private data forst {
     for_phase: Word,
     for_var: Word,
     for_vslot: Word,
@@ -418,6 +453,13 @@ private data bs {
     for_emit: Word,
     for_emit_i: Word,
     for_stmt_start: Word,
+}
+
+// `mat` is the `match` context stack and the enum/enum-pattern resolution it shares:
+// `match_phase`/`match_temp`/`match_argcount`/`match_call_base` per pending match,
+// `match_sp` the depth, `match_build` the build sub-step; `enum_phase`/`enum_name`/
+// `enum_disc` resolve a `Name::Variant()` cast and `mpat_phase` its match-pattern form.
+private data mat {
     match_phase: [Word; 8],
     match_temp: [Word; 8],
     match_argcount: [Word; 8],
@@ -575,14 +617,14 @@ fn opcode_of(k: Word) -> Word {
 // Settle a just-read operator: pop one stacked operator of equal or higher precedence
 // (emitting it), or, when none remains, push the pending operator.
 fn step_resolving() -> Word {
-    if bs.opsp > 0 andalso prec_of(bs.opstack[bs.opsp - 1]) >= bs.pending_prec {
-        bs.opsp = bs.opsp - 1;
-        let op = bs.opstack[bs.opsp];
+    if ops.opsp > 0 andalso prec_of(ops.opstack[ops.opsp - 1]) >= ops.pending_prec {
+        ops.opsp = ops.opsp - 1;
+        let op = ops.opstack[ops.opsp];
         emit_op(op)
     } else {
-        bs.opstack[bs.opsp] = bs.pending_op;
-        bs.opsp = bs.opsp + 1;
-        bs.resolving = 0;
+        ops.opstack[ops.opsp] = ops.pending_op;
+        ops.opsp = ops.opsp + 1;
+        ops.resolving = 0;
         0
     }
 }
@@ -590,29 +632,29 @@ fn step_resolving() -> Word {
 // A `)`: flush the operators above the marker. A parenthesis marker (15) is discarded;
 // a call marker (21) counts the last argument (if any) and emits the Call.
 fn step_closing() -> Word {
-    if bs.opsp > 0 {
-        let top = bs.opstack[bs.opsp - 1];
+    if ops.opsp > 0 {
+        let top = ops.opstack[ops.opsp - 1];
         if top == OpCode::Paren() as Word {
-            bs.opsp = bs.opsp - 1;
-            bs.closing = 0;
-            bs.expect_operand = 0;
+            ops.opsp = ops.opsp - 1;
+            ops.closing = 0;
+            ops.expect_operand = 0;
             0
         } else {
         if top == OpCode::CallMark() as Word {
-            bs.opsp = bs.opsp - 1;
-            bs.closing = 0;
-            if bs.expect_operand == 0 {
-                bs.call_count[bs.call_sp - 1] = bs.call_count[bs.call_sp - 1] + 1;
+            ops.opsp = ops.opsp - 1;
+            ops.closing = 0;
+            if ops.expect_operand == 0 {
+                call.call_count[call.call_sp - 1] = call.call_count[call.call_sp - 1] + 1;
             }
-            bs.call_sp = bs.call_sp - 1;
-            bs.expect_operand = 0;
-            Node::Call() as Word + (bs.call_chunk[bs.call_sp] + bs.call_count[bs.call_sp] * enc.callmul) * enc.radix
+            call.call_sp = call.call_sp - 1;
+            ops.expect_operand = 0;
+            Node::Call() as Word + (call.call_chunk[call.call_sp] + call.call_count[call.call_sp] * enc.callmul) * enc.radix
         } else {
-            bs.opsp = bs.opsp - 1;
+            ops.opsp = ops.opsp - 1;
             emit_op(top)
         } }
     } else {
-        bs.closing = 0;
+        ops.closing = 0;
         0
     }
 }
@@ -620,14 +662,14 @@ fn step_closing() -> Word {
 // A `,`: flush the current call argument's operators down to the call marker (20 is the
 // index marker, 21 the call marker), then count the argument.
 fn step_cdraining() -> Word {
-    if bs.opsp > 0 andalso bs.opstack[bs.opsp - 1] != OpCode::CallMark() as Word {
-        bs.opsp = bs.opsp - 1;
-        let op = bs.opstack[bs.opsp];
+    if ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] != OpCode::CallMark() as Word {
+        ops.opsp = ops.opsp - 1;
+        let op = ops.opstack[ops.opsp];
         emit_op(op)
     } else {
-        bs.cdraining = 0;
-        bs.call_count[bs.call_sp - 1] = bs.call_count[bs.call_sp - 1] + 1;
-        bs.expect_operand = 1;
+        call.cdraining = 0;
+        call.call_count[call.call_sp - 1] = call.call_count[call.call_sp - 1] + 1;
+        ops.expect_operand = 1;
         0
     }
 }
@@ -637,17 +679,17 @@ fn step_cdraining() -> Word {
 // a read and an indexed assignment (`d.f[i] = e`), so the base and length are held in a
 // one-slot lookahead (post_index) that step_post_index resolves on the next token.
 fn step_iclosing() -> Word {
-    if bs.opsp > 0 andalso bs.opstack[bs.opsp - 1] != OpCode::IndexMark() as Word {
-        bs.opsp = bs.opsp - 1;
-        let op = bs.opstack[bs.opsp];
+    if ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] != OpCode::IndexMark() as Word {
+        ops.opsp = ops.opsp - 1;
+        let op = ops.opstack[ops.opsp];
         emit_op(op)
     } else {
-        bs.opsp = bs.opsp - 1;
-        bs.idx_sp = bs.idx_sp - 1;
-        bs.pidx_base = bs.idx_base[bs.idx_sp];
-        bs.pidx_len = bs.idx_len[bs.idx_sp];
-        bs.iclosing = 0;
-        bs.post_index = 1;
+        ops.opsp = ops.opsp - 1;
+        da.idx_sp = da.idx_sp - 1;
+        da.pidx_base = da.idx_base[da.idx_sp];
+        da.pidx_len = da.idx_len[da.idx_sp];
+        da.iclosing = 0;
+        da.post_index = 1;
         0
     }
 }
@@ -658,17 +700,17 @@ fn step_iclosing() -> Word {
 // makes it a read: emit the IndexRead (kind 13) over the index node and push the token
 // back for reinterpretation.
 fn step_post_index(k: Word) -> Word {
-    bs.post_index = 0;
+    da.post_index = 0;
     if k == Tok::Eq() as Word {
-        bs.pstmt_kind[bs.pstmt_sp] = pstmt.index_assign;
-        bs.pstmt_arg[bs.pstmt_sp] = bs.pidx_base + bs.pidx_len * enc.pack;
-        bs.pstmt_sp = bs.pstmt_sp + 1;
-        bs.expect_operand = 1;
+        stmt.pstmt_kind[stmt.pstmt_sp] = pstmt.index_assign;
+        stmt.pstmt_arg[stmt.pstmt_sp] = da.pidx_base + da.pidx_len * enc.pack;
+        stmt.pstmt_sp = stmt.pstmt_sp + 1;
+        ops.expect_operand = 1;
         0
     } else {
-        bs.cursor = bs.cursor - 1;
-        bs.expect_operand = 0;
-        Node::IndexRead() as Word + (bs.pidx_base + bs.pidx_len * enc.pack) * enc.radix
+        ctrl.cursor = ctrl.cursor - 1;
+        ops.expect_operand = 0;
+        Node::IndexRead() as Word + (da.pidx_base + da.pidx_len * enc.pack) * enc.radix
     }
 }
 
@@ -676,157 +718,157 @@ fn step_post_index(k: Word) -> Word {
 // pending statement whose value rests on the host stack, and a `}` (reason 1) begins
 // the fold over all statements.
 fn step_draining() -> Word {
-    if bs.opsp > 0 {
-        bs.opsp = bs.opsp - 1;
-        let op = bs.opstack[bs.opsp];
+    if ops.opsp > 0 {
+        ops.opsp = ops.opsp - 1;
+        let op = ops.opstack[ops.opsp];
         emit_op(op)
     } else {
-        if bs.drain_reason == reason.commit {
+        if ops.drain_reason == reason.commit {
             // Commit the current statement at its `;`. A pending statement above the
             // current block's baseline is a `let` or an assignment (its `=` pushed it);
             // otherwise the statement is a bare expression whose value is discarded. A
             // nested statement inside this one's value has already committed and popped
             // itself, so the innermost pending entry, if any, is this statement's own.
-            if bs.pstmt_sp > bs.stmt_base {
-                bs.pstmt_sp = bs.pstmt_sp - 1;
-                if bs.pstmt_kind[bs.pstmt_sp] == pstmt.let_bind {
+            if stmt.pstmt_sp > stmt.stmt_base {
+                stmt.pstmt_sp = stmt.pstmt_sp - 1;
+                if stmt.pstmt_kind[stmt.pstmt_sp] == pstmt.let_bind {
                     // A `let`: claim the next frame slot from the monotonic counter and
                     // bind its name to that slot (the counter also advances for a loop's
                     // anonymous slots, so the slot is stored explicitly, not derived).
-                    let slot = src.param_count + bs.slot_count;
-                    bs.slot_count = bs.slot_count + 1;
-                    bs.stmt_kind[bs.stmt_count] = Node::LetIn() as Word;
-                    bs.stmt_arg[bs.stmt_count] = slot;
-                    bs.let_names[bs.let_count] = bs.pstmt_name[bs.pstmt_sp];
-                    bs.scope_slot[bs.let_count] = slot;
-                    bs.let_count = bs.let_count + 1;
-                    bs.stmt_count = bs.stmt_count + 1;
-                    bs.draining = 0;
-                    bs.expect_operand = 1;
+                    let slot = src.param_count + stmt.slot_count;
+                    stmt.slot_count = stmt.slot_count + 1;
+                    stmt.stmt_kind[stmt.stmt_count] = Node::LetIn() as Word;
+                    stmt.stmt_arg[stmt.stmt_count] = slot;
+                    stmt.let_names[stmt.let_count] = stmt.pstmt_name[stmt.pstmt_sp];
+                    stmt.scope_slot[stmt.let_count] = slot;
+                    stmt.let_count = stmt.let_count + 1;
+                    stmt.stmt_count = stmt.stmt_count + 1;
+                    ops.draining = 0;
+                    ops.expect_operand = 1;
                     0
                 } else {
-                if bs.pstmt_kind[bs.pstmt_sp] == pstmt.assign {
+                if stmt.pstmt_kind[stmt.pstmt_sp] == pstmt.assign {
                     // A scalar data assignment: write the target field's slot.
-                    bs.stmt_kind[bs.stmt_count] = Node::DataAssignIn() as Word;
-                    bs.stmt_arg[bs.stmt_count] = bs.pstmt_arg[bs.pstmt_sp];
-                    bs.stmt_count = bs.stmt_count + 1;
-                    bs.draining = 0;
-                    bs.expect_operand = 1;
+                    stmt.stmt_kind[stmt.stmt_count] = Node::DataAssignIn() as Word;
+                    stmt.stmt_arg[stmt.stmt_count] = stmt.pstmt_arg[stmt.pstmt_sp];
+                    stmt.stmt_count = stmt.stmt_count + 1;
+                    ops.draining = 0;
+                    ops.expect_operand = 1;
                     0
                 } else {
                     // An indexed data assignment (`d.f[i] = e`): the index and value nodes
                     // rest on the host stack (index below, value on top). Emit the
                     // IndexStore signal (kind 36) so the host combines them into a kind-15
                     // node; step_store_finalize then records the IndexAssignIn statement.
-                    bs.store_arg = bs.pstmt_arg[bs.pstmt_sp];
-                    bs.store_emit = 1;
-                    bs.draining = 0;
+                    da.store_arg = stmt.pstmt_arg[stmt.pstmt_sp];
+                    da.store_emit = 1;
+                    ops.draining = 0;
                     Node::IndexStore() as Word
                 } }
             } else {
                 // A bare expression statement (ExprStmt, kind 21): its value node rests
                 // on the host stack, to be discarded by the fold's continuation link.
-                bs.stmt_kind[bs.stmt_count] = Node::ExprStmt() as Word;
-                bs.stmt_arg[bs.stmt_count] = 0;
-                bs.stmt_count = bs.stmt_count + 1;
-                bs.draining = 0;
-                bs.expect_operand = 1;
+                stmt.stmt_kind[stmt.stmt_count] = Node::ExprStmt() as Word;
+                stmt.stmt_arg[stmt.stmt_count] = 0;
+                stmt.stmt_count = stmt.stmt_count + 1;
+                ops.draining = 0;
+                ops.expect_operand = 1;
                 0
             }
         } else {
-        if bs.drain_reason == reason.body {
+        if ops.drain_reason == reason.body {
             // The body tail is drained; fold all statements to the block root, DONE.
-            bs.draining = 0;
-            bs.folding = 1;
-            bs.fold_i = bs.stmt_count;
-            bs.fold_start = 0;
-            bs.fold_cont = phase.fold_body;
+            ops.draining = 0;
+            stmt.folding = 1;
+            stmt.fold_i = stmt.stmt_count;
+            stmt.fold_start = 0;
+            stmt.fold_cont = phase.fold_body;
             0
         } else {
-        if bs.drain_reason == reason.if_cond {
+        if ops.drain_reason == reason.if_cond {
             // The condition is drained; enter the then branch, recording its start and
             // pushing the pending-statement baseline (its statements' `let`/assignment
             // entries sit above the enclosing statement's).
-            bs.if_phase[bs.if_sp - 1] = phase.if_then;
-            bs.if_stmt_start[bs.if_sp - 1] = bs.stmt_count;
-            bs.pbase[bs.pbase_sp] = bs.stmt_base;
-            bs.pbase_sp = bs.pbase_sp + 1;
-            bs.stmt_base = bs.pstmt_sp;
-            bs.draining = 0;
-            bs.expect_operand = 1;
+            branch.if_phase[branch.if_sp - 1] = phase.if_then;
+            branch.if_stmt_start[branch.if_sp - 1] = stmt.stmt_count;
+            stmt.pbase[stmt.pbase_sp] = stmt.stmt_base;
+            stmt.pbase_sp = stmt.pbase_sp + 1;
+            stmt.stmt_base = stmt.pstmt_sp;
+            ops.draining = 0;
+            ops.expect_operand = 1;
             0
         } else {
-        if bs.drain_reason == reason.then_tail {
+        if ops.drain_reason == reason.then_tail {
             // The then tail is drained; fold the then block, then await `else`.
-            bs.draining = 0;
-            bs.folding = 1;
-            bs.fold_i = bs.stmt_count;
-            bs.fold_start = bs.if_stmt_start[bs.if_sp - 1];
-            bs.fold_cont = phase.fold_then;
+            ops.draining = 0;
+            stmt.folding = 1;
+            stmt.fold_i = stmt.stmt_count;
+            stmt.fold_start = branch.if_stmt_start[branch.if_sp - 1];
+            stmt.fold_cont = phase.fold_then;
             0
         } else {
-        if bs.drain_reason == reason.else_tail {
+        if ops.drain_reason == reason.else_tail {
             // The else tail is drained; fold the else block, then emit the If.
-            bs.draining = 0;
-            bs.folding = 1;
-            bs.fold_i = bs.stmt_count;
-            bs.fold_start = bs.if_stmt_start[bs.if_sp - 1];
-            bs.fold_cont = phase.fold_else;
+            ops.draining = 0;
+            stmt.folding = 1;
+            stmt.fold_i = stmt.stmt_count;
+            stmt.fold_start = branch.if_stmt_start[branch.if_sp - 1];
+            stmt.fold_cont = phase.fold_else;
             0
         } else {
-        if bs.drain_reason == reason.for_start {
+        if ops.drain_reason == reason.for_start {
             // The loop start is drained; reserve the loop-variable slot.
-            bs.for_vslot = src.param_count + bs.slot_count;
-            bs.slot_count = bs.slot_count + 1;
-            bs.for_phase = phase.for_hi;
-            bs.draining = 0;
-            bs.expect_operand = 1;
+            forst.for_vslot = src.param_count + stmt.slot_count;
+            stmt.slot_count = stmt.slot_count + 1;
+            forst.for_phase = phase.for_hi;
+            ops.draining = 0;
+            ops.expect_operand = 1;
             0
         } else {
-        if bs.drain_reason == reason.for_end {
+        if ops.drain_reason == reason.for_end {
             // The loop end is drained; reserve the four anonymous loop slots (end,
             // counter, cap, outcome).
-            bs.for_end_slot = src.param_count + bs.slot_count;
-            bs.slot_count = bs.slot_count + 1;
-            bs.for_ctr = src.param_count + bs.slot_count;
-            bs.slot_count = bs.slot_count + 1;
-            bs.for_cap_slot = src.param_count + bs.slot_count;
-            bs.slot_count = bs.slot_count + 1;
-            bs.for_oc = src.param_count + bs.slot_count;
-            bs.slot_count = bs.slot_count + 1;
-            bs.for_phase = phase.for_cap;
-            bs.draining = 0;
+            forst.for_end_slot = src.param_count + stmt.slot_count;
+            stmt.slot_count = stmt.slot_count + 1;
+            forst.for_ctr = src.param_count + stmt.slot_count;
+            stmt.slot_count = stmt.slot_count + 1;
+            forst.for_cap_slot = src.param_count + stmt.slot_count;
+            stmt.slot_count = stmt.slot_count + 1;
+            forst.for_oc = src.param_count + stmt.slot_count;
+            stmt.slot_count = stmt.slot_count + 1;
+            forst.for_phase = phase.for_cap;
+            ops.draining = 0;
             0
         } else {
-        if bs.drain_reason == reason.for_body {
+        if ops.drain_reason == reason.for_body {
             // reason 7: the loop body is drained; fold its statements around the body
             // value (fold_cont 3 then starts the ForLimit emission).
-            bs.draining = 0;
-            bs.folding = 1;
-            bs.fold_i = bs.stmt_count;
-            bs.fold_start = bs.for_stmt_start;
-            bs.fold_cont = phase.fold_forbody;
+            ops.draining = 0;
+            stmt.folding = 1;
+            stmt.fold_i = stmt.stmt_count;
+            stmt.fold_start = forst.for_stmt_start;
+            stmt.fold_cont = phase.fold_forbody;
             0
         } else {
-        if bs.drain_reason == reason.match_scrut {
+        if ops.drain_reason == reason.match_scrut {
             // reason 8: the match scrutinee is drained; reserve its temp slot (right
             // after the scrutinee's own locals, mirroring the reference) and move to the
             // arm patterns.
-            bs.match_temp[bs.match_sp - 1] = src.param_count + bs.slot_count;
-            bs.slot_count = bs.slot_count + 1;
-            bs.match_phase[bs.match_sp - 1] = phase.match_pat;
-            bs.draining = 0;
+            mat.match_temp[mat.match_sp - 1] = src.param_count + stmt.slot_count;
+            stmt.slot_count = stmt.slot_count + 1;
+            mat.match_phase[mat.match_sp - 1] = phase.match_pat;
+            ops.draining = 0;
             0
         } else {
-        if bs.drain_reason == reason.next_arm {
+        if ops.drain_reason == reason.next_arm {
             // reason 9: an arm result is drained; expect the next arm's pattern.
-            bs.match_phase[bs.match_sp - 1] = phase.match_pat;
-            bs.draining = 0;
+            mat.match_phase[mat.match_sp - 1] = phase.match_pat;
+            ops.draining = 0;
             0
         } else {
             // reason 10: the last arm result is drained; build the match.
-            bs.match_build = 1;
-            bs.draining = 0;
+            mat.match_build = 1;
+            ops.draining = 0;
             0
         } } } }
         } } } } } }
@@ -838,35 +880,35 @@ fn step_draining() -> Word {
 // continuation: DONE for the body, advance to `else` for a then branch, or emit the If
 // for an else branch.
 fn step_folding() -> Word {
-    if bs.fold_i > bs.fold_start {
-        bs.fold_i = bs.fold_i - 1;
-        bs.stmt_kind[bs.fold_i] + bs.stmt_arg[bs.fold_i] * enc.radix
+    if stmt.fold_i > stmt.fold_start {
+        stmt.fold_i = stmt.fold_i - 1;
+        stmt.stmt_kind[stmt.fold_i] + stmt.stmt_arg[stmt.fold_i] * enc.radix
     } else {
-        bs.stmt_count = bs.fold_start;
-        bs.folding = 0;
+        stmt.stmt_count = stmt.fold_start;
+        stmt.folding = 0;
         // Leaving the just-folded block restores the enclosing pending-statement
         // baseline (the body, fold_cont 0, is the outermost block and never pushed).
-        if bs.fold_cont > 0 {
-            bs.pbase_sp = bs.pbase_sp - 1;
-            bs.stmt_base = bs.pbase[bs.pbase_sp];
+        if stmt.fold_cont > 0 {
+            stmt.pbase_sp = stmt.pbase_sp - 1;
+            stmt.stmt_base = stmt.pbase[stmt.pbase_sp];
         }
-        if bs.fold_cont == phase.fold_body {
-            bs.done = 1;
+        if stmt.fold_cont == phase.fold_body {
+            ctrl.done = 1;
             Node::Done() as Word
         } else {
-        if bs.fold_cont == phase.fold_then {
-            bs.if_phase[bs.if_sp - 1] = phase.if_await_else;
+        if stmt.fold_cont == phase.fold_then {
+            branch.if_phase[branch.if_sp - 1] = phase.if_await_else;
             0
         } else {
-        if bs.fold_cont == phase.fold_else {
-            bs.if_sp = bs.if_sp - 1;
-            bs.expect_operand = 0;
+        if stmt.fold_cont == phase.fold_else {
+            branch.if_sp = branch.if_sp - 1;
+            ops.expect_operand = 0;
             Node::If() as Word
         } else {
             // fold_cont == phase.fold_forbody: the `for` body is folded; its value rests on the host
             // stack. Start the ForLimit parts emission.
-            bs.for_emit = 1;
-            bs.for_emit_i = 0;
+            forst.for_emit = 1;
+            forst.for_emit_i = 0;
             0
         } } }
     }
@@ -876,15 +918,15 @@ fn step_folding() -> Word {
 // await a `[` (indexed) or not (scalar).
 fn step_dafield(k: Word, v: Word) -> Word {
     if k == Tok::Ident() as Word {
-        bs.da_base = 0;
-        bs.da_len = 1;
+        da.da_base = 0;
+        da.da_len = 1;
         for i in 0..src.field_count limit 64 {
-            if src.fdata[i] == bs.da_data andalso src.ffield[i] == v {
-                bs.da_base = src.fbase[i];
-                bs.da_len = src.flen[i];
+            if src.fdata[i] == da.da_data andalso src.ffield[i] == v {
+                da.da_base = src.fbase[i];
+                da.da_len = src.flen[i];
             }
         }
-        bs.da_phase = phase.da_index;
+        da.da_phase = phase.da_index;
     }
     0
 }
@@ -893,27 +935,27 @@ fn step_dafield(k: Word, v: Word) -> Word {
 // is the field's slot); any other token is a scalar read (whose token is pushed back).
 fn step_daindex(k: Word) -> Word {
     if k == Tok::LBracket() as Word {
-        bs.idx_base[bs.idx_sp] = bs.da_base;
-        bs.idx_len[bs.idx_sp] = bs.da_len;
-        bs.idx_sp = bs.idx_sp + 1;
-        bs.opstack[bs.opsp] = OpCode::IndexMark() as Word;
-        bs.opsp = bs.opsp + 1;
-        bs.da_phase = phase.da_idle;
-        bs.expect_operand = 1;
+        da.idx_base[da.idx_sp] = da.da_base;
+        da.idx_len[da.idx_sp] = da.da_len;
+        da.idx_sp = da.idx_sp + 1;
+        ops.opstack[ops.opsp] = OpCode::IndexMark() as Word;
+        ops.opsp = ops.opsp + 1;
+        da.da_phase = phase.da_idle;
+        ops.expect_operand = 1;
         0
     } else {
     if k == Tok::Eq() as Word {
-        bs.pstmt_kind[bs.pstmt_sp] = pstmt.assign;
-        bs.pstmt_arg[bs.pstmt_sp] = bs.da_base;
-        bs.pstmt_sp = bs.pstmt_sp + 1;
-        bs.da_phase = phase.da_idle;
-        bs.expect_operand = 1;
+        stmt.pstmt_kind[stmt.pstmt_sp] = pstmt.assign;
+        stmt.pstmt_arg[stmt.pstmt_sp] = da.da_base;
+        stmt.pstmt_sp = stmt.pstmt_sp + 1;
+        da.da_phase = phase.da_idle;
+        ops.expect_operand = 1;
         0
     } else {
-        bs.cursor = bs.cursor - 1;
-        bs.da_phase = phase.da_idle;
-        bs.expect_operand = 0;
-        Node::DataRead() as Word + bs.da_base * enc.radix
+        ctrl.cursor = ctrl.cursor - 1;
+        da.da_phase = phase.da_idle;
+        ops.expect_operand = 0;
+        Node::DataRead() as Word + da.da_base * enc.radix
     } }
 }
 
@@ -921,58 +963,58 @@ fn step_daindex(k: Word) -> Word {
 // read; otherwise it is a Local, resolved against the `let` bindings (most recent wins,
 // shadowing a parameter) then the parameters.
 fn step_ident(v: Word) -> Word {
-    bs.found_flag = 0;
+    ctrl.found_flag = 0;
     for i in 0..src.chunk_count limit 64 {
         if src.chunks[i] == v {
-            bs.call_pending = i;
-            bs.found_flag = 1;
+            call.call_pending = i;
+            ctrl.found_flag = 1;
         }
     }
-    if bs.found_flag == 1 {
-        bs.call_phase = phase.call_lparen;
+    if ctrl.found_flag == 1 {
+        call.call_phase = phase.call_lparen;
         0
     } else {
-    bs.found_flag = 0;
+    ctrl.found_flag = 0;
     for i in 0..src.field_count limit 64 {
         if src.fdata[i] == v {
-            bs.found_flag = 1;
+            ctrl.found_flag = 1;
         }
     }
-    if bs.found_flag == 1 {
-        bs.da_data = v;
-        bs.da_phase = phase.da_dot;
+    if ctrl.found_flag == 1 {
+        da.da_data = v;
+        da.da_phase = phase.da_dot;
         0
     } else {
-    bs.found_flag = 0;
+    ctrl.found_flag = 0;
     for i in 0..src.enum_count limit 64 {
         if src.edata[i] == v {
-            bs.found_flag = 1;
+            ctrl.found_flag = 1;
         }
     }
-    if bs.found_flag == 1 {
+    if ctrl.found_flag == 1 {
         // An enum name opens a `Name::Variant() as Word` cast that the parser folds to
         // the variant's discriminant literal (the enum-as-code idiom).
-        bs.enum_name = v;
-        bs.enum_phase = phase.enum_colcol;
+        mat.enum_name = v;
+        mat.enum_phase = phase.enum_colcol;
         0
     } else {
-        bs.found = 0;
-        bs.found_flag = 0;
-        for i in 0..bs.let_count limit 64 {
-            if bs.let_names[i] == v {
-                bs.found = bs.scope_slot[i];
-                bs.found_flag = 1;
+        ctrl.found = 0;
+        ctrl.found_flag = 0;
+        for i in 0..stmt.let_count limit 64 {
+            if stmt.let_names[i] == v {
+                ctrl.found = stmt.scope_slot[i];
+                ctrl.found_flag = 1;
             }
         }
-        if bs.found_flag == 0 {
+        if ctrl.found_flag == 0 {
             for i in 0..src.param_count limit 32 {
                 if src.params[i] == v {
-                    bs.found = i;
+                    ctrl.found = i;
                 }
             }
         }
-        bs.expect_operand = 0;
-        Node::Local() as Word + bs.found * enc.radix
+        ops.expect_operand = 0;
+        Node::Local() as Word + ctrl.found * enc.radix
     }
     }
     }
@@ -983,52 +1025,52 @@ fn step_ident(v: Word) -> Word {
 fn step_op(k: Word) -> Word {
     if k == Tok::For() as Word {
         // `for` opens a bounded loop; the variable name follows.
-        bs.for_phase = phase.for_var;
+        forst.for_phase = phase.for_var;
         0
     } else {
     if k == Tok::Let() as Word {
-        bs.let_phase = phase.let_name;
+        stmt.let_phase = phase.let_name;
         0
     } else {
     if k == Tok::Semi() as Word {
-        bs.drain_reason = reason.commit;
-        bs.draining = 1;
+        ops.drain_reason = reason.commit;
+        ops.draining = 1;
         0
     } else {
     if k == Tok::Not() as Word {
-        bs.opstack[bs.opsp] = OpCode::Not() as Word;
-        bs.opsp = bs.opsp + 1;
-        bs.expect_operand = 1;
+        ops.opstack[ops.opsp] = OpCode::Not() as Word;
+        ops.opsp = ops.opsp + 1;
+        ops.expect_operand = 1;
         0
     } else {
     if k == Tok::Yield() as Word {
         // `yield` is a loosest-binding prefix: push its marker (code 22) so no operator
         // pops across it and the whole following expression becomes its operand.
-        bs.opstack[bs.opsp] = OpCode::YieldMark() as Word;
-        bs.opsp = bs.opsp + 1;
-        bs.expect_operand = 1;
+        ops.opstack[ops.opsp] = OpCode::YieldMark() as Word;
+        ops.opsp = ops.opsp + 1;
+        ops.expect_operand = 1;
         0
     } else {
     if k == Tok::Match() as Word {
         // `match` opens a scrutinee-then-arms context; its scrutinee is an operand.
-        bs.match_phase[bs.match_sp] = phase.match_open;
-        bs.match_argcount[bs.match_sp] = 0;
-        bs.match_sp = bs.match_sp + 1;
-        bs.expect_operand = 1;
+        mat.match_phase[mat.match_sp] = phase.match_open;
+        mat.match_argcount[mat.match_sp] = 0;
+        mat.match_sp = mat.match_sp + 1;
+        ops.expect_operand = 1;
         0
     } else {
-    if k == Tok::Minus() as Word andalso bs.expect_operand == 1 {
-        bs.opstack[bs.opsp] = OpCode::Neg() as Word;
-        bs.opsp = bs.opsp + 1;
-        bs.expect_operand = 1;
+    if k == Tok::Minus() as Word andalso ops.expect_operand == 1 {
+        ops.opstack[ops.opsp] = OpCode::Neg() as Word;
+        ops.opsp = ops.opsp + 1;
+        ops.expect_operand = 1;
         0
     } else {
         let op = opcode_of(k);
         if op > 0 {
-            bs.pending_op = op;
-            bs.pending_prec = prec_of(op);
-            bs.resolving = 1;
-            bs.expect_operand = 1;
+            ops.pending_op = op;
+            ops.pending_prec = prec_of(op);
+            ops.resolving = 1;
+            ops.expect_operand = 1;
             0
         } else {
             0
@@ -1042,57 +1084,57 @@ fn step_op(k: Word) -> Word {
 // `{` that opens the body, where the loop variable joins the scope and for_body marks
 // the body). The start and end ranges are ordinary expressions handled by step_normal.
 fn step_forheader(k: Word, v: Word) -> Word {
-    if bs.for_phase == phase.for_var {
+    if forst.for_phase == phase.for_var {
         if k == Tok::Ident() as Word {
-            bs.for_var = v;
-            bs.for_phase = phase.for_in;
+            forst.for_var = v;
+            forst.for_phase = phase.for_in;
         }
         0
     } else {
-    if bs.for_phase == phase.for_in {
+    if forst.for_phase == phase.for_in {
         if k == Tok::In() as Word {
-            bs.for_phase = phase.for_lo;
-            bs.expect_operand = 1;
+            forst.for_phase = phase.for_lo;
+            ops.expect_operand = 1;
         }
         0
     } else {
-    if bs.for_phase == phase.for_lo {
+    if forst.for_phase == phase.for_lo {
         if k == Tok::DotDot() as Word {
-            bs.drain_reason = reason.for_start;
-            bs.draining = 1;
+            ops.drain_reason = reason.for_start;
+            ops.draining = 1;
             0
         } else {
             step_normal(k, v)
         }
     } else {
-    if bs.for_phase == phase.for_hi {
+    if forst.for_phase == phase.for_hi {
         if k == Tok::Ident() as Word andalso v == src.limit_id {
-            bs.drain_reason = reason.for_end;
-            bs.draining = 1;
+            ops.drain_reason = reason.for_end;
+            ops.draining = 1;
             0
         } else {
             step_normal(k, v)
         }
     } else {
-    if bs.for_phase == phase.for_cap {
+    if forst.for_phase == phase.for_cap {
         if k == Tok::IntLit() as Word {
-            bs.for_cap = v;
-            bs.for_phase = phase.for_open;
+            forst.for_cap = v;
+            forst.for_phase = phase.for_open;
         }
         0
     } else {
         if k == Tok::LBrace() as Word {
             // The `{` opens the body: bind the loop variable to its slot and mark the
             // body (phase 7), which parses as an ordinary block.
-            bs.let_names[bs.let_count] = bs.for_var;
-            bs.scope_slot[bs.let_count] = bs.for_vslot;
-            bs.let_count = bs.let_count + 1;
-            bs.for_phase = phase.for_body;
-            bs.for_stmt_start = bs.stmt_count;
-            bs.pbase[bs.pbase_sp] = bs.stmt_base;
-            bs.pbase_sp = bs.pbase_sp + 1;
-            bs.stmt_base = bs.pstmt_sp;
-            bs.expect_operand = 1;
+            stmt.let_names[stmt.let_count] = forst.for_var;
+            stmt.scope_slot[stmt.let_count] = forst.for_vslot;
+            stmt.let_count = stmt.let_count + 1;
+            forst.for_phase = phase.for_body;
+            forst.for_stmt_start = stmt.stmt_count;
+            stmt.pbase[stmt.pbase_sp] = stmt.stmt_base;
+            stmt.pbase_sp = stmt.pbase_sp + 1;
+            stmt.stmt_base = stmt.pstmt_sp;
+            ops.expect_operand = 1;
         }
         0
     } } } } }
@@ -1105,53 +1147,53 @@ fn step_forheader(k: Word, v: Word) -> Word {
 // limit_parts entry. Finally the ForLimit statement (kind 23, arg = its entry start,
 // 12 words per prior loop) is recorded for the block fold.
 fn step_for_emit() -> Word {
-    if bs.for_emit_i == 0 {
-        bs.for_emit_i = 1;
-        Node::Literal() as Word + bs.for_cap * enc.radix
+    if forst.for_emit_i == 0 {
+        forst.for_emit_i = 1;
+        Node::Literal() as Word + forst.for_cap * enc.radix
     } else {
-    if bs.for_emit_i == 1 {
-        bs.for_emit_i = 2;
+    if forst.for_emit_i == 1 {
+        forst.for_emit_i = 2;
         Node::Literal() as Word
     } else {
-    if bs.for_emit_i == 2 {
-        bs.for_emit_i = 3;
+    if forst.for_emit_i == 2 {
+        forst.for_emit_i = 3;
         Node::Literal() as Word + 1 * enc.radix
     } else {
-    if bs.for_emit_i == 3 {
-        bs.for_emit_i = 4;
+    if forst.for_emit_i == 3 {
+        forst.for_emit_i = 4;
         Node::Literal() as Word + 2 * enc.radix
     } else {
-    if bs.for_emit_i == 4 {
-        bs.for_emit_i = 5;
-        Node::SlotRecord() as Word + bs.for_vslot * enc.radix
+    if forst.for_emit_i == 4 {
+        forst.for_emit_i = 5;
+        Node::SlotRecord() as Word + forst.for_vslot * enc.radix
     } else {
-    if bs.for_emit_i == 5 {
-        bs.for_emit_i = 6;
-        Node::SlotRecord() as Word + bs.for_end_slot * enc.radix
+    if forst.for_emit_i == 5 {
+        forst.for_emit_i = 6;
+        Node::SlotRecord() as Word + forst.for_end_slot * enc.radix
     } else {
-    if bs.for_emit_i == 6 {
-        bs.for_emit_i = 7;
-        Node::SlotRecord() as Word + bs.for_ctr * enc.radix
+    if forst.for_emit_i == 6 {
+        forst.for_emit_i = 7;
+        Node::SlotRecord() as Word + forst.for_ctr * enc.radix
     } else {
-    if bs.for_emit_i == 7 {
-        bs.for_emit_i = 8;
-        Node::SlotRecord() as Word + bs.for_cap_slot * enc.radix
+    if forst.for_emit_i == 7 {
+        forst.for_emit_i = 8;
+        Node::SlotRecord() as Word + forst.for_cap_slot * enc.radix
     } else {
-    if bs.for_emit_i == 8 {
-        bs.for_emit_i = 9;
-        Node::SlotRecord() as Word + bs.for_oc * enc.radix
+    if forst.for_emit_i == 8 {
+        forst.for_emit_i = 9;
+        Node::SlotRecord() as Word + forst.for_oc * enc.radix
     } else {
-    if bs.for_emit_i == 9 {
-        bs.for_emit_i = 10;
+    if forst.for_emit_i == 9 {
+        forst.for_emit_i = 10;
         Node::ForBuild() as Word
     } else {
-        bs.stmt_kind[bs.stmt_count] = Node::ForLimit() as Word;
-        bs.stmt_arg[bs.stmt_count] = 12 * bs.forlimit_count;
-        bs.stmt_count = bs.stmt_count + 1;
-        bs.forlimit_count = bs.forlimit_count + 1;
-        bs.for_emit = 0;
-        bs.for_phase = phase.for_idle;
-        bs.expect_operand = 1;
+        stmt.stmt_kind[stmt.stmt_count] = Node::ForLimit() as Word;
+        stmt.stmt_arg[stmt.stmt_count] = 12 * forst.forlimit_count;
+        stmt.stmt_count = stmt.stmt_count + 1;
+        forst.forlimit_count = forst.forlimit_count + 1;
+        forst.for_emit = 0;
+        forst.for_phase = phase.for_idle;
+        ops.expect_operand = 1;
         0
     } } } } } } } } } }
 }
@@ -1162,51 +1204,51 @@ fn step_for_emit() -> Word {
 // body (reason 1); `if` pushes a context and `else` advances one.
 fn step_if(k: Word) -> Word {
     if k == Tok::If() as Word {
-        bs.if_phase[bs.if_sp] = phase.if_cond;
-        bs.if_sp = bs.if_sp + 1;
-        bs.expect_operand = 1;
+        branch.if_phase[branch.if_sp] = phase.if_cond;
+        branch.if_sp = branch.if_sp + 1;
+        ops.expect_operand = 1;
         0
     } else {
     if k == Tok::Else() as Word {
-        bs.if_phase[bs.if_sp - 1] = phase.if_await_brace;
+        branch.if_phase[branch.if_sp - 1] = phase.if_await_brace;
         0
     } else {
     if k == Tok::LBrace() as Word {
-        if bs.if_sp > 0 {
-            if bs.if_phase[bs.if_sp - 1] == phase.if_cond {
-                bs.drain_reason = reason.if_cond;
-                bs.draining = 1;
+        if branch.if_sp > 0 {
+            if branch.if_phase[branch.if_sp - 1] == phase.if_cond {
+                ops.drain_reason = reason.if_cond;
+                ops.draining = 1;
             } else {
-                bs.if_phase[bs.if_sp - 1] = phase.if_else;
-                bs.if_stmt_start[bs.if_sp - 1] = bs.stmt_count;
-                bs.pbase[bs.pbase_sp] = bs.stmt_base;
-                bs.pbase_sp = bs.pbase_sp + 1;
-                bs.stmt_base = bs.pstmt_sp;
-                bs.expect_operand = 1;
+                branch.if_phase[branch.if_sp - 1] = phase.if_else;
+                branch.if_stmt_start[branch.if_sp - 1] = stmt.stmt_count;
+                stmt.pbase[stmt.pbase_sp] = stmt.stmt_base;
+                stmt.pbase_sp = stmt.pbase_sp + 1;
+                stmt.stmt_base = stmt.pstmt_sp;
+                ops.expect_operand = 1;
             }
         }
         0
     } else {
         // k == Tok::RBrace() as Word: close a branch, or the body when no conditional is pending.
-        if bs.if_sp > 0 {
-            if bs.if_phase[bs.if_sp - 1] == phase.if_then {
-                bs.drain_reason = reason.then_tail;
+        if branch.if_sp > 0 {
+            if branch.if_phase[branch.if_sp - 1] == phase.if_then {
+                ops.drain_reason = reason.then_tail;
             } else {
-                bs.drain_reason = reason.else_tail;
+                ops.drain_reason = reason.else_tail;
             }
         } else {
-            if bs.for_phase == phase.for_body {
-                bs.drain_reason = reason.for_body;
+            if forst.for_phase == phase.for_body {
+                ops.drain_reason = reason.for_body;
             } else {
-                bs.drain_reason = reason.body;
+                ops.drain_reason = reason.body;
             }
         }
-        bs.draining = 1;
+        ops.draining = 1;
         // A block that closes while an operand is still expected has no tail expression
         // (it is statement-only): its value is Unit (node kind 20), emitted now so the
         // fold wraps it. Clearing expect_operand lets the drain proceed to the fold.
-        if bs.expect_operand == 1 {
-            bs.expect_operand = 0;
+        if ops.expect_operand == 1 {
+            ops.expect_operand = 0;
             Node::Unit() as Word
         } else {
             0
@@ -1220,29 +1262,29 @@ fn step_normal(k: Word, v: Word) -> Word {
         step_if(k)
     } else {
     if k == Tok::IntLit() as Word {
-        bs.expect_operand = 0;
+        ops.expect_operand = 0;
         Node::Literal() as Word + v * enc.radix
     } else {
     if k == Tok::LParen() as Word {
-        bs.opstack[bs.opsp] = OpCode::Paren() as Word;
-        bs.opsp = bs.opsp + 1;
-        bs.expect_operand = 1;
+        ops.opstack[ops.opsp] = OpCode::Paren() as Word;
+        ops.opsp = ops.opsp + 1;
+        ops.expect_operand = 1;
         0
     } else {
     if k == Tok::RParen() as Word {
         // `)` closes a parenthesised group or a call; step_closing needs the pre-`)`
         // `expect_operand` to tell whether a final call argument is present, so it is
         // left unchanged here and cleared there.
-        bs.closing = 1;
+        ops.closing = 1;
         0
     } else {
     if k == Tok::RBracket() as Word {
-        bs.iclosing = 1;
+        da.iclosing = 1;
         0
     } else {
     if k == Tok::Comma() as Word {
         // `,` ends a call argument; drain it to the call marker and count it.
-        bs.cdraining = 1;
+        call.cdraining = 1;
         0
     } else {
     if k == Tok::Ident() as Word {
@@ -1259,29 +1301,29 @@ fn step_normal(k: Word, v: Word) -> Word {
 // baseline). Every other token, including a scrutinee or arm-result expression,
 // dispatches normally.
 fn step_dispatch(k: Word, v: Word) -> Word {
-    if bs.started == 0 {
+    if ctrl.started == 0 {
         if k == Tok::LBrace() as Word {
-            bs.started = 1;
-            bs.stmt_base = 0;
-            bs.expect_operand = 1;
+            ctrl.started = 1;
+            stmt.stmt_base = 0;
+            ops.expect_operand = 1;
         }
         0
     } else {
-        if bs.post_index == 1 {
+        if da.post_index == 1 {
             // The token after a `]` decides read versus indexed assignment.
             step_post_index(k)
         } else {
-        if bs.mpat_phase >= phase.mpat_colcol {
+        if mat.mpat_phase >= phase.mpat_colcol {
             // An open enum-variant match pattern (`Name::Variant()`) consumes its tokens.
             step_mpat(k, v)
         } else {
-        if bs.match_sp > 0 andalso bs.da_phase == phase.da_idle {
+        if mat.match_sp > 0 andalso da.da_phase == phase.da_idle {
             // A pending data-field read (da_phase nonzero) must flush before a match
             // boundary is claimed, so the scrutinee or arm-result DataRead lands on the
             // host stack before the drain; step_daindex emits it and pushes the boundary
             // token back for reinterpretation here.
-            let mp = bs.match_phase[bs.match_sp - 1];
-            if mp == 2 orelse mp == 3 orelse (mp == 1 andalso k == Tok::LBrace() as Word) orelse (mp == 4 andalso k == Tok::RBrace() as Word) orelse (mp == 4 andalso k == Tok::Comma() as Word andalso bs.call_sp == bs.match_call_base[bs.match_sp - 1]) {
+            let mp = mat.match_phase[mat.match_sp - 1];
+            if mp == 2 orelse mp == 3 orelse (mp == 1 andalso k == Tok::LBrace() as Word) orelse (mp == 4 andalso k == Tok::RBrace() as Word) orelse (mp == 4 andalso k == Tok::Comma() as Word andalso call.call_sp == mat.match_call_base[mat.match_sp - 1]) {
                 step_match(k, v)
             } else {
                 step_dispatch_normal(k, v)
@@ -1297,55 +1339,55 @@ fn step_dispatch(k: Word, v: Word) -> Word {
 // The normal parse-phase dispatch: a `let` binding's name or `=`, a `data.field` phase,
 // a `for` header, or the ordinary expression dispatch.
 fn step_dispatch_normal(k: Word, v: Word) -> Word {
-    if bs.let_phase == phase.let_eq {
+    if stmt.let_phase == phase.let_eq {
         if k == Tok::Eq() as Word {
-            bs.let_phase = phase.let_idle;
-            bs.pstmt_kind[bs.pstmt_sp] = pstmt.let_bind;
-            bs.pstmt_name[bs.pstmt_sp] = bs.pending_let_name;
-            bs.pstmt_sp = bs.pstmt_sp + 1;
-            bs.expect_operand = 1;
+            stmt.let_phase = phase.let_idle;
+            stmt.pstmt_kind[stmt.pstmt_sp] = pstmt.let_bind;
+            stmt.pstmt_name[stmt.pstmt_sp] = stmt.pending_let_name;
+            stmt.pstmt_sp = stmt.pstmt_sp + 1;
+            ops.expect_operand = 1;
         }
         0
     } else {
-    if bs.let_phase == phase.let_name {
+    if stmt.let_phase == phase.let_name {
         if k == Tok::Ident() as Word {
-            bs.pending_let_name = v;
-            bs.let_phase = phase.let_eq;
+            stmt.pending_let_name = v;
+            stmt.let_phase = phase.let_eq;
         }
         0
     } else {
-    if bs.da_phase == phase.da_dot {
+    if da.da_phase == phase.da_dot {
         if k == Tok::Dot() as Word {
-            bs.da_phase = phase.da_field;
+            da.da_phase = phase.da_field;
         }
         0
     } else {
-    if bs.da_phase == phase.da_field {
+    if da.da_phase == phase.da_field {
         step_dafield(k, v)
     } else {
-    if bs.da_phase == phase.da_index {
+    if da.da_phase == phase.da_index {
         step_daindex(k)
     } else {
-    if bs.call_phase == phase.call_lparen {
+    if call.call_phase == phase.call_lparen {
         // A call name was read; the `(` opens the argument list.
         if k == Tok::LParen() as Word {
-            bs.call_chunk[bs.call_sp] = bs.call_pending;
-            bs.call_count[bs.call_sp] = 0;
-            bs.call_sp = bs.call_sp + 1;
-            bs.opstack[bs.opsp] = OpCode::CallMark() as Word;
-            bs.opsp = bs.opsp + 1;
-            bs.call_phase = phase.call_idle;
-            bs.expect_operand = 1;
+            call.call_chunk[call.call_sp] = call.call_pending;
+            call.call_count[call.call_sp] = 0;
+            call.call_sp = call.call_sp + 1;
+            ops.opstack[ops.opsp] = OpCode::CallMark() as Word;
+            ops.opsp = ops.opsp + 1;
+            call.call_phase = phase.call_idle;
+            ops.expect_operand = 1;
         }
         0
     } else {
         // An open enum cast (`Name::Variant() as Word`) consumes its remaining tokens.
         // Otherwise phases 1..6 are the `for` header; phase 7 (its body) and phase 0
         // parse normally.
-        if bs.enum_phase >= phase.enum_colcol {
+        if mat.enum_phase >= phase.enum_colcol {
             step_enum(k, v)
         } else {
-        if bs.for_phase >= phase.for_var andalso bs.for_phase <= phase.for_open {
+        if forst.for_phase >= phase.for_var andalso forst.for_phase <= phase.for_open {
             step_forheader(k, v)
         } else {
             step_normal(k, v)
@@ -1360,23 +1402,23 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
 // awaits `=>`; match_result reads the arm-result expression, ended by a match-level `,`
 // (drain reason next_arm) or the closing `}` (drain reason match_build).
 fn step_match(k: Word, v: Word) -> Word {
-    let sp = bs.match_sp - 1;
-    let mp = bs.match_phase[sp];
+    let sp = mat.match_sp - 1;
+    let mp = mat.match_phase[sp];
     if mp == 1 {
-        bs.drain_reason = reason.match_scrut;
-        bs.draining = 1;
+        ops.drain_reason = reason.match_scrut;
+        ops.draining = 1;
         0
     } else {
     if mp == 2 {
         if k == Tok::IntLit() as Word {
             // A literal arm: emit its Literal node, count it, then await `=>`.
-            bs.match_argcount[sp] = bs.match_argcount[sp] + 1;
-            bs.match_phase[sp] = phase.match_arrow;
+            mat.match_argcount[sp] = mat.match_argcount[sp] + 1;
+            mat.match_phase[sp] = phase.match_arrow;
             Node::Literal() as Word + v * enc.radix
         } else {
         if k == Tok::Underscore() as Word {
             // The wildcard arm: no node; its result becomes the default. Await `=>`.
-            bs.match_phase[sp] = phase.match_arrow;
+            mat.match_phase[sp] = phase.match_arrow;
             0
         } else {
         if k == Tok::Ident() as Word {
@@ -1384,38 +1426,38 @@ fn step_match(k: Word, v: Word) -> Word {
             // discriminant match: fold it to the variant's discriminant literal, the
             // same arm an integer literal would form. Recognise the enum name, then read
             // the `::Variant()` in step_mpat.
-            bs.found_flag = 0;
+            ctrl.found_flag = 0;
             for i in 0..src.enum_count limit 64 {
                 if src.edata[i] == v {
-                    bs.found_flag = 1;
+                    ctrl.found_flag = 1;
                 }
             }
-            if bs.found_flag == 1 {
-                bs.enum_name = v;
-                bs.mpat_phase = phase.mpat_colcol;
+            if ctrl.found_flag == 1 {
+                mat.enum_name = v;
+                mat.mpat_phase = phase.mpat_colcol;
             }
             0
         } else {
             // k == Tok::RBrace() as Word: the arms end (a trailing comma preceded this `}`); build.
-            bs.match_build = 1;
+            mat.match_build = 1;
             0
         } } }
     } else {
     if mp == 3 {
         if k == Tok::FatArrow() as Word {
-            bs.match_phase[sp] = phase.match_result;
-            bs.match_call_base[sp] = bs.call_sp;
-            bs.expect_operand = 1;
+            mat.match_phase[sp] = phase.match_result;
+            mat.match_call_base[sp] = call.call_sp;
+            ops.expect_operand = 1;
         }
         0
     } else {
         if k == Tok::Comma() as Word {
-            bs.drain_reason = reason.next_arm;
-            bs.draining = 1;
+            ops.drain_reason = reason.next_arm;
+            ops.draining = 1;
             0
         } else {
-            bs.drain_reason = reason.match_build;
-            bs.draining = 1;
+            ops.drain_reason = reason.match_build;
+            ops.draining = 1;
             0
         }
     } } }
@@ -1427,34 +1469,34 @@ fn step_match(k: Word, v: Word) -> Word {
 // the discriminant Literal node is emitted as the arm's pattern and the arm advances to
 // its `=>`, exactly as an integer-literal arm would.
 fn step_mpat(k: Word, v: Word) -> Word {
-    if bs.mpat_phase == phase.mpat_colcol {
+    if mat.mpat_phase == phase.mpat_colcol {
         if k == Tok::ColCol() as Word {
-            bs.mpat_phase = phase.mpat_variant;
+            mat.mpat_phase = phase.mpat_variant;
         }
         0
     } else {
-    if bs.mpat_phase == phase.mpat_variant {
+    if mat.mpat_phase == phase.mpat_variant {
         if k == Tok::Ident() as Word {
-            bs.enum_disc = 0;
+            mat.enum_disc = 0;
             for i in 0..src.enum_count limit 64 {
-                if src.edata[i] == bs.enum_name andalso src.evar[i] == v {
-                    bs.enum_disc = src.edisc[i];
+                if src.edata[i] == mat.enum_name andalso src.evar[i] == v {
+                    mat.enum_disc = src.edisc[i];
                 }
             }
-            bs.mpat_phase = phase.mpat_lparen;
+            mat.mpat_phase = phase.mpat_lparen;
         }
         0
     } else {
-    if bs.mpat_phase == phase.mpat_lparen {
+    if mat.mpat_phase == phase.mpat_lparen {
         if k == Tok::LParen() as Word {
-            bs.mpat_phase = phase.mpat_rparen;
+            mat.mpat_phase = phase.mpat_rparen;
         }
         0
     } else {
-        bs.mpat_phase = phase.mpat_idle;
-        bs.match_argcount[bs.match_sp - 1] = bs.match_argcount[bs.match_sp - 1] + 1;
-        bs.match_phase[bs.match_sp - 1] = phase.match_arrow;
-        Node::Literal() as Word + bs.enum_disc * enc.radix
+        mat.mpat_phase = phase.mpat_idle;
+        mat.match_argcount[mat.match_sp - 1] = mat.match_argcount[mat.match_sp - 1] + 1;
+        mat.match_phase[mat.match_sp - 1] = phase.match_arrow;
+        Node::Literal() as Word + mat.enum_disc * enc.radix
     } } }
 }
 
@@ -1463,23 +1505,23 @@ fn step_mpat(k: Word, v: Word) -> Word {
 // (Literal node, result) pairs, and the scrutinee, assembles the match_parts entry, and
 // emits the MatchIn node. The match is now an operand, so expect_operand clears.
 fn step_match_build() -> Word {
-    bs.match_build = 0;
-    let sp = bs.match_sp - 1;
-    let temp = bs.match_temp[sp];
-    let ac = bs.match_argcount[sp];
-    bs.match_sp = sp;
-    bs.expect_operand = 0;
+    mat.match_build = 0;
+    let sp = mat.match_sp - 1;
+    let temp = mat.match_temp[sp];
+    let ac = mat.match_argcount[sp];
+    mat.match_sp = sp;
+    ops.expect_operand = 0;
     Node::MatchBuild() as Word + (temp * enc.matchmul + ac) * enc.radix
 }
 
 // After the IndexStore signal, record the IndexAssignIn statement (kind 14, arg =
 // base + len*65536) so the block fold wraps the store node as the assignment.
 fn step_store_finalize() -> Word {
-    bs.store_emit = 0;
-    bs.stmt_kind[bs.stmt_count] = Node::IndexAssignIn() as Word;
-    bs.stmt_arg[bs.stmt_count] = bs.store_arg;
-    bs.stmt_count = bs.stmt_count + 1;
-    bs.expect_operand = 1;
+    da.store_emit = 0;
+    stmt.stmt_kind[stmt.stmt_count] = Node::IndexAssignIn() as Word;
+    stmt.stmt_arg[stmt.stmt_count] = da.store_arg;
+    stmt.stmt_count = stmt.stmt_count + 1;
+    ops.expect_operand = 1;
     0
 }
 
@@ -1490,91 +1532,91 @@ fn step_store_finalize() -> Word {
 // phase 6 the target type name, after which a Literal node carrying the discriminant is
 // emitted as an operand. Only the no-payload `Variant()` cast form is handled.
 fn step_enum(k: Word, v: Word) -> Word {
-    if bs.enum_phase == phase.enum_colcol {
+    if mat.enum_phase == phase.enum_colcol {
         if k == Tok::ColCol() as Word {
-            bs.enum_phase = phase.enum_variant;
+            mat.enum_phase = phase.enum_variant;
         }
         0
     } else {
-    if bs.enum_phase == phase.enum_variant {
+    if mat.enum_phase == phase.enum_variant {
         if k == Tok::Ident() as Word {
-            bs.enum_disc = 0;
+            mat.enum_disc = 0;
             for i in 0..src.enum_count limit 64 {
-                if src.edata[i] == bs.enum_name andalso src.evar[i] == v {
-                    bs.enum_disc = src.edisc[i];
+                if src.edata[i] == mat.enum_name andalso src.evar[i] == v {
+                    mat.enum_disc = src.edisc[i];
                 }
             }
-            bs.enum_phase = phase.enum_lparen;
+            mat.enum_phase = phase.enum_lparen;
         }
         0
     } else {
-    if bs.enum_phase == phase.enum_lparen {
+    if mat.enum_phase == phase.enum_lparen {
         if k == Tok::LParen() as Word {
-            bs.enum_phase = phase.enum_rparen;
+            mat.enum_phase = phase.enum_rparen;
         }
         0
     } else {
-    if bs.enum_phase == phase.enum_rparen {
+    if mat.enum_phase == phase.enum_rparen {
         if k == Tok::RParen() as Word {
-            bs.enum_phase = phase.enum_as;
+            mat.enum_phase = phase.enum_as;
         }
         0
     } else {
-    if bs.enum_phase == phase.enum_as {
+    if mat.enum_phase == phase.enum_as {
         if k == Tok::As() as Word {
-            bs.enum_phase = phase.enum_type;
+            mat.enum_phase = phase.enum_type;
         }
         0
     } else {
-        bs.enum_phase = phase.enum_idle;
-        bs.expect_operand = 0;
-        Node::Literal() as Word + bs.enum_disc * enc.radix
+        mat.enum_phase = phase.enum_idle;
+        ops.expect_operand = 0;
+        Node::Literal() as Word + mat.enum_disc * enc.radix
     } } } } }
 }
 
 // Read the next token and dispatch it, or begin the final drain at end of input.
 fn step_read() -> Word {
-    if bs.cursor >= src.len {
-        bs.draining = 1;
+    if ctrl.cursor >= src.len {
+        ops.draining = 1;
         0
     } else {
-        let k = src.kinds[bs.cursor];
-        let v = src.vals[bs.cursor];
-        bs.cursor = bs.cursor + 1;
+        let k = src.kinds[ctrl.cursor];
+        let v = src.vals[ctrl.cursor];
+        ctrl.cursor = ctrl.cursor + 1;
         step_dispatch(k, v)
     }
 }
 
 // One step of the parser: the active sub-state, or reading the next token.
 fn step() -> Word {
-    if bs.done == 1 {
+    if ctrl.done == 1 {
         Node::Done() as Word
     } else {
-    if bs.resolving == 1 {
+    if ops.resolving == 1 {
         step_resolving()
     } else {
-    if bs.closing == 1 {
+    if ops.closing == 1 {
         step_closing()
     } else {
-    if bs.iclosing == 1 {
+    if da.iclosing == 1 {
         step_iclosing()
     } else {
-    if bs.cdraining == 1 {
+    if call.cdraining == 1 {
         step_cdraining()
     } else {
-    if bs.draining == 1 {
+    if ops.draining == 1 {
         step_draining()
     } else {
-    if bs.folding == 1 {
+    if stmt.folding == 1 {
         step_folding()
     } else {
-    if bs.for_emit == 1 {
+    if forst.for_emit == 1 {
         step_for_emit()
     } else {
-    if bs.match_build == 1 {
+    if mat.match_build == 1 {
         step_match_build()
     } else {
-    if bs.store_emit == 1 {
+    if da.store_emit == 1 {
         step_store_finalize()
     } else {
         step_read()
