@@ -2541,6 +2541,50 @@ fn a_match_may_be_a_let_value() {
     assert_eq!(nodes[letin.lhs as usize].kind, 22); // the MatchIn value
 }
 
+// A block-form `match` used as a statement, with no trailing `;` and a tail after it, is
+// an ExprStmt (kind 21) wrapping the MatchIn, symmetric with the block-form if statement.
+#[test]
+fn a_block_form_match_statement_is_an_expr_stmt() {
+    let src = "fn f(n: Word) -> Word { match n { 1 => n, _ => n } n }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _c, _l, _m, root) = run_body(src);
+    let es = nodes[root as usize];
+    assert_eq!(es.kind, 21);
+    assert_eq!(nodes[es.lhs as usize].kind, 22); // the discarded MatchIn
+    assert_eq!(nodes[es.rhs as usize].kind, 2); // the tail Local n
+}
+
+// A statement-form `match` may be followed by a `let` binding, then the tail; the `let`
+// keyword commits the preceding match as an ExprStmt.
+#[test]
+fn a_block_form_match_statement_precedes_a_let() {
+    let src = "fn f(n: Word) -> Word { match n { 1 => n, _ => n } let y = n; y }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _c, _l, _m, root) = run_body(src);
+    let es = nodes[root as usize];
+    assert_eq!(es.kind, 21);
+    assert_eq!(nodes[es.lhs as usize].kind, 22); // MatchIn
+    let letin = nodes[es.rhs as usize];
+    assert_eq!(letin.kind, 5); // LetIn y
+    assert_eq!(nodes[letin.rhs as usize].kind, 2); // tail Local y
+}
+
+// A block-form `if` statement followed by a block-form `match` statement, then a tail:
+// each block-form expression is committed as an ExprStmt when the next statement starts.
+#[test]
+fn a_block_form_if_then_match_statement() {
+    let src = "fn f(n: Word) -> Word { if n > 0 { n } else { n } match n { 1 => n, _ => n } n }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _c, _l, _m, root) = run_body(src);
+    let first = nodes[root as usize];
+    assert_eq!(first.kind, 21); // ExprStmt(If)
+    assert_eq!(nodes[first.lhs as usize].kind, 4);
+    let second = nodes[first.rhs as usize];
+    assert_eq!(second.kind, 21); // ExprStmt(MatchIn)
+    assert_eq!(nodes[second.lhs as usize].kind, 22);
+    assert_eq!(nodes[second.rhs as usize].kind, 2); // tail Local n
+}
+
 // A real `match` on a data field, compiled and verified on the current runtime: the
 // scrutinee is a data read and the arms select a constant.
 #[test]

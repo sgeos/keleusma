@@ -1,11 +1,11 @@
 // compiler/kel/body.kel — the body-expression parser, a sub-component of Stage 2.
 //
-// Increment 24: a function body over the full operator-precedence expression grammar,
+// Increment 25: a function body over the full operator-precedence expression grammar,
 // scalar and indexed data-field reads, `let` bindings, scalar and indexed data-field
 // assignments, the bare expression statement `expr;`, the semicolon-less block-form
-// `if`/`else` statement, the `if`/`else` conditional (with an optional `else`, an
-// absent one synthesizing a Unit branch) with nested statement-block branches, function
-// calls, the `yield e` reentrant expression, the `match` expression
+// `if`/`else` and `match` statements, the `if`/`else` conditional (with an optional
+// `else`, an absent one synthesizing a Unit branch) with nested statement-block branches,
+// function calls, the `yield e` reentrant expression, the `match` expression
 // over integer-literal and unit enum-variant discriminant arms with a trailing wildcard,
 // the `Enum::Variant() as Word` cast folded to the variant's discriminant literal, the
 // bounded `for v in start..end limit CAP { body }` loop, and a statement-only block
@@ -1347,12 +1347,13 @@ fn step_dispatch(k: Word, v: Word) -> Word {
         // The then branch folded and no `else` follows: this `if` has no else branch.
         synth_empty_else()
     } else {
-        // A just-completed block-form `if` operand (blockform, a one-token flag) that a
-        // statement-starter follows was an expression statement, not the block tail: commit
-        // it as an ExprStmt (its If value already rests on the host stack in source order)
-        // and let the routing below dispatch this token as the next statement. A terminator
-        // (a `;`, the block `}`, an operator, `)`, `,`, or a match boundary) instead clears
-        // the flag and routes normally, so the If stays the tail, a let value, or an arm.
+        // A just-completed block-form `if` or `match` operand (blockform, a one-token flag)
+        // that a statement-starter follows was an expression statement, not the block tail:
+        // commit it as an ExprStmt (its If or MatchIn value already rests on the host stack
+        // in source order) and let the routing below dispatch this token as the next
+        // statement. A terminator (a `;`, the block `}`, an operator, `)`, `,`, or a match
+        // boundary) instead clears the flag and routes normally, so the operand stays the
+        // tail, a let value, a call argument, or an arm result.
         if stmt.blockform == 1 {
             stmt.blockform = 0;
             if is_stmt_start(k) == 1 {
@@ -1557,7 +1558,11 @@ fn step_mpat(k: Word, v: Word) -> Word {
 // Emit the match build record: kind 34 packs the scrutinee temp slot and the literal-arm
 // count as `temp * enc.matchmul + count`. The host pops the wildcard result, the literal-arm
 // (Literal node, result) pairs, and the scrutinee, assembles the match_parts entry, and
-// emits the MatchIn node. The match is now an operand, so expect_operand clears.
+// emits the MatchIn node. The match is now a completed block-form operand, so
+// expect_operand clears and blockform marks it, exactly as a completed If does: the next
+// token then claims it as the block tail, a let value, a call argument, or an arm result
+// (a terminator follows), or commits it as an expression statement (a statement-starter
+// follows).
 fn step_match_build() -> Word {
     mat.match_build = 0;
     let sp = mat.match_sp - 1;
@@ -1565,6 +1570,7 @@ fn step_match_build() -> Word {
     let ac = mat.match_argcount[sp];
     mat.match_sp = sp;
     ops.expect_operand = 0;
+    stmt.blockform = 1;
     Node::MatchBuild() as Word + (temp * enc.matchmul + ac) * enc.radix
 }
 
