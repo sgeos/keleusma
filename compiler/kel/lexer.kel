@@ -23,6 +23,14 @@
 //   kind 3 INT      integer literal; value = its parsed value
 //   kind 4 PUNCT    single-byte punctuation; value = the byte
 //   kind 5 OP2      two-byte operator (increment 2); value = a compound code
+//   kind 6 KEYWORD  a keyword identifier run (increment 3); value = its Tok code
+// Increment 3 (KEYWORD). An identifier run that spells a language keyword is
+// classified to the parser's unified `Tok` discriminant (fn 0, yield 5, loop 6,
+// data 13, shared 14, private 15, const 16, use 19, not 32, band 33, bor 34,
+// bxor 35, andalso 36, orelse 37, let 38, if 43, else 44, for 45, in 46,
+// match 48, as 52, enum 53) rather than emitted as a plain IDENT, so the lexer's
+// output kinds move closer to the parser's token vocabulary. A non-keyword run is
+// still an IDENT. See `keyword_code` and its per-length helpers.
 // Increment 2 (OP2). The lexer now does maximal munch over the two-character
 // operators the grammar uses, so `==`, `<=`, `::`, `..`, and `=>` are one token
 // rather than two punctuation bytes. The compound codes are 0 `==`, 1 `!=`,
@@ -102,17 +110,124 @@ fn compound_code(b: Word, next: Word) -> Word {
     0 } } } } } }
 }
 
+// Keyword recognition (increment 3). An identifier run whose bytes spell one of
+// the language's keywords is classified to the parser's `Tok` code for that
+// keyword rather than emitted as a plain IDENT. The match is split into one
+// helper per run length so each stays a flat `andalso` chain of byte equalities,
+// keeping every function well under the host compiler's recursion-depth limit.
+// A run of a length no keyword has, or a non-matching run, returns the -1
+// sentinel (0 is a valid Tok code, `fn`, so 0 cannot mean "no match"). Byte
+// values are ASCII: the run's bytes are read through `peek_at`, which yields the
+// past-the-end sentinel 0 for a run that is shorter than the length probed.
+
+fn kw2(start: Word) -> Word {
+    let a = peek_at(start);
+    let b = peek_at(start + 1);
+    if a == 102 andalso b == 110 { 0 } else {    // fn
+    if a == 105 andalso b == 102 { 43 } else {   // if
+    if a == 105 andalso b == 110 { 46 } else {   // in
+    if a == 97 andalso b == 115 { 52 } else {    // as
+    0 - 1 } } } }
+}
+
+fn kw3(start: Word) -> Word {
+    let a = peek_at(start);
+    let b = peek_at(start + 1);
+    let c = peek_at(start + 2);
+    if a == 108 andalso b == 101 andalso c == 116 { 38 } else {   // let
+    if a == 102 andalso b == 111 andalso c == 114 { 45 } else {   // for
+    if a == 117 andalso b == 115 andalso c == 101 { 19 } else {   // use
+    if a == 110 andalso b == 111 andalso c == 116 { 32 } else {   // not
+    if a == 98 andalso b == 111 andalso c == 114 { 34 } else {    // bor
+    0 - 1 } } } } }
+}
+
+fn kw4(start: Word) -> Word {
+    let a = peek_at(start);
+    let b = peek_at(start + 1);
+    let c = peek_at(start + 2);
+    let d = peek_at(start + 3);
+    if a == 101 andalso b == 108 andalso c == 115 andalso d == 101 { 44 } else {  // else
+    if a == 108 andalso b == 111 andalso c == 111 andalso d == 112 { 6 } else {   // loop
+    if a == 100 andalso b == 97 andalso c == 116 andalso d == 97 { 13 } else {    // data
+    if a == 101 andalso b == 110 andalso c == 117 andalso d == 109 { 53 } else {  // enum
+    if a == 98 andalso b == 97 andalso c == 110 andalso d == 100 { 33 } else {    // band
+    if a == 98 andalso b == 120 andalso c == 111 andalso d == 114 { 35 } else {   // bxor
+    0 - 1 } } } } } }
+}
+
+fn kw5(start: Word) -> Word {
+    let a = peek_at(start);
+    let b = peek_at(start + 1);
+    let c = peek_at(start + 2);
+    let d = peek_at(start + 3);
+    let e = peek_at(start + 4);
+    if a == 99 andalso b == 111 andalso c == 110 andalso d == 115 andalso e == 116 { 16 } else {   // const
+    if a == 109 andalso b == 97 andalso c == 116 andalso d == 99 andalso e == 104 { 48 } else {    // match
+    if a == 121 andalso b == 105 andalso c == 101 andalso d == 108 andalso e == 100 { 5 } else {   // yield
+    0 - 1 } } }
+}
+
+fn kw6(start: Word) -> Word {
+    let a = peek_at(start);
+    let b = peek_at(start + 1);
+    let c = peek_at(start + 2);
+    let d = peek_at(start + 3);
+    let e = peek_at(start + 4);
+    let f = peek_at(start + 5);
+    if a == 115 andalso b == 104 andalso c == 97 andalso d == 114 andalso e == 101 andalso f == 100 { 14 } else {   // shared
+    if a == 111 andalso b == 114 andalso c == 101 andalso d == 108 andalso e == 115 andalso f == 101 { 37 } else {  // orelse
+    0 - 1 } }
+}
+
+fn kw7(start: Word) -> Word {
+    let a = peek_at(start);
+    let b = peek_at(start + 1);
+    let c = peek_at(start + 2);
+    let d = peek_at(start + 3);
+    let e = peek_at(start + 4);
+    let f = peek_at(start + 5);
+    let g = peek_at(start + 6);
+    if a == 112 andalso b == 114 andalso c == 105 andalso d == 118 andalso e == 97 andalso f == 116 andalso g == 101 { 15 } else {  // private
+    if a == 97 andalso b == 110 andalso c == 100 andalso d == 97 andalso e == 108 andalso f == 115 andalso g == 111 { 36 } else {   // andalso
+    0 - 1 } }
+}
+
+// Dispatch keyword matching by run length; a length no keyword has returns -1.
+fn keyword_code(start: Word, len: Word) -> Word {
+    if len == 2 { kw2(start) } else {
+    if len == 3 { kw3(start) } else {
+    if len == 4 { kw4(start) } else {
+    if len == 5 { kw5(start) } else {
+    if len == 6 { kw6(start) } else {
+    if len == 7 { kw7(start) } else {
+    0 - 1 } } } } } }
+}
+
+// The token word for a completed identifier run at `start` of `len` bytes: a
+// KEYWORD token (kind 6, value the parser's Tok code) when the run spells a
+// keyword, else an IDENT token (kind 2, value the run length).
+fn ident_token(start: Word, len: Word) -> Word {
+    let kc = keyword_code(start, len);
+    if kc >= 0 { 6 + kc * 16 } else { 2 + len * 16 }
+}
+
 loop main(resume: Word) -> Word {
     if st.cursor >= src.len {
         // End of source: flush a token still being built, then report EOF.
         if st.kind == 0 {
             yield 1
         } else {
+        if st.kind == 2 {
+            // A keyword or identifier ending exactly at end of input.
+            st.kind = 0;
+            yield ident_token(st.start, st.val)
+        } else {
             let k = st.kind;
             let v = st.val;
             st.kind = 0;
             yield k + v * 16
-        }
+        } }
     } else {
         let b = src.bytes[st.cursor] as Word;
         if st.kind == 2 {
@@ -122,9 +237,9 @@ loop main(resume: Word) -> Word {
                 st.val = st.val + 1;
                 yield 0
             } else {
-                let v = st.val;
+                // The run ended: classify it as a keyword or emit it as an IDENT.
                 st.kind = 0;
-                yield 2 + v * 16
+                yield ident_token(st.start, st.val)
             }
         } else {
         if st.kind == 3 {

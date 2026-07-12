@@ -86,8 +86,9 @@ fn status() {
     println!("function calls, and scalar and");
     println!("indexed data-segment reads and writes, into an op buffer it streams with its own");
     println!("deduplicating constant pool and counted local-frame size, and lexer");
-    println!("increment 2, a streaming tokenizer with maximal munch over the two-byte");
-    println!("operators, both compile, verify, and run (see");
+    println!("increment 3, a streaming tokenizer with maximal munch over the two-byte");
+    println!("operators and keyword classification to the parser's Tok codes, both");
+    println!("compile, verify, and run (see");
     println!("tests/selfhost_codegen.rs and `lex <file>`). The codegen stage is now");
     println!("FULLY SELF-HOSTING: all 34 of its functions, including the multiheaded");
     println!("`yield emit_next` dispatch and the `loop main`, compile themselves");
@@ -184,6 +185,8 @@ fn run_lexer(path: &str) {
                         };
                         println!("  OP2     {op}");
                     }
+                    // A keyword run (increment 3); value is the parser's Tok code.
+                    6 => println!("  KEYWORD tok {value}"),
                     other => println!("  ?kind {other} value {value}"),
                 }
             }

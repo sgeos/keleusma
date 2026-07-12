@@ -11,11 +11,12 @@
     not(feature = "narrow-word-32")
 ))]
 //! Regression test for the self-hosted compiler's Stage 1 lexer
-//! (`compiler/kel/lexer.kel`, through increment 2). It compiles the lexer on the
+//! (`compiler/kel/lexer.kel`, through increment 3). It compiles the lexer on the
 //! current runtime, drives it over a source held in shared data, and checks the
-//! streamed token encoding: increment 1's IDENT/INT/PUNCT/EOF wire and
-//! increment 2's maximal munch over the two-byte operators. Guards that the lexer
-//! keeps compiling and tokenizing as the runtime evolves toward V0.3.0.
+//! streamed token encoding: increment 1's IDENT/INT/PUNCT/EOF wire, increment 2's
+//! maximal munch over the two-byte operators, and increment 3's keyword
+//! classification to the parser's Tok codes. Guards that the lexer keeps compiling
+//! and tokenizing as the runtime evolves toward V0.3.0.
 use keleusma::Arena;
 use keleusma::bytecode::Value;
 use keleusma::compiler::compile;
@@ -65,10 +66,11 @@ fn self_hosted_lexer_increment_1() {
             .expect("resume");
     }
     eprintln!("tokens (kind,value) = {:?}", tokens);
-    // IDENT len3 "let", IDENT len1 "x", PUNCT '=' , INT 42, EOF
+    // KEYWORD let (Tok::Let = 38, classified since increment 3), IDENT x, PUNCT '=',
+    // INT 42, EOF.
     assert_eq!(
         tokens,
-        vec![(2, 3), (2, 1), (4, b'=' as i64), (3, 42), (1, 0)]
+        vec![(6, 38), (2, 1), (4, b'=' as i64), (3, 42), (1, 0)]
     );
 }
 
@@ -167,6 +169,50 @@ fn self_hosted_lexer_increment_2_single_byte_punctuation_unaffected() {
             (2, 1),           // IDENT e
             (4, b'=' as i64), // trailing = at end of input (peek sees sentinel 0)
             (1, 0),           // EOF
+        ]
+    );
+}
+
+// Increment 3: keyword classification. An identifier run that spells a keyword is
+// emitted as a KEYWORD token (kind 6) carrying the parser's Tok code, while a
+// non-keyword run and a keyword-like prefix (`i`, `fna`, `ip`) stay IDENT.
+#[test]
+fn self_hosted_lexer_increment_3_keyword_classification() {
+    // One keyword from each run length plus a plain identifier and an integer, so
+    // the dispatch-by-length and the keyword-versus-IDENT split are both covered.
+    let tokens = lex_tokens(b"fn let else const shared private x 9 as");
+    assert_eq!(
+        tokens,
+        vec![
+            (6, 0),  // KEYWORD fn      (Tok::Fn = 0)
+            (6, 38), // KEYWORD let     (Tok::Let = 38)
+            (6, 44), // KEYWORD else    (Tok::Else = 44)
+            (6, 16), // KEYWORD const   (Tok::Const = 16)
+            (6, 14), // KEYWORD shared  (Tok::Shared = 14)
+            (6, 15), // KEYWORD private (Tok::Private = 15)
+            (2, 1),  // IDENT x
+            (3, 9),  // INT 9
+            (6, 52), // KEYWORD as      (Tok::As = 52), ending exactly at end of input
+            (1, 0),  // EOF
+        ]
+    );
+}
+
+// A keyword's proper prefix, superstring, or same-length near-miss is an ordinary
+// identifier, not a keyword: the match is exact over the whole run, not a prefix
+// test. `i` (prefix of `if`/`in`), `fnn` (superstring of `fn`), and `ix`
+// (same-length near-miss of `if`) must all stay IDENT.
+#[test]
+fn self_hosted_lexer_increment_3_keyword_matching_is_exact() {
+    let tokens = lex_tokens(b"i fnn ix loops");
+    assert_eq!(
+        tokens,
+        vec![
+            (2, 1), // IDENT i     (prefix of if/in)
+            (2, 3), // IDENT fnn   (fn plus a byte)
+            (2, 2), // IDENT ix    (same length as if, second byte differs)
+            (2, 5), // IDENT loops (loop plus a byte)
+            (1, 0), // EOF
         ]
     );
 }
