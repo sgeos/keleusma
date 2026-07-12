@@ -40,7 +40,10 @@
 // keyword classification, increment 4 identifier interning, and increment 5 folds
 // all of these plus the single-byte punctuation into the one `Tok`-coded wire via
 // `op2_tok`, `punct_tok`, and `ident_token`. A lone `_` is the Underscore token,
-// while `_foo` is an ordinary identifier.
+// while `_foo` is an ordinary identifier. Increment 6 skips `//` line comments: on
+// the two slashes the scanner enters kind 5 and drops bytes to the newline that
+// ends the comment (or end of source), so a comment never tokenizes -- a
+// prerequisite for tokenizing comment-dense real stage files.
 // Spans, string interning of literals, and the richer `Token` struct in
 // prelude.kel land in later increments once struct-valued yields are wired.
 
@@ -341,11 +344,15 @@ loop main(resume: Word) -> Word {
             st.kind = 0;
             yield ident_token(st.start, st.val)
         } else {
+        if st.kind == 3 {
             // An integer ending at end of input: IntLit (Tok 12), value the payload.
             let v = st.val;
             st.kind = 0;
             yield 12 + v * 64
-        } }
+        } else {
+            // A `//` comment ran to end of source with no trailing newline: no token.
+            yield 62
+        } } }
     } else {
         let b = src.bytes[st.cursor] as Word;
         if st.kind == 2 {
@@ -374,6 +381,15 @@ loop main(resume: Word) -> Word {
                 yield 12 + v * 64
             }
         } else {
+        if st.kind == 5 {
+            // Inside a `//` line comment: skip bytes until the newline that ends it
+            // (or end of source), then resume normal tokenizing.
+            if b == 10 {
+                st.kind = 0;
+            }
+            st.cursor = st.cursor + 1;
+            yield 63
+        } else {
             // No token in progress: start one, skip whitespace, or emit punctuation.
             if is_space(b) == 1 {
                 st.cursor = st.cursor + 1;
@@ -393,6 +409,12 @@ loop main(resume: Word) -> Word {
                 st.cursor = st.cursor + 1;
                 yield 63
             } else {
+            if b == 47 andalso peek_at(st.cursor + 1) == 47 {
+                // A `//` line comment: skip both slashes and read the rest in kind 5.
+                st.kind = 5;
+                st.cursor = st.cursor + 2;
+                yield 63
+            } else {
                 // Punctuation: a two-byte operator by maximal munch, else one byte,
                 // each mapped to its parser Tok code (payload 0).
                 let cc = compound_code(b, peek_at(st.cursor + 1));
@@ -403,7 +425,7 @@ loop main(resume: Word) -> Word {
                     st.cursor = st.cursor + 1;
                     yield punct_tok(b)
                 }
-            } } }
-        } }
+            } } } }
+        } } }
     }
 }
