@@ -19,7 +19,7 @@
 // Token wire. Each yielded token is a single Word, `kind + value*16`:
 //   kind 0 PENDING  no complete token this iteration; the host skips it
 //   kind 1 EOF      end of source; value 0
-//   kind 2 IDENT    identifier run; value = its byte length
+//   kind 2 IDENT    identifier run; value = its interned id (increment 4)
 //   kind 3 INT      integer literal; value = its parsed value
 //   kind 4 PUNCT    single-byte punctuation; value = the byte
 //   kind 5 OP2      two-byte operator (increment 2); value = a compound code
@@ -31,6 +31,10 @@
 // match 48, as 52, enum 53) rather than emitted as a plain IDENT, so the lexer's
 // output kinds move closer to the parser's token vocabulary. A non-keyword run is
 // still an IDENT. See `keyword_code` and its per-length helpers.
+// Increment 4 (interning). A non-keyword IDENT now carries a stable id rather than
+// a byte length: each distinct identifier is assigned an index in an intern table
+// on first sight and every later occurrence resolves to the same id, the identity
+// the parser needs to match a name to a chunk, field, or enum. See `intern_id`.
 // Increment 2 (OP2). The lexer now does maximal munch over the two-character
 // operators the grammar uses, so `==`, `<=`, `::`, `..`, and `=>` are one token
 // rather than two punctuation bytes. The compound codes are 0 `==`, 1 `!=`,
@@ -59,6 +63,22 @@ private data st {
     kind: Word,
     start: Word,
     val: Word,
+}
+
+// The identifier intern table (increment 4). Each distinct identifier run is
+// assigned a stable id, its index here, so an IDENT token carries an id rather
+// than a mere length and two occurrences of the same name resolve to the same id.
+// An entry stores the run's start offset into the persistent source and its byte
+// length; the bytes themselves stay in `src.bytes`, so no copy is needed. `found`
+// and `mism` are scratch accumulators for the content comparison, which cannot
+// use immutable locals. Capacity 512 distinct identifiers; a source that exceeds
+// it fails closed at the interning scan's `limit` rather than aliasing.
+private data intern {
+    istart: [Word; 512],
+    ilen: [Word; 512],
+    icount: Word,
+    found: Word,
+    mism: Word,
 }
 
 // Byte-class predicates. Atomic total `fn`, so bounded by construction.
@@ -204,12 +224,46 @@ fn keyword_code(start: Word, len: Word) -> Word {
     0 - 1 } } } } } }
 }
 
+// Intern a non-keyword identifier run at source offset `start` of `len` bytes and
+// return its stable id. The run is compared byte for byte against each existing
+// entry of the same length; a match returns that entry's index and a miss appends
+// a new entry and returns its index. Both loops are `for .. limit`, so the work is
+// statically bounded and an identifier longer than the inner cap (64) fails closed
+// at that limit rather than being silently truncated to an aliasing key. `found`
+// and `mism` are data fields because a `for` body cannot mutate a local; ids are
+// unique, so the last (and only) matching index the scan records is the answer.
+fn intern_id(start: Word, len: Word) -> Word {
+    intern.found = 0 - 1;
+    for i in 0..intern.icount limit 512 {
+        if intern.ilen[i] == len {
+            intern.mism = 0;
+            for j in 0..len limit 64 {
+                if peek_at(intern.istart[i] + j) != peek_at(start + j) {
+                    intern.mism = intern.mism + 1;
+                }
+            }
+            if intern.mism == 0 {
+                intern.found = i;
+            }
+        }
+    }
+    if intern.found >= 0 {
+        intern.found
+    } else {
+        let id = intern.icount;
+        intern.istart[id] = start;
+        intern.ilen[id] = len;
+        intern.icount = intern.icount + 1;
+        id
+    }
+}
+
 // The token word for a completed identifier run at `start` of `len` bytes: a
 // KEYWORD token (kind 6, value the parser's Tok code) when the run spells a
-// keyword, else an IDENT token (kind 2, value the run length).
+// keyword, else an IDENT token (kind 2, value the run's interned id).
 fn ident_token(start: Word, len: Word) -> Word {
     let kc = keyword_code(start, len);
-    if kc >= 0 { 6 + kc * 16 } else { 2 + len * 16 }
+    if kc >= 0 { 6 + kc * 16 } else { 2 + intern_id(start, len) * 16 }
 }
 
 loop main(resume: Word) -> Word {
