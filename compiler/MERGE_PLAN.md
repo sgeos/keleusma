@@ -7,6 +7,27 @@ adapter and is the critical-path step toward a self-hosting parser stage. The bo
 parser is complete through increment 25 (the block-form statement family), so the
 merge is now unblocked.
 
+## Status: feature-complete (increments 1 through 11 landed)
+
+The merged stage `kel/parse.kel` (tested by `tests/selfhost_parse.rs`, 41 cases) now
+parses every declaration form and body construct the compiler stages use, in one pass:
+functions with their full bodies, `data` blocks, `enum` and `use` declarations, and the
+complete body grammar (the operator-precedence expressions, `let` blocks, `if`/`else`
+including the block-form and else-less forms, `for .. limit`, `match`, `yield`, scalar
+and indexed data reads and writes, function calls, and enum casts and match patterns).
+Name resolution is by strategy-B accumulation for the field-layout and enum tables, with
+a host-supplied chunk table (the one remaining resolved-reference crutch). The compiler
+scaffold's parser stage (`compiler/src/main.rs` STAGES) points at `parse.kel`.
+
+**Deferred: retirement of the originals (former increment 11 cleanup).** `parser.kel`,
+`body.kel`, and their harnesses (`selfhost_parser.rs`, `selfhost_body.rs`, 14 + 90 tests)
+are retained rather than deleted. `parse.kel` supersedes them functionally, but its 41
+tests are fewer than the originals' 104 (especially body.kel's edge-case and torture
+suites), and the pipeline is not yet composed end-to-end, so the originals remain the
+reference implementations and the broader coverage. They are retired once `parse.kel` is
+composed into an end-to-end `parse -> codegen` pipeline and its coverage matches, per the
+deferral-ledger discipline.
+
 ## Load-bearing decisions
 
 **Name resolution: incremental table accumulation (strategy B).** At parse time the
