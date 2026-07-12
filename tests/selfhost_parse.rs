@@ -1,7 +1,8 @@
-//! Merged parser stage (`compiler/kel/parse.kel`), increment 3: one streaming `loop` that
-//! parses a whole top-level function declaration whose body is a BLOCK — zero or more
-//! `let name = value;` bindings followed by a tail expression (or, statement-only, an
-//! implicit Unit) over the operator grammar of increment 2 — in a single pass.
+//! Merged parser stage (`compiler/kel/parse.kel`), increment 4: one streaming `loop` that
+//! parses a whole top-level function declaration whose body may contain the
+//! `if cond { then } else { else }` conditional with nested statement-block branches (and
+//! the block-form `if` statement and the `if` without `else`), over the `let` blocks and
+//! operator grammar of increments 2 and 3, in a single pass.
 //!
 //! A throwaway adapter maps the reference tokenizer into the stage's unified `(kind,
 //! value)` token stream. The stage emits header records `dkind + val*64` (1/2/3 START of a
@@ -86,6 +87,8 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
             TokenKind::Orelse => (37, 0),
             TokenKind::Let => (38, 0),
             TokenKind::Semicolon => (39, 0),
+            TokenKind::If => (43, 0),
+            TokenKind::Else => (44, 0),
             TokenKind::Eof => continue,
             _ => (4, 0),
         };
@@ -194,7 +197,7 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
 /// operator code, the short-circuit booleans their own kinds (8 Andalso, 9 Orelse), and
 /// the unary prefixes 6 Not / 10 Neg. Parenthesised grouping is structural in the AST, so
 /// it contributes no node, exactly as the stage discards its parenthesis marker.
-fn flatten(e: &Expr, scope: &[(String, i64)], out: &mut Vec<(i64, i64)>) {
+fn flatten(e: &Expr, scope: &[(String, i64)], next_slot: &mut i64, out: &mut Vec<(i64, i64)>) {
     match e {
         Expr::Literal {
             value: Literal::Int(n),
@@ -214,8 +217,8 @@ fn flatten(e: &Expr, scope: &[(String, i64)], out: &mut Vec<(i64, i64)>) {
         Expr::BinOp {
             op, left, right, ..
         } => {
-            flatten(left, scope, out);
-            flatten(right, scope, out);
+            flatten(left, scope, next_slot, out);
+            flatten(right, scope, next_slot, out);
             let (kind, code) = match op {
                 BinOp::Add => (3, 1),
                 BinOp::Mul => (3, 2),
@@ -233,53 +236,80 @@ fn flatten(e: &Expr, scope: &[(String, i64)], out: &mut Vec<(i64, i64)>) {
                 BinOp::Bxor => (3, 14),
                 BinOp::Andalso => (8, 0),
                 BinOp::Orelse => (9, 0),
-                other => panic!("increment 2 does not handle operator {other:?}"),
+                other => panic!("increment does not handle operator {other:?}"),
             };
             out.push((kind, code));
         }
         Expr::UnaryOp { op, operand, .. } => {
-            flatten(operand, scope, out);
+            flatten(operand, scope, next_slot, out);
             let kind = match op {
                 UnaryOp::Not => 6,
                 UnaryOp::Neg => 10,
-                other => panic!("increment 3 handles only `-` and `not`, got {other:?}"),
+                other => panic!("increment handles only `-` and `not`, got {other:?}"),
             };
             out.push((kind, 0));
         }
-        other => panic!("increment 3 handles operator expressions, got {other:?}"),
+        Expr::If {
+            condition,
+            then_block,
+            else_block,
+            ..
+        } => {
+            // Postorder: the condition, the then branch (a folded block), the else branch
+            // (a folded block, or a synthesized Unit when absent), then the If node
+            // (kind 4). Slots are monotonic across branches, so `next_slot` is threaded.
+            flatten(condition, scope, next_slot, out);
+            flatten_block(then_block, scope, next_slot, out);
+            match else_block {
+                Some(eb) => flatten_block(eb, scope, next_slot, out),
+                None => out.push((20, 0)), // synthesized empty else: a Unit
+            }
+            out.push((4, 0));
+        }
+        other => panic!("increment 4 does not handle expression {other:?}"),
     }
 }
 
-/// Flatten a block: each `let` value in source order, then the tail (or a Unit for a
-/// statement-only block), then a LetIn node (kind 5, arg = slot) per binding last to
-/// first, mirroring the stage's block fold. A binding claims the next frame slot after
-/// the parameters and joins the scope so a later value or the tail resolves it.
-fn flatten_block(block: &Block, params: &[(String, i64)], out: &mut Vec<(i64, i64)>) {
-    let mut scope = params.to_vec();
-    let mut let_slots = Vec::new();
-    let mut next_slot = params.len() as i64;
+/// Flatten a block: each statement's value in source order, then the tail (or a Unit for a
+/// statement-only block), then each statement's node (LetIn for a `let`, ExprStmt for a
+/// bare or block-form expression) last to first, mirroring the stage's block fold. A `let`
+/// binding claims the next monotonic frame slot and joins the scope. `next_slot` is the
+/// monotonic frame-slot counter, threaded so a nested branch's slots never collide with an
+/// enclosing block's.
+fn flatten_block(
+    block: &Block,
+    scope: &[(String, i64)],
+    next_slot: &mut i64,
+    out: &mut Vec<(i64, i64)>,
+) {
+    let mut local = scope.to_vec();
+    let mut stmt_nodes = Vec::new();
     for st in &block.stmts {
         match st {
             Stmt::Let(l) => {
-                flatten(&l.value, &scope, out);
+                flatten(&l.value, &local, next_slot, out);
                 let name = match &l.pattern {
                     Pattern::Variable(n, _) => n.clone(),
                     other => panic!("test uses simple let patterns only, got {other:?}"),
                 };
-                let slot = next_slot;
-                next_slot += 1;
-                scope.push((name, slot));
-                let_slots.push(slot);
+                let slot = *next_slot;
+                *next_slot += 1;
+                local.push((name, slot));
+                stmt_nodes.push((5, slot)); // LetIn
             }
-            other => panic!("increment 3 handles only `let` statements, got {other:?}"),
+            Stmt::Expr(e) => {
+                flatten(e, &local, next_slot, out);
+                stmt_nodes.push((21, 0)); // ExprStmt
+            }
+            other => panic!("increment 4 handles `let` and expression statements, got {other:?}"),
         }
     }
     match &block.tail_expr {
-        Some(tail) => flatten(tail, &scope, out),
+        Some(tail) => flatten(tail, &local, next_slot, out),
         None => out.push((20, 0)), // statement-only block: implicit Unit
     }
-    for slot in let_slots.iter().rev() {
-        out.push((5, *slot)); // LetIn, arg = the binding's slot
+    for (kind, arg) in stmt_nodes.iter().rev() {
+        out.push((*kind, *arg));
     }
 }
 
@@ -316,7 +346,8 @@ fn reference(src: &str, names: &[String]) -> Parsed {
             .map(|(i, n)| (n.to_string(), i as i64))
             .collect();
         let mut body = Vec::new();
-        flatten_block(&f.body, &param_scope, &mut body);
+        let mut next_slot = param_names.len() as i64;
+        flatten_block(&f.body, &param_scope, &mut next_slot, &mut body);
         funcs.push((cat, id(&f.name), params, body));
     }
     Parsed { funcs }
@@ -441,4 +472,64 @@ fn a_statement_only_block_has_a_unit_tail() {
     assert_eq!(got, reference(src, &names));
     // a [value], Unit [tail], LetIn(slot 1).
     assert_eq!(got.funcs[0].3, vec![(2, 0), (20, 0), (5, 1)]);
+}
+
+// An `if`/`else` as the block tail: condition, then branch, else branch, then the If node.
+#[test]
+fn an_if_else_tail_is_an_if_node() {
+    let src = "fn f(a: Word) -> Word { if a > 0 { a } else { 0 } }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    // a, 0, BinOp(Gt) [cond]; a [then]; 0 [else]; If.
+    assert_eq!(
+        got.funcs[0].3,
+        vec![(2, 0), (1, 0), (3, 9), (2, 0), (1, 0), (4, 0)]
+    );
+}
+
+// Nested statement blocks in the branches, each with its own `let`, use monotonic slots.
+#[test]
+fn if_branches_are_statement_blocks() {
+    let src = "fn f(a: Word) -> Word { if a > 0 { let x = a; x } else { let y = a; y } }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+}
+
+// An `if` without `else` synthesizes a Unit else branch.
+#[test]
+fn an_if_without_else_synthesizes_a_unit() {
+    let src = "fn f(a: Word) -> Word { if a > 0 { a } }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    // cond; a [then]; Unit [synth else]; If.
+    assert_eq!(
+        got.funcs[0].3,
+        vec![(2, 0), (1, 0), (3, 9), (2, 0), (20, 0), (4, 0)]
+    );
+}
+
+// A block-form `if` statement followed by a tail is committed as an ExprStmt.
+#[test]
+fn a_block_form_if_statement_is_an_expr_stmt() {
+    let src = "fn f(a: Word) -> Word { if a > 0 { a } else { a } a }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    // cond, then, else, If [the statement value]; a [tail]; ExprStmt.
+    assert_eq!(
+        got.funcs[0].3,
+        vec![
+            (2, 0),
+            (1, 0),
+            (3, 9),
+            (2, 0),
+            (2, 0),
+            (4, 0),
+            (2, 0),
+            (21, 0)
+        ]
+    );
 }
