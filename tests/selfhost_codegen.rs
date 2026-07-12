@@ -4269,20 +4269,22 @@ const WA_STREAM_POS: usize = 1;
 const WA_RESET_POS: usize = 2;
 const WA_LOCAL_COUNT: usize = 3;
 const WA_VSB: usize = 4;
-const WA_COST: usize = 5;
-const WA_CLASS: usize = 5 + 1024;
-const WA_ARG: usize = 5 + 1024 * 2;
-const WA_GROWTH: usize = 5 + 1024 * 3;
-const WA_SHRINK: usize = 5 + 1024 * 4;
-const WA_HEAP: usize = 5 + 1024 * 5;
-const WA_OPK: usize = 5 + 1024 * 6;
-const WA_SLOT: usize = 5 + 1024 * 7;
-const WA_CVAL: usize = 5 + 1024 * 8;
-const WA_CINT: usize = 5 + 1024 * 9;
-const WA_OUT_WCET: usize = 5 + 1024 * 10;
-const WA_OUT_STACK: usize = 5 + 1024 * 10 + 1;
-const WA_OUT_HEAP: usize = 5 + 1024 * 10 + 2;
-const WA_OUT_REJECT: usize = 5 + 1024 * 10 + 3;
+const WA_ARENA_CAPACITY: usize = 5;
+const WA_COST: usize = 6;
+const WA_CLASS: usize = 6 + 1024;
+const WA_ARG: usize = 6 + 1024 * 2;
+const WA_GROWTH: usize = 6 + 1024 * 3;
+const WA_SHRINK: usize = 6 + 1024 * 4;
+const WA_HEAP: usize = 6 + 1024 * 5;
+const WA_OPK: usize = 6 + 1024 * 6;
+const WA_SLOT: usize = 6 + 1024 * 7;
+const WA_CVAL: usize = 6 + 1024 * 8;
+const WA_CINT: usize = 6 + 1024 * 9;
+const WA_OUT_WCET: usize = 6 + 1024 * 10;
+const WA_OUT_STACK: usize = 6 + 1024 * 10 + 1;
+const WA_OUT_HEAP: usize = 6 + 1024 * 10 + 2;
+const WA_OUT_REJECT: usize = 6 + 1024 * 10 + 3;
+const WA_OUT_VALID: usize = 6 + 1024 * 10 + 4;
 
 fn analyze_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
@@ -4352,11 +4354,16 @@ fn analyze_stack_effect(op: &keleusma::bytecode::Op) -> (i64, i64) {
     }
 }
 
-/// Compute a Stream chunk's per-iteration bounds `(wcet, stack_bytes, heap_bytes, reject)` by
-/// running analyze.kel over its op table. `reject` is true when the stage cannot statically
-/// bound a loop, mirroring the reference's rejection. Uses the empty-resolver shallow form: a
-/// `Call` and a native call contribute their local stack effect only, not the callee body.
-fn analyze_via_kel(chunk: &keleusma::bytecode::Chunk) -> (i64, i64, i64, bool) {
+/// Run analyze.kel over a Stream chunk's op table against `arena_capacity`, returning
+/// `(wcet, stack_bytes, heap_bytes, reject, valid)`. `reject` is true when the stage cannot
+/// statically bound a loop (mirroring the reference's rejection); `valid` is the self-hosted
+/// validation verdict -- a provable finite bound whose stack-plus-heap budget fits the
+/// capacity. Uses the empty-resolver shallow form: a `Call` and a native call contribute
+/// their local stack effect only, not the callee body.
+fn run_analyze_kel(
+    chunk: &keleusma::bytecode::Chunk,
+    arena_capacity: i64,
+) -> (i64, i64, i64, bool, bool) {
     use keleusma::bytecode::Op;
     let sp = chunk
         .ops
@@ -4388,6 +4395,7 @@ fn analyze_via_kel(chunk: &keleusma::bytecode::Chunk) -> (i64, i64, i64, bool) {
         WA_VSB,
         keleusma::bytecode::VALUE_SLOT_SIZE_BYTES as i64,
     );
+    set(&vm, &mut shared, WA_ARENA_CAPACITY, arena_capacity);
     for (i, op) in chunk.ops.iter().enumerate() {
         let (class, arg) = analyze_class(op);
         let (opk, slot, cval, cint) = analyze_opk(op, chunk);
@@ -4421,7 +4429,21 @@ fn analyze_via_kel(chunk: &keleusma::bytecode::Chunk) -> (i64, i64, i64, bool) {
         rd(WA_OUT_STACK),
         rd(WA_OUT_HEAP),
         rd(WA_OUT_REJECT) != 0,
+        rd(WA_OUT_VALID) != 0,
     )
+}
+
+/// The analysis view: the per-iteration bounds `(wcet, stack_bytes, heap_bytes, reject)`. Runs
+/// against an effectively unbounded capacity so the validity verdict never constrains it.
+fn analyze_via_kel(chunk: &keleusma::bytecode::Chunk) -> (i64, i64, i64, bool) {
+    let (wcet, stack, heap, reject, _valid) = run_analyze_kel(chunk, i64::MAX);
+    (wcet, stack, heap, reject)
+}
+
+/// The self-hosted validator verdict for a Stream chunk against `arena_capacity`: true iff
+/// analyze.kel proves a finite per-iteration bound whose stack-plus-heap budget fits.
+fn validate_via_kel(chunk: &keleusma::bytecode::Chunk, arena_capacity: i64) -> bool {
+    run_analyze_kel(chunk, arena_capacity).4
 }
 
 // analyze.kel reproduces both `wcet_stream_iteration` and `wcmu_stream_iteration` exactly for
@@ -4661,4 +4683,82 @@ loop main(resume: Word) -> Word {
         );
         assert_eq!(heap, ref_heap as i64, "wcmu heap with native n={n_args:#x}");
     }
+}
+
+// The self-hosted validator: analyze.kel's `out_valid` verdict for a Stream chunk against an
+// arena capacity must agree with the reference `verify_resource_bounds`, which admits a
+// module iff every Stream chunk has a provable finite bound whose stack-plus-heap budget
+// fits. The programs are call-free (no `Op::Call`), so the shallow per-iteration WCMU the
+// validator uses equals the transitive `module_wcmu` the reference uses, and the two verdicts
+// must match exactly -- at capacities just below, at, and above the budget, and for an
+// inextractable (mutated) loop that both must reject.
+#[test]
+fn validate_via_kel_matches_verify_resource_bounds() {
+    use keleusma::bytecode::{BlockType, Op};
+    // Call-free single-Stream programs: one straight-line, one with a bounded loop.
+    let srcs: &[&str] = &[
+        r#"require word >= 32;
+private data d { s: Word }
+shared data io { out: Word }
+loop main(resume: Word) -> Word {
+    d.s = 5;
+    io.out = d.s;
+    yield d.s
+}"#,
+        r#"require word >= 32;
+private data d { s: Word }
+shared data io { out: Word, arr: [Word; 16] }
+loop main(resume: Word) -> Word {
+    d.s = 0;
+    for i in 0..10 limit 16 { d.s = d.s + io.arr[i]; }
+    io.out = d.s;
+    yield d.s
+}"#,
+    ];
+    for src in srcs {
+        let m = compile_src(src);
+        let main = m
+            .chunks
+            .iter()
+            .find(|c| c.block_type == BlockType::Stream)
+            .expect("stream chunk");
+        assert!(
+            !main.ops.iter().any(|o| matches!(o, Op::Call(..))),
+            "test program must be call-free for the shallow validator to match the reference"
+        );
+        let (stack, heap) = keleusma::verify::wcmu_stream_iteration(main).expect("wcmu");
+        let total = (stack + heap) as i64;
+        // Below, at, and above the exact budget.
+        for cap in [total - 1, total, total + 4096] {
+            let self_valid = validate_via_kel(main, cap);
+            let ref_valid = keleusma::verify::verify_resource_bounds(&m, cap as usize).is_ok();
+            assert_eq!(self_valid, ref_valid, "validity at cap={cap} for `{src}`");
+        }
+    }
+
+    // An inextractable loop: both the validator and the reference must reject it (invalid)
+    // regardless of capacity.
+    let src = srcs[1];
+    let m = compile_src(src);
+    let mut broken = m.clone();
+    let ci = broken
+        .chunks
+        .iter()
+        .position(|c| c.block_type == BlockType::Stream)
+        .unwrap();
+    let loop_ip = broken.chunks[ci]
+        .ops
+        .iter()
+        .position(|o| matches!(o, Op::Loop(_)))
+        .unwrap();
+    broken.chunks[ci].ops[loop_ip + 1] = Op::Const(0);
+    let big = 1i64 << 30;
+    assert!(
+        !validate_via_kel(&broken.chunks[ci], big),
+        "validator must reject an inextractable loop"
+    );
+    assert!(
+        keleusma::verify::verify_resource_bounds(&broken, big as usize).is_err(),
+        "reference must reject an inextractable loop"
+    );
 }
