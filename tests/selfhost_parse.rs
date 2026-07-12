@@ -1758,3 +1758,27 @@ fn parse_kel_parses_its_own_enums_and_operator_functions() {
     assert_eq!(got, reference(src, &names));
     assert_eq!(got.funcs.len(), 3); // prec_of, opcode_of, emit_op
 }
+
+// A data block wider than the field table's seed capacity. parse.kel accumulates one
+// field-layout entry per data-block field into fixed arrays scanned by fixed-range loops;
+// a whole stage file declares far more fields than the original 64-entry sizing, the same
+// fixed-capacity class the enum vocabulary hit. This builds a block of 70 scalar fields and
+// reads the last, which overflows a 64-entry table at accumulation and traps a 64-cap scan
+// at resolution. It must resolve the last field to its slot exactly as the reference does.
+#[test]
+fn a_data_block_wider_than_the_field_table_seed_capacity() {
+    const FIELDS: usize = 70;
+    let mut block = String::from("shared data wide { ");
+    for i in 0..FIELDS {
+        if i > 0 {
+            block.push_str(", ");
+        }
+        block.push_str(&format!("f{i}: Word"));
+    }
+    block.push_str(" } ");
+    let src = format!("{block} fn read_last() -> Word {{ wide.f{} }}", FIELDS - 1);
+    let mut names = Vec::new();
+    let got = run_parse(&src, &mut names);
+    assert_eq!(got, reference(&src, &names));
+    assert_eq!(got.funcs[0].3, vec![(11, (FIELDS - 1) as i64)]); // DataRead of slot 69
+}
