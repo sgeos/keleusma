@@ -1,9 +1,9 @@
-//! Merged parser stage (`compiler/kel/parse.kel`), increment 8: one streaming `loop` that
-//! parses a whole top-level function declaration and the `data` block declaration,
-//! accumulating the field-layout table so the body's scalar and indexed `data.field`
-//! reads (DataRead, IndexRead) and assignments (DataAssignIn, IndexStore/IndexAssignIn)
-//! resolve to their flat-segment slots with no host-supplied table, validated against the
-//! compiler's `data_layout.slots`.
+//! Merged parser stage (`compiler/kel/parse.kel`), increment 9: one streaming `loop` that
+//! parses a whole top-level function declaration, the `data` block declaration, and the
+//! body's full expression, statement, control-flow, data-access, and now function-call
+//! grammar. Data fields resolve against the accumulated field-layout table; a call `f(..)`
+//! resolves its callee against a host-supplied chunk-name table (resolved-reference data
+//! that stays host-supplied, since a forward call cannot resolve in a single pass).
 //!
 //! A throwaway adapter maps the reference tokenizer into the stage's unified `(kind,
 //! value)` token stream. The stage emits header records `dkind + val*64` (1/2/3 START of a
@@ -41,6 +41,8 @@ const LEN: usize = 0;
 const KINDS: usize = 1;
 const VALS: usize = 1 + 2048;
 const LIMIT_ID: usize = 1 + 2048 + 2048;
+const CHUNK_COUNT: usize = 1 + 2048 + 2048 + 1;
+const CHUNKS: usize = 1 + 2048 + 2048 + 2;
 
 /// Map the reference token stream into the stage's unified `(kind, value)` pairs. The
 /// operator codes are body.kel's (`Plus` 21 upward); the header keywords and punctuation
@@ -188,6 +190,28 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
         .unwrap_or(-1);
     vm.set_shared(&mut shared, LIMIT_ID, Value::Int(limit_id))
         .expect("limit_id");
+    // The chunk-name table: the function names in declaration order, interned to the same
+    // ids the token stream uses. A call resolves its callee against this host-supplied
+    // table (resolved-reference data, per the merge plan; forward calls cannot resolve in
+    // a single pass, so it stays host-supplied).
+    let program = parse(&tokenize(src).expect("lex")).expect("parse");
+    let chunk_ids: Vec<i64> = program
+        .functions
+        .iter()
+        .map(|f| {
+            names
+                .iter()
+                .position(|n| n == &f.name)
+                .unwrap_or_else(|| panic!("function name {} not interned", f.name))
+                as i64
+        })
+        .collect();
+    vm.set_shared(&mut shared, CHUNK_COUNT, Value::Int(chunk_ids.len() as i64))
+        .expect("chunk_count");
+    for (i, &id) in chunk_ids.iter().enumerate() {
+        vm.set_shared(&mut shared, CHUNKS + i, Value::Int(id))
+            .expect("chunk");
+    }
     for (i, (&k, &v)) in kinds.iter().zip(vals.iter()).enumerate() {
         vm.set_shared(&mut shared, KINDS + i, Value::Int(k))
             .expect("kind");
@@ -266,6 +290,7 @@ fn flatten(
     next_slot: &mut i64,
     forlim: &mut i64,
     data_slots: &[String],
+    chunk_names: &[String],
     out: &mut Vec<(i64, i64)>,
 ) {
     match e {
@@ -287,8 +312,16 @@ fn flatten(
         Expr::BinOp {
             op, left, right, ..
         } => {
-            flatten(left, scope, next_slot, forlim, data_slots, out);
-            flatten(right, scope, next_slot, forlim, data_slots, out);
+            flatten(left, scope, next_slot, forlim, data_slots, chunk_names, out);
+            flatten(
+                right,
+                scope,
+                next_slot,
+                forlim,
+                data_slots,
+                chunk_names,
+                out,
+            );
             let (kind, code) = match op {
                 BinOp::Add => (3, 1),
                 BinOp::Mul => (3, 2),
@@ -311,7 +344,15 @@ fn flatten(
             out.push((kind, code));
         }
         Expr::UnaryOp { op, operand, .. } => {
-            flatten(operand, scope, next_slot, forlim, data_slots, out);
+            flatten(
+                operand,
+                scope,
+                next_slot,
+                forlim,
+                data_slots,
+                chunk_names,
+                out,
+            );
             let kind = match op {
                 UnaryOp::Not => 6,
                 UnaryOp::Neg => 10,
@@ -328,17 +369,43 @@ fn flatten(
             // Postorder: the condition, the then branch (a folded block), the else branch
             // (a folded block, or a synthesized Unit when absent), then the If node
             // (kind 4). Slots are monotonic across branches, so `next_slot` is threaded.
-            flatten(condition, scope, next_slot, forlim, data_slots, out);
-            flatten_block(then_block, scope, next_slot, forlim, data_slots, out);
+            flatten(
+                condition,
+                scope,
+                next_slot,
+                forlim,
+                data_slots,
+                chunk_names,
+                out,
+            );
+            flatten_block(
+                then_block,
+                scope,
+                next_slot,
+                forlim,
+                data_slots,
+                chunk_names,
+                out,
+            );
             match else_block {
-                Some(eb) => flatten_block(eb, scope, next_slot, forlim, data_slots, out),
+                Some(eb) => {
+                    flatten_block(eb, scope, next_slot, forlim, data_slots, chunk_names, out)
+                }
                 None => out.push((20, 0)), // synthesized empty else: a Unit
             }
             out.push((4, 0));
         }
         Expr::Yield { value, .. } => {
             // `yield e` is a unary YieldExpr (kind 24) over its operand.
-            flatten(value, scope, next_slot, forlim, data_slots, out);
+            flatten(
+                value,
+                scope,
+                next_slot,
+                forlim,
+                data_slots,
+                chunk_names,
+                out,
+            );
             out.push((24, 0));
         }
         Expr::FieldAccess { object, field, .. } => {
@@ -372,7 +439,15 @@ fn flatten(
                 other => panic!("a data index object must be a field access, got {other:?}"),
             };
             let (base, len) = array_base_len(data_slots, data, field);
-            flatten(index, scope, next_slot, forlim, data_slots, out);
+            flatten(
+                index,
+                scope,
+                next_slot,
+                forlim,
+                data_slots,
+                chunk_names,
+                out,
+            );
             out.push((13, base + len * 65536));
         }
         Expr::Match {
@@ -382,7 +457,15 @@ fn flatten(
             // result, then the trailing wildcard's result, then a MatchBuild (kind 34)
             // packing the scrutinee temp slot and the literal-arm count as
             // `temp * 1024 + count`. The temp slot is reserved right after the scrutinee.
-            flatten(scrutinee, scope, next_slot, forlim, data_slots, out);
+            flatten(
+                scrutinee,
+                scope,
+                next_slot,
+                forlim,
+                data_slots,
+                chunk_names,
+                out,
+            );
             let temp = *next_slot;
             *next_slot += 1;
             let mut lit_count = 0i64;
@@ -394,16 +477,47 @@ fn flatten(
                 match &arm.pattern {
                     Pattern::Literal(Literal::Int(v), _) => {
                         out.push((1, *v));
-                        flatten(&arm.expr, scope, next_slot, forlim, data_slots, out);
+                        flatten(
+                            &arm.expr,
+                            scope,
+                            next_slot,
+                            forlim,
+                            data_slots,
+                            chunk_names,
+                            out,
+                        );
                         lit_count += 1;
                     }
                     Pattern::Wildcard(_) => {
-                        flatten(&arm.expr, scope, next_slot, forlim, data_slots, out);
+                        flatten(
+                            &arm.expr,
+                            scope,
+                            next_slot,
+                            forlim,
+                            data_slots,
+                            chunk_names,
+                            out,
+                        );
                     }
                     other => panic!("increment 5 handles integer and wildcard arms, got {other:?}"),
                 }
             }
             out.push((34, temp * 1024 + lit_count));
+        }
+        Expr::Call { name, args, .. } => {
+            // A call flattens its arguments left to right, then a Call (kind 7) packing the
+            // callee chunk index and the argument count as chunk + count*256. The chunk is
+            // the callee's position in the function declaration order (the last, matching
+            // the stage's scan, so a repeated name resolves identically).
+            for arg in args {
+                flatten(arg, scope, next_slot, forlim, data_slots, chunk_names, out);
+            }
+            let chunk = chunk_names
+                .iter()
+                .rposition(|n| n == name)
+                .unwrap_or_else(|| panic!("no chunk named `{name}`"))
+                as i64;
+            out.push((7, chunk + args.len() as i64 * 256));
         }
         other => panic!("increment does not handle expression {other:?}"),
     }
@@ -421,6 +535,7 @@ fn flatten_block(
     next_slot: &mut i64,
     forlim: &mut i64,
     data_slots: &[String],
+    chunk_names: &[String],
     out: &mut Vec<(i64, i64)>,
 ) {
     let mut local = scope.to_vec();
@@ -428,7 +543,15 @@ fn flatten_block(
     for st in &block.stmts {
         match st {
             Stmt::Let(l) => {
-                flatten(&l.value, &local, next_slot, forlim, data_slots, out);
+                flatten(
+                    &l.value,
+                    &local,
+                    next_slot,
+                    forlim,
+                    data_slots,
+                    chunk_names,
+                    out,
+                );
                 let name = match &l.pattern {
                     Pattern::Variable(n, _) => n.clone(),
                     other => panic!("test uses simple let patterns only, got {other:?}"),
@@ -439,7 +562,7 @@ fn flatten_block(
                 stmt_nodes.push((5, slot)); // LetIn
             }
             Stmt::Expr(e) => {
-                flatten(e, &local, next_slot, forlim, data_slots, out);
+                flatten(e, &local, next_slot, forlim, data_slots, chunk_names, out);
                 stmt_nodes.push((21, 0)); // ExprStmt
             }
             Stmt::DataFieldAssign {
@@ -450,7 +573,15 @@ fn flatten_block(
             } => {
                 // `d.f = e` — the value, then a DataAssignIn (kind 12) carrying the field's
                 // slot, folded in like a LetIn.
-                flatten(value, &local, next_slot, forlim, data_slots, out);
+                flatten(
+                    value,
+                    &local,
+                    next_slot,
+                    forlim,
+                    data_slots,
+                    chunk_names,
+                    out,
+                );
                 let name = format!("{data_name}.{field}");
                 let slot = data_slots
                     .iter()
@@ -469,8 +600,24 @@ fn flatten_block(
                 // `d.f[i] = e` — the index, the value, an IndexStore signal (kind 36), then
                 // an IndexAssignIn (kind 14, arg = base + len*65536) folded around the block.
                 assert_eq!(indices.len(), 1, "single-dimension array assignment only");
-                flatten(&indices[0], &local, next_slot, forlim, data_slots, out);
-                flatten(value, &local, next_slot, forlim, data_slots, out);
+                flatten(
+                    &indices[0],
+                    &local,
+                    next_slot,
+                    forlim,
+                    data_slots,
+                    chunk_names,
+                    out,
+                );
+                flatten(
+                    value,
+                    &local,
+                    next_slot,
+                    forlim,
+                    data_slots,
+                    chunk_names,
+                    out,
+                );
                 let (base, len) = array_base_len(data_slots, data_name, field);
                 out.push((36, 0));
                 stmt_nodes.push((14, base + len * 65536));
@@ -492,10 +639,18 @@ fn flatten_block(
                     }) => *n,
                     other => panic!("the stage requires a literal `limit`, got {other:?}"),
                 };
-                flatten(low, &local, next_slot, forlim, data_slots, out);
+                flatten(low, &local, next_slot, forlim, data_slots, chunk_names, out);
                 let vslot = *next_slot;
                 *next_slot += 1;
-                flatten(high, &local, next_slot, forlim, data_slots, out);
+                flatten(
+                    high,
+                    &local,
+                    next_slot,
+                    forlim,
+                    data_slots,
+                    chunk_names,
+                    out,
+                );
                 let end_slot = *next_slot;
                 *next_slot += 1;
                 let ctr = *next_slot;
@@ -506,7 +661,15 @@ fn flatten_block(
                 *next_slot += 1;
                 let mut body_scope = local.clone();
                 body_scope.push((fs.var.clone(), vslot));
-                flatten_block(&fs.body, &body_scope, next_slot, forlim, data_slots, out);
+                flatten_block(
+                    &fs.body,
+                    &body_scope,
+                    next_slot,
+                    forlim,
+                    data_slots,
+                    chunk_names,
+                    out,
+                );
                 out.push((1, cap));
                 out.push((1, 0));
                 out.push((1, 1));
@@ -526,7 +689,15 @@ fn flatten_block(
         }
     }
     match &block.tail_expr {
-        Some(tail) => flatten(tail, &local, next_slot, forlim, data_slots, out),
+        Some(tail) => flatten(
+            tail,
+            &local,
+            next_slot,
+            forlim,
+            data_slots,
+            chunk_names,
+            out,
+        ),
         None => out.push((20, 0)), // statement-only block: implicit Unit
     }
     for (kind, arg) in stmt_nodes.iter().rev() {
@@ -545,6 +716,7 @@ fn reference(src: &str, names: &[String]) -> Parsed {
     };
     let program = parse(&tokenize(src).expect("lex")).expect("parse");
     let data_slots = data_slot_names(&program);
+    let chunk_names: Vec<String> = program.functions.iter().map(|f| f.name.clone()).collect();
     let mut funcs = Vec::new();
     for f in &program.functions {
         let cat = match f.category {
@@ -576,6 +748,7 @@ fn reference(src: &str, names: &[String]) -> Parsed {
             &mut next_slot,
             &mut forlim,
             &data_slots,
+            &chunk_names,
             &mut body,
         );
         funcs.push((cat, id(&f.name), params, body));
@@ -1001,6 +1174,41 @@ fn an_indexed_data_assignment_parses() {
 #[test]
 fn a_data_read_may_index_another() {
     let src = "shared data d { xs: [Word; 4], j: Word } fn f() -> Word { d.xs[d.j] }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+}
+
+// A call with two arguments is a Call node packing the callee chunk index and arg count.
+#[test]
+fn a_call_with_arguments_parses() {
+    let src = "fn g(a: Word, b: Word) -> Word { a } fn f(n: Word) -> Word { g(n, n) }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    // args n(0), n(0); Call(chunk 0 + count 2*256).
+    assert_eq!(got.funcs[1].3, vec![(2, 0), (2, 0), (7, 2 * 256)]);
+}
+
+// A zero-argument call and an argument that is an expression.
+#[test]
+fn calls_with_zero_and_expression_arguments() {
+    let src = "fn z() -> Word { 0 } fn h(a: Word) -> Word { a } \
+        fn f(n: Word) -> Word { z() + h(n + 1) }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    // z() [Call chunk 0, 0 args]; n, 1, Add [h's arg]; h(...) [Call chunk 1, 1 arg]; Add.
+    assert_eq!(
+        got.funcs[2].3,
+        vec![(7, 0), (2, 0), (1, 1), (3, 1), (7, 1 + 256), (3, 1)]
+    );
+}
+
+// A nested call: an argument is itself a call.
+#[test]
+fn a_nested_call_parses() {
+    let src = "fn g(a: Word) -> Word { a } fn f(n: Word) -> Word { g(g(n)) }";
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
