@@ -179,7 +179,8 @@ fn kw4(start: Word) -> Word {
     if a == 101 andalso b == 110 andalso c == 117 andalso d == 109 { 53 } else {  // enum
     if a == 98 andalso b == 97 andalso c == 110 andalso d == 100 { 33 } else {    // band
     if a == 98 andalso b == 120 andalso c == 111 andalso d == 114 { 35 } else {   // bxor
-    0 - 1 } } } } } }
+    if a == 119 andalso b == 104 andalso c == 101 andalso d == 110 { 4 } else {   // when
+    0 - 1 } } } } } } }
 }
 
 fn kw5(start: Word) -> Word {
