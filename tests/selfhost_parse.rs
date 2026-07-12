@@ -1,8 +1,8 @@
-//! Merged parser stage (`compiler/kel/parse.kel`), increment 11: one streaming `loop` that
-//! parses a whole top-level declaration — a function (its header and full body), a `data`
-//! block, an `enum`, or a `use` native import — in a single pass. This covers every
-//! declaration form and body construct the compiler stages use. Data fields and enums
-//! resolve by strategy-B accumulation; calls against a host-supplied chunk-name table.
+//! Merged parser stage (`compiler/kel/parse.kel`): one streaming `loop` that parses a
+//! whole top-level declaration — a function (its header and full body), a `data` block, an
+//! `enum`, a `use` native import, or a `require` machine directive — in a single pass. This
+//! covers every declaration form and body construct the compiler stages use. Data fields
+//! and enums resolve by strategy-B accumulation; calls against a host-supplied chunk table.
 //!
 //! A throwaway adapter maps the reference tokenizer into the stage's unified `(kind,
 //! value)` token stream. The stage emits header records `dkind + val*64` (1/2/3 START of a
@@ -42,6 +42,7 @@ const VALS: usize = 1 + 2048;
 const LIMIT_ID: usize = 1 + 2048 + 2048;
 const CHUNK_COUNT: usize = 1 + 2048 + 2048 + 1;
 const CHUNKS: usize = 1 + 2048 + 2048 + 2;
+const REQUIRE_ID: usize = 1 + 2048 + 2048 + 2 + 256;
 
 /// Map the reference token stream into the stage's unified `(kind, value)` pairs. The
 /// operator codes are body.kel's (`Plus` 21 upward); the header keywords and punctuation
@@ -211,6 +212,15 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
         .unwrap_or(-1);
     vm.set_shared(&mut shared, LIMIT_ID, Value::Int(limit_id))
         .expect("limit_id");
+    // `require` is a lowercase identifier, not a keyword; the stage recognizes the machine
+    // directive by comparing an identifier to the interned id of "require".
+    let require_id = names
+        .iter()
+        .position(|n| n == "require")
+        .map(|i| i as i64)
+        .unwrap_or(-1);
+    vm.set_shared(&mut shared, REQUIRE_ID, Value::Int(require_id))
+        .expect("require_id");
     // The chunk-name table: the function names in declaration order, interned to the same
     // ids the token stream uses. A call resolves its callee against this host-supplied
     // table (resolved-reference data, per the merge plan; forward calls cannot resolve in
@@ -1442,4 +1452,16 @@ fn a_use_import_at_end_of_input_is_closed() {
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
     assert_eq!(got.funcs.len(), 0);
+}
+
+// A `require word >= N;` machine directive at the top of a program is skipped, and the
+// declarations after it parse. Every compiler stage source begins with such a directive.
+#[test]
+fn a_require_directive_is_skipped() {
+    let src = "require word >= 32; fn f(n: Word) -> Word { n + n }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    assert_eq!(got.funcs.len(), 1);
+    assert_eq!(got.funcs[0].3, vec![(2, 0), (2, 0), (3, 1)]);
 }

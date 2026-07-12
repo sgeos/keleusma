@@ -19,6 +19,10 @@ Name resolution is by strategy-B accumulation for the field-layout and enum tabl
 a host-supplied chunk table (the one remaining resolved-reference crutch). The compiler
 scaffold's parser stage (`compiler/src/main.rs` STAGES) points at `parse.kel`.
 
+Beyond the merge, the stage also skips the `require word >= N;` machine directive every
+stage source begins with (recognized by the interned id of "require", like the `limit`
+identifier), a first step toward self-parsing the stages' own source.
+
 **Deferred: retirement of the originals (former increment 11 cleanup).** `parser.kel`,
 `body.kel`, and their harnesses (`selfhost_parser.rs`, `selfhost_body.rs`, 14 + 90 tests)
 are retained rather than deleted. `parse.kel` supersedes them functionally, but its 41

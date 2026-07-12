@@ -26,6 +26,7 @@ shared data toks {
     limit_id: Word,
     chunk_count: Word,
     chunks: [Word; 256],
+    require_id: Word,
 }
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
@@ -1415,6 +1416,13 @@ fn header_step(k: Word, v: Word) -> Word {
             ps.mode = 8;
             10
         } else {
+        if k == 1 andalso v == toks.require_id {
+            // A `require` machine-property directive (`require word >= N;`), a lowercase
+            // identifier rather than a keyword. Skip it to its `;`; it constrains
+            // verification, not the parsed declarations.
+            ps.mode = 20;
+            0
+        } else {
             if k == 5 {
                 ps.dkind = 2;
             } else {
@@ -1425,7 +1433,7 @@ fn header_step(k: Word, v: Word) -> Word {
             } }
             ps.mode = 1;
             0
-        } } } } } }
+        } } } } } } }
     } else {
     if ps.mode == 1 {
         if k == 1 {
@@ -1452,8 +1460,15 @@ fn header_step(k: Word, v: Word) -> Word {
     if ps.mode == 8 {
         header_use(k, v)
     } else {
+    if ps.mode == 20 {
+        // A `require` directive skip: consume to the `;`.
+        if k == 39 {
+            ps.mode = 0;
+        }
+        0
+    } else {
         header_enum(k, v)
-    } } } } }
+    } } } } } }
 }
 
 // The `use path::name` native import: emit a UPATH per `::`-separated segment; a non-`::`
