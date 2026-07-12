@@ -104,6 +104,7 @@ enum Node {
     ExprStmt = 21,
     ForLimit = 23,
     YieldExpr = 24,
+    Cast = 26,
     SlotRecord = 32,
     ForBuild = 33,
     MatchBuild = 34,
@@ -310,6 +311,7 @@ private data da {
     store_arg: Word,
     cda_phase: Word,
     cda_block: Word,
+    as_skip: Word,
 }
 
 // A function call context stack: `call_chunk`/`call_count` per pending call (the callee's
@@ -1150,11 +1152,26 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         // An open `Name::Variant() as Word` enum cast consumes its remaining tokens.
         step_enum(k, v)
     } else {
+    if da.as_skip == 1 {
+        // The target type name after a plain `as` cast; skip it. The Cast node was
+        // already emitted when the `as` token was seen.
+        da.as_skip = 0;
+        0
+    } else {
+    if k == Tok::As() as Word {
+        // A plain `<expr> as Type` cast (not an enum cast, which step_enum consumes):
+        // the operand is on the host stack, so emit a Cast node (kind 26) wrapping it and
+        // arm the skip of the target type name. The stages only cast `Byte as Word`, which
+        // codegen lowers to a single ByteToWord op.
+        da.as_skip = 1;
+        ops.expect_operand = 0;
+        Node::Cast() as Word
+    } else {
     if forst.for_sp > 0 andalso forst.for_phase[forst.for_sp - 1] >= 1 andalso forst.for_phase[forst.for_sp - 1] <= 6 {
         step_forheader(k, v)
     } else {
         step_normal(k, v)
-    } } } } } } } } } }
+    } } } } } } } } } } } }
 }
 
 // Dispatch a body token: the else-less `if` synthesis and the block-form-statement commit
@@ -1478,6 +1495,7 @@ fn arm_body() -> Word {
     mat.mpat_phase = 0;
     da.da_phase = 0;
     da.cda_phase = 0;
+    da.as_skip = 0;
     da.idx_sp = 0;
     da.post_index = 0;
     da.iclosing = 0;

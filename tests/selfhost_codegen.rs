@@ -252,6 +252,18 @@ fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &
             });
             (ctx.nodes.len() - 1) as i64
         }
+        Expr::Cast { expr, .. } => {
+            // A `Byte as Word` widening: Cast node (kind 26), operand in lhs. The stages
+            // only cast a Byte data-read to Word, which lowers to a single ByteToWord op.
+            let operand = flatten(expr, scope, next_slot, ctx);
+            ctx.nodes.push(Node {
+                kind: 26,
+                arg: 0,
+                lhs: operand,
+                rhs: 0,
+            });
+            (ctx.nodes.len() - 1) as i64
+        }
         Expr::Call { name, args, .. } => {
             let chunk = ctx
                 .chunk_names
@@ -734,6 +746,7 @@ fn decode_op(w: i64) -> Op {
         42 => Op::Yield,
         43 => Op::Stream,
         44 => Op::Reset,
+        45 => Op::ByteToWord,
         other => panic!("unknown op tag {other} (word {w})"),
     }
 }
@@ -1427,7 +1440,7 @@ fn self_compile_codegen_atomic_functions() {
     // that stops self-compiling, or one that disappears) fails the test rather than
     // passing unnoticed once attention moves to the parser. If codegen.kel gains or
     // loses a function deliberately, update EXPECTED_SELF_COMPILE below.
-    const EXPECTED_SELF_COMPILE: usize = 34;
+    const EXPECTED_SELF_COMPILE: usize = 35;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -1825,7 +1838,7 @@ fn reconstruct_into(
                 });
                 (nodes.len() - 1) as i64
             }
-            6 | 10 | 13 | 24 => {
+            6 | 10 | 13 | 24 | 26 => {
                 let c = stack.pop().expect("unary operand");
                 nodes.push(Node {
                     kind,
@@ -2894,6 +2907,59 @@ fn parse_into_codegen_nested_for_matches_the_reference() {
             "private data d { s: Word } fn main(n: Word) -> Word { d.s = 1; for i in 0..n limit 4 { for j in 0..n limit 4 { d.s = d.s + 1; } d.s = d.s + 10; } d.s }",
             2,
             25,
+        ),
+    ];
+    for &(src, input, expected) in cases {
+        let (records, param_count, category) = parse_function_records(src);
+        let body = reconstruct_body(&records, category);
+        let (emitted, pool, local_count) = run_codegen(&body, param_count);
+        let reference = compile_src(src);
+        let idx = reference
+            .chunks
+            .iter()
+            .position(|c| c.name == "main")
+            .unwrap();
+        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
+        assert_eq!(
+            local_count, reference.chunks[idx].local_count as i64,
+            "local_count for `{src}`"
+        );
+        let mut built = compile_src(src);
+        built.chunks[idx].ops = emitted;
+        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].local_count = local_count as u16;
+        let need = required_persistent_capacity_for(&built);
+        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+        arena.resize_persistent(need).expect("resize");
+        let mut vm = Vm::new(built, &arena).expect("verify built");
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        match vm
+            .call_with_shared(&mut shared, &[Value::Int(input)])
+            .expect("call")
+        {
+            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
+            other => panic!("unexpected result for `{src}`: {other:?}"),
+        }
+    }
+}
+
+// The bridge over a `Byte as Word` cast, the last construct blocking lexer.kel: a Byte
+// data-read widened to Word lowers to a single ByteToWord op. parse.kel emits a Cast node
+// (26) on `as`, codegen.kel emits ByteToWord, and both match the Rust compiler.
+#[test]
+fn parse_into_codegen_byte_cast_matches_the_reference() {
+    let cases: &[(&str, i64, i64)] = &[
+        // a Byte element read, widened and used in arithmetic (the peek_at shape).
+        (
+            "shared data d { bs: [Byte; 8], n: Word } fn main(p: Word) -> Word { d.n = p; d.bs[0] as Word + 1 }",
+            0,
+            1,
+        ),
+        // a runtime index, and the cast under a comparison.
+        (
+            "shared data d { bs: [Byte; 8], n: Word } fn main(p: Word) -> Word { d.n = p; if d.bs[p] as Word < 5 { 1 } else { 0 } }",
+            0,
+            1,
         ),
     ];
     for &(src, input, expected) in cases {
