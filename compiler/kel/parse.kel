@@ -220,19 +220,26 @@ private data branch {
 // `for_ctr`/`for_cap_slot`/`for_oc` the ForLimit's four reserved slots; `for_cap` the
 // literal cap; `forlimit_count` the emitted-loop count; `for_emit`/`for_emit_i` the
 // parts-emission sub-step; `for_stmt_start` the body's statement baseline.
+// The `for .. limit` context is a stack (`for_sp` deep), so a loop nested in another
+// loop's body does not overwrite the enclosing loop's state. The per-loop fields (phase,
+// variable, the five frame slots, the literal cap, and the body's statement start) are
+// stacked; `forlimit_count` is a program-order counter and the emission cursor
+// (`for_emit`/`for_emit_i`) is single because a nested loop emits its parts fully before
+// the enclosing loop's body closes, so the two emissions never overlap.
 private data forst {
-    for_phase: Word,
-    for_var: Word,
-    for_vslot: Word,
-    for_end_slot: Word,
-    for_ctr: Word,
-    for_cap_slot: Word,
-    for_oc: Word,
-    for_cap: Word,
+    for_phase: [Word; 8],
+    for_var: [Word; 8],
+    for_vslot: [Word; 8],
+    for_end_slot: [Word; 8],
+    for_ctr: [Word; 8],
+    for_cap_slot: [Word; 8],
+    for_oc: [Word; 8],
+    for_cap: [Word; 8],
+    for_stmt_start: [Word; 8],
+    for_sp: Word,
     forlimit_count: Word,
     for_emit: Word,
     for_emit_i: Word,
-    for_stmt_start: Word,
 }
 
 // The `match scrut { arms }` context stack: `match_phase` per pending match (1 the
@@ -720,7 +727,9 @@ fn step_cdraining() -> Word {
 // An operator or statement token.
 fn step_op(k: Word) -> Word {
     if k == Tok::For() as Word {
-        forst.for_phase = 1;
+        // Push a fresh loop context; a nested loop stacks above the enclosing one.
+        forst.for_phase[forst.for_sp] = 1;
+        forst.for_sp = forst.for_sp + 1;
         0
     } else {
     if k == Tok::Let() as Word {
@@ -812,7 +821,7 @@ fn step_if(k: Word) -> Word {
                 ops.drain_reason = 4;
             }
         } else {
-            if forst.for_phase == 7 {
+            if forst.for_sp > 0 andalso forst.for_phase[forst.for_sp - 1] == 7 {
                 ops.drain_reason = 7;
             } else {
                 ops.drain_reason = 1;
@@ -935,21 +944,22 @@ fn step_match_build() -> Word {
 // reason 6), 5 the literal cap, 6 the opening `{` (which binds the loop variable and marks
 // the body, phase 7). The bounds are ordinary expressions handled by step_normal.
 fn step_forheader(k: Word, v: Word) -> Word {
-    if forst.for_phase == 1 {
+    let fp = forst.for_sp - 1;
+    if forst.for_phase[fp] == 1 {
         if k == Tok::Ident() as Word {
-            forst.for_var = v;
-            forst.for_phase = 2;
+            forst.for_var[fp] = v;
+            forst.for_phase[fp] = 2;
         }
         0
     } else {
-    if forst.for_phase == 2 {
+    if forst.for_phase[fp] == 2 {
         if k == Tok::In() as Word {
-            forst.for_phase = 3;
+            forst.for_phase[fp] = 3;
             ops.expect_operand = 1;
         }
         0
     } else {
-    if forst.for_phase == 3 {
+    if forst.for_phase[fp] == 3 {
         if k == Tok::DotDot() as Word {
             ops.drain_reason = 5;
             ops.draining = 1;
@@ -958,7 +968,7 @@ fn step_forheader(k: Word, v: Word) -> Word {
             step_normal(k, v)
         }
     } else {
-    if forst.for_phase == 4 {
+    if forst.for_phase[fp] == 4 {
         if k == Tok::Ident() as Word andalso v == toks.limit_id {
             ops.drain_reason = 6;
             ops.draining = 1;
@@ -967,19 +977,19 @@ fn step_forheader(k: Word, v: Word) -> Word {
             step_normal(k, v)
         }
     } else {
-    if forst.for_phase == 5 {
+    if forst.for_phase[fp] == 5 {
         if k == Tok::IntLit() as Word {
-            forst.for_cap = v;
-            forst.for_phase = 6;
+            forst.for_cap[fp] = v;
+            forst.for_phase[fp] = 6;
         }
         0
     } else {
         if k == Tok::LBrace() as Word {
-            stmt.let_names[stmt.let_count] = forst.for_var;
-            stmt.scope_slot[stmt.let_count] = forst.for_vslot;
+            stmt.let_names[stmt.let_count] = forst.for_var[fp];
+            stmt.scope_slot[stmt.let_count] = forst.for_vslot[fp];
             stmt.let_count = stmt.let_count + 1;
-            forst.for_phase = 7;
-            forst.for_stmt_start = stmt.stmt_count;
+            forst.for_phase[fp] = 7;
+            forst.for_stmt_start[fp] = stmt.stmt_count;
             stmt.pbase[stmt.pbase_sp] = stmt.stmt_base;
             stmt.pbase_sp = stmt.pbase_sp + 1;
             stmt.stmt_base = stmt.pstmt_sp;
@@ -994,9 +1004,10 @@ fn step_forheader(k: Word, v: Word) -> Word {
 // signal; finally the ForLimit statement (arg = its 12-word limit_parts entry start) is
 // recorded for the enclosing block fold.
 fn step_for_emit() -> Word {
+    let fp = forst.for_sp - 1;
     if forst.for_emit_i == 0 {
         forst.for_emit_i = 1;
-        Node::Literal() as Word + forst.for_cap * 64
+        Node::Literal() as Word + forst.for_cap[fp] * 64
     } else {
     if forst.for_emit_i == 1 {
         forst.for_emit_i = 2;
@@ -1012,34 +1023,36 @@ fn step_for_emit() -> Word {
     } else {
     if forst.for_emit_i == 4 {
         forst.for_emit_i = 5;
-        Node::SlotRecord() as Word + forst.for_vslot * 64
+        Node::SlotRecord() as Word + forst.for_vslot[fp] * 64
     } else {
     if forst.for_emit_i == 5 {
         forst.for_emit_i = 6;
-        Node::SlotRecord() as Word + forst.for_end_slot * 64
+        Node::SlotRecord() as Word + forst.for_end_slot[fp] * 64
     } else {
     if forst.for_emit_i == 6 {
         forst.for_emit_i = 7;
-        Node::SlotRecord() as Word + forst.for_ctr * 64
+        Node::SlotRecord() as Word + forst.for_ctr[fp] * 64
     } else {
     if forst.for_emit_i == 7 {
         forst.for_emit_i = 8;
-        Node::SlotRecord() as Word + forst.for_cap_slot * 64
+        Node::SlotRecord() as Word + forst.for_cap_slot[fp] * 64
     } else {
     if forst.for_emit_i == 8 {
         forst.for_emit_i = 9;
-        Node::SlotRecord() as Word + forst.for_oc * 64
+        Node::SlotRecord() as Word + forst.for_oc[fp] * 64
     } else {
     if forst.for_emit_i == 9 {
         forst.for_emit_i = 10;
         Node::ForBuild() as Word
     } else {
+        // The loop's parts are emitted; record its ForLimit statement, pop the loop
+        // context, and let the enclosing block fold it in.
         stmt.stmt_kind[stmt.stmt_count] = Node::ForLimit() as Word;
         stmt.stmt_arg[stmt.stmt_count] = 12 * forst.forlimit_count;
         stmt.stmt_count = stmt.stmt_count + 1;
         forst.forlimit_count = forst.forlimit_count + 1;
         forst.for_emit = 0;
-        forst.for_phase = 0;
+        forst.for_sp = forst.for_sp - 1;
         ops.expect_operand = 1;
         0
     } } } } } } } } } }
@@ -1137,7 +1150,7 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         // An open `Name::Variant() as Word` enum cast consumes its remaining tokens.
         step_enum(k, v)
     } else {
-    if forst.for_phase >= 1 andalso forst.for_phase <= 6 {
+    if forst.for_sp > 0 andalso forst.for_phase[forst.for_sp - 1] >= 1 andalso forst.for_phase[forst.for_sp - 1] <= 6 {
         step_forheader(k, v)
     } else {
         step_normal(k, v)
@@ -1298,24 +1311,24 @@ fn step_draining() -> Word {
         } else {
         if ops.drain_reason == 5 {
             // The loop's low bound is drained; reserve the loop-variable slot.
-            forst.for_vslot = ps.pcount + stmt.slot_count;
+            forst.for_vslot[forst.for_sp - 1] = ps.pcount + stmt.slot_count;
             stmt.slot_count = stmt.slot_count + 1;
-            forst.for_phase = 4;
+            forst.for_phase[forst.for_sp - 1] = 4;
             ops.draining = 0;
             ops.expect_operand = 1;
             0
         } else {
         if ops.drain_reason == 6 {
             // The high bound is drained; reserve the four anonymous loop slots.
-            forst.for_end_slot = ps.pcount + stmt.slot_count;
+            forst.for_end_slot[forst.for_sp - 1] = ps.pcount + stmt.slot_count;
             stmt.slot_count = stmt.slot_count + 1;
-            forst.for_ctr = ps.pcount + stmt.slot_count;
+            forst.for_ctr[forst.for_sp - 1] = ps.pcount + stmt.slot_count;
             stmt.slot_count = stmt.slot_count + 1;
-            forst.for_cap_slot = ps.pcount + stmt.slot_count;
+            forst.for_cap_slot[forst.for_sp - 1] = ps.pcount + stmt.slot_count;
             stmt.slot_count = stmt.slot_count + 1;
-            forst.for_oc = ps.pcount + stmt.slot_count;
+            forst.for_oc[forst.for_sp - 1] = ps.pcount + stmt.slot_count;
             stmt.slot_count = stmt.slot_count + 1;
-            forst.for_phase = 5;
+            forst.for_phase[forst.for_sp - 1] = 5;
             ops.draining = 0;
             0
         } else {
@@ -1325,7 +1338,7 @@ fn step_draining() -> Word {
             ops.draining = 0;
             stmt.folding = 1;
             stmt.fold_i = stmt.stmt_count;
-            stmt.fold_start = forst.for_stmt_start;
+            stmt.fold_start = forst.for_stmt_start[forst.for_sp - 1];
             stmt.fold_cont = 3;
             0
         } else {
@@ -1456,7 +1469,7 @@ fn arm_body() -> Word {
     stmt.folding = 0;
     stmt.blockform = 0;
     branch.if_sp = 0;
-    forst.for_phase = 0;
+    forst.for_sp = 0;
     forst.for_emit = 0;
     forst.forlimit_count = 0;
     mat.match_sp = 0;
