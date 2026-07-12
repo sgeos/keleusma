@@ -1626,3 +1626,37 @@ fn a_stage_scan_loop_function_parses() {
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
 }
+
+// A whole mini-stage program combining every declaration form and body construct at once:
+// a require directive, a use import, an enum, shared/private/const data blocks, and
+// functions using if/else, a for-limit loop with data access and a call, a when-guarded
+// multiheaded yield reading and writing data, and a match mixing integer and enum arms.
+// The strongest self-parse test: the closest to a real stage source file.
+#[test]
+fn a_whole_mini_stage_program_parses() {
+    let src = "enum Kind { Lo, Hi } \
+        shared data src { buf: [Word; 16], len: Word } \
+        private data st { pos: Word, acc: Word } \
+        const data cfg { cap: Word = 16 } \
+        fn clamp(x: Word) -> Word { if x > 100 { 100 } else { x } } \
+        fn scan(target: Word) -> Word { \
+            st.pos = 0; \
+            st.acc = 0; \
+            for i in 0..src.len limit 16 { \
+                if src.buf[i] == target { st.acc = st.acc + 1; } \
+            } \
+            clamp(st.acc) \
+        } \
+        yield emit(resume: Word) -> Word when st.pos < src.len { \
+            st.pos = st.pos + 1; \
+            yield src.buf[st.pos] \
+        } \
+        yield emit(resume: Word) -> Word { yield 0 } \
+        fn classify(n: Word) -> Word { \
+            match n { 0 => Kind::Lo() as Word, 1 => Kind::Hi() as Word, _ => n } \
+        }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    assert_eq!(got.funcs.len(), 5); // clamp, scan, emit, emit, classify
+}
