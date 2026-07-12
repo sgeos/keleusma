@@ -2846,4 +2846,21 @@ fn self_host_compiles_a_whole_program_byte_identically() {
          loop main(n: Word) -> Word { yield total(n) }",
     );
     assert_self_host_yields(m2, 4, 6); // total(4) = 0+1+2+3 = 6
+
+    // An enum program: enum-variant casts (`Kind::Lo() as Word`), a match over the cast
+    // result, and calls. parse.kel accumulates the enum table and folds each cast to its
+    // discriminant literal, so the whole program self-compiles at module scope.
+    //
+    // Const-data field reads (`cfg.base`, which the reference inlines to the field's
+    // literal) are NOT yet handled: parse.kel skips const blocks, so a const-field read
+    // leaves an unbalanced forest. codegen.kel's own `const data wire` opcode constants
+    // rely on this inlining, so it is the next required feature before a whole stage file
+    // self-compiles.
+    let m3 = assert_self_host_byte_identical(
+        "enum Kind { Lo = 0, Hi = 1 } \
+         fn classify(n: Word) -> Word { if n < 10 { Kind::Lo() as Word } else { Kind::Hi() as Word } } \
+         fn pick(k: Word) -> Word { match k { 0 => 100, _ => 200 } } \
+         loop main(n: Word) -> Word { yield pick(classify(n)) }",
+    );
+    assert_self_host_yields(m3, 5, 100); // classify(5)=Lo=0 -> pick(0)=100
 }
