@@ -3,38 +3,48 @@
 // cycles) and WCMU (worst-case memory usage, stack bytes and heap bytes) of a Stream chunk.
 //
 // The reference verifier computes both by a recursive max traversal of the chunk's
-// structured control flow (`verify.rs::wcet_region` and `wcmu_region`). The two share an
-// identical shape -- straight-line ops accumulate, an `if`/`else` takes the max of its two
-// branches, a bare `if` takes the max of its then-branch and the zero-cost fall-through, a
-// `break`/`trap` ends a path -- differing only in what accumulates: cost for WCET, and the
-// peak operand-stack depth, the running depth delta, and heap bytes for WCMU. Keleusma is
-// total and admits no arbitrary recursion, so this stage reformulates that recursion as one
-// explicit region-frame stack, folding both analyses into a single walk.
+// structured control flow (`verify.rs::wcet_region`/`wcmu_region`), sharing an identical
+// shape and differing only in what accumulates: cost for WCET, and the peak operand-stack
+// depth, running depth delta, and heap bytes for WCMU. Keleusma is total and admits no
+// arbitrary recursion, so this stage reformulates that recursion as one explicit region
+// -frame stack walked by a single bounded work loop, folding both analyses into one pass.
+//
+// Control-flow forms handled: straight-line, `if`/`else`, bare `if`, `break`/`breakif`/
+// `trap`, and `loop`. An `if`/`else` takes the max of its two branches; a bare `if` the max
+// of its then-branch and the zero-cost fall-through. A `break`/`breakif` records the cost,
+// peak, and heap at its point (a `trap` ends a path without recording, since it does not
+// transfer control to the enclosing loop). Break records propagate up the frame stack -- the
+// WCET cost unlifted, the WCMU peak lifted by the depth at each region boundary -- until a
+// `loop` consumes them: a loop multiplies its body cost and heap by the statically extracted
+// iteration count, and folds in the maximum break cost/peak/heap of its body.
+//
+// The iteration count is self-hosted: `extract_bound` recognizes the compiler's canonical
+// for-range loop header (`GetLocal var; GetLocal end; CmpGe; BreakIf`), traces the literal
+// start and end constants (`trace_const`), and confirms the body advances the induction
+// variable by a positive constant exactly once at its tail and never reassigns the
+// induction or bound local (`advances_induction`, the C7 soundness check). A loop whose
+// bound cannot be extracted sets `out_reject`, mirroring the reference's load-time
+// rejection; the WCET/WCMU guarantee is never weakened by a silent under-count. The one
+// bound pattern not yet handled is the for-in-over-literal-array length (`trace_literal_
+// array_length`); such a loop is rejected rather than mis-bounded.
 //
 // Every per-op quantity is the authoritative calibrated value the host marshals in:
-// `Op::cost()` (WCET cycles), `Op::stack_growth()`/`Op::stack_shrink()` (operand-stack
-// slots pushed/popped), and `Op::heap_alloc()` (heap bytes). The stage self-hosts only the
-// control-flow algorithm, not the cost or stack-effect models. A subregion computes its
-// peak and delta relative to a local zero; the parent lifts them by its depth at the branch
-// point, matching `wcmu_subregion`. `Call` reduces to the empty-resolver form (a shallow
-// bound: push one, pop the arguments, no callee body), which its `stack_growth`/`shrink`
-// already encode. This increment covers the loop-free structured forms, exact for a loop
-// -free Stream body; `loop` regions and their iteration-bound extraction are the next
-// increment. The four self-hosted stage bodies are loop-free.
-//
-// The host writes the chunk's op table and the two runtime scalars (`local_count`,
-// `value_slot_bytes`) into `wa`, runs this loop once, and reads back `out_wcet`,
-// `out_stack_bytes`, and `out_heap`, matching `wcet_stream_iteration` and
-// `wcmu_stream_iteration` exactly.
+// `Op::cost()`, `stack_growth()`/`stack_shrink()`, `heap_alloc()`, and the fine-grained
+// opcode kind, slot, and constant value the bound extraction inspects. The stage self-hosts
+// the control-flow algorithm and the bound extraction, not the cost or stack-effect models.
 //
 // The self-hosted compiler is a full-width host tool.
 require word >= 32;
 
-// The one host-facing block (R28 admits a single shared block per program). Per op:
-// `cost` its WCET cycles; `class` its control-flow role (0 plain, 1 If with `arg` the branch
-// target, 2 Else with `arg` the matching EndIf position, 3 EndIf, 4 Loop, 5 EndLoop, 6
-// Break, 7 BreakIf, 8 Trap); `growth`/`shrink` its operand-stack slots pushed/popped; `heap`
-// its heap-allocation bytes. `local_count` and `value_slot_bytes` size the stack bound.
+// The one host-facing block (R28 admits a single shared block per program). Per op: `cost`
+// its WCET cycles; `class` its control-flow role (0 plain, 1 If with `arg` the branch
+// target, 2 Else with `arg` the matching EndIf, 3 EndIf, 4 Loop with `arg` the exit target,
+// 5 EndLoop, 6 Break, 7 BreakIf, 8 Trap); `growth`/`shrink` its operand slots pushed/popped;
+// `heap` its heap-allocation bytes; `opk` a fine opcode kind for bound extraction (1
+// GetLocal, 2 SetLocal, 3 Const, 4 CmpGe, 5 BreakIf, 6 CheckedAdd, 7 PopN, 8 EndLoop, 9
+// Loop, 0 other); `slot` the GetLocal/SetLocal slot; `cval` the Const integer value or PopN
+// count; `cint` 1 if a Const resolves to an integer. `local_count`/`value_slot_bytes` size
+// the stack bound.
 shared data wa {
     op_count: Word,
     stream_pos: Word,
@@ -47,20 +57,26 @@ shared data wa {
     growth: [Word; 1024],
     shrink: [Word; 1024],
     heap: [Word; 1024],
+    opk: [Word; 1024],
+    slot: [Word; 1024],
+    cval: [Word; 1024],
+    cint: [Word; 1024],
     out_wcet: Word,
     out_stack_bytes: Word,
     out_heap: Word,
+    out_reject: Word,
 }
 
 // The region-frame work stack. Each frame is one invocation of the reference's recursion
-// over `[f_ip, f_end)`: `f_cost` its running WCET, `f_peak` its peak operand depth above the
-// region's entry, `f_off` its running depth delta (signed), `f_heap` its accumulated heap,
-// `f_broke` whether the region hit a `break`/`trap` (the reference's `None`). While a frame
-// waits on a child region it sets `f_pa` and records how to fold the child back in: `f_pk` 0
-// bare `if`, 1 `if`/`else`; `f_ps` the `if`/`else` stage (0 awaiting then, 1 awaiting else);
-// `f_pj` the op to resume at; `f_es`/`f_ei` the else-branch start and EndIf position; the
-// `f_pt*` fields the stashed, already-lifted then-branch result. `child_*` hold the result a
-// just-completed frame delivers to its parent.
+// over `[f_ip, f_end)`: `f_cost` its running WCET, `f_peak`/`f_off` its peak depth and
+// running delta, `f_heap` its heap, `f_broke` whether it hit a `break`/`trap`. `f_mb`/`f_hb`
+// /`f_bp`/`f_bh` accumulate the break cost/flag/peak/heap collected in the frame's subtree
+// (consumed by the enclosing loop). While a frame waits on a child it sets `f_pa` and
+// records how to fold it in: `f_pk` 0 bare `if`, 1 `if`/`else`, 2 `loop`; `f_ps` the
+// `if`/`else` stage; `f_pj` the resume op; `f_es`/`f_ei` the else/loop start and end (or
+// loop_ip in `f_es`); the `f_pt*` fields the stashed lifted then-branch result and its break
+// info. `child_*` carry a completed frame's result to its parent. The `trace_*`/`bound_*`/
+// `vsets`/`bad` fields are bound-extraction scratch; `reject` latches an inextractable bound.
 private data an {
     sp: Word,
     f_ip: [Word; 64],
@@ -70,6 +86,10 @@ private data an {
     f_off: [Word; 64],
     f_heap: [Word; 64],
     f_broke: [Word; 64],
+    f_mb: [Word; 64],
+    f_hb: [Word; 64],
+    f_bp: [Word; 64],
+    f_bh: [Word; 64],
     f_pa: [Word; 64],
     f_pk: [Word; 64],
     f_pj: [Word; 64],
@@ -81,11 +101,25 @@ private data an {
     f_ptd: [Word; 64],
     f_pth: [Word; 64],
     f_ptb: [Word; 64],
+    f_ptmb: [Word; 64],
+    f_pthb: [Word; 64],
+    f_ptbp: [Word; 64],
+    f_ptbh: [Word; 64],
     child_cost: Word,
     child_peak: Word,
     child_off: Word,
     child_heap: Word,
     child_broke: Word,
+    child_mb: Word,
+    child_hb: Word,
+    child_bp: Word,
+    child_bh: Word,
+    trace_ok: Word,
+    trace_val: Word,
+    bound_val: Word,
+    vsets: Word,
+    bad: Word,
+    reject: Word,
 }
 
 // Clamp a signed depth to a non-negative operand-stack peak.
@@ -103,14 +137,17 @@ fn push_frame(ip: Word, end: Word) -> Word {
     an.f_off[j] = 0;
     an.f_heap[j] = 0;
     an.f_broke[j] = 0;
+    an.f_mb[j] = 0;
+    an.f_hb[j] = 0;
+    an.f_bp[j] = 0;
+    an.f_bh[j] = 0;
     an.f_pa[j] = 0;
     an.sp = j + 1;
     j
 }
 
-// Fold one op's WCET and WCMU effect into frame `i`: its cost, its during-op operand peak
-// (`(depth + growth)` clamped), its heap, and its net depth change `growth - shrink`. Does
-// not advance `f_ip`; the caller decides the next op.
+// Fold one op's WCET and WCMU effect into frame `i`: cost, during-op operand peak, heap, and
+// net depth change. Does not advance `f_ip`.
 fn account_op(i: Word, ip: Word) -> Word {
     an.f_cost[i] = an.f_cost[i] + wa.cost[ip];
     let g = wa.growth[ip];
@@ -124,22 +161,150 @@ fn account_op(i: Word, ip: Word) -> Word {
     0
 }
 
-// Advance the analysis by one transition on the top frame. Either it resolves a pending
-// `if` with the last child's (lifted) result, completes and pops a frame (delivering its
-// result to the parent through the `child_*` registers), or consumes one op of the region.
+// Record a break exit in frame `i`: the cost/peak/heap at this point join the frame's break
+// accumulators (consumed by the enclosing loop).
+fn record_break(i: Word) -> Word {
+    if an.f_cost[i] > an.f_mb[i] {
+        an.f_mb[i] = an.f_cost[i];
+    }
+    an.f_hb[i] = 1;
+    if an.f_peak[i] > an.f_bp[i] {
+        an.f_bp[i] = an.f_peak[i];
+    }
+    if an.f_heap[i] > an.f_bh[i] {
+        an.f_bh[i] = an.f_heap[i];
+    }
+    0
+}
+
+// Trace the most recent `SetLocal(slot)` before `before_ip` back to a literal integer
+// constant (`Const(int); SetLocal(slot)`). Sets `an.trace_val` and returns 1 on success, 0
+// otherwise (including the not-yet-handled for-in array-length pattern).
+fn trace_const(before_ip: Word, target_slot: Word) -> Word {
+    an.trace_ok = 0;
+    an.trace_val = 0;
+    for k in 0..before_ip limit 1024 {
+        let ip = before_ip - 1 - k;
+        if wa.opk[ip] == 2 andalso wa.slot[ip] == target_slot {
+            if ip > 0 andalso wa.opk[ip - 1] == 3 andalso wa.cint[ip - 1] == 1 {
+                an.trace_ok = 1;
+                an.trace_val = wa.cval[ip - 1];
+            }
+            break;
+        }
+    }
+    an.trace_ok
+}
+
+// The C7 soundness check: the loop body advances `var_slot` by a positive constant exactly
+// once, at its tail, and never reassigns `var_slot` (except that tail) or `end_slot`. Returns
+// 1 if the body makes `end - start` a sound upper bound on iterations, 0 otherwise.
+fn advances_induction(loop_ip: Word, var_slot: Word, end_slot: Word) -> Word {
+    let exit = wa.arg[loop_ip];
+    if exit == 0 orelse exit > wa.op_count {
+        0
+    } else {
+        let endloop = exit - 1;
+        if wa.opk[endloop] == 8 {
+            let body = loop_ip + 5;
+            if endloop < 5 orelse endloop - 5 < body {
+                0
+            } else {
+                an.vsets = 0;
+                an.bad = 0;
+                for k in 0..(endloop - body) limit 1024 {
+                    let ip = body + k;
+                    if wa.opk[ip] == 2 {
+                        if wa.slot[ip] == end_slot {
+                            an.bad = 1;
+                        }
+                        if wa.slot[ip] == var_slot {
+                            an.vsets = an.vsets + 1;
+                        }
+                    }
+                }
+                if an.bad == 1 orelse an.vsets != 1 {
+                    0
+                } else {
+                    let t = endloop - 5;
+                    if wa.opk[t] == 1 andalso wa.slot[t] == var_slot
+                        andalso wa.opk[t + 1] == 3 andalso wa.cint[t + 1] == 1 andalso wa.cval[t + 1] > 0
+                        andalso wa.opk[t + 2] == 6
+                        andalso wa.opk[t + 3] == 7 andalso wa.cval[t + 3] == 2
+                        andalso wa.opk[t + 4] == 2 andalso wa.slot[t + 4] == var_slot
+                    {
+                        1
+                    } else {
+                        0
+                    }
+                }
+            }
+        } else {
+            0
+        }
+    }
+}
+
+// Extract the loop's iteration count from the canonical for-range pattern. Sets
+// `an.bound_val` and returns 1 on success, 0 if the bound is inextractable (the caller then
+// rejects).
+fn extract_bound(loop_ip: Word) -> Word {
+    an.bound_val = 0;
+    if loop_ip + 4 >= wa.op_count {
+        0
+    } else {
+        if wa.opk[loop_ip + 1] == 1 andalso wa.opk[loop_ip + 2] == 1
+            andalso wa.opk[loop_ip + 3] == 4 andalso wa.opk[loop_ip + 4] == 5
+        {
+            let var_slot = wa.slot[loop_ip + 1];
+            let end_slot = wa.slot[loop_ip + 2];
+            let e_ok = trace_const(loop_ip, end_slot);
+            let end_val = an.trace_val;
+            if e_ok == 0 {
+                0
+            } else {
+                let s_ok = trace_const(loop_ip, var_slot);
+                let start_val = an.trace_val;
+                if s_ok == 0 {
+                    0
+                } else {
+                    if advances_induction(loop_ip, var_slot, end_slot) == 0 {
+                        0
+                    } else {
+                        if end_val >= start_val {
+                            an.bound_val = end_val - start_val;
+                        } else {
+                            an.bound_val = 0;
+                        }
+                        1
+                    }
+                }
+            }
+        } else {
+            0
+        }
+    }
+}
+
+// Advance the analysis by one transition on the top frame: resolve a pending `if`/`loop`
+// with the last child's result, complete and pop a frame, or consume one op.
 fn analyze_step() -> Word {
     let i = an.sp - 1;
     if an.f_pa[i] == 1 {
-        // A child region just completed; lift its peak and delta into this frame's depth at
-        // the branch point (`f_off[i]`, unchanged while suspended).
-        let cp = pos(an.f_off[i]) + an.child_peak;
-        let cd = an.f_off[i] + an.child_off;
+        // A child region just completed; lift its peak, delta, and break peak by this
+        // frame's depth at the branch point (`f_off[i]`, unchanged while suspended).
+        let seed = an.f_off[i];
+        let cp = pos(seed) + an.child_peak;
+        let cd = seed + an.child_off;
+        let cbp = pos(seed) + an.child_bp;
         let ch = an.child_heap;
         let cc = an.child_cost;
         let cb = an.child_broke;
+        let cmb = an.child_mb;
+        let chb = an.child_hb;
+        let cbh = an.child_bh;
         if an.f_pk[i] == 0 {
-            // Bare `if`: a live then-branch contributes; the false path falls through at
-            // zero cost and leaves the depth unchanged except a conservative max on delta.
+            // Bare `if`: a live then-branch contributes; the false path falls through.
             if cb == 0 {
                 an.f_cost[i] = an.f_cost[i] + cc;
                 if cp > an.f_peak[i] {
@@ -150,93 +315,184 @@ fn analyze_step() -> Word {
                     an.f_off[i] = cd;
                 }
             }
+            // Break records from the then-branch propagate regardless of the false path.
+            if cmb > an.f_mb[i] {
+                an.f_mb[i] = cmb;
+            }
+            if chb == 1 {
+                an.f_hb[i] = 1;
+            }
+            if cbp > an.f_bp[i] {
+                an.f_bp[i] = cbp;
+            }
+            if cbh > an.f_bh[i] {
+                an.f_bh[i] = cbh;
+            }
             an.f_ip[i] = an.f_pj[i];
             an.f_pa[i] = 0;
             0
         } else {
-            if an.f_ps[i] == 0 {
-                // `if`/`else`: the then-branch completed. Stash its lifted result and launch
-                // the else-branch region `[f_es, f_ei)`.
-                an.f_ptc[i] = cc;
-                an.f_ptb[i] = cb;
-                an.f_ptp[i] = cp;
-                an.f_ptd[i] = cd;
-                an.f_pth[i] = ch;
-                an.f_ps[i] = 1;
-                push_frame(an.f_es[i], an.f_ei[i])
-            } else {
-                // Both branches done: combine, treating a broken branch as absent. If both
-                // broke the whole region breaks.
-                let tb = an.f_ptb[i];
-                if tb == 0 andalso cb == 0 {
-                    if an.f_ptc[i] > cc {
+            if an.f_pk[i] == 1 {
+                if an.f_ps[i] == 0 {
+                    // `if`/`else`: the then-branch completed. Stash it (result and breaks)
+                    // and launch the else-branch region `[f_es, f_ei)`.
+                    an.f_ptc[i] = cc;
+                    an.f_ptb[i] = cb;
+                    an.f_ptp[i] = cp;
+                    an.f_ptd[i] = cd;
+                    an.f_pth[i] = ch;
+                    an.f_ptmb[i] = cmb;
+                    an.f_pthb[i] = chb;
+                    an.f_ptbp[i] = cbp;
+                    an.f_ptbh[i] = cbh;
+                    an.f_ps[i] = 1;
+                    push_frame(an.f_es[i], an.f_ei[i])
+                } else {
+                    // Both branches done: combine, treating a broken branch as absent.
+                    let tb = an.f_ptb[i];
+                    if tb == 0 andalso cb == 0 {
+                        if an.f_ptc[i] > cc {
+                            an.f_cost[i] = an.f_cost[i] + an.f_ptc[i];
+                        } else {
+                            an.f_cost[i] = an.f_cost[i] + cc;
+                        }
+                        if an.f_ptp[i] > an.f_peak[i] {
+                            an.f_peak[i] = an.f_ptp[i];
+                        }
+                        if cp > an.f_peak[i] {
+                            an.f_peak[i] = cp;
+                        }
+                        if an.f_pth[i] > ch {
+                            an.f_heap[i] = an.f_heap[i] + an.f_pth[i];
+                        } else {
+                            an.f_heap[i] = an.f_heap[i] + ch;
+                        }
+                        if an.f_ptd[i] > cd {
+                            an.f_off[i] = an.f_ptd[i];
+                        } else {
+                            an.f_off[i] = cd;
+                        }
+                        an.f_ip[i] = an.f_pj[i];
+                        an.f_pa[i] = 0;
+                    } else {
+                    if tb == 0 andalso cb == 1 {
                         an.f_cost[i] = an.f_cost[i] + an.f_ptc[i];
-                    } else {
-                        an.f_cost[i] = an.f_cost[i] + cc;
-                    }
-                    if an.f_ptp[i] > an.f_peak[i] {
-                        an.f_peak[i] = an.f_ptp[i];
-                    }
-                    if cp > an.f_peak[i] {
-                        an.f_peak[i] = cp;
-                    }
-                    if an.f_pth[i] > ch {
+                        if an.f_ptp[i] > an.f_peak[i] {
+                            an.f_peak[i] = an.f_ptp[i];
+                        }
                         an.f_heap[i] = an.f_heap[i] + an.f_pth[i];
-                    } else {
-                        an.f_heap[i] = an.f_heap[i] + ch;
-                    }
-                    if an.f_ptd[i] > cd {
                         an.f_off[i] = an.f_ptd[i];
+                        an.f_ip[i] = an.f_pj[i];
+                        an.f_pa[i] = 0;
                     } else {
+                    if tb == 1 andalso cb == 0 {
+                        an.f_cost[i] = an.f_cost[i] + cc;
+                        if cp > an.f_peak[i] {
+                            an.f_peak[i] = cp;
+                        }
+                        an.f_heap[i] = an.f_heap[i] + ch;
                         an.f_off[i] = cd;
+                        an.f_ip[i] = an.f_pj[i];
+                        an.f_pa[i] = 0;
+                    } else {
+                        an.f_broke[i] = 1;
+                        an.f_ip[i] = an.f_end[i];
+                        an.f_pa[i] = 0;
+                    } } }
+                    // Break records from both branches propagate to the enclosing region.
+                    if an.f_ptmb[i] > an.f_mb[i] {
+                        an.f_mb[i] = an.f_ptmb[i];
                     }
-                    an.f_ip[i] = an.f_pj[i];
-                    an.f_pa[i] = 0;
-                } else {
-                if tb == 0 andalso cb == 1 {
-                    an.f_cost[i] = an.f_cost[i] + an.f_ptc[i];
-                    if an.f_ptp[i] > an.f_peak[i] {
-                        an.f_peak[i] = an.f_ptp[i];
+                    if cmb > an.f_mb[i] {
+                        an.f_mb[i] = cmb;
                     }
-                    an.f_heap[i] = an.f_heap[i] + an.f_pth[i];
-                    an.f_off[i] = an.f_ptd[i];
-                    an.f_ip[i] = an.f_pj[i];
-                    an.f_pa[i] = 0;
-                } else {
-                if tb == 1 andalso cb == 0 {
-                    an.f_cost[i] = an.f_cost[i] + cc;
-                    if cp > an.f_peak[i] {
-                        an.f_peak[i] = cp;
+                    if an.f_pthb[i] == 1 {
+                        an.f_hb[i] = 1;
                     }
-                    an.f_heap[i] = an.f_heap[i] + ch;
-                    an.f_off[i] = cd;
-                    an.f_ip[i] = an.f_pj[i];
-                    an.f_pa[i] = 0;
+                    if chb == 1 {
+                        an.f_hb[i] = 1;
+                    }
+                    if an.f_ptbp[i] > an.f_bp[i] {
+                        an.f_bp[i] = an.f_ptbp[i];
+                    }
+                    if cbp > an.f_bp[i] {
+                        an.f_bp[i] = cbp;
+                    }
+                    if an.f_ptbh[i] > an.f_bh[i] {
+                        an.f_bh[i] = an.f_ptbh[i];
+                    }
+                    if cbh > an.f_bh[i] {
+                        an.f_bh[i] = cbh;
+                    }
+                    0
+                }
+            } else {
+                // `loop` (f_pk == 2): consume the body. The iteration count is 1 for a
+                // wholly-breaking body, else the statically extracted bound (reject if
+                // inextractable). The body cost and heap scale by the count; the peak does
+                // not (a high-water mark repeats each iteration). The body's max break
+                // cost/peak/heap folds in, lifted by this frame's depth.
+                let iter = if cb == 1 {
+                    1
                 } else {
+                    if extract_bound(an.f_es[i]) == 1 {
+                        an.bound_val
+                    } else {
+                        an.reject = 1;
+                        1
+                    }
+                };
+                if chb == 0 andalso cb == 1 {
                     an.f_broke[i] = 1;
                     an.f_ip[i] = an.f_end[i];
                     an.f_pa[i] = 0;
-                } } }
+                } else {
+                    let body_total = if cb == 1 { 0 } else { an.child_cost * iter };
+                    if an.child_mb > body_total {
+                        an.f_cost[i] = an.f_cost[i] + an.child_mb;
+                    } else {
+                        an.f_cost[i] = an.f_cost[i] + body_total;
+                    }
+                    let body_peak = if cb == 1 { 0 } else { pos(seed) + an.child_peak };
+                    let break_peak = if chb == 1 { pos(seed) + an.child_bp } else { 0 };
+                    if body_peak > an.f_peak[i] {
+                        an.f_peak[i] = body_peak;
+                    }
+                    if break_peak > an.f_peak[i] {
+                        an.f_peak[i] = break_peak;
+                    }
+                    let body_heap = if cb == 1 { 0 } else { an.child_heap * iter };
+                    let break_heap = an.child_bh;
+                    if body_heap > break_heap {
+                        an.f_heap[i] = an.f_heap[i] + body_heap;
+                    } else {
+                        an.f_heap[i] = an.f_heap[i] + break_heap;
+                    }
+                    an.f_ip[i] = an.f_pj[i];
+                    an.f_pa[i] = 0;
+                }
                 0
             }
         }
     } else {
         if an.f_ip[i] >= an.f_end[i] {
-            // Region exhausted: deliver its result to the parent and pop.
+            // Region exhausted: deliver its result and break accumulators, then pop.
             an.child_cost = an.f_cost[i];
             an.child_peak = an.f_peak[i];
             an.child_off = an.f_off[i];
             an.child_heap = an.f_heap[i];
             an.child_broke = an.f_broke[i];
+            an.child_mb = an.f_mb[i];
+            an.child_hb = an.f_hb[i];
+            an.child_bp = an.f_bp[i];
+            an.child_bh = an.f_bh[i];
             an.sp = an.sp - 1;
             0
         } else {
             let ip = an.f_ip[i];
             let c = wa.class[ip];
             if c == 1 {
-                // If: account the branch op, then spawn the then-branch. An `if`/`else` is
-                // recognized by an Else immediately before the target; its EndIf position
-                // comes from that Else's `arg`.
+                // If: account the branch op, then spawn the then-branch.
                 account_op(i, ip);
                 let target = wa.arg[ip];
                 if target > 0 andalso wa.class[target - 1] == 2 {
@@ -255,8 +511,32 @@ fn analyze_step() -> Word {
                     push_frame(ip + 1, target)
                 }
             } else {
-            if c == 6 orelse c == 8 {
-                // Break or Trap: account the op and end this path.
+            if c == 4 {
+                // Loop: account the op, then spawn the body `[ip+1, endloop)`.
+                account_op(i, ip);
+                an.f_pk[i] = 2;
+                an.f_es[i] = ip;
+                an.f_pj[i] = wa.arg[ip];
+                an.f_pa[i] = 1;
+                push_frame(ip + 1, wa.arg[ip] - 1)
+            } else {
+            if c == 6 {
+                // Break: account, record, end this path.
+                account_op(i, ip);
+                record_break(i);
+                an.f_broke[i] = 1;
+                an.f_ip[i] = an.f_end[i];
+                0
+            } else {
+            if c == 7 {
+                // BreakIf: account, record, and continue (conditional exit).
+                account_op(i, ip);
+                record_break(i);
+                an.f_ip[i] = ip + 1;
+                0
+            } else {
+            if c == 8 {
+                // Trap: account and end this path without recording a break.
                 account_op(i, ip);
                 an.f_broke[i] = 1;
                 an.f_ip[i] = an.f_end[i];
@@ -267,27 +547,32 @@ fn analyze_step() -> Word {
                 an.f_ip[i] = ip + 1;
                 0
             } else {
-                // Plain op (including Call and BreakIf): account and advance.
+                // Plain op (including Call): account and advance.
                 account_op(i, ip);
                 an.f_ip[i] = ip + 1;
                 0
-            } } }
+            } } } } } }
         }
     }
 }
 
 // Walk the Stream body `[stream_pos + 1, reset_pos)` to a fixed point and publish the three
-// bounds. WCET is the Stream and Reset op costs plus the region cost; WCMU stack bytes are
-// `(local_count + region peak) * value_slot_bytes`; WCMU heap is the region heap. A broken
-// body contributes zero region cost/peak/heap, matching the reference's `unwrap_or`. The
-// work loop is bounded by a generous static cap and exits the moment the stack empties.
+// bounds (or set `out_reject` if a loop bound was inextractable). WCET is the Stream and
+// Reset op costs plus the region cost; WCMU stack bytes are `(local_count + region peak) *
+// value_slot_bytes`; WCMU heap is the region heap. A broken body contributes zero. The work
+// loop is bounded by a generous static cap and exits the moment the stack empties.
 fn run() -> Word {
     an.sp = 0;
+    an.reject = 0;
     an.child_cost = 0;
     an.child_peak = 0;
     an.child_off = 0;
     an.child_heap = 0;
     an.child_broke = 0;
+    an.child_mb = 0;
+    an.child_hb = 0;
+    an.child_bp = 0;
+    an.child_bh = 0;
     push_frame(wa.stream_pos + 1, wa.reset_pos);
     for step in 0..16384 limit 16384 {
         if an.sp == 0 {
@@ -296,13 +581,22 @@ fn run() -> Word {
             analyze_step();
         }
     }
-    let region_cost = if an.child_broke == 1 { 0 } else { an.child_cost };
-    let region_peak = if an.child_broke == 1 { 0 } else { an.child_peak };
-    let region_heap = if an.child_broke == 1 { 0 } else { an.child_heap };
-    wa.out_wcet = wa.cost[wa.stream_pos] + wa.cost[wa.reset_pos] + region_cost;
-    wa.out_stack_bytes = (wa.local_count + region_peak) * wa.value_slot_bytes;
-    wa.out_heap = region_heap;
-    wa.out_wcet
+    if an.reject == 1 {
+        wa.out_reject = 1;
+        wa.out_wcet = 0;
+        wa.out_stack_bytes = 0;
+        wa.out_heap = 0;
+        0
+    } else {
+        wa.out_reject = 0;
+        let region_cost = if an.child_broke == 1 { 0 } else { an.child_cost };
+        let region_peak = if an.child_broke == 1 { 0 } else { an.child_peak };
+        let region_heap = if an.child_broke == 1 { 0 } else { an.child_heap };
+        wa.out_wcet = wa.cost[wa.stream_pos] + wa.cost[wa.reset_pos] + region_cost;
+        wa.out_stack_bytes = (wa.local_count + region_peak) * wa.value_slot_bytes;
+        wa.out_heap = region_heap;
+        wa.out_wcet
+    }
 }
 
 // Compute the chunk's bounds in one call and yield the WCET.

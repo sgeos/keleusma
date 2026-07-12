@@ -4131,7 +4131,8 @@ fn assemble_resource_bounds(module: &mut Module) {
         if c.block_type != keleusma::bytecode::BlockType::Stream {
             continue;
         }
-        let (wcet, stack, heap) = analyze_via_kel(c);
+        let (wcet, stack, heap, reject) = analyze_via_kel(c);
+        assert!(!reject, "analyze.kel rejected a stage Stream chunk");
         max_wcet = max_wcet.max(wcet);
         max_wcmu = max_wcmu.max(stack + heap);
     }
@@ -4274,9 +4275,14 @@ const WA_ARG: usize = 5 + 1024 * 2;
 const WA_GROWTH: usize = 5 + 1024 * 3;
 const WA_SHRINK: usize = 5 + 1024 * 4;
 const WA_HEAP: usize = 5 + 1024 * 5;
-const WA_OUT_WCET: usize = 5 + 1024 * 6;
-const WA_OUT_STACK: usize = 5 + 1024 * 6 + 1;
-const WA_OUT_HEAP: usize = 5 + 1024 * 6 + 2;
+const WA_OPK: usize = 5 + 1024 * 6;
+const WA_SLOT: usize = 5 + 1024 * 7;
+const WA_CVAL: usize = 5 + 1024 * 8;
+const WA_CINT: usize = 5 + 1024 * 9;
+const WA_OUT_WCET: usize = 5 + 1024 * 10;
+const WA_OUT_STACK: usize = 5 + 1024 * 10 + 1;
+const WA_OUT_HEAP: usize = 5 + 1024 * 10 + 2;
+const WA_OUT_REJECT: usize = 5 + 1024 * 10 + 3;
 
 fn analyze_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
@@ -4291,7 +4297,7 @@ fn analyze_kel_module() -> Module {
 
 /// Classify an op for analyze.kel as `(class, arg)`. The class tags the control-flow role
 /// (0 plain, 1 If, 2 Else, 3 EndIf, 4 Loop, 5 EndLoop, 6 Break, 7 BreakIf, 8 Trap); `arg`
-/// carries the branch target for If and the matching EndIf position for Else.
+/// carries the branch target for If and Loop, and the matching EndIf position for Else.
 fn analyze_class(op: &keleusma::bytecode::Op) -> (i64, i64) {
     use keleusma::bytecode::Op;
     match op {
@@ -4307,11 +4313,38 @@ fn analyze_class(op: &keleusma::bytecode::Op) -> (i64, i64) {
     }
 }
 
-/// Compute a Stream chunk's per-iteration bounds `(wcet, stack_bytes, heap_bytes)` by
-/// running analyze.kel over its op table. The stage takes the empty-resolver shallow form,
-/// so a chunk with a `Loop` (not yet handled) or a native call (whose reference WCMU arm
-/// diverges from the generic stack-effect model) is out of scope and rejected here.
-fn analyze_via_kel(chunk: &keleusma::bytecode::Chunk) -> (i64, i64, i64) {
+/// Fine-grained op detail for analyze.kel's loop-bound extraction: `(opk, slot, cval, cint)`.
+/// `opk` tags the opcode (1 GetLocal, 2 SetLocal, 3 Const, 4 CmpGe, 5 BreakIf, 6 CheckedAdd,
+/// 7 PopN, 8 EndLoop, 9 Loop, 0 other); `slot` the GetLocal/SetLocal slot; `cval` the Const
+/// integer value or PopN count; `cint` 1 if a Const resolves to an integer.
+fn analyze_opk(
+    op: &keleusma::bytecode::Op,
+    chunk: &keleusma::bytecode::Chunk,
+) -> (i64, i64, i64, i64) {
+    use keleusma::bytecode::{ConstValue, Op};
+    match op {
+        Op::GetLocal(s) => (1, *s as i64, 0, 0),
+        Op::SetLocal(s) => (2, *s as i64, 0, 0),
+        Op::Const(idx) => match chunk.constants.get(*idx as usize) {
+            Some(ConstValue::Int(v)) => (3, 0, *v, 1),
+            _ => (3, 0, 0, 0),
+        },
+        Op::CmpGe => (4, 0, 0, 0),
+        Op::BreakIf(_) => (5, 0, 0, 0),
+        Op::CheckedAdd => (6, 0, 0, 0),
+        Op::PopN(n) => (7, 0, *n as i64, 0),
+        Op::EndLoop(_) => (8, 0, 0, 0),
+        Op::Loop(_) => (9, 0, 0, 0),
+        _ => (0, 0, 0, 0),
+    }
+}
+
+/// Compute a Stream chunk's per-iteration bounds `(wcet, stack_bytes, heap_bytes, reject)` by
+/// running analyze.kel over its op table. `reject` is true when the stage cannot statically
+/// bound a loop, mirroring the reference's rejection. The stage takes the empty-resolver
+/// shallow form, so a native call (whose reference WCMU arm diverges from the generic
+/// stack-effect model) is out of scope and rejected here.
+fn analyze_via_kel(chunk: &keleusma::bytecode::Chunk) -> (i64, i64, i64, bool) {
     use keleusma::bytecode::Op;
     let sp = chunk
         .ops
@@ -4325,11 +4358,11 @@ fn analyze_via_kel(chunk: &keleusma::bytecode::Chunk) -> (i64, i64, i64) {
         .expect("Reset op");
     assert!(chunk.ops.len() <= 1024, "analyze.kel op-table capacity");
     assert!(
-        !chunk.ops.iter().any(|o| matches!(
-            o,
-            Op::Loop(_) | Op::CallVerifiedNative(..) | Op::CallExternalNative(..)
-        )),
-        "analyze.kel increment handles loop-free, native-free Stream bodies only"
+        !chunk
+            .ops
+            .iter()
+            .any(|o| matches!(o, Op::CallVerifiedNative(..) | Op::CallExternalNative(..))),
+        "analyze.kel does not yet model native-call stack effects"
     );
     let m = analyze_kel_module();
     let need = required_persistent_capacity_for(&m);
@@ -4352,12 +4385,17 @@ fn analyze_via_kel(chunk: &keleusma::bytecode::Chunk) -> (i64, i64, i64) {
     );
     for (i, op) in chunk.ops.iter().enumerate() {
         let (class, arg) = analyze_class(op);
+        let (opk, slot, cval, cint) = analyze_opk(op, chunk);
         set(&vm, &mut shared, WA_COST + i, op.cost() as i64);
         set(&vm, &mut shared, WA_CLASS + i, class);
         set(&vm, &mut shared, WA_ARG + i, arg);
         set(&vm, &mut shared, WA_GROWTH + i, op.stack_growth() as i64);
         set(&vm, &mut shared, WA_SHRINK + i, op.stack_shrink() as i64);
         set(&vm, &mut shared, WA_HEAP + i, op.heap_alloc(chunk) as i64);
+        set(&vm, &mut shared, WA_OPK + i, opk);
+        set(&vm, &mut shared, WA_SLOT + i, slot);
+        set(&vm, &mut shared, WA_CVAL + i, cval);
+        set(&vm, &mut shared, WA_CINT + i, cint);
     }
     match vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
@@ -4372,7 +4410,12 @@ fn analyze_via_kel(chunk: &keleusma::bytecode::Chunk) -> (i64, i64, i64) {
             o => panic!("expected Int at {slot}, got {o:?}"),
         }
     };
-    (rd(WA_OUT_WCET), rd(WA_OUT_STACK), rd(WA_OUT_HEAP))
+    (
+        rd(WA_OUT_WCET),
+        rd(WA_OUT_STACK),
+        rd(WA_OUT_HEAP),
+        rd(WA_OUT_REJECT) != 0,
+    )
 }
 
 // analyze.kel reproduces both `wcet_stream_iteration` and `wcmu_stream_iteration` exactly for
@@ -4392,7 +4435,8 @@ fn analyze_via_kel_matches_the_reference() {
             if c.block_type != keleusma::bytecode::BlockType::Stream {
                 continue;
             }
-            let (wcet, stack, heap) = analyze_via_kel(c);
+            let (wcet, stack, heap, reject) = analyze_via_kel(c);
+            assert!(!reject, "unexpected reject for {path} `{}`", c.name);
             let ref_wcet =
                 keleusma::verify::wcet_stream_iteration(c).expect("reference wcet") as i64;
             let (ref_stack, ref_heap) =
@@ -4404,6 +4448,80 @@ fn analyze_via_kel_matches_the_reference() {
                 c.name
             );
             assert_eq!(heap, ref_heap as i64, "wcmu heap for {path} `{}`", c.name);
+        }
+    }
+}
+
+// analyze.kel handles `loop` regions with a self-hosted iteration-bound extraction. These
+// synthetic Stream programs carry a `for .. limit` loop in the loop body (the compiler emits
+// the canonical for-range header analyze.kel recognizes), and analyze.kel must reproduce
+// `wcet_stream_iteration`/`wcmu_stream_iteration` exactly for each -- exercising the loop
+// multiply, the runtime-range `break` inside the loop, and nested control flow.
+#[test]
+fn analyze_via_kel_matches_the_reference_for_loops() {
+    let cases: &[&str] = &[
+        // A plain accumulation loop.
+        r#"require word >= 32;
+private data d { s: Word }
+shared data io { out: Word, arr: [Word; 16] }
+loop main(resume: Word) -> Word {
+    d.s = 0;
+    for i in 0..10 limit 16 { d.s = d.s + io.arr[i]; }
+    io.out = d.s;
+    yield d.s
+}"#,
+        // A loop whose body carries a conditional (nested if inside the loop).
+        r#"require word >= 32;
+private data d { s: Word }
+shared data io { out: Word, arr: [Word; 32] }
+loop main(resume: Word) -> Word {
+    d.s = 0;
+    for i in 0..20 limit 32 {
+        if io.arr[i] > 0 { d.s = d.s + io.arr[i]; } else { d.s = d.s + 1; }
+    }
+    io.out = d.s;
+    yield d.s
+}"#,
+        // Straight-line code before and after the loop, and a different cap.
+        r#"require word >= 32;
+private data d { s: Word, t: Word }
+shared data io { out: Word, arr: [Word; 8] }
+loop main(resume: Word) -> Word {
+    d.t = 7;
+    d.s = d.t;
+    for i in 0..5 limit 8 { d.s = d.s + io.arr[i] * 2; }
+    io.out = d.s + d.t;
+    yield d.s
+}"#,
+        // A nested loop: the inner loop is consumed within the outer loop body (each loop
+        // frame consumes only its own body's breaks), exercising frame-stack recursion.
+        r#"require word >= 32;
+private data d { s: Word }
+shared data io { out: Word }
+loop main(resume: Word) -> Word {
+    d.s = 0;
+    for i in 0..3 limit 4 {
+        for j in 0..3 limit 4 { d.s = d.s + 1; }
+    }
+    io.out = d.s;
+    yield d.s
+}"#,
+    ];
+    for src in cases {
+        let m = compile_src(src);
+        for c in &m.chunks {
+            if c.block_type != keleusma::bytecode::BlockType::Stream {
+                continue;
+            }
+            let (wcet, stack, heap, reject) = analyze_via_kel(c);
+            assert!(!reject, "unexpected reject for `{src}`");
+            let ref_wcet =
+                keleusma::verify::wcet_stream_iteration(c).expect("reference wcet") as i64;
+            let (ref_stack, ref_heap) =
+                keleusma::verify::wcmu_stream_iteration(c).expect("reference wcmu");
+            assert_eq!(wcet, ref_wcet, "wcet for `{src}`");
+            assert_eq!(stack, ref_stack as i64, "wcmu stack for `{src}`");
+            assert_eq!(heap, ref_heap as i64, "wcmu heap for `{src}`");
         }
     }
 }
