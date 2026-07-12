@@ -4339,11 +4339,23 @@ fn analyze_opk(
     }
 }
 
+/// The operand-stack `(growth, shrink)` analyze.kel accounts for `op` under the empty
+/// resolver. Identical to `Op::stack_growth()`/`stack_shrink()` except for a native call: the
+/// reference WCMU native arm uses `during_peak = offset + 1` and `offset += 1 - n` with `n`
+/// the whole argument-count byte (the error-reify high bit included), which the generic
+/// accounting reproduces exactly as `growth = 1, shrink = n_full_byte`.
+fn analyze_stack_effect(op: &keleusma::bytecode::Op) -> (i64, i64) {
+    use keleusma::bytecode::Op;
+    match op {
+        Op::CallVerifiedNative(_, n) | Op::CallExternalNative(_, n) => (1, *n as i64),
+        _ => (op.stack_growth() as i64, op.stack_shrink() as i64),
+    }
+}
+
 /// Compute a Stream chunk's per-iteration bounds `(wcet, stack_bytes, heap_bytes, reject)` by
 /// running analyze.kel over its op table. `reject` is true when the stage cannot statically
-/// bound a loop, mirroring the reference's rejection. The stage takes the empty-resolver
-/// shallow form, so a native call (whose reference WCMU arm diverges from the generic
-/// stack-effect model) is out of scope and rejected here.
+/// bound a loop, mirroring the reference's rejection. Uses the empty-resolver shallow form: a
+/// `Call` and a native call contribute their local stack effect only, not the callee body.
 fn analyze_via_kel(chunk: &keleusma::bytecode::Chunk) -> (i64, i64, i64, bool) {
     use keleusma::bytecode::Op;
     let sp = chunk
@@ -4357,13 +4369,6 @@ fn analyze_via_kel(chunk: &keleusma::bytecode::Chunk) -> (i64, i64, i64, bool) {
         .position(|o| matches!(o, Op::Reset))
         .expect("Reset op");
     assert!(chunk.ops.len() <= 1024, "analyze.kel op-table capacity");
-    assert!(
-        !chunk
-            .ops
-            .iter()
-            .any(|o| matches!(o, Op::CallVerifiedNative(..) | Op::CallExternalNative(..))),
-        "analyze.kel does not yet model native-call stack effects"
-    );
     let m = analyze_kel_module();
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -4386,11 +4391,12 @@ fn analyze_via_kel(chunk: &keleusma::bytecode::Chunk) -> (i64, i64, i64, bool) {
     for (i, op) in chunk.ops.iter().enumerate() {
         let (class, arg) = analyze_class(op);
         let (opk, slot, cval, cint) = analyze_opk(op, chunk);
+        let (growth, shrink) = analyze_stack_effect(op);
         set(&vm, &mut shared, WA_COST + i, op.cost() as i64);
         set(&vm, &mut shared, WA_CLASS + i, class);
         set(&vm, &mut shared, WA_ARG + i, arg);
-        set(&vm, &mut shared, WA_GROWTH + i, op.stack_growth() as i64);
-        set(&vm, &mut shared, WA_SHRINK + i, op.stack_shrink() as i64);
+        set(&vm, &mut shared, WA_GROWTH + i, growth);
+        set(&vm, &mut shared, WA_SHRINK + i, shrink);
         set(&vm, &mut shared, WA_HEAP + i, op.heap_alloc(chunk) as i64);
         set(&vm, &mut shared, WA_OPK + i, opk);
         set(&vm, &mut shared, WA_SLOT + i, slot);
@@ -4506,6 +4512,19 @@ loop main(resume: Word) -> Word {
     io.out = d.s;
     yield d.s
 }"#,
+        // A for-in over a literal array: the compiler bakes the length as a constant (the
+        // range end), so the same pattern-1 header applies; the array's NewComposite
+        // exercises the heap term (a non-zero WCMU heap).
+        r#"require word >= 32;
+private data d { s: Word }
+shared data io { out: Word }
+loop main(resume: Word) -> Word {
+    d.s = 0;
+    let a = [1, 2, 3, 4];
+    for x in a { d.s = d.s + x; }
+    io.out = d.s;
+    yield d.s
+}"#,
     ];
     for src in cases {
         let m = compile_src(src);
@@ -4523,5 +4542,123 @@ loop main(resume: Word) -> Word {
             assert_eq!(stack, ref_stack as i64, "wcmu stack for `{src}`");
             assert_eq!(heap, ref_heap as i64, "wcmu heap for `{src}`");
         }
+    }
+}
+
+// analyze.kel is itself compiled byte-identically by the self-hosted pipeline -- the same
+// fixed-point property the other four stages have. This makes the resource-bound analysis a
+// fifth self-compiling Keleusma stage, not merely Keleusma code the reference compiles.
+#[test]
+fn self_host_compiles_analyze_kel_byte_identically() {
+    let src = std::fs::read_to_string("compiler/kel/analyze.kel").expect("read analyze.kel");
+    let module = self_host_compile(&src);
+    let reference = compile_src(&src);
+    assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");
+    for (m, r) in module.chunks.iter().zip(reference.chunks.iter()) {
+        assert_eq!(m.name, r.name, "chunk order");
+        assert_eq!(m.ops, r.ops, "ops for chunk `{}`", r.name);
+        assert_eq!(m.constants, r.constants, "pool for chunk `{}`", r.name);
+        assert_eq!(
+            m.local_count, r.local_count,
+            "local_count for chunk `{}`",
+            r.name
+        );
+    }
+}
+
+// The fail-closed reject path: a loop whose bound cannot be statically extracted must be
+// rejected, not silently under-bounded. Every compilable Keleusma Stream loop emits the
+// canonical for-range header, so no source program reaches the reject path; this constructs
+// it by mutating a compiled loop's header (replacing the induction `GetLocal` with a
+// non-canonical op) and asserts analyze.kel rejects exactly when the reference does.
+#[test]
+fn analyze_via_kel_rejects_an_inextractable_loop_like_the_reference() {
+    use keleusma::bytecode::Op;
+    let src = r#"require word >= 32;
+private data d { s: Word }
+shared data io { out: Word, arr: [Word; 16] }
+loop main(resume: Word) -> Word {
+    d.s = 0;
+    for i in 0..10 limit 16 { d.s = d.s + io.arr[i]; }
+    io.out = d.s;
+    yield d.s
+}"#;
+    let m = compile_src(src);
+    let mut chunk = m
+        .chunks
+        .iter()
+        .find(|c| c.block_type == keleusma::bytecode::BlockType::Stream)
+        .expect("stream chunk")
+        .clone();
+    // Sanity: the unmutated loop extracts a bound (reference and analyze both succeed).
+    assert!(keleusma::verify::wcet_stream_iteration(&chunk).is_ok());
+    assert!(
+        !analyze_via_kel(&chunk).3,
+        "unmutated loop should not reject"
+    );
+
+    // Break the canonical header: the op after Loop is the induction `GetLocal`. Replace it
+    // with a non-GetLocal so the bound is inextractable while the body still falls through.
+    let loop_ip = chunk
+        .ops
+        .iter()
+        .position(|o| matches!(o, Op::Loop(_)))
+        .expect("loop op");
+    assert!(matches!(chunk.ops[loop_ip + 1], Op::GetLocal(_)));
+    chunk.ops[loop_ip + 1] = Op::Const(0);
+
+    // The reference now rejects (no statically extractable iteration bound); so must analyze.
+    assert!(
+        keleusma::verify::wcet_stream_iteration(&chunk).is_err(),
+        "reference should reject the mutated loop"
+    );
+    let (_, _, _, reject) = analyze_via_kel(&chunk);
+    assert!(reject, "analyze.kel should reject the mutated loop");
+}
+
+// Native-call stack effects. No compiler stage calls a host native, so this injects a
+// CallVerifiedNative op (with the empty resolver both analyze and the reference use, no
+// registration is needed) and asserts analyze.kel reproduces the reference's WCET and WCMU
+// on the same mutated chunk -- for a plain native (n = 2) and an error-reify native (n =
+// 0x82), whose high bit the reference's native WCMU arm folds into the pop count.
+#[test]
+fn analyze_via_kel_matches_the_reference_for_native_calls() {
+    use keleusma::bytecode::Op;
+    let src = r#"require word >= 32;
+private data d { s: Word }
+shared data io { out: Word }
+loop main(resume: Word) -> Word {
+    d.s = 5;
+    io.out = d.s;
+    yield d.s
+}"#;
+    for n_args in [2u8, 0x82u8] {
+        let m = compile_src(src);
+        let mut chunk = m
+            .chunks
+            .iter()
+            .find(|c| c.block_type == keleusma::bytecode::BlockType::Stream)
+            .expect("stream chunk")
+            .clone();
+        // Replace the first Const in the body with a native call.
+        let at = chunk
+            .ops
+            .iter()
+            .position(|o| matches!(o, Op::Const(_)))
+            .expect("a Const to mutate");
+        chunk.ops[at] = Op::CallVerifiedNative(0, n_args);
+
+        let (wcet, stack, heap, reject) = analyze_via_kel(&chunk);
+        assert!(!reject, "native chunk should not reject (n={n_args:#x})");
+        let ref_wcet =
+            keleusma::verify::wcet_stream_iteration(&chunk).expect("reference wcet") as i64;
+        let (ref_stack, ref_heap) =
+            keleusma::verify::wcmu_stream_iteration(&chunk).expect("reference wcmu");
+        assert_eq!(wcet, ref_wcet, "wcet with native n={n_args:#x}");
+        assert_eq!(
+            stack, ref_stack as i64,
+            "wcmu stack with native n={n_args:#x}"
+        );
+        assert_eq!(heap, ref_heap as i64, "wcmu heap with native n={n_args:#x}");
     }
 }
