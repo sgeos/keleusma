@@ -86,9 +86,9 @@ fn status() {
     println!("function calls, and scalar and");
     println!("indexed data-segment reads and writes, into an op buffer it streams with its own");
     println!("deduplicating constant pool and counted local-frame size, and lexer");
-    println!("increment 3, a streaming tokenizer with maximal munch over the two-byte");
-    println!("operators and keyword classification to the parser's Tok codes, both");
-    println!("compile, verify, and run (see");
+    println!("increment 4, a streaming tokenizer with maximal munch over the two-byte");
+    println!("operators, keyword classification to the parser's Tok codes, and");
+    println!("identifier interning to stable ids, both compile, verify, and run (see");
     println!("tests/selfhost_codegen.rs and `lex <file>`). The codegen stage is now");
     println!("FULLY SELF-HOSTING: all 34 of its functions, including the multiheaded");
     println!("`yield emit_next` dispatch and the `loop main`, compile themselves");
@@ -168,7 +168,7 @@ fn run_lexer(path: &str) {
                         println!("  EOF");
                         return;
                     }
-                    2 => println!("  IDENT   len {value}"),
+                    2 => println!("  IDENT   id {value}"),
                     3 => println!("  INT     {value}"),
                     4 => println!("  PUNCT   {:?}", value as u8 as char),
                     5 => {

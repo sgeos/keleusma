@@ -11,12 +11,13 @@
     not(feature = "narrow-word-32")
 ))]
 //! Regression test for the self-hosted compiler's Stage 1 lexer
-//! (`compiler/kel/lexer.kel`, through increment 3). It compiles the lexer on the
+//! (`compiler/kel/lexer.kel`, through increment 4). It compiles the lexer on the
 //! current runtime, drives it over a source held in shared data, and checks the
 //! streamed token encoding: increment 1's IDENT/INT/PUNCT/EOF wire, increment 2's
-//! maximal munch over the two-byte operators, and increment 3's keyword
-//! classification to the parser's Tok codes. Guards that the lexer keeps compiling
-//! and tokenizing as the runtime evolves toward V0.3.0.
+//! maximal munch over the two-byte operators, increment 3's keyword classification
+//! to the parser's Tok codes, and increment 4's identifier interning (an IDENT
+//! carries a stable id, not a length). Guards that the lexer keeps compiling and
+//! tokenizing as the runtime evolves toward V0.3.0.
 use keleusma::Arena;
 use keleusma::bytecode::Value;
 use keleusma::compiler::compile;
@@ -66,11 +67,11 @@ fn self_hosted_lexer_increment_1() {
             .expect("resume");
     }
     eprintln!("tokens (kind,value) = {:?}", tokens);
-    // KEYWORD let (Tok::Let = 38, classified since increment 3), IDENT x, PUNCT '=',
-    // INT 42, EOF.
+    // KEYWORD let (Tok::Let = 38, classified since increment 3), IDENT x (interned
+    // to id 0 since increment 4), PUNCT '=', INT 42, EOF.
     assert_eq!(
         tokens,
-        vec![(6, 38), (2, 1), (4, b'=' as i64), (3, 42), (1, 0)]
+        vec![(6, 38), (2, 0), (4, b'=' as i64), (3, 42), (1, 0)]
     );
 }
 
@@ -125,24 +126,25 @@ fn lex_tokens(input: &[u8]) -> Vec<(i64, i64)> {
 fn self_hosted_lexer_increment_2_compound_operators() {
     // Every compound operator, separated by identifiers so each stands alone.
     let tokens = lex_tokens(b"a==b!=c<=d>=e::f..g=>h");
+    // The eight identifiers are all distinct, so they intern to ids 0..7.
     assert_eq!(
         tokens,
         vec![
-            (2, 1), // IDENT a
+            (2, 0), // IDENT a -> id 0
             (5, 0), // ==
-            (2, 1), // IDENT b
+            (2, 1), // IDENT b -> id 1
             (5, 1), // !=
-            (2, 1), // IDENT c
+            (2, 2), // IDENT c -> id 2
             (5, 2), // <=
-            (2, 1), // IDENT d
+            (2, 3), // IDENT d -> id 3
             (5, 3), // >=
-            (2, 1), // IDENT e
+            (2, 4), // IDENT e -> id 4
             (5, 4), // ::
-            (2, 1), // IDENT f
+            (2, 5), // IDENT f -> id 5
             (5, 5), // ..
-            (2, 1), // IDENT g
+            (2, 6), // IDENT g -> id 6
             (5, 6), // =>
-            (2, 1), // IDENT h
+            (2, 7), // IDENT h -> id 7
             (1, 0), // EOF
         ]
     );
@@ -155,18 +157,19 @@ fn self_hosted_lexer_increment_2_compound_operators() {
 fn self_hosted_lexer_increment_2_single_byte_punctuation_unaffected() {
     // `a = b < c : d . e` — lone operators, and a trailing `=` at end of input.
     let tokens = lex_tokens(b"a=b<c:d.e=");
+    // Five distinct identifiers intern to ids 0..4.
     assert_eq!(
         tokens,
         vec![
-            (2, 1),           // IDENT a
+            (2, 0),           // IDENT a -> id 0
             (4, b'=' as i64), // lone =
-            (2, 1),           // IDENT b
+            (2, 1),           // IDENT b -> id 1
             (4, b'<' as i64), // lone <
-            (2, 1),           // IDENT c
+            (2, 2),           // IDENT c -> id 2
             (4, b':' as i64), // lone :
-            (2, 1),           // IDENT d
+            (2, 3),           // IDENT d -> id 3
             (4, b'.' as i64), // lone .
-            (2, 1),           // IDENT e
+            (2, 4),           // IDENT e -> id 4
             (4, b'=' as i64), // trailing = at end of input (peek sees sentinel 0)
             (1, 0),           // EOF
         ]
@@ -190,7 +193,7 @@ fn self_hosted_lexer_increment_3_keyword_classification() {
             (6, 16), // KEYWORD const   (Tok::Const = 16)
             (6, 14), // KEYWORD shared  (Tok::Shared = 14)
             (6, 15), // KEYWORD private (Tok::Private = 15)
-            (2, 1),  // IDENT x
+            (2, 0),  // IDENT x (the only non-keyword run, interned to id 0)
             (3, 9),  // INT 9
             (6, 52), // KEYWORD as      (Tok::As = 52), ending exactly at end of input
             (1, 0),  // EOF
@@ -205,13 +208,56 @@ fn self_hosted_lexer_increment_3_keyword_classification() {
 #[test]
 fn self_hosted_lexer_increment_3_keyword_matching_is_exact() {
     let tokens = lex_tokens(b"i fnn ix loops");
+    // All four are distinct non-keyword runs, interned to ids 0..3.
     assert_eq!(
         tokens,
         vec![
-            (2, 1), // IDENT i     (prefix of if/in)
-            (2, 3), // IDENT fnn   (fn plus a byte)
+            (2, 0), // IDENT i     (prefix of if/in)
+            (2, 1), // IDENT fnn   (fn plus a byte)
             (2, 2), // IDENT ix    (same length as if, second byte differs)
-            (2, 5), // IDENT loops (loop plus a byte)
+            (2, 3), // IDENT loops (loop plus a byte)
+            (1, 0), // EOF
+        ]
+    );
+}
+
+// Increment 4: identifier interning. A non-keyword IDENT now carries a stable id
+// (its index in the intern table) rather than a byte length, so repeated
+// identifiers share an id and distinct ones get sequential ids in first-seen
+// order. Keywords are classified before interning, so `let` never consumes an id.
+#[test]
+fn self_hosted_lexer_increment_4_identifier_interning() {
+    let tokens = lex_tokens(b"foo bar foo let baz bar foo");
+    assert_eq!(
+        tokens,
+        vec![
+            (2, 0),  // foo -> new id 0
+            (2, 1),  // bar -> new id 1
+            (2, 0),  // foo -> id 0
+            (6, 38), // KEYWORD let (Tok::Let, not interned)
+            (2, 2),  // baz -> new id 2
+            (2, 1),  // bar -> id 1
+            (2, 0),  // foo -> id 0
+            (1, 0),  // EOF
+        ]
+    );
+}
+
+// Interning keys on content, not length: same-length distinct runs get distinct
+// ids, and a repeat resolves to its original id regardless of intervening
+// identifiers (the table is a set, not a stack). The last run ends exactly at end
+// of input, exercising the interning path in the flush branch.
+#[test]
+fn self_hosted_lexer_increment_4_interning_is_by_content() {
+    let tokens = lex_tokens(b"cat dog cot dog cat");
+    assert_eq!(
+        tokens,
+        vec![
+            (2, 0), // cat -> id 0
+            (2, 1), // dog -> id 1
+            (2, 2), // cot -> id 2 (same length as cat, differs at byte 1)
+            (2, 1), // dog -> id 1
+            (2, 0), // cat -> id 0, ending exactly at end of input
             (1, 0), // EOF
         ]
     );
