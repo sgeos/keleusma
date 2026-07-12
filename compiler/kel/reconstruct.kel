@@ -46,11 +46,18 @@ shared data io {
 }
 
 // The node-index work stack and the running array counts. `node_count` is the next
-// free node slot; `sp` the stack depth. All reset at the start of each run.
+// free node slot; `sp` the stack depth; `ca`/`lp`/`mp` the next free `call_args`,
+// `limit_parts`, and `match_parts` slots. `pending` collects a `for` loop's five
+// SlotRecords until its ForBuild. All reset at the start of each run.
 private data rs {
     node_count: Word,
     sp: Word,
     stack: [Word; 1024],
+    ca: Word,
+    lp: Word,
+    mp: Word,
+    pending: [Word; 8],
+    pcount: Word,
 }
 
 // Push a node index onto the work stack.
@@ -119,8 +126,94 @@ fn step(k: Word, a: Word) -> Word {
         let cond = pop();
         emit(4, cond, th, el)
     } else {
+    if k == 36 {
+        // IndexStore signal: fold the value (top) and index into a kind-15 node
+        // (value in lhs, index in rhs). The record kind is 36 because 15 collides
+        // with the record DONE marker.
+        let value = pop();
+        let index = pop();
+        emit(15, 0, value, index)
+    } else {
+    if k == 7 {
+        // Call: arg packs `chunk + count*256`. Pop the `count` argument node indices
+        // (last-pushed is the last argument) and store them in source order into the
+        // `call_args` side array. The Call node's lhs is that slice's start and its
+        // rhs the argument count.
+        let chunk = a % 256;
+        let count = a / 256;
+        let args_start = rs.ca;
+        for j in 0..count limit 64 {
+            let node = pop();
+            io.call_args[args_start + count - 1 - j] = node;
+        }
+        rs.ca = args_start + count;
+        emit(7, chunk, args_start, count)
+    } else {
+    if k == 32 {
+        // A SlotRecord carries one of the pending `for` loop's five frame slots.
+        rs.pending[rs.pcount] = a;
+        rs.pcount = rs.pcount + 1;
         0
-    } } } }
+    } else {
+    if k == 33 {
+        // ForBuild: pop the loop's seven nodes (pushed start, end, body, cap, 0, 1, 2)
+        // and assemble the twelve-word limit_parts entry -- the five slots then the
+        // seven node indices in source order. Emits no node.
+        let two = pop();
+        let one = pop();
+        let zero = pop();
+        let cap = pop();
+        let body = pop();
+        let end = pop();
+        let start = pop();
+        let base = rs.lp;
+        io.limit_parts[base] = rs.pending[0];
+        io.limit_parts[base + 1] = rs.pending[1];
+        io.limit_parts[base + 2] = rs.pending[2];
+        io.limit_parts[base + 3] = rs.pending[3];
+        io.limit_parts[base + 4] = rs.pending[4];
+        io.limit_parts[base + 5] = start;
+        io.limit_parts[base + 6] = end;
+        io.limit_parts[base + 7] = body;
+        io.limit_parts[base + 8] = cap;
+        io.limit_parts[base + 9] = zero;
+        io.limit_parts[base + 10] = one;
+        io.limit_parts[base + 11] = two;
+        rs.lp = base + 12;
+        rs.pcount = 0;
+        0
+    } else {
+    if k == 23 {
+        // ForLimit statement: arg is the limit_parts entry start. It folds into the
+        // block popping only the continuation, held in rhs; lhs is unused.
+        let cont = pop();
+        emit(23, a, 0, cont)
+    } else {
+    if k == 34 {
+        // MatchBuild: arg packs `temp*1024 + lit_count`. Pop the wildcard result
+        // (top), then a (result, literal) pair per literal arm, then the scrutinee.
+        // Assemble the match_parts entry -- temp, wildcard, then each arm's (literal,
+        // result) in source order -- and build the MatchIn node (kind 22): arg the
+        // entry start, lhs the scrutinee, rhs the literal-arm count.
+        let temp = a / 1024;
+        let lit_count = a % 1024;
+        let wc = pop();
+        let base = rs.mp;
+        io.match_parts[base] = temp;
+        io.match_parts[base + 1] = wc;
+        for p in 0..lit_count limit 64 {
+            let res = pop();
+            let lit = pop();
+            let arm = lit_count - 1 - p;
+            io.match_parts[base + 2 + arm * 2] = lit;
+            io.match_parts[base + 2 + arm * 2 + 1] = res;
+        }
+        rs.mp = base + 2 + lit_count * 2;
+        let scrut = pop();
+        emit(22, base, scrut, lit_count)
+    } else {
+        0
+    } } } } } } } } } }
 }
 
 // Reconstruct the whole record stream in one call: reset the state, fold each record,
@@ -129,6 +222,10 @@ fn step(k: Word, a: Word) -> Word {
 loop main(resume: Word) -> Word {
     rs.node_count = 0;
     rs.sp = 0;
+    rs.ca = 0;
+    rs.lp = 0;
+    rs.mp = 0;
+    rs.pcount = 0;
     for i in 0..io.rec_count limit 1024 {
         step(io.rec_kind[i], io.rec_arg[i]);
     }

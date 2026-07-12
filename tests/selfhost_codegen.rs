@@ -3250,6 +3250,9 @@ const RC_AST_KINDS: usize = RC_AST_BASE + 1;
 const RC_AST_ARGS: usize = RC_AST_BASE + 1 + 1024;
 const RC_AST_LHS: usize = RC_AST_BASE + 1 + 1024 * 2;
 const RC_AST_RHS: usize = RC_AST_BASE + 1 + 1024 * 3;
+const RC_AST_CALL_ARGS: usize = RC_AST_BASE + 1 + 1024 * 4;
+const RC_AST_MATCH_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 2;
+const RC_AST_LIMIT_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 3;
 const RC_AST_CATEGORY: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 5 + 1;
 
 /// Drive reconstruct.kel over one function's postorder records and read back the
@@ -3299,12 +3302,20 @@ fn reconstruct_via_kel(records: &[(i64, i64)], category: i64, param_count: usize
             rhs: rd(&vm, &shared, RC_AST_RHS + i),
         });
     }
+    // Read each 64-entry side array in full; the caller compares only the prefix the
+    // Rust reconstruction populated.
+    let read_side = |vm: &Vm<'_, '_>, shared: &[u8], base: usize| -> Vec<i64> {
+        (0..64).map(|k| rd(vm, shared, base + k)).collect()
+    };
+    let call_args = read_side(&vm, &shared, RC_AST_CALL_ARGS);
+    let match_parts = read_side(&vm, &shared, RC_AST_MATCH_PARTS);
+    let limit_parts = read_side(&vm, &shared, RC_AST_LIMIT_PARTS);
     Body {
         nodes,
-        call_args: Vec::new(),
+        call_args,
         for_parts: Vec::new(),
-        match_parts: Vec::new(),
-        limit_parts: Vec::new(),
+        match_parts,
+        limit_parts,
         head_parts: Vec::new(),
         category: rd(&vm, &shared, RC_AST_CATEGORY),
         root,
@@ -3330,6 +3341,23 @@ fn assert_reconstruct_kel_matches(src: &str) {
     }
     assert_eq!(via_kel.root, via_rust.root, "root for `{src}`");
     assert_eq!(via_kel.category, via_rust.category, "category for `{src}`");
+    // The reconstruct.kel side arrays are read at full width; compare the prefix the
+    // Rust reconstruction populated (the rest is zero-fill).
+    assert_eq!(
+        via_kel.call_args[..via_rust.call_args.len()],
+        via_rust.call_args[..],
+        "call_args for `{src}`"
+    );
+    assert_eq!(
+        via_kel.match_parts[..via_rust.match_parts.len()],
+        via_rust.match_parts[..],
+        "match_parts for `{src}`"
+    );
+    assert_eq!(
+        via_kel.limit_parts[..via_rust.limit_parts.len()],
+        via_rust.limit_parts[..],
+        "limit_parts for `{src}`"
+    );
 }
 
 // reconstruct.kel increment 1: the atomic, operator, block, and `if` node kinds --
@@ -3347,6 +3375,41 @@ fn reconstruct_kel_matches_rust_for_atomic_and_if_bodies() {
         "fn main(x: Word) -> Word { (x > 0) andalso (x < 10) }",
         "fn main(x: Word) -> Word { (x < 0) orelse (x > 10) }",
         "fn main(x: Word) -> Word { if x > 0 { if x > 10 { 2 } else { 1 } } else { 0 } }",
+    ];
+    for src in cases {
+        assert_reconstruct_kel_matches(src);
+    }
+}
+
+// reconstruct.kel increment 2: function calls (the call_args side array, argument
+// nodes stored in source order) and indexed data writes (the IndexStore signal
+// folding value and index into a kind-15 node).
+#[test]
+fn reconstruct_kel_matches_rust_for_calls_and_indexed_writes() {
+    let cases: &[&str] = &[
+        "fn g(x: Word) -> Word { x + 1 } fn main(x: Word) -> Word { g(x) }",
+        "fn add(a: Word, b: Word) -> Word { a + b } fn main(x: Word) -> Word { add(x, 1) }",
+        "fn g(x: Word) -> Word { x } fn main(x: Word) -> Word { g(g(x)) }",
+        "fn g(a: Word, b: Word, c: Word) -> Word { a } fn main(x: Word) -> Word { g(x, x + 1, x + 2) }",
+        "shared data d { a: [Word; 8] } fn main(i: Word) -> Word { d.a[i] = 3; d.a[i] }",
+    ];
+    for src in cases {
+        assert_reconstruct_kel_matches(src);
+    }
+}
+
+// reconstruct.kel increment 3: bounded `for .. limit` loops (the SlotRecord/ForBuild
+// signals assembling the twelve-word limit_parts entry, and the ForLimit statement)
+// and integer `match` (the MatchBuild signal assembling the match_parts entry and the
+// MatchIn node). With these the whole single-headed body grammar reconstructs.
+#[test]
+fn reconstruct_kel_matches_rust_for_loops_and_matches() {
+    let cases: &[&str] = &[
+        "private data d { s: Word } fn main(n: Word) -> Word { for i in 0..n limit 8 { d.s = d.s + i; } d.s }",
+        "private data d { s: Word } fn main(n: Word) -> Word { for i in 0..n limit 4 { for j in 0..n limit 4 { d.s = d.s + 1; } } d.s }",
+        "fn main(k: Word) -> Word { match k { 0 => 100, 1 => 200, _ => k * 2 } }",
+        "fn g(x: Word) -> Word { x + 1 } fn main(k: Word) -> Word { match k { 0 => g(k), 1 => g(k), _ => g(k) } }",
+        "private data d { s: Word } fn main(n: Word) -> Word { for i in 0..n limit 8 { if i > 0 { d.s = d.s + i; } } d.s }",
     ];
     for src in cases {
         assert_reconstruct_kel_matches(src);
