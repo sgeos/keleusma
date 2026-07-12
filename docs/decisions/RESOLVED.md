@@ -112,9 +112,13 @@ Cross-swap value handling for the data segment follows Replace semantics. The ho
 
 Hot swap atomicity is logical only. The new code text and rodata must be resident in memory and the host-supplied data segment instance must conform to the new schema before the candidate is eligible for installation. The host writes the candidate slot. The VM reads the slot at the next RESET and applies the swap as a single transition from the script's point of view. Crash atomicity, namely recovery from a fault that interrupts the swap, is the responsibility of the host platform and is out of scope for the VM specification. The Ksplice and Kitsune literature treats this question in detail [H4, H5]. Rollback is mechanically identical to a forward update with an older code version selected. After a rollback, the host must mark the rejected version as ineligible or operate in a rollback mode so that the VM does not automatically reinstall the rejected candidate at the next opportunity.
 
-## R28. Singular data block per program
+## R28. Data block multiplicity
 
-A program may declare zero or one `data` block. The grammar admits the syntactic form of multiple data declarations, but the compiler emits an error if more than one block is declared. This decision follows the philosophy of "boring code that does exciting things," in which the script presents a single coherent context type T to the host. Future extension to multiple blocks composed into a single segment is admissible but is not part of the current specification.
+A program may declare at most one `shared` data block, and any number of named `private` and `const` data blocks.
+
+The original rule admitted at most one `data` block per program, and its successor at most one per visibility class, both following the philosophy of "boring code that does exciting things" in which the script presents a single coherent context type T to the host. That rationale is load bearing only for the `shared` segment, which the host mirrors as one type through `marshal_shared_into::<T>` and `unmarshal_shared::<T>`. A second `shared` block would fragment that single host-facing type, so it remains rejected.
+
+Private and const data cross no host boundary. Private data lives in the arena's persistent region and is never exposed through the host API. Const data inlines to constant loads at compile time and occupies no runtime slot. A program may therefore declare several named blocks of each, organising its state and its constant tables into cohesive groups rather than one grab-bag block. The layout and field resolution are block-name-qualified already, keying fields on the pair of block name and field name, so multiple blocks stay distinct with no slot collision. The one added requirement is that two blocks may not share a name, since the name is the layout key. Field types may be nested structs and enums, validated recursively for a fixed size.
 
 ## R29. Host interoperability layer is slot-based
 

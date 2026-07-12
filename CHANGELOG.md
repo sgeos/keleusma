@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Multiple named `private` and `const` data blocks per program.** The single-block
+  rule (R28) relaxes: a program may now declare any number of named `private` and
+  `const` data blocks, keeping only the one-`shared`-block limit. The shared segment is
+  mirrored to the host as a single context type, so a second shared block is still
+  rejected, but private data lives in the arena and const data inlines to constant
+  loads, so neither crosses a host boundary and both may be split into cohesive named
+  groups (`private data cursor { ... }`, `const data opcodes { ... }`, ...) rather than
+  one grab-bag block. Fields resolve on the block-name-and-field pair, so two blocks may
+  hold same-named fields without collision; two blocks may not share a *name*, which is
+  the layout key, and a duplicate name is rejected with its own diagnostic before type
+  checking. Nested struct and enum data fields continue to work. No wire-format or
+  `BYTECODE_VERSION` change.
+
 - **A unit enum-variant pattern matches a `Word` scrutinee by discriminant.** A
   `match` over a `Word` may use a no-payload enum-variant pattern, `match k { Tok::Fn()
   => ..., _ => ... }`, which tests the word against the variant's discriminant. It is a

@@ -10264,6 +10264,31 @@ mod tests {
     }
 
     #[test]
+    fn multiple_private_and_const_data_blocks_run() {
+        // Private and const data cross no host boundary, so a program may declare several
+        // named blocks of each (R28 relaxed). The block-name-qualified layout keeps them
+        // distinct: two const blocks fold their fields, two private blocks each get their
+        // own arena slots, and all read back correctly.
+        let src = "\
+            const data a { one: Word = 1 }\n\
+            const data b { two: Word = 2 }\n\
+            private data p { x: Word }\n\
+            private data q { y: Word }\n\
+            fn main() -> Word { p.x = 10; q.y = 20; a.one + b.two + p.x + q.y }";
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        let module = compile(&program).expect("compile multi-block");
+        let need = required_persistent_capacity_for(&module);
+        let mut arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+        arena.resize_persistent(need).expect("resize");
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        match vm.call_with_shared(&mut shared, &[]).unwrap() {
+            VmState::Finished(v) => assert_eq!(v, Value::Int(33)),
+            other => panic!("expected Finished(Int(33)), got {other:?}"),
+        }
+    }
+
+    #[test]
     fn eval_data_write() {
         // Write to a data slot and read it back.
         let src = "\
