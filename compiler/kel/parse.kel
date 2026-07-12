@@ -307,9 +307,9 @@ private data call {
 // previous plus one otherwise) unless an explicit `= N` overrides it and reseeds the
 // running `next_disc`. `cur_enum` is the enum under construction.
 private data enums {
-    edata: [Word; 64],
-    evar: [Word; 64],
-    edisc: [Word; 64],
+    edata: [Word; 256],
+    evar: [Word; 256],
+    edisc: [Word; 256],
     enum_count: Word,
     cur_enum: Word,
     next_disc: Word,
@@ -364,7 +364,7 @@ fn step_ident(v: Word) -> Word {
         0
     } else {
     ps.found_flag = 0;
-    for i in 0..enums.enum_count limit 64 {
+    for i in 0..enums.enum_count limit 256 {
         if enums.edata[i] == v {
             ps.found_flag = 1;
         }
@@ -393,7 +393,7 @@ fn step_enum(k: Word, v: Word) -> Word {
     if mat.enum_phase == 2 {
         if k == Tok::Ident() as Word {
             mat.enum_disc = 0;
-            for i in 0..enums.enum_count limit 64 {
+            for i in 0..enums.enum_count limit 256 {
                 if enums.edata[i] == mat.enum_name andalso enums.evar[i] == v {
                     mat.enum_disc = enums.edisc[i];
                 }
@@ -440,7 +440,7 @@ fn step_mpat(k: Word, v: Word) -> Word {
     if mat.mpat_phase == 2 {
         if k == Tok::Ident() as Word {
             mat.enum_disc = 0;
-            for i in 0..enums.enum_count limit 64 {
+            for i in 0..enums.enum_count limit 256 {
                 if enums.edata[i] == mat.enum_name andalso enums.evar[i] == v {
                     mat.enum_disc = enums.edisc[i];
                 }
@@ -834,7 +834,7 @@ fn step_match(k: Word, v: Word) -> Word {
             // discriminant literal, the same arm an integer literal forms. Recognise the
             // enum name, then read the `::Variant()` in step_mpat.
             ps.found_flag = 0;
-            for i in 0..enums.enum_count limit 64 {
+            for i in 0..enums.enum_count limit 256 {
                 if enums.edata[i] == v {
                     ps.found_flag = 1;
                 }

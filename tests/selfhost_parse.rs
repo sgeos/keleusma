@@ -1696,3 +1696,65 @@ fn a_match_let_value_with_an_enum_arm() {
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
 }
+
+// ACTUAL STAGE SOURCE, VERBATIM. The three real enums parse.kel declares (`Tok`, `Node`,
+// `OpCode`) with their explicit, out-of-order discriminants, and three of parse.kel's own
+// self-contained functions (`prec_of`, `opcode_of`, `emit_op`) copied verbatim. Unlike the
+// paraphrased emit_op test, this feeds the real out-of-order discriminants (Underscore=50
+// then LBracket=41, ...), so it exercises parse.kel's explicit-discriminant enum-table
+// accumulation against the genuine stage vocabulary: every `Tok::X()`/`OpCode::X()` pattern
+// and every `Node::X() as Word` cast must resolve to the discriminant literal the reference
+// compiler assigns. This is parse.kel parsing its own source, the strongest self-parse yet.
+#[test]
+fn parse_kel_parses_its_own_enums_and_operator_functions() {
+    let src = "\
+        enum Tok { \
+            Fn = 0, Ident = 1, LBrace = 2, RBrace = 3, Yield = 5, Loop = 6, LParen = 7, \
+            RParen = 8, Colon = 9, Comma = 10, IntLit = 12, Data = 13, Shared = 14, \
+            Private = 15, Const = 16, Eq = 17, Use = 19, Plus = 21, Minus = 22, Star = 23, \
+            Slash = 24, Percent = 25, EqEq = 26, NotEq = 27, Lt = 28, Gt = 29, LtEq = 30, \
+            GtEq = 31, Not = 32, Band = 33, Bor = 34, Bxor = 35, Andalso = 36, Orelse = 37, \
+            Let = 38, Semi = 39, Dot = 40, If = 43, Else = 44, For = 45, In = 46, \
+            DotDot = 47, Match = 48, FatArrow = 49, Underscore = 50, LBracket = 41, \
+            RBracket = 42, ColCol = 51, As = 52, Enum = 53 } \
+        enum Node { \
+            Literal = 1, Local = 2, BinOp = 3, If = 4, LetIn = 5, Not = 6, Call = 7, \
+            DataRead = 11, DataAssignIn = 12, IndexRead = 13, IndexAssignIn = 14, \
+            Andalso = 8, Orelse = 9, Neg = 10, Done = 15, Unit = 20, ExprStmt = 21, \
+            ForLimit = 23, YieldExpr = 24, SlotRecord = 32, ForBuild = 33, MatchBuild = 34, \
+            IndexStore = 36 } \
+        enum OpCode { \
+            Add = 1, Mul = 2, Sub = 3, Div = 4, Mod = 5, Eq = 6, NotEq = 7, Lt = 8, Gt = 9, \
+            LtEq = 10, GtEq = 11, Band = 12, Bor = 13, Bxor = 14, Paren = 15, Neg = 16, \
+            Not = 17, Andalso = 18, Orelse = 19, IndexMark = 20, CallMark = 21, \
+            YieldMark = 22 } \
+        fn prec_of(op: Word) -> Word { \
+            match op { \
+                OpCode::Neg() => 9, OpCode::Not() => 9, OpCode::Paren() => 0, \
+                OpCode::IndexMark() => 0, OpCode::YieldMark() => 0, OpCode::Mul() => 8, \
+                OpCode::Div() => 8, OpCode::Mod() => 8, OpCode::Add() => 7, \
+                OpCode::Sub() => 7, OpCode::Band() => 6, OpCode::Bxor() => 5, \
+                OpCode::Bor() => 4, OpCode::Andalso() => 2, OpCode::Orelse() => 1, _ => 3 } } \
+        fn opcode_of(k: Word) -> Word { \
+            match k { \
+                Tok::Plus() => OpCode::Add() as Word, Tok::Minus() => OpCode::Sub() as Word, \
+                Tok::Star() => OpCode::Mul() as Word, Tok::Slash() => OpCode::Div() as Word, \
+                Tok::Percent() => OpCode::Mod() as Word, Tok::EqEq() => OpCode::Eq() as Word, \
+                Tok::NotEq() => OpCode::NotEq() as Word, Tok::Lt() => OpCode::Lt() as Word, \
+                Tok::Gt() => OpCode::Gt() as Word, Tok::LtEq() => OpCode::LtEq() as Word, \
+                Tok::GtEq() => OpCode::GtEq() as Word, Tok::Band() => OpCode::Band() as Word, \
+                Tok::Bor() => OpCode::Bor() as Word, Tok::Bxor() => OpCode::Bxor() as Word, \
+                Tok::Andalso() => OpCode::Andalso() as Word, \
+                Tok::Orelse() => OpCode::Orelse() as Word, _ => 0 } } \
+        fn emit_op(op: Word) -> Word { \
+            match op { \
+                OpCode::Neg() => Node::Neg() as Word, OpCode::Not() => Node::Not() as Word, \
+                OpCode::Andalso() => Node::Andalso() as Word, \
+                OpCode::Orelse() => Node::Orelse() as Word, \
+                OpCode::YieldMark() => Node::YieldExpr() as Word, \
+                _ => Node::BinOp() as Word + op * 64 } }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    assert_eq!(got.funcs.len(), 3); // prec_of, opcode_of, emit_op
+}
