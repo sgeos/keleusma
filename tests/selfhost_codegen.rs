@@ -4100,3 +4100,23 @@ fn assembled_signatures_match_the_reference() {
         }
     }
 }
+
+// The schema hash is a pure function of the DataLayout, which the driver assembles
+// itself, so the driver computes the module's schema hash from its own assembled layout
+// -- matching the reference for every stage source.
+#[test]
+fn assembled_schema_hash_matches_the_reference() {
+    for path in [
+        "compiler/kel/lexer.kel",
+        "compiler/kel/reconstruct.kel",
+        "compiler/kel/codegen.kel",
+        "compiler/kel/parse.kel",
+    ] {
+        let src = std::fs::read_to_string(path).expect("read stage");
+        let (_fns, names, data_records, _enums) = parse_functions(&src);
+        let dl = assemble_data_layout(&data_records, &names);
+        let hash = keleusma::bytecode::compute_schema_hash(Some(&dl));
+        let reference = compile_src(&src);
+        assert_eq!(hash, reference.schema_hash, "schema hash for {path}");
+    }
+}
