@@ -257,10 +257,10 @@ private data mat {
 // `cur_*`/`has_field` fields hold the field under construction until its length is known
 // (a scalar at its type, an array at its ASIZE), committed at the next field or the `}`.
 private data fields {
-    fdata: [Word; 64],
-    ffield: [Word; 64],
-    fbase: [Word; 64],
-    flen: [Word; 64],
+    fdata: [Word; 256],
+    ffield: [Word; 256],
+    fbase: [Word; 256],
+    flen: [Word; 256],
     field_count: Word,
     base_ctr: Word,
     cur_block: Word,
@@ -353,7 +353,7 @@ fn step_ident(v: Word) -> Word {
         0
     } else {
     ps.found_flag = 0;
-    for i in 0..fields.field_count limit 64 {
+    for i in 0..fields.field_count limit 256 {
         if fields.fdata[i] == v {
             ps.found_flag = 1;
         }
@@ -468,7 +468,7 @@ fn step_dafield(k: Word, v: Word) -> Word {
     if k == 1 {
         da.da_base = 0;
         da.da_len = 1;
-        for i in 0..fields.field_count limit 64 {
+        for i in 0..fields.field_count limit 256 {
             if fields.fdata[i] == da.da_data andalso fields.ffield[i] == v {
                 da.da_base = fields.fbase[i];
                 da.da_len = fields.flen[i];
