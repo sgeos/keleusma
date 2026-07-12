@@ -2328,6 +2328,18 @@ fn parse_into_codegen_yield_in_a_loop_matches_the_reference() {
             20,
             42,
         ),
+        // `yield` of a block-form if: the yield marker must span the whole if, so the
+        // Yield op follows the branch. Regression for the fixed marker-drain bug.
+        (
+            "loop main(r: Word) -> Word { yield if r < 5 { 1 } else { 2 } }",
+            3,
+            1,
+        ),
+        (
+            "loop main(r: Word) -> Word { yield if r < 5 { 1 } else { 2 } }",
+            9,
+            2,
+        ),
     ];
     for &(src, input, expected) in cases {
         let (records, param_count, category) = parse_function_records(src);
@@ -2363,21 +2375,14 @@ fn parse_into_codegen_yield_in_a_loop_matches_the_reference() {
 }
 
 // Harden the bridge on combined and nested constructs: the individual kinds each
-// pass, but their compositions exercise the reconstruction's stack discipline
-// under interaction. These five compose cleanly -- an if inside a for body, a call
-// in a for body, a match over a let value, a call inside an if branch, and a data
-// read as a match arm result -- and are byte-identical to the reference.
-//
-// Two compositions are deliberately absent because they surface parse.kel record
-// bugs (not codegen-bridge bugs), each tracked as a separate finding:
-//   1. `yield if c { .. } else { .. }`: parse.kel drains the yield marker after the
-//      if's condition rather than over the whole if, so the Yield emits before the
-//      branch instead of after.
-//   2. `f(match x { .. })` (a match as a call argument): parse.kel drains the call
-//      marker as a spurious BinOp (OpCode CallMark=21 -> record (3, 21)) and never
-//      emits the Call node, so the argument's match displaces the call.
-// Both are call/yield-marker interactions in parse.kel's shunting-yard; the
-// bridge reconstruction is correct for every composition parse.kel emits soundly.
+// pass, but their compositions exercise the reconstruction's stack discipline under
+// interaction. All compose cleanly and are byte-identical to the reference -- an if
+// inside a for body, a call in a for body, a match over a let value, a call whose
+// argument is a match, a call inside an if branch, and a data read as a match arm
+// result. The match-as-call-argument case (`f(match x { .. })`) is a regression for
+// the fixed marker-drain bug in parse.kel: a sub-expression drain used to pop the
+// enclosing call marker as a spurious BinOp, so the Call was never emitted; it now
+// stops at the marker, which the closing `)` consumes into the Call.
 #[test]
 fn parse_into_codegen_combined_constructs_match_the_reference() {
     let cases: &[(&str, i64, i64)] = &[
@@ -2398,6 +2403,14 @@ fn parse_into_codegen_combined_constructs_match_the_reference() {
             "fn main(n: Word) -> Word { let c = n + 1; match c { 3 => 100, _ => c * 2 } }",
             1,
             4,
+        ),
+        // a call whose argument is a match expression. Regression for the fixed
+        // marker-drain bug: the call marker must survive the match's scrutinee and
+        // arm drains so the Call node is emitted after the match.
+        (
+            "fn inc(x: Word) -> Word { x + 1 } fn main(n: Word) -> Word { inc(match n { 0 => 10, _ => 20 }) }",
+            5,
+            21,
         ),
         // a call inside an if branch.
         (
