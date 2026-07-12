@@ -16,32 +16,32 @@
 // and its length in `src.len`, then drives the loop with resume. Byte work is
 // plain array indexing (R3.3); no `Text` native is needed for this increment.
 //
-// Token wire. Each yielded token is a single Word, `kind + value*16`:
-//   kind 0 PENDING  no complete token this iteration; the host skips it
-//   kind 1 EOF      end of source; value 0
-//   kind 2 IDENT    identifier run; value = its interned id (increment 4)
-//   kind 3 INT      integer literal; value = its parsed value
-//   kind 4 PUNCT    single-byte punctuation; value = the byte
-//   kind 5 OP2      two-byte operator (increment 2); value = a compound code
-//   kind 6 KEYWORD  a keyword identifier run (increment 3); value = its Tok code
-// Increment 3 (KEYWORD). An identifier run that spells a language keyword is
-// classified to the parser's unified `Tok` discriminant (fn 0, yield 5, loop 6,
-// data 13, shared 14, private 15, const 16, use 19, not 32, band 33, bor 34,
-// bxor 35, andalso 36, orelse 37, let 38, if 43, else 44, for 45, in 46,
-// match 48, as 52, enum 53) rather than emitted as a plain IDENT, so the lexer's
-// output kinds move closer to the parser's token vocabulary. A non-keyword run is
-// still an IDENT. See `keyword_code` and its per-length helpers.
-// Increment 4 (interning). A non-keyword IDENT now carries a stable id rather than
-// a byte length: each distinct identifier is assigned an index in an intern table
-// on first sight and every later occurrence resolves to the same id, the identity
-// the parser needs to match a name to a chunk, field, or enum. See `intern_id`.
-// Increment 2 (OP2). The lexer now does maximal munch over the two-character
-// operators the grammar uses, so `==`, `<=`, `::`, `..`, and `=>` are one token
-// rather than two punctuation bytes. The compound codes are 0 `==`, 1 `!=`,
-// 2 `<=`, 3 `>=`, 4 `::`, 5 `..`, 6 `=>`; a `=`, `<`, `>`, `:`, `.`, or `!` not
-// followed by its partner still emits a single-byte PUNCT. This is the first step
-// toward emitting the parser's unified token vocabulary directly.
-// Spans, string interning, keyword resolution, and the richer `Token` struct in
+// Token wire (increment 5, unified vocabulary). Each yielded Word is
+// `tok + payload*64`, where `tok` is the parser's `Tok` discriminant and
+// `payload` is the token's datum, so the lexer's output stream IS the parser's
+// input stream and the two stages can be composed with no host-side adapter. Two
+// out-of-band markers ride above the Tok range (0..53), so they never collide
+// with `Tok::Fn = 0`:
+//   63 PENDING  no complete token this iteration; the host skips it
+//   62 EOF      end of source
+// Payloads: an Ident (Tok 1) carries its interned id; an IntLit (Tok 12) carries
+// its parsed value; every other token has payload 0. The Tok discriminants:
+// fn 0, Ident 1, LBrace 2, RBrace 3, Yield 5, Loop 6, LParen 7, RParen 8,
+// Colon 9, Comma 10, IntLit 12, data 13, shared 14, private 15, const 16, Eq 17,
+// use 19, Plus 21, Minus 22, Star 23, Slash 24, Percent 25, EqEq 26, NotEq 27,
+// Lt 28, Gt 29, LtEq 30, GtEq 31, not 32, band 33, bor 34, bxor 35, andalso 36,
+// orelse 37, let 38, Semicolon 39, Dot 40, LBracket 41, RBracket 42, if 43,
+// else 44, for 45, in 46, DotDot 47, match 48, FatArrow 49, Underscore 50,
+// ColCol 51, as 52, enum 53; the catch-all 4 absorbs the `->` arrow and any
+// unrecognized punctuation, which the parser skips.
+//
+// This wire is reached incrementally: increment 2 added maximal munch over the
+// two-byte operators (`==`, `<=`, `::`, `..`, `=>`, and now `->`), increment 3
+// keyword classification, increment 4 identifier interning, and increment 5 folds
+// all of these plus the single-byte punctuation into the one `Tok`-coded wire via
+// `op2_tok`, `punct_tok`, and `ident_token`. A lone `_` is the Underscore token,
+// while `_foo` is an ordinary identifier.
+// Spans, string interning of literals, and the richer `Token` struct in
 // prelude.kel land in later increments once struct-valued yields are wired.
 
 // The self-hosted compiler is a full-width host tool. Its token encoding does
@@ -87,15 +87,19 @@ fn is_digit(b: Word) -> Word {
 }
 
 fn is_alpha(b: Word) -> Word {
-    if b >= 97 {
-        if b <= 122 { 1 } else { 0 }
-    } else {
-        if b >= 65 {
-            if b <= 90 { 1 } else { 0 }
-        } else {
-            if b == 95 { 1 } else { 0 }
-        }
-    }
+    // Lowercase [97,122], uppercase [65,90], or underscore (95). The underscore is
+    // checked on its own rather than inside the uppercase branch, since 95 is above
+    // the uppercase range and would otherwise be misclassified as a non-letter.
+    if b >= 97 andalso b <= 122 { 1 } else {
+    if b >= 65 andalso b <= 90 { 1 } else {
+    if b == 95 { 1 } else { 0 } } }
+}
+
+// An identifier continues with a letter, an underscore, or a digit (but must begin
+// with a letter or underscore, which the start branch enforces with `is_alpha`).
+// Without the digit, `kw2` would split into the identifier `kw` and the integer 2.
+fn is_ident_cont(b: Word) -> Word {
+    if is_alpha(b) == 1 { 1 } else { if is_digit(b) == 1 { 1 } else { 0 } }
 }
 
 fn is_space(b: Word) -> Word {
@@ -113,10 +117,11 @@ fn peek_at(pos: Word) -> Word {
 }
 
 // Classify a two-byte operator by its first byte `b` and the byte after it,
-// `next`. Returns the compound code plus one (1..7) so 0 cleanly means "not a
+// `next`. Returns the compound code plus one (1..8) so 0 cleanly means "not a
 // two-byte operator"; the caller subtracts one to recover the code. Factored out
 // of the loop so the per-iteration body stays shallow (the parser stage learned
 // that deep loop nesting overflows the host compiler's recursion-depth limit).
+// Codes: 0 `==`, 1 `!=`, 2 `<=`, 3 `>=`, 4 `::`, 5 `..`, 6 `=>`, 7 `->`.
 fn compound_code(b: Word, next: Word) -> Word {
     if b == 61 {
         // `=` begins `==` (code 0) or `=>` (code 6); otherwise a lone `=`.
@@ -127,7 +132,8 @@ fn compound_code(b: Word, next: Word) -> Word {
     if b == 62 { if next == 61 { 4 } else { 0 } } else {   // `>=`
     if b == 58 { if next == 58 { 5 } else { 0 } } else {   // `::`
     if b == 46 { if next == 46 { 6 } else { 0 } } else {   // `..`
-    0 } } } } } }
+    if b == 45 { if next == 62 { 8 } else { 0 } } else {   // `->`
+    0 } } } } } } }
 }
 
 // Keyword recognition (increment 3). An identifier run whose bytes spell one of
@@ -258,38 +264,93 @@ fn intern_id(start: Word, len: Word) -> Word {
     }
 }
 
-// The token word for a completed identifier run at `start` of `len` bytes: a
-// KEYWORD token (kind 6, value the parser's Tok code) when the run spells a
-// keyword, else an IDENT token (kind 2, value the run's interned id).
+// Map a two-byte operator's compound code (0..7) to its parser `Tok` code. The
+// arrow `->` has no dedicated Tok variant (the runtime tokenizer's Arrow folds to
+// the catch-all 4, which the parser skips between the parameter list and the
+// return type), so code 7 maps to 4 like any other unrecognized punctuation.
+fn op2_tok(code: Word) -> Word {
+    if code == 0 { 26 } else {   // ==  EqEq
+    if code == 1 { 27 } else {   // !=  NotEq
+    if code == 2 { 30 } else {   // <=  LtEq
+    if code == 3 { 31 } else {   // >=  GtEq
+    if code == 4 { 51 } else {   // ::  ColCol
+    if code == 5 { 47 } else {   // ..  DotDot
+    if code == 6 { 49 } else {   // =>  FatArrow
+    4 } } } } } } }              // ->  Arrow (catch-all)
+}
+
+// Map a single punctuation byte to its parser `Tok` code, split into a delimiter
+// group and an operator group so each helper stays a shallow if-else chain. An
+// unrecognized byte becomes the catch-all Tok 4, matching the reference adapter.
+fn punct_tok(b: Word) -> Word {
+    let t = punct_delim(b);
+    if t >= 0 { t } else { punct_op(b) }
+}
+
+fn punct_delim(b: Word) -> Word {
+    if b == 123 { 2 } else {    // {  LBrace
+    if b == 125 { 3 } else {    // }  RBrace
+    if b == 40 { 7 } else {     // (  LParen
+    if b == 41 { 8 } else {     // )  RParen
+    if b == 91 { 41 } else {    // [  LBracket
+    if b == 93 { 42 } else {    // ]  RBracket
+    if b == 58 { 9 } else {     // :  Colon
+    if b == 44 { 10 } else {    // ,  Comma
+    if b == 59 { 39 } else {    // ;  Semicolon
+    0 - 1 } } } } } } } } }
+}
+
+fn punct_op(b: Word) -> Word {
+    if b == 61 { 17 } else {    // =  Eq
+    if b == 43 { 21 } else {    // +  Plus
+    if b == 45 { 22 } else {    // -  Minus
+    if b == 42 { 23 } else {    // *  Star
+    if b == 47 { 24 } else {    // /  Slash
+    if b == 37 { 25 } else {    // %  Percent
+    if b == 60 { 28 } else {    // <  Lt
+    if b == 62 { 29 } else {    // >  Gt
+    if b == 46 { 40 } else {    // .  Dot
+    4 } } } } } } } } }
+}
+
+// The token word for a completed identifier run at `start` of `len` bytes, in the
+// unified wire `tok + payload*64`: a lone `_` is the Underscore token (Tok 50); a
+// keyword run is its Tok code with no payload; any other run is an Ident (Tok 1)
+// carrying its interned id as the payload.
 fn ident_token(start: Word, len: Word) -> Word {
-    let kc = keyword_code(start, len);
-    if kc >= 0 { 6 + kc * 16 } else { 2 + intern_id(start, len) * 16 }
+    if len == 1 andalso peek_at(start) == 95 {
+        50
+    } else {
+        let kc = keyword_code(start, len);
+        if kc >= 0 { kc } else { 1 + intern_id(start, len) * 64 }
+    }
 }
 
 loop main(resume: Word) -> Word {
     if st.cursor >= src.len {
-        // End of source: flush a token still being built, then report EOF.
+        // End of source: flush a token still being built, then report EOF (62).
         if st.kind == 0 {
-            yield 1
+            yield 62
         } else {
         if st.kind == 2 {
             // A keyword or identifier ending exactly at end of input.
             st.kind = 0;
             yield ident_token(st.start, st.val)
         } else {
-            let k = st.kind;
+            // An integer ending at end of input: IntLit (Tok 12), value the payload.
             let v = st.val;
             st.kind = 0;
-            yield k + v * 16
+            yield 12 + v * 64
         } }
     } else {
         let b = src.bytes[st.cursor] as Word;
         if st.kind == 2 {
-            // Extending an identifier, or ending it at a non-identifier byte.
-            if is_alpha(b) == 1 {
+            // Extending an identifier, or ending it at a non-identifier byte. The
+            // continuation set includes digits, so `kw2` is one identifier.
+            if is_ident_cont(b) == 1 {
                 st.cursor = st.cursor + 1;
                 st.val = st.val + 1;
-                yield 0
+                yield 63
             } else {
                 // The run ended: classify it as a keyword or emit it as an IDENT.
                 st.kind = 0;
@@ -301,40 +362,42 @@ loop main(resume: Word) -> Word {
             if is_digit(b) == 1 {
                 st.cursor = st.cursor + 1;
                 st.val = st.val * 10 + (b - 48);
-                yield 0
+                yield 63
             } else {
+                // IntLit (Tok 12), the parsed value as the payload.
                 let v = st.val;
                 st.kind = 0;
-                yield 3 + v * 16
+                yield 12 + v * 64
             }
         } else {
             // No token in progress: start one, skip whitespace, or emit punctuation.
             if is_space(b) == 1 {
                 st.cursor = st.cursor + 1;
-                yield 0
+                yield 63
             } else {
             if is_alpha(b) == 1 {
                 st.kind = 2;
                 st.start = st.cursor;
                 st.val = 1;
                 st.cursor = st.cursor + 1;
-                yield 0
+                yield 63
             } else {
             if is_digit(b) == 1 {
                 st.kind = 3;
                 st.start = st.cursor;
                 st.val = b - 48;
                 st.cursor = st.cursor + 1;
-                yield 0
+                yield 63
             } else {
-                // Punctuation: a two-byte operator by maximal munch, else one byte.
+                // Punctuation: a two-byte operator by maximal munch, else one byte,
+                // each mapped to its parser Tok code (payload 0).
                 let cc = compound_code(b, peek_at(st.cursor + 1));
                 if cc > 0 {
                     st.cursor = st.cursor + 2;
-                    yield 5 + (cc - 1) * 16
+                    yield op2_tok(cc - 1)
                 } else {
                     st.cursor = st.cursor + 1;
-                    yield 4 + b * 16
+                    yield punct_tok(b)
                 }
             } } }
         } }
