@@ -1649,15 +1649,19 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize) {
 /// 0/1/2 as nodes, then five SlotRecords (32) carrying its frame slots, then a
 /// ForBuild (33) that assembles the 12-word limit_parts entry (the five slots then
 /// the start, end, body, cap, 0, 1, 2 node indices); the ForLimit statement (23)
-/// folds into the block popping only the continuation. This increment covers the
-/// arithmetic, comparison, bitwise, unary, short-circuit, block, if, scalar and
-/// indexed data-access, call, and for-limit kinds; a record of any other kind is
-/// rejected until a later increment adds it.
+/// folds into the block popping only the continuation. A `match` streams its
+/// scrutinee, a (literal, result) pair per literal arm, and the wildcard result,
+/// then a MatchBuild (34) packing `temp*1024 + lit_count`, which assembles the
+/// match_parts entry (temp, wildcard, then the pairs) and builds the MatchIn node.
+/// This increment covers the arithmetic, comparison, bitwise, unary, short-circuit,
+/// block, if, scalar and indexed data-access, call, for-limit, and integer-match
+/// kinds; a record of any other kind is rejected until a later increment adds it.
 fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
     let mut nodes: Vec<Node> = Vec::new();
     let mut stack: Vec<i64> = Vec::new();
     let mut call_args: Vec<i64> = Vec::new();
     let mut limit_parts: Vec<i64> = Vec::new();
+    let mut match_parts: Vec<i64> = Vec::new();
     let mut pending_slots: Vec<i64> = Vec::new();
     for &(kind, arg) in records {
         // A SlotRecord (32) carries a frame slot for the pending `for` loop, and a
@@ -1742,6 +1746,40 @@ fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
                 });
                 (nodes.len() - 1) as i64
             }
+            34 => {
+                // MatchBuild signal: arg packs `temp*1024 + lit_count`. The stack
+                // holds the scrutinee, then a (literal, result) pair per literal arm,
+                // then the wildcard result on top. Assemble the match_parts entry
+                // (temp, wildcard, then the literal/result pairs) and build the
+                // MatchIn node (kind 22): arg = entry start, lhs = scrutinee, rhs =
+                // literal-arm count. Unlike the for loop, the build signal itself
+                // produces the value node.
+                let temp = arg.div_euclid(1024);
+                let lit_count = arg.rem_euclid(1024);
+                let wc = stack.pop().expect("match wildcard result");
+                let mut pairs: Vec<(i64, i64)> = Vec::new();
+                for _ in 0..lit_count {
+                    let res = stack.pop().expect("match arm result");
+                    let lit = stack.pop().expect("match arm literal");
+                    pairs.push((lit, res));
+                }
+                pairs.reverse();
+                let scrut = stack.pop().expect("match scrutinee");
+                let base = match_parts.len() as i64;
+                match_parts.push(temp);
+                match_parts.push(wc);
+                for (lit, res) in &pairs {
+                    match_parts.push(*lit);
+                    match_parts.push(*res);
+                }
+                nodes.push(Node {
+                    kind: 22,
+                    arg: base,
+                    lhs: scrut,
+                    rhs: lit_count,
+                });
+                (nodes.len() - 1) as i64
+            }
             6 | 10 | 13 => {
                 let c = stack.pop().expect("unary operand");
                 nodes.push(Node {
@@ -1793,7 +1831,7 @@ fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
         nodes,
         call_args,
         for_parts: Vec::new(),
-        match_parts: Vec::new(),
+        match_parts,
         limit_parts,
         head_parts: Vec::new(),
         category,
@@ -2165,6 +2203,69 @@ fn parse_into_codegen_for_limit_matches_the_reference() {
             "private data d { s: Word } fn main(v: Word) -> Word { let base = v; for i in 0..3 limit 8 { d.s = d.s + base; } d.s }",
             10,
             30,
+        ),
+    ];
+    for &(src, input, expected) in cases {
+        let (records, param_count) = parse_function_records(src);
+        let body = reconstruct_body(&records, 0);
+        let (emitted, pool, local_count) = run_codegen(&body, param_count);
+
+        let reference = compile_src(src);
+        let idx = reference
+            .chunks
+            .iter()
+            .position(|c| c.name == "main")
+            .unwrap();
+        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
+        assert_eq!(
+            local_count, reference.chunks[idx].local_count as i64,
+            "local_count for `{src}`"
+        );
+
+        let mut built = compile_src(src);
+        built.chunks[idx].ops = emitted;
+        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].local_count = local_count as u16;
+        let need = required_persistent_capacity_for(&built);
+        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+        arena.resize_persistent(need).expect("resize");
+        let mut vm = Vm::new(built, &arena).expect("verify built");
+        match vm.call(&[Value::Int(input)]).expect("call built") {
+            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
+            other => panic!("unexpected result for `{src}`: {other:?}"),
+        }
+    }
+}
+
+// The bridge over the integer `match` expression: the MatchBuild signal assembles
+// the match_parts entry (temp slot, wildcard, then the literal/result pairs) and
+// builds the MatchIn node. Same self-hosted path and byte-identity check.
+#[test]
+fn parse_into_codegen_match_matches_the_reference() {
+    let cases: &[(&str, i64, i64)] = &[
+        // two literal arms and a wildcard; the matched arm is taken.
+        (
+            "fn main(n: Word) -> Word { match n { 0 => 10, 1 => 20, _ => 30 } }",
+            1,
+            20,
+        ),
+        // the wildcard arm is taken and reads the scrutinee.
+        (
+            "fn main(n: Word) -> Word { match n { 0 => 100, _ => n + 1 } }",
+            5,
+            6,
+        ),
+        // a match as a let value, its result used in the tail.
+        (
+            "fn main(n: Word) -> Word { let r = match n { 1 => 100, _ => n }; r + 1 }",
+            1,
+            101,
+        ),
+        // arithmetic in an arm result.
+        (
+            "fn main(n: Word) -> Word { match n { 2 => n * 10, _ => 0 } }",
+            2,
+            20,
         ),
     ];
     for &(src, input, expected) in cases {
