@@ -1581,3 +1581,48 @@ fn a_stage_shaped_dispatch_function_parses() {
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
 }
+
+// A real stage function (parse.kel's own emit_op): a match over enum-variant patterns
+// whose arm results are enum casts, with an enum-cast-plus-arithmetic wildcard. This
+// combines enum patterns, enum casts in arm results, and arithmetic as the stages do.
+#[test]
+fn the_emit_op_stage_function_parses() {
+    let src = "enum Op { Neg, Not, Andalso, Orelse, YieldMark } \
+        enum Nd { BinOp, Neg, Not, Andalso, Orelse, YieldExpr } \
+        fn emit_op(op: Word) -> Word { \
+            match op { \
+                Op::Neg() => Nd::Neg() as Word, \
+                Op::Not() => Nd::Not() as Word, \
+                Op::Andalso() => Nd::Andalso() as Word, \
+                Op::Orelse() => Nd::Orelse() as Word, \
+                Op::YieldMark() => Nd::YieldExpr() as Word, \
+                _ => Nd::BinOp() as Word + op * 64 \
+            } \
+        }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+}
+
+// A scan function shaped like the parser's own table lookups (resolve_param, step_ident):
+// a `for .. limit` loop whose body is an else-less `if` with an indexed data read in the
+// condition and data writes in the body, plus a data-read tail.
+#[test]
+fn a_stage_scan_loop_function_parses() {
+    let src = "shared data src { chunks: [Word; 8], chunk_count: Word } \
+        private data st { found: Word, flag: Word } \
+        fn resolve(v: Word) -> Word { \
+            st.found = 0; \
+            st.flag = 0; \
+            for i in 0..src.chunk_count limit 8 { \
+                if src.chunks[i] == v { \
+                    st.found = i; \
+                    st.flag = 1; \
+                } \
+            } \
+            st.found \
+        }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+}
