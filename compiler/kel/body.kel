@@ -68,8 +68,8 @@
 // An `if cond { then } else { else }` conditional is an If node (kind 4, arg = the
 // condition node, `lhs` the then branch, `rhs` the else branch); the host pops the
 // three sub-nodes off its stack (cond, then, else), emitted in that order. An
-// `if`-context stack `if_phase`/`if_sp` tracks each pending conditional's phase (1
-// condition, 2 then, 3 awaiting `else`, 4 awaiting the else `{`, 5 else), so nested
+// `if`-context stack `if_phase`/`if_sp` tracks each pending conditional's phase
+// (if_cond, if_then, if_await_else, if_await_brace, if_else), so nested
 // conditionals resolve their `{`, `}`, and `else` against the innermost. The condition
 // and the condition is an expression drained at the `{` after it (reason 2). Each
 // branch is a full statement block: its statements accumulate onto the shared list from
@@ -282,6 +282,31 @@ const data phase {
     fold_then: Word = 1,
     fold_else: Word = 2,
     fold_forbody: Word = 3,
+    // The `if cond { then } else { else }` conditional, an array-indexed phase per
+    // pending conditional (if_phase[if_sp - 1]).
+    if_idle: Word = 0,
+    if_cond: Word = 1,
+    if_then: Word = 2,
+    if_await_else: Word = 3,
+    if_await_brace: Word = 4,
+    if_else: Word = 5,
+    // The `match scrut { arms }` expression, an array-indexed phase per pending match
+    // (match_phase[match_sp - 1]): the scrutinee `{`, an arm pattern, the `=>`, the
+    // arm result.
+    match_idle: Word = 0,
+    match_open: Word = 1,
+    match_pat: Word = 2,
+    match_arrow: Word = 3,
+    match_result: Word = 4,
+}
+
+// The pending-statement kind recorded when a statement's value begins, selecting how the
+// block fold wraps it once the value drains: a `let name =` binding, a scalar
+// `data.field =` assignment, or an indexed `data.field[i] =` assignment.
+const data pstmt {
+    let_bind: Word = 0,
+    assign: Word = 1,
+    index_assign: Word = 2,
 }
 
 // The host-provided body token stream, parameter-name table, and data-field layout.
@@ -635,7 +660,7 @@ fn step_iclosing() -> Word {
 fn step_post_index(k: Word) -> Word {
     bs.post_index = 0;
     if k == Tok::Eq() as Word {
-        bs.pstmt_kind[bs.pstmt_sp] = 2;
+        bs.pstmt_kind[bs.pstmt_sp] = pstmt.index_assign;
         bs.pstmt_arg[bs.pstmt_sp] = bs.pidx_base + bs.pidx_len * enc.pack;
         bs.pstmt_sp = bs.pstmt_sp + 1;
         bs.expect_operand = 1;
@@ -664,7 +689,7 @@ fn step_draining() -> Word {
             // itself, so the innermost pending entry, if any, is this statement's own.
             if bs.pstmt_sp > bs.stmt_base {
                 bs.pstmt_sp = bs.pstmt_sp - 1;
-                if bs.pstmt_kind[bs.pstmt_sp] == 0 {
+                if bs.pstmt_kind[bs.pstmt_sp] == pstmt.let_bind {
                     // A `let`: claim the next frame slot from the monotonic counter and
                     // bind its name to that slot (the counter also advances for a loop's
                     // anonymous slots, so the slot is stored explicitly, not derived).
@@ -680,7 +705,7 @@ fn step_draining() -> Word {
                     bs.expect_operand = 1;
                     0
                 } else {
-                if bs.pstmt_kind[bs.pstmt_sp] == 1 {
+                if bs.pstmt_kind[bs.pstmt_sp] == pstmt.assign {
                     // A scalar data assignment: write the target field's slot.
                     bs.stmt_kind[bs.stmt_count] = Node::DataAssignIn() as Word;
                     bs.stmt_arg[bs.stmt_count] = bs.pstmt_arg[bs.pstmt_sp];
@@ -722,7 +747,7 @@ fn step_draining() -> Word {
             // The condition is drained; enter the then branch, recording its start and
             // pushing the pending-statement baseline (its statements' `let`/assignment
             // entries sit above the enclosing statement's).
-            bs.if_phase[bs.if_sp - 1] = 2;
+            bs.if_phase[bs.if_sp - 1] = phase.if_then;
             bs.if_stmt_start[bs.if_sp - 1] = bs.stmt_count;
             bs.pbase[bs.pbase_sp] = bs.stmt_base;
             bs.pbase_sp = bs.pbase_sp + 1;
@@ -789,13 +814,13 @@ fn step_draining() -> Word {
             // arm patterns.
             bs.match_temp[bs.match_sp - 1] = src.param_count + bs.slot_count;
             bs.slot_count = bs.slot_count + 1;
-            bs.match_phase[bs.match_sp - 1] = 2;
+            bs.match_phase[bs.match_sp - 1] = phase.match_pat;
             bs.draining = 0;
             0
         } else {
         if bs.drain_reason == reason.next_arm {
             // reason 9: an arm result is drained; expect the next arm's pattern.
-            bs.match_phase[bs.match_sp - 1] = 2;
+            bs.match_phase[bs.match_sp - 1] = phase.match_pat;
             bs.draining = 0;
             0
         } else {
@@ -830,7 +855,7 @@ fn step_folding() -> Word {
             Node::Done() as Word
         } else {
         if bs.fold_cont == phase.fold_then {
-            bs.if_phase[bs.if_sp - 1] = 3;
+            bs.if_phase[bs.if_sp - 1] = phase.if_await_else;
             0
         } else {
         if bs.fold_cont == phase.fold_else {
@@ -878,7 +903,7 @@ fn step_daindex(k: Word) -> Word {
         0
     } else {
     if k == Tok::Eq() as Word {
-        bs.pstmt_kind[bs.pstmt_sp] = 1;
+        bs.pstmt_kind[bs.pstmt_sp] = pstmt.assign;
         bs.pstmt_arg[bs.pstmt_sp] = bs.da_base;
         bs.pstmt_sp = bs.pstmt_sp + 1;
         bs.da_phase = phase.da_idle;
@@ -986,7 +1011,7 @@ fn step_op(k: Word) -> Word {
     } else {
     if k == Tok::Match() as Word {
         // `match` opens a scrutinee-then-arms context; its scrutinee is an operand.
-        bs.match_phase[bs.match_sp] = 1;
+        bs.match_phase[bs.match_sp] = phase.match_open;
         bs.match_argcount[bs.match_sp] = 0;
         bs.match_sp = bs.match_sp + 1;
         bs.expect_operand = 1;
@@ -1137,22 +1162,22 @@ fn step_for_emit() -> Word {
 // body (reason 1); `if` pushes a context and `else` advances one.
 fn step_if(k: Word) -> Word {
     if k == Tok::If() as Word {
-        bs.if_phase[bs.if_sp] = 1;
+        bs.if_phase[bs.if_sp] = phase.if_cond;
         bs.if_sp = bs.if_sp + 1;
         bs.expect_operand = 1;
         0
     } else {
     if k == Tok::Else() as Word {
-        bs.if_phase[bs.if_sp - 1] = 4;
+        bs.if_phase[bs.if_sp - 1] = phase.if_await_brace;
         0
     } else {
     if k == Tok::LBrace() as Word {
         if bs.if_sp > 0 {
-            if bs.if_phase[bs.if_sp - 1] == 1 {
+            if bs.if_phase[bs.if_sp - 1] == phase.if_cond {
                 bs.drain_reason = reason.if_cond;
                 bs.draining = 1;
             } else {
-                bs.if_phase[bs.if_sp - 1] = 5;
+                bs.if_phase[bs.if_sp - 1] = phase.if_else;
                 bs.if_stmt_start[bs.if_sp - 1] = bs.stmt_count;
                 bs.pbase[bs.pbase_sp] = bs.stmt_base;
                 bs.pbase_sp = bs.pbase_sp + 1;
@@ -1164,7 +1189,7 @@ fn step_if(k: Word) -> Word {
     } else {
         // k == Tok::RBrace() as Word: close a branch, or the body when no conditional is pending.
         if bs.if_sp > 0 {
-            if bs.if_phase[bs.if_sp - 1] == 2 {
+            if bs.if_phase[bs.if_sp - 1] == phase.if_then {
                 bs.drain_reason = reason.then_tail;
             } else {
                 bs.drain_reason = reason.else_tail;
@@ -1275,7 +1300,7 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
     if bs.let_phase == phase.let_eq {
         if k == Tok::Eq() as Word {
             bs.let_phase = phase.let_idle;
-            bs.pstmt_kind[bs.pstmt_sp] = 0;
+            bs.pstmt_kind[bs.pstmt_sp] = pstmt.let_bind;
             bs.pstmt_name[bs.pstmt_sp] = bs.pending_let_name;
             bs.pstmt_sp = bs.pstmt_sp + 1;
             bs.expect_operand = 1;
@@ -1328,12 +1353,12 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
     } } } } } }
 }
 
-// The `match` structural tokens. Phase 1 awaits the scrutinee's `{` (drain reason 8,
-// which reserves the scrutinee temp slot and moves to the arm patterns); phase 2 reads
-// an arm pattern (an integer literal, emitted as a Literal node and counted, a `_`
-// wildcard, or `}` ending the arms with a trailing comma); phase 3 awaits `=>`; phase 4
-// reads the arm-result expression, ended by a match-level `,` (drain reason 9, next arm)
-// or the closing `}` (drain reason 10, build the match).
+// The `match` structural tokens. match_open awaits the scrutinee's `{` (drain reason
+// match_scrut, which reserves the scrutinee temp slot and moves to the arm patterns);
+// match_pat reads an arm pattern (an integer literal, emitted as a Literal node and
+// counted, a `_` wildcard, or `}` ending the arms with a trailing comma); match_arrow
+// awaits `=>`; match_result reads the arm-result expression, ended by a match-level `,`
+// (drain reason next_arm) or the closing `}` (drain reason match_build).
 fn step_match(k: Word, v: Word) -> Word {
     let sp = bs.match_sp - 1;
     let mp = bs.match_phase[sp];
@@ -1346,12 +1371,12 @@ fn step_match(k: Word, v: Word) -> Word {
         if k == Tok::IntLit() as Word {
             // A literal arm: emit its Literal node, count it, then await `=>`.
             bs.match_argcount[sp] = bs.match_argcount[sp] + 1;
-            bs.match_phase[sp] = 3;
+            bs.match_phase[sp] = phase.match_arrow;
             Node::Literal() as Word + v * enc.radix
         } else {
         if k == Tok::Underscore() as Word {
             // The wildcard arm: no node; its result becomes the default. Await `=>`.
-            bs.match_phase[sp] = 3;
+            bs.match_phase[sp] = phase.match_arrow;
             0
         } else {
         if k == Tok::Ident() as Word {
@@ -1378,7 +1403,7 @@ fn step_match(k: Word, v: Word) -> Word {
     } else {
     if mp == 3 {
         if k == Tok::FatArrow() as Word {
-            bs.match_phase[sp] = 4;
+            bs.match_phase[sp] = phase.match_result;
             bs.match_call_base[sp] = bs.call_sp;
             bs.expect_operand = 1;
         }
@@ -1428,7 +1453,7 @@ fn step_mpat(k: Word, v: Word) -> Word {
     } else {
         bs.mpat_phase = phase.mpat_idle;
         bs.match_argcount[bs.match_sp - 1] = bs.match_argcount[bs.match_sp - 1] + 1;
-        bs.match_phase[bs.match_sp - 1] = 3;
+        bs.match_phase[bs.match_sp - 1] = phase.match_arrow;
         Node::Literal() as Word + bs.enum_disc * enc.radix
     } } }
 }
