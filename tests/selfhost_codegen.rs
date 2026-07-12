@@ -4121,16 +4121,35 @@ fn assembled_schema_hash_matches_the_reference() {
     }
 }
 
+/// Set a module's declared WCET/WCMU header from the self-hosted analyze.kel stage: the
+/// per-iteration maximum across the module's Stream chunks, mirroring the reference
+/// compiler's fold (`compiler.rs` sets `wcet_cycles`/`wcmu_bytes` to that maximum).
+fn assemble_resource_bounds(module: &mut Module) {
+    let mut max_wcet = 0i64;
+    let mut max_wcmu = 0i64;
+    for c in &module.chunks {
+        if c.block_type != keleusma::bytecode::BlockType::Stream {
+            continue;
+        }
+        let (wcet, stack, heap) = analyze_via_kel(c);
+        max_wcet = max_wcet.max(wcet);
+        max_wcmu = max_wcmu.max(stack + heap);
+    }
+    module.wcet_cycles = max_wcet as u32;
+    module.wcmu_bytes = max_wcmu as u32;
+}
+
 // -- integration: the self-assembled scaffold serializes byte-identically ------
 //
 // Each analytical scaffold component (DataLayout, enum-layout table, typed-verifier
-// signatures, schema hash) was proved byte-identical to the reference as a struct. This
-// splices all of them, together with the self-hosted chunk ops, into a module and
-// serializes it, asserting the wire bytes equal the reference compiler's -- so the
-// assembled components agree not only field by field but through the wire encoding.
-// The chunk-table metadata and the two WCET/WCMU declared-bound numbers still ride the
-// self_host_compile scaffold (the WCET/WCMU cost analysis, whose true self-hosted form
-// is a Keleusma stage, is the last piece); everything else is driver-assembled.
+// signatures, schema hash, chunk-table metadata, and now the WCET/WCMU declared-bound
+// numbers) was proved byte-identical to the reference as a struct. This splices all of them,
+// together with the self-hosted chunk ops, into a module and serializes it, asserting the
+// wire bytes equal the reference compiler's -- so the assembled components agree not only
+// field by field but through the wire encoding. With `assemble_resource_bounds` computing
+// the header WCET/WCMU from analyze.kel, no field of the serialized module is borrowed from
+// the reference for these loop-free stages; the reference module is used only as the
+// comparison oracle.
 #[test]
 fn self_assembled_scaffold_serializes_byte_identically() {
     for path in [
@@ -4149,6 +4168,7 @@ fn self_assembled_scaffold_serializes_byte_identically() {
         module.data_layout = Some(dl);
         module.enum_layouts = assemble_enum_layouts(&enum_records, &names);
         module.signatures = assemble_signatures(&fns, &names);
+        assemble_resource_bounds(&mut module);
 
         let self_bytes = module.to_bytes().expect("serialize self-assembled module");
         let ref_bytes = compile_src(&src)
