@@ -934,7 +934,18 @@ fn flatten(
                     match_parts,
                     enum_table,
                 ),
-                None => panic!("increment requires an else branch"),
+                // An `if` without `else` synthesizes an empty else whose value is Unit
+                // (kind 20), emitted after the then branch and before the If, matching the
+                // stage's synthesized empty-else block.
+                None => {
+                    nodes.push(Node {
+                        kind: 20,
+                        arg: 0,
+                        lhs: 0,
+                        rhs: 0,
+                    });
+                    (nodes.len() - 1) as i64
+                }
             };
             nodes.push(Node {
                 kind: 4,
@@ -2378,6 +2389,49 @@ fn consecutive_block_form_if_statements() {
     assert_eq!(second.kind, 21); // ExprStmt(If)
     assert_eq!(nodes[second.lhs as usize].kind, 4);
     assert_eq!(nodes[second.rhs as usize].kind, 2); // tail Local a
+}
+
+// An `if` without an `else` synthesizes an empty else whose value is Unit (kind 20).
+// As the block tail, the If is the block root; its else branch is the synthesized Unit.
+#[test]
+fn an_if_without_else_synthesizes_a_unit_else() {
+    let src = "fn f(x: Word) -> Word { if x > 0 { x } }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
+    let iff = nodes[root as usize];
+    assert_eq!(iff.kind, 4);
+    assert_eq!(nodes[iff.lhs as usize].kind, 2); // then: Local x
+    assert_eq!(nodes[iff.rhs as usize].kind, 20); // else: synthesized Unit
+}
+
+// An else-less `if` used as a statement, followed by a tail: the completed If (with its
+// synthesized Unit else) is committed as an ExprStmt, then the tail follows.
+#[test]
+fn an_else_less_if_statement_precedes_a_tail() {
+    let src = "fn f(x: Word) -> Word { if x > 0 { x } x }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
+    let es = nodes[root as usize];
+    assert_eq!(es.kind, 21); // ExprStmt
+    let iff = nodes[es.lhs as usize];
+    assert_eq!(iff.kind, 4);
+    assert_eq!(nodes[iff.rhs as usize].kind, 20); // synthesized Unit else
+    assert_eq!(nodes[es.rhs as usize].kind, 2); // tail Local x
+}
+
+// An else-less `if` nests as the tail of an outer `if`'s then branch; the inner If's
+// else is the synthesized Unit while the outer If keeps its real else.
+#[test]
+fn an_else_less_if_nests_in_a_then_branch() {
+    let src = "fn f(x: Word) -> Word { if x > 0 { if x > 5 { x } } else { x } }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
+    let outer = nodes[root as usize];
+    assert_eq!(outer.kind, 4);
+    let inner = nodes[outer.lhs as usize];
+    assert_eq!(inner.kind, 4); // the inner else-less If is the then branch
+    assert_eq!(nodes[inner.rhs as usize].kind, 20); // inner else: synthesized Unit
+    assert_eq!(nodes[outer.rhs as usize].kind, 2); // outer else: Local x
 }
 
 // A `yield e` tail lowers to a YieldExpr (kind 24) holding the yielded expression in
