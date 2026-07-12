@@ -33,6 +33,13 @@
 // opcode kind, slot, and constant value the bound extraction inspects. The stage self-hosts
 // the control-flow algorithm and the bound extraction, not the cost or stack-effect models.
 //
+// The stage is also the self-hosted validator: given `arena_capacity` it sets `out_valid` to
+// 1 exactly when the chunk has a provable finite per-iteration bound (not rejected) whose
+// stack-plus-heap budget fits the capacity -- the per-chunk admission `verify_resource_bounds`
+// performs. The verdict is sound for a chunk without transitive calls (the shallow
+// empty-resolver bound then equals the module-level transitive bound); a call-bearing chunk
+// would need the callee bodies folded in, which this stage does not yet do.
+//
 // The self-hosted compiler is a full-width host tool.
 require word >= 32;
 
@@ -51,6 +58,7 @@ shared data wa {
     reset_pos: Word,
     local_count: Word,
     value_slot_bytes: Word,
+    arena_capacity: Word,
     cost: [Word; 1024],
     class: [Word; 1024],
     arg: [Word; 1024],
@@ -65,6 +73,7 @@ shared data wa {
     out_stack_bytes: Word,
     out_heap: Word,
     out_reject: Word,
+    out_valid: Word,
 }
 
 // The region-frame work stack. Each frame is one invocation of the reference's recursion
@@ -589,10 +598,12 @@ fn run() -> Word {
         }
     }
     if an.reject == 1 {
+        // An inextractable bound: the chunk fails validation (no finite bound is provable).
         wa.out_reject = 1;
         wa.out_wcet = 0;
         wa.out_stack_bytes = 0;
         wa.out_heap = 0;
+        wa.out_valid = 0;
         0
     } else {
         wa.out_reject = 0;
@@ -602,6 +613,14 @@ fn run() -> Word {
         wa.out_wcet = wa.cost[wa.stream_pos] + wa.cost[wa.reset_pos] + region_cost;
         wa.out_stack_bytes = (wa.local_count + region_peak) * wa.value_slot_bytes;
         wa.out_heap = region_heap;
+        // Validation verdict: a provable finite bound whose stack-plus-heap budget fits the
+        // arena capacity (the per-chunk admission `verify_resource_bounds` enforces, with
+        // `Budget::total = bottom + top`). Sound for a chunk without transitive calls.
+        if wa.out_stack_bytes + wa.out_heap <= wa.arena_capacity {
+            wa.out_valid = 1;
+        } else {
+            wa.out_valid = 0;
+        }
         wa.out_wcet
     }
 }
