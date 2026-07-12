@@ -1,14 +1,15 @@
 // compiler/kel/body.kel — the body-expression parser, a sub-component of Stage 2.
 //
-// Increment 20: a function body over the full operator-precedence expression grammar,
+// Increment 21: a function body over the full operator-precedence expression grammar,
 // scalar and indexed data-field reads, `let` bindings, scalar and indexed data-field
 // assignments, the bare expression statement `expr;`, the `if`/`else` conditional with
 // nested statement-block branches, function calls, the `yield e` reentrant expression,
-// the `match` expression over integer-literal arms and a trailing wildcard, the bounded
-// `for v in start..end limit CAP { body }` loop, and a statement-only block whose
-// implicit value is Unit. Real Keleusma code that compiles and verifies on the current
-// runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md (roadmap
-// Step 2).
+// the `match` expression over integer-literal arms and a trailing wildcard, the
+// `Enum::Variant() as Word` cast folded to the variant's discriminant literal, the
+// bounded `for v in start..end limit CAP { body }` loop, and a statement-only block
+// whose implicit value is Unit. Real Keleusma code that compiles and verifies on the
+// current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md
+// (roadmap Step 2).
 //
 // Model. Stage 2's declaration parser (parser.kel) reads a function's signature and
 // brace-matches its body. This companion loop reads that body's tokens and produces
@@ -201,6 +202,8 @@ const data tok {
     matchkw: Word = 48,
     fatarrow: Word = 49,
     underscore: Word = 50,
+    colcol: Word = 51,
+    askw: Word = 52,
 }
 
 // The host-provided body token stream, parameter-name table, and data-field layout.
@@ -221,6 +224,10 @@ shared data src {
     chunk_count: Word,
     chunks: [Word; 64],
     limit_id: Word,
+    enum_count: Word,
+    edata: [Word; 64],
+    evar: [Word; 64],
+    edisc: [Word; 64],
 }
 
 // The parser's cross-iteration state. `cursor` is the token index; `started` records
@@ -314,6 +321,9 @@ private data bs {
     match_call_base: [Word; 8],
     match_sp: Word,
     match_build: Word,
+    enum_phase: Word,
+    enum_name: Word,
+    enum_disc: Word,
 }
 
 // The precedence of an operator code, tightest to loosest: unary (16 Neg, 17 Not) 9,
@@ -833,6 +843,19 @@ fn step_ident(v: Word) -> Word {
         bs.da_phase = 1;
         0
     } else {
+    bs.found_flag = 0;
+    for i in 0..src.enum_count limit 64 {
+        if src.edata[i] == v {
+            bs.found_flag = 1;
+        }
+    }
+    if bs.found_flag == 1 {
+        // An enum name opens a `Name::Variant() as Word` cast that the parser folds to
+        // the variant's discriminant literal (the enum-as-code idiom).
+        bs.enum_name = v;
+        bs.enum_phase = 1;
+        0
+    } else {
         bs.found = 0;
         bs.found_flag = 0;
         for i in 0..bs.let_count limit 64 {
@@ -850,6 +873,7 @@ fn step_ident(v: Word) -> Word {
         }
         bs.expect_operand = 0;
         2 + bs.found * 64
+    }
     }
     }
 }
@@ -1210,13 +1234,17 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         }
         0
     } else {
-        // Phases 1..6 are the `for` header; phase 7 (its body) and phase 0 parse
-        // normally.
+        // An open enum cast (`Name::Variant() as Word`) consumes its remaining tokens.
+        // Otherwise phases 1..6 are the `for` header; phase 7 (its body) and phase 0
+        // parse normally.
+        if bs.enum_phase >= 1 {
+            step_enum(k, v)
+        } else {
         if bs.for_phase >= 1 andalso bs.for_phase <= 6 {
             step_forheader(k, v)
         } else {
             step_normal(k, v)
-        }
+        } }
     } } } } } }
 }
 
@@ -1294,6 +1322,55 @@ fn step_store_finalize() -> Word {
     bs.stmt_count = bs.stmt_count + 1;
     bs.expect_operand = 1;
     0
+}
+
+// A `Name::Variant() as Word` cast, folded to the variant's discriminant literal (the
+// enum-as-code idiom, matching the runtime's constant fold). Phase 1 awaits `::`, phase
+// 2 the variant name (whose discriminant is looked up in the host enum tables by the
+// enum name and variant name), phase 3 the `(`, phase 4 the `)`, phase 5 the `as`, and
+// phase 6 the target type name, after which a Literal node carrying the discriminant is
+// emitted as an operand. Only the no-payload `Variant()` cast form is handled.
+fn step_enum(k: Word, v: Word) -> Word {
+    if bs.enum_phase == 1 {
+        if k == tok.colcol {
+            bs.enum_phase = 2;
+        }
+        0
+    } else {
+    if bs.enum_phase == 2 {
+        if k == tok.ident {
+            bs.enum_disc = 0;
+            for i in 0..src.enum_count limit 64 {
+                if src.edata[i] == bs.enum_name andalso src.evar[i] == v {
+                    bs.enum_disc = src.edisc[i];
+                }
+            }
+            bs.enum_phase = 3;
+        }
+        0
+    } else {
+    if bs.enum_phase == 3 {
+        if k == tok.lparen {
+            bs.enum_phase = 4;
+        }
+        0
+    } else {
+    if bs.enum_phase == 4 {
+        if k == tok.rparen {
+            bs.enum_phase = 5;
+        }
+        0
+    } else {
+    if bs.enum_phase == 5 {
+        if k == tok.askw {
+            bs.enum_phase = 6;
+        }
+        0
+    } else {
+        bs.enum_phase = 0;
+        bs.expect_operand = 0;
+        1 + bs.enum_disc * 64
+    } } } } }
 }
 
 // Read the next token and dispatch it, or begin the final drain at end of input.

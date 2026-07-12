@@ -1,9 +1,10 @@
-//! Body-expression parser (`compiler/kel/body.kel`), increment 20: a function body over
+//! Body-expression parser (`compiler/kel/body.kel`), increment 21: a function body over
 //! the full operator-precedence expression grammar, scalar and indexed data-field
 //! reads, `let` bindings, scalar and indexed data-field assignments, the bare expression
 //! statement `expr;`, the `if`/`else` conditional with nested statement-block branches,
 //! function calls, the `yield e` reentrant expression, the `match` expression over
-//! integer-literal arms and a trailing wildcard, the bounded
+//! integer-literal arms and a trailing wildcard, the `Enum::Variant() as Word` cast
+//! folded to the variant's discriminant literal, the bounded
 //! `for v in start..end limit CAP { body }` loop, and a statement-only block whose
 //! implicit value is Unit — lowered to the abstract-syntax node forest codegen consumes,
 //! with `call_args`, `limit_parts`, and `match_parts` side arrays.
@@ -57,6 +58,10 @@ const FLEN: usize = 1 + 512 + 512 + 1 + 32 + 1 + 64 + 64 + 64;
 const CHUNK_COUNT: usize = 1 + 512 + 512 + 1 + 32 + 1 + 64 + 64 + 64 + 64;
 const CHUNKS: usize = 1 + 512 + 512 + 1 + 32 + 1 + 64 + 64 + 64 + 64 + 1;
 const LIMIT_ID: usize = 1 + 512 + 512 + 1 + 32 + 1 + 64 + 64 + 64 + 64 + 1 + 64;
+const ENUM_COUNT: usize = LIMIT_ID + 1;
+const EDATA: usize = ENUM_COUNT + 1;
+const EVAR: usize = EDATA + 64;
+const EDISC: usize = EVAR + 64;
 
 /// One node of the abstract-syntax forest: the codegen contract's `(kind, arg, lhs,
 /// rhs)`. A leaf has `lhs == rhs == 0`.
@@ -178,6 +183,8 @@ fn run_body_inner(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, Vec<i64>, i
             TokenKind::Semicolon => (39, 0),
             TokenKind::Eq => (17, 0),
             TokenKind::Colon => (9, 0),
+            TokenKind::ColonColon => (51, 0),
+            TokenKind::As => (52, 0),
             TokenKind::Eof => continue,
             _ => (4, 0),
         };
@@ -212,6 +219,18 @@ fn run_body_inner(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, Vec<i64>, i
     // The interned id of the contextual `limit` keyword, so the parser can recognise
     // the end of a loop's range (harmless when the program has no loop).
     let limit_id = intern("limit");
+    // The enum discriminant tables: one (enum name id, variant name id, discriminant)
+    // triple per declared variant, so the parser can fold `Enum::Variant() as Word` to
+    // the discriminant literal.
+    let mut enum_table: Vec<(i64, i64, i64)> = Vec::new();
+    for ty in &program.types {
+        if let keleusma::ast::TypeDef::Enum(ed) = ty {
+            let eid = intern(&ed.name);
+            for variant in &ed.variants {
+                enum_table.push((eid, intern(&variant.name), variant.discriminant_value));
+            }
+        }
+    }
 
     // The data-field layout, from the compiled program's flat data segment. Each slot
     // name is `data.field` (scalar) or `data.field[k]` (array element); the field
@@ -279,6 +298,16 @@ fn run_body_inner(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, Vec<i64>, i
     }
     vm.set_shared(&mut shared, LIMIT_ID, Value::Int(limit_id))
         .expect("limit_id");
+    vm.set_shared(&mut shared, ENUM_COUNT, Value::Int(enum_table.len() as i64))
+        .expect("enum_count");
+    for (i, &(eid, vid, disc)) in enum_table.iter().enumerate() {
+        vm.set_shared(&mut shared, EDATA + i, Value::Int(eid))
+            .expect("edata");
+        vm.set_shared(&mut shared, EVAR + i, Value::Int(vid))
+            .expect("evar");
+        vm.set_shared(&mut shared, EDISC + i, Value::Int(disc))
+            .expect("edisc");
+    }
 
     let mut nodes: Vec<Node> = Vec::new();
     let mut call_args: Vec<i64> = Vec::new();
@@ -523,6 +552,7 @@ fn flatten(
     next_slot: &mut i64,
     limit_parts: &mut Vec<i64>,
     match_parts: &mut Vec<i64>,
+    enum_table: &[(String, String, i64)],
 ) -> i64 {
     match expr {
         Expr::Literal {
@@ -569,6 +599,7 @@ fn flatten(
                 next_slot,
                 limit_parts,
                 match_parts,
+                enum_table,
             );
             let rhs = flatten(
                 right,
@@ -580,6 +611,7 @@ fn flatten(
                 next_slot,
                 limit_parts,
                 match_parts,
+                enum_table,
             );
             // Most operators are a BinOp node (kind 3) with an operator code; the
             // short-circuit booleans are their own node kinds (8 Andalso, 9 Orelse).
@@ -623,6 +655,7 @@ fn flatten(
                 next_slot,
                 limit_parts,
                 match_parts,
+                enum_table,
             );
             let kind = match op {
                 UnaryOp::Not => 6,
@@ -650,6 +683,7 @@ fn flatten(
                 next_slot,
                 limit_parts,
                 match_parts,
+                enum_table,
             );
             nodes.push(Node {
                 kind: 24,
@@ -659,6 +693,33 @@ fn flatten(
             });
             (nodes.len() - 1) as i64
         }
+        Expr::Cast { expr: inner, .. } => match inner.as_ref() {
+            // A `Enum::Variant() as Word` cast of a no-payload variant folds to the
+            // variant's discriminant literal (kind 1), matching the runtime's constant
+            // fold. Only this form is handled this increment.
+            Expr::EnumVariant {
+                enum_name,
+                variant,
+                args,
+                ..
+            } if args.is_empty() => {
+                let disc = enum_table
+                    .iter()
+                    .find(|(e, v, _)| e == enum_name && v == variant)
+                    .map(|(_, _, d)| *d)
+                    .unwrap_or_else(|| panic!("no discriminant for {enum_name}::{variant}"));
+                nodes.push(Node {
+                    kind: 1,
+                    arg: disc,
+                    lhs: 0,
+                    rhs: 0,
+                });
+                (nodes.len() - 1) as i64
+            }
+            other => {
+                panic!("increment handles `Enum::Variant() as Word` casts only, got {other:?}")
+            }
+        },
         Expr::Match {
             scrutinee, arms, ..
         } => {
@@ -678,6 +739,7 @@ fn flatten(
                 next_slot,
                 limit_parts,
                 match_parts,
+                enum_table,
             );
             let temp = *next_slot;
             *next_slot += 1;
@@ -704,6 +766,7 @@ fn flatten(
                             next_slot,
                             limit_parts,
                             match_parts,
+                            enum_table,
                         );
                         lit_arms.push((lit_node, res_node));
                     }
@@ -719,6 +782,7 @@ fn flatten(
                             next_slot,
                             limit_parts,
                             match_parts,
+                            enum_table,
                         ));
                     }
                     other => {
@@ -783,6 +847,7 @@ fn flatten(
                 next_slot,
                 limit_parts,
                 match_parts,
+                enum_table,
             );
             nodes.push(Node {
                 kind: 13,
@@ -810,6 +875,7 @@ fn flatten(
                 next_slot,
                 limit_parts,
                 match_parts,
+                enum_table,
             );
             let then = flatten_block(
                 then_block,
@@ -821,6 +887,7 @@ fn flatten(
                 next_slot,
                 limit_parts,
                 match_parts,
+                enum_table,
             );
             let els = match else_block {
                 Some(eb) => flatten_block(
@@ -833,6 +900,7 @@ fn flatten(
                     next_slot,
                     limit_parts,
                     match_parts,
+                    enum_table,
                 ),
                 None => panic!("increment requires an else branch"),
             };
@@ -865,6 +933,7 @@ fn flatten(
                         next_slot,
                         limit_parts,
                         match_parts,
+                        enum_table,
                     )
                 })
                 .collect();
@@ -901,6 +970,7 @@ fn flatten_block(
     next_slot: &mut i64,
     limit_parts: &mut Vec<i64>,
     match_parts: &mut Vec<i64>,
+    enum_table: &[(String, String, i64)],
 ) -> i64 {
     // Each entry is (statement node kind, arg, value node index).
     let mut stmts: Vec<(i64, i64, i64)> = Vec::new();
@@ -917,6 +987,7 @@ fn flatten_block(
                     next_slot,
                     limit_parts,
                     match_parts,
+                    enum_table,
                 );
                 let name = match &l.pattern {
                     Pattern::Variable(n, _) => n.clone(),
@@ -943,6 +1014,7 @@ fn flatten_block(
                     next_slot,
                     limit_parts,
                     match_parts,
+                    enum_table,
                 );
                 let slot = data_slot(data_slots, data_name, field);
                 stmts.push((12, slot, value_node));
@@ -969,6 +1041,7 @@ fn flatten_block(
                     next_slot,
                     limit_parts,
                     match_parts,
+                    enum_table,
                 );
                 let value_node = flatten(
                     value,
@@ -980,6 +1053,7 @@ fn flatten_block(
                     next_slot,
                     limit_parts,
                     match_parts,
+                    enum_table,
                 );
                 nodes.push(Node {
                     kind: 15,
@@ -1004,6 +1078,7 @@ fn flatten_block(
                     next_slot,
                     limit_parts,
                     match_parts,
+                    enum_table,
                 );
                 stmts.push((21, 0, expr_node));
             }
@@ -1041,6 +1116,7 @@ fn flatten_block(
                     next_slot,
                     limit_parts,
                     match_parts,
+                    enum_table,
                 );
                 let var = *next_slot;
                 *next_slot += 1;
@@ -1054,6 +1130,7 @@ fn flatten_block(
                     next_slot,
                     limit_parts,
                     match_parts,
+                    enum_table,
                 );
                 let end_slot = *next_slot;
                 *next_slot += 1;
@@ -1074,6 +1151,7 @@ fn flatten_block(
                     next_slot,
                     limit_parts,
                     match_parts,
+                    enum_table,
                 );
                 scope.pop();
                 let mut lit = |v: i64| -> i64 {
@@ -1116,6 +1194,7 @@ fn flatten_block(
             next_slot,
             limit_parts,
             match_parts,
+            enum_table,
         ),
         None => {
             nodes.push(Node {
@@ -1164,6 +1243,20 @@ fn reference_body_inner(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, Vec<i
     let mut call_args = Vec::new();
     let mut limit_parts = Vec::new();
     let mut match_parts = Vec::new();
+    // The enum discriminant table, keyed by (enum name, variant name), for folding a
+    // `Enum::Variant() as Word` cast to its discriminant literal.
+    let mut enum_table: Vec<(String, String, i64)> = Vec::new();
+    for ty in &program.types {
+        if let keleusma::ast::TypeDef::Enum(ed) = ty {
+            for variant in &ed.variants {
+                enum_table.push((
+                    ed.name.clone(),
+                    variant.name.clone(),
+                    variant.discriminant_value,
+                ));
+            }
+        }
+    }
     let root = flatten_block(
         &f.body,
         &mut scope,
@@ -1174,6 +1267,7 @@ fn reference_body_inner(func_src: &str) -> (Vec<Node>, Vec<i64>, Vec<i64>, Vec<i
         &mut next_slot,
         &mut limit_parts,
         &mut match_parts,
+        &enum_table,
     );
     (nodes, call_args, limit_parts, match_parts, root)
 }
@@ -2393,4 +2487,57 @@ fn an_indexed_assignment_folds_among_statements() {
     let inner = nodes[outer.rhs as usize];
     assert_eq!(inner.kind, 14); // IndexAssignIn (d.xs[0] = d.k)
     assert_eq!(nodes[inner.rhs as usize].kind, 11); // tail d.k is a DataRead
+}
+
+// A `Enum::Variant() as Word` cast of a no-payload variant folds to the variant's
+// discriminant literal, matching the runtime's constant fold. The enum-as-code idiom
+// the self-hosted stages adopt for their token, node, and opcode codes.
+#[test]
+fn an_enum_variant_cast_folds_to_a_literal() {
+    let src = "enum Tok { Fn = 0, Ident = 1, Plus = 21 } \
+        fn f() -> Word { Tok::Plus() as Word }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _c, _l, _m, root) = run_body(src);
+    assert_eq!(
+        nodes[root as usize],
+        Node {
+            kind: 1,
+            arg: 21,
+            lhs: 0,
+            rhs: 0
+        }
+    );
+}
+
+// The folded discriminant composes as an ordinary operand under arithmetic.
+#[test]
+fn an_enum_cast_composes_under_arithmetic() {
+    let src = "enum Tok { Fn = 0, Ident = 1 } \
+        fn f() -> Word { Tok::Ident() as Word + 5 }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _c, _l, _m, root) = run_body(src);
+    let add = nodes[root as usize];
+    assert_eq!(add.kind, 3); // BinOp
+    assert_eq!(add.arg, 1); // Add
+    assert_eq!(nodes[add.lhs as usize].arg, 1); // the folded discriminant 1
+    assert_eq!(nodes[add.rhs as usize].arg, 5); // the literal 5
+}
+
+// The stages' dispatch idiom: compare a host-fed `Word` token kind against an enum
+// variant discriminant. This compiles and verifies on the current runtime, where the
+// cast folds to a constant.
+#[test]
+fn an_enum_cast_names_a_token_comparison() {
+    let src = "enum Tok { Fn = 0, Ident = 1, Plus = 21 } \
+        shared data s { k: Word } \
+        fn classify() -> Word { if s.k == Tok::Plus() as Word { 1 } else { 0 } }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _c, _l, _m, root) = run_body(src);
+    let iff = nodes[root as usize];
+    assert_eq!(iff.kind, 4); // If
+    let cond = nodes[iff.arg as usize];
+    assert_eq!(cond.kind, 3); // BinOp
+    assert_eq!(cond.arg, 6); // Eq
+    // The right operand is the folded discriminant 21.
+    assert_eq!(nodes[cond.rhs as usize].arg, 21);
 }
