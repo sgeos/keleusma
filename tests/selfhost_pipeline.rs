@@ -340,15 +340,14 @@ fn host_recovers_parser_metadata_from_lexer_output() {
 }
 
 // Flat shared-data slot indices of parse.kel's `toks` block, matching the parser
-// harness: len, kinds[3072], vals[3072], limit_id, chunk_count, chunks[256],
-// require_id, in declaration order.
+// harness: len, packed[6144] (one `tok+payload*64` word per token), limit_id,
+// chunk_count, chunks[256], require_id, in declaration order.
 const P_LEN: usize = 0;
-const P_KINDS: usize = 1;
-const P_VALS: usize = 1 + 3072;
-const P_LIMIT_ID: usize = 1 + 3072 + 3072;
-const P_CHUNK_COUNT: usize = 1 + 3072 + 3072 + 1;
-const P_CHUNKS: usize = 1 + 3072 + 3072 + 2;
-const P_REQUIRE_ID: usize = 1 + 3072 + 3072 + 2 + 256;
+const P_PACKED: usize = 1;
+const P_LIMIT_ID: usize = 1 + 6144;
+const P_CHUNK_COUNT: usize = 1 + 6144 + 1;
+const P_CHUNKS: usize = 1 + 6144 + 2;
+const P_REQUIRE_ID: usize = 1 + 6144 + 2 + 256;
 
 /// Compile parse.kel on a 64MB thread; its deeply nested source overflows the
 /// default 2MB test-thread stack in the host compiler's recursive-descent parse.
@@ -403,9 +402,7 @@ fn parse_via_lexer(src: &str) -> (usize, usize) {
             .unwrap();
     }
     for (i, &(k, v)) in tokens.iter().enumerate() {
-        vm.set_shared(&mut shared, P_KINDS + i, Value::Int(k))
-            .unwrap();
-        vm.set_shared(&mut shared, P_VALS + i, Value::Int(v))
+        vm.set_shared(&mut shared, P_PACKED + i, Value::Int(k + v * 64))
             .unwrap();
     }
 

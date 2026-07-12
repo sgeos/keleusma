@@ -35,14 +35,14 @@ use keleusma::parser::parse;
 use keleusma::token::TokenKind;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 
-// Shared-data slot offsets, mirroring the `toks` block in parse.kel.
+// Shared-data slot offsets, mirroring the `toks` block in parse.kel: the token stream
+// is one packed `tok+payload*64` word per token (not two `kinds`/`vals` arrays).
 const LEN: usize = 0;
-const KINDS: usize = 1;
-const VALS: usize = 1 + 3072;
-const LIMIT_ID: usize = 1 + 3072 + 3072;
-const CHUNK_COUNT: usize = 1 + 3072 + 3072 + 1;
-const CHUNKS: usize = 1 + 3072 + 3072 + 2;
-const REQUIRE_ID: usize = 1 + 3072 + 3072 + 2 + 256;
+const PACKED: usize = 1;
+const LIMIT_ID: usize = 1 + 6144;
+const CHUNK_COUNT: usize = 1 + 6144 + 1;
+const CHUNKS: usize = 1 + 6144 + 2;
+const REQUIRE_ID: usize = 1 + 6144 + 2 + 256;
 
 /// Map the reference token stream into the stage's unified `(kind, value)` pairs. The
 /// operator codes are body.kel's (`Plus` 21 upward); the header keywords and punctuation
@@ -244,10 +244,8 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
             .expect("chunk");
     }
     for (i, (&k, &v)) in kinds.iter().zip(vals.iter()).enumerate() {
-        vm.set_shared(&mut shared, KINDS + i, Value::Int(k))
-            .expect("kind");
-        vm.set_shared(&mut shared, VALS + i, Value::Int(v))
-            .expect("val");
+        vm.set_shared(&mut shared, PACKED + i, Value::Int(k + v * 64))
+            .expect("token");
     }
 
     let mut parsed = Parsed::default();

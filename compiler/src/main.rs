@@ -288,14 +288,14 @@ fn run_parse_pipeline(path: &str) {
     const LEX_ISTART: usize = 1 + 24576;
     const LEX_ILEN: usize = 1 + 24576 + 512;
     const LEX_ICOUNT: usize = 1 + 24576 + 512 + 512;
-    // Parser `toks` block slot layout.
+    // Parser `toks` block slot layout: the token stream is one packed `tok+payload*64`
+    // word per token (not two `kinds`/`vals` arrays), which halves its byte cost.
     const P_LEN: usize = 0;
-    const P_KINDS: usize = 1;
-    const P_VALS: usize = 1 + 3072;
-    const P_LIMIT_ID: usize = 1 + 3072 + 3072;
-    const P_CHUNK_COUNT: usize = 1 + 3072 + 3072 + 1;
-    const P_CHUNKS: usize = 1 + 3072 + 3072 + 2;
-    const P_REQUIRE_ID: usize = 1 + 3072 + 3072 + 2 + 256;
+    const P_PACKED: usize = 1;
+    const P_LIMIT_ID: usize = 1 + 6144;
+    const P_CHUNK_COUNT: usize = 1 + 6144 + 1;
+    const P_CHUNKS: usize = 1 + 6144 + 2;
+    const P_REQUIRE_ID: usize = 1 + 6144 + 2 + 256;
 
     let input = std::fs::read(path).unwrap_or_else(|e| {
         eprintln!("cannot read {path}: {e}");
@@ -354,9 +354,9 @@ fn run_parse_pipeline(path: &str) {
         let len = read_word(&lvm, &lshared, LEX_ILEN + id) as usize;
         names.push(String::from_utf8_lossy(&input[start..start + len]).into_owned());
     }
-    if tokens.len() > 3072 {
+    if tokens.len() > 6144 {
         eprintln!(
-            "{} tokens; the parser stage caps input at 3072",
+            "{} tokens; the parser stage caps input at 6144",
             tokens.len()
         );
         std::process::exit(1);
@@ -389,9 +389,7 @@ fn run_parse_pipeline(path: &str) {
             .unwrap();
     }
     for (i, &(k, v)) in tokens.iter().enumerate() {
-        pvm.set_shared(&mut pshared, P_KINDS + i, Value::Int(k))
-            .unwrap();
-        pvm.set_shared(&mut pshared, P_VALS + i, Value::Int(v))
+        pvm.set_shared(&mut pshared, P_PACKED + i, Value::Int(k + v * 64))
             .unwrap();
     }
 
