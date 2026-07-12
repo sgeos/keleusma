@@ -1,10 +1,11 @@
 // compiler/kel/body.kel — the body-expression parser, a sub-component of Stage 2.
 //
-// Increment 23: a function body over the full operator-precedence expression grammar,
+// Increment 24: a function body over the full operator-precedence expression grammar,
 // scalar and indexed data-field reads, `let` bindings, scalar and indexed data-field
 // assignments, the bare expression statement `expr;`, the semicolon-less block-form
-// `if`/`else` statement, the `if`/`else` conditional with nested statement-block
-// branches, function calls, the `yield e` reentrant expression, the `match` expression
+// `if`/`else` statement, the `if`/`else` conditional (with an optional `else`, an
+// absent one synthesizing a Unit branch) with nested statement-block branches, function
+// calls, the `yield e` reentrant expression, the `match` expression
 // over integer-literal and unit enum-variant discriminant arms with a trailing wildcard,
 // the `Enum::Variant() as Word` cast folded to the variant's discriminant literal, the
 // bounded `for v in start..end limit CAP { body }` loop, and a statement-only block
@@ -1307,6 +1308,24 @@ fn step_normal(k: Word, v: Word) -> Word {
 // `,` separating arms (phase 4, when no call argument list is open above the arm's
 // baseline). Every other token, including a scrutinee or arm-result expression,
 // dispatches normally.
+// An `if` without `else`: when the then branch has folded (if_await_else) and the next
+// token is not `else`, synthesize an empty else block whose implicit Unit tail the fold
+// wraps into the If. The triggering token is pushed back (cursor steps back one) so it is
+// reprocessed against the completed If, exactly as a real else's `}` leaves the If for the
+// next token to claim as the tail or, via blockform, an expression statement.
+fn synth_empty_else() -> Word {
+    ctrl.cursor = ctrl.cursor - 1;
+    branch.if_phase[branch.if_sp - 1] = phase.if_else;
+    branch.if_stmt_start[branch.if_sp - 1] = stmt.stmt_count;
+    stmt.pbase[stmt.pbase_sp] = stmt.stmt_base;
+    stmt.pbase_sp = stmt.pbase_sp + 1;
+    stmt.stmt_base = stmt.pstmt_sp;
+    ops.drain_reason = reason.else_tail;
+    ops.draining = 1;
+    ops.expect_operand = 0;
+    Node::Unit() as Word
+}
+
 fn is_stmt_start(k: Word) -> Word {
     if k == Tok::Ident() as Word orelse k == Tok::IntLit() as Word orelse k == Tok::If() as Word orelse k == Tok::For() as Word orelse k == Tok::Match() as Word orelse k == Tok::Yield() as Word orelse k == Tok::Let() as Word {
         1
@@ -1323,6 +1342,10 @@ fn step_dispatch(k: Word, v: Word) -> Word {
             ops.expect_operand = 1;
         }
         0
+    } else {
+    if branch.if_sp > 0 andalso branch.if_phase[branch.if_sp - 1] == phase.if_await_else andalso k != Tok::Else() as Word {
+        // The then branch folded and no `else` follows: this `if` has no else branch.
+        synth_empty_else()
     } else {
         // A just-completed block-form `if` operand (blockform, a one-token flag) that a
         // statement-starter follows was an expression statement, not the block tail: commit
@@ -1363,6 +1386,7 @@ fn step_dispatch(k: Word, v: Word) -> Word {
         }
         }
         }
+    }
     }
 }
 
