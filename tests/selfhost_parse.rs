@@ -1660,3 +1660,39 @@ fn a_whole_mini_stage_program_parses() {
     assert_eq!(got, reference(src, &names));
     assert_eq!(got.funcs.len(), 5); // clamp, scan, emit, emit, classify
 }
+
+// body.kel's BASELINE TORTURE TEST, ported: an expression statement nested in a `let`'s
+// value (`let a = if c { g(n); n } else { 0 };`) must be an ExprStmt without clobbering
+// the enclosing `let`, which must still be a LetIn. Getting the pending-statement baseline
+// wrong would mis-commit the outer let, a silent valid-but-wrong forest.
+#[test]
+fn an_expr_statement_nested_in_a_let_value_keeps_the_let() {
+    let src = "fn g(x: Word) -> Word { x } \
+        fn f(c: Word, n: Word) -> Word { let a = if c > 0 { g(n); n } else { 0 }; a }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    // The root is the outer LetIn (kind 5), not an ExprStmt.
+    assert_eq!(got.funcs[1].3.last().unwrap().0, 5);
+}
+
+// A block-form `if` statement inside a `for` body: the pending-statement baseline is
+// pushed for both the for body and the branch blocks.
+#[test]
+fn a_block_form_if_statement_inside_a_for_body() {
+    let src = "shared data d { acc: Word } \
+        fn f(n: Word) -> Word { for i in 0..n limit 8 { if i > 0 { d.acc = i; } else { d.acc = 0; } } d.acc }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+}
+
+// A `match` as a `let` value with an enum-variant arm, nested in a further block.
+#[test]
+fn a_match_let_value_with_an_enum_arm() {
+    let src = "enum E { A, B } \
+        fn f(n: Word) -> Word { let r = match n { 1 => E::A() as Word, _ => n }; r + 1 }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+}
