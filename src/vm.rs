@@ -946,13 +946,15 @@ pub struct GenericVm<
     /// borrowed for each call (B28 item 2), not in the VM. The unified slot
     /// index space partitions into `[0, shared_slot_count)` (shared) and
     /// `[shared_slot_count, shared_slot_count + private_slot_count)`
-    /// (private, in the arena's persistent region).
-    shared_slot_count: u16,
+    /// (private, in the arena's persistent region). A `u32` so a module
+    /// with more than 64 K data slots (a large shared byte buffer) is
+    /// counted without saturation, matching the twenty-four-bit slot operands.
+    shared_slot_count: u32,
     /// Number of private slots. Cached at construction. Private
     /// slots live in the arena's persistent region starting at
     /// `arena.persistent_ptr()` and occupy
     /// `private_slot_count * size_of::<crate::bytecode::GenericValue<W, F>>()` bytes there.
-    private_slot_count: u16,
+    private_slot_count: u32,
     /// Host-owned dual-end bump-allocated arena. Borrowed for the
     /// lifetime of the VM. Native functions that allocate dynamic
     /// strings pass `vm.arena()` to [`crate::kstring::KString::alloc`].
@@ -1996,10 +1998,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // with the legacy format; only the chunk-ops separation
         // is new.
         let (shared_count, private_count) = match archived.data_layout.as_ref() {
-            None => (0u16, 0u16),
+            None => (0u32, 0u32),
             Some(dl) => {
-                let mut shared = 0u16;
-                let mut private_ = 0u16;
+                let mut shared = 0u32;
+                let mut private_ = 0u32;
                 for slot in dl.slots.iter() {
                     match slot.visibility {
                         crate::bytecode::ArchivedSlotVisibility::Shared => {
@@ -2165,25 +2167,31 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // slots first in the unified slot index space, so the
         // partition reduces to a count.
         let (shared_count, private_count) = match module.data_layout.as_ref() {
-            None => (0u16, 0u16),
+            None => (0u32, 0u32),
             Some(dl) => {
-                let mut shared = 0u16;
-                let mut private_ = 0u16;
+                let mut shared = 0u32;
+                let mut private_ = 0u32;
                 for slot in &dl.slots {
                     match slot.visibility {
                         crate::bytecode::SlotVisibility::Shared => {
-                            shared = shared.checked_add(1).ok_or_else(|| {
-                                VmError::VerifyError(String::from(
-                                    "data layout shared slot count exceeds u16::MAX",
-                                ))
-                            })?;
+                            shared = shared
+                                .checked_add(1)
+                                .filter(|v| *v <= crate::bytecode::MAX_DATA_ADDR)
+                                .ok_or_else(|| {
+                                    VmError::VerifyError(String::from(
+                                        "data layout shared slot count exceeds the 24-bit bound",
+                                    ))
+                                })?;
                         }
                         crate::bytecode::SlotVisibility::Private => {
-                            private_ = private_.checked_add(1).ok_or_else(|| {
-                                VmError::VerifyError(String::from(
-                                    "data layout private slot count exceeds u16::MAX",
-                                ))
-                            })?;
+                            private_ = private_
+                                .checked_add(1)
+                                .filter(|v| *v <= crate::bytecode::MAX_DATA_ADDR)
+                                .ok_or_else(|| {
+                                    VmError::VerifyError(String::from(
+                                        "data layout private slot count exceeds the 24-bit bound",
+                                    ))
+                                })?;
                         }
                     }
                 }
@@ -3529,25 +3537,31 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // host-owned buffer supplied at the next call, not a hot-swap input
         // (B28 item 2).
         let (new_shared, new_private) = match new_module.data_layout.as_ref() {
-            None => (0u16, 0u16),
+            None => (0u32, 0u32),
             Some(dl) => {
-                let mut shared = 0u16;
-                let mut private_ = 0u16;
+                let mut shared = 0u32;
+                let mut private_ = 0u32;
                 for slot in &dl.slots {
                     match slot.visibility {
                         crate::bytecode::SlotVisibility::Shared => {
-                            shared = shared.checked_add(1).ok_or_else(|| {
-                                VmError::VerifyError(String::from(
-                                    "data layout shared slot count exceeds u16::MAX",
-                                ))
-                            })?;
+                            shared = shared
+                                .checked_add(1)
+                                .filter(|v| *v <= crate::bytecode::MAX_DATA_ADDR)
+                                .ok_or_else(|| {
+                                    VmError::VerifyError(String::from(
+                                        "data layout shared slot count exceeds the 24-bit bound",
+                                    ))
+                                })?;
                         }
                         crate::bytecode::SlotVisibility::Private => {
-                            private_ = private_.checked_add(1).ok_or_else(|| {
-                                VmError::VerifyError(String::from(
-                                    "data layout private slot count exceeds u16::MAX",
-                                ))
-                            })?;
+                            private_ = private_
+                                .checked_add(1)
+                                .filter(|v| *v <= crate::bytecode::MAX_DATA_ADDR)
+                                .ok_or_else(|| {
+                                    VmError::VerifyError(String::from(
+                                        "data layout private slot count exceeds the 24-bit bound",
+                                    ))
+                                })?;
                         }
                     }
                 }
@@ -11040,10 +11054,13 @@ mod tests {
         // raising the total to 300 bytes, and again for the
         // `WireAuxBody::native_return_shapes` table (A.2.1 native-result
         // seeding), whose empty `ArchivedVec` adds 8 more bytes for a total of
-        // 308. Per B28 the format may change freely without a BYTECODE_VERSION
-        // bump (no production traction; programs are recompiled).
+        // 308. The wire format may change freely between development builds; a
+        // change a prior-version runtime could not read (here the V2 twenty-
+        // four-bit data operands) bumps BYTECODE_VERSION, which is 2 (byte
+        // four). Only the version byte and the CRC trailer differ from the V1
+        // golden bytes, since this program has no data segment.
         let expected: alloc::vec::Vec<u8> = alloc::vec![
-            75, 69, 76, 69, 1, 0, 64, 0, 60, 1, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            75, 69, 76, 69, 2, 0, 64, 0, 60, 1, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 240, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 159, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -11054,8 +11071,8 @@ mod tests {
             255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 144, 255, 255, 255, 0,
-            0, 0, 0, 136, 255, 255, 255, 1, 0, 0, 0, 152, 255, 255, 255, 0, 0, 0, 0, 122, 91, 139,
-            23
+            0, 0, 0, 136, 255, 255, 255, 1, 0, 0, 0, 152, 255, 255, 255, 0, 0, 0, 0, 67, 239, 18,
+            140
         ];
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
@@ -13298,7 +13315,7 @@ mod tests {
         assert_eq!(dl.shared_layout[0].len, 0);
         // Slot 1: composite `(Word, Word)` at offset `wb`, body `2*wb` bytes,
         // tagged as a tuple via the composite flag plus the CompositeKind tag.
-        assert_eq!(dl.shared_layout[1].offset as u32, wb);
+        assert_eq!(dl.shared_layout[1].offset, wb);
         assert_eq!(
             dl.shared_layout[1].kind,
             crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG

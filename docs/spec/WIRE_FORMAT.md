@@ -6,6 +6,8 @@ This document specifies the V0.2.0 bytecode wire format. The format pairs a fixe
 
 V0.2.0 introduces the format. V0.1.x runtimes cannot read V0.2.0 bytecode. The framing-header `version` field resets to `1` to signal the discontinuity. The rkyv-archived encoding survives as the internal representation for the auxiliary body and as a cross-process transport mechanism, but the execution loop reads the opcode stream and the operand pool directly through the new fixed-size records.
 
+**Version 2.** The framing-header `version` field is now `2`. Version 2 widens the shared-data byte offset, unified data-slot index, and indexed-array length operands of `GetData`, `SetData`, `GetDataIndexed`, and `SetDataIndexed` from sixteen to twenty-four bits, raising the shared-segment ceiling from 64 KB to 16 MB. The widening reuses the three inline operand bytes (for `GetData`/`SetData`) and the six-byte operand-pool payload (for the indexed pair, under the new `(u24, u24)` tag `0x04`), so the four-byte opcode record and eight-byte pool entry are unchanged and bytecode size does not grow. `SharedSlotLayout::offset` becomes a `u32`. Version 1 bytecode is rejected at load on the version check. The change is documented per shape below.
+
 ## Status
 
 V0.2.0 Phase 7a publishes this specification and the wire-format types in `src/wire_format.rs`. The opcode encoder and decoder are implemented and exercised by round-trip tests covering every `Op` variant.
@@ -133,13 +135,15 @@ The operand semantics depend on the opcode variant. Inline operands cover these 
 
 - **No operand.** Bytes one through three are zero. Thirty-six variants.
 - **`u8`.** Byte one carries the value; bytes two and three are zero. Eight variants.
-- **`u16`.** Bytes one through two carry the value little-endian; byte three is zero. Fifteen variants.
+- **`u16`.** Bytes one through two carry the value little-endian; byte three is zero. Thirteen variants.
+- **`u24` (V2).** Bytes one through three carry the value little-endian. Two variants: `GetData`, `SetData`. A data-slot index above 65535 (a shared segment beyond 64 KB) is representable because the index uses all three inline bytes.
 - **`(u16, u8)`.** Bytes one through two carry the `u16` little-endian; byte three carries the `u8`. Three variants.
 - **`NewComposite`, flat form.** Bytes one through two carry the composite's flat byte size little-endian. Byte three packs the composite kind in its high two bits and the operand-stack pop count (zero through sixty-two) in its low six bits. A low-six-bit value of `0x3F` is the sentinel that redirects to the pool form below.
 
 The pool-referencing forms place their payload in the operand pool because it does not fit in three bytes:
 
-- **`(u16, u16)`.** Pool entry tag `0x01`. Two variants: `GetDataIndexed`, `SetDataIndexed`. The inline operand bytes carry a twenty-four-bit pool index little-endian. The tag also serves the `FlatNested` composite-access records described below.
+- **`(u24, u24)` (V2).** Pool entry tag `0x04`. Two variants: `GetDataIndexed`, `SetDataIndexed` (the array base slot and length, each up to twenty-four bits). The inline operand bytes carry a twenty-four-bit pool index little-endian. The two twenty-four-bit values fill the entry's six payload bytes exactly.
+- **`(u16, u16)`.** Pool entry tag `0x01`. Serves the `FlatNested` composite-access records described below (before V2 it also served `GetDataIndexed`/`SetDataIndexed`, which moved to the `(u24, u24)` tag). The inline operand bytes carry a twenty-four-bit pool index little-endian.
 - **`(u16, u16, u8)`.** Pool entry tag `0x02`. One variant: `NewComposite`, used for the boxed form or when the flat field count exceeds sixty-two. Operand byte three holds the composite kind in its high two bits and the sentinel `0x3F` in its low six bits, so operand bytes one through two carry a sixteen-bit pool index rather than the twenty-four-bit index used by the `(u16, u16)` opcodes. The referenced entry carries `(count, byte_size-or-meta, boxed_flag)`.
 - **`(u16, u16, u16)`.** Pool entry tag `0x03`. One variant: `IsEnum`, which carries three constant indices, the enum name, the variant name, and the discriminant value. The inline operand bytes carry a twenty-four-bit pool index little-endian. The referenced entry carries the three `u16` values across bytes two through seven.
 
@@ -161,16 +165,16 @@ The operand pool is a contiguous sequence of eight-byte entries. Each entry is s
 
 | Offset | Width | Field |
 |--------|-------|-------|
-| 0      | 1     | Type tag (`0x01` for `(u16, u16)`, `0x02` for `(u16, u16, u8)`, `0x03` for `(u16, u16, u16)`). |
+| 0      | 1     | Type tag (`0x01` for `(u16, u16)`, `0x02` for `(u16, u16, u8)`, `0x03` for `(u16, u16, u16)`, `0x04` for `(u24, u24)`). |
 | 1      | 1     | Parity (XOR of bytes 0 and 2 through 7). |
-| 2      | 2     | First `u16` little-endian. |
-| 4      | 2     | Second `u16` little-endian. |
-| 6      | 1     | For tag `0x02`, the `u8`. For tag `0x01`, zero. For tag `0x03`, the low byte of the third `u16`. |
-| 7      | 1     | For tag `0x03`, the high byte of the third `u16`. Otherwise reserved (zero). |
+| 2      | 2     | First `u16` little-endian (tags `0x01`/`0x02`/`0x03`). For tag `0x04`, bytes 2 through 4 are the first `u24` little-endian. |
+| 4      | 2     | Second `u16` little-endian (tags `0x01`/`0x02`/`0x03`). For tag `0x04`, bytes 5 through 7 are the second `u24` little-endian. |
+| 6      | 1     | For tag `0x02`, the `u8`. For tags `0x01`, zero. For tag `0x03`, the low byte of the third `u16`. For tag `0x04`, part of the second `u24`. |
+| 7      | 1     | For tag `0x03`, the high byte of the third `u16`. For tag `0x04`, the high byte of the second `u24`. Otherwise reserved (zero). |
 
 The pool offset declared in the framing header is eight-byte aligned within the bytecode buffer. A consumer reading a pool entry validates the type tag against the expected tag for the consuming opcode and validates the parity against the rest of the entry. Tag and parity mismatches surface as `LoadError::CorruptOperandPool`.
 
-Byte seven is the high byte of the third `u16` for a tag `0x03` entry and is otherwise reserved zero so each entry occupies a full cache line within an eight-byte aligned region. The entry width is fixed at eight bytes regardless of the tag so a producer can compute pool offsets through `index * 8` arithmetic without consulting per-entry metadata.
+Byte seven is the high byte of the third `u16` for a tag `0x03` entry, the high byte of the second `u24` for a tag `0x04` entry, and otherwise reserved zero so each entry occupies a full cache line within an eight-byte aligned region. The entry width is fixed at eight bytes regardless of the tag so a producer can compute pool offsets through `index * 8` arithmetic without consulting per-entry metadata. The `(u24, u24)` tag reuses the same eight-byte entry as the narrower shapes, so widening the indexed operands costs no bytecode size.
 
 ## Section-partitioned body
 
@@ -182,7 +186,7 @@ The body of the bytecode partitions into three sections after the framing header
 
    The `schema_hash` is a CRC-32 of the data-segment layout, computed from a canonical serialisation of each slot's name and visibility in declaration order (`Module::schema_hash`). The runtime uses it to gate hot-swap compatibility: `Vm::replace_module` rejects a swap against an incompatible schema before any data is loaded. A module with no data layout reports zero.
 
-   The data layout itself carries four parts (`DataLayout` in `src/bytecode.rs`). The first is `slots`, the named slots in declaration order, whose index corresponds to the `GetData`/`SetData` operand. The second is `shared_layout: Vec<SharedSlotLayout>`, one entry per shared slot in declaration order, each carrying a byte `offset` (u16) into the host buffer, a `kind` (u8) that is a scalar-kind tag when the `SHARED_SLOT_COMPOSITE_FLAG` high bit is clear or a composite-kind tag in the low bits when set, and a `len` (u16) that is the flat composite body length for a composite slot and zero for a scalar slot. This table is empty when there are no shared slots. The third is `private_composite_layout: Vec<PrivateCompositeSlot>`, one entry per private slot that holds a flat composite body (single composite fields and array-of-composite element slots alike), each carrying the unified data-slot index `slot` (u16) and the byte `offset` (u32) of the body within the persistent composite pool, sorted ascending by `slot` so the runtime resolves a slot by binary search. This table is empty for a module with no private composite slots, so the wire form of such a module is unchanged. The fourth is `private_init: Vec<ConstValue>`, the load-time initial value of each private slot in private-slot order (parallel to the private-slot suffix of `slots`), the `.data`-section model: a scalar slot carries its `= literal` initializer or the type's zero, and a composite or `Text` slot carries `ConstValue::Unit`. The runtime writes these into the persistent region when the VM is constructed; they persist across RESET and are not re-applied. This table is empty for a module with no private data, so the wire form of such a module is unchanged.
+   The data layout itself carries four parts (`DataLayout` in `src/bytecode.rs`). The first is `slots`, the named slots in declaration order, whose index corresponds to the `GetData`/`SetData` operand. The second is `shared_layout: Vec<SharedSlotLayout>`, one entry per shared slot in declaration order, each carrying a byte `offset` (u32 since V2, validated below `2^24` so the shared segment may reach 16 MB) into the host buffer, a `kind` (u8) that is a scalar-kind tag when the `SHARED_SLOT_COMPOSITE_FLAG` high bit is clear or a composite-kind tag in the low bits when set, and a `len` (u16) that is the flat composite body length for a composite slot and zero for a scalar slot (a single composite body still fits sixteen bits). This table is empty when there are no shared slots. The third is `private_composite_layout: Vec<PrivateCompositeSlot>`, one entry per private slot that holds a flat composite body (single composite fields and array-of-composite element slots alike), each carrying the unified data-slot index `slot` (u16) and the byte `offset` (u32) of the body within the persistent composite pool, sorted ascending by `slot` so the runtime resolves a slot by binary search. This table is empty for a module with no private composite slots, so the wire form of such a module is unchanged. The fourth is `private_init: Vec<ConstValue>`, the load-time initial value of each private slot in private-slot order (parallel to the private-slot suffix of `slots`), the `.data`-section model: a scalar slot carries its `= literal` initializer or the type's zero, and a composite or `Text` slot carries `ConstValue::Unit`. The runtime writes these into the persistent region when the VM is constructed; they persist across RESET and are not re-applied. This table is empty for a module with no private data, so the wire form of such a module is unchanged.
 
 The CRC-32 trailer covers the header and all three sections. The trailer's algebraic self-inclusion property holds: a consumer computing the CRC over the bytes from offset zero through the four-byte trailer obtains the residue constant `0x2144DF1C`. This property survives the section-partitioned body unchanged.
 

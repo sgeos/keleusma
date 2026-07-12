@@ -246,7 +246,7 @@ pub enum TypedError {
 /// alone cannot determine a value's shape. Phase 2 consumes it; the
 /// compiler emitting it and the wire format carrying it (additively in the
 /// auxiliary body) is the Phase 2b plumbing. Absent, every seed point is
-/// [`AbsVal::Top`](crate::verify_typed::AbsVal::Top) and shape checks defer, which is exactly the Phase 1
+/// [`AbsVal::Top`] and shape checks defer, which is exactly the Phase 1
 /// behaviour.
 #[derive(Clone, Debug, Default)]
 pub struct ChunkSig {
@@ -408,18 +408,18 @@ fn validate_data_layout(
                 None => {
                     return Err(TypedError::SharedSlotOutOfBounds {
                         slot,
-                        offset: usize::from(sl.offset),
+                        offset: sl.offset as usize,
                         size: 0,
                         buffer,
                     });
                 }
             }
         };
-        let need = usize::from(sl.offset) + size;
+        let need = sl.offset as usize + size;
         if need > buffer as usize {
             return Err(TypedError::SharedSlotOutOfBounds {
                 slot,
-                offset: usize::from(sl.offset),
+                offset: sl.offset as usize,
                 size,
                 buffer,
             });
