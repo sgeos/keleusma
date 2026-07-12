@@ -1,12 +1,16 @@
 //! Driver and bootstrap harness for the self-hosted Keleusma compiler (V0.3.0).
 //!
-//! This is scaffolding. The three pipeline stages live in Keleusma source under
-//! `kel/`. The codegen and parser stages are implemented (the parser as the merged
-//! `parse.kel`, which parses a whole declaration including its body in one pass); this
-//! driver establishes the structure that will register the `compiler::` natives, drive
-//! the yield/resume pipeline, run the bootstrap phases, and validate byte-identical
-//! output against the Rust-hosted reference compiler. See `README.md` and `MILESTONES.md`;
-//! the authoritative design is `docs/roadmap/V0_3_0_SELF_HOSTING.md`.
+//! The three pipeline stages live in Keleusma source under `kel/` (`lexer.kel`,
+//! `parse.kel`, `codegen.kel`), and each self-compiles byte-identically to the
+//! Rust-hosted reference compiler. The `compile <file>` command drives all three end
+//! to end through the shared `keleusma_selfhost::selfhost` library to emit bytecode
+//! and check the fixed-point property; `lex` and `parse` run the first one and two
+//! stages. Two gaps remain before full self-hosting (both in `selfhost.rs` and
+//! `MILESTONES.md`): the postorder-record-to-forest reconstruction between the parser
+//! and code generator is still host-side Rust, and the emitted module borrows its data
+//! layout and auxiliary body from the reference rather than assembling them from the
+//! stages. See `README.md` and `MILESTONES.md`; the authoritative design is
+//! `docs/roadmap/V0_3_0_SELF_HOSTING.md`.
 
 /// The bytecode format the self-hosted compiler must emit. Sourced from the parent
 /// runtime so the two compilers cannot drift on the wire format.
@@ -51,9 +55,28 @@ fn main() {
             }
         },
         "compile" => match args.get(1) {
-            Some(path) => run_compile_pipeline(path),
+            Some(path) => {
+                // Optional `-o <out>` writes the assembled bytecode to a file.
+                let out = match args.get(2).map(String::as_str) {
+                    Some("-o") => match args.get(3) {
+                        Some(o) => Some(o.as_str()),
+                        None => {
+                            eprintln!("usage: keleusma-selfhost compile <file> [-o <out>]");
+                            std::process::exit(2);
+                        }
+                    },
+                    Some(other) => {
+                        eprintln!(
+                            "unexpected argument `{other}`; usage: compile <file> [-o <out>]"
+                        );
+                        std::process::exit(2);
+                    }
+                    None => None,
+                };
+                run_compile_pipeline(path, out);
+            }
             None => {
-                eprintln!("usage: keleusma-selfhost compile <file>");
+                eprintln!("usage: keleusma-selfhost compile <file> [-o <out>]");
                 std::process::exit(2);
             }
         },
@@ -112,13 +135,15 @@ fn status() {
     println!("body, a data block, an enum, or a use import -- in a single pass, folding");
     println!("body.kel's node-forest walk into parser.kel's declaration scan and");
     println!("resolving data fields and enums by accumulating their tables as it parses");
-    println!("(see tests/selfhost_parse.rs). The lexer and parser stages now COMPOSE: the");
-    println!("`parse <file>` command tokenizes with lexer.kel, recovers the parser's");
-    println!("inputs from the lexer's exposed intern table and a scan of its token stream,");
-    println!("drives parse.kel, and prints the declarations, with no runtime-tokenizer");
-    println!("adapter in the path (see tests/selfhost_pipeline.rs). The remaining pipeline");
-    println!("work is composing the parser's node forest into codegen.kel to emit");
-    println!("bytecode. V0.3.0 ships when the bootstrap reaches a fixed point.");
+    println!("(see tests/selfhost_parse.rs). ALL THREE STAGES NOW SELF-COMPILE");
+    println!("byte-identically (lexer.kel, codegen.kel, parse.kel), and the `compile");
+    println!("<file>` command drives the whole lexer/parser/codegen pipeline end to end");
+    println!("to bytecode, checking the fixed-point property (compiler/tests/fixed_point.rs).");
+    println!("Two gaps remain before full self-hosting: the record-to-forest reconstruction");
+    println!("between the parser and code generator is still host-side Rust, and the emitted");
+    println!("module borrows its data layout and auxiliary body from the reference rather");
+    println!("than assembling them from the stages. V0.3.0 ships when those close and the");
+    println!("bootstrap reaches the Phase B/C fixed point.");
 }
 
 /// Run Stage 1 (the self-hosted lexer) over `path` and print the token stream.
@@ -562,8 +587,9 @@ fn compile_stage(src: &str, name: &str, deep: bool) -> keleusma::bytecode::Modul
 /// (the same interim scaffold the fixed-point test uses). It then verifies the module
 /// loads and reports whether its ops, constant pool, and local-frame sizes are
 /// byte-identical to the reference compiler's -- the fixed-point property for this
-/// source. Reconstruction remains host-side Rust; see `MILESTONES.md`.
-fn run_compile_pipeline(path: &str) {
+/// source. When `out` is set, the assembled bytecode is written there. Reconstruction
+/// remains host-side Rust; see `MILESTONES.md`.
+fn run_compile_pipeline(path: &str, out: Option<&str>) {
     use keleusma::Arena;
     use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, required_persistent_capacity_for};
     use keleusma_selfhost::selfhost::{compile_src, self_host_compile};
@@ -584,26 +610,51 @@ fn run_compile_pipeline(path: &str) {
         }
     }
 
+    // Serialize the bytecode before the VM consumes the module, when requested.
+    let total_ops: usize = module.chunks.iter().map(|c| c.ops.len()).sum();
+    let bytes = if out.is_some() {
+        Some(module.to_bytes().unwrap_or_else(|e| {
+            eprintln!("cannot serialize the compiled module: {e:?}");
+            std::process::exit(1);
+        }))
+    } else {
+        None
+    };
+
     // Verify the assembled module loads on the VM.
     let need = required_persistent_capacity_for(&module);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let total_ops: usize = module.chunks.iter().map(|c| c.ops.len()).sum();
-    match Vm::new(module, &arena) {
-        Ok(_) => println!(
-            "compiled {path}: {} chunks, {} ops, {}",
+    if let Err(e) = Vm::new(module, &arena) {
+        eprintln!("compiled {path} but the module failed to verify: {e:?}");
+        std::process::exit(1);
+    }
+
+    // Write the artifact, if requested.
+    if let (Some(out), Some(bytes)) = (out, bytes.as_ref()) {
+        std::fs::write(out, bytes).unwrap_or_else(|e| {
+            eprintln!("cannot write {out}: {e}");
+            std::process::exit(1);
+        });
+    }
+
+    let status = if mismatched == 0 {
+        "byte-identical to the reference compiler".to_string()
+    } else {
+        format!("{mismatched} chunk(s) differ from the reference")
+    };
+    match out {
+        Some(o) => println!(
+            "compiled {path}: {} chunks, {} ops, {status}; wrote {} bytes to {o}",
             reference.chunks.len(),
             total_ops,
-            if mismatched == 0 {
-                "byte-identical to the reference compiler".to_string()
-            } else {
-                format!("{mismatched} chunk(s) differ from the reference")
-            }
+            bytes.as_ref().map_or(0, |b| b.len())
         ),
-        Err(e) => {
-            eprintln!("compiled {path} but the module failed to verify: {e:?}");
-            std::process::exit(1);
-        }
+        None => println!(
+            "compiled {path}: {} chunks, {} ops, {status}",
+            reference.chunks.len(),
+            total_ops
+        ),
     }
     if mismatched != 0 {
         std::process::exit(1);
@@ -623,7 +674,8 @@ fn help() {
     println!("  status          show the pipeline scaffold state (default)");
     println!("  lex <file>      run Stage 1 (the self-hosted lexer) and print tokens");
     println!("  parse <file>    run Stages 1+2 (lexer into parser) and print declarations");
-    println!("  compile <file>  run the whole pipeline to bytecode and check the fixed point");
+    println!("  compile <file> [-o <out>]  run the pipeline to bytecode, check the fixed point,");
+    println!("                             and optionally write the artifact");
     println!("  bootstrap       cross-compile, self-compile, reach fixed point (planned)");
     println!(
         "  verify-corpus   assert byte-identical output vs the Rust-hosted compiler (planned)"
