@@ -165,6 +165,24 @@ Variants identified by name are the script-side mechanism for pattern matching; 
 
 Restrictions: discriminants must be integer literals, optionally preceded by a unary minus for negative values. Expressions, named constants, and casts are not admissible in the discriminant clause itself. Duplicate discriminant values within a single enum are rejected at parse time.
 
+#### Matching a `Word` by variant discriminant
+
+A `match` whose scrutinee is a `Word` may use a no-payload enum-variant pattern. The pattern matches when the word equals the variant's discriminant.
+
+```
+enum TokenKind { Fn = 0, Ident = 1, Plus = 21 }
+
+fn classify(k: Word) -> Word {
+    match k {
+        TokenKind::Fn()    => 1,
+        TokenKind::Ident() => 2,
+        _ => 0,
+    }
+}
+```
+
+This is a zero-cost switch on a tag word. The compiler folds each pattern to the variant's discriminant and emits the same comparison an integer-literal arm would, so no enum value is constructed and no variant test opcode is involved. It exists so host-fed tagged data, such as a token stream keyed by an `enum TokenKind`, can dispatch by variant name while the stream stays a plain `Word`. The variant must exist and carry no payload, since a `Word` has none to bind, and a wildcard arm is required because a `Word` ranges beyond the declared variants. An enum-typed scrutinee is unaffected and matches by the general variant test.
+
 #### Casting an enum value to `Word`
 
 An enum-typed value can be cast to `Word` to extract its variant's discriminant.

@@ -11199,6 +11199,25 @@ fn compile_pattern_test(
             fc.emit(Op::CmpEq);
             fail_addrs.push(fc.emit_jump(Op::If(0)));
         }
+        Pattern::Enum(enum_name, variant, sub_pats, _)
+            if sub_pats.is_empty() && matches!(ty, Some(TypeExpr::Prim(PrimType::Word, _))) =>
+        {
+            // A unit enum-variant pattern against a `Word` scrutinee is a discriminant
+            // match: fold to the variant's discriminant and compile the integer `CmpEq`
+            // path, byte-identical to an integer-literal arm. The type checker has
+            // confirmed the variant exists and is a unit variant.
+            let disc = fc
+                .type_info
+                .enum_variant_order
+                .get(enum_name)
+                .and_then(|vs| vs.iter().find(|(n, _)| n == variant).map(|(_, d)| *d))
+                .unwrap_or(0);
+            fc.emit(Op::GetLocal(value_slot));
+            let idx = fc.add_constant(Value::Int(disc));
+            fc.emit(Op::Const(idx));
+            fc.emit(Op::CmpEq);
+            fail_addrs.push(fc.emit_jump(Op::If(0)));
+        }
         Pattern::Enum(enum_name, variant, sub_pats, _) => {
             // Both `Option` variants go through `IsEnum`. `Option::Some(x)`
             // flattens (or boxes) as an enum body with discriminant 1;
@@ -12336,6 +12355,57 @@ mod tests {
                 .iter()
                 .any(|op| matches!(op, Op::IsEnum(..))),
             "a cast of a bound variable keeps the IsEnum chain"
+        );
+    }
+
+    #[test]
+    fn compile_discriminant_match_folds_to_integer_match() {
+        // A unit enum-variant pattern against a `Word` scrutinee is a discriminant
+        // match: it compiles byte-identically to the equivalent integer-literal match,
+        // with no IsEnum. This lets host-fed tagged data dispatch by variant name while
+        // reusing the integer-match code generator.
+        let disc = compile_str(
+            "enum Tok { Fn = 0, Ident = 1, Plus = 21 }\n\
+             fn f(k: Word) -> Word { match k { Tok::Ident() => 10, Tok::Plus() => 20, _ => 0 } }",
+        )
+        .unwrap();
+        let literal =
+            compile_str("fn f(k: Word) -> Word { match k { 1 => 10, 21 => 20, _ => 0 } }").unwrap();
+        let df = disc.chunks.iter().find(|c| c.name == "f").unwrap();
+        let lf = literal.chunks.iter().find(|c| c.name == "f").unwrap();
+        assert!(
+            !df.ops.iter().any(|op| matches!(op, Op::IsEnum(..))),
+            "a discriminant match must not emit IsEnum, got {:?}",
+            df.ops
+        );
+        assert_eq!(
+            df.ops, lf.ops,
+            "a discriminant match must be byte-identical to the integer match"
+        );
+
+        // An enum-typed scrutinee still routes through IsEnum (the discriminant fold is
+        // scoped to a Word scrutinee).
+        let typed = compile_str(
+            "enum Color { Red, Green, Blue }\n\
+             fn f(c: Color) -> Word { match c { Color::Red() => 1, _ => 0 } }",
+        )
+        .unwrap();
+        assert!(
+            typed.chunks[0]
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::IsEnum(..))),
+            "an enum-typed match keeps IsEnum"
+        );
+
+        // A payload variant against a Word scrutinee is rejected at type-check.
+        let bad = compile_str(
+            "enum Msg { Ping, Data(Word) }\n\
+             fn f(k: Word) -> Word { match k { Msg::Data() => 1, _ => 0 } }",
+        );
+        assert!(
+            bad.is_err(),
+            "a payload variant cannot match a Word scrutinee"
         );
     }
 

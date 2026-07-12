@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A unit enum-variant pattern matches a `Word` scrutinee by discriminant.** A
+  `match` over a `Word` may use a no-payload enum-variant pattern, `match k { Tok::Fn()
+  => ..., _ => ... }`, which tests the word against the variant's discriminant. It is a
+  zero-cost switch on a tag: the compiler folds the pattern to the discriminant literal
+  and emits the same `CmpEq` path as an integer-literal arm, so no `IsEnum` and no enum
+  value are involved. This lets host-fed tagged data — a token stream keyed by an
+  `enum TokenKind` — dispatch by variant name while keeping the stream a plain `Word`.
+  The variant must exist and carry no payload, since a `Word` has none to bind; an
+  enum-typed scrutinee still routes through the general variant test. No wire-format or
+  `BYTECODE_VERSION` change.
+
 - **The host per-slot API can seed a discriminant-only enum shared field.** A
   discriminant-only enum occupies a single word holding its variant discriminant,
   byte-identical to a `Word` slot, so `Vm::set_shared` now accepts a discriminant
