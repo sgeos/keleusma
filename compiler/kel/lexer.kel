@@ -16,12 +16,19 @@
 // and its length in `src.len`, then drives the loop with resume. Byte work is
 // plain array indexing (R3.3); no `Text` native is needed for this increment.
 //
-// Token wire (increment 1). Each yielded token is a single Word, `kind + value*16`:
+// Token wire. Each yielded token is a single Word, `kind + value*16`:
 //   kind 0 PENDING  no complete token this iteration; the host skips it
 //   kind 1 EOF      end of source; value 0
 //   kind 2 IDENT    identifier run; value = its byte length
 //   kind 3 INT      integer literal; value = its parsed value
 //   kind 4 PUNCT    single-byte punctuation; value = the byte
+//   kind 5 OP2      two-byte operator (increment 2); value = a compound code
+// Increment 2 (OP2). The lexer now does maximal munch over the two-character
+// operators the grammar uses, so `==`, `<=`, `::`, `..`, and `=>` are one token
+// rather than two punctuation bytes. The compound codes are 0 `==`, 1 `!=`,
+// 2 `<=`, 3 `>=`, 4 `::`, 5 `..`, 6 `=>`; a `=`, `<`, `>`, `:`, `.`, or `!` not
+// followed by its partner still emits a single-byte PUNCT. This is the first step
+// toward emitting the parser's unified token vocabulary directly.
 // Spans, string interning, keyword resolution, and the richer `Token` struct in
 // prelude.kel land in later increments once struct-valued yields are wired.
 
@@ -68,6 +75,31 @@ fn is_space(b: Word) -> Word {
     if b == 9 { 1 } else {
     if b == 10 { 1 } else {
     if b == 13 { 1 } else { 0 } } } }
+}
+
+// The source byte at `pos`, or 0 when `pos` is past the end. Lets the punctuation
+// scan look one byte ahead for a two-character operator without indexing out of
+// bounds at the final byte. Reads the shared source array.
+fn peek_at(pos: Word) -> Word {
+    if pos < src.len { src.bytes[pos] as Word } else { 0 }
+}
+
+// Classify a two-byte operator by its first byte `b` and the byte after it,
+// `next`. Returns the compound code plus one (1..7) so 0 cleanly means "not a
+// two-byte operator"; the caller subtracts one to recover the code. Factored out
+// of the loop so the per-iteration body stays shallow (the parser stage learned
+// that deep loop nesting overflows the host compiler's recursion-depth limit).
+fn compound_code(b: Word, next: Word) -> Word {
+    if b == 61 {
+        // `=` begins `==` (code 0) or `=>` (code 6); otherwise a lone `=`.
+        if next == 61 { 1 } else { if next == 62 { 7 } else { 0 } }
+    } else {
+    if b == 33 { if next == 61 { 2 } else { 0 } } else {   // `!=`
+    if b == 60 { if next == 61 { 3 } else { 0 } } else {   // `<=`
+    if b == 62 { if next == 61 { 4 } else { 0 } } else {   // `>=`
+    if b == 58 { if next == 58 { 5 } else { 0 } } else {   // `::`
+    if b == 46 { if next == 46 { 6 } else { 0 } } else {   // `..`
+    0 } } } } } }
 }
 
 loop main(resume: Word) -> Word {
@@ -126,8 +158,15 @@ loop main(resume: Word) -> Word {
                 st.cursor = st.cursor + 1;
                 yield 0
             } else {
-                st.cursor = st.cursor + 1;
-                yield 4 + b * 16
+                // Punctuation: a two-byte operator by maximal munch, else one byte.
+                let cc = compound_code(b, peek_at(st.cursor + 1));
+                if cc > 0 {
+                    st.cursor = st.cursor + 2;
+                    yield 5 + (cc - 1) * 16
+                } else {
+                    st.cursor = st.cursor + 1;
+                    yield 4 + b * 16
+                }
             } } }
         } }
     }
