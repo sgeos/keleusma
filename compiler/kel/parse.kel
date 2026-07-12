@@ -1,0 +1,267 @@
+// compiler/kel/parse.kel — the merged declaration-and-body parser (roadmap Step 2).
+//
+// Increment 1: a single streaming `loop` that parses a whole top-level function
+// declaration INCLUDING an atomic body (one integer literal or one parameter
+// reference) in one pass, rather than the two composed loops (parser.kel finding
+// declarations and body.kel parsing each body) the host currently chains. This proves
+// the merge architecture: a combined state machine with an `in_body` mode switch, a
+// shared token stream and cursor, a param table the header itself accumulates, and a
+// bracket protocol that lets the host decode the header and body record streams
+// without changing either encoding. See compiler/MERGE_PLAN.md and MILESTONES.md.
+//
+// Structure. `main` reads one token per iteration from the shared `toks` stream at
+// `ps.cursor` and delegates to `header_step` (the declaration scan, parser.kel's mode
+// machine) or `body_step` (the body walk, body.kel's forest emission) by the `ps.in_body`
+// flag. The header, on the function body's opening `{`, arms the body (emits a BSTART
+// bracket, sets `in_body`) rather than brace-matching it. The body, on its closing `}`,
+// emits the forest's terminal Done and requests the declaration's END, returning control
+// to the header for the next declaration.
+//
+// Record wire. Header records are `dkind + val*64`; body records are `kind + arg*64`
+// (the body.kel node encoding). Both use radix 64, so the host disambiguates them by the
+// bracket: a BSTART (dkind 16) switches the host decoder into body mode, and the body's
+// terminal Done (kind 15) switches it back. Header dkinds: 1/2/3 START of a fn/yield/loop
+// (val = name id), 4 PARAM (val = its name id), 5 END, 6 PTYPE, 7 RETTYPE, 8 ASIZE,
+// 15 DONE (stream exhausted), 16 BSTART (a body's forest follows). Body kinds are the
+// `enum Node` codes (1 Literal, 2 Local, 15 Done, ...).
+//
+// Increment 1 handles only the atomic body and a functions-only header; the operator
+// grammar, statements, and the data/enum/use declaration kinds land in later increments.
+// The two vocabularies already agree on every token an atomic body uses (Ident 1, IntLit
+// 12, `{` 2, `}` 3), so this increment needs no token re-coding; the reconciliation to
+// one unified vocabulary lands with the operators in increment 2.
+
+// The self-hosted compiler is a full-width host tool whose record arithmetic (`val*64`)
+// overflows a narrow word, so it declares a 32-bit floor.
+require word >= 32;
+
+// The host-provided token stream. `kinds[i]`/`vals[i]` are the i-th token; `len` is the
+// token count.
+shared data toks {
+    len: Word,
+    kinds: [Word; 2048],
+    vals: [Word; 2048],
+}
+
+// The merged parser state. The header fields (`mode` the declaration phase, `dkind` the
+// function category 1 fn / 2 yield / 3 loop, `pdepth` the signature parenthesis depth,
+// `pname`/`ptype`/`rtype` the armed type positions, `arr`/`arr_ret` an array type) drive
+// the signature scan. `in_body` selects the body walk; `started` records that the body's
+// opening `{` was consumed; `pend_end` requests the declaration's END on the iteration
+// after the body's Done. `pcount`/`pnames` are the current function's parameter table,
+// accumulated as each PARAM is emitted so the body resolves an identifier to its frame
+// slot without a host-supplied table.
+private data ps {
+    cursor: Word,
+    mode: Word,
+    dkind: Word,
+    pdepth: Word,
+    pdone: Word,
+    pname: Word,
+    ptype: Word,
+    rtype: Word,
+    arr: Word,
+    arr_ret: Word,
+    in_body: Word,
+    started: Word,
+    pend_end: Word,
+    pcount: Word,
+    pnames: [Word; 32],
+    found_slot: Word,
+}
+
+// Resolve an identifier's interned id to its frame slot by scanning the accumulated
+// parameter table; a parameter's slot is its position. An unresolved identifier yields
+// slot 0 (no other identifier binding exists in an atomic body).
+fn resolve_param(v: Word) -> Word {
+    ps.found_slot = 0;
+    for i in 0..ps.pcount limit 32 {
+        if ps.pnames[i] == v {
+            ps.found_slot = i;
+        }
+    }
+    ps.found_slot
+}
+
+// The declaration scan (header). Mode 0 reads the category keyword (`yield` 5, `loop` 6,
+// otherwise `fn`); mode 1 the declaration name, emitting START and resetting the param
+// table; mode 2 the signature, emitting a PARAM per parameter name (and accumulating it),
+// a PTYPE per parameter type, and a RETTYPE for the return type, until the first `{` at
+// parenthesis depth zero arms the body.
+fn header_step(k: Word, v: Word) -> Word {
+    if ps.mode == 0 {
+        if k == 5 {
+            ps.dkind = 2;
+        } else {
+        if k == 6 {
+            ps.dkind = 3;
+        } else {
+            ps.dkind = 1;
+        } }
+        ps.mode = 1;
+        0
+    } else {
+    if ps.mode == 1 {
+        if k == 1 {
+            ps.pdepth = 0;
+            ps.pdone = 0;
+            ps.pname = 0;
+            ps.ptype = 0;
+            ps.rtype = 0;
+            ps.arr = 0;
+            ps.arr_ret = 0;
+            ps.pcount = 0;
+            ps.mode = 2;
+            ps.dkind + v * 64
+        } else {
+            0
+        }
+    } else {
+        header_sig(k, v)
+    } }
+}
+
+// Mode 2 in a helper so the header's if-else nesting stays under the parser's
+// recursion-depth limit. The signature scan: PARAM/PTYPE/RETTYPE emission and array
+// types, ending when the first `{` at depth zero arms the body (BSTART).
+fn header_sig(k: Word, v: Word) -> Word {
+    if k == 1 {
+        if ps.arr == 1 {
+            ps.arr = 2;
+            if ps.arr_ret == 0 {
+                6 + v * 64
+            } else {
+                7 + v * 64
+            }
+        } else {
+        if ps.pdepth == 1 {
+            if ps.pname == 1 {
+                ps.pname = 0;
+                ps.pnames[ps.pcount] = v;
+                ps.pcount = ps.pcount + 1;
+                4 + v * 64
+            } else {
+            if ps.ptype == 1 {
+                ps.ptype = 0;
+                6 + v * 64
+            } else {
+                0
+            } }
+        } else {
+            if ps.rtype == 1 {
+                ps.rtype = 0;
+                7 + v * 64
+            } else {
+                0
+            }
+        } }
+    } else {
+    if k == 11 {
+        if ps.ptype == 1 {
+            ps.ptype = 0;
+            ps.arr_ret = 0;
+            ps.arr = 1;
+        } else {
+            if ps.rtype == 1 {
+                ps.rtype = 0;
+                ps.arr_ret = 1;
+                ps.arr = 1;
+            }
+        }
+        0
+    } else {
+    if k == 12 {
+        if ps.arr == 2 {
+            ps.arr = 0;
+            8 + v * 64
+        } else {
+            0
+        }
+    } else {
+    if k == 7 {
+        ps.pdepth = ps.pdepth + 1;
+        if ps.pdepth == 1 {
+            if ps.pdone == 0 {
+                ps.pname = 1;
+            }
+        }
+        0
+    } else {
+    if k == 8 {
+        ps.pdepth = ps.pdepth - 1;
+        if ps.pdepth == 0 {
+            ps.pdone = 1;
+            ps.rtype = 1;
+        }
+        0
+    } else {
+    if k == 9 {
+        if ps.pdepth == 1 {
+            ps.ptype = 1;
+        }
+        0
+    } else {
+    if k == 10 {
+        if ps.pdepth == 1 {
+            if ps.pdone == 0 {
+                ps.pname = 1;
+            }
+        }
+        0
+    } else {
+    if k == 2 {
+        if ps.pdepth == 0 {
+            // The body's opening `{`: arm the body walk rather than brace-match it. Emit
+            // the BSTART bracket; the body walk consumes the body's own tokens next.
+            ps.in_body = 1;
+            ps.started = 1;
+            16
+        } else {
+            0
+        }
+    } else {
+        0
+    } } } } } } } }
+}
+
+// The body walk (atomic bodies only this increment). The opening `{` is already consumed
+// (started set at the arm). An integer literal emits a Literal node (kind 1, arg = its
+// value); an identifier a Local node (kind 2, arg = its resolved frame slot); the closing
+// `}` emits the forest's terminal Done (kind 15) and requests the declaration's END.
+fn body_step(k: Word, v: Word) -> Word {
+    if k == 12 {
+        1 + v * 64
+    } else {
+    if k == 1 {
+        2 + resolve_param(v) * 64
+    } else {
+    if k == 3 {
+        ps.in_body = 0;
+        ps.pend_end = 1;
+        15
+    } else {
+        0
+    } } }
+}
+
+loop main(resume: Word) -> Word {
+    if ps.pend_end == 1 {
+        // The body's Done was emitted last iteration; close the declaration with END and
+        // return to the header for the next declaration, consuming no token.
+        ps.pend_end = 0;
+        ps.mode = 0;
+        yield 5
+    } else {
+    if ps.cursor >= toks.len {
+        yield 15
+    } else {
+        let k = toks.kinds[ps.cursor];
+        let v = toks.vals[ps.cursor];
+        ps.cursor = ps.cursor + 1;
+        if ps.in_body == 1 {
+            yield body_step(k, v)
+        } else {
+            yield header_step(k, v)
+        }
+    } }
+}
