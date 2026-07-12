@@ -4233,3 +4233,117 @@ fn assembled_chunk_metadata_matches_the_reference() {
         }
     }
 }
+
+// -- self-hosted WCET analysis (analyze.kel) ----------------------------------
+//
+// analyze.kel reformulates the reference verifier's recursive `wcet_region` max-cost
+// traversal as an explicit region-frame stack, computing a Stream chunk's per-iteration
+// WCET from a marshalled op table. The per-op cost is the authoritative `Op::cost()`; the
+// stage self-hosts only the control-flow algorithm. This increment covers the loop-free
+// structured forms (straight-line, `if`/`else`, bare `if`, `break`/`trap`), which is exact
+// for the four stages' Stream bodies; `loop` regions land in a later increment.
+const WA_OP_COUNT: usize = 0;
+const WA_STREAM_POS: usize = 1;
+const WA_RESET_POS: usize = 2;
+const WA_COST: usize = 3;
+const WA_CLASS: usize = 3 + 1024;
+const WA_ARG: usize = 3 + 1024 * 2;
+#[allow(dead_code)]
+const WA_OUT_WCET: usize = 3 + 1024 * 3;
+
+fn analyze_kel_module() -> Module {
+    static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| {
+            compile_src(
+                &std::fs::read_to_string("compiler/kel/analyze.kel").expect("read analyze.kel"),
+            )
+        })
+        .clone()
+}
+
+/// Classify an op for analyze.kel as `(class, arg)`. The class tags the control-flow role
+/// (0 plain, 1 If, 2 Else, 3 EndIf, 4 Loop, 5 EndLoop, 6 Break, 7 BreakIf, 8 Trap); `arg`
+/// carries the branch target for If and the matching EndIf position for Else.
+fn analyze_class(op: &keleusma::bytecode::Op) -> (i64, i64) {
+    use keleusma::bytecode::Op;
+    match op {
+        Op::If(t) => (1, *t as i64),
+        Op::Else(e) => (2, *e as i64),
+        Op::EndIf => (3, 0),
+        Op::Loop(x) => (4, *x as i64),
+        Op::EndLoop(_) => (5, 0),
+        Op::Break(_) => (6, 0),
+        Op::BreakIf(_) => (7, 0),
+        Op::Trap(_) => (8, 0),
+        _ => (0, 0),
+    }
+}
+
+/// Compute a Stream chunk's per-iteration WCET by running analyze.kel over its op table.
+fn wcet_via_kel(chunk: &keleusma::bytecode::Chunk) -> i64 {
+    use keleusma::bytecode::Op;
+    let sp = chunk
+        .ops
+        .iter()
+        .position(|o| matches!(o, Op::Stream))
+        .expect("Stream op");
+    let rp = chunk
+        .ops
+        .iter()
+        .position(|o| matches!(o, Op::Reset))
+        .expect("Reset op");
+    assert!(chunk.ops.len() <= 1024, "analyze.kel op-table capacity");
+    let m = analyze_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify analyze.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.set_shared(&mut shared, WA_OP_COUNT, Value::Int(chunk.ops.len() as i64))
+        .unwrap();
+    vm.set_shared(&mut shared, WA_STREAM_POS, Value::Int(sp as i64))
+        .unwrap();
+    vm.set_shared(&mut shared, WA_RESET_POS, Value::Int(rp as i64))
+        .unwrap();
+    for (i, op) in chunk.ops.iter().enumerate() {
+        let (class, arg) = analyze_class(op);
+        vm.set_shared(&mut shared, WA_COST + i, Value::Int(op.cost() as i64))
+            .unwrap();
+        vm.set_shared(&mut shared, WA_CLASS + i, Value::Int(class))
+            .unwrap();
+        vm.set_shared(&mut shared, WA_ARG + i, Value::Int(arg))
+            .unwrap();
+    }
+    match vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call analyze.kel")
+    {
+        VmState::Yielded(Value::Int(n)) => n,
+        other => panic!("unexpected analyze.kel state: {other:?}"),
+    }
+}
+
+// analyze.kel reproduces `wcet_stream_iteration` exactly for every stage's loop-free Stream
+// chunk. The reference values are 154 (lexer), 43 (reconstruct), and 14 (codegen, parse).
+#[test]
+fn wcet_via_kel_matches_the_reference() {
+    for path in [
+        "compiler/kel/lexer.kel",
+        "compiler/kel/reconstruct.kel",
+        "compiler/kel/codegen.kel",
+        "compiler/kel/parse.kel",
+    ] {
+        let src = std::fs::read_to_string(path).expect("read stage");
+        let m = compile_src(&src);
+        for c in &m.chunks {
+            if c.block_type != keleusma::bytecode::BlockType::Stream {
+                continue;
+            }
+            let via_kel = wcet_via_kel(c);
+            let reference =
+                keleusma::verify::wcet_stream_iteration(c).expect("reference wcet") as i64;
+            assert_eq!(via_kel, reference, "wcet for {path} chunk `{}`", c.name);
+        }
+    }
+}
