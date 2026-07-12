@@ -28,7 +28,7 @@ require word >= 32;
 // site recovers `kind` as `packed % 64` and `payload` as `packed / 64`.
 shared data toks {
     len: Word,
-    packed: [Word; 6144],
+    packed: [Word; 12288],
     limit_id: Word,
     chunk_count: Word,
     chunks: [Word; 256],
@@ -607,21 +607,25 @@ fn step_iclosing() -> Word {
 }
 
 // The token after a closing `]`. A `=` makes the just-indexed `d.f[i]` an assignment
-// target: push a pending indexed assignment (pstmt kind 2, carrying base + len*65536),
+// target: push a pending indexed assignment (pstmt kind 2, carrying base + len*2^24),
 // leaving the index node on the host stack for the eventual IndexStore. Any other token is
 // a read: emit the IndexRead (kind 13) over the index node and push the token back.
+// The base and length pack with a 2^24 radix (not 2^16) so a data array in a shared
+// segment beyond 64 KB, whose element-0 slot or length exceeds 65535, does not spill
+// its base into the length field; the runtime's `GetDataIndexed` operands are the
+// matching twenty-four bits.
 fn step_post_index(k: Word) -> Word {
     da.post_index = 0;
     if k == Tok::Eq() as Word {
         stmt.pstmt_kind[stmt.pstmt_sp] = 2;
-        stmt.pstmt_arg[stmt.pstmt_sp] = da.pidx_base + da.pidx_len * 65536;
+        stmt.pstmt_arg[stmt.pstmt_sp] = da.pidx_base + da.pidx_len * 16777216;
         stmt.pstmt_sp = stmt.pstmt_sp + 1;
         ops.expect_operand = 1;
         0
     } else {
         ps.cursor = ps.cursor - 1;
         ops.expect_operand = 0;
-        Node::IndexRead() as Word + (da.pidx_base + da.pidx_len * 65536) * 64
+        Node::IndexRead() as Word + (da.pidx_base + da.pidx_len * 16777216) * 64
     }
 }
 

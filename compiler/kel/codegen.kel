@@ -215,12 +215,17 @@ const data wire {
 // (kind 16) has args = the start of its 7-word entry in `for_parts`
 // (loop-var slot, limit slot, start expr, limit expr, condition, body, increment)
 // and rhs = the continuation; a Unit node (kind 20) emits PushImmediate(0).
+// The node arrays are sized to the largest stage function: parse.kel's
+// `step_draining` reconstructs to about 440 nodes and emits about 540 ops, past
+// the 512 that held the smaller stages. The wire-format V2 16 MB shared ceiling
+// admits the larger `ast` block (these arrays plus `st.stack`/`st.ops` stay far
+// under it).
 shared data ast {
     root: Word,
-    kinds: [Word; 512],
-    args: [Word; 512],
-    lhs: [Word; 512],
-    rhs: [Word; 512],
+    kinds: [Word; 1024],
+    args: [Word; 1024],
+    lhs: [Word; 1024],
+    rhs: [Word; 1024],
     call_args: [Word; 64],
     for_parts: [Word; 64],
     match_parts: [Word; 64],
@@ -239,11 +244,11 @@ shared data ast {
 // position stack (depth `cf_sp`) recording where the open `If`/`Else` markers
 // sit in `ops`. All persist across the loop's per-iteration RESET.
 private data st {
-    stack: [Word; 512],
+    stack: [Word; 1024],
     sp: Word,
     started: Word,
     ret_done: Word,
-    ops: [Word; 512],
+    ops: [Word; 1024],
     op_count: Word,
     emit_cursor: Word,
     cf_if: [Word; 32],

@@ -39,10 +39,10 @@ use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capa
 // is one packed `tok+payload*64` word per token (not two `kinds`/`vals` arrays).
 const LEN: usize = 0;
 const PACKED: usize = 1;
-const LIMIT_ID: usize = 1 + 6144;
-const CHUNK_COUNT: usize = 1 + 6144 + 1;
-const CHUNKS: usize = 1 + 6144 + 2;
-const REQUIRE_ID: usize = 1 + 6144 + 2 + 256;
+const LIMIT_ID: usize = 1 + 12288;
+const CHUNK_COUNT: usize = 1 + 12288 + 1;
+const CHUNKS: usize = 1 + 12288 + 2;
+const REQUIRE_ID: usize = 1 + 12288 + 2 + 256;
 
 /// Map the reference token stream into the stage's unified `(kind, value)` pairs. The
 /// operator codes are body.kel's (`Plus` 21 upward); the header keywords and punctuation
@@ -503,7 +503,7 @@ fn flatten(
             out.push((11, slot));
         }
         Expr::ArrayIndex { object, index, .. } => {
-            // A `data.field[i]` read is an IndexRead (kind 13, arg = base + len*65536) over
+            // A `data.field[i]` read is an IndexRead (kind 13, arg = base + len*2^24) over
             // the index expression. The object is a `data.field` access.
             let (data, field) = match object.as_ref() {
                 Expr::FieldAccess {
@@ -527,7 +527,7 @@ fn flatten(
                 enum_table,
                 out,
             );
-            out.push((13, base + len * 65536));
+            out.push((13, base + len * 16_777_216));
         }
         Expr::Match {
             scrutinee, arms, ..
@@ -742,7 +742,7 @@ fn flatten_block(
                 ..
             } => {
                 // `d.f[i] = e` — the index, the value, an IndexStore signal (kind 36), then
-                // an IndexAssignIn (kind 14, arg = base + len*65536) folded around the block.
+                // an IndexAssignIn (kind 14, arg = base + len*2^24) folded around the block.
                 assert_eq!(indices.len(), 1, "single-dimension array assignment only");
                 flatten(
                     &indices[0],
@@ -766,7 +766,7 @@ fn flatten_block(
                 );
                 let (base, len) = array_base_len(data_slots, data_name, field);
                 out.push((36, 0));
-                stmt_nodes.push((14, base + len * 65536));
+                stmt_nodes.push((14, base + len * 16_777_216));
             }
             Stmt::For(fs) if fs.limit.is_some() => {
                 // A `for v in lo..hi limit CAP { body }`. The loop variable, the high slot,
@@ -1329,8 +1329,8 @@ fn an_indexed_data_read_parses() {
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
-    // index i (slot 0), IndexRead(base 0 + len 4 * 65536).
-    assert_eq!(got.funcs[0].3, vec![(2, 0), (13, 4 * 65536)]);
+    // index i (slot 0), IndexRead(base 0 + len 4 * 2^24).
+    assert_eq!(got.funcs[0].3, vec![(2, 0), (13, 4 * 16_777_216)]);
 }
 
 // An indexed `data.field[i] = e` assignment: index, value, IndexStore signal, then the
@@ -1341,10 +1341,10 @@ fn an_indexed_data_assignment_parses() {
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
-    // index i(0), value x(1), IndexStore(36); tail 0; IndexAssignIn(base 0 + len 4*65536).
+    // index i(0), value x(1), IndexStore(36); tail 0; IndexAssignIn(base 0 + len 4*2^24).
     assert_eq!(
         got.funcs[0].3,
-        vec![(2, 0), (2, 1), (36, 0), (1, 0), (14, 4 * 65536)]
+        vec![(2, 0), (2, 1), (36, 0), (1, 0), (14, 4 * 16_777_216)]
     );
 }
 

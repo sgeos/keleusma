@@ -117,10 +117,10 @@ fn reference_stream_and_names(src: &str) -> (Vec<(i64, i64)>, Vec<String>) {
 }
 
 // Flat shared-data slot indices of the lexer's intern table, in the `src` block's
-// declaration order: len (1 slot) then bytes (46080) precede it.
-const LEX_ISTART: usize = 1 + 46080;
-const LEX_ILEN: usize = 1 + 46080 + 1024;
-const LEX_ICOUNT: usize = 1 + 46080 + 1024 + 1024;
+// declaration order: len (1 slot) then bytes (73728) precede it.
+const LEX_ISTART: usize = 1 + 73728;
+const LEX_ILEN: usize = 1 + 73728 + 1280;
+const LEX_ICOUNT: usize = 1 + 73728 + 1280 + 1280;
 
 fn shared_word(vm: &Vm, buf: &[u8], slot: usize) -> i64 {
     match vm.get_shared(buf, slot).expect("get_shared") {
@@ -144,8 +144,8 @@ fn lex_full(src: &str) -> (Vec<(i64, i64)>, Vec<String>) {
     let mut vm = Vm::new(m, &arena).expect("verify");
 
     assert!(
-        bytes.len() <= 46080,
-        "source exceeds the lexer's 46080-byte cap"
+        bytes.len() <= 73728,
+        "source exceeds the lexer's 73728-byte cap"
     );
     let mut shared = vec![0u8; vm.shared_data_bytes()];
     vm.set_shared(&mut shared, 0, Value::Int(bytes.len() as i64))
@@ -340,14 +340,14 @@ fn host_recovers_parser_metadata_from_lexer_output() {
 }
 
 // Flat shared-data slot indices of parse.kel's `toks` block, matching the parser
-// harness: len, packed[6144] (one `tok+payload*64` word per token), limit_id,
+// harness: len, packed[12288] (one `tok+payload*64` word per token), limit_id,
 // chunk_count, chunks[256], require_id, in declaration order.
 const P_LEN: usize = 0;
 const P_PACKED: usize = 1;
-const P_LIMIT_ID: usize = 1 + 6144;
-const P_CHUNK_COUNT: usize = 1 + 6144 + 1;
-const P_CHUNKS: usize = 1 + 6144 + 2;
-const P_REQUIRE_ID: usize = 1 + 6144 + 2 + 256;
+const P_LIMIT_ID: usize = 1 + 12288;
+const P_CHUNK_COUNT: usize = 1 + 12288 + 1;
+const P_CHUNKS: usize = 1 + 12288 + 2;
+const P_REQUIRE_ID: usize = 1 + 12288 + 2 + 256;
 
 /// Compile parse.kel on a 64MB thread; its deeply nested source overflows the
 /// default 2MB test-thread stack in the host compiler's recursive-descent parse.

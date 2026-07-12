@@ -40,16 +40,16 @@ use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capa
 // then the length-64 `call_args`/`for_parts`/`match_parts` side arrays, then
 // param_count.
 const KINDS: usize = 1;
-const ARGS: usize = 513;
-const LHS: usize = 1025;
-const RHS: usize = 1537;
-const CALL_ARGS: usize = 2049;
-const FOR_PARTS: usize = 2113;
-const MATCH_PARTS: usize = 2177;
-const LIMIT_PARTS: usize = 2241;
-const HEAD_PARTS: usize = 2305;
-const PARAM_COUNT: usize = 2369;
-const CATEGORY: usize = 2370;
+const ARGS: usize = 1 + 1024;
+const LHS: usize = 1 + 1024 * 2;
+const RHS: usize = 1 + 1024 * 3;
+const CALL_ARGS: usize = 1 + 1024 * 4;
+const FOR_PARTS: usize = 1 + 1024 * 4 + 64;
+const MATCH_PARTS: usize = 1 + 1024 * 4 + 64 * 2;
+const LIMIT_PARTS: usize = 1 + 1024 * 4 + 64 * 3;
+const HEAD_PARTS: usize = 1 + 1024 * 4 + 64 * 4;
+const PARAM_COUNT: usize = 1 + 1024 * 4 + 64 * 5;
+const CATEGORY: usize = 1 + 1024 * 4 + 64 * 5 + 1;
 
 struct Node {
     kind: i64,
@@ -304,7 +304,7 @@ fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &
             }
         }
         Expr::ArrayIndex { object, index, .. } => {
-            // A `d.arr[i]` read. IndexRead (kind 13): arg = base + len*65536,
+            // A `d.arr[i]` read. IndexRead (kind 13): arg = base + len*2^24,
             // lhs = index. The object is a `d.arr` field access.
             let (data_name, field) = match object.as_ref() {
                 Expr::FieldAccess {
@@ -321,7 +321,7 @@ fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &
             let index_node = flatten(index, scope, next_slot, ctx);
             ctx.nodes.push(Node {
                 kind: 13,
-                arg: base + len * 65536,
+                arg: base + len * 16_777_216,
                 lhs: index_node,
                 rhs: 0,
             });
@@ -457,8 +457,8 @@ fn flatten_block(
                 });
                 let store_node = (ctx.nodes.len() - 1) as i64;
                 let (base, len) = array_base_len(ctx, data_name, field);
-                // IndexAssignIn (kind 14): arg = base + len*65536, value = store node.
-                stmts.push((14, base + len * 65536, store_node));
+                // IndexAssignIn (kind 14): arg = base + len*2^24, value = store node.
+                stmts.push((14, base + len * 16_777_216, store_node));
             }
             Stmt::For(fs) if fs.limit.is_some() => {
                 // A `for i in start..end limit CAP { body }` in the bare form.
@@ -722,8 +722,10 @@ fn decode_op(w: i64) -> Op {
         26 => Op::BitXor,
         27 => Op::GetData(operand as u32),
         28 => Op::SetData(operand as u32),
-        29 => Op::GetDataIndexed((operand % 65536) as u32, (operand / 65536) as u32),
-        30 => Op::SetDataIndexed((operand % 65536) as u32, (operand / 65536) as u32),
+        // Base and length pack with a 2^24 radix so a data slot or length beyond
+        // 65535 (a shared segment over 64 KB) does not spill base into length.
+        29 => Op::GetDataIndexed((operand % 16777216) as u32, (operand / 16777216) as u32),
+        30 => Op::SetDataIndexed((operand % 16777216) as u32, (operand / 16777216) as u32),
         31 => Op::Loop(operand as u16),
         32 => Op::BreakIf(operand as u16),
         33 => Op::EndLoop(operand as u16),
@@ -1372,7 +1374,7 @@ fn self_compile_codegen_atomic_functions() {
                     _ => return Err("non-atomic single-head (yield) function".to_string()),
                 }
             };
-            if body.nodes.len() > 512
+            if body.nodes.len() > 1024
                 || body.for_parts.len() > 64
                 || body.call_args.len() > 64
                 || body.match_parts.len() > 64
@@ -1468,17 +1470,17 @@ fn self_compile_codegen_atomic_functions() {
 // ---------------------------------------------------------------------------
 
 // Lexer `src` block slots: len(1) + bytes(65536) then the intern table.
-const BR_LEX_ISTART: usize = 1 + 46080;
-const BR_LEX_ILEN: usize = 1 + 46080 + 1024;
-const BR_LEX_ICOUNT: usize = 1 + 46080 + 1024 + 1024;
+const BR_LEX_ISTART: usize = 1 + 73728;
+const BR_LEX_ILEN: usize = 1 + 73728 + 1280;
+const BR_LEX_ICOUNT: usize = 1 + 73728 + 1280 + 1280;
 // Parser `toks` block slots: len(1), then the packed token array (one `tok+payload*64`
 // word per token), then the scalar and chunk-table inputs.
 const BR_P_LEN: usize = 0;
 const BR_P_PACKED: usize = 1;
-const BR_P_LIMIT_ID: usize = 1 + 6144;
-const BR_P_CHUNK_COUNT: usize = 1 + 6144 + 1;
-const BR_P_CHUNKS: usize = 1 + 6144 + 2;
-const BR_P_REQUIRE_ID: usize = 1 + 6144 + 2 + 256;
+const BR_P_LIMIT_ID: usize = 1 + 12288;
+const BR_P_CHUNK_COUNT: usize = 1 + 12288 + 1;
+const BR_P_CHUNKS: usize = 1 + 12288 + 2;
+const BR_P_REQUIRE_ID: usize = 1 + 12288 + 2 + 256;
 
 fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
     match vm.get_shared(buf, slot).expect("get_shared") {
@@ -1663,12 +1665,12 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
 /// The root is the one node left on the stack. The data-access kinds fit the same
 /// groups: a scalar DataRead (11) is a leaf carrying its slot; a DataAssign (12)
 /// folds like a LetIn carrying its slot; and an IndexRead (13) is unary over the
-/// index, carrying `base + len*65536` in `arg`. A Call (7) packs `chunk + count*256`
+/// index, carrying `base + len*2^24` in `arg`. A Call (7) packs `chunk + count*256`
 /// in its record `arg`; it pops its `count` argument nodes, reverses them to source
 /// order into the `call_args` side array, and takes that slice's start as `lhs` and
 /// the count as `rhs`. An indexed write pairs an IndexStore signal (36), which
 /// folds the value and index into a kind-15 node (value in lhs, index in rhs),
-/// with an IndexAssign (14) that folds like a LetIn carrying `base + len*65536`.
+/// with an IndexAssign (14) that folds like a LetIn carrying `base + len*2^24`.
 /// A `for .. limit` loop streams its start, end, body, and the four literals cap/
 /// 0/1/2 as nodes, then five SlotRecords (32) carrying its frame slots, then a
 /// ForBuild (33) that assembles the 12-word limit_parts entry (the five slots then
@@ -3183,6 +3185,34 @@ fn parse_into_codegen_match_call_arms_match_the_reference() {
 #[test]
 fn self_host_compiles_codegen_kel_byte_identically() {
     let src = std::fs::read_to_string("compiler/kel/codegen.kel").expect("read codegen.kel");
+    let module = self_host_compile(&src);
+    let reference = compile_src(&src);
+    assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");
+    for (m, r) in module.chunks.iter().zip(reference.chunks.iter()) {
+        assert_eq!(m.name, r.name, "chunk order");
+        assert_eq!(m.ops, r.ops, "ops for chunk `{}`", r.name);
+        assert_eq!(m.constants, r.constants, "pool for chunk `{}`", r.name);
+        assert_eq!(
+            m.local_count, r.local_count,
+            "local_count for chunk `{}`",
+            r.name
+        );
+    }
+}
+
+// The whole of parse.kel, the parser stage, self-compiled: every one of its 42 chunks is
+// emitted by the self-hosted pipeline byte-identically to the Rust-hosted compiler. This
+// is the THIRD and last whole stage-file self-compile, so all three self-hosted stages
+// (lexer.kel, codegen.kel, parse.kel) now reproduce their own bytecode -- the precondition
+// for the self-compiling fixed point. parse.kel is the largest stage (68 KB source, ~10040
+// tokens, functions up to ~440 nodes and ~540 ops); reaching it required the wire-format V2
+// 24-bit data operands (its shared segment exceeds 64 KB), the widened base+length pack in
+// the parse-to-codegen bridge (a data slot or array length past 65535 no longer spills its
+// base into the length field), and the enlarged lexer source, parser token, and codegen
+// ast/op buffers.
+#[test]
+fn self_host_compiles_parse_kel_byte_identically() {
+    let src = std::fs::read_to_string("compiler/kel/parse.kel").expect("read parse.kel");
     let module = self_host_compile(&src);
     let reference = compile_src(&src);
     assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");

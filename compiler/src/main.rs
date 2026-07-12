@@ -156,7 +156,7 @@ fn run_lexer(path: &str) {
 
     let cap = vm.shared_data_bytes();
     // The increment-1 lexer holds up to 65536 source bytes in its shared array.
-    if input.len() > 46080 {
+    if input.len() > 73728 {
         eprintln!(
             "input is {} bytes; the increment-1 lexer caps source at 65536",
             input.len()
@@ -285,23 +285,23 @@ fn run_parse_pipeline(path: &str) {
     use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 
     // Lexer `src` block slot layout: len(1) + bytes(65536) then the intern table.
-    const LEX_ISTART: usize = 1 + 46080;
-    const LEX_ILEN: usize = 1 + 46080 + 1024;
-    const LEX_ICOUNT: usize = 1 + 46080 + 1024 + 1024;
+    const LEX_ISTART: usize = 1 + 73728;
+    const LEX_ILEN: usize = 1 + 73728 + 1280;
+    const LEX_ICOUNT: usize = 1 + 73728 + 1280 + 1280;
     // Parser `toks` block slot layout: the token stream is one packed `tok+payload*64`
     // word per token (not two `kinds`/`vals` arrays), which halves its byte cost.
     const P_LEN: usize = 0;
     const P_PACKED: usize = 1;
-    const P_LIMIT_ID: usize = 1 + 6144;
-    const P_CHUNK_COUNT: usize = 1 + 6144 + 1;
-    const P_CHUNKS: usize = 1 + 6144 + 2;
-    const P_REQUIRE_ID: usize = 1 + 6144 + 2 + 256;
+    const P_LIMIT_ID: usize = 1 + 12288;
+    const P_CHUNK_COUNT: usize = 1 + 12288 + 1;
+    const P_CHUNKS: usize = 1 + 12288 + 2;
+    const P_REQUIRE_ID: usize = 1 + 12288 + 2 + 256;
 
     let input = std::fs::read(path).unwrap_or_else(|e| {
         eprintln!("cannot read {path}: {e}");
         std::process::exit(1);
     });
-    if input.len() > 46080 {
+    if input.len() > 73728 {
         eprintln!(
             "input is {} bytes; the increment-1 lexer caps source at 65536",
             input.len()
@@ -354,9 +354,9 @@ fn run_parse_pipeline(path: &str) {
         let len = read_word(&lvm, &lshared, LEX_ILEN + id) as usize;
         names.push(String::from_utf8_lossy(&input[start..start + len]).into_owned());
     }
-    if tokens.len() > 6144 {
+    if tokens.len() > 12288 {
         eprintln!(
-            "{} tokens; the parser stage caps input at 6144",
+            "{} tokens; the parser stage caps input at 12288",
             tokens.len()
         );
         std::process::exit(1);
