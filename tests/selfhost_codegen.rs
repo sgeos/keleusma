@@ -2522,7 +2522,7 @@ struct ParsedFn {
 /// Drive lexer.kel then parse.kel over `src` and return every function it yields, each
 /// with its guard and body records, plus the interned-name table. Multiheaded functions
 /// appear as several same-named entries in declaration order.
-fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>) {
+fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
     let (tokens, names) = br_lex(src);
     let id_of = |s: &str| {
         names
@@ -2578,6 +2578,9 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>) {
     // Every data block's header records (DSTART, then PARAM/PTYPE/ASIZE per field, then
     // END), concatenated in declaration order, for the driver's own data-layout assembly.
     let mut data_records: Vec<(i64, i64)> = Vec::new();
+    // Every enum's header records (ENUMSTART, then EVARIANT/EDISC per variant, then END),
+    // for the driver's own enum-layout assembly.
+    let mut enum_records: Vec<(i64, i64)> = Vec::new();
     let (mut in_body, mut in_guard, mut in_data, mut in_enum, mut in_use) =
         (false, false, false, false, false);
     let mut state = vm
@@ -2606,7 +2609,12 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>) {
                     data_records.push((code, val));
                 }
             } else if in_enum {
-                in_enum = code != 5;
+                if code == 5 {
+                    enum_records.push((5, 0));
+                    in_enum = false;
+                } else if code != 0 {
+                    enum_records.push((code, val));
+                }
             } else if in_use {
                 in_use = code != 5;
             } else {
@@ -2626,11 +2634,14 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>) {
                         data_records.push((9, val));
                     }
                     10 => in_use = true,
-                    12 => in_enum = true,
+                    12 => {
+                        in_enum = true;
+                        enum_records.push((12, val));
+                    }
                     16 => in_body = true,
                     17 => in_guard = true,
                     5 => fns.push(cur.take().unwrap()),
-                    15 => return (fns, names, data_records),
+                    15 => return (fns, names, data_records, enum_records),
                     _ => {}
                 }
             }
@@ -2716,7 +2727,7 @@ fn build_multihead_bridge(heads: &[&ParsedFn], pc: usize) -> Body {
 /// Reconstruct the multiheaded function named `head_name` in `src` from the record stream
 /// and assert its emitted ops are byte-identical to the Rust compiler's single chunk.
 fn assert_multihead_matches(src: &str, head_name: &str) {
-    let (fns, names, _) = parse_functions(src);
+    let (fns, names, _, _) = parse_functions(src);
     let heads: Vec<&ParsedFn> = fns
         .iter()
         .filter(|f| names[f.name as usize] == head_name)
@@ -2770,7 +2781,7 @@ fn parse_into_codegen_multihead_matches_the_reference() {
 /// reference's ops. The result is a runnable module whose every source-defined chunk was
 /// emitted by the self-hosted pipeline.
 fn self_host_compile(src: &str) -> Module {
-    let (fns, names, _) = parse_functions(src);
+    let (fns, names, _, _) = parse_functions(src);
     let mut module = compile_src(src);
     let mut i = 0;
     while i < fns.len() {
@@ -3573,7 +3584,7 @@ fn reconstruct_kel_matches_rust_for_multihead() {
          yield pick(k: Word) -> Word { yield 0 }",
     ];
     for src in cases {
-        let (fns, names, _) = parse_functions(src);
+        let (fns, names, _, _) = parse_functions(src);
         // Group the last run of same-named heads (the multiheaded function).
         let last_name = names[fns.last().unwrap().name as usize].clone();
         let group: Vec<&ParsedFn> = fns
@@ -3690,7 +3701,7 @@ fn assembled_data_slots_match_the_reference() {
     ];
     for path in cases {
         let src = std::fs::read_to_string(path).expect("read stage");
-        let (_fns, names, data_records) = parse_functions(&src);
+        let (_fns, names, data_records, _) = parse_functions(&src);
         let slots = assemble_data_slots(&data_records, &names);
         let reference = compile_src(&src);
         let ref_slots = &reference.data_layout.as_ref().expect("data layout").slots;
@@ -3767,7 +3778,7 @@ fn assembled_shared_layout_matches_the_reference() {
     ];
     for path in cases {
         let src = std::fs::read_to_string(path).expect("read stage");
-        let (_fns, names, data_records) = parse_functions(&src);
+        let (_fns, names, data_records, _) = parse_functions(&src);
         let layout = assemble_shared_layout(&data_records, &names);
         let reference = compile_src(&src);
         let ref_layout = &reference
@@ -3860,7 +3871,7 @@ fn assembled_data_layout_matches_the_reference() {
     ];
     for path in cases {
         let src = std::fs::read_to_string(path).expect("read stage");
-        let (_fns, names, data_records) = parse_functions(&src);
+        let (_fns, names, data_records, _) = parse_functions(&src);
         let dl = assemble_data_layout(&data_records, &names);
         let reference = compile_src(&src);
         let ref_dl = reference.data_layout.as_ref().expect("data layout");
@@ -3898,5 +3909,93 @@ fn assembled_data_layout_matches_the_reference() {
             dl.private_init, ref_dl.private_init,
             "private_init for {path}"
         );
+    }
+}
+
+// -- enum-layout assembly from parse.kel's enum records -----------------------
+//
+// parse.kel emits each enum as ENUMSTART (the type name), then EVARIANT per variant
+// (the running implicit discriminant, from 0, is used) and an optional EDISC that
+// overrides it and reseeds the running value, then END. The stage enums are unit enums
+// (no payload), so `min_payload` is zero. The driver assembles the enum-layout table
+// itself, matching the reference's `build_enum_layouts`.
+
+/// Assemble the enum-layout table from parse.kel's enum record stream.
+fn assemble_enum_layouts(
+    enum_records: &[(i64, i64)],
+    names: &[String],
+) -> Vec<keleusma::bytecode::EnumLayout> {
+    use keleusma::bytecode::{EnumLayout, EnumVariantDisc};
+    let mut layouts: Vec<EnumLayout> = Vec::new();
+    let mut running = 0i64;
+    for &(code, val) in enum_records {
+        match code {
+            12 => {
+                layouts.push(EnumLayout {
+                    type_name: names[val as usize].clone(),
+                    variants: Vec::new(),
+                    min_payload: 0,
+                });
+                running = 0;
+            }
+            13 => {
+                layouts.last_mut().unwrap().variants.push(EnumVariantDisc {
+                    name: names[val as usize].clone(),
+                    disc: running,
+                });
+                running += 1;
+            }
+            14 => {
+                let vs = &mut layouts.last_mut().unwrap().variants;
+                vs.last_mut().unwrap().disc = val;
+                running = val + 1;
+            }
+            _ => {}
+        }
+    }
+    // The reference orders the enum-layout table by type name, not declaration order.
+    layouts.sort_by(|a, b| a.type_name.cmp(&b.type_name));
+    layouts
+}
+
+// The enum-layout table the driver assembles from parse.kel's records equals the
+// reference compiler's -- type name, each variant's name and discriminant (implicit and
+// explicit), and the zero min_payload -- for the stages that declare enums.
+#[test]
+fn assembled_enum_layouts_match_the_reference() {
+    // parse.kel declares enums (Tok, OpCode, Node); the other stages declare none, so
+    // the assembled table is empty and still matches.
+    let cases = [
+        "compiler/kel/parse.kel",
+        "compiler/kel/reconstruct.kel",
+        "compiler/kel/lexer.kel",
+        "compiler/kel/codegen.kel",
+    ];
+    for path in cases {
+        let src = std::fs::read_to_string(path).expect("read stage");
+        let (_fns, names, _data, enum_records) = parse_functions(&src);
+        let layouts = assemble_enum_layouts(&enum_records, &names);
+        let reference = compile_src(&src);
+        assert_eq!(
+            layouts.len(),
+            reference.enum_layouts.len(),
+            "enum count for {path}"
+        );
+        for (a, b) in layouts.iter().zip(reference.enum_layouts.iter()) {
+            assert_eq!(a.type_name, b.type_name, "enum name for {path}");
+            assert_eq!(a.min_payload, b.min_payload, "min_payload for {path}");
+            assert_eq!(
+                a.variants.len(),
+                b.variants.len(),
+                "variant count for {path}"
+            );
+            for (va, vb) in a.variants.iter().zip(b.variants.iter()) {
+                assert_eq!(
+                    (&va.name, va.disc),
+                    (&vb.name, vb.disc),
+                    "variant for {path}"
+                );
+            }
+        }
     }
 }
