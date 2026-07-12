@@ -36,9 +36,12 @@
 // The stage is also the self-hosted validator: given `arena_capacity` it sets `out_valid` to
 // 1 exactly when the chunk has a provable finite per-iteration bound (not rejected) whose
 // stack-plus-heap budget fits the capacity -- the per-chunk admission `verify_resource_bounds`
-// performs. The verdict is sound for a chunk without transitive calls (the shallow
-// empty-resolver bound then equals the module-level transitive bound); a call-bearing chunk
-// would need the callee bodies folded in, which this stage does not yet do.
+// performs. A `Call` folds in the callee's transitive WCMU through the marshalled
+// `callee_slots`/`callee_heap` (the host resolves them in topological order, callees before
+// callers), so the verdict is a drop-in match for `verify_resource_bounds` on a whole module,
+// not only a call-free chunk. The one heap term still outside the model is the text-size
+// pass's string-allocation bound, which is zero for every text-free program (all five stages
+// among them); a text-allocating program would need that pass self-hosted too.
 //
 // The self-hosted compiler is a full-width host tool.
 require word >= 32;
@@ -59,6 +62,8 @@ shared data wa {
     local_count: Word,
     value_slot_bytes: Word,
     arena_capacity: Word,
+    region_start: Word,
+    region_end: Word,
     cost: [Word; 1024],
     class: [Word; 1024],
     arg: [Word; 1024],
@@ -69,6 +74,8 @@ shared data wa {
     slot: [Word; 1024],
     cval: [Word; 1024],
     cint: [Word; 1024],
+    callee_slots: [Word; 1024],
+    callee_heap: [Word; 1024],
     out_wcet: Word,
     out_stack_bytes: Word,
     out_heap: Word,
@@ -130,6 +137,12 @@ private data an {
     vsets: Word,
     bad: Word,
     reject: Word,
+    // The current child's result lifted into the resuming frame's depth: `seed` the frame's
+    // depth at the branch point, `lcp`/`lcd`/`lcbp` the lifted peak, delta, and break peak.
+    seed: Word,
+    lcp: Word,
+    lcd: Word,
+    lcbp: Word,
 }
 
 // Clamp a signed depth to a non-negative operand-stack peak.
@@ -301,272 +314,320 @@ fn extract_bound(loop_ip: Word) -> Word {
     }
 }
 
+// Lift the current child's peak, delta, and break peak into the resuming frame `i`'s depth
+// at the branch point (`f_off[i]`, unchanged while the frame was suspended).
+fn lift(i: Word) -> Word {
+    an.seed = an.f_off[i];
+    an.lcp = pos(an.seed) + an.child_peak;
+    an.lcd = an.seed + an.child_off;
+    an.lcbp = pos(an.seed) + an.child_bp;
+    0
+}
+
+// Resolve a bare `if`: a live then-branch contributes; the false path falls through at zero
+// cost, leaving the depth unchanged but for a conservative max on the delta. Break records
+// from the then-branch propagate regardless of the false path.
+fn resolve_bare_if(i: Word) -> Word {
+    if an.child_broke == 0 {
+        an.f_cost[i] = an.f_cost[i] + an.child_cost;
+        if an.lcp > an.f_peak[i] {
+            an.f_peak[i] = an.lcp;
+        }
+        an.f_heap[i] = an.f_heap[i] + an.child_heap;
+        if an.lcd > an.f_off[i] {
+            an.f_off[i] = an.lcd;
+        }
+    }
+    if an.child_mb > an.f_mb[i] {
+        an.f_mb[i] = an.child_mb;
+    }
+    if an.child_hb == 1 {
+        an.f_hb[i] = 1;
+    }
+    if an.lcbp > an.f_bp[i] {
+        an.f_bp[i] = an.lcbp;
+    }
+    if an.child_bh > an.f_bh[i] {
+        an.f_bh[i] = an.child_bh;
+    }
+    an.f_ip[i] = an.f_pj[i];
+    an.f_pa[i] = 0;
+    0
+}
+
+// Resolve an `if`/`else`: at stage 0 stash the lifted then-branch and launch the else-branch;
+// at stage 1 combine both branches (treating a broken branch as absent), then propagate the
+// break records from both to the enclosing region.
+fn resolve_if_else(i: Word) -> Word {
+    if an.f_ps[i] == 0 {
+        an.f_ptc[i] = an.child_cost;
+        an.f_ptb[i] = an.child_broke;
+        an.f_ptp[i] = an.lcp;
+        an.f_ptd[i] = an.lcd;
+        an.f_pth[i] = an.child_heap;
+        an.f_ptmb[i] = an.child_mb;
+        an.f_pthb[i] = an.child_hb;
+        an.f_ptbp[i] = an.lcbp;
+        an.f_ptbh[i] = an.child_bh;
+        an.f_ps[i] = 1;
+        push_frame(an.f_es[i], an.f_ei[i])
+    } else {
+        let tb = an.f_ptb[i];
+        let cb = an.child_broke;
+        if tb == 0 andalso cb == 0 {
+            if an.f_ptc[i] > an.child_cost {
+                an.f_cost[i] = an.f_cost[i] + an.f_ptc[i];
+            } else {
+                an.f_cost[i] = an.f_cost[i] + an.child_cost;
+            }
+            if an.f_ptp[i] > an.f_peak[i] {
+                an.f_peak[i] = an.f_ptp[i];
+            }
+            if an.lcp > an.f_peak[i] {
+                an.f_peak[i] = an.lcp;
+            }
+            if an.f_pth[i] > an.child_heap {
+                an.f_heap[i] = an.f_heap[i] + an.f_pth[i];
+            } else {
+                an.f_heap[i] = an.f_heap[i] + an.child_heap;
+            }
+            if an.f_ptd[i] > an.lcd {
+                an.f_off[i] = an.f_ptd[i];
+            } else {
+                an.f_off[i] = an.lcd;
+            }
+            an.f_ip[i] = an.f_pj[i];
+            an.f_pa[i] = 0;
+        } else {
+        if tb == 0 andalso cb == 1 {
+            an.f_cost[i] = an.f_cost[i] + an.f_ptc[i];
+            if an.f_ptp[i] > an.f_peak[i] {
+                an.f_peak[i] = an.f_ptp[i];
+            }
+            an.f_heap[i] = an.f_heap[i] + an.f_pth[i];
+            an.f_off[i] = an.f_ptd[i];
+            an.f_ip[i] = an.f_pj[i];
+            an.f_pa[i] = 0;
+        } else {
+        if tb == 1 andalso cb == 0 {
+            an.f_cost[i] = an.f_cost[i] + an.child_cost;
+            if an.lcp > an.f_peak[i] {
+                an.f_peak[i] = an.lcp;
+            }
+            an.f_heap[i] = an.f_heap[i] + an.child_heap;
+            an.f_off[i] = an.lcd;
+            an.f_ip[i] = an.f_pj[i];
+            an.f_pa[i] = 0;
+        } else {
+            an.f_broke[i] = 1;
+            an.f_ip[i] = an.f_end[i];
+            an.f_pa[i] = 0;
+        } } }
+        if an.f_ptmb[i] > an.f_mb[i] {
+            an.f_mb[i] = an.f_ptmb[i];
+        }
+        if an.child_mb > an.f_mb[i] {
+            an.f_mb[i] = an.child_mb;
+        }
+        if an.f_pthb[i] == 1 {
+            an.f_hb[i] = 1;
+        }
+        if an.child_hb == 1 {
+            an.f_hb[i] = 1;
+        }
+        if an.f_ptbp[i] > an.f_bp[i] {
+            an.f_bp[i] = an.f_ptbp[i];
+        }
+        if an.lcbp > an.f_bp[i] {
+            an.f_bp[i] = an.lcbp;
+        }
+        if an.f_ptbh[i] > an.f_bh[i] {
+            an.f_bh[i] = an.f_ptbh[i];
+        }
+        if an.child_bh > an.f_bh[i] {
+            an.f_bh[i] = an.child_bh;
+        }
+        0
+    }
+}
+
+// Resolve a `loop`: iteration count is 1 for a wholly-breaking body, else the statically
+// extracted bound (reject if inextractable). Body cost and heap scale by the count; the peak
+// does not (a high-water mark repeats each iteration). The body's max break cost/peak/heap
+// folds in (its peak and break peak already lifted into `lcp`/`lcbp`).
+fn resolve_loop(i: Word) -> Word {
+    let cb = an.child_broke;
+    let chb = an.child_hb;
+    let iter = if cb == 1 {
+        1
+    } else {
+        if extract_bound(an.f_es[i]) == 1 {
+            an.bound_val
+        } else {
+            an.reject = 1;
+            1
+        }
+    };
+    if chb == 0 andalso cb == 1 {
+        an.f_broke[i] = 1;
+        an.f_ip[i] = an.f_end[i];
+        an.f_pa[i] = 0;
+    } else {
+        let body_total = if cb == 1 { 0 } else { an.child_cost * iter };
+        if an.child_mb > body_total {
+            an.f_cost[i] = an.f_cost[i] + an.child_mb;
+        } else {
+            an.f_cost[i] = an.f_cost[i] + body_total;
+        }
+        let body_peak = if cb == 1 { 0 } else { an.lcp };
+        let break_peak = if chb == 1 { an.lcbp } else { 0 };
+        if body_peak > an.f_peak[i] {
+            an.f_peak[i] = body_peak;
+        }
+        if break_peak > an.f_peak[i] {
+            an.f_peak[i] = break_peak;
+        }
+        let body_heap = if cb == 1 { 0 } else { an.child_heap * iter };
+        let break_heap = an.child_bh;
+        if body_heap > break_heap {
+            an.f_heap[i] = an.f_heap[i] + body_heap;
+        } else {
+            an.f_heap[i] = an.f_heap[i] + break_heap;
+        }
+        an.f_ip[i] = an.f_pj[i];
+        an.f_pa[i] = 0;
+    }
+    0
+}
+
+// Resolve the pending `if`/`loop` on frame `i` using the just-completed child's result.
+fn resolve_pending(i: Word) -> Word {
+    lift(i);
+    if an.f_pk[i] == 0 {
+        resolve_bare_if(i)
+    } else {
+        if an.f_pk[i] == 1 {
+            resolve_if_else(i)
+        } else {
+            resolve_loop(i)
+        }
+    }
+}
+
+// Deliver a region's result and break accumulators to its parent, then pop the frame.
+fn deliver(i: Word) -> Word {
+    an.child_cost = an.f_cost[i];
+    an.child_peak = an.f_peak[i];
+    an.child_off = an.f_off[i];
+    an.child_heap = an.f_heap[i];
+    an.child_broke = an.f_broke[i];
+    an.child_mb = an.f_mb[i];
+    an.child_hb = an.f_hb[i];
+    an.child_bp = an.f_bp[i];
+    an.child_bh = an.f_bh[i];
+    an.sp = an.sp - 1;
+    0
+}
+
+// Consume one op of frame `i`'s region.
+fn scan_op(i: Word) -> Word {
+    let ip = an.f_ip[i];
+    let c = wa.class[ip];
+    if c == 1 {
+        // If: account the branch op, then spawn the then-branch.
+        account_op(i, ip);
+        let target = wa.arg[ip];
+        if target > 0 andalso wa.class[target - 1] == 2 {
+            let endif = wa.arg[target - 1];
+            an.f_pk[i] = 1;
+            an.f_es[i] = target;
+            an.f_ei[i] = endif;
+            an.f_pj[i] = endif + 1;
+            an.f_ps[i] = 0;
+            an.f_pa[i] = 1;
+            push_frame(ip + 1, target - 1)
+        } else {
+            an.f_pk[i] = 0;
+            an.f_pj[i] = target + 1;
+            an.f_pa[i] = 1;
+            push_frame(ip + 1, target)
+        }
+    } else {
+    if c == 4 {
+        // Loop: account the op, then spawn the body `[ip+1, endloop)`.
+        account_op(i, ip);
+        an.f_pk[i] = 2;
+        an.f_es[i] = ip;
+        an.f_pj[i] = wa.arg[ip];
+        an.f_pa[i] = 1;
+        push_frame(ip + 1, wa.arg[ip] - 1)
+    } else {
+    if c == 6 {
+        // Break: account, record, end this path.
+        account_op(i, ip);
+        record_break(i);
+        an.f_broke[i] = 1;
+        an.f_ip[i] = an.f_end[i];
+        0
+    } else {
+    if c == 7 {
+        // BreakIf: account, record, and continue (conditional exit).
+        account_op(i, ip);
+        record_break(i);
+        an.f_ip[i] = ip + 1;
+        0
+    } else {
+    if c == 8 {
+        // Trap: account and end this path without recording a break.
+        account_op(i, ip);
+        an.f_broke[i] = 1;
+        an.f_ip[i] = an.f_end[i];
+        0
+    } else {
+    if c == 9 {
+        // Call: fold the callee's transitive WCMU. The during-call operand peak is
+        // `offset + callee_slots - n_args` (the callee's frame sits above the caller's depth
+        // minus the arguments passed), never below `offset + 1` (the single return slot); heap
+        // adds the callee's heap; the net stack effect pops the arguments and pushes one
+        // return value. WCET adds only the dispatch cost. With `callee_slots = callee_heap = 0`
+        // this is exactly the empty-resolver shallow Call, so one arm serves both modes.
+        an.f_cost[i] = an.f_cost[i] + wa.cost[ip];
+        let nn = wa.shrink[ip];
+        let cand1 = an.f_off[i] + wa.callee_slots[ip] - nn;
+        let cand2 = an.f_off[i] + 1;
+        let hi = if cand1 > cand2 { cand1 } else { cand2 };
+        let dp = pos(hi);
+        if dp > an.f_peak[i] {
+            an.f_peak[i] = dp;
+        }
+        an.f_heap[i] = an.f_heap[i] + wa.callee_heap[ip];
+        an.f_off[i] = an.f_off[i] + 1 - nn;
+        an.f_ip[i] = ip + 1;
+        0
+    } else {
+    if c == 2 orelse c == 3 orelse c == 5 {
+        // Else / EndIf / EndLoop: structural markers, no effect, step over.
+        an.f_ip[i] = ip + 1;
+        0
+    } else {
+        // Plain op: account and advance.
+        account_op(i, ip);
+        an.f_ip[i] = ip + 1;
+        0
+    } } } } } } }
+}
+
 // Advance the analysis by one transition on the top frame: resolve a pending `if`/`loop`
 // with the last child's result, complete and pop a frame, or consume one op.
 fn analyze_step() -> Word {
     let i = an.sp - 1;
     if an.f_pa[i] == 1 {
-        // A child region just completed; lift its peak, delta, and break peak by this
-        // frame's depth at the branch point (`f_off[i]`, unchanged while suspended).
-        let seed = an.f_off[i];
-        let cp = pos(seed) + an.child_peak;
-        let cd = seed + an.child_off;
-        let cbp = pos(seed) + an.child_bp;
-        let ch = an.child_heap;
-        let cc = an.child_cost;
-        let cb = an.child_broke;
-        let cmb = an.child_mb;
-        let chb = an.child_hb;
-        let cbh = an.child_bh;
-        if an.f_pk[i] == 0 {
-            // Bare `if`: a live then-branch contributes; the false path falls through.
-            if cb == 0 {
-                an.f_cost[i] = an.f_cost[i] + cc;
-                if cp > an.f_peak[i] {
-                    an.f_peak[i] = cp;
-                }
-                an.f_heap[i] = an.f_heap[i] + ch;
-                if cd > an.f_off[i] {
-                    an.f_off[i] = cd;
-                }
-            }
-            // Break records from the then-branch propagate regardless of the false path.
-            if cmb > an.f_mb[i] {
-                an.f_mb[i] = cmb;
-            }
-            if chb == 1 {
-                an.f_hb[i] = 1;
-            }
-            if cbp > an.f_bp[i] {
-                an.f_bp[i] = cbp;
-            }
-            if cbh > an.f_bh[i] {
-                an.f_bh[i] = cbh;
-            }
-            an.f_ip[i] = an.f_pj[i];
-            an.f_pa[i] = 0;
-            0
-        } else {
-            if an.f_pk[i] == 1 {
-                if an.f_ps[i] == 0 {
-                    // `if`/`else`: the then-branch completed. Stash it (result and breaks)
-                    // and launch the else-branch region `[f_es, f_ei)`.
-                    an.f_ptc[i] = cc;
-                    an.f_ptb[i] = cb;
-                    an.f_ptp[i] = cp;
-                    an.f_ptd[i] = cd;
-                    an.f_pth[i] = ch;
-                    an.f_ptmb[i] = cmb;
-                    an.f_pthb[i] = chb;
-                    an.f_ptbp[i] = cbp;
-                    an.f_ptbh[i] = cbh;
-                    an.f_ps[i] = 1;
-                    push_frame(an.f_es[i], an.f_ei[i])
-                } else {
-                    // Both branches done: combine, treating a broken branch as absent.
-                    let tb = an.f_ptb[i];
-                    if tb == 0 andalso cb == 0 {
-                        if an.f_ptc[i] > cc {
-                            an.f_cost[i] = an.f_cost[i] + an.f_ptc[i];
-                        } else {
-                            an.f_cost[i] = an.f_cost[i] + cc;
-                        }
-                        if an.f_ptp[i] > an.f_peak[i] {
-                            an.f_peak[i] = an.f_ptp[i];
-                        }
-                        if cp > an.f_peak[i] {
-                            an.f_peak[i] = cp;
-                        }
-                        if an.f_pth[i] > ch {
-                            an.f_heap[i] = an.f_heap[i] + an.f_pth[i];
-                        } else {
-                            an.f_heap[i] = an.f_heap[i] + ch;
-                        }
-                        if an.f_ptd[i] > cd {
-                            an.f_off[i] = an.f_ptd[i];
-                        } else {
-                            an.f_off[i] = cd;
-                        }
-                        an.f_ip[i] = an.f_pj[i];
-                        an.f_pa[i] = 0;
-                    } else {
-                    if tb == 0 andalso cb == 1 {
-                        an.f_cost[i] = an.f_cost[i] + an.f_ptc[i];
-                        if an.f_ptp[i] > an.f_peak[i] {
-                            an.f_peak[i] = an.f_ptp[i];
-                        }
-                        an.f_heap[i] = an.f_heap[i] + an.f_pth[i];
-                        an.f_off[i] = an.f_ptd[i];
-                        an.f_ip[i] = an.f_pj[i];
-                        an.f_pa[i] = 0;
-                    } else {
-                    if tb == 1 andalso cb == 0 {
-                        an.f_cost[i] = an.f_cost[i] + cc;
-                        if cp > an.f_peak[i] {
-                            an.f_peak[i] = cp;
-                        }
-                        an.f_heap[i] = an.f_heap[i] + ch;
-                        an.f_off[i] = cd;
-                        an.f_ip[i] = an.f_pj[i];
-                        an.f_pa[i] = 0;
-                    } else {
-                        an.f_broke[i] = 1;
-                        an.f_ip[i] = an.f_end[i];
-                        an.f_pa[i] = 0;
-                    } } }
-                    // Break records from both branches propagate to the enclosing region.
-                    if an.f_ptmb[i] > an.f_mb[i] {
-                        an.f_mb[i] = an.f_ptmb[i];
-                    }
-                    if cmb > an.f_mb[i] {
-                        an.f_mb[i] = cmb;
-                    }
-                    if an.f_pthb[i] == 1 {
-                        an.f_hb[i] = 1;
-                    }
-                    if chb == 1 {
-                        an.f_hb[i] = 1;
-                    }
-                    if an.f_ptbp[i] > an.f_bp[i] {
-                        an.f_bp[i] = an.f_ptbp[i];
-                    }
-                    if cbp > an.f_bp[i] {
-                        an.f_bp[i] = cbp;
-                    }
-                    if an.f_ptbh[i] > an.f_bh[i] {
-                        an.f_bh[i] = an.f_ptbh[i];
-                    }
-                    if cbh > an.f_bh[i] {
-                        an.f_bh[i] = cbh;
-                    }
-                    0
-                }
-            } else {
-                // `loop` (f_pk == 2): consume the body. The iteration count is 1 for a
-                // wholly-breaking body, else the statically extracted bound (reject if
-                // inextractable). The body cost and heap scale by the count; the peak does
-                // not (a high-water mark repeats each iteration). The body's max break
-                // cost/peak/heap folds in, lifted by this frame's depth.
-                let iter = if cb == 1 {
-                    1
-                } else {
-                    if extract_bound(an.f_es[i]) == 1 {
-                        an.bound_val
-                    } else {
-                        an.reject = 1;
-                        1
-                    }
-                };
-                if chb == 0 andalso cb == 1 {
-                    an.f_broke[i] = 1;
-                    an.f_ip[i] = an.f_end[i];
-                    an.f_pa[i] = 0;
-                } else {
-                    let body_total = if cb == 1 { 0 } else { an.child_cost * iter };
-                    if an.child_mb > body_total {
-                        an.f_cost[i] = an.f_cost[i] + an.child_mb;
-                    } else {
-                        an.f_cost[i] = an.f_cost[i] + body_total;
-                    }
-                    let body_peak = if cb == 1 { 0 } else { pos(seed) + an.child_peak };
-                    let break_peak = if chb == 1 { pos(seed) + an.child_bp } else { 0 };
-                    if body_peak > an.f_peak[i] {
-                        an.f_peak[i] = body_peak;
-                    }
-                    if break_peak > an.f_peak[i] {
-                        an.f_peak[i] = break_peak;
-                    }
-                    let body_heap = if cb == 1 { 0 } else { an.child_heap * iter };
-                    let break_heap = an.child_bh;
-                    if body_heap > break_heap {
-                        an.f_heap[i] = an.f_heap[i] + body_heap;
-                    } else {
-                        an.f_heap[i] = an.f_heap[i] + break_heap;
-                    }
-                    an.f_ip[i] = an.f_pj[i];
-                    an.f_pa[i] = 0;
-                }
-                0
-            }
-        }
+        resolve_pending(i)
     } else {
         if an.f_ip[i] >= an.f_end[i] {
-            // Region exhausted: deliver its result and break accumulators, then pop.
-            an.child_cost = an.f_cost[i];
-            an.child_peak = an.f_peak[i];
-            an.child_off = an.f_off[i];
-            an.child_heap = an.f_heap[i];
-            an.child_broke = an.f_broke[i];
-            an.child_mb = an.f_mb[i];
-            an.child_hb = an.f_hb[i];
-            an.child_bp = an.f_bp[i];
-            an.child_bh = an.f_bh[i];
-            an.sp = an.sp - 1;
-            0
+            deliver(i)
         } else {
-            let ip = an.f_ip[i];
-            let c = wa.class[ip];
-            if c == 1 {
-                // If: account the branch op, then spawn the then-branch.
-                account_op(i, ip);
-                let target = wa.arg[ip];
-                if target > 0 andalso wa.class[target - 1] == 2 {
-                    let endif = wa.arg[target - 1];
-                    an.f_pk[i] = 1;
-                    an.f_es[i] = target;
-                    an.f_ei[i] = endif;
-                    an.f_pj[i] = endif + 1;
-                    an.f_ps[i] = 0;
-                    an.f_pa[i] = 1;
-                    push_frame(ip + 1, target - 1)
-                } else {
-                    an.f_pk[i] = 0;
-                    an.f_pj[i] = target + 1;
-                    an.f_pa[i] = 1;
-                    push_frame(ip + 1, target)
-                }
-            } else {
-            if c == 4 {
-                // Loop: account the op, then spawn the body `[ip+1, endloop)`.
-                account_op(i, ip);
-                an.f_pk[i] = 2;
-                an.f_es[i] = ip;
-                an.f_pj[i] = wa.arg[ip];
-                an.f_pa[i] = 1;
-                push_frame(ip + 1, wa.arg[ip] - 1)
-            } else {
-            if c == 6 {
-                // Break: account, record, end this path.
-                account_op(i, ip);
-                record_break(i);
-                an.f_broke[i] = 1;
-                an.f_ip[i] = an.f_end[i];
-                0
-            } else {
-            if c == 7 {
-                // BreakIf: account, record, and continue (conditional exit).
-                account_op(i, ip);
-                record_break(i);
-                an.f_ip[i] = ip + 1;
-                0
-            } else {
-            if c == 8 {
-                // Trap: account and end this path without recording a break.
-                account_op(i, ip);
-                an.f_broke[i] = 1;
-                an.f_ip[i] = an.f_end[i];
-                0
-            } else {
-            if c == 2 orelse c == 3 orelse c == 5 {
-                // Else / EndIf / EndLoop: structural markers, no effect, step over.
-                an.f_ip[i] = ip + 1;
-                0
-            } else {
-                // Plain op (including Call): account and advance.
-                account_op(i, ip);
-                an.f_ip[i] = ip + 1;
-                0
-            } } } } } }
+            scan_op(i)
         }
     }
 }
@@ -588,7 +649,7 @@ fn run() -> Word {
     an.child_hb = 0;
     an.child_bp = 0;
     an.child_bh = 0;
-    push_frame(wa.stream_pos + 1, wa.reset_pos);
+    push_frame(wa.region_start, wa.region_end);
     // The loop runs to its static cap; a step is a no-op once the frame stack empties. (An
     // early `break` would be cleaner but is not yet in the self-hosted codegen subset, so
     // analyze.kel avoids it to remain self-compiling.)

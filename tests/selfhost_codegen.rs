@@ -4270,21 +4270,25 @@ const WA_RESET_POS: usize = 2;
 const WA_LOCAL_COUNT: usize = 3;
 const WA_VSB: usize = 4;
 const WA_ARENA_CAPACITY: usize = 5;
-const WA_COST: usize = 6;
-const WA_CLASS: usize = 6 + 1024;
-const WA_ARG: usize = 6 + 1024 * 2;
-const WA_GROWTH: usize = 6 + 1024 * 3;
-const WA_SHRINK: usize = 6 + 1024 * 4;
-const WA_HEAP: usize = 6 + 1024 * 5;
-const WA_OPK: usize = 6 + 1024 * 6;
-const WA_SLOT: usize = 6 + 1024 * 7;
-const WA_CVAL: usize = 6 + 1024 * 8;
-const WA_CINT: usize = 6 + 1024 * 9;
-const WA_OUT_WCET: usize = 6 + 1024 * 10;
-const WA_OUT_STACK: usize = 6 + 1024 * 10 + 1;
-const WA_OUT_HEAP: usize = 6 + 1024 * 10 + 2;
-const WA_OUT_REJECT: usize = 6 + 1024 * 10 + 3;
-const WA_OUT_VALID: usize = 6 + 1024 * 10 + 4;
+const WA_REGION_START: usize = 6;
+const WA_REGION_END: usize = 7;
+const WA_COST: usize = 8;
+const WA_CLASS: usize = 8 + 1024;
+const WA_ARG: usize = 8 + 1024 * 2;
+const WA_GROWTH: usize = 8 + 1024 * 3;
+const WA_SHRINK: usize = 8 + 1024 * 4;
+const WA_HEAP: usize = 8 + 1024 * 5;
+const WA_OPK: usize = 8 + 1024 * 6;
+const WA_SLOT: usize = 8 + 1024 * 7;
+const WA_CVAL: usize = 8 + 1024 * 8;
+const WA_CINT: usize = 8 + 1024 * 9;
+const WA_CALLEE_SLOTS: usize = 8 + 1024 * 10;
+const WA_CALLEE_HEAP: usize = 8 + 1024 * 11;
+const WA_OUT_WCET: usize = 8 + 1024 * 12;
+const WA_OUT_STACK: usize = 8 + 1024 * 12 + 1;
+const WA_OUT_HEAP: usize = 8 + 1024 * 12 + 2;
+const WA_OUT_REJECT: usize = 8 + 1024 * 12 + 3;
+const WA_OUT_VALID: usize = 8 + 1024 * 12 + 4;
 
 fn analyze_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
@@ -4298,8 +4302,8 @@ fn analyze_kel_module() -> Module {
 }
 
 /// Classify an op for analyze.kel as `(class, arg)`. The class tags the control-flow role
-/// (0 plain, 1 If, 2 Else, 3 EndIf, 4 Loop, 5 EndLoop, 6 Break, 7 BreakIf, 8 Trap); `arg`
-/// carries the branch target for If and Loop, and the matching EndIf position for Else.
+/// (0 plain, 1 If, 2 Else, 3 EndIf, 4 Loop, 5 EndLoop, 6 Break, 7 BreakIf, 8 Trap, 9 Call);
+/// `arg` carries the branch target for If and Loop, and the matching EndIf position for Else.
 fn analyze_class(op: &keleusma::bytecode::Op) -> (i64, i64) {
     use keleusma::bytecode::Op;
     match op {
@@ -4311,6 +4315,7 @@ fn analyze_class(op: &keleusma::bytecode::Op) -> (i64, i64) {
         Op::Break(_) => (6, 0),
         Op::BreakIf(_) => (7, 0),
         Op::Trap(_) => (8, 0),
+        Op::Call(_, _) => (9, 0),
         _ => (0, 0),
     }
 }
@@ -4354,27 +4359,67 @@ fn analyze_stack_effect(op: &keleusma::bytecode::Op) -> (i64, i64) {
     }
 }
 
-/// Run analyze.kel over a Stream chunk's op table against `arena_capacity`, returning
-/// `(wcet, stack_bytes, heap_bytes, reject, valid)`. `reject` is true when the stage cannot
-/// statically bound a loop (mirroring the reference's rejection); `valid` is the self-hosted
-/// validation verdict -- a provable finite bound whose stack-plus-heap budget fits the
-/// capacity. Uses the empty-resolver shallow form: a `Call` and a native call contribute
-/// their local stack effect only, not the callee body.
+/// The per-op arena-heap bytes analyze.kel accounts for `op`: the op's own construction
+/// allocation (`Op::heap_alloc`) plus the copy-out a `GetData`/`GetDataIndexed` performs when
+/// it reads a flat-composite shared slot (`shared_composite_copyout_bytes`). `shared_layout`
+/// is empty for the shallow empty-resolver form (copy-out zero, matching
+/// `wcmu_stream_iteration`) and the module's real layout for the transitive validator.
+fn analyze_op_heap(
+    op: &keleusma::bytecode::Op,
+    chunk: &keleusma::bytecode::Chunk,
+    shared_layout: &[keleusma::bytecode::SharedSlotLayout],
+) -> i64 {
+    use keleusma::bytecode::{Op, SHARED_SLOT_COMPOSITE_FLAG};
+    let slot_copyout = |slot: usize| -> i64 {
+        shared_layout
+            .get(slot)
+            .filter(|e| e.kind & SHARED_SLOT_COMPOSITE_FLAG != 0)
+            .map_or(0, |e| e.len as i64)
+    };
+    let copyout = match op {
+        Op::GetData(s) => slot_copyout(*s as usize),
+        Op::GetDataIndexed(base, len) => (0..*len as usize)
+            .map(|i| slot_copyout(*base as usize + i))
+            .max()
+            .unwrap_or(0),
+        _ => 0,
+    };
+    op.heap_alloc(chunk) as i64 + copyout
+}
+
+/// Run analyze.kel over one chunk against `arena_capacity`, returning `(wcet, stack_bytes,
+/// heap_bytes, reject, valid)`. The region is the Stream-to-Reset body for a Stream chunk and
+/// the whole op range for a Func/Reentrant chunk, matching `compute_chunk_wcmu`. `chunk_wcmu`
+/// resolves each `Op::Call` to the callee chunk's already-computed `(stack_bytes, heap_bytes)`
+/// (indexed by chunk index); pass `&[]` for the shallow empty-resolver form, where every
+/// callee folds in as zero. `shared_layout` sizes composite-shared-read copy-out (empty for
+/// the shallow form).
 fn run_analyze_kel(
     chunk: &keleusma::bytecode::Chunk,
     arena_capacity: i64,
+    chunk_wcmu: &[(i64, i64)],
+    shared_layout: &[keleusma::bytecode::SharedSlotLayout],
 ) -> (i64, i64, i64, bool, bool) {
-    use keleusma::bytecode::Op;
-    let sp = chunk
-        .ops
-        .iter()
-        .position(|o| matches!(o, Op::Stream))
-        .expect("Stream op");
-    let rp = chunk
-        .ops
-        .iter()
-        .position(|o| matches!(o, Op::Reset))
-        .expect("Reset op");
+    use keleusma::bytecode::{BlockType, Op};
+    let vsb = keleusma::bytecode::VALUE_SLOT_SIZE_BYTES as i64;
+    // The analysed region and the Stream/Reset positions (used only for a Stream chunk's WCET
+    // overhead term; a Func/Reentrant chunk analyses its whole op range).
+    let (region_start, region_end, sp, rp) = match chunk.block_type {
+        BlockType::Stream => {
+            let sp = chunk
+                .ops
+                .iter()
+                .position(|o| matches!(o, Op::Stream))
+                .expect("Stream op");
+            let rp = chunk
+                .ops
+                .iter()
+                .position(|o| matches!(o, Op::Reset))
+                .expect("Reset op");
+            (sp + 1, rp, sp, rp)
+        }
+        BlockType::Func | BlockType::Reentrant => (0, chunk.ops.len(), 0, 0),
+    };
     assert!(chunk.ops.len() <= 1024, "analyze.kel op-table capacity");
     let m = analyze_kel_module();
     let need = required_persistent_capacity_for(&m);
@@ -4389,13 +4434,10 @@ fn run_analyze_kel(
     set(&vm, &mut shared, WA_STREAM_POS, sp as i64);
     set(&vm, &mut shared, WA_RESET_POS, rp as i64);
     set(&vm, &mut shared, WA_LOCAL_COUNT, chunk.local_count as i64);
-    set(
-        &vm,
-        &mut shared,
-        WA_VSB,
-        keleusma::bytecode::VALUE_SLOT_SIZE_BYTES as i64,
-    );
+    set(&vm, &mut shared, WA_VSB, vsb);
     set(&vm, &mut shared, WA_ARENA_CAPACITY, arena_capacity);
+    set(&vm, &mut shared, WA_REGION_START, region_start as i64);
+    set(&vm, &mut shared, WA_REGION_END, region_end as i64);
     for (i, op) in chunk.ops.iter().enumerate() {
         let (class, arg) = analyze_class(op);
         let (opk, slot, cval, cint) = analyze_opk(op, chunk);
@@ -4405,11 +4447,23 @@ fn run_analyze_kel(
         set(&vm, &mut shared, WA_ARG + i, arg);
         set(&vm, &mut shared, WA_GROWTH + i, growth);
         set(&vm, &mut shared, WA_SHRINK + i, shrink);
-        set(&vm, &mut shared, WA_HEAP + i, op.heap_alloc(chunk) as i64);
+        set(
+            &vm,
+            &mut shared,
+            WA_HEAP + i,
+            analyze_op_heap(op, chunk, shared_layout),
+        );
         set(&vm, &mut shared, WA_OPK + i, opk);
         set(&vm, &mut shared, WA_SLOT + i, slot);
         set(&vm, &mut shared, WA_CVAL + i, cval);
         set(&vm, &mut shared, WA_CINT + i, cint);
+        // A Call folds in the callee's transitive WCMU (in slots for the stack term, bytes
+        // for the heap term). An unresolved callee (shallow mode) contributes zero.
+        if let Op::Call(callee, _) = op {
+            let (cs, ch) = chunk_wcmu.get(*callee as usize).copied().unwrap_or((0, 0));
+            set(&vm, &mut shared, WA_CALLEE_SLOTS + i, cs / vsb);
+            set(&vm, &mut shared, WA_CALLEE_HEAP + i, ch);
+        }
     }
     match vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
@@ -4433,17 +4487,75 @@ fn run_analyze_kel(
     )
 }
 
-/// The analysis view: the per-iteration bounds `(wcet, stack_bytes, heap_bytes, reject)`. Runs
-/// against an effectively unbounded capacity so the validity verdict never constrains it.
+/// The analysis view: the per-iteration bounds `(wcet, stack_bytes, heap_bytes, reject)` for a
+/// Stream chunk. Shallow (empty resolver) and against an unbounded capacity.
 fn analyze_via_kel(chunk: &keleusma::bytecode::Chunk) -> (i64, i64, i64, bool) {
-    let (wcet, stack, heap, reject, _valid) = run_analyze_kel(chunk, i64::MAX);
+    let (wcet, stack, heap, reject, _valid) = run_analyze_kel(chunk, i64::MAX, &[], &[]);
     (wcet, stack, heap, reject)
 }
 
-/// The self-hosted validator verdict for a Stream chunk against `arena_capacity`: true iff
-/// analyze.kel proves a finite per-iteration bound whose stack-plus-heap budget fits.
+/// The self-hosted validator verdict for a Stream chunk against `arena_capacity` (shallow):
+/// true iff analyze.kel proves a finite per-iteration bound whose stack-plus-heap budget fits.
 fn validate_via_kel(chunk: &keleusma::bytecode::Chunk, arena_capacity: i64) -> bool {
-    run_analyze_kel(chunk, arena_capacity).4
+    run_analyze_kel(chunk, arena_capacity, &[], &[]).4
+}
+
+/// The self-hosted drop-in replacement for `verify_resource_bounds`: analyze.kel decides each
+/// chunk's WCMU transitively (callee bodies folded at every `Op::Call`, resolved in
+/// topological order so callees precede callers), and the module is admitted iff no chunk has
+/// an inextractable bound and every Stream chunk's budget fits `arena_capacity`.
+fn validate_module_via_kel(module: &Module, arena_capacity: i64) -> bool {
+    use keleusma::bytecode::{BlockType, Op};
+    let n = module.chunks.len();
+    // Topological order over the call graph (callees before callers), rejecting recursion --
+    // the same DFS postorder `topological_call_order` computes.
+    let mut visited = vec![0u8; n]; // 0 unseen, 1 on-stack, 2 done
+    let mut order = Vec::new();
+    fn visit(module: &Module, i: usize, visited: &mut [u8], order: &mut Vec<usize>) -> bool {
+        if visited[i] == 1 {
+            return false; // cycle
+        }
+        if visited[i] == 2 {
+            return true;
+        }
+        visited[i] = 1;
+        for op in &module.chunks[i].ops {
+            if let Op::Call(callee, _) = op {
+                let c = *callee as usize;
+                if c < module.chunks.len() && !visit(module, c, visited, order) {
+                    return false;
+                }
+            }
+        }
+        visited[i] = 2;
+        order.push(i);
+        true
+    }
+    for i in 0..n {
+        if visited[i] != 2 && !visit(module, i, &mut visited, &mut order) {
+            return false; // a recursive call graph is inadmissible
+        }
+    }
+    // Resolve each chunk's transitive WCMU in topological order, then admit.
+    let shared_layout = module
+        .data_layout
+        .as_ref()
+        .map_or(&[][..], |dl| &dl.shared_layout);
+    let mut chunk_wcmu = vec![(0i64, 0i64); n];
+    let mut valid = true;
+    for &idx in &order {
+        let chunk = &module.chunks[idx];
+        let (_wcet, stack, heap, reject, chunk_valid) =
+            run_analyze_kel(chunk, arena_capacity, &chunk_wcmu, shared_layout);
+        if reject {
+            valid = false; // an inextractable bound anywhere fails module_wcmu
+        }
+        if chunk.block_type == BlockType::Stream && !chunk_valid {
+            valid = false; // a Stream chunk whose transitive budget exceeds the capacity
+        }
+        chunk_wcmu[idx] = (stack, heap);
+    }
+    valid
 }
 
 // analyze.kel reproduces both `wcet_stream_iteration` and `wcmu_stream_iteration` exactly for
@@ -4761,4 +4873,112 @@ loop main(resume: Word) -> Word {
         keleusma::verify::verify_resource_bounds(&broken, big as usize).is_err(),
         "reference must reject an inextractable loop"
     );
+}
+
+// The self-hosted validator as a drop-in replacement for `verify_resource_bounds` on
+// CALL-BEARING modules. analyze.kel folds each callee's transitive WCMU at every Op::Call
+// (resolved in topological order), so the module verdict must match the reference for the
+// four self-hosted stage modules (whose `main` calls many helpers, some with loops) and for
+// synthetic call programs -- at capacities below, at, and above the module's Stream budget.
+#[test]
+fn validate_module_via_kel_is_a_drop_in_for_verify_resource_bounds() {
+    use keleusma::bytecode::BlockType;
+    let mut modules: Vec<Module> = Vec::new();
+    for path in [
+        "compiler/kel/lexer.kel",
+        "compiler/kel/reconstruct.kel",
+        "compiler/kel/codegen.kel",
+        "compiler/kel/parse.kel",
+    ] {
+        modules.push(compile_src(
+            &std::fs::read_to_string(path).expect("read stage"),
+        ));
+    }
+    let synth: &[&str] = &[
+        // main -> a plain Func helper.
+        r#"require word >= 32;
+shared data io { out: Word }
+fn add3(a: Word, b: Word, c: Word) -> Word { a + b + c }
+loop main(resume: Word) -> Word { io.out = add3(1, 2, 3); yield io.out }"#,
+        // main -> a helper that itself contains a bounded loop.
+        r#"require word >= 32;
+shared data io { out: Word }
+fn work(n: Word) -> Word {
+    for i in 0..n limit 16 { let z = i + i; }
+    n + 1
+}
+loop main(resume: Word) -> Word { io.out = work(10); yield io.out }"#,
+        // A two-level call chain (main -> f -> g).
+        r#"require word >= 32;
+shared data io { out: Word }
+fn g(x: Word) -> Word { x + 1 }
+fn f(x: Word) -> Word { g(x) + g(x + 1) }
+loop main(resume: Word) -> Word { io.out = f(3); yield io.out }"#,
+    ];
+    for s in synth {
+        modules.push(compile_src(s));
+    }
+    for m in &modules {
+        // Confirm the module actually exercises calls, then find its max Stream budget.
+        assert!(
+            m.chunks.iter().any(|c| c
+                .ops
+                .iter()
+                .any(|o| matches!(o, keleusma::bytecode::Op::Call(..)))),
+            "test module must contain at least one Op::Call"
+        );
+        let per = keleusma::verify::module_wcmu(m, &[]).expect("reference module_wcmu");
+        let mut max_total = 0i64;
+        for (i, c) in m.chunks.iter().enumerate() {
+            if c.block_type == BlockType::Stream {
+                max_total = max_total.max((per[i].0 + per[i].1) as i64);
+            }
+        }
+        for cap in [max_total - 1, max_total, max_total + 4096] {
+            let self_valid = validate_module_via_kel(m, cap);
+            let ref_valid = keleusma::verify::verify_resource_bounds(m, cap as usize).is_ok();
+            assert_eq!(self_valid, ref_valid, "validity at cap={cap}");
+        }
+    }
+}
+
+// The composite-shared-read copy-out heap term: reading a whole flat-composite shared slot
+// (`GetData` on a struct/array slot) copies its bytes to the arena, which `module_wcmu`
+// counts and `wcmu_stream_iteration` (empty resolver) does not. analyze.kel's transitive
+// validator folds the same term, so it must still match `verify_resource_bounds` for a
+// program whose shared read is composite -- where the shallow bound would under-count.
+#[test]
+fn validate_module_via_kel_folds_composite_shared_copyout() {
+    use keleusma::bytecode::BlockType;
+    let src = r#"require word >= 32;
+struct P { x: Word, y: Word }
+shared data io { p: P, out: Word }
+loop main(resume: Word) -> Word {
+    let q = io.p;
+    io.out = q.x + q.y;
+    yield io.out
+}"#;
+    let m = compile_src(src);
+    // Confirm this program actually exercises a non-zero composite copy-out: the transitive
+    // module_wcmu heap for the Stream chunk must exceed the shallow wcmu_stream_iteration heap.
+    let per = keleusma::verify::module_wcmu(&m, &[]).expect("module_wcmu");
+    let mut max_total = 0i64;
+    for (i, c) in m.chunks.iter().enumerate() {
+        if c.block_type == BlockType::Stream {
+            let (_s, shallow_heap) = keleusma::verify::wcmu_stream_iteration(c).expect("shallow");
+            assert!(
+                per[i].1 > shallow_heap,
+                "expected a composite copy-out to make transitive heap exceed the shallow heap"
+            );
+            max_total = max_total.max((per[i].0 + per[i].1) as i64);
+        }
+    }
+    for cap in [max_total - 1, max_total, max_total + 4096] {
+        let self_valid = validate_module_via_kel(&m, cap);
+        let ref_valid = keleusma::verify::verify_resource_bounds(&m, cap as usize).is_ok();
+        assert_eq!(
+            self_valid, ref_valid,
+            "composite-shared validity at cap={cap}"
+        );
+    }
 }
