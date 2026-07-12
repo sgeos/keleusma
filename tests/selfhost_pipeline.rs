@@ -117,10 +117,10 @@ fn reference_stream_and_names(src: &str) -> (Vec<(i64, i64)>, Vec<String>) {
 }
 
 // Flat shared-data slot indices of the lexer's intern table, in the `src` block's
-// declaration order: len (1 slot) then bytes (24576) precede it.
-const LEX_ISTART: usize = 1 + 24576;
-const LEX_ILEN: usize = 1 + 24576 + 512;
-const LEX_ICOUNT: usize = 1 + 24576 + 512 + 512;
+// declaration order: len (1 slot) then bytes (46080) precede it.
+const LEX_ISTART: usize = 1 + 46080;
+const LEX_ILEN: usize = 1 + 46080 + 1024;
+const LEX_ICOUNT: usize = 1 + 46080 + 1024 + 1024;
 
 fn shared_word(vm: &Vm, buf: &[u8], slot: usize) -> i64 {
     match vm.get_shared(buf, slot).expect("get_shared") {
@@ -144,8 +144,8 @@ fn lex_full(src: &str) -> (Vec<(i64, i64)>, Vec<String>) {
     let mut vm = Vm::new(m, &arena).expect("verify");
 
     assert!(
-        bytes.len() <= 24576,
-        "source exceeds the lexer's 24576-byte cap"
+        bytes.len() <= 46080,
+        "source exceeds the lexer's 46080-byte cap"
     );
     let mut shared = vec![0u8; vm.shared_data_bytes()];
     vm.set_shared(&mut shared, 0, Value::Int(bytes.len() as i64))

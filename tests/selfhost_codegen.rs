@@ -1468,9 +1468,9 @@ fn self_compile_codegen_atomic_functions() {
 // ---------------------------------------------------------------------------
 
 // Lexer `src` block slots: len(1) + bytes(65536) then the intern table.
-const BR_LEX_ISTART: usize = 1 + 24576;
-const BR_LEX_ILEN: usize = 1 + 24576 + 512;
-const BR_LEX_ICOUNT: usize = 1 + 24576 + 512 + 512;
+const BR_LEX_ISTART: usize = 1 + 46080;
+const BR_LEX_ILEN: usize = 1 + 46080 + 1024;
+const BR_LEX_ICOUNT: usize = 1 + 46080 + 1024 + 1024;
 // Parser `toks` block slots: len(1), then the packed token array (one `tok+payload*64`
 // word per token), then the scalar and chunk-table inputs.
 const BR_P_LEN: usize = 0;
@@ -1605,7 +1605,7 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
     let mut state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
-    for _ in 0..(tokens.len() * 4 + 64) {
+    for _ in 0..(tokens.len() * 16 + 256) {
         if let VmState::Yielded(Value::Int(w)) = state {
             let (code, val) = (w.rem_euclid(64), w.div_euclid(64));
             if in_body {
@@ -2578,7 +2578,7 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>) {
     let mut state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
-    for _ in 0..(tokens.len() * 4 + 64) {
+    for _ in 0..(tokens.len() * 16 + 256) {
         if let VmState::Yielded(Value::Int(w)) = state {
             let (code, val) = (w.rem_euclid(64), w.div_euclid(64));
             if in_body {
@@ -3124,5 +3124,76 @@ fn parse_into_codegen_for_in_if_branch_matches_the_reference() {
             VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
             other => panic!("unexpected result for `{src}`: {other:?}"),
         }
+    }
+}
+
+// A `match` whose arm results are function calls (`k => f(x)`), and matches with many
+// arms. codegen.kel's `walk_step` dispatch is a 23-arm match of exactly this shape; the
+// earlier whole-program tests only exercised literal-valued arms, so this pins the
+// call-valued and high-arity forms independently.
+#[test]
+fn parse_into_codegen_match_call_arms_match_the_reference() {
+    let cases: &[(&str, i64, i64)] = &[
+        (
+            "fn g(x: Word) -> Word { x + 1 } fn h(x: Word) -> Word { x + 2 } fn main(k: Word) -> Word { match k { 0 => g(k), 1 => h(k), _ => g(k) } }",
+            1,
+            3, // h(1) = 3
+        ),
+        (
+            "fn main(k: Word) -> Word { match k { 0 => 10, 1 => 11, 2 => 12, 3 => 13, 4 => 14, 5 => 15, 6 => 16, 7 => 17, 8 => 18, 9 => 19, _ => 99 } }",
+            7,
+            17,
+        ),
+        (
+            "fn g(x: Word) -> Word { x + 1 } fn main(k: Word) -> Word { match k { 0 => g(k), 1 => g(k), 2 => g(k), 3 => g(k), 4 => g(k), 5 => g(k), 6 => g(k), 7 => g(k), 8 => g(k), 9 => g(k), _ => g(k) } }",
+            5,
+            6, // g(5) = 6
+        ),
+    ];
+    for &(src, input, expected) in cases {
+        let (records, param_count, category) = parse_function_records(src);
+        let body = reconstruct_body(&records, category);
+        let (emitted, pool, local_count) = run_codegen(&body, param_count);
+        let reference = compile_src(src);
+        let idx = main_index(&reference);
+        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
+        let mut built = compile_src(src);
+        built.chunks[idx].ops = emitted;
+        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].local_count = local_count as u16;
+        let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(built, &arena).expect("verify");
+        match vm.call(&[Value::Int(input)]).expect("call") {
+            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
+            other => panic!("unexpected result for `{src}`: {other:?}"),
+        }
+    }
+}
+
+// The whole of codegen.kel, the code-generator stage, self-compiled: every one of its 35
+// chunks is emitted by the self-hosted pipeline byte-identically to the Rust-hosted
+// compiler. This is the second whole stage-file self-compile (after lexer.kel) and the
+// first that is itself a code generator, so the self-hosted codegen reproduces its own
+// bytecode. It exercises the full body grammar at scale: a 23-arm dispatch `match` with
+// call-valued arms, `for .. limit` emitters with ~78-statement bodies, nested data-array
+// reads and writes, and the multiheaded `emit_next` phase machine. Reaching it required
+// packing the parser token stream (codegen.kel is 4404 tokens), raising the lexer source
+// and intern buffers (42KB, ~900 identifiers), raising parse.kel's per-block statement
+// table past 64, and rewriting codegen.kel's one `|>` pipe to the `match` it desugars to.
+#[test]
+fn self_host_compiles_codegen_kel_byte_identically() {
+    let src = std::fs::read_to_string("compiler/kel/codegen.kel").expect("read codegen.kel");
+    let module = self_host_compile(&src);
+    let reference = compile_src(&src);
+    assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");
+    for (m, r) in module.chunks.iter().zip(reference.chunks.iter()) {
+        assert_eq!(m.name, r.name, "chunk order");
+        assert_eq!(m.ops, r.ops, "ops for chunk `{}`", r.name);
+        assert_eq!(m.constants, r.constants, "pool for chunk `{}`", r.name);
+        assert_eq!(
+            m.local_count, r.local_count,
+            "local_count for chunk `{}`",
+            r.name
+        );
     }
 }
