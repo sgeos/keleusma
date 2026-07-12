@@ -86,6 +86,8 @@ enum Node {
     Not = 6,
     DataRead = 11,
     DataAssignIn = 12,
+    IndexRead = 13,
+    IndexAssignIn = 14,
     Andalso = 8,
     Orelse = 9,
     Neg = 10,
@@ -97,6 +99,7 @@ enum Node {
     SlotRecord = 32,
     ForBuild = 33,
     MatchBuild = 34,
+    IndexStore = 36,
 }
 
 // The shunting-yard operator codes.
@@ -120,6 +123,7 @@ enum OpCode {
     Not = 17,
     Andalso = 18,
     Orelse = 19,
+    IndexMark = 20,
     YieldMark = 22,
 }
 
@@ -260,6 +264,15 @@ private data da {
     da_data: Word,
     da_base: Word,
     da_len: Word,
+    idx_base: [Word; 8],
+    idx_len: [Word; 8],
+    idx_sp: Word,
+    iclosing: Word,
+    post_index: Word,
+    pidx_base: Word,
+    pidx_len: Word,
+    store_emit: Word,
+    store_arg: Word,
 }
 
 // Resolve an identifier to its frame slot: the `let` bindings first (most recent wins),
@@ -319,11 +332,20 @@ fn step_dafield(k: Word, v: Word) -> Word {
     0
 }
 
-// The token after a data field: a `=` opens a scalar assignment (whose target is the
-// field's slot, recorded as a pending statement); any other token is a scalar read (emit a
-// DataRead over the field's element-0 slot and push the token back). An indexed `[` is a
-// later increment.
+// The token after a data field: a `[` opens an indexed access (push the field's base and
+// length on the idx stack and an index marker that blocks precedence across the index),
+// a `=` a scalar assignment (target = the field's slot), any other token a scalar read.
 fn step_daindex(k: Word) -> Word {
+    if k == Tok::LBracket() as Word {
+        da.idx_base[da.idx_sp] = da.da_base;
+        da.idx_len[da.idx_sp] = da.da_len;
+        da.idx_sp = da.idx_sp + 1;
+        ops.opstack[ops.opsp] = OpCode::IndexMark() as Word;
+        ops.opsp = ops.opsp + 1;
+        da.da_phase = 0;
+        ops.expect_operand = 1;
+        0
+    } else {
     if k == Tok::Eq() as Word {
         stmt.pstmt_kind[stmt.pstmt_sp] = 1;
         stmt.pstmt_arg[stmt.pstmt_sp] = da.da_base;
@@ -336,7 +358,56 @@ fn step_daindex(k: Word) -> Word {
         da.da_phase = 0;
         ops.expect_operand = 0;
         Node::DataRead() as Word + da.da_base * 64
+    } }
+}
+
+// A `]`: flush the operators above the index marker, then pop the marker and the idx
+// stack into a one-slot lookahead (pidx). The IndexRead is not emitted yet: the token
+// after the `]` decides between a read and an indexed assignment.
+fn step_iclosing() -> Word {
+    if ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] != OpCode::IndexMark() as Word {
+        ops.opsp = ops.opsp - 1;
+        let op = ops.opstack[ops.opsp];
+        emit_op(op)
+    } else {
+        ops.opsp = ops.opsp - 1;
+        da.idx_sp = da.idx_sp - 1;
+        da.pidx_base = da.idx_base[da.idx_sp];
+        da.pidx_len = da.idx_len[da.idx_sp];
+        da.iclosing = 0;
+        da.post_index = 1;
+        0
     }
+}
+
+// The token after a closing `]`. A `=` makes the just-indexed `d.f[i]` an assignment
+// target: push a pending indexed assignment (pstmt kind 2, carrying base + len*65536),
+// leaving the index node on the host stack for the eventual IndexStore. Any other token is
+// a read: emit the IndexRead (kind 13) over the index node and push the token back.
+fn step_post_index(k: Word) -> Word {
+    da.post_index = 0;
+    if k == Tok::Eq() as Word {
+        stmt.pstmt_kind[stmt.pstmt_sp] = 2;
+        stmt.pstmt_arg[stmt.pstmt_sp] = da.pidx_base + da.pidx_len * 65536;
+        stmt.pstmt_sp = stmt.pstmt_sp + 1;
+        ops.expect_operand = 1;
+        0
+    } else {
+        ps.cursor = ps.cursor - 1;
+        ops.expect_operand = 0;
+        Node::IndexRead() as Word + (da.pidx_base + da.pidx_len * 65536) * 64
+    }
+}
+
+// After the IndexStore signal, record the IndexAssignIn statement so the block fold wraps
+// the store node as the assignment.
+fn step_store_finalize() -> Word {
+    da.store_emit = 0;
+    stmt.stmt_kind[stmt.stmt_count] = Node::IndexAssignIn() as Word;
+    stmt.stmt_arg[stmt.stmt_count] = da.store_arg;
+    stmt.stmt_count = stmt.stmt_count + 1;
+    ops.expect_operand = 1;
+    0
 }
 
 fn prec_of(op: Word) -> Word {
@@ -344,6 +415,7 @@ fn prec_of(op: Word) -> Word {
         OpCode::Neg() => 9,
         OpCode::Not() => 9,
         OpCode::Paren() => 0,
+        OpCode::IndexMark() => 0,
         OpCode::YieldMark() => 0,
         OpCode::Mul() => 8,
         OpCode::Div() => 8,
@@ -752,8 +824,12 @@ fn step_normal(k: Word, v: Word) -> Word {
         ops.closing = 1;
         0
     } else {
+    if k == Tok::RBracket() as Word {
+        da.iclosing = 1;
+        0
+    } else {
         step_op(k)
-    } } } } }
+    } } } } } }
 }
 
 // The normal parse-phase dispatch: a `let` binding's name or `=`, else an expression
@@ -810,6 +886,10 @@ fn step_body_dispatch(k: Word, v: Word) -> Word {
                 ops.expect_operand = 1;
             }
         }
+        if da.post_index == 1 {
+            // The token after a `]` decides read versus indexed assignment.
+            step_post_index(k)
+        } else {
         if mat.match_sp > 0 {
             // Route the match structural tokens (a pattern, `=>`, the scrutinee's `{`, the
             // arms' `}`, or a match-level `,`) to step_match; the scrutinee and arm results
@@ -822,7 +902,7 @@ fn step_body_dispatch(k: Word, v: Word) -> Word {
             }
         } else {
             step_dispatch_normal(k, v)
-        }
+        } }
     }
 }
 
@@ -847,15 +927,28 @@ fn step_draining() -> Word {
                     stmt.scope_slot[stmt.let_count] = slot;
                     stmt.let_count = stmt.let_count + 1;
                     stmt.stmt_count = stmt.stmt_count + 1;
+                    ops.draining = 0;
+                    ops.expect_operand = 1;
+                    0
                 } else {
+                if stmt.pstmt_kind[stmt.pstmt_sp] == 1 {
                     // A scalar data assignment: write the target field's slot.
                     stmt.stmt_kind[stmt.stmt_count] = Node::DataAssignIn() as Word;
                     stmt.stmt_arg[stmt.stmt_count] = stmt.pstmt_arg[stmt.pstmt_sp];
                     stmt.stmt_count = stmt.stmt_count + 1;
-                }
-                ops.draining = 0;
-                ops.expect_operand = 1;
-                0
+                    ops.draining = 0;
+                    ops.expect_operand = 1;
+                    0
+                } else {
+                    // An indexed data assignment: the index and value nodes rest on the host
+                    // stack (index below, value on top). Emit the IndexStore signal so the
+                    // host combines them into a kind-15 node; step_store_finalize then records
+                    // the IndexAssignIn statement.
+                    da.store_arg = stmt.pstmt_arg[stmt.pstmt_sp];
+                    da.store_emit = 1;
+                    ops.draining = 0;
+                    Node::IndexStore() as Word
+                } }
             } else {
                 stmt.stmt_kind[stmt.stmt_count] = Node::ExprStmt() as Word;
                 stmt.stmt_arg[stmt.stmt_count] = 0;
@@ -999,6 +1092,9 @@ fn body_step() -> Word {
     if ops.closing == 1 {
         step_closing()
     } else {
+    if da.iclosing == 1 {
+        step_iclosing()
+    } else {
     if ops.draining == 1 {
         step_draining()
     } else {
@@ -1011,6 +1107,9 @@ fn body_step() -> Word {
     if mat.match_build == 1 {
         step_match_build()
     } else {
+    if da.store_emit == 1 {
+        step_store_finalize()
+    } else {
         if ps.cursor >= toks.len {
             ops.draining = 1;
             0
@@ -1020,7 +1119,7 @@ fn body_step() -> Word {
             ps.cursor = ps.cursor + 1;
             step_body_dispatch(k, v)
         }
-    } } } } } }
+    } } } } } } } }
 }
 
 // Reset the body-walk state for a fresh function body.
@@ -1048,6 +1147,10 @@ fn arm_body() -> Word {
     mat.match_sp = 0;
     mat.match_build = 0;
     da.da_phase = 0;
+    da.idx_sp = 0;
+    da.post_index = 0;
+    da.iclosing = 0;
+    da.store_emit = 0;
     16
 }
 
