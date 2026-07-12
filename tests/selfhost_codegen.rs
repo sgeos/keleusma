@@ -3253,7 +3253,14 @@ const RC_AST_RHS: usize = RC_AST_BASE + 1 + 1024 * 3;
 const RC_AST_CALL_ARGS: usize = RC_AST_BASE + 1 + 1024 * 4;
 const RC_AST_MATCH_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 2;
 const RC_AST_LIMIT_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 3;
+const RC_AST_HEAD_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 4;
 const RC_AST_CATEGORY: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 5 + 1;
+// Multiheaded-dispatch input, appended after out_category.
+const RC_HEAD_COUNT: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 5 + 2;
+const RC_HEAD_GUARD_START: usize = RC_HEAD_COUNT + 1;
+const RC_HEAD_GUARD_LEN: usize = RC_HEAD_COUNT + 1 + 16;
+const RC_HEAD_BODY_START: usize = RC_HEAD_COUNT + 1 + 16 * 2;
+const RC_HEAD_BODY_LEN: usize = RC_HEAD_COUNT + 1 + 16 * 3;
 
 /// Drive reconstruct.kel over one function's postorder records and read back the
 /// reconstructed forest as a `Body`. This increment reads only the node arrays and
@@ -3413,5 +3420,140 @@ fn reconstruct_kel_matches_rust_for_loops_and_matches() {
     ];
     for src in cases {
         assert_reconstruct_kel_matches(src);
+    }
+}
+
+/// Drive reconstruct.kel over a group of same-named heads (a multiheaded function),
+/// feeding each head's guard and body record ranges, and read back the reconstructed
+/// multihead `Body`.
+fn reconstruct_via_kel_multihead(heads: &[&ParsedFn], pc: usize) -> Body {
+    // Concatenate every head's guard then body records, tracking the per-head offsets.
+    let mut recs: Vec<(i64, i64)> = Vec::new();
+    let mut gs = Vec::new();
+    let mut gl = Vec::new();
+    let mut bs = Vec::new();
+    let mut bl = Vec::new();
+    for h in heads {
+        gs.push(recs.len());
+        gl.push(h.guard.len());
+        recs.extend_from_slice(&h.guard);
+        bs.push(recs.len());
+        bl.push(h.body.len());
+        recs.extend_from_slice(&h.body);
+    }
+
+    let src =
+        std::fs::read_to_string("compiler/kel/reconstruct.kel").expect("read reconstruct.kel");
+    let m = compile_src(&src);
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify reconstruct.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let mut set = |vm: &mut Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
+        vm.set_shared(shared, slot, Value::Int(v)).unwrap();
+    };
+    set(&mut vm, &mut shared, RC_REC_COUNT, recs.len() as i64);
+    set(&mut vm, &mut shared, RC_IN_CATEGORY, 3);
+    set(&mut vm, &mut shared, RC_IN_PARAM, pc as i64);
+    for (i, &(k, a)) in recs.iter().enumerate() {
+        set(&mut vm, &mut shared, RC_REC_KIND + i, k);
+        set(&mut vm, &mut shared, RC_REC_ARG + i, a);
+    }
+    set(&mut vm, &mut shared, RC_HEAD_COUNT, heads.len() as i64);
+    for h in 0..heads.len() {
+        set(&mut vm, &mut shared, RC_HEAD_GUARD_START + h, gs[h] as i64);
+        set(&mut vm, &mut shared, RC_HEAD_GUARD_LEN + h, gl[h] as i64);
+        set(&mut vm, &mut shared, RC_HEAD_BODY_START + h, bs[h] as i64);
+        set(&mut vm, &mut shared, RC_HEAD_BODY_LEN + h, bl[h] as i64);
+    }
+    let node_count = match vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call")
+    {
+        VmState::Yielded(Value::Int(n)) => n as usize,
+        other => panic!("unexpected reconstruct.kel state: {other:?}"),
+    };
+    let rd = |vm: &Vm<'_, '_>, shared: &[u8], slot: usize| -> i64 {
+        match vm.get_shared(shared, slot).unwrap() {
+            Value::Int(n) => n,
+            o => panic!("expected Int at {slot}, got {o:?}"),
+        }
+    };
+    let root = rd(&vm, &shared, RC_AST_ROOT);
+    let mut nodes = Vec::with_capacity(node_count);
+    for i in 0..node_count {
+        nodes.push(Node {
+            kind: rd(&vm, &shared, RC_AST_KINDS + i),
+            arg: rd(&vm, &shared, RC_AST_ARGS + i),
+            lhs: rd(&vm, &shared, RC_AST_LHS + i),
+            rhs: rd(&vm, &shared, RC_AST_RHS + i),
+        });
+    }
+    let read_side = |vm: &Vm<'_, '_>, shared: &[u8], base: usize| -> Vec<i64> {
+        (0..64).map(|k| rd(vm, shared, base + k)).collect()
+    };
+    Body {
+        nodes,
+        call_args: read_side(&vm, &shared, RC_AST_CALL_ARGS),
+        for_parts: Vec::new(),
+        match_parts: read_side(&vm, &shared, RC_AST_MATCH_PARTS),
+        limit_parts: read_side(&vm, &shared, RC_AST_LIMIT_PARTS),
+        head_parts: read_side(&vm, &shared, RC_AST_HEAD_PARTS),
+        category: rd(&vm, &shared, RC_AST_CATEGORY),
+        root,
+    }
+}
+
+// reconstruct.kel increment 4: the multiheaded dispatch. A group of same-named
+// `yield` heads reconstructs to the same forest, head_parts entries, and MultiHead
+// root the Rust `build_multihead_bridge` builds -- each head's frame slots remapped
+// into its parameter window, guards reconstructed when present. With this
+// reconstruct.kel covers the whole grammar the bridge does.
+#[test]
+fn reconstruct_kel_matches_rust_for_multihead() {
+    let cases: &[&str] = &[
+        "yield emit(r: Word) -> Word when r > 0 { yield r } yield emit(r: Word) -> Word { yield 0 }",
+        "shared data st { pos: Word, len: Word } \
+         yield emit(r: Word) -> Word when st.pos < st.len { yield st.pos } \
+         yield emit(r: Word) -> Word { yield 62 }",
+        "yield pick(k: Word) -> Word when k > 5 { yield k * 2 } \
+         yield pick(k: Word) -> Word when k > 0 { yield k } \
+         yield pick(k: Word) -> Word { yield 0 }",
+    ];
+    for src in cases {
+        let (fns, names) = parse_functions(src);
+        // Group the last run of same-named heads (the multiheaded function).
+        let last_name = names[fns.last().unwrap().name as usize].clone();
+        let group: Vec<&ParsedFn> = fns
+            .iter()
+            .filter(|f| names[f.name as usize] == last_name)
+            .collect();
+        let pc = group[0].params;
+        let via_kel = reconstruct_via_kel_multihead(&group, pc);
+        let via_rust = build_multihead_bridge(&group, pc);
+        assert_eq!(
+            via_kel.nodes.len(),
+            via_rust.nodes.len(),
+            "node count for `{src}`"
+        );
+        for (i, (a, b)) in via_kel.nodes.iter().zip(via_rust.nodes.iter()).enumerate() {
+            assert_eq!(
+                (a.kind, a.arg, a.lhs, a.rhs),
+                (b.kind, b.arg, b.lhs, b.rhs),
+                "node {i} for `{src}`"
+            );
+        }
+        assert_eq!(via_kel.root, via_rust.root, "root for `{src}`");
+        assert_eq!(
+            via_kel.head_parts[..via_rust.head_parts.len()],
+            via_rust.head_parts[..],
+            "head_parts for `{src}`"
+        );
+        assert_eq!(
+            via_kel.match_parts[..via_rust.match_parts.len()],
+            via_rust.match_parts[..],
+            "match_parts for `{src}`"
+        );
     }
 }
