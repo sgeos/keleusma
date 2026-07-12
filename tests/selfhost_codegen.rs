@@ -1627,15 +1627,19 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize) {
 /// the value and right child the continuation. A unary operator (Not 6, Neg 10)
 /// pops its single operand into `lhs`. An If (4) pops its else, then, and cond
 /// children and takes the cond node index as its `arg` (the record's `arg` is 0).
-/// The root is the one node left on the stack. This increment covers the
-/// arithmetic, comparison, bitwise, unary, short-circuit, block, and if kinds; a
-/// record of any other kind is rejected until a later increment adds it.
+/// The root is the one node left on the stack. The data-access kinds fit the same
+/// groups: a scalar DataRead (11) is a leaf carrying its slot; a DataAssign (12)
+/// folds like a LetIn carrying its slot; and an IndexRead (13) is unary over the
+/// index, carrying `base + len*65536` in `arg`. This increment covers the
+/// arithmetic, comparison, bitwise, unary, short-circuit, block, if, and
+/// scalar/indexed-read data kinds; a record of any other kind is rejected until a
+/// later increment adds it.
 fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
     let mut nodes: Vec<Node> = Vec::new();
     let mut stack: Vec<i64> = Vec::new();
     for &(kind, arg) in records {
         let idx = match kind {
-            1 | 2 | 20 => {
+            1 | 2 | 11 | 20 => {
                 nodes.push(Node {
                     kind,
                     arg,
@@ -1644,7 +1648,7 @@ fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
                 });
                 (nodes.len() - 1) as i64
             }
-            3 | 5 | 8 | 9 | 21 => {
+            3 | 5 | 8 | 9 | 12 | 21 => {
                 let r = stack.pop().expect("binary rhs");
                 let l = stack.pop().expect("binary lhs");
                 nodes.push(Node {
@@ -1655,7 +1659,7 @@ fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
                 });
                 (nodes.len() - 1) as i64
             }
-            6 | 10 => {
+            6 | 10 | 13 => {
                 let c = stack.pop().expect("unary operand");
                 nodes.push(Node {
                     kind,
@@ -1799,6 +1803,86 @@ fn parse_into_codegen_blocks_and_control_flow_match_the_reference() {
             "fn main(a: Word) -> Word { let x = a + 1; if x < 5 { let y = x + 1; y } else { let z = x - 1; z } }",
             10,
             10,
+        ),
+    ];
+    for &(src, input, expected) in cases {
+        let (records, param_count) = parse_function_records(src);
+        let body = reconstruct_body(&records, 0);
+        let (emitted, pool, local_count) = run_codegen(&body, param_count);
+
+        let reference = compile_src(src);
+        let idx = reference
+            .chunks
+            .iter()
+            .position(|c| c.name == "main")
+            .unwrap();
+        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
+        assert_eq!(
+            local_count, reference.chunks[idx].local_count as i64,
+            "local_count for `{src}`"
+        );
+
+        let mut built = compile_src(src);
+        built.chunks[idx].ops = emitted;
+        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].local_count = local_count as u16;
+        let need = required_persistent_capacity_for(&built);
+        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+        arena.resize_persistent(need).expect("resize");
+        let mut vm = Vm::new(built, &arena).expect("verify built");
+        match vm.call(&[Value::Int(input)]).expect("call built") {
+            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
+            other => panic!("unexpected result for `{src}`: {other:?}"),
+        }
+    }
+}
+
+// The bridge over the scalar and indexed-read data-access kinds: a scalar DataRead
+// (11) and DataAssign (12), and an indexed IndexRead (13) with a constant or
+// runtime index. parse.kel resolves each field to its data-layout slot and bakes it
+// into the record, so the reconstruction needs no slot table. Same self-hosted path
+// and byte-identity check. (Indexed writes -- the IndexStore signal and IndexAssign
+// -- are a later increment.)
+#[test]
+fn parse_into_codegen_data_access_reads_match_the_reference() {
+    let cases: &[(&str, i64, i64)] = &[
+        // scalar write then read.
+        (
+            "private data d { x: Word } fn main(v: Word) -> Word { d.x = v; d.x }",
+            42,
+            42,
+        ),
+        // two scalar fields, written then read and combined.
+        (
+            "private data d { a: Word, b: Word } fn main(v: Word) -> Word { d.a = v; d.b = v + 1; d.a + d.b }",
+            20,
+            41,
+        ),
+        // a scalar write interleaved with a let, read in the tail.
+        (
+            "private data d { x: Word } fn main(v: Word) -> Word { let y = v * 2; d.x = y; d.x + 1 }",
+            20,
+            41,
+        ),
+        // indexed read with a runtime index; the array is zero-initialized, so the
+        // read yields 0 and the result is the scalar field's value. The scalar write
+        // satisfies the rule that a `private data` block must be mutated somewhere.
+        (
+            "private data d { xs: [Word; 4], n: Word } fn main(i: Word) -> Word { d.n = i; d.xs[i] + d.n }",
+            3,
+            3,
+        ),
+        // indexed read with a constant index.
+        (
+            "private data d { xs: [Word; 4], n: Word } fn main(v: Word) -> Word { d.n = v; d.xs[2] + d.n }",
+            9,
+            9,
+        ),
+        // an indexed read used in arithmetic in the tail.
+        (
+            "private data d { xs: [Word; 4], n: Word } fn main(i: Word) -> Word { d.n = 7; d.xs[i] + d.n }",
+            1,
+            7,
         ),
     ];
     for &(src, input, expected) in cases {
