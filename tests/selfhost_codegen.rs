@@ -1673,10 +1673,40 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
 /// it (the multiheaded dispatch and its head_parts remain).
 fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
     let mut nodes: Vec<Node> = Vec::new();
-    let mut stack: Vec<i64> = Vec::new();
     let mut call_args: Vec<i64> = Vec::new();
     let mut limit_parts: Vec<i64> = Vec::new();
     let mut match_parts: Vec<i64> = Vec::new();
+    let root = reconstruct_into(
+        records,
+        &mut nodes,
+        &mut call_args,
+        &mut limit_parts,
+        &mut match_parts,
+    );
+    Body {
+        nodes,
+        call_args,
+        for_parts: Vec::new(),
+        match_parts,
+        limit_parts,
+        head_parts: Vec::new(),
+        category,
+        root,
+    }
+}
+
+/// Reconstruct one postorder record forest into the shared `nodes` array (and the
+/// shared side arrays), returning the root node index. Node indices are absolute in
+/// `nodes`, so several forests -- a multihead's per-head guards and bodies -- can be
+/// reconstructed into one array and referenced by `head_parts`.
+fn reconstruct_into(
+    records: &[(i64, i64)],
+    nodes: &mut Vec<Node>,
+    call_args: &mut Vec<i64>,
+    limit_parts: &mut Vec<i64>,
+    match_parts: &mut Vec<i64>,
+) -> i64 {
+    let mut stack: Vec<i64> = Vec::new();
     let mut pending_slots: Vec<i64> = Vec::new();
     for &(kind, arg) in records {
         // A SlotRecord (32) carries a frame slot for the pending `for` loop, and a
@@ -1842,16 +1872,7 @@ fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
         stack.push(idx);
     }
     assert_eq!(stack.len(), 1, "exactly one root node remains");
-    Body {
-        nodes,
-        call_args,
-        for_parts: Vec::new(),
-        match_parts,
-        limit_parts,
-        head_parts: Vec::new(),
-        category,
-        root: stack[0],
-    }
+    stack[0]
 }
 
 // The whole self-hosted front-to-back path for the arithmetic node kinds: lexer.kel
@@ -2472,4 +2493,241 @@ fn parse_into_codegen_combined_constructs_match_the_reference() {
             other => panic!("unexpected result for `{src}`: {other:?}"),
         }
     }
+}
+
+/// A parsed function from the record stream: parser category (1 fn, 2 yield, 3 loop),
+/// name id, value-parameter count, and the postorder records of its `when` guard (empty
+/// when unguarded) and its body.
+struct ParsedFn {
+    cat: i64,
+    name: i64,
+    params: usize,
+    guard: Vec<(i64, i64)>,
+    body: Vec<(i64, i64)>,
+}
+
+/// Drive lexer.kel then parse.kel over `src` and return every function it yields, each
+/// with its guard and body records, plus the interned-name table. Multiheaded functions
+/// appear as several same-named entries in declaration order.
+fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>) {
+    let (tokens, names) = br_lex(src);
+    let id_of = |s: &str| {
+        names
+            .iter()
+            .position(|n| n == s)
+            .map(|i| i as i64)
+            .unwrap_or(-1)
+    };
+    let chunks = br_chunks(&tokens);
+    let module = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| compile_src(&std::fs::read_to_string("compiler/kel/parse.kel").expect("read")))
+        .expect("spawn")
+        .join()
+        .expect("join");
+    let need = required_persistent_capacity_for(&module);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(module, &arena).expect("verify parse.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.set_shared(&mut shared, BR_P_LEN, Value::Int(tokens.len() as i64))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_LIMIT_ID, Value::Int(id_of("limit")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_REQUIRE_ID, Value::Int(id_of("require")))
+        .unwrap();
+    vm.set_shared(
+        &mut shared,
+        BR_P_CHUNK_COUNT,
+        Value::Int(chunks.len() as i64),
+    )
+    .unwrap();
+    for (i, &c) in chunks.iter().enumerate() {
+        vm.set_shared(&mut shared, BR_P_CHUNKS + i, Value::Int(c))
+            .unwrap();
+    }
+    for (i, &(k, v)) in tokens.iter().enumerate() {
+        vm.set_shared(&mut shared, BR_P_KINDS + i, Value::Int(k))
+            .unwrap();
+        vm.set_shared(&mut shared, BR_P_VALS + i, Value::Int(v))
+            .unwrap();
+    }
+
+    let mut fns: Vec<ParsedFn> = Vec::new();
+    let mut cur: Option<ParsedFn> = None;
+    let (mut in_body, mut in_guard, mut in_data, mut in_enum, mut in_use) =
+        (false, false, false, false, false);
+    let mut state = vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call");
+    for _ in 0..(tokens.len() * 4 + 64) {
+        if let VmState::Yielded(Value::Int(w)) = state {
+            let (code, val) = (w.rem_euclid(64), w.div_euclid(64));
+            if in_body {
+                match code {
+                    0 => {}
+                    15 => in_body = false,
+                    _ => cur.as_mut().unwrap().body.push((code, val)),
+                }
+            } else if in_guard {
+                match code {
+                    0 => {}
+                    15 => in_guard = false,
+                    _ => cur.as_mut().unwrap().guard.push((code, val)),
+                }
+            } else if in_data {
+                in_data = code != 5;
+            } else if in_enum {
+                in_enum = code != 5;
+            } else if in_use {
+                in_use = code != 5;
+            } else {
+                match code {
+                    1..=3 => {
+                        cur = Some(ParsedFn {
+                            cat: code,
+                            name: val,
+                            params: 0,
+                            guard: Vec::new(),
+                            body: Vec::new(),
+                        })
+                    }
+                    4 => cur.as_mut().unwrap().params += 1,
+                    9 => in_data = true,
+                    10 => in_use = true,
+                    12 => in_enum = true,
+                    16 => in_body = true,
+                    17 => in_guard = true,
+                    5 => fns.push(cur.take().unwrap()),
+                    15 => return (fns, names),
+                    _ => {}
+                }
+            }
+        }
+        state = vm
+            .resume_with_shared(&mut shared, Value::Int(0))
+            .expect("resume");
+    }
+    panic!("parse.kel did not reach DONE");
+}
+
+/// Combine the heads of a multiheaded function into the codegen Body codegen.kel's
+/// multihead dispatch consumes. Each head's guard and body are reconstructed into one
+/// shared node array, its frame slots remapped by the head's `param_start` -- the heads'
+/// parameter copies occupy `(i+1)*pc .. (i+2)*pc` (this covers heads whose only frame
+/// slots are the parameters; heads with their own lets or loops need the additional
+/// per-head temp offset, a later refinement). Each head contributes a four-word
+/// head_parts entry (param_start, guarded, guard node, body node), and a MultiHead node
+/// (kind 25, rhs = head count) is the root; the category is 3.
+fn build_multihead_bridge(heads: &[&ParsedFn], pc: usize) -> Body {
+    let mut nodes: Vec<Node> = Vec::new();
+    let mut call_args: Vec<i64> = Vec::new();
+    let mut limit_parts: Vec<i64> = Vec::new();
+    let mut match_parts: Vec<i64> = Vec::new();
+    let mut head_parts: Vec<i64> = Vec::new();
+    let mut entries: Vec<(i64, i64, i64, i64)> = Vec::new();
+    for (i, h) in heads.iter().enumerate() {
+        let base = ((i + 1) * pc) as i64;
+        // Remap frame-slot references (Local) into this head's parameter window.
+        let remap = |recs: &[(i64, i64)]| -> Vec<(i64, i64)> {
+            recs.iter()
+                .map(|&(k, a)| if k == 2 { (k, a + base) } else { (k, a) })
+                .collect()
+        };
+        let (guarded, guard_node) = if h.guard.is_empty() {
+            (0i64, 0i64)
+        } else {
+            let g = remap(&h.guard);
+            let root = reconstruct_into(
+                &g,
+                &mut nodes,
+                &mut call_args,
+                &mut limit_parts,
+                &mut match_parts,
+            );
+            (1i64, root)
+        };
+        let b = remap(&h.body);
+        let body_node = reconstruct_into(
+            &b,
+            &mut nodes,
+            &mut call_args,
+            &mut limit_parts,
+            &mut match_parts,
+        );
+        entries.push((base, guarded, guard_node, body_node));
+    }
+    for (ps, g, gn, bn) in &entries {
+        head_parts.push(*ps);
+        head_parts.push(*g);
+        head_parts.push(*gn);
+        head_parts.push(*bn);
+    }
+    nodes.push(Node {
+        kind: 25,
+        arg: 0,
+        lhs: 0,
+        rhs: heads.len() as i64,
+    });
+    let root = (nodes.len() - 1) as i64;
+    Body {
+        nodes,
+        call_args,
+        for_parts: Vec::new(),
+        match_parts,
+        limit_parts,
+        head_parts,
+        category: 3,
+        root,
+    }
+}
+
+/// Reconstruct the multiheaded function named `head_name` in `src` from the record stream
+/// and assert its emitted ops are byte-identical to the Rust compiler's single chunk.
+fn assert_multihead_matches(src: &str, head_name: &str) {
+    let (fns, names) = parse_functions(src);
+    let heads: Vec<&ParsedFn> = fns
+        .iter()
+        .filter(|f| names[f.name as usize] == head_name)
+        .collect();
+    assert!(heads.len() >= 2, "a multihead has at least two heads");
+    let pc = heads[0].params;
+    let body = build_multihead_bridge(&heads, pc);
+    let (emitted, _pool, _lc) = run_codegen(&body, pc);
+    let reference = compile_src(src);
+    let ops = reference
+        .chunks
+        .iter()
+        .find(|c| c.name == head_name)
+        .expect("head chunk")
+        .ops
+        .clone();
+    assert_eq!(emitted, ops, "multihead ops for `{src}`");
+}
+
+// The final reconstruction kind: the multiheaded dispatch. parse.kel emits each head as a
+// separate declaration with its guard and body forests; the host groups the same-named
+// heads, reconstructs them into one node array with per-head slot remapping, and assembles
+// the head_parts side array with a MultiHead root. The emitted ops must be byte-identical
+// to the Rust compiler's single chunk.
+#[test]
+fn parse_into_codegen_multihead_matches_the_reference() {
+    // Parameter-referencing guards and simple yield bodies.
+    assert_multihead_matches(
+        "yield g(r: Word) -> Word when r == 0 { yield r } \
+         yield g(r: Word) -> Word when r > 5 { yield r } \
+         yield g(r: Word) -> Word { yield 0 } \
+         loop main(r: Word) -> Word { g(r) }",
+        "g",
+    );
+    // Data-field guards and data-read bodies, the shape codegen.kel's own `emit_next`
+    // dispatch uses: the data reads resolve to shared data slots (not frame slots), so
+    // they pass through the per-head slot remapping untouched.
+    assert_multihead_matches(
+        "shared data st { pos: Word, len: Word } \
+         yield emit(r: Word) -> Word when st.pos < st.len { yield st.pos } \
+         yield emit(r: Word) -> Word { yield 0 } \
+         loop main(r: Word) -> Word { emit(r) }",
+        "emit",
+    );
 }
