@@ -1,6 +1,7 @@
-//! Stage 2 parser (`compiler/kel/parser.kel`), increment 8: the function signature
+//! Stage 2 parser (`compiler/kel/parser.kel`), increment 9: the function signature
 //! (including array types), the shared, private, and const `data` block declaration,
-//! and the bare `use path::name` native import, streamed as a per-declaration record.
+//! the bare `use path::name` native import, and the `enum` declaration with explicit or
+//! implicit variant discriminants, streamed as a per-declaration record.
 //!
 //! A throwaway adapter maps the reference tokenizer's output into the parser
 //! stage's `(kind, value)` token stream, the Keleusma `loop` consumes it one token
@@ -14,7 +15,9 @@
 //! that consumes a nested array, tuple, or struct initializer whole) and emits
 //! nothing this increment. A use import is a `USTART` element, then one `UPATH` per
 //! `::`-separated path segment, then `END`; the last segment is the imported name and
-//! the rest the module path. A `PTYPE` or `RETTYPE` naming an array element is
+//! the rest the module path. An enum is an `ENUMSTART` element (its name), then per
+//! variant an `EVARIANT` (its name) and an optional `EDISC` (an explicit `= N`
+//! discriminant), then `END`. A `PTYPE` or `RETTYPE` naming an array element is
 //! immediately followed by an `ASIZE` carrying the literal length, so the host
 //! reconstructs `[T; N]`. The element type is a simple named type and the length a
 //! literal this increment; an arbitrarily nested element, a const length, the other
@@ -88,6 +91,7 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
             TokenKind::RBracket => (18, 0),
             TokenKind::Use => (19, 0),
             TokenKind::ColonColon => (20, 0),
+            TokenKind::Enum => (21, 0),
             TokenKind::Eof => continue,
             _ => (4, 0),
         };
@@ -118,6 +122,10 @@ type DataBlock = (i64, i64, Vec<(i64, TypeRepr)>);
 /// A parsed `use` native import: the module path segment ids and the imported name
 /// id, mirroring the reference `UseDecl`'s `path` and `import` name.
 type UseImport = (Vec<i64>, i64);
+/// An enum declaration: the name id, then each variant as (name id, explicit
+/// discriminant), where the discriminant is `Some(n)` for an explicit `= n` clause and
+/// `None` for an implicit one.
+type EnumBlock = (i64, Vec<(i64, Option<i64>)>);
 
 /// Everything the parser yields, in the collections the reference AST keeps them in:
 /// function declarations, data block declarations, and use imports.
@@ -126,6 +134,7 @@ struct Parsed {
     funcs: Vec<Decl>,
     data: Vec<DataBlock>,
     uses: Vec<UseImport>,
+    enums: Vec<EnumBlock>,
 }
 
 /// Which type an `ASIZE` element upgrades to an array: the last parameter's type, or
@@ -145,6 +154,7 @@ enum Cur {
     Func(Decl),
     Data(DataBlock),
     Use(Vec<i64>),
+    Enum(EnumBlock),
 }
 
 impl Cur {
@@ -154,18 +164,33 @@ impl Cur {
             Cur::Func(d) => &mut d.2,
             Cur::Data(d) => &mut d.2,
             Cur::Use(_) => panic!("a use import has no field list"),
+            Cur::Enum(_) => panic!("an enum has no field list"),
         }
     }
 }
 
 /// Drive the parser stage over `src`, decoding the record stream into the function
 /// and data block declarations, each in source order within its kind.
+/// Compile `parser.kel` on a wide-stack thread. The stage's deeply nested mode machine
+/// makes the host compiler's recursive-descent parse of it exceed the default
+/// test-thread stack; a wider stack keeps the driver robust as the stage grows.
+fn compile_parser_stage() -> keleusma::bytecode::Module {
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| {
+            let stage =
+                std::fs::read_to_string("compiler/kel/parser.kel").expect("read parser.kel");
+            compile(&parse(&tokenize(&stage).expect("lex parser.kel")).expect("parse parser.kel"))
+                .expect("compile parser.kel")
+        })
+        .expect("spawn")
+        .join()
+        .expect("join")
+}
+
 fn run_parser(src: &str, names: &mut Vec<String>) -> Parsed {
     let (kinds, vals) = adapt_tokens(src, names);
-    let stage = std::fs::read_to_string("compiler/kel/parser.kel").expect("read parser.kel");
-    let module =
-        compile(&parse(&tokenize(&stage).expect("lex parser.kel")).expect("parse parser.kel"))
-            .expect("compile parser.kel");
+    let module = compile_parser_stage();
     let need = required_persistent_capacity_for(&module);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
@@ -216,6 +241,24 @@ fn run_parser(src: &str, names: &mut Vec<String>) -> Parsed {
                         // UPATH: one path segment of the current use import.
                         Cur::Use(segments) => segments.push(val),
                         _ => panic!("UPATH outside a use import"),
+                    },
+                    12 => {
+                        // ENUMSTART: an enum declaration; val is the name id.
+                        cur = Some(Cur::Enum((val, Vec::new())));
+                        arr_target = ArrTarget::None;
+                    }
+                    13 => match cur.as_mut().expect("EVARIANT before ENUMSTART") {
+                        // EVARIANT: a variant name, discriminant implicit unless an EDISC
+                        // follows.
+                        Cur::Enum((_, variants)) => variants.push((val, None)),
+                        _ => panic!("EVARIANT outside an enum"),
+                    },
+                    14 => match cur.as_mut().expect("EDISC before ENUMSTART") {
+                        // EDISC: an explicit discriminant for the most recent variant.
+                        Cur::Enum((_, variants)) => {
+                            variants.last_mut().expect("EDISC before EVARIANT").1 = Some(val);
+                        }
+                        _ => panic!("EDISC outside an enum"),
                     },
                     4 => cur
                         .as_mut()
@@ -270,6 +313,7 @@ fn run_parser(src: &str, names: &mut Vec<String>) -> Parsed {
                     5 => match cur.take().expect("END before START/DSTART/USTART") {
                         Cur::Func(d) => parsed.funcs.push(d),
                         Cur::Data(d) => parsed.data.push(d),
+                        Cur::Enum(e) => parsed.enums.push(e),
                         Cur::Use(mut segments) => {
                             // The last segment is the imported name; the rest is the path.
                             let name = segments.pop().expect("use import has a name");
@@ -399,7 +443,27 @@ fn reference(src: &str, names: &[String]) -> Parsed {
             (path, name)
         })
         .collect();
-    Parsed { funcs, data, uses }
+    let enums = program
+        .types
+        .iter()
+        .filter_map(|t| match t {
+            keleusma::ast::TypeDef::Enum(ed) => {
+                let variants = ed
+                    .variants
+                    .iter()
+                    .map(|vd| (id_of(&vd.name), vd.explicit_discriminant))
+                    .collect();
+                Some((id_of(&ed.name), variants))
+            }
+            _ => None,
+        })
+        .collect();
+    Parsed {
+        funcs,
+        data,
+        uses,
+        enums,
+    }
 }
 
 // A single function: the parser recognises one declaration and yields its name.
@@ -643,4 +707,60 @@ fn use_imports_are_recognised() {
     assert_eq!(got.uses[0], (vec![id("audio")], id("play_note")));
     // `use game::world::spawn`: path [game, world], name spawn.
     assert_eq!(got.uses[1], (vec![id("game"), id("world")], id("spawn")));
+}
+
+#[test]
+fn enum_declarations_are_recognised() {
+    let src = "enum Tok { Fn = 0, Ident = 1, Plus = 21 } \
+        fn use_it(k: Word) -> Word { k } \
+        enum Color { Red, Green, Blue }";
+    let mut names = Vec::new();
+    let got = run_parser(src, &mut names);
+    let want = reference(src, &names);
+    assert_eq!(got, want);
+    let id = |s: &str| names.iter().position(|n| n == s).unwrap() as i64;
+    // Two enum declarations, in source order, and the function between them.
+    assert_eq!(got.funcs.len(), 1);
+    assert_eq!(got.enums.len(), 2);
+    // `enum Tok` with explicit discriminants.
+    assert_eq!(
+        got.enums[0],
+        (
+            id("Tok"),
+            vec![
+                (id("Fn"), Some(0)),
+                (id("Ident"), Some(1)),
+                (id("Plus"), Some(21)),
+            ]
+        )
+    );
+    // `enum Color` with implicit discriminants (no `= n` clauses).
+    assert_eq!(
+        got.enums[1],
+        (
+            id("Color"),
+            vec![(id("Red"), None), (id("Green"), None), (id("Blue"), None)]
+        )
+    );
+}
+
+#[test]
+fn enum_mixes_explicit_and_implicit_discriminants() {
+    let src = "enum Status { Ok = 0, Busy, Err = 5 }";
+    let mut names = Vec::new();
+    let got = run_parser(src, &mut names);
+    let want = reference(src, &names);
+    assert_eq!(got, want);
+    let id = |s: &str| names.iter().position(|n| n == s).unwrap() as i64;
+    assert_eq!(
+        got.enums[0],
+        (
+            id("Status"),
+            vec![
+                (id("Ok"), Some(0)),
+                (id("Busy"), None),
+                (id("Err"), Some(5))
+            ]
+        )
+    );
 }

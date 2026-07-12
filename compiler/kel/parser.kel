@@ -93,6 +93,9 @@
 //   dkind 9        DSTART; a data block; val = name*4 + visibility (0 shared, 1 private, 2 const)
 //   dkind 10       USTART; a `use` native import declaration begins
 //   dkind 11       UPATH; one `::`-separated path segment of a use; val = its name id
+//   dkind 12       ENUMSTART; an enum declaration begins; val = its name id
+//   dkind 13       EVARIANT; one enum variant; val = its name id
+//   dkind 14       EDISC; the explicit discriminant of the most recent variant; val = it
 //   dkind 15       DONE; the token stream is exhausted, no further declarations
 // A function declaration is START, then for each value parameter a PARAM followed by
 // its PTYPE, then a RETTYPE, then END. A data block declaration is DSTART, then for
@@ -154,6 +157,65 @@ private data ps {
     depth: Word,
 }
 
+// The enum declaration modes, extracted from the mode machine so its if-else nesting
+// stays under the parser's recursion-depth limit. Returns the record word to yield and
+// advances ps.mode: mode 9 emits ENUMSTART (dkind 12, the enum name), mode 10 awaits the
+// `{`, mode 11 emits an EVARIANT (dkind 13, a variant name) or ends the enum with END
+// (dkind 5) on `}`, mode 12 opens an explicit discriminant on `=`, begins the next
+// variant on `,`, or ends on `}`, and mode 13 emits an EDISC (dkind 14) for the
+// discriminant literal.
+fn step_enum_decl(k: Word, v: Word) -> Word {
+    if ps.mode == 9 {
+        if k == 1 {
+            ps.mode = 10;
+            12 + v * 16
+        } else {
+            0
+        }
+    } else {
+    if ps.mode == 10 {
+        if k == 2 {
+            ps.mode = 11;
+        }
+        0
+    } else {
+    if ps.mode == 11 {
+        if k == 1 {
+            ps.mode = 12;
+            13 + v * 16
+        } else {
+        if k == 3 {
+            ps.mode = 0;
+            5
+        } else {
+            0
+        } }
+    } else {
+    if ps.mode == 12 {
+        if k == 17 {
+            ps.mode = 13;
+            0
+        } else {
+        if k == 10 {
+            ps.mode = 11;
+            0
+        } else {
+        if k == 3 {
+            ps.mode = 0;
+            5
+        } else {
+            0
+        } } }
+    } else {
+        if k == 12 {
+            ps.mode = 12;
+            14 + v * 16
+        } else {
+            0
+        }
+    } } } }
+}
+
 loop main(resume: Word) -> Word {
     if ps.cursor >= toks.len {
         // The stream is exhausted. A `use` declaration has no closing delimiter, so
@@ -194,6 +256,11 @@ loop main(resume: Word) -> Word {
                 ps.mode = 5;
                 yield 0
             } else {
+            if k == 21 {
+                // `enum`; an enum declaration. The name follows in mode 9.
+                ps.mode = 9;
+                yield 0
+            } else {
             if k == 19 {
                 // `use`; a native import declaration. Emit USTART and scan the path.
                 ps.mode = 8;
@@ -209,7 +276,12 @@ loop main(resume: Word) -> Word {
                 } }
                 ps.mode = 1;
                 yield 0
-            } } } } }
+            } } } } } }
+        } else {
+        if ps.mode >= 9 andalso ps.mode <= 13 {
+            // The enum declaration modes are handled in a helper so the mode machine's
+            // if-else nesting stays under the parser's recursion-depth limit.
+            yield step_enum_decl(k, v)
         } else {
         if ps.mode == 1 {
             // The declaration name (kind 1 ident); emit START and begin the
@@ -498,5 +570,6 @@ loop main(resume: Word) -> Word {
         }
         } } } }
         } } }
+        }
     }
 }
