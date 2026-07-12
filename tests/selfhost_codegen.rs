@@ -1645,14 +1645,54 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize) {
 /// the count as `rhs`. An indexed write pairs an IndexStore signal (36), which
 /// folds the value and index into a kind-15 node (value in lhs, index in rhs),
 /// with an IndexAssign (14) that folds like a LetIn carrying `base + len*65536`.
-/// This increment covers the arithmetic, comparison, bitwise, unary, short-circuit,
-/// block, if, scalar and indexed data-access, and call kinds; a record of any other
-/// kind is rejected until a later increment adds it.
+/// A `for .. limit` loop streams its start, end, body, and the four literals cap/
+/// 0/1/2 as nodes, then five SlotRecords (32) carrying its frame slots, then a
+/// ForBuild (33) that assembles the 12-word limit_parts entry (the five slots then
+/// the start, end, body, cap, 0, 1, 2 node indices); the ForLimit statement (23)
+/// folds into the block popping only the continuation. This increment covers the
+/// arithmetic, comparison, bitwise, unary, short-circuit, block, if, scalar and
+/// indexed data-access, call, and for-limit kinds; a record of any other kind is
+/// rejected until a later increment adds it.
 fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
     let mut nodes: Vec<Node> = Vec::new();
     let mut stack: Vec<i64> = Vec::new();
     let mut call_args: Vec<i64> = Vec::new();
+    let mut limit_parts: Vec<i64> = Vec::new();
+    let mut pending_slots: Vec<i64> = Vec::new();
     for &(kind, arg) in records {
+        // A SlotRecord (32) carries a frame slot for the pending `for` loop, and a
+        // ForBuild (33) assembles the 12-word limit_parts entry from the five
+        // collected slots and the seven loop nodes on the stack. Neither is a node.
+        if kind == 32 {
+            pending_slots.push(arg);
+            continue;
+        }
+        if kind == 33 {
+            let two = stack.pop().expect("for two");
+            let one = stack.pop().expect("for one");
+            let zero = stack.pop().expect("for zero");
+            let cap = stack.pop().expect("for cap");
+            let body = stack.pop().expect("for body");
+            let end = stack.pop().expect("for end");
+            let start = stack.pop().expect("for start");
+            assert_eq!(pending_slots.len(), 5, "a for loop has five SlotRecords");
+            limit_parts.extend([
+                pending_slots[0],
+                pending_slots[1],
+                pending_slots[2],
+                pending_slots[3],
+                pending_slots[4],
+                start,
+                end,
+                body,
+                cap,
+                zero,
+                one,
+                two,
+            ]);
+            pending_slots.clear();
+            continue;
+        }
         let idx = match kind {
             1 | 2 | 11 | 20 => {
                 nodes.push(Node {
@@ -1686,6 +1726,19 @@ fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
                     arg: 0,
                     lhs: value,
                     rhs: index,
+                });
+                (nodes.len() - 1) as i64
+            }
+            23 => {
+                // ForLimit statement: arg is the limit_parts entry start (already
+                // assembled at the ForBuild). It folds into the block popping only
+                // the continuation; its lhs is unused.
+                let cont = stack.pop().expect("forlimit continuation");
+                nodes.push(Node {
+                    kind: 23,
+                    arg,
+                    lhs: 0,
+                    rhs: cont,
                 });
                 (nodes.len() - 1) as i64
             }
@@ -1741,7 +1794,7 @@ fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
         call_args,
         for_parts: Vec::new(),
         match_parts: Vec::new(),
-        limit_parts: Vec::new(),
+        limit_parts,
         head_parts: Vec::new(),
         category,
         root: stack[0],
@@ -2055,6 +2108,63 @@ fn parse_into_codegen_indexed_writes_match_the_reference() {
             "private data d { xs: [Word; 4] } fn main(v: Word) -> Word { d.xs[0] = v; d.xs[1] = v + 1; d.xs[0] + d.xs[1] }",
             20,
             41,
+        ),
+    ];
+    for &(src, input, expected) in cases {
+        let (records, param_count) = parse_function_records(src);
+        let body = reconstruct_body(&records, 0);
+        let (emitted, pool, local_count) = run_codegen(&body, param_count);
+
+        let reference = compile_src(src);
+        let idx = reference
+            .chunks
+            .iter()
+            .position(|c| c.name == "main")
+            .unwrap();
+        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
+        assert_eq!(
+            local_count, reference.chunks[idx].local_count as i64,
+            "local_count for `{src}`"
+        );
+
+        let mut built = compile_src(src);
+        built.chunks[idx].ops = emitted;
+        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].local_count = local_count as u16;
+        let need = required_persistent_capacity_for(&built);
+        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+        arena.resize_persistent(need).expect("resize");
+        let mut vm = Vm::new(built, &arena).expect("verify built");
+        match vm.call(&[Value::Int(input)]).expect("call built") {
+            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
+            other => panic!("unexpected result for `{src}`: {other:?}"),
+        }
+    }
+}
+
+// The bridge over the bounded `for .. limit` loop: the first construct whose
+// reconstruction consumes SlotRecords and a build signal to assemble a fixed-size
+// side-array entry (limit_parts). Same self-hosted path and byte-identity check.
+#[test]
+fn parse_into_codegen_for_limit_matches_the_reference() {
+    let cases: &[(&str, i64, i64)] = &[
+        // runtime range with a static cap, accumulating into a scalar field.
+        (
+            "private data d { s: Word } fn main(n: Word) -> Word { for i in 0..n limit 8 { d.s = d.s + i; } d.s }",
+            4,
+            6,
+        ),
+        // writing each array element by its index in the loop.
+        (
+            "private data d { xs: [Word; 8] } fn main(n: Word) -> Word { for i in 0..n limit 8 { d.xs[i] = i * 2; } d.xs[3] }",
+            4,
+            6,
+        ),
+        // a let before the loop, the loop accumulating a constant.
+        (
+            "private data d { s: Word } fn main(v: Word) -> Word { let base = v; for i in 0..3 limit 8 { d.s = d.s + base; } d.s }",
+            10,
+            30,
         ),
     ];
     for &(src, input, expected) in cases {
