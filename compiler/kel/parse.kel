@@ -24,6 +24,8 @@ shared data toks {
     kinds: [Word; 2048],
     vals: [Word; 2048],
     limit_id: Word,
+    chunk_count: Word,
+    chunks: [Word; 256],
 }
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
@@ -84,6 +86,7 @@ enum Node {
     If = 4,
     LetIn = 5,
     Not = 6,
+    Call = 7,
     DataRead = 11,
     DataAssignIn = 12,
     IndexRead = 13,
@@ -124,6 +127,7 @@ enum OpCode {
     Andalso = 18,
     Orelse = 19,
     IndexMark = 20,
+    CallMark = 21,
     YieldMark = 22,
 }
 
@@ -275,6 +279,19 @@ private data da {
     store_arg: Word,
 }
 
+// A function call context stack: `call_chunk`/`call_count` per pending call (the callee's
+// chunk index and a running argument count), `call_sp` the nesting depth, `call_pending`
+// the just-read callee name awaiting its `(`, `call_phase` that await, `cdraining` the
+// per-argument operator drain at each `,`.
+private data call {
+    call_chunk: [Word; 8],
+    call_count: [Word; 8],
+    call_sp: Word,
+    call_pending: Word,
+    call_phase: Word,
+    cdraining: Word,
+}
+
 // Resolve an identifier to its frame slot: the `let` bindings first (most recent wins),
 // then the parameters.
 fn step_local(v: Word) -> Word {
@@ -297,9 +314,21 @@ fn step_local(v: Word) -> Word {
     Node::Local() as Word + ps.found * 64
 }
 
-// An identifier in operand position: a data-block name opens a `data.field` read; any
-// other identifier is a Local (a `let` binding or a parameter).
+// An identifier in operand position: a chunk (function) name opens a call, a data-block
+// name a `data.field` read; any other identifier is a Local (a `let` binding or a
+// parameter).
 fn step_ident(v: Word) -> Word {
+    ps.found_flag = 0;
+    for i in 0..toks.chunk_count limit 256 {
+        if toks.chunks[i] == v {
+            call.call_pending = i;
+            ps.found_flag = 1;
+        }
+    }
+    if ps.found_flag == 1 {
+        call.call_phase = 1;
+        0
+    } else {
     ps.found_flag = 0;
     for i in 0..fields.field_count limit 64 {
         if fields.fdata[i] == v {
@@ -312,7 +341,7 @@ fn step_ident(v: Word) -> Word {
         0
     } else {
         step_local(v)
-    }
+    } }
 }
 
 // The data-field name: resolve `da_data.field` to its element-0 slot and length in the
@@ -477,15 +506,47 @@ fn step_resolving() -> Word {
     }
 }
 
+// A `)`: flush the operators above the marker. A parenthesis marker is discarded; a call
+// marker counts the last argument (when one is present) and emits the Call.
 fn step_closing() -> Word {
-    if ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] != OpCode::Paren() as Word {
+    if ops.opsp > 0 {
+        let top = ops.opstack[ops.opsp - 1];
+        if top == OpCode::Paren() as Word {
+            ops.opsp = ops.opsp - 1;
+            ops.closing = 0;
+            ops.expect_operand = 0;
+            0
+        } else {
+        if top == OpCode::CallMark() as Word {
+            ops.opsp = ops.opsp - 1;
+            ops.closing = 0;
+            if ops.expect_operand == 0 {
+                call.call_count[call.call_sp - 1] = call.call_count[call.call_sp - 1] + 1;
+            }
+            call.call_sp = call.call_sp - 1;
+            ops.expect_operand = 0;
+            Node::Call() as Word + (call.call_chunk[call.call_sp] + call.call_count[call.call_sp] * 256) * 64
+        } else {
+            ops.opsp = ops.opsp - 1;
+            emit_op(top)
+        } }
+    } else {
+        ops.closing = 0;
+        0
+    }
+}
+
+// A `,`: flush the current call argument's operators down to the call marker, then count
+// the argument.
+fn step_cdraining() -> Word {
+    if ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] != OpCode::CallMark() as Word {
         ops.opsp = ops.opsp - 1;
         let op = ops.opstack[ops.opsp];
         emit_op(op)
     } else {
-        ops.opsp = ops.opsp - 1;
-        ops.closing = 0;
-        ops.expect_operand = 0;
+        call.cdraining = 0;
+        call.call_count[call.call_sp - 1] = call.call_count[call.call_sp - 1] + 1;
+        ops.expect_operand = 1;
         0
     }
 }
@@ -828,8 +889,12 @@ fn step_normal(k: Word, v: Word) -> Word {
         da.iclosing = 1;
         0
     } else {
+    if k == Tok::Comma() as Word {
+        call.cdraining = 1;
+        0
+    } else {
         step_op(k)
-    } } } } } }
+    } } } } } } }
 }
 
 // The normal parse-phase dispatch: a `let` binding's name or `=`, else an expression
@@ -864,11 +929,24 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
     if da.da_phase == 3 {
         step_daindex(k)
     } else {
+    if call.call_phase == 1 {
+        // A call name was read; the `(` opens the argument list.
+        if k == Tok::LParen() as Word {
+            call.call_chunk[call.call_sp] = call.call_pending;
+            call.call_count[call.call_sp] = 0;
+            call.call_sp = call.call_sp + 1;
+            ops.opstack[ops.opsp] = OpCode::CallMark() as Word;
+            ops.opsp = ops.opsp + 1;
+            call.call_phase = 0;
+            ops.expect_operand = 1;
+        }
+        0
+    } else {
     if forst.for_phase >= 1 andalso forst.for_phase <= 6 {
         step_forheader(k, v)
     } else {
         step_normal(k, v)
-    } } } } } }
+    } } } } } } }
 }
 
 // Dispatch a body token: the else-less `if` synthesis and the block-form-statement commit
@@ -1095,6 +1173,9 @@ fn body_step() -> Word {
     if da.iclosing == 1 {
         step_iclosing()
     } else {
+    if call.cdraining == 1 {
+        step_cdraining()
+    } else {
     if ops.draining == 1 {
         step_draining()
     } else {
@@ -1119,7 +1200,7 @@ fn body_step() -> Word {
             ps.cursor = ps.cursor + 1;
             step_body_dispatch(k, v)
         }
-    } } } } } } } }
+    } } } } } } } } }
 }
 
 // Reset the body-walk state for a fresh function body.
@@ -1151,6 +1232,9 @@ fn arm_body() -> Word {
     da.post_index = 0;
     da.iclosing = 0;
     da.store_emit = 0;
+    call.call_sp = 0;
+    call.call_phase = 0;
+    call.cdraining = 0;
     16
 }
 
