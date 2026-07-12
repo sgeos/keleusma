@@ -3232,6 +3232,32 @@ fn self_host_compiles_parse_kel_byte_identically() {
     }
 }
 
+// reconstruct.kel, the reconstruction stage, self-compiled: every chunk is emitted by
+// the self-hosted pipeline (which itself now runs through reconstruct.kel) byte-
+// identically to the Rust-hosted compiler. reconstruct.kel reconstructing its own
+// source is the fourth stage-file self-compile, so every Keleusma source in the
+// compiler self-compiles. It stays within the bridged grammar (fn/loop, if/else,
+// `orelse`, nested `for .. limit`, shared and private data with indexed access, and
+// helper calls -- no match, enum, struct, or generic), and is the smallest stage.
+#[test]
+fn self_host_compiles_reconstruct_kel_byte_identically() {
+    let src =
+        std::fs::read_to_string("compiler/kel/reconstruct.kel").expect("read reconstruct.kel");
+    let module = self_host_compile(&src);
+    let reference = compile_src(&src);
+    assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");
+    for (m, r) in module.chunks.iter().zip(reference.chunks.iter()) {
+        assert_eq!(m.name, r.name, "chunk order");
+        assert_eq!(m.ops, r.ops, "ops for chunk `{}`", r.name);
+        assert_eq!(m.constants, r.constants, "pool for chunk `{}`", r.name);
+        assert_eq!(
+            m.local_count, r.local_count,
+            "local_count for chunk `{}`",
+            r.name
+        );
+    }
+}
+
 // -- reconstruct.kel: the self-hosted reconstruction stage --------------------
 //
 // parse.kel emits postorder (kind, arg) records; codegen.kel consumes a
