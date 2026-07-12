@@ -2340,6 +2340,19 @@ fn parse_into_codegen_yield_in_a_loop_matches_the_reference() {
             9,
             2,
         ),
+        // `yield` of a match: the match's scrutinee and arm drains must stop at the
+        // yield marker, which the block-tail drain then emits as the YieldExpr.
+        (
+            "loop main(r: Word) -> Word { yield match r { 0 => 100, _ => r + 1 } }",
+            5,
+            6,
+        ),
+        // `yield` of a call: the call closes on its `)`, then the yield spans it.
+        (
+            "fn inc(x: Word) -> Word { x + 1 } loop main(r: Word) -> Word { yield inc(r) }",
+            41,
+            42,
+        ),
     ];
     for &(src, input, expected) in cases {
         let (records, param_count, category) = parse_function_records(src);
