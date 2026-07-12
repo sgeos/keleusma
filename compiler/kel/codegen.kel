@@ -181,6 +181,7 @@ const data wire {
     yieldop: Word = 42,
     stream: Word = 43,
     reset: Word = 44,
+    bytetoword: Word = 45,
     radix: Word = 64,
     item: Word = 4,
     pack: Word = 65536,
@@ -472,6 +473,13 @@ fn push_letin(p: Word) -> Word {
 // UnaryNot (kind 6): emit the operand ops then a single Not (tag 20). lhs = operand.
 fn push_not(p: Word) -> Word {
     push_emit(wire.lnot);
+    push_visit(ast.lhs[p])
+}
+
+// Cast (kind 26): a `Byte as Word` widening. Emit the operand ops then ByteToWord.
+// lhs = operand.
+fn push_cast(p: Word) -> Word {
+    push_emit(wire.bytetoword);
     push_visit(ast.lhs[p])
 }
 
@@ -858,6 +866,7 @@ fn walk_step() -> Word {
             23 => push_forlimit(payload),
             24 => push_yield(payload),
             25 => push_multihead(payload),
+            26 => push_cast(payload),
             _ => 0,
         };
     }
