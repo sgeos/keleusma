@@ -19,10 +19,16 @@
 
 require word >= 32;
 
+// The token stream is packed one token per slot in the lexer's own wire,
+// `tok + payload*64` (`tok` the Tok discriminant, `payload` an Ident's interned id
+// or an IntLit's value), rather than two parallel `kinds`/`vals` arrays. The shared
+// segment is a flat 64KB host buffer of 8-byte words, so a two-array representation
+// costs 16 bytes per token and caps input near 4000 tokens; one packed array halves
+// that to 8 bytes per token, which is what lets the larger stage files fit. Each read
+// site recovers `kind` as `packed % 64` and `payload` as `packed / 64`.
 shared data toks {
     len: Word,
-    kinds: [Word; 3072],
-    vals: [Word; 3072],
+    packed: [Word; 6144],
     limit_id: Word,
     chunk_count: Word,
     chunks: [Word; 256],
@@ -1506,8 +1512,8 @@ fn body_step() -> Word {
             ops.draining = 1;
             0
         } else {
-            let k = toks.kinds[ps.cursor];
-            let v = toks.vals[ps.cursor];
+            let k = toks.packed[ps.cursor] % 64;
+            let v = toks.packed[ps.cursor] / 64;
             ps.cursor = ps.cursor + 1;
             step_body_dispatch(k, v)
         }
@@ -2041,8 +2047,8 @@ fn step() -> Word {
                 15
             }
         } else {
-            let k = toks.kinds[ps.cursor];
-            let v = toks.vals[ps.cursor];
+            let k = toks.packed[ps.cursor] % 64;
+            let v = toks.packed[ps.cursor] / 64;
             ps.cursor = ps.cursor + 1;
             header_step(k, v)
         }

@@ -1471,14 +1471,14 @@ fn self_compile_codegen_atomic_functions() {
 const BR_LEX_ISTART: usize = 1 + 24576;
 const BR_LEX_ILEN: usize = 1 + 24576 + 512;
 const BR_LEX_ICOUNT: usize = 1 + 24576 + 512 + 512;
-// Parser `toks` block slots.
+// Parser `toks` block slots: len(1), then the packed token array (one `tok+payload*64`
+// word per token), then the scalar and chunk-table inputs.
 const BR_P_LEN: usize = 0;
-const BR_P_KINDS: usize = 1;
-const BR_P_VALS: usize = 1 + 3072;
-const BR_P_LIMIT_ID: usize = 1 + 3072 + 3072;
-const BR_P_CHUNK_COUNT: usize = 1 + 3072 + 3072 + 1;
-const BR_P_CHUNKS: usize = 1 + 3072 + 3072 + 2;
-const BR_P_REQUIRE_ID: usize = 1 + 3072 + 3072 + 2 + 256;
+const BR_P_PACKED: usize = 1;
+const BR_P_LIMIT_ID: usize = 1 + 6144;
+const BR_P_CHUNK_COUNT: usize = 1 + 6144 + 1;
+const BR_P_CHUNKS: usize = 1 + 6144 + 2;
+const BR_P_REQUIRE_ID: usize = 1 + 6144 + 2 + 256;
 
 fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
     match vm.get_shared(buf, slot).expect("get_shared") {
@@ -1587,9 +1587,7 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
             .unwrap();
     }
     for (i, &(k, v)) in tokens.iter().enumerate() {
-        vm.set_shared(&mut shared, BR_P_KINDS + i, Value::Int(k))
-            .unwrap();
-        vm.set_shared(&mut shared, BR_P_VALS + i, Value::Int(v))
+        vm.set_shared(&mut shared, BR_P_PACKED + i, Value::Int(k + v * 64))
             .unwrap();
     }
 
@@ -2569,9 +2567,7 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>) {
             .unwrap();
     }
     for (i, &(k, v)) in tokens.iter().enumerate() {
-        vm.set_shared(&mut shared, BR_P_KINDS + i, Value::Int(k))
-            .unwrap();
-        vm.set_shared(&mut shared, BR_P_VALS + i, Value::Int(v))
+        vm.set_shared(&mut shared, BR_P_PACKED + i, Value::Int(k + v * 64))
             .unwrap();
     }
 
