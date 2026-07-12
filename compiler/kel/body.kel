@@ -157,53 +157,54 @@
 // arithmetic (`arg*64`) that overflows a narrow word, so it declares a 32-bit floor.
 require word >= 32;
 
-// The token kinds, named so the phase machines read as grammar rather than integer
-// codes. Their values are the codes the host adapter assigns when it maps the runtime
-// token stream into `src.kinds`; a `const data` field inlines to its literal at compile
-// time, so naming them costs nothing. Keleusma keywords take a `kw` suffix to avoid
-// colliding with the reserved word.
-const data tok {
-    ident: Word = 1,
-    lbrace: Word = 2,
-    rbrace: Word = 3,
-    yieldkw: Word = 5,
-    lparen: Word = 7,
-    rparen: Word = 8,
-    comma: Word = 10,
-    intlit: Word = 12,
-    eq: Word = 17,
-    plus: Word = 21,
-    minus: Word = 22,
-    star: Word = 23,
-    slash: Word = 24,
-    percent: Word = 25,
-    eqeq: Word = 26,
-    noteq: Word = 27,
-    lt: Word = 28,
-    gt: Word = 29,
-    lteq: Word = 30,
-    gteq: Word = 31,
-    notkw: Word = 32,
-    bandkw: Word = 33,
-    borkw: Word = 34,
-    bxorkw: Word = 35,
-    andalsokw: Word = 36,
-    orelsekw: Word = 37,
-    letkw: Word = 38,
-    semi: Word = 39,
-    dot: Word = 40,
-    lbracket: Word = 41,
-    rbracket: Word = 42,
-    ifkw: Word = 43,
-    elsekw: Word = 44,
-    forkw: Word = 45,
-    inkw: Word = 46,
-    dotdot: Word = 47,
-    matchkw: Word = 48,
-    fatarrow: Word = 49,
-    underscore: Word = 50,
-    colcol: Word = 51,
-    askw: Word = 52,
+// The token kinds, an enum keyed by the codes the host adapter assigns when it maps the
+// runtime token stream into `src.kinds`. The phase machines dispatch on a token with
+// `k == Tok::Ident() as Word`, which the compiler folds to the discriminant literal, so
+// naming the kinds costs nothing at runtime while reading as grammar. Variant names are
+// upper-case, so a keyword spelling like `Yield` or `Match` does not collide with the
+// reserved word.
+enum Tok {
+    Ident = 1,
+    LBrace = 2,
+    RBrace = 3,
+    Yield = 5,
+    LParen = 7,
+    RParen = 8,
+    Comma = 10,
+    IntLit = 12,
+    Eq = 17,
+    Plus = 21,
+    Minus = 22,
+    Star = 23,
+    Slash = 24,
+    Percent = 25,
+    EqEq = 26,
+    NotEq = 27,
+    Lt = 28,
+    Gt = 29,
+    LtEq = 30,
+    GtEq = 31,
+    Not = 32,
+    Band = 33,
+    Bor = 34,
+    Bxor = 35,
+    Andalso = 36,
+    Orelse = 37,
+    Let = 38,
+    Semi = 39,
+    Dot = 40,
+    LBracket = 41,
+    RBracket = 42,
+    If = 43,
+    Else = 44,
+    For = 45,
+    In = 46,
+    DotDot = 47,
+    Match = 48,
+    FatArrow = 49,
+    Underscore = 50,
+    ColCol = 51,
+    As = 52,
 }
 
 // The host-provided body token stream, parameter-name table, and data-field layout.
@@ -414,58 +415,29 @@ fn emit_op(op: Word) -> Word {
 
 // The operator code for a token kind, or 0 when the token is not a binary operator.
 // Codes 1..11 are arithmetic and comparison, 12..14 the bitwise operators, and 18..19
-// the short-circuit booleans (whose codes emit their own node kinds).
+// the short-circuit booleans (whose codes emit their own node kinds). The token kind is
+// a `Word`, so each `Tok` variant pattern folds to its discriminant and the match
+// lowers to the same integer dispatch a table of literals would.
 fn opcode_of(k: Word) -> Word {
-    if k == tok.plus {
-        1
-    } else {
-    if k == tok.minus {
-        3
-    } else {
-    if k == tok.star {
-        2
-    } else {
-    if k == tok.slash {
-        4
-    } else {
-    if k == tok.percent {
-        5
-    } else {
-    if k == tok.eqeq {
-        6
-    } else {
-    if k == tok.noteq {
-        7
-    } else {
-    if k == tok.lt {
-        8
-    } else {
-    if k == tok.gt {
-        9
-    } else {
-    if k == tok.lteq {
-        10
-    } else {
-    if k == tok.gteq {
-        11
-    } else {
-    if k == tok.bandkw {
-        12
-    } else {
-    if k == tok.borkw {
-        13
-    } else {
-    if k == tok.bxorkw {
-        14
-    } else {
-    if k == tok.andalsokw {
-        18
-    } else {
-    if k == tok.orelsekw {
-        19
-    } else {
-        0
-    } } } } } } } } } } } } } } } }
+    match k {
+        Tok::Plus() => 1,
+        Tok::Minus() => 3,
+        Tok::Star() => 2,
+        Tok::Slash() => 4,
+        Tok::Percent() => 5,
+        Tok::EqEq() => 6,
+        Tok::NotEq() => 7,
+        Tok::Lt() => 8,
+        Tok::Gt() => 9,
+        Tok::LtEq() => 10,
+        Tok::GtEq() => 11,
+        Tok::Band() => 12,
+        Tok::Bor() => 13,
+        Tok::Bxor() => 14,
+        Tok::Andalso() => 18,
+        Tok::Orelse() => 19,
+        _ => 0,
+    }
 }
 
 // The parser is structured as a set of shallow `fn` steps rather than one deeply
@@ -560,7 +532,7 @@ fn step_iclosing() -> Word {
 // back for reinterpretation.
 fn step_post_index(k: Word) -> Word {
     bs.post_index = 0;
-    if k == tok.eq {
+    if k == Tok::Eq() as Word {
         bs.pstmt_kind[bs.pstmt_sp] = 2;
         bs.pstmt_arg[bs.pstmt_sp] = bs.pidx_base + bs.pidx_len * 65536;
         bs.pstmt_sp = bs.pstmt_sp + 1;
@@ -776,7 +748,7 @@ fn step_folding() -> Word {
 // The data field name: resolve `da_data.field` to its element-0 slot and length, then
 // await a `[` (indexed) or not (scalar).
 fn step_dafield(k: Word, v: Word) -> Word {
-    if k == tok.ident {
+    if k == Tok::Ident() as Word {
         bs.da_base = 0;
         bs.da_len = 1;
         for i in 0..src.field_count limit 64 {
@@ -793,7 +765,7 @@ fn step_dafield(k: Word, v: Word) -> Word {
 // After a field: a `[` opens an indexed read, a `=` a scalar assignment (whose target
 // is the field's slot); any other token is a scalar read (whose token is pushed back).
 fn step_daindex(k: Word) -> Word {
-    if k == tok.lbracket {
+    if k == Tok::LBracket() as Word {
         bs.idx_base[bs.idx_sp] = bs.da_base;
         bs.idx_len[bs.idx_sp] = bs.da_len;
         bs.idx_sp = bs.idx_sp + 1;
@@ -803,7 +775,7 @@ fn step_daindex(k: Word) -> Word {
         bs.expect_operand = 1;
         0
     } else {
-    if k == tok.eq {
+    if k == Tok::Eq() as Word {
         bs.pstmt_kind[bs.pstmt_sp] = 1;
         bs.pstmt_arg[bs.pstmt_sp] = bs.da_base;
         bs.pstmt_sp = bs.pstmt_sp + 1;
@@ -882,27 +854,27 @@ fn step_ident(v: Word) -> Word {
 // A `let`, a `;`, or an operator (unary `not`/`-` pushed straight onto the stack, a
 // binary operator settled by precedence, any other token ignored).
 fn step_op(k: Word) -> Word {
-    if k == tok.forkw {
+    if k == Tok::For() as Word {
         // `for` opens a bounded loop; the variable name follows.
         bs.for_phase = 1;
         0
     } else {
-    if k == tok.letkw {
+    if k == Tok::Let() as Word {
         bs.let_phase = 1;
         0
     } else {
-    if k == tok.semi {
+    if k == Tok::Semi() as Word {
         bs.drain_reason = 0;
         bs.draining = 1;
         0
     } else {
-    if k == tok.notkw {
+    if k == Tok::Not() as Word {
         bs.opstack[bs.opsp] = 17;
         bs.opsp = bs.opsp + 1;
         bs.expect_operand = 1;
         0
     } else {
-    if k == tok.yieldkw {
+    if k == Tok::Yield() as Word {
         // `yield` is a loosest-binding prefix: push its marker (code 22) so no operator
         // pops across it and the whole following expression becomes its operand.
         bs.opstack[bs.opsp] = 22;
@@ -910,7 +882,7 @@ fn step_op(k: Word) -> Word {
         bs.expect_operand = 1;
         0
     } else {
-    if k == tok.matchkw {
+    if k == Tok::Match() as Word {
         // `match` opens a scrutinee-then-arms context; its scrutinee is an operand.
         bs.match_phase[bs.match_sp] = 1;
         bs.match_argcount[bs.match_sp] = 0;
@@ -918,7 +890,7 @@ fn step_op(k: Word) -> Word {
         bs.expect_operand = 1;
         0
     } else {
-    if k == tok.minus andalso bs.expect_operand == 1 {
+    if k == Tok::Minus() as Word andalso bs.expect_operand == 1 {
         bs.opstack[bs.opsp] = 16;
         bs.opsp = bs.opsp + 1;
         bs.expect_operand = 1;
@@ -944,21 +916,21 @@ fn step_op(k: Word) -> Word {
 // ordinary expressions handled by step_normal.
 fn step_forheader(k: Word, v: Word) -> Word {
     if bs.for_phase == 1 {
-        if k == tok.ident {
+        if k == Tok::Ident() as Word {
             bs.for_var = v;
             bs.for_phase = 2;
         }
         0
     } else {
     if bs.for_phase == 2 {
-        if k == tok.inkw {
+        if k == Tok::In() as Word {
             bs.for_phase = 3;
             bs.expect_operand = 1;
         }
         0
     } else {
     if bs.for_phase == 3 {
-        if k == tok.dotdot {
+        if k == Tok::DotDot() as Word {
             bs.drain_reason = 5;
             bs.draining = 1;
             0
@@ -967,7 +939,7 @@ fn step_forheader(k: Word, v: Word) -> Word {
         }
     } else {
     if bs.for_phase == 4 {
-        if k == tok.ident andalso v == src.limit_id {
+        if k == Tok::Ident() as Word andalso v == src.limit_id {
             bs.drain_reason = 6;
             bs.draining = 1;
             0
@@ -976,13 +948,13 @@ fn step_forheader(k: Word, v: Word) -> Word {
         }
     } else {
     if bs.for_phase == 5 {
-        if k == tok.intlit {
+        if k == Tok::IntLit() as Word {
             bs.for_cap = v;
             bs.for_phase = 6;
         }
         0
     } else {
-        if k == tok.lbrace {
+        if k == Tok::LBrace() as Word {
             // The `{` opens the body: bind the loop variable to its slot and mark the
             // body (phase 7), which parses as an ordinary block.
             bs.let_names[bs.let_count] = bs.for_var;
@@ -1062,17 +1034,17 @@ fn step_for_emit() -> Word {
 // a `}` drains a branch (reason 3 then, 4 else) or, with no pending conditional, the
 // body (reason 1); `if` pushes a context and `else` advances one.
 fn step_if(k: Word) -> Word {
-    if k == tok.ifkw {
+    if k == Tok::If() as Word {
         bs.if_phase[bs.if_sp] = 1;
         bs.if_sp = bs.if_sp + 1;
         bs.expect_operand = 1;
         0
     } else {
-    if k == tok.elsekw {
+    if k == Tok::Else() as Word {
         bs.if_phase[bs.if_sp - 1] = 4;
         0
     } else {
-    if k == tok.lbrace {
+    if k == Tok::LBrace() as Word {
         if bs.if_sp > 0 {
             if bs.if_phase[bs.if_sp - 1] == 1 {
                 bs.drain_reason = 2;
@@ -1088,7 +1060,7 @@ fn step_if(k: Word) -> Word {
         }
         0
     } else {
-        // k == tok.rbrace: close a branch, or the body when no conditional is pending.
+        // k == Tok::RBrace() as Word: close a branch, or the body when no conditional is pending.
         if bs.if_sp > 0 {
             if bs.if_phase[bs.if_sp - 1] == 2 {
                 bs.drain_reason = 3;
@@ -1117,36 +1089,36 @@ fn step_if(k: Word) -> Word {
 
 // The token-kind dispatch in normal (expression) position.
 fn step_normal(k: Word, v: Word) -> Word {
-    if k == tok.lbrace orelse k == tok.rbrace orelse k == tok.ifkw orelse k == tok.elsekw {
+    if k == Tok::LBrace() as Word orelse k == Tok::RBrace() as Word orelse k == Tok::If() as Word orelse k == Tok::Else() as Word {
         step_if(k)
     } else {
-    if k == tok.intlit {
+    if k == Tok::IntLit() as Word {
         bs.expect_operand = 0;
         1 + v * 64
     } else {
-    if k == tok.lparen {
+    if k == Tok::LParen() as Word {
         bs.opstack[bs.opsp] = 15;
         bs.opsp = bs.opsp + 1;
         bs.expect_operand = 1;
         0
     } else {
-    if k == tok.rparen {
+    if k == Tok::RParen() as Word {
         // `)` closes a parenthesised group or a call; step_closing needs the pre-`)`
         // `expect_operand` to tell whether a final call argument is present, so it is
         // left unchanged here and cleared there.
         bs.closing = 1;
         0
     } else {
-    if k == tok.rbracket {
+    if k == Tok::RBracket() as Word {
         bs.iclosing = 1;
         0
     } else {
-    if k == tok.comma {
+    if k == Tok::Comma() as Word {
         // `,` ends a call argument; drain it to the call marker and count it.
         bs.cdraining = 1;
         0
     } else {
-    if k == tok.ident {
+    if k == Tok::Ident() as Word {
         step_ident(v)
     } else {
         step_op(k)
@@ -1161,7 +1133,7 @@ fn step_normal(k: Word, v: Word) -> Word {
 // dispatches normally.
 fn step_dispatch(k: Word, v: Word) -> Word {
     if bs.started == 0 {
-        if k == tok.lbrace {
+        if k == Tok::LBrace() as Word {
             bs.started = 1;
             bs.stmt_base = 0;
             bs.expect_operand = 1;
@@ -1182,7 +1154,7 @@ fn step_dispatch(k: Word, v: Word) -> Word {
             // host stack before the drain; step_daindex emits it and pushes the boundary
             // token back for reinterpretation here.
             let mp = bs.match_phase[bs.match_sp - 1];
-            if mp == 2 orelse mp == 3 orelse (mp == 1 andalso k == tok.lbrace) orelse (mp == 4 andalso k == tok.rbrace) orelse (mp == 4 andalso k == tok.comma andalso bs.call_sp == bs.match_call_base[bs.match_sp - 1]) {
+            if mp == 2 orelse mp == 3 orelse (mp == 1 andalso k == Tok::LBrace() as Word) orelse (mp == 4 andalso k == Tok::RBrace() as Word) orelse (mp == 4 andalso k == Tok::Comma() as Word andalso bs.call_sp == bs.match_call_base[bs.match_sp - 1]) {
                 step_match(k, v)
             } else {
                 step_dispatch_normal(k, v)
@@ -1199,7 +1171,7 @@ fn step_dispatch(k: Word, v: Word) -> Word {
 // a `for` header, or the ordinary expression dispatch.
 fn step_dispatch_normal(k: Word, v: Word) -> Word {
     if bs.let_phase == 2 {
-        if k == tok.eq {
+        if k == Tok::Eq() as Word {
             bs.let_phase = 0;
             bs.pstmt_kind[bs.pstmt_sp] = 0;
             bs.pstmt_name[bs.pstmt_sp] = bs.pending_let_name;
@@ -1209,14 +1181,14 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         0
     } else {
     if bs.let_phase == 1 {
-        if k == tok.ident {
+        if k == Tok::Ident() as Word {
             bs.pending_let_name = v;
             bs.let_phase = 2;
         }
         0
     } else {
     if bs.da_phase == 1 {
-        if k == tok.dot {
+        if k == Tok::Dot() as Word {
             bs.da_phase = 2;
         }
         0
@@ -1229,7 +1201,7 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
     } else {
     if bs.call_phase == 1 {
         // A call name was read; the `(` opens the argument list.
-        if k == tok.lparen {
+        if k == Tok::LParen() as Word {
             bs.call_chunk[bs.call_sp] = bs.call_pending;
             bs.call_count[bs.call_sp] = 0;
             bs.call_sp = bs.call_sp + 1;
@@ -1269,18 +1241,18 @@ fn step_match(k: Word, v: Word) -> Word {
         0
     } else {
     if mp == 2 {
-        if k == tok.intlit {
+        if k == Tok::IntLit() as Word {
             // A literal arm: emit its Literal node, count it, then await `=>`.
             bs.match_argcount[sp] = bs.match_argcount[sp] + 1;
             bs.match_phase[sp] = 3;
             1 + v * 64
         } else {
-        if k == tok.underscore {
+        if k == Tok::Underscore() as Word {
             // The wildcard arm: no node; its result becomes the default. Await `=>`.
             bs.match_phase[sp] = 3;
             0
         } else {
-        if k == tok.ident {
+        if k == Tok::Ident() as Word {
             // A unit enum-variant pattern `Name::Variant()` over a Word scrutinee is a
             // discriminant match: fold it to the variant's discriminant literal, the
             // same arm an integer literal would form. Recognise the enum name, then read
@@ -1297,20 +1269,20 @@ fn step_match(k: Word, v: Word) -> Word {
             }
             0
         } else {
-            // k == tok.rbrace: the arms end (a trailing comma preceded this `}`); build.
+            // k == Tok::RBrace() as Word: the arms end (a trailing comma preceded this `}`); build.
             bs.match_build = 1;
             0
         } } }
     } else {
     if mp == 3 {
-        if k == tok.fatarrow {
+        if k == Tok::FatArrow() as Word {
             bs.match_phase[sp] = 4;
             bs.match_call_base[sp] = bs.call_sp;
             bs.expect_operand = 1;
         }
         0
     } else {
-        if k == tok.comma {
+        if k == Tok::Comma() as Word {
             bs.drain_reason = 9;
             bs.draining = 1;
             0
@@ -1329,13 +1301,13 @@ fn step_match(k: Word, v: Word) -> Word {
 // its `=>`, exactly as an integer-literal arm would.
 fn step_mpat(k: Word, v: Word) -> Word {
     if bs.mpat_phase == 1 {
-        if k == tok.colcol {
+        if k == Tok::ColCol() as Word {
             bs.mpat_phase = 2;
         }
         0
     } else {
     if bs.mpat_phase == 2 {
-        if k == tok.ident {
+        if k == Tok::Ident() as Word {
             bs.enum_disc = 0;
             for i in 0..src.enum_count limit 64 {
                 if src.edata[i] == bs.enum_name andalso src.evar[i] == v {
@@ -1347,7 +1319,7 @@ fn step_mpat(k: Word, v: Word) -> Word {
         0
     } else {
     if bs.mpat_phase == 3 {
-        if k == tok.lparen {
+        if k == Tok::LParen() as Word {
             bs.mpat_phase = 4;
         }
         0
@@ -1392,13 +1364,13 @@ fn step_store_finalize() -> Word {
 // emitted as an operand. Only the no-payload `Variant()` cast form is handled.
 fn step_enum(k: Word, v: Word) -> Word {
     if bs.enum_phase == 1 {
-        if k == tok.colcol {
+        if k == Tok::ColCol() as Word {
             bs.enum_phase = 2;
         }
         0
     } else {
     if bs.enum_phase == 2 {
-        if k == tok.ident {
+        if k == Tok::Ident() as Word {
             bs.enum_disc = 0;
             for i in 0..src.enum_count limit 64 {
                 if src.edata[i] == bs.enum_name andalso src.evar[i] == v {
@@ -1410,19 +1382,19 @@ fn step_enum(k: Word, v: Word) -> Word {
         0
     } else {
     if bs.enum_phase == 3 {
-        if k == tok.lparen {
+        if k == Tok::LParen() as Word {
             bs.enum_phase = 4;
         }
         0
     } else {
     if bs.enum_phase == 4 {
-        if k == tok.rparen {
+        if k == Tok::RParen() as Word {
             bs.enum_phase = 5;
         }
         0
     } else {
     if bs.enum_phase == 5 {
-        if k == tok.askw {
+        if k == Tok::As() as Word {
             bs.enum_phase = 6;
         }
         0
