@@ -1,9 +1,9 @@
-//! Merged parser stage (`compiler/kel/parse.kel`), increment 7: one streaming `loop` that
+//! Merged parser stage (`compiler/kel/parse.kel`), increment 8: one streaming `loop` that
 //! parses a whole top-level function declaration and the `data` block declaration,
-//! accumulating the field-layout table so a body scalar `data.field` read (DataRead) and a
-//! scalar `data.field = e` assignment (DataAssignIn) resolve to their flat-segment slots
-//! with no host-supplied table, validated against the compiler's `data_layout.slots`.
-//! Indexed access is a later increment.
+//! accumulating the field-layout table so the body's scalar and indexed `data.field`
+//! reads (DataRead, IndexRead) and assignments (DataAssignIn, IndexStore/IndexAssignIn)
+//! resolve to their flat-segment slots with no host-supplied table, validated against the
+//! compiler's `data_layout.slots`.
 //!
 //! A throwaway adapter maps the reference tokenizer into the stage's unified `(kind,
 //! value)` token stream. The stage emits header records `dkind + val*64` (1/2/3 START of a
@@ -152,6 +152,19 @@ fn data_slot_names(program: &keleusma::ast::Program) -> Vec<String> {
         .as_ref()
         .map(|dl| dl.slots.iter().map(|s| s.name.clone()).collect())
         .unwrap_or_default()
+}
+
+/// The element-0 slot (base) and length of an array `data.field`, from its per-element
+/// slot names `data.field[0]`, `data.field[1]`, ...
+fn array_base_len(data_slots: &[String], data: &str, field: &str) -> (i64, i64) {
+    let prefix = format!("{data}.{field}[");
+    let base = data_slots
+        .iter()
+        .position(|n| n.starts_with(&prefix))
+        .unwrap_or_else(|| panic!("no array data slot with prefix `{prefix}`"))
+        as i64;
+    let len = data_slots.iter().filter(|n| n.starts_with(&prefix)).count() as i64;
+    (base, len)
 }
 
 fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
@@ -344,6 +357,24 @@ fn flatten(
                 as i64;
             out.push((11, slot));
         }
+        Expr::ArrayIndex { object, index, .. } => {
+            // A `data.field[i]` read is an IndexRead (kind 13, arg = base + len*65536) over
+            // the index expression. The object is a `data.field` access.
+            let (data, field) = match object.as_ref() {
+                Expr::FieldAccess {
+                    object: inner,
+                    field,
+                    ..
+                } => match inner.as_ref() {
+                    Expr::Ident { name, .. } => (name.as_str(), field.as_str()),
+                    other => panic!("a data index object must be a block name, got {other:?}"),
+                },
+                other => panic!("a data index object must be a field access, got {other:?}"),
+            };
+            let (base, len) = array_base_len(data_slots, data, field);
+            flatten(index, scope, next_slot, forlim, data_slots, out);
+            out.push((13, base + len * 65536));
+        }
         Expr::Match {
             scrutinee, arms, ..
         } => {
@@ -427,6 +458,22 @@ fn flatten_block(
                     .unwrap_or_else(|| panic!("no data slot named `{name}`"))
                     as i64;
                 stmt_nodes.push((12, slot));
+            }
+            Stmt::DataFieldIndexAssign {
+                data_name,
+                field,
+                indices,
+                value,
+                ..
+            } => {
+                // `d.f[i] = e` — the index, the value, an IndexStore signal (kind 36), then
+                // an IndexAssignIn (kind 14, arg = base + len*65536) folded around the block.
+                assert_eq!(indices.len(), 1, "single-dimension array assignment only");
+                flatten(&indices[0], &local, next_slot, forlim, data_slots, out);
+                flatten(value, &local, next_slot, forlim, data_slots, out);
+                let (base, len) = array_base_len(data_slots, data_name, field);
+                out.push((36, 0));
+                stmt_nodes.push((14, base + len * 65536));
             }
             Stmt::For(fs) if fs.limit.is_some() => {
                 // A `for v in lo..hi limit CAP { body }`. The loop variable, the high slot,
@@ -919,6 +966,41 @@ fn a_scalar_data_assignment_parses() {
 fn shared_and_private_blocks_share_the_slot_space() {
     let src = "shared data s { a: Word } private data p { b: Word } \
         fn f(x: Word) -> Word { p.b = x; s.a }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+}
+
+// An indexed `data.field[i]` read is an IndexRead over the index, arg packing base + len.
+#[test]
+fn an_indexed_data_read_parses() {
+    let src = "shared data d { xs: [Word; 4] } fn f(i: Word) -> Word { d.xs[i] }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    // index i (slot 0), IndexRead(base 0 + len 4 * 65536).
+    assert_eq!(got.funcs[0].3, vec![(2, 0), (13, 4 * 65536)]);
+}
+
+// An indexed `data.field[i] = e` assignment: index, value, IndexStore signal, then the
+// folded IndexAssignIn.
+#[test]
+fn an_indexed_data_assignment_parses() {
+    let src = "shared data d { xs: [Word; 4] } fn f(i: Word, x: Word) -> Word { d.xs[i] = x; 0 }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    // index i(0), value x(1), IndexStore(36); tail 0; IndexAssignIn(base 0 + len 4*65536).
+    assert_eq!(
+        got.funcs[0].3,
+        vec![(2, 0), (2, 1), (36, 0), (1, 0), (14, 4 * 65536)]
+    );
+}
+
+// The index may itself be a data read, exercising the nested idx stack.
+#[test]
+fn a_data_read_may_index_another() {
+    let src = "shared data d { xs: [Word; 4], j: Word } fn f() -> Word { d.xs[d.j] }";
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
