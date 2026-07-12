@@ -118,7 +118,7 @@ fn b6_shared_slot_offset_overrun_rejected() {
         "expected a shared-slot layout entry"
     );
     // Push the first slot's offset past the end of the shared-data buffer.
-    layout.shared_layout[0].offset = (buffer + 8) as u16;
+    layout.shared_layout[0].offset = buffer + 8;
     assert!(
         rejected_by_typed_pass(&m),
         "a shared-slot offset past the buffer must be rejected by the typed pass"

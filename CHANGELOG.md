@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The shared-data segment ceiling rises from 64 KB to 16 MB (wire format V2,
+  `BYTECODE_VERSION` 1 → 2).** The shared byte-offset, unified data-slot index, and
+  indexed-array length operands of `GetData`, `SetData`, `GetDataIndexed`, and
+  `SetDataIndexed` widen from sixteen to twenty-four bits, so a program may declare a
+  shared segment (a large host-shared byte buffer, for instance) beyond the former 64 KB
+  cap. The widening reuses the existing three inline operand bytes and the six-byte
+  operand-pool payload (a new `(u24, u24)` pool tag `0x04`), so the four-byte opcode
+  record and eight-byte pool entry are unchanged and bytecode does not grow — the
+  rad-hard minimal-ISA and the 32-bit embedded FLASH budget are preserved.
+  `SharedSlotLayout::offset` becomes a `u32`; the VM's shared and private slot counts
+  widen to `u32`. Worst-case memory usage is unaffected (it accounts arena and private
+  memory, not the host-provided shared buffer). Unlike the additive changes below, this
+  is a deliberate `BYTECODE_VERSION` bump: **V1 bytecode is rejected at load on the
+  version check** and programs must be recompiled. See `docs/spec/WIRE_FORMAT.md`
+  (Version 2).
+
 - **Multiple named `private` and `const` data blocks per program.** The single-block
   rule (R28) relaxes: a program may now declare any number of named `private` and
   `const` data blocks, keeping only the one-`shared`-block limit. The shared segment is

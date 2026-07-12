@@ -107,6 +107,14 @@ pub const POOL_TAG_U16_U16_U8: u8 = 0x02;
 /// indices); the three `u16`s occupy bytes two through seven (B28 P2).
 pub const POOL_TAG_U16_U16_U16: u8 = 0x03;
 
+/// Pool entry type tag for the `(u24, u24)` shape. Used by
+/// `Op::GetDataIndexed` and `Op::SetDataIndexed` (base slot, array
+/// length) so each operand may exceed 64 K. The two twenty-four-bit
+/// little-endian values fill bytes two through seven exactly. Distinct
+/// from [`POOL_TAG_U16_U16`], which stays sixteen-bit for the nested
+/// composite and `IsEnum` shapes.
+pub const POOL_TAG_U24_U24: u8 = 0x04;
+
 /// Byte-three sentinel in a baked `Op::GetTupleField` record marking
 /// the boxed (positional-index) form. Distinguished from a flat
 /// scalar-kind tag because [`crate::value_layout::ScalarKind::to_tag`]
@@ -294,6 +302,14 @@ impl OpcodeRecord {
     pub fn operand_pool_index(&self) -> u32 {
         u32::from_le_bytes([self.0[1], self.0[2], self.0[3], 0])
     }
+
+    /// Decode the inline operand as a twenty-four-bit little-endian
+    /// value across bytes one through three. Used by `GetData` and
+    /// `SetData` for a data-slot index that may exceed 64 K. The
+    /// producer validates the value fits in twenty-four bits.
+    pub fn operand_u24(&self) -> u32 {
+        u32::from_le_bytes([self.0[1], self.0[2], self.0[3], 0])
+    }
 }
 
 impl OperandPoolEntry {
@@ -306,6 +322,25 @@ impl OperandPoolEntry {
         bytes[2..4].copy_from_slice(&a.to_le_bytes());
         bytes[4..6].copy_from_slice(&b.to_le_bytes());
         // Bytes 6 and 7 stay zero for the `(u16, u16)` shape.
+        let parity_payload = [
+            bytes[0], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ];
+        bytes[1] = pool_entry_parity(&parity_payload);
+        OperandPoolEntry(bytes)
+    }
+
+    /// Construct a `(u24, u24)` pool entry: two twenty-four-bit
+    /// little-endian values in bytes two through four and five
+    /// through seven. Computes the parity byte over the type tag and
+    /// the payload. The caller validates each value fits in
+    /// twenty-four bits.
+    pub fn from_u24_u24(a: u32, b: u32) -> Self {
+        let mut bytes = [0u8; OPERAND_POOL_ENTRY_BYTES];
+        bytes[0] = POOL_TAG_U24_U24;
+        let ab = a.to_le_bytes();
+        let bb = b.to_le_bytes();
+        bytes[2..5].copy_from_slice(&ab[0..3]);
+        bytes[5..8].copy_from_slice(&bb[0..3]);
         let parity_payload = [
             bytes[0], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
         ];
@@ -367,6 +402,16 @@ impl OperandPoolEntry {
         (
             u16::from_le_bytes([self.0[2], self.0[3]]),
             u16::from_le_bytes([self.0[4], self.0[5]]),
+        )
+    }
+
+    /// Decode the `(u24, u24)` payload: two twenty-four-bit
+    /// little-endian values. Caller verifies the tag and parity
+    /// before invoking.
+    pub fn as_u24_u24(&self) -> (u32, u32) {
+        (
+            u32::from_le_bytes([self.0[2], self.0[3], self.0[4], 0]),
+            u32::from_le_bytes([self.0[5], self.0[6], self.0[7], 0]),
         )
     }
 
@@ -669,8 +714,6 @@ pub fn encode_op(
         Op::Const(v)
         | Op::GetLocal(v)
         | Op::SetLocal(v)
-        | Op::GetData(v)
-        | Op::SetData(v)
         | Op::BoundsCheck(v)
         | Op::If(v)
         | Op::Else(v)
@@ -682,6 +725,14 @@ pub fn encode_op(
         | Op::Trap(v) => {
             let b = v.to_le_bytes();
             [b[0], b[1], 0]
+        }
+
+        // `u24` data-slot operand carried little-endian across bytes one
+        // through three (V2). The compiler validates the slot fits in
+        // twenty-four bits, so byte three's contribution is never lost.
+        Op::GetData(v) | Op::SetData(v) => {
+            let b = v.to_le_bytes();
+            [b[0], b[1], b[2]]
         }
 
         // `(u16, u8)` operand carried inline: u16 little-endian in
@@ -745,7 +796,7 @@ pub fn encode_op(
             if idx >= MAX_POOL_ENTRIES {
                 return Err(WireFormatError::OperandPoolIndexOverflow);
             }
-            pool.push(OperandPoolEntry::from_u16_u16(*a, *b));
+            pool.push(OperandPoolEntry::from_u24_u24(*a, *b));
             let idx_bytes = (idx as u32).to_le_bytes();
             [idx_bytes[0], idx_bytes[1], idx_bytes[2]]
         }
@@ -823,14 +874,14 @@ pub fn decode_op(record: OpcodeRecord, pool: &[OperandPoolEntry]) -> Result<Op, 
         0 => Op::Const(record.operand_u16()),
         1 => Op::GetLocal(record.operand_u16()),
         2 => Op::SetLocal(record.operand_u16()),
-        3 => Op::GetData(record.operand_u16()),
-        4 => Op::SetData(record.operand_u16()),
+        3 => Op::GetData(record.operand_u24()),
+        4 => Op::SetData(record.operand_u24()),
         5 => {
-            let (a, b) = decode_pool_u16_u16(record, pool)?;
+            let (a, b) = decode_pool_u24_u24(record, pool)?;
             Op::GetDataIndexed(a, b)
         }
         6 => {
-            let (a, b) = decode_pool_u16_u16(record, pool)?;
+            let (a, b) = decode_pool_u24_u24(record, pool)?;
             Op::SetDataIndexed(a, b)
         }
         7 => Op::BoundsCheck(record.operand_u16()),
@@ -1016,25 +1067,26 @@ pub fn decode_op(record: OpcodeRecord, pool: &[OperandPoolEntry]) -> Result<Op, 
     Ok(op)
 }
 
-/// Helper: fetch a `(u16, u16)` operand pool entry, validating
-/// the index, the parity, and the type tag.
-fn decode_pool_u16_u16(
+/// Helper: fetch a `(u24, u24)` operand pool entry, validating the
+/// index, the parity, and the type tag. Used by `GetDataIndexed` and
+/// `SetDataIndexed` (V2).
+fn decode_pool_u24_u24(
     record: OpcodeRecord,
     pool: &[OperandPoolEntry],
-) -> Result<(u16, u16), WireFormatError> {
+) -> Result<(u32, u32), WireFormatError> {
     let idx = record.operand_pool_index() as usize;
     let entry = pool
         .get(idx)
         .copied()
         .ok_or(WireFormatError::OperandPoolIndexOutOfBounds(idx))?;
     entry.check_parity()?;
-    if entry.tag() != POOL_TAG_U16_U16 {
+    if entry.tag() != POOL_TAG_U24_U24 {
         return Err(WireFormatError::OperandPoolTagMismatch {
             observed: entry.tag(),
-            expected: POOL_TAG_U16_U16,
+            expected: POOL_TAG_U24_U24,
         });
     }
-    Ok(entry.as_u16_u16())
+    Ok(entry.as_u24_u24())
 }
 
 /// Helper: fetch the `(offset, size)` of a nested composite access from
@@ -2524,6 +2576,26 @@ mod tests {
         assert_eq!(op, decoded);
     }
 
+    // The V2 twenty-four-bit data operands round-trip at values above the old
+    // sixteen-bit ceiling: `GetData`/`SetData` inline across three bytes and
+    // `GetDataIndexed`/`SetDataIndexed` through the `(u24, u24)` pool entry.
+    #[test]
+    fn data_ops_roundtrip_beyond_16_bits() {
+        for op in [
+            Op::GetData(0),
+            Op::GetData(65_535),
+            Op::GetData(65_536),
+            Op::GetData(1_000_000),
+            Op::GetData((1 << 24) - 1),
+            Op::SetData((1 << 24) - 1),
+            Op::GetDataIndexed(65_536, 70_000),
+            Op::GetDataIndexed((1 << 24) - 1, (1 << 24) - 1),
+            Op::SetDataIndexed(1_000_000, 2_000_000),
+        ] {
+            roundtrip(op);
+        }
+    }
+
     #[test]
     fn opcode_id_table_is_dense_and_unique() {
         // Every identifier in the table is in range and the
@@ -2866,11 +2938,11 @@ mod tests {
 
     #[test]
     fn pool_tag_mismatch_surfaces_error() {
-        // A pool entry tagged for (u16, u16) cannot satisfy an
+        // A pool entry tagged for (u24, u24) cannot satisfy an
         // opcode that wants (u16, u16, u8). Hand-craft the
         // mismatch and confirm the decoder rejects.
         let mut pool: Vec<OperandPoolEntry> = Vec::new();
-        // First, encode something that uses the (u16, u16) shape.
+        // First, encode something that uses the (u24, u24) shape.
         let _record = encode_op(&Op::GetDataIndexed(1, 2), &mut pool).expect("encode");
         // Manufacture a NewEnum record that references the same
         // (mismatched) entry.
@@ -2889,7 +2961,7 @@ mod tests {
         assert_eq!(
             result,
             Err(WireFormatError::OperandPoolTagMismatch {
-                observed: POOL_TAG_U16_U16,
+                observed: POOL_TAG_U24_U24,
                 expected: POOL_TAG_U16_U16_U8,
             }),
         );

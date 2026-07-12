@@ -2082,8 +2082,11 @@ pub enum Op {
     /// Pop and store to local variable slot.
     SetLocal(u16),
 
-    /// Push data segment slot value onto stack.
-    GetData(u16),
+    /// Push data segment slot value onto stack. The slot index is carried in
+    /// twenty-four bits on the wire (`u32` in memory, validated `< 1 << 24` at
+    /// compile and load), so the unified data-slot space is bounded to 16 M
+    /// slots rather than 64 K.
+    GetData(u32),
     /// Pop a value and store it into a data-segment slot. The runtime dispatches
     /// on the value. A scalar is stored inline in the slot. A private slot whose
     /// value is a flat composite copies its body into the persistent composite
@@ -2092,8 +2095,9 @@ pub enum Op {
     /// place (B28 P3 item 5, item 3a), so the body lives at a static,
     /// inspectable `.data`-style address rather than on the global heap. The
     /// pool offset comes from that module table rather than a baked operand, so
-    /// no dedicated composite-write opcode is required.
-    SetData(u16),
+    /// no dedicated composite-write opcode is required. The slot index is a
+    /// twenty-four-bit wire operand (`u32` in memory), as for [`Op::GetData`].
+    SetData(u32),
 
     /// Indexed read from a data-segment array. The first immediate is
     /// the array's base slot, the second is the array's total slot
@@ -2101,14 +2105,17 @@ pub enum Op {
     /// stack, checks `0 <= index < total`, traps if the index is out
     /// of range, and pushes `data[base + index]`. Used by the compiler
     /// for `state.field[i]` reads when `state.field` is an array-typed
-    /// data field.
-    GetDataIndexed(u16, u16),
+    /// data field. Both immediates are twenty-four-bit wire operands (`u32` in
+    /// memory), so an array's base slot and length may each exceed 64 K.
+    GetDataIndexed(u32, u32),
     /// Indexed write to a data-segment array. The first immediate is
     /// the array's base slot, the second is the array's total slot
     /// count. The opcode pops the `Value::Int` index, then pops the
     /// new value, checks `0 <= index < total`, traps if out of range,
-    /// and stores `data[base + index] = value`.
-    SetDataIndexed(u16, u16),
+    /// and stores `data[base + index] = value`. Both immediates are
+    /// twenty-four-bit wire operands (`u32` in memory), as for
+    /// [`Op::GetDataIndexed`].
+    SetDataIndexed(u32, u32),
     /// Bounds check against the value on top of the operand stack
     /// without modifying the stack. The immediate is the exclusive
     /// upper bound. Traps when the top is not a `Value::Int`, when
@@ -3054,8 +3061,11 @@ pub enum SlotVisibility {
 /// minimal-ISA choice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub struct SharedSlotLayout {
-    /// Byte offset of this slot within the host buffer.
-    pub offset: u16,
+    /// Byte offset of this slot within the host buffer. A `u32` (validated
+    /// `< 1 << 24` at compile) so the shared segment is not bounded to 64 KB;
+    /// the on-wire operand and the `PrivateCompositeSlot::offset` precedent are
+    /// the same twenty-four-bit width.
+    pub offset: u32,
     /// Slot kind. When the [`SHARED_SLOT_COMPOSITE_FLAG`] high bit is clear,
     /// this is a `crate::value_layout::ScalarKind::to_tag` (`0..=7`) for a
     /// scalar slot. When the flag is set, the low seven bits are a
@@ -3439,6 +3449,15 @@ pub const FLAG_EPHEMERAL: u8 = 0x01;
 /// Magic prefix identifying serialized Keleusma bytecode (`KELE`).
 pub const BYTECODE_MAGIC: [u8; 4] = *b"KELE";
 
+/// Exclusive ceiling for a data-segment byte offset, unified data-slot
+/// index, or indexed-array length. The `GetData`/`SetData`/
+/// `GetDataIndexed`/`SetDataIndexed` operands are twenty-four bits on the
+/// wire (V2), so every individual value must be strictly less than this
+/// (`2^24 - 1` is the largest encodable value); a running size accumulator
+/// may reach it exactly (one past the last valid offset). This bounds the
+/// shared segment to 16 MB, up from the 64 KB of the sixteen-bit V1 fields.
+pub const MAX_DATA_ADDR: u32 = 1 << 24;
+
 /// Wire format version for serialized bytecode. Bytecode produced under a
 /// different version is rejected at load time.
 ///
@@ -3448,7 +3467,14 @@ pub const BYTECODE_MAGIC: [u8; 4] = *b"KELE";
 /// data byte counts. Bytecode produced under any earlier development
 /// build is rejected at load time on header-shape mismatch through the
 /// CRC trailer.
-pub const BYTECODE_VERSION: u16 = 1;
+///
+/// Version 2 widens the shared-data byte-offset, data-slot-index, and
+/// indexed-array-length operands of `GetData`/`SetData`/`GetDataIndexed`/
+/// `SetDataIndexed` from sixteen to twenty-four bits (raising the shared
+/// segment ceiling from 64 KB to 16 MB) without changing the four-byte
+/// opcode record or eight-byte operand-pool entry sizes. Version 1
+/// bytecode is rejected at load time on the version check.
+pub const BYTECODE_VERSION: u16 = 2;
 
 /// Word size in bits assumed by this binary build, encoded as the
 /// base-2 exponent. Actual width in bits is `1 << RUNTIME_WORD_BITS_LOG2`.

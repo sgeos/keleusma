@@ -159,7 +159,7 @@ struct FuncCompiler {
     /// Holds entries for shared and private data only. Const data
     /// fields do not consume runtime slots and are tracked through
     /// `const_fields` instead.
-    data_fields: BTreeMap<String, Vec<(String, u16)>>,
+    data_fields: BTreeMap<String, Vec<(String, u32)>>,
     /// Map from data block name to a map from field name to the
     /// compile-time `ConstValue` for `const data` fields. Field
     /// reads resolve through this map first and compile to
@@ -483,7 +483,7 @@ impl FuncCompiler {
         function_map: BTreeMap<String, u16>,
         native_map: BTreeMap<String, u16>,
         native_externals: BTreeMap<String, bool>,
-        data_fields: BTreeMap<String, Vec<(String, u16)>>,
+        data_fields: BTreeMap<String, Vec<(String, u32)>>,
         const_fields: BTreeMap<String, BTreeMap<String, crate::bytecode::ConstValue>>,
         type_info: TypeInfo,
         expr_types: BTreeMap<crate::token::Span, TypeExpr>,
@@ -851,7 +851,7 @@ impl FuncCompiler {
     }
 
     /// Resolve a data block field to its slot index.
-    fn resolve_data_field(&self, data_name: &str, field: &str) -> Option<u16> {
+    fn resolve_data_field(&self, data_name: &str, field: &str) -> Option<u32> {
         self.data_fields.get(data_name).and_then(|fields| {
             fields
                 .iter()
@@ -3230,13 +3230,13 @@ pub fn compile_with_options(
     // `Vm::set_data`/`Vm::get_data`. The order within each
     // partition matches the source declaration order so error
     // messages and slot names remain predictable.
-    let mut data_fields: BTreeMap<String, Vec<(String, u16)>> = BTreeMap::new();
+    let mut data_fields: BTreeMap<String, Vec<(String, u32)>> = BTreeMap::new();
     let mut shared_slots: Vec<DataSlot> = Vec::new();
     let mut private_slots: Vec<DataSlot> = Vec::new();
     // Load-time initial value of each private slot, in private-slot order,
     // parallel to `private_slots`. Filled only during the private pass.
     let mut private_init: Vec<crate::bytecode::ConstValue> = Vec::new();
-    let mut data_slot_idx: u16 = 0;
+    let mut data_slot_idx: u32 = 0;
     // Two-pass loop. Pass 0 processes shared declarations; pass 1
     // processes private declarations. The slot index counter is
     // continuous across both passes.
@@ -3291,9 +3291,10 @@ pub fn compile_with_options(
                 }
                 data_slot_idx = data_slot_idx
                     .checked_add(n_slots)
+                    .filter(|v| *v <= MAX_DATA_ADDR)
                     .ok_or_else(|| CompileError {
                         message: format!(
-                            "data segment field `{}.{}` overflows the 16-bit slot index space",
+                            "data segment field `{}.{}` overflows the 24-bit slot index space (16 M slots)",
                             decl.name, field.name
                         ),
                         span: field.span,
@@ -3515,7 +3516,7 @@ pub fn compile_with_options(
                 continue;
             }
             for field in &decl.fields {
-                let n = slots_for_data_type(&field.type_expr) as u32;
+                let n = slots_for_data_type(&field.type_expr);
                 // The flat composite body size of the leaf element. A single
                 // composite field is its own leaf (`n == 1`); an
                 // array-of-composite field has `n` element slots each of the
@@ -3577,7 +3578,7 @@ pub fn compile_with_options(
         Vec<crate::bytecode::SharedSlotLayout>,
     ) = {
         let mut entries: Vec<crate::bytecode::SharedSlotLayout> = Vec::new();
-        let mut offset: u16 = 0;
+        let mut offset: u32 = 0;
         for decl in &program.data_decls {
             if !matches!(decl.visibility, crate::ast::DataVisibility::Shared) {
                 continue;
@@ -3590,15 +3591,18 @@ pub fn compile_with_options(
                     field.span,
                     &mut entries,
                 )?;
-                offset = offset.checked_add(consumed).ok_or_else(|| CompileError {
-                    message: String::from(
-                        "shared data segment exceeds the 64KB flat host-buffer limit",
-                    ),
-                    span: field.span,
-                })?;
+                offset = offset
+                    .checked_add(consumed)
+                    .filter(|v| *v <= MAX_DATA_ADDR)
+                    .ok_or_else(|| CompileError {
+                        message: String::from(
+                            "shared data segment exceeds the 16 MB flat host-buffer limit",
+                        ),
+                        span: field.span,
+                    })?;
             }
         }
-        (offset as u32, entries)
+        (offset, entries)
     };
     if let Some(dl) = data_layout.as_mut() {
         dl.shared_layout = shared_slot_layout;
@@ -3667,7 +3671,7 @@ pub fn compile_with_options(
     // rewrite. Const data blocks are exempt because their values
     // are compile-time and never written.
     if shared_count + private_count > 0 {
-        let mut private_slot_indices: Vec<u16> = Vec::new();
+        let mut private_slot_indices: Vec<u32> = Vec::new();
         for decl in &program.data_decls {
             if decl.visibility != DataVisibility::Private {
                 continue;
@@ -3685,7 +3689,7 @@ pub fn compile_with_options(
             }
         }
         if !private_slot_indices.is_empty() {
-            let mut written: alloc::collections::BTreeSet<u16> =
+            let mut written: alloc::collections::BTreeSet<u32> =
                 alloc::collections::BTreeSet::new();
             for chunk in &chunks {
                 for op in &chunk.ops {
@@ -4672,12 +4676,12 @@ fn const_value_from_literal_for_field(
     }
 }
 
-fn slots_for_data_type(type_expr: &TypeExpr) -> u16 {
+fn slots_for_data_type(type_expr: &TypeExpr) -> u32 {
     match type_expr {
         TypeExpr::Array(elem, len, _) => {
-            let elem_slots = slots_for_data_type(elem) as u32;
+            let elem_slots = slots_for_data_type(elem);
             let total = elem_slots.saturating_mul(len.as_lit().unwrap_or(0) as u32);
-            total.min(u16::MAX as u32) as u16
+            total.min(MAX_DATA_ADDR)
         }
         _ => 1,
     }
@@ -4808,7 +4812,7 @@ fn emit_indexed_offset(
     field_type: &TypeExpr,
     indices: &[&Expr],
     span: Span,
-) -> Result<u16, CompileError> {
+) -> Result<u32, CompileError> {
     let single_level = indices.len() == 1;
     let mut current_type = field_type.clone();
     let mut emitted_first = false;
@@ -4836,25 +4840,26 @@ fn emit_indexed_offset(
                 span,
             });
         }
-        if len > u16::MAX as i64 {
-            return Err(CompileError {
-                message: format!(
-                    "data array length {} exceeds the 16-bit bound the bytecode supports",
-                    len
-                ),
-                span,
-            });
-        }
-        let len_u16 = len as u16;
         let stride = slots_for_data_type(&elem_type);
 
         compile_expr(fc, idx_expr)?;
         // Skip the explicit `BoundsCheck` when there is exactly
         // one index. The trailing `Op::GetDataIndexed` or
         // `Op::SetDataIndexed` will perform the same check
-        // against the field's total length, which equals this
-        // level's length for a single-level access.
+        // against the field's total length (a twenty-four-bit
+        // operand), which equals this level's length for a
+        // single-level access. A multi-level access emits a
+        // per-level `BoundsCheck`, whose operand stays sixteen
+        // bits, so a per-level dimension above 64 K is rejected.
         if !single_level {
+            let len_u16 = u16::try_from(len).map_err(|_| CompileError {
+                message: format!(
+                    "per-level indexed dimension {} exceeds the 16-bit BoundsCheck bound; \
+                     only the outermost (single-level) length uses the wider indexed operand",
+                    len
+                ),
+                span,
+            })?;
             fc.emit(Op::BoundsCheck(len_u16));
         }
         if stride != 1 {
@@ -4888,7 +4893,18 @@ fn emit_indexed_offset(
             span,
         });
     }
-    Ok(slots_for_data_type(field_type))
+    // The total feeds the twenty-four-bit `GetDataIndexed`/`SetDataIndexed`
+    // length operand, so it must fit strictly within `MAX_DATA_ADDR`.
+    let total = slots_for_data_type(field_type);
+    if total >= MAX_DATA_ADDR {
+        return Err(CompileError {
+            message: String::from(
+                "indexed data array length exceeds the 24-bit bound the bytecode supports",
+            ),
+            span,
+        });
+    }
+    Ok(total)
 }
 
 /// Emit a `state.field[i][j]...` read by computing the flat
@@ -5200,7 +5216,7 @@ fn compile_function_group(
     function_map: &BTreeMap<String, u16>,
     native_map: &BTreeMap<String, u16>,
     native_externals: &BTreeMap<String, bool>,
-    data_fields: &BTreeMap<String, Vec<(String, u16)>>,
+    data_fields: &BTreeMap<String, Vec<(String, u32)>>,
     const_fields: &BTreeMap<String, BTreeMap<String, crate::bytecode::ConstValue>>,
     type_info: &TypeInfo,
     fn_expr_types: &BTreeMap<String, BTreeMap<crate::token::Span, TypeExpr>>,
@@ -6102,10 +6118,10 @@ fn data_field_pool_bytes(ty: &TypeExpr, ti: &TypeInfo) -> usize {
 fn push_shared_slot_layout(
     ty: &TypeExpr,
     ti: &TypeInfo,
-    base_offset: u16,
+    base_offset: u32,
     span: crate::token::Span,
     out: &mut Vec<crate::bytecode::SharedSlotLayout>,
-) -> Result<u16, CompileError> {
+) -> Result<u32, CompileError> {
     let layout = ti
         .layout_context()
         .layout_for(ty)
@@ -6123,15 +6139,17 @@ fn push_shared_slot_layout(
 fn push_shared_layout_desc(
     layout: &crate::value_layout::LayoutDescriptor,
     ti: &TypeInfo,
-    base_offset: u16,
+    base_offset: u32,
     span: crate::token::Span,
     out: &mut Vec<crate::bytecode::SharedSlotLayout>,
-) -> Result<u16, CompileError> {
+) -> Result<u32, CompileError> {
     use crate::value_layout::{CompositeKind, LayoutDescriptor as LD, ScalarKind};
     let overflow = || CompileError {
-        message: String::from("shared data segment exceeds the 64KB flat host-buffer limit"),
+        message: String::from("shared data segment exceeds the 16 MB flat host-buffer limit"),
         span,
     };
+    // A running byte offset stays within the twenty-four-bit wire width.
+    let bounded = |v: u32| (v <= MAX_DATA_ADDR).then_some(v);
     match layout {
         LD::Scalar(kind) => {
             if matches!(kind, ScalarKind::Text | ScalarKind::Opaque) {
@@ -6143,7 +6161,7 @@ fn push_shared_layout_desc(
                     span,
                 });
             }
-            let size = u16::try_from(kind.size_in_bytes(ti.word_bytes, ti.float_bytes))
+            let size = u32::try_from(kind.size_in_bytes(ti.word_bytes, ti.float_bytes))
                 .map_err(|_| overflow())?;
             out.push(crate::bytecode::SharedSlotLayout {
                 offset: base_offset,
@@ -6154,10 +6172,13 @@ fn push_shared_layout_desc(
         }
         LD::Array { element, count } => {
             let mut off = base_offset;
-            let mut total: u16 = 0;
+            let mut total: u32 = 0;
             for _ in 0..*count {
                 let consumed = push_shared_layout_desc(element, ti, off, span, out)?;
-                off = off.checked_add(consumed).ok_or_else(overflow)?;
+                off = off
+                    .checked_add(consumed)
+                    .and_then(bounded)
+                    .ok_or_else(overflow)?;
                 total = total.checked_add(consumed).ok_or_else(overflow)?;
             }
             Ok(total)
@@ -6184,13 +6205,16 @@ fn push_shared_layout_desc(
                     ),
                     span,
                 })?;
+            // A single composite body still fits sixteen bits (`SharedSlotLayout::len`
+            // stays `u16`); only the segment offset widens. A composite larger than
+            // 64 KB is rejected here, which no admissible flat composite reaches.
             let len_u16 = u16::try_from(len).map_err(|_| overflow())?;
             out.push(crate::bytecode::SharedSlotLayout {
                 offset: base_offset,
                 kind: crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG | composite_kind.to_tag(),
                 len: len_u16,
             });
-            Ok(len_u16)
+            Ok(u32::from(len_u16))
         }
     }
 }
@@ -7101,10 +7125,10 @@ fn compile_for_in_data_array(
             span: for_stmt.span,
         });
     }
-    if !(0..=u16::MAX as i64).contains(&len) {
+    if !(0..MAX_DATA_ADDR as i64).contains(&len) {
         return Err(CompileError {
             message: format!(
-                "data array length {} is outside the supported 16-bit bound",
+                "data array length {} is outside the supported 24-bit bound",
                 len
             ),
             span: for_stmt.span,
@@ -7116,7 +7140,16 @@ fn compile_for_in_data_array(
             message: format!("unknown data field: {}.{}", data_name, field),
             span: for_stmt.span,
         })?;
-    let total_slots = (len as u16).saturating_mul(slots_for_data_type(elem_type));
+    let total_slots = (len as u32).saturating_mul(slots_for_data_type(elem_type));
+    if total_slots >= MAX_DATA_ADDR {
+        return Err(CompileError {
+            message: format!(
+                "data array `{}.{}` total slot count exceeds the 24-bit bound",
+                data_name, field
+            ),
+            span: for_stmt.span,
+        });
+    }
 
     // `_idx = 0`
     let zero_const = fc.add_constant(Value::Int(0));
