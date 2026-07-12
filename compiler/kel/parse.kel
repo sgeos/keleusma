@@ -1110,10 +1110,12 @@ fn step_body_dispatch(k: Word, v: Word) -> Word {
             // An open enum-variant match pattern (`Name::Variant()`) consumes its tokens.
             step_mpat(k, v)
         } else {
-        if mat.match_sp > 0 {
+        if mat.match_sp > 0 andalso da.da_phase == 0 {
             // Route the match structural tokens (a pattern, `=>`, the scrutinee's `{`, the
             // arms' `}`, or a match-level `,`) to step_match; the scrutinee and arm results
-            // dispatch normally.
+            // dispatch normally. A pending data-field read (da_phase nonzero) must flush
+            // first, so the scrutinee or arm-result DataRead lands before the match drain;
+            // step_daindex emits it and pushes the boundary token back for reinterpretation.
             let mp = mat.match_phase[mat.match_sp - 1];
             if mp == 2 orelse mp == 3 orelse (mp == 1 andalso k == Tok::LBrace() as Word) orelse (mp == 4 andalso k == Tok::RBrace() as Word) orelse (mp == 4 andalso k == Tok::Comma() as Word) {
                 step_match(k, v)

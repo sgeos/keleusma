@@ -1465,3 +1465,37 @@ fn a_require_directive_is_skipped() {
     assert_eq!(got.funcs.len(), 1);
     assert_eq!(got.funcs[0].3, vec![(2, 0), (2, 0), (3, 1)]);
 }
+
+// A multiheaded function with a `when` guard: each head is a separate declaration, and
+// the guard (between the return type and the body) is skipped, matching the reference.
+#[test]
+fn a_when_guarded_multihead_parses() {
+    let src = "yield step(r: Word) -> Word when r > 0 { yield r } \
+        yield step(r: Word) -> Word { yield 0 }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    assert_eq!(got.funcs.len(), 2);
+    assert_eq!(got.funcs[0].0, 2); // yield category
+    assert_eq!(got.funcs[0].3, vec![(2, 0), (24, 0)]); // yield r (Local 0, YieldExpr)
+}
+
+// A realistic body mixing a data blocks, a let, a data assignment, an indexed read, an
+// if statement, a call, and an enum-scrutinee match, as the compiler stages combine them.
+#[test]
+fn a_realistic_stage_like_body_parses() {
+    let src = "enum Kind { A, B } \
+        shared data src { buf: [Word; 8] } \
+        private data st { pos: Word, acc: Word } \
+        fn helper(x: Word) -> Word { x + 1 } \
+        fn run(n: Word) -> Word { \
+            let x = helper(n); \
+            st.pos = x; \
+            if n > 0 { st.acc = src.buf[st.pos]; } else { st.acc = 0; } \
+            match n { 1 => Kind::A() as Word, _ => st.acc } \
+        }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    assert_eq!(got.funcs.len(), 2);
+}
