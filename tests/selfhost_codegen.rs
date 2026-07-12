@@ -1531,10 +1531,11 @@ fn br_chunks(tokens: &[(i64, i64)]) -> Vec<i64> {
     chunks
 }
 
-/// Drive lexer.kel then parse.kel over a single-function `src`, returning that
-/// function's body records (the postorder (kind, arg) node stream) and its value
-/// parameter count. All parser inputs come from the lexer's output.
-fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize) {
+/// Drive lexer.kel then parse.kel over `src`, returning the last function's body
+/// records (the postorder (kind, arg) node stream), its value parameter count, and
+/// its codegen category (0 fn, 2 loop, 3 multihead, mapped from the parser's START
+/// category of 1 fn / 2 yield / 3 loop). All parser inputs come from the lexer.
+fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
     let (tokens, names) = br_lex(src);
     let id_of = |s: &str| {
         names
@@ -1582,9 +1583,12 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize) {
     // Track each function's records and value-parameter count, keeping the last
     // one at DONE. Multi-function sources (a callee then `main`) supply the whole
     // chunk table so parse.kel resolves the call, and `main` is the last function.
-    let mut last: (Vec<(i64, i64)>, usize) = (Vec::new(), 0);
+    let mut last: (Vec<(i64, i64)>, usize, i64) = (Vec::new(), 0, 0);
     let mut records: Vec<(i64, i64)> = Vec::new();
     let mut params = 0usize;
+    // Codegen category, mapped from the parser's START category: fn 1 -> 0,
+    // yield 2 -> 3 (multihead), loop 3 -> 2.
+    let mut cur_cat = 0i64;
     let (mut in_body, mut in_data, mut in_enum, mut in_use) = (false, false, false, false);
     let mut state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
@@ -1607,6 +1611,11 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize) {
             } else {
                 match code {
                     1..=3 => {
+                        cur_cat = match code {
+                            3 => 2, // loop
+                            2 => 3, // yield -> multihead
+                            _ => 0, // fn
+                        };
                         records = Vec::new();
                         params = 0;
                     }
@@ -1615,7 +1624,7 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize) {
                     10 => in_use = true,
                     12 => in_enum = true,
                     16 => in_body = true,
-                    5 => last = (std::mem::take(&mut records), params),
+                    5 => last = (std::mem::take(&mut records), params, cur_cat),
                     15 => return last,
                     _ => {}
                 }
@@ -1653,9 +1662,11 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize) {
 /// scrutinee, a (literal, result) pair per literal arm, and the wildcard result,
 /// then a MatchBuild (34) packing `temp*1024 + lit_count`, which assembles the
 /// match_parts entry (temp, wildcard, then the pairs) and builds the MatchIn node.
-/// This increment covers the arithmetic, comparison, bitwise, unary, short-circuit,
-/// block, if, scalar and indexed data-access, call, for-limit, and integer-match
-/// kinds; a record of any other kind is rejected until a later increment adds it.
+/// A YieldExpr (24) is unary, holding the yielded expression in `lhs`. This
+/// increment covers the arithmetic, comparison, bitwise, unary, short-circuit,
+/// block, if, scalar and indexed data-access, call, for-limit, integer-match, and
+/// yield kinds; a record of any other kind is rejected until a later increment adds
+/// it (the multiheaded dispatch and its head_parts remain).
 fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
     let mut nodes: Vec<Node> = Vec::new();
     let mut stack: Vec<i64> = Vec::new();
@@ -1780,7 +1791,7 @@ fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
                 });
                 (nodes.len() - 1) as i64
             }
-            6 | 10 | 13 => {
+            6 | 10 | 13 | 24 => {
                 let c = stack.pop().expect("unary operand");
                 nodes.push(Node {
                     kind,
@@ -1861,8 +1872,8 @@ fn parse_into_codegen_arithmetic_matches_the_reference() {
         ("fn main(a: Word) -> Word { a bxor 3 }", 5, 6),
     ];
     for &(src, input, expected) in cases {
-        let (records, param_count) = parse_function_records(src);
-        let body = reconstruct_body(&records, 0);
+        let (records, param_count, category) = parse_function_records(src);
+        let body = reconstruct_body(&records, category);
         let (emitted, pool, local_count) = run_codegen(&body, param_count);
 
         let reference = compile_src(src);
@@ -1947,8 +1958,8 @@ fn parse_into_codegen_blocks_and_control_flow_match_the_reference() {
         ),
     ];
     for &(src, input, expected) in cases {
-        let (records, param_count) = parse_function_records(src);
-        let body = reconstruct_body(&records, 0);
+        let (records, param_count, category) = parse_function_records(src);
+        let body = reconstruct_body(&records, category);
         let (emitted, pool, local_count) = run_codegen(&body, param_count);
 
         let reference = compile_src(src);
@@ -2027,8 +2038,8 @@ fn parse_into_codegen_data_access_reads_match_the_reference() {
         ),
     ];
     for &(src, input, expected) in cases {
-        let (records, param_count) = parse_function_records(src);
-        let body = reconstruct_body(&records, 0);
+        let (records, param_count, category) = parse_function_records(src);
+        let body = reconstruct_body(&records, category);
         let (emitted, pool, local_count) = run_codegen(&body, param_count);
 
         let reference = compile_src(src);
@@ -2092,8 +2103,8 @@ fn parse_into_codegen_calls_match_the_reference() {
         ),
     ];
     for &(src, input, expected) in cases {
-        let (records, param_count) = parse_function_records(src);
-        let body = reconstruct_body(&records, 0);
+        let (records, param_count, category) = parse_function_records(src);
+        let body = reconstruct_body(&records, category);
         let (emitted, pool, local_count) = run_codegen(&body, param_count);
 
         let reference = compile_src(src);
@@ -2149,8 +2160,8 @@ fn parse_into_codegen_indexed_writes_match_the_reference() {
         ),
     ];
     for &(src, input, expected) in cases {
-        let (records, param_count) = parse_function_records(src);
-        let body = reconstruct_body(&records, 0);
+        let (records, param_count, category) = parse_function_records(src);
+        let body = reconstruct_body(&records, category);
         let (emitted, pool, local_count) = run_codegen(&body, param_count);
 
         let reference = compile_src(src);
@@ -2206,8 +2217,8 @@ fn parse_into_codegen_for_limit_matches_the_reference() {
         ),
     ];
     for &(src, input, expected) in cases {
-        let (records, param_count) = parse_function_records(src);
-        let body = reconstruct_body(&records, 0);
+        let (records, param_count, category) = parse_function_records(src);
+        let body = reconstruct_body(&records, category);
         let (emitted, pool, local_count) = run_codegen(&body, param_count);
 
         let reference = compile_src(src);
@@ -2269,8 +2280,8 @@ fn parse_into_codegen_match_matches_the_reference() {
         ),
     ];
     for &(src, input, expected) in cases {
-        let (records, param_count) = parse_function_records(src);
-        let body = reconstruct_body(&records, 0);
+        let (records, param_count, category) = parse_function_records(src);
+        let body = reconstruct_body(&records, category);
         let (emitted, pool, local_count) = run_codegen(&body, param_count);
 
         let reference = compile_src(src);
@@ -2295,6 +2306,57 @@ fn parse_into_codegen_match_matches_the_reference() {
         let mut vm = Vm::new(built, &arena).expect("verify built");
         match vm.call(&[Value::Int(input)]).expect("call built") {
             VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
+            other => panic!("unexpected result for `{src}`: {other:?}"),
+        }
+    }
+}
+
+// The bridge over `yield` in a `loop` function: YieldExpr is unary, and the loop
+// category (2) makes run_codegen read to the terminating Reset. The whole
+// self-hosted path over a coroutine, byte-identical to the Rust compiler; a loop
+// yields rather than finishing, so the yielded value is checked.
+#[test]
+fn parse_into_codegen_yield_in_a_loop_matches_the_reference() {
+    let cases: &[(&str, i64, i64)] = &[
+        ("loop main(r: Word) -> Word { yield r + 1 }", 41, 42),
+        ("loop main(r: Word) -> Word { yield r * 2 }", 21, 42),
+        // a yield of a larger arithmetic expression.
+        ("loop main(r: Word) -> Word { yield r * 2 + r }", 14, 42),
+        // a let before the yield.
+        (
+            "loop main(r: Word) -> Word { let x = r + 1; yield x * 2 }",
+            20,
+            42,
+        ),
+    ];
+    for &(src, input, expected) in cases {
+        let (records, param_count, category) = parse_function_records(src);
+        assert_eq!(category, 2, "loop maps to codegen category 2");
+        let body = reconstruct_body(&records, category);
+        let (emitted, pool, local_count) = run_codegen(&body, param_count);
+
+        let reference = compile_src(src);
+        let idx = reference
+            .chunks
+            .iter()
+            .position(|c| c.name == "main")
+            .unwrap();
+        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
+        assert_eq!(
+            local_count, reference.chunks[idx].local_count as i64,
+            "local_count for `{src}`"
+        );
+
+        let mut built = compile_src(src);
+        built.chunks[idx].ops = emitted;
+        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].local_count = local_count as u16;
+        let need = required_persistent_capacity_for(&built);
+        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+        arena.resize_persistent(need).expect("resize");
+        let mut vm = Vm::new(built, &arena).expect("verify built");
+        match vm.call(&[Value::Int(input)]).expect("call built") {
+            VmState::Yielded(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
             other => panic!("unexpected result for `{src}`: {other:?}"),
         }
     }
