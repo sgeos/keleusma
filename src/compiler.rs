@@ -7907,6 +7907,24 @@ fn compile_enum_to_word(
     inner: &Expr,
     enum_name: &str,
 ) -> Result<(), CompileError> {
+    // Fast path: casting a known unit-variant constructor `Enum::Variant as
+    // Word` folds to the variant's discriminant constant, avoiding the
+    // construct-then-`IsEnum`-chain that the general path below emits. A named
+    // variant's discriminant is fixed at compile time, so the fold is sound; it
+    // also strictly reduces the op count and control-flow depth, so the WCET and
+    // WCMU bounds only tighten. Only the no-payload form is folded, since a
+    // payload constructor's argument expressions may have side effects that must
+    // still run.
+    if let Expr::EnumVariant { variant, args, .. } = inner
+        && args.is_empty()
+        && let Some(variants) = fc.type_info.enum_variant_order.get(enum_name)
+        && let Some((_, discriminant)) = variants.iter().find(|(n, _)| n == variant)
+    {
+        let disc_const = fc.add_constant(Value::Int(*discriminant));
+        fc.emit(Op::Const(disc_const));
+        return Ok(());
+    }
+
     // Evaluate the enum value and stash it in a local so each
     // variant test can re-read it without re-evaluating the
     // expression (which may have side effects).
@@ -12277,6 +12295,48 @@ mod tests {
             .collect();
         assert!(int_consts.contains(&-1));
         assert!(int_consts.contains(&1));
+    }
+
+    #[test]
+    fn compile_enum_variant_to_word_cast_folds_to_const() {
+        // A direct `Enum::Variant as Word` on a known unit variant folds to a single
+        // Const of the discriminant, with no IsEnum chain and no NewComposite.
+        let module = compile_str(
+            "enum Op { A = 1, B = 2, C = 21 }\n\
+             fn f() -> Word { Op::C() as Word }",
+        )
+        .unwrap();
+        let ops = &module.chunks[0].ops;
+        assert!(
+            !ops.iter().any(|op| matches!(op, Op::IsEnum(..))),
+            "the fold must not emit an IsEnum chain, got {ops:?}"
+        );
+        assert!(
+            !ops.iter().any(|op| matches!(op, Op::NewComposite(_))),
+            "the fold must not construct the variant, got {ops:?}"
+        );
+        assert!(
+            module.chunks[0]
+                .constants
+                .iter()
+                .any(|c| matches!(c, ConstValue::Int(21))),
+            "the discriminant 21 must be in the constant pool"
+        );
+
+        // A cast of a bound variable is not a literal variant constructor, so it keeps
+        // the general IsEnum-chain path.
+        let chained = compile_str(
+            "enum Op { A = 1, B = 2, C = 21 }\n\
+             fn f() -> Word { let x = Op::C(); x as Word }",
+        )
+        .unwrap();
+        assert!(
+            chained.chunks[0]
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::IsEnum(..))),
+            "a cast of a bound variable keeps the IsEnum chain"
+        );
     }
 
     #[test]
