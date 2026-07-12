@@ -4157,3 +4157,79 @@ fn self_assembled_scaffold_serializes_byte_identically() {
         assert_eq!(self_bytes, ref_bytes, "serialized module for {path}");
     }
 }
+
+// -- chunk-table metadata assembly --------------------------------------------
+//
+// The last driver-borrowed chunk fields (beyond the self-hosted ops/constants/
+// local_count) are the parameter count, block type, and parameter type tags. All three
+// come from parse.kel: the count and types from the header PARAM/PTYPE records, and the
+// block type from the category (fn -> Func, yield -> Reentrant, loop -> Stream). A
+// multiheaded function is one chunk described by its first head; the table is ordered by
+// chunk name.
+
+/// Assemble each chunk's (name, param_count, block_type, param_type tags) from the
+/// parsed functions, in chunk-name order.
+#[allow(clippy::type_complexity)]
+fn assemble_chunk_metadata(
+    fns: &[ParsedFn],
+    names: &[String],
+) -> Vec<(
+    String,
+    u8,
+    keleusma::bytecode::BlockType,
+    Vec<keleusma::bytecode::TypeTag>,
+)> {
+    use keleusma::bytecode::{BlockType, TypeTag};
+    let tag_of = |type_id: i64| -> TypeTag {
+        match names.get(type_id as usize).map(String::as_str) {
+            Some("Word") => TypeTag::Word,
+            Some("Byte") => TypeTag::Byte,
+            _ => TypeTag::Composite,
+        }
+    };
+    let mut chunks = Vec::new();
+    let mut i = 0;
+    while i < fns.len() {
+        let name = names[fns[i].name as usize].clone();
+        let first = &fns[i];
+        let mut j = i + 1;
+        while j < fns.len() && names[fns[j].name as usize] == name {
+            j += 1;
+        }
+        i = j;
+        let block_type = match first.cat {
+            1 => BlockType::Func,
+            2 => BlockType::Reentrant,
+            _ => BlockType::Stream,
+        };
+        let param_types: Vec<TypeTag> = first.param_types.iter().map(|&t| tag_of(t)).collect();
+        chunks.push((name, first.params as u8, block_type, param_types));
+    }
+    chunks.sort_by(|a, b| a.0.cmp(&b.0));
+    chunks
+}
+
+// The chunk-table metadata the driver assembles equals the reference compiler's --
+// parameter count, block type, and parameter type tags, in chunk-name order -- for every
+// stage source. With this, only the two WCET/WCMU declared-bound numbers remain borrowed.
+#[test]
+fn assembled_chunk_metadata_matches_the_reference() {
+    for path in [
+        "compiler/kel/lexer.kel",
+        "compiler/kel/reconstruct.kel",
+        "compiler/kel/codegen.kel",
+        "compiler/kel/parse.kel",
+    ] {
+        let src = std::fs::read_to_string(path).expect("read stage");
+        let (fns, names, _data, _enums) = parse_functions(&src);
+        let meta = assemble_chunk_metadata(&fns, &names);
+        let reference = compile_src(&src);
+        assert_eq!(meta.len(), reference.chunks.len(), "chunk count for {path}");
+        for (i, (m, c)) in meta.iter().zip(reference.chunks.iter()).enumerate() {
+            assert_eq!(m.0, c.name, "chunk {i} name for {path}");
+            assert_eq!(m.1, c.param_count, "param_count of `{}` for {path}", c.name);
+            assert_eq!(m.2, c.block_type, "block_type of `{}` for {path}", c.name);
+            assert_eq!(m.3, c.param_types, "param_types of `{}` for {path}", c.name);
+        }
+    }
+}
