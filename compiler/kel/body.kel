@@ -1,15 +1,16 @@
 // compiler/kel/body.kel — the body-expression parser, a sub-component of Stage 2.
 //
-// Increment 22: a function body over the full operator-precedence expression grammar,
+// Increment 23: a function body over the full operator-precedence expression grammar,
 // scalar and indexed data-field reads, `let` bindings, scalar and indexed data-field
-// assignments, the bare expression statement `expr;`, the `if`/`else` conditional with
-// nested statement-block branches, function calls, the `yield e` reentrant expression,
-// the `match` expression over integer-literal and unit enum-variant discriminant arms
-// with a trailing wildcard, the `Enum::Variant() as Word` cast folded to the variant's
-// discriminant literal, the bounded `for v in start..end limit CAP { body }` loop, and
-// a statement-only block whose implicit value is Unit. Real Keleusma code that compiles
-// and verifies on the current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and
-// compiler/MILESTONES.md (roadmap Step 2).
+// assignments, the bare expression statement `expr;`, the semicolon-less block-form
+// `if`/`else` statement, the `if`/`else` conditional with nested statement-block
+// branches, function calls, the `yield e` reentrant expression, the `match` expression
+// over integer-literal and unit enum-variant discriminant arms with a trailing wildcard,
+// the `Enum::Variant() as Word` cast folded to the variant's discriminant literal, the
+// bounded `for v in start..end limit CAP { body }` loop, and a statement-only block
+// whose implicit value is Unit. Real Keleusma code that compiles and verifies on the
+// current runtime. See docs/roadmap/V0_3_0_SELF_HOSTING.md and compiler/MILESTONES.md
+// (roadmap Step 2).
 //
 // Model. Stage 2's declaration parser (parser.kel) reads a function's signature and
 // brace-matches its body. This companion loop reads that body's tokens and produces
@@ -393,6 +394,7 @@ private data stmt {
     fold_i: Word,
     fold_start: Word,
     fold_cont: Word,
+    blockform: Word,
 }
 
 // `da` is the `data.field` (and `data.field[index]`) access machinery: `da_phase`/
@@ -903,6 +905,11 @@ fn step_folding() -> Word {
         if stmt.fold_cont == phase.fold_else {
             branch.if_sp = branch.if_sp - 1;
             ops.expect_operand = 0;
+            // The If node is now a completed block-form operand. Mark it so the next token
+            // decides whether it was the block tail (or a let value, call argument, or arm
+            // result), which a terminator follows, or a statement, which a statement-starter
+            // follows and step_dispatch then commits as an ExprStmt.
+            stmt.blockform = 1;
             Node::If() as Word
         } else {
             // fold_cont == phase.fold_forbody: the `for` body is folded; its value rests on the host
@@ -1300,6 +1307,14 @@ fn step_normal(k: Word, v: Word) -> Word {
 // `,` separating arms (phase 4, when no call argument list is open above the arm's
 // baseline). Every other token, including a scrutinee or arm-result expression,
 // dispatches normally.
+fn is_stmt_start(k: Word) -> Word {
+    if k == Tok::Ident() as Word orelse k == Tok::IntLit() as Word orelse k == Tok::If() as Word orelse k == Tok::For() as Word orelse k == Tok::Match() as Word orelse k == Tok::Yield() as Word orelse k == Tok::Let() as Word {
+        1
+    } else {
+        0
+    }
+}
+
 fn step_dispatch(k: Word, v: Word) -> Word {
     if ctrl.started == 0 {
         if k == Tok::LBrace() as Word {
@@ -1309,6 +1324,21 @@ fn step_dispatch(k: Word, v: Word) -> Word {
         }
         0
     } else {
+        // A just-completed block-form `if` operand (blockform, a one-token flag) that a
+        // statement-starter follows was an expression statement, not the block tail: commit
+        // it as an ExprStmt (its If value already rests on the host stack in source order)
+        // and let the routing below dispatch this token as the next statement. A terminator
+        // (a `;`, the block `}`, an operator, `)`, `,`, or a match boundary) instead clears
+        // the flag and routes normally, so the If stays the tail, a let value, or an arm.
+        if stmt.blockform == 1 {
+            stmt.blockform = 0;
+            if is_stmt_start(k) == 1 {
+                stmt.stmt_kind[stmt.stmt_count] = Node::ExprStmt() as Word;
+                stmt.stmt_arg[stmt.stmt_count] = 0;
+                stmt.stmt_count = stmt.stmt_count + 1;
+                ops.expect_operand = 1;
+            }
+        }
         if da.post_index == 1 {
             // The token after a `]` decides read versus indexed assignment.
             step_post_index(k)

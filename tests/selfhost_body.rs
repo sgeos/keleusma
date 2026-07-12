@@ -2332,6 +2332,54 @@ fn a_for_limit_body_may_be_a_bare_call() {
     assert_eq!(nodes[body.rhs as usize].kind, 20); // Unit tail
 }
 
+// A block-form `if`/`else` used as a statement, with no trailing `;` and a further
+// statement or tail after it, is an ExprStmt (kind 21) wrapping the If. This is the
+// pervasive stage idiom `if cond { ... } else { ... }` followed by more statements.
+#[test]
+fn a_block_form_if_statement_is_an_expr_stmt() {
+    let src = "fn f(x: Word) -> Word { if x > 0 { x } else { x } x }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
+    // The root is the ExprStmt wrapping the If; its continuation (rhs) is the tail x.
+    let es = nodes[root as usize];
+    assert_eq!(es.kind, 21);
+    assert_eq!(nodes[es.lhs as usize].kind, 4); // the discarded If
+    assert_eq!(nodes[es.rhs as usize].kind, 2); // the tail Local x
+}
+
+// A statement-form `if` may be followed by a `let` binding, then the tail. The `let`
+// keyword is a statement-starter that commits the preceding if as an ExprStmt.
+#[test]
+fn a_block_form_if_statement_precedes_a_let() {
+    let src = "fn f(x: Word) -> Word { if x > 0 { x } else { x } let y = x; y }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
+    // Root is the ExprStmt(If); its continuation is the LetIn(y), whose continuation is y.
+    let es = nodes[root as usize];
+    assert_eq!(es.kind, 21);
+    assert_eq!(nodes[es.lhs as usize].kind, 4); // If
+    let letin = nodes[es.rhs as usize];
+    assert_eq!(letin.kind, 5); // LetIn y
+    assert_eq!(nodes[letin.rhs as usize].kind, 2); // tail Local y
+}
+
+// Two consecutive statement-form conditionals, each committed as an ExprStmt when the
+// next `if` (a statement-starter) is read, then a tail.
+#[test]
+fn consecutive_block_form_if_statements() {
+    let src =
+        "fn f(a: Word, b: Word) -> Word { if a > 0 { a } else { b } if b > 0 { a } else { b } a }";
+    assert_eq!(run_body(src), reference_body(src));
+    let (nodes, _call_args, _limit_parts, _match_parts, root) = run_body(src);
+    let first = nodes[root as usize];
+    assert_eq!(first.kind, 21); // ExprStmt(If)
+    assert_eq!(nodes[first.lhs as usize].kind, 4);
+    let second = nodes[first.rhs as usize];
+    assert_eq!(second.kind, 21); // ExprStmt(If)
+    assert_eq!(nodes[second.lhs as usize].kind, 4);
+    assert_eq!(nodes[second.rhs as usize].kind, 2); // tail Local a
+}
+
 // A `yield e` tail lowers to a YieldExpr (kind 24) holding the yielded expression in
 // `lhs`. The self-hosted stages' own `loop main(resume) { yield step() }` shape.
 #[test]
