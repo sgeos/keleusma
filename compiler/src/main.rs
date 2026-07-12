@@ -1,20 +1,25 @@
 //! Driver and bootstrap harness for the self-hosted Keleusma compiler (V0.3.0).
 //!
 //! This is scaffolding. The three pipeline stages live in Keleusma source under
-//! `kel/` and are not yet implemented; this driver establishes the structure that
-//! will register the `compiler::` natives, drive the yield/resume pipeline, run the
-//! bootstrap phases, and validate byte-identical output against the Rust-hosted
-//! reference compiler. See `README.md` and `MILESTONES.md`; the authoritative design
-//! is `docs/roadmap/V0_3_0_SELF_HOSTING.md`.
+//! `kel/`. The codegen and parser stages are implemented (the parser as the merged
+//! `parse.kel`, which parses a whole declaration including its body in one pass); this
+//! driver establishes the structure that will register the `compiler::` natives, drive
+//! the yield/resume pipeline, run the bootstrap phases, and validate byte-identical
+//! output against the Rust-hosted reference compiler. See `README.md` and `MILESTONES.md`;
+//! the authoritative design is `docs/roadmap/V0_3_0_SELF_HOSTING.md`.
 
 /// The bytecode format the self-hosted compiler must emit. Sourced from the parent
 /// runtime so the two compilers cannot drift on the wire format.
 const TARGET_BYTECODE_VERSION: u16 = keleusma::bytecode::BYTECODE_VERSION;
 
-/// The three pipeline stages, in migration order (roadmap Steps 1, 2, 3).
+/// The three pipeline stages, in migration order (roadmap Steps 1, 2, 3). The parser
+/// stage is the merged `parse.kel`, which parses a whole top-level declaration including
+/// its function body in one pass; the earlier split `parser.kel` and body `body.kel`
+/// loops are retained as the reference implementations and broader test coverage until
+/// `parse.kel` is composed into an end-to-end pipeline with matching coverage.
 const STAGES: &[(&str, &str)] = &[
     ("lexer", "kel/lexer.kel"),
-    ("parser", "kel/parser.kel"),
+    ("parser", "kel/parse.kel"),
     ("codegen", "kel/codegen.kel"),
 ];
 
@@ -85,7 +90,13 @@ fn status() {
     println!("tests/selfhost_codegen.rs and `lex <file>`). The codegen stage is now");
     println!("FULLY SELF-HOSTING: all 34 of its functions, including the multiheaded");
     println!("`yield emit_next` dispatch and the `loop main`, compile themselves");
-    println!("byte-identically. V0.3.0 ships when the bootstrap reaches a fixed point.");
+    println!("byte-identically. The parser stage (Step 2) is now the merged parse.kel,");
+    println!("which parses a whole top-level declaration -- a function with its full");
+    println!("body, a data block, an enum, or a use import -- in a single pass, folding");
+    println!("body.kel's node-forest walk into parser.kel's declaration scan and");
+    println!("resolving data fields and enums by accumulating their tables as it parses");
+    println!("(see tests/selfhost_parse.rs). V0.3.0 ships when the bootstrap reaches a");
+    println!("fixed point.");
 }
 
 /// Run Stage 1 (the self-hosted lexer) over `path` and print the token stream.
