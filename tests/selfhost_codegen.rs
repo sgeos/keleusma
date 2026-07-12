@@ -2522,7 +2522,7 @@ struct ParsedFn {
 /// Drive lexer.kel then parse.kel over `src` and return every function it yields, each
 /// with its guard and body records, plus the interned-name table. Multiheaded functions
 /// appear as several same-named entries in declaration order.
-fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>) {
+fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>) {
     let (tokens, names) = br_lex(src);
     let id_of = |s: &str| {
         names
@@ -2575,6 +2575,9 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>) {
 
     let mut fns: Vec<ParsedFn> = Vec::new();
     let mut cur: Option<ParsedFn> = None;
+    // Every data block's header records (DSTART, then PARAM/PTYPE/ASIZE per field, then
+    // END), concatenated in declaration order, for the driver's own data-layout assembly.
+    let mut data_records: Vec<(i64, i64)> = Vec::new();
     let (mut in_body, mut in_guard, mut in_data, mut in_enum, mut in_use) =
         (false, false, false, false, false);
     let mut state = vm
@@ -2596,7 +2599,12 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>) {
                     _ => cur.as_mut().unwrap().guard.push((code, val)),
                 }
             } else if in_data {
-                in_data = code != 5;
+                if code == 5 {
+                    data_records.push((5, 0));
+                    in_data = false;
+                } else if code != 0 {
+                    data_records.push((code, val));
+                }
             } else if in_enum {
                 in_enum = code != 5;
             } else if in_use {
@@ -2613,13 +2621,16 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>) {
                         })
                     }
                     4 => cur.as_mut().unwrap().params += 1,
-                    9 => in_data = true,
+                    9 => {
+                        in_data = true;
+                        data_records.push((9, val));
+                    }
                     10 => in_use = true,
                     12 => in_enum = true,
                     16 => in_body = true,
                     17 => in_guard = true,
                     5 => fns.push(cur.take().unwrap()),
-                    15 => return (fns, names),
+                    15 => return (fns, names, data_records),
                     _ => {}
                 }
             }
@@ -2705,7 +2716,7 @@ fn build_multihead_bridge(heads: &[&ParsedFn], pc: usize) -> Body {
 /// Reconstruct the multiheaded function named `head_name` in `src` from the record stream
 /// and assert its emitted ops are byte-identical to the Rust compiler's single chunk.
 fn assert_multihead_matches(src: &str, head_name: &str) {
-    let (fns, names) = parse_functions(src);
+    let (fns, names, _) = parse_functions(src);
     let heads: Vec<&ParsedFn> = fns
         .iter()
         .filter(|f| names[f.name as usize] == head_name)
@@ -2759,7 +2770,7 @@ fn parse_into_codegen_multihead_matches_the_reference() {
 /// reference's ops. The result is a runnable module whose every source-defined chunk was
 /// emitted by the self-hosted pipeline.
 fn self_host_compile(src: &str) -> Module {
-    let (fns, names) = parse_functions(src);
+    let (fns, names, _) = parse_functions(src);
     let mut module = compile_src(src);
     let mut i = 0;
     while i < fns.len() {
@@ -3562,7 +3573,7 @@ fn reconstruct_kel_matches_rust_for_multihead() {
          yield pick(k: Word) -> Word { yield 0 }",
     ];
     for src in cases {
-        let (fns, names) = parse_functions(src);
+        let (fns, names, _) = parse_functions(src);
         // Group the last run of same-named heads (the multiheaded function).
         let last_name = names[fns.last().unwrap().name as usize].clone();
         let group: Vec<&ParsedFn> = fns
@@ -3595,5 +3606,98 @@ fn reconstruct_kel_matches_rust_for_multihead() {
             via_rust.match_parts[..],
             "match_parts for `{src}`"
         );
+    }
+}
+
+// -- data-layout assembly from parse.kel's data-block records -----------------
+//
+// The self-host compile still borrows the module's data layout from the reference.
+// The first step to assembling it from the stages: parse.kel already emits each data
+// block's header (DSTART packing name and visibility, a PARAM per field name, a PTYPE
+// per type, an ASIZE per array field, END), so the driver can build the slot table
+// itself. This is the same two-pass expansion the Rust compiler does -- shared blocks
+// first, then private, const blocks producing no runtime slots, array fields expanding
+// to one `block.field[k]` slot per element.
+
+/// Assemble the data-slot table from parse.kel's data-block record stream, mapping the
+/// interned block, field, and (unused here) type ids through the name table.
+fn assemble_data_slots(
+    data_records: &[(i64, i64)],
+    names: &[String],
+) -> Vec<keleusma::bytecode::DataSlot> {
+    use keleusma::bytecode::{DataSlot, SlotVisibility};
+    struct Blk {
+        name_id: i64,
+        vis: i64,
+        fields: Vec<(i64, i64)>, // (field name id, element count)
+    }
+    let mut blocks: Vec<Blk> = Vec::new();
+    for &(code, val) in data_records {
+        match code {
+            9 => blocks.push(Blk {
+                name_id: val / 4,
+                vis: val % 4,
+                fields: Vec::new(),
+            }),
+            4 => blocks.last_mut().unwrap().fields.push((val, 1)),
+            8 => blocks.last_mut().unwrap().fields.last_mut().unwrap().1 = val,
+            // 6 (PTYPE) is not needed for the slot names; 5 (END) is a boundary.
+            _ => {}
+        }
+    }
+    let mut slots = Vec::new();
+    // Pass 0 shared, pass 1 private; visibility 2 (const) yields no runtime slots.
+    for pass_vis in [0i64, 1i64] {
+        let visibility = if pass_vis == 0 {
+            SlotVisibility::Shared
+        } else {
+            SlotVisibility::Private
+        };
+        for b in blocks.iter().filter(|b| b.vis == pass_vis) {
+            let bname = &names[b.name_id as usize];
+            for &(fid, count) in &b.fields {
+                let fname = &names[fid as usize];
+                if count == 1 {
+                    slots.push(DataSlot {
+                        name: format!("{bname}.{fname}"),
+                        visibility,
+                    });
+                } else {
+                    for k in 0..count {
+                        slots.push(DataSlot {
+                            name: format!("{bname}.{fname}[{k}]"),
+                            visibility,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    slots
+}
+
+// The data-slot table the driver assembles from parse.kel's data-block records is
+// byte-identical (name and visibility, in order) to the one the Rust-hosted compiler
+// bakes, for every stage source: shared-then-private ordering, array expansion, and
+// const blocks producing no slots.
+#[test]
+fn assembled_data_slots_match_the_reference() {
+    let cases = [
+        "compiler/kel/lexer.kel",
+        "compiler/kel/reconstruct.kel",
+        "compiler/kel/codegen.kel",
+        "compiler/kel/parse.kel",
+    ];
+    for path in cases {
+        let src = std::fs::read_to_string(path).expect("read stage");
+        let (_fns, names, data_records) = parse_functions(&src);
+        let slots = assemble_data_slots(&data_records, &names);
+        let reference = compile_src(&src);
+        let ref_slots = &reference.data_layout.as_ref().expect("data layout").slots;
+        assert_eq!(slots.len(), ref_slots.len(), "slot count for {path}");
+        for (i, (a, b)) in slots.iter().zip(ref_slots.iter()).enumerate() {
+            assert_eq!(a.name, b.name, "slot {i} name for {path}");
+            assert_eq!(a.visibility, b.visibility, "slot {i} visibility for {path}");
+        }
     }
 }
