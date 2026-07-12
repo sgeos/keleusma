@@ -1,7 +1,7 @@
-//! Merged parser stage (`compiler/kel/parse.kel`), increment 2: one streaming `loop` that
-//! parses a whole top-level function declaration whose body is an operator-precedence
-//! expression over integer literals and parameter references (arithmetic, comparison,
-//! bitwise, short-circuit, parentheses, and the unary `-`/`not`), in a single pass.
+//! Merged parser stage (`compiler/kel/parse.kel`), increment 3: one streaming `loop` that
+//! parses a whole top-level function declaration whose body is a BLOCK — zero or more
+//! `let name = value;` bindings followed by a tail expression (or, statement-only, an
+//! implicit Unit) over the operator grammar of increment 2 — in a single pass.
 //!
 //! A throwaway adapter maps the reference tokenizer into the stage's unified `(kind,
 //! value)` token stream. The stage emits header records `dkind + val*64` (1/2/3 START of a
@@ -24,7 +24,7 @@
 ))]
 
 use keleusma::Arena;
-use keleusma::ast::{BinOp, Expr, FunctionCategory, Literal, Pattern, UnaryOp};
+use keleusma::ast::{BinOp, Block, Expr, FunctionCategory, Literal, Pattern, Stmt, UnaryOp};
 use keleusma::bytecode::Value;
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
@@ -66,6 +66,7 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
             TokenKind::Colon => (9, 0),
             TokenKind::Comma => (10, 0),
             TokenKind::IntLit(n) => (12, *n),
+            TokenKind::Eq => (17, 0),
             TokenKind::Plus => (21, 0),
             TokenKind::Minus => (22, 0),
             TokenKind::Star => (23, 0),
@@ -83,6 +84,8 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
             TokenKind::Bxor => (35, 0),
             TokenKind::Andalso => (36, 0),
             TokenKind::Orelse => (37, 0),
+            TokenKind::Let => (38, 0),
+            TokenKind::Semicolon => (39, 0),
             TokenKind::Eof => continue,
             _ => (4, 0),
         };
@@ -191,25 +194,28 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
 /// operator code, the short-circuit booleans their own kinds (8 Andalso, 9 Orelse), and
 /// the unary prefixes 6 Not / 10 Neg. Parenthesised grouping is structural in the AST, so
 /// it contributes no node, exactly as the stage discards its parenthesis marker.
-fn flatten(e: &Expr, params: &[&str], out: &mut Vec<(i64, i64)>) {
+fn flatten(e: &Expr, scope: &[(String, i64)], out: &mut Vec<(i64, i64)>) {
     match e {
         Expr::Literal {
             value: Literal::Int(n),
             ..
         } => out.push((1, *n)),
         Expr::Ident { name, .. } => {
-            let slot = params
+            // The scope maps each bound name to its frame slot; the most recent binding of
+            // a name wins (a `let` shadows a parameter).
+            let slot = scope
                 .iter()
-                .position(|p| *p == name.as_str())
-                .unwrap_or_else(|| panic!("identifier {name} is not a parameter"))
-                as i64;
+                .rev()
+                .find(|(n, _)| n == name)
+                .map(|(_, s)| *s)
+                .unwrap_or_else(|| panic!("identifier {name} is not in scope"));
             out.push((2, slot));
         }
         Expr::BinOp {
             op, left, right, ..
         } => {
-            flatten(left, params, out);
-            flatten(right, params, out);
+            flatten(left, scope, out);
+            flatten(right, scope, out);
             let (kind, code) = match op {
                 BinOp::Add => (3, 1),
                 BinOp::Mul => (3, 2),
@@ -232,15 +238,48 @@ fn flatten(e: &Expr, params: &[&str], out: &mut Vec<(i64, i64)>) {
             out.push((kind, code));
         }
         Expr::UnaryOp { op, operand, .. } => {
-            flatten(operand, params, out);
+            flatten(operand, scope, out);
             let kind = match op {
                 UnaryOp::Not => 6,
                 UnaryOp::Neg => 10,
-                other => panic!("increment 2 handles only `-` and `not`, got {other:?}"),
+                other => panic!("increment 3 handles only `-` and `not`, got {other:?}"),
             };
             out.push((kind, 0));
         }
-        other => panic!("increment 2 handles operator expressions, got {other:?}"),
+        other => panic!("increment 3 handles operator expressions, got {other:?}"),
+    }
+}
+
+/// Flatten a block: each `let` value in source order, then the tail (or a Unit for a
+/// statement-only block), then a LetIn node (kind 5, arg = slot) per binding last to
+/// first, mirroring the stage's block fold. A binding claims the next frame slot after
+/// the parameters and joins the scope so a later value or the tail resolves it.
+fn flatten_block(block: &Block, params: &[(String, i64)], out: &mut Vec<(i64, i64)>) {
+    let mut scope = params.to_vec();
+    let mut let_slots = Vec::new();
+    let mut next_slot = params.len() as i64;
+    for st in &block.stmts {
+        match st {
+            Stmt::Let(l) => {
+                flatten(&l.value, &scope, out);
+                let name = match &l.pattern {
+                    Pattern::Variable(n, _) => n.clone(),
+                    other => panic!("test uses simple let patterns only, got {other:?}"),
+                };
+                let slot = next_slot;
+                next_slot += 1;
+                scope.push((name, slot));
+                let_slots.push(slot);
+            }
+            other => panic!("increment 3 handles only `let` statements, got {other:?}"),
+        }
+    }
+    match &block.tail_expr {
+        Some(tail) => flatten(tail, &scope, out),
+        None => out.push((20, 0)), // statement-only block: implicit Unit
+    }
+    for slot in let_slots.iter().rev() {
+        out.push((5, *slot)); // LetIn, arg = the binding's slot
     }
 }
 
@@ -270,13 +309,14 @@ fn reference(src: &str, names: &[String]) -> Parsed {
             })
             .collect();
         let params: Vec<i64> = param_names.iter().map(|n| id(n)).collect();
-        let tail = f
-            .body
-            .tail_expr
-            .as_ref()
-            .expect("an expression body has a tail");
+        // The frame scope: each parameter at its positional slot.
+        let param_scope: Vec<(String, i64)> = param_names
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.to_string(), i as i64))
+            .collect();
         let mut body = Vec::new();
-        flatten(tail, &param_names, &mut body);
+        flatten_block(&f.body, &param_scope, &mut body);
         funcs.push((cat, id(&f.name), params, body));
     }
     Parsed { funcs }
@@ -353,4 +393,52 @@ fn two_expression_bodies_in_sequence() {
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
     assert_eq!(got.funcs.len(), 2);
+}
+
+// A single `let` binding followed by a tail: the value, the tail, then a LetIn wrapping
+// them. The binding's slot is the first after the parameters.
+#[test]
+fn a_let_binding_folds_into_a_letin() {
+    let src = "fn f(a: Word) -> Word { let x = a + a; x }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    // a, a, BinOp(Add) [the value], Local(x, slot 1) [tail], LetIn(slot 1).
+    assert_eq!(got.funcs[0].3, vec![(2, 0), (2, 0), (3, 1), (2, 1), (5, 1)]);
+}
+
+// Two `let` bindings: the second may reference the first; the fold wraps last to first.
+#[test]
+fn two_let_bindings_fold_last_to_first() {
+    let src = "fn f(a: Word) -> Word { let x = a + a; let y = x + a; y }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    // x value (a,a,Add), y value (x=slot1, a=slot0, Add), tail y=slot2,
+    // then LetIn(y=slot2), LetIn(x=slot1).
+    assert_eq!(
+        got.funcs[0].3,
+        vec![
+            (2, 0),
+            (2, 0),
+            (3, 1),
+            (2, 1),
+            (2, 0),
+            (3, 1),
+            (2, 2),
+            (5, 2),
+            (5, 1)
+        ]
+    );
+}
+
+// A statement-only block (a `let` with no tail) has the implicit Unit value.
+#[test]
+fn a_statement_only_block_has_a_unit_tail() {
+    let src = "fn f(a: Word) -> Word { let x = a; }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    // a [value], Unit [tail], LetIn(slot 1).
+    assert_eq!(got.funcs[0].3, vec![(2, 0), (20, 0), (5, 1)]);
 }
