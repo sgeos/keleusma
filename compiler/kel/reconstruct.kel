@@ -43,6 +43,16 @@ shared data io {
     head_parts: [Word; 64],
     out_param_count: Word,
     out_category: Word,
+    // Multiheaded-dispatch input, appended after the codegen.kel-mirroring output so
+    // the output slot range is unchanged. `head_count` is zero for a single-headed
+    // function; otherwise each head's guard and body records occupy the ranges
+    // `[guard_start, guard_start+guard_len)` and `[body_start, body_start+body_len)`
+    // in `rec_kind`/`rec_arg` (a `guard_len` of zero means the head is unguarded).
+    head_count: Word,
+    head_guard_start: [Word; 16],
+    head_guard_len: [Word; 16],
+    head_body_start: [Word; 16],
+    head_body_len: [Word; 16],
 }
 
 // The node-index work stack and the running array counts. `node_count` is the next
@@ -58,6 +68,10 @@ private data rs {
     mp: Word,
     pending: [Word; 8],
     pcount: Word,
+    // Added to every Local (2) node's slot while reconstructing a multiheaded head,
+    // remapping the head's frame slots into its parameter window `(head+1)*pc`. Zero
+    // for a single-headed function, so the Local slot passes through unchanged.
+    remap_base: Word,
 }
 
 // Push a node index onto the work stack.
@@ -109,7 +123,11 @@ fn is_unary(k: Word) -> Word {
 // the branches in lhs/rhs.
 fn step(k: Word, a: Word) -> Word {
     if is_leaf(k) == 1 {
-        emit(k, a, 0, 0)
+        if k == 2 {
+            emit(2, a + rs.remap_base, 0, 0)
+        } else {
+            emit(k, a, 0, 0)
+        }
     } else {
     if is_binary(k) == 1 {
         let r = pop();
@@ -216,9 +234,44 @@ fn step(k: Word, a: Word) -> Word {
     } } } } } } } } } }
 }
 
-// Reconstruct the whole record stream in one call: reset the state, fold each record,
-// then publish the single remaining stack entry as the root and pass the category and
-// parameter count through. Yields the node count as a completion signal.
+// Reconstruct one record range on a fresh work stack (the node array and the side
+// arrays accumulate across ranges), returning its single remaining node -- the range
+// root. A multihead's per-head guards and bodies each reconstruct as one range.
+fn reconstruct_range(start: Word, len: Word) -> Word {
+    rs.sp = 0;
+    for i in 0..len limit 1024 {
+        step(io.rec_kind[start + i], io.rec_arg[start + i]);
+    }
+    rs.stack[0]
+}
+
+// Reconstruct a multiheaded function: each head's guard and body reconstruct with the
+// head's frame slots remapped into its parameter window, the four-word head_parts
+// entry (param_start, guarded, guard node, body node) is written, and a MultiHead
+// node (kind 25, rhs the head count) is the root.
+fn build_multihead(pc: Word) -> Word {
+    for h in 0..io.head_count limit 16 {
+        let base = (h + 1) * pc;
+        rs.remap_base = base;
+        let guarded = if io.head_guard_len[h] > 0 { 1 } else { 0 };
+        let guard_node = if guarded == 1 {
+            reconstruct_range(io.head_guard_start[h], io.head_guard_len[h])
+        } else {
+            0
+        };
+        let body_node = reconstruct_range(io.head_body_start[h], io.head_body_len[h]);
+        io.head_parts[h * 4] = base;
+        io.head_parts[h * 4 + 1] = guarded;
+        io.head_parts[h * 4 + 2] = guard_node;
+        io.head_parts[h * 4 + 3] = body_node;
+    }
+    rs.remap_base = 0;
+    emit(25, 0, 0, io.head_count)
+}
+
+// Reconstruct one function in a single call: reset the state, dispatch to the
+// single-headed body walk or the multiheaded assembly, publish the root, and pass the
+// category and parameter count through. Yields the node count as a completion signal.
 loop main(resume: Word) -> Word {
     rs.node_count = 0;
     rs.sp = 0;
@@ -226,10 +279,12 @@ loop main(resume: Word) -> Word {
     rs.lp = 0;
     rs.mp = 0;
     rs.pcount = 0;
-    for i in 0..io.rec_count limit 1024 {
-        step(io.rec_kind[i], io.rec_arg[i]);
+    rs.remap_base = 0;
+    if io.head_count > 0 {
+        io.root = build_multihead(io.in_param_count);
+    } else {
+        io.root = reconstruct_range(0, io.rec_count);
     }
-    io.root = rs.stack[0];
     io.out_param_count = io.in_param_count;
     io.out_category = io.in_category;
     yield rs.node_count
