@@ -39,6 +39,10 @@ enum Tok {
     Colon = 9,
     Comma = 10,
     IntLit = 12,
+    Data = 13,
+    Shared = 14,
+    Private = 15,
+    Const = 16,
     Eq = 17,
     Plus = 21,
     Minus = 22,
@@ -67,6 +71,8 @@ enum Tok {
     Match = 48,
     FatArrow = 49,
     Underscore = 50,
+    LBracket = 41,
+    RBracket = 42,
 }
 
 // The node-record kinds the body walk yields (a subset of body.kel's `enum Node`).
@@ -126,6 +132,9 @@ private data ps {
     rtype: Word,
     arr: Word,
     arr_ret: Word,
+    dvis: Word,
+    init: Word,
+    idepth: Word,
     in_body: Word,
     started: Word,
     pend_end: Word,
@@ -934,16 +943,39 @@ fn arm_body() -> Word {
 
 fn header_step(k: Word, v: Word) -> Word {
     if ps.mode == 0 {
-        if k == 5 {
-            ps.dkind = 2;
+        // A `shared`/`private`/`const` modifier or a bare `data` keyword opens a data
+        // block; otherwise a function category keyword (`yield`, `loop`, or `fn`).
+        if k == 14 {
+            ps.dvis = 0;
+            ps.mode = 4;
+            0
         } else {
-        if k == 6 {
-            ps.dkind = 3;
+        if k == 15 {
+            ps.dvis = 1;
+            ps.mode = 4;
+            0
         } else {
-            ps.dkind = 1;
-        } }
-        ps.mode = 1;
-        0
+        if k == 16 {
+            ps.dvis = 2;
+            ps.mode = 4;
+            0
+        } else {
+        if k == 13 {
+            ps.dvis = 0;
+            ps.mode = 5;
+            0
+        } else {
+            if k == 5 {
+                ps.dkind = 2;
+            } else {
+            if k == 6 {
+                ps.dkind = 3;
+            } else {
+                ps.dkind = 1;
+            } }
+            ps.mode = 1;
+            0
+        } } } }
     } else {
     if ps.mode == 1 {
         if k == 1 {
@@ -961,8 +993,142 @@ fn header_step(k: Word, v: Word) -> Word {
             0
         }
     } else {
+    if ps.mode == 2 {
         header_sig(k, v)
-    } }
+    } else {
+        header_data(k, v)
+    } } }
+}
+
+// The data-block declaration modes: 4 expect `data` after a modifier, 5 the block name
+// (emit DSTART), 6 the opening `{`, 7 the field list (a PARAM per field name, a PTYPE per
+// type, an ASIZE for an array field, a const `=` initializer skipped, `}` ends the block).
+// DSTART packs the name and visibility as `name * 4 + visibility` (0 shared, 1 private,
+// 2 const).
+fn header_data(k: Word, v: Word) -> Word {
+    if ps.mode == 4 {
+        if k == 13 {
+            ps.mode = 5;
+        }
+        0
+    } else {
+    if ps.mode == 5 {
+        if k == 1 {
+            ps.pname = 0;
+            ps.ptype = 0;
+            ps.arr = 0;
+            ps.init = 0;
+            ps.idepth = 0;
+            ps.mode = 6;
+            9 + (v * 4 + ps.dvis) * 64
+        } else {
+            0
+        }
+    } else {
+    if ps.mode == 6 {
+        if k == 2 {
+            ps.pname = 1;
+            ps.mode = 7;
+        }
+        0
+    } else {
+        if ps.init == 1 {
+            header_field_skip(k)
+        } else {
+            header_field(k, v)
+        }
+    } } }
+}
+
+// A const field's initializer skip, depth-aware over `()`/`[]`/`{}` so a nested tuple,
+// array, or struct initializer is consumed whole; a top-level `,` ends the field and a
+// top-level `}` ends the block.
+fn header_field_skip(k: Word) -> Word {
+    if k == 2 orelse k == 7 orelse k == 41 {
+        ps.idepth = ps.idepth + 1;
+        0
+    } else {
+    if k == 8 orelse k == 42 {
+        if ps.idepth > 0 {
+            ps.idepth = ps.idepth - 1;
+        }
+        0
+    } else {
+    if k == 10 {
+        if ps.idepth == 0 {
+            ps.init = 0;
+            ps.pname = 1;
+        }
+        0
+    } else {
+    if k == 3 {
+        if ps.idepth == 0 {
+            ps.init = 0;
+            ps.mode = 0;
+            5
+        } else {
+            ps.idepth = ps.idepth - 1;
+            0
+        }
+    } else {
+        0
+    } } } }
+}
+
+// The field list: a PARAM per field name, a PTYPE per type (with an ASIZE for an array
+// field), a const `=` opening an initializer skip, the closing `}` ending the block.
+fn header_field(k: Word, v: Word) -> Word {
+    if k == 1 {
+        if ps.arr == 1 {
+            ps.arr = 2;
+            6 + v * 64
+        } else {
+        if ps.pname == 1 {
+            ps.pname = 0;
+            4 + v * 64
+        } else {
+        if ps.ptype == 1 {
+            ps.ptype = 0;
+            6 + v * 64
+        } else {
+            0
+        } }
+        }
+    } else {
+    if k == 41 {
+        if ps.ptype == 1 {
+            ps.ptype = 0;
+            ps.arr = 1;
+        }
+        0
+    } else {
+    if k == 12 {
+        if ps.arr == 2 {
+            ps.arr = 0;
+            8 + v * 64
+        } else {
+            0
+        }
+    } else {
+    if k == 9 {
+        ps.ptype = 1;
+        0
+    } else {
+    if k == 10 {
+        ps.pname = 1;
+        0
+    } else {
+    if k == 17 {
+        ps.init = 1;
+        ps.idepth = 0;
+        0
+    } else {
+    if k == 3 {
+        ps.mode = 0;
+        5
+    } else {
+        0
+    } } } } } } }
 }
 
 // Mode 2: the signature scan, ending when the first `{` at depth zero arms the body walk.

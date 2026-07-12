@@ -1,8 +1,9 @@
-//! Merged parser stage (`compiler/kel/parse.kel`), increment 5: one streaming `loop` that
-//! parses a whole top-level function declaration whose body may contain the `if`/`else`
-//! conditional, the `yield e` reentrant expression, and the bounded
-//! `for v in lo..hi limit CAP { body }` loop, over the `let` blocks and operator grammar
-//! of the earlier increments, in a single pass.
+//! Merged parser stage (`compiler/kel/parse.kel`), increment 6a: one streaming `loop` that
+//! parses a whole top-level function declaration (its header and full body over the
+//! expression, `let`, `if`/`else`, `yield`, `for .. limit`, and `match` grammar) and now
+//! also the `shared`/`private`/`const` `data` block declaration, in a single pass. The
+//! data block is consumed by the header; its field-table accumulation and the body
+//! `data.field` reads that use it land in increment 6b.
 //!
 //! A throwaway adapter maps the reference tokenizer into the stage's unified `(kind,
 //! value)` token stream. The stage emits header records `dkind + val*64` (1/2/3 START of a
@@ -70,7 +71,13 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
             TokenKind::Colon => (9, 0),
             TokenKind::Comma => (10, 0),
             TokenKind::IntLit(n) => (12, *n),
+            TokenKind::Data => (13, 0),
+            TokenKind::Shared => (14, 0),
+            TokenKind::Private => (15, 0),
+            TokenKind::Const => (16, 0),
             TokenKind::Eq => (17, 0),
+            TokenKind::LBracket => (41, 0),
+            TokenKind::RBracket => (42, 0),
             TokenKind::Plus => (21, 0),
             TokenKind::Minus => (22, 0),
             TokenKind::Star => (23, 0),
@@ -164,6 +171,9 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
     // The declaration under construction: (category, name, params, body records).
     let mut cur: Option<(i64, i64, Vec<i64>, Vec<(i64, i64)>)> = None;
     let mut in_body = false;
+    // A data block is skipped this increment: DSTART opens it and its END closes it; its
+    // fields are not compared, only that the block is consumed without breaking the stream.
+    let mut in_data = false;
     let mut state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
@@ -182,12 +192,18 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                             .3
                             .push((code, val)),
                     }
+                } else if in_data {
+                    match code {
+                        5 => in_data = false, // the data block's END
+                        _ => {}               // its fields, skipped this increment
+                    }
                 } else {
                     match code {
                         0 => {} // PENDING
                         1..=3 => cur = Some((code, val, Vec::new(), Vec::new())),
                         4 => cur.as_mut().expect("PARAM before START").2.push(val),
                         6 | 7 | 8 => {} // PTYPE/RETTYPE/ASIZE: not checked this increment
+                        9 => in_data = true, // DSTART: a data block, skipped this increment
                         16 => in_body = true, // BSTART: a body forest follows
                         5 => {
                             let f = cur.take().expect("END before START");
@@ -770,4 +786,30 @@ fn a_block_form_match_statement_is_an_expr_stmt() {
             (21, 0)
         ]
     );
+}
+
+// A `shared data` block before a function: the block is consumed by the header and the
+// function still parses correctly.
+#[test]
+fn a_data_block_before_a_function_parses() {
+    let src = "shared data d { a: Word, b: Word } fn f(n: Word) -> Word { n + n }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    assert_eq!(got.funcs.len(), 1);
+    assert_eq!(got.funcs[0].3, vec![(2, 0), (2, 0), (3, 1)]);
+}
+
+// A function interleaved between a private data block with an array field and a const
+// data block whose initializers are skipped.
+#[test]
+fn functions_interleave_with_data_blocks() {
+    let src = "private data ps { xs: [Word; 4], n: Word } \
+        fn f(a: Word) -> Word { a } \
+        const data k { radix: Word = 64, pack: Word = 65536 } \
+        fn g(b: Word) -> Word { b }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    assert_eq!(got.funcs.len(), 2);
 }
