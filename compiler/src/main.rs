@@ -86,9 +86,11 @@ fn status() {
     println!("function calls, and scalar and");
     println!("indexed data-segment reads and writes, into an op buffer it streams with its own");
     println!("deduplicating constant pool and counted local-frame size, and lexer");
-    println!("increment 4, a streaming tokenizer with maximal munch over the two-byte");
-    println!("operators, keyword classification to the parser's Tok codes, and");
-    println!("identifier interning to stable ids, both compile, verify, and run (see");
+    println!("increment 5, a streaming tokenizer whose output is now the parser's input");
+    println!("stream directly -- every token carries its unified Tok code, with maximal");
+    println!("munch over the two-byte operators, keyword classification, identifier");
+    println!("interning to stable ids, and the single-byte punctuation, `->` arrow, and");
+    println!("lone `_` mapped to their Tok codes -- both compile, verify, and run (see");
     println!("tests/selfhost_codegen.rs and `lex <file>`). The codegen stage is now");
     println!("FULLY SELF-HOSTING: all 34 of its functions, including the multiheaded");
     println!("`yield emit_next` dispatch and the `loop main`, compile themselves");
@@ -105,9 +107,10 @@ fn status() {
 ///
 /// This drives `kel/lexer.kel` on the current runtime: it compiles the lexer,
 /// places the input source in the loop's `shared data` byte array, and resumes
-/// it, decoding the `kind + value*16` token wire (through increment 2, which adds
-/// the OP2 two-byte-operator kind). It is the first end-to-end proof that the host
-/// can drive a self-hosted pipeline stage.
+/// it, decoding the unified `tok + payload*64` token wire (increment 5), where
+/// `tok` is the parser's Tok discriminant and 63/62 are the PENDING/EOF markers.
+/// It is the first end-to-end proof that the host can drive a self-hosted pipeline
+/// stage, and the point at which the lexer's output becomes the parser's input.
 fn run_lexer(path: &str) {
     use keleusma::Arena;
     use keleusma::bytecode::Value;
@@ -161,33 +164,23 @@ fn run_lexer(path: &str) {
     for _ in 0..(input.len() * 4 + 16) {
         match state {
             VmState::Yielded(Value::Int(t)) => {
-                let (kind, value) = (t.rem_euclid(16), t.div_euclid(16));
-                match kind {
-                    0 => {} // PENDING; the host skips it
-                    1 => {
-                        println!("  EOF");
-                        return;
+                // Unified wire (increment 5): `tok + payload*64`, with 63 PENDING
+                // (skipped) and 62 EOF above the Tok range.
+                if t == 63 {
+                    // PENDING; the host skips it.
+                } else if t == 62 {
+                    println!("  EOF");
+                    return;
+                } else {
+                    let (tok, payload) = (t.rem_euclid(64), t.div_euclid(64));
+                    let name = tok_name(tok);
+                    if tok == 1 {
+                        println!("  {name:<9} id {payload}");
+                    } else if tok == 12 {
+                        println!("  {name:<9} {payload}");
+                    } else {
+                        println!("  {name}");
                     }
-                    2 => println!("  IDENT   id {value}"),
-                    3 => println!("  INT     {value}"),
-                    4 => println!("  PUNCT   {:?}", value as u8 as char),
-                    5 => {
-                        // A two-byte operator (increment 2); value is its compound code.
-                        let op = match value {
-                            0 => "==",
-                            1 => "!=",
-                            2 => "<=",
-                            3 => ">=",
-                            4 => "::",
-                            5 => "..",
-                            6 => "=>",
-                            _ => "?op",
-                        };
-                        println!("  OP2     {op}");
-                    }
-                    // A keyword run (increment 3); value is the parser's Tok code.
-                    6 => println!("  KEYWORD tok {value}"),
-                    other => println!("  ?kind {other} value {value}"),
                 }
             }
             VmState::Reset => {}
@@ -202,6 +195,66 @@ fn run_lexer(path: &str) {
     }
     eprintln!("iteration budget exhausted before EOF");
     std::process::exit(1);
+}
+
+/// Name a parser `Tok` discriminant for the `lex` command's human-readable dump.
+/// Mirrors the `Tok` enum in `kel/parse.kel`; 4 is the catch-all that absorbs the
+/// `->` arrow and any unrecognized punctuation.
+fn tok_name(tok: i64) -> &'static str {
+    match tok {
+        0 => "fn",
+        1 => "Ident",
+        2 => "LBrace",
+        3 => "RBrace",
+        4 => "catchall",
+        5 => "yield",
+        6 => "loop",
+        7 => "LParen",
+        8 => "RParen",
+        9 => "Colon",
+        10 => "Comma",
+        12 => "IntLit",
+        13 => "data",
+        14 => "shared",
+        15 => "private",
+        16 => "const",
+        17 => "Eq",
+        19 => "use",
+        21 => "Plus",
+        22 => "Minus",
+        23 => "Star",
+        24 => "Slash",
+        25 => "Percent",
+        26 => "EqEq",
+        27 => "NotEq",
+        28 => "Lt",
+        29 => "Gt",
+        30 => "LtEq",
+        31 => "GtEq",
+        32 => "not",
+        33 => "band",
+        34 => "bor",
+        35 => "bxor",
+        36 => "andalso",
+        37 => "orelse",
+        38 => "let",
+        39 => "Semi",
+        40 => "Dot",
+        41 => "LBracket",
+        42 => "RBracket",
+        43 => "if",
+        44 => "else",
+        45 => "for",
+        46 => "in",
+        47 => "DotDot",
+        48 => "match",
+        49 => "FatArrow",
+        50 => "Underscore",
+        51 => "ColCol",
+        52 => "as",
+        53 => "enum",
+        _ => "?tok",
+    }
 }
 
 fn not_yet(cmd: &str, what: &str) {
