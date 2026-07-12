@@ -15,6 +15,13 @@
 //! expressions: a bare call or a statement-form `if` (both `Stmt::Expr`) lowers to
 //! the expression ops then `PopN(1)`; an `if` without `else` synthesizes a Unit
 //! else so both branches produce a unit value.
+//!
+//! This file also hosts the parse-into-codegen bridge (see `reconstruct_body`),
+//! which replaces the throwaway adapter with the real parser: lexer.kel tokenizes
+//! the source, parse.kel emits the body's postorder node records, the host rebuilds
+//! the codegen forest from that stream, and codegen.kel emits the ops. For the
+//! arithmetic node kinds this whole self-hosted path is byte-identical to the Rust
+//! compiler; later increments extend the reconstruction to the remaining kinds.
 
 use keleusma::Arena;
 use keleusma::ast::{
@@ -1431,4 +1438,294 @@ fn self_compile_codegen_atomic_functions() {
         "codegen self-compile count changed (expected {EXPECTED_SELF_COMPILE}); \
          update the gate deliberately if codegen.kel changed. self-compiled: {ok:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Parse-into-codegen bridge (arithmetic subset).
+//
+// The final composition step: parse.kel emits a function body as a postorder
+// stream of (kind, arg) node records, and codegen.kel consumes a forest of
+// (kind, arg, lhs, rhs) nodes. `reconstruct_body` rebuilds that forest from the
+// postorder stream with a node-index stack -- a leaf pushes itself, an operator
+// pops its children and links them -- exactly the inverse of the reference
+// flatten. Driving lexer.kel then parse.kel then codegen.kel over real source and
+// asserting byte-identity with the Rust compiler proves the whole self-hosted
+// front-to-back path for the arithmetic node kinds; later increments extend the
+// reconstruction to the control-flow, data-access, call, and yield kinds.
+// ---------------------------------------------------------------------------
+
+// Lexer `src` block slots: len(1) + bytes(4096) then the intern table.
+const BR_LEX_ISTART: usize = 1 + 4096;
+const BR_LEX_ILEN: usize = 1 + 4096 + 512;
+const BR_LEX_ICOUNT: usize = 1 + 4096 + 512 + 512;
+// Parser `toks` block slots.
+const BR_P_LEN: usize = 0;
+const BR_P_KINDS: usize = 1;
+const BR_P_VALS: usize = 1 + 2048;
+const BR_P_LIMIT_ID: usize = 1 + 2048 + 2048;
+const BR_P_CHUNK_COUNT: usize = 1 + 2048 + 2048 + 1;
+const BR_P_CHUNKS: usize = 1 + 2048 + 2048 + 2;
+const BR_P_REQUIRE_ID: usize = 1 + 2048 + 2048 + 2 + 256;
+
+fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
+    match vm.get_shared(buf, slot).expect("get_shared") {
+        Value::Int(n) => n,
+        other => panic!("expected Int at slot {slot}, got {other:?}"),
+    }
+}
+
+/// Tokenize `src` with lexer.kel; return its `(tok, payload)` stream (no EOF) and
+/// the id-to-spelling table recovered from the exposed intern table.
+fn br_lex(src: &str) -> (Vec<(i64, i64)>, Vec<String>) {
+    let bytes = src.as_bytes();
+    let m =
+        compile_src(&std::fs::read_to_string("compiler/kel/lexer.kel").expect("read lexer.kel"));
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify lexer.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.set_shared(&mut shared, 0, Value::Int(bytes.len() as i64))
+        .unwrap();
+    for (i, &b) in bytes.iter().enumerate() {
+        vm.set_shared(&mut shared, 1 + i, Value::Byte(b)).unwrap();
+    }
+    let mut toks = Vec::new();
+    let mut st = vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call");
+    for _ in 0..(bytes.len() * 4 + 16) {
+        if let VmState::Yielded(Value::Int(t)) = st {
+            if t == 63 {
+            } else if t == 62 {
+                break;
+            } else {
+                toks.push((t.rem_euclid(64), t.div_euclid(64)));
+            }
+        }
+        st = vm
+            .resume_with_shared(&mut shared, Value::Int(0))
+            .expect("resume");
+    }
+    let icount = br_shared_word(&vm, &shared, BR_LEX_ICOUNT) as usize;
+    let mut names = Vec::with_capacity(icount);
+    for id in 0..icount {
+        let start = br_shared_word(&vm, &shared, BR_LEX_ISTART + id) as usize;
+        let len = br_shared_word(&vm, &shared, BR_LEX_ILEN + id) as usize;
+        names.push(String::from_utf8(bytes[start..start + len].to_vec()).unwrap());
+    }
+    (toks, names)
+}
+
+/// Function-name ids in declaration order, from a brace-depth scan of the tokens.
+fn br_chunks(tokens: &[(i64, i64)]) -> Vec<i64> {
+    let (mut chunks, mut depth) = (Vec::new(), 0i64);
+    for w in tokens.windows(2) {
+        match w[0].0 {
+            2 => depth += 1,
+            3 => depth -= 1,
+            0 | 5 | 6 if depth == 0 && w[1].0 == 1 => chunks.push(w[1].1),
+            _ => {}
+        }
+    }
+    chunks
+}
+
+/// Drive lexer.kel then parse.kel over a single-function `src`, returning that
+/// function's body records (the postorder (kind, arg) node stream) and its value
+/// parameter count. All parser inputs come from the lexer's output.
+fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize) {
+    let (tokens, names) = br_lex(src);
+    let id_of = |s: &str| {
+        names
+            .iter()
+            .position(|n| n == s)
+            .map(|i| i as i64)
+            .unwrap_or(-1)
+    };
+    let chunks = br_chunks(&tokens);
+
+    let module = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| compile_src(&std::fs::read_to_string("compiler/kel/parse.kel").expect("read")))
+        .expect("spawn")
+        .join()
+        .expect("join");
+    let need = required_persistent_capacity_for(&module);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(module, &arena).expect("verify parse.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.set_shared(&mut shared, BR_P_LEN, Value::Int(tokens.len() as i64))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_LIMIT_ID, Value::Int(id_of("limit")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_REQUIRE_ID, Value::Int(id_of("require")))
+        .unwrap();
+    vm.set_shared(
+        &mut shared,
+        BR_P_CHUNK_COUNT,
+        Value::Int(chunks.len() as i64),
+    )
+    .unwrap();
+    for (i, &c) in chunks.iter().enumerate() {
+        vm.set_shared(&mut shared, BR_P_CHUNKS + i, Value::Int(c))
+            .unwrap();
+    }
+    for (i, &(k, v)) in tokens.iter().enumerate() {
+        vm.set_shared(&mut shared, BR_P_KINDS + i, Value::Int(k))
+            .unwrap();
+        vm.set_shared(&mut shared, BR_P_VALS + i, Value::Int(v))
+            .unwrap();
+    }
+
+    let mut records: Vec<(i64, i64)> = Vec::new();
+    let mut params = 0usize;
+    let (mut in_body, mut in_data, mut in_enum, mut in_use) = (false, false, false, false);
+    let mut state = vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call");
+    for _ in 0..(tokens.len() * 4 + 64) {
+        if let VmState::Yielded(Value::Int(w)) = state {
+            let (code, val) = (w.rem_euclid(64), w.div_euclid(64));
+            if in_body {
+                match code {
+                    0 => {}
+                    15 => in_body = false,
+                    _ => records.push((code, val)),
+                }
+            } else if in_data {
+                in_data = code != 5;
+            } else if in_enum {
+                in_enum = code != 5;
+            } else if in_use {
+                in_use = code != 5;
+            } else {
+                match code {
+                    4 => params += 1,
+                    9 => in_data = true,
+                    10 => in_use = true,
+                    12 => in_enum = true,
+                    16 => in_body = true,
+                    15 => return (records, params),
+                    _ => {}
+                }
+            }
+        }
+        state = vm
+            .resume_with_shared(&mut shared, Value::Int(0))
+            .expect("resume");
+    }
+    panic!("parse.kel did not reach DONE");
+}
+
+/// Rebuild the codegen node forest from parse.kel's postorder record stream. A
+/// leaf (Literal 1, Local 2) pushes itself; a binary operator (BinOp 3, Andalso 8,
+/// Orelse 9) pops its right then left child; a unary operator (Not 6, Neg 10) pops
+/// its single operand into `lhs`. The root is the one node left on the stack. This
+/// increment covers the arithmetic, comparison, bitwise, unary, and short-circuit
+/// kinds; a record of any other kind is rejected until a later increment adds it.
+fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
+    let mut nodes: Vec<Node> = Vec::new();
+    let mut stack: Vec<i64> = Vec::new();
+    for &(kind, arg) in records {
+        let idx = match kind {
+            1 | 2 => {
+                nodes.push(Node {
+                    kind,
+                    arg,
+                    lhs: 0,
+                    rhs: 0,
+                });
+                (nodes.len() - 1) as i64
+            }
+            3 | 8 | 9 => {
+                let r = stack.pop().expect("binary rhs");
+                let l = stack.pop().expect("binary lhs");
+                nodes.push(Node {
+                    kind,
+                    arg,
+                    lhs: l,
+                    rhs: r,
+                });
+                (nodes.len() - 1) as i64
+            }
+            6 | 10 => {
+                let c = stack.pop().expect("unary operand");
+                nodes.push(Node {
+                    kind,
+                    arg,
+                    lhs: c,
+                    rhs: 0,
+                });
+                (nodes.len() - 1) as i64
+            }
+            other => panic!("reconstruct_body: unsupported node kind {other} (arithmetic subset)"),
+        };
+        stack.push(idx);
+    }
+    assert_eq!(stack.len(), 1, "exactly one root node remains");
+    Body {
+        nodes,
+        call_args: Vec::new(),
+        for_parts: Vec::new(),
+        match_parts: Vec::new(),
+        limit_parts: Vec::new(),
+        head_parts: Vec::new(),
+        category,
+        root: stack[0],
+    }
+}
+
+// The whole self-hosted front-to-back path for the arithmetic node kinds: lexer.kel
+// tokenizes real source, parse.kel produces the body's postorder records, the host
+// rebuilds the forest, and codegen.kel emits the ops -- which must be byte-identical
+// to the Rust compiler's, and the built module must compute the right value.
+#[test]
+fn parse_into_codegen_arithmetic_matches_the_reference() {
+    // (source, input, expected) -- all `fn` bodies returning Word.
+    let cases: &[(&str, i64, i64)] = &[
+        ("fn main(x: Word) -> Word { x + 1 }", 41, 42),
+        ("fn main(x: Word) -> Word { x * 2 + 1 }", 20, 41),
+        ("fn main(x: Word) -> Word { x * 2 + 2 }", 20, 42),
+        ("fn main(a: Word) -> Word { a - 1 }", 43, 42),
+        ("fn main(a: Word) -> Word { a / 2 }", 84, 42),
+        ("fn main(a: Word) -> Word { a % 5 }", 47, 2),
+        ("fn main(a: Word) -> Word { (a - 2) / 2 }", 86, 42),
+        ("fn main(a: Word) -> Word { -a }", 5, -5),
+        ("fn main(a: Word) -> Word { 3 - -a }", 4, 7),
+        ("fn main(a: Word) -> Word { a band 6 }", 5, 4),
+        ("fn main(a: Word) -> Word { a bor 1 }", 4, 5),
+        ("fn main(a: Word) -> Word { a bxor 3 }", 5, 6),
+    ];
+    for &(src, input, expected) in cases {
+        let (records, param_count) = parse_function_records(src);
+        let body = reconstruct_body(&records, 0);
+        let (emitted, pool, local_count) = run_codegen(&body, param_count);
+
+        let reference = compile_src(src);
+        let idx = reference
+            .chunks
+            .iter()
+            .position(|c| c.name == "main")
+            .unwrap();
+        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
+        assert_eq!(
+            local_count, reference.chunks[idx].local_count as i64,
+            "local_count for `{src}`"
+        );
+
+        let mut built = compile_src(src);
+        built.chunks[idx].ops = emitted;
+        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].local_count = local_count as u16;
+        let need = required_persistent_capacity_for(&built);
+        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+        arena.resize_persistent(need).expect("resize");
+        let mut vm = Vm::new(built, &arena).expect("verify built");
+        match vm.call(&[Value::Int(input)]).expect("call built") {
+            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
+            other => panic!("unexpected result for `{src}`: {other:?}"),
+        }
+    }
 }
