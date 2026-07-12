@@ -50,9 +50,18 @@
 // miscompiled.
 require word >= 32;
 
+// The host places the source in `len`/`bytes` before driving the loop, and reads
+// the identifier intern table (`istart`/`ilen`/`icount`) back out after: an Ident
+// token's payload id indexes it, and each entry's `(istart, ilen)` locates the
+// name's bytes in `bytes`, so the host recovers the id-to-spelling map the parser
+// stage's `limit`/`require`/chunk-name inputs are expressed in without re-lexing.
+// The table lives in shared data (not private) precisely so the host can read it.
 shared data src {
     len: Word,
     bytes: [Byte; 4096],
+    istart: [Word; 512],
+    ilen: [Word; 512],
+    icount: Word,
 }
 
 // The scanner's cross-iteration state. `kind` is the token being built: 0 none,
@@ -65,18 +74,12 @@ private data st {
     val: Word,
 }
 
-// The identifier intern table (increment 4). Each distinct identifier run is
-// assigned a stable id, its index here, so an IDENT token carries an id rather
-// than a mere length and two occurrences of the same name resolve to the same id.
-// An entry stores the run's start offset into the persistent source and its byte
-// length; the bytes themselves stay in `src.bytes`, so no copy is needed. `found`
-// and `mism` are scratch accumulators for the content comparison, which cannot
-// use immutable locals. Capacity 512 distinct identifiers; a source that exceeds
-// it fails closed at the interning scan's `limit` rather than aliasing.
+// Scratch accumulators for the interning content comparison (increment 4), which
+// cannot use immutable locals. The intern table itself (`istart`/`ilen`/`icount`)
+// lives in the shared `src` block so the host can read it back; capacity 512
+// distinct identifiers, and a source that exceeds it fails closed at the interning
+// scan's `limit` rather than aliasing.
 private data intern {
-    istart: [Word; 512],
-    ilen: [Word; 512],
-    icount: Word,
     found: Word,
     mism: Word,
 }
@@ -241,11 +244,11 @@ fn keyword_code(start: Word, len: Word) -> Word {
 // unique, so the last (and only) matching index the scan records is the answer.
 fn intern_id(start: Word, len: Word) -> Word {
     intern.found = 0 - 1;
-    for i in 0..intern.icount limit 512 {
-        if intern.ilen[i] == len {
+    for i in 0..src.icount limit 512 {
+        if src.ilen[i] == len {
             intern.mism = 0;
             for j in 0..len limit 64 {
-                if peek_at(intern.istart[i] + j) != peek_at(start + j) {
+                if peek_at(src.istart[i] + j) != peek_at(start + j) {
                     intern.mism = intern.mism + 1;
                 }
             }
@@ -257,10 +260,10 @@ fn intern_id(start: Word, len: Word) -> Word {
     if intern.found >= 0 {
         intern.found
     } else {
-        let id = intern.icount;
-        intern.istart[id] = start;
-        intern.ilen[id] = len;
-        intern.icount = intern.icount + 1;
+        let id = src.icount;
+        src.istart[id] = start;
+        src.ilen[id] = len;
+        src.icount = src.icount + 1;
         id
     }
 }
