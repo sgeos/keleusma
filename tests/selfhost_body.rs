@@ -32,6 +32,10 @@
     not(feature = "narrow-word-16"),
     not(feature = "narrow-word-32")
 ))]
+// The recursive `flatten`/`flatten_block` adapter helpers thread the full lowering context
+// (scope, node arena, three side arrays, and the struct/enum tables) as positional arguments;
+// a context struct would obscure the throwaway-adapter intent, so allow the arity here.
+#![allow(clippy::too_many_arguments)]
 
 use keleusma::Arena;
 use keleusma::ast::{BinOp, Block, Expr, Iterable, Literal, Pattern, Stmt, UnaryOp};

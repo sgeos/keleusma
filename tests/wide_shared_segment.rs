@@ -94,7 +94,7 @@ fn set_and_get_shared_reach_a_high_offset_slot() {
         .slots
         .iter()
         .position(|s| s.name == "d.n")
-        .expect("n slot") as usize;
+        .expect("n slot");
     assert!(n_slot > u16::MAX as usize, "n slot {n_slot} exceeds 65535");
 
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);

@@ -23,6 +23,17 @@
     not(feature = "narrow-word-16"),
     not(feature = "narrow-word-32")
 ))]
+// Throwaway test-driver adapters: the streaming decode state machine uses single-arm matches
+// per parser sub-state, documentary `temp * 1024 + offset` slot encodings in expected-record
+// literals, and record helpers that thread many positional arguments. Refactoring these would
+// only obscure the adapter intent, so allow the corresponding style lints for this test file.
+#![allow(
+    clippy::type_complexity,
+    clippy::too_many_arguments,
+    clippy::single_match,
+    clippy::manual_range_patterns,
+    clippy::identity_op
+)]
 
 use keleusma::Arena;
 use keleusma::ast::{
