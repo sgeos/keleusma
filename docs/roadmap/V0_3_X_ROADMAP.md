@@ -60,12 +60,37 @@ manages. This is the piece the V0.4.0 strategy identifies as where the risk conc
 Coroutine frames live in the arena, not the C stack, preserving the bounded-WCMU model in
 native code. The native runtime reproduces the arena bump-and-reset discipline.
 
-### D. Static-library linkage and the host ABI
+### D. Static-library linkage, the host ABI, and foreign-linkable object files
 
 The native artefact links as a static library against a Rust host and exposes sub-coroutine
 entry points. The ABI between native Keleusma code and the host, including the native form of
 the marshalling boundary, is specified here (it is the native counterpart of the V0.2.x native
 ABI definition).
+
+Beyond a Rust host, the artefact links into a project written in **any** language. This is the
+incremental-adoption path: rather than replace a whole system, an operator writes one
+safety-critical piece in Keleusma and links its object file into existing C, Rust, or Ada code.
+The canonical example is an **interrupt handler object file** (see the V0.4.x low-level tier,
+`V0_4_X_ROADMAP.md` Workstream I), whose hard problems, stack size, execution time, and
+trap-freedom, are exactly Keleusma's strengths. The requirements:
+
+- A **stable C ABI**: the object exports a known symbol under the platform C ABI, freestanding,
+  so it links without dragging in a Keleusma runtime or VM. Symbol mangling is fixed per the
+  V0.4.0 strategy's resolved question.
+- **The bounds exported as a linkable, self-describing contract.** The object emits its
+  WCMU-sized arena requirement (a symbol or linker constant) so the foreign build statically
+  provisions a correctly sized buffer and passes it in; the WCET bound and the trap-free verdict
+  export the same way, as machine-readable metadata beside the object. The foreign project
+  inherits "this artefact needs N bytes of arena, runs in at most C cycles, and cannot trap" as a
+  checkable claim.
+- **The shared-data region as a C-representable layout** at a known symbol, so the foreign code
+  and the Keleusma object agree on the cross-boundary state.
+
+The trust boundary is explicit: the guarantees are **sound on the Keleusma side and contingent on
+the foreign caller honoring the contract** (provisioning the declared arena, respecting the
+shared layout, calling under the declared discipline). Keleusma cannot verify the foreign side;
+this is the standard FFI island boundary, the verified artefact being the object file, its
+enforcement being the linker's and the foreign project's responsibility.
 
 ### E. WCET and WCMU preservation across native compilation
 

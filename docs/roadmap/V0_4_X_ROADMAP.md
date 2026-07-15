@@ -172,6 +172,18 @@ handler arena is a declared arena partition (Workstream D, master-WCMU-based all
 sub-coroutine slot model (Workstream A) is the general form of an isolated context, of which a
 handler arena is the simplest case.
 
+**Foreign-linkable handler objects.** A Keleusma interrupt handler is a strong incremental
+-adoption artefact: compiled to a native object file (a V0.4.0 native-codegen capability,
+`V0_3_X_ROADMAP.md` Workstream D), it links into an existing C, Rust, or Ada firmware so an
+operator writes one safety-critical ISR in Keleusma without rewriting the system. The object
+exports a C-ABI symbol and, as a self-describing contract, its WCMU-sized arena requirement, its
+WCET bound, and its trap-free verdict, so the foreign build provisions the arena and inherits the
+claims. Two entry shapes: the object owns the naked interrupt entry (self-contained, but its
+entry wrapper is low-level-tier code), or the foreign project keeps its own trampoline and calls
+a plain C-ABI Keleusma function (which keeps the Keleusma side entirely in the verified core plus
+a C export, minimizing the unsafe surface). The guarantees are sound on the Keleusma side and
+contingent on the foreign caller honoring the contract, the standard FFI island boundary.
+
 This tier is an explicit **impure, unsafe island**: totality and bounded WCET and WCMU do not
 hold inside it, and the verifier's soundness is scoped to the pure core above it, exactly as
 Rust `unsafe`, Ada `System.Machine_Code`, and the Oberon `SYSTEM` pseudo-module are demarcated. Its timing is host-attested or best-effort, per
