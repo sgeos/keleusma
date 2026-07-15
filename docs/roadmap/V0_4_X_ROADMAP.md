@@ -143,9 +143,25 @@ ASM-level logic directly, accepting the feature additions that requires. The tie
   of instruction intrinsics) for the handful of operations a stack-based functional core cannot
   synthesize, such as loading the initial stack pointer.
 
+**State-and-handlers decomposition (minimal new surface).** The tier reuses two constructs
+Keleusma already has, so it is a small addition rather than a new sublanguage. The low-level
+**state** is a `shared data` block: the vector table, the syscall scratch and argument area,
+saved context, and MMIO base pointers all live there. The only extensions are placement (a block
+pinned to a fixed physical address for a memory-mapped device, or to a named linker section for
+the vector table) and volatile access semantics. The **handlers** are ordinary functions over
+that block; only the entry and exit wrapper needs the tier, a naked-entry attribute plus the
+escape hatch for the irreducible instructions (the trap or `eret` return, the context save and
+restore), while the body is normal Keleusma. This matches the Oberon `SYSTEM`-module shape, a
+demarcated primitive set plus ordinary procedures, which is the closest precedent and is already
+in the roadmap's Wirth lineage. One subtlety: a hardware-invoked handler fires asynchronously and
+must not disturb the interrupted context, so it needs its own stack and arena slot rather than
+the caller's, which is exactly the sub-coroutine slot model of Workstream A (own program counter,
+call-frame stack, operand stack, and arena slot). An interrupt handler is therefore a
+naked-entry function bound to its own slot, and Workstreams A and I connect there.
+
 This tier is an explicit **impure, unsafe island**: totality and bounded WCET and WCMU do not
 hold inside it, and the verifier's soundness is scoped to the pure core above it, exactly as
-Rust `unsafe` and Ada `System` are demarcated. Its timing is host-attested or best-effort, per
+Rust `unsafe`, Ada `System.Machine_Code`, and the Oberon `SYSTEM` pseudo-module are demarcated. Its timing is host-attested or best-effort, per
 the native WCET stance. It widens Keleusma's positioning from a bounded embeddable stream
 processor toward a bounded systems language with a low-level escape hatch, a deliberate
 strengthening that also widens the trusted surface. The tier is a language-feature theme that
