@@ -8,7 +8,21 @@ AI to Human communication channel.
 
 ## Last Updated
 
-**Date**: 2026-07-12 (session 24)
+**Date**: 2026-07-15 (session 25)
+
+**V0.2.X ROADMAP EXECUTION BEGAN. First increment: the self-hosted validator (`analyze.kel`) is now wired into the `keleusma-selfhost` binary and the compiler subproject, not only the root-crate tests.**
+
+The V0.2.x line has a written roadmap ([`docs/roadmap/V0_2_X_ROADMAP.md`](../roadmap/V0_2_X_ROADMAP.md)) and a repeating version ladder (V0.2.x -> V0.3.0 full self-hosting; V0.3.x -> V0.4.0 native codegen; V0.4.x -> V0.5.0 Rust host retirement). The roadmap's step-1 gate is "the tool compiles the stages with no reference scaffold borrow and runs the self-hosted validator." This increment lands the validator half of that: the analyze-driver Rust (`analyze_kel_module`, `analyze_class`/`analyze_opk`/`analyze_stack_effect`/`analyze_op_heap`, `run_analyze_kel`, `validate_module_via_kel`, plus a reporting wrapper `analyze_stream_chunk`) is ported from the root test `tests/selfhost_codegen.rs` into the subproject library `compiler/src/selfhost.rs`, adapting only the analyze.kel path to `read_stage("kel/analyze.kel")`. A new subproject test `compiler/tests/validator.rs` proves the ported `validate_module_via_kel` agrees with the reference `verify_resource_bounds` at three capacities (budget minus one, budget, budget plus one) for all five stage modules, and confirms the reference verdict actually flips across that boundary (non-vacuous). The `keleusma-selfhost compile` command now prints a self-hosted resource-bound report (per-Stream-chunk WCET and WCMU, and the module validity verdict cross-checked against `verify_resource_bounds`) without changing the emitted bytecode.
+
+**Honest scope.** (1) The validator agreement is empirical over the five loop-free-Stream, transitive-call stage modules, not proven for arbitrary modules; no test yet exercises a Stream chunk analyze.kel rejects, a recursive call graph, or a text-allocating program (the text-size heap term remains unmodelled). (2) The scaffold half of step 1 is not done: the subproject's `self_host_compile` still starts from `compile_src` (the reference) and overwrites ops, so the module scaffold and chunk skeleton (names, order, param metadata, bounds) are still reference-derived. True no-borrow requires assembling the whole module from parse records plus codegen, larger than porting the capstone. The scaffold-assembly and analyze-bounds drivers exist in the root test but are not yet in the subproject. (3) The driver logic is now duplicated between the root test and the subproject; deduplication (the root test cannot import the subproject, which depends on the parent) awaits the test-infrastructure migration the roadmap names.
+
+**Verification.** `cd compiler && cargo test --test validator` (5) and `--test fixed_point` (3) green; `cargo build` no new warnings; the binary's report smoke-tested on `kel/lexer.kel` (WCET 154, WCMU 288, admits, agrees). No change to root crate `src/` or `tests/`, and no `.kel` change.
+
+**Intended next step.** Continue step 1: port the scaffold assembly (`assemble_data_layout`/`assemble_enum_layouts`/`assemble_signatures`/`compute_schema_hash`/`assemble_chunk_metadata`) and `assemble_resource_bounds` into the subproject, extend the subproject `parse_functions`/`ParsedFn` to the 4-tuple with `param_types`/`return_type`, and build a from-scratch `self_host_compile_full` that assembles the whole module from parse records plus codegen (no `compile_src` base) and is byte-identical to the reference for all five stages. Then the binary emits a genuinely no-reference-borrow artifact.
+
+---
+
+### Prior handoff (session 24): SELF-HOSTED WCET/WCMU ANALYSIS AND VALIDATOR
 
 **SELF-HOSTED MODULE-SCAFFOLD ASSEMBLY COMPLETE including a general WCET/WCMU analysis (`analyze.kel`, a fifth Keleusma stage, now with `loop` regions and self-hosted iteration-bound extraction); `reconstruct.kel` (a fourth stage) self-compiles; landed on `v0.2.3`.**
 
