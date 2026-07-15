@@ -6,6 +6,12 @@
 //! `let t = (p, p)` otherwise grows the inferred type, and inference time,
 //! exponentially in the source length.
 
+// This suite drives the compile front end (lexer, parser, type checker), all gated behind
+// the `compile` feature. Gate the whole file so the CI `--no-default-features` build, where
+// those modules are absent, does not attempt to compile it (the other front-end test files
+// gate themselves the same way).
+#![cfg(feature = "compile")]
+
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
 use keleusma::typecheck::check;
