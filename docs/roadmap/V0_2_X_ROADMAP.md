@@ -15,15 +15,29 @@ them.
 
 The goal of the V0.2.x line is to move the entire Keleusma toolchain from Rust into
 Keleusma, one reviewable increment per release, and to reach a self-hosting fixed point
-over a deliberate language subset. The nominally complete compiler, meaning full-language
-support, is the V0.3.0 release.
+over a deliberate language subset. **V0.2.x is self-hosting work in progress; V0.3.0 is a
+full self-hosting solution**, meaning the whole toolchain self-hosted over the full language.
+
+This is the first rung of a repeating version ladder. Each `V0.N.x` line is the incremental
+work toward the `V0.(N+1).0` milestone, and each milestone has a paired architecture strategy
+document:
+
+| Work line | Milestone | Milestone meaning | Strategy document |
+|-----------|-----------|-------------------|-------------------|
+| V0.2.x (this document) | V0.3.0 | Full self-hosting solution | [`V0_3_0_SELF_HOSTING.md`](./V0_3_0_SELF_HOSTING.md) |
+| V0.3.x | V0.4.0 | Full native code generation | [`V0_4_0_NATIVE_CODEGEN.md`](./V0_4_0_NATIVE_CODEGEN.md) |
+| V0.4.x | V0.5.0 | Rust host retirement (a host written in Keleusma) | [`V0_5_0_KELEUSMA_HOST.md`](./V0_5_0_KELEUSMA_HOST.md) |
+
+Language feature additions and revisions are expected along the whole ladder, not front-loaded
+into V0.3.0; the surface language co-evolves with the toolchain toward V0.5.0.
 
 This re-scopes two earlier framings and both should be aligned to match:
 
 - `compiler/MILESTONES.md` and `V0_3_0_SELF_HOSTING.md` currently state that completing the
-  self-hosted compiler **is** V0.3.0. Under this roadmap, self-hosting over the subset is a
-  V0.2.x milestone, and V0.3.0 is instead defined by **full-language** support. Self-hosting
-  is a precondition for V0.3.0, not V0.3.0 itself.
+  self-hosted compiler **is** V0.3.0. Under this roadmap, self-hosting over the subset is
+  V0.2.x work in progress, and V0.3.0 is instead the **full self-hosting solution**, meaning
+  the whole toolchain self-hosted over the full language. Subset self-hosting is a rung on
+  the way to V0.3.0, not V0.3.0 itself.
 - The runtime-in-Keleusma work described in
   [`V0_5_0_KELEUSMA_HOST.md`](./V0_5_0_KELEUSMA_HOST.md) is pulled forward into the V0.2.x
   line as Workstream D below. That document stays authoritative for the sub-coroutine
@@ -117,25 +131,54 @@ value form (Workstream F).
 
 ### C. Unhandled-trap analysis (new)
 
-A static analysis that proves a program cannot reach a runtime trap, so that running only
-provably non-trapping programs becomes a host-selectable mode. This is additive to the
-validator and is itself a self-hosting candidate.
+A validator verdict that a program cannot reach a runtime trap, so that running only
+provably non-trapping programs becomes a host-selectable mode. The mechanism is syntactic,
+not semantic: rather than prove trap-freedom by interval and refinement reasoning, the ISA
+and the compiler are arranged so that trap-freedom becomes a decidable scan of the emitted
+bytecode. This is far simpler and more robust than a semantic analysis, and it is trivially
+auditable.
 
-- **Scope of traps to close.** Checked-arithmetic overflow (add, sub, mul, neg, div, mod),
-  division and modulo by zero, array and indexed-data bounds, `LoopLimitExceeded` for a
-  bare `for .. limit`, cast range violations, newtype refinement failures, and unhandled
-  native errors.
-- **Method.** A partial operation is trap-free when its operands are provably in range or it
-  carries an outcome handler (the checked-arithmetic and index-guard constructs, the
-  `on { .. }` loop-outcome block). Prove the in-range case with interval and refinement
-  reasoning; the interval substrate already exists in Rust (`src/interval.rs`) and the
-  refinement and value-range machinery in `value_layout.rs` and the newtype system.
-- **Output.** A `trap-free` verdict per chunk and per module. Two host uses follow: refuse
-  to load a possibly-trapping program when the host requests trap-free-only, and permit a
-  no-check execution mode that omits the runtime guards a proven-total program cannot need.
-- **First pass versus full language.** The first pass covers the trap classes the toolchain
-  source can raise (arithmetic and bounds over `Word`/`Byte`); the newtype-refinement and
-  native-error classes widen with Workstream F.
+**The design (an ISA and lowering change).**
+
+- **`Trap` is the only opcode that traps.** Every other opcode is made total, meaning it
+  never faults at run time.
+- **The formerly-trapping opcodes produce a flag instead of trapping.** Each partial
+  operation (checked arithmetic overflow across add, sub, mul, neg, div, mod; division and
+  modulo by zero; array and indexed-data bounds; the bare `for .. limit` limit; cast range;
+  newtype refinement; native errors) yields an outcome flag alongside its result rather than
+  faulting internally. The checked-arithmetic family already produces such a flag; this
+  generalizes the pattern to every partial operation.
+- **Compilation lowers a partial operation to the flag-producing opcode followed by a
+  flag-based conditional trap.** For an operation the source does **not** handle, the
+  compiler emits the total opcode and then a flag-guarded `Trap`. For an operation the
+  source **does** handle with a checked-outcome construct (the `{ ok => .., overflow => .. }`
+  form, the index guard, the `on { .. }` loop-outcome block), the compiler emits the total
+  opcode and then a flag-guarded branch to the handler, with no `Trap`.
+- **Consequence.** A program that handles every partial-operation outcome contains no `Trap`
+  opcode. A program with any unhandled partial operation contains an explicit `Trap`. Trap
+  reachability, which is undecidable in general, becomes the decidable presence or absence of
+  a single opcode.
+- **The validator simply scans the binary for `Trap` opcodes.** Zero `Trap` means provably
+  non-trapping. Any `Trap` means possibly-trapping. No interval or refinement reasoning is
+  needed in the validator at all.
+
+**Host use.** The "run only non-trapping programs" mode is a load-time refusal of any module
+that contains a `Trap` opcode, unless the host opts into trap-permitting execution. A
+proven-trap-free module can additionally run in a no-check mode, because a total opcode needs
+no runtime guard.
+
+**Scope of the change.** This is a `BYTECODE_VERSION`-bumping ISA change touching the
+instruction set (`bytecode.rs`), the lowering (`compiler.rs` and, in the self-hosted line,
+`codegen.kel`), the VM (`vm.rs`, which becomes simpler because only `Trap` can fault), and
+the validator (`verify.rs` and the self-hosted `analyze.kel`, which gain a trivial scan). It
+supersedes the interval-and-refinement approach that was previously sketched here. It also
+aligns with the flat-machine ISA direction and with the native partial-operation lowering
+planned for V0.4.0 (B35 P8).
+
+**First pass versus full language.** The first pass covers the trap classes the toolchain
+source can raise (arithmetic and bounds over `Word`/`Byte`); the newtype-refinement and
+native-error classes widen with Workstream F, but the scanning validator is complete from the
+start because it is agnostic to which partial operation produced the `Trap`.
 
 ### D. Runtime in Keleusma (hosted meta-circular VM)
 
