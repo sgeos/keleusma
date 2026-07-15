@@ -153,11 +153,24 @@ that block; only the entry and exit wrapper needs the tier, a naked-entry attrib
 escape hatch for the irreducible instructions (the trap or `eret` return, the context save and
 restore), while the body is normal Keleusma. This matches the Oberon `SYSTEM`-module shape, a
 demarcated primitive set plus ordinary procedures, which is the closest precedent and is already
-in the roadmap's Wirth lineage. One subtlety: a hardware-invoked handler fires asynchronously and
-must not disturb the interrupted context, so it needs its own stack and arena slot rather than
-the caller's, which is exactly the sub-coroutine slot model of Workstream A (own program counter,
-call-frame stack, operand stack, and arena slot). An interrupt handler is therefore a
-naked-entry function bound to its own slot, and Workstreams A and I connect there.
+in the roadmap's Wirth lineage.
+
+**Interrupt handlers and WCMU-sized arenas.** A hardware-invoked handler fires asynchronously and
+must not disturb the interrupted context, so it runs against **its own arena paired with the
+shared-data block**, not the interrupted code's arena. The arena is the handler's execution
+memory (its operand stack, call frames, and transient composites are arena-resident); the shared
+block carries the cross-boundary state. This is where the definitive-WCMU property pays off
+directly: the arena a handler needs is its computed WCMU, and a program whose handler WCMU cannot
+be bounded is rejected rather than shipped to overflow. Sizing an interrupt stack is a
+notoriously error-prone embedded problem that C and Rust answer with over-provisioning or a
+separate, often-unsound worst-case-stack tool; here it is a sound, compiler-computed number. The
+one honest addend is the register-save frame the naked entry writes, which lives in the low-level
+tier outside WCMU but is a fixed, architecture-known constant, so the arena is
+`WCMU(body) + fixed_save_frame`. Nested, preempting interrupts sum their WCMUs along the deepest
+preemption chain, which WCMU also makes computable; a non-nesting design takes the maximum. Each
+handler arena is a declared arena partition (Workstream D, master-WCMU-based allocation); the
+sub-coroutine slot model (Workstream A) is the general form of an isolated context, of which a
+handler arena is the simplest case.
 
 This tier is an explicit **impure, unsafe island**: totality and bounded WCET and WCMU do not
 hold inside it, and the verifier's soundness is scoped to the pure core above it, exactly as
