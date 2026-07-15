@@ -35,9 +35,16 @@ already runs bare metal, so the target is demonstrably reachable.
 
 This tightens the framing in `V0_5_0_KELEUSMA_HOST.md`, which describes a minimal Rust shim
 remaining. Under this roadmap the shim need not be Rust: it is the ordinary OS-or-bare-metal
-boundary, and once V0.4.0 native code generation exists it can itself be Keleusma-native (the
-platform's syscalls emitted directly, or bare metal) atop the small target-specific entry stub
-that even a C program links. Two axes stay distinct. The **host application** (driver,
+boundary, and once V0.4.0 native code generation exists it can itself be Keleusma-native, the
+platform's syscalls emitted directly or bare metal from the reset vector up. **Expressing even
+the entry stub in Keleusma is a deliberate language goal, not a concession to a non-Keleusma
+crt0.** The reset-vector entry, the initial stack-pointer load before any stack-using code can
+run, and the raw syscall or trap instruction are the irreducible lowest rung, and reaching them
+requires the language to grow a demarcated low-level tier (Workstream I) whose primitive is an
+instruction-emitting escape hatch, in the manner of Rust inline assembly or Ada machine-code
+insertions. The bounded WCET and WCMU and totality guarantees are scoped to the pure core above
+that tier; the tier is an explicit impure, unsafe island, which is the same discipline every
+systems language with high-level guarantees uses. Two axes stay distinct. The **host application** (driver,
 orchestration) is what V0.5.0 retires. The **runtime VM** is a separate concern that exists only
 for the bytecode-interpretation deployment shape; the native deployment shape runs no VM, so a
 native, Keleusma-hosted program on an OS or bare metal can carry no Rust in its operator path at
@@ -94,7 +101,8 @@ seam (Workstream B): the syscalls and device reads are inherently impure and unb
 Keleusma's bounded, total guarantees are about the pure core inside the seam. That is the
 standard bounded-core-with-impure-edge shape of any real-time system, not a Keleusma
 peculiarity. The layer is small and target-specific; it is not a permanent Rust dependency and
-can be Keleusma-native once V0.4.0 lands. The V0.5.0 scope is the file-and-stdio host;
+is expressed in Keleusma over the low-level tier (Workstream I), including the entry stub. The
+V0.5.0 scope is the file-and-stdio host;
 bare-metal hardware-control natives (volatile access, interrupt registration) are the V0.5.x
 widening, for which `examples/rtos/` is the reachable-target precedent.
 
@@ -116,6 +124,34 @@ replacement from V0.3.x.
 Surface-language work continues through V0.4.x as the host and module system surface constraints,
 in the same co-evolution posture as the earlier rungs.
 
+### I. Low-level and freestanding language tier
+
+The language capability that lets the OS-or-bare-metal interface, and the entry stub itself, be
+Keleusma rather than a foreign stub. It is a deliberate language goal that Keleusma express
+ASM-level logic directly, accepting the feature additions that requires. The tier comprises:
+
+- A **freestanding mode** with no assumed runtime or startup, and a definable entry point (the
+  process entry on a hosted OS, the reset vector on bare metal).
+- **Raw and volatile memory access** for memory-mapped device registers and fixed-address I/O,
+  distinct from the arena and shared-data models.
+- A **direct syscall or trap intrinsic** (`svc`, `ecall`, `syscall`, `int`) as the raw OS or
+  supervisor boundary.
+- **Interrupt and exception handlers** with the platform's required calling convention (naked
+  entry, no prologue), and control over **memory layout and linker sections** (the vector table,
+  code and data placement).
+- At the bottom, an **instruction-emitting escape hatch** (inline-assembly-equivalent or a set
+  of instruction intrinsics) for the handful of operations a stack-based functional core cannot
+  synthesize, such as loading the initial stack pointer.
+
+This tier is an explicit **impure, unsafe island**: totality and bounded WCET and WCMU do not
+hold inside it, and the verifier's soundness is scoped to the pure core above it, exactly as
+Rust `unsafe` and Ada `System` are demarcated. Its timing is host-attested or best-effort, per
+the native WCET stance. It widens Keleusma's positioning from a bounded embeddable stream
+processor toward a bounded systems language with a low-level escape hatch, a deliberate
+strengthening that also widens the trusted surface. The tier is a language-feature theme that
+begins here because bare metal forces it, but its primitives are designed as general language
+additions, not host-migration one-offs.
+
 ## Dependency ordering and indicative release mapping
 
 Indicative and revised as increments land.
@@ -124,10 +160,11 @@ Indicative and revised as increments land.
 |-------|-----------|-------------|------|
 | 1 | Sub-coroutines and purity | A, B | The pipeline stages run as sub-coroutines from an impure driver, purity discipline enforced. |
 | 2 | Modules and partitions | C, D | The host and compiler are multi-module with declared arena partitions. |
-| 3 | OS shim | E | The minimal file and stdio native surface is in place. |
-| 4 | Host driver in Keleusma | F | The `impure fn main` compiler driver runs the full pipeline against a source file and exits, native-hosted. |
-| 5 | Live update | G | Structured live code update through the host. |
-| 6 | **Rust host retirement → V0.5.0** | F (both shapes), plus widening | The host application is Keleusma; only the OS shim and the VM remain in Rust. |
+| 3 | Low-level and freestanding tier | I | A freestanding Keleusma program reaches the OS by its own syscall path or runs bare metal from the reset vector, with the instruction-emitting escape hatch in place. |
+| 4 | OS or bare-metal interface | E | The file and stdio (hosted) or device (bare-metal) native surface is expressed in Keleusma over the low-level tier. |
+| 5 | Host driver in Keleusma | F | The `impure fn main` compiler driver runs the full pipeline against a source file and exits, native-hosted. |
+| 6 | Live update | G | Structured live code update through the host. |
+| 7 | **Rust host retirement → V0.5.0** | F (both shapes), plus widening | The host application and the OS-or-bare-metal interface, including the entry stub, are Keleusma; in the native deployment shape no Rust remains in the operator path. |
 
 ## The oracle and trust story
 
@@ -160,6 +197,12 @@ Carried from `V0_5_0_KELEUSMA_HOST.md`'s open questions, resolved as V0.4.x appr
    implementation approaches).
 3. **VM-loop closure horizon.** Whether and when replacing the shipping VM itself (V0.6+) becomes
    a committed goal; V0.5.0 informs but does not decide it.
+4. **Low-level tier design (Workstream I).** Whether the instruction-emitting escape hatch is an
+   inline-assembly form, a fixed set of instruction intrinsics, or both; how the low-level tier
+   is demarcated syntactically and how far the verifier's soundness scoping extends around it;
+   and which targets' syscall and reset-vector conventions land first. This is a language-design
+   decision with a security-surface cost, since the tier is where the bounded guarantees are
+   suspended.
 
 ## Relationship to other roadmaps
 

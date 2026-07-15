@@ -29,7 +29,12 @@ document:
 | V0.4.x | V0.5.0 | Rust host retirement (a host written in Keleusma) | [`V0_5_0_KELEUSMA_HOST.md`](./V0_5_0_KELEUSMA_HOST.md) |
 
 Language feature additions and revisions are expected along the whole ladder, not front-loaded
-into V0.3.0; the surface language co-evolves with the toolchain toward V0.5.0.
+into V0.3.0; the surface language co-evolves with the toolchain toward V0.5.0. One such theme is
+a deliberate goal that Keleusma express ASM-level logic directly: a demarcated low-level,
+freestanding tier that lets the OS-or-bare-metal interface, and the entry stub itself, be
+Keleusma rather than a foreign stub. It surfaces concretely at the bare-metal rung
+([`V0_4_X_ROADMAP.md`](./V0_4_X_ROADMAP.md), Workstream I), but it is a general language
+capability, not a host-migration one-off.
 
 This re-scopes two earlier framings and both should be aligned to match:
 
