@@ -23,12 +23,27 @@ This is the third rung of the version ladder introduced in `V0_2_X_ROADMAP.md`, 
 discipline: a subset first, one reviewable increment per release, the prior artefact retained as
 a differential oracle, and language feature additions and revisions expected along the way.
 
-**What "retirement" does and does not mean.** Per `V0_5_0_KELEUSMA_HOST.md`, V0.5.0 closes the
-host loop, not the VM loop. A minimal Rust shim remains for the operating-system interface
-(process launch, allocator binding, signal handling) and to host the runtime VM where bytecode
-execution is selected. The shipping VM stays in Rust through V0.5.0; replacing the VM itself is a
-V0.6-and-later aspiration. The meta-circular runtime that V0.2.x self-hosted is an executable
-specification of VM semantics, not the shipping VM, and it does not change this boundary.
+**What "retirement" does and does not mean.** A retired host means the program is hosted by the
+operating system, or by bare metal directly, exactly as any ahead-of-time-compiled program is.
+The interface it crosses to reach the world, the startup sequence, the syscall or device
+boundary, the memory the arena draws from, and signal or interrupt handling, is a **universal
+native-program concern, not a Keleusma-specific one**. It is a tractable, well-trodden problem
+that every systems language solves in its own runtime, and Keleusma's quirks are semantic
+(totality, bounded WCET and WCMU, coroutine structure) rather than anything that changes how a
+compiled program reaches the operating system. The `examples/rtos/` cooperative microkernel
+already runs bare metal, so the target is demonstrably reachable.
+
+This tightens the framing in `V0_5_0_KELEUSMA_HOST.md`, which describes a minimal Rust shim
+remaining. Under this roadmap the shim need not be Rust: it is the ordinary OS-or-bare-metal
+boundary, and once V0.4.0 native code generation exists it can itself be Keleusma-native (the
+platform's syscalls emitted directly, or bare metal) atop the small target-specific entry stub
+that even a C program links. Two axes stay distinct. The **host application** (driver,
+orchestration) is what V0.5.0 retires. The **runtime VM** is a separate concern that exists only
+for the bytecode-interpretation deployment shape; the native deployment shape runs no VM, so a
+native, Keleusma-hosted program on an OS or bare metal can carry no Rust in its operator path at
+all. The Rust VM survives only as long as bytecode interpretation is offered as a deployment
+shape, and replacing it there is the V0.6-and-later question. The meta-circular runtime that
+V0.2.x self-hosted is an executable specification of VM semantics, not the shipping VM.
 
 ## Entry baseline (what V0.4.0 hands to V0.4.x)
 
@@ -70,11 +85,18 @@ multi-module programs.
 Source-level partition-boundary declarations, each assigned its own arena slot, with
 master-WCMU-based allocation. Auto-detection is deferred; declaration is the V0.5.0 mechanism.
 
-### E. Operating-system interface natives
+### E. Operating-system or bare-metal interface
 
-The minimal Rust shim: file open, read, write, close; command-line argument iteration; process
-exit code; and stdout and stderr write. This is the irreducible host seam. Bare-metal
-hardware-control natives are deferred to V0.5.x.
+The universal boundary a native program crosses to reach the world: file open, read, write,
+close; command-line argument iteration; process exit code; and stdout and stderr write on a
+hosted OS, or the device and interrupt boundary on bare metal. This is the designated impure
+seam (Workstream B): the syscalls and device reads are inherently impure and unbounded, and
+Keleusma's bounded, total guarantees are about the pure core inside the seam. That is the
+standard bounded-core-with-impure-edge shape of any real-time system, not a Keleusma
+peculiarity. The layer is small and target-specific; it is not a permanent Rust dependency and
+can be Keleusma-native once V0.4.0 lands. The V0.5.0 scope is the file-and-stdio host;
+bare-metal hardware-control natives (volatile access, interrupt registration) are the V0.5.x
+widening, for which `examples/rtos/` is the reachable-target precedent.
 
 ### F. The host driver in Keleusma
 
@@ -158,6 +180,8 @@ The V0.4.x line is complete, and V0.5.0 is ready, when:
    driver.
 3. Sub-coroutines, the three-mode purity discipline, file-based modules with interface
    declarations, and declared arena partitions are all in place and verifier-enforced.
-4. The only operator-facing Rust remaining is the minimal OS shim and the runtime VM, both a
-   reviewed trust base, with the Rust host driver retired to a differential oracle pending its
-   own retirement decision.
+4. In the native deployment shape, the operator-facing path carries no Rust: the OS-or-bare-metal
+   interface is Keleusma-native atop the platform's standard entry stub, and no VM runs. The Rust
+   runtime VM remains only for the separate bytecode-interpretation deployment shape (its
+   replacement is the V0.6-and-later question), and the Rust host driver is retired to a
+   differential oracle pending its own retirement decision.
