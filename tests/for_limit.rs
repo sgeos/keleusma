@@ -9,6 +9,11 @@
 //! constructs. Overflow capture and `when` guards on outcome arms are not yet
 //! implemented and are rejected explicitly.
 
+// Drives the compile front end and constructs a `Vm` (strict verification), so it needs both
+// the `compile` and `verify` features. Gate the whole file so the CI `--no-default-features`
+// build does not attempt to compile it.
+#![cfg(all(feature = "compile", feature = "verify"))]
+
 use keleusma::Arena;
 use keleusma::bytecode::Value;
 use keleusma::compiler::compile;
