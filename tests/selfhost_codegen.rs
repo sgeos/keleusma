@@ -6,6 +6,9 @@
     not(feature = "narrow-word-16"),
     not(feature = "narrow-word-32")
 ))]
+// The self-hosting driver and scaffold-assembly helpers carry composite tuple types that a
+// `type` alias would only scatter; allow the complexity lint for this test file.
+#![allow(clippy::type_complexity)]
 //! Stage 3 codegen (`compiler/kel/codegen.kel`). A throwaway adapter flattens the
 //! reference's block into the shared-data node arrays and statement metadata, the
 //! Keleusma stage walks it recursion-free, interns each literal into its own
@@ -3520,7 +3523,7 @@ fn reconstruct_via_kel_multihead(heads: &[&ParsedFn], pc: usize) -> Body {
     arena.resize_persistent(need).expect("resize");
     let mut vm = Vm::new(m, &arena).expect("verify reconstruct.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
-    let mut set = |vm: &mut Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
+    let set = |vm: &mut Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
         vm.set_shared(shared, slot, Value::Int(v)).unwrap();
     };
     set(&mut vm, &mut shared, RC_REC_COUNT, recs.len() as i64);
