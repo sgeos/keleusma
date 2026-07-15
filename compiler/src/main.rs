@@ -593,8 +593,11 @@ fn compile_stage(src: &str, name: &str, deep: bool) -> keleusma::bytecode::Modul
 /// `MILESTONES.md`.
 fn run_compile_pipeline(path: &str, out: Option<&str>) {
     use keleusma::Arena;
+    use keleusma::bytecode::BlockType;
     use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, required_persistent_capacity_for};
-    use keleusma_selfhost::selfhost::{compile_src, self_host_compile};
+    use keleusma_selfhost::selfhost::{
+        analyze_stream_chunk, compile_src, self_host_compile, validate_module_via_kel,
+    };
 
     let src = std::fs::read_to_string(path).unwrap_or_else(|e| {
         eprintln!("cannot read {path}: {e}");
@@ -622,6 +625,44 @@ fn run_compile_pipeline(path: &str, out: Option<&str>) {
     } else {
         None
     };
+
+    // Self-hosted resource-bound report: run analyze.kel over each Stream chunk for its
+    // per-iteration WCET and WCMU, then decide the module-level validity via the
+    // transitive self-hosted validator and confirm it agrees with the Rust reference
+    // `verify_resource_bounds`. This is a report only; it does not alter the bytecode.
+    let arena_capacity = DEFAULT_ARENA_CAPACITY as i64;
+    println!("self-hosted resource-bound report (arena capacity {arena_capacity}):");
+    for chunk in &module.chunks {
+        if chunk.block_type != BlockType::Stream {
+            continue;
+        }
+        let (wcet, stack, heap, reject, _valid) = analyze_stream_chunk(chunk);
+        if reject {
+            println!(
+                "  Stream `{}`: no static bound (analyze.kel rejects)",
+                chunk.name
+            );
+        } else {
+            println!(
+                "  Stream `{}`: WCET {wcet}, WCMU {} bytes (stack {stack} + heap {heap})",
+                chunk.name,
+                stack + heap
+            );
+        }
+    }
+    let kel_valid = validate_module_via_kel(&module, arena_capacity);
+    let ref_valid =
+        keleusma::verify::verify_resource_bounds(&module, arena_capacity as usize).is_ok();
+    println!(
+        "  module: self-hosted validator {}; reference verify_resource_bounds {}; {}",
+        if kel_valid { "admits" } else { "rejects" },
+        if ref_valid { "admits" } else { "rejects" },
+        if kel_valid == ref_valid {
+            "agree"
+        } else {
+            "DISAGREE"
+        }
+    );
 
     // Verify the assembled module loads on the VM.
     let need = required_persistent_capacity_for(&module);
