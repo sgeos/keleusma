@@ -327,6 +327,42 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
     (ops, pool, local_count)
 }
 
+/// Derive the call-resolution chunk table (the interned name id of each chunk, in the
+/// module's chunk order) from lexer.kel's token stream, with no reference borrow of the
+/// user program. The reference orders chunks by function name and folds a multiheaded
+/// function's several same-named heads into one chunk, so the table is the deduplicated,
+/// lexicographically sorted set of the program's function names. Each `fn` (tok 0),
+/// `yield` (tok 5), or `loop` (tok 6) keyword is immediately followed by the name
+/// identifier (tok 1, whose payload is the interned id), so the function-name set is a
+/// direct token scan. Returns each chunk name's interned id in the sorted order.
+fn chunk_table_from_tokens(tokens: &[(i64, i64)], names: &[String]) -> Vec<i64> {
+    // Track brace-nesting depth (LBrace = 2, RBrace = 3) so a `yield` keyword used as a
+    // yield *statement* inside a body (depth > 0), or any keyword occurrence below the
+    // top level, is not mistaken for a function head. A function head appears only at
+    // depth 0, before its body's opening brace, immediately followed by the name Ident.
+    let mut ids: Vec<i64> = Vec::new();
+    let mut depth: i64 = 0;
+    for w in tokens.windows(2) {
+        let (kw, _) = w[0];
+        let (tok, payload) = w[1];
+        if depth == 0 && (kw == 0 || kw == 5 || kw == 6) && tok == 1 {
+            ids.push(payload);
+        }
+        match kw {
+            2 => depth += 1,
+            3 => depth -= 1,
+            _ => {}
+        }
+    }
+    // The final token is not covered by `windows(2)` as a `w[0]`, but a function head is
+    // never the last token (its body follows), so no head is missed by that omission.
+    // Deduplicate by name (a multiheaded function is one chunk) and order by chunk name,
+    // matching the reference's name-keyed `BTreeMap` chunk order.
+    ids.sort_by(|&a, &b| names[a as usize].cmp(&names[b as usize]));
+    ids.dedup_by(|&mut a, &mut b| names[a as usize] == names[b as usize]);
+    ids
+}
+
 /// Drive lexer.kel then parse.kel over `src` and return every function it yields, each
 /// with its guard and body records, plus the interned-name table. Multiheaded functions
 /// appear as several same-named entries in declaration order.
@@ -346,15 +382,13 @@ pub fn parse_functions(
             .unwrap_or(-1)
     };
     // The chunk table must be in the module's actual chunk order so a resolved call index
-    // matches the assembled module. The Rust compiler orders chunks by name, not by
-    // declaration, so the table (host-supplied resolved-reference data) is taken from the
-    // reference module's chunk order rather than the token scan's declaration order.
-    let reference_chunks = compile_src(src);
-    let chunks: Vec<i64> = reference_chunks
-        .chunks
-        .iter()
-        .map(|c| id_of(&c.name))
-        .collect();
+    // matches the assembled module. The Rust compiler orders chunks by name (a `BTreeMap`
+    // keyed by function name), not by declaration order, and groups same-named heads into
+    // one chunk. The same order is the deduplicated, lexicographically sorted set of the
+    // program's function names, which is derived from the token stream itself (each
+    // `fn`/`yield`/`loop` keyword is immediately followed by the name identifier), so the
+    // resolution table needs no reference borrow of the user program.
+    let chunks: Vec<i64> = chunk_table_from_tokens(&tokens, &names);
     let module = std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
         .spawn(|| compile_src(&read_stage("kel/parse.kel")))
@@ -1394,4 +1428,144 @@ fn self_host_module_bookkeeping(module: &mut Module) {
     } else {
         0
     };
+}
+
+/// The shared segment's flat byte total, derived from the assembled shared-slot layout the
+/// same way the reference accumulates it (`compile_with_target`'s `shared_data_flat_bytes`):
+/// one entry per shared slot at consecutive byte offsets, so the total is the byte past the
+/// last entry. The per-slot size is fixed by the scalar kind tag the layout records: a `Word`
+/// (tag 3) is eight bytes and a `Byte` (tag 2) is one byte at the 64-bit reference width, the
+/// same `(tag, size)` mapping `assemble_shared_layout` uses. Zero for a module with no shared
+/// slots.
+fn shared_data_bytes_of(shared_layout: &[keleusma::bytecode::SharedSlotLayout]) -> u32 {
+    shared_layout
+        .iter()
+        .map(|e| {
+            let size = match e.kind {
+                3 => 8u32,
+                2 => 1u32,
+                other => panic!("unhandled shared slot kind tag {other}"),
+            };
+            e.offset + size
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// Self-host-compile a whole program building the emitted [`Module`] entirely from the
+/// pipeline output, with no reference-compiler borrow of the user program. Unlike
+/// [`self_host_compile_full`] (which starts from `compile_src(src)` and overwrites fields),
+/// every one of the module's eighteen fields is assembled here from parse.kel's record
+/// stream, reconstruct.kel's forest, codegen.kel's ops, and analyze.kel's verdict; the
+/// reference is used only as the byte-identity oracle in `tests/scaffold.rs`.
+///
+/// The chunk order matches the reference's name-keyed `BTreeMap` order (chunks sorted
+/// lexicographically by name, same-named heads folded into one chunk). The entry point is the
+/// name-sorted index of `main`. The scalar bit widths are the host target's. The
+/// shared/private data byte totals are derived from the assembled `DataLayout` exactly as the
+/// reference derives them (the shared segment's flat byte span, and the private-slot count
+/// times `VALUE_SLOT_SIZE_BYTES`). The stages declare no natives, so `native_names` and
+/// `native_return_shapes` are empty.
+pub fn self_host_compile_scratch(src: &str) -> Module {
+    use keleusma::bytecode::{Chunk, ConstValue, SlotVisibility};
+    let (fns, names, data_records, enum_records) = parse_functions(src);
+
+    // Build each source chunk from the pipeline output. Group consecutive same-named heads
+    // (a multiheaded function is one chunk), mirroring `self_host_compile`, but emit a fresh
+    // `Chunk` rather than splicing into a reference base.
+    let meta = assemble_chunk_metadata(&fns, &names);
+    let mut chunks: Vec<Chunk> = Vec::new();
+    let mut i = 0;
+    while i < fns.len() {
+        let name = names[fns[i].name as usize].clone();
+        let mut group: Vec<&ParsedFn> = vec![&fns[i]];
+        let mut j = i + 1;
+        while j < fns.len() && names[fns[j].name as usize] == name {
+            group.push(&fns[j]);
+            j += 1;
+        }
+        i = j;
+        let pc = group[0].params;
+        let body = if group[0].cat == 2 {
+            reconstruct_via_kel_multihead(&group, pc)
+        } else {
+            let category = if group[0].cat == 3 { 2 } else { 0 };
+            reconstruct_via_kel(&group[0].body, category, pc)
+        };
+        let (ops, pool, lc) = run_codegen(&body, pc);
+        // The metadata table (already name-sorted) supplies param_count, block_type, and
+        // param_types; look this chunk's entry up by name.
+        let (_, param_count, block_type, param_types) = meta
+            .iter()
+            .find(|(n, _, _, _)| n == &name)
+            .unwrap_or_else(|| panic!("no metadata for chunk `{name}`"));
+        chunks.push(Chunk {
+            name,
+            ops,
+            constants: pool.iter().map(|&v| ConstValue::Int(v)).collect(),
+            struct_templates: Vec::new(),
+            local_count: lc as u16,
+            param_count: *param_count,
+            block_type: *block_type,
+            param_types: param_types.clone(),
+            debug_pool: None,
+        });
+    }
+    // Order chunks by name to match the reference's name-keyed chunk order. The stage
+    // sources have no native chunks, so every chunk is source-defined.
+    chunks.sort_by(|a, b| a.name.cmp(&b.name));
+
+    // The entry point is the name-sorted index of the module's `main`.
+    let entry_point = chunks.iter().position(|c| c.name == "main");
+
+    // The native names come from the `use` declarations; the stages declare none, so this is
+    // empty and `native_return_shapes` is correspondingly empty.
+    let native_names: Vec<String> = Vec::new();
+    let native_return_shapes: Vec<keleusma::bytecode::WireShape> = Vec::new();
+
+    // The data layout, assembled from parse.kel's data-block records, drives both the shared
+    // and private byte totals the reference derives from the same layout.
+    let dl = assemble_data_layout(&data_records, &names);
+    let shared_data_bytes = shared_data_bytes_of(&dl.shared_layout);
+    let private_slot_count = dl
+        .slots
+        .iter()
+        .filter(|s| s.visibility == SlotVisibility::Private)
+        .count() as u32;
+    let private_data_bytes =
+        private_slot_count.saturating_mul(keleusma::bytecode::VALUE_SLOT_SIZE_BYTES);
+    let schema_hash = keleusma::bytecode::compute_schema_hash(Some(&dl));
+
+    let enum_layouts = assemble_enum_layouts(&enum_records, &names);
+    let signatures = assemble_signatures(&fns, &names);
+
+    // The scalar bit widths are the host target's, matching the reference `compile`, which
+    // compiles with `Target::host()`.
+    let target = keleusma::target::Target::host();
+
+    let mut module = Module {
+        chunks,
+        native_names,
+        entry_point,
+        data_layout: Some(dl),
+        word_bits_log2: target.word_bits_log2,
+        addr_bits_log2: target.addr_bits_log2,
+        float_bits_log2: target.float_bits_log2,
+        // Assembled from analyze.kel below.
+        wcet_cycles: 0,
+        wcmu_bytes: 0,
+        // Assembled from the program-analysis bookkeeping below.
+        aux_arena_bytes: 0,
+        persistent_composite_bytes: 0,
+        flags: 0,
+        shared_data_bytes,
+        private_data_bytes,
+        schema_hash,
+        enum_layouts,
+        signatures,
+        native_return_shapes,
+    };
+    assemble_resource_bounds(&mut module);
+    self_host_module_bookkeeping(&mut module);
+    module
 }
