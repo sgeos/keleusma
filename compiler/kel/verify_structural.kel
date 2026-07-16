@@ -1,12 +1,14 @@
-// compiler/kel/verify_structural.kel -- the self-hosted structural verifier's block-nesting
-// and branch-target pass: the block-nesting, branch-target-bounds, and exact target-equality
-// subset of the reference verifier's first structural pass (`verify.rs`, the block-nesting
-// walk that precedes the WCET/WCMU resource analysis already self-hosted in `analyze.kel`).
+// compiler/kel/verify_structural.kel -- the self-hosted structural verifier's block-nesting,
+// branch-target, and operand-bounds pass: `verify.rs`'s whole first structural pass except the
+// block-type constraints (second pass) and productive-divergence analysis (third pass). It is
+// the load-time structural check that precedes the WCET/WCMU resource analysis already
+// self-hosted in `analyze.kel`.
 //
 // The reference `verify()` walks each chunk maintaining a block stack and a parallel If stack,
-// rejecting a chunk whose structured control flow is malformed. This stage reproduces the
-// subset of that walk decidable from the marshalled `(class, arg)` op table alone (the same
-// table `analyze.kel` receives, with the EndLoop/Break/BreakIf targets now populated), namely:
+// rejecting a chunk whose structured control flow or operand indices are malformed. This stage
+// reproduces the block-nesting and target checks decidable from the marshalled `(class, arg)`
+// op table (the same table `analyze.kel` receives, with the EndLoop/Break/BreakIf targets now
+// populated), namely:
 //
 //   * branch-target bounds: an `If`/`Loop` exit target in `[0, op_count]`, an `Else` target in
 //     `[0, op_count)`, and a `Break`/`BreakIf` target in `[0, op_count]`;
@@ -19,26 +21,53 @@
 //     back-edge equals `loop_ip + 1` and its paired `Loop` exit equals `endloop_ip + 1`; a
 //     `Break`/`BreakIf` targets the innermost enclosing loop's exit.
 //
-// Together these are the whole of `verify.rs`'s first-pass block-nesting-and-target checks.
-// Still outside this stage (later slices): the operand-bounds family in the same reference
-// pass (local slot, data slot, constant pool, call target and arity, fraction bits, template
-// index), the block-type constraints (second pass), and the productive-divergence analysis
-// (third pass).
+// Together the above are the whole of `verify.rs`'s first-pass block-nesting-and-target checks.
+// This stage also carries the operand-bounds family of the same first pass: every per-op
+// operand index validated against a chunk or module table.
+//
+//   * local slot: `GetLocal`/`SetLocal` slot `< local_count`;
+//   * data slot: `GetData`/`SetData` slot `< data_len` (and a declared data layout), and
+//     `GetDataIndexed`/`SetDataIndexed` range `[base, base + len)` within `data_len`;
+//   * constant pool: `Const`/`IsStruct`/`GetField(Boxed)` index `< const_count`, and all three
+//     of `IsEnum`'s indices `< const_count`;
+//   * call target and arity: `Call` callee `< nchunks` and argument count `<= callee locals`;
+//   * fixed-point fraction bits: a Q-format `fb < word_bits`;
+//   * boxed struct/enum template: `NewComposite(Boxed)` meta index `< template_count`.
+//
+// Still outside this stage (later slices): the block-type constraints (second reference pass)
+// and the productive-divergence analysis (third pass).
 //
 // The class encoding matches the host's `analyze_class`: 0 plain, 1 If (arg the branch
 // target), 2 Else (arg the matching EndIf), 3 EndIf, 4 Loop (arg the exit target), 5 EndLoop
 // (arg the back-edge), 6 Break (arg the loop exit), 7 BreakIf (arg the loop exit), 8 Trap,
-// 9 Call. The stage sets `out_reject` to 1 on the first malformed construct it proves, and 0
-// for a well-formed chunk. The walk latches `bad` rather than stopping (the reference returns
+// 9 Call. The operand-bounds encoding is a parallel table `opb`/`o1`/`o2`/`o3` from the host's
+// `structural_opbounds`: opb 0 none, 1 data-single (`o1` slot), 2 data-range (`o1` base, `o2`
+// len), 3 constant-single (`o1` index), 4 enum-triple (`o1`/`o2`/`o3` indices), 5 call (`o1`
+// callee, `o2` argument count, `o3` the callee's local count resolved by the host), 6
+// fixed-fraction (`o1` fraction bits), 7 local (`o1` slot), 8 boxed struct/enum template (`o1`
+// meta index). The stage sets `out_reject` to 1 on the first malformed construct it proves, and
+// 0 for a well-formed chunk. The walk latches `bad` rather than stopping (the reference returns
 // on first error; this stage folds to the same boolean verdict).
 require word >= 32;
 
-// The host-facing block: the marshalled op table (`class`/`arg`, indexed by instruction
-// pointer) and the verdict `out_reject`. `op_count` bounds the walk.
+// The host-facing block: the per-chunk and per-module counts the operand-bounds checks
+// validate against, the marshalled op table (control-flow `class`/`arg` and operand-bounds
+// `opb`/`o1`/`o2`/`o3`, indexed by instruction pointer), and the verdict `out_reject`.
+// `op_count` bounds the walk.
 shared data sv {
     op_count: Word,
+    local_count: Word,
+    const_count: Word,
+    template_count: Word,
+    data_len: Word,
+    nchunks: Word,
+    word_bits: Word,
     class: [Word; 1024],
     arg: [Word; 1024],
+    opb: [Word; 1024],
+    o1: [Word; 1024],
+    o2: [Word; 1024],
+    o3: [Word; 1024],
     out_reject: Word,
 }
 
@@ -173,6 +202,87 @@ fn handle_break(ip: Word, a: Word) -> Word {
     0
 }
 
+// Validate the operand indices of the op at `ip` against the chunk/module counts, by its
+// operand-bounds kind `opb` (0 for an op with no operand index to check). Control-flow and
+// operand-bounds roles are disjoint per op except `Call`, which is both a control-flow class
+// (9, no nesting effect) and an operand-bounds op (5); the two roles are checked independently.
+fn check_opbounds(ip: Word) -> Word {
+    let k = sv.opb[ip];
+    let a = sv.o1[ip];
+    let b = sv.o2[ip];
+    let d = sv.o3[ip];
+    if k == 1 {
+        // GetData/SetData(slot = a): a declared, in-range data slot.
+        if sv.data_len == 0 {
+            sd.bad = 1;
+        } else {
+            if a >= sv.data_len {
+                sd.bad = 1;
+            }
+        }
+        0
+    } else {
+    if k == 2 {
+        // GetDataIndexed/SetDataIndexed(base = a, len = b): range within the data slots.
+        if sv.data_len == 0 {
+            sd.bad = 1;
+        } else {
+            if a + b > sv.data_len {
+                sd.bad = 1;
+            }
+        }
+        0
+    } else {
+    if k == 3 {
+        // Const/IsStruct/GetField(Boxed)(index = a): a constant-pool index.
+        if a >= sv.const_count {
+            sd.bad = 1;
+        }
+        0
+    } else {
+    if k == 4 {
+        // IsEnum(a, b, d): three constant-pool indices.
+        if a >= sv.const_count orelse b >= sv.const_count orelse d >= sv.const_count {
+            sd.bad = 1;
+        }
+        0
+    } else {
+    if k == 5 {
+        // Call(callee = a, argc = b, callee locals = d): a named chunk, arity within locals.
+        if a >= sv.nchunks {
+            sd.bad = 1;
+        } else {
+            if b > d {
+                sd.bad = 1;
+            }
+        }
+        0
+    } else {
+    if k == 6 {
+        // Fixed-point fraction bits (a): a Q-format count below the word width.
+        if a >= sv.word_bits {
+            sd.bad = 1;
+        }
+        0
+    } else {
+    if k == 7 {
+        // GetLocal/SetLocal(slot = a): a declared local slot.
+        if a >= sv.local_count {
+            sd.bad = 1;
+        }
+        0
+    } else {
+    if k == 8 {
+        // NewComposite(Boxed struct/enum)(meta = a): a boxed-metadata template index.
+        if a >= sv.template_count {
+            sd.bad = 1;
+        }
+        0
+    } else {
+        0
+    } } } } } } } }
+}
+
 // Process one op at instruction pointer `ip` by its control-flow class.
 fn step(ip: Word) -> Word {
     let c = sv.class[ip];
@@ -219,6 +329,7 @@ fn run() -> Word {
     for ip in 0..1024 limit 1024 {
         if sv.op_count > ip {
             step(ip);
+            check_opbounds(ip);
         }
     }
     if sd.depth > 0 {
