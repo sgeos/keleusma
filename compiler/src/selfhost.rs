@@ -1273,13 +1273,64 @@ fn assemble_resource_bounds(module: &mut Module) {
     module.wcmu_bytes = max_wcmu as u32;
 }
 
+/// Each chunk's `(name, param_count, block_type, param_types)` assembled from the parsed
+/// functions, in chunk-name order. The block type comes from the declaration category (fn ->
+/// Func, yield -> Reentrant, loop -> Stream); the parameter type tags map `Word`/`Byte` to
+/// their [`keleusma::bytecode::TypeTag`] (a stage boundary carries only scalar parameters). A
+/// multiheaded function is one chunk described by its first head.
+#[allow(clippy::type_complexity)]
+fn assemble_chunk_metadata(
+    fns: &[ParsedFn],
+    names: &[String],
+) -> Vec<(
+    String,
+    u8,
+    keleusma::bytecode::BlockType,
+    Vec<keleusma::bytecode::TypeTag>,
+)> {
+    use keleusma::bytecode::{BlockType, TypeTag};
+    let tag_of = |type_id: i64| -> TypeTag {
+        match names.get(type_id as usize).map(String::as_str) {
+            Some("Word") => TypeTag::Word,
+            Some("Byte") => TypeTag::Byte,
+            _ => TypeTag::Composite,
+        }
+    };
+    let mut chunks = Vec::new();
+    let mut i = 0;
+    while i < fns.len() {
+        let name = names[fns[i].name as usize].clone();
+        let first = &fns[i];
+        let mut j = i + 1;
+        while j < fns.len() && names[fns[j].name as usize] == name {
+            j += 1;
+        }
+        i = j;
+        let block_type = match first.cat {
+            1 => BlockType::Func,
+            2 => BlockType::Reentrant,
+            _ => BlockType::Stream,
+        };
+        let param_types: Vec<TypeTag> = first.param_types.iter().map(|&t| tag_of(t)).collect();
+        chunks.push((name, first.params as u8, block_type, param_types));
+    }
+    chunks.sort_by(|a, b| a.0.cmp(&b.0));
+    chunks
+}
+
 /// Self-host-compile a whole program with a from-scratch module scaffold: the
 /// self-hosted chunk ops (via [`self_host_compile`]) plus a data layout, schema hash,
-/// enum-layout table, chunk signatures, and declared WCET/WCMU header all assembled from
-/// the pipeline output (parse.kel's record stream and analyze.kel's verdict) rather than
-/// borrowed from the Rust reference. For the loop-free stage sources the serialized
-/// module is byte-identical to the reference; the reference is used only as the oracle in
-/// `tests/scaffold.rs`.
+/// enum-layout table, chunk signatures, per-chunk metadata, and declared WCET/WCMU header all
+/// assembled from the pipeline output (parse.kel's record stream and analyze.kel's verdict)
+/// rather than borrowed from the Rust reference. For the loop-free stage sources the
+/// serialized module is byte-identical to the reference; the reference is used only as the
+/// oracle in `tests/scaffold.rs`.
+///
+/// What still rides the reference base: the chunk table's names and order, the (absent, for
+/// the stages) native chunks, and the module bookkeeping metadata (`aux_arena_bytes`,
+/// `persist_composite_bytes`, `flags`, and the target bit-widths). The last three are
+/// program-analysis-derived (opaque-intern reachability, private-composite persistence, entry
+/// modifiers) and self-hosting them is a distinct increment.
 pub fn self_host_compile_full(src: &str) -> Module {
     let mut module = self_host_compile(src);
     let (fns, names, data_records, enum_records) = parse_functions(src);
@@ -1288,6 +1339,17 @@ pub fn self_host_compile_full(src: &str) -> Module {
     module.data_layout = Some(dl);
     module.enum_layouts = assemble_enum_layouts(&enum_records, &names);
     module.signatures = assemble_signatures(&fns, &names);
+    // Self-assemble each source chunk's param_count, block_type, and param_types (the last
+    // per-chunk scaffold field). A native chunk (absent for the stages) is not in `meta` and
+    // keeps the reference's metadata.
+    let meta = assemble_chunk_metadata(&fns, &names);
+    for chunk in &mut module.chunks {
+        if let Some((_, pc, bt, pts)) = meta.iter().find(|(n, _, _, _)| n == &chunk.name) {
+            chunk.param_count = *pc;
+            chunk.block_type = *bt;
+            chunk.param_types = pts.clone();
+        }
+    }
     assemble_resource_bounds(&mut module);
     module
 }
