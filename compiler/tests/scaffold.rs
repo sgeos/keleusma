@@ -48,3 +48,26 @@ fn codegen_kel_scaffold_serializes_byte_identically() {
 fn analyze_kel_scaffold_serializes_byte_identically() {
     assert_scaffold_byte_identical("kel/analyze.kel");
 }
+
+// The self-hosted bookkeeping (`self_host_module_bookkeeping`) derives `FLAG_EPHEMERAL` from the
+// absence of private data. The five stage files all have private data, so they exercise only the
+// non-ephemeral path (flags 0). This private-data-free program is marked ephemeral by the
+// reference, so byte-identity here confirms the self-hosted flags computation genuinely sets the
+// bit -- and the `expect_ephemeral` check keeps the test non-vacuous.
+#[test]
+fn ephemeral_module_scaffold_serializes_byte_identically() {
+    let src = "require word >= 32;\n\
+               shared data io { out: Word }\n\
+               loop main(r: Word) -> Word { io.out = r + 1; yield io.out }";
+    let self_module = self_host_compile_full(src);
+    let ref_module = compile_src(src);
+    assert!(
+        ref_module.flags & keleusma::bytecode::FLAG_EPHEMERAL != 0,
+        "the reference must mark this private-data-free program ephemeral for the test to bind"
+    );
+    assert_eq!(
+        self_module.to_bytes().unwrap(),
+        ref_module.to_bytes().unwrap(),
+        "serialized ephemeral module (flags path)"
+    );
+}

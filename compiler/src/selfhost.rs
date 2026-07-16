@@ -1351,5 +1351,47 @@ pub fn self_host_compile_full(src: &str) -> Module {
         }
     }
     assemble_resource_bounds(&mut module);
+    self_host_module_bookkeeping(&mut module);
     module
+}
+
+/// Compute the module bookkeeping fields the reference derives by program analysis --
+/// `aux_arena_bytes`, `persistent_composite_bytes`, and `flags` -- from the pipeline output,
+/// rather than inheriting them from the reference base.
+///
+/// For the self-hosting subset (scalar `Word`/`Byte` data, no `Text`, no opaque types, no
+/// `signed` entry) these reduce to closed forms:
+///
+/// - **`aux_arena_bytes` is 0.** The field reserves an opaque-registry arena slice sized by
+///   `may_intern_opaque`, which is true only when the program constructs a flat composite able
+///   to hold a host opaque. A scalar-only program never does, so the field is provably 0. The
+///   general opaque-reachability analysis is a future extension gated on opaque-type support.
+/// - **`persistent_composite_bytes` is 0.** The field is the summed flat-body size of private
+///   data slots that hold a composite; the subset's private data is scalar or array-of-scalar,
+///   so the assembled private-composite layout is empty. The general body-size accounting is a
+///   future extension gated on composite-in-`data` support (a `debug_assert` guards the
+///   assumption).
+/// - **`FLAG_EPHEMERAL` iff `private_data_bytes == 0`.** The reference sets it when the module
+///   has no private data and no arena-resident (`Text`) value crosses the host boundary; the
+///   subset has no `Text`, so the text condition is vacuously satisfied and the flag reduces to
+///   the private-data test. `FLAG_REQUIRES_SIGNATURE` is never set (the subset has no `signed`
+///   entry).
+///
+/// The byte-identity oracle (`tests/scaffold.rs`) confirms these match the reference for the
+/// five stages (all zero) and a private-data-free program (which sets `FLAG_EPHEMERAL`).
+fn self_host_module_bookkeeping(module: &mut Module) {
+    module.aux_arena_bytes = 0;
+    debug_assert!(
+        module
+            .data_layout
+            .as_ref()
+            .is_none_or(|dl| dl.private_composite_layout.is_empty()),
+        "self-hosted persistent_composite_bytes = 0 assumes no private composite data (subset)"
+    );
+    module.persistent_composite_bytes = 0;
+    module.flags = if module.private_data_bytes == 0 {
+        keleusma::bytecode::FLAG_EPHEMERAL
+    } else {
+        0
+    };
 }
