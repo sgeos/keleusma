@@ -1,0 +1,169 @@
+// compiler/kel/verify_structural.kel -- the first slice of the self-hosted structural
+// verifier: the block-nesting and branch-target-bounds subset of the reference verifier's
+// first structural pass (`verify.rs`, the block-nesting walk that precedes the WCET/WCMU
+// resource analysis already self-hosted in `analyze.kel`).
+//
+// The reference `verify()` walks each chunk maintaining a block stack, rejecting a chunk
+// whose structured control flow is malformed. This stage reproduces the subset of that walk
+// that is decidable from the marshalled `(class, arg)` op table alone -- the same table
+// `analyze.kel` receives -- namely:
+//
+//   * branch-target bounds: an `If`/`Loop` exit target in `[0, op_count]` and an `Else`
+//     target in `[0, op_count)` (`verify.rs` uses `<= ops.len()` for `If`/`Loop` and
+//     `< ops.len()` for `Else`);
+//   * block nesting: `Else`/`EndIf` match an open `If`, `EndLoop` matches an open `Loop`,
+//     the block stack is empty at the end of the chunk (no unclosed `If`/`Loop`);
+//   * break containment: a `Break`/`BreakIf` occurs only inside an enclosing `Loop`
+//     (`loop_depth > 0`).
+//
+// Deliberately OUT of this slice, deferred to a follow-up that must first extend the host
+// marshalling (`analyze_class` currently drops the `Break`/`BreakIf`/`EndLoop` targets to
+// zero): the exact target-equality checks -- an `If` without an `Else` must target its
+// `EndIf`, an `Else` must target its `EndIf`, a `Loop` exit must equal `EndLoop + 1`, a
+// `Break` target must equal the enclosing loop's exit, and an `EndLoop` back-edge must equal
+// `Loop + 1`. Those checks require the currently-dropped operands and a forward marker-
+// position lookup; until they land this stage is a sound *necessary* condition (every chunk
+// it rejects the reference also rejects), not yet the full first pass.
+//
+// The class encoding matches the host's `analyze_class`: 0 plain, 1 If (arg the branch
+// target), 2 Else (arg the matching EndIf), 3 EndIf, 4 Loop (arg the exit target), 5 EndLoop,
+// 6 Break, 7 BreakIf, 8 Trap, 9 Call. The stage sets `out_reject` to 1 on the first malformed
+// construct it can prove, and 0 for a well-nested chunk.
+require word >= 32;
+
+// The host-facing block: the marshalled op table (`class`/`arg`, indexed by instruction
+// pointer) and the verdict `out_reject`. `op_count` bounds the walk.
+shared data sv {
+    op_count: Word,
+    class: [Word; 1024],
+    arg: [Word; 1024],
+    out_reject: Word,
+}
+
+// The block-nesting scratch. `stack` holds the open-block kinds in nesting order (1 If,
+// 2 Loop); `depth` is its height; `loop_depth` counts the open `Loop` markers (for break
+// containment); `bad` latches the first proven malformation.
+private data sd {
+    stack: [Word; 1024],
+    depth: Word,
+    loop_depth: Word,
+    bad: Word,
+}
+
+// Push an open-block marker of `kind` (1 If, 2 Loop). A push past the static stack capacity
+// (unreachable while `op_count <= 1024`, since each op opens at most one block) latches `bad`
+// rather than faulting.
+fn push_block(kind: Word) -> Word {
+    if sd.depth > 1023 {
+        sd.bad = 1;
+    } else {
+        sd.stack[sd.depth] = kind;
+        sd.depth = sd.depth + 1;
+    }
+    0
+}
+
+// Pop one open-block marker, requiring the top to be `kind` (1 If, 2 Loop). A pop of an empty
+// stack or a kind mismatch latches `bad` and leaves the stack unchanged (no underflow).
+fn pop_block(kind: Word) -> Word {
+    if sd.depth > 0 {
+        if sd.stack[sd.depth - 1] == kind {
+            sd.depth = sd.depth - 1;
+        } else {
+            sd.bad = 1;
+        }
+    } else {
+        sd.bad = 1;
+    }
+    0
+}
+
+// Process one op at instruction pointer `ip` by its control-flow class.
+fn step(ip: Word) -> Word {
+    let c = sv.class[ip];
+    if c == 1 {
+        // If: bounds-check the branch target (`<= op_count`), open an If block.
+        if sv.arg[ip] > sv.op_count {
+            sd.bad = 1;
+        }
+        push_block(1)
+    } else {
+    if c == 2 {
+        // Else: bounds-check the target (`< op_count`), require an open If on top (no pop --
+        // the If block closes at its EndIf).
+        if sv.arg[ip] >= sv.op_count {
+            sd.bad = 1;
+        }
+        if sd.depth > 0 {
+            if sd.stack[sd.depth - 1] == 1 {
+                0
+            } else {
+                sd.bad = 1;
+                0
+            }
+        } else {
+            sd.bad = 1;
+            0
+        }
+    } else {
+    if c == 3 {
+        // EndIf: close the open If block.
+        pop_block(1)
+    } else {
+    if c == 4 {
+        // Loop: bounds-check the exit target (`<= op_count`), open a Loop block.
+        if sv.arg[ip] > sv.op_count {
+            sd.bad = 1;
+        }
+        sd.loop_depth = sd.loop_depth + 1;
+        push_block(2)
+    } else {
+    if c == 5 {
+        // EndLoop: close the open Loop block.
+        if sd.loop_depth > 0 {
+            sd.loop_depth = sd.loop_depth - 1;
+        }
+        pop_block(2)
+    } else {
+    if c == 6 orelse c == 7 {
+        // Break / BreakIf: valid only inside an enclosing Loop.
+        if sd.loop_depth > 0 {
+            0
+        } else {
+            sd.bad = 1;
+            0
+        }
+    } else {
+        // EndIf/Trap/Call/plain and every other class: no nesting effect.
+        0
+    } } } } } }
+}
+
+// Walk the chunk's op range in order, then require the block stack to be empty (no unclosed
+// If/Loop) and publish the verdict. The walk runs to a static cap; a step past `op_count` is a
+// no-op. (An early `break` on `bad` would be cleaner but is not in the self-hosted codegen
+// subset, so this stage avoids it to stay self-compiling, exactly as `analyze.kel` does.)
+fn run() -> Word {
+    sd.depth = 0;
+    sd.loop_depth = 0;
+    sd.bad = 0;
+    for ip in 0..1024 limit 1024 {
+        if sv.op_count > ip {
+            step(ip);
+        }
+    }
+    if sd.depth > 0 {
+        sd.bad = 1;
+    }
+    if sd.bad == 1 {
+        sv.out_reject = 1;
+    } else {
+        sv.out_reject = 0;
+    }
+    sv.out_reject
+}
+
+// Check the chunk's structure in one call and yield the verdict (1 reject, 0 well-nested).
+loop main(resume: Word) -> Word {
+    yield run()
+}

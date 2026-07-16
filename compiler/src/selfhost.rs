@@ -962,6 +962,73 @@ pub fn analyze_stream_chunk(chunk: &keleusma::bytecode::Chunk) -> (i64, i64, i64
     run_analyze_kel(chunk, i64::MAX, &[], &[])
 }
 
+// --- Self-hosted structural verifier (verify_structural.kel) ---------------------------------
+//
+// The first slice of the self-hosted structural pass: the block-nesting and branch-target-
+// bounds subset of `verify.rs`'s first structural walk, decidable from the marshalled
+// `(class, arg)` op table alone (the same table `analyze.kel` receives). The shared block `sv`
+// lays out `op_count` (slot 0), `class[1024]` (slots 1..), `arg[1024]` (slots 1025..), and the
+// verdict `out_reject` (slot 2049). The exact target-equality checks are deferred to a follow-
+// up slice that must first extend `analyze_class` to carry the `Break`/`BreakIf`/`EndLoop`
+// targets it currently drops; until then this stage is a sound necessary condition (every
+// chunk it rejects the reference also rejects), not yet the full first pass.
+
+const SV_OP_COUNT: usize = 0;
+const SV_CLASS: usize = 1;
+const SV_ARG: usize = 1 + 1024;
+const SV_OUT_REJECT: usize = 1 + 1024 * 2;
+
+fn verify_structural_kel_module() -> Module {
+    static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| compile_src(&read_stage("kel/verify_structural.kel")))
+        .clone()
+}
+
+/// Run verify_structural.kel over one chunk, returning whether it rejects the chunk's block
+/// nesting or branch-target bounds. Marshals the `(class, arg)` op table via `analyze_class`,
+/// the same classification `analyze.kel` receives; no chunk metadata beyond the op classes is
+/// consulted, so a deliberately malformed chunk is classified but never executed.
+pub fn structural_reject_chunk_via_kel(chunk: &keleusma::bytecode::Chunk) -> bool {
+    assert!(
+        chunk.ops.len() <= 1024,
+        "verify_structural.kel op-table capacity"
+    );
+    let m = verify_structural_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify verify_structural.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let set = |vm: &Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
+        vm.set_shared(shared, slot, Value::Int(v)).unwrap();
+    };
+    set(&vm, &mut shared, SV_OP_COUNT, chunk.ops.len() as i64);
+    for (i, op) in chunk.ops.iter().enumerate() {
+        let (class, arg) = analyze_class(op);
+        set(&vm, &mut shared, SV_CLASS + i, class);
+        set(&vm, &mut shared, SV_ARG + i, arg);
+    }
+    match vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call verify_structural.kel")
+    {
+        VmState::Yielded(Value::Int(_)) => {}
+        other => panic!("unexpected verify_structural.kel state: {other:?}"),
+    }
+    match vm.get_shared(&shared, SV_OUT_REJECT).unwrap() {
+        Value::Int(n) => n != 0,
+        o => panic!("expected Int at out_reject, got {o:?}"),
+    }
+}
+
+/// Run verify_structural.kel over every chunk of a module; the module is structurally rejected
+/// (by this first slice) iff any chunk is, mirroring how `verify()` rejects a module on its
+/// first malformed chunk.
+pub fn structural_reject_module_via_kel(module: &Module) -> bool {
+    module.chunks.iter().any(structural_reject_chunk_via_kel)
+}
+
 /// The self-hosted drop-in replacement for `verify_resource_bounds`: analyze.kel decides each
 /// chunk's WCMU transitively (callee bodies folded at every `Op::Call`, resolved in
 /// topological order so callees precede callers), and the module is admitted iff no chunk has
