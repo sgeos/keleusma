@@ -1,0 +1,303 @@
+// compiler/kel/verify_depth.kel -- the self-hosted operand-stack depth-balance pass (reference
+// `verify_stack_depth`/`verify_depth_region`, `src/verify.rs`). It walks a chunk tracking the
+// absolute operand-stack depth through the structured control flow and rejects any op that would
+// underflow the operand stack (audit finding 3). This is the fourth per-chunk check `verify()`
+// runs, alongside the block-nesting/target/operand pass, the block-type pass, and the productive-
+// divergence pass already self-hosted.
+//
+// The reference is a recursive walk returning `Option<i32>` (`Some(end_depth)` on fall-through,
+// `None` when every path exits via Break/Trap/Return), threading a mutable break-depth list a
+// Loop consumes to resume at the depth its exits leave. This stage reformulates that recursion
+// as one explicit region-frame stack (as `verify_yield.kel` does for yield coverage) and
+// eliminates the mutable list by returning each region's break summary up through the frame
+// result: `fell` (some path falls through), `depth` (operand depth on fall-through), `hb` (this
+// break-scope saw a break), `bmax` (the max depth over those breaks). An If shares its parent's
+// break-scope (child summaries merge up); a Loop body is a fresh scope (its breaks decide the
+// loop and do not propagate). At a control-flow merge the depth is the reference's `max` of the
+// arms; underflow (`depth < required`) latches the reject.
+//
+// The host marshals, per op: `class` (as in `analyze_class`: 1 If, 2 Else, 3 EndIf, 4 Loop, 5
+// EndLoop, 6 Break, 7 BreakIf, others 0/8/9), `arg` (branch/exit target and matching-EndIf), the
+// operand-consumption `dreq`/`dnet` (the reference `op_depth_effect`, NOT the WCMU stack effect),
+// and `is_term` (1 for Trap/Return, which end a path). The stage self-hosts the control-flow walk
+// and the underflow check.
+require word >= 32;
+
+// The host-facing block: the op table and the verdict. `op_count` bounds the walk and the
+// target lookups (the reference's clamps).
+shared data dv {
+    op_count: Word,
+    class: [Word; 1024],
+    arg: [Word; 1024],
+    dreq: [Word; 1024],
+    dnet: [Word; 1024],
+    is_term: [Word; 1024],
+    out_reject: Word,
+}
+
+// The region-frame work stack. Each frame is one `verify_depth_region([f_ip, f_end))`: `f_depth`
+// its running operand depth, `f_fell` whether it falls through, `f_hb`/`f_bmax` its break-scope
+// summary. While a frame waits on a child it sets `f_pa` and records how to fold it in: `f_pk` 1
+// bare-if, 2 if-else, 3 loop; `f_ps` the if-else stage; `f_resume` the resume op; `f_elstart`/
+// `f_elend` the else region; `f_tf`/`f_td` the stashed then result. `child_*` carry a completed
+// frame's result. `bad` latches an underflow.
+private data df {
+    sp: Word,
+    f_ip: [Word; 128],
+    f_end: [Word; 128],
+    f_depth: [Word; 128],
+    f_fell: [Word; 128],
+    f_hb: [Word; 128],
+    f_bmax: [Word; 128],
+    f_pa: [Word; 128],
+    f_pk: [Word; 128],
+    f_ps: [Word; 128],
+    f_resume: [Word; 128],
+    f_elstart: [Word; 128],
+    f_elend: [Word; 128],
+    f_tf: [Word; 128],
+    f_td: [Word; 128],
+    child_fell: Word,
+    child_depth: Word,
+    child_hb: Word,
+    child_bmax: Word,
+    bad: Word,
+}
+
+// Push a fresh frame for region `[ip, end)` with entry depth `depth`; `end` is clamped to
+// `op_count`. A push past the static frame capacity is dropped rather than faulting.
+fn push_frame(ip: Word, end: Word, depth: Word) -> Word {
+    if df.sp > 127 {
+        df.sp = df.sp;
+    } else {
+        let j = df.sp;
+        df.f_ip[j] = ip;
+        if end > dv.op_count {
+            df.f_end[j] = dv.op_count;
+        } else {
+            df.f_end[j] = end;
+        }
+        df.f_depth[j] = depth;
+        df.f_fell[j] = 1;
+        df.f_hb[j] = 0;
+        df.f_bmax[j] = 0;
+        df.f_pa[j] = 0;
+        df.sp = df.sp + 1;
+    }
+    0
+}
+
+// Complete frame `i`: publish its result to `child_*` and pop it.
+fn deliver(i: Word) -> Word {
+    df.child_fell = df.f_fell[i];
+    df.child_depth = df.f_depth[i];
+    df.child_hb = df.f_hb[i];
+    df.child_bmax = df.f_bmax[i];
+    df.sp = df.sp - 1;
+    0
+}
+
+// Record a break at frame `i`'s current depth into its break-scope summary.
+fn record_break(i: Word) -> Word {
+    if df.f_hb[i] == 0 {
+        df.f_hb[i] = 1;
+        df.f_bmax[i] = df.f_depth[i];
+    } else {
+        if df.f_depth[i] > df.f_bmax[i] {
+            df.f_bmax[i] = df.f_depth[i];
+        }
+    }
+    0
+}
+
+// Merge the last child's break summary into frame `i`'s scope (for If children, which share the
+// parent's break-scope).
+fn merge_child_breaks(i: Word) -> Word {
+    if df.child_hb == 1 {
+        if df.f_hb[i] == 0 {
+            df.f_hb[i] = 1;
+            df.f_bmax[i] = df.child_bmax;
+        } else {
+            if df.child_bmax > df.f_bmax[i] {
+                df.f_bmax[i] = df.child_bmax;
+            }
+        }
+    }
+    0
+}
+
+// Latch the reject if the op at `ip` requires more operands than frame `i` currently has.
+fn check_underflow(i: Word, ip: Word) -> Word {
+    if df.f_depth[i] < dv.dreq[ip] {
+        df.bad = 1;
+    }
+    0
+}
+
+// Consume one op of frame `i`'s region.
+fn scan_op(i: Word) -> Word {
+    let ip = df.f_ip[i];
+    if dv.is_term[ip] == 1 {
+        // Trap/Return: end this path, no fall-through.
+        df.f_fell[i] = 0;
+        df.f_ip[i] = df.f_end[i];
+    } else {
+    if dv.class[ip] == 6 {
+        // Break: record the depth, end this path.
+        record_break(i);
+        df.f_fell[i] = 0;
+        df.f_ip[i] = df.f_end[i];
+    } else {
+    if dv.class[ip] == 7 {
+        // BreakIf: pop the condition, record the break edge, continue.
+        check_underflow(i, ip);
+        df.f_depth[i] = df.f_depth[i] + dv.dnet[ip];
+        record_break(i);
+        df.f_ip[i] = ip + 1;
+    } else {
+    if dv.class[ip] == 1 {
+        // If: pop the condition, spawn the then-branch (and, for an if-else, the else-branch).
+        check_underflow(i, ip);
+        df.f_depth[i] = df.f_depth[i] + dv.dnet[ip];
+        let t = dv.arg[ip];
+        if t > 0 andalso t <= dv.op_count andalso dv.class[t - 1] == 2 {
+            let endif = dv.arg[t - 1];
+            df.f_pk[i] = 2;
+            df.f_ps[i] = 0;
+            df.f_elstart[i] = t;
+            df.f_elend[i] = endif;
+            df.f_resume[i] = endif + 1;
+            df.f_pa[i] = 1;
+            push_frame(ip + 1, t - 1, df.f_depth[i]);
+        } else {
+            df.f_pk[i] = 1;
+            df.f_resume[i] = t + 1;
+            df.f_pa[i] = 1;
+            push_frame(ip + 1, t, df.f_depth[i]);
+        }
+    } else {
+    if dv.class[ip] == 4 {
+        // Loop: spawn the body `[ip+1, endloop)` as a fresh break-scope.
+        let t = dv.arg[ip];
+        df.f_pk[i] = 3;
+        df.f_resume[i] = t;
+        df.f_pa[i] = 1;
+        push_frame(ip + 1, t - 1, df.f_depth[i]);
+    } else {
+    if dv.class[ip] == 2 orelse dv.class[ip] == 3 orelse dv.class[ip] == 5 {
+        // Else/EndIf/EndLoop: structural markers, stepped over.
+        df.f_ip[i] = ip + 1;
+    } else {
+        // Plain op or Call: pop `dreq`, apply the net depth change.
+        check_underflow(i, ip);
+        df.f_depth[i] = df.f_depth[i] + dv.dnet[ip];
+        df.f_ip[i] = ip + 1;
+    } } } } } }
+    0
+}
+
+// Fold the last child's result into the waiting frame `i` and resume it.
+fn resolve_pending(i: Word) -> Word {
+    if df.f_pk[i] == 1 {
+        // Bare if: merge the child's breaks; on child fall-through, depth = max(depth, child).
+        merge_child_breaks(i);
+        if df.child_fell == 1 {
+            if df.child_depth > df.f_depth[i] {
+                df.f_depth[i] = df.child_depth;
+            }
+        }
+        df.f_ip[i] = df.f_resume[i];
+        df.f_pa[i] = 0;
+    } else {
+    if df.f_pk[i] == 2 {
+        if df.f_ps[i] == 0 {
+            // Then-branch returned: merge, stash, spawn the else-branch from the same entry depth.
+            merge_child_breaks(i);
+            df.f_tf[i] = df.child_fell;
+            df.f_td[i] = df.child_depth;
+            df.f_ps[i] = 1;
+            push_frame(df.f_elstart[i], df.f_elend[i], df.f_depth[i]);
+        } else {
+            // Else-branch returned: merge, combine the two arms by the reference's max rule.
+            merge_child_breaks(i);
+            if df.f_tf[i] == 1 andalso df.child_fell == 1 {
+                if df.f_td[i] > df.child_depth {
+                    df.f_depth[i] = df.f_td[i];
+                } else {
+                    df.f_depth[i] = df.child_depth;
+                }
+                df.f_ip[i] = df.f_resume[i];
+                df.f_pa[i] = 0;
+            } else {
+            if df.f_tf[i] == 1 {
+                df.f_depth[i] = df.f_td[i];
+                df.f_ip[i] = df.f_resume[i];
+                df.f_pa[i] = 0;
+            } else {
+            if df.child_fell == 1 {
+                df.f_depth[i] = df.child_depth;
+                df.f_ip[i] = df.f_resume[i];
+                df.f_pa[i] = 0;
+            } else {
+                // Both arms break out: no fall-through.
+                df.f_fell[i] = 0;
+                df.f_ip[i] = df.f_end[i];
+                df.f_pa[i] = 0;
+            } } }
+        }
+    } else {
+        // Loop: depth after the loop is the max break depth, else the body's fall-through depth,
+        // else the entry depth (unchanged). The body's breaks do not propagate to the parent.
+        if df.child_hb == 1 {
+            df.f_depth[i] = df.child_bmax;
+        } else {
+            if df.child_fell == 1 {
+                df.f_depth[i] = df.child_depth;
+            }
+        }
+        df.f_ip[i] = df.f_resume[i];
+        df.f_pa[i] = 0;
+    } }
+    0
+}
+
+// Advance the analysis by one transition on the top frame.
+fn depth_step() -> Word {
+    let i = df.sp - 1;
+    if df.f_pa[i] == 1 {
+        resolve_pending(i)
+    } else {
+        if df.f_ip[i] >= df.f_end[i] {
+            deliver(i)
+        } else {
+            scan_op(i)
+        }
+    }
+}
+
+// Walk the whole chunk `[0, op_count)` from depth 0 and publish whether any op underflows.
+fn run() -> Word {
+    df.sp = 0;
+    df.bad = 0;
+    df.child_fell = 1;
+    df.child_depth = 0;
+    df.child_hb = 0;
+    df.child_bmax = 0;
+    push_frame(0, dv.op_count, 0);
+    for step in 0..8192 limit 8192 {
+        if df.sp > 0 {
+            depth_step();
+        }
+    }
+    if df.bad == 1 {
+        dv.out_reject = 1;
+    } else {
+        dv.out_reject = 0;
+    }
+    dv.out_reject
+}
+
+// Check the chunk's operand-stack depth balance in one call and yield the verdict.
+loop main(resume: Word) -> Word {
+    yield run()
+}

@@ -1285,17 +1285,90 @@ fn productivity_reject_via_kel(
     }
 }
 
-/// Run the whole self-hosted structural verifier over a module: the block-nesting, branch-
-/// target, operand-bounds, and block-type checks per chunk (verify_structural.kel), plus the
-/// productive-divergence check for Stream chunks (verify_yield.kel). The module is rejected iff
-/// any chunk is, mirroring `verify()`. The always-yielding set -- the block-type pass's
-/// delegated-yield input and the Pass 3 delegation contribution -- is now computed by the
-/// self-hosted fixpoint, not borrowed from the reference.
+// --- Self-hosted operand-stack depth-balance pass (verify_depth.kel) -------------------------
+//
+// verify_depth.kel reproduces the reference `verify_stack_depth`/`verify_depth_region`: it walks
+// a chunk tracking the absolute operand-stack depth through the structured control flow and
+// rejects any op that would underflow the operand stack (audit finding 3). Height-only (no
+// shapes), it is the frame-stack twin of verify_yield.kel. Its shared block `dv` lays out
+// `op_count` (0); the arrays `class` (1..), `arg`, `dreq`, `dnet`, `is_term` (each 1024 wide);
+// and the verdict `out_reject`. `dreq`/`dnet` are the reference `op_depth_effect` (the actual
+// operand consumption, NOT the WCMU stack effect); `is_term` flags Trap/Return.
+
+const DV_OP_COUNT: usize = 0;
+const DV_CLASS: usize = 1;
+const DV_ARG: usize = 1 + 1024;
+const DV_DREQ: usize = 1 + 1024 * 2;
+const DV_DNET: usize = 1 + 1024 * 3;
+const DV_IS_TERM: usize = 1 + 1024 * 4;
+const DV_OUT_REJECT: usize = 1 + 1024 * 5;
+
+fn verify_depth_kel_module() -> Module {
+    static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| compile_src(&read_stage("kel/verify_depth.kel")))
+        .clone()
+}
+
+/// Run verify_depth.kel over one chunk, returning whether any op underflows the operand stack
+/// (the reference `verify_stack_depth`). Marshals the control-flow `(class, arg)` table via
+/// `analyze_class`, the actual operand consumption `(dreq, dnet)` via `op_depth_effect`, and the
+/// Trap/Return terminator flag.
+pub fn depth_reject_chunk_via_kel(chunk: &keleusma::bytecode::Chunk) -> bool {
+    use keleusma::bytecode::Op;
+    assert!(
+        chunk.ops.len() <= 1024,
+        "verify_depth.kel op-table capacity"
+    );
+    let m = verify_depth_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify verify_depth.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let set = |vm: &Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
+        vm.set_shared(shared, slot, Value::Int(v)).unwrap();
+    };
+    set(&vm, &mut shared, DV_OP_COUNT, chunk.ops.len() as i64);
+    for (i, op) in chunk.ops.iter().enumerate() {
+        let (class, arg) = analyze_class(op);
+        let (req, net) = keleusma::verify::op_depth_effect(op, chunk);
+        set(&vm, &mut shared, DV_CLASS + i, class);
+        set(&vm, &mut shared, DV_ARG + i, arg);
+        set(&vm, &mut shared, DV_DREQ + i, i64::from(req.max(0)));
+        set(&vm, &mut shared, DV_DNET + i, i64::from(net));
+        set(
+            &vm,
+            &mut shared,
+            DV_IS_TERM + i,
+            i64::from(matches!(op, Op::Trap(_) | Op::Return)),
+        );
+    }
+    match vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call verify_depth.kel")
+    {
+        VmState::Yielded(Value::Int(_)) => {}
+        other => panic!("unexpected verify_depth.kel state: {other:?}"),
+    }
+    match vm.get_shared(&shared, DV_OUT_REJECT).unwrap() {
+        Value::Int(n) => n != 0,
+        o => panic!("expected Int at out_reject, got {o:?}"),
+    }
+}
+
+/// Run the whole self-hosted structural verifier over a module: the block-nesting, branch-target,
+/// operand-bounds, and block-type checks per chunk (verify_structural.kel), the productive-
+/// divergence check for Stream chunks (verify_yield.kel), and the operand-stack depth-balance
+/// check per chunk (verify_depth.kel). Together these are `verify()`'s per-chunk checks -- every
+/// pass except the A.2.1 typed operand-stack pass. The module is rejected iff any chunk is,
+/// mirroring `verify()`. The always-yielding set is computed by the self-hosted fixpoint.
 pub fn structural_reject_module_via_kel(module: &Module) -> bool {
     let always = self_hosted_always_yielding(module);
     module.chunks.iter().any(|chunk| {
         structural_reject_chunk_via_kel(module, chunk, &always)
             || productivity_reject_via_kel(chunk, &always)
+            || depth_reject_chunk_via_kel(chunk)
     })
 }
 

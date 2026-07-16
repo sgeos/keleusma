@@ -1,11 +1,13 @@
 //! Conformance gate for the self-hosted structural verifier
 //! (`compiler/kel/verify_structural.kel`, driven by `selfhost::structural_reject_*_via_kel`).
 //!
-//! The stage reproduces `verify.rs`'s first structural pass -- block nesting and branch-target
-//! bounds (slice 1), the exact target-equality checks (slice 2, reference audits D2 and E1), and
-//! the operand-bounds family (slice 3) -- and its second pass, the block-type marker constraints
-//! (slice 4). Only the third pass (productive divergence) is not yet self-hosted. Two oracles
-//! bound it:
+//! The self-hosted structural verifier reproduces all four of `verify()`'s per-chunk checks:
+//! the first pass -- block nesting and branch-target bounds, the exact target-equality checks
+//! (reference audits D2 and E1), and the operand-bounds family; the second pass -- the
+//! block-type marker constraints; the third pass -- productive divergence (`verify_yield.kel`);
+//! and the operand-stack depth-balance check (`verify_depth.kel`, reference `verify_stack_depth`,
+//! audit finding 3). Only the module-level A.2.1 typed operand-stack pass is checked separately
+//! (`verify_typed.rs` test). Two oracles bound it:
 //!
 //!   * POSITIVE: every self-hosted stage source plus a minimal ephemeral program, and small
 //!     valid whole programs for each block type (including a Stream that delegates its yield to
@@ -226,8 +228,10 @@ fn break_target_not_loop_exit_is_rejected() {
 // ---- POSITIVE (slice 2): well-formed nested control at the chunk level ----------------------
 //
 // Well-nested fragments that satisfy every target-equality invariant must not be rejected,
-// guarding against a slice-2 false positive on structurally valid control flow. These are
-// checked at the chunk level (they are not whole programs the reference `verify()` accepts).
+// guarding against a slice-2 false positive on structurally valid control flow. They are also
+// operand-stack-balanced (the condition an If/BreakIf pops is pushed first, both arms neutral),
+// so the depth-balance pass accepts them too; they are chunk fragments, not whole programs the
+// reference `verify()` accepts end to end.
 
 fn assert_chunk_well_formed(label: &str, ops: Vec<Op>) {
     let m = mutated_module(ops);
@@ -239,17 +243,26 @@ fn assert_chunk_well_formed(label: &str, ops: Vec<Op>) {
 
 #[test]
 fn well_formed_if_else_is_accepted() {
-    // If(2) targets the else body at 2; Else(3) targets the EndIf at 3.
-    assert_chunk_well_formed("if-else", vec![Op::If(2), Op::Else(3), Op::Add, Op::EndIf]);
+    // Push the condition; If(3) targets the else body at 3 (after the Else at 2); Else(3) targets
+    // the EndIf at 3. Both arms are empty (operand-neutral).
+    assert_chunk_well_formed(
+        "if-else",
+        vec![Op::PushImmediate(1), Op::If(3), Op::Else(3), Op::EndIf],
+    );
 }
 
 #[test]
 fn well_formed_loop_with_breakif_is_accepted() {
-    // Loop(3) exits after the EndLoop at 2; BreakIf(3) targets that exit; EndLoop(1) back-edges
-    // to the loop body at 1.
+    // Loop(4) exits after the EndLoop at 3; the body pushes a condition then BreakIf(4) targets
+    // that exit; EndLoop(1) back-edges to the loop body at 1.
     assert_chunk_well_formed(
         "loop-breakif",
-        vec![Op::Loop(3), Op::BreakIf(3), Op::EndLoop(1)],
+        vec![
+            Op::Loop(4),
+            Op::PushImmediate(1),
+            Op::BreakIf(4),
+            Op::EndLoop(1),
+        ],
     );
 }
 
@@ -512,4 +525,21 @@ fn unproductive_stream_is_rejected() {
         stream_base(),
         vec![Op::Stream, Op::If(3), Op::Yield, Op::EndIf, Op::Reset],
     );
+}
+
+// ---- NEGATIVE (operand-stack depth balance, verify_stack_depth): underflow ------------------
+//
+// A chunk that is well-nested, operand-clean, and block-type-valid (Pass 1/2/3 accept it) but
+// whose op consumes more operands than the stack holds. Only the depth-balance pass rejects it.
+
+#[test]
+fn operand_stack_underflow_is_rejected() {
+    // `Add` consumes two operands with an empty stack (depth 0 < required 2).
+    assert_rejected("depth-underflow", vec![Op::Add]);
+}
+
+#[test]
+fn operand_stack_underflow_after_a_push_is_rejected() {
+    // One push leaves depth 1; `Add` still requires 2. Exercises the running-depth tracking.
+    assert_rejected("depth-underflow-2", vec![Op::PushImmediate(1), Op::Add]);
 }
