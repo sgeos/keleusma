@@ -1160,16 +1160,143 @@ pub fn structural_reject_chunk_via_kel(
     }
 }
 
-/// Run verify_structural.kel over every chunk of a module; the module is structurally rejected
-/// iff any chunk is, mirroring how `verify()` rejects a module on its first malformed chunk. The
-/// always-yielding set (the block-type pass's inter-procedural input) is computed once here from
-/// the reference fixpoint and shared across chunks.
+// --- Self-hosted yield-coverage kernel (verify_yield.kel) and Pass 3 -------------------------
+//
+// verify_yield.kel decides whether every fall-through path of a chunk region passes through a
+// Yield (or a Call delegating to an always-yielding chunk), reproducing the reference
+// `analyze_yield_coverage`. Its shared block `yv` lays out `op_count` (0), `region_start` (1),
+// `region_end` (2); the arrays `class` (3..), `arg`, `mark`, `cay` (each 1024 wide, where `cay`
+// flags a Call to an always-yielding chunk); and the results `out_fell`, `out_hy`. The driver
+// runs it in two orchestrations, both self-hosting what was the reference borrow: the
+// always-yielding monotone fixpoint (over `[0, op_count)` per chunk) and the Stream productivity
+// check (over `[stream_pos + 1, reset_pos)`).
+
+const YV_OP_COUNT: usize = 0;
+const YV_REGION_START: usize = 1;
+const YV_REGION_END: usize = 2;
+const YV_CLASS: usize = 3;
+const YV_ARG: usize = 3 + 1024;
+const YV_MARK: usize = 3 + 1024 * 2;
+const YV_CAY: usize = 3 + 1024 * 3;
+const YV_OUT_FELL: usize = 3 + 1024 * 4;
+const YV_OUT_HY: usize = 3 + 1024 * 4 + 1;
+
+fn verify_yield_kel_module() -> Module {
+    static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| compile_src(&read_stage("kel/verify_yield.kel")))
+        .clone()
+}
+
+/// Run verify_yield.kel over `chunk`'s region `[start, end)`, returning `(fell, hy)`: whether
+/// some path falls through to `end`, and whether every such path yielded. `always` is the
+/// current always-yielding chunk set, which flags each `Call`'s delegated yield (`cay`).
+fn run_ayc(
+    chunk: &keleusma::bytecode::Chunk,
+    start: usize,
+    end: usize,
+    always: &std::collections::BTreeSet<usize>,
+) -> (bool, bool) {
+    use keleusma::bytecode::Op;
+    assert!(
+        chunk.ops.len() <= 1024,
+        "verify_yield.kel op-table capacity"
+    );
+    let m = verify_yield_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify verify_yield.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let set = |vm: &Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
+        vm.set_shared(shared, slot, Value::Int(v)).unwrap();
+    };
+    set(&vm, &mut shared, YV_OP_COUNT, chunk.ops.len() as i64);
+    set(&vm, &mut shared, YV_REGION_START, start as i64);
+    set(&vm, &mut shared, YV_REGION_END, end as i64);
+    for (i, op) in chunk.ops.iter().enumerate() {
+        let (class, arg) = analyze_class(op);
+        set(&vm, &mut shared, YV_CLASS + i, class);
+        set(&vm, &mut shared, YV_ARG + i, arg);
+        set(&vm, &mut shared, YV_MARK + i, structural_marker(op));
+        let cay = matches!(op, Op::Call(g, _) if always.contains(&(*g as usize)));
+        set(&vm, &mut shared, YV_CAY + i, i64::from(cay));
+    }
+    match vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call verify_yield.kel")
+    {
+        VmState::Yielded(Value::Int(_)) => {}
+        other => panic!("unexpected verify_yield.kel state: {other:?}"),
+    }
+    let rd = |slot: usize| -> i64 {
+        match vm.get_shared(&shared, slot).unwrap() {
+            Value::Int(n) => n,
+            o => panic!("expected Int at {slot}, got {o:?}"),
+        }
+    };
+    (rd(YV_OUT_FELL) != 0, rd(YV_OUT_HY) != 0)
+}
+
+/// The self-hosted always-yielding chunk set: the monotone fixpoint of verify_yield.kel over
+/// `[0, op_count)` per chunk (a chunk joins the set when every path of it yields, using the set
+/// from prior rounds for the delegated-yield contribution). A drop-in for the reference
+/// `compute_always_yielding`, computed entirely by the self-hosted kernel.
+pub fn self_hosted_always_yielding(module: &Module) -> std::collections::BTreeSet<usize> {
+    let mut always: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    loop {
+        let mut changed = false;
+        for (i, chunk) in module.chunks.iter().enumerate() {
+            if always.contains(&i) {
+                continue;
+            }
+            let (fell, hy) = run_ayc(chunk, 0, chunk.ops.len(), &always);
+            if fell && hy {
+                always.insert(i);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    always
+}
+
+/// Whether `chunk` is an unproductive Stream chunk: some path from its `Stream` to its `Reset`
+/// passes no Yield (directly or by delegation). Reproduces the reference Pass 3 via the
+/// self-hosted kernel; `always` is the (self-hosted) always-yielding set. Non-Stream chunks and
+/// chunks missing a Stream/Reset marker are not rejected here (Pass 2 handles the latter).
+fn productivity_reject_via_kel(
+    chunk: &keleusma::bytecode::Chunk,
+    always: &std::collections::BTreeSet<usize>,
+) -> bool {
+    use keleusma::bytecode::{BlockType, Op};
+    if chunk.block_type != BlockType::Stream {
+        return false;
+    }
+    let sp = chunk.ops.iter().position(|o| matches!(o, Op::Stream));
+    let rp = chunk.ops.iter().position(|o| matches!(o, Op::Reset));
+    if let (Some(s), Some(r)) = (sp, rp) {
+        let (fell, hy) = run_ayc(chunk, s + 1, r, always);
+        fell && !hy
+    } else {
+        false
+    }
+}
+
+/// Run the whole self-hosted structural verifier over a module: the block-nesting, branch-
+/// target, operand-bounds, and block-type checks per chunk (verify_structural.kel), plus the
+/// productive-divergence check for Stream chunks (verify_yield.kel). The module is rejected iff
+/// any chunk is, mirroring `verify()`. The always-yielding set -- the block-type pass's
+/// delegated-yield input and the Pass 3 delegation contribution -- is now computed by the
+/// self-hosted fixpoint, not borrowed from the reference.
 pub fn structural_reject_module_via_kel(module: &Module) -> bool {
-    let always = keleusma::verify::compute_always_yielding(module);
-    module
-        .chunks
-        .iter()
-        .any(|chunk| structural_reject_chunk_via_kel(module, chunk, &always))
+    let always = self_hosted_always_yielding(module);
+    module.chunks.iter().any(|chunk| {
+        structural_reject_chunk_via_kel(module, chunk, &always)
+            || productivity_reject_via_kel(chunk, &always)
+    })
 }
 
 /// The self-hosted drop-in replacement for `verify_resource_bounds`: analyze.kel decides each

@@ -1,0 +1,294 @@
+// compiler/kel/verify_yield.kel -- the yield-coverage kernel of the self-hosted structural
+// verifier's third pass (productive divergence). Given a region `[region_start, region_end)` of
+// a chunk's op table, it decides whether every fall-through path of the region passes through a
+// Yield (or a Call delegating to an always-yielding chunk), reproducing the reference
+// `analyze_yield_coverage` (`src/verify.rs`).
+//
+// The reference is a recursive function returning `Option<bool>`: `Some(has_yielded)` when some
+// path falls through to the region end (`has_yielded` true iff every such path yielded), or
+// `None` when the region has no fall-through (it exits via an unconditional Break, or a loop
+// with no exit). It also threads a mutable `break_states` list: each Break/BreakIf records the
+// `has_yielded` at its point, and a Loop consumes its body's breaks to decide the loop's own
+// `has_yielded` (all breaks yielded) and whether the loop exits at all (any break).
+//
+// This stage reformulates that recursion as one explicit region-frame stack walked by a single
+// bounded work loop (as `analyze.kel` does for the resource recursion), and eliminates the
+// mutable `break_states` by returning the break summary up through each frame result: `fell`
+// (some path falls through), `hy` (has_yielded on fall-through), `hb` (this break-scope saw a
+// Break/BreakIf), `bmin` (the AND of has_yielded over those breaks). An If shares its parent's
+// break-scope, so its child break summaries merge into the parent; a Loop's body is a fresh
+// break-scope, so the body's breaks decide the loop and do not propagate to the parent.
+//
+// Both callers of this kernel live in the host driver: the always-yielding fixpoint runs it over
+// `[0, op_count)` per chunk (a chunk is always-yielding iff `fell` and `hy`), and the Stream
+// productivity check runs it over `[stream_pos + 1, reset_pos)` (a Stream chunk is unproductive
+// iff `fell` and not `hy`). The delegated-yield input -- whether a Call targets an
+// already-always-yielding chunk -- is marshalled per op as `cay`, the fixpoint variable.
+require word >= 32;
+
+// The host-facing block: the op table (`class` as in `analyze_class`; `mark` 1 for Yield; `cay`
+// 1 for a Call to an always-yielding chunk), the region to analyse, and the result `out_fell`/
+// `out_hy`. `op_count` bounds region ends and target lookups (the reference's `end.min(len)` and
+// `target <= len` clamps), so a malformed target cannot drive an out-of-range index.
+shared data yv {
+    op_count: Word,
+    region_start: Word,
+    region_end: Word,
+    class: [Word; 1024],
+    arg: [Word; 1024],
+    mark: [Word; 1024],
+    cay: [Word; 1024],
+    out_fell: Word,
+    out_hy: Word,
+}
+
+// The region-frame work stack. Each frame is one `analyze_yield_coverage([f_ip, f_end))`: `f_hy`
+// its running has_yielded, `f_hb`/`f_bmin` its break-scope summary, `f_fell` whether it falls
+// through (cleared on an early no-fall-through return). While a frame waits on a child it sets
+// `f_pa` and records how to fold the child in: `f_pk` 1 bare-if, 2 if-else, 3 loop; `f_ps` the
+// if-else stage (0 waiting then, 1 waiting else); `f_resume` the op to resume at; `f_elstart`/
+// `f_elend` the else region; `f_tf`/`f_thy` the stashed then result. `child_*` carry a completed
+// frame's result to its parent.
+private data yf {
+    sp: Word,
+    f_ip: [Word; 128],
+    f_end: [Word; 128],
+    f_hy: [Word; 128],
+    f_hb: [Word; 128],
+    f_bmin: [Word; 128],
+    f_fell: [Word; 128],
+    f_pa: [Word; 128],
+    f_pk: [Word; 128],
+    f_ps: [Word; 128],
+    f_resume: [Word; 128],
+    f_elstart: [Word; 128],
+    f_elend: [Word; 128],
+    f_tf: [Word; 128],
+    f_thy: [Word; 128],
+    child_fell: Word,
+    child_hy: Word,
+    child_hb: Word,
+    child_bmin: Word,
+}
+
+// Push a fresh frame for region `[ip, end)` with entry has_yielded `hy`. `end` is clamped to
+// `op_count` (the reference's `end.min(len)`). A push past the static frame capacity (deeper
+// control nesting than 128) is dropped rather than faulting; such a chunk is rejected by the
+// structural passes regardless.
+fn push_frame(ip: Word, end: Word, hy: Word) -> Word {
+    if yf.sp > 127 {
+        yf.sp = yf.sp;
+    } else {
+        let j = yf.sp;
+        yf.f_ip[j] = ip;
+        if end > yv.op_count {
+            yf.f_end[j] = yv.op_count;
+        } else {
+            yf.f_end[j] = end;
+        }
+        yf.f_hy[j] = hy;
+        yf.f_hb[j] = 0;
+        yf.f_bmin[j] = 1;
+        yf.f_fell[j] = 1;
+        yf.f_pa[j] = 0;
+        yf.sp = yf.sp + 1;
+    }
+    0
+}
+
+// Complete frame `i`: publish its result to `child_*` and pop it.
+fn deliver(i: Word) -> Word {
+    yf.child_fell = yf.f_fell[i];
+    yf.child_hy = yf.f_hy[i];
+    yf.child_hb = yf.f_hb[i];
+    yf.child_bmin = yf.f_bmin[i];
+    yf.sp = yf.sp - 1;
+    0
+}
+
+// Merge the last child's break summary into frame `i`'s scope (used for If children, which
+// share the parent's break-scope; not for Loop children, which are a fresh scope).
+fn merge_child_breaks(i: Word) -> Word {
+    if yf.f_hb[i] == 1 orelse yf.child_hb == 1 {
+        yf.f_hb[i] = 1;
+    }
+    if yf.f_bmin[i] == 1 andalso yf.child_bmin == 1 {
+        yf.f_bmin[i] = 1;
+    } else {
+        yf.f_bmin[i] = 0;
+    }
+    0
+}
+
+// Consume one op of frame `i`'s region.
+fn scan_op(i: Word) -> Word {
+    let ip = yf.f_ip[i];
+    if yv.mark[ip] == 1 {
+        // Yield: this path has now yielded.
+        yf.f_hy[i] = 1;
+        yf.f_ip[i] = ip + 1;
+    } else {
+    if yv.class[ip] == 6 {
+        // Break: record the break, end this path (no fall-through).
+        yf.f_hb[i] = 1;
+        if yf.f_hy[i] == 0 {
+            yf.f_bmin[i] = 0;
+        }
+        yf.f_fell[i] = 0;
+        yf.f_ip[i] = yf.f_end[i];
+    } else {
+    if yv.class[ip] == 7 {
+        // BreakIf: record the break, continue (conditional exit).
+        yf.f_hb[i] = 1;
+        if yf.f_hy[i] == 0 {
+            yf.f_bmin[i] = 0;
+        }
+        yf.f_ip[i] = ip + 1;
+    } else {
+    if yv.class[ip] == 1 {
+        // If: spawn the then-branch; an if-else is recognised by an Else just before the target.
+        let t = yv.arg[ip];
+        if t > 0 andalso t <= yv.op_count andalso yv.class[t - 1] == 2 {
+            let endif = yv.arg[t - 1];
+            yf.f_pk[i] = 2;
+            yf.f_ps[i] = 0;
+            yf.f_elstart[i] = t;
+            yf.f_elend[i] = endif;
+            yf.f_resume[i] = endif + 1;
+            yf.f_pa[i] = 1;
+            push_frame(ip + 1, t - 1, yf.f_hy[i]);
+        } else {
+            yf.f_pk[i] = 1;
+            yf.f_resume[i] = t + 1;
+            yf.f_pa[i] = 1;
+            push_frame(ip + 1, t, yf.f_hy[i]);
+        }
+    } else {
+    if yv.class[ip] == 4 {
+        // Loop: spawn the body `[ip+1, endloop)` as a fresh break-scope.
+        let t = yv.arg[ip];
+        yf.f_pk[i] = 3;
+        yf.f_resume[i] = t;
+        yf.f_pa[i] = 1;
+        push_frame(ip + 1, t - 1, yf.f_hy[i]);
+    } else {
+    if yv.class[ip] == 2 orelse yv.class[ip] == 3 orelse yv.class[ip] == 5 {
+        // Else/EndIf/EndLoop: structural markers, stepped over (regions are spawned explicitly).
+        yf.f_ip[i] = ip + 1;
+    } else {
+        // Plain op, or a Call: a Call to an always-yielding chunk delegates a yield.
+        if yv.cay[ip] == 1 {
+            yf.f_hy[i] = 1;
+        }
+        yf.f_ip[i] = ip + 1;
+    } } } } } }
+    0
+}
+
+// Fold the last child's result into the waiting frame `i` and resume it.
+fn resolve_pending(i: Word) -> Word {
+    if yf.f_pk[i] == 1 {
+        // Bare if: merge the child's breaks; on child fall-through, has_yielded &&= child_hy;
+        // on a child that breaks out, the false path falls through unchanged.
+        merge_child_breaks(i);
+        if yf.child_fell == 1 {
+            if yf.child_hy == 1 andalso yf.f_hy[i] == 1 {
+                yf.f_hy[i] = 1;
+            } else {
+                yf.f_hy[i] = 0;
+            }
+        }
+        yf.f_ip[i] = yf.f_resume[i];
+        yf.f_pa[i] = 0;
+    } else {
+    if yf.f_pk[i] == 2 {
+        if yf.f_ps[i] == 0 {
+            // Then-branch returned: merge its breaks, stash its result, spawn the else-branch.
+            merge_child_breaks(i);
+            yf.f_tf[i] = yf.child_fell;
+            yf.f_thy[i] = yf.child_hy;
+            yf.f_ps[i] = 1;
+            push_frame(yf.f_elstart[i], yf.f_elend[i], yf.f_hy[i]);
+        } else {
+            // Else-branch returned: merge its breaks, combine the two branches.
+            merge_child_breaks(i);
+            if yf.f_tf[i] == 1 andalso yf.child_fell == 1 {
+                if yf.f_thy[i] == 1 andalso yf.child_hy == 1 {
+                    yf.f_hy[i] = 1;
+                } else {
+                    yf.f_hy[i] = 0;
+                }
+                yf.f_ip[i] = yf.f_resume[i];
+                yf.f_pa[i] = 0;
+            } else {
+            if yf.f_tf[i] == 1 {
+                yf.f_hy[i] = yf.f_thy[i];
+                yf.f_ip[i] = yf.f_resume[i];
+                yf.f_pa[i] = 0;
+            } else {
+            if yf.child_fell == 1 {
+                yf.f_hy[i] = yf.child_hy;
+                yf.f_ip[i] = yf.f_resume[i];
+                yf.f_pa[i] = 0;
+            } else {
+                // Both branches break out: this region has no fall-through.
+                yf.f_fell[i] = 0;
+                yf.f_ip[i] = yf.f_end[i];
+                yf.f_pa[i] = 0;
+            } } }
+        }
+    } else {
+        // Loop: the body is a fresh break-scope. No break in the body -> the loop never exits,
+        // so the enclosing region has no fall-through. Otherwise has_yielded is the AND over the
+        // body's breaks, and those breaks do not propagate to the parent scope.
+        if yf.child_hb == 0 {
+            yf.f_fell[i] = 0;
+            yf.f_ip[i] = yf.f_end[i];
+            yf.f_pa[i] = 0;
+        } else {
+            yf.f_hy[i] = yf.child_bmin;
+            yf.f_ip[i] = yf.f_resume[i];
+            yf.f_pa[i] = 0;
+        }
+    } }
+    0
+}
+
+// Advance the analysis by one transition on the top frame.
+fn ayc_step() -> Word {
+    let i = yf.sp - 1;
+    if yf.f_pa[i] == 1 {
+        resolve_pending(i)
+    } else {
+        if yf.f_ip[i] >= yf.f_end[i] {
+            deliver(i)
+        } else {
+            scan_op(i)
+        }
+    }
+}
+
+// Analyse the region to a fixed point and publish `(out_fell, out_hy)`. The root frame's entry
+// has_yielded is false (the reference's `initial`). The work loop runs to a static cap and is a
+// no-op once the stack empties.
+fn run() -> Word {
+    yf.sp = 0;
+    yf.child_fell = 1;
+    yf.child_hy = 0;
+    yf.child_hb = 0;
+    yf.child_bmin = 1;
+    push_frame(yv.region_start, yv.region_end, 0);
+    for step in 0..8192 limit 8192 {
+        if yf.sp > 0 {
+            ayc_step();
+        }
+    }
+    yv.out_fell = yf.child_fell;
+    yv.out_hy = yf.child_hy;
+    yf.child_fell
+}
+
+// Analyse the region in one call and yield the fall-through flag.
+loop main(resume: Word) -> Word {
+    yield run()
+}
