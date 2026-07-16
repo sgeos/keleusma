@@ -15,11 +15,10 @@
 //!     reject, or a rejection that does not track a real reference rejection, fails here). This
 //!     mirrors the typed-verifier conformance corpus, which mutates real bytecode.
 
-use keleusma::bytecode::{Module, Op};
+use keleusma::bytecode::{Module, NewCompositeOperand, Op};
+use keleusma::value_layout::CompositeKind;
 use keleusma::verify::verify;
-use keleusma_selfhost::selfhost::{
-    compile_src, structural_reject_chunk_via_kel, structural_reject_module_via_kel,
-};
+use keleusma_selfhost::selfhost::{compile_src, structural_reject_module_via_kel};
 
 /// The private-data-free ephemeral program the scaffold tests also use; a well-nested loop.
 const EPHEMERAL_SRC: &str = "require word >= 32;\n\
@@ -32,18 +31,33 @@ fn read_stage(rel: &str) -> String {
         .unwrap_or_else(|e| panic!("cannot read {rel}: {e}"))
 }
 
-/// A base module with a single well-nested chunk, cloned and mutated to build the negatives.
+/// A base module with a single well-nested, data-free chunk, mutated to build the negatives.
 fn base_module() -> Module {
     compile_src("loop main(r: Word) -> Word { yield r }")
 }
 
-/// The base module's entry chunk with its op vector replaced by `ops` (all other chunk
-/// metadata retained). Used both to feed the stage directly and, wrapped back into the module,
-/// to cross-check the reference verdict.
-fn mutated_module(ops: Vec<Op>) -> Module {
-    let mut m = base_module();
+/// A base module that declares a shared data layout (one `Word` slot), so `data_len > 0` and
+/// the `GetData` slot-out-of-range branch (not just the no-layout branch) can be exercised.
+fn data_base() -> Module {
+    compile_src(
+        "require word >= 32;\n\
+         shared data io { a: Word }\n\
+         loop main(r: Word) -> Word { io.a = r; yield io.a }",
+    )
+}
+
+/// `base` with its entry chunk's op vector replaced by `ops` (all other chunk and module
+/// metadata retained, so the marshalled counts are those of `base`). Used both to feed the
+/// stage and, unchanged, to cross-check the reference verdict.
+fn mutated_from(base: Module, ops: Vec<Op>) -> Module {
+    let mut m = base;
     m.chunks[0].ops = ops;
     m
+}
+
+/// `mutated_from` over the data-free base module.
+fn mutated_module(ops: Vec<Op>) -> Module {
+    mutated_from(base_module(), ops)
 }
 
 // ---- POSITIVE: real, reference-accepted modules must not be rejected ----------------------
@@ -92,24 +106,23 @@ fn ephemeral_program_is_well_nested() {
 
 // ---- NEGATIVE: each slice-1 invariant, violated in isolation ------------------------------
 
-/// The stage must reject `ops`, and the reference must reject the same mutated module, so the
+/// The stage must reject the mutated module, and the reference must reject it too, so the
 /// self-hosted rejection tracks a genuine reference rejection rather than a phantom.
-fn assert_rejected(label: &str, ops: Vec<Op>) {
-    let mut chunk = base_module().chunks[0].clone();
-    chunk.ops = ops.clone();
+fn assert_rejected_in(label: &str, base: Module, ops: Vec<Op>) {
+    let m = mutated_from(base, ops);
     assert!(
-        structural_reject_chunk_via_kel(&chunk),
-        "{label}: the structural stage must reject this chunk"
+        structural_reject_module_via_kel(&m),
+        "{label}: the structural stage must reject the mutated module"
     );
-    let m = mutated_module(ops);
     assert!(
         verify(&m).is_err(),
         "{label}: the reference verifier must also reject the mutated module"
     );
-    assert!(
-        structural_reject_module_via_kel(&m),
-        "{label}: the module-level stage must reject the mutated module"
-    );
+}
+
+/// `assert_rejected_in` over the data-free base module.
+fn assert_rejected(label: &str, ops: Vec<Op>) {
+    assert_rejected_in(label, base_module(), ops);
 }
 
 #[test]
@@ -196,10 +209,9 @@ fn break_target_not_loop_exit_is_rejected() {
 // checked at the chunk level (they are not whole programs the reference `verify()` accepts).
 
 fn assert_chunk_well_formed(label: &str, ops: Vec<Op>) {
-    let mut chunk = base_module().chunks[0].clone();
-    chunk.ops = ops;
+    let m = mutated_module(ops);
     assert!(
-        !structural_reject_chunk_via_kel(&chunk),
+        !structural_reject_module_via_kel(&m),
         "{label}: the structural stage must accept this well-formed chunk"
     );
 }
@@ -217,5 +229,83 @@ fn well_formed_loop_with_breakif_is_accepted() {
     assert_chunk_well_formed(
         "loop-breakif",
         vec![Op::Loop(3), Op::BreakIf(3), Op::EndLoop(1)],
+    );
+}
+
+// ---- NEGATIVE (operand bounds): each per-op operand index out of range ----------------------
+//
+// Each op is well-nested (so the block-nesting and target checks accept it) but carries an
+// operand index beyond its chunk/module table. A maximal operand (65535 / 255) exceeds any
+// plausible count, so the rejection does not depend on the base module's incidental sizes.
+
+#[test]
+fn local_slot_out_of_range_is_rejected() {
+    // GetLocal slot 65535 exceeds the chunk's local_count.
+    assert_rejected("getlocal-oob", vec![Op::GetLocal(65535)]);
+}
+
+#[test]
+fn data_slot_without_layout_is_rejected() {
+    // GetData in a module with no declared data layout (data_len == 0).
+    assert_rejected("getdata-no-layout", vec![Op::GetData(0)]);
+}
+
+#[test]
+fn data_slot_out_of_range_is_rejected() {
+    // GetData slot 65535 in a module whose data layout has only one slot (the slot-range branch,
+    // distinct from the no-layout branch above).
+    assert_rejected_in("getdata-slot-oob", data_base(), vec![Op::GetData(65535)]);
+}
+
+#[test]
+fn data_range_out_of_range_is_rejected() {
+    // GetDataIndexed [0, 65535) overruns the one-slot data layout.
+    assert_rejected_in(
+        "getdataindexed-oob",
+        data_base(),
+        vec![Op::GetDataIndexed(0, 65535)],
+    );
+}
+
+#[test]
+fn constant_index_out_of_range_is_rejected() {
+    // Const references pool index 65535.
+    assert_rejected("const-oob", vec![Op::Const(65535)]);
+}
+
+#[test]
+fn enum_constant_index_out_of_range_is_rejected() {
+    // IsEnum's first constant index is out of range.
+    assert_rejected("isenum-oob", vec![Op::IsEnum(65535, 0, 0)]);
+}
+
+#[test]
+fn call_target_out_of_range_is_rejected() {
+    // Call targets chunk 65535, past the module's chunk count.
+    assert_rejected("call-target-oob", vec![Op::Call(65535, 0)]);
+}
+
+#[test]
+fn call_arity_exceeds_callee_locals_is_rejected() {
+    // Call targets a valid chunk (0) but passes more arguments than it declares locals.
+    assert_rejected("call-arity-oob", vec![Op::Call(0, 255)]);
+}
+
+#[test]
+fn fixed_fraction_bits_exceed_word_is_rejected() {
+    // A Q-format fraction count of 255 meets or exceeds the 64-bit host word.
+    assert_rejected("fixed-frac-oob", vec![Op::WordToFixed(255)]);
+}
+
+#[test]
+fn boxed_template_index_out_of_range_is_rejected() {
+    // A boxed struct construction references template 65535, past the chunk's template table.
+    assert_rejected(
+        "template-oob",
+        vec![Op::NewComposite(NewCompositeOperand::Boxed {
+            kind: CompositeKind::Struct,
+            count: 0,
+            meta: 65535,
+        })],
     );
 }

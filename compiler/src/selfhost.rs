@@ -968,20 +968,31 @@ pub fn analyze_stream_chunk(chunk: &keleusma::bytecode::Chunk) -> (i64, i64, i64
 
 // --- Self-hosted structural verifier (verify_structural.kel) ---------------------------------
 //
-// The block-nesting and branch-target pass of the self-hosted structural verifier: the
-// block-nesting, branch-target-bounds, and exact target-equality subset of `verify.rs`'s first
-// structural walk, decidable from the marshalled `(class, arg)` op table alone (the same table
-// `analyze.kel` receives, with the EndLoop/Break/BreakIf targets now populated by
-// `analyze_class`). The shared block `sv` lays out `op_count` (slot 0), `class[1024]` (slots
-// 1..), `arg[1024]` (slots 1025..), and the verdict `out_reject` (slot 2049). Still outside
-// this stage (later slices): the operand-bounds family in the same reference pass (local slot,
-// data slot, constant pool, call target and arity, fraction bits, template index), the
-// block-type constraints (second pass), and the productive-divergence analysis (third pass).
+// The block-nesting, branch-target, and operand-bounds portion of the self-hosted structural
+// verifier: `verify.rs`'s whole first structural pass except the block-type constraints (second
+// pass) and productive-divergence analysis (third pass). It runs over a marshalled op table:
+// the control-flow `(class, arg)` table `analyze.kel` also receives (with the EndLoop/Break/
+// BreakIf targets populated by `analyze_class`), plus a parallel operand-bounds table
+// `(opb, o1, o2, o3)` from `structural_opbounds`, and the per-chunk/per-module counts the
+// operand-bounds checks validate against. The shared block `sv` lays out the scalars `op_count`
+// (0), `local_count` (1), `const_count` (2), `template_count` (3), `data_len` (4), `nchunks`
+// (5), `word_bits` (6); the arrays `class` (7..), `arg`, `opb`, `o1`, `o2`, `o3` (each 1024
+// wide); and the verdict `out_reject`.
 
 const SV_OP_COUNT: usize = 0;
-const SV_CLASS: usize = 1;
-const SV_ARG: usize = 1 + 1024;
-const SV_OUT_REJECT: usize = 1 + 1024 * 2;
+const SV_LOCAL_COUNT: usize = 1;
+const SV_CONST_COUNT: usize = 2;
+const SV_TEMPLATE_COUNT: usize = 3;
+const SV_DATA_LEN: usize = 4;
+const SV_NCHUNKS: usize = 5;
+const SV_WORD_BITS: usize = 6;
+const SV_CLASS: usize = 7;
+const SV_ARG: usize = 7 + 1024;
+const SV_OPB: usize = 7 + 1024 * 2;
+const SV_O1: usize = 7 + 1024 * 3;
+const SV_O2: usize = 7 + 1024 * 4;
+const SV_O3: usize = 7 + 1024 * 5;
+const SV_OUT_REJECT: usize = 7 + 1024 * 6;
 
 fn verify_structural_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
@@ -990,11 +1001,58 @@ fn verify_structural_kel_module() -> Module {
         .clone()
 }
 
-/// Run verify_structural.kel over one chunk, returning whether it rejects the chunk's block
-/// nesting or branch-target bounds. Marshals the `(class, arg)` op table via `analyze_class`,
-/// the same classification `analyze.kel` receives; no chunk metadata beyond the op classes is
-/// consulted, so a deliberately malformed chunk is classified but never executed.
-pub fn structural_reject_chunk_via_kel(chunk: &keleusma::bytecode::Chunk) -> bool {
+/// The number of declared shared/private data slots (`data_layout.slots.len()`), or 0 when the
+/// module declares no data layout, matching the reference `GetData`/`SetData` bound.
+fn data_layout_slot_count(module: &Module) -> i64 {
+    module
+        .data_layout
+        .as_ref()
+        .map_or(0, |dl| dl.slots.len() as i64)
+}
+
+/// Classify an op's operand-bounds obligation as `(opb, o1, o2, o3)`, mirroring the reference's
+/// operand-index checks (see `verify_structural.kel` for the `opb` tag meanings). For a `Call`,
+/// `o3` is the callee chunk's local count resolved here (0 when the callee index is out of
+/// range, in which case the callee-in-bounds check rejects first). An op with no operand index
+/// to validate yields `(0, 0, 0, 0)`.
+fn structural_opbounds(op: &keleusma::bytecode::Op, module: &Module) -> (i64, i64, i64, i64) {
+    use keleusma::bytecode::{NewCompositeOperand, Op, StructField};
+    use keleusma::value_layout::CompositeKind;
+    match op {
+        Op::GetData(s) | Op::SetData(s) => (1, *s as i64, 0, 0),
+        Op::GetDataIndexed(b, l) | Op::SetDataIndexed(b, l) => (2, *b as i64, *l as i64, 0),
+        Op::Const(i) | Op::IsStruct(i) => (3, *i as i64, 0, 0),
+        Op::GetField(StructField::Boxed { name_const }) => (3, *name_const as i64, 0, 0),
+        Op::IsEnum(e, v, d) => (4, *e as i64, *v as i64, *d as i64),
+        Op::Call(callee, nargs) => {
+            let callee_locals = module
+                .chunks
+                .get(*callee as usize)
+                .map_or(0, |ch| ch.local_count as i64);
+            (5, *callee as i64, *nargs as i64, callee_locals)
+        }
+        Op::WordToFixed(fb)
+        | Op::FixedToWord(fb)
+        | Op::FixedMul(fb)
+        | Op::FixedDiv(fb)
+        | Op::CheckedMul(fb)
+        | Op::CheckedDiv(fb) => (6, *fb as i64, 0, 0),
+        Op::GetLocal(s) | Op::SetLocal(s) => (7, *s as i64, 0, 0),
+        Op::NewComposite(NewCompositeOperand::Boxed {
+            kind: CompositeKind::Struct | CompositeKind::Enum,
+            meta,
+            ..
+        }) => (8, *meta as i64, 0, 0),
+        _ => (0, 0, 0, 0),
+    }
+}
+
+/// Run verify_structural.kel over one chunk of `module`, returning whether it rejects the
+/// chunk's block nesting, branch targets, or operand-index bounds. Marshals the control-flow
+/// `(class, arg)` table via `analyze_class`, the operand-bounds `(opb, o1, o2, o3)` table via
+/// `structural_opbounds`, and the per-chunk/per-module counts. No op is executed: a deliberately
+/// malformed chunk is classified but never run.
+pub fn structural_reject_chunk_via_kel(module: &Module, chunk: &keleusma::bytecode::Chunk) -> bool {
     assert!(
         chunk.ops.len() <= 1024,
         "verify_structural.kel op-table capacity"
@@ -1009,10 +1067,41 @@ pub fn structural_reject_chunk_via_kel(chunk: &keleusma::bytecode::Chunk) -> boo
         vm.set_shared(shared, slot, Value::Int(v)).unwrap();
     };
     set(&vm, &mut shared, SV_OP_COUNT, chunk.ops.len() as i64);
+    set(&vm, &mut shared, SV_LOCAL_COUNT, chunk.local_count as i64);
+    set(
+        &vm,
+        &mut shared,
+        SV_CONST_COUNT,
+        chunk.constants.len() as i64,
+    );
+    set(
+        &vm,
+        &mut shared,
+        SV_TEMPLATE_COUNT,
+        chunk.struct_templates.len() as i64,
+    );
+    set(
+        &vm,
+        &mut shared,
+        SV_DATA_LEN,
+        data_layout_slot_count(module),
+    );
+    set(&vm, &mut shared, SV_NCHUNKS, module.chunks.len() as i64);
+    set(
+        &vm,
+        &mut shared,
+        SV_WORD_BITS,
+        1i64 << module.word_bits_log2,
+    );
     for (i, op) in chunk.ops.iter().enumerate() {
         let (class, arg) = analyze_class(op);
         set(&vm, &mut shared, SV_CLASS + i, class);
         set(&vm, &mut shared, SV_ARG + i, arg);
+        let (opb, o1, o2, o3) = structural_opbounds(op, module);
+        set(&vm, &mut shared, SV_OPB + i, opb);
+        set(&vm, &mut shared, SV_O1 + i, o1);
+        set(&vm, &mut shared, SV_O2 + i, o2);
+        set(&vm, &mut shared, SV_O3 + i, o3);
     }
     match vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
@@ -1028,10 +1117,12 @@ pub fn structural_reject_chunk_via_kel(chunk: &keleusma::bytecode::Chunk) -> boo
 }
 
 /// Run verify_structural.kel over every chunk of a module; the module is structurally rejected
-/// (by this first slice) iff any chunk is, mirroring how `verify()` rejects a module on its
-/// first malformed chunk.
+/// iff any chunk is, mirroring how `verify()` rejects a module on its first malformed chunk.
 pub fn structural_reject_module_via_kel(module: &Module) -> bool {
-    module.chunks.iter().any(structural_reject_chunk_via_kel)
+    module
+        .chunks
+        .iter()
+        .any(|chunk| structural_reject_chunk_via_kel(module, chunk))
 }
 
 /// The self-hosted drop-in replacement for `verify_resource_bounds`: analyze.kel decides each
