@@ -1,64 +1,93 @@
-// compiler/kel/verify_typed.kel -- the first slice of the self-hosted A.2.1 typed operand-stack
-// verifier (reference `verify_typed.rs`). It reconstructs the flat shape of each operand-stack
-// entry by abstract interpretation and validates every compiler-baked flat field/array offset
-// against the composite's known size (audit findings B1/B2), for the STRAIGHT-LINE prefix of a
-// chunk checked in isolation (no seeding).
+// compiler/kel/verify_typed.kel -- the self-hosted A.2.1 typed operand-stack verifier (reference
+// `verify_typed.rs`), slice 2a: a frame-stack abstract interpreter over the whole chunk (all
+// control flow), checked in isolation.
 //
-// The shape lattice `AbsVal` is encoded per stack entry as `(tag, size)`: tag 0 Top (unknown,
-// defers every check), 1 Scalar (a scalar of `size` bytes), 2 Flat (a flat composite body of
-// `size` bytes). Local slots are tracked the same way; in isolation every local and parameter
-// starts Top, so a flat access on a param-or-local-held composite defers, exactly as the
-// reference's isolated `typed_check_chunk` does. A composite CONSTRUCTED in the chunk
-// (`NewComposite` flat) has a known Flat size, so a subsequent flat field or array access on it
-// is bounds-checked, not deferred.
+// It reconstructs the flat shape of each operand-stack entry -- the lattice `AbsVal` encoded per
+// entry as `(tag, size)`: 0 Top (unknown, defers every check), 1 Scalar (`size` bytes), 2 Flat
+// (a flat composite body of `size` bytes) -- and validates every compiler-baked flat field/array
+// offset against the composite's known size (audit B1/B2), the operand-stack underflow (audit
+// finding 3), the if/else branch-height balance (B3/B4), and the loop back-edge height
+// neutrality (B5). Locals are tracked the same way; in isolation every param/local starts Top.
 //
-// This slice is sound but incomplete: it interprets ops straight-line and DEFERS (stops,
-// accepting) at the first control-flow op (If/Else/EndIf/Loop/EndLoop/Break/BreakIf/Trap/Return)
-// or native call, because the operand-stack joins across branches and the per-loop local-shape
-// fixpoint are later slices. Deferring never rejects a valid program; it only forgoes checks
-// beyond the first branch. The host marshals, per op, a typed descriptor `(tkind, treq, tprod,
-// ta, tb)` and a `defer` flag from the authoritative op semantics; the stage self-hosts the
-// abstract interpretation and the offset checks.
+// The control flow is walked by the same explicit region-frame stack `verify_yield.kel` and
+// `verify_depth.kel` use (if-else staging, fresh-scope loops), but the state carried is the live
+// operand shape stack whose height is the operand depth. Per the operator's chosen trade-off,
+// shapes are the SOUND OVER-APPROXIMATION the reference itself falls back to: precise within a
+// basic block, and reset to Top across every control-flow boundary (both if/else arms rejoin to
+// Top; a loop invalidates every local to Top and Tops the operand entries above the loop entry).
+// This never rejects a valid program -- a Top defers to the retained runtime bounds guard -- and
+// catches every within-basic-block flat violation plus the underflow and height-balance
+// obligations; it forgoes only the cross-join shape precision (loop-carried-local flat checks),
+// which defer. The host marshals, per op, the control-flow class/arg, a Trap/Return flag, the
+// operand consumption `req` (the reference `op_depth_effect`) and generic push count `prod`, and
+// the shape-transfer kind `tk` with operands `ta`/`tb`.
 require word >= 32;
 
-// The host-facing block: the per-op typed descriptor and the verdict. `tkind` selects the
-// transfer (0 generic pop `treq`/push `tprod` unknowns; 1 Dup; 2 push a scalar of `ta` bytes;
-// 3 GetLocal slot `ta`; 4 SetLocal slot `ta`; 6 NewComposite flat, pop `treq`, push Flat `tb`
-// bytes; 7 flat scalar field at offset `ta`, field `tb` bytes; 8 flat nested field at offset
-// `ta`, size `tb`; 9 flat array scalar element of `ta` bytes; 10 flat array nested element of
-// `ta` bytes). `defer` marks an op the straight-line slice stops at.
+// The host-facing block. `tk` selects the shape transfer (0 generic pop `req`/push `prod`
+// unknowns; 1 Dup; 2 push scalar of `ta` bytes; 3 GetLocal slot `ta`; 4 SetLocal slot `ta`; 6
+// NewComposite flat, pop `req`, push Flat `tb` bytes; 7 flat scalar field at offset `ta`, field
+// `tb` bytes; 8 flat nested field at offset `ta`, size `tb`; 9 flat array scalar element of `ta`
+// bytes; 10 flat array nested element of `ta` bytes). `class` is the control-flow role (1 If, 2
+// Else, 3 EndIf, 4 Loop, 5 EndLoop, 6 Break, 7 BreakIf, else 0/8/9); `arg` the branch target;
+// `is_term` flags Trap/Return.
 shared data tv {
     op_count: Word,
-    tkind: [Word; 1024],
-    treq: [Word; 1024],
-    tprod: [Word; 1024],
+    class: [Word; 1024],
+    arg: [Word; 1024],
+    is_term: [Word; 1024],
+    tk: [Word; 1024],
+    req: [Word; 1024],
+    prod: [Word; 1024],
     ta: [Word; 1024],
     tb: [Word; 1024],
-    defer: [Word; 1024],
     out_reject: Word,
 }
 
-// The abstract state: the operand stack (`st_tag`/`st_size`, height `sp`) and the local frame
-// (`lc_tag`/`lc_size`). `stopped` latches once the walk defers at a control-flow op; `pop_tag`/
-// `pop_size` carry a popped entry; `bad` latches the first proven offset violation.
+// The live operand shape stack (`st_tag`/`st_size`, height `dsp`), the local frame
+// (`lc_tag`/`lc_size`), and the control-flow region-frame stack. Each frame is one region
+// `[f_ip, f_end)`: `f_esp` its entry operand height (for the if/else reset and the loop back-edge
+// neutrality check), `f_fell` whether it falls through, `f_hb`/`f_bmax` its break-scope height
+// summary. While a frame waits on a child it sets `f_pa` and records how to fold it in: `f_pk` 1
+// bare-if, 2 if-else, 3 loop; `f_ps` the if-else stage; `f_resume` the resume op; `f_elstart`/
+// `f_elend` the else region; `f_tsp`/`f_tfell` the stashed then result. `child_*` carry a
+// completed frame's result. `bad` latches the first proven violation.
 private data tf {
-    st_tag: [Word; 1024],
-    st_size: [Word; 1024],
-    lc_tag: [Word; 1024],
-    lc_size: [Word; 1024],
-    sp: Word,
-    stopped: Word,
+    st_tag: [Word; 256],
+    st_size: [Word; 256],
+    dsp: Word,
+    lc_tag: [Word; 256],
+    lc_size: [Word; 256],
+    fsp: Word,
+    f_ip: [Word; 64],
+    f_end: [Word; 64],
+    f_esp: [Word; 64],
+    f_fell: [Word; 64],
+    f_hb: [Word; 64],
+    f_bmax: [Word; 64],
+    f_pa: [Word; 64],
+    f_pk: [Word; 64],
+    f_ps: [Word; 64],
+    f_resume: [Word; 64],
+    f_elstart: [Word; 64],
+    f_elend: [Word; 64],
+    f_tsp: [Word; 64],
+    f_tfell: [Word; 64],
+    child_fell: Word,
+    child_esp: Word,
+    child_hb: Word,
+    child_bmax: Word,
     pop_tag: Word,
     pop_size: Word,
     bad: Word,
 }
 
-// Pop one entry into `pop_tag`/`pop_size` (Top on underflow).
-fn pop() -> Word {
-    if tf.sp > 0 {
-        tf.sp = tf.sp - 1;
-        tf.pop_tag = tf.st_tag[tf.sp];
-        tf.pop_size = tf.st_size[tf.sp];
+// --- live operand shape stack --------------------------------------------------------------
+
+fn st_pop() -> Word {
+    if tf.dsp > 0 {
+        tf.dsp = tf.dsp - 1;
+        tf.pop_tag = tf.st_tag[tf.dsp];
+        tf.pop_size = tf.st_size[tf.dsp];
     } else {
         tf.pop_tag = 0;
         tf.pop_size = 0;
@@ -66,46 +95,54 @@ fn pop() -> Word {
     0
 }
 
-// Push one entry (dropped silently past the static stack cap).
-fn push(tag: Word, size: Word) -> Word {
-    if tf.sp < 1024 {
-        tf.st_tag[tf.sp] = tag;
-        tf.st_size[tf.sp] = size;
-        tf.sp = tf.sp + 1;
+fn st_push(tag: Word, size: Word) -> Word {
+    if tf.dsp < 256 {
+        tf.st_tag[tf.dsp] = tag;
+        tf.st_size[tf.dsp] = size;
+        tf.dsp = tf.dsp + 1;
     }
     0
 }
 
-// Drop `n` entries (the generic-op pop; individual values are not inspected).
-fn pop_n(n: Word) -> Word {
-    if tf.sp >= n {
-        tf.sp = tf.sp - n;
+fn st_pop_n(n: Word) -> Word {
+    if tf.dsp >= n {
+        tf.dsp = tf.dsp - n;
     } else {
-        tf.sp = 0;
+        tf.dsp = 0;
     }
     0
 }
 
-// Push `n` unknown (Top) entries; `n` is a small op stack-growth (bounded here at four).
-fn push_tops(n: Word) -> Word {
+fn st_push_tops(n: Word) -> Word {
     if n >= 1 {
-        push(0, 0);
+        st_push(0, 0);
     }
     if n >= 2 {
-        push(0, 0);
+        st_push(0, 0);
     }
     if n >= 3 {
-        push(0, 0);
+        st_push(0, 0);
     }
     if n >= 4 {
-        push(0, 0);
+        st_push(0, 0);
     }
     0
 }
 
-// A flat scalar or nested field access reads `[offset, need)` of a composite of shape
-// `(vtag, vsize)`; `need` is `offset + field_extent`. A Flat operand is bounds-checked, a Scalar
-// operand is a type error (expected composite), a Top operand defers.
+// Set every operand entry from `lo` up to the current height to Top -- the sound join
+// over-approximation applied when a control-flow boundary rejoins.
+fn top_from(lo: Word) -> Word {
+    for j in 0..256 limit 256 {
+        if j >= lo andalso j < tf.dsp {
+            tf.st_tag[j] = 0;
+            tf.st_size[j] = 0;
+        }
+    }
+    0
+}
+
+// A flat scalar/nested field reads `[offset, need)` of a composite of shape `(vtag, vsize)`;
+// `need` is `offset + extent`. Flat is bounds-checked, Scalar is a type error, Top defers.
 fn check_flat_extent(vtag: Word, vsize: Word, need: Word) -> Word {
     if vtag == 2 {
         if need > vsize {
@@ -120,8 +157,7 @@ fn check_flat_extent(vtag: Word, vsize: Word, need: Word) -> Word {
 }
 
 // A flat array element access requires the baked element stride to evenly divide the array body
-// (remainder computed by division, avoiding a modulo). A zero-size element needs no check; a
-// Scalar operand is a type error; a Top operand defers.
+// (remainder by division, avoiding a modulo). Zero-size element defers; Scalar is a type error.
 fn check_stride(atag: Word, asize: Word, elem: Word) -> Word {
     if atag == 2 {
         if elem > 0 {
@@ -137,94 +173,270 @@ fn check_stride(atag: Word, asize: Word, elem: Word) -> Word {
     0
 }
 
-// Apply the typed transfer of the op at `ip`.
-fn apply(ip: Word) -> Word {
-    let k = tv.tkind[ip];
-    let req = tv.treq[ip];
-    if tf.sp < req {
+// Apply the shape transfer of the op at `ip` to the live operand stack (and check its flat
+// offsets). Underflow (`dsp < req`) latches the reject.
+fn apply_typed(ip: Word) -> Word {
+    let k = tv.tk[ip];
+    let r = tv.req[ip];
+    if tf.dsp < r {
         tf.bad = 1;
     }
     if k == 0 {
-        // Generic height-correct effect: pop `treq`, push `tprod` unknowns.
-        pop_n(req);
-        push_tops(tv.tprod[ip]);
+        st_pop_n(r);
+        st_push_tops(tv.prod[ip]);
     } else {
     if k == 1 {
-        // Dup: push a copy of the top entry.
-        if tf.sp > 0 {
-            let dt = tf.st_tag[tf.sp - 1];
-            let ds = tf.st_size[tf.sp - 1];
-            push(dt, ds);
+        if tf.dsp > 0 {
+            let dt = tf.st_tag[tf.dsp - 1];
+            let ds = tf.st_size[tf.dsp - 1];
+            st_push(dt, ds);
         }
     } else {
     if k == 2 {
-        // Push a scalar of `ta` bytes (Const scalar, IsEnum/IsStruct bool).
-        push(1, tv.ta[ip]);
+        st_push(1, tv.ta[ip]);
     } else {
     if k == 3 {
-        // GetLocal: push the tracked shape of slot `ta`.
-        push(tf.lc_tag[tv.ta[ip]], tf.lc_size[tv.ta[ip]]);
+        st_push(tf.lc_tag[tv.ta[ip]], tf.lc_size[tv.ta[ip]]);
     } else {
     if k == 4 {
-        // SetLocal: pop the value into slot `ta` (isolation: seed is Top, so any value fits).
-        pop();
+        st_pop();
         tf.lc_tag[tv.ta[ip]] = tf.pop_tag;
         tf.lc_size[tv.ta[ip]] = tf.pop_size;
     } else {
     if k == 6 {
-        // NewComposite flat: pop the `treq` packed elements, push the Flat body of `tb` bytes.
-        pop_n(req);
-        push(2, tv.tb[ip]);
+        st_pop_n(r);
+        st_push(2, tv.tb[ip]);
     } else {
     if k == 7 {
-        // Flat scalar field: pop the composite, bounds-check offset `ta` + field `tb`, push a
-        // scalar of `tb` bytes.
-        pop();
+        st_pop();
         check_flat_extent(tf.pop_tag, tf.pop_size, tv.ta[ip] + tv.tb[ip]);
-        push(1, tv.tb[ip]);
+        st_push(1, tv.tb[ip]);
     } else {
     if k == 8 {
-        // Flat nested field: pop the composite, bounds-check offset `ta` + size `tb`, push the
-        // nested Flat of `tb` bytes.
-        pop();
+        st_pop();
         check_flat_extent(tf.pop_tag, tf.pop_size, tv.ta[ip] + tv.tb[ip]);
-        push(2, tv.tb[ip]);
+        st_push(2, tv.tb[ip]);
     } else {
     if k == 9 {
-        // Flat array scalar element: pop the index and the array, stride-check `ta` bytes, push
-        // a scalar of `ta` bytes.
-        pop();
-        pop();
+        st_pop();
+        st_pop();
         check_stride(tf.pop_tag, tf.pop_size, tv.ta[ip]);
-        push(1, tv.ta[ip]);
+        st_push(1, tv.ta[ip]);
     } else {
-        // k == 10 flat array nested element: pop index and array, stride-check, push the nested
-        // Flat of `ta` bytes.
-        pop();
-        pop();
+        st_pop();
+        st_pop();
         check_stride(tf.pop_tag, tf.pop_size, tv.ta[ip]);
-        push(2, tv.ta[ip]);
+        st_push(2, tv.ta[ip]);
     } } } } } } } } }
     0
 }
 
-// Interpret the chunk straight-line, deferring (stopping, accepting) at the first control-flow
-// op or native call, and publish the verdict. In isolation every local starts Top.
-fn run() -> Word {
-    tf.sp = 0;
-    tf.stopped = 0;
-    tf.bad = 0;
-    for j in 0..1024 limit 1024 {
+// Invalidate every local to Top (the sound loop over-approximation: a prior iteration may have
+// overwritten any slot).
+fn invalidate_locals() -> Word {
+    for j in 0..256 limit 256 {
         tf.lc_tag[j] = 0;
         tf.lc_size[j] = 0;
     }
-    for ip in 0..1024 limit 1024 {
-        if tv.op_count > ip andalso tf.stopped == 0 {
-            if tv.defer[ip] == 1 {
-                tf.stopped = 1;
+    0
+}
+
+// --- control-flow region-frame stack -------------------------------------------------------
+
+fn push_frame(ip: Word, end: Word, esp: Word) -> Word {
+    if tf.fsp > 63 {
+        tf.fsp = tf.fsp;
+    } else {
+        let j = tf.fsp;
+        tf.f_ip[j] = ip;
+        if end > tv.op_count {
+            tf.f_end[j] = tv.op_count;
+        } else {
+            tf.f_end[j] = end;
+        }
+        tf.f_esp[j] = esp;
+        tf.f_fell[j] = 1;
+        tf.f_hb[j] = 0;
+        tf.f_bmax[j] = 0;
+        tf.f_pa[j] = 0;
+        tf.fsp = tf.fsp + 1;
+    }
+    0
+}
+
+fn deliver(i: Word) -> Word {
+    tf.child_fell = tf.f_fell[i];
+    tf.child_esp = tf.dsp;
+    tf.child_hb = tf.f_hb[i];
+    tf.child_bmax = tf.f_bmax[i];
+    tf.fsp = tf.fsp - 1;
+    0
+}
+
+fn record_break(i: Word) -> Word {
+    if tf.f_hb[i] == 0 {
+        tf.f_hb[i] = 1;
+        tf.f_bmax[i] = tf.dsp;
+    } else {
+        if tf.dsp > tf.f_bmax[i] {
+            tf.f_bmax[i] = tf.dsp;
+        }
+    }
+    0
+}
+
+// Latch the reject if `x` and `y` differ (a height-balance obligation).
+fn ne_bad(x: Word, y: Word) -> Word {
+    if x > y orelse y > x {
+        tf.bad = 1;
+    }
+    0
+}
+
+fn scan_op(i: Word) -> Word {
+    let ip = tf.f_ip[i];
+    if tv.is_term[ip] == 1 {
+        // Trap/Return: no fall-through.
+        tf.f_fell[i] = 0;
+        tf.f_ip[i] = tf.f_end[i];
+    } else {
+    if tv.class[ip] == 6 {
+        // Break: record the exit height, no fall-through.
+        record_break(i);
+        tf.f_fell[i] = 0;
+        tf.f_ip[i] = tf.f_end[i];
+    } else {
+    if tv.class[ip] == 7 {
+        // BreakIf: pop the condition, record the break edge, continue.
+        apply_typed(ip);
+        record_break(i);
+        tf.f_ip[i] = ip + 1;
+    } else {
+    if tv.class[ip] == 1 {
+        // If: pop the condition, spawn the then-branch (and, for an if-else, the else-branch).
+        apply_typed(ip);
+        let t = tv.arg[ip];
+        if t > 0 andalso t <= tv.op_count andalso tv.class[t - 1] == 2 {
+            let endif = tv.arg[t - 1];
+            tf.f_pk[i] = 2;
+            tf.f_ps[i] = 0;
+            tf.f_esp[i] = tf.dsp;
+            tf.f_elstart[i] = t;
+            tf.f_elend[i] = endif;
+            tf.f_resume[i] = endif + 1;
+            tf.f_pa[i] = 1;
+            push_frame(ip + 1, t - 1, tf.dsp);
+        } else {
+            tf.f_pk[i] = 1;
+            tf.f_esp[i] = tf.dsp;
+            tf.f_resume[i] = t + 1;
+            tf.f_pa[i] = 1;
+            push_frame(ip + 1, t, tf.dsp);
+        }
+    } else {
+    if tv.class[ip] == 4 {
+        // Loop: invalidate locals (over-approximation), spawn the body as a fresh break-scope.
+        invalidate_locals();
+        tf.f_pk[i] = 3;
+        tf.f_esp[i] = tf.dsp;
+        tf.f_resume[i] = tv.arg[ip];
+        tf.f_pa[i] = 1;
+        push_frame(ip + 1, tv.arg[ip] - 1, tf.dsp);
+    } else {
+    if tv.class[ip] == 2 orelse tv.class[ip] == 3 orelse tv.class[ip] == 5 {
+        // Else/EndIf/EndLoop: structural markers, stepped over.
+        tf.f_ip[i] = ip + 1;
+    } else {
+        // Plain op or Call: apply the shape transfer.
+        apply_typed(ip);
+        tf.f_ip[i] = ip + 1;
+    } } } } } }
+    0
+}
+
+fn resolve_pending(i: Word) -> Word {
+    if tf.f_pk[i] == 1 {
+        // Bare if: the then-arm must be height-neutral (join with the fall-through); reset to the
+        // entry height and Top the operand entries above it (the join over-approximation).
+        if tf.child_fell == 1 {
+            ne_bad(tf.dsp, tf.f_esp[i]);
+        }
+        tf.dsp = tf.f_esp[i];
+        tf.f_ip[i] = tf.f_resume[i];
+        tf.f_pa[i] = 0;
+    } else {
+    if tf.f_pk[i] == 2 {
+        if tf.f_ps[i] == 0 {
+            // Then-branch returned: stash its end height/fell, reset to the entry height, spawn
+            // the else-branch from there.
+            tf.f_tsp[i] = tf.dsp;
+            tf.f_tfell[i] = tf.child_fell;
+            tf.dsp = tf.f_esp[i];
+            tf.f_ps[i] = 1;
+            push_frame(tf.f_elstart[i], tf.f_elend[i], tf.f_esp[i]);
+        } else {
+            // Else-branch returned: both arms that fall through must reach the same height
+            // (B3/B4); the joined operand entries above the entry height are Top.
+            if tf.f_tfell[i] == 1 andalso tf.child_fell == 1 {
+                ne_bad(tf.f_tsp[i], tf.dsp);
             } else {
-                apply(ip);
+                if tf.f_tfell[i] == 1 {
+                    tf.dsp = tf.f_tsp[i];
+                }
             }
+            top_from(tf.f_esp[i]);
+            tf.f_ip[i] = tf.f_resume[i];
+            tf.f_pa[i] = 0;
+        }
+    } else {
+        // Loop: the body fall-through must restore the entry height (B5 back-edge neutrality).
+        // The height after the loop is the max break height, else the body end, else the entry;
+        // the operand entries above the entry are Top.
+        if tf.child_fell == 1 {
+            ne_bad(tf.dsp, tf.f_esp[i]);
+        }
+        if tf.child_hb == 1 {
+            tf.dsp = tf.child_bmax;
+        } else {
+            if tf.child_fell == 0 {
+                tf.dsp = tf.f_esp[i];
+            }
+        }
+        top_from(tf.f_esp[i]);
+        tf.f_ip[i] = tf.f_resume[i];
+        tf.f_pa[i] = 0;
+    } }
+    0
+}
+
+fn step() -> Word {
+    let i = tf.fsp - 1;
+    if tf.f_pa[i] == 1 {
+        resolve_pending(i)
+    } else {
+        if tf.f_ip[i] >= tf.f_end[i] {
+            deliver(i)
+        } else {
+            scan_op(i)
+        }
+    }
+}
+
+// Interpret the whole chunk `[0, op_count)` from an empty stack and all-Top locals, and publish
+// whether any flat offset, underflow, or height-balance obligation is violated.
+fn run() -> Word {
+    tf.dsp = 0;
+    tf.fsp = 0;
+    tf.bad = 0;
+    tf.child_fell = 1;
+    tf.child_esp = 0;
+    tf.child_hb = 0;
+    tf.child_bmax = 0;
+    invalidate_locals();
+    push_frame(0, tv.op_count, 0);
+    for s in 0..8192 limit 8192 {
+        if tf.fsp > 0 {
+            step();
         }
     }
     if tf.bad == 1 {
@@ -235,7 +447,6 @@ fn run() -> Word {
     tv.out_reject
 }
 
-// Check the chunk's straight-line flat offsets in one call and yield the verdict.
 loop main(resume: Word) -> Word {
     yield run()
 }
