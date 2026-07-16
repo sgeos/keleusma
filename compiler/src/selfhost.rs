@@ -8,10 +8,12 @@
 //! `kel/reconstruct.kel` folds that into the (kind, arg, lhs, rhs) node forest, and
 //! `kel/codegen.kel` emits each chunk's ops, which are spliced into a module. The
 //! host only moves data between stages; the compile logic is Keleusma end to end.
-//! One limitation remains on the road to full self-hosting, documented in
-//! `MILESTONES.md`: the module scaffold (data layout, constant-pool metadata,
-//! auxiliary body) is taken from the Rust-hosted reference compiler (`compile_src`)
-//! rather than assembled from the stage output.
+//! The [`self_host_compile`] entry splices only the self-hosted chunk ops onto the
+//! reference scaffold, whereas [`self_host_compile_full`] additionally assembles the
+//! module scaffold (data layout, enum-layout table, chunk signatures, schema hash, and
+//! declared WCET/WCMU header) from the pipeline output, so for the loop-free stage
+//! sources its serialized module is byte-identical to the reference (see
+//! `tests/scaffold.rs`) without borrowing any field from it.
 //!
 //! The stage sources are read relative to the current directory, trying the
 //! package-local `kel/...` path then the repo-root `compiler/kel/...` path, so the
@@ -59,6 +61,10 @@ pub struct ParsedFn {
     cat: i64,
     name: i64,
     params: usize,
+    // The type-name id of each value parameter (from the header PTYPE records) and of
+    // the return (the RETTYPE record), for the driver's own chunk-signature assembly.
+    param_types: Vec<i64>,
+    return_type: i64,
     guard: Vec<(i64, i64)>,
     body: Vec<(i64, i64)>,
 }
@@ -324,7 +330,13 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
 /// Drive lexer.kel then parse.kel over `src` and return every function it yields, each
 /// with its guard and body records, plus the interned-name table. Multiheaded functions
 /// appear as several same-named entries in declaration order.
-pub fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>) {
+// The 4-tuple return carries the parsed functions, name table, and the raw data and
+// enum record streams; factoring each into a `type` alias would only scatter it, so
+// allow the complexity lint here as the root test file does file-wide.
+#[allow(clippy::type_complexity)]
+pub fn parse_functions(
+    src: &str,
+) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
     let (tokens, names) = br_lex(src);
     let id_of = |s: &str| {
         names
@@ -377,6 +389,12 @@ pub fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>) {
 
     let mut fns: Vec<ParsedFn> = Vec::new();
     let mut cur: Option<ParsedFn> = None;
+    // Every data block's header records (DSTART, then PARAM/PTYPE/ASIZE per field, then
+    // END), concatenated in declaration order, for the driver's own data-layout assembly.
+    let mut data_records: Vec<(i64, i64)> = Vec::new();
+    // Every enum's header records (ENUMSTART, then EVARIANT/EDISC per variant, then END),
+    // for the driver's own enum-layout assembly.
+    let mut enum_records: Vec<(i64, i64)> = Vec::new();
     let (mut in_body, mut in_guard, mut in_data, mut in_enum, mut in_use) =
         (false, false, false, false, false);
     let mut state = vm
@@ -398,9 +416,19 @@ pub fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>) {
                     _ => cur.as_mut().unwrap().guard.push((code, val)),
                 }
             } else if in_data {
-                in_data = code != 5;
+                if code == 5 {
+                    data_records.push((5, 0));
+                    in_data = false;
+                } else if code != 0 {
+                    data_records.push((code, val));
+                }
             } else if in_enum {
-                in_enum = code != 5;
+                if code == 5 {
+                    enum_records.push((5, 0));
+                    in_enum = false;
+                } else if code != 0 {
+                    enum_records.push((code, val));
+                }
             } else if in_use {
                 in_use = code != 5;
             } else {
@@ -410,18 +438,28 @@ pub fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>) {
                             cat: code,
                             name: val,
                             params: 0,
+                            param_types: Vec::new(),
+                            return_type: 0,
                             guard: Vec::new(),
                             body: Vec::new(),
                         })
                     }
                     4 => cur.as_mut().unwrap().params += 1,
-                    9 => in_data = true,
+                    6 => cur.as_mut().unwrap().param_types.push(val),
+                    7 => cur.as_mut().unwrap().return_type = val,
+                    9 => {
+                        in_data = true;
+                        data_records.push((9, val));
+                    }
                     10 => in_use = true,
-                    12 => in_enum = true,
+                    12 => {
+                        in_enum = true;
+                        enum_records.push((12, val));
+                    }
                     16 => in_body = true,
                     17 => in_guard = true,
                     5 => fns.push(cur.take().unwrap()),
-                    15 => return (fns, names),
+                    15 => return (fns, names, data_records, enum_records),
                     _ => {}
                 }
             }
@@ -440,7 +478,7 @@ pub fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>) {
 /// reference's ops. The result is a runnable module whose every source-defined chunk was
 /// emitted by the self-hosted pipeline.
 pub fn self_host_compile(src: &str) -> Module {
-    let (fns, names) = parse_functions(src);
+    let (fns, names, _data_records, _enum_records) = parse_functions(src);
     let mut module = compile_src(src);
     let mut i = 0;
     while i < fns.len() {
@@ -946,4 +984,310 @@ pub fn validate_module_via_kel(module: &Module, arena_capacity: i64) -> bool {
         chunk_wcmu[idx] = (stack, heap);
     }
     valid
+}
+
+// -- scaffold assembly from parse.kel's records (ported from tests/selfhost_codegen.rs) --
+//
+// The data layout, enum-layout table, chunk signatures, schema hash, and declared
+// WCET/WCMU header are assembled from the pipeline output (parse.kel's record stream and
+// analyze.kel's per-chunk verdict), rather than borrowed from the Rust reference. Each
+// assembly mirrors the corresponding Rust compiler pass, so the serialized module is
+// byte-identical to the reference for the loop-free stage sources.
+
+/// Assemble the data-slot table from parse.kel's data-block record stream, mapping the
+/// interned block, field, and (unused here) type ids through the name table.
+fn assemble_data_slots(
+    data_records: &[(i64, i64)],
+    names: &[String],
+) -> Vec<keleusma::bytecode::DataSlot> {
+    use keleusma::bytecode::{DataSlot, SlotVisibility};
+    struct Blk {
+        name_id: i64,
+        vis: i64,
+        fields: Vec<(i64, i64)>, // (field name id, element count)
+    }
+    let mut blocks: Vec<Blk> = Vec::new();
+    for &(code, val) in data_records {
+        match code {
+            9 => blocks.push(Blk {
+                name_id: val / 4,
+                vis: val % 4,
+                fields: Vec::new(),
+            }),
+            4 => blocks.last_mut().unwrap().fields.push((val, 1)),
+            8 => blocks.last_mut().unwrap().fields.last_mut().unwrap().1 = val,
+            // 6 (PTYPE) is not needed for the slot names; 5 (END) is a boundary.
+            _ => {}
+        }
+    }
+    let mut slots = Vec::new();
+    // Pass 0 shared, pass 1 private; visibility 2 (const) yields no runtime slots.
+    for pass_vis in [0i64, 1i64] {
+        let visibility = if pass_vis == 0 {
+            SlotVisibility::Shared
+        } else {
+            SlotVisibility::Private
+        };
+        for b in blocks.iter().filter(|b| b.vis == pass_vis) {
+            let bname = &names[b.name_id as usize];
+            for &(fid, count) in &b.fields {
+                let fname = &names[fid as usize];
+                if count == 1 {
+                    slots.push(DataSlot {
+                        name: format!("{bname}.{fname}"),
+                        visibility,
+                    });
+                } else {
+                    for k in 0..count {
+                        slots.push(DataSlot {
+                            name: format!("{bname}.{fname}[{k}]"),
+                            visibility,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    slots
+}
+
+/// Assemble the per-shared-slot byte layout (offset, kind tag, len) from parse.kel's
+/// data-block records. The shared segment is the single shared block's fields expanded
+/// to one entry per element at consecutive byte offsets; the stage data fields are all
+/// `Word` (ScalarKind::Int, tag 3, eight bytes at the 64-bit reference width) or `Byte`
+/// (tag 2, one byte), and each is a scalar (len 0).
+fn assemble_shared_layout(
+    data_records: &[(i64, i64)],
+    names: &[String],
+) -> Vec<keleusma::bytecode::SharedSlotLayout> {
+    use keleusma::bytecode::SharedSlotLayout;
+    struct Blk {
+        vis: i64,
+        fields: Vec<(i64, i64)>, // (type name id, element count)
+    }
+    let mut blocks: Vec<Blk> = Vec::new();
+    for &(code, val) in data_records {
+        match code {
+            9 => blocks.push(Blk {
+                vis: val % 4,
+                fields: Vec::new(),
+            }),
+            4 => blocks.last_mut().unwrap().fields.push((0, 1)),
+            6 => blocks.last_mut().unwrap().fields.last_mut().unwrap().0 = val,
+            8 => blocks.last_mut().unwrap().fields.last_mut().unwrap().1 = val,
+            _ => {}
+        }
+    }
+    let scalar = |type_id: i64| -> (u8, u32) {
+        match names[type_id as usize].as_str() {
+            "Word" => (3, 8),
+            "Byte" => (2, 1),
+            other => panic!("unhandled shared field type `{other}`"),
+        }
+    };
+    let mut layout = Vec::new();
+    let mut offset: u32 = 0;
+    for b in blocks.iter().filter(|b| b.vis == 0) {
+        for &(tid, count) in &b.fields {
+            let (tag, size) = scalar(tid);
+            for _ in 0..count {
+                layout.push(SharedSlotLayout {
+                    offset,
+                    kind: tag,
+                    len: 0,
+                });
+                offset += size;
+            }
+        }
+    }
+    layout
+}
+
+/// Assemble the per-private-slot load-time initial values from parse.kel's records:
+/// one entry per private slot (arrays expanded), the type's zero -- `Int(0)` for a
+/// `Word` slot, `Byte(0)` for a `Byte` slot. The stage private fields carry no
+/// `= literal` initializer, so every entry is a zero.
+fn assemble_private_init(
+    data_records: &[(i64, i64)],
+    names: &[String],
+) -> Vec<keleusma::bytecode::ConstValue> {
+    use keleusma::bytecode::ConstValue;
+    struct Blk {
+        vis: i64,
+        fields: Vec<(i64, i64)>, // (type name id, element count)
+    }
+    let mut blocks: Vec<Blk> = Vec::new();
+    for &(code, val) in data_records {
+        match code {
+            9 => blocks.push(Blk {
+                vis: val % 4,
+                fields: Vec::new(),
+            }),
+            4 => blocks.last_mut().unwrap().fields.push((0, 1)),
+            6 => blocks.last_mut().unwrap().fields.last_mut().unwrap().0 = val,
+            8 => blocks.last_mut().unwrap().fields.last_mut().unwrap().1 = val,
+            _ => {}
+        }
+    }
+    let mut init = Vec::new();
+    for b in blocks.iter().filter(|b| b.vis == 1) {
+        for &(tid, count) in &b.fields {
+            let zero = match names[tid as usize].as_str() {
+                "Word" => ConstValue::Int(0),
+                "Byte" => ConstValue::Byte(0),
+                other => panic!("unhandled private field type `{other}`"),
+            };
+            for _ in 0..count {
+                init.push(zero.clone());
+            }
+        }
+    }
+    init
+}
+
+/// Assemble a whole `DataLayout` from parse.kel's data-block records. The stages have
+/// no private composite fields, so `private_composite_layout` is empty.
+fn assemble_data_layout(
+    data_records: &[(i64, i64)],
+    names: &[String],
+) -> keleusma::bytecode::DataLayout {
+    keleusma::bytecode::DataLayout {
+        slots: assemble_data_slots(data_records, names),
+        shared_layout: assemble_shared_layout(data_records, names),
+        private_composite_layout: Vec::new(),
+        private_init: assemble_private_init(data_records, names),
+    }
+}
+
+/// Assemble the enum-layout table from parse.kel's enum record stream.
+fn assemble_enum_layouts(
+    enum_records: &[(i64, i64)],
+    names: &[String],
+) -> Vec<keleusma::bytecode::EnumLayout> {
+    use keleusma::bytecode::{EnumLayout, EnumVariantDisc};
+    let mut layouts: Vec<EnumLayout> = Vec::new();
+    let mut running = 0i64;
+    for &(code, val) in enum_records {
+        match code {
+            12 => {
+                layouts.push(EnumLayout {
+                    type_name: names[val as usize].clone(),
+                    variants: Vec::new(),
+                    min_payload: 0,
+                });
+                running = 0;
+            }
+            13 => {
+                layouts.last_mut().unwrap().variants.push(EnumVariantDisc {
+                    name: names[val as usize].clone(),
+                    disc: running,
+                });
+                running += 1;
+            }
+            14 => {
+                let vs = &mut layouts.last_mut().unwrap().variants;
+                vs.last_mut().unwrap().disc = val;
+                running = val + 1;
+            }
+            _ => {}
+        }
+    }
+    // The reference orders the enum-layout table by type name, not declaration order.
+    layouts.sort_by(|a, b| a.type_name.cmp(&b.type_name));
+    layouts
+}
+
+/// The flat shape of a stage boundary type: `Word` -> Int scalar (tag 3), `Byte` ->
+/// Byte scalar (tag 2), anything else the conservative `Top` the reference records for
+/// an unresolvable type.
+fn wire_shape_of(type_id: i64, names: &[String]) -> keleusma::bytecode::WireShape {
+    use keleusma::bytecode::WireShape;
+    match names.get(type_id as usize).map(String::as_str) {
+        Some("Word") => WireShape::Scalar { kind: 3 },
+        Some("Byte") => WireShape::Scalar { kind: 2 },
+        _ => WireShape::Top,
+    }
+}
+
+/// Assemble the per-chunk signature table from the parsed functions, grouping
+/// same-named heads into one chunk and ordering by chunk name to match the module.
+fn assemble_signatures(
+    fns: &[ParsedFn],
+    names: &[String],
+) -> Vec<keleusma::bytecode::ChunkSignature> {
+    use keleusma::bytecode::{ChunkSignature, WireShape};
+    let mut chunks: Vec<(String, ChunkSignature)> = Vec::new();
+    let mut i = 0;
+    while i < fns.len() {
+        let name = names[fns[i].name as usize].clone();
+        let first = &fns[i];
+        // Skip the rest of this head group.
+        let mut j = i + 1;
+        while j < fns.len() && names[fns[j].name as usize] == name {
+            j += 1;
+        }
+        i = j;
+        let params: Vec<WireShape> = first
+            .param_types
+            .iter()
+            .map(|&t| wire_shape_of(t, names))
+            .collect();
+        let ret = wire_shape_of(first.return_type, names);
+        // Only a `loop` (category 3, a Stream chunk) resumes with its first parameter.
+        let resume = if first.cat == 3 {
+            params.first().copied().unwrap_or(WireShape::Top)
+        } else {
+            WireShape::Top
+        };
+        chunks.push((
+            name,
+            ChunkSignature {
+                params,
+                ret,
+                resume,
+            },
+        ));
+    }
+    chunks.sort_by(|a, b| a.0.cmp(&b.0));
+    chunks.into_iter().map(|(_, s)| s).collect()
+}
+
+/// Set a module's declared WCET/WCMU header from the self-hosted analyze.kel stage: the
+/// per-iteration maximum across the module's Stream chunks, mirroring the reference
+/// compiler's fold (`compiler.rs` sets `wcet_cycles`/`wcmu_bytes` to that maximum).
+fn assemble_resource_bounds(module: &mut Module) {
+    let mut max_wcet = 0i64;
+    let mut max_wcmu = 0i64;
+    for c in &module.chunks {
+        if c.block_type != keleusma::bytecode::BlockType::Stream {
+            continue;
+        }
+        // The self-hosted analyze.kel driver already ported into this file: the shallow
+        // empty-resolver form matches `wcet_stream_iteration`/`wcmu_stream_iteration`.
+        let (wcet, stack, heap, reject, _valid) = run_analyze_kel(c, i64::MAX, &[], &[]);
+        assert!(!reject, "analyze.kel rejected a stage Stream chunk");
+        max_wcet = max_wcet.max(wcet);
+        max_wcmu = max_wcmu.max(stack + heap);
+    }
+    module.wcet_cycles = max_wcet as u32;
+    module.wcmu_bytes = max_wcmu as u32;
+}
+
+/// Self-host-compile a whole program with a from-scratch module scaffold: the
+/// self-hosted chunk ops (via [`self_host_compile`]) plus a data layout, schema hash,
+/// enum-layout table, chunk signatures, and declared WCET/WCMU header all assembled from
+/// the pipeline output (parse.kel's record stream and analyze.kel's verdict) rather than
+/// borrowed from the Rust reference. For the loop-free stage sources the serialized
+/// module is byte-identical to the reference; the reference is used only as the oracle in
+/// `tests/scaffold.rs`.
+pub fn self_host_compile_full(src: &str) -> Module {
+    let mut module = self_host_compile(src);
+    let (fns, names, data_records, enum_records) = parse_functions(src);
+    let dl = assemble_data_layout(&data_records, &names);
+    module.schema_hash = keleusma::bytecode::compute_schema_hash(Some(&dl));
+    module.data_layout = Some(dl);
+    module.enum_layouts = assemble_enum_layouts(&enum_records, &names);
+    module.signatures = assemble_signatures(&fns, &names);
+    assemble_resource_bounds(&mut module);
+    module
 }
