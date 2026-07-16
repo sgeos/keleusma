@@ -71,6 +71,21 @@ through the CLI; it orchestrates POSIX tools through `shell::run` and
 drives its exit code from their result. The earlier pure-POSIX
 implementation remains in the git history at `scripts/check-md-links.sh`. CI runs the same set plus per-feature variants, no_std targets, Miri on the arena crate, and the bare-metal STM32N6570-DK build through `examples/rtos`. The doc command uses the docs.rs feature set; the `encryption` feature carries the `crate::encryption` module that the wire-format documentation links to, so omitting it produces an unresolved-link failure.
 
+The commands above and the pre-push hook run only the **default** feature set of
+the root workspace. They do not exercise the configurations where feature-gated
+code diverges — `--no-default-features`, the `signatures` and broad
+`signatures,shell` sets — nor the detached `compiler/` self-hosting subproject,
+which is a separate workspace gated by neither the hook nor the root CI job. That
+gap is how a `--no-default-features` compile break or a subproject regression
+reaches CI unseen. Run [`scripts/verify.sh`](scripts/verify.sh) to close it: it
+mirrors CI's runnable feature matrix plus the subproject's build, tests, clippy,
+and fmt, and reports every failure in one pass. It deliberately does not use
+`--all-features` (unsuitable for this workspace, as the CI "broad features" job
+documents — it selects mutually-degenerate narrow-word widths), and it skips the
+toolchain- or target-specific jobs (Miri, MSRV, cross-builds, WASM) with a note
+when the required toolchain is absent. Run it before pushing changes that touch
+feature-gated code or the subproject.
+
 ## Automated pre-push hook
 
 These checks also run automatically before every `git push` through a [cargo-husky](https://github.com/rhysd/cargo-husky) pre-push hook. The hook is version-controlled at [`.cargo-husky/hooks/pre-push`](.cargo-husky/hooks/pre-push) and cargo-husky installs it into `.git/hooks/` the next time the dev-dependencies compile, for example on the first `cargo test --workspace` after cloning. No manual setup step is required. The hook runs the test step under `cargo nextest` (parallel) when it is installed and falls back to `cargo test --workspace` otherwise, so installing `cargo-nextest` makes the push gate substantially faster.
