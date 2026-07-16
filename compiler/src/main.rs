@@ -6,11 +6,12 @@
 //! command drives all four end to end through the shared `keleusma_selfhost::selfhost`
 //! library to emit bytecode and check the fixed-point property, with the host only
 //! moving data between stages; `lex` and `parse` run the first one and two stages.
-//! One gap remains before full self-hosting (both in `selfhost.rs` and
-//! `MILESTONES.md`): the emitted module borrows its data layout and auxiliary body
-//! from the reference rather than assembling them from the stages. See `README.md`
-//! and `MILESTONES.md`; the authoritative design is
-//! `docs/roadmap/V0_3_0_SELF_HOSTING.md`.
+//! The `compile` command now emits a from-scratch module scaffold: the data layout,
+//! enum-layout table, chunk signatures, schema hash, and declared WCET/WCMU header are
+//! assembled from the pipeline output (via `self_host_compile_full`), so for the
+//! loop-free stage sources the serialized module is byte-identical to the reference
+//! without borrowing any field from it. See `README.md` and `MILESTONES.md`; the
+//! authoritative design is `docs/roadmap/V0_3_0_SELF_HOSTING.md`.
 
 /// The bytecode format the self-hosted compiler must emit. Sourced from the parent
 /// runtime so the two compilers cannot drift on the wire format.
@@ -141,9 +142,11 @@ fn status() {
     println!("stage reconstruct.kel. The `compile <file>` command drives the whole four-stage");
     println!("pipeline end to end to bytecode, checking the fixed-point property");
     println!("(compiler/tests/fixed_point.rs), with the host only moving data between stages.");
-    println!("One gap remains before full self-hosting: the emitted module borrows its data");
-    println!("layout and auxiliary body from the reference rather than assembling them from");
-    println!("the stages. V0.3.0 ships when that closes and the bootstrap reaches the Phase");
+    println!("The `compile` command now assembles the module scaffold (data layout, enum");
+    println!("layouts, chunk signatures, schema hash, and the declared WCET/WCMU header) from");
+    println!("the pipeline output rather than borrowing it from the reference; for the loop-free");
+    println!("stage sources the serialized module is byte-identical to the reference");
+    println!("(compiler/tests/scaffold.rs). V0.3.0 ships when the bootstrap reaches the Phase");
     println!("B/C fixed point.");
 }
 
@@ -585,25 +588,26 @@ fn compile_stage(src: &str, name: &str, deep: bool) -> keleusma::bytecode::Modul
 /// Drives the four Keleusma stages (`kel/lexer.kel`, `kel/parse.kel`,
 /// `kel/reconstruct.kel`, `kel/codegen.kel`) through the shared
 /// `keleusma_selfhost::selfhost` library to emit each chunk's ops, splicing them into
-/// a module whose data layout and chunk table come from the Rust-hosted reference
-/// (the same interim scaffold the fixed-point test uses). It then verifies the module
-/// loads and reports whether its ops, constant pool, and local-frame sizes are
-/// byte-identical to the reference compiler's -- the fixed-point property for this
-/// source. When `out` is set, the assembled bytecode is written there. See
-/// `MILESTONES.md`.
+/// a module whose scaffold (data layout, enum-layout table, chunk signatures, schema
+/// hash, and declared WCET/WCMU header) is itself assembled from the pipeline output --
+/// parse.kel's record stream and analyze.kel's per-chunk verdict -- rather than borrowed
+/// from the reference (`self_host_compile_full`). It then verifies the module loads and
+/// reports whether its ops, constant pool, and local-frame sizes are byte-identical to
+/// the reference compiler's -- the fixed-point property for this source. When `out` is
+/// set, the assembled bytecode is written there. See `MILESTONES.md`.
 fn run_compile_pipeline(path: &str, out: Option<&str>) {
     use keleusma::Arena;
     use keleusma::bytecode::BlockType;
     use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, required_persistent_capacity_for};
     use keleusma_selfhost::selfhost::{
-        analyze_stream_chunk, compile_src, self_host_compile, validate_module_via_kel,
+        analyze_stream_chunk, compile_src, self_host_compile_full, validate_module_via_kel,
     };
 
     let src = std::fs::read_to_string(path).unwrap_or_else(|e| {
         eprintln!("cannot read {path}: {e}");
         std::process::exit(1);
     });
-    let module = self_host_compile(&src);
+    let module = self_host_compile_full(&src);
     let reference = compile_src(&src);
 
     // Report byte-identity chunk by chunk.
