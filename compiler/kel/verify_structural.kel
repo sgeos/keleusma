@@ -1,8 +1,17 @@
-// compiler/kel/verify_structural.kel -- the self-hosted structural verifier's block-nesting,
-// branch-target, and operand-bounds pass: `verify.rs`'s whole first structural pass except the
-// block-type constraints (second pass) and productive-divergence analysis (third pass). It is
-// the load-time structural check that precedes the WCET/WCMU resource analysis already
-// self-hosted in `analyze.kel`.
+// compiler/kel/verify_structural.kel -- the self-hosted structural verifier: `verify.rs`'s
+// first structural pass (block nesting, branch targets, operand bounds) and its second pass
+// (block-type constraints), leaving only the third pass (productive divergence). It is the
+// load-time structural check that precedes the WCET/WCMU resource analysis already self-hosted
+// in `analyze.kel`.
+//
+// The second pass (block-type constraints) checks each chunk's marker-op profile against its
+// declared block type: a Func block contains no Yield/Stream/Reset; a Reentrant block contains
+// an effective Yield (a direct Yield, or a Call delegating to an always-yielding chunk) and no
+// Stream/Reset; a Stream block contains exactly one Stream, exactly one Reset, and an effective
+// Yield. The marker counts and the block type are self-hosted here; the one inter-procedural
+// input -- whether the chunk Calls an always-yielding chunk (`calls_ay`) -- is resolved by the
+// host driver from the reference's always-yielding fixpoint, marshalled as a per-chunk flag,
+// until that fixpoint is itself self-hosted alongside the third pass (they share the analysis).
 //
 // The reference `verify()` walks each chunk maintaining a block stack and a parallel If stack,
 // rejecting a chunk whose structured control flow or operand indices are malformed. This stage
@@ -50,9 +59,11 @@
 // on first error; this stage folds to the same boolean verdict).
 require word >= 32;
 
-// The host-facing block: the per-chunk and per-module counts the operand-bounds checks
-// validate against, the marshalled op table (control-flow `class`/`arg` and operand-bounds
-// `opb`/`o1`/`o2`/`o3`, indexed by instruction pointer), and the verdict `out_reject`.
+// The host-facing block: the per-chunk and per-module counts the operand-bounds and block-type
+// checks validate against (`block_type` is 0 Func, 1 Reentrant, 2 Stream; `calls_ay` is 1 when
+// the chunk Calls an always-yielding chunk), the marshalled op table (control-flow `class`/
+// `arg`, operand-bounds `opb`/`o1`/`o2`/`o3`, and the block-type marker `mark` -- 1 Yield, 2
+// Stream, 3 Reset, 0 other -- indexed by instruction pointer), and the verdict `out_reject`.
 // `op_count` bounds the walk.
 shared data sv {
     op_count: Word,
@@ -62,12 +73,15 @@ shared data sv {
     data_len: Word,
     nchunks: Word,
     word_bits: Word,
+    block_type: Word,
+    calls_ay: Word,
     class: [Word; 1024],
     arg: [Word; 1024],
     opb: [Word; 1024],
     o1: [Word; 1024],
     o2: [Word; 1024],
     o3: [Word; 1024],
+    mark: [Word; 1024],
     out_reject: Word,
 }
 
@@ -84,6 +98,9 @@ private data sd {
     depth: Word,
     loop_depth: Word,
     le: Word,
+    yc: Word,
+    sc: Word,
+    rc: Word,
     bad: Word,
 }
 
@@ -318,10 +335,72 @@ fn step(ip: Word) -> Word {
     } } } } } }
 }
 
-// Walk the chunk's op range in order, then require the block stack to be empty (no unclosed
-// If/Loop) and publish the verdict. The walk runs to a static cap; a step past `op_count` is a
-// no-op. (An early `break` on `bad` would be cleaner but is not in the self-hosted codegen
-// subset, so this stage avoids it to stay self-compiling, exactly as `analyze.kel` does.)
+// Count the chunk's Yield (`yc`), Stream (`sc`), and Reset (`rc`) marker ops from the marshalled
+// `mark` table.
+fn count_markers() -> Word {
+    sd.yc = 0;
+    sd.sc = 0;
+    sd.rc = 0;
+    for ip in 0..1024 limit 1024 {
+        if sv.op_count > ip {
+            if sv.mark[ip] == 1 {
+                sd.yc = sd.yc + 1;
+            }
+            if sv.mark[ip] == 2 {
+                sd.sc = sd.sc + 1;
+            }
+            if sv.mark[ip] == 3 {
+                sd.rc = sd.rc + 1;
+            }
+        }
+    }
+    0
+}
+
+// The block-type constraints (reference Pass 2): the chunk's marker-op profile must match its
+// declared block type. `has_effective_yield` is a direct Yield or a delegated one (`calls_ay`).
+fn check_block_type() -> Word {
+    count_markers();
+    let eff = if sd.yc > 0 orelse sv.calls_ay == 1 { 1 } else { 0 };
+    if sv.block_type == 0 {
+        // Func: no Yield, Stream, or Reset.
+        if sd.yc > 0 {
+            sd.bad = 1;
+        }
+        if sd.sc > 0 {
+            sd.bad = 1;
+        }
+        if sd.rc > 0 {
+            sd.bad = 1;
+        }
+    } else {
+    if sv.block_type == 1 {
+        // Reentrant: an effective Yield, and no Stream or Reset.
+        if eff == 0 {
+            sd.bad = 1;
+        }
+        if sd.sc > 0 {
+            sd.bad = 1;
+        }
+        if sd.rc > 0 {
+            sd.bad = 1;
+        }
+    } else {
+        // Stream: exactly one Stream, exactly one Reset, and an effective Yield.
+        ne_bad(sd.sc, 1);
+        ne_bad(sd.rc, 1);
+        if eff == 0 {
+            sd.bad = 1;
+        }
+    } }
+    0
+}
+
+// Walk the chunk's op range in order (Pass 1: block nesting, targets, operand bounds), require
+// the block stack to be empty (no unclosed If/Loop), run the block-type constraints (Pass 2),
+// and publish the verdict. The walk runs to a static cap; a step past `op_count` is a no-op.
+// (An early `break` on `bad` would be cleaner but is not in the self-hosted codegen subset, so
+// this stage avoids it to stay self-compiling, exactly as `analyze.kel` does.)
 fn run() -> Word {
     sd.depth = 0;
     sd.loop_depth = 0;
@@ -335,6 +414,7 @@ fn run() -> Word {
     if sd.depth > 0 {
         sd.bad = 1;
     }
+    check_block_type();
     if sd.bad == 1 {
         sv.out_reject = 1;
     } else {

@@ -1,19 +1,23 @@
-//! Conformance gate for the self-hosted structural-verifier block-nesting-and-target pass
+//! Conformance gate for the self-hosted structural verifier
 //! (`compiler/kel/verify_structural.kel`, driven by `selfhost::structural_reject_*_via_kel`).
 //!
-//! The stage reproduces the whole of `verify.rs`'s first-pass block-nesting-and-target checks,
-//! decidable from the marshalled `(class, arg)` op table alone: the block-nesting and
-//! branch-target-bounds subset (slice 1) and the exact target-equality checks (slice 2,
-//! reference audits D2 and E1). Two oracles bound it:
+//! The stage reproduces `verify.rs`'s first structural pass -- block nesting and branch-target
+//! bounds (slice 1), the exact target-equality checks (slice 2, reference audits D2 and E1), and
+//! the operand-bounds family (slice 3) -- and its second pass, the block-type marker constraints
+//! (slice 4). Only the third pass (productive divergence) is not yet self-hosted. Two oracles
+//! bound it:
 //!
-//!   * POSITIVE: every self-hosted stage source plus a minimal ephemeral program compiles to a
-//!     module the reference `verify()` accepts; the stage must therefore reject none of their
-//!     chunks (a spurious reject would fail here). Two well-formed nested-control fragments
-//!     guard the slice-2 target-equality checks against a false positive at the chunk level.
+//!   * POSITIVE: every self-hosted stage source plus a minimal ephemeral program, and small
+//!     valid whole programs for each block type (including a Stream that delegates its yield to
+//!     an always-yielding callee), compile to modules the reference `verify()` accepts; the
+//!     stage must therefore reject none of them (a spurious reject fails here). Well-formed
+//!     nested-control fragments additionally guard the target-equality checks at the chunk level.
 //!   * NEGATIVE: hand-built op sequences that violate exactly one invariant must be rejected by
 //!     the stage, and the reference `verify()` must reject the same mutated module (a missed
-//!     reject, or a rejection that does not track a real reference rejection, fails here). This
-//!     mirrors the typed-verifier conformance corpus, which mutates real bytecode.
+//!     reject, or a rejection that does not track a real reference rejection, fails here). Each
+//!     negative is built over a base whose block type keeps the other passes satisfied, so it
+//!     isolates its intended check. This mirrors the typed-verifier conformance corpus, which
+//!     mutates real bytecode.
 
 use keleusma::bytecode::{Module, NewCompositeOperand, Op};
 use keleusma::value_layout::CompositeKind;
@@ -31,13 +35,28 @@ fn read_stage(rel: &str) -> String {
         .unwrap_or_else(|e| panic!("cannot read {rel}: {e}"))
 }
 
-/// A base module with a single well-nested, data-free chunk, mutated to build the negatives.
+/// A base module whose entry is a `Func` (`fn main`): a Func block imposes no marker-op
+/// requirements, so a hand-built chunk mutated over this base exercises only the block-nesting,
+/// target, and operand-bounds checks -- the block-type pass accepts it trivially, keeping each
+/// nesting/operand negative isolated to its intended check now that Pass 2 also runs.
 fn base_module() -> Module {
+    compile_src("fn main(r: Word) -> Word { r }")
+}
+
+/// A base whose entry is a `Stream` (`loop main`), for the Stream block-type negatives.
+fn stream_base() -> Module {
     compile_src("loop main(r: Word) -> Word { yield r }")
 }
 
-/// A base module that declares a shared data layout (one `Word` slot), so `data_len > 0` and
-/// the `GetData` slot-out-of-range branch (not just the no-layout branch) can be exercised.
+/// A base whose entry is a `Reentrant` (`yield main`), for the Reentrant block-type negatives.
+fn reentrant_base() -> Module {
+    compile_src("yield main(r: Word) -> Word { yield r }")
+}
+
+/// A Stream base that declares a shared data layout (one `Word` slot), so `data_len > 0` and
+/// the `GetData` slot-out-of-range branch (not just the no-layout branch) can be exercised. The
+/// data negatives wrap the bad access in a valid Stream marker profile so only the operand
+/// check rejects.
 fn data_base() -> Module {
     compile_src(
         "require word >= 32;\n\
@@ -253,8 +272,13 @@ fn data_slot_without_layout_is_rejected() {
 #[test]
 fn data_slot_out_of_range_is_rejected() {
     // GetData slot 65535 in a module whose data layout has only one slot (the slot-range branch,
-    // distinct from the no-layout branch above).
-    assert_rejected_in("getdata-slot-oob", data_base(), vec![Op::GetData(65535)]);
+    // distinct from the no-layout branch above). The Stream marker profile keeps the block-type
+    // pass satisfied so only the operand check rejects.
+    assert_rejected_in(
+        "getdata-slot-oob",
+        data_base(),
+        vec![Op::Stream, Op::GetData(65535), Op::Yield, Op::Reset],
+    );
 }
 
 #[test]
@@ -263,7 +287,12 @@ fn data_range_out_of_range_is_rejected() {
     assert_rejected_in(
         "getdataindexed-oob",
         data_base(),
-        vec![Op::GetDataIndexed(0, 65535)],
+        vec![
+            Op::Stream,
+            Op::GetDataIndexed(0, 65535),
+            Op::Yield,
+            Op::Reset,
+        ],
     );
 }
 
@@ -307,5 +336,118 @@ fn boxed_template_index_out_of_range_is_rejected() {
             count: 0,
             meta: 65535,
         })],
+    );
+}
+
+// ---- NEGATIVE (block type, Pass 2): each marker-profile constraint violated ------------------
+//
+// Each chunk is well-nested and operand-clean (Pass 1 accepts it) but violates one block-type
+// marker constraint. The base's block type (Func / Stream / Reentrant) selects the constraint;
+// the ops carry (or omit) the marker profile that base requires.
+
+#[test]
+fn func_with_yield_is_rejected() {
+    // A Func block must contain no Yield.
+    assert_rejected_in("func-yield", base_module(), vec![Op::Yield]);
+}
+
+#[test]
+fn func_with_stream_is_rejected() {
+    // A Func block must contain no Stream.
+    assert_rejected_in("func-stream", base_module(), vec![Op::Stream]);
+}
+
+#[test]
+fn stream_with_no_stream_marker_is_rejected() {
+    // A Stream block must contain exactly one Stream; this has none.
+    assert_rejected_in("stream-zero-stream", stream_base(), vec![Op::Yield]);
+}
+
+#[test]
+fn stream_with_two_stream_markers_is_rejected() {
+    // A Stream block must contain exactly one Stream; this has two.
+    assert_rejected_in(
+        "stream-two-stream",
+        stream_base(),
+        vec![Op::Stream, Op::Stream, Op::Reset, Op::Yield],
+    );
+}
+
+#[test]
+fn stream_with_no_reset_is_rejected() {
+    // A Stream block must contain exactly one Reset; this has none.
+    assert_rejected_in(
+        "stream-no-reset",
+        stream_base(),
+        vec![Op::Stream, Op::Yield],
+    );
+}
+
+#[test]
+fn stream_with_no_yield_is_rejected() {
+    // A Stream block must contain an effective Yield; this has one Stream and one Reset but no
+    // Yield and no delegating Call.
+    assert_rejected_in(
+        "stream-no-yield",
+        stream_base(),
+        vec![Op::Stream, Op::Reset],
+    );
+}
+
+#[test]
+fn reentrant_with_no_yield_is_rejected() {
+    // A Reentrant block must contain an effective Yield; this has none.
+    assert_rejected_in("reentrant-no-yield", reentrant_base(), vec![Op::Add]);
+}
+
+#[test]
+fn reentrant_with_stream_is_rejected() {
+    // A Reentrant block must contain no Stream, even with a Yield present.
+    assert_rejected_in(
+        "reentrant-stream",
+        reentrant_base(),
+        vec![Op::Yield, Op::Stream],
+    );
+}
+
+// ---- POSITIVE (block type, Pass 2): valid whole programs the reference accepts ---------------
+
+/// A whole program the reference `verify()` accepts, which the stage must therefore not reject.
+fn assert_module_accepted(label: &str, src: &str) {
+    let m = compile_src(src);
+    assert!(
+        verify(&m).is_ok(),
+        "{label}: the reference verifier must accept this program for the positive oracle to bind"
+    );
+    assert!(
+        !structural_reject_module_via_kel(&m),
+        "{label}: the structural stage must not reject a reference-accepted program"
+    );
+}
+
+#[test]
+fn valid_func_program_is_accepted() {
+    assert_module_accepted("func", "fn main(r: Word) -> Word { r }");
+}
+
+#[test]
+fn valid_reentrant_program_is_accepted() {
+    assert_module_accepted("reentrant", "yield main(r: Word) -> Word { yield r }");
+}
+
+#[test]
+fn valid_stream_program_is_accepted() {
+    assert_module_accepted("stream", "loop main(r: Word) -> Word { yield r }");
+}
+
+#[test]
+fn stream_delegating_yield_to_always_yielder_is_accepted() {
+    // A Stream main with no direct Yield that delegates productivity to an always-yielding
+    // callee. This exercises the `calls_ay` (delegated-yield) path of has_effective_yield: the
+    // stage must accept it, as the reference does.
+    assert_module_accepted(
+        "delegation",
+        "yield tick(x: Word) -> Word { yield x }\n\
+         loop main(r: Word) -> Word { tick(r) }",
     );
 }

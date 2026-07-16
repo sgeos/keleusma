@@ -968,15 +968,19 @@ pub fn analyze_stream_chunk(chunk: &keleusma::bytecode::Chunk) -> (i64, i64, i64
 
 // --- Self-hosted structural verifier (verify_structural.kel) ---------------------------------
 //
-// The block-nesting, branch-target, and operand-bounds portion of the self-hosted structural
-// verifier: `verify.rs`'s whole first structural pass except the block-type constraints (second
-// pass) and productive-divergence analysis (third pass). It runs over a marshalled op table:
-// the control-flow `(class, arg)` table `analyze.kel` also receives (with the EndLoop/Break/
-// BreakIf targets populated by `analyze_class`), plus a parallel operand-bounds table
-// `(opb, o1, o2, o3)` from `structural_opbounds`, and the per-chunk/per-module counts the
-// operand-bounds checks validate against. The shared block `sv` lays out the scalars `op_count`
-// (0), `local_count` (1), `const_count` (2), `template_count` (3), `data_len` (4), `nchunks`
-// (5), `word_bits` (6); the arrays `class` (7..), `arg`, `opb`, `o1`, `o2`, `o3` (each 1024
+// The block-nesting, branch-target, operand-bounds, and block-type portion of the self-hosted
+// structural verifier: `verify.rs`'s first structural pass and its second pass (block-type
+// constraints), leaving only the third pass (productive-divergence analysis). It runs over a
+// marshalled op table: the control-flow `(class, arg)` table `analyze.kel` also receives (with
+// the EndLoop/Break/BreakIf targets populated by `analyze_class`), a parallel operand-bounds
+// table `(opb, o1, o2, o3)` from `structural_opbounds`, a block-type marker table `mark` from
+// `structural_marker`, and the per-chunk/per-module counts the checks validate against. The
+// block-type pass's one inter-procedural input -- whether the chunk Calls an always-yielding
+// chunk (`calls_ay`) -- is resolved here from the reference `compute_always_yielding` fixpoint
+// (marshalled per chunk), pending that fixpoint's own self-hosting alongside the third pass. The
+// shared block `sv` lays out the scalars `op_count` (0), `local_count` (1), `const_count` (2),
+// `template_count` (3), `data_len` (4), `nchunks` (5), `word_bits` (6), `block_type` (7),
+// `calls_ay` (8); the arrays `class` (9..), `arg`, `opb`, `o1`, `o2`, `o3`, `mark` (each 1024
 // wide); and the verdict `out_reject`.
 
 const SV_OP_COUNT: usize = 0;
@@ -986,13 +990,16 @@ const SV_TEMPLATE_COUNT: usize = 3;
 const SV_DATA_LEN: usize = 4;
 const SV_NCHUNKS: usize = 5;
 const SV_WORD_BITS: usize = 6;
-const SV_CLASS: usize = 7;
-const SV_ARG: usize = 7 + 1024;
-const SV_OPB: usize = 7 + 1024 * 2;
-const SV_O1: usize = 7 + 1024 * 3;
-const SV_O2: usize = 7 + 1024 * 4;
-const SV_O3: usize = 7 + 1024 * 5;
-const SV_OUT_REJECT: usize = 7 + 1024 * 6;
+const SV_BLOCK_TYPE: usize = 7;
+const SV_CALLS_AY: usize = 8;
+const SV_CLASS: usize = 9;
+const SV_ARG: usize = 9 + 1024;
+const SV_OPB: usize = 9 + 1024 * 2;
+const SV_O1: usize = 9 + 1024 * 3;
+const SV_O2: usize = 9 + 1024 * 4;
+const SV_O3: usize = 9 + 1024 * 5;
+const SV_MARK: usize = 9 + 1024 * 6;
+const SV_OUT_REJECT: usize = 9 + 1024 * 7;
 
 fn verify_structural_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
@@ -1047,12 +1054,41 @@ fn structural_opbounds(op: &keleusma::bytecode::Op, module: &Module) -> (i64, i6
     }
 }
 
+/// Tag an op as a block-type marker for the second reference pass: 1 Yield, 2 Stream, 3 Reset,
+/// 0 other. The stage counts these to enforce each block type's marker profile.
+fn structural_marker(op: &keleusma::bytecode::Op) -> i64 {
+    use keleusma::bytecode::Op;
+    match op {
+        Op::Yield => 1,
+        Op::Stream => 2,
+        Op::Reset => 3,
+        _ => 0,
+    }
+}
+
+/// The block type as the stage's tag: 0 Func, 1 Reentrant, 2 Stream.
+fn block_type_tag(chunk: &keleusma::bytecode::Chunk) -> i64 {
+    use keleusma::bytecode::BlockType;
+    match chunk.block_type {
+        BlockType::Func => 0,
+        BlockType::Reentrant => 1,
+        BlockType::Stream => 2,
+    }
+}
+
 /// Run verify_structural.kel over one chunk of `module`, returning whether it rejects the
-/// chunk's block nesting, branch targets, or operand-index bounds. Marshals the control-flow
-/// `(class, arg)` table via `analyze_class`, the operand-bounds `(opb, o1, o2, o3)` table via
-/// `structural_opbounds`, and the per-chunk/per-module counts. No op is executed: a deliberately
-/// malformed chunk is classified but never run.
-pub fn structural_reject_chunk_via_kel(module: &Module, chunk: &keleusma::bytecode::Chunk) -> bool {
+/// chunk's block nesting, branch targets, operand-index bounds, or block-type marker profile.
+/// Marshals the control-flow `(class, arg)` table via `analyze_class`, the operand-bounds
+/// `(opb, o1, o2, o3)` table via `structural_opbounds`, the block-type markers via
+/// `structural_marker`, and the per-chunk/per-module counts. `always` is the module's
+/// always-yielding chunk set (from `compute_always_yielding`), used to resolve the chunk's
+/// delegated-yield flag. No op is executed: a deliberately malformed chunk is classified but
+/// never run.
+pub fn structural_reject_chunk_via_kel(
+    module: &Module,
+    chunk: &keleusma::bytecode::Chunk,
+    always: &std::collections::BTreeSet<usize>,
+) -> bool {
     assert!(
         chunk.ops.len() <= 1024,
         "verify_structural.kel op-table capacity"
@@ -1093,6 +1129,13 @@ pub fn structural_reject_chunk_via_kel(module: &Module, chunk: &keleusma::byteco
         SV_WORD_BITS,
         1i64 << module.word_bits_log2,
     );
+    set(&vm, &mut shared, SV_BLOCK_TYPE, block_type_tag(chunk));
+    // Whether the chunk delegates its yield to an always-yielding callee (the reference's
+    // `calls_always_yielder`). Resolved from the marshalled always-yielding set.
+    let calls_ay = chunk.ops.iter().any(
+        |op| matches!(op, keleusma::bytecode::Op::Call(g, _) if always.contains(&(*g as usize))),
+    );
+    set(&vm, &mut shared, SV_CALLS_AY, i64::from(calls_ay));
     for (i, op) in chunk.ops.iter().enumerate() {
         let (class, arg) = analyze_class(op);
         set(&vm, &mut shared, SV_CLASS + i, class);
@@ -1102,6 +1145,7 @@ pub fn structural_reject_chunk_via_kel(module: &Module, chunk: &keleusma::byteco
         set(&vm, &mut shared, SV_O1 + i, o1);
         set(&vm, &mut shared, SV_O2 + i, o2);
         set(&vm, &mut shared, SV_O3 + i, o3);
+        set(&vm, &mut shared, SV_MARK + i, structural_marker(op));
     }
     match vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
@@ -1117,12 +1161,15 @@ pub fn structural_reject_chunk_via_kel(module: &Module, chunk: &keleusma::byteco
 }
 
 /// Run verify_structural.kel over every chunk of a module; the module is structurally rejected
-/// iff any chunk is, mirroring how `verify()` rejects a module on its first malformed chunk.
+/// iff any chunk is, mirroring how `verify()` rejects a module on its first malformed chunk. The
+/// always-yielding set (the block-type pass's inter-procedural input) is computed once here from
+/// the reference fixpoint and shared across chunks.
 pub fn structural_reject_module_via_kel(module: &Module) -> bool {
+    let always = keleusma::verify::compute_always_yielding(module);
     module
         .chunks
         .iter()
-        .any(|chunk| structural_reject_chunk_via_kel(module, chunk))
+        .any(|chunk| structural_reject_chunk_via_kel(module, chunk, &always))
 }
 
 /// The self-hosted drop-in replacement for `verify_resource_bounds`: analyze.kel decides each
