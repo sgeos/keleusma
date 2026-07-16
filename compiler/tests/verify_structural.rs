@@ -21,8 +21,10 @@
 
 use keleusma::bytecode::{Module, NewCompositeOperand, Op};
 use keleusma::value_layout::CompositeKind;
-use keleusma::verify::verify;
-use keleusma_selfhost::selfhost::{compile_src, structural_reject_module_via_kel};
+use keleusma::verify::{compute_always_yielding, verify};
+use keleusma_selfhost::selfhost::{
+    compile_src, self_hosted_always_yielding, structural_reject_module_via_kel,
+};
 
 /// The private-data-free ephemeral program the scaffold tests also use; a well-nested loop.
 const EPHEMERAL_SRC: &str = "require word >= 32;\n\
@@ -449,5 +451,65 @@ fn stream_delegating_yield_to_always_yielder_is_accepted() {
         "delegation",
         "yield tick(x: Word) -> Word { yield x }\n\
          loop main(r: Word) -> Word { tick(r) }",
+    );
+}
+
+// ---- Pass 3: the self-hosted yield-coverage kernel and productive divergence -----------------
+//
+// The self-hosted always-yielding fixpoint (verify_yield.kel, orchestrated by the driver) must
+// agree set-for-set with the reference `compute_always_yielding`, and the productivity check
+// must agree with `verify()`.
+
+/// The self-hosted always-yielding set must equal the reference's, for a program whose control
+/// flow (yields, branches, delegation) exercises the kernel.
+fn assert_always_matches(label: &str, src: &str) {
+    let m = compile_src(src);
+    let expect = compute_always_yielding(&m);
+    let got = self_hosted_always_yielding(&m);
+    assert_eq!(got, expect, "{label}: self-hosted always-yielding set");
+}
+
+#[test]
+fn always_yielding_matches_reference_on_stage_sources() {
+    for stage in [
+        "kel/lexer.kel",
+        "kel/parse.kel",
+        "kel/reconstruct.kel",
+        "kel/codegen.kel",
+        "kel/analyze.kel",
+    ] {
+        assert_always_matches(stage, &read_stage(stage));
+    }
+}
+
+#[test]
+fn always_yielding_matches_reference_on_control_flow_shapes() {
+    // A direct-yield loop, a Func (never yields), a delegating loop, and a chain of delegation.
+    assert_always_matches("direct", "loop main(r: Word) -> Word { yield r }");
+    assert_always_matches("func-only", "fn main(r: Word) -> Word { r }");
+    assert_always_matches(
+        "delegation",
+        "yield tick(x: Word) -> Word { yield x }\n\
+         loop main(r: Word) -> Word { tick(r) }",
+    );
+    // A conditional yield: `tick` yields on only one branch, so it is not always-yielding, and a
+    // loop delegating to it is not productive by delegation alone.
+    assert_always_matches(
+        "conditional",
+        "yield tick(x: Word) -> Word { if x > 0 { yield x } else { x } }\n\
+         yield always(x: Word) -> Word { yield x }\n\
+         loop main(r: Word) -> Word { yield r }",
+    );
+}
+
+#[test]
+fn unproductive_stream_is_rejected() {
+    // A Stream body whose `If` yields on its then-branch only: the false path reaches Reset
+    // without yielding, so no yield is guaranteed on every path. Pass 1/2 accept it (one Stream,
+    // one Reset, a Yield present, well-nested); only the productivity pass rejects.
+    assert_rejected_in(
+        "unproductive-stream",
+        stream_base(),
+        vec![Op::Stream, Op::If(3), Op::Yield, Op::EndIf, Op::Reset],
     );
 }
