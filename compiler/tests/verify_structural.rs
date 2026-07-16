@@ -1,17 +1,19 @@
-//! Conformance gate for the first self-hosted structural-verifier slice
+//! Conformance gate for the self-hosted structural-verifier block-nesting-and-target pass
 //! (`compiler/kel/verify_structural.kel`, driven by `selfhost::structural_reject_*_via_kel`).
 //!
-//! The stage reproduces the block-nesting and branch-target-bounds subset of `verify.rs`'s
-//! first structural pass, decidable from the marshalled `(class, arg)` op table alone. Two
-//! oracles bound it:
+//! The stage reproduces the whole of `verify.rs`'s first-pass block-nesting-and-target checks,
+//! decidable from the marshalled `(class, arg)` op table alone: the block-nesting and
+//! branch-target-bounds subset (slice 1) and the exact target-equality checks (slice 2,
+//! reference audits D2 and E1). Two oracles bound it:
 //!
 //!   * POSITIVE: every self-hosted stage source plus a minimal ephemeral program compiles to a
 //!     module the reference `verify()` accepts; the stage must therefore reject none of their
-//!     chunks (a spurious reject would fail here).
-//!   * NEGATIVE: hand-built op sequences that violate exactly one slice-1 invariant must be
-//!     rejected by the stage, and the reference `verify()` must reject the same mutated module
-//!     (a missed reject, or a rejection that does not track a real reference rejection, fails
-//!     here). This mirrors the typed-verifier conformance corpus, which mutates real bytecode.
+//!     chunks (a spurious reject would fail here). Two well-formed nested-control fragments
+//!     guard the slice-2 target-equality checks against a false positive at the chunk level.
+//!   * NEGATIVE: hand-built op sequences that violate exactly one invariant must be rejected by
+//!     the stage, and the reference `verify()` must reject the same mutated module (a missed
+//!     reject, or a rejection that does not track a real reference rejection, fails here). This
+//!     mirrors the typed-verifier conformance corpus, which mutates real bytecode.
 
 use keleusma::bytecode::{Module, Op};
 use keleusma::verify::verify;
@@ -138,4 +140,82 @@ fn else_without_matching_if_is_rejected() {
 fn endloop_without_loop_is_rejected() {
     // An EndLoop with no open Loop on the block stack.
     assert_rejected("endloop-without-loop", vec![Op::EndLoop(0), Op::Add]);
+}
+
+// ---- NEGATIVE (slice 2): the exact target-equality checks -----------------------------------
+//
+// Each of these is well-nested and in-bounds -- the slice-1 checks accept it -- but violates
+// one target-equality invariant. It therefore exercises the checks slice 2 adds over slice 1.
+
+#[test]
+fn no_else_if_target_not_endif_is_rejected() {
+    // A no-Else If must target its EndIf (at 1); this one targets 0.
+    assert_rejected("no-else-if-target", vec![Op::If(0), Op::EndIf]);
+}
+
+#[test]
+fn if_with_else_target_not_else_body_is_rejected() {
+    // An If with an Else must target the else-body start (else_ip + 1 = 2); this targets 0.
+    assert_rejected("if-else-target", vec![Op::If(0), Op::Else(2), Op::EndIf]);
+}
+
+#[test]
+fn else_target_not_endif_is_rejected() {
+    // The Else's own target (4) is in bounds but is an Add, not the EndIf at 3.
+    assert_rejected(
+        "else-target-not-endif",
+        vec![Op::If(2), Op::Else(4), Op::Add, Op::EndIf, Op::Add],
+    );
+}
+
+#[test]
+fn endloop_back_edge_wrong_is_rejected() {
+    // The EndLoop back-edge (0) must be loop_ip + 1 = 1.
+    assert_rejected("endloop-back-edge", vec![Op::Loop(2), Op::EndLoop(0)]);
+}
+
+#[test]
+fn loop_exit_not_after_endloop_is_rejected() {
+    // The Loop exit (1) must be endloop_ip + 1 = 2 (audit E1). Back-edge (1) is correct.
+    assert_rejected("loop-exit", vec![Op::Loop(1), Op::EndLoop(1)]);
+}
+
+#[test]
+fn break_target_not_loop_exit_is_rejected() {
+    // The Break target (0) must equal the enclosing loop's exit (3).
+    assert_rejected(
+        "break-target",
+        vec![Op::Loop(3), Op::Break(0), Op::EndLoop(1)],
+    );
+}
+
+// ---- POSITIVE (slice 2): well-formed nested control at the chunk level ----------------------
+//
+// Well-nested fragments that satisfy every target-equality invariant must not be rejected,
+// guarding against a slice-2 false positive on structurally valid control flow. These are
+// checked at the chunk level (they are not whole programs the reference `verify()` accepts).
+
+fn assert_chunk_well_formed(label: &str, ops: Vec<Op>) {
+    let mut chunk = base_module().chunks[0].clone();
+    chunk.ops = ops;
+    assert!(
+        !structural_reject_chunk_via_kel(&chunk),
+        "{label}: the structural stage must accept this well-formed chunk"
+    );
+}
+
+#[test]
+fn well_formed_if_else_is_accepted() {
+    // If(2) targets the else body at 2; Else(3) targets the EndIf at 3.
+    assert_chunk_well_formed("if-else", vec![Op::If(2), Op::Else(3), Op::Add, Op::EndIf]);
+}
+
+#[test]
+fn well_formed_loop_with_breakif_is_accepted() {
+    // Loop(3) exits after the EndLoop at 2; BreakIf(3) targets that exit; EndLoop(1) back-edges
+    // to the loop body at 1.
+    assert_chunk_well_formed(
+        "loop-breakif",
+        vec![Op::Loop(3), Op::BreakIf(3), Op::EndLoop(1)],
+    );
 }

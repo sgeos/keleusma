@@ -769,9 +769,13 @@ fn analyze_kel_module() -> Module {
         .clone()
 }
 
-/// Classify an op for analyze.kel as `(class, arg)`. The class tags the control-flow role
-/// (0 plain, 1 If, 2 Else, 3 EndIf, 4 Loop, 5 EndLoop, 6 Break, 7 BreakIf, 8 Trap, 9 Call);
-/// `arg` carries the branch target for If and Loop, and the matching EndIf position for Else.
+/// Classify an op for analyze.kel and verify_structural.kel as `(class, arg)`. The class tags
+/// the control-flow role (0 plain, 1 If, 2 Else, 3 EndIf, 4 Loop, 5 EndLoop, 6 Break, 7 BreakIf,
+/// 8 Trap, 9 Call); `arg` carries each control-transfer op's target: the branch/exit target for
+/// If and Loop, the matching EndIf position for Else, the back-edge for EndLoop, and the loop
+/// exit a Break/BreakIf jumps to. (analyze.kel reads `arg` only for If and Loop; the EndLoop,
+/// Break, and BreakIf targets are ignored there and consumed only by verify_structural.kel's
+/// target-equality checks, so populating them does not affect the resource analysis.)
 fn analyze_class(op: &keleusma::bytecode::Op) -> (i64, i64) {
     use keleusma::bytecode::Op;
     match op {
@@ -779,9 +783,9 @@ fn analyze_class(op: &keleusma::bytecode::Op) -> (i64, i64) {
         Op::Else(e) => (2, *e as i64),
         Op::EndIf => (3, 0),
         Op::Loop(x) => (4, *x as i64),
-        Op::EndLoop(_) => (5, 0),
-        Op::Break(_) => (6, 0),
-        Op::BreakIf(_) => (7, 0),
+        Op::EndLoop(t) => (5, *t as i64),
+        Op::Break(t) => (6, *t as i64),
+        Op::BreakIf(t) => (7, *t as i64),
         Op::Trap(_) => (8, 0),
         Op::Call(_, _) => (9, 0),
         _ => (0, 0),
@@ -964,14 +968,15 @@ pub fn analyze_stream_chunk(chunk: &keleusma::bytecode::Chunk) -> (i64, i64, i64
 
 // --- Self-hosted structural verifier (verify_structural.kel) ---------------------------------
 //
-// The first slice of the self-hosted structural pass: the block-nesting and branch-target-
-// bounds subset of `verify.rs`'s first structural walk, decidable from the marshalled
-// `(class, arg)` op table alone (the same table `analyze.kel` receives). The shared block `sv`
-// lays out `op_count` (slot 0), `class[1024]` (slots 1..), `arg[1024]` (slots 1025..), and the
-// verdict `out_reject` (slot 2049). The exact target-equality checks are deferred to a follow-
-// up slice that must first extend `analyze_class` to carry the `Break`/`BreakIf`/`EndLoop`
-// targets it currently drops; until then this stage is a sound necessary condition (every
-// chunk it rejects the reference also rejects), not yet the full first pass.
+// The block-nesting and branch-target pass of the self-hosted structural verifier: the
+// block-nesting, branch-target-bounds, and exact target-equality subset of `verify.rs`'s first
+// structural walk, decidable from the marshalled `(class, arg)` op table alone (the same table
+// `analyze.kel` receives, with the EndLoop/Break/BreakIf targets now populated by
+// `analyze_class`). The shared block `sv` lays out `op_count` (slot 0), `class[1024]` (slots
+// 1..), `arg[1024]` (slots 1025..), and the verdict `out_reject` (slot 2049). Still outside
+// this stage (later slices): the operand-bounds family in the same reference pass (local slot,
+// data slot, constant pool, call target and arity, fraction bits, template index), the
+// block-type constraints (second pass), and the productive-divergence analysis (third pass).
 
 const SV_OP_COUNT: usize = 0;
 const SV_CLASS: usize = 1;
