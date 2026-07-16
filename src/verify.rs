@@ -171,7 +171,13 @@ fn analyze_yield_coverage(
 /// forbids recursion, so the call graph is acyclic in practice. The category-call
 /// discipline guarantees that a `fn` never yields, directly or transitively, so
 /// no `Func` chunk is ever classified as always-yielding.
-fn compute_always_yielding(module: &Module) -> BTreeSet<usize> {
+///
+/// Exposed (hidden from the rendered docs) for the self-hosted verifier's driver in the
+/// detached `compiler/` subproject, which needs this inter-procedural set to resolve the
+/// block-type pass's delegated-yield term until the always-yielding fixpoint is itself
+/// self-hosted alongside the productive-divergence pass. Not part of the stable public API.
+#[doc(hidden)]
+pub fn compute_always_yielding(module: &Module) -> BTreeSet<usize> {
     let mut always: BTreeSet<usize> = BTreeSet::new();
     loop {
         let mut changed = false;
