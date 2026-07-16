@@ -1299,6 +1299,194 @@ pub fn structural_reject_module_via_kel(module: &Module) -> bool {
     })
 }
 
+// --- Self-hosted A.2.1 typed operand-stack verifier, slice 1 (verify_typed.kel) --------------
+//
+// verify_typed.kel reconstructs the flat shape of each operand-stack entry by abstract
+// interpretation and validates every compiler-baked flat field/array offset against the
+// composite's known size (audit B1/B2), for the STRAIGHT-LINE prefix of a chunk checked in
+// isolation. It is sound but incomplete: it defers (accepts) at the first control-flow op or
+// native call, since the operand-stack joins and the per-loop local-shape fixpoint are later
+// slices. The shared block `tv` lays out `op_count` (0); the per-op typed-descriptor arrays
+// `tkind` (1..), `treq`, `tprod`, `ta`, `tb`, `defer` (each 1024 wide); and the verdict
+// `out_reject`. Not yet wired into `structural_reject_module_via_kel` (the isolated, partial
+// check is exercised only by its conformance test until the interpreter is complete).
+
+const TV_OP_COUNT: usize = 0;
+const TV_TKIND: usize = 1;
+const TV_TREQ: usize = 1 + 1024;
+const TV_TPROD: usize = 1 + 1024 * 2;
+const TV_TA: usize = 1 + 1024 * 3;
+const TV_TB: usize = 1 + 1024 * 4;
+const TV_DEFER: usize = 1 + 1024 * 5;
+const TV_OUT_REJECT: usize = 1 + 1024 * 6;
+
+fn verify_typed_kel_module() -> Module {
+    static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| compile_src(&read_stage("kel/verify_typed.kel")))
+        .clone()
+}
+
+/// The byte size of a scalar-shaped constant (`const_abs` restricted to its scalar arms), or
+/// `None` for a composite/unknown constant (which the reference leaves `Top`).
+fn const_scalar_size(
+    cv: Option<&keleusma::bytecode::ConstValue>,
+    wb: usize,
+    fb: usize,
+) -> Option<i64> {
+    use keleusma::bytecode::ConstValue;
+    use keleusma::value_layout::ScalarKind;
+    let sz = |k: ScalarKind| k.size_in_bytes(wb, fb) as i64;
+    match cv {
+        Some(ConstValue::Unit) => Some(sz(ScalarKind::Unit)),
+        Some(ConstValue::Bool(_)) => Some(sz(ScalarKind::Bool)),
+        Some(ConstValue::Int(_)) => Some(sz(ScalarKind::Int)),
+        Some(ConstValue::Byte(_)) => Some(sz(ScalarKind::Byte)),
+        Some(ConstValue::Fixed(_)) => Some(sz(ScalarKind::Fixed)),
+        Some(ConstValue::StaticStr(_)) => Some(sz(ScalarKind::Text)),
+        // A `Float` constant (present only under the parent crate's `floats` feature, which the
+        // subproject cannot gate on) falls through to `None` -> Top: a sound defer, since a
+        // float const is never a composite operand a flat access would need sized.
+        _ => None,
+    }
+}
+
+/// The typed-descriptor `(tkind, treq, tprod, ta, tb, defer)` verify_typed.kel applies for `op`,
+/// mirroring the reference `apply_op` for the straight-line subset (see verify_typed.kel for the
+/// `tkind` meanings). Control-flow ops and native calls are marked `defer` (the slice stops
+/// there); every other op is either special-cased (Dup, IsEnum/IsStruct, GetLocal/SetLocal, a
+/// scalar Const, NewComposite-flat, the flat field/array accesses) or generic (pop
+/// `stack_shrink`, push `stack_growth` unknowns).
+fn typed_desc(
+    op: &keleusma::bytecode::Op,
+    chunk: &keleusma::bytecode::Chunk,
+    wb: usize,
+    fb: usize,
+) -> (i64, i64, i64, i64, i64, i64) {
+    use keleusma::bytecode::{
+        ArrayElem, EnumField, NewCompositeOperand, Op, StructField, TupleField,
+    };
+    // The typed pass's actual operand consumption (req) and net delta -- NOT the WCMU
+    // stack_growth/shrink, which model net memory and mis-state ops like Yield. The generic arm
+    // pops `req` and pushes `net + req` unknowns; the special arms carry their own `req`.
+    let (req, net) = keleusma::verify::op_depth_effect(op, chunk);
+    let req = req.max(0) as i64;
+    let generic = (0, req, (net + req.max(0) as i32).max(0) as i64, 0, 0, 0);
+    match op {
+        Op::If(_)
+        | Op::Else(_)
+        | Op::EndIf
+        | Op::Loop(_)
+        | Op::EndLoop(_)
+        | Op::Break(_)
+        | Op::BreakIf(_)
+        | Op::Trap(_)
+        | Op::Return
+        | Op::CallVerifiedNative(_, _)
+        | Op::CallExternalNative(_, _) => (0, 0, 0, 0, 0, 1),
+        Op::Dup => (1, req, 0, 0, 0, 0),
+        Op::IsEnum(_, _, _) | Op::IsStruct(_) => (2, req, 0, 1, 0, 0),
+        Op::GetLocal(i) => (3, req, 0, *i as i64, 0, 0),
+        Op::SetLocal(i) => (4, req, 0, *i as i64, 0, 0),
+        Op::Const(idx) => match const_scalar_size(chunk.constants.get(*idx as usize), wb, fb) {
+            Some(sz) => (2, req, 0, sz, 0, 0),
+            None => generic,
+        },
+        Op::NewComposite(NewCompositeOperand::Flat { byte_size, .. }) => {
+            (6, req, 0, 0, *byte_size as i64, 0)
+        }
+        Op::GetField(StructField::Flat { offset, kind }) => (
+            7,
+            req,
+            0,
+            *offset as i64,
+            kind.size_in_bytes(wb, fb) as i64,
+            0,
+        ),
+        Op::GetField(StructField::FlatNested { offset, size, .. }) => {
+            (8, req, 0, *offset as i64, *size as i64, 0)
+        }
+        Op::GetTupleField(TupleField::Flat { offset, kind }) => (
+            7,
+            req,
+            0,
+            *offset as i64,
+            kind.size_in_bytes(wb, fb) as i64,
+            0,
+        ),
+        Op::GetTupleField(TupleField::FlatNested { offset, size, .. }) => {
+            (8, req, 0, *offset as i64, *size as i64, 0)
+        }
+        Op::GetEnumField(EnumField::Flat { offset, kind }) => (
+            7,
+            req,
+            0,
+            *offset as i64,
+            kind.size_in_bytes(wb, fb) as i64,
+            0,
+        ),
+        Op::GetEnumField(EnumField::FlatNested { offset, size, .. }) => {
+            (8, req, 0, *offset as i64, *size as i64, 0)
+        }
+        Op::GetIndex(ArrayElem::Flat { kind }) => {
+            (9, req, 0, kind.size_in_bytes(wb, fb) as i64, 0, 0)
+        }
+        Op::GetIndex(ArrayElem::FlatNested { size, .. }) => (10, req, 0, *size as i64, 0, 0),
+        _ => generic,
+    }
+}
+
+/// Run verify_typed.kel over one chunk (isolation), returning whether it rejects a
+/// straight-line flat field/array offset. Marshals the per-op typed descriptor via `typed_desc`.
+pub fn typed_reject_chunk_via_kel(module: &Module, chunk: &keleusma::bytecode::Chunk) -> bool {
+    assert!(
+        chunk.ops.len() <= 1024,
+        "verify_typed.kel op-table capacity"
+    );
+    let wb = (1usize << module.word_bits_log2) / 8;
+    let fb = (1usize << module.float_bits_log2) / 8;
+    let m = verify_typed_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify verify_typed.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let set = |vm: &Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
+        vm.set_shared(shared, slot, Value::Int(v)).unwrap();
+    };
+    set(&vm, &mut shared, TV_OP_COUNT, chunk.ops.len() as i64);
+    for (i, op) in chunk.ops.iter().enumerate() {
+        let (tkind, treq, tprod, ta, tb, defer) = typed_desc(op, chunk, wb, fb);
+        assert!(tprod <= 4, "verify_typed.kel push_tops unroll bound");
+        set(&vm, &mut shared, TV_TKIND + i, tkind);
+        set(&vm, &mut shared, TV_TREQ + i, treq);
+        set(&vm, &mut shared, TV_TPROD + i, tprod);
+        set(&vm, &mut shared, TV_TA + i, ta);
+        set(&vm, &mut shared, TV_TB + i, tb);
+        set(&vm, &mut shared, TV_DEFER + i, defer);
+    }
+    match vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call verify_typed.kel")
+    {
+        VmState::Yielded(Value::Int(_)) => {}
+        other => panic!("unexpected verify_typed.kel state: {other:?}"),
+    }
+    match vm.get_shared(&shared, TV_OUT_REJECT).unwrap() {
+        Value::Int(n) => n != 0,
+        o => panic!("expected Int at out_reject, got {o:?}"),
+    }
+}
+
+/// Run verify_typed.kel over every chunk of a module; the module is rejected (by this slice) iff
+/// any chunk's straight-line prefix has a flat-offset violation.
+pub fn typed_reject_module_via_kel(module: &Module) -> bool {
+    module
+        .chunks
+        .iter()
+        .any(|chunk| typed_reject_chunk_via_kel(module, chunk))
+}
+
 /// The self-hosted drop-in replacement for `verify_resource_bounds`: analyze.kel decides each
 /// chunk's WCMU transitively (callee bodies folded at every `Op::Call`, resolved in
 /// topological order so callees precede callers), and the module is admitted iff no chunk has
