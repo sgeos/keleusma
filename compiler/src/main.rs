@@ -8,7 +8,7 @@
 //! moving data between stages; `lex` and `parse` run the first one and two stages.
 //! The `compile` command now emits a from-scratch module scaffold: the data layout,
 //! enum-layout table, chunk signatures, schema hash, and declared WCET/WCMU header are
-//! assembled from the pipeline output (via `self_host_compile_full`), so for the
+//! built from the pipeline output with no reference borrow of the user program (via `self_host_compile_scratch`), so for the
 //! loop-free stage sources the serialized module is byte-identical to the reference
 //! without borrowing any field from it. See `README.md` and `MILESTONES.md`; the
 //! authoritative design is `docs/roadmap/V0_3_0_SELF_HOSTING.md`.
@@ -591,7 +591,7 @@ fn compile_stage(src: &str, name: &str, deep: bool) -> keleusma::bytecode::Modul
 /// a module whose scaffold (data layout, enum-layout table, chunk signatures, schema
 /// hash, and declared WCET/WCMU header) is itself assembled from the pipeline output --
 /// parse.kel's record stream and analyze.kel's per-chunk verdict -- rather than borrowed
-/// from the reference (`self_host_compile_full`). It then verifies the module loads and
+/// entirely from the pipeline output, with no reference borrow of the user program (`self_host_compile_scratch`). It then verifies the module loads and
 /// reports whether its ops, constant pool, and local-frame sizes are byte-identical to
 /// the reference compiler's -- the fixed-point property for this source. When `out` is
 /// set, the assembled bytecode is written there. See `MILESTONES.md`.
@@ -600,14 +600,14 @@ fn run_compile_pipeline(path: &str, out: Option<&str>) {
     use keleusma::bytecode::BlockType;
     use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, required_persistent_capacity_for};
     use keleusma_selfhost::selfhost::{
-        analyze_stream_chunk, compile_src, self_host_compile_full, validate_module_via_kel,
+        analyze_stream_chunk, compile_src, self_host_compile_scratch, validate_module_via_kel,
     };
 
     let src = std::fs::read_to_string(path).unwrap_or_else(|e| {
         eprintln!("cannot read {path}: {e}");
         std::process::exit(1);
     });
-    let module = self_host_compile_full(&src);
+    let module = self_host_compile_scratch(&src);
     let reference = compile_src(&src);
 
     // Report byte-identity chunk by chunk.
