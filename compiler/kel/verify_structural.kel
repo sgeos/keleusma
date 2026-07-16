@@ -1,34 +1,36 @@
-// compiler/kel/verify_structural.kel -- the first slice of the self-hosted structural
-// verifier: the block-nesting and branch-target-bounds subset of the reference verifier's
-// first structural pass (`verify.rs`, the block-nesting walk that precedes the WCET/WCMU
-// resource analysis already self-hosted in `analyze.kel`).
+// compiler/kel/verify_structural.kel -- the self-hosted structural verifier's block-nesting
+// and branch-target pass: the block-nesting, branch-target-bounds, and exact target-equality
+// subset of the reference verifier's first structural pass (`verify.rs`, the block-nesting
+// walk that precedes the WCET/WCMU resource analysis already self-hosted in `analyze.kel`).
 //
-// The reference `verify()` walks each chunk maintaining a block stack, rejecting a chunk
-// whose structured control flow is malformed. This stage reproduces the subset of that walk
-// that is decidable from the marshalled `(class, arg)` op table alone -- the same table
-// `analyze.kel` receives -- namely:
+// The reference `verify()` walks each chunk maintaining a block stack and a parallel If stack,
+// rejecting a chunk whose structured control flow is malformed. This stage reproduces the
+// subset of that walk decidable from the marshalled `(class, arg)` op table alone (the same
+// table `analyze.kel` receives, with the EndLoop/Break/BreakIf targets now populated), namely:
 //
-//   * branch-target bounds: an `If`/`Loop` exit target in `[0, op_count]` and an `Else`
-//     target in `[0, op_count)` (`verify.rs` uses `<= ops.len()` for `If`/`Loop` and
-//     `< ops.len()` for `Else`);
-//   * block nesting: `Else`/`EndIf` match an open `If`, `EndLoop` matches an open `Loop`,
-//     the block stack is empty at the end of the chunk (no unclosed `If`/`Loop`);
-//   * break containment: a `Break`/`BreakIf` occurs only inside an enclosing `Loop`
-//     (`loop_depth > 0`).
+//   * branch-target bounds: an `If`/`Loop` exit target in `[0, op_count]`, an `Else` target in
+//     `[0, op_count)`, and a `Break`/`BreakIf` target in `[0, op_count]`;
+//   * block nesting: `Else`/`EndIf` match an open `If`, `EndLoop` matches an open `Loop`, the
+//     block stack is empty at chunk end (no unclosed `If`/`Loop`);
+//   * break containment: a `Break`/`BreakIf` occurs only inside an enclosing `Loop`;
+//   * exact target equality (the control-flow-integrity checks, reference audit findings D2
+//     and E1): an `If` with an `Else` targets its else-body start (`else_ip + 1`); an `Else`
+//     targets an `EndIf`; an `If` without an `Else` targets its `EndIf`; an `EndLoop`
+//     back-edge equals `loop_ip + 1` and its paired `Loop` exit equals `endloop_ip + 1`; a
+//     `Break`/`BreakIf` targets the innermost enclosing loop's exit.
 //
-// Deliberately OUT of this slice, deferred to a follow-up that must first extend the host
-// marshalling (`analyze_class` currently drops the `Break`/`BreakIf`/`EndLoop` targets to
-// zero): the exact target-equality checks -- an `If` without an `Else` must target its
-// `EndIf`, an `Else` must target its `EndIf`, a `Loop` exit must equal `EndLoop + 1`, a
-// `Break` target must equal the enclosing loop's exit, and an `EndLoop` back-edge must equal
-// `Loop + 1`. Those checks require the currently-dropped operands and a forward marker-
-// position lookup; until they land this stage is a sound *necessary* condition (every chunk
-// it rejects the reference also rejects), not yet the full first pass.
+// Together these are the whole of `verify.rs`'s first-pass block-nesting-and-target checks.
+// Still outside this stage (later slices): the operand-bounds family in the same reference
+// pass (local slot, data slot, constant pool, call target and arity, fraction bits, template
+// index), the block-type constraints (second pass), and the productive-divergence analysis
+// (third pass).
 //
 // The class encoding matches the host's `analyze_class`: 0 plain, 1 If (arg the branch
-// target), 2 Else (arg the matching EndIf), 3 EndIf, 4 Loop (arg the exit target), 5 EndLoop,
-// 6 Break, 7 BreakIf, 8 Trap, 9 Call. The stage sets `out_reject` to 1 on the first malformed
-// construct it can prove, and 0 for a well-nested chunk.
+// target), 2 Else (arg the matching EndIf), 3 EndIf, 4 Loop (arg the exit target), 5 EndLoop
+// (arg the back-edge), 6 Break (arg the loop exit), 7 BreakIf (arg the loop exit), 8 Trap,
+// 9 Call. The stage sets `out_reject` to 1 on the first malformed construct it proves, and 0
+// for a well-formed chunk. The walk latches `bad` rather than stopping (the reference returns
+// on first error; this stage folds to the same boolean verdict).
 require word >= 32;
 
 // The host-facing block: the marshalled op table (`class`/`arg`, indexed by instruction
@@ -40,38 +42,131 @@ shared data sv {
     out_reject: Word,
 }
 
-// The block-nesting scratch. `stack` holds the open-block kinds in nesting order (1 If,
-// 2 Loop); `depth` is its height; `loop_depth` counts the open `Loop` markers (for break
-// containment); `bad` latches the first proven malformation.
+// The block-nesting scratch. The open blocks form a stack of frames in nesting order: `kind`
+// (1 If, 2 Loop), `b_ip` the opening op's instruction pointer, `b_tgt` its target (an If's
+// branch target or a Loop's exit target), `b_else` an If frame's else-seen flag. `depth` is
+// the stack height, `loop_depth` counts the open Loop frames (break containment), `le` is the
+// enclosing-loop-exit scratch, `bad` latches the first proven malformation.
 private data sd {
-    stack: [Word; 1024],
+    kind: [Word; 1024],
+    b_ip: [Word; 1024],
+    b_tgt: [Word; 1024],
+    b_else: [Word; 1024],
     depth: Word,
     loop_depth: Word,
+    le: Word,
     bad: Word,
 }
 
-// Push an open-block marker of `kind` (1 If, 2 Loop). A push past the static stack capacity
-// (unreachable while `op_count <= 1024`, since each op opens at most one block) latches `bad`
-// rather than faulting.
-fn push_block(kind: Word) -> Word {
+// Latch `bad` when `x` and `y` differ (an equality obligation the reference enforces with a
+// direct `!=`, expressed here with the two ordered comparisons the self-compiling subset
+// admits).
+fn ne_bad(x: Word, y: Word) -> Word {
+    if x > y orelse y > x {
+        sd.bad = 1;
+    }
+    0
+}
+
+// Open an If frame for the `If` at `ip` with branch target `tgt`. A push past the static stack
+// capacity (unreachable while `op_count <= 1024`, since each op opens at most one block)
+// latches `bad` rather than faulting.
+fn push_if(ip: Word, tgt: Word) -> Word {
     if sd.depth > 1023 {
         sd.bad = 1;
     } else {
-        sd.stack[sd.depth] = kind;
+        sd.kind[sd.depth] = 1;
+        sd.b_ip[sd.depth] = ip;
+        sd.b_tgt[sd.depth] = tgt;
+        sd.b_else[sd.depth] = 0;
         sd.depth = sd.depth + 1;
     }
     0
 }
 
-// Pop one open-block marker, requiring the top to be `kind` (1 If, 2 Loop). A pop of an empty
-// stack or a kind mismatch latches `bad` and leaves the stack unchanged (no underflow).
-fn pop_block(kind: Word) -> Word {
-    if sd.depth > 0 {
-        if sd.stack[sd.depth - 1] == kind {
-            sd.depth = sd.depth - 1;
-        } else {
+// Open a Loop frame for the `Loop` at `ip` with exit target `tgt`.
+fn push_loop(ip: Word, tgt: Word) -> Word {
+    if sd.depth > 1023 {
+        sd.bad = 1;
+    } else {
+        sd.kind[sd.depth] = 2;
+        sd.b_ip[sd.depth] = ip;
+        sd.b_tgt[sd.depth] = tgt;
+        sd.depth = sd.depth + 1;
+        sd.loop_depth = sd.loop_depth + 1;
+    }
+    0
+}
+
+// The exit target of the innermost enclosing Loop frame: the exit of the highest-indexed Loop
+// on the stack. Only meaningful with `loop_depth > 0`, which every caller guarantees.
+fn innermost_loop_exit() -> Word {
+    sd.le = 0;
+    for j in 0..1024 limit 1024 {
+        if sd.depth > j andalso sd.kind[j] == 2 {
+            sd.le = sd.b_tgt[j];
+        }
+    }
+    sd.le
+}
+
+// Handle an `Else` at `ip` with target `a`: require an open If on top, whose branch target must
+// be this Else's body start (`ip + 1`); the Else's own target must be an in-bounds `EndIf`.
+fn handle_else(ip: Word, a: Word) -> Word {
+    if sd.depth > 0 andalso sd.kind[sd.depth - 1] == 1 {
+        let top = sd.depth - 1;
+        sd.b_else[top] = 1;
+        ne_bad(sd.b_tgt[top], ip + 1);
+    } else {
+        sd.bad = 1;
+    }
+    if a >= sv.op_count {
+        sd.bad = 1;
+    } else {
+        ne_bad(sv.class[a], 3);
+    }
+    0
+}
+
+// Handle an `EndIf` at `ip`: a no-Else If must target this EndIf; close the open If frame.
+fn handle_endif(ip: Word) -> Word {
+    if sd.depth > 0 andalso sd.kind[sd.depth - 1] == 1 {
+        let top = sd.depth - 1;
+        if sd.b_else[top] == 0 {
+            ne_bad(sd.b_tgt[top], ip);
+        }
+        sd.depth = sd.depth - 1;
+    } else {
+        sd.bad = 1;
+    }
+    0
+}
+
+// Handle an `EndLoop` at `ip` with back-edge `a`: the back-edge must be `loop_ip + 1` and the
+// paired Loop's exit must be `ip + 1`; close the open Loop frame.
+fn handle_endloop(ip: Word, a: Word) -> Word {
+    if sd.depth > 0 andalso sd.kind[sd.depth - 1] == 2 {
+        let top = sd.depth - 1;
+        ne_bad(a, sd.b_ip[top] + 1);
+        ne_bad(sd.b_tgt[top], ip + 1);
+        sd.depth = sd.depth - 1;
+        if sd.loop_depth > 0 {
+            sd.loop_depth = sd.loop_depth - 1;
+        }
+    } else {
+        sd.bad = 1;
+    }
+    0
+}
+
+// Handle a `Break`/`BreakIf` at `ip` with target `a`: valid only inside an enclosing Loop, in
+// bounds, and targeting that loop's exit.
+fn handle_break(ip: Word, a: Word) -> Word {
+    if sd.loop_depth > 0 {
+        if a > sv.op_count {
             sd.bad = 1;
         }
+        ne_bad(a, innermost_loop_exit());
     } else {
         sd.bad = 1;
     }
@@ -81,60 +176,34 @@ fn pop_block(kind: Word) -> Word {
 // Process one op at instruction pointer `ip` by its control-flow class.
 fn step(ip: Word) -> Word {
     let c = sv.class[ip];
+    let a = sv.arg[ip];
     if c == 1 {
-        // If: bounds-check the branch target (`<= op_count`), open an If block.
-        if sv.arg[ip] > sv.op_count {
+        // If: bounds-check the branch target (`<= op_count`), open an If frame.
+        if a > sv.op_count {
             sd.bad = 1;
         }
-        push_block(1)
+        push_if(ip, a)
     } else {
     if c == 2 {
-        // Else: bounds-check the target (`< op_count`), require an open If on top (no pop --
-        // the If block closes at its EndIf).
-        if sv.arg[ip] >= sv.op_count {
-            sd.bad = 1;
-        }
-        if sd.depth > 0 {
-            if sd.stack[sd.depth - 1] == 1 {
-                0
-            } else {
-                sd.bad = 1;
-                0
-            }
-        } else {
-            sd.bad = 1;
-            0
-        }
+        handle_else(ip, a)
     } else {
     if c == 3 {
-        // EndIf: close the open If block.
-        pop_block(1)
+        handle_endif(ip)
     } else {
     if c == 4 {
-        // Loop: bounds-check the exit target (`<= op_count`), open a Loop block.
-        if sv.arg[ip] > sv.op_count {
+        // Loop: bounds-check the exit target (`<= op_count`), open a Loop frame.
+        if a > sv.op_count {
             sd.bad = 1;
         }
-        sd.loop_depth = sd.loop_depth + 1;
-        push_block(2)
+        push_loop(ip, a)
     } else {
     if c == 5 {
-        // EndLoop: close the open Loop block.
-        if sd.loop_depth > 0 {
-            sd.loop_depth = sd.loop_depth - 1;
-        }
-        pop_block(2)
+        handle_endloop(ip, a)
     } else {
     if c == 6 orelse c == 7 {
-        // Break / BreakIf: valid only inside an enclosing Loop.
-        if sd.loop_depth > 0 {
-            0
-        } else {
-            sd.bad = 1;
-            0
-        }
+        handle_break(ip, a)
     } else {
-        // EndIf/Trap/Call/plain and every other class: no nesting effect.
+        // Trap/Call/plain and every other class: no nesting effect.
         0
     } } } } } }
 }
@@ -163,7 +232,7 @@ fn run() -> Word {
     sv.out_reject
 }
 
-// Check the chunk's structure in one call and yield the verdict (1 reject, 0 well-nested).
+// Check the chunk's structure in one call and yield the verdict (1 reject, 0 well-formed).
 loop main(resume: Word) -> Word {
     yield run()
 }
