@@ -1372,26 +1372,32 @@ pub fn structural_reject_module_via_kel(module: &Module) -> bool {
     })
 }
 
-// --- Self-hosted A.2.1 typed operand-stack verifier, slice 1 (verify_typed.kel) --------------
+// --- Self-hosted A.2.1 typed operand-stack verifier, slice 2a (verify_typed.kel) -------------
 //
-// verify_typed.kel reconstructs the flat shape of each operand-stack entry by abstract
-// interpretation and validates every compiler-baked flat field/array offset against the
-// composite's known size (audit B1/B2), for the STRAIGHT-LINE prefix of a chunk checked in
-// isolation. It is sound but incomplete: it defers (accepts) at the first control-flow op or
-// native call, since the operand-stack joins and the per-loop local-shape fixpoint are later
-// slices. The shared block `tv` lays out `op_count` (0); the per-op typed-descriptor arrays
-// `tkind` (1..), `treq`, `tprod`, `ta`, `tb`, `defer` (each 1024 wide); and the verdict
-// `out_reject`. Not yet wired into `structural_reject_module_via_kel` (the isolated, partial
-// check is exercised only by its conformance test until the interpreter is complete).
+// verify_typed.kel is a frame-stack abstract interpreter over the WHOLE chunk (all control flow),
+// checked in isolation. It reconstructs each operand-stack entry's flat shape and validates every
+// compiler-baked flat field/array offset against the composite's known size (audit B1/B2), the
+// operand-stack underflow (audit finding 3), the if/else branch-height balance (B3/B4), and the
+// loop back-edge height neutrality (B5). Per the operator's chosen trade-off it uses the SOUND
+// over-approximation the reference itself falls back to: shapes are precise within a basic block
+// and reset to Top across every control-flow boundary (a loop also invalidates every local), so
+// it never rejects a valid program -- a Top defers to the retained runtime guard -- and forgoes
+// only the cross-join shape precision (loop-carried-local flat checks). The shared block `tv`
+// lays out `op_count` (0); the per-op arrays `class` (1..), `arg`, `is_term`, `tk`, `req`,
+// `prod`, `ta`, `tb` (each 1024 wide); and the verdict `out_reject`. Still isolation-only (no
+// signature/native/enum seeding -- slice 2b) and without the module-level data-layout validation
+// (slice 2c), so not yet wired into `structural_reject_module_via_kel`.
 
 const TV_OP_COUNT: usize = 0;
-const TV_TKIND: usize = 1;
-const TV_TREQ: usize = 1 + 1024;
-const TV_TPROD: usize = 1 + 1024 * 2;
-const TV_TA: usize = 1 + 1024 * 3;
-const TV_TB: usize = 1 + 1024 * 4;
-const TV_DEFER: usize = 1 + 1024 * 5;
-const TV_OUT_REJECT: usize = 1 + 1024 * 6;
+const TV_CLASS: usize = 1;
+const TV_ARG: usize = 1 + 1024;
+const TV_IS_TERM: usize = 1 + 1024 * 2;
+const TV_TK: usize = 1 + 1024 * 3;
+const TV_REQ: usize = 1 + 1024 * 4;
+const TV_PROD: usize = 1 + 1024 * 5;
+const TV_TA: usize = 1 + 1024 * 6;
+const TV_TB: usize = 1 + 1024 * 7;
+const TV_OUT_REJECT: usize = 1 + 1024 * 8;
 
 fn verify_typed_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
@@ -1424,93 +1430,57 @@ fn const_scalar_size(
     }
 }
 
-/// The typed-descriptor `(tkind, treq, tprod, ta, tb, defer)` verify_typed.kel applies for `op`,
-/// mirroring the reference `apply_op` for the straight-line subset (see verify_typed.kel for the
-/// `tkind` meanings). Control-flow ops and native calls are marked `defer` (the slice stops
-/// there); every other op is either special-cased (Dup, IsEnum/IsStruct, GetLocal/SetLocal, a
-/// scalar Const, NewComposite-flat, the flat field/array accesses) or generic (pop
-/// `stack_shrink`, push `stack_growth` unknowns).
+/// The typed op descriptor verify_typed.kel applies for `op`:
+/// `(class, arg, is_term, tk, req, prod, ta, tb)`. `(class, arg)` is the control-flow role/target
+/// (via `analyze_class`); `is_term` flags Trap/Return; `(req, prod)` is the actual operand
+/// consumption and generic push count from the reference `op_depth_effect` (NOT the WCMU
+/// `stack_growth`/`shrink`, which mis-state ops like `Yield`); `tk`/`ta`/`tb` is the shape
+/// transfer (see verify_typed.kel), 0 generic for every op except the shape producers/consumers.
 fn typed_desc(
     op: &keleusma::bytecode::Op,
     chunk: &keleusma::bytecode::Chunk,
     wb: usize,
     fb: usize,
-) -> (i64, i64, i64, i64, i64, i64) {
+) -> (i64, i64, i64, i64, i64, i64, i64, i64) {
     use keleusma::bytecode::{
         ArrayElem, EnumField, NewCompositeOperand, Op, StructField, TupleField,
     };
-    // The typed pass's actual operand consumption (req) and net delta -- NOT the WCMU
-    // stack_growth/shrink, which model net memory and mis-state ops like Yield. The generic arm
-    // pops `req` and pushes `net + req` unknowns; the special arms carry their own `req`.
-    let (req, net) = keleusma::verify::op_depth_effect(op, chunk);
-    let req = req.max(0) as i64;
-    let generic = (0, req, (net + req.max(0) as i32).max(0) as i64, 0, 0, 0);
-    match op {
-        Op::If(_)
-        | Op::Else(_)
-        | Op::EndIf
-        | Op::Loop(_)
-        | Op::EndLoop(_)
-        | Op::Break(_)
-        | Op::BreakIf(_)
-        | Op::Trap(_)
-        | Op::Return
-        | Op::CallVerifiedNative(_, _)
-        | Op::CallExternalNative(_, _) => (0, 0, 0, 0, 0, 1),
-        Op::Dup => (1, req, 0, 0, 0, 0),
-        Op::IsEnum(_, _, _) | Op::IsStruct(_) => (2, req, 0, 1, 0, 0),
-        Op::GetLocal(i) => (3, req, 0, *i as i64, 0, 0),
-        Op::SetLocal(i) => (4, req, 0, *i as i64, 0, 0),
+    let (class, arg) = analyze_class(op);
+    let is_term = i64::from(matches!(op, Op::Return | Op::Trap(_)));
+    let (r, net) = keleusma::verify::op_depth_effect(op, chunk);
+    let req = i64::from(r.max(0));
+    let prod = i64::from((net + r.max(0)).max(0));
+    // The shape transfer kind and its operands; everything not listed is generic (tk 0).
+    let (tk, ta, tb): (i64, i64, i64) = match op {
+        Op::Dup => (1, 0, 0),
+        Op::IsEnum(_, _, _) | Op::IsStruct(_) => (2, 1, 0),
+        Op::GetLocal(i) => (3, *i as i64, 0),
+        Op::SetLocal(i) => (4, *i as i64, 0),
         Op::Const(idx) => match const_scalar_size(chunk.constants.get(*idx as usize), wb, fb) {
-            Some(sz) => (2, req, 0, sz, 0, 0),
-            None => generic,
+            Some(sz) => (2, sz, 0),
+            None => (0, 0, 0),
         },
-        Op::NewComposite(NewCompositeOperand::Flat { byte_size, .. }) => {
-            (6, req, 0, 0, *byte_size as i64, 0)
+        Op::NewComposite(NewCompositeOperand::Flat { byte_size, .. }) => (6, 0, *byte_size as i64),
+        Op::GetField(StructField::Flat { offset, kind })
+        | Op::GetTupleField(TupleField::Flat { offset, kind })
+        | Op::GetEnumField(EnumField::Flat { offset, kind }) => {
+            (7, *offset as i64, kind.size_in_bytes(wb, fb) as i64)
         }
-        Op::GetField(StructField::Flat { offset, kind }) => (
-            7,
-            req,
-            0,
-            *offset as i64,
-            kind.size_in_bytes(wb, fb) as i64,
-            0,
-        ),
-        Op::GetField(StructField::FlatNested { offset, size, .. }) => {
-            (8, req, 0, *offset as i64, *size as i64, 0)
+        Op::GetField(StructField::FlatNested { offset, size, .. })
+        | Op::GetTupleField(TupleField::FlatNested { offset, size, .. })
+        | Op::GetEnumField(EnumField::FlatNested { offset, size, .. }) => {
+            (8, *offset as i64, *size as i64)
         }
-        Op::GetTupleField(TupleField::Flat { offset, kind }) => (
-            7,
-            req,
-            0,
-            *offset as i64,
-            kind.size_in_bytes(wb, fb) as i64,
-            0,
-        ),
-        Op::GetTupleField(TupleField::FlatNested { offset, size, .. }) => {
-            (8, req, 0, *offset as i64, *size as i64, 0)
-        }
-        Op::GetEnumField(EnumField::Flat { offset, kind }) => (
-            7,
-            req,
-            0,
-            *offset as i64,
-            kind.size_in_bytes(wb, fb) as i64,
-            0,
-        ),
-        Op::GetEnumField(EnumField::FlatNested { offset, size, .. }) => {
-            (8, req, 0, *offset as i64, *size as i64, 0)
-        }
-        Op::GetIndex(ArrayElem::Flat { kind }) => {
-            (9, req, 0, kind.size_in_bytes(wb, fb) as i64, 0, 0)
-        }
-        Op::GetIndex(ArrayElem::FlatNested { size, .. }) => (10, req, 0, *size as i64, 0, 0),
-        _ => generic,
-    }
+        Op::GetIndex(ArrayElem::Flat { kind }) => (9, kind.size_in_bytes(wb, fb) as i64, 0),
+        Op::GetIndex(ArrayElem::FlatNested { size, .. }) => (10, *size as i64, 0),
+        _ => (0, 0, 0),
+    };
+    (class, arg, is_term, tk, req, prod, ta, tb)
 }
 
-/// Run verify_typed.kel over one chunk (isolation), returning whether it rejects a
-/// straight-line flat field/array offset. Marshals the per-op typed descriptor via `typed_desc`.
+/// Run verify_typed.kel over one chunk (isolation), returning whether the frame-stack abstract
+/// interpreter rejects a flat field/array offset, an operand-stack underflow, or an if/else or
+/// loop height imbalance. Marshals the per-op descriptor via `typed_desc`.
 pub fn typed_reject_chunk_via_kel(module: &Module, chunk: &keleusma::bytecode::Chunk) -> bool {
     assert!(
         chunk.ops.len() <= 1024,
@@ -1529,14 +1499,16 @@ pub fn typed_reject_chunk_via_kel(module: &Module, chunk: &keleusma::bytecode::C
     };
     set(&vm, &mut shared, TV_OP_COUNT, chunk.ops.len() as i64);
     for (i, op) in chunk.ops.iter().enumerate() {
-        let (tkind, treq, tprod, ta, tb, defer) = typed_desc(op, chunk, wb, fb);
-        assert!(tprod <= 4, "verify_typed.kel push_tops unroll bound");
-        set(&vm, &mut shared, TV_TKIND + i, tkind);
-        set(&vm, &mut shared, TV_TREQ + i, treq);
-        set(&vm, &mut shared, TV_TPROD + i, tprod);
+        let (class, arg, is_term, tk, req, prod, ta, tb) = typed_desc(op, chunk, wb, fb);
+        assert!(prod <= 4, "verify_typed.kel push_tops unroll bound");
+        set(&vm, &mut shared, TV_CLASS + i, class);
+        set(&vm, &mut shared, TV_ARG + i, arg);
+        set(&vm, &mut shared, TV_IS_TERM + i, is_term);
+        set(&vm, &mut shared, TV_TK + i, tk);
+        set(&vm, &mut shared, TV_REQ + i, req);
+        set(&vm, &mut shared, TV_PROD + i, prod);
         set(&vm, &mut shared, TV_TA + i, ta);
         set(&vm, &mut shared, TV_TB + i, tb);
-        set(&vm, &mut shared, TV_DEFER + i, defer);
     }
     match vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
@@ -1551,8 +1523,8 @@ pub fn typed_reject_chunk_via_kel(module: &Module, chunk: &keleusma::bytecode::C
     }
 }
 
-/// Run verify_typed.kel over every chunk of a module; the module is rejected (by this slice) iff
-/// any chunk's straight-line prefix has a flat-offset violation.
+/// Run verify_typed.kel over every chunk of a module; the module is rejected (by this pass) iff
+/// any chunk is.
 pub fn typed_reject_module_via_kel(module: &Module) -> bool {
     module
         .chunks

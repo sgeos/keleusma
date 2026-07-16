@@ -198,3 +198,52 @@ fn flat_field_on_a_scalar_is_rejected() {
         vec![ConstValue::Int(1)],
     );
 }
+
+// ---- Frame-stack capability (slice 2a): checks past control flow, and height balance ---------
+
+#[test]
+fn flat_field_out_of_bounds_after_a_branch_is_rejected() {
+    // An empty if/else, then construct a 16-byte struct and read a full word at offset 9 (17 >
+    // 16). Slice 1 deferred at the If; the frame-stack interpreter checks the basic block after
+    // the branch and rejects, as the reference does.
+    assert_chunk_rejected(
+        "flat-oob-after-branch",
+        vec![
+            Op::PushImmediate(1),
+            Op::If(3),
+            Op::Else(3),
+            Op::EndIf,
+            Op::Const(0),
+            Op::Const(0),
+            Op::NewComposite(NewCompositeOperand::Flat {
+                kind: CompositeKind::Struct,
+                count: 2,
+                byte_size: 16,
+            }),
+            Op::GetField(StructField::Flat {
+                offset: 9,
+                kind: ScalarKind::Int,
+            }),
+        ],
+        vec![ConstValue::Int(1)],
+    );
+}
+
+#[test]
+fn if_else_branch_height_mismatch_is_rejected() {
+    // The then-arm leaves one value; the else-arm leaves none. The arms rejoin at different
+    // operand heights (audit B3/B4). Pass 1/2 and the depth pass accept it (the depth pass maxes
+    // the arms); only the typed height-balance join rejects.
+    assert_chunk_rejected(
+        "branch-height-mismatch",
+        vec![
+            Op::PushImmediate(1),
+            Op::If(4),
+            Op::Const(0),
+            Op::Else(4),
+            Op::EndIf,
+            Op::Return,
+        ],
+        vec![ConstValue::Int(1)],
+    );
+}
