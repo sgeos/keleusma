@@ -462,11 +462,13 @@ fn step_ident(v: Word) -> Word {
     for i in 0..structdefs.sd_count limit 64 {
         if structdefs.sd_name[i] == v {
             ps.found_flag = 1;
+            // Record the struct's declaration index; the StructInit node carries it so the
+            // layout bridge can resolve the struct's flat byte size downstream.
+            structdefs.sc_pending = i;
         }
     }
     if ps.found_flag == 1 {
         // A struct type name opens a `Name { field: expr, ... }` construction; await the `{`.
-        structdefs.sc_pending = v;
         structdefs.sc_phase = 1;
         0
     } else {
@@ -798,9 +800,9 @@ fn step_cdraining() -> Word {
 
 // A `}` closing a struct construction: flush the operators above the StructMark, then pop
 // the mark, count the last field (when a value was parsed), and emit a StructInit node
-// carrying the field count. The field-expression nodes precede it in postorder, exactly as
-// a Call's arguments precede the Call. The struct name (for the flat byte size) is resolved
-// by the downstream layout bridge; this parse-level node carries the field count only.
+// packing the struct's declaration index and the field count as `index * 1024 + count`. The
+// field-expression nodes precede it in postorder, exactly as a Call's arguments precede the
+// Call. The layout bridge resolves the index to the struct's flat byte size downstream.
 fn step_sc_closing() -> Word {
     if ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] != OpCode::StructMark() as Word {
         ops.opsp = ops.opsp - 1;
@@ -814,7 +816,7 @@ fn step_sc_closing() -> Word {
         }
         structdefs.sc_sp = structdefs.sc_sp - 1;
         ops.expect_operand = 0;
-        Node::StructInit() as Word + structdefs.sc_count[structdefs.sc_sp] * 64
+        Node::StructInit() as Word + (structdefs.sc_name[structdefs.sc_sp] * 1024 + structdefs.sc_count[structdefs.sc_sp]) * 64
     }
 }
 
