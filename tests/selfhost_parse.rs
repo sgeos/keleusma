@@ -148,6 +148,8 @@ type StructRec = (i64, Vec<(i64, i64, i64)>);
 struct Parsed {
     funcs: Vec<Func>,
     structs: Vec<StructRec>,
+    // Per trait declaration, its method-signature name ids in source order.
+    traits: Vec<Vec<i64>>,
 }
 
 /// Compile parse.kel on a 64MB thread; its deeply nested source overflows the default
@@ -283,9 +285,12 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
     // compared against the reference StructDef.
     let mut in_struct = false;
     let mut cur_struct: Option<StructRec> = None;
-    // A trait (TRAITSTART 19) or impl (IMPLSTART 20) declaration is skipped whole: the stage
-    // emits its START, then brace-matches the body and emits END, yielding PENDING between.
-    let mut in_skip = false;
+    // A trait (TRAITSTART 19) captures each method signature's name (MNAME 21) into a list,
+    // validated against the reference TraitDef. An impl (IMPLSTART 20) is skipped whole (its
+    // methods are a later increment). Both emit END at the brace-matched close.
+    let mut in_trait = false;
+    let mut cur_trait: Option<Vec<i64>> = None;
+    let mut in_impl = false;
     let mut state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
@@ -360,10 +365,25 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                         }
                         _ => {} // PENDING and any other intra-struct record
                     }
-                } else if in_skip {
+                } else if in_trait {
                     match code {
-                        5 => in_skip = false, // the trait/impl's END
-                        _ => {}               // its body, skipped whole this increment
+                        // MNAME: a method signature's name.
+                        21 => cur_trait
+                            .as_mut()
+                            .expect("method name before TRAITSTART")
+                            .push(val),
+                        5 => {
+                            parsed
+                                .traits
+                                .push(cur_trait.take().expect("trait END without TRAITSTART"));
+                            in_trait = false;
+                        }
+                        _ => {} // signature params/return, skipped this increment
+                    }
+                } else if in_impl {
+                    match code {
+                        5 => in_impl = false, // the impl's END
+                        _ => {}               // its methods, skipped whole this increment
                     }
                 } else if in_use {
                     match code {
@@ -384,9 +404,14 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                             in_struct = true;
                             cur_struct = Some((val, Vec::new()));
                         }
-                        19 | 20 => in_skip = true, // TRAITSTART/IMPLSTART: skipped whole
-                        16 => in_body = true,      // BSTART: a body forest follows
-                        17 => in_guard = true,     // GSTART: a `when` guard forest follows
+                        19 => {
+                            // TRAITSTART: open a trait capture; MNAMEs fill its method list.
+                            in_trait = true;
+                            cur_trait = Some(Vec::new());
+                        }
+                        20 => in_impl = true, // IMPLSTART: skipped whole this increment
+                        16 => in_body = true, // BSTART: a body forest follows
+                        17 => in_guard = true, // GSTART: a `when` guard forest follows
                         5 => {
                             let f = cur.take().expect("END before START");
                             parsed.funcs.push(f);
@@ -1041,7 +1066,18 @@ fn reference(src: &str, names: &[String]) -> Parsed {
             structs.push((id(&sd.name), fields));
         }
     }
-    Parsed { funcs, structs }
+    // Trait declarations, in source order; each as the list of its method-signature name
+    // ids -- mirroring the stage's per-trait MNAME capture.
+    let traits: Vec<Vec<i64>> = program
+        .traits
+        .iter()
+        .map(|td| td.methods.iter().map(|m| id(&m.name)).collect())
+        .collect();
+    Parsed {
+        funcs,
+        structs,
+        traits,
+    }
 }
 
 // An atomic literal body (the increment-1 case) still parses: one Literal record.
@@ -1987,22 +2023,24 @@ fn a_generic_struct_declaration_has_its_fields_captured() {
     assert_eq!(got.funcs[1].3, vec![(1, 8)]); // b: Literal 8
 }
 
-// A `trait` declaration between two functions is recognised and its whole body skipped: the
-// stage emits TRAITSTART (19), consumes the header and brace-matched body, and emits END.
-// A trait's method signatures land in `program.traits`, not `program.functions`, so the
-// reference skips it too and the surrounding functions match.
+// A `trait` declaration between two functions: the stage emits TRAITSTART (19), captures
+// each method signature's name (MNAME), and emits END; the two method names are validated
+// against the reference TraitDef, and the surrounding functions parse to the reference
+// records (a trait's methods land in `program.traits`, not `program.functions`).
 #[test]
-fn a_trait_declaration_is_recognised_and_skipped() {
+fn a_trait_declaration_captures_its_method_names() {
     let src = "fn a() -> Word { 1 } \
                trait Shape { fn area(self) -> Word; fn name(self) -> Word; } \
                fn b() -> Word { 2 }";
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
+    assert_eq!(got.funcs.len(), 2, "both functions parsed");
+    assert_eq!(got.traits.len(), 1, "one trait captured");
     assert_eq!(
-        got.funcs.len(),
+        got.traits[0].len(),
         2,
-        "both functions parsed, the trait skipped"
+        "two method names captured (area, name)"
     );
     assert_eq!(got.funcs[0].3, vec![(1, 1)]); // a: Literal 1
     assert_eq!(got.funcs[1].3, vec![(1, 2)]); // b: Literal 2
