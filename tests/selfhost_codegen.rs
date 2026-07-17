@@ -1928,7 +1928,7 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
                     12 => in_enum = true,
                     16 => in_body = true,
                     17 => in_guard = true,
-                    18 | 19 | 20 => in_skip_decl = true, // struct/trait/impl declaration
+                    18..=20 => in_skip_decl = true, // struct/trait/impl declaration
                     5 => last = (std::mem::take(&mut records), params, cur_cat),
                     15 => return last,
                     _ => {}
@@ -1973,16 +1973,6 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
 /// yield kinds; a record of any other kind is rejected until a later increment adds
 /// it (the multiheaded dispatch and its head_parts remain).
 fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
-    reconstruct_body_with_structs(records, category, &[])
-}
-
-// Reconstruct a body that may contain struct constructions, resolving each StructInit's
-// flat byte size from `struct_bytesizes` (indexed by struct declaration order).
-fn reconstruct_body_with_structs(
-    records: &[(i64, i64)],
-    category: i64,
-    struct_bytesizes: &[u16],
-) -> Body {
     let mut nodes: Vec<Node> = Vec::new();
     let mut call_args: Vec<i64> = Vec::new();
     let mut limit_parts: Vec<i64> = Vec::new();
@@ -1993,7 +1983,6 @@ fn reconstruct_body_with_structs(
         &mut call_args,
         &mut limit_parts,
         &mut match_parts,
-        struct_bytesizes,
     );
     Body {
         nodes,
@@ -2017,7 +2006,6 @@ fn reconstruct_into(
     call_args: &mut Vec<i64>,
     limit_parts: &mut Vec<i64>,
     match_parts: &mut Vec<i64>,
-    struct_bytesizes: &[u16],
 ) -> i64 {
     let mut stack: Vec<i64> = Vec::new();
     let mut pending_slots: Vec<i64> = Vec::new();
@@ -2181,17 +2169,13 @@ fn reconstruct_into(
                 (nodes.len() - 1) as i64
             }
             27 => {
-                // StructInit (the layout bridge): arg packs `struct_index * 1024 + count`.
-                // Resolve the struct's flat byte size from its declaration index, pop the
-                // field-value nodes into call_args in source order, and build the codegen
-                // StructInit node whose arg is the byte size, lhs the field slice start,
-                // rhs the field count -- exactly what `push_struct_init` in codegen.kel
-                // consumes.
-                let index = arg.div_euclid(1024);
-                let count = arg.rem_euclid(1024);
-                let byte_size = *struct_bytesizes
-                    .get(index as usize)
-                    .unwrap_or_else(|| panic!("no layout for struct index {index}"));
+                // StructInit: arg is the construction's field count. The flat byte size of
+                // an all-scalar Word struct is count * word_bytes (8), mirroring
+                // reconstruct.kel's layout pass. Pop the field-value nodes into call_args in
+                // source order and build the codegen StructInit node whose arg is the byte
+                // size, lhs the field-slice start, rhs the field count.
+                let count = arg;
+                let byte_size = count * 8;
                 let mut popped: Vec<i64> = (0..count)
                     .map(|_| stack.pop().expect("struct field value"))
                     .collect();
@@ -2200,7 +2184,7 @@ fn reconstruct_into(
                 call_args.extend(popped);
                 nodes.push(Node {
                     kind: 27,
-                    arg: byte_size as i64,
+                    arg: byte_size,
                     lhs: args_start,
                     rhs: count,
                 });
@@ -2278,19 +2262,16 @@ fn parse_into_codegen_arithmetic_matches_the_reference() {
 fn parse_into_codegen_struct_construction_matches_the_reference() {
     let src = "struct P { x: Word, y: Word }\n\
                fn make() -> P { P { x: 1, y: 2 } }";
-    // Struct flat byte sizes in declaration order (P is index 0), from the layout helper.
-    let (p_bytes, _p_fields) = struct_scalar_layout(&["Word", "Word"]);
-    let struct_bytesizes = vec![p_bytes];
-
     let (records, param_count, category) = parse_function_records(src);
-    // parse.kel emits [(Literal 1), (Literal 2), (StructInit index 0 * 1024 + count 2)].
+    // parse.kel emits [(Literal 1), (Literal 2), (StructInit field-count 2)]; the byte size
+    // is resolved by the reconstruct layout pass (count * word_bytes = 16), not the parser.
     assert_eq!(
         records,
         vec![(1, 1), (1, 2), (27, 2)],
         "make's construction records"
     );
 
-    let body = reconstruct_body_with_structs(&records, category, &struct_bytesizes);
+    let body = reconstruct_body(&records, category);
     let (ops, _pool, _lc) = run_codegen(&body, param_count);
 
     let reference = compile_src(src);
@@ -2313,6 +2294,19 @@ fn parse_into_codegen_struct_construction_matches_the_reference() {
             })
         )),
         "emits a flat 2-field 16-byte struct NewComposite"
+    );
+}
+
+// The layout pass now lives in the .kel reconstruct stage: driving the WHOLE self-hosted
+// pipeline (lexer.kel -> parse.kel -> reconstruct.kel -> codegen.kel) over a struct
+// construction, `reconstruct.kel` resolves the StructInit's field count to the flat byte
+// size (count * word_bytes) with no host layout helper, and the compiled `make` chunk is
+// byte-identical to the reference. This proves the byte-size resolution is self-hosted.
+#[test]
+fn self_host_compiles_a_struct_construction() {
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\n\
+         fn make() -> P { P { x: 1, y: 2 } }",
     );
 }
 
@@ -2962,6 +2956,9 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
     let mut enum_records: Vec<(i64, i64)> = Vec::new();
     let (mut in_body, mut in_guard, mut in_data, mut in_enum, mut in_use) =
         (false, false, false, false, false);
+    // A struct/trait/impl declaration (STRUCTSTART 18, TRAITSTART 19, IMPLSTART 20) is
+    // skipped until its END; it contributes no chunk or scaffold record here.
+    let mut in_skip_decl = false;
     let mut state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
@@ -2996,6 +2993,8 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
                 }
             } else if in_use {
                 in_use = code != 5;
+            } else if in_skip_decl {
+                in_skip_decl = code != 5;
             } else {
                 match code {
                     1..=3 => {
@@ -3023,6 +3022,7 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
                     }
                     16 => in_body = true,
                     17 => in_guard = true,
+                    18..=20 => in_skip_decl = true, // struct/trait/impl declaration
                     5 => fns.push(cur.take().unwrap()),
                     15 => return (fns, names, data_records, enum_records),
                     _ => {}
@@ -3069,7 +3069,6 @@ fn build_multihead_bridge(heads: &[&ParsedFn], pc: usize) -> Body {
                 &mut call_args,
                 &mut limit_parts,
                 &mut match_parts,
-                &[],
             );
             (1i64, root)
         };
@@ -3080,7 +3079,6 @@ fn build_multihead_bridge(heads: &[&ParsedFn], pc: usize) -> Body {
             &mut call_args,
             &mut limit_parts,
             &mut match_parts,
-            &[],
         );
         entries.push((base, guarded, guard_node, body_node));
     }
