@@ -2720,6 +2720,38 @@ fn parse_into_codegen_calls_match_the_reference() {
     }
 }
 
+// A CONDITIONAL used as a CALL ARGUMENT (`f(if c { a } else { b })`). This is a reconstruct
+// gap the roadmap names: the shunting-yard resolution of a default-precedence operator inside
+// a call argument (a comparison, `c > 0`) used to pop the CallMark -- which carried the
+// default precedence 3, the same as a comparison -- and mis-emit it as a spurious BinOp,
+// dropping the Call. Giving CallMark/StructMark precedence 0 (like the other grouping markers)
+// fixes it. Exercised as a sole argument, a trailing argument (after a plain argument), and a
+// leading argument, each byte-identical to the reference through the whole self-hosted
+// pipeline, and each runs.
+#[test]
+fn self_host_compiles_a_conditional_as_a_call_argument() {
+    let m1 = assert_self_host_byte_identical(
+        "fn one(a: Word) -> Word { a } \
+         fn g(c: Word) -> Word { one(if c > 0 { 10 } else { 20 }) } \
+         loop main(c: Word) -> Word { yield g(c) }",
+    );
+    assert_self_host_yields(m1, 5, 10); // c=5 > 0 -> 10
+
+    let m2 = assert_self_host_byte_identical(
+        "fn add(a: Word, b: Word) -> Word { a + b } \
+         fn g(c: Word) -> Word { add(3, if c > 0 { 10 } else { 20 }) } \
+         loop main(c: Word) -> Word { yield g(c) }",
+    );
+    assert_self_host_yields(m2, 5, 13); // 3 + 10
+
+    let m3 = assert_self_host_byte_identical(
+        "fn add(a: Word, b: Word) -> Word { a + b } \
+         fn g(c: Word) -> Word { add(if c > 0 { 10 } else { 20 }, 3) } \
+         loop main(c: Word) -> Word { yield g(c) }",
+    );
+    assert_self_host_yields(m3, 0, 23); // c=0, not > 0 -> 20 + 3
+}
+
 // The bridge over the indexed write, completing the data-access family: an
 // IndexStore signal folds the value and index into a kind-15 node, and IndexAssign
 // folds it into the block. Same self-hosted path and byte-identity check.
