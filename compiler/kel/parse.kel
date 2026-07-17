@@ -132,6 +132,9 @@ enum Node {
     // A flat array-element read `p.xs[i]`: emits GetIndex(Flat{element kind}). lhs = the array
     // value (a FieldAccessNested), rhs = the index expression.
     ArrIndex = 31,
+    // An array literal `[a, b, c]`: emits the element ops then NewComposite(Flat{Array, count,
+    // byte_size}). Like a Call/StructInit, its elements ride the call_args side array.
+    ArrayLit = 17,
 }
 
 // The shunting-yard operator codes.
@@ -159,6 +162,7 @@ enum OpCode {
     CallMark = 21,
     YieldMark = 22,
     StructMark = 23,
+    ArrayMark = 24,
 }
 
 // The merged parser state.
@@ -390,6 +394,11 @@ private data call {
     call_pending: Word,
     call_phase: Word,
     cdraining: Word,
+    // The array-literal context stack, parallel to the call stack: `al_count` the running
+    // element count per open `[...]` literal, `al_sp` the nesting depth. Its `,` drains through
+    // the same `step_cdraining` (generalised to the ArrayMark), its `]` emits the ArrayLit.
+    al_count: [Word; 8],
+    al_sp: Word,
 }
 
 // The enum table, accumulated by the header as each `enum` block is parsed: `edata`/`evar`
@@ -724,26 +733,42 @@ fn step_daindex(k: Word) -> Word {
 // stack into a one-slot lookahead (pidx). The IndexRead is not emitted yet: the token
 // after the `]` decides between a read and an indexed assignment.
 fn step_iclosing() -> Word {
-    if ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] != OpCode::IndexMark() as Word {
+    if ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] != OpCode::IndexMark() as Word andalso ops.opstack[ops.opsp - 1] != OpCode::ArrayMark() as Word {
         ops.opsp = ops.opsp - 1;
         let op = ops.opstack[ops.opsp];
         emit_op(op)
     } else {
-        ops.opsp = ops.opsp - 1;
         da.iclosing = 0;
-        if da.fa_index == 1 {
-            // A struct array-element access `p.xs[i]`: emit the ArrIndex (GetIndex) of the
-            // element kind directly (no read-vs-assign lookahead; array-element assignment is a
-            // later increment). It pops the index (top) and the FlatNested array value.
-            da.fa_index = 0;
+        if ops.opstack[ops.opsp - 1] == OpCode::ArrayMark() as Word {
+            // An array literal `[...]` close: pop the ArrayMark, count the last element (unless
+            // the array is empty, when no value was parsed), pop the array context, and emit an
+            // ArrayLit packing the flat byte size (count * word_bytes, eight per Word element)
+            // and the count as byte_size * 1024 + count -- the reconstruct/StructInit shape --
+            // which codegen lowers to NewComposite(Flat{Array, count, byte_size}).
+            ops.opsp = ops.opsp - 1;
+            if ops.expect_operand == 0 {
+                call.al_count[call.al_sp - 1] = call.al_count[call.al_sp - 1] + 1;
+            }
+            let count = call.al_count[call.al_sp - 1];
+            call.al_sp = call.al_sp - 1;
             ops.expect_operand = 0;
-            Node::ArrIndex() as Word + da.fa_index_kind * 64
+            Node::ArrayLit() as Word + (count * 8 * 1024 + count) * 64
         } else {
-            da.idx_sp = da.idx_sp - 1;
-            da.pidx_base = da.idx_base[da.idx_sp];
-            da.pidx_len = da.idx_len[da.idx_sp];
-            da.post_index = 1;
-            0
+            ops.opsp = ops.opsp - 1;
+            if da.fa_index == 1 {
+                // A struct array-element access `p.xs[i]`: emit the ArrIndex (GetIndex) of the
+                // element kind directly (no read-vs-assign lookahead; array-element assignment
+                // is a later increment). It pops the index (top) and the FlatNested array value.
+                da.fa_index = 0;
+                ops.expect_operand = 0;
+                Node::ArrIndex() as Word + da.fa_index_kind * 64
+            } else {
+                da.idx_sp = da.idx_sp - 1;
+                da.pidx_base = da.idx_base[da.idx_sp];
+                da.pidx_len = da.idx_len[da.idx_sp];
+                da.post_index = 1;
+                0
+            }
         }
     }
 }
@@ -795,6 +820,7 @@ fn prec_of(op: Word) -> Word {
         // a comparison in a call argument (`f(a > b)`) pops the CallMark and mis-emits it.
         OpCode::CallMark() => 0,
         OpCode::StructMark() => 0,
+        OpCode::ArrayMark() => 0,
         OpCode::Mul() => 8,
         OpCode::Div() => 8,
         OpCode::Mod() => 8,
@@ -888,7 +914,7 @@ fn step_closing() -> Word {
 // A `,`: flush the current call argument's operators down to the call marker, then count
 // the argument.
 fn step_cdraining() -> Word {
-    if ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] != OpCode::CallMark() as Word andalso ops.opstack[ops.opsp - 1] != OpCode::StructMark() as Word {
+    if ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] != OpCode::CallMark() as Word andalso ops.opstack[ops.opsp - 1] != OpCode::StructMark() as Word andalso ops.opstack[ops.opsp - 1] != OpCode::ArrayMark() as Word {
         ops.opsp = ops.opsp - 1;
         let op = ops.opstack[ops.opsp];
         emit_op(op)
@@ -902,10 +928,16 @@ fn step_cdraining() -> Word {
             ops.expect_operand = 0;
             0
         } else {
+        if ops.opstack[ops.opsp - 1] == OpCode::ArrayMark() as Word {
+            // A `,` between array-literal elements: count the element just drained.
+            call.al_count[call.al_sp - 1] = call.al_count[call.al_sp - 1] + 1;
+            ops.expect_operand = 1;
+            0
+        } else {
             call.call_count[call.call_sp - 1] = call.call_count[call.call_sp - 1] + 1;
             ops.expect_operand = 1;
             0
-        }
+        } }
     }
 }
 
@@ -1317,6 +1349,16 @@ fn step_normal(k: Word, v: Word) -> Word {
         ops.expect_operand = 1;
         0
     } else {
+    if k == Tok::LBracket() as Word {
+        // A `[` in operand position opens an array literal (a `[` after an operand is an index,
+        // intercepted earlier). Push an ArrayMark that blocks precedence across the elements.
+        call.al_count[call.al_sp] = 0;
+        call.al_sp = call.al_sp + 1;
+        ops.opstack[ops.opsp] = OpCode::ArrayMark() as Word;
+        ops.opsp = ops.opsp + 1;
+        ops.expect_operand = 1;
+        0
+    } else {
     if k == Tok::RParen() as Word {
         ops.closing = 1;
         0
@@ -1330,7 +1372,7 @@ fn step_normal(k: Word, v: Word) -> Word {
         0
     } else {
         step_op(k)
-    } } } } } } }
+    } } } } } } } }
 }
 
 // The struct-field-access postfix (ps.fa_phase 1/2), after a struct-typed parameter Local was
@@ -1885,6 +1927,7 @@ fn arm_body() -> Word {
     da.fa_index = 0;
     da.store_emit = 0;
     call.call_sp = 0;
+    call.al_sp = 0;
     call.call_phase = 0;
     call.cdraining = 0;
     ps.fa_phase = 0;

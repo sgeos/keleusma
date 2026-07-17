@@ -755,10 +755,15 @@ fn decode_op(w: i64) -> Op {
         43 => Op::Stream,
         44 => Op::Reset,
         45 => Op::ByteToWord,
-        // A flat struct construction: the operand packs count + byte_size*65536. The
-        // composite kind is Struct this increment (the only lowered composite).
+        // A flat struct construction: the operand packs count + byte_size*65536.
         46 => Op::NewComposite(NewCompositeOperand::Flat {
             kind: CompositeKind::Struct,
+            count: (operand % 65536) as u16,
+            byte_size: (operand / 65536) as u16,
+        }),
+        // A flat array literal: same packing, Array composite kind.
+        50 => Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Array,
             count: (operand % 65536) as u16,
             byte_size: (operand / 65536) as u16,
         }),
@@ -1753,8 +1758,9 @@ fn self_compile_codegen_atomic_functions() {
     // 37 as of increment 34 (added `push_struct_init` and `push_field_access` for flat
     // struct construction and field access); 39 with `push_const_value` and `push_break`
     // for the user-written `break;` statement; 41 with `push_field_access_nested` and
-    // `push_arrindex` for struct array-element access.
-    const EXPECTED_SELF_COMPILE: usize = 41;
+    // `push_arrindex` for struct array-element access; 42 with `push_array_lit` for array
+    // literals.
+    const EXPECTED_SELF_COMPILE: usize = 42;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -2240,6 +2246,27 @@ fn reconstruct_into(
                 });
                 (nodes.len() - 1) as i64
             }
+            17 => {
+                // ArrayLit: arg packs byte_size * 1024 + count. Pop the element nodes into
+                // call_args in source order (positional; no FieldPos), and build the codegen
+                // ArrayLit node whose arg is the byte size, lhs the element-slice start, rhs
+                // the count.
+                let byte_size = arg.div_euclid(1024);
+                let count = arg.rem_euclid(1024);
+                let mut popped: Vec<i64> = (0..count)
+                    .map(|_| stack.pop().expect("array element value"))
+                    .collect();
+                popped.reverse();
+                let args_start = call_args.len() as i64;
+                call_args.extend(popped);
+                nodes.push(Node {
+                    kind: 17,
+                    arg: byte_size,
+                    lhs: args_start,
+                    rhs: count,
+                });
+                (nodes.len() - 1) as i64
+            }
             other => panic!("reconstruct_body: unsupported node kind {other}"),
         };
         stack.push(idx);
@@ -2519,6 +2546,24 @@ fn self_host_compiles_array_element_access() {
         "struct B { bs: [Byte; 5] }\n\
          fn gb(b: B, i: Word) -> Byte { b.bs[i] }",
     );
+}
+
+// An ARRAY LITERAL `[a, b, c]`: parse.kel emits the element ops then an ArrayLit
+// (NewComposite(Flat{Array, count, byte_size = count * word_bytes})) -- like a struct
+// construction but the Array composite kind. This completes the array story (layout, element
+// access, and now construction): a standalone literal and a literal constructing an array-field
+// struct both compile byte-identically through the whole self-hosted pipeline. (Byte-identity
+// only, as the value is a composite; Word elements only, as untyped integer literals default to
+// Word -- a Byte array needs element casts, a later increment.)
+#[test]
+fn self_host_compiles_an_array_literal() {
+    assert_self_host_byte_identical("fn g() -> [Word; 3] { [1, 2, 3] }");
+    assert_self_host_byte_identical(
+        "struct Buf { xs: [Word; 3] }\n\
+         fn make() -> Buf { Buf { xs: [1, 2, 3] } }",
+    );
+    // Arithmetic elements, exercising the per-element operator drain at each `,`.
+    assert_self_host_byte_identical("fn g(a: Word) -> [Word; 2] { [a + 1, a * 2] }");
 }
 
 // NESTED-composite field access `s.i.x` on a struct-typed parameter, reusing the FlatNested
