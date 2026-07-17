@@ -367,6 +367,23 @@ private data enums {
     next_disc: Word,
 }
 
+// Struct type names, accumulated as each `struct` declaration's STRUCTSTART is emitted, so a
+// body can recognise `Name { field: expr, ... }` construction. Only the names are needed to
+// recognise the construction and open its field scan; the flat layout (byte size) is
+// resolved downstream by the layout pass. `sc_*` is the construction context stack: `sc_sp`
+// the nesting depth, `sc_name`/`sc_count` the struct name and running field count per open
+// construction, `sc_pending` the just-read struct name awaiting its `{`, `sc_phase` the
+// field-scan sub-state (0 none, 1 await `{`, 2 await a field name, 3 await the `:`).
+private data structdefs {
+    sd_count: Word,
+    sd_name: [Word; 64],
+    sc_sp: Word,
+    sc_name: [Word; 8],
+    sc_count: [Word; 8],
+    sc_pending: Word,
+    sc_phase: Word,
+}
+
 // Resolve an identifier to its frame slot: the `let` bindings first (most recent wins),
 // then the parameters.
 fn step_local(v: Word) -> Word {
@@ -439,8 +456,20 @@ fn step_ident(v: Word) -> Word {
         mat.enum_phase = 1;
         0
     } else {
+    ps.found_flag = 0;
+    for i in 0..structdefs.sd_count limit 64 {
+        if structdefs.sd_name[i] == v {
+            ps.found_flag = 1;
+        }
+    }
+    if ps.found_flag == 1 {
+        // A struct type name opens a `Name { field: expr, ... }` construction; await the `{`.
+        structdefs.sc_pending = v;
+        structdefs.sc_phase = 1;
+        0
+    } else {
         step_local(v)
-    } } } }
+    } } } } }
 }
 
 // A const-data field name: look its value up in the const-field table and emit it as a
@@ -1847,7 +1876,10 @@ fn header_data(k: Word, v: Word) -> Word {
             ps.mode = 6;
             if ps.dvis == 3 {
                 // STRUCTSTART: a struct type declaration carrying its name; its fields
-                // reuse the data-field scan but are not slotted (see commit_field).
+                // reuse the data-field scan but are not slotted (see commit_field). Record
+                // the name so a body can recognise its `Name { ... }` construction.
+                structdefs.sd_name[structdefs.sd_count] = v;
+                structdefs.sd_count = structdefs.sd_count + 1;
                 18 + v * 64
             } else {
                 9 + (v * 4 + ps.dvis) * 64
