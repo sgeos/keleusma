@@ -1723,8 +1723,9 @@ fn self_compile_codegen_atomic_functions() {
     // passing unnoticed once attention moves to the parser. If codegen.kel gains or
     // loses a function deliberately, update EXPECTED_SELF_COMPILE below.
     // 37 as of increment 34 (added `push_struct_init` and `push_field_access` for flat
-    // struct construction and field access).
-    const EXPECTED_SELF_COMPILE: usize = 37;
+    // struct construction and field access); 39 with `push_const_value` and `push_break`
+    // for the user-written `break;` statement.
+    const EXPECTED_SELF_COMPILE: usize = 39;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -2144,7 +2145,7 @@ fn reconstruct_into(
                 });
                 (nodes.len() - 1) as i64
             }
-            6 | 10 | 13 | 24 | 26 | 28 => {
+            6 | 10 | 13 | 24 | 26 | 28 | 29 => {
                 let c = stack.pop().expect("unary operand");
                 nodes.push(Node {
                     kind,
@@ -2750,6 +2751,24 @@ fn self_host_compiles_a_conditional_as_a_call_argument() {
          loop main(c: Word) -> Word { yield g(c) }",
     );
     assert_self_host_yields(m3, 0, 23); // c=0, not > 0 -> 20 + 3
+}
+
+// A user-written `break;` statement inside a `for .. limit` loop -- the second roadmap-named
+// "reconstruct gap the subset needs." lexer.kel gains the `break` keyword; parse.kel records a
+// Break node (kind 29) carrying the enclosing loop's outcome slot (`for_oc`); reconstruct
+// treats it as a unary statement wrapping the continuation; and codegen emits
+// `Const(LOOP_OUTCOME_BREAK=2), SetLocal(oc), Break`, the Break patched to the loop exit by the
+// enclosing `mendloop` exactly like the loop's own range exit. Byte-identical to the reference
+// through the whole self-hosted pipeline, and it runs: the loop accumulates 0+1+2+3 and breaks
+// at i == 4.
+#[test]
+fn self_host_compiles_a_user_break() {
+    let m = assert_self_host_byte_identical(
+        "private data d { sum: Word } \
+         fn accumulate(n: Word) -> Word { d.sum = 0; for i in 0..n limit 8 { if i > 3 { break; } d.sum = d.sum + i; } d.sum } \
+         loop main(n: Word) -> Word { yield accumulate(n) }",
+    );
+    assert_self_host_yields(m, 10, 6); // breaks at i=4, so 0+1+2+3 = 6
 }
 
 // The bridge over the indexed write, completing the data-access family: an

@@ -204,7 +204,8 @@ fn kw5(start: Word) -> Word {
     if a == 109 andalso b == 97 andalso c == 116 andalso d == 99 andalso e == 104 { 48 } else {    // match
     if a == 121 andalso b == 105 andalso c == 101 andalso d == 108 andalso e == 100 { 5 } else {   // yield
     if a == 116 andalso b == 114 andalso c == 97 andalso d == 105 andalso e == 116 { 55 } else {   // trait
-    0 - 1 } } } }
+    if a == 98 andalso b == 114 andalso c == 101 andalso d == 97 andalso e == 107 { 57 } else {    // break
+    0 - 1 } } } } }
 }
 
 fn kw6(start: Word) -> Word {

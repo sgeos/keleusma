@@ -93,6 +93,7 @@ enum Tok {
     Struct = 54,
     Trait = 55,
     Impl = 56,
+    Break = 57,
 }
 
 // The node-record kinds the body walk yields (a subset of body.kel's `enum Node`).
@@ -124,6 +125,7 @@ enum Node {
     MatchBuild = 34,
     FieldPos = 35,
     IndexStore = 36,
+    Break = 29,
 }
 
 // The shunting-yard operator codes.
@@ -206,6 +208,9 @@ private data ops {
 // finishes (0 the body's Done, 1 a then branch's phase advance, 2 an else branch's If).
 private data stmt {
     let_phase: Word,
+    // Set when a `break` statement was just recorded, so the terminating `;` is consumed
+    // without draining a (non-existent) statement value.
+    break_pending: Word,
     pending_let_name: Word,
     let_names: [Word; 64],
     scope_slot: [Word; 64],
@@ -905,9 +910,25 @@ fn step_op(k: Word) -> Word {
         stmt.let_phase = 1;
         0
     } else {
+    if k == Tok::Break() as Word {
+        // A `break;` statement: record a Break node (kind 29) carrying the enclosing
+        // `for .. limit` loop's outcome slot (for_oc), which codegen sets to the user-break
+        // outcome code before the Break op. The terminating `;` is consumed as a no-op.
+        stmt.stmt_kind[stmt.stmt_count] = Node::Break() as Word;
+        stmt.stmt_arg[stmt.stmt_count] = forst.for_oc[forst.for_sp - 1];
+        stmt.stmt_count = stmt.stmt_count + 1;
+        stmt.break_pending = 1;
+        ops.expect_operand = 1;
+        0
+    } else {
     if k == Tok::Semi() as Word {
-        ops.drain_reason = 0;
-        ops.draining = 1;
+        if stmt.break_pending == 1 {
+            // The `;` after a `break` was already recorded; consume it without draining.
+            stmt.break_pending = 0;
+        } else {
+            ops.drain_reason = 0;
+            ops.draining = 1;
+        }
         0
     } else {
     if k == Tok::Yield() as Word {
@@ -948,7 +969,7 @@ fn step_op(k: Word) -> Word {
         } else {
             0
         }
-    } } } } } } }
+    } } } } } } } }
 }
 
 // The conditional tokens `{`, `}`, `if`, `else`. A `{` after a condition drains it
@@ -1766,6 +1787,7 @@ fn arm_body() -> Word {
     ops.closing = 0;
     ops.draining = 0;
     stmt.let_phase = 0;
+    stmt.break_pending = 0;
     stmt.let_count = 0;
     stmt.slot_count = 0;
     stmt.stmt_count = 0;
