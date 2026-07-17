@@ -184,6 +184,25 @@ fn nested_flat_field_out_of_bounds_is_rejected() {
 }
 
 #[test]
+fn newcomposite_packed_size_mismatch_is_rejected() {
+    // Two Int elements pack to 16 bytes but the baked flat struct body claims 12
+    // (NewCompositeSizeMismatch). All element sizes are known, so the check fires.
+    assert_chunk_rejected(
+        "newcomposite-size",
+        vec![
+            Op::Const(0),
+            Op::Const(0),
+            Op::NewComposite(NewCompositeOperand::Flat {
+                kind: CompositeKind::Struct,
+                count: 2,
+                byte_size: 12,
+            }),
+        ],
+        vec![ConstValue::Int(1)],
+    );
+}
+
+#[test]
 fn flat_field_on_a_scalar_is_rejected() {
     // A flat field access on a scalar operand is a type error (expected composite).
     assert_chunk_rejected(

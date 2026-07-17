@@ -7,9 +7,10 @@
 // `resume_size`), a `SetLocal` checks the stored value against the slot's seed (`setlocal_compat`,
 // size-only flat compatibility), a `Call`/native pushes the seeded return shape (`ret_tag`/
 // `ret_size`), and a flat enum `NewComposite` cross-checks its baked body size against the
-// declared set (`eb_vals`/`eb_count`, audit B8). The Call argument-vs-parameter check
-// (`CallArgMismatch`), the non-enum `NewComposite` packed-size check, and exact composite-kind
-// compatibility remain deferred (documented residuals). An unseeded run (all seeds Top, empty
+// declared set (`eb_vals`/`eb_count`, audit B8). A non-enum flat `NewComposite` also checks that
+// its packed element sizes sum to the baked body when all are known (`NewCompositeSizeMismatch`).
+// The Call argument-vs-parameter check (`CallArgMismatch`) and exact composite-kind compatibility
+// (size-only flat) remain deferred (documented residuals). An unseeded run (all seeds Top, empty
 // tables) reproduces the isolation `typed_check_chunk`.
 //
 // It reconstructs the flat shape of each operand-stack entry -- the lattice `AbsVal` encoded per
@@ -97,6 +98,8 @@ private data tf {
     pop_tag: Word,
     pop_size: Word,
     flag: Word,
+    sum: Word,
+    allknown: Word,
     bad: Word,
 }
 
@@ -265,7 +268,25 @@ fn apply_typed(ip: Word) -> Word {
         tf.lc_size[tv.ta[ip]] = tf.pop_size;
     } else {
     if k == 6 {
-        st_pop_n(r);
+        // NewComposite non-enum flat: pop the packed elements; when every element size is known,
+        // their sum must equal the baked body size (`NewCompositeSizeMismatch`).
+        tf.sum = 0;
+        tf.allknown = 1;
+        for kk in 0..256 limit 256 {
+            if kk < r {
+                st_pop();
+                if tf.pop_tag == 0 {
+                    tf.allknown = 0;
+                } else {
+                    tf.sum = tf.sum + tf.pop_size;
+                }
+            }
+        }
+        if tf.allknown == 1 {
+            if tf.sum > tv.tb[ip] orelse tv.tb[ip] > tf.sum {
+                tf.bad = 1;
+            }
+        }
         st_push(2, tv.tb[ip]);
     } else {
     if k == 7 {
