@@ -15,6 +15,35 @@ use keleusma_selfhost::selfhost::{compile_src, dl_reject_module_via_kel};
 const WB: usize = 8;
 const FB: usize = 8;
 
+fn read_stage(rel: &str) -> String {
+    std::fs::read_to_string(rel)
+        .or_else(|_| std::fs::read_to_string(format!("compiler/{rel}")))
+        .unwrap_or_else(|e| panic!("cannot read {rel}: {e}"))
+}
+
+// The self-hosted stages have very large data layouts (lexer.kel alone has ~76k shared slots, one
+// per array element), so accepting them exercises the batched marshalling on real tables.
+#[test]
+fn stage_data_layouts_are_accepted() {
+    for stage in [
+        "kel/lexer.kel",
+        "kel/parse.kel",
+        "kel/reconstruct.kel",
+        "kel/codegen.kel",
+        "kel/analyze.kel",
+    ] {
+        let m = compile_src(&read_stage(stage));
+        assert!(
+            typed_check_module(&m, WB, FB).is_ok(),
+            "{stage}: the reference must accept the data layout"
+        );
+        assert!(
+            !dl_reject_module_via_kel(&m),
+            "{stage}: the batched data-layout stage must accept the large valid layout"
+        );
+    }
+}
+
 // ---- POSITIVE: valid data layouts are accepted --------------------------------------------
 
 fn assert_accepted(label: &str, src: &str) {

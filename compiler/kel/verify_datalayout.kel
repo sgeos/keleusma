@@ -1,129 +1,105 @@
 // compiler/kel/verify_datalayout.kel -- the self-hosted module-level data-layout validation of
 // the A.2.1 typed pass (reference `verify_typed.rs::validate_data_layout`), audit findings B6 and
-// C4. It reconciles the shared-slot layout table and validates the private-composite layout
-// table, the two wire tables the runtime trusts only because verified.
+// C4, in a BATCHED form so it scales to the self-hosted stages (whose layouts expand to tens of
+// thousands of slots, one per array element).
 //
 // Three checks (see the reference for the full rationale):
 //   * B6 contiguity/count: the shared slots must be a contiguous prefix of the unified slot
 //     array (`prefix_shared == total_shared`), and there must be exactly one shared-layout entry
-//     per shared slot (`n_shared == total_shared`). Otherwise a shared-slot access the structural
-//     verifier admits could index the layout table out of bounds at runtime.
+//     per shared slot (`n_shared == total_shared`).
 //   * B6 bounds: every shared slot's byte extent (`offset + size`) must lie within the
-//     shared-data buffer. `size` is the composite body length for a composite slot, or the scalar
-//     size at the module widths otherwise; an undecodable kind tag (`sl_bad`) is a corrupt entry.
+//     shared-data buffer. The host precomputes `size` (the composite body length, or the scalar
+//     size at the module widths) and the undecodable-kind flag `a2`.
 //   * C4 monotonicity: the private-composite layout must have strictly ascending unique slot
-//     indices (the runtime binary-search invariant) that are in range (`< n_slots`), and strictly
-//     ascending pool offsets in range (`< pool`).
+//     indices in range (`< n_slots`) and strictly ascending pool offsets in range (`< pool`).
 //
-// The host precomputes each shared slot's `size` (and the undecodable flag) -- the authoritative
-// sizing, as the resource stage marshals `Op::cost()` -- and the stage self-hosts the reconcile/
-// bounds/monotonicity algorithm. This slice processes a single batch of up to 1024 entries per
-// table; a module whose data layout expands past that (the self-hosted stages, one slot per array
-// element) needs the driver to batch the tables and thread the running monotonicity/count state
-// across batches -- a mechanical driver extension left for a follow-up.
+// The tables are fed to this stage one 1024-entry batch at a time by resuming the coroutine: the
+// host writes the batch into `a0`/`a1`/`a2` with the `phase` (1 slots, 2 shared bounds, 3
+// private) and `count`, then resumes; the running state `io_*` (the shared prefix/total counts,
+// the private-layout previous slot/offset, and the accumulated `bad`) persists in the shared
+// buffer across resumes. After the last batch the host reads `io_prefix`/`io_total`/`io_bad` and
+// finalises the contiguity/count comparison. The stage self-hosts the reconcile/bounds/
+// monotonicity algorithm; the driver orchestrates the batching, as it does the topological
+// resource-bound resolution for analyze.kel.
 require word >= 32;
 
-// The host-facing block: the table sizes and buffer/pool bounds, the per-slot shared flag
-// (`slot_shared`), the per-shared-entry offset/size and undecodable flag, the per-private-entry
-// slot/offset, and the verdict.
+// The host-facing block: the batch descriptor (`phase`/`count`), the layout scalars, the running
+// state `io_*` (read at the start of each batch, written back at the end), and the batch arrays
+// (`a0`: shared flag / shared offset / private slot; `a1`: shared size / private offset; `a2`:
+// shared undecodable flag), reused per phase.
 shared data dl {
+    phase: Word,
+    count: Word,
     n_slots: Word,
-    n_shared: Word,
-    n_private: Word,
     buffer: Word,
     pool: Word,
-    slot_shared: [Word; 1024],
-    sl_offset: [Word; 1024],
-    sl_size: [Word; 1024],
-    sl_bad: [Word; 1024],
-    pc_slot: [Word; 1024],
-    pc_offset: [Word; 1024],
-    out_reject: Word,
+    io_prefix: Word,
+    io_total: Word,
+    io_still: Word,
+    io_prev_slot: Word,
+    io_prev_off: Word,
+    io_first: Word,
+    io_bad: Word,
+    a0: [Word; 1024],
+    a1: [Word; 1024],
+    a2: [Word; 1024],
 }
 
-// Reconcile-and-monotonicity scratch: `prefix`/`total`/`still` count the shared prefix, `prev_*`/
-// `first` carry the private-layout monotonicity state, `bad` latches the first violation.
-private data dp {
-    prefix: Word,
-    total: Word,
-    still: Word,
-    prev_slot: Word,
-    prev_off: Word,
-    first: Word,
-    bad: Word,
-}
-
+// Process one batch of the current `phase`, updating the running `io_*` state.
 fn run() -> Word {
-    dp.bad = 0;
-
-    // B6 contiguity/count: count the leading shared prefix and the total shared slots.
-    dp.prefix = 0;
-    dp.total = 0;
-    dp.still = 1;
-    for i in 0..1024 limit 1024 {
-        if dl.n_slots > i {
-            if dl.slot_shared[i] == 1 {
-                dp.total = dp.total + 1;
-                if dp.still == 1 {
-                    dp.prefix = dp.prefix + 1;
-                }
-            } else {
-                dp.still = 0;
-            }
-        }
-    }
-    if dp.prefix > dp.total orelse dp.total > dp.prefix {
-        dp.bad = 1;
-    }
-    if dl.n_shared > dp.total orelse dp.total > dl.n_shared {
-        dp.bad = 1;
-    }
-
-    // B6 bounds: each shared slot's extent must lie within the buffer.
-    for i in 0..1024 limit 1024 {
-        if dl.n_shared > i {
-            if dl.sl_bad[i] == 1 {
-                dp.bad = 1;
-            } else {
-                if dl.sl_offset[i] + dl.sl_size[i] > dl.buffer {
-                    dp.bad = 1;
+    if dl.phase == 1 {
+        // B6 contiguity/count: count the leading shared prefix and the total shared slots.
+        for i in 0..1024 limit 1024 {
+            if dl.count > i {
+                if dl.a0[i] == 1 {
+                    dl.io_total = dl.io_total + 1;
+                    if dl.io_still == 1 {
+                        dl.io_prefix = dl.io_prefix + 1;
+                    }
+                } else {
+                    dl.io_still = 0;
                 }
             }
         }
-    }
-
-    // C4 monotonicity: strictly ascending, in-range slots and pool offsets.
-    dp.first = 1;
-    dp.prev_slot = 0;
-    dp.prev_off = 0;
-    for i in 0..1024 limit 1024 {
-        if dl.n_private > i {
-            if dl.pc_slot[i] >= dl.n_slots {
-                dp.bad = 1;
-            }
-            if dl.pc_offset[i] >= dl.pool {
-                dp.bad = 1;
-            }
-            if dp.first == 0 {
-                if dl.pc_slot[i] <= dp.prev_slot {
-                    dp.bad = 1;
-                }
-                if dl.pc_offset[i] <= dp.prev_off {
-                    dp.bad = 1;
-                }
-            }
-            dp.prev_slot = dl.pc_slot[i];
-            dp.prev_off = dl.pc_offset[i];
-            dp.first = 0;
-        }
-    }
-
-    if dp.bad == 1 {
-        dl.out_reject = 1;
     } else {
-        dl.out_reject = 0;
-    }
-    dl.out_reject
+    if dl.phase == 2 {
+        // B6 bounds: each shared slot's extent must lie within the buffer.
+        for i in 0..1024 limit 1024 {
+            if dl.count > i {
+                if dl.a2[i] == 1 {
+                    dl.io_bad = 1;
+                } else {
+                    if dl.a0[i] + dl.a1[i] > dl.buffer {
+                        dl.io_bad = 1;
+                    }
+                }
+            }
+        }
+    } else {
+        // C4 monotonicity: strictly ascending, in-range slots and pool offsets.
+        for i in 0..1024 limit 1024 {
+            if dl.count > i {
+                if dl.a0[i] >= dl.n_slots {
+                    dl.io_bad = 1;
+                }
+                if dl.a1[i] >= dl.pool {
+                    dl.io_bad = 1;
+                }
+                if dl.io_first == 0 {
+                    if dl.a0[i] <= dl.io_prev_slot {
+                        dl.io_bad = 1;
+                    }
+                    if dl.a1[i] <= dl.io_prev_off {
+                        dl.io_bad = 1;
+                    }
+                }
+                dl.io_prev_slot = dl.a0[i];
+                dl.io_prev_off = dl.a1[i];
+                dl.io_first = 0;
+            }
+        }
+    } }
+    0
 }
 
 loop main(resume: Word) -> Word {

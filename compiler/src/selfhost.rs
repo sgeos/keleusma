@@ -1357,19 +1357,28 @@ pub fn depth_reject_chunk_via_kel(chunk: &keleusma::bytecode::Chunk) -> bool {
     }
 }
 
-/// Run the whole self-hosted structural verifier over a module: the block-nesting, branch-target,
-/// operand-bounds, and block-type checks per chunk (verify_structural.kel), the productive-
-/// divergence check for Stream chunks (verify_yield.kel), and the operand-stack depth-balance
-/// check per chunk (verify_depth.kel). Together these are `verify()`'s per-chunk checks -- every
-/// pass except the A.2.1 typed operand-stack pass. The module is rejected iff any chunk is,
-/// mirroring `verify()`. The always-yielding set is computed by the self-hosted fixpoint.
+/// Run the WHOLE self-hosted verifier over a module -- every check `verify()` performs, all
+/// self-hosted: per chunk, the block-nesting/branch-target/operand-bounds and block-type checks
+/// (verify_structural.kel), the productive-divergence check for Stream chunks (verify_yield.kel),
+/// and the operand-stack depth-balance check (verify_depth.kel); then the module-level A.2.1
+/// typed operand-stack pass (verify_typed.kel, seeded from the signature table) and its
+/// data-layout validation (verify_datalayout.kel, B6/C4). The module is rejected iff any check
+/// rejects, mirroring `verify()`. The always-yielding set is computed by the self-hosted fixpoint.
+///
+/// The typed pass runs its documented sound over-approximation (operand shapes reset to Top across
+/// control-flow boundaries) and defers two residuals -- the Call argument-vs-parameter check and
+/// exact composite-kind compatibility (size-only flat) -- so it never rejects a program `verify()`
+/// accepts (the deferred checks fall to the retained runtime guard) but may admit some `verify()`
+/// rejects. The structural, block-type, depth, productivity, data-layout, and within-basic-block
+/// flat/underflow/height/newcomposite-size checks are exact.
 pub fn structural_reject_module_via_kel(module: &Module) -> bool {
     let always = self_hosted_always_yielding(module);
-    module.chunks.iter().any(|chunk| {
+    let per_chunk = module.chunks.iter().any(|chunk| {
         structural_reject_chunk_via_kel(module, chunk, &always)
             || productivity_reject_via_kel(chunk, &always)
             || depth_reject_chunk_via_kel(chunk)
-    })
+    });
+    per_chunk || typed_reject_module_via_kel(module) || dl_reject_module_via_kel(module)
 }
 
 // --- Self-hosted A.2.1 typed operand-stack verifier, slices 2a+2b (verify_typed.kel) ---------
@@ -1387,10 +1396,10 @@ pub fn structural_reject_module_via_kel(module: &Module) -> bool {
 // only the cross-join shape precision. `typed_run` marshals the per-op descriptor plus, in the
 // seeded form, the per-slot seed shapes (from the chunk signature), the resume shape, the per-op
 // Call/native return shapes, and the enum body sizes; an unseeded run reproduces the isolation
-// `typed_check_chunk`. Deferred residuals: the Call argument-vs-parameter check, the non-enum
-// `NewComposite` packed-size check, and exact composite-kind compatibility. Still without the
-// module-level data-layout validation (slice 2c), so not yet wired into
-// `structural_reject_module_via_kel`.
+// `typed_check_chunk`. The non-enum `NewComposite` packed-size check (`NewCompositeSizeMismatch`)
+// is enforced; the remaining deferred residuals are the Call argument-vs-parameter check and exact
+// composite-kind compatibility (size-only flat). Together with the batched data-layout validation
+// (slice 2c) the typed pass is wired into `structural_reject_module_via_kel`.
 
 const TV_OP_COUNT: usize = 0;
 const TV_RESUME_TAG: usize = 1;
@@ -1641,26 +1650,32 @@ pub fn typed_reject_module_via_kel(module: &Module) -> bool {
 //
 // verify_datalayout.kel reproduces the reference `validate_data_layout` (B6/C4): the shared-slot
 // reconcile (contiguity/count), the shared-slot buffer bounds, and the private-composite
-// monotonicity. The driver precomputes each shared slot's `size` (composite body length, or the
-// scalar size at the module widths, or the undecodable flag) and marshals the tables. This slice
-// is a single batch of up to 1024 entries per table; a layout past that (the self-hosted stages'
-// per-array-element slots) needs the driver to batch and thread the running state, a mechanical
-// extension left for a follow-up. The shared block `dl` lays out the scalars `n_slots` (0),
-// `n_shared` (1), `n_private` (2), `buffer` (3), `pool` (4); the arrays `slot_shared` (5..),
-// `sl_offset`, `sl_size`, `sl_bad`, `pc_slot`, `pc_offset` (each 1024 wide); and `out_reject`.
+// monotonicity. It is BATCHED so it scales to the self-hosted stages, whose layouts expand to
+// tens of thousands of slots (one per array element). The driver feeds each table 1024 entries at
+// a time by resuming the coroutine, threading the running state through the shared block `dl`:
+// scalars `phase` (0), `count` (1), `n_slots` (2), `buffer` (3), `pool` (4); the running state
+// `io_prefix` (5) `io_total` `io_still` `io_prev_slot` `io_prev_off` `io_first` `io_bad` (11); and
+// the batch arrays `a0` (12..), `a1`, `a2` (each 1024 wide), reused per phase. After the last
+// batch the driver reads `io_bad`/`io_prefix`/`io_total` and finalises the contiguity/count
+// comparison (`prefix == total`, `n_shared == total`).
 
-const DL_N_SLOTS: usize = 0;
-const DL_N_SHARED: usize = 1;
-const DL_N_PRIVATE: usize = 2;
+const DL_PHASE: usize = 0;
+const DL_COUNT: usize = 1;
+const DL_N_SLOTS: usize = 2;
 const DL_BUFFER: usize = 3;
 const DL_POOL: usize = 4;
-const DL_SLOT_SHARED: usize = 5;
-const DL_SL_OFFSET: usize = 5 + 1024;
-const DL_SL_SIZE: usize = 5 + 1024 * 2;
-const DL_SL_BAD: usize = 5 + 1024 * 3;
-const DL_PC_SLOT: usize = 5 + 1024 * 4;
-const DL_PC_OFFSET: usize = 5 + 1024 * 5;
-const DL_OUT_REJECT: usize = 5 + 1024 * 6;
+const DL_IO_PREFIX: usize = 5;
+const DL_IO_TOTAL: usize = 6;
+const DL_IO_STILL: usize = 7;
+const DL_IO_PREV_SLOT: usize = 8;
+const DL_IO_PREV_OFF: usize = 9;
+const DL_IO_FIRST: usize = 10;
+const DL_IO_BAD: usize = 11;
+const DL_A0: usize = 12;
+const DL_A1: usize = 12 + 1024;
+const DL_A2: usize = 12 + 1024 * 2;
+
+const DL_BATCH: usize = 1024;
 
 fn verify_datalayout_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
@@ -1671,9 +1686,9 @@ fn verify_datalayout_kel_module() -> Module {
 
 /// Run verify_datalayout.kel over a module's data layout, returning whether it rejects a B6
 /// shared-slot reconcile/bounds or a C4 private-composite monotonicity violation (the reference
-/// `validate_data_layout`). A module with no data layout is accepted. Panics if a table exceeds
-/// the single-batch cap of 1024 entries (the self-hosted stages exceed it and need the batched
-/// driver extension).
+/// `validate_data_layout`). A module with no data layout is accepted. The three tables are fed one
+/// 1024-entry batch at a time (resuming the coroutine, the running state persisting in the shared
+/// buffer), so it scales to the self-hosted stages' tens-of-thousands-of-slot layouts.
 pub fn dl_reject_module_via_kel(module: &Module) -> bool {
     use keleusma::bytecode::{SHARED_SLOT_COMPOSITE_FLAG, SlotVisibility};
     use keleusma::value_layout::ScalarKind;
@@ -1682,11 +1697,6 @@ pub fn dl_reject_module_via_kel(module: &Module) -> bool {
     };
     let n_slots = layout.slots.len();
     let n_shared = layout.shared_layout.len();
-    let n_private = layout.private_composite_layout.len();
-    assert!(
-        n_slots <= 1024 && n_shared <= 1024 && n_private <= 1024,
-        "verify_datalayout.kel single-batch cap (batched driver extension needed for large layouts)"
-    );
     let wb = (1usize << module.word_bits_log2) / 8;
     let fb = (1usize << module.float_bits_log2) / 8;
     let m = verify_datalayout_kel_module();
@@ -1698,9 +1708,15 @@ pub fn dl_reject_module_via_kel(module: &Module) -> bool {
     let set = |vm: &Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
         vm.set_shared(shared, slot, Value::Int(v)).unwrap();
     };
+    // Running state and the per-run scalars, initialised once (they persist across resumes).
+    set(&vm, &mut shared, DL_IO_PREFIX, 0);
+    set(&vm, &mut shared, DL_IO_TOTAL, 0);
+    set(&vm, &mut shared, DL_IO_STILL, 1);
+    set(&vm, &mut shared, DL_IO_PREV_SLOT, 0);
+    set(&vm, &mut shared, DL_IO_PREV_OFF, 0);
+    set(&vm, &mut shared, DL_IO_FIRST, 1);
+    set(&vm, &mut shared, DL_IO_BAD, 0);
     set(&vm, &mut shared, DL_N_SLOTS, n_slots as i64);
-    set(&vm, &mut shared, DL_N_SHARED, n_shared as i64);
-    set(&vm, &mut shared, DL_N_PRIVATE, n_private as i64);
     set(&vm, &mut shared, DL_BUFFER, module.shared_data_bytes as i64);
     set(
         &vm,
@@ -1708,38 +1724,71 @@ pub fn dl_reject_module_via_kel(module: &Module) -> bool {
         DL_POOL,
         module.persistent_composite_bytes as i64,
     );
-    for (i, s) in layout.slots.iter().enumerate() {
-        let is_shared = i64::from(matches!(s.visibility, SlotVisibility::Shared));
-        set(&vm, &mut shared, DL_SLOT_SHARED + i, is_shared);
-    }
-    for (i, sl) in layout.shared_layout.iter().enumerate() {
-        set(&vm, &mut shared, DL_SL_OFFSET + i, sl.offset as i64);
-        let (size, bad) = if sl.kind & SHARED_SLOT_COMPOSITE_FLAG != 0 {
-            (sl.len as i64, 0)
-        } else {
-            match ScalarKind::from_tag(sl.kind) {
-                Some(k) => (k.size_in_bytes(wb, fb) as i64, 0),
-                None => (0, 1),
-            }
-        };
-        set(&vm, &mut shared, DL_SL_SIZE + i, size);
-        set(&vm, &mut shared, DL_SL_BAD + i, bad);
-    }
-    for (i, e) in layout.private_composite_layout.iter().enumerate() {
-        set(&vm, &mut shared, DL_PC_SLOT + i, e.slot as i64);
-        set(&vm, &mut shared, DL_PC_OFFSET + i, e.offset as i64);
-    }
-    match vm
-        .call_with_shared(&mut shared, &[Value::Int(0)])
+
+    // Process one prepared batch (`phase`/`count`/arrays already set). Each batch is a fresh
+    // `call_with_shared` -- it re-enters `loop main` from the entry, runs `run()` once, and yields
+    // -- so the batch's `run()` always executes (a resume can land on the Stream/Reset cycle
+    // boundary, which does not run the body). The running state `io_*` persists in the shared
+    // buffer across calls because the buffer is retained, not re-zeroed.
+    let run_batch = |vm: &mut Vm<'_, '_>, shared: &mut [u8]| match vm
+        .call_with_shared(shared, &[Value::Int(0)])
         .expect("call verify_datalayout.kel")
     {
         VmState::Yielded(Value::Int(_)) => {}
         other => panic!("unexpected verify_datalayout.kel state: {other:?}"),
+    };
+
+    // Phase 1: the slot visibilities (shared prefix/total counts).
+    for batch in layout.slots.chunks(DL_BATCH) {
+        set(&vm, &mut shared, DL_PHASE, 1);
+        set(&vm, &mut shared, DL_COUNT, batch.len() as i64);
+        for (j, s) in batch.iter().enumerate() {
+            let is_shared = i64::from(matches!(s.visibility, SlotVisibility::Shared));
+            set(&vm, &mut shared, DL_A0 + j, is_shared);
+        }
+        run_batch(&mut vm, &mut shared);
     }
-    match vm.get_shared(&shared, DL_OUT_REJECT).unwrap() {
-        Value::Int(n) => n != 0,
-        o => panic!("expected Int at out_reject, got {o:?}"),
+    // Phase 2: the shared-slot layout (offset, precomputed size, undecodable flag).
+    for batch in layout.shared_layout.chunks(DL_BATCH) {
+        set(&vm, &mut shared, DL_PHASE, 2);
+        set(&vm, &mut shared, DL_COUNT, batch.len() as i64);
+        for (j, sl) in batch.iter().enumerate() {
+            set(&vm, &mut shared, DL_A0 + j, sl.offset as i64);
+            let (size, bad) = if sl.kind & SHARED_SLOT_COMPOSITE_FLAG != 0 {
+                (sl.len as i64, 0)
+            } else {
+                match ScalarKind::from_tag(sl.kind) {
+                    Some(k) => (k.size_in_bytes(wb, fb) as i64, 0),
+                    None => (0, 1),
+                }
+            };
+            set(&vm, &mut shared, DL_A1 + j, size);
+            set(&vm, &mut shared, DL_A2 + j, bad);
+        }
+        run_batch(&mut vm, &mut shared);
     }
+    // Phase 3: the private-composite layout (slot, pool offset).
+    for batch in layout.private_composite_layout.chunks(DL_BATCH) {
+        set(&vm, &mut shared, DL_PHASE, 3);
+        set(&vm, &mut shared, DL_COUNT, batch.len() as i64);
+        for (j, e) in batch.iter().enumerate() {
+            set(&vm, &mut shared, DL_A0 + j, e.slot as i64);
+            set(&vm, &mut shared, DL_A1 + j, e.offset as i64);
+        }
+        run_batch(&mut vm, &mut shared);
+    }
+
+    let rd = |slot: usize| -> i64 {
+        match vm.get_shared(&shared, slot).unwrap() {
+            Value::Int(n) => n,
+            o => panic!("expected Int at {slot}, got {o:?}"),
+        }
+    };
+    // Reject on any per-entry violation, or the B6 contiguity/count mismatch. When there were no
+    // batches at all (an empty layout), the running state is its init value and this is `false`.
+    rd(DL_IO_BAD) != 0
+        || rd(DL_IO_PREFIX) != rd(DL_IO_TOTAL)
+        || (n_shared as i64) != rd(DL_IO_TOTAL)
 }
 
 /// The self-hosted drop-in replacement for `verify_resource_bounds`: analyze.kel decides each
