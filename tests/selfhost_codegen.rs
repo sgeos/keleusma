@@ -2450,6 +2450,29 @@ fn self_host_compiles_a_struct_parameter_used_whole() {
     );
 }
 
+// A scalar field AFTER an ARRAY field: `tag` sits at flat byte offset 32 (four Words), so the
+// layout must size the array field as element_size * length (8 * 4), not as one element. The
+// getter `s.tag` compiles byte-identically to the reference through the whole self-hosted
+// pipeline only if the array field is accounted for. (Array-element access `s.xs[i]` needs an
+// indexed flat read and is a later increment; this validates the array field's SIZE in the
+// layout.)
+#[test]
+fn self_host_compiles_field_access_after_an_array_field() {
+    assert_self_host_byte_identical(
+        "struct S { xs: [Word; 4], tag: Word }\n\
+         fn gt(s: S) -> Word { s.tag }",
+    );
+}
+
+// A mixed-width array field: `flags: [Byte; 3]` is three bytes, so `n` lands at offset 3.
+#[test]
+fn self_host_compiles_field_access_after_a_byte_array_field() {
+    assert_self_host_byte_identical(
+        "struct H { flags: [Byte; 3], n: Word }\n\
+         fn gn(h: H) -> Word { h.n }",
+    );
+}
+
 // An indexed-data-field ASSIGNMENT whose right side contains a CALL, as the sole body of a
 // nested block-form `if` (`d.arr[i] = dbl(x);`). parse.kel's own `header_field` now uses this
 // shape (a data assignment with a `field_size_and_kind` call), so this exercises it in a
