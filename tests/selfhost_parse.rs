@@ -56,8 +56,8 @@ const CHUNKS: usize = 1 + 12288 + 2;
 const REQUIRE_ID: usize = 1 + 12288 + 2 + 256;
 
 /// Map the reference token stream into the stage's unified `(kind, value)` pairs. The
-/// operator codes are body.kel's (`Plus` 21 upward); the header keywords and punctuation
-/// keep their parser.kel codes, which agree with the body vocabulary on every shared
+/// operator codes follow the retired body.kel scheme (`Plus` 21 upward); the header
+/// keywords and punctuation keep the retired parser.kel codes, which agree with the body vocabulary on every shared
 /// token. The trailing `Eof` is dropped.
 fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
     let mut intern = |s: &str| -> i64 {
@@ -1704,7 +1704,7 @@ fn a_whole_mini_stage_program_parses() {
     assert_eq!(got.funcs.len(), 5); // clamp, scan, emit, emit, classify
 }
 
-// body.kel's BASELINE TORTURE TEST, ported: an expression statement nested in a `let`'s
+// The BASELINE TORTURE TEST ported from the retired body.kel: an expression statement nested in a `let`'s
 // value (`let a = if c { g(n); n } else { 0 };`) must be an ExprStmt without clobbering
 // the enclosing `let`, which must still be a LetIn. Getting the pending-statement baseline
 // wrong would mis-commit the outer let, a silent valid-but-wrong forest.
