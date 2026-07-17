@@ -800,9 +800,9 @@ fn step_cdraining() -> Word {
 
 // A `}` closing a struct construction: flush the operators above the StructMark, then pop
 // the mark, count the last field (when a value was parsed), and emit a StructInit node
-// packing the struct's declaration index and the field count as `index * 1024 + count`. The
-// field-expression nodes precede it in postorder, exactly as a Call's arguments precede the
-// Call. The layout bridge resolves the index to the struct's flat byte size downstream.
+// carrying the field count. The field-expression nodes precede it in postorder, exactly as
+// a Call's arguments precede the Call. The reconstruct stage resolves the field count to the
+// struct's flat byte size (its `.kel` layout pass); this parse-level node carries the count.
 fn step_sc_closing() -> Word {
     if ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] != OpCode::StructMark() as Word {
         ops.opsp = ops.opsp - 1;
@@ -816,7 +816,7 @@ fn step_sc_closing() -> Word {
         }
         structdefs.sc_sp = structdefs.sc_sp - 1;
         ops.expect_operand = 0;
-        Node::StructInit() as Word + (structdefs.sc_name[structdefs.sc_sp] * 1024 + structdefs.sc_count[structdefs.sc_sp]) * 64
+        Node::StructInit() as Word + structdefs.sc_count[structdefs.sc_sp] * 64
     }
 }
 

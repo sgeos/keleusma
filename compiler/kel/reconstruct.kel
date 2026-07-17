@@ -167,6 +167,23 @@ fn step(k: Word, a: Word) -> Word {
         rs.ca = args_start + count;
         emit(7, chunk, args_start, count)
     } else {
+    if k == 27 {
+        // StructInit: `arg` is the construction's field count. Resolve the flat byte size
+        // here -- the layout pass in .kel -- as `count * word_bytes` for an all-scalar Word
+        // struct on the eight-byte-word target. Pop the field-value nodes into `call_args`
+        // in source order (like a Call), and emit the StructInit node whose arg is the byte
+        // size, lhs the field-slice start, rhs the field count, which codegen's
+        // `push_struct_init` consumes. A mixed-field-size struct is a later increment.
+        let count = a;
+        let byte_size = count * 8;
+        let args_start = rs.ca;
+        for j in 0..count limit 64 {
+            let node = pop();
+            io.call_args[args_start + count - 1 - j] = node;
+        }
+        rs.ca = args_start + count;
+        emit(27, byte_size, args_start, count)
+    } else {
     if k == 32 {
         // A SlotRecord carries one of the pending `for` loop's five frame slots.
         rs.pending[rs.pcount] = a;
@@ -231,7 +248,7 @@ fn step(k: Word, a: Word) -> Word {
         emit(22, base, scrut, lit_count)
     } else {
         0
-    } } } } } } } } } }
+    } } } } } } } } } } }
 }
 
 // Reconstruct one record range on a fresh work stack (the node array and the side
