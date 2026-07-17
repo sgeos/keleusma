@@ -2310,6 +2310,31 @@ fn self_host_compiles_a_struct_construction() {
     );
 }
 
+// Multiple structs of different field counts: the layout pass computes each construction's
+// byte size from its own field count, so two structs and two constructors all match.
+#[test]
+fn self_host_compiles_multiple_struct_constructions() {
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\n\
+         struct Q { a: Word, b: Word, c: Word }\n\
+         fn mp() -> P { P { x: 1, y: 2 } }\n\
+         fn mq() -> Q { Q { a: 3, b: 4, c: 5 } }",
+    );
+}
+
+// A nested construction: a struct-typed field whose value is itself a construction. The
+// construction-context mark stack (`sc_sp`) handles the nesting, and the inner struct here
+// is one Word wide (eight bytes), so `count * word_bytes` gives the right size at both
+// levels. A nested struct wider than one word needs the mixed-field-size layout (later).
+#[test]
+fn self_host_compiles_a_nested_struct_construction() {
+    assert_self_host_byte_identical(
+        "struct Inner { a: Word }\n\
+         struct Outer { i: Inner }\n\
+         fn make() -> Outer { Outer { i: Inner { a: 1 } } }",
+    );
+}
+
 // The bridge over the block and control-flow node kinds: `let` bindings (LetIn),
 // bare expression statements (ExprStmt), the statement-only-block Unit, and
 // `if`/`else` including an else-less form and nesting. Same self-hosted path and
