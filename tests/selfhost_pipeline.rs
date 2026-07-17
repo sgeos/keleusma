@@ -340,15 +340,17 @@ fn host_recovers_parser_metadata_from_lexer_output() {
 }
 
 // Flat shared-data slot indices of parse.kel's `toks` block, matching the parser
-// harness: len, packed[12288] (one `tok+payload*64` word per token), limit_id,
+// harness: len, packed[16384] (one `tok+payload*64` word per token), limit_id,
 // chunk_count, chunks[256], require_id, in declaration order.
 const P_LEN: usize = 0;
 const P_PACKED: usize = 1;
-const P_LIMIT_ID: usize = 1 + 12288;
-const P_CHUNK_COUNT: usize = 1 + 12288 + 1;
-const P_CHUNKS: usize = 1 + 12288 + 2;
-const P_REQUIRE_ID: usize = 1 + 12288 + 2 + 256;
-const P_WORD_ID: usize = 1 + 12288 + 2 + 256 + 1;
+const P_LIMIT_ID: usize = 1 + 16384;
+const P_CHUNK_COUNT: usize = 1 + 16384 + 1;
+const P_CHUNKS: usize = 1 + 16384 + 2;
+const P_REQUIRE_ID: usize = 1 + 16384 + 2 + 256;
+const P_WORD_ID: usize = 1 + 16384 + 2 + 256 + 1;
+const P_BYTE_ID: usize = 1 + 16384 + 2 + 256 + 2;
+const P_BOOL_ID: usize = 1 + 16384 + 2 + 256 + 3;
 
 /// Compile parse.kel on a 64MB thread; its deeply nested source overflows the
 /// default 2MB test-thread stack in the host compiler's recursive-descent parse.
@@ -382,6 +384,8 @@ fn parse_via_lexer(src: &str) -> (usize, usize) {
     let limit_id = id_of("limit");
     let require_id = id_of("require");
     let word_id = id_of("Word");
+    let byte_id = id_of("Byte");
+    let bool_id = id_of("Bool");
     let chunks = chunk_ids_from_tokens(&tokens);
 
     let module = compile_parse_stage();
@@ -398,6 +402,10 @@ fn parse_via_lexer(src: &str) -> (usize, usize) {
     vm.set_shared(&mut shared, P_REQUIRE_ID, Value::Int(require_id))
         .unwrap();
     vm.set_shared(&mut shared, P_WORD_ID, Value::Int(word_id))
+        .unwrap();
+    vm.set_shared(&mut shared, P_BYTE_ID, Value::Int(byte_id))
+        .unwrap();
+    vm.set_shared(&mut shared, P_BOOL_ID, Value::Int(bool_id))
         .unwrap();
     vm.set_shared(&mut shared, P_CHUNK_COUNT, Value::Int(chunks.len() as i64))
         .unwrap();

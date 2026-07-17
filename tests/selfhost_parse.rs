@@ -51,11 +51,13 @@ use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capa
 // is one packed `tok+payload*64` word per token (not two `kinds`/`vals` arrays).
 const LEN: usize = 0;
 const PACKED: usize = 1;
-const LIMIT_ID: usize = 1 + 12288;
-const CHUNK_COUNT: usize = 1 + 12288 + 1;
-const CHUNKS: usize = 1 + 12288 + 2;
-const REQUIRE_ID: usize = 1 + 12288 + 2 + 256;
-const WORD_ID: usize = 1 + 12288 + 2 + 256 + 1;
+const LIMIT_ID: usize = 1 + 16384;
+const CHUNK_COUNT: usize = 1 + 16384 + 1;
+const CHUNKS: usize = 1 + 16384 + 2;
+const REQUIRE_ID: usize = 1 + 16384 + 2 + 256;
+const WORD_ID: usize = 1 + 16384 + 2 + 256 + 1;
+const BYTE_ID: usize = 1 + 16384 + 2 + 256 + 2;
+const BOOL_ID: usize = 1 + 16384 + 2 + 256 + 3;
 
 /// Map the reference token stream into the stage's unified `(kind, value)` pairs. The
 /// operator codes follow the retired body.kel scheme (`Plus` 21 upward); the header
@@ -255,6 +257,22 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
         .unwrap_or(-1);
     vm.set_shared(&mut shared, WORD_ID, Value::Int(word_id))
         .expect("word_id");
+    // The interned ids of `Byte` and `Bool`, so a struct field of that scalar type resolves
+    // its ScalarKind for a `p.field` access; -1 when the program has no such token.
+    let byte_id = names
+        .iter()
+        .position(|n| n == "Byte")
+        .map(|i| i as i64)
+        .unwrap_or(-1);
+    vm.set_shared(&mut shared, BYTE_ID, Value::Int(byte_id))
+        .expect("byte_id");
+    let bool_id = names
+        .iter()
+        .position(|n| n == "Bool")
+        .map(|i| i as i64)
+        .unwrap_or(-1);
+    vm.set_shared(&mut shared, BOOL_ID, Value::Int(bool_id))
+        .expect("bool_id");
     // The chunk-name table: the function names in declaration order, interned to the same
     // ids the token stream uses. A call resolves its callee against this host-supplied
     // table (resolved-reference data, per the merge plan; forward calls cannot resolve in

@@ -28,12 +28,14 @@ require word >= 32;
 // site recovers `kind` as `packed % 64` and `payload` as `packed / 64`.
 shared data toks {
     len: Word,
-    packed: [Word; 12288],
+    packed: [Word; 16384],
     limit_id: Word,
     chunk_count: Word,
     chunks: [Word; 256],
     require_id: Word,
     word_id: Word,
+    byte_id: Word,
+    bool_id: Word,
 }
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
@@ -116,6 +118,7 @@ enum Node {
     YieldExpr = 24,
     Cast = 26,
     StructInit = 27,
+    FieldAccess = 28,
     SlotRecord = 32,
     ForBuild = 33,
     MatchBuild = 34,
@@ -170,6 +173,12 @@ private data ps {
     pend_end: Word,
     pcount: Word,
     pnames: [Word; 32],
+    // Per value-parameter struct binding: 0 if not a struct type, else the struct's
+    // declaration index plus one; and the field-access postfix sub-state after a struct-typed
+    // parameter Local was emitted (1 awaits an optional `.`, 2 reads the field name).
+    pstruct: [Word; 32],
+    fa_phase: Word,
+    fa_struct: Word,
     found: Word,
     found_flag: Word,
     in_guard: Word,
@@ -394,6 +403,8 @@ private data structdefs {
     sd_fstart: [Word; 64],
     sd_fcount: [Word; 64],
     sd_fname: [Word; 512],
+    sd_foffset: [Word; 512],
+    sd_fkind: [Word; 512],
     sd_fname_ctr: Word,
     sc_fieldpos: Word,
     sc_sp: Word,
@@ -424,6 +435,40 @@ fn step_local(v: Word) -> Word {
     }
     ops.expect_operand = 0;
     Node::Local() as Word + ps.found * 64
+}
+
+// Resolve a plain identifier that is neither a chunk, data block, const block, enum, nor
+// struct name. If it is a struct-typed PARAMETER not shadowed by a `let` binding, emit its
+// Local and arm the field-access postfix (a following `.f` becomes a FieldAccess); a `let`
+// binding (whose struct type is not tracked) and a non-struct parameter both read as an
+// ordinary Local. Held in its own function so step_ident's five-deep name-lookup chain is not
+// deepened by the two scan loops here (the parser's own conditional stack is bounded).
+fn resolve_plain_ident(v: Word) -> Word {
+    ps.found_flag = 0;
+    for i in 0..stmt.let_count limit 64 {
+        if stmt.let_names[i] == v {
+            ps.found_flag = 1;
+        }
+    }
+    if ps.found_flag == 1 {
+        step_local(v)
+    } else {
+        ps.found_flag = 0;
+        for i in 0..ps.pcount limit 32 {
+            if ps.pnames[i] == v andalso ps.pstruct[i] > 0 {
+                ps.found_flag = 1;
+                ps.found = i;
+                ps.fa_struct = ps.pstruct[i] - 1;
+            }
+        }
+        if ps.found_flag == 1 {
+            ps.fa_phase = 1;
+            ops.expect_operand = 0;
+            Node::Local() as Word + ps.found * 64
+        } else {
+            step_local(v)
+        }
+    }
 }
 
 // An identifier in operand position: a chunk (function) name opens a call, a data-block
@@ -490,7 +535,7 @@ fn step_ident(v: Word) -> Word {
         structdefs.sc_phase = 1;
         0
     } else {
-        step_local(v)
+        resolve_plain_ident(v)
     } } } } }
 }
 
@@ -1224,6 +1269,38 @@ fn step_normal(k: Word, v: Word) -> Word {
     } } } } } } }
 }
 
+// The struct-field-access postfix (ps.fa_phase 1/2), after a struct-typed parameter Local was
+// emitted. Phase 1 awaits an optional `.` (a non-`.` token is pushed back, the parameter was
+// used whole); phase 2 reads the field name, resolves its flat byte offset and ScalarKind in
+// the parameter's struct, and emits a FieldAccess (kind 28) that pops the parameter Local,
+// packing the GetField operand as offset + kind * 65536. Held in its own function so the
+// dispatch chain is not deepened (the parser's own conditional stack is bounded).
+fn step_fieldaccess(k: Word, v: Word) -> Word {
+    if ps.fa_phase == 1 {
+        if k == Tok::Dot() as Word {
+            ps.fa_phase = 2;
+        } else {
+            ps.fa_phase = 0;
+            ps.cursor = ps.cursor - 1;
+        }
+        0
+    } else {
+        ps.fa_phase = 0;
+        if k == Tok::Ident() as Word {
+            structdefs.sc_fieldpos = structdefs.sd_fstart[ps.fa_struct];
+            for i in 0..structdefs.sd_fcount[ps.fa_struct] limit 64 {
+                if structdefs.sd_fname[structdefs.sd_fstart[ps.fa_struct] + i] == v {
+                    structdefs.sc_fieldpos = structdefs.sd_fstart[ps.fa_struct] + i;
+                }
+            }
+            ops.expect_operand = 0;
+            Node::FieldAccess() as Word + (structdefs.sd_foffset[structdefs.sc_fieldpos] + structdefs.sd_fkind[structdefs.sc_fieldpos] * 65536) * 64
+        } else {
+            0
+        }
+    }
+}
+
 // The normal parse-phase dispatch: a `let` binding's name or `=`, else an expression
 // token.
 fn step_dispatch_normal(k: Word, v: Word) -> Word {
@@ -1659,7 +1736,13 @@ fn body_step() -> Word {
             let k = toks.packed[ps.cursor] % 64;
             let v = toks.packed[ps.cursor] / 64;
             ps.cursor = ps.cursor + 1;
-            step_body_dispatch(k, v)
+            // A pending struct-field-access postfix intercepts the next token here, before the
+            // normal dispatch, so the deep `step_dispatch_normal` chain is not deepened.
+            if ps.fa_phase >= 1 {
+                step_fieldaccess(k, v)
+            } else {
+                step_body_dispatch(k, v)
+            }
         }
     } } } } } } } } } }
 }
@@ -1701,6 +1784,7 @@ fn arm_body() -> Word {
     call.call_sp = 0;
     call.call_phase = 0;
     call.cdraining = 0;
+    ps.fa_phase = 0;
     16
 }
 
@@ -2111,21 +2195,30 @@ fn header_field(k: Word, v: Word) -> Word {
         if ps.ptype == 1 {
             ps.ptype = 0;
             if ps.dvis == 3 {
-                // Sum this struct field's flat size. A `Word` is `word_bytes` (eight); a
-                // struct-typed field contributes the already-declared struct's own flat byte
-                // size (a struct type is declared before use, so its size is final here); any
-                // other scalar (Byte, Bool) is one byte. Array fields are a later increment.
+                let cur = structdefs.sd_count - 1;
+                let fidx = structdefs.sd_fstart[cur] + structdefs.sd_fcount[cur] - 1;
+                structdefs.sd_foffset[fidx] = structdefs.sd_bytesize[cur];
                 if v == toks.word_id {
-                    structdefs.sd_bytesize[structdefs.sd_count - 1] = structdefs.sd_bytesize[structdefs.sd_count - 1] + 8;
+                    structdefs.sd_fkind[fidx] = 3;
+                    structdefs.sd_bytesize[cur] = structdefs.sd_bytesize[cur] + 8;
+                } else {
+                if v == toks.byte_id {
+                    structdefs.sd_fkind[fidx] = 2;
+                    structdefs.sd_bytesize[cur] = structdefs.sd_bytesize[cur] + 1;
+                } else {
+                if v == toks.bool_id {
+                    structdefs.sd_fkind[fidx] = 1;
+                    structdefs.sd_bytesize[cur] = structdefs.sd_bytesize[cur] + 1;
                 } else {
                     structdefs.sd_matchsz = 1;
+                    structdefs.sd_fkind[fidx] = 0;
                     for i in 0..structdefs.sd_count limit 64 {
                         if structdefs.sd_name[i] == v {
                             structdefs.sd_matchsz = structdefs.sd_bytesize[i];
                         }
                     }
-                    structdefs.sd_bytesize[structdefs.sd_count - 1] = structdefs.sd_bytesize[structdefs.sd_count - 1] + structdefs.sd_matchsz;
-                }
+                    structdefs.sd_bytesize[cur] = structdefs.sd_bytesize[cur] + structdefs.sd_matchsz;
+                } } }
             }
             6 + v * 64
         } else {
@@ -2187,11 +2280,21 @@ fn header_sig(k: Word, v: Word) -> Word {
             if ps.pname == 1 {
                 ps.pname = 0;
                 ps.pnames[ps.pcount] = v;
+                // Default this parameter to non-struct; the type identifier that follows
+                // overrides it when the type names a declared struct.
+                ps.pstruct[ps.pcount] = 0;
                 ps.pcount = ps.pcount + 1;
                 4 + v * 64
             } else {
             if ps.ptype == 1 {
                 ps.ptype = 0;
+                // Record whether this parameter's type names a declared struct (index + 1),
+                // so a body `p.field` access can resolve the field. A scalar type leaves 0.
+                for i in 0..structdefs.sd_count limit 64 {
+                    if structdefs.sd_name[i] == v {
+                        ps.pstruct[ps.pcount - 1] = i + 1;
+                    }
+                }
                 6 + v * 64
             } else {
                 0

@@ -119,7 +119,7 @@ fn emit(k: Word, a: Word, l: Word, r: Word) -> Word {
 // The three kind groups that share a shape. A leaf (Literal 1, Local 2, DataRead 11,
 // Unit 20) carries no operand; a binary node (BinOp 3, LetIn 5, Andalso 8, Orelse 9,
 // DataAssignIn 12, IndexAssignIn 14, ExprStmt 21) pops its right then left child; a
-// unary node (Not 6, Neg 10, IndexRead 13, YieldExpr 24, Cast 26) pops one operand.
+// unary node (Not 6, Neg 10, IndexRead 13, YieldExpr 24, Cast 26, FieldAccess 28) pops one.
 fn is_leaf(k: Word) -> Word {
     if k == 1 orelse k == 2 orelse k == 11 orelse k == 20 { 1 } else { 0 }
 }
@@ -133,7 +133,7 @@ fn is_binary(k: Word) -> Word {
 }
 
 fn is_unary(k: Word) -> Word {
-    if k == 6 orelse k == 10 orelse k == 13 orelse k == 24 orelse k == 26 { 1 } else { 0 }
+    if k == 6 orelse k == 10 orelse k == 13 orelse k == 24 orelse k == 26 orelse k == 28 { 1 } else { 0 }
 }
 
 // Process one record, folding it into a node and leaving that node's index on the

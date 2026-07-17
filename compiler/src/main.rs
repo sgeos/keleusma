@@ -324,11 +324,13 @@ fn run_parse_pipeline(path: &str) {
     // word per token (not two `kinds`/`vals` arrays), which halves its byte cost.
     const P_LEN: usize = 0;
     const P_PACKED: usize = 1;
-    const P_LIMIT_ID: usize = 1 + 12288;
-    const P_CHUNK_COUNT: usize = 1 + 12288 + 1;
-    const P_CHUNKS: usize = 1 + 12288 + 2;
-    const P_REQUIRE_ID: usize = 1 + 12288 + 2 + 256;
-    const P_WORD_ID: usize = 1 + 12288 + 2 + 256 + 1;
+    const P_LIMIT_ID: usize = 1 + 16384;
+    const P_CHUNK_COUNT: usize = 1 + 16384 + 1;
+    const P_CHUNKS: usize = 1 + 16384 + 2;
+    const P_REQUIRE_ID: usize = 1 + 16384 + 2 + 256;
+    const P_WORD_ID: usize = 1 + 16384 + 2 + 256 + 1;
+    const P_BYTE_ID: usize = 1 + 16384 + 2 + 256 + 2;
+    const P_BOOL_ID: usize = 1 + 16384 + 2 + 256 + 3;
 
     let input = std::fs::read(path).unwrap_or_else(|e| {
         eprintln!("cannot read {path}: {e}");
@@ -387,9 +389,9 @@ fn run_parse_pipeline(path: &str) {
         let len = read_word(&lvm, &lshared, LEX_ILEN + id) as usize;
         names.push(String::from_utf8_lossy(&input[start..start + len]).into_owned());
     }
-    if tokens.len() > 12288 {
+    if tokens.len() > 16384 {
         eprintln!(
-            "{} tokens; the parser stage caps input at 12288",
+            "{} tokens; the parser stage caps input at 16384",
             tokens.len()
         );
         std::process::exit(1);
@@ -400,6 +402,8 @@ fn run_parse_pipeline(path: &str) {
     let limit_id = id_of("limit").unwrap_or(-1);
     let require_id = id_of("require").unwrap_or(-1);
     let word_id = id_of("Word").unwrap_or(-1);
+    let byte_id = id_of("Byte").unwrap_or(-1);
+    let bool_id = id_of("Bool").unwrap_or(-1);
     let chunks = chunk_ids_from_tokens(&tokens);
 
     // Stage 2: drive the parser with the lexer-recovered inputs.
@@ -417,6 +421,10 @@ fn run_parse_pipeline(path: &str) {
     pvm.set_shared(&mut pshared, P_REQUIRE_ID, Value::Int(require_id))
         .unwrap();
     pvm.set_shared(&mut pshared, P_WORD_ID, Value::Int(word_id))
+        .unwrap();
+    pvm.set_shared(&mut pshared, P_BYTE_ID, Value::Int(byte_id))
+        .unwrap();
+    pvm.set_shared(&mut pshared, P_BOOL_ID, Value::Int(bool_id))
         .unwrap();
     pvm.set_shared(&mut pshared, P_CHUNK_COUNT, Value::Int(chunks.len() as i64))
         .unwrap();
