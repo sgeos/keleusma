@@ -1759,11 +1759,13 @@ const BR_LEX_ICOUNT: usize = 1 + 98304 + 1280 + 1280;
 // word per token), then the scalar and chunk-table inputs.
 const BR_P_LEN: usize = 0;
 const BR_P_PACKED: usize = 1;
-const BR_P_LIMIT_ID: usize = 1 + 12288;
-const BR_P_CHUNK_COUNT: usize = 1 + 12288 + 1;
-const BR_P_CHUNKS: usize = 1 + 12288 + 2;
-const BR_P_REQUIRE_ID: usize = 1 + 12288 + 2 + 256;
-const BR_P_WORD_ID: usize = 1 + 12288 + 2 + 256 + 1;
+const BR_P_LIMIT_ID: usize = 1 + 16384;
+const BR_P_CHUNK_COUNT: usize = 1 + 16384 + 1;
+const BR_P_CHUNKS: usize = 1 + 16384 + 2;
+const BR_P_REQUIRE_ID: usize = 1 + 16384 + 2 + 256;
+const BR_P_WORD_ID: usize = 1 + 16384 + 2 + 256 + 1;
+const BR_P_BYTE_ID: usize = 1 + 16384 + 2 + 256 + 2;
+const BR_P_BOOL_ID: usize = 1 + 16384 + 2 + 256 + 3;
 
 fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
     match vm.get_shared(buf, slot).expect("get_shared") {
@@ -1862,6 +1864,10 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
     vm.set_shared(&mut shared, BR_P_REQUIRE_ID, Value::Int(id_of("require")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_WORD_ID, Value::Int(id_of("Word")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_BYTE_ID, Value::Int(id_of("Byte")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("Bool")))
         .unwrap();
     vm.set_shared(
         &mut shared,
@@ -2138,7 +2144,7 @@ fn reconstruct_into(
                 });
                 (nodes.len() - 1) as i64
             }
-            6 | 10 | 13 | 24 | 26 => {
+            6 | 10 | 13 | 24 | 26 | 28 => {
                 let c = stack.pop().expect("unary operand");
                 nodes.push(Node {
                     kind,
@@ -2389,6 +2395,58 @@ fn self_host_compiles_a_fully_reversed_struct_construction() {
     assert_self_host_byte_identical(
         "struct T { a: Word, b: Word, c: Word }\n\
          fn make() -> T { T { c: 3, b: 2, a: 1 } }",
+    );
+}
+
+// Struct field ACCESS on a struct-typed PARAMETER: `p.x` reads field `x` from parameter `p`
+// of type P. parse.kel captures each parameter's struct type and each struct's field offsets
+// and ScalarKinds, so it emits the parameter Local then a FieldAccess (kind 28) packing the
+// field's byte offset and kind. Asserted at the record level: `p.x` (field 0, offset 0, kind
+// Int = 3) is Local(0) then FieldAccess(0 + 3 * 65536).
+#[test]
+fn parse_emits_field_access_on_a_struct_parameter() {
+    let src = "struct P { x: Word, y: Word }\n\
+               fn gx(p: P) -> Word { p.x }";
+    let (records, param_count, _category) = parse_function_records(src);
+    assert_eq!(param_count, 1, "gx has one parameter");
+    assert_eq!(
+        records,
+        vec![(2, 0), (28, 3 * 65536)],
+        "p.x is Local(0) then FieldAccess(offset 0, kind Int 3)"
+    );
+}
+
+// The same field access through the WHOLE self-hosted pipeline: both getters compile byte-
+// identically to the reference (which lowers `p.f` to `GetField(Flat{offset, kind})`), so the
+// reconstruct FieldAccess arm and codegen's `push_field_access` agree end to end.
+#[test]
+fn self_host_compiles_struct_field_access_on_a_parameter() {
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\n\
+         fn gx(p: P) -> Word { p.x }\n\
+         fn gy(p: P) -> Word { p.y }",
+    );
+}
+
+// A mixed-size struct exercises the per-field offset and ScalarKind: `m.b` (a Byte at offset
+// 0, kind Byte = 2) and `m.w` (a Word at offset 1 after the byte, kind Int = 3).
+#[test]
+fn self_host_compiles_mixed_field_access_on_a_parameter() {
+    assert_self_host_byte_identical(
+        "struct M { b: Byte, w: Word }\n\
+         fn gb(m: M) -> Byte { m.b }\n\
+         fn gw(m: M) -> Word { m.w }",
+    );
+}
+
+// A struct-typed parameter used WHOLE (not `.field`) must still read as a plain Local: `id`
+// returns its parameter unchanged, so the postfix field-access arm pushes the non-`.` token
+// back and the parameter compiles to a bare GetLocal, byte-identical to the reference.
+#[test]
+fn self_host_compiles_a_struct_parameter_used_whole() {
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\n\
+         fn id(p: P) -> P { p }",
     );
 }
 
@@ -3014,6 +3072,10 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
     vm.set_shared(&mut shared, BR_P_REQUIRE_ID, Value::Int(id_of("require")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_WORD_ID, Value::Int(id_of("Word")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_BYTE_ID, Value::Int(id_of("Byte")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("Bool")))
         .unwrap();
     vm.set_shared(
         &mut shared,
