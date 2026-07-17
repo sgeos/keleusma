@@ -37,7 +37,8 @@
 
 use keleusma::Arena;
 use keleusma::ast::{
-    BinOp, Block, Expr, FunctionCategory, Iterable, Literal, Pattern, Stmt, UnaryOp,
+    BinOp, Block, Expr, FunctionCategory, Iterable, Literal, Pattern, PrimType, Stmt, TypeDef,
+    TypeExpr, UnaryOp,
 };
 use keleusma::bytecode::Value;
 use keleusma::compiler::compile;
@@ -139,10 +140,14 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
 /// parameter name ids in order, its body's postorder node record sequence as (kind, arg)
 /// pairs, and a `when` guard's postorder node records (empty when the head is unguarded).
 type Func = (i64, i64, Vec<i64>, Vec<(i64, i64)>, Vec<(i64, i64)>);
+// A captured struct declaration: its name id, then per field the field-name id, the
+// type-name id, and the array length (0 for a scalar field).
+type StructRec = (i64, Vec<(i64, i64, i64)>);
 
 #[derive(Debug, Default, PartialEq)]
 struct Parsed {
     funcs: Vec<Func>,
+    structs: Vec<StructRec>,
 }
 
 /// Compile parse.kel on a 64MB thread; its deeply nested source overflows the default
@@ -273,9 +278,11 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
     let mut in_data = false;
     let mut in_enum = false;
     let mut in_use = false;
-    // A struct declaration is skipped like a data block: STRUCTSTART (18) opens it and its
-    // END closes it; its field records are consumed without comparison this increment.
+    // A struct declaration is captured: STRUCTSTART (18) opens it with the struct name, each
+    // PARAM/PTYPE/ASIZE builds a field record, and END closes it. The captured fields are
+    // compared against the reference StructDef.
     let mut in_struct = false;
+    let mut cur_struct: Option<StructRec> = None;
     // A trait (TRAITSTART 19) or impl (IMPLSTART 20) declaration is skipped whole: the stage
     // emits its START, then brace-matches the body and emits END, yielding PENDING between.
     let mut in_skip = false;
@@ -319,8 +326,39 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                     }
                 } else if in_struct {
                     match code {
-                        5 => in_struct = false, // the struct's END
-                        _ => {}                 // its fields, skipped this increment
+                        // PARAM: a new field name; its type and array length follow.
+                        4 => cur_struct
+                            .as_mut()
+                            .expect("struct field before STRUCTSTART")
+                            .1
+                            .push((val, 0, 0)),
+                        // PTYPE: the current field's type name.
+                        6 => {
+                            cur_struct
+                                .as_mut()
+                                .expect("PTYPE before STRUCTSTART")
+                                .1
+                                .last_mut()
+                                .expect("PTYPE before PARAM")
+                                .1 = val
+                        }
+                        // ASIZE: the current field is an array of this length.
+                        8 => {
+                            cur_struct
+                                .as_mut()
+                                .expect("ASIZE before STRUCTSTART")
+                                .1
+                                .last_mut()
+                                .expect("ASIZE before PARAM")
+                                .2 = val
+                        }
+                        5 => {
+                            parsed
+                                .structs
+                                .push(cur_struct.take().expect("struct END without STRUCTSTART"));
+                            in_struct = false;
+                        }
+                        _ => {} // PENDING and any other intra-struct record
                     }
                 } else if in_skip {
                     match code {
@@ -341,10 +379,14 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                         9 => in_data = true, // DSTART: a data block, skipped this increment
                         10 => in_use = true, // USTART: a use import, skipped this increment
                         12 => in_enum = true, // ENUMSTART: an enum, skipped this increment
-                        18 => in_struct = true, // STRUCTSTART: a struct, skipped this increment
+                        18 => {
+                            // STRUCTSTART: open a struct capture carrying its name id.
+                            in_struct = true;
+                            cur_struct = Some((val, Vec::new()));
+                        }
                         19 | 20 => in_skip = true, // TRAITSTART/IMPLSTART: skipped whole
-                        16 => in_body = true, // BSTART: a body forest follows
-                        17 => in_guard = true, // GSTART: a `when` guard forest follows
+                        16 => in_body = true,      // BSTART: a body forest follows
+                        17 => in_guard = true,     // GSTART: a `when` guard forest follows
                         5 => {
                             let f = cur.take().expect("END before START");
                             parsed.funcs.push(f);
@@ -963,7 +1005,43 @@ fn reference(src: &str, names: &[String]) -> Parsed {
         );
         funcs.push((cat, id(&f.name), params, body, guard));
     }
-    Parsed { funcs }
+    // Struct declarations, in source order, each as (name, fields) where a field is
+    // (field name, type name, array length 0 for a scalar) -- mirroring the stage's
+    // STRUCTSTART / PARAM / PTYPE / ASIZE record capture.
+    // The source spelling of a scalar type, so its interned id matches the type-name token
+    // the stage emits as PTYPE. A primitive (`Word`, `Byte`, ...) is a `Prim`, not a `Named`.
+    fn type_name(te: &TypeExpr) -> &str {
+        match te {
+            TypeExpr::Named(n, _, _, _) => n.as_str(),
+            TypeExpr::Prim(pt, _) => match pt {
+                PrimType::Byte => "Byte",
+                PrimType::Word => "Word",
+                PrimType::Float => "Float",
+                PrimType::Bool => "Bool",
+                PrimType::Text => "Text",
+                PrimType::Fixed(_) => "Fixed",
+            },
+            other => panic!("struct test uses named or primitive field types only, got {other:?}"),
+        }
+    }
+    let mut structs = Vec::new();
+    for ty in &program.types {
+        if let TypeDef::Struct(sd) = ty {
+            let mut fields = Vec::new();
+            for fd in &sd.fields {
+                let (tn, size): (&str, i64) = match &fd.type_expr {
+                    TypeExpr::Array(elem, len, _) => (
+                        type_name(elem),
+                        len.as_lit().expect("array length must be a literal"),
+                    ),
+                    other => (type_name(other), 0),
+                };
+                fields.push((id(&fd.name), id(tn), size));
+            }
+            structs.push((id(&sd.name), fields));
+        }
+    }
+    Parsed { funcs, structs }
 }
 
 // An atomic literal body (the increment-1 case) still parses: one Literal record.
@@ -1847,63 +1925,63 @@ fn a_data_block_wider_than_the_field_table_seed_capacity() {
     assert_eq!(got.funcs[0].3, vec![(11, (FIELDS - 1) as i64)]); // DataRead of slot 69
 }
 
-// A `struct` declaration between two functions is recognised and its field body scanned
-// without derailing the declaration stream: the functions before and after it parse to the
-// same records the reference produces (the reference iterates `program.functions`, so it
-// skips the struct too). The parser emits STRUCTSTART (18), which the harness skips like a
-// data block; struct fields are not slotted (`commit_field` leaves the data-field table
-// untouched), so a later `data.field` read still resolves correctly.
+// A `struct` declaration between two functions: its two scalar fields are captured
+// (STRUCTSTART then PARAM/PTYPE per field) and validated against the reference StructDef,
+// and the surrounding functions parse to the same records the reference produces. The
+// struct's fields are not slotted (`commit_field` leaves the data-field table untouched).
 #[test]
-fn a_struct_declaration_is_recognised_and_skipped() {
+fn a_struct_declaration_has_its_fields_captured() {
     let src = "fn a() -> Word { 1 } \
                struct P { x: Word, y: Word } \
                fn b(p: Word) -> Word { p }";
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
-    assert_eq!(
-        got.funcs.len(),
-        2,
-        "both functions parsed, the struct skipped"
-    );
+    assert_eq!(got.funcs.len(), 2, "both functions parsed");
+    assert_eq!(got.structs.len(), 1, "one struct captured");
+    assert_eq!(got.structs[0].1.len(), 2, "two fields captured");
+    assert_eq!(got.structs[0].1[0].2, 0, "x is a scalar field"); // array length 0
+    assert_eq!(got.structs[0].1[1].2, 0, "y is a scalar field");
     assert_eq!(got.funcs[0].3, vec![(1, 1)]); // a: Literal 1
     assert_eq!(got.funcs[1].3, vec![(2, 0)]); // b: Local slot 0 (p)
 }
 
-// A struct with an array field exercises the `[T; N]` field path (PTYPE + ASIZE) inside a
-// struct body, and confirms a following function's own `data.field` read still resolves --
-// proving the struct's fields did not pollute the data-field layout table.
+// A struct with an array field exercises the `[T; N]` field path (PTYPE + ASIZE): the
+// captured field records its element type and length 4. A following function's own
+// `data.field` read still resolves, proving the struct's fields did not pollute the
+// data-field layout table.
 #[test]
-fn a_struct_with_an_array_field_does_not_pollute_the_data_table() {
+fn a_struct_with_an_array_field_captures_its_length() {
     let src = "struct Buf { xs: [Word; 4] } \
                shared data s { a: Word } \
                fn read() -> Word { s.a }";
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
-    assert_eq!(
-        got.funcs.len(),
-        1,
-        "the function parsed, the struct skipped"
-    );
+    assert_eq!(got.funcs.len(), 1, "the function parsed");
+    assert_eq!(got.structs.len(), 1, "one struct captured");
+    assert_eq!(got.structs[0].1.len(), 1, "one field captured");
+    assert_eq!(got.structs[0].1[0].2, 4, "xs is an array of length 4");
     assert_eq!(got.funcs[0].3, vec![(11, 0)]); // read: DataRead of s.a at slot 0
 }
 
 // A generic struct needs no extra parser machinery: after the struct name, mode 6 ignores
 // every token until the body's `{`, so the `<...>` type parameters are skipped for free.
-// The struct is skipped whole by the harness; the surrounding functions parse normally.
+// Its two fields (typed by the generic parameters) are still captured and validated.
 #[test]
-fn a_generic_struct_declaration_is_recognised_and_skipped() {
+fn a_generic_struct_declaration_has_its_fields_captured() {
     let src = "fn a() -> Word { 7 } \
                struct Pair<A, B> { first: A, second: B } \
                fn b() -> Word { 8 }";
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
+    assert_eq!(got.funcs.len(), 2, "both functions parsed");
+    assert_eq!(got.structs.len(), 1, "the generic struct captured");
     assert_eq!(
-        got.funcs.len(),
+        got.structs[0].1.len(),
         2,
-        "both functions parsed, the generic struct skipped"
+        "two generic-typed fields captured"
     );
     assert_eq!(got.funcs[0].3, vec![(1, 7)]); // a: Literal 7
     assert_eq!(got.funcs[1].3, vec![(1, 8)]); // b: Literal 8
