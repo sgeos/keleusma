@@ -1,5 +1,13 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
+// Increment 33: the first struct-codegen slice. A flat all-scalar struct construction
+// (a StructInit node, kind 27) lowers to its field expressions in declaration order then
+// a `NewComposite(Flat{Struct, count, byte_size})` (op tag 46), packed as
+// `count + byte_size*65536`, exactly like a Call but emitting the composite op. The
+// struct's packed byte size is supplied on the node by the layout (an earlier stage), not
+// computed here; only a flat all-scalar struct is lowered. Field access and non-flat
+// structs are later increments. The stage still self-compiles byte-identically.
+//
 // Increment 32: multiheaded `yield` dispatch and `yield` expressions — the codegen
 // stage is now FULLY SELF-HOSTING. A `yield <expr>` lowers to the expression ops
 // then `Yield` (a YieldExpr node, kind 24). A multiheaded function lowers to the
@@ -182,6 +190,7 @@ const data wire {
     stream: Word = 43,
     reset: Word = 44,
     bytetoword: Word = 45,
+    newcomposite: Word = 46,
     radix: Word = 64,
     item: Word = 4,
     pack: Word = 65536,
@@ -703,6 +712,25 @@ fn push_call(p: Word) -> Word {
     0
 }
 
+// StructInit (kind 27): a flat struct construction `P { f: e, ... }`. Emit each field
+// expression left to right, then NewComposite(Flat{Struct, count, byte_size}), exactly
+// like a Call but with the composite op and its two operands packed as count +
+// byte_size*65536. args = the total packed byte size, lhs = the field-expression start
+// (into call_args, reused), rhs = the field count. Fields arrive in declaration order.
+// Only a flat all-scalar struct is lowered this increment; the byte size is supplied by
+// the layout, not computed here.
+fn push_struct_init(p: Word) -> Word {
+    let count = ast.rhs[p];
+    let byte_size = ast.args[p];
+    let start = ast.lhs[p];
+    push_emit(wire.newcomposite + (count + byte_size * wire.pack) * wire.radix);
+    for i in 0..count limit 64 {
+        let idx = start + count - 1 - i;
+        push_visit(ast.call_args[idx]);
+    }
+    0
+}
+
 // Andalso (kind 8): left, Dup, If, PopN(1), right, Else, EndIf. The If/Else markers
 // backpatch to the EndIf for this shape. lhs = left, rhs = right.
 fn push_andalso(p: Word) -> Word {
@@ -874,6 +902,7 @@ fn walk_step() -> Word {
             24 => push_yield(payload),
             25 => push_multihead(payload),
             26 => push_cast(payload),
+            27 => push_struct_init(payload),
             _ => 0,
         };
     }

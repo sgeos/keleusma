@@ -31,10 +31,11 @@ use keleusma::ast::{
     BinOp, Block, ConstInitializer, DataVisibility, Expr, FunctionCategory, FunctionDef, Iterable,
     Literal, Param, Pattern, Stmt, UnaryOp,
 };
-use keleusma::bytecode::{ConstValue, Module, Op, Value};
+use keleusma::bytecode::{ConstValue, Module, NewCompositeOperand, Op, Value};
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
+use keleusma::value_layout::CompositeKind;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 
 // Shared-data slot offsets, mirroring the `ast` block's field order in codegen.kel
@@ -752,6 +753,13 @@ fn decode_op(w: i64) -> Op {
         43 => Op::Stream,
         44 => Op::Reset,
         45 => Op::ByteToWord,
+        // A flat struct construction: the operand packs count + byte_size*65536. The
+        // composite kind is Struct this increment (the only lowered composite).
+        46 => Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Struct,
+            count: (operand % 65536) as u16,
+            byte_size: (operand / 65536) as u16,
+        }),
         other => panic!("unknown op tag {other} (word {w})"),
     }
 }
@@ -872,6 +880,68 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
     // Phase 3: the local-frame size the stage computed.
     let local_count = next_word(&mut vm, &mut shared);
     (ops, pool, local_count)
+}
+
+// The first slice of struct codegen: a flat all-scalar struct construction `P { x: 1, y: 2 }`
+// lowers to its field expressions in declaration order then a NewComposite(Flat{Struct,
+// count, byte_size}), byte-identically to the reference compiler. Driven from a hand-built
+// AST because parse.kel does not yet emit a struct-construction node in a body; the struct's
+// packed byte size (16 = two 8-byte Words) is supplied by the layout, exactly as an earlier
+// stage will supply it once the parser produces the node.
+#[test]
+fn struct_construction_lowers_to_newcomposite() {
+    let m = compile_src("struct P { x: Word, y: Word }\nfn make() -> P { P { x: 1, y: 2 } }");
+    let make = m
+        .chunks
+        .iter()
+        .find(|c| c.name == "make")
+        .expect("make chunk");
+
+    let body = Body {
+        nodes: vec![
+            Node {
+                kind: 1,
+                arg: 1,
+                lhs: 0,
+                rhs: 0,
+            }, // Literal 1 (field x)
+            Node {
+                kind: 1,
+                arg: 2,
+                lhs: 0,
+                rhs: 0,
+            }, // Literal 2 (field y)
+            Node {
+                kind: 27,
+                arg: 16,
+                lhs: 0,
+                rhs: 2,
+            }, // StructInit: byte_size 16, start 0, count 2
+        ],
+        call_args: vec![0, 1],
+        for_parts: Vec::new(),
+        match_parts: Vec::new(),
+        limit_parts: Vec::new(),
+        head_parts: Vec::new(),
+        category: 1, // fn
+        root: 2,
+    };
+    let (ops, _pool, _lc) = run_codegen(&body, 0);
+    assert_eq!(
+        ops, make.ops,
+        "struct construction lowers like the reference"
+    );
+    assert!(
+        ops.iter().any(|op| matches!(
+            op,
+            Op::NewComposite(NewCompositeOperand::Flat {
+                kind: CompositeKind::Struct,
+                count: 2,
+                byte_size: 16,
+            })
+        )),
+        "emits a flat 2-field 16-byte struct NewComposite"
+    );
 }
 
 /// Expected result of running a built module. Arithmetic bodies return a `Word`;
@@ -1445,7 +1515,8 @@ fn self_compile_codegen_atomic_functions() {
     // that stops self-compiling, or one that disappears) fails the test rather than
     // passing unnoticed once attention moves to the parser. If codegen.kel gains or
     // loses a function deliberately, update EXPECTED_SELF_COMPILE below.
-    const EXPECTED_SELF_COMPILE: usize = 35;
+    // 36 as of increment 33 (added `push_struct_init` for flat struct construction).
+    const EXPECTED_SELF_COMPILE: usize = 36;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
