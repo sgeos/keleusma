@@ -150,6 +150,8 @@ struct Parsed {
     structs: Vec<StructRec>,
     // Per trait declaration, its method-signature name ids in source order.
     traits: Vec<Vec<i64>>,
+    // Per impl block, its method name ids in source order.
+    impls: Vec<Vec<i64>>,
 }
 
 /// Compile parse.kel on a 64MB thread; its deeply nested source overflows the default
@@ -291,6 +293,7 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
     let mut in_trait = false;
     let mut cur_trait: Option<Vec<i64>> = None;
     let mut in_impl = false;
+    let mut cur_impl: Option<Vec<i64>> = None;
     let mut state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
@@ -382,8 +385,17 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                     }
                 } else if in_impl {
                     match code {
-                        5 => in_impl = false, // the impl's END
-                        _ => {}               // its methods, skipped whole this increment
+                        21 => cur_impl
+                            .as_mut()
+                            .expect("method name before IMPLSTART")
+                            .push(val), // MNAME: an impl method's name
+                        5 => {
+                            parsed
+                                .impls
+                                .push(cur_impl.take().expect("impl END without IMPLSTART"));
+                            in_impl = false;
+                        }
+                        _ => {} // method params/return/body, skipped this increment
                     }
                 } else if in_use {
                     match code {
@@ -409,8 +421,12 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                             in_trait = true;
                             cur_trait = Some(Vec::new());
                         }
-                        20 => in_impl = true, // IMPLSTART: skipped whole this increment
-                        16 => in_body = true, // BSTART: a body forest follows
+                        20 => {
+                            // IMPLSTART: open an impl capture; MNAMEs fill its method list.
+                            in_impl = true;
+                            cur_impl = Some(Vec::new());
+                        }
+                        16 => in_body = true,  // BSTART: a body forest follows
                         17 => in_guard = true, // GSTART: a `when` guard forest follows
                         5 => {
                             let f = cur.take().expect("END before START");
@@ -1092,10 +1108,17 @@ fn reference(src: &str, names: &[String]) -> Parsed {
         .iter()
         .map(|td| td.methods.iter().map(|m| id(&m.name)).collect())
         .collect();
+    // Impl blocks, in source order; each as the list of its method name ids.
+    let impls: Vec<Vec<i64>> = program
+        .impls
+        .iter()
+        .map(|ib| ib.methods.iter().map(|m| id(&m.name)).collect())
+        .collect();
     Parsed {
         funcs,
         structs,
         traits,
+        impls,
     }
 }
 
@@ -2082,12 +2105,13 @@ fn a_trait_declaration_captures_its_method_names() {
     assert_eq!(got.funcs[1].3, vec![(1, 2)]); // b: Literal 2
 }
 
-// An `impl Trait for Type` block is recognised and skipped whole, including its methods' own
-// brace-nested bodies (the `idepth` counter balances them). Its methods land in
-// `program.impls`, not `program.functions`, so the reference skips it and the top-level
-// function matches. The struct and trait it depends on are skipped by their own paths.
+// An `impl Trait for Type` block has its method NAMES captured (each `fn` at body depth one),
+// while its methods' brace-nested bodies are still consumed (the `idepth` counter balances
+// them). Its methods land in `program.impls`, not `program.functions`, so the top-level
+// function matches and the impl's one method name is validated against the reference. The
+// struct and trait it depends on are captured by their own paths.
 #[test]
-fn an_impl_block_with_method_bodies_is_recognised_and_skipped() {
+fn an_impl_block_captures_its_method_names() {
     let src = "struct S { c: Word } \
                trait Cap { fn cap(self) -> Word; } \
                impl Cap for S { fn cap(s: S) -> Word { s.c } } \
@@ -2095,10 +2119,9 @@ fn an_impl_block_with_method_bodies_is_recognised_and_skipped() {
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
-    assert_eq!(
-        got.funcs.len(),
-        1,
-        "the top-level function parsed, the impl skipped"
-    );
+    assert_eq!(got.funcs.len(), 1, "the top-level function parsed");
+    assert_eq!(got.impls.len(), 1, "one impl captured");
+    assert_eq!(got.impls[0].len(), 1, "its one method name (cap) captured");
+    assert_eq!(got.traits.len(), 1, "the trait captured too");
     assert_eq!(got.funcs[0].3, vec![(1, 5)]); // top: Literal 5
 }
