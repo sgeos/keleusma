@@ -317,6 +317,8 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                     match code {
                         0 => {}                // PENDING (a shunting-yard push, no record)
                         15 => in_body = false, // the body's Done ends body mode
+                        35 => {} // FieldPos: a construction reorder marker, consumed by
+                        // reconstruct; not part of the parse-level node stream.
                         _ => cur
                             .as_mut()
                             .expect("body node before START")
@@ -327,6 +329,7 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                     match code {
                         0 => {}                 // PENDING
                         15 => in_guard = false, // the guard's Done ends guard mode
+                        35 => {}                // FieldPos: reorder marker, skipped (see above)
                         _ => cur
                             .as_mut()
                             .expect("guard node before START")

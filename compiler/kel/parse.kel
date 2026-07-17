@@ -119,6 +119,7 @@ enum Node {
     SlotRecord = 32,
     ForBuild = 33,
     MatchBuild = 34,
+    FieldPos = 35,
     IndexStore = 36,
 }
 
@@ -381,6 +382,16 @@ private data structdefs {
     sd_name: [Word; 64],
     sd_bytesize: [Word; 64],
     sd_matchsz: Word,
+    // Per-struct field names in declaration order, so a construction can resolve each field to
+    // its declaration POSITION and emit a FieldPos marker for reconstruct to reorder by (a
+    // construction may write fields out of declaration order). `sd_fname` is the flat name
+    // storage; `sd_fstart[d]`/`sd_fcount[d]` bound struct d's field-name run; `sd_fname_ctr`
+    // is the running append cursor; `sc_fieldpos` is the just-resolved construction position.
+    sd_fstart: [Word; 64],
+    sd_fcount: [Word; 64],
+    sd_fname: [Word; 512],
+    sd_fname_ctr: Word,
+    sc_fieldpos: Word,
     sc_sp: Word,
     sc_name: [Word; 8],
     sc_count: [Word; 8],
@@ -1227,12 +1238,22 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         0
     } else {
     if structdefs.sc_phase == 2 {
-        // A field name (skipped: source order matches declaration order this increment);
-        // the `:` follows.
+        // A construction field name: resolve its declaration POSITION within the struct being
+        // constructed (the top construction context) and emit a FieldPos marker so reconstruct
+        // can place this field's value at its declaration slot even when written out of order.
+        // The `:` follows.
         if k == Tok::Ident() as Word {
             structdefs.sc_phase = 3;
+            structdefs.sc_fieldpos = 0;
+            for i in 0..structdefs.sd_fcount[structdefs.sc_name[structdefs.sc_sp - 1]] limit 64 {
+                if structdefs.sd_fname[structdefs.sd_fstart[structdefs.sc_name[structdefs.sc_sp - 1]] + i] == v {
+                    structdefs.sc_fieldpos = i;
+                }
+            }
+            Node::FieldPos() as Word + structdefs.sc_fieldpos * 64
+        } else {
+            0
         }
-        0
     } else {
     if structdefs.sc_phase == 3 {
         // The `:` before a field's value expression.
@@ -1958,6 +1979,8 @@ fn header_data(k: Word, v: Word) -> Word {
                 // its flat byte-size accumulator (summed per scalar field below).
                 structdefs.sd_name[structdefs.sd_count] = v;
                 structdefs.sd_bytesize[structdefs.sd_count] = 0;
+                structdefs.sd_fstart[structdefs.sd_count] = structdefs.sd_fname_ctr;
+                structdefs.sd_fcount[structdefs.sd_count] = 0;
                 structdefs.sd_count = structdefs.sd_count + 1;
                 18 + v * 64
             } else {
@@ -2071,6 +2094,13 @@ fn header_field(k: Word, v: Word) -> Word {
             fields.cur_len = 1;
             fields.cur_cval = 0;
             fields.has_field = 1;
+            // A struct field's name is recorded in declaration order for the construction
+            // reorder (see structdefs); data/const fields are not, as they never construct.
+            if ps.dvis == 3 {
+                structdefs.sd_fname[structdefs.sd_fname_ctr] = v;
+                structdefs.sd_fname_ctr = structdefs.sd_fname_ctr + 1;
+                structdefs.sd_fcount[structdefs.sd_count - 1] = structdefs.sd_fcount[structdefs.sd_count - 1] + 1;
+            }
             ps.pname = 0;
             4 + v * 64
         } else {
