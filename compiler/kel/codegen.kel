@@ -201,6 +201,7 @@ const data wire {
     getfield: Word = 47,
     getfieldnested: Word = 48,
     getindex: Word = 49,
+    newcompositearray: Word = 50,
     radix: Word = 64,
     item: Word = 4,
     pack: Word = 65536,
@@ -746,6 +747,23 @@ fn push_struct_init(p: Word) -> Word {
     0
 }
 
+// ArrayLit (kind 17): an array literal `[a, b, c]`. Emit each element expression left to
+// right, then NewComposite(Flat{Array, count, byte_size}) -- exactly like a struct
+// construction but the Array composite kind (op tag 50 `newcompositearray` rather than 46).
+// args = the packed byte size, lhs = the element-expression start (into call_args), rhs = the
+// element count.
+fn push_array_lit(p: Word) -> Word {
+    let count = ast.rhs[p];
+    let byte_size = ast.args[p];
+    let start = ast.lhs[p];
+    push_emit(wire.newcompositearray + (count + byte_size * wire.pack) * wire.radix);
+    for i in 0..count limit 64 {
+        let idx = start + count - 1 - i;
+        push_visit(ast.call_args[idx]);
+    }
+    0
+}
+
 // FieldAccess (kind 28): a flat struct field read `obj.f`. Emit the object ops, then
 // GetField(Flat{offset, kind}) (op tag 47), the two operands packed as
 // `offset + kind*65536` where `kind` is the field's ScalarKind tag (Int 3, Bool 1, ...).
@@ -987,6 +1005,7 @@ fn walk_step() -> Word {
             29 => push_break(payload),
             30 => push_field_access_nested(payload),
             31 => push_arrindex(payload),
+            17 => push_array_lit(payload),
             _ => 0,
         };
     }
