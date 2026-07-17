@@ -328,6 +328,7 @@ fn run_parse_pipeline(path: &str) {
     const P_CHUNK_COUNT: usize = 1 + 12288 + 1;
     const P_CHUNKS: usize = 1 + 12288 + 2;
     const P_REQUIRE_ID: usize = 1 + 12288 + 2 + 256;
+    const P_WORD_ID: usize = 1 + 12288 + 2 + 256 + 1;
 
     let input = std::fs::read(path).unwrap_or_else(|e| {
         eprintln!("cannot read {path}: {e}");
@@ -398,6 +399,7 @@ fn run_parse_pipeline(path: &str) {
     let id_of = |s: &str| names.iter().position(|n| n == s).map(|i| i as i64);
     let limit_id = id_of("limit").unwrap_or(-1);
     let require_id = id_of("require").unwrap_or(-1);
+    let word_id = id_of("Word").unwrap_or(-1);
     let chunks = chunk_ids_from_tokens(&tokens);
 
     // Stage 2: drive the parser with the lexer-recovered inputs.
@@ -413,6 +415,8 @@ fn run_parse_pipeline(path: &str) {
     pvm.set_shared(&mut pshared, P_LIMIT_ID, Value::Int(limit_id))
         .unwrap();
     pvm.set_shared(&mut pshared, P_REQUIRE_ID, Value::Int(require_id))
+        .unwrap();
+    pvm.set_shared(&mut pshared, P_WORD_ID, Value::Int(word_id))
         .unwrap();
     pvm.set_shared(&mut pshared, P_CHUNK_COUNT, Value::Int(chunks.len() as i64))
         .unwrap();

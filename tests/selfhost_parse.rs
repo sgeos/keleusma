@@ -55,6 +55,7 @@ const LIMIT_ID: usize = 1 + 12288;
 const CHUNK_COUNT: usize = 1 + 12288 + 1;
 const CHUNKS: usize = 1 + 12288 + 2;
 const REQUIRE_ID: usize = 1 + 12288 + 2 + 256;
+const WORD_ID: usize = 1 + 12288 + 2 + 256 + 1;
 
 /// Map the reference token stream into the stage's unified `(kind, value)` pairs. The
 /// operator codes follow the retired body.kel scheme (`Plus` 21 upward); the header
@@ -244,6 +245,16 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
         .unwrap_or(-1);
     vm.set_shared(&mut shared, REQUIRE_ID, Value::Int(require_id))
         .expect("require_id");
+    // The interned id of `Word`, so the stage sizes a struct's Word fields at eight bytes
+    // (any other scalar field is one byte) when it sums a struct's flat byte size; -1 when
+    // the program has no `Word` token.
+    let word_id = names
+        .iter()
+        .position(|n| n == "Word")
+        .map(|i| i as i64)
+        .unwrap_or(-1);
+    vm.set_shared(&mut shared, WORD_ID, Value::Int(word_id))
+        .expect("word_id");
     // The chunk-name table: the function names in declaration order, interned to the same
     // ids the token stream uses. A call resolves its callee against this host-supplied
     // table (resolved-reference data, per the merge plan; forward calls cannot resolve in
@@ -750,9 +761,10 @@ fn flatten(
         }
         Expr::StructInit { fields, .. } => {
             // A struct construction flattens its field values in source order (which equals
-            // declaration order this increment), then a StructInit (kind 27) carrying the
-            // field count. The struct name, for the flat byte size, is resolved by the
-            // layout bridge downstream; this parse-level node carries the count only.
+            // declaration order this increment), then a StructInit (kind 27) packing the
+            // struct's flat byte size and field count as byte_size * 1024 + count. The
+            // parse-level structs here are all-Word, so the byte size is count * word_bytes
+            // (eight); the stage sums it per field from the declaration, so the two agree.
             for f in fields {
                 flatten(
                     &f.value,
@@ -765,7 +777,8 @@ fn flatten(
                     out,
                 );
             }
-            out.push((27, fields.len() as i64));
+            let count = fields.len() as i64;
+            out.push((27, count * 8 * 1024 + count));
         }
         Expr::Cast { expr: inner, .. } => match inner.as_ref() {
             // A `Enum::Variant() as Word` cast of a no-payload variant folds to the
@@ -2078,8 +2091,9 @@ fn a_struct_construction_parses_to_a_struct_init() {
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
     assert_eq!(got.funcs.len(), 1, "make parsed");
-    // Postorder: the two field values, then the StructInit with field count 2.
-    assert_eq!(got.funcs[0].3, vec![(1, 1), (1, 2), (27, 2)]);
+    // Postorder: the two field values, then the StructInit packing the flat byte size (16 =
+    // two Words) and field count 2 as 16 * 1024 + 2.
+    assert_eq!(got.funcs[0].3, vec![(1, 1), (1, 2), (27, 16 * 1024 + 2)]);
 }
 
 // A `trait` declaration between two functions: the stage emits TRAITSTART (19), captures

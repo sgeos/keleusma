@@ -348,6 +348,7 @@ const P_LIMIT_ID: usize = 1 + 12288;
 const P_CHUNK_COUNT: usize = 1 + 12288 + 1;
 const P_CHUNKS: usize = 1 + 12288 + 2;
 const P_REQUIRE_ID: usize = 1 + 12288 + 2 + 256;
+const P_WORD_ID: usize = 1 + 12288 + 2 + 256 + 1;
 
 /// Compile parse.kel on a 64MB thread; its deeply nested source overflows the
 /// default 2MB test-thread stack in the host compiler's recursive-descent parse.
@@ -380,6 +381,7 @@ fn parse_via_lexer(src: &str) -> (usize, usize) {
     };
     let limit_id = id_of("limit");
     let require_id = id_of("require");
+    let word_id = id_of("Word");
     let chunks = chunk_ids_from_tokens(&tokens);
 
     let module = compile_parse_stage();
@@ -394,6 +396,8 @@ fn parse_via_lexer(src: &str) -> (usize, usize) {
     vm.set_shared(&mut shared, P_LIMIT_ID, Value::Int(limit_id))
         .unwrap();
     vm.set_shared(&mut shared, P_REQUIRE_ID, Value::Int(require_id))
+        .unwrap();
+    vm.set_shared(&mut shared, P_WORD_ID, Value::Int(word_id))
         .unwrap();
     vm.set_shared(&mut shared, P_CHUNK_COUNT, Value::Int(chunks.len() as i64))
         .unwrap();

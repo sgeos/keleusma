@@ -33,6 +33,7 @@ shared data toks {
     chunk_count: Word,
     chunks: [Word; 256],
     require_id: Word,
+    word_id: Word,
 }
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
@@ -378,6 +379,8 @@ private data enums {
 private data structdefs {
     sd_count: Word,
     sd_name: [Word; 64],
+    sd_bytesize: [Word; 64],
+    sd_matchsz: Word,
     sc_sp: Word,
     sc_name: [Word; 8],
     sc_count: [Word; 8],
@@ -800,9 +803,10 @@ fn step_cdraining() -> Word {
 
 // A `}` closing a struct construction: flush the operators above the StructMark, then pop
 // the mark, count the last field (when a value was parsed), and emit a StructInit node
-// carrying the field count. The field-expression nodes precede it in postorder, exactly as
-// a Call's arguments precede the Call. The reconstruct stage resolves the field count to the
-// struct's flat byte size (its `.kel` layout pass); this parse-level node carries the count.
+// packing the struct's flat byte size (summed per field at its declaration) and the field
+// count as `byte_size * 1024 + count`. The field-expression nodes precede it in postorder,
+// exactly as a Call's arguments precede the Call. The reconstruct stage reads the byte size
+// directly, so a mixed-scalar struct (a `Byte` beside a `Word`) is sized correctly.
 fn step_sc_closing() -> Word {
     if ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] != OpCode::StructMark() as Word {
         ops.opsp = ops.opsp - 1;
@@ -816,7 +820,7 @@ fn step_sc_closing() -> Word {
         }
         structdefs.sc_sp = structdefs.sc_sp - 1;
         ops.expect_operand = 0;
-        Node::StructInit() as Word + structdefs.sc_count[structdefs.sc_sp] * 64
+        Node::StructInit() as Word + (structdefs.sd_bytesize[structdefs.sc_name[structdefs.sc_sp]] * 1024 + structdefs.sc_count[structdefs.sc_sp]) * 64
     }
 }
 
@@ -1950,8 +1954,10 @@ fn header_data(k: Word, v: Word) -> Word {
             if ps.dvis == 3 {
                 // STRUCTSTART: a struct type declaration carrying its name; its fields
                 // reuse the data-field scan but are not slotted (see commit_field). Record
-                // the name so a body can recognise its `Name { ... }` construction.
+                // the name so a body can recognise its `Name { ... }` construction, and open
+                // its flat byte-size accumulator (summed per scalar field below).
                 structdefs.sd_name[structdefs.sd_count] = v;
+                structdefs.sd_bytesize[structdefs.sd_count] = 0;
                 structdefs.sd_count = structdefs.sd_count + 1;
                 18 + v * 64
             } else {
@@ -2070,6 +2076,23 @@ fn header_field(k: Word, v: Word) -> Word {
         } else {
         if ps.ptype == 1 {
             ps.ptype = 0;
+            if ps.dvis == 3 {
+                // Sum this struct field's flat size. A `Word` is `word_bytes` (eight); a
+                // struct-typed field contributes the already-declared struct's own flat byte
+                // size (a struct type is declared before use, so its size is final here); any
+                // other scalar (Byte, Bool) is one byte. Array fields are a later increment.
+                if v == toks.word_id {
+                    structdefs.sd_bytesize[structdefs.sd_count - 1] = structdefs.sd_bytesize[structdefs.sd_count - 1] + 8;
+                } else {
+                    structdefs.sd_matchsz = 1;
+                    for i in 0..structdefs.sd_count limit 64 {
+                        if structdefs.sd_name[i] == v {
+                            structdefs.sd_matchsz = structdefs.sd_bytesize[i];
+                        }
+                    }
+                    structdefs.sd_bytesize[structdefs.sd_count - 1] = structdefs.sd_bytesize[structdefs.sd_count - 1] + structdefs.sd_matchsz;
+                }
+            }
             6 + v * 64
         } else {
             0

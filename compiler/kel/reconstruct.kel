@@ -168,14 +168,14 @@ fn step(k: Word, a: Word) -> Word {
         emit(7, chunk, args_start, count)
     } else {
     if k == 27 {
-        // StructInit: `arg` is the construction's field count. Resolve the flat byte size
-        // here -- the layout pass in .kel -- as `count * word_bytes` for an all-scalar Word
-        // struct on the eight-byte-word target. Pop the field-value nodes into `call_args`
+        // StructInit: `arg` packs `byte_size * 1024 + count`. The parser summed the struct's
+        // flat byte size per field (a `Word` eight bytes, a `Byte`/`Bool` one), so a mixed-
+        // scalar struct is sized correctly here. Pop the field-value nodes into `call_args`
         // in source order (like a Call), and emit the StructInit node whose arg is the byte
         // size, lhs the field-slice start, rhs the field count, which codegen's
-        // `push_struct_init` consumes. A mixed-field-size struct is a later increment.
-        let count = a;
-        let byte_size = count * 8;
+        // `push_struct_init` consumes.
+        let byte_size = a / 1024;
+        let count = a % 1024;
         let args_start = rs.ca;
         for j in 0..count limit 64 {
             let node = pop();
