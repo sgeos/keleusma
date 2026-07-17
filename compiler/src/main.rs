@@ -134,7 +134,7 @@ fn status() {
     println!("byte-identically. The parser stage (Step 2) is now the merged parse.kel,");
     println!("which parses a whole top-level declaration -- a function with its full");
     println!("body, a data block, an enum, or a use import -- in a single pass, folding");
-    println!("body.kel's node-forest walk into parser.kel's declaration scan and");
+    println!("the retired body.kel node-forest walk into the retired parser.kel scan and");
     println!("resolving data fields and enums by accumulating their tables as it parses");
     println!("(see tests/selfhost_parse.rs). ALL FOUR STAGES NOW SELF-COMPILE");
     println!("byte-identically (lexer.kel, parse.kel, reconstruct.kel, codegen.kel): the");
