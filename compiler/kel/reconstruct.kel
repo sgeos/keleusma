@@ -125,7 +125,7 @@ fn is_leaf(k: Word) -> Word {
 }
 
 fn is_binary(k: Word) -> Word {
-    if k == 3 orelse k == 5 orelse k == 8 orelse k == 9 orelse k == 12 orelse k == 14 orelse k == 21 {
+    if k == 3 orelse k == 5 orelse k == 8 orelse k == 9 orelse k == 12 orelse k == 14 orelse k == 21 orelse k == 31 {
         1
     } else {
         0
@@ -133,7 +133,7 @@ fn is_binary(k: Word) -> Word {
 }
 
 fn is_unary(k: Word) -> Word {
-    if k == 6 orelse k == 10 orelse k == 13 orelse k == 24 orelse k == 26 orelse k == 28 orelse k == 29 { 1 } else { 0 }
+    if k == 6 orelse k == 10 orelse k == 13 orelse k == 24 orelse k == 26 orelse k == 28 orelse k == 29 orelse k == 30 { 1 } else { 0 }
 }
 
 // Process one record, folding it into a node and leaving that node's index on the

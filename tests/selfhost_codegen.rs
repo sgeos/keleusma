@@ -31,7 +31,9 @@ use keleusma::ast::{
     BinOp, Block, ConstInitializer, DataVisibility, Expr, FunctionCategory, FunctionDef, Iterable,
     Literal, Param, Pattern, Stmt, UnaryOp,
 };
-use keleusma::bytecode::{ConstValue, Module, NewCompositeOperand, Op, StructField, Value};
+use keleusma::bytecode::{
+    ArrayElem, ConstValue, Module, NewCompositeOperand, Op, StructField, Value,
+};
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
@@ -764,6 +766,32 @@ fn decode_op(w: i64) -> Op {
         47 => Op::GetField(StructField::Flat {
             offset: (operand % 65536) as u16,
             kind: match operand / 65536 {
+                0 => ScalarKind::Unit,
+                1 => ScalarKind::Bool,
+                2 => ScalarKind::Byte,
+                3 => ScalarKind::Int,
+                4 => ScalarKind::Fixed,
+                5 => ScalarKind::Float,
+                6 => ScalarKind::Text,
+                7 => ScalarKind::Opaque,
+                other => panic!("bad scalar kind tag {other}"),
+            },
+        }),
+        // A flat-nested struct field read: operand packs offset + size*65536 + variant*2^32.
+        48 => Op::GetField(StructField::FlatNested {
+            offset: (operand % 65536) as u16,
+            size: ((operand / 65536) % 65536) as u16,
+            variant: match operand / 4294967296 {
+                0 => CompositeKind::Tuple,
+                1 => CompositeKind::Array,
+                2 => CompositeKind::Struct,
+                3 => CompositeKind::Enum,
+                other => panic!("bad composite variant tag {other}"),
+            },
+        }),
+        // A flat array-element read: operand is the element ScalarKind tag.
+        49 => Op::GetIndex(ArrayElem::Flat {
+            kind: match operand {
                 0 => ScalarKind::Unit,
                 1 => ScalarKind::Bool,
                 2 => ScalarKind::Byte,
@@ -1724,8 +1752,9 @@ fn self_compile_codegen_atomic_functions() {
     // loses a function deliberately, update EXPECTED_SELF_COMPILE below.
     // 37 as of increment 34 (added `push_struct_init` and `push_field_access` for flat
     // struct construction and field access); 39 with `push_const_value` and `push_break`
-    // for the user-written `break;` statement.
-    const EXPECTED_SELF_COMPILE: usize = 39;
+    // for the user-written `break;` statement; 41 with `push_field_access_nested` and
+    // `push_arrindex` for struct array-element access.
+    const EXPECTED_SELF_COMPILE: usize = 41;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -2072,7 +2101,7 @@ fn reconstruct_into(
                 });
                 (nodes.len() - 1) as i64
             }
-            3 | 5 | 8 | 9 | 12 | 14 | 21 => {
+            3 | 5 | 8 | 9 | 12 | 14 | 21 | 31 => {
                 let r = stack.pop().expect("binary rhs");
                 let l = stack.pop().expect("binary lhs");
                 nodes.push(Node {
@@ -2145,7 +2174,7 @@ fn reconstruct_into(
                 });
                 (nodes.len() - 1) as i64
             }
-            6 | 10 | 13 | 24 | 26 | 28 | 29 => {
+            6 | 10 | 13 | 24 | 26 | 28 | 29 | 30 => {
                 let c = stack.pop().expect("unary operand");
                 nodes.push(Node {
                     kind,
@@ -2471,6 +2500,24 @@ fn self_host_compiles_field_access_after_a_byte_array_field() {
     assert_self_host_byte_identical(
         "struct H { flags: [Byte; 3], n: Word }\n\
          fn gn(h: H) -> Word { h.n }",
+    );
+}
+
+// Array-ELEMENT access `s.xs[i]` on a struct-typed parameter: parse.kel emits a
+// FieldAccessNested (the whole array field extracted as a value, GetField(FlatNested{offset,
+// size, Array})) then an ArrIndex (GetIndex(Flat{element kind})) over it and the index. The
+// getter compiles byte-identically to the reference through the whole self-hosted pipeline for
+// both a Word-element and a Byte-element array. (Construction of an array-field struct needs an
+// array literal and remains later, so these are byte-identity checks, not runs.)
+#[test]
+fn self_host_compiles_array_element_access() {
+    assert_self_host_byte_identical(
+        "struct S { xs: [Word; 4], tag: Word }\n\
+         fn g(s: S, i: Word) -> Word { s.xs[i] }",
+    );
+    assert_self_host_byte_identical(
+        "struct B { bs: [Byte; 5] }\n\
+         fn gb(b: B, i: Word) -> Byte { b.bs[i] }",
     );
 }
 
