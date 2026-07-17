@@ -229,6 +229,56 @@ fn flat_field_out_of_bounds_after_a_branch_is_rejected() {
     );
 }
 
+// ---- Seeding (slice 2b): a composite-parameter field access caught only with seeding --------
+
+#[test]
+fn seeded_composite_param_field_out_of_bounds_is_rejected() {
+    // `f` takes a 16-byte struct parameter and reads a field. Seeding makes the parameter's Flat
+    // shape known, so a mutated out-of-bounds field offset is caught -- which the isolation check
+    // (all-Top locals) defers. This is the flagship seeded check (Phase 2b).
+    let mut m = compile_src(
+        "struct P { x: Word, y: Word }\n\
+         fn f(p: P) -> Word { p.x }\n\
+         fn main() -> Word { f(P { x: 1, y: 2 }) }",
+    );
+    // Bump `f`'s flat field offset out of bounds (offset 12 + a word 8 = 20 > 16).
+    let mut mutated = false;
+    for c in &mut m.chunks {
+        for op in &mut c.ops {
+            if let Op::GetField(StructField::Flat { offset, .. }) = op {
+                *offset = 12;
+                mutated = true;
+            }
+        }
+    }
+    assert!(mutated, "expected a flat GetField in the compiled program");
+
+    // The seeded reference and the seeded stage both reject.
+    assert!(
+        typed_check_module(&m, WB, FB).is_err(),
+        "the seeded reference typed check must reject the out-of-bounds parameter field"
+    );
+    assert!(
+        typed_reject_module_via_kel(&m),
+        "the seeded stage must reject the out-of-bounds parameter field"
+    );
+    // Without seeding the parameter is Top, so the isolation check defers (does not reject) --
+    // confirming the rejection comes from the seeding, not from an unrelated check.
+    let fchunk = m
+        .chunks
+        .iter()
+        .find(|c| {
+            c.ops
+                .iter()
+                .any(|o| matches!(o, Op::GetField(StructField::Flat { .. })))
+        })
+        .expect("the chunk with the flat field");
+    assert!(
+        !typed_reject_chunk_via_kel(&m, fchunk),
+        "the isolation check must defer the parameter field access (proving seeding is required)"
+    );
+}
+
 #[test]
 fn if_else_branch_height_mismatch_is_rejected() {
     // The then-arm leaves one value; the else-arm leaves none. The arms rejoin at different

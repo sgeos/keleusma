@@ -1372,32 +1372,44 @@ pub fn structural_reject_module_via_kel(module: &Module) -> bool {
     })
 }
 
-// --- Self-hosted A.2.1 typed operand-stack verifier, slice 2a (verify_typed.kel) -------------
+// --- Self-hosted A.2.1 typed operand-stack verifier, slices 2a+2b (verify_typed.kel) ---------
 //
-// verify_typed.kel is a frame-stack abstract interpreter over the WHOLE chunk (all control flow),
-// checked in isolation. It reconstructs each operand-stack entry's flat shape and validates every
-// compiler-baked flat field/array offset against the composite's known size (audit B1/B2), the
-// operand-stack underflow (audit finding 3), the if/else branch-height balance (B3/B4), and the
-// loop back-edge height neutrality (B5). Per the operator's chosen trade-off it uses the SOUND
-// over-approximation the reference itself falls back to: shapes are precise within a basic block
-// and reset to Top across every control-flow boundary (a loop also invalidates every local), so
-// it never rejects a valid program -- a Top defers to the retained runtime guard -- and forgoes
-// only the cross-join shape precision (loop-carried-local flat checks). The shared block `tv`
-// lays out `op_count` (0); the per-op arrays `class` (1..), `arg`, `is_term`, `tk`, `req`,
-// `prod`, `ta`, `tb` (each 1024 wide); and the verdict `out_reject`. Still isolation-only (no
-// signature/native/enum seeding -- slice 2b) and without the module-level data-layout validation
-// (slice 2c), so not yet wired into `structural_reject_module_via_kel`.
+// verify_typed.kel is a frame-stack abstract interpreter over the WHOLE chunk (all control flow).
+// It reconstructs each operand-stack entry's flat shape and validates every compiler-baked flat
+// field/array offset against the composite's known size (audit B1/B2), the operand-stack
+// underflow (finding 3), the if/else branch-height balance (B3/B4), the loop back-edge height
+// neutrality (B5), and -- with signature/native/enum seeding (slice 2b) -- the seeded local
+// composite-field offsets, `SetLocal` compatibility, resume shape, `Call`/native return shape,
+// and enum body size (B8). Per the operator's chosen trade-off it uses the SOUND over-
+// approximation the reference itself falls back to: shapes are precise within a basic block and
+// reset to Top across every control-flow boundary (a loop also invalidates every local), so it
+// never rejects a valid program -- a Top defers to the retained runtime guard -- and forgoes
+// only the cross-join shape precision. `typed_run` marshals the per-op descriptor plus, in the
+// seeded form, the per-slot seed shapes (from the chunk signature), the resume shape, the per-op
+// Call/native return shapes, and the enum body sizes; an unseeded run reproduces the isolation
+// `typed_check_chunk`. Deferred residuals: the Call argument-vs-parameter check, the non-enum
+// `NewComposite` packed-size check, and exact composite-kind compatibility. Still without the
+// module-level data-layout validation (slice 2c), so not yet wired into
+// `structural_reject_module_via_kel`.
 
 const TV_OP_COUNT: usize = 0;
-const TV_CLASS: usize = 1;
-const TV_ARG: usize = 1 + 1024;
-const TV_IS_TERM: usize = 1 + 1024 * 2;
-const TV_TK: usize = 1 + 1024 * 3;
-const TV_REQ: usize = 1 + 1024 * 4;
-const TV_PROD: usize = 1 + 1024 * 5;
-const TV_TA: usize = 1 + 1024 * 6;
-const TV_TB: usize = 1 + 1024 * 7;
-const TV_OUT_REJECT: usize = 1 + 1024 * 8;
+const TV_RESUME_TAG: usize = 1;
+const TV_RESUME_SIZE: usize = 2;
+const TV_EB_COUNT: usize = 3;
+const TV_CLASS: usize = 4;
+const TV_ARG: usize = 4 + 1024;
+const TV_IS_TERM: usize = 4 + 1024 * 2;
+const TV_TK: usize = 4 + 1024 * 3;
+const TV_REQ: usize = 4 + 1024 * 4;
+const TV_PROD: usize = 4 + 1024 * 5;
+const TV_TA: usize = 4 + 1024 * 6;
+const TV_TB: usize = 4 + 1024 * 7;
+const TV_RET_TAG: usize = 4 + 1024 * 8;
+const TV_RET_SIZE: usize = 4 + 1024 * 9;
+const TV_SEED_TAG: usize = 4 + 1024 * 10;
+const TV_SEED_SIZE: usize = 4 + 1024 * 10 + 256;
+const TV_EB_VALS: usize = 4 + 1024 * 10 + 512;
+const TV_OUT_REJECT: usize = 4 + 1024 * 10 + 512 + 64;
 
 fn verify_typed_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
@@ -1445,6 +1457,7 @@ fn typed_desc(
     use keleusma::bytecode::{
         ArrayElem, EnumField, NewCompositeOperand, Op, StructField, TupleField,
     };
+    use keleusma::value_layout::CompositeKind;
     let (class, arg) = analyze_class(op);
     let is_term = i64::from(matches!(op, Op::Return | Op::Trap(_)));
     let (r, net) = keleusma::verify::op_depth_effect(op, chunk);
@@ -1456,10 +1469,17 @@ fn typed_desc(
         Op::IsEnum(_, _, _) | Op::IsStruct(_) => (2, 1, 0),
         Op::GetLocal(i) => (3, *i as i64, 0),
         Op::SetLocal(i) => (4, *i as i64, 0),
+        Op::Yield => (11, 0, 0),
+        Op::Call(_, _) | Op::CallVerifiedNative(_, _) | Op::CallExternalNative(_, _) => (12, 0, 0),
         Op::Const(idx) => match const_scalar_size(chunk.constants.get(*idx as usize), wb, fb) {
             Some(sz) => (2, sz, 0),
             None => (0, 0, 0),
         },
+        Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Enum,
+            byte_size,
+            ..
+        }) => (14, 0, *byte_size as i64),
         Op::NewComposite(NewCompositeOperand::Flat { byte_size, .. }) => (6, 0, *byte_size as i64),
         Op::GetField(StructField::Flat { offset, kind })
         | Op::GetTupleField(TupleField::Flat { offset, kind })
@@ -1478,16 +1498,44 @@ fn typed_desc(
     (class, arg, is_term, tk, req, prod, ta, tb)
 }
 
-/// Run verify_typed.kel over one chunk (isolation), returning whether the frame-stack abstract
-/// interpreter rejects a flat field/array offset, an operand-stack underflow, or an if/else or
-/// loop height imbalance. Marshals the per-op descriptor via `typed_desc`.
-pub fn typed_reject_chunk_via_kel(module: &Module, chunk: &keleusma::bytecode::Chunk) -> bool {
+/// Lift a wire signature shape into the stage's `(tag, size)` lattice, mirroring
+/// `AbsVal::from_wire`: Top -> (0,0); a decodable scalar -> (1, byte size); a decodable flat
+/// composite -> (2, byte size); an undecodable tag -> Top. The composite kind is not tracked
+/// (size-only flat compatibility, a documented residual).
+fn abs_from_wire(shape: &keleusma::bytecode::WireShape, wb: usize, fb: usize) -> (i64, i64) {
+    use keleusma::bytecode::WireShape;
+    use keleusma::value_layout::{CompositeKind, ScalarKind};
+    match shape {
+        WireShape::Top => (0, 0),
+        WireShape::Scalar { kind } => match ScalarKind::from_tag(*kind) {
+            Some(k) => (1, k.size_in_bytes(wb, fb) as i64),
+            None => (0, 0),
+        },
+        WireShape::Flat { kind, size } => match CompositeKind::from_tag(*kind) {
+            Some(_) => (2, *size as i64),
+            None => (0, 0),
+        },
+    }
+}
+
+/// Run verify_typed.kel over one chunk. `sig` seeds the local frame and resume shape (Phase 2b);
+/// `None` is the isolation check (all Top). When `sig` is `Some` the module tables are also used
+/// to seed each `Call`/native return shape and the enum body sizes (B8); the isolation form
+/// leaves them empty, reproducing `typed_check_chunk`. Returns whether the interpreter rejects a
+/// flat offset, an underflow, a height imbalance, a `SetLocal` shape mismatch, or an enum body
+/// size mismatch.
+fn typed_run(
+    module: &Module,
+    chunk: &keleusma::bytecode::Chunk,
+    sig: Option<&keleusma::bytecode::ChunkSignature>,
+    wb: usize,
+    fb: usize,
+) -> bool {
+    use keleusma::bytecode::Op;
     assert!(
         chunk.ops.len() <= 1024,
         "verify_typed.kel op-table capacity"
     );
-    let wb = (1usize << module.word_bits_log2) / 8;
-    let fb = (1usize << module.float_bits_log2) / 8;
     let m = verify_typed_kel_module();
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -1498,6 +1546,32 @@ pub fn typed_reject_chunk_via_kel(module: &Module, chunk: &keleusma::bytecode::C
         vm.set_shared(shared, slot, Value::Int(v)).unwrap();
     };
     set(&vm, &mut shared, TV_OP_COUNT, chunk.ops.len() as i64);
+    // Seed the local frame from the signature's parameters (leading slots) and the resume shape.
+    if let Some(sig) = sig {
+        for (i, param) in sig.params.iter().enumerate().take(256) {
+            let (tag, size) = abs_from_wire(param, wb, fb);
+            set(&vm, &mut shared, TV_SEED_TAG + i, tag);
+            set(&vm, &mut shared, TV_SEED_SIZE + i, size);
+        }
+        let (rtag, rsize) = abs_from_wire(&sig.resume, wb, fb);
+        set(&vm, &mut shared, TV_RESUME_TAG, rtag);
+        set(&vm, &mut shared, TV_RESUME_SIZE, rsize);
+        // The declared flat enum body sizes (`word_bytes + min_payload`), for the B8 cross-check.
+        for (i, el) in module.enum_layouts.iter().enumerate().take(64) {
+            set(
+                &vm,
+                &mut shared,
+                TV_EB_VALS + i,
+                wb as i64 + el.min_payload as i64,
+            );
+        }
+        set(
+            &vm,
+            &mut shared,
+            TV_EB_COUNT,
+            module.enum_layouts.len().min(64) as i64,
+        );
+    }
     for (i, op) in chunk.ops.iter().enumerate() {
         let (class, arg, is_term, tk, req, prod, ta, tb) = typed_desc(op, chunk, wb, fb);
         assert!(prod <= 4, "verify_typed.kel push_tops unroll bound");
@@ -1509,6 +1583,25 @@ pub fn typed_reject_chunk_via_kel(module: &Module, chunk: &keleusma::bytecode::C
         set(&vm, &mut shared, TV_PROD + i, prod);
         set(&vm, &mut shared, TV_TA + i, ta);
         set(&vm, &mut shared, TV_TB + i, tb);
+        // A Call/native return shape, seeded from the module tables (only in the seeded form;
+        // isolation leaves it Top, matching `typed_check_chunk`'s empty tables).
+        if sig.is_some() {
+            let ret = match op {
+                Op::Call(callee, _) => module
+                    .signatures
+                    .get(*callee as usize)
+                    .map(|cs| abs_from_wire(&cs.ret, wb, fb)),
+                Op::CallVerifiedNative(idx, _) | Op::CallExternalNative(idx, _) => module
+                    .native_return_shapes
+                    .get(*idx as usize)
+                    .map(|w| abs_from_wire(w, wb, fb)),
+                _ => None,
+            };
+            if let Some((tag, size)) = ret {
+                set(&vm, &mut shared, TV_RET_TAG + i, tag);
+                set(&vm, &mut shared, TV_RET_SIZE + i, size);
+            }
+        }
     }
     match vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
@@ -1523,13 +1616,25 @@ pub fn typed_reject_chunk_via_kel(module: &Module, chunk: &keleusma::bytecode::C
     }
 }
 
-/// Run verify_typed.kel over every chunk of a module; the module is rejected (by this pass) iff
+/// Run verify_typed.kel over one chunk in isolation (no seeding), the drop-in for
+/// `typed_check_chunk`.
+pub fn typed_reject_chunk_via_kel(module: &Module, chunk: &keleusma::bytecode::Chunk) -> bool {
+    let wb = (1usize << module.word_bits_log2) / 8;
+    let fb = (1usize << module.float_bits_log2) / 8;
+    typed_run(module, chunk, None, wb, fb)
+}
+
+/// Run verify_typed.kel over every chunk of a module, seeding each from the module's per-chunk
+/// signature table (Phase 2b), the drop-in for `typed_check_module`. The module is rejected iff
 /// any chunk is.
 pub fn typed_reject_module_via_kel(module: &Module) -> bool {
+    let wb = (1usize << module.word_bits_log2) / 8;
+    let fb = (1usize << module.float_bits_log2) / 8;
     module
         .chunks
         .iter()
-        .any(|chunk| typed_reject_chunk_via_kel(module, chunk))
+        .enumerate()
+        .any(|(i, chunk)| typed_run(module, chunk, module.signatures.get(i), wb, fb))
 }
 
 /// The self-hosted drop-in replacement for `verify_resource_bounds`: analyze.kel decides each
