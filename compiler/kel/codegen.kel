@@ -199,6 +199,8 @@ const data wire {
     bytetoword: Word = 45,
     newcomposite: Word = 46,
     getfield: Word = 47,
+    getfieldnested: Word = 48,
+    getindex: Word = 49,
     radix: Word = 64,
     item: Word = 4,
     pack: Word = 65536,
@@ -755,6 +757,27 @@ fn push_field_access(p: Word) -> Word {
     0
 }
 
+// FieldAccessNested (kind 30): a flat-nested struct field read `obj.f` where `f` is an array
+// (or nested composite) -- the whole field's bytes are extracted as a composite value. Emit
+// the object ops, then GetField(FlatNested{offset, size, variant}) (op tag 48), the operands
+// packed as offset + size*65536 + variant*2^32 (variant Array = 1). args = that packing, lhs =
+// the object. Foundation for `obj.xs[i]` (an ArrIndex over this value).
+fn push_field_access_nested(p: Word) -> Word {
+    push_emit(wire.getfieldnested + ast.args[p] * wire.radix);
+    push_visit(ast.lhs[p]);
+    0
+}
+
+// ArrIndex (kind 31): a flat array-element read `obj.xs[i]`. Emit the array-value ops (the
+// FieldAccessNested child), then the index ops, then GetIndex(Flat{element kind}) (op tag 49,
+// operand the ScalarKind tag). args = the element kind, lhs = the array value, rhs = the index.
+fn push_arrindex(p: Word) -> Word {
+    push_emit(wire.getindex + ast.args[p] * wire.radix);
+    push_visit(ast.rhs[p]);
+    push_visit(ast.lhs[p]);
+    0
+}
+
 // Intern a raw constant value into the pool (deduplicating, like push_literal) and schedule
 // its `Const(index)`. Used where a constant has no Literal node, such as a `break`'s outcome
 // code.
@@ -962,6 +985,8 @@ fn walk_step() -> Word {
             27 => push_struct_init(payload),
             28 => push_field_access(payload),
             29 => push_break(payload),
+            30 => push_field_access_nested(payload),
+            31 => push_arrindex(payload),
             _ => 0,
         };
     }

@@ -126,6 +126,12 @@ enum Node {
     FieldPos = 35,
     IndexStore = 36,
     Break = 29,
+    // A flat-nested struct field read `p.f` where `f` is an array (or nested composite): emits
+    // GetField(FlatNested{offset, size, variant}). Followed by an ArrIndex for `p.xs[i]`.
+    FieldAccessNested = 30,
+    // A flat array-element read `p.xs[i]`: emits GetIndex(Flat{element kind}). lhs = the array
+    // value (a FieldAccessNested), rhs = the index expression.
+    ArrIndex = 31,
 }
 
 // The shunting-yard operator codes.
@@ -181,6 +187,12 @@ private data ps {
     pstruct: [Word; 32],
     fa_phase: Word,
     fa_struct: Word,
+    // The just-resolved field's flat byte offset, ScalarKind (or element kind for an array),
+    // and total byte size, held between reading the field name and deciding scalar (`.f`) vs
+    // array-element (`.xs[i]`) access at the following token.
+    fa_off: Word,
+    fa_kind: Word,
+    fa_size: Word,
     found: Word,
     found_flag: Word,
     in_guard: Word,
@@ -351,6 +363,11 @@ private data da {
     idx_len: [Word; 8],
     idx_sp: Word,
     iclosing: Word,
+    // Set while an open `[...]` index belongs to a struct array-field access (`p.xs[i]`) rather
+    // than a data-field index, so its closing `]` emits an ArrIndex (GetIndex) of the element
+    // kind instead of a data IndexRead. Nested struct-array indices are not supported.
+    fa_index: Word,
+    fa_index_kind: Word,
     post_index: Word,
     pidx_base: Word,
     pidx_len: Word,
@@ -413,6 +430,10 @@ private data structdefs {
     sd_fname: [Word; 512],
     sd_foffset: [Word; 512],
     sd_fkind: [Word; 512],
+    // Each field's total flat byte size (a scalar's kind size, an array's element*length, a
+    // nested struct's own size), so an array-element access `p.xs[i]` can emit the FlatNested
+    // GetField that extracts the whole array field before indexing it.
+    sd_fsize: [Word; 512],
     sd_fname_ctr: Word,
     sc_fieldpos: Word,
     sc_sp: Word,
@@ -705,12 +726,21 @@ fn step_iclosing() -> Word {
         emit_op(op)
     } else {
         ops.opsp = ops.opsp - 1;
-        da.idx_sp = da.idx_sp - 1;
-        da.pidx_base = da.idx_base[da.idx_sp];
-        da.pidx_len = da.idx_len[da.idx_sp];
         da.iclosing = 0;
-        da.post_index = 1;
-        0
+        if da.fa_index == 1 {
+            // A struct array-element access `p.xs[i]`: emit the ArrIndex (GetIndex) of the
+            // element kind directly (no read-vs-assign lookahead; array-element assignment is a
+            // later increment). It pops the index (top) and the FlatNested array value.
+            da.fa_index = 0;
+            ops.expect_operand = 0;
+            Node::ArrIndex() as Word + da.fa_index_kind * 64
+        } else {
+            da.idx_sp = da.idx_sp - 1;
+            da.pidx_base = da.idx_base[da.idx_sp];
+            da.pidx_len = da.idx_len[da.idx_sp];
+            da.post_index = 1;
+            0
+        }
     }
 }
 
@@ -1315,7 +1345,10 @@ fn step_fieldaccess(k: Word, v: Word) -> Word {
         }
         0
     } else {
-        ps.fa_phase = 0;
+    if ps.fa_phase == 2 {
+        // The field name: resolve its flat offset, ScalarKind (element kind for an array), and
+        // total byte size, and DEFER emission to phase 3, where the following token decides a
+        // scalar read (`p.f`) from an array-element read (`p.xs[i]`).
         if k == Tok::Ident() as Word {
             structdefs.sc_fieldpos = structdefs.sd_fstart[ps.fa_struct];
             for i in 0..structdefs.sd_fcount[ps.fa_struct] limit 64 {
@@ -1323,12 +1356,35 @@ fn step_fieldaccess(k: Word, v: Word) -> Word {
                     structdefs.sc_fieldpos = structdefs.sd_fstart[ps.fa_struct] + i;
                 }
             }
-            ops.expect_operand = 0;
-            Node::FieldAccess() as Word + (structdefs.sd_foffset[structdefs.sc_fieldpos] + structdefs.sd_fkind[structdefs.sc_fieldpos] * 65536) * 64
+            ps.fa_off = structdefs.sd_foffset[structdefs.sc_fieldpos];
+            ps.fa_kind = structdefs.sd_fkind[structdefs.sc_fieldpos];
+            ps.fa_size = structdefs.sd_fsize[structdefs.sc_fieldpos];
+            ps.fa_phase = 3;
         } else {
-            0
+            ps.fa_phase = 0;
         }
-    }
+        0
+    } else {
+        // Phase 3: a `[` makes this an array-element read; anything else is a scalar read.
+        ps.fa_phase = 0;
+        if k == Tok::LBracket() as Word {
+            // Array element `p.xs[i]`: emit the FlatNested field read (the whole array value,
+            // packed offset + size*65536 + Array-variant(1)*2^32), open the index (an
+            // IndexMark blocks precedence), and mark the closing `]` to emit the ArrIndex.
+            da.fa_index = 1;
+            da.fa_index_kind = ps.fa_kind;
+            ops.opstack[ops.opsp] = OpCode::IndexMark() as Word;
+            ops.opsp = ops.opsp + 1;
+            ops.expect_operand = 1;
+            Node::FieldAccessNested() as Word + (ps.fa_off + ps.fa_size * 65536 + 4294967296) * 64
+        } else {
+            // Scalar read `p.f`: emit the flat GetField and push the token back for the normal
+            // dispatch (as the pre-array path did directly at the field name).
+            ps.cursor = ps.cursor - 1;
+            ops.expect_operand = 0;
+            Node::FieldAccess() as Word + (ps.fa_off + ps.fa_kind * 65536) * 64
+        }
+    } }
 }
 
 // The normal parse-phase dispatch: a `let` binding's name or `=`, else an expression
@@ -1811,6 +1867,7 @@ fn arm_body() -> Word {
     da.idx_sp = 0;
     da.post_index = 0;
     da.iclosing = 0;
+    da.fa_index = 0;
     da.store_emit = 0;
     call.call_sp = 0;
     call.call_phase = 0;
@@ -2268,10 +2325,11 @@ fn header_field(k: Word, v: Word) -> Word {
             ps.ptype = 0;
             if ps.dvis == 3 {
                 // A scalar field: add its size (the offset was set at the field name), with
-                // field_size_and_kind also recording its ScalarKind.
+                // field_size_and_kind also recording its ScalarKind, and record the field size.
                 let cur = structdefs.sd_count - 1;
                 let fidx = structdefs.sd_fstart[cur] + structdefs.sd_fcount[cur] - 1;
-                structdefs.sd_bytesize[cur] = structdefs.sd_bytesize[cur] + field_size_and_kind(fidx, v);
+                structdefs.sd_fsize[fidx] = field_size_and_kind(fidx, v);
+                structdefs.sd_bytesize[cur] = structdefs.sd_bytesize[cur] + structdefs.sd_fsize[fidx];
             }
             6 + v * 64
         } else {
@@ -2290,10 +2348,13 @@ fn header_field(k: Word, v: Word) -> Word {
         if ps.arr == 2 {
             ps.arr = 0;
             fields.cur_len = v;
-            // A struct array field's length: the field's flat size is element_size * length.
+            // A struct array field's length: the field's flat size is element_size * length,
+            // recorded per field for a later FlatNested element access.
             if ps.dvis == 3 {
                 let cur = structdefs.sd_count - 1;
-                structdefs.sd_bytesize[cur] = structdefs.sd_bytesize[cur] + structdefs.sd_arrelem * v;
+                let fidx = structdefs.sd_fstart[cur] + structdefs.sd_fcount[cur] - 1;
+                structdefs.sd_fsize[fidx] = structdefs.sd_arrelem * v;
+                structdefs.sd_bytesize[cur] = structdefs.sd_bytesize[cur] + structdefs.sd_fsize[fidx];
             }
             8 + v * 64
         } else {
