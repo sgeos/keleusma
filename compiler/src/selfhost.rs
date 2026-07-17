@@ -1637,6 +1637,111 @@ pub fn typed_reject_module_via_kel(module: &Module) -> bool {
         .any(|(i, chunk)| typed_run(module, chunk, module.signatures.get(i), wb, fb))
 }
 
+// --- Self-hosted A.2.1 data-layout validation, slice 2c (verify_datalayout.kel) --------------
+//
+// verify_datalayout.kel reproduces the reference `validate_data_layout` (B6/C4): the shared-slot
+// reconcile (contiguity/count), the shared-slot buffer bounds, and the private-composite
+// monotonicity. The driver precomputes each shared slot's `size` (composite body length, or the
+// scalar size at the module widths, or the undecodable flag) and marshals the tables. This slice
+// is a single batch of up to 1024 entries per table; a layout past that (the self-hosted stages'
+// per-array-element slots) needs the driver to batch and thread the running state, a mechanical
+// extension left for a follow-up. The shared block `dl` lays out the scalars `n_slots` (0),
+// `n_shared` (1), `n_private` (2), `buffer` (3), `pool` (4); the arrays `slot_shared` (5..),
+// `sl_offset`, `sl_size`, `sl_bad`, `pc_slot`, `pc_offset` (each 1024 wide); and `out_reject`.
+
+const DL_N_SLOTS: usize = 0;
+const DL_N_SHARED: usize = 1;
+const DL_N_PRIVATE: usize = 2;
+const DL_BUFFER: usize = 3;
+const DL_POOL: usize = 4;
+const DL_SLOT_SHARED: usize = 5;
+const DL_SL_OFFSET: usize = 5 + 1024;
+const DL_SL_SIZE: usize = 5 + 1024 * 2;
+const DL_SL_BAD: usize = 5 + 1024 * 3;
+const DL_PC_SLOT: usize = 5 + 1024 * 4;
+const DL_PC_OFFSET: usize = 5 + 1024 * 5;
+const DL_OUT_REJECT: usize = 5 + 1024 * 6;
+
+fn verify_datalayout_kel_module() -> Module {
+    static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| compile_src(&read_stage("kel/verify_datalayout.kel")))
+        .clone()
+}
+
+/// Run verify_datalayout.kel over a module's data layout, returning whether it rejects a B6
+/// shared-slot reconcile/bounds or a C4 private-composite monotonicity violation (the reference
+/// `validate_data_layout`). A module with no data layout is accepted. Panics if a table exceeds
+/// the single-batch cap of 1024 entries (the self-hosted stages exceed it and need the batched
+/// driver extension).
+pub fn dl_reject_module_via_kel(module: &Module) -> bool {
+    use keleusma::bytecode::{SHARED_SLOT_COMPOSITE_FLAG, SlotVisibility};
+    use keleusma::value_layout::ScalarKind;
+    let Some(layout) = module.data_layout.as_ref() else {
+        return false;
+    };
+    let n_slots = layout.slots.len();
+    let n_shared = layout.shared_layout.len();
+    let n_private = layout.private_composite_layout.len();
+    assert!(
+        n_slots <= 1024 && n_shared <= 1024 && n_private <= 1024,
+        "verify_datalayout.kel single-batch cap (batched driver extension needed for large layouts)"
+    );
+    let wb = (1usize << module.word_bits_log2) / 8;
+    let fb = (1usize << module.float_bits_log2) / 8;
+    let m = verify_datalayout_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify verify_datalayout.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let set = |vm: &Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
+        vm.set_shared(shared, slot, Value::Int(v)).unwrap();
+    };
+    set(&vm, &mut shared, DL_N_SLOTS, n_slots as i64);
+    set(&vm, &mut shared, DL_N_SHARED, n_shared as i64);
+    set(&vm, &mut shared, DL_N_PRIVATE, n_private as i64);
+    set(&vm, &mut shared, DL_BUFFER, module.shared_data_bytes as i64);
+    set(
+        &vm,
+        &mut shared,
+        DL_POOL,
+        module.persistent_composite_bytes as i64,
+    );
+    for (i, s) in layout.slots.iter().enumerate() {
+        let is_shared = i64::from(matches!(s.visibility, SlotVisibility::Shared));
+        set(&vm, &mut shared, DL_SLOT_SHARED + i, is_shared);
+    }
+    for (i, sl) in layout.shared_layout.iter().enumerate() {
+        set(&vm, &mut shared, DL_SL_OFFSET + i, sl.offset as i64);
+        let (size, bad) = if sl.kind & SHARED_SLOT_COMPOSITE_FLAG != 0 {
+            (sl.len as i64, 0)
+        } else {
+            match ScalarKind::from_tag(sl.kind) {
+                Some(k) => (k.size_in_bytes(wb, fb) as i64, 0),
+                None => (0, 1),
+            }
+        };
+        set(&vm, &mut shared, DL_SL_SIZE + i, size);
+        set(&vm, &mut shared, DL_SL_BAD + i, bad);
+    }
+    for (i, e) in layout.private_composite_layout.iter().enumerate() {
+        set(&vm, &mut shared, DL_PC_SLOT + i, e.slot as i64);
+        set(&vm, &mut shared, DL_PC_OFFSET + i, e.offset as i64);
+    }
+    match vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call verify_datalayout.kel")
+    {
+        VmState::Yielded(Value::Int(_)) => {}
+        other => panic!("unexpected verify_datalayout.kel state: {other:?}"),
+    }
+    match vm.get_shared(&shared, DL_OUT_REJECT).unwrap() {
+        Value::Int(n) => n != 0,
+        o => panic!("expected Int at out_reject, got {o:?}"),
+    }
+}
+
 /// The self-hosted drop-in replacement for `verify_resource_bounds`: analyze.kel decides each
 /// chunk's WCMU transitively (callee bodies folded at every `Op::Call`, resolved in
 /// topological order so callees precede callers), and the module is admitted iff no chunk has
