@@ -2335,6 +2335,25 @@ fn self_host_compiles_a_nested_struct_construction() {
     );
 }
 
+// The one genuine construction gap: fields written OUT OF declaration order. The reference
+// sorts a construction's fields to declaration order before codegen, so `P { y: 2, x: 1 }`
+// packs x (offset 0) = 1 and y (offset 8) = 2. parse.kel currently emits the field values in
+// SOURCE order and does not reorder, so the self-hosted output packs them wrong -- a
+// correctness gap, not just a byte-order one. The fix (a later increment): parse.kel
+// accumulates each struct's field names in declaration order, resolves each construction
+// field's declaration position, and emits a FieldPos marker per field; reconstruct.kel
+// reorders the field values by position (the parse-level harness skips FieldPos, so in-order
+// tests are unaffected and reordering is validated here at the codegen level). Ignored until
+// then; remove the ignore when reordering lands.
+#[test]
+#[ignore = "out-of-order struct fields need declaration-order reordering (tracked)"]
+fn self_host_compiles_out_of_order_struct_construction() {
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\n\
+         fn make() -> P { P { y: 2, x: 1 } }",
+    );
+}
+
 // The bridge over the block and control-flow node kinds: `let` bindings (LetIn),
 // bare expression statements (ExprStmt), the statement-only-block Unit, and
 // `if`/`else` including an else-less form and nesting. Same self-hosted path and
