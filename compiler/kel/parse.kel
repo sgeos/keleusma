@@ -395,6 +395,9 @@ private data structdefs {
     sd_name: [Word; 64],
     sd_bytesize: [Word; 64],
     sd_matchsz: Word,
+    // The element byte size of the struct array field currently being parsed, captured at its
+    // element type and multiplied by the array length at its `; N` to size the whole field.
+    sd_arrelem: Word,
     // Per-struct field names in declaration order, so a construction can resolve each field to
     // its declaration POSITION and emit a FieldPos marker for reconstruct to reorder by (a
     // construction may write fields out of declaration order). `sd_fname` is the flat name
@@ -2202,6 +2205,14 @@ fn header_field(k: Word, v: Word) -> Word {
     if k == 1 {
         if ps.arr == 1 {
             ps.arr = 2;
+            // A struct array field's element type: capture the element byte size (and, via the
+            // helper, its ScalarKind, unused until array-element access lands) to multiply by
+            // the length at the `; N`.
+            if ps.dvis == 3 {
+                let cur = structdefs.sd_count - 1;
+                let fidx = structdefs.sd_fstart[cur] + structdefs.sd_fcount[cur] - 1;
+                structdefs.sd_arrelem = field_size_and_kind(fidx, v);
+            }
             6 + v * 64
         } else {
         if ps.pname == 1 {
@@ -2212,10 +2223,15 @@ fn header_field(k: Word, v: Word) -> Word {
             fields.has_field = 1;
             // A struct field's name is recorded in declaration order for the construction
             // reorder (see structdefs); data/const fields are not, as they never construct.
+            // Its flat byte offset (the running struct size before this field) is recorded
+            // here, before its type adds the field's size, so it is set for a scalar and an
+            // array field alike.
             if ps.dvis == 3 {
                 structdefs.sd_fname[structdefs.sd_fname_ctr] = v;
                 structdefs.sd_fname_ctr = structdefs.sd_fname_ctr + 1;
-                structdefs.sd_fcount[structdefs.sd_count - 1] = structdefs.sd_fcount[structdefs.sd_count - 1] + 1;
+                let cur = structdefs.sd_count - 1;
+                structdefs.sd_fcount[cur] = structdefs.sd_fcount[cur] + 1;
+                structdefs.sd_foffset[structdefs.sd_fstart[cur] + structdefs.sd_fcount[cur] - 1] = structdefs.sd_bytesize[cur];
             }
             ps.pname = 0;
             4 + v * 64
@@ -2223,12 +2239,10 @@ fn header_field(k: Word, v: Word) -> Word {
         if ps.ptype == 1 {
             ps.ptype = 0;
             if ps.dvis == 3 {
-                // Record this field's flat byte offset (the running size before it), then add
-                // its size (and, in the helper, its ScalarKind). The size/kind logic lives in
-                // field_size_and_kind so this nested field body stays flat.
+                // A scalar field: add its size (the offset was set at the field name), with
+                // field_size_and_kind also recording its ScalarKind.
                 let cur = structdefs.sd_count - 1;
                 let fidx = structdefs.sd_fstart[cur] + structdefs.sd_fcount[cur] - 1;
-                structdefs.sd_foffset[fidx] = structdefs.sd_bytesize[cur];
                 structdefs.sd_bytesize[cur] = structdefs.sd_bytesize[cur] + field_size_and_kind(fidx, v);
             }
             6 + v * 64
@@ -2248,6 +2262,11 @@ fn header_field(k: Word, v: Word) -> Word {
         if ps.arr == 2 {
             ps.arr = 0;
             fields.cur_len = v;
+            // A struct array field's length: the field's flat size is element_size * length.
+            if ps.dvis == 3 {
+                let cur = structdefs.sd_count - 1;
+                structdefs.sd_bytesize[cur] = structdefs.sd_bytesize[cur] + structdefs.sd_arrelem * v;
+            }
             8 + v * 64
         } else {
             0
