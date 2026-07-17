@@ -1886,6 +1886,9 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
     let mut cur_cat = 0i64;
     let (mut in_body, mut in_data, mut in_enum, mut in_use) = (false, false, false, false);
     let mut in_guard = false;
+    // A struct (STRUCTSTART 18), trait (19), or impl (20) declaration is skipped until its
+    // END so its fields/methods are not mistaken for a function's params or body.
+    let mut in_skip_decl = false;
     let mut state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
@@ -1906,6 +1909,8 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
                 in_enum = code != 5;
             } else if in_use {
                 in_use = code != 5;
+            } else if in_skip_decl {
+                in_skip_decl = code != 5;
             } else {
                 match code {
                     1..=3 => {
@@ -1923,6 +1928,7 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
                     12 => in_enum = true,
                     16 => in_body = true,
                     17 => in_guard = true,
+                    18 | 19 | 20 => in_skip_decl = true, // struct/trait/impl declaration
                     5 => last = (std::mem::take(&mut records), params, cur_cat),
                     15 => return last,
                     _ => {}
@@ -1967,6 +1973,16 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
 /// yield kinds; a record of any other kind is rejected until a later increment adds
 /// it (the multiheaded dispatch and its head_parts remain).
 fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
+    reconstruct_body_with_structs(records, category, &[])
+}
+
+// Reconstruct a body that may contain struct constructions, resolving each StructInit's
+// flat byte size from `struct_bytesizes` (indexed by struct declaration order).
+fn reconstruct_body_with_structs(
+    records: &[(i64, i64)],
+    category: i64,
+    struct_bytesizes: &[u16],
+) -> Body {
     let mut nodes: Vec<Node> = Vec::new();
     let mut call_args: Vec<i64> = Vec::new();
     let mut limit_parts: Vec<i64> = Vec::new();
@@ -1977,6 +1993,7 @@ fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
         &mut call_args,
         &mut limit_parts,
         &mut match_parts,
+        struct_bytesizes,
     );
     Body {
         nodes,
@@ -2000,6 +2017,7 @@ fn reconstruct_into(
     call_args: &mut Vec<i64>,
     limit_parts: &mut Vec<i64>,
     match_parts: &mut Vec<i64>,
+    struct_bytesizes: &[u16],
 ) -> i64 {
     let mut stack: Vec<i64> = Vec::new();
     let mut pending_slots: Vec<i64> = Vec::new();
@@ -2162,6 +2180,32 @@ fn reconstruct_into(
                 });
                 (nodes.len() - 1) as i64
             }
+            27 => {
+                // StructInit (the layout bridge): arg packs `struct_index * 1024 + count`.
+                // Resolve the struct's flat byte size from its declaration index, pop the
+                // field-value nodes into call_args in source order, and build the codegen
+                // StructInit node whose arg is the byte size, lhs the field slice start,
+                // rhs the field count -- exactly what `push_struct_init` in codegen.kel
+                // consumes.
+                let index = arg.div_euclid(1024);
+                let count = arg.rem_euclid(1024);
+                let byte_size = *struct_bytesizes
+                    .get(index as usize)
+                    .unwrap_or_else(|| panic!("no layout for struct index {index}"));
+                let mut popped: Vec<i64> = (0..count)
+                    .map(|_| stack.pop().expect("struct field value"))
+                    .collect();
+                popped.reverse();
+                let args_start = call_args.len() as i64;
+                call_args.extend(popped);
+                nodes.push(Node {
+                    kind: 27,
+                    arg: byte_size as i64,
+                    lhs: args_start,
+                    rhs: count,
+                });
+                (nodes.len() - 1) as i64
+            }
             other => panic!("reconstruct_body: unsupported node kind {other}"),
         };
         stack.push(idx);
@@ -2221,6 +2265,55 @@ fn parse_into_codegen_arithmetic_matches_the_reference() {
             other => panic!("unexpected result for `{src}`: {other:?}"),
         }
     }
+}
+
+// The layout bridge, end to end: lexer.kel tokenizes, parse.kel emits the construction
+// records (a StructInit carrying the struct's declaration index), the host layout bridge
+// resolves the flat byte size from that index, and codegen.kel emits the ops -- byte-
+// identical to the reference for a flat all-scalar struct construction. This is the seam
+// that joins the construction PARSER (parse.kel) to the construction CODEGEN (codegen.kel's
+// NewComposite lowering); the byte-size resolution is host-side for now, to be ported to a
+// .kel layout pass in the self-hosted reconstruct stage later.
+#[test]
+fn parse_into_codegen_struct_construction_matches_the_reference() {
+    let src = "struct P { x: Word, y: Word }\n\
+               fn make() -> P { P { x: 1, y: 2 } }";
+    // Struct flat byte sizes in declaration order (P is index 0), from the layout helper.
+    let (p_bytes, _p_fields) = struct_scalar_layout(&["Word", "Word"]);
+    let struct_bytesizes = vec![p_bytes];
+
+    let (records, param_count, category) = parse_function_records(src);
+    // parse.kel emits [(Literal 1), (Literal 2), (StructInit index 0 * 1024 + count 2)].
+    assert_eq!(
+        records,
+        vec![(1, 1), (1, 2), (27, 2)],
+        "make's construction records"
+    );
+
+    let body = reconstruct_body_with_structs(&records, category, &struct_bytesizes);
+    let (ops, _pool, _lc) = run_codegen(&body, param_count);
+
+    let reference = compile_src(src);
+    let make = reference
+        .chunks
+        .iter()
+        .find(|c| c.name == "make")
+        .expect("make chunk");
+    assert_eq!(
+        ops, make.ops,
+        "self-hosted struct construction matches the reference"
+    );
+    assert!(
+        ops.iter().any(|op| matches!(
+            op,
+            Op::NewComposite(NewCompositeOperand::Flat {
+                kind: CompositeKind::Struct,
+                count: 2,
+                byte_size: 16,
+            })
+        )),
+        "emits a flat 2-field 16-byte struct NewComposite"
+    );
 }
 
 // The bridge over the block and control-flow node kinds: `let` bindings (LetIn),
@@ -2976,6 +3069,7 @@ fn build_multihead_bridge(heads: &[&ParsedFn], pc: usize) -> Body {
                 &mut call_args,
                 &mut limit_parts,
                 &mut match_parts,
+                &[],
             );
             (1i64, root)
         };
@@ -2986,6 +3080,7 @@ fn build_multihead_bridge(heads: &[&ParsedFn], pc: usize) -> Body {
             &mut call_args,
             &mut limit_parts,
             &mut match_parts,
+            &[],
         );
         entries.push((base, guarded, guard_node, body_node));
     }

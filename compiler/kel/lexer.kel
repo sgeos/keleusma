@@ -190,7 +190,8 @@ fn kw4(start: Word) -> Word {
     if a == 98 andalso b == 97 andalso c == 110 andalso d == 100 { 33 } else {    // band
     if a == 98 andalso b == 120 andalso c == 111 andalso d == 114 { 35 } else {   // bxor
     if a == 119 andalso b == 104 andalso c == 101 andalso d == 110 { 4 } else {   // when
-    0 - 1 } } } } } } }
+    if a == 105 andalso b == 109 andalso c == 112 andalso d == 108 { 56 } else {  // impl
+    0 - 1 } } } } } } } }
 }
 
 fn kw5(start: Word) -> Word {
@@ -202,7 +203,8 @@ fn kw5(start: Word) -> Word {
     if a == 99 andalso b == 111 andalso c == 110 andalso d == 115 andalso e == 116 { 16 } else {   // const
     if a == 109 andalso b == 97 andalso c == 116 andalso d == 99 andalso e == 104 { 48 } else {    // match
     if a == 121 andalso b == 105 andalso c == 101 andalso d == 108 andalso e == 100 { 5 } else {   // yield
-    0 - 1 } } }
+    if a == 116 andalso b == 114 andalso c == 97 andalso d == 105 andalso e == 116 { 55 } else {   // trait
+    0 - 1 } } } }
 }
 
 fn kw6(start: Word) -> Word {
@@ -214,7 +216,8 @@ fn kw6(start: Word) -> Word {
     let f = peek_at(start + 5);
     if a == 115 andalso b == 104 andalso c == 97 andalso d == 114 andalso e == 101 andalso f == 100 { 14 } else {   // shared
     if a == 111 andalso b == 114 andalso c == 101 andalso d == 108 andalso e == 115 andalso f == 101 { 37 } else {  // orelse
-    0 - 1 } }
+    if a == 115 andalso b == 116 andalso c == 114 andalso d == 117 andalso e == 99 andalso f == 116 { 54 } else {   // struct
+    0 - 1 } } }
 }
 
 fn kw7(start: Word) -> Word {
