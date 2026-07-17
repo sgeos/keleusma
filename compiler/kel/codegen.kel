@@ -755,6 +755,39 @@ fn push_field_access(p: Word) -> Word {
     0
 }
 
+// Intern a raw constant value into the pool (deduplicating, like push_literal) and schedule
+// its `Const(index)`. Used where a constant has no Literal node, such as a `break`'s outcome
+// code.
+fn push_const_value(value: Word) -> Word {
+    st.dup_idx = st.pool_count;
+    for i in 0..st.pool_count limit 64 {
+        if st.pool[i] == value {
+            st.dup_idx = i;
+        }
+    }
+    let idx = st.dup_idx;
+    if idx == st.pool_count {
+        st.pool[st.pool_count] = value;
+        st.pool_count = st.pool_count + 1;
+    }
+    push_emit(wire.konst + idx * wire.radix)
+}
+
+// Break (kind 29): a user `break;` statement inside a `for .. limit` loop. The reference
+// records the loop's exit reason before jumping, so this emits `Const(LOOP_OUTCOME_BREAK)`
+// (the outcome VALUE 2, which the reference `compile_for_limit` stamps at a break),
+// `SetLocal(oc)` (the loop's outcome slot, baked on the node as args), an unconditional
+// `Break` (an `mbreak`, patched to the loop exit by the enclosing `mendloop` like the loop's
+// own range exit), then the continuation. args = the outcome slot, lhs = the continuation (the
+// rest of the block, an implicit Unit when the break is a block's last statement). Pushed in
+// reverse so the drain emits them in order.
+fn push_break(p: Word) -> Word {
+    push_visit(ast.lhs[p]);
+    push_emit(wire.mbreak);
+    push_emit(wire.setlocal + ast.args[p] * wire.radix);
+    push_const_value(2)
+}
+
 // Andalso (kind 8): left, Dup, If, PopN(1), right, Else, EndIf. The If/Else markers
 // backpatch to the EndIf for this shape. lhs = left, rhs = right.
 fn push_andalso(p: Word) -> Word {
@@ -928,6 +961,7 @@ fn walk_step() -> Word {
             26 => push_cast(payload),
             27 => push_struct_init(payload),
             28 => push_field_access(payload),
+            29 => push_break(payload),
             _ => 0,
         };
     }
