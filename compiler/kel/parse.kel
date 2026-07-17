@@ -750,6 +750,12 @@ fn prec_of(op: Word) -> Word {
         OpCode::Paren() => 0,
         OpCode::IndexMark() => 0,
         OpCode::YieldMark() => 0,
+        // The call- and struct-construction marks are grouping markers too: an operator's
+        // precedence resolution must never pop them (they are consumed by the closing `)` or
+        // `}`), so they carry precedence 0. Without this a default-precedence operator such as
+        // a comparison in a call argument (`f(a > b)`) pops the CallMark and mis-emits it.
+        OpCode::CallMark() => 0,
+        OpCode::StructMark() => 0,
         OpCode::Mul() => 8,
         OpCode::Div() => 8,
         OpCode::Mod() => 8,
