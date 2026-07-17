@@ -1365,12 +1365,11 @@ pub fn depth_reject_chunk_via_kel(chunk: &keleusma::bytecode::Chunk) -> bool {
 /// data-layout validation (verify_datalayout.kel, B6/C4). The module is rejected iff any check
 /// rejects, mirroring `verify()`. The always-yielding set is computed by the self-hosted fixpoint.
 ///
-/// The typed pass runs its documented sound over-approximation (operand shapes reset to Top across
-/// control-flow boundaries) and defers two residuals -- the Call argument-vs-parameter check and
-/// exact composite-kind compatibility (size-only flat) -- so it never rejects a program `verify()`
-/// accepts (the deferred checks fall to the retained runtime guard) but may admit some `verify()`
-/// rejects. The structural, block-type, depth, productivity, data-layout, and within-basic-block
-/// flat/underflow/height/newcomposite-size checks are exact.
+/// The typed pass reconstructs shapes with the operator's chosen sound over-approximation (operand
+/// shapes reset to Top across control-flow boundaries, so cross-join precision is forgone -- a Top
+/// defers to the retained runtime guard, never a false-reject); within that approximation every
+/// reference check is reproduced exactly, including the Call argument-vs-parameter check and exact
+/// composite-kind compatibility. There are no deferred verifier checks left in the wiring.
 pub fn structural_reject_module_via_kel(module: &Module) -> bool {
     let always = self_hosted_always_yielding(module);
     let per_chunk = module.chunks.iter().any(|chunk| {
@@ -1396,29 +1395,38 @@ pub fn structural_reject_module_via_kel(module: &Module) -> bool {
 // only the cross-join shape precision. `typed_run` marshals the per-op descriptor plus, in the
 // seeded form, the per-slot seed shapes (from the chunk signature), the resume shape, the per-op
 // Call/native return shapes, and the enum body sizes; an unseeded run reproduces the isolation
-// `typed_check_chunk`. The non-enum `NewComposite` packed-size check (`NewCompositeSizeMismatch`)
-// is enforced; the remaining deferred residuals are the Call argument-vs-parameter check and exact
-// composite-kind compatibility (size-only flat). Together with the batched data-layout validation
-// (slice 2c) the typed pass is wired into `structural_reject_module_via_kel`.
+// `typed_check_chunk`. Every reference check is now reproduced: the non-enum `NewComposite`
+// packed-size check, the Call argument-vs-parameter check (per-callee parameter shapes marshalled
+// as `cp_*`, up to eight), and exact composite-kind compatibility (a `kind` word threaded through
+// every shape). Together with the batched data-layout validation (slice 2c) the typed pass is
+// wired into `structural_reject_module_via_kel`; within the sound over-approximation it is exact.
 
 const TV_OP_COUNT: usize = 0;
 const TV_RESUME_TAG: usize = 1;
 const TV_RESUME_SIZE: usize = 2;
-const TV_EB_COUNT: usize = 3;
-const TV_CLASS: usize = 4;
-const TV_ARG: usize = 4 + 1024;
-const TV_IS_TERM: usize = 4 + 1024 * 2;
-const TV_TK: usize = 4 + 1024 * 3;
-const TV_REQ: usize = 4 + 1024 * 4;
-const TV_PROD: usize = 4 + 1024 * 5;
-const TV_TA: usize = 4 + 1024 * 6;
-const TV_TB: usize = 4 + 1024 * 7;
-const TV_RET_TAG: usize = 4 + 1024 * 8;
-const TV_RET_SIZE: usize = 4 + 1024 * 9;
-const TV_SEED_TAG: usize = 4 + 1024 * 10;
-const TV_SEED_SIZE: usize = 4 + 1024 * 10 + 256;
-const TV_EB_VALS: usize = 4 + 1024 * 10 + 512;
-const TV_OUT_REJECT: usize = 4 + 1024 * 10 + 512 + 64;
+const TV_RESUME_KIND: usize = 3;
+const TV_EB_COUNT: usize = 4;
+const TV_CLASS: usize = 5;
+const TV_ARG: usize = 5 + 1024;
+const TV_IS_TERM: usize = 5 + 1024 * 2;
+const TV_TK: usize = 5 + 1024 * 3;
+const TV_REQ: usize = 5 + 1024 * 4;
+const TV_PROD: usize = 5 + 1024 * 5;
+const TV_TA: usize = 5 + 1024 * 6;
+const TV_TB: usize = 5 + 1024 * 7;
+const TV_TC: usize = 5 + 1024 * 8;
+const TV_RET_TAG: usize = 5 + 1024 * 9;
+const TV_RET_SIZE: usize = 5 + 1024 * 10;
+const TV_RET_KIND: usize = 5 + 1024 * 11;
+const TV_SEED_TAG: usize = 5 + 1024 * 12;
+const TV_SEED_SIZE: usize = 5 + 1024 * 12 + 256;
+const TV_SEED_KIND: usize = 5 + 1024 * 12 + 512;
+const TV_EB_VALS: usize = 5 + 1024 * 12 + 768;
+const TV_CP_TAG: usize = 5 + 1024 * 12 + 768 + 64;
+const TV_CP_SIZE: usize = 5 + 1024 * 12 + 768 + 64 + 8192;
+const TV_CP_KIND: usize = 5 + 1024 * 12 + 768 + 64 + 8192 * 2;
+const TV_OUT_REJECT: usize = 5 + 1024 * 12 + 768 + 64 + 8192 * 3;
+const TV_CP_STRIDE: usize = 8;
 
 fn verify_typed_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
@@ -1462,7 +1470,7 @@ fn typed_desc(
     chunk: &keleusma::bytecode::Chunk,
     wb: usize,
     fb: usize,
-) -> (i64, i64, i64, i64, i64, i64, i64, i64) {
+) -> (i64, i64, i64, i64, i64, i64, i64, i64, i64) {
     use keleusma::bytecode::{
         ArrayElem, EnumField, NewCompositeOperand, Op, StructField, TupleField,
     };
@@ -1472,57 +1480,78 @@ fn typed_desc(
     let (r, net) = keleusma::verify::op_depth_effect(op, chunk);
     let req = i64::from(r.max(0));
     let prod = i64::from((net + r.max(0)).max(0));
-    // The shape transfer kind and its operands; everything not listed is generic (tk 0).
-    let (tk, ta, tb): (i64, i64, i64) = match op {
-        Op::Dup => (1, 0, 0),
-        Op::IsEnum(_, _, _) | Op::IsStruct(_) => (2, 1, 0),
-        Op::GetLocal(i) => (3, *i as i64, 0),
-        Op::SetLocal(i) => (4, *i as i64, 0),
-        Op::Yield => (11, 0, 0),
-        Op::Call(_, _) | Op::CallVerifiedNative(_, _) | Op::CallExternalNative(_, _) => (12, 0, 0),
+    // The shape transfer kind, its operands, and (for flat composites) the composite kind `tc`
+    // (the reference's `CompositeKind::to_tag`); everything not listed is generic (tk 0).
+    let (tk, ta, tb, tc): (i64, i64, i64, i64) = match op {
+        Op::Dup => (1, 0, 0, 0),
+        Op::IsEnum(_, _, _) | Op::IsStruct(_) => (2, 1, 0, 0),
+        Op::GetLocal(i) => (3, *i as i64, 0, 0),
+        Op::SetLocal(i) => (4, *i as i64, 0, 0),
+        Op::Yield => (11, 0, 0, 0),
+        Op::Call(_, _) | Op::CallVerifiedNative(_, _) | Op::CallExternalNative(_, _) => {
+            (12, 0, 0, 0)
+        }
         Op::Const(idx) => match const_scalar_size(chunk.constants.get(*idx as usize), wb, fb) {
-            Some(sz) => (2, sz, 0),
-            None => (0, 0, 0),
+            Some(sz) => (2, sz, 0, 0),
+            None => (0, 0, 0, 0),
         },
         Op::NewComposite(NewCompositeOperand::Flat {
             kind: CompositeKind::Enum,
             byte_size,
             ..
-        }) => (14, 0, *byte_size as i64),
-        Op::NewComposite(NewCompositeOperand::Flat { byte_size, .. }) => (6, 0, *byte_size as i64),
+        }) => (
+            14,
+            0,
+            *byte_size as i64,
+            i64::from(CompositeKind::Enum.to_tag()),
+        ),
+        Op::NewComposite(NewCompositeOperand::Flat {
+            kind, byte_size, ..
+        }) => (6, 0, *byte_size as i64, i64::from(kind.to_tag())),
         Op::GetField(StructField::Flat { offset, kind })
         | Op::GetTupleField(TupleField::Flat { offset, kind })
         | Op::GetEnumField(EnumField::Flat { offset, kind }) => {
-            (7, *offset as i64, kind.size_in_bytes(wb, fb) as i64)
+            (7, *offset as i64, kind.size_in_bytes(wb, fb) as i64, 0)
         }
-        Op::GetField(StructField::FlatNested { offset, size, .. })
-        | Op::GetTupleField(TupleField::FlatNested { offset, size, .. })
-        | Op::GetEnumField(EnumField::FlatNested { offset, size, .. }) => {
-            (8, *offset as i64, *size as i64)
+        Op::GetField(StructField::FlatNested {
+            offset,
+            size,
+            variant,
+        })
+        | Op::GetTupleField(TupleField::FlatNested {
+            offset,
+            size,
+            variant,
+        })
+        | Op::GetEnumField(EnumField::FlatNested {
+            offset,
+            size,
+            variant,
+        }) => (8, *offset as i64, *size as i64, i64::from(variant.to_tag())),
+        Op::GetIndex(ArrayElem::Flat { kind }) => (9, kind.size_in_bytes(wb, fb) as i64, 0, 0),
+        Op::GetIndex(ArrayElem::FlatNested { size, variant }) => {
+            (10, *size as i64, 0, i64::from(variant.to_tag()))
         }
-        Op::GetIndex(ArrayElem::Flat { kind }) => (9, kind.size_in_bytes(wb, fb) as i64, 0),
-        Op::GetIndex(ArrayElem::FlatNested { size, .. }) => (10, *size as i64, 0),
-        _ => (0, 0, 0),
+        _ => (0, 0, 0, 0),
     };
-    (class, arg, is_term, tk, req, prod, ta, tb)
+    (class, arg, is_term, tk, req, prod, ta, tb, tc)
 }
 
-/// Lift a wire signature shape into the stage's `(tag, size)` lattice, mirroring
-/// `AbsVal::from_wire`: Top -> (0,0); a decodable scalar -> (1, byte size); a decodable flat
-/// composite -> (2, byte size); an undecodable tag -> Top. The composite kind is not tracked
-/// (size-only flat compatibility, a documented residual).
-fn abs_from_wire(shape: &keleusma::bytecode::WireShape, wb: usize, fb: usize) -> (i64, i64) {
+/// Lift a wire signature shape into the stage's `(tag, size, kind)` lattice, mirroring
+/// `AbsVal::from_wire`: Top -> (0,0,0); a decodable scalar -> (1, byte size, 0); a decodable flat
+/// composite -> (2, byte size, composite-kind tag); an undecodable tag -> Top.
+fn abs_from_wire(shape: &keleusma::bytecode::WireShape, wb: usize, fb: usize) -> (i64, i64, i64) {
     use keleusma::bytecode::WireShape;
     use keleusma::value_layout::{CompositeKind, ScalarKind};
     match shape {
-        WireShape::Top => (0, 0),
+        WireShape::Top => (0, 0, 0),
         WireShape::Scalar { kind } => match ScalarKind::from_tag(*kind) {
-            Some(k) => (1, k.size_in_bytes(wb, fb) as i64),
-            None => (0, 0),
+            Some(k) => (1, k.size_in_bytes(wb, fb) as i64, 0),
+            None => (0, 0, 0),
         },
         WireShape::Flat { kind, size } => match CompositeKind::from_tag(*kind) {
-            Some(_) => (2, *size as i64),
-            None => (0, 0),
+            Some(_) => (2, *size as i64, i64::from(*kind)),
+            None => (0, 0, 0),
         },
     }
 }
@@ -1558,13 +1587,15 @@ fn typed_run(
     // Seed the local frame from the signature's parameters (leading slots) and the resume shape.
     if let Some(sig) = sig {
         for (i, param) in sig.params.iter().enumerate().take(256) {
-            let (tag, size) = abs_from_wire(param, wb, fb);
+            let (tag, size, kind) = abs_from_wire(param, wb, fb);
             set(&vm, &mut shared, TV_SEED_TAG + i, tag);
             set(&vm, &mut shared, TV_SEED_SIZE + i, size);
+            set(&vm, &mut shared, TV_SEED_KIND + i, kind);
         }
-        let (rtag, rsize) = abs_from_wire(&sig.resume, wb, fb);
+        let (rtag, rsize, rkind) = abs_from_wire(&sig.resume, wb, fb);
         set(&vm, &mut shared, TV_RESUME_TAG, rtag);
         set(&vm, &mut shared, TV_RESUME_SIZE, rsize);
+        set(&vm, &mut shared, TV_RESUME_KIND, rkind);
         // The declared flat enum body sizes (`word_bytes + min_payload`), for the B8 cross-check.
         for (i, el) in module.enum_layouts.iter().enumerate().take(64) {
             set(
@@ -1582,7 +1613,7 @@ fn typed_run(
         );
     }
     for (i, op) in chunk.ops.iter().enumerate() {
-        let (class, arg, is_term, tk, req, prod, ta, tb) = typed_desc(op, chunk, wb, fb);
+        let (class, arg, is_term, tk, req, prod, ta, tb, tc) = typed_desc(op, chunk, wb, fb);
         assert!(prod <= 4, "verify_typed.kel push_tops unroll bound");
         set(&vm, &mut shared, TV_CLASS + i, class);
         set(&vm, &mut shared, TV_ARG + i, arg);
@@ -1592,23 +1623,36 @@ fn typed_run(
         set(&vm, &mut shared, TV_PROD + i, prod);
         set(&vm, &mut shared, TV_TA + i, ta);
         set(&vm, &mut shared, TV_TB + i, tb);
-        // A Call/native return shape, seeded from the module tables (only in the seeded form;
-        // isolation leaves it Top, matching `typed_check_chunk`'s empty tables).
+        set(&vm, &mut shared, TV_TC + i, tc);
+        // In the seeded form, a Call's return shape and the callee's parameter shapes (for the
+        // argument check), or a native's return shape; isolation leaves them Top, matching
+        // `typed_check_chunk`'s empty tables. An unmarshalled parameter slot (beyond the callee's
+        // count, or for a native) stays Top and defers.
         if sig.is_some() {
-            let ret = match op {
-                Op::Call(callee, _) => module
-                    .signatures
-                    .get(*callee as usize)
-                    .map(|cs| abs_from_wire(&cs.ret, wb, fb)),
-                Op::CallVerifiedNative(idx, _) | Op::CallExternalNative(idx, _) => module
-                    .native_return_shapes
-                    .get(*idx as usize)
-                    .map(|w| abs_from_wire(w, wb, fb)),
-                _ => None,
-            };
-            if let Some((tag, size)) = ret {
-                set(&vm, &mut shared, TV_RET_TAG + i, tag);
-                set(&vm, &mut shared, TV_RET_SIZE + i, size);
+            match op {
+                Op::Call(callee, _) => {
+                    if let Some(cs) = module.signatures.get(*callee as usize) {
+                        let (tag, size, kind) = abs_from_wire(&cs.ret, wb, fb);
+                        set(&vm, &mut shared, TV_RET_TAG + i, tag);
+                        set(&vm, &mut shared, TV_RET_SIZE + i, size);
+                        set(&vm, &mut shared, TV_RET_KIND + i, kind);
+                        for (p, param) in cs.params.iter().enumerate().take(TV_CP_STRIDE) {
+                            let (ptag, psize, pkind) = abs_from_wire(param, wb, fb);
+                            set(&vm, &mut shared, TV_CP_TAG + i * TV_CP_STRIDE + p, ptag);
+                            set(&vm, &mut shared, TV_CP_SIZE + i * TV_CP_STRIDE + p, psize);
+                            set(&vm, &mut shared, TV_CP_KIND + i * TV_CP_STRIDE + p, pkind);
+                        }
+                    }
+                }
+                Op::CallVerifiedNative(idx, _) | Op::CallExternalNative(idx, _) => {
+                    if let Some(w) = module.native_return_shapes.get(*idx as usize) {
+                        let (tag, size, kind) = abs_from_wire(w, wb, fb);
+                        set(&vm, &mut shared, TV_RET_TAG + i, tag);
+                        set(&vm, &mut shared, TV_RET_SIZE + i, size);
+                        set(&vm, &mut shared, TV_RET_KIND + i, kind);
+                    }
+                }
+                _ => {}
             }
         }
     }

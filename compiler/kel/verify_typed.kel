@@ -3,19 +3,20 @@
 // control flow), with signature/native/enum seeding.
 //
 // Slice 2b adds the seeding (Phase 2b/3/4): the local frame is seeded from the chunk signature's
-// parameters (`seed_tag`/`seed_size`), a `Yield` pushes the seeded resume shape (`resume_tag`/
-// `resume_size`), a `SetLocal` checks the stored value against the slot's seed (`setlocal_compat`,
-// size-only flat compatibility), a `Call`/native pushes the seeded return shape (`ret_tag`/
-// `ret_size`), and a flat enum `NewComposite` cross-checks its baked body size against the
-// declared set (`eb_vals`/`eb_count`, audit B8). A non-enum flat `NewComposite` also checks that
-// its packed element sizes sum to the baked body when all are known (`NewCompositeSizeMismatch`).
-// The Call argument-vs-parameter check (`CallArgMismatch`) and exact composite-kind compatibility
-// (size-only flat) remain deferred (documented residuals). An unseeded run (all seeds Top, empty
-// tables) reproduces the isolation `typed_check_chunk`.
+// parameters (`seed_tag`/`seed_size`/`seed_kind`), a `Yield` pushes the seeded resume shape
+// (`resume_*`), a `SetLocal` checks the stored value against the slot's seed (`setlocal_compat`),
+// a `Call`/native pushes the seeded return shape (`ret_*`), and a flat enum `NewComposite`
+// cross-checks its baked body size against the declared set (`eb_vals`/`eb_count`, audit B8). A
+// non-enum flat `NewComposite` also checks that its packed element sizes sum to the baked body
+// when all are known (`NewCompositeSizeMismatch`). A `Call` additionally checks each popped
+// argument against the callee's parameter shapes (`cp_*`, up to eight, `CallArgMismatch`), and
+// flat compatibility is exact: same tag AND same size AND same composite `kind`. There are no
+// deferred residuals; within the sound over-approximation the pass reproduces every reference
+// check. An unseeded run (all seeds Top, empty tables) reproduces the isolation `typed_check_chunk`.
 //
 // It reconstructs the flat shape of each operand-stack entry -- the lattice `AbsVal` encoded per
-// entry as `(tag, size)`: 0 Top (unknown, defers every check), 1 Scalar (`size` bytes), 2 Flat
-// (a flat composite body of `size` bytes) -- and validates every compiler-baked flat field/array
+// entry as `(tag, size, kind)`: 0 Top (unknown, defers every check), 1 Scalar (`size` bytes), 2
+// Flat (a flat composite body of `size` bytes and composite `kind`) -- and validates every flat field/array
 // offset against the composite's known size (audit B1/B2), the operand-stack underflow (audit
 // finding 3), the if/else branch-height balance (B3/B4), and the loop back-edge height
 // neutrality (B5). Locals are tracked the same way; in isolation every param/local starts Top.
@@ -45,6 +46,7 @@ shared data tv {
     op_count: Word,
     resume_tag: Word,
     resume_size: Word,
+    resume_kind: Word,
     eb_count: Word,
     class: [Word; 1024],
     arg: [Word; 1024],
@@ -54,11 +56,17 @@ shared data tv {
     prod: [Word; 1024],
     ta: [Word; 1024],
     tb: [Word; 1024],
+    tc: [Word; 1024],
     ret_tag: [Word; 1024],
     ret_size: [Word; 1024],
+    ret_kind: [Word; 1024],
     seed_tag: [Word; 256],
     seed_size: [Word; 256],
+    seed_kind: [Word; 256],
     eb_vals: [Word; 64],
+    cp_tag: [Word; 8192],
+    cp_size: [Word; 8192],
+    cp_kind: [Word; 8192],
     out_reject: Word,
 }
 
@@ -73,9 +81,11 @@ shared data tv {
 private data tf {
     st_tag: [Word; 256],
     st_size: [Word; 256],
+    st_kind: [Word; 256],
     dsp: Word,
     lc_tag: [Word; 256],
     lc_size: [Word; 256],
+    lc_kind: [Word; 256],
     fsp: Word,
     f_ip: [Word; 64],
     f_end: [Word; 64],
@@ -97,6 +107,7 @@ private data tf {
     child_bmax: Word,
     pop_tag: Word,
     pop_size: Word,
+    pop_kind: Word,
     flag: Word,
     sum: Word,
     allknown: Word,
@@ -110,17 +121,33 @@ fn st_pop() -> Word {
         tf.dsp = tf.dsp - 1;
         tf.pop_tag = tf.st_tag[tf.dsp];
         tf.pop_size = tf.st_size[tf.dsp];
+        tf.pop_kind = tf.st_kind[tf.dsp];
     } else {
         tf.pop_tag = 0;
         tf.pop_size = 0;
+        tf.pop_kind = 0;
     }
     0
 }
 
+// Push a scalar/Top entry (composite kind defaults to 0).
 fn st_push(tag: Word, size: Word) -> Word {
     if tf.dsp < 256 {
         tf.st_tag[tf.dsp] = tag;
         tf.st_size[tf.dsp] = size;
+        tf.st_kind[tf.dsp] = 0;
+        tf.dsp = tf.dsp + 1;
+    }
+    0
+}
+
+// Push a flat composite entry carrying its composite `kind` (for the shape-compatibility checks;
+// the flat-offset checks use only the size).
+fn st_push_k(tag: Word, size: Word, kind: Word) -> Word {
+    if tf.dsp < 256 {
+        tf.st_tag[tf.dsp] = tag;
+        tf.st_size[tf.dsp] = size;
+        tf.st_kind[tf.dsp] = kind;
         tf.dsp = tf.dsp + 1;
     }
     0
@@ -158,6 +185,7 @@ fn top_from(lo: Word) -> Word {
         if j >= lo andalso j < tf.dsp {
             tf.st_tag[j] = 0;
             tf.st_size[j] = 0;
+            tf.st_kind[j] = 0;
         }
     }
     0
@@ -195,15 +223,26 @@ fn check_stride(atag: Word, asize: Word, elem: Word) -> Word {
     0
 }
 
-// Whether a value shape `(vtag, vsize)` may be stored into a slot of declared shape
-// `(dtag, dsize)`: Top on either side defers; two scalars are compatible; two flats are
-// compatible when their sizes match (the composite kind is not tracked, a documented residual);
-// a scalar and a flat never match. Latches the reject on an incompatible store.
-fn setlocal_compat(vtag: Word, vsize: Word, dtag: Word, dsize: Word) -> Word {
+// Whether a value shape `(vtag, vsize, vkind)` is compatible with a declared shape
+// `(dtag, dsize, dkind)` -- the reference `shapes_compatible`, used for a `SetLocal` store against
+// the slot seed and a `Call` argument against the callee parameter: Top on either side defers;
+// two scalars are compatible; two flats are compatible when their size AND composite kind match; a
+// scalar and a flat never match. Latches the reject on an incompatibility.
+fn shapes_compat(
+    vtag: Word,
+    vsize: Word,
+    vkind: Word,
+    dtag: Word,
+    dsize: Word,
+    dkind: Word,
+) -> Word {
     if vtag > 0 andalso dtag > 0 {
         if vtag == dtag {
             if vtag == 2 {
                 if vsize > dsize orelse dsize > vsize {
+                    tf.bad = 1;
+                }
+                if vkind > dkind orelse dkind > vkind {
                     tf.bad = 1;
                 }
             }
@@ -250,22 +289,31 @@ fn apply_typed(ip: Word) -> Word {
         if tf.dsp > 0 {
             let dt = tf.st_tag[tf.dsp - 1];
             let ds = tf.st_size[tf.dsp - 1];
-            st_push(dt, ds);
+            let dk = tf.st_kind[tf.dsp - 1];
+            st_push_k(dt, ds, dk);
         }
     } else {
     if k == 2 {
         st_push(1, tv.ta[ip]);
     } else {
     if k == 3 {
-        st_push(tf.lc_tag[tv.ta[ip]], tf.lc_size[tv.ta[ip]]);
+        st_push_k(tf.lc_tag[tv.ta[ip]], tf.lc_size[tv.ta[ip]], tf.lc_kind[tv.ta[ip]]);
     } else {
     if k == 4 {
-        // SetLocal: the stored value must be compatible with the slot's seed shape, then the
-        // tracked live shape is updated to what was stored.
+        // SetLocal: the stored value must be compatible with the slot's seed shape; the tracked
+        // live shape is then updated to what was stored.
         st_pop();
-        setlocal_compat(tf.pop_tag, tf.pop_size, tv.seed_tag[tv.ta[ip]], tv.seed_size[tv.ta[ip]]);
+        shapes_compat(
+            tf.pop_tag,
+            tf.pop_size,
+            tf.pop_kind,
+            tv.seed_tag[tv.ta[ip]],
+            tv.seed_size[tv.ta[ip]],
+            tv.seed_kind[tv.ta[ip]],
+        );
         tf.lc_tag[tv.ta[ip]] = tf.pop_tag;
         tf.lc_size[tv.ta[ip]] = tf.pop_size;
+        tf.lc_kind[tv.ta[ip]] = tf.pop_kind;
     } else {
     if k == 6 {
         // NewComposite non-enum flat: pop the packed elements; when every element size is known,
@@ -287,7 +335,7 @@ fn apply_typed(ip: Word) -> Word {
                 tf.bad = 1;
             }
         }
-        st_push(2, tv.tb[ip]);
+        st_push_k(2, tv.tb[ip], tv.tc[ip]);
     } else {
     if k == 7 {
         st_pop();
@@ -297,7 +345,7 @@ fn apply_typed(ip: Word) -> Word {
     if k == 8 {
         st_pop();
         check_flat_extent(tf.pop_tag, tf.pop_size, tv.ta[ip] + tv.tb[ip]);
-        st_push(2, tv.tb[ip]);
+        st_push_k(2, tv.tb[ip], tv.tc[ip]);
     } else {
     if k == 9 {
         st_pop();
@@ -309,18 +357,35 @@ fn apply_typed(ip: Word) -> Word {
         st_pop();
         st_pop();
         check_stride(tf.pop_tag, tf.pop_size, tv.ta[ip]);
-        st_push(2, tv.ta[ip]);
+        st_push_k(2, tv.ta[ip], tv.tc[ip]);
     } else {
     if k == 11 {
         // Yield: pop the output value, push the seeded resume shape.
         st_pop();
-        st_push(tv.resume_tag, tv.resume_size);
+        st_push_k(tv.resume_tag, tv.resume_size, tv.resume_kind);
     } else {
     if k == 12 {
-        // Call/native: pop the arguments, push the callee/native return shape, then any native
-        // error flag (as Top). The argument-vs-parameter check is a later slice.
-        st_pop_n(r);
-        st_push(tv.ret_tag[ip], tv.ret_size[ip]);
+        // Call/native: check each argument against the callee parameter (an unmarshalled
+        // parameter -- beyond the callee's count, or a native -- is Top and defers), pop the
+        // arguments, push the return shape and any native error flag (as Top). The `kk`-th pop is
+        // parameter `r - 1 - kk`, checked when it is within the marshalled bound of eight.
+        for kk in 0..256 limit 256 {
+            if kk < r {
+                st_pop();
+                let p = r - 1 - kk;
+                if p < 8 {
+                    shapes_compat(
+                        tf.pop_tag,
+                        tf.pop_size,
+                        tf.pop_kind,
+                        tv.cp_tag[ip * 8 + p],
+                        tv.cp_size[ip * 8 + p],
+                        tv.cp_kind[ip * 8 + p],
+                    );
+                }
+            }
+        }
+        st_push_k(tv.ret_tag[ip], tv.ret_size[ip], tv.ret_kind[ip]);
         if tv.prod[ip] > 1 {
             st_push_tops(tv.prod[ip] - 1);
         }
@@ -329,7 +394,7 @@ fn apply_typed(ip: Word) -> Word {
         // body size against the declared set (B8), push the Flat body.
         st_pop_n(r);
         eb_check(tv.tb[ip]);
-        st_push(2, tv.tb[ip]);
+        st_push_k(2, tv.tb[ip], tv.tc[ip]);
     } } } } } } } } } } } }
     0
 }
@@ -340,6 +405,7 @@ fn invalidate_locals() -> Word {
     for j in 0..256 limit 256 {
         tf.lc_tag[j] = 0;
         tf.lc_size[j] = 0;
+        tf.lc_kind[j] = 0;
     }
     0
 }
@@ -350,6 +416,7 @@ fn seed_locals() -> Word {
     for j in 0..256 limit 256 {
         tf.lc_tag[j] = tv.seed_tag[j];
         tf.lc_size[j] = tv.seed_size[j];
+        tf.lc_kind[j] = tv.seed_kind[j];
     }
     0
 }

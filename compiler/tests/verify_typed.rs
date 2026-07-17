@@ -16,7 +16,9 @@
 //!     The violation is placed before any control flow, so the stage's straight-line prefix
 //!     covers it.
 
-use keleusma::bytecode::{Chunk, ConstValue, Module, NewCompositeOperand, Op, StructField};
+use keleusma::bytecode::{
+    Chunk, ConstValue, Module, NewCompositeOperand, Op, StructField, WireShape,
+};
 use keleusma::value_layout::{CompositeKind, ScalarKind};
 use keleusma::verify_typed::{typed_check_chunk, typed_check_module};
 use keleusma_selfhost::selfhost::{
@@ -245,6 +247,64 @@ fn flat_field_out_of_bounds_after_a_branch_is_rejected() {
             }),
         ],
         vec![ConstValue::Int(1)],
+    );
+}
+
+// ---- Residuals: Call argument-vs-parameter check and exact composite-kind compatibility ------
+
+#[test]
+fn call_argument_shape_mismatch_is_rejected() {
+    // `main` passes a scalar to `f`, but `f`'s parameter is mutated to a flat composite: a
+    // scalar-vs-flat argument mismatch. Only seeding (the callee parameter shape) catches it.
+    let mut m = compile_src(
+        "fn f(x: Word) -> Word { x }\n\
+         fn main() -> Word { f(3) }",
+    );
+    let fidx = m
+        .chunks
+        .iter()
+        .position(|c| c.name == "f")
+        .expect("f chunk");
+    m.signatures[fidx].params[0] = WireShape::Flat {
+        kind: CompositeKind::Struct.to_tag(),
+        size: 16,
+    };
+    assert!(
+        typed_check_module(&m, WB, FB).is_err(),
+        "the reference must reject the argument shape mismatch"
+    );
+    assert!(
+        typed_reject_module_via_kel(&m),
+        "the stage must reject the argument shape mismatch"
+    );
+}
+
+#[test]
+fn call_argument_kind_mismatch_same_size_is_rejected() {
+    // `main` constructs a 16-byte struct and passes it to `f`, whose parameter is mutated to a
+    // 16-byte ARRAY: same size, different composite kind. Only exact composite-kind tracking
+    // (not size-only flat compatibility) catches this.
+    let mut m = compile_src(
+        "struct P { x: Word, y: Word }\n\
+         fn f(p: P) -> Word { p.x }\n\
+         fn main() -> Word { f(P { x: 1, y: 2 }) }",
+    );
+    let fidx = m
+        .chunks
+        .iter()
+        .position(|c| c.name == "f")
+        .expect("f chunk");
+    m.signatures[fidx].params[0] = WireShape::Flat {
+        kind: CompositeKind::Array.to_tag(),
+        size: 16,
+    };
+    assert!(
+        typed_check_module(&m, WB, FB).is_err(),
+        "the reference must reject the same-size different-kind argument"
+    );
+    assert!(
+        typed_reject_module_via_kel(&m),
+        "the stage must reject the same-size different-kind argument"
     );
 }
 
