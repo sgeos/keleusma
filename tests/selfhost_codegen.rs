@@ -31,11 +31,11 @@ use keleusma::ast::{
     BinOp, Block, ConstInitializer, DataVisibility, Expr, FunctionCategory, FunctionDef, Iterable,
     Literal, Param, Pattern, Stmt, UnaryOp,
 };
-use keleusma::bytecode::{ConstValue, Module, NewCompositeOperand, Op, Value};
+use keleusma::bytecode::{ConstValue, Module, NewCompositeOperand, Op, StructField, Value};
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
-use keleusma::value_layout::CompositeKind;
+use keleusma::value_layout::{CompositeKind, ScalarKind};
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 
 // Shared-data slot offsets, mirroring the `ast` block's field order in codegen.kel
@@ -760,6 +760,21 @@ fn decode_op(w: i64) -> Op {
             count: (operand % 65536) as u16,
             byte_size: (operand / 65536) as u16,
         }),
+        // A flat struct field read: the operand packs offset + kind_tag*65536.
+        47 => Op::GetField(StructField::Flat {
+            offset: (operand % 65536) as u16,
+            kind: match operand / 65536 {
+                0 => ScalarKind::Unit,
+                1 => ScalarKind::Bool,
+                2 => ScalarKind::Byte,
+                3 => ScalarKind::Int,
+                4 => ScalarKind::Fixed,
+                5 => ScalarKind::Float,
+                6 => ScalarKind::Text,
+                7 => ScalarKind::Opaque,
+                other => panic!("bad scalar kind tag {other}"),
+            },
+        }),
         other => panic!("unknown op tag {other} (word {w})"),
     }
 }
@@ -942,6 +957,90 @@ fn struct_construction_lowers_to_newcomposite() {
         )),
         "emits a flat 2-field 16-byte struct NewComposite"
     );
+}
+
+// The second struct-codegen slice: a flat struct field read `p.f` lowers to the object ops
+// then `GetField(Flat{offset, kind})`, byte-identically to the reference. Two fields at
+// distinct byte offsets (x at 0, y at 8 on a 64-bit target) confirm the packed offset+kind
+// operand. Driven from a hand-built AST; the baked offset and ScalarKind are supplied on
+// the node by the layout, as an earlier stage will supply them.
+#[test]
+fn struct_field_access_lowers_to_getfield() {
+    let m = compile_src(
+        "struct P { x: Word, y: Word }\n\
+         fn getx(p: P) -> Word { p.x }\n\
+         fn gety(p: P) -> Word { p.y }",
+    );
+    let getx = m.chunks.iter().find(|c| c.name == "getx").expect("getx");
+    let gety = m.chunks.iter().find(|c| c.name == "gety").expect("gety");
+
+    // `p.x`: field at byte offset 0, read as an Int (ScalarKind tag 3).
+    let bx = Body {
+        nodes: vec![
+            Node {
+                kind: 2,
+                arg: 0,
+                lhs: 0,
+                rhs: 0,
+            }, // Local slot 0 (p)
+            Node {
+                kind: 28,
+                arg: 3 * 65536,
+                lhs: 0,
+                rhs: 0,
+            }, // FieldAccess offset 0, kind Int
+        ],
+        call_args: Vec::new(),
+        for_parts: Vec::new(),
+        match_parts: Vec::new(),
+        limit_parts: Vec::new(),
+        head_parts: Vec::new(),
+        category: 1,
+        root: 1,
+    };
+    let (ops_x, _p, _l) = run_codegen(&bx, 1);
+    assert_eq!(ops_x, getx.ops, "p.x lowers like the reference");
+    assert!(ops_x.iter().any(|op| matches!(
+        op,
+        Op::GetField(StructField::Flat {
+            offset: 0,
+            kind: ScalarKind::Int
+        })
+    )));
+
+    // `p.y`: field at byte offset 8 (after the 8-byte x field).
+    let by = Body {
+        nodes: vec![
+            Node {
+                kind: 2,
+                arg: 0,
+                lhs: 0,
+                rhs: 0,
+            }, // Local slot 0 (p)
+            Node {
+                kind: 28,
+                arg: 8 + 3 * 65536,
+                lhs: 0,
+                rhs: 0,
+            }, // FieldAccess offset 8, kind Int
+        ],
+        call_args: Vec::new(),
+        for_parts: Vec::new(),
+        match_parts: Vec::new(),
+        limit_parts: Vec::new(),
+        head_parts: Vec::new(),
+        category: 1,
+        root: 1,
+    };
+    let (ops_y, _p, _l) = run_codegen(&by, 1);
+    assert_eq!(ops_y, gety.ops, "p.y lowers like the reference");
+    assert!(ops_y.iter().any(|op| matches!(
+        op,
+        Op::GetField(StructField::Flat {
+            offset: 8,
+            kind: ScalarKind::Int
+        })
+    )));
 }
 
 /// Expected result of running a built module. Arithmetic bodies return a `Word`;
@@ -1515,8 +1614,9 @@ fn self_compile_codegen_atomic_functions() {
     // that stops self-compiling, or one that disappears) fails the test rather than
     // passing unnoticed once attention moves to the parser. If codegen.kel gains or
     // loses a function deliberately, update EXPECTED_SELF_COMPILE below.
-    // 36 as of increment 33 (added `push_struct_init` for flat struct construction).
-    const EXPECTED_SELF_COMPILE: usize = 36;
+    // 37 as of increment 34 (added `push_struct_init` and `push_field_access` for flat
+    // struct construction and field access).
+    const EXPECTED_SELF_COMPILE: usize = 37;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"

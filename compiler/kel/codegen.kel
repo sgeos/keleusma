@@ -1,12 +1,19 @@
 // compiler/kel/codegen.kel — Stage 3 of the self-hosted compiler.
 //
+// Increment 34: a flat struct field read `obj.f` (a FieldAccess node, kind 28) lowers to
+// the object ops then `GetField(Flat{offset, kind})` (op tag 47), packed as
+// `offset + kind*65536` where `kind` is the field's ScalarKind tag. The baked byte offset
+// and kind come from the struct layout on the node, as the reference bakes them. Only a
+// flat scalar field is read; a nested-composite (FlatNested) or boxed field is a later
+// increment. The stage still self-compiles byte-identically.
+//
 // Increment 33: the first struct-codegen slice. A flat all-scalar struct construction
 // (a StructInit node, kind 27) lowers to its field expressions in declaration order then
 // a `NewComposite(Flat{Struct, count, byte_size})` (op tag 46), packed as
 // `count + byte_size*65536`, exactly like a Call but emitting the composite op. The
 // struct's packed byte size is supplied on the node by the layout (an earlier stage), not
-// computed here; only a flat all-scalar struct is lowered. Field access and non-flat
-// structs are later increments. The stage still self-compiles byte-identically.
+// computed here; only a flat all-scalar struct is lowered. The stage self-compiles
+// byte-identically.
 //
 // Increment 32: multiheaded `yield` dispatch and `yield` expressions — the codegen
 // stage is now FULLY SELF-HOSTING. A `yield <expr>` lowers to the expression ops
@@ -191,6 +198,7 @@ const data wire {
     reset: Word = 44,
     bytetoword: Word = 45,
     newcomposite: Word = 46,
+    getfield: Word = 47,
     radix: Word = 64,
     item: Word = 4,
     pack: Word = 65536,
@@ -731,6 +739,17 @@ fn push_struct_init(p: Word) -> Word {
     0
 }
 
+// FieldAccess (kind 28): a flat struct field read `obj.f`. Emit the object ops, then
+// GetField(Flat{offset, kind}) (op tag 47), the two operands packed as
+// `offset + kind*65536` where `kind` is the field's ScalarKind tag (Int 3, Bool 1, ...).
+// args = the packed offset+kind, lhs = the object expression. The baked byte offset and
+// kind come from the struct layout on the node, as the reference bakes them.
+fn push_field_access(p: Word) -> Word {
+    push_emit(wire.getfield + ast.args[p] * wire.radix);
+    push_visit(ast.lhs[p]);
+    0
+}
+
 // Andalso (kind 8): left, Dup, If, PopN(1), right, Else, EndIf. The If/Else markers
 // backpatch to the EndIf for this shape. lhs = left, rhs = right.
 fn push_andalso(p: Word) -> Word {
@@ -903,6 +922,7 @@ fn walk_step() -> Word {
             25 => push_multihead(payload),
             26 => push_cast(payload),
             27 => push_struct_init(payload),
+            28 => push_field_access(payload),
             _ => 0,
         };
     }
