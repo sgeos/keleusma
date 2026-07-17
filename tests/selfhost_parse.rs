@@ -123,6 +123,7 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
             TokenKind::ColonColon => (51, 0),
             TokenKind::As => (52, 0),
             TokenKind::Enum => (53, 0),
+            TokenKind::Struct => (54, 0),
             TokenKind::Eof => continue,
             _ => (4, 0),
         };
@@ -270,6 +271,9 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
     let mut in_data = false;
     let mut in_enum = false;
     let mut in_use = false;
+    // A struct declaration is skipped like a data block: STRUCTSTART (18) opens it and its
+    // END closes it; its field records are consumed without comparison this increment.
+    let mut in_struct = false;
     let mut state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
@@ -308,6 +312,11 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                         5 => in_enum = false, // the enum's END
                         _ => {}               // its variants, skipped this increment
                     }
+                } else if in_struct {
+                    match code {
+                        5 => in_struct = false, // the struct's END
+                        _ => {}                 // its fields, skipped this increment
+                    }
                 } else if in_use {
                     match code {
                         5 => in_use = false, // the use import's END
@@ -322,6 +331,7 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                         9 => in_data = true, // DSTART: a data block, skipped this increment
                         10 => in_use = true, // USTART: a use import, skipped this increment
                         12 => in_enum = true, // ENUMSTART: an enum, skipped this increment
+                        18 => in_struct = true, // STRUCTSTART: a struct, skipped this increment
                         16 => in_body = true, // BSTART: a body forest follows
                         17 => in_guard = true, // GSTART: a `when` guard forest follows
                         5 => {
@@ -1824,4 +1834,46 @@ fn a_data_block_wider_than_the_field_table_seed_capacity() {
     let got = run_parse(&src, &mut names);
     assert_eq!(got, reference(&src, &names));
     assert_eq!(got.funcs[0].3, vec![(11, (FIELDS - 1) as i64)]); // DataRead of slot 69
+}
+
+// A `struct` declaration between two functions is recognised and its field body scanned
+// without derailing the declaration stream: the functions before and after it parse to the
+// same records the reference produces (the reference iterates `program.functions`, so it
+// skips the struct too). The parser emits STRUCTSTART (18), which the harness skips like a
+// data block; struct fields are not slotted (`commit_field` leaves the data-field table
+// untouched), so a later `data.field` read still resolves correctly.
+#[test]
+fn a_struct_declaration_is_recognised_and_skipped() {
+    let src = "fn a() -> Word { 1 } \
+               struct P { x: Word, y: Word } \
+               fn b(p: Word) -> Word { p }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    assert_eq!(
+        got.funcs.len(),
+        2,
+        "both functions parsed, the struct skipped"
+    );
+    assert_eq!(got.funcs[0].3, vec![(1, 1)]); // a: Literal 1
+    assert_eq!(got.funcs[1].3, vec![(2, 0)]); // b: Local slot 0 (p)
+}
+
+// A struct with an array field exercises the `[T; N]` field path (PTYPE + ASIZE) inside a
+// struct body, and confirms a following function's own `data.field` read still resolves --
+// proving the struct's fields did not pollute the data-field layout table.
+#[test]
+fn a_struct_with_an_array_field_does_not_pollute_the_data_table() {
+    let src = "struct Buf { xs: [Word; 4] } \
+               shared data s { a: Word } \
+               fn read() -> Word { s.a }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    assert_eq!(
+        got.funcs.len(),
+        1,
+        "the function parsed, the struct skipped"
+    );
+    assert_eq!(got.funcs[0].3, vec![(11, 0)]); // read: DataRead of s.a at slot 0
 }
