@@ -1043,6 +1043,114 @@ fn struct_field_access_lowers_to_getfield() {
     )));
 }
 
+// -- Struct layout computation ------------------------------------------------
+//
+// The third struct-codegen slice: compute the flat packed layout of an all-scalar struct
+// -- its total byte size (for the NewComposite operand) and per field the byte offset and
+// ScalarKind (for the GetField operand) -- from the field types the parser captures. This
+// is the bridge between the parser's captured struct fields and the codegen operands. It is
+// prototyped host-side (a Rust helper) as the scaffold assembly and analyze driver were,
+// to be ported to a `.kel` layout pass later. Fields pack with no alignment padding, exactly
+// as the reference `value_layout` sums preceding field sizes. Scalar fields only this slice.
+
+/// The ScalarKind and byte size of a scalar field type on the 64-bit host target
+/// (word and float are eight bytes). Mirrors `value_layout::ScalarKind::size_in_bytes`.
+fn scalar_kind_size(ty: &str) -> (ScalarKind, u16) {
+    match ty {
+        "Word" => (ScalarKind::Int, 8),
+        "Byte" => (ScalarKind::Byte, 1),
+        "Bool" => (ScalarKind::Bool, 1),
+        "Float" => (ScalarKind::Float, 8),
+        other => panic!("struct layout: unsupported scalar field type `{other}`"),
+    }
+}
+
+/// The flat packed layout of an all-scalar struct: its total byte size, and per field in
+/// declaration order the field's byte offset and ScalarKind.
+fn struct_scalar_layout(field_types: &[&str]) -> (u16, Vec<(u16, ScalarKind)>) {
+    let mut offset = 0u16;
+    let mut fields = Vec::with_capacity(field_types.len());
+    for ty in field_types {
+        let (kind, size) = scalar_kind_size(ty);
+        fields.push((offset, kind));
+        offset += size;
+    }
+    (offset, fields) // `offset` is now the total packed byte size
+}
+
+/// The byte size the reference baked into a construction's `NewComposite` op.
+fn ref_struct_byte_size(m: &Module, ctor: &str) -> u16 {
+    let c = m
+        .chunks
+        .iter()
+        .find(|c| c.name == ctor)
+        .expect("ctor chunk");
+    c.ops
+        .iter()
+        .find_map(|op| match op {
+            Op::NewComposite(NewCompositeOperand::Flat { byte_size, .. }) => Some(*byte_size),
+            _ => None,
+        })
+        .expect("a NewComposite op")
+}
+
+/// The (offset, kind) the reference baked into a getter's `GetField` op.
+fn ref_field_offset_kind(m: &Module, getter: &str) -> (u16, ScalarKind) {
+    let c = m
+        .chunks
+        .iter()
+        .find(|c| c.name == getter)
+        .expect("getter chunk");
+    c.ops
+        .iter()
+        .find_map(|op| match op {
+            Op::GetField(StructField::Flat { offset, kind }) => Some((*offset, *kind)),
+            _ => None,
+        })
+        .expect("a GetField op")
+}
+
+// The computed layout matches the offsets and byte size the reference bakes. An all-Word
+// struct validates the byte size (via a construction) and the equal-stride offsets (via
+// getters); a mixed Byte/Word struct validates that offsets accumulate across differing
+// field sizes (a one-byte field then a word).
+#[test]
+fn struct_layout_matches_the_reference_baked_layout() {
+    // All-Word struct: byte size 24, offsets 0/8/16, all Int.
+    let (bytes, fields) = struct_scalar_layout(&["Word", "Word", "Word"]);
+    assert_eq!(bytes, 24);
+    assert_eq!(
+        fields,
+        vec![
+            (0, ScalarKind::Int),
+            (8, ScalarKind::Int),
+            (16, ScalarKind::Int)
+        ]
+    );
+    let m = compile_src(
+        "struct P { x: Word, y: Word, z: Word }\n\
+         fn make() -> P { P { x: 1, y: 2, z: 3 } }\n\
+         fn gx(p: P) -> Word { p.x }\n\
+         fn gy(p: P) -> Word { p.y }\n\
+         fn gz(p: P) -> Word { p.z }",
+    );
+    assert_eq!(bytes, ref_struct_byte_size(&m, "make"));
+    assert_eq!(fields[0], ref_field_offset_kind(&m, "gx"));
+    assert_eq!(fields[1], ref_field_offset_kind(&m, "gy"));
+    assert_eq!(fields[2], ref_field_offset_kind(&m, "gz"));
+
+    // Mixed Byte/Word struct: the word field starts at offset 1, right after the byte.
+    let (_mbytes, mfields) = struct_scalar_layout(&["Byte", "Word"]);
+    assert_eq!(mfields, vec![(0, ScalarKind::Byte), (1, ScalarKind::Int)]);
+    let mm = compile_src(
+        "struct M { b: Byte, w: Word }\n\
+         fn gb(m: M) -> Byte { m.b }\n\
+         fn gw(m: M) -> Word { m.w }",
+    );
+    assert_eq!(mfields[0], ref_field_offset_kind(&mm, "gb"));
+    assert_eq!(mfields[1], ref_field_offset_kind(&mm, "gw"));
+}
+
 /// Expected result of running a built module. Arithmetic bodies return a `Word`;
 /// comparison bodies return a `bool`.
 #[derive(Clone, Copy, Debug)]
