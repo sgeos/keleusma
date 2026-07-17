@@ -88,6 +88,8 @@ enum Tok {
     As = 52,
     Enum = 53,
     Struct = 54,
+    Trait = 55,
+    Impl = 56,
 }
 
 // The node-record kinds the body walk yields (a subset of body.kel's `enum Node`).
@@ -1619,6 +1621,18 @@ fn header_step(k: Word, v: Word) -> Word {
             ps.mode = 5;
             0
         } else {
+        if k == 55 {
+            // `trait`: a trait declaration. Emit TRAITSTART and skip its header and
+            // brace-matched body; its method signatures are a later increment.
+            ps.mode = 21;
+            19
+        } else {
+        if k == 56 {
+            // `impl`: an impl block. Emit IMPLSTART and skip its header (`Type` or
+            // `Trait for Type`) and brace-matched body; its methods are a later increment.
+            ps.mode = 21;
+            20
+        } else {
         if k == 19 {
             // `use`: a native import declaration. Emit USTART and scan the path.
             ps.mode = 8;
@@ -1641,7 +1655,7 @@ fn header_step(k: Word, v: Word) -> Word {
             } }
             ps.mode = 1;
             0
-        } } } } } } } }
+        } } } } } } } } } }
     } else {
     if ps.mode == 1 {
         if k == 1 {
@@ -1675,8 +1689,41 @@ fn header_step(k: Word, v: Word) -> Word {
         }
         0
     } else {
+    if ps.mode == 21 orelse ps.mode == 22 {
+        header_skip_block(k)
+    } else {
         header_enum(k, v)
-    } } } } } }
+    } } } } } } }
+}
+
+// A `trait`/`impl` declaration is skipped whole this increment: mode 21 consumes the
+// header up to the body's opening `{`, then mode 22 brace-matches the body (its methods
+// or signatures are a later increment) and emits END at the matching close brace. Nested
+// braces (a method body inside an impl) are balanced by `idepth`.
+fn header_skip_block(k: Word) -> Word {
+    if ps.mode == 21 {
+        if k == 2 {
+            ps.idepth = 1;
+            ps.mode = 22;
+        }
+        0
+    } else {
+        if k == 2 {
+            ps.idepth = ps.idepth + 1;
+            0
+        } else {
+        if k == 3 {
+            ps.idepth = ps.idepth - 1;
+            if ps.idepth == 0 {
+                ps.mode = 0;
+                5
+            } else {
+                0
+            }
+        } else {
+            0
+        } }
+    }
 }
 
 // The `use path::name` native import: emit a UPATH per `::`-separated segment; a non-`::`

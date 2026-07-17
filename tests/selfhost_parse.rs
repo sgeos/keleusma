@@ -124,6 +124,8 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
             TokenKind::As => (52, 0),
             TokenKind::Enum => (53, 0),
             TokenKind::Struct => (54, 0),
+            TokenKind::Trait => (55, 0),
+            TokenKind::Impl => (56, 0),
             TokenKind::Eof => continue,
             _ => (4, 0),
         };
@@ -274,6 +276,9 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
     // A struct declaration is skipped like a data block: STRUCTSTART (18) opens it and its
     // END closes it; its field records are consumed without comparison this increment.
     let mut in_struct = false;
+    // A trait (TRAITSTART 19) or impl (IMPLSTART 20) declaration is skipped whole: the stage
+    // emits its START, then brace-matches the body and emits END, yielding PENDING between.
+    let mut in_skip = false;
     let mut state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
@@ -317,6 +322,11 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                         5 => in_struct = false, // the struct's END
                         _ => {}                 // its fields, skipped this increment
                     }
+                } else if in_skip {
+                    match code {
+                        5 => in_skip = false, // the trait/impl's END
+                        _ => {}               // its body, skipped whole this increment
+                    }
                 } else if in_use {
                     match code {
                         5 => in_use = false, // the use import's END
@@ -332,6 +342,7 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                         10 => in_use = true, // USTART: a use import, skipped this increment
                         12 => in_enum = true, // ENUMSTART: an enum, skipped this increment
                         18 => in_struct = true, // STRUCTSTART: a struct, skipped this increment
+                        19 | 20 => in_skip = true, // TRAITSTART/IMPLSTART: skipped whole
                         16 => in_body = true, // BSTART: a body forest follows
                         17 => in_guard = true, // GSTART: a `when` guard forest follows
                         5 => {
@@ -1876,4 +1887,66 @@ fn a_struct_with_an_array_field_does_not_pollute_the_data_table() {
         "the function parsed, the struct skipped"
     );
     assert_eq!(got.funcs[0].3, vec![(11, 0)]); // read: DataRead of s.a at slot 0
+}
+
+// A generic struct needs no extra parser machinery: after the struct name, mode 6 ignores
+// every token until the body's `{`, so the `<...>` type parameters are skipped for free.
+// The struct is skipped whole by the harness; the surrounding functions parse normally.
+#[test]
+fn a_generic_struct_declaration_is_recognised_and_skipped() {
+    let src = "fn a() -> Word { 7 } \
+               struct Pair<A, B> { first: A, second: B } \
+               fn b() -> Word { 8 }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    assert_eq!(
+        got.funcs.len(),
+        2,
+        "both functions parsed, the generic struct skipped"
+    );
+    assert_eq!(got.funcs[0].3, vec![(1, 7)]); // a: Literal 7
+    assert_eq!(got.funcs[1].3, vec![(1, 8)]); // b: Literal 8
+}
+
+// A `trait` declaration between two functions is recognised and its whole body skipped: the
+// stage emits TRAITSTART (19), consumes the header and brace-matched body, and emits END.
+// A trait's method signatures land in `program.traits`, not `program.functions`, so the
+// reference skips it too and the surrounding functions match.
+#[test]
+fn a_trait_declaration_is_recognised_and_skipped() {
+    let src = "fn a() -> Word { 1 } \
+               trait Shape { fn area(self) -> Word; fn name(self) -> Word; } \
+               fn b() -> Word { 2 }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    assert_eq!(
+        got.funcs.len(),
+        2,
+        "both functions parsed, the trait skipped"
+    );
+    assert_eq!(got.funcs[0].3, vec![(1, 1)]); // a: Literal 1
+    assert_eq!(got.funcs[1].3, vec![(1, 2)]); // b: Literal 2
+}
+
+// An `impl Trait for Type` block is recognised and skipped whole, including its methods' own
+// brace-nested bodies (the `idepth` counter balances them). Its methods land in
+// `program.impls`, not `program.functions`, so the reference skips it and the top-level
+// function matches. The struct and trait it depends on are skipped by their own paths.
+#[test]
+fn an_impl_block_with_method_bodies_is_recognised_and_skipped() {
+    let src = "struct S { c: Word } \
+               trait Cap { fn cap(self) -> Word; } \
+               impl Cap for S { fn cap(s: S) -> Word { s.c } } \
+               fn top() -> Word { 5 }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    assert_eq!(
+        got.funcs.len(),
+        1,
+        "the top-level function parsed, the impl skipped"
+    );
+    assert_eq!(got.funcs[0].3, vec![(1, 5)]); // top: Literal 5
 }
