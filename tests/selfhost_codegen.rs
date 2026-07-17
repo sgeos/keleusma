@@ -2521,6 +2521,29 @@ fn self_host_compiles_array_element_access() {
     );
 }
 
+// NESTED-composite field access `s.i.x` on a struct-typed parameter, reusing the FlatNested
+// GetField: parse.kel emits a FieldAccessNested (the whole inner struct, GetField(FlatNested
+// {offset, size, Struct})) then a scalar FieldAccess (GetField(Flat{offset within inner,
+// kind})) into it. Each `.` in a chain of struct-typed fields extends the FlatNested chain; the
+// final scalar field is the ordinary flat read. Byte-identical to the reference for the second
+// and first inner fields, and for a two-deep nesting.
+#[test]
+fn self_host_compiles_nested_struct_field_access() {
+    assert_self_host_byte_identical(
+        "struct Inner { a: Word, b: Word }\n\
+         struct Outer { i: Inner, tag: Word }\n\
+         fn gb(s: Outer) -> Word { s.i.b }\n\
+         fn ga(s: Outer) -> Word { s.i.a }",
+    );
+    // Two-deep nesting: s.mid.inner.b.
+    assert_self_host_byte_identical(
+        "struct Inner { a: Word, b: Word }\n\
+         struct Mid { inner: Inner, m: Word }\n\
+         struct Top { mid: Mid, t: Word }\n\
+         fn g(s: Top) -> Word { s.mid.inner.b }",
+    );
+}
+
 // An indexed-data-field ASSIGNMENT whose right side contains a CALL, as the sole body of a
 // nested block-form `if` (`d.arr[i] = dbl(x);`). parse.kel's own `header_field` now uses this
 // shape (a data assignment with a `field_size_and_kind` call), so this exercises it in a

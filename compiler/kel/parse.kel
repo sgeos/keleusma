@@ -193,6 +193,7 @@ private data ps {
     fa_off: Word,
     fa_kind: Word,
     fa_size: Word,
+    fa_fstruct: Word,
     found: Word,
     found_flag: Word,
     in_guard: Word,
@@ -434,6 +435,9 @@ private data structdefs {
     // nested struct's own size), so an array-element access `p.xs[i]` can emit the FlatNested
     // GetField that extracts the whole array field before indexing it.
     sd_fsize: [Word; 512],
+    // For a struct-typed field, the nested struct's declaration index plus one (0 for a scalar
+    // or array field), so a nested field access `p.inner.x` can resolve the inner field.
+    sd_fstruct: [Word; 512],
     sd_fname_ctr: Word,
     sc_fieldpos: Word,
     sc_sp: Word,
@@ -1359,18 +1363,20 @@ fn step_fieldaccess(k: Word, v: Word) -> Word {
             ps.fa_off = structdefs.sd_foffset[structdefs.sc_fieldpos];
             ps.fa_kind = structdefs.sd_fkind[structdefs.sc_fieldpos];
             ps.fa_size = structdefs.sd_fsize[structdefs.sc_fieldpos];
+            ps.fa_fstruct = structdefs.sd_fstruct[structdefs.sc_fieldpos];
             ps.fa_phase = 3;
         } else {
             ps.fa_phase = 0;
         }
         0
     } else {
-        // Phase 3: a `[` makes this an array-element read; anything else is a scalar read.
-        ps.fa_phase = 0;
+        // Phase 3: a `[` is an array-element read, a `.` a nested struct field read, anything
+        // else the scalar read.
         if k == Tok::LBracket() as Word {
             // Array element `p.xs[i]`: emit the FlatNested field read (the whole array value,
             // packed offset + size*65536 + Array-variant(1)*2^32), open the index (an
             // IndexMark blocks precedence), and mark the closing `]` to emit the ArrIndex.
+            ps.fa_phase = 0;
             da.fa_index = 1;
             da.fa_index_kind = ps.fa_kind;
             ops.opstack[ops.opsp] = OpCode::IndexMark() as Word;
@@ -1378,12 +1384,21 @@ fn step_fieldaccess(k: Word, v: Word) -> Word {
             ops.expect_operand = 1;
             Node::FieldAccessNested() as Word + (ps.fa_off + ps.fa_size * 65536 + 4294967296) * 64
         } else {
+        if k == Tok::Dot() as Word {
+            // Nested struct field `p.inner.x`: emit the FlatNested field read of `inner` (the
+            // whole nested struct value, Struct-variant 2), then re-enter field-access mode with
+            // the inner struct as the base so the following field name resolves into it.
+            ps.fa_struct = ps.fa_fstruct - 1;
+            ps.fa_phase = 2;
+            Node::FieldAccessNested() as Word + (ps.fa_off + ps.fa_size * 65536 + 2 * 4294967296) * 64
+        } else {
             // Scalar read `p.f`: emit the flat GetField and push the token back for the normal
             // dispatch (as the pre-array path did directly at the field name).
+            ps.fa_phase = 0;
             ps.cursor = ps.cursor - 1;
             ops.expect_operand = 0;
             Node::FieldAccess() as Word + (ps.fa_off + ps.fa_kind * 65536) * 64
-        }
+        } }
     } }
 }
 
@@ -2257,7 +2272,8 @@ fn commit_field() -> Word {
 // Record struct field `fidx`'s ScalarKind tag by its type token `v` and return the field's
 // flat byte size. A `Word` is eight bytes (kind 3 Int); a `Byte` one (kind 2); a `Bool` one
 // (kind 1); a struct-typed field is the already-declared struct's own flat size (declared
-// before use, so final here) with kind 0 (unused; nested field access is a later increment).
+// before use, so final here) with kind 0 and `sd_fstruct` set to the nested struct's index + 1
+// so a nested field access `p.inner.x` can resolve into it.
 fn field_size_and_kind(fidx: Word, v: Word) -> Word {
     if v == toks.word_id {
         structdefs.sd_fkind[fidx] = 3;
@@ -2276,6 +2292,7 @@ fn field_size_and_kind(fidx: Word, v: Word) -> Word {
         for i in 0..structdefs.sd_count limit 64 {
             if structdefs.sd_name[i] == v {
                 structdefs.sd_matchsz = structdefs.sd_bytesize[i];
+                structdefs.sd_fstruct[fidx] = i + 1;
             }
         }
         structdefs.sd_matchsz
