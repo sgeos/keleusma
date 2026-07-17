@@ -109,6 +109,8 @@ const BR_P_CHUNKS: usize = 1 + 12288 + 2;
 
 const BR_P_REQUIRE_ID: usize = 1 + 12288 + 2 + 256;
 
+const BR_P_WORD_ID: usize = 1 + 12288 + 2 + 256 + 1;
+
 fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
     match vm.get_shared(buf, slot).expect("get_shared") {
         Value::Int(n) => n,
@@ -405,6 +407,8 @@ pub fn parse_functions(
     vm.set_shared(&mut shared, BR_P_LIMIT_ID, Value::Int(id_of("limit")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_REQUIRE_ID, Value::Int(id_of("require")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_WORD_ID, Value::Int(id_of("Word")))
         .unwrap();
     vm.set_shared(
         &mut shared,

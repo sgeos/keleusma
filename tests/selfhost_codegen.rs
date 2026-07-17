@@ -1763,6 +1763,7 @@ const BR_P_LIMIT_ID: usize = 1 + 12288;
 const BR_P_CHUNK_COUNT: usize = 1 + 12288 + 1;
 const BR_P_CHUNKS: usize = 1 + 12288 + 2;
 const BR_P_REQUIRE_ID: usize = 1 + 12288 + 2 + 256;
+const BR_P_WORD_ID: usize = 1 + 12288 + 2 + 256 + 1;
 
 fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
     match vm.get_shared(buf, slot).expect("get_shared") {
@@ -1859,6 +1860,8 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
     vm.set_shared(&mut shared, BR_P_LIMIT_ID, Value::Int(id_of("limit")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_REQUIRE_ID, Value::Int(id_of("require")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_WORD_ID, Value::Int(id_of("Word")))
         .unwrap();
     vm.set_shared(
         &mut shared,
@@ -2169,13 +2172,13 @@ fn reconstruct_into(
                 (nodes.len() - 1) as i64
             }
             27 => {
-                // StructInit: arg is the construction's field count. The flat byte size of
-                // an all-scalar Word struct is count * word_bytes (8), mirroring
-                // reconstruct.kel's layout pass. Pop the field-value nodes into call_args in
-                // source order and build the codegen StructInit node whose arg is the byte
-                // size, lhs the field-slice start, rhs the field count.
-                let count = arg;
-                let byte_size = count * 8;
+                // StructInit: arg packs byte_size * 1024 + count. The parser summed the
+                // struct's flat byte size per field, so a mixed-scalar struct is sized here.
+                // Pop the field-value nodes into call_args in source order and build the
+                // codegen StructInit node whose arg is the byte size, lhs the field-slice
+                // start, rhs the field count.
+                let byte_size = arg.div_euclid(1024);
+                let count = arg.rem_euclid(1024);
                 let mut popped: Vec<i64> = (0..count)
                     .map(|_| stack.pop().expect("struct field value"))
                     .collect();
@@ -2263,11 +2266,11 @@ fn parse_into_codegen_struct_construction_matches_the_reference() {
     let src = "struct P { x: Word, y: Word }\n\
                fn make() -> P { P { x: 1, y: 2 } }";
     let (records, param_count, category) = parse_function_records(src);
-    // parse.kel emits [(Literal 1), (Literal 2), (StructInit field-count 2)]; the byte size
-    // is resolved by the reconstruct layout pass (count * word_bytes = 16), not the parser.
+    // parse.kel emits [(Literal 1), (Literal 2), (StructInit byte_size 16 * 1024 + count 2)];
+    // the parser sums the struct's flat byte size (two Words = 16) per field.
     assert_eq!(
         records,
-        vec![(1, 1), (1, 2), (27, 2)],
+        vec![(1, 1), (1, 2), (27, 16 * 1024 + 2)],
         "make's construction records"
     );
 
@@ -2332,6 +2335,25 @@ fn self_host_compiles_a_nested_struct_construction() {
         "struct Inner { a: Word }\n\
          struct Outer { i: Inner }\n\
          fn make() -> Outer { Outer { i: Inner { a: 1 } } }",
+    );
+}
+
+// Mixed-field-size layout, at the record level: a struct whose fields differ in byte width
+// (a one-byte `Byte` then an eight-byte `Word`). parse.kel sums a flat byte size of 9 (one
+// for the Byte, eight for the Word), NOT count * word_bytes (which would give 16 and misplace
+// `w`). The StructInit record it emits therefore carries 9 * 1024 + 2, which the reconstruct
+// layout pass reads directly. Asserted at the record level -- parse.kel does no type checking,
+// so the Byte field takes a plain integer value here -- to isolate the byte-size accumulation
+// from the Byte-cast codegen a full byte-identical construction would additionally exercise.
+#[test]
+fn parse_sums_a_mixed_field_size_struct_layout() {
+    let src = "struct M { b: Byte, w: Word }\n\
+               fn make() -> M { M { b: 1, w: 2 } }";
+    let (records, _param_count, _category) = parse_function_records(src);
+    assert_eq!(
+        records,
+        vec![(1, 1), (1, 2), (27, 9 * 1024 + 2)],
+        "make's construction records size M at 9 bytes (Byte 1 + Word 8), not 16"
     );
 }
 
@@ -2974,6 +2996,8 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
     vm.set_shared(&mut shared, BR_P_LIMIT_ID, Value::Int(id_of("limit")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_REQUIRE_ID, Value::Int(id_of("require")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_WORD_ID, Value::Int(id_of("Word")))
         .unwrap();
     vm.set_shared(
         &mut shared,
