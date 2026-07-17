@@ -2012,12 +2012,21 @@ fn reconstruct_into(
 ) -> i64 {
     let mut stack: Vec<i64> = Vec::new();
     let mut pending_slots: Vec<i64> = Vec::new();
+    // The construction field-position stack, parallel to `stack`: a FieldPos (35) pushes the
+    // following field value's declaration slot, and StructInit pops one per value to place it
+    // in declaration order (a construction may write fields out of order).
+    let mut pending_fp: Vec<i64> = Vec::new();
     for &(kind, arg) in records {
         // A SlotRecord (32) carries a frame slot for the pending `for` loop, and a
         // ForBuild (33) assembles the 12-word limit_parts entry from the five
         // collected slots and the seven loop nodes on the stack. Neither is a node.
         if kind == 32 {
             pending_slots.push(arg);
+            continue;
+        }
+        // A FieldPos (35) carries the declaration slot of the field value that follows.
+        if kind == 35 {
+            pending_fp.push(arg);
             continue;
         }
         if kind == 33 {
@@ -2174,17 +2183,19 @@ fn reconstruct_into(
             27 => {
                 // StructInit: arg packs byte_size * 1024 + count. The parser summed the
                 // struct's flat byte size per field, so a mixed-scalar struct is sized here.
-                // Pop the field-value nodes into call_args in source order and build the
+                // Pop each field value with its FieldPos slot and place it at its DECLARATION
+                // position (a construction may write fields out of order), then build the
                 // codegen StructInit node whose arg is the byte size, lhs the field-slice
                 // start, rhs the field count.
                 let byte_size = arg.div_euclid(1024);
                 let count = arg.rem_euclid(1024);
-                let mut popped: Vec<i64> = (0..count)
-                    .map(|_| stack.pop().expect("struct field value"))
-                    .collect();
-                popped.reverse();
                 let args_start = call_args.len() as i64;
-                call_args.extend(popped);
+                call_args.extend(std::iter::repeat_n(0, count as usize));
+                for _ in 0..count {
+                    let node = stack.pop().expect("struct field value");
+                    let pos = pending_fp.pop().expect("struct field position");
+                    call_args[(args_start + pos) as usize] = node;
+                }
                 nodes.push(Node {
                     kind: 27,
                     arg: byte_size,
@@ -2266,11 +2277,12 @@ fn parse_into_codegen_struct_construction_matches_the_reference() {
     let src = "struct P { x: Word, y: Word }\n\
                fn make() -> P { P { x: 1, y: 2 } }";
     let (records, param_count, category) = parse_function_records(src);
-    // parse.kel emits [(Literal 1), (Literal 2), (StructInit byte_size 16 * 1024 + count 2)];
-    // the parser sums the struct's flat byte size (two Words = 16) per field.
+    // parse.kel emits a FieldPos marker before each field value (position 0 for `x`, 1 for
+    // `y`, in declaration order), then the StructInit packing the flat byte size (two Words =
+    // 16) and count 2. reconstruct consumes the FieldPos markers to reorder.
     assert_eq!(
         records,
-        vec![(1, 1), (1, 2), (27, 16 * 1024 + 2)],
+        vec![(35, 0), (1, 1), (35, 1), (1, 2), (27, 16 * 1024 + 2)],
         "make's construction records"
     );
 
@@ -2352,27 +2364,31 @@ fn parse_sums_a_mixed_field_size_struct_layout() {
     let (records, _param_count, _category) = parse_function_records(src);
     assert_eq!(
         records,
-        vec![(1, 1), (1, 2), (27, 9 * 1024 + 2)],
+        vec![(35, 0), (1, 1), (35, 1), (1, 2), (27, 9 * 1024 + 2)],
         "make's construction records size M at 9 bytes (Byte 1 + Word 8), not 16"
     );
 }
 
-// The one genuine construction gap: fields written OUT OF declaration order. The reference
-// sorts a construction's fields to declaration order before codegen, so `P { y: 2, x: 1 }`
-// packs x (offset 0) = 1 and y (offset 8) = 2. parse.kel currently emits the field values in
-// SOURCE order and does not reorder, so the self-hosted output packs them wrong -- a
-// correctness gap, not just a byte-order one. The fix (a later increment): parse.kel
-// accumulates each struct's field names in declaration order, resolves each construction
-// field's declaration position, and emits a FieldPos marker per field; reconstruct.kel
-// reorders the field values by position (the parse-level harness skips FieldPos, so in-order
-// tests are unaffected and reordering is validated here at the codegen level). Ignored until
-// then; remove the ignore when reordering lands.
+// Fields written OUT OF declaration order. The reference sorts a construction's fields to
+// declaration order before codegen, so `P { y: 2, x: 1 }` packs x (offset 0) = 1 and y
+// (offset 8) = 2. parse.kel emits the field values in SOURCE order but precedes each with a
+// FieldPos marker carrying its declaration position; reconstruct.kel places each value at its
+// declaration slot, so the self-hosted output matches the reference byte-for-byte.
 #[test]
-#[ignore = "out-of-order struct fields need declaration-order reordering (tracked)"]
 fn self_host_compiles_out_of_order_struct_construction() {
     assert_self_host_byte_identical(
         "struct P { x: Word, y: Word }\n\
          fn make() -> P { P { y: 2, x: 1 } }",
+    );
+}
+
+// A three-field struct constructed fully reversed, to exercise a non-trivial permutation of
+// the FieldPos reorder (not just a two-field swap): c,b,a must land at declaration slots 2,1,0.
+#[test]
+fn self_host_compiles_a_fully_reversed_struct_construction() {
+    assert_self_host_byte_identical(
+        "struct T { a: Word, b: Word, c: Word }\n\
+         fn make() -> T { T { c: 3, b: 2, a: 1 } }",
     );
 }
 
