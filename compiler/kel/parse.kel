@@ -170,6 +170,7 @@ private data ps {
     found_flag: Word,
     in_guard: Word,
     arm_pending: Word,
+    is_trait: Word,
 }
 
 // The shunting-yard operator stack. `drain_reason` selects the empty-stack drain: 0 commit
@@ -1622,14 +1623,17 @@ fn header_step(k: Word, v: Word) -> Word {
             0
         } else {
         if k == 55 {
-            // `trait`: a trait declaration. Emit TRAITSTART and skip its header and
-            // brace-matched body; its method signatures are a later increment.
+            // `trait`: a trait declaration. Emit TRAITSTART and enter the skip machine;
+            // `is_trait` makes the body capture each method signature's name (MNAME).
+            ps.is_trait = 1;
             ps.mode = 21;
             19
         } else {
         if k == 56 {
             // `impl`: an impl block. Emit IMPLSTART and skip its header (`Type` or
-            // `Trait for Type`) and brace-matched body; its methods are a later increment.
+            // `Trait for Type`) and brace-matched body whole; its methods are a later
+            // increment.
+            ps.is_trait = 0;
             ps.mode = 21;
             20
         } else {
@@ -1690,20 +1694,23 @@ fn header_step(k: Word, v: Word) -> Word {
         0
     } else {
     if ps.mode == 21 orelse ps.mode == 22 {
-        header_skip_block(k)
+        header_skip_block(k, v)
     } else {
         header_enum(k, v)
     } } } } } } }
 }
 
-// A `trait`/`impl` declaration is skipped whole this increment: mode 21 consumes the
-// header up to the body's opening `{`, then mode 22 brace-matches the body (its methods
-// or signatures are a later increment) and emits END at the matching close brace. Nested
-// braces (a method body inside an impl) are balanced by `idepth`.
-fn header_skip_block(k: Word) -> Word {
+// A `trait`/`impl` body: mode 21 consumes the header up to the body's opening `{`, then
+// mode 22 brace-matches the body and emits END at the matching close brace. Nested braces
+// (a method body inside an impl, or a trait default method) are balanced by `idepth`. For a
+// trait (`is_trait`), each `fn` at body depth one arms `pname` so the following identifier
+// is captured as a method name (MNAME, dkind 21); an impl body is skipped whole. Method
+// parameters, return types, and bodies are a later increment.
+fn header_skip_block(k: Word, v: Word) -> Word {
     if ps.mode == 21 {
         if k == 2 {
             ps.idepth = 1;
+            ps.pname = 0;
             ps.mode = 22;
         }
         0
@@ -1721,8 +1728,17 @@ fn header_skip_block(k: Word) -> Word {
                 0
             }
         } else {
+        if ps.is_trait == 1 andalso ps.idepth == 1 andalso k == 0 {
+            // a trait method signature opens; the next identifier is its name
+            ps.pname = 1;
             0
-        } }
+        } else {
+        if ps.is_trait == 1 andalso ps.pname == 1 andalso k == 1 {
+            ps.pname = 0;
+            21 + v * 64
+        } else {
+            0
+        } } } }
     }
 }
 
