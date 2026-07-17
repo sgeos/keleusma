@@ -2166,6 +2166,34 @@ fn commit_field() -> Word {
     0
 }
 
+// Record struct field `fidx`'s ScalarKind tag by its type token `v` and return the field's
+// flat byte size. A `Word` is eight bytes (kind 3 Int); a `Byte` one (kind 2); a `Bool` one
+// (kind 1); a struct-typed field is the already-declared struct's own flat size (declared
+// before use, so final here) with kind 0 (unused; nested field access is a later increment).
+fn field_size_and_kind(fidx: Word, v: Word) -> Word {
+    if v == toks.word_id {
+        structdefs.sd_fkind[fidx] = 3;
+        8
+    } else {
+    if v == toks.byte_id {
+        structdefs.sd_fkind[fidx] = 2;
+        1
+    } else {
+    if v == toks.bool_id {
+        structdefs.sd_fkind[fidx] = 1;
+        1
+    } else {
+        structdefs.sd_fkind[fidx] = 0;
+        structdefs.sd_matchsz = 1;
+        for i in 0..structdefs.sd_count limit 64 {
+            if structdefs.sd_name[i] == v {
+                structdefs.sd_matchsz = structdefs.sd_bytesize[i];
+            }
+        }
+        structdefs.sd_matchsz
+    } } }
+}
+
 // The field list: a PARAM per field name, a PTYPE per type (with an ASIZE for an array
 // field), a const `=` opening an initializer skip, the closing `}` ending the block. Each
 // field name commits the previous field to the layout table and opens a new one (default
@@ -2195,30 +2223,13 @@ fn header_field(k: Word, v: Word) -> Word {
         if ps.ptype == 1 {
             ps.ptype = 0;
             if ps.dvis == 3 {
+                // Record this field's flat byte offset (the running size before it), then add
+                // its size (and, in the helper, its ScalarKind). The size/kind logic lives in
+                // field_size_and_kind so this nested field body stays flat.
                 let cur = structdefs.sd_count - 1;
                 let fidx = structdefs.sd_fstart[cur] + structdefs.sd_fcount[cur] - 1;
                 structdefs.sd_foffset[fidx] = structdefs.sd_bytesize[cur];
-                if v == toks.word_id {
-                    structdefs.sd_fkind[fidx] = 3;
-                    structdefs.sd_bytesize[cur] = structdefs.sd_bytesize[cur] + 8;
-                } else {
-                if v == toks.byte_id {
-                    structdefs.sd_fkind[fidx] = 2;
-                    structdefs.sd_bytesize[cur] = structdefs.sd_bytesize[cur] + 1;
-                } else {
-                if v == toks.bool_id {
-                    structdefs.sd_fkind[fidx] = 1;
-                    structdefs.sd_bytesize[cur] = structdefs.sd_bytesize[cur] + 1;
-                } else {
-                    structdefs.sd_matchsz = 1;
-                    structdefs.sd_fkind[fidx] = 0;
-                    for i in 0..structdefs.sd_count limit 64 {
-                        if structdefs.sd_name[i] == v {
-                            structdefs.sd_matchsz = structdefs.sd_bytesize[i];
-                        }
-                    }
-                    structdefs.sd_bytesize[cur] = structdefs.sd_bytesize[cur] + structdefs.sd_matchsz;
-                } } }
+                structdefs.sd_bytesize[cur] = structdefs.sd_bytesize[cur] + field_size_and_kind(fidx, v);
             }
             6 + v * 64
         } else {

@@ -2450,6 +2450,22 @@ fn self_host_compiles_a_struct_parameter_used_whole() {
     );
 }
 
+// An indexed-data-field ASSIGNMENT whose right side contains a CALL, as the sole body of a
+// nested block-form `if` (`d.arr[i] = dbl(x);`). parse.kel's own `header_field` now uses this
+// shape (a data assignment with a `field_size_and_kind` call), so this exercises it in a
+// user program too; it compiles through the whole self-hosted pipeline byte-identically and
+// runs. This shape had appeared to be a parser bug, but was a token-buffer capacity limit.
+#[test]
+fn self_host_compiles_an_indexed_assign_with_a_call() {
+    let m = assert_self_host_byte_identical(
+        "private data d { arr: [Word; 8] } \
+         fn dbl(x: Word) -> Word { x + x } \
+         fn store(i: Word, x: Word) -> Word { if i < 8 { d.arr[i] = dbl(x); } d.arr[0] } \
+         loop main(x: Word) -> Word { yield store(0, x) }",
+    );
+    assert_self_host_yields(m, 5, 10); // d.arr[0] = dbl(5) = 10
+}
+
 // The bridge over the block and control-flow node kinds: `let` bindings (LetIn),
 // bare expression statements (ExprStmt), the statement-only-block Unit, and
 // `if`/`else` including an else-less form and nesting. Same self-hosted path and
