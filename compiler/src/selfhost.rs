@@ -79,17 +79,17 @@ const RHS: usize = 1 + 1024 * 3;
 
 const CALL_ARGS: usize = 1 + 1024 * 4;
 
-const FOR_PARTS: usize = 1 + 1024 * 4 + 64;
+const FOR_PARTS: usize = 1 + 1024 * 4 + 256;
 
-const MATCH_PARTS: usize = 1 + 1024 * 4 + 64 * 2;
+const MATCH_PARTS: usize = 1 + 1024 * 4 + 256 * 2;
 
-const LIMIT_PARTS: usize = 1 + 1024 * 4 + 64 * 3;
+const LIMIT_PARTS: usize = 1 + 1024 * 4 + 256 * 3;
 
-const HEAD_PARTS: usize = 1 + 1024 * 4 + 64 * 4;
+const HEAD_PARTS: usize = 1 + 1024 * 4 + 256 * 4;
 
-const PARAM_COUNT: usize = 1 + 1024 * 4 + 64 * 5;
+const PARAM_COUNT: usize = 1 + 1024 * 4 + 256 * 5;
 
-const CATEGORY: usize = 1 + 1024 * 4 + 64 * 5 + 1;
+const CATEGORY: usize = 1 + 1024 * 4 + 256 * 5 + 1;
 
 const BR_LEX_ISTART: usize = 1 + 98304;
 
@@ -568,11 +568,11 @@ const RC_AST_ARGS: usize = RC_AST_BASE + 1 + 1024;
 const RC_AST_LHS: usize = RC_AST_BASE + 1 + 1024 * 2;
 const RC_AST_RHS: usize = RC_AST_BASE + 1 + 1024 * 3;
 const RC_AST_CALL_ARGS: usize = RC_AST_BASE + 1 + 1024 * 4;
-const RC_AST_MATCH_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 2;
-const RC_AST_LIMIT_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 3;
-const RC_AST_HEAD_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 4;
-const RC_AST_CATEGORY: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 5 + 1;
-const RC_HEAD_COUNT: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 5 + 2;
+const RC_AST_MATCH_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 256 * 2;
+const RC_AST_LIMIT_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 256 * 3;
+const RC_AST_HEAD_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 256 * 4;
+const RC_AST_CATEGORY: usize = RC_AST_BASE + 1 + 1024 * 4 + 256 * 5 + 1;
+const RC_HEAD_COUNT: usize = RC_AST_BASE + 1 + 1024 * 4 + 256 * 5 + 2;
 const RC_HEAD_GUARD_START: usize = RC_HEAD_COUNT + 1;
 const RC_HEAD_GUARD_LEN: usize = RC_HEAD_COUNT + 1 + 16;
 const RC_HEAD_BODY_START: usize = RC_HEAD_COUNT + 1 + 16 * 2;
@@ -632,10 +632,10 @@ fn reconstruct_via_kel(records: &[(i64, i64)], category: i64, param_count: usize
             rhs: rd(&vm, &shared, RC_AST_RHS + i),
         });
     }
-    // Read each 64-entry side array in full; the caller compares only the prefix the
+    // Read each 256-entry side array in full; the caller compares only the prefix the
     // Rust reconstruction populated.
     let read_side = |vm: &Vm<'_, '_>, shared: &[u8], base: usize| -> Vec<i64> {
-        (0..64).map(|k| rd(vm, shared, base + k)).collect()
+        (0..256).map(|k| rd(vm, shared, base + k)).collect()
     };
     let call_args = read_side(&vm, &shared, RC_AST_CALL_ARGS);
     let match_parts = read_side(&vm, &shared, RC_AST_MATCH_PARTS);

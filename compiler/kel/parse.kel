@@ -209,12 +209,16 @@ private data stmt {
     stmt_kind: [Word; 256],
     stmt_arg: [Word; 256],
     stmt_count: Word,
-    pstmt_kind: [Word; 16],
-    pstmt_name: [Word; 16],
-    pstmt_arg: [Word; 16],
+    // The pending-statement and block-base stacks, sized 32 (was 16). The current stage
+    // functions fit within 16, but the stage's own deepest dispatch function
+    // (`step_dispatch_normal`) sits at exactly sixteen nested `if`/`else` levels, so any
+    // growth of it overflows a 16-deep stack; 32 gives headroom for continued stage work.
+    pstmt_kind: [Word; 32],
+    pstmt_name: [Word; 32],
+    pstmt_arg: [Word; 32],
     pstmt_sp: Word,
     stmt_base: Word,
-    pbase: [Word; 16],
+    pbase: [Word; 32],
     pbase_sp: Word,
     folding: Word,
     fold_i: Word,
@@ -236,10 +240,10 @@ private data stmt {
 // wrapping the whole conditional (`yield if c { a }`, whose YieldMark was pushed
 // before the branch opened and must keep spanning the built If).
 private data branch {
-    if_phase: [Word; 16],
-    if_stmt_start: [Word; 16],
-    if_opbase: [Word; 16],
-    if_seq: [Word; 16],
+    if_phase: [Word; 32],
+    if_stmt_start: [Word; 32],
+    if_opbase: [Word; 32],
+    if_seq: [Word; 32],
     if_sp: Word,
 }
 

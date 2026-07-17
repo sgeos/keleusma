@@ -243,11 +243,16 @@ shared data ast {
     args: [Word; 1024],
     lhs: [Word; 1024],
     rhs: [Word; 1024],
-    call_args: [Word; 64],
-    for_parts: [Word; 64],
-    match_parts: [Word; 64],
-    limit_parts: [Word; 64],
-    head_parts: [Word; 64],
+    // The per-function side arrays, sized 256 (was 64): each accumulates across a whole
+    // function -- `limit_parts` twelve words per `for .. limit` loop, `call_args` one per
+    // call argument -- and the stage's own largest dispatch functions (with five to seven
+    // scan loops) exceed a 64-word `limit_parts`. The consuming loops bound per-entity counts
+    // (one call's args, one match's arms), so those stay `limit 64`.
+    call_args: [Word; 256],
+    for_parts: [Word; 256],
+    match_parts: [Word; 256],
+    limit_parts: [Word; 256],
+    head_parts: [Word; 256],
     param_count: Word,
     category: Word,
 }

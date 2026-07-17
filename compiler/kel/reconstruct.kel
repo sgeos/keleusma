@@ -24,7 +24,7 @@ require word >= 32;
 // host before the run -- and the remainder is the reconstructed forest, laid out so
 // the output portion (from `root` onward) mirrors codegen.kel's `ast` block slot for
 // slot, letting the host copy that slot range straight across: the four parallel
-// node arrays, the five length-64 side arrays, then the parameter count and category.
+// node arrays, the five length-256 side arrays, then the parameter count and category.
 shared data io {
     rec_count: Word,
     in_category: Word,
@@ -36,11 +36,11 @@ shared data io {
     args: [Word; 1024],
     lhs: [Word; 1024],
     rhs: [Word; 1024],
-    call_args: [Word; 64],
-    for_parts: [Word; 64],
-    match_parts: [Word; 64],
-    limit_parts: [Word; 64],
-    head_parts: [Word; 64],
+    call_args: [Word; 256],
+    for_parts: [Word; 256],
+    match_parts: [Word; 256],
+    limit_parts: [Word; 256],
+    head_parts: [Word; 256],
     out_param_count: Word,
     out_category: Word,
     // Multiheaded-dispatch input, appended after the codegen.kel-mirroring output so

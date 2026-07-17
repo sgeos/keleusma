@@ -41,19 +41,19 @@ use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capa
 // Shared-data slot offsets, mirroring the `ast` block's field order in codegen.kel
 // (one slot per scalar, arrays contiguous). root=0, then the four length-512 node
 // arrays (`kinds`/`args`/`lhs`/`rhs`, sized for the stage's largest own function),
-// then the length-64 `call_args`/`for_parts`/`match_parts` side arrays, then
+// then the length-256 `call_args`/`for_parts`/`match_parts` side arrays, then
 // param_count.
 const KINDS: usize = 1;
 const ARGS: usize = 1 + 1024;
 const LHS: usize = 1 + 1024 * 2;
 const RHS: usize = 1 + 1024 * 3;
 const CALL_ARGS: usize = 1 + 1024 * 4;
-const FOR_PARTS: usize = 1 + 1024 * 4 + 64;
-const MATCH_PARTS: usize = 1 + 1024 * 4 + 64 * 2;
-const LIMIT_PARTS: usize = 1 + 1024 * 4 + 64 * 3;
-const HEAD_PARTS: usize = 1 + 1024 * 4 + 64 * 4;
-const PARAM_COUNT: usize = 1 + 1024 * 4 + 64 * 5;
-const CATEGORY: usize = 1 + 1024 * 4 + 64 * 5 + 1;
+const FOR_PARTS: usize = 1 + 1024 * 4 + 256;
+const MATCH_PARTS: usize = 1 + 1024 * 4 + 256 * 2;
+const LIMIT_PARTS: usize = 1 + 1024 * 4 + 256 * 3;
+const HEAD_PARTS: usize = 1 + 1024 * 4 + 256 * 4;
+const PARAM_COUNT: usize = 1 + 1024 * 4 + 256 * 5;
+const CATEGORY: usize = 1 + 1024 * 4 + 256 * 5 + 1;
 
 struct Node {
     kind: i64,
@@ -1655,11 +1655,11 @@ fn self_compile_codegen_atomic_functions() {
                 }
             };
             if body.nodes.len() > 1024
-                || body.for_parts.len() > 64
-                || body.call_args.len() > 64
-                || body.match_parts.len() > 64
-                || body.head_parts.len() > 64
-                || body.limit_parts.len() > 64
+                || body.for_parts.len() > 256
+                || body.call_args.len() > 256
+                || body.match_parts.len() > 256
+                || body.head_parts.len() > 256
+                || body.limit_parts.len() > 256
             {
                 return Err(format!(
                     "exceeds the adapter arrays ({} nodes)",
@@ -3375,6 +3375,32 @@ fn self_host_compiles_a_whole_program_byte_identically() {
     assert_self_host_yields(m4, 5, 40); // bump(5)=15; stride(15)=15*2+10=40
 }
 
+// Exercises the raised per-function side-array capacity: a function with SEVEN `for .. limit`
+// loops needs 7 * 12 = 84 words in reconstruct.kel's / codegen.kel's `limit_parts` side array,
+// which overflowed the former 64-word size (it held at most five loops) and now fits the
+// 256-word arrays. The whole self-hosted pipeline reconstructs and codegens it byte-identically
+// to the reference, and the built module runs, proving the capacity raise end to end.
+#[test]
+fn self_host_compiles_a_function_with_many_for_loops() {
+    let m = assert_self_host_byte_identical(
+        "private data d { acc: Word } \
+         fn many(n: Word) -> Word { \
+             d.acc = 0; \
+             for a in 0..n limit 8 { d.acc = d.acc + a; } \
+             for b in 0..n limit 8 { d.acc = d.acc + b; } \
+             for c in 0..n limit 8 { d.acc = d.acc + c; } \
+             for e in 0..n limit 8 { d.acc = d.acc + e; } \
+             for f in 0..n limit 8 { d.acc = d.acc + f; } \
+             for g in 0..n limit 8 { d.acc = d.acc + g; } \
+             for h in 0..n limit 8 { d.acc = d.acc + h; } \
+             d.acc \
+         } \
+         loop main(n: Word) -> Word { yield many(n) }",
+    );
+    // Each loop sums 0+1+2+3 = 6 for n=4; seven loops give 42.
+    assert_self_host_yields(m, 4, 42);
+}
+
 // Nested `for .. limit`: the loop-context stack lets an inner loop nest in an outer
 // loop's body without displacing it. Byte-identical to the reference, and the built
 // module computes the doubly-nested accumulation.
@@ -3770,12 +3796,12 @@ const RC_AST_ARGS: usize = RC_AST_BASE + 1 + 1024;
 const RC_AST_LHS: usize = RC_AST_BASE + 1 + 1024 * 2;
 const RC_AST_RHS: usize = RC_AST_BASE + 1 + 1024 * 3;
 const RC_AST_CALL_ARGS: usize = RC_AST_BASE + 1 + 1024 * 4;
-const RC_AST_MATCH_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 2;
-const RC_AST_LIMIT_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 3;
-const RC_AST_HEAD_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 4;
-const RC_AST_CATEGORY: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 5 + 1;
+const RC_AST_MATCH_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 256 * 2;
+const RC_AST_LIMIT_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 256 * 3;
+const RC_AST_HEAD_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 256 * 4;
+const RC_AST_CATEGORY: usize = RC_AST_BASE + 1 + 1024 * 4 + 256 * 5 + 1;
 // Multiheaded-dispatch input, appended after out_category.
-const RC_HEAD_COUNT: usize = RC_AST_BASE + 1 + 1024 * 4 + 64 * 5 + 2;
+const RC_HEAD_COUNT: usize = RC_AST_BASE + 1 + 1024 * 4 + 256 * 5 + 2;
 const RC_HEAD_GUARD_START: usize = RC_HEAD_COUNT + 1;
 const RC_HEAD_GUARD_LEN: usize = RC_HEAD_COUNT + 1 + 16;
 const RC_HEAD_BODY_START: usize = RC_HEAD_COUNT + 1 + 16 * 2;
@@ -3843,7 +3869,7 @@ fn reconstruct_via_kel(records: &[(i64, i64)], category: i64, param_count: usize
     // Read each 64-entry side array in full; the caller compares only the prefix the
     // Rust reconstruction populated.
     let read_side = |vm: &Vm<'_, '_>, shared: &[u8], base: usize| -> Vec<i64> {
-        (0..64).map(|k| rd(vm, shared, base + k)).collect()
+        (0..256).map(|k| rd(vm, shared, base + k)).collect()
     };
     let call_args = read_side(&vm, &shared, RC_AST_CALL_ARGS);
     let match_parts = read_side(&vm, &shared, RC_AST_MATCH_PARTS);
@@ -4020,7 +4046,7 @@ fn reconstruct_via_kel_multihead(heads: &[&ParsedFn], pc: usize) -> Body {
         });
     }
     let read_side = |vm: &Vm<'_, '_>, shared: &[u8], base: usize| -> Vec<i64> {
-        (0..64).map(|k| rd(vm, shared, base + k)).collect()
+        (0..256).map(|k| rd(vm, shared, base + k)).collect()
     };
     Body {
         nodes,
