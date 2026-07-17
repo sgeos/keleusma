@@ -87,6 +87,7 @@ enum Tok {
     ColCol = 51,
     As = 52,
     Enum = 53,
+    Struct = 54,
 }
 
 // The node-record kinds the body walk yields (a subset of body.kel's `enum Node`).
@@ -1608,6 +1609,16 @@ fn header_step(k: Word, v: Word) -> Word {
             ps.mode = 9;
             0
         } else {
+        if k == 54 {
+            // `struct`: a struct type declaration. Its `Name { field: type, ... }` body
+            // reuses the data-block field machinery (mode 5 reads the name, 6 the `{`, 7
+            // the fields). dvis 3 marks it a struct, so mode 5 emits STRUCTSTART (18)
+            // rather than DSTART and commit_field keeps its fields out of the data-field
+            // layout table. Generic structs (`Name<...>`) are a later increment.
+            ps.dvis = 3;
+            ps.mode = 5;
+            0
+        } else {
         if k == 19 {
             // `use`: a native import declaration. Emit USTART and scan the path.
             ps.mode = 8;
@@ -1630,7 +1641,7 @@ fn header_step(k: Word, v: Word) -> Word {
             } }
             ps.mode = 1;
             0
-        } } } } } } }
+        } } } } } } } }
     } else {
     if ps.mode == 1 {
         if k == 1 {
@@ -1771,7 +1782,13 @@ fn header_data(k: Word, v: Word) -> Word {
             fields.cur_block = v;
             fields.has_field = 0;
             ps.mode = 6;
-            9 + (v * 4 + ps.dvis) * 64
+            if ps.dvis == 3 {
+                // STRUCTSTART: a struct type declaration carrying its name; its fields
+                // reuse the data-field scan but are not slotted (see commit_field).
+                18 + v * 64
+            } else {
+                9 + (v * 4 + ps.dvis) * 64
+            }
         } else {
             0
         }
@@ -1841,7 +1858,10 @@ fn header_field_skip(k: Word, v: Word) -> Word {
 // runtime slot). The element-0 slot is the running counter; the counter then advances by
 // the field's slot count.
 fn commit_field() -> Word {
-    if fields.has_field == 1 {
+    // A struct field (dvis 3) is a type member, neither a runtime data slot nor a
+    // const-data field, so it is committed to no data-field layout table; only dvis 0/1/2
+    // (shared/private/const `data` blocks) accumulate here.
+    if fields.has_field == 1 andalso ps.dvis <= 2 {
         if ps.dvis == 2 {
             // A const field inlines to its captured integer value; record it in the
             // const-field table rather than the runtime-slot layout.
