@@ -65,7 +65,7 @@ require word >= 32;
 // arrays sit past a 64KB byte offset; the whole `src` block stays far under 16MB.
 shared data src {
     len: Word,
-    bytes: [Byte; 73728],
+    bytes: [Byte; 98304],
     istart: [Word; 1280],
     ilen: [Word; 1280],
     icount: Word,

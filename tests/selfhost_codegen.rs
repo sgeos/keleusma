@@ -1752,9 +1752,9 @@ fn self_compile_codegen_atomic_functions() {
 // ---------------------------------------------------------------------------
 
 // Lexer `src` block slots: len(1) + bytes(65536) then the intern table.
-const BR_LEX_ISTART: usize = 1 + 73728;
-const BR_LEX_ILEN: usize = 1 + 73728 + 1280;
-const BR_LEX_ICOUNT: usize = 1 + 73728 + 1280 + 1280;
+const BR_LEX_ISTART: usize = 1 + 98304;
+const BR_LEX_ILEN: usize = 1 + 98304 + 1280;
+const BR_LEX_ICOUNT: usize = 1 + 98304 + 1280 + 1280;
 // Parser `toks` block slots: len(1), then the packed token array (one `tok+payload*64`
 // word per token), then the scalar and chunk-table inputs.
 const BR_P_LEN: usize = 0;
@@ -4057,7 +4057,7 @@ fn assemble_shared_layout(
 
 // The per-shared-slot byte layout the driver assembles from parse.kel's records equals
 // the reference compiler's, offset/kind/len for every element slot, for all four stage
-// sources (including lexer.kel's 73728-byte buffer whose later fields sit past 64 KB).
+// sources (including lexer.kel's 98304-byte buffer whose later fields sit past 64 KB).
 #[test]
 fn assembled_shared_layout_matches_the_reference() {
     let cases = [

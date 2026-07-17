@@ -114,6 +114,7 @@ enum Node {
     ForLimit = 23,
     YieldExpr = 24,
     Cast = 26,
+    StructInit = 27,
     SlotRecord = 32,
     ForBuild = 33,
     MatchBuild = 34,
@@ -144,6 +145,7 @@ enum OpCode {
     IndexMark = 20,
     CallMark = 21,
     YieldMark = 22,
+    StructMark = 23,
 }
 
 // The merged parser state.
@@ -382,6 +384,7 @@ private data structdefs {
     sc_count: [Word; 8],
     sc_pending: Word,
     sc_phase: Word,
+    sc_closing: Word,
 }
 
 // Resolve an identifier to its frame slot: the `let` bindings first (most recent wins),
@@ -773,15 +776,46 @@ fn step_closing() -> Word {
 // A `,`: flush the current call argument's operators down to the call marker, then count
 // the argument.
 fn step_cdraining() -> Word {
-    if ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] != OpCode::CallMark() as Word {
+    if ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] != OpCode::CallMark() as Word andalso ops.opstack[ops.opsp - 1] != OpCode::StructMark() as Word {
         ops.opsp = ops.opsp - 1;
         let op = ops.opstack[ops.opsp];
         emit_op(op)
     } else {
         call.cdraining = 0;
-        call.call_count[call.call_sp - 1] = call.call_count[call.call_sp - 1] + 1;
-        ops.expect_operand = 1;
-        0
+        if ops.opstack[ops.opsp - 1] == OpCode::StructMark() as Word {
+            // A `,` between struct-construction fields: count the field just drained and
+            // await the next field name.
+            structdefs.sc_count[structdefs.sc_sp - 1] = structdefs.sc_count[structdefs.sc_sp - 1] + 1;
+            structdefs.sc_phase = 2;
+            ops.expect_operand = 0;
+            0
+        } else {
+            call.call_count[call.call_sp - 1] = call.call_count[call.call_sp - 1] + 1;
+            ops.expect_operand = 1;
+            0
+        }
+    }
+}
+
+// A `}` closing a struct construction: flush the operators above the StructMark, then pop
+// the mark, count the last field (when a value was parsed), and emit a StructInit node
+// carrying the field count. The field-expression nodes precede it in postorder, exactly as
+// a Call's arguments precede the Call. The struct name (for the flat byte size) is resolved
+// by the downstream layout bridge; this parse-level node carries the field count only.
+fn step_sc_closing() -> Word {
+    if ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] != OpCode::StructMark() as Word {
+        ops.opsp = ops.opsp - 1;
+        let op = ops.opstack[ops.opsp];
+        emit_op(op)
+    } else {
+        ops.opsp = ops.opsp - 1;
+        structdefs.sc_closing = 0;
+        if ops.expect_operand == 0 {
+            structdefs.sc_count[structdefs.sc_sp - 1] = structdefs.sc_count[structdefs.sc_sp - 1] + 1;
+        }
+        structdefs.sc_sp = structdefs.sc_sp - 1;
+        ops.expect_operand = 0;
+        Node::StructInit() as Word + structdefs.sc_count[structdefs.sc_sp] * 64
     }
 }
 
@@ -1173,6 +1207,42 @@ fn step_normal(k: Word, v: Word) -> Word {
 // The normal parse-phase dispatch: a `let` binding's name or `=`, else an expression
 // token.
 fn step_dispatch_normal(k: Word, v: Word) -> Word {
+    if structdefs.sc_phase == 1 {
+        // A struct name was read; the `{` opens its field list. Push the struct context and
+        // a StructMark that blocks precedence across the fields, then await a field name.
+        if k == Tok::LBrace() as Word {
+            structdefs.sc_name[structdefs.sc_sp] = structdefs.sc_pending;
+            structdefs.sc_count[structdefs.sc_sp] = 0;
+            structdefs.sc_sp = structdefs.sc_sp + 1;
+            ops.opstack[ops.opsp] = OpCode::StructMark() as Word;
+            ops.opsp = ops.opsp + 1;
+            structdefs.sc_phase = 2;
+            ops.expect_operand = 0;
+        }
+        0
+    } else {
+    if structdefs.sc_phase == 2 {
+        // A field name (skipped: source order matches declaration order this increment);
+        // the `:` follows.
+        if k == Tok::Ident() as Word {
+            structdefs.sc_phase = 3;
+        }
+        0
+    } else {
+    if structdefs.sc_phase == 3 {
+        // The `:` before a field's value expression.
+        if k == Tok::Colon() as Word {
+            structdefs.sc_phase = 0;
+            ops.expect_operand = 1;
+        }
+        0
+    } else {
+    if structdefs.sc_sp > 0 andalso structdefs.sc_phase == 0 andalso k == Tok::RBrace() as Word {
+        // Inside a construction with a field value parsed, the `}` closes it (a block `}`
+        // has `sc_sp == 0`). Drain the last field to the StructMark and emit the StructInit.
+        structdefs.sc_closing = 1;
+        0
+    } else {
     if stmt.let_phase == 2 {
         if k == Tok::Eq() as Word {
             stmt.let_phase = 0;
@@ -1247,7 +1317,7 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         step_forheader(k, v)
     } else {
         step_normal(k, v)
-    } } } } } } } } } } } }
+    } } } } } } } } } } } } } } } }
 }
 
 // Dispatch a body token: the else-less `if` synthesis and the block-form-statement commit
@@ -1528,6 +1598,9 @@ fn body_step() -> Word {
     if ops.closing == 1 {
         step_closing()
     } else {
+    if structdefs.sc_closing == 1 {
+        step_sc_closing()
+    } else {
     if da.iclosing == 1 {
         step_iclosing()
     } else {
@@ -1558,7 +1631,7 @@ fn body_step() -> Word {
             ps.cursor = ps.cursor + 1;
             step_body_dispatch(k, v)
         }
-    } } } } } } } } }
+    } } } } } } } } } }
 }
 
 // Reset the body-walk state for a fresh function body.
