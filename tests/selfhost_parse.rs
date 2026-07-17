@@ -732,6 +732,25 @@ fn flatten(
                 as i64;
             out.push((7, chunk + args.len() as i64 * 256));
         }
+        Expr::StructInit { fields, .. } => {
+            // A struct construction flattens its field values in source order (which equals
+            // declaration order this increment), then a StructInit (kind 27) carrying the
+            // field count. The struct name, for the flat byte size, is resolved by the
+            // layout bridge downstream; this parse-level node carries the count only.
+            for f in fields {
+                flatten(
+                    &f.value,
+                    scope,
+                    next_slot,
+                    forlim,
+                    data_slots,
+                    chunk_names,
+                    enum_table,
+                    out,
+                );
+            }
+            out.push((27, fields.len() as i64));
+        }
         Expr::Cast { expr: inner, .. } => match inner.as_ref() {
             // A `Enum::Variant() as Word` cast of a no-payload variant folds to the
             // variant's discriminant literal (kind 1).
@@ -2021,6 +2040,23 @@ fn a_generic_struct_declaration_has_its_fields_captured() {
     );
     assert_eq!(got.funcs[0].3, vec![(1, 7)]); // a: Literal 7
     assert_eq!(got.funcs[1].3, vec![(1, 8)]); // b: Literal 8
+}
+
+// A struct construction `P { x: 1, y: 2 }` in a body parses to its field values in order
+// (Literal 1, Literal 2) then a StructInit node (kind 27) carrying the field count, matching
+// the reference flatten. The stage recognises `P` as a struct type name (from its accumulated
+// struct table), opens the field scan at `{`, drains each field value at `,`/`}`, and emits
+// the StructInit at the closing `}`.
+#[test]
+fn a_struct_construction_parses_to_a_struct_init() {
+    let src = "struct P { x: Word, y: Word }\n\
+               fn make() -> P { P { x: 1, y: 2 } }";
+    let mut names = Vec::new();
+    let got = run_parse(src, &mut names);
+    assert_eq!(got, reference(src, &names));
+    assert_eq!(got.funcs.len(), 1, "make parsed");
+    // Postorder: the two field values, then the StructInit with field count 2.
+    assert_eq!(got.funcs[0].3, vec![(1, 1), (1, 2), (27, 2)]);
 }
 
 // A `trait` declaration between two functions: the stage emits TRAITSTART (19), captures
