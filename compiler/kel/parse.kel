@@ -217,6 +217,9 @@ private data ps {
     // optional `[`, `aa_kind` the element ScalarKind for the GetIndex operand.
     aa_phase: Word,
     aa_kind: Word,
+    // The tuple layout index (plus one, 0 otherwise) of the just-resolved struct field, so a
+    // following `.N` on a tuple-typed field reads a tuple element.
+    fa_ftuple: Word,
     // The `let`-binding index a plain-identifier lookup matched (most recent wins), so a
     // composite-typed binding can arm the field-access postfix.
     let_hit: Word,
@@ -539,6 +542,10 @@ private data structdefs {
     // For a struct-typed field, the nested struct's declaration index plus one (0 for a scalar
     // or array field), so a nested field access `p.inner.x` can resolve the inner field.
     sd_fstruct: [Word; 512],
+    // For a tuple-typed field, the `tupledefs` layout index plus one (0 otherwise), so a nested
+    // tuple-element access `s.p.N` can extract the tuple field (FlatNested{Tuple}) then read
+    // element N (GetTupleField).
+    sd_ftuple: [Word; 512],
     sd_fname_ctr: Word,
     sc_fieldpos: Word,
     sc_sp: Word,
@@ -1708,6 +1715,7 @@ fn step_fieldaccess(k: Word, v: Word) -> Word {
             ps.fa_kind = structdefs.sd_fkind[structdefs.sc_fieldpos];
             ps.fa_size = structdefs.sd_fsize[structdefs.sc_fieldpos];
             ps.fa_fstruct = structdefs.sd_fstruct[structdefs.sc_fieldpos];
+            ps.fa_ftuple = structdefs.sd_ftuple[structdefs.sc_fieldpos];
             ps.fa_phase = 3;
         } else {
             ps.fa_phase = 0;
@@ -1729,12 +1737,22 @@ fn step_fieldaccess(k: Word, v: Word) -> Word {
             Node::FieldAccessNested() as Word + (ps.fa_off + ps.fa_size * 65536 + 4294967296) * 64
         } else {
         if k == Tok::Dot() as Word {
-            // Nested struct field `p.inner.x`: emit the FlatNested field read of `inner` (the
-            // whole nested struct value, Struct-variant 2), then re-enter field-access mode with
-            // the inner struct as the base so the following field name resolves into it.
-            ps.fa_struct = ps.fa_fstruct - 1;
-            ps.fa_phase = 2;
-            Node::FieldAccessNested() as Word + (ps.fa_off + ps.fa_size * 65536 + 2 * 4294967296) * 64
+            if ps.fa_ftuple > 0 {
+                // Nested tuple field `s.p.N`: emit the FlatNested read of the tuple field (the
+                // whole tuple value, Tuple-variant 0), then hand off to the tuple-index postfix
+                // (ta_phase 2) to read `.N` and emit the GetTupleField of element N.
+                ps.fa_phase = 0;
+                ps.ta_phase = 2;
+                ps.ta_tuple = ps.fa_ftuple - 1;
+                Node::FieldAccessNested() as Word + (ps.fa_off + ps.fa_size * 65536) * 64
+            } else {
+                // Nested struct field `p.inner.x`: emit the FlatNested field read of `inner` (the
+                // whole nested struct value, Struct-variant 2), then re-enter field-access mode with
+                // the inner struct as the base so the following field name resolves into it.
+                ps.fa_struct = ps.fa_fstruct - 1;
+                ps.fa_phase = 2;
+                Node::FieldAccessNested() as Word + (ps.fa_off + ps.fa_size * 65536 + 2 * 4294967296) * 64
+            }
         } else {
             // Scalar read `p.f`: emit the flat GetField and push the token back for the normal
             // dispatch (as the pre-array path did directly at the field name).
@@ -2765,6 +2783,16 @@ fn field_size_and_kind(fidx: Word, v: Word) -> Word {
 // later increment); only sizing is needed here.
 fn step_struct_tuple_field(k: Word, v: Word) -> Word {
     if k == Tok::Ident() as Word {
+        if ps.dvis == 3 {
+            let cur = structdefs.sd_count - 1;
+            let fidx = structdefs.sd_fstart[cur] + structdefs.sd_fcount[cur] - 1;
+            let li = structdefs.sd_ftuple[fidx] - 1;
+            let base = tupledefs.tup_estart[li];
+            let ei = tupledefs.tup_ecount[li];
+            tupledefs.tup_eoffset[base + ei] = ps.tf_size;
+            tupledefs.tup_ekind[base + ei] = scalar_kind_of(v);
+            tupledefs.tup_ecount[li] = ei + 1;
+        }
         ps.tf_size = ps.tf_size + type_byte_size(v);
         0
     } else {
@@ -2775,6 +2803,8 @@ fn step_struct_tuple_field(k: Word, v: Word) -> Word {
             structdefs.sd_fsize[fidx] = ps.tf_size;
             structdefs.sd_fkind[fidx] = 0;
             structdefs.sd_bytesize[cur] = structdefs.sd_bytesize[cur] + ps.tf_size;
+            let li = structdefs.sd_ftuple[fidx] - 1;
+            tupledefs.tup_ecursor = tupledefs.tup_estart[li] + tupledefs.tup_ecount[li];
         }
         ps.tf = 0;
         0
@@ -2851,11 +2881,21 @@ fn header_field(k: Word, v: Word) -> Word {
     } else {
     if k == 7 {
         // A `(` opening a struct field's tuple type `(T, T, ...)`: scan its element types in
-        // `step_struct_tuple_field` to size the field.
+        // `step_struct_tuple_field` to size the field and record its element layout (a `tupledefs`
+        // entry bound to the field via `sd_ftuple`, so a nested `s.p.N` access reads element N).
         if ps.ptype == 1 {
             ps.ptype = 0;
             ps.tf = 1;
             ps.tf_size = 0;
+            if ps.dvis == 3 {
+                let cur = structdefs.sd_count - 1;
+                let fidx = structdefs.sd_fstart[cur] + structdefs.sd_fcount[cur] - 1;
+                let li = tupledefs.tup_count;
+                tupledefs.tup_estart[li] = tupledefs.tup_ecursor;
+                tupledefs.tup_ecount[li] = 0;
+                tupledefs.tup_count = li + 1;
+                structdefs.sd_ftuple[fidx] = li + 1;
+            }
         }
         0
     } else {
