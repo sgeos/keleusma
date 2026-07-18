@@ -867,7 +867,7 @@ fn next_word(vm: &mut Vm<'_, '_>, shared: &mut [u8]) -> i64 {
 
 /// Drive the codegen; return its emitted ops, the constant pool it built, and the
 /// local-frame size (`local_count`) it computed.
-fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
+fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<(i64, i64)>, i64) {
     let src = std::fs::read_to_string("compiler/kel/codegen.kel").expect("read codegen.kel");
     let m = compile_src(&src);
     let need = required_persistent_capacity_for(&m);
@@ -947,11 +947,17 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
             .expect("resume");
     }
 
-    // Phase 2: the pool the stage built. Size, then that many raw values.
+    // Phase 2: the pool the stage built. Size, then that many raw values, then that many raw
+    // tags (0 Int, 1 StaticStr). Each pool entry is returned as (value, tag): an Int carries its
+    // value, a StaticStr its lexer intern id (which the full-pipeline driver resolves to bytes).
     let count = next_word(&mut vm, &mut shared);
-    let pool = (0..count)
+    let values: Vec<i64> = (0..count)
         .map(|_| next_word(&mut vm, &mut shared))
         .collect();
+    let tags: Vec<i64> = (0..count)
+        .map(|_| next_word(&mut vm, &mut shared))
+        .collect();
+    let pool: Vec<(i64, i64)> = values.into_iter().zip(tags).collect();
     // Phase 3: the local-frame size the stage computed.
     let local_count = next_word(&mut vm, &mut shared);
     (ops, pool, local_count)
@@ -1575,7 +1581,7 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
         // Build the module from the stage's own ops, constant pool, and local_count.
         let mut built = compile_src(src);
         built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
         built.chunks[idx].local_count = local_count as u16;
         let need = required_persistent_capacity_for(&built);
         let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -1787,8 +1793,10 @@ fn self_compile_codegen_atomic_functions() {
     // for the user-written `break;` statement; 41 with `push_field_access_nested` and
     // `push_arrindex` for struct array-element access; 42 with `push_array_lit` for array
     // literals; 43 with `push_enum_init` for enum payload construction; 44 with
-    // `push_tuple_init` for tuple construction; 45 with `push_tuple_field` for tuple field access.
-    const EXPECTED_SELF_COMPILE: usize = 45;
+    // `push_tuple_init` for tuple construction; 45 with `push_tuple_field` for tuple field access;
+    // 46 with `drain_tags` for the tagged constant-pool protocol; 47 with `push_strlit` for
+    // string literals.
+    const EXPECTED_SELF_COMPILE: usize = 47;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -2126,7 +2134,7 @@ fn reconstruct_into(
             continue;
         }
         let idx = match kind {
-            1 | 2 | 11 | 20 => {
+            1 | 2 | 11 | 20 | 38 => {
                 nodes.push(Node {
                     kind,
                     arg,
@@ -2386,7 +2394,7 @@ fn parse_into_codegen_arithmetic_matches_the_reference() {
 
         let mut built = compile_src(src);
         built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
         built.chunks[idx].local_count = local_count as u16;
         let need = required_persistent_capacity_for(&built);
         let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -2818,6 +2826,28 @@ fn self_host_compiles_a_nested_tuple_field_read() {
     );
 }
 
+// STRING LITERALS `"..."`: the StaticStr foundation end to end. lexer.kel tokenizes a quoted run,
+// interning the content bytes and emitting a Str token; parse.kel emits a StrLit node carrying the
+// intern id; codegen.kel interns it as a tag-1 (StaticStr) constant-pool entry; and the host
+// resolves the id to the string bytes through the lexer name table, building ConstValue::StaticStr
+// -- byte-identical to the reference. This also exercises the tagged constant-pool protocol
+// (values then tags) with a genuine non-Int entry.
+#[test]
+fn self_host_compiles_string_literals() {
+    // A bare string literal returned as Text.
+    assert_self_host_byte_identical("fn f() -> Text { \"hi\" }");
+    // A longer string.
+    assert_self_host_byte_identical("fn f() -> Text { \"hello world\" }");
+    // Two distinct string literals in one function: two StaticStr pool entries.
+    assert_self_host_byte_identical(
+        "fn f(b: Word) -> Text { if b > 0 { \"yes\" } else { \"no\" } }",
+    );
+    // A repeated string literal dedups to one pool entry (like a repeated Int).
+    assert_self_host_byte_identical(
+        "fn f(b: Word) -> Text { if b > 0 { \"same\" } else { \"same\" } }",
+    );
+}
+
 // NESTED-composite field access `s.i.x` on a struct-typed parameter, reusing the FlatNested
 // GetField: parse.kel emits a FieldAccessNested (the whole inner struct, GetField(FlatNested
 // {offset, size, Struct})) then a scalar FieldAccess (GetField(Flat{offset within inner,
@@ -2930,7 +2960,7 @@ fn parse_into_codegen_blocks_and_control_flow_match_the_reference() {
 
         let mut built = compile_src(src);
         built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
         built.chunks[idx].local_count = local_count as u16;
         let need = required_persistent_capacity_for(&built);
         let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -3010,7 +3040,7 @@ fn parse_into_codegen_data_access_reads_match_the_reference() {
 
         let mut built = compile_src(src);
         built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
         built.chunks[idx].local_count = local_count as u16;
         let need = required_persistent_capacity_for(&built);
         let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -3075,7 +3105,7 @@ fn parse_into_codegen_calls_match_the_reference() {
 
         let mut built = compile_src(src);
         built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
         built.chunks[idx].local_count = local_count as u16;
         let need = required_persistent_capacity_for(&built);
         let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -3182,7 +3212,7 @@ fn parse_into_codegen_indexed_writes_match_the_reference() {
 
         let mut built = compile_src(src);
         built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
         built.chunks[idx].local_count = local_count as u16;
         let need = required_persistent_capacity_for(&built);
         let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -3239,7 +3269,7 @@ fn parse_into_codegen_for_limit_matches_the_reference() {
 
         let mut built = compile_src(src);
         built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
         built.chunks[idx].local_count = local_count as u16;
         let need = required_persistent_capacity_for(&built);
         let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -3302,7 +3332,7 @@ fn parse_into_codegen_match_matches_the_reference() {
 
         let mut built = compile_src(src);
         built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
         built.chunks[idx].local_count = local_count as u16;
         let need = required_persistent_capacity_for(&built);
         let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -3378,7 +3408,7 @@ fn parse_into_codegen_yield_in_a_loop_matches_the_reference() {
 
         let mut built = compile_src(src);
         built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
         built.chunks[idx].local_count = local_count as u16;
         let need = required_persistent_capacity_for(&built);
         let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -3461,7 +3491,7 @@ fn parse_into_codegen_combined_constructs_match_the_reference() {
 
         let mut built = compile_src(src);
         built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
         built.chunks[idx].local_count = local_count as u16;
         let need = required_persistent_capacity_for(&built);
         let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -3799,7 +3829,18 @@ fn self_host_compile(src: &str) -> Module {
             .position(|c| c.name == name)
             .unwrap_or_else(|| panic!("no chunk named `{name}`"));
         module.chunks[idx].ops = ops;
-        module.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        // A tag-1 pool entry is a StaticStr: its value is the lexer intern id, resolved to the
+        // string bytes through the name table. A tag-0 entry is an Int.
+        module.chunks[idx].constants = pool
+            .iter()
+            .map(|&(v, t)| {
+                if t == 1 {
+                    ConstValue::StaticStr(names[v as usize].clone())
+                } else {
+                    ConstValue::Int(v)
+                }
+            })
+            .collect();
         module.chunks[idx].local_count = lc as u16;
     }
     module
@@ -3962,7 +4003,7 @@ fn parse_into_codegen_nested_for_matches_the_reference() {
         );
         let mut built = compile_src(src);
         built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
         built.chunks[idx].local_count = local_count as u16;
         let need = required_persistent_capacity_for(&built);
         let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -4015,7 +4056,7 @@ fn parse_into_codegen_byte_cast_matches_the_reference() {
         );
         let mut built = compile_src(src);
         built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
         built.chunks[idx].local_count = local_count as u16;
         let need = required_persistent_capacity_for(&built);
         let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -4097,7 +4138,7 @@ fn parse_into_codegen_yield_in_if_branch_matches_the_reference() {
         assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
         let mut built = compile_src(src);
         built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
         built.chunks[idx].local_count = local_count as u16;
         let need = required_persistent_capacity_for(&built);
         let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -4150,7 +4191,7 @@ fn parse_into_codegen_for_in_if_branch_matches_the_reference() {
         assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
         let mut built = compile_src(src);
         built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
         built.chunks[idx].local_count = local_count as u16;
         let need = required_persistent_capacity_for(&built);
         let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -4199,7 +4240,7 @@ fn parse_into_codegen_match_call_arms_match_the_reference() {
         assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
         let mut built = compile_src(src);
         built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&v| ConstValue::Int(v)).collect();
+        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
         built.chunks[idx].local_count = local_count as u16;
         let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let mut vm = Vm::new(built, &arena).expect("verify");

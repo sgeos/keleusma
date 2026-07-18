@@ -398,7 +398,31 @@ loop main(resume: Word) -> Word {
             st.cursor = st.cursor + 1;
             yield 63
         } else {
+        if st.kind == 4 {
+            // Inside a string literal: extend until the closing `"` (byte 34), then intern the
+            // content bytes (dedup, reusing the identifier intern table) and emit a Str token
+            // (Tok 58) carrying the intern id; the host resolves the id to the string bytes. No
+            // escape handling yet -- a raw byte run between the quotes.
+            if b == 34 {
+                let id = intern_id(st.start, st.val);
+                st.kind = 0;
+                st.cursor = st.cursor + 1;
+                yield 58 + id * 64
+            } else {
+                st.cursor = st.cursor + 1;
+                st.val = st.val + 1;
+                yield 63
+            }
+        } else {
             // No token in progress: start one, skip whitespace, or emit punctuation.
+            if b == 34 {
+                // Opening quote: start a string literal; its content begins at the next byte.
+                st.kind = 4;
+                st.start = st.cursor + 1;
+                st.val = 0;
+                st.cursor = st.cursor + 1;
+                yield 63
+            } else {
             if is_space(b) == 1 {
                 st.cursor = st.cursor + 1;
                 yield 63
@@ -433,7 +457,7 @@ loop main(resume: Word) -> Word {
                     st.cursor = st.cursor + 1;
                     yield punct_tok(b)
                 }
-            } } } }
-        } } }
+            } } } } }
+        } } } }
     }
 }

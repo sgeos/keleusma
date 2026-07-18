@@ -121,7 +121,7 @@ fn emit(k: Word, a: Word, l: Word, r: Word) -> Word {
 // DataAssignIn 12, IndexAssignIn 14, ExprStmt 21) pops its right then left child; a
 // unary node (Not 6, Neg 10, IndexRead 13, YieldExpr 24, Cast 26, FieldAccess 28) pops one.
 fn is_leaf(k: Word) -> Word {
-    if k == 1 orelse k == 2 orelse k == 11 orelse k == 20 { 1 } else { 0 }
+    if k == 1 orelse k == 2 orelse k == 11 orelse k == 20 orelse k == 38 { 1 } else { 0 }
 }
 
 fn is_binary(k: Word) -> Word {

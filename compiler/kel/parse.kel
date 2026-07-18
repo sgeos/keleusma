@@ -94,6 +94,7 @@ enum Tok {
     Trait = 55,
     Impl = 56,
     Break = 57,
+    Str = 58,
 }
 
 // The node-record kinds the body walk yields (a subset of body.kel's `enum Node`).
@@ -149,6 +150,10 @@ enum Node {
     // kind}), packed offset + kind * 65536, where offset/kind come from the parameter's tuple
     // type annotation (parsed into `tupledefs`). A unary node popping the parameter Local.
     TupleField = 37,
+    // A string literal `"..."`: emits Const of a StaticStr pool entry. `arg` is the lexer intern
+    // id of the string content, which codegen interns as a tag-1 (StaticStr) pool entry and the
+    // host resolves to the string bytes. A leaf node, like a Literal.
+    StrLit = 38,
 }
 
 // The shunting-yard operator codes.
@@ -1649,6 +1654,12 @@ fn step_normal(k: Word, v: Word) -> Word {
         ops.expect_operand = 0;
         Node::Literal() as Word + v * 64
     } else {
+    if k == Tok::Str() as Word {
+        // A string literal: emit a StrLit carrying the intern id (v), which codegen interns as a
+        // StaticStr pool entry.
+        ops.expect_operand = 0;
+        Node::StrLit() as Word + v * 64
+    } else {
     if k == Tok::Ident() as Word {
         step_ident(v)
     } else {
@@ -1681,7 +1692,7 @@ fn step_normal(k: Word, v: Word) -> Word {
         0
     } else {
         step_op(k)
-    } } } } } } } }
+    } } } } } } } } }
 }
 
 // The struct-field-access postfix (ps.fa_phase 1/2), after a struct-typed parameter Local was

@@ -323,11 +323,16 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<i64>, i64) {
             .expect("resume");
     }
 
-    // Phase 2: the pool the stage built. Size, then that many raw values.
+    // Phase 2: the pool the stage built. Size, then that many raw values, then that many raw
+    // tags (0 Int, 1 StaticStr). The stage sources are all-Int, so the tags are consumed and
+    // discarded here; the tagged protocol only matters for a program with a string literal.
     let count = next_word(&mut vm, &mut shared);
     let pool = (0..count)
         .map(|_| next_word(&mut vm, &mut shared))
         .collect();
+    for _ in 0..count {
+        let _tag = next_word(&mut vm, &mut shared);
+    }
     // Phase 3: the local-frame size the stage computed.
     let local_count = next_word(&mut vm, &mut shared);
     (ops, pool, local_count)
