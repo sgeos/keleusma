@@ -2785,6 +2785,39 @@ fn self_host_compiles_let_bound_array_access() {
     assert_self_host_byte_identical("fn f(i: Word) -> Word { let a = [10, 20, 30, 40]; a[i + 1] }");
 }
 
+// NESTED TUPLE-FIELD read `s.p.N`: a struct field that is itself a tuple. The struct declaration
+// records the tuple field's element layout (a `tupledefs` entry via `sd_ftuple`), so `s.p`
+// extracts the whole tuple field (GetField(FlatNested{Tuple})) and `.N` reads element N
+// (GetTupleField(Flat{offset, kind})), byte-identical to the reference -- the tuple analogue of
+// the nested-struct field read `s.inner.x`.
+#[test]
+fn self_host_compiles_a_nested_tuple_field_read() {
+    // The tuple field `p` at offset 0; read element 0 and element 1.
+    assert_self_host_byte_identical(
+        "struct S { p: (Word, Word), tag: Word }\n\
+         fn g0(s: S) -> Word { s.p.0 }",
+    );
+    assert_self_host_byte_identical(
+        "struct S { p: (Word, Word), tag: Word }\n\
+         fn g1(s: S) -> Word { s.p.1 }",
+    );
+    // A scalar before the tuple field: `p` sits at offset 8, so the FlatNested offset is 8.
+    assert_self_host_byte_identical(
+        "struct T { lead: Word, p: (Word, Word) }\n\
+         fn g(s: T) -> Word { s.p.1 }",
+    );
+    // A mixed-scalar tuple field: element 1 is a Byte at intra-tuple offset 8.
+    assert_self_host_byte_identical(
+        "struct M { pair: (Word, Byte), n: Word }\n\
+         fn gm(m: M) -> Byte { m.pair.1 }",
+    );
+    // Both elements combined in an expression.
+    assert_self_host_byte_identical(
+        "struct S { p: (Word, Word) }\n\
+         fn gs(s: S) -> Word { s.p.0 + s.p.1 }",
+    );
+}
+
 // NESTED-composite field access `s.i.x` on a struct-typed parameter, reusing the FlatNested
 // GetField: parse.kel emits a FieldAccessNested (the whole inner struct, GetField(FlatNested
 // {offset, size, Struct})) then a scalar FieldAccess (GetField(Flat{offset within inner,
