@@ -204,6 +204,7 @@ const data wire {
     newcompositearray: Word = 50,
     newcompositeenum: Word = 51,
     newcompositetuple: Word = 52,
+    gettuplefield: Word = 53,
     radix: Word = 64,
     item: Word = 4,
     pack: Word = 65536,
@@ -808,6 +809,15 @@ fn push_field_access(p: Word) -> Word {
     0
 }
 
+// TupleField (kind 37): a flat tuple field read `t.N`. Emit the tuple value ops (the parameter
+// Local, in lhs) then GetTupleField(Flat{offset, kind}) (op tag 53), packed offset + kind*65536,
+// exactly like a struct GetField but the tuple op.
+fn push_tuple_field(p: Word) -> Word {
+    push_emit(wire.gettuplefield + ast.args[p] * wire.radix);
+    push_visit(ast.lhs[p]);
+    0
+}
+
 // FieldAccessNested (kind 30): a flat-nested struct field read `obj.f` where `f` is an array
 // (or nested composite) -- the whole field's bytes are extracted as a composite value. Emit
 // the object ops, then GetField(FlatNested{offset, size, variant}) (op tag 48), the operands
@@ -1041,6 +1051,7 @@ fn walk_step() -> Word {
             17 => push_array_lit(payload),
             18 => push_enum_init(payload),
             19 => push_tuple_init(payload),
+            37 => push_tuple_field(payload),
             _ => 0,
         };
     }

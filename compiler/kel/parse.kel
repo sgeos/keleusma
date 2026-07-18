@@ -145,6 +145,10 @@ enum Node {
     // taken as `Word`-sized (byte_size = count * 8), since a mixed-scalar tuple would need
     // per-element type inference the pipeline lacks. A single `(expr)` is grouping, not a tuple.
     TupleInit = 19,
+    // A tuple field read `t.N` on a tuple-typed parameter: emits GetTupleField(Flat{offset,
+    // kind}), packed offset + kind * 65536, where offset/kind come from the parameter's tuple
+    // type annotation (parsed into `tupledefs`). A unary node popping the parameter Local.
+    TupleField = 37,
 }
 
 // The shunting-yard operator codes.
@@ -201,6 +205,16 @@ private data ps {
     // declaration index plus one; and the field-access postfix sub-state after a struct-typed
     // parameter Local was emitted (1 awaits an optional `.`, 2 reads the field name).
     pstruct: [Word; 32],
+    // Per value-parameter tuple binding: 0 if not a tuple type, else the tuple layout index (in
+    // `tupledefs`) plus one, so a body `t.N` access resolves the element offset/kind. `ta_phase`
+    // is the tuple-access postfix sub-state (1 awaits an optional `.`, 2 reads the element index);
+    // `ta_tuple` the layout index of the tuple under access. `tts`/`tts_off` scan a tuple TYPE
+    // annotation `(T, T, ...)` in the signature: `tts` active, `tts_off` the running byte offset.
+    ptuple: [Word; 32],
+    ta_phase: Word,
+    ta_tuple: Word,
+    tts: Word,
+    tts_off: Word,
     fa_phase: Word,
     fa_struct: Word,
     // The just-resolved field's flat byte offset, ScalarKind (or element kind for an array),
@@ -450,6 +464,21 @@ private data enums {
     emax_scratch: Word,
 }
 
+// The tuple-parameter-type layout table, accumulated as each `(T, T, ...)` parameter type
+// annotation is scanned. `tup_estart[t]`/`tup_ecount[t]` bound tuple `t`'s element run in the
+// flat `tup_eoffset`/`tup_ekind` arrays (per-element flat byte offset and ScalarKind);
+// `tup_ecursor` is the running append cursor. A body `t.N` access reads element N's offset and
+// kind here to bake the GetTupleField operand. Only scalar `Word`/`Byte`/`Bool` elements are
+// recorded; a nested-composite tuple element would need the FlatNested form, a later increment.
+private data tupledefs {
+    tup_count: Word,
+    tup_estart: [Word; 32],
+    tup_ecount: [Word; 32],
+    tup_eoffset: [Word; 256],
+    tup_ekind: [Word; 256],
+    tup_ecursor: Word,
+}
+
 // Struct type names, accumulated as each `struct` declaration's STRUCTSTART is emitted, so a
 // body can recognise `Name { field: expr, ... }` construction. Only the names are needed to
 // recognise the construction and open its field scan; the flat layout (byte size) is
@@ -543,7 +572,21 @@ fn resolve_plain_ident(v: Word) -> Word {
             ops.expect_operand = 0;
             Node::Local() as Word + ps.found * 64
         } else {
-            step_local(v)
+            ps.found_flag = 0;
+            for i in 0..ps.pcount limit 32 {
+                if ps.pnames[i] == v andalso ps.ptuple[i] > 0 {
+                    ps.found_flag = 1;
+                    ps.found = i;
+                    ps.ta_tuple = ps.ptuple[i] - 1;
+                }
+            }
+            if ps.found_flag == 1 {
+                ps.ta_phase = 1;
+                ops.expect_operand = 0;
+                Node::Local() as Word + ps.found * 64
+            } else {
+                step_local(v)
+            }
         }
     }
 }
@@ -657,6 +700,48 @@ fn type_byte_size(v: Word) -> Word {
         }
         enums.esz_scratch
     } } }
+}
+
+// The ScalarKind tag of a scalar type name: `Word` Int (3), `Byte` (2), `Bool` (1), else Unit
+// (0). Used to bake a tuple element's GetTupleField kind, mirroring `field_size_and_kind`'s tag.
+fn scalar_kind_of(v: Word) -> Word {
+    if v == toks.word_id {
+        3
+    } else {
+    if v == toks.byte_id {
+        2
+    } else {
+    if v == toks.bool_id {
+        1
+    } else {
+        0
+    } } }
+}
+
+// A token inside a tuple parameter type `(T, T, ...)` during the signature scan. A type ident
+// records the element's running flat byte offset and ScalarKind into the current tuple layout;
+// the `)` advances the flat element cursor and ends the scan. A `,` (and any other token) is
+// ignored. Emits no signature record.
+fn step_tuple_type(k: Word, v: Word) -> Word {
+    if k == Tok::Ident() as Word {
+        let li = ps.ptuple[ps.pcount - 1] - 1;
+        let base = tupledefs.tup_estart[li];
+        let ei = tupledefs.tup_ecount[li];
+        tupledefs.tup_eoffset[base + ei] = ps.tts_off;
+        tupledefs.tup_ekind[base + ei] = scalar_kind_of(v);
+        tupledefs.tup_ecount[li] = ei + 1;
+        ps.tts_off = ps.tts_off + type_byte_size(v);
+        0
+    } else {
+    if k == Tok::RParen() as Word {
+        let li = ps.ptuple[ps.pcount - 1] - 1;
+        tupledefs.tup_ecursor = tupledefs.tup_estart[li] + tupledefs.tup_ecount[li];
+        ps.tts = 0;
+        ps.ptype = 0;
+        0
+    } else {
+        0
+    } }
 }
 
 // The flat body size of an enum: eight bytes for the discriminant plus the largest payload
@@ -1583,6 +1668,36 @@ fn step_fieldaccess(k: Word, v: Word) -> Word {
     } }
 }
 
+// The tuple-field-access postfix (ps.ta_phase 1/2), after a tuple-typed parameter Local was
+// emitted. Phase 1 awaits an optional `.` (a non-`.` token is pushed back, the parameter was used
+// whole); phase 2 reads the element index N (an integer literal), resolves element N's flat byte
+// offset and ScalarKind from the parameter's tuple layout, and emits a TupleField (kind 37) that
+// pops the parameter Local, packing the GetTupleField operand as offset + kind * 65536. Held in
+// its own function so the dispatch chain is not deepened.
+fn step_tupleaccess(k: Word, v: Word) -> Word {
+    if ps.ta_phase == 1 {
+        if k == Tok::Dot() as Word {
+            ps.ta_phase = 2;
+        } else {
+            ps.ta_phase = 0;
+            ps.cursor = ps.cursor - 1;
+        }
+        0
+    } else {
+        if k == Tok::IntLit() as Word {
+            let base = tupledefs.tup_estart[ps.ta_tuple];
+            ps.fa_off = tupledefs.tup_eoffset[base + v];
+            ps.fa_kind = tupledefs.tup_ekind[base + v];
+            ps.ta_phase = 0;
+            ops.expect_operand = 0;
+            Node::TupleField() as Word + (ps.fa_off + ps.fa_kind * 65536) * 64
+        } else {
+            ps.ta_phase = 0;
+            0
+        }
+    }
+}
+
 // The normal parse-phase dispatch: a `let` binding's name or `=`, else an expression
 // token.
 fn step_dispatch_normal(k: Word, v: Word) -> Word {
@@ -2023,8 +2138,11 @@ fn body_step() -> Word {
             if ps.fa_phase >= 1 {
                 step_fieldaccess(k, v)
             } else {
+            if ps.ta_phase >= 1 {
+                step_tupleaccess(k, v)
+            } else {
                 step_body_dispatch(k, v)
-            }
+            } }
         }
     } } } } } } } } } }
 }
@@ -2607,6 +2725,10 @@ fn header_field(k: Word, v: Word) -> Word {
 
 // Mode 2: the signature scan, ending when the first `{` at depth zero arms the body walk.
 fn header_sig(k: Word, v: Word) -> Word {
+    if ps.tts == 1 {
+        // Inside a tuple parameter type `(T, T, ...)`: the element types feed the tuple layout.
+        step_tuple_type(k, v)
+    } else {
     if k == 1 {
         if ps.arr == 1 {
             ps.arr = 2;
@@ -2620,9 +2742,10 @@ fn header_sig(k: Word, v: Word) -> Word {
             if ps.pname == 1 {
                 ps.pname = 0;
                 ps.pnames[ps.pcount] = v;
-                // Default this parameter to non-struct; the type identifier that follows
-                // overrides it when the type names a declared struct.
+                // Default this parameter to non-struct and non-tuple; the type identifier or `(`
+                // tuple annotation that follows overrides it.
                 ps.pstruct[ps.pcount] = 0;
+                ps.ptuple[ps.pcount] = 0;
                 ps.pcount = ps.pcount + 1;
                 4 + v * 64
             } else {
@@ -2671,13 +2794,26 @@ fn header_sig(k: Word, v: Word) -> Word {
         }
     } else {
     if k == 7 {
-        ps.pdepth = ps.pdepth + 1;
-        if ps.pdepth == 1 {
-            if ps.pdone == 0 {
-                ps.pname = 1;
+        if ps.ptype == 1 andalso ps.pdepth == 1 {
+            // A tuple parameter type `(T, T, ...)`: open a fresh tuple layout entry, bind it to the
+            // current parameter, and scan its element types in `step_tuple_type`. The outer `(`
+            // stays at pdepth 1; the tuple's own `(`/`)` never touch pdepth.
+            ps.ptuple[ps.pcount - 1] = tupledefs.tup_count + 1;
+            tupledefs.tup_estart[tupledefs.tup_count] = tupledefs.tup_ecursor;
+            tupledefs.tup_ecount[tupledefs.tup_count] = 0;
+            tupledefs.tup_count = tupledefs.tup_count + 1;
+            ps.tts = 1;
+            ps.tts_off = 0;
+            0
+        } else {
+            ps.pdepth = ps.pdepth + 1;
+            if ps.pdepth == 1 {
+                if ps.pdone == 0 {
+                    ps.pname = 1;
+                }
             }
+            0
         }
-        0
     } else {
     if k == 8 {
         ps.pdepth = ps.pdepth - 1;
@@ -2716,7 +2852,7 @@ fn header_sig(k: Word, v: Word) -> Word {
         } else {
             0
         }
-    } } } } } } } }
+    } } } } } } } } }
 }
 
 fn step() -> Word {

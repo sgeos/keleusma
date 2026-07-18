@@ -32,7 +32,7 @@ use keleusma::ast::{
     Literal, Param, Pattern, Stmt, UnaryOp,
 };
 use keleusma::bytecode::{
-    ArrayElem, ConstValue, Module, NewCompositeOperand, Op, StructField, Value,
+    ArrayElem, ConstValue, Module, NewCompositeOperand, Op, StructField, TupleField, Value,
 };
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
@@ -809,6 +809,21 @@ fn decode_op(w: i64) -> Op {
         // A flat array-element read: operand is the element ScalarKind tag.
         49 => Op::GetIndex(ArrayElem::Flat {
             kind: match operand {
+                0 => ScalarKind::Unit,
+                1 => ScalarKind::Bool,
+                2 => ScalarKind::Byte,
+                3 => ScalarKind::Int,
+                4 => ScalarKind::Fixed,
+                5 => ScalarKind::Float,
+                6 => ScalarKind::Text,
+                7 => ScalarKind::Opaque,
+                other => panic!("bad scalar kind tag {other}"),
+            },
+        }),
+        // A flat tuple field read: operand packs offset + kind_tag*65536.
+        53 => Op::GetTupleField(TupleField::Flat {
+            offset: (operand % 65536) as u16,
+            kind: match operand / 65536 {
                 0 => ScalarKind::Unit,
                 1 => ScalarKind::Bool,
                 2 => ScalarKind::Byte,
@@ -1772,8 +1787,8 @@ fn self_compile_codegen_atomic_functions() {
     // for the user-written `break;` statement; 41 with `push_field_access_nested` and
     // `push_arrindex` for struct array-element access; 42 with `push_array_lit` for array
     // literals; 43 with `push_enum_init` for enum payload construction; 44 with
-    // `push_tuple_init` for tuple construction.
-    const EXPECTED_SELF_COMPILE: usize = 44;
+    // `push_tuple_init` for tuple construction; 45 with `push_tuple_field` for tuple field access.
+    const EXPECTED_SELF_COMPILE: usize = 45;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -2193,7 +2208,7 @@ fn reconstruct_into(
                 });
                 (nodes.len() - 1) as i64
             }
-            6 | 10 | 13 | 24 | 26 | 28 | 29 | 30 => {
+            6 | 10 | 13 | 24 | 26 | 28 | 29 | 30 | 37 => {
                 let c = stack.pop().expect("unary operand");
                 nodes.push(Node {
                     kind,
@@ -2677,6 +2692,25 @@ fn self_host_compiles_a_tuple_construction() {
     // A parenthesised sub-expression as a tuple element keeps its grouping Paren distinct from
     // the outer TupleMark.
     assert_self_host_byte_identical("fn nest(a: Word, b: Word) -> (Word, Word) { ((a + b), b) }");
+}
+
+// TUPLE FIELD access `t.N` on a tuple-typed PARAMETER: the signature scan parses the `(T, T, ...)`
+// parameter type annotation into a per-parameter element layout (offset + ScalarKind), so `t.N`
+// emits GetTupleField(Flat{offset, kind}) -- the parameter Local then the flat read, like a struct
+// field access but the tuple op. The element offset is the sum of the preceding element sizes, so
+// a mixed-scalar tuple parameter reads each field correctly (unlike CONSTRUCTION, which is Word-
+// sized only). Byte-identical to the reference.
+#[test]
+fn self_host_compiles_tuple_field_access() {
+    // All-Word tuple: element 0 at offset 0, element 1 at offset 8, both Int.
+    assert_self_host_byte_identical("fn g0(t: (Word, Word)) -> Word { t.0 }");
+    assert_self_host_byte_identical("fn g1(t: (Word, Word)) -> Word { t.1 }");
+    // Mixed-scalar tuple parameter: element 1 is a Byte at offset 8.
+    assert_self_host_byte_identical("fn gm(t: (Word, Byte)) -> Byte { t.1 }");
+    // Three elements, reading the middle and last.
+    assert_self_host_byte_identical("fn g(t: (Word, Word, Word)) -> Word { t.1 + t.2 }");
+    // A tuple field used in an arithmetic expression, exercising the postfix-then-operator path.
+    assert_self_host_byte_identical("fn gx(t: (Word, Word)) -> Word { t.0 + t.1 }");
 }
 
 // NESTED-composite field access `s.i.x` on a struct-typed parameter, reusing the FlatNested
