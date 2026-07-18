@@ -293,9 +293,14 @@ private data st {
     cf_mbreak: [Word; 64],
     cf_mbc: Word,
     pool: [Word; 64],
+    // Per pool entry, the constant kind: 0 an Int (the payload is the value), 1 a StaticStr (the
+    // payload is the lexer intern id the host resolves to string bytes). Streamed after the pool
+    // values so the host builds the right ConstValue per entry.
+    pool_tag: [Word; 64],
     pool_count: Word,
     count_done: Word,
     pool_cursor: Word,
+    tag_cursor: Word,
     header_done: Word,
     let_count: Word,
     dup_idx: Word,
@@ -313,9 +318,10 @@ private data st {
 //   29 GetDataIndexed(base,len)  30 SetDataIndexed(base,len)   base + len*65536 packed
 //   31 Loop(exit)  32 BreakIf(exit)  33 EndLoop(back)  (targets backpatched)  34 PushImmediate(v)
 // The op stream ends with Return. After Return the stage emits its constant pool:
-// first the pool size as a raw Word, then that many raw Word values, and finally
-// `local_count` as one raw Word. The host reads ops until Return, then the pool
-// size, then the values, then local_count.
+// first the pool size as a raw Word, then that many raw Word values, then that many
+// raw Word tags (0 Int, 1 StaticStr -- the value is the intern id for a StaticStr),
+// and finally `local_count` as one raw Word. The host reads ops until Return, then the
+// pool size, then the values, then the tags, then local_count.
 
 // Push a VISIT work item for node index `node` onto the work-stack.
 fn push_visit(node: Word) -> Word {
@@ -433,13 +439,34 @@ fn push_literal(p: Word) -> Word {
     let value = ast.args[p];
     st.dup_idx = st.pool_count;
     for i in 0..st.pool_count limit 64 {
-        if st.pool[i] == value {
+        if st.pool[i] == value andalso st.pool_tag[i] == 0 {
             st.dup_idx = i;
         }
     }
     let idx = st.dup_idx;
     if idx == st.pool_count {
         st.pool[st.pool_count] = value;
+        st.pool_tag[st.pool_count] = 0;
+        st.pool_count = st.pool_count + 1;
+    }
+    push_emit(wire.konst + idx * wire.radix)
+}
+
+// StrLit (kind 38): a string literal. Intern its content (the lexer intern id in `args`) as a
+// StaticStr pool entry (tag 1, deduplicating among StaticStr entries by intern id, since a given
+// string has one id), then schedule `Const(index)`. The host resolves the id to the string bytes.
+fn push_strlit(p: Word) -> Word {
+    let id = ast.args[p];
+    st.dup_idx = st.pool_count;
+    for i in 0..st.pool_count limit 64 {
+        if st.pool[i] == id andalso st.pool_tag[i] == 1 {
+            st.dup_idx = i;
+        }
+    }
+    let idx = st.dup_idx;
+    if idx == st.pool_count {
+        st.pool[st.pool_count] = id;
+        st.pool_tag[st.pool_count] = 1;
         st.pool_count = st.pool_count + 1;
     }
     push_emit(wire.konst + idx * wire.radix)
@@ -845,13 +872,14 @@ fn push_arrindex(p: Word) -> Word {
 fn push_const_value(value: Word) -> Word {
     st.dup_idx = st.pool_count;
     for i in 0..st.pool_count limit 64 {
-        if st.pool[i] == value {
+        if st.pool[i] == value andalso st.pool_tag[i] == 0 {
             st.dup_idx = i;
         }
     }
     let idx = st.dup_idx;
     if idx == st.pool_count {
         st.pool[st.pool_count] = value;
+        st.pool_tag[st.pool_count] = 0;
         st.pool_count = st.pool_count + 1;
     }
     push_emit(wire.konst + idx * wire.radix)
@@ -1052,6 +1080,7 @@ fn walk_step() -> Word {
             18 => push_enum_init(payload),
             19 => push_tuple_init(payload),
             37 => push_tuple_field(payload),
+            38 => push_strlit(payload),
             _ => 0,
         };
     }
@@ -1101,6 +1130,14 @@ fn drain_pool() -> Word {
     v
 }
 
+// Phase 5b: stream one constant-pool tag (0 Int, 1 StaticStr), after all the values, so the host
+// builds the right ConstValue per entry.
+fn drain_tags() -> Word {
+    let t = st.pool_tag[st.tag_cursor];
+    st.tag_cursor = st.tag_cursor + 1;
+    t
+}
+
 // Phase 6: the local-frame size, parameters plus one slot per `let`.
 fn drain_header() -> Word {
     st.header_done = 1;
@@ -1136,6 +1173,10 @@ yield emit_next(resume: Word) -> Word when st.count_done == 0 {
 
 yield emit_next(resume: Word) -> Word when st.pool_cursor < st.pool_count {
     yield drain_pool()
+}
+
+yield emit_next(resume: Word) -> Word when st.tag_cursor < st.pool_count {
+    yield drain_tags()
 }
 
 yield emit_next(resume: Word) -> Word when st.header_done == 0 {
