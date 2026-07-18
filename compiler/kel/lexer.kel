@@ -400,9 +400,15 @@ loop main(resume: Word) -> Word {
         } else {
         if st.kind == 4 {
             // Inside a string literal: extend until the closing `"` (byte 34), then intern the
-            // content bytes (dedup, reusing the identifier intern table) and emit a Str token
-            // (Tok 58) carrying the intern id; the host resolves the id to the string bytes. No
-            // escape handling yet -- a raw byte run between the quotes.
+            // RAW content bytes (dedup, reusing the identifier intern table) and emit a Str token
+            // (Tok 58) carrying the intern id. A backslash (byte 92) escapes the next byte: the
+            // pair is skipped as raw content (so `\"` does not terminate and `\\` is one unit), and
+            // the host unescapes the raw bytes when building the StaticStr, matching the reference.
+            if b == 92 {
+                st.cursor = st.cursor + 2;
+                st.val = st.val + 2;
+                yield 63
+            } else {
             if b == 34 {
                 let id = intern_id(st.start, st.val);
                 st.kind = 0;
@@ -412,7 +418,7 @@ loop main(resume: Word) -> Word {
                 st.cursor = st.cursor + 1;
                 st.val = st.val + 1;
                 yield 63
-            }
+            } }
         } else {
             // No token in progress: start one, skip whitespace, or emit punctuation.
             if b == 34 {

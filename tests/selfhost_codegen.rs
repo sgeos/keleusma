@@ -2848,6 +2848,20 @@ fn self_host_compiles_string_literals() {
     );
 }
 
+// STRING ESCAPE sequences: the lexer skips a backslash-escape pair as raw content (so `\"` does
+// not terminate the string and `\\` is one unit), interning the raw bytes; the host unescapes them
+// (`\n` newline, `\t` tab, `\"` quote, `\\` backslash) when building the StaticStr, matching the
+// reference. Byte-identical to the reference for each escape.
+#[test]
+fn self_host_compiles_string_escapes() {
+    assert_self_host_byte_identical("fn f() -> Text { \"a\\nb\" }"); // newline
+    assert_self_host_byte_identical("fn f() -> Text { \"tab\\there\" }"); // tab
+    assert_self_host_byte_identical("fn f() -> Text { \"q\\\"q\" }"); // escaped quote
+    assert_self_host_byte_identical("fn f() -> Text { \"back\\\\slash\" }"); // escaped backslash
+    // Multiple escapes in one string, and an escaped quote that must not terminate early.
+    assert_self_host_byte_identical("fn f() -> Text { \"line1\\nline2\\ttabbed\" }");
+}
+
 // NESTED-composite field access `s.i.x` on a struct-typed parameter, reusing the FlatNested
 // GetField: parse.kel emits a FieldAccessNested (the whole inner struct, GetField(FlatNested
 // {offset, size, Struct})) then a scalar FieldAccess (GetField(Flat{offset within inner,
@@ -3796,6 +3810,32 @@ fn parse_into_codegen_multihead_matches_the_reference() {
 /// reference module chunk of that name. Native chunks (absent from the source) keep the
 /// reference's ops. The result is a runnable module whose every source-defined chunk was
 /// emitted by the self-hosted pipeline.
+/// Unescape a raw string-literal body (the bytes between the quotes, backslashes intact) into the
+/// StaticStr content the reference bakes: `\n` newline, `\t` tab, `\"` quote, `\\` backslash; any
+/// other escape passes the second byte through. The self-host lexer interns the raw bytes (it only
+/// skips the escape pair so a `\"` does not terminate), so the host performs the unescape here.
+fn unescape_string(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            out.push(match bytes[i + 1] {
+                b'n' => b'\n',
+                b't' => b'\t',
+                b'"' => b'"',
+                b'\\' => b'\\',
+                other => other,
+            });
+            i += 2;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).expect("unescaped string is valid UTF-8")
+}
+
 fn self_host_compile(src: &str) -> Module {
     let (fns, names, _, _) = parse_functions(src);
     let mut module = compile_src(src);
@@ -3835,7 +3875,7 @@ fn self_host_compile(src: &str) -> Module {
             .iter()
             .map(|&(v, t)| {
                 if t == 1 {
-                    ConstValue::StaticStr(names[v as usize].clone())
+                    ConstValue::StaticStr(unescape_string(&names[v as usize]))
                 } else {
                     ConstValue::Int(v)
                 }
