@@ -2740,6 +2740,36 @@ fn self_host_compiles_a_tuple_typed_struct_field() {
     );
 }
 
+// LET-BOUND composite field access: a `let` binding whose value's root is a DIRECT composite
+// construction records the binding's type (a fresh all-Word `tupledefs` layout for a tuple, the
+// declaration index for a struct), so a later `x.N`/`x.field` access on the binding arms the same
+// field-access postfix a typed parameter uses, byte-identical to the reference. The pending-type
+// tracking is cleared by any operator or call, so only a bare construction root survives -- a
+// `let x = f((a,b))` or `let x = (a,b) == (c,d)` binding is left untyped, not mistagged.
+#[test]
+fn self_host_compiles_let_bound_composite_field_access() {
+    // A let-bound tuple, read by index.
+    assert_self_host_byte_identical("fn f(a: Word, b: Word) -> Word { let t = (a, b); t.0 }");
+    assert_self_host_byte_identical("fn f(a: Word, b: Word) -> Word { let t = (a, b); t.1 }");
+    assert_self_host_byte_identical("fn f(a: Word, b: Word) -> Word { let t = (a, b); t.0 + t.1 }");
+    // A let-bound struct, read by field.
+    assert_self_host_byte_identical(
+        "struct S { x: Word, y: Word }\n\
+         fn f() -> Word { let s = S { x: 1, y: 2 }; s.x }",
+    );
+    assert_self_host_byte_identical(
+        "struct S { x: Word, y: Word }\n\
+         fn f() -> Word { let s = S { x: 1, y: 2 }; s.x + s.y }",
+    );
+    // A three-element let-bound tuple.
+    assert_self_host_byte_identical(
+        "fn f(a: Word, b: Word, c: Word) -> Word { let t = (a, b, c); t.2 }",
+    );
+    // A tuple with an arithmetic element still tracks as a tuple root (the `+` is inside the
+    // construction, emitted before the TupleInit root).
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { let t = (a + 1, a * 2); t.0 }");
+}
+
 // NESTED-composite field access `s.i.x` on a struct-typed parameter, reusing the FlatNested
 // GetField: parse.kel emits a FieldAccessNested (the whole inner struct, GetField(FlatNested
 // {offset, size, Struct})) then a scalar FieldAccess (GetField(Flat{offset within inner,
