@@ -2770,6 +2770,21 @@ fn self_host_compiles_let_bound_composite_field_access() {
     assert_self_host_byte_identical("fn f(a: Word) -> Word { let t = (a + 1, a * 2); t.0 }");
 }
 
+// LET-BOUND ARRAY element access `let a = [..]; a[i]`: a `let` whose value root is an array literal
+// records the binding's element kind (all-Word arrays, ScalarKind Int) so a later `a[i]` arms the
+// same ArrIndex/GetIndex postfix the struct array-field read uses, minus the FlatNested extraction
+// (the binding IS the whole array value). Byte-identical to the reference.
+#[test]
+fn self_host_compiles_let_bound_array_access() {
+    // A literal index and a runtime index.
+    assert_self_host_byte_identical("fn f(i: Word) -> Word { let a = [10, 20, 30]; a[i] }");
+    assert_self_host_byte_identical("fn f() -> Word { let a = [10, 20, 30]; a[1] }");
+    // Two element reads combined.
+    assert_self_host_byte_identical("fn f(i: Word) -> Word { let a = [10, 20, 30]; a[i] + a[0] }");
+    // An arithmetic index expression.
+    assert_self_host_byte_identical("fn f(i: Word) -> Word { let a = [10, 20, 30, 40]; a[i + 1] }");
+}
+
 // NESTED-composite field access `s.i.x` on a struct-typed parameter, reusing the FlatNested
 // GetField: parse.kel emits a FieldAccessNested (the whole inner struct, GetField(FlatNested
 // {offset, size, Struct})) then a scalar FieldAccess (GetField(Flat{offset within inner,

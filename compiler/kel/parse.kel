@@ -213,6 +213,10 @@ private data ps {
     ptuple: [Word; 32],
     ta_phase: Word,
     ta_tuple: Word,
+    // The array-access postfix after a let-bound array Local was emitted: `aa_phase` 1 awaits an
+    // optional `[`, `aa_kind` the element ScalarKind for the GetIndex operand.
+    aa_phase: Word,
+    aa_kind: Word,
     // The `let`-binding index a plain-identifier lookup matched (most recent wins), so a
     // composite-typed binding can arm the field-access postfix.
     let_hit: Word,
@@ -277,8 +281,12 @@ private data stmt {
     // the root's type.
     let_tuple: [Word; 64],
     let_struct: [Word; 64],
+    // Per `let` binding, 0 or the element ScalarKind plus one when the binding's value root was an
+    // array literal, so a later `a[i]` access emits GetIndex(Flat{kind}).
+    let_array: [Word; 64],
     pending_ctuple: Word,
     pending_cstruct: Word,
+    pending_carray: Word,
     // A block's folded-statement table. Sized to the largest stage function body: a
     // codegen.kel emitter such as `push_forlimit` is a single flat block of about 78
     // statements, so 64 is too small; 256 covers the stage files with headroom. These
@@ -594,8 +602,14 @@ fn resolve_plain_ident(v: Word) -> Word {
             ops.expect_operand = 0;
             Node::Local() as Word + stmt.scope_slot[ps.let_hit] * 64
         } else {
+        if stmt.let_array[ps.let_hit] > 0 {
+            ps.aa_kind = stmt.let_array[ps.let_hit] - 1;
+            ps.aa_phase = 1;
+            ops.expect_operand = 0;
+            Node::Local() as Word + stmt.scope_slot[ps.let_hit] * 64
+        } else {
             step_local(v)
-        } }
+        } } }
     } else {
         ps.found_flag = 0;
         for i in 0..ps.pcount limit 32 {
@@ -962,6 +976,12 @@ fn step_iclosing() -> Word {
             let count = call.al_count[call.al_sp - 1];
             call.al_sp = call.al_sp - 1;
             ops.expect_operand = 0;
+            // Record this array as the value's current root composite (all-Word elements, element
+            // ScalarKind Int = 3), so a `let` binding to it can arm `a[i]` access; a later
+            // operator/call clears it.
+            stmt.pending_ctuple = 0;
+            stmt.pending_cstruct = 0;
+            stmt.pending_carray = 3 + 1;
             Node::ArrayLit() as Word + (count * 8 * 1024 + count) * 64
         } else {
             ops.opsp = ops.opsp - 1;
@@ -1052,6 +1072,7 @@ fn emit_op(op: Word) -> Word {
     // composite construction, so clear the pending composite-type tracking (see `stmt`).
     stmt.pending_ctuple = 0;
     stmt.pending_cstruct = 0;
+    stmt.pending_carray = 0;
     match op {
         OpCode::Neg() => Node::Neg() as Word,
         OpCode::Not() => Node::Not() as Word,
@@ -1120,6 +1141,7 @@ fn step_closing() -> Word {
             // returning a composite is not a construction the parser can layout-track).
             stmt.pending_ctuple = 0;
             stmt.pending_cstruct = 0;
+            stmt.pending_carray = 0;
             Node::Call() as Word + (call.call_chunk[call.call_sp] + call.call_count[call.call_sp] * 256) * 64
         } else {
         if top == OpCode::EnumMark() as Word {
@@ -1152,6 +1174,7 @@ fn step_closing() -> Word {
             // `let` binding to it can arm `t.N` access; a later operator/call clears it.
             stmt.pending_ctuple = call.tp_count[call.tp_sp];
             stmt.pending_cstruct = 0;
+            stmt.pending_carray = 0;
             Node::TupleInit() as Word + (call.tp_count[call.tp_sp] * 8 * 1024 + call.tp_count[call.tp_sp]) * 64
         } else {
             ops.opsp = ops.opsp - 1;
@@ -1238,6 +1261,7 @@ fn step_sc_closing() -> Word {
         // arm `x.field` access; a later operator/call clears it.
         stmt.pending_ctuple = 0;
         stmt.pending_cstruct = structdefs.sc_name[structdefs.sc_sp] + 1;
+        stmt.pending_carray = 0;
         Node::StructInit() as Word + (structdefs.sd_bytesize[structdefs.sc_name[structdefs.sc_sp]] * 1024 + structdefs.sc_count[structdefs.sc_sp]) * 64
     }
 }
@@ -1752,6 +1776,27 @@ fn step_tupleaccess(k: Word, v: Word) -> Word {
     }
 }
 
+// The array-access postfix (ps.aa_phase 1), after a let-bound array Local was emitted. A `[` opens
+// the element index (an IndexMark blocks precedence, `da.fa_index` marks the closing `]` to emit
+// the ArrIndex/GetIndex of the element kind); the array value is the already-emitted Local, so no
+// FlatNested extraction is needed (unlike a struct array FIELD `p.xs[i]`). A non-`[` token is
+// pushed back (the array was used whole).
+fn step_arrayaccess(k: Word, v: Word) -> Word {
+    if k == Tok::LBracket() as Word {
+        ps.aa_phase = 0;
+        da.fa_index = 1;
+        da.fa_index_kind = ps.aa_kind;
+        ops.opstack[ops.opsp] = OpCode::IndexMark() as Word;
+        ops.opsp = ops.opsp + 1;
+        ops.expect_operand = 1;
+        v * 0
+    } else {
+        ps.aa_phase = 0;
+        ps.cursor = ps.cursor - 1;
+        0
+    }
+}
+
 // The normal parse-phase dispatch: a `let` binding's name or `=`, else an expression
 // token.
 fn step_dispatch_normal(k: Word, v: Word) -> Word {
@@ -1811,6 +1856,7 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
             // Begin tracking this `let` value's root composite type fresh.
             stmt.pending_ctuple = 0;
             stmt.pending_cstruct = 0;
+            stmt.pending_carray = 0;
         }
         0
     } else {
@@ -1987,6 +2033,7 @@ fn step_draining() -> Word {
                     // index. `let_tuple`/`let_struct` default 0 (a scalar or untracked value).
                     stmt.let_tuple[stmt.let_count] = 0;
                     stmt.let_struct[stmt.let_count] = 0;
+                    stmt.let_array[stmt.let_count] = 0;
                     if stmt.pending_ctuple > 0 {
                         let li = tupledefs.tup_count;
                         tupledefs.tup_estart[li] = tupledefs.tup_ecursor;
@@ -2001,10 +2048,15 @@ fn step_draining() -> Word {
                     } else {
                         if stmt.pending_cstruct > 0 {
                             stmt.let_struct[stmt.let_count] = stmt.pending_cstruct;
+                        } else {
+                            if stmt.pending_carray > 0 {
+                                stmt.let_array[stmt.let_count] = stmt.pending_carray;
+                            }
                         }
                     }
                     stmt.pending_ctuple = 0;
                     stmt.pending_cstruct = 0;
+                    stmt.pending_carray = 0;
                     stmt.let_count = stmt.let_count + 1;
                     stmt.stmt_count = stmt.stmt_count + 1;
                     ops.draining = 0;
@@ -2222,8 +2274,11 @@ fn body_step() -> Word {
             if ps.ta_phase >= 1 {
                 step_tupleaccess(k, v)
             } else {
+            if ps.aa_phase >= 1 {
+                step_arrayaccess(k, v)
+            } else {
                 step_body_dispatch(k, v)
-            } }
+            } } }
         }
     } } } } } } } } } }
 }
