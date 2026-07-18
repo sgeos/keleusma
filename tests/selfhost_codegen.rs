@@ -767,6 +767,12 @@ fn decode_op(w: i64) -> Op {
             count: (operand % 65536) as u16,
             byte_size: (operand / 65536) as u16,
         }),
+        // A flat enum construction: same packing, Enum composite kind.
+        51 => Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Enum,
+            count: (operand % 65536) as u16,
+            byte_size: (operand / 65536) as u16,
+        }),
         // A flat struct field read: the operand packs offset + kind_tag*65536.
         47 => Op::GetField(StructField::Flat {
             offset: (operand % 65536) as u16,
@@ -1759,8 +1765,8 @@ fn self_compile_codegen_atomic_functions() {
     // struct construction and field access); 39 with `push_const_value` and `push_break`
     // for the user-written `break;` statement; 41 with `push_field_access_nested` and
     // `push_arrindex` for struct array-element access; 42 with `push_array_lit` for array
-    // literals.
-    const EXPECTED_SELF_COMPILE: usize = 42;
+    // literals; 43 with `push_enum_init` for enum payload construction.
+    const EXPECTED_SELF_COMPILE: usize = 43;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -1787,10 +1793,10 @@ fn self_compile_codegen_atomic_functions() {
 // reconstruction to the control-flow, data-access, call, and yield kinds.
 // ---------------------------------------------------------------------------
 
-// Lexer `src` block slots: len(1) + bytes(65536) then the intern table.
-const BR_LEX_ISTART: usize = 1 + 98304;
-const BR_LEX_ILEN: usize = 1 + 98304 + 1280;
-const BR_LEX_ICOUNT: usize = 1 + 98304 + 1280 + 1280;
+// Lexer `src` block slots: len(1) + bytes(131072) then the intern table.
+const BR_LEX_ISTART: usize = 1 + 131072;
+const BR_LEX_ILEN: usize = 1 + 131072 + 1280;
+const BR_LEX_ICOUNT: usize = 1 + 131072 + 1280 + 1280;
 // Parser `toks` block slots: len(1), then the packed token array (one `tok+payload*64`
 // word per token), then the scalar and chunk-table inputs.
 const BR_P_LEN: usize = 0;
@@ -2267,6 +2273,28 @@ fn reconstruct_into(
                 });
                 (nodes.len() - 1) as i64
             }
+            18 => {
+                // EnumInit: arg packs byte_size * 1024 + count. The children are positional
+                // (the discriminant literal first, then the payload expressions), like an
+                // ArrayLit, so pop them in source order (no FieldPos) and build the codegen
+                // EnumInit node whose arg is the enum's flat byte size, lhs the child-slice
+                // start, rhs the child count.
+                let byte_size = arg.div_euclid(1024);
+                let count = arg.rem_euclid(1024);
+                let mut popped: Vec<i64> = (0..count)
+                    .map(|_| stack.pop().expect("enum child value"))
+                    .collect();
+                popped.reverse();
+                let args_start = call_args.len() as i64;
+                call_args.extend(popped);
+                nodes.push(Node {
+                    kind: 18,
+                    arg: byte_size,
+                    lhs: args_start,
+                    rhs: count,
+                });
+                (nodes.len() - 1) as i64
+            }
             other => panic!("reconstruct_body: unsupported node kind {other}"),
         };
         stack.push(idx);
@@ -2564,6 +2592,40 @@ fn self_host_compiles_an_array_literal() {
     );
     // Arithmetic elements, exercising the per-element operator drain at each `,`.
     assert_self_host_byte_identical("fn g(a: Word) -> [Word; 2] { [a + 1, a * 2] }");
+}
+
+// ENUM PAYLOAD construction `E::V(payload...)`: the declaration parser now records each
+// variant's payload byte sum (`epayload`), so a construction resolves the enum's flat body size
+// (eight for the discriminant plus the largest variant payload) and emits the discriminant
+// literal, the payload expressions, then NewComposite(Flat{Enum, count, byte_size}). Distinct
+// from the pre-existing `E::V() as Word` discriminant fold (unchanged). Byte-identity only, as
+// the result is a composite value. Single- and multi-field payloads, and an arithmetic payload
+// element (exercising the per-element drain), all lower like the reference. Payloads are
+// cast-free (Word/Byte values, not `<int literal> as Word`): the self-host Cast node lowers only
+// `Byte as Word`, and a literal `as Word` (FloatToInt) needs the type inference the pipeline
+// lacks -- an orthogonal, later increment.
+#[test]
+fn self_host_compiles_enum_payload_construction() {
+    // Single Word payload: byte_size = 8 + 8 = 16, count = 2.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn make(x: Word) -> E { E::A(x) }",
+    );
+    // Multi-field payload with a mixed-scalar largest variant: byte_size = 8 + (8 + 1) = 17.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B(Word, Byte), C }\n\
+         fn mb(w: Word, b: Byte) -> E { E::B(w, b) }",
+    );
+    // An arithmetic payload element drains the operator at the `)`.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn m(x: Word) -> E { E::A(x + x) }",
+    );
+    // The discriminant-fold form `E::V() as Word` must still lower to the bare discriminant.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn tag() -> Word { E::B() as Word }",
+    );
 }
 
 // NESTED-composite field access `s.i.x` on a struct-typed parameter, reusing the FlatNested
@@ -4527,7 +4589,7 @@ fn assemble_shared_layout(
 
 // The per-shared-slot byte layout the driver assembles from parse.kel's records equals
 // the reference compiler's, offset/kind/len for every element slot, for all four stage
-// sources (including lexer.kel's 98304-byte buffer whose later fields sit past 64 KB).
+// sources (including lexer.kel's 131072-byte buffer whose later fields sit past 64 KB).
 #[test]
 fn assembled_shared_layout_matches_the_reference() {
     let cases = [

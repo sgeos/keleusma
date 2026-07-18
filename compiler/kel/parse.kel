@@ -135,6 +135,11 @@ enum Node {
     // An array literal `[a, b, c]`: emits the element ops then NewComposite(Flat{Array, count,
     // byte_size}). Like a Call/StructInit, its elements ride the call_args side array.
     ArrayLit = 17,
+    // An enum construction `E::V(payload...)`: emits the discriminant literal, then the payload
+    // expressions, then NewComposite(Flat{Enum, count, byte_size}). The discriminant rides as
+    // element 0; `count` is one (the discriminant) plus the payload field count; `byte_size` is
+    // the enum's flat body size (eight for the discriminant plus the largest variant payload).
+    EnumInit = 18,
 }
 
 // The shunting-yard operator codes.
@@ -163,6 +168,7 @@ enum OpCode {
     YieldMark = 22,
     StructMark = 23,
     ArrayMark = 24,
+    EnumMark = 25,
 }
 
 // The merged parser state.
@@ -399,6 +405,14 @@ private data call {
     // the same `step_cdraining` (generalised to the ArrayMark), its `]` emits the ArrayLit.
     al_count: [Word; 8],
     al_sp: Word,
+    // The enum-construction context stack, parallel to the call stack: `en_count` the running
+    // child count per open `E::V(...)` construction (seeded at one for the discriminant, then
+    // one per payload element), `en_bytesize` the enum's flat body size resolved at the open,
+    // `en_sp` the nesting depth. Its `,` drains through `step_cdraining` (generalised to the
+    // EnumMark), its `)` emits the EnumInit via `step_closing`.
+    en_count: [Word; 8],
+    en_bytesize: [Word; 8],
+    en_sp: Word,
 }
 
 // The enum table, accumulated by the header as each `enum` block is parsed: `edata`/`evar`
@@ -410,9 +424,18 @@ private data enums {
     edata: [Word; 256],
     evar: [Word; 256],
     edisc: [Word; 256],
+    // Per variant row, the sum of that variant's payload field byte sizes (zero for a unit
+    // variant). A construction reads the enum's flat body size as eight (the discriminant) plus
+    // the largest `epayload` across the enum's variants; see `enum_bytesize`.
+    epayload: [Word; 256],
     enum_count: Word,
     cur_enum: Word,
     next_disc: Word,
+    // Scratch accumulators for `type_byte_size` (a struct payload field's size) and
+    // `enum_bytesize` (the running maximum variant payload). Used transiently within each helper;
+    // parse is sequential, so no reentrancy hazard.
+    esz_scratch: Word,
+    emax_scratch: Word,
 }
 
 // Struct type names, accumulated as each `struct` declaration's STRUCTSTART is emitted, so a
@@ -600,10 +623,49 @@ fn step_cfield(k: Word, v: Word) -> Word {
     }
 }
 
+// The flat byte size of a payload field type: a `Word` eight bytes, a `Byte`/`Bool` one, a
+// struct type its accumulated flat body size (zero for an unrecognised name). Mirrors
+// `field_size_and_kind` without recording a ScalarKind, as an enum payload's per-field kind is
+// unused until payload matching lands.
+fn type_byte_size(v: Word) -> Word {
+    if v == toks.word_id {
+        8
+    } else {
+    if v == toks.byte_id {
+        1
+    } else {
+    if v == toks.bool_id {
+        1
+    } else {
+        enums.esz_scratch = 0;
+        for i in 0..structdefs.sd_count limit 64 {
+            if structdefs.sd_name[i] == v {
+                enums.esz_scratch = structdefs.sd_bytesize[i];
+            }
+        }
+        enums.esz_scratch
+    } } }
+}
+
+// The flat body size of an enum: eight bytes for the discriminant plus the largest payload
+// across the enum's variants. A construction of any variant carries this same size, matching
+// the reference (every variant of an enum shares the enum's flat footprint).
+fn enum_bytesize(name: Word) -> Word {
+    enums.emax_scratch = 0;
+    for i in 0..enums.enum_count limit 256 {
+        if enums.edata[i] == name andalso enums.epayload[i] > enums.emax_scratch {
+            enums.emax_scratch = enums.epayload[i];
+        }
+    }
+    8 + enums.emax_scratch
+}
+
 // A `Name::Variant() as Word` cast, folded to the variant's discriminant literal. Phase 1
 // awaits `::`, phase 2 the variant (whose discriminant is looked up in the enum table),
 // phase 3 the `(`, phase 4 the `)`, phase 5 the `as`, phase 6 the target type, after which
-// a Literal carrying the discriminant is emitted.
+// a Literal carrying the discriminant is emitted. A phase-4 token other than `)` is a payload
+// construction `E::V(expr, ...)`: emit the discriminant as element 0, open an EnumMark context,
+// and re-dispatch the token so the payload parses normally (closed by `step_closing`).
 fn step_enum(k: Word, v: Word) -> Word {
     if mat.enum_phase == 1 {
         if k == Tok::ColCol() as Word {
@@ -632,8 +694,21 @@ fn step_enum(k: Word, v: Word) -> Word {
     if mat.enum_phase == 4 {
         if k == Tok::RParen() as Word {
             mat.enum_phase = 5;
+            0
+        } else {
+            // A payload construction `E::V(expr, ...)`. Emit the discriminant literal now (element
+            // 0), open an EnumMark context seeded at one child (the discriminant) with the enum's
+            // flat body size, and re-dispatch this first payload token through the normal path.
+            mat.enum_phase = 0;
+            call.en_count[call.en_sp] = 1;
+            call.en_bytesize[call.en_sp] = enum_bytesize(mat.enum_name);
+            call.en_sp = call.en_sp + 1;
+            ops.opstack[ops.opsp] = OpCode::EnumMark() as Word;
+            ops.opsp = ops.opsp + 1;
+            ops.expect_operand = 1;
+            ps.cursor = ps.cursor - 1;
+            Node::Literal() as Word + mat.enum_disc * 64
         }
-        0
     } else {
     if mat.enum_phase == 5 {
         if k == Tok::As() as Word {
@@ -821,6 +896,7 @@ fn prec_of(op: Word) -> Word {
         OpCode::CallMark() => 0,
         OpCode::StructMark() => 0,
         OpCode::ArrayMark() => 0,
+        OpCode::EnumMark() => 0,
         OpCode::Mul() => 8,
         OpCode::Div() => 8,
         OpCode::Mod() => 8,
@@ -902,9 +978,23 @@ fn step_closing() -> Word {
             ops.expect_operand = 0;
             Node::Call() as Word + (call.call_chunk[call.call_sp] + call.call_count[call.call_sp] * 256) * 64
         } else {
+        if top == OpCode::EnumMark() as Word {
+            // A `)` closing an enum payload construction: pop the mark, count the last payload
+            // element (when a value was parsed), and emit the EnumInit packing the enum's flat
+            // byte size and the child count as `byte_size * 1024 + count` -- the StructInit/
+            // ArrayLit shape reconstruct consumes.
+            ops.opsp = ops.opsp - 1;
+            ops.closing = 0;
+            if ops.expect_operand == 0 {
+                call.en_count[call.en_sp - 1] = call.en_count[call.en_sp - 1] + 1;
+            }
+            call.en_sp = call.en_sp - 1;
+            ops.expect_operand = 0;
+            Node::EnumInit() as Word + (call.en_bytesize[call.en_sp] * 1024 + call.en_count[call.en_sp]) * 64
+        } else {
             ops.opsp = ops.opsp - 1;
             emit_op(top)
-        } }
+        } } }
     } else {
         ops.closing = 0;
         0
@@ -914,7 +1004,7 @@ fn step_closing() -> Word {
 // A `,`: flush the current call argument's operators down to the call marker, then count
 // the argument.
 fn step_cdraining() -> Word {
-    if ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] != OpCode::CallMark() as Word andalso ops.opstack[ops.opsp - 1] != OpCode::StructMark() as Word andalso ops.opstack[ops.opsp - 1] != OpCode::ArrayMark() as Word {
+    if ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] != OpCode::CallMark() as Word andalso ops.opstack[ops.opsp - 1] != OpCode::StructMark() as Word andalso ops.opstack[ops.opsp - 1] != OpCode::ArrayMark() as Word andalso ops.opstack[ops.opsp - 1] != OpCode::EnumMark() as Word {
         ops.opsp = ops.opsp - 1;
         let op = ops.opstack[ops.opsp];
         emit_op(op)
@@ -934,10 +1024,16 @@ fn step_cdraining() -> Word {
             ops.expect_operand = 1;
             0
         } else {
+        if ops.opstack[ops.opsp - 1] == OpCode::EnumMark() as Word {
+            // A `,` between enum-payload elements: count the payload element just drained.
+            call.en_count[call.en_sp - 1] = call.en_count[call.en_sp - 1] + 1;
+            ops.expect_operand = 1;
+            0
+        } else {
             call.call_count[call.call_sp - 1] = call.call_count[call.call_sp - 1] + 1;
             ops.expect_operand = 1;
             0
-        } }
+        } } }
     }
 }
 
@@ -1928,6 +2024,7 @@ fn arm_body() -> Word {
     da.store_emit = 0;
     call.call_sp = 0;
     call.al_sp = 0;
+    call.en_sp = 0;
     call.call_phase = 0;
     call.cdraining = 0;
     ps.fa_phase = 0;
@@ -2120,9 +2217,12 @@ fn header_use(k: Word, v: Word) -> Word {
 
 // The enum declaration modes: 9 the enum name (emit ENUMSTART, dkind 12, and open the
 // accumulation), 10 the opening `{`, 11 a variant name (emit EVARIANT, dkind 13, and
-// record it with the running discriminant) or `}` ending the enum, 12 an explicit `= N`
-// discriminant, the next variant on `,`, or the `}`, and 13 the explicit discriminant
-// literal (emit EDISC, dkind 14, and reseed the running discriminant).
+// record it with the running discriminant) or `}` ending the enum, 12 an optional `(payload)`,
+// an explicit `= N` discriminant, the next variant on `,`, or the `}`, 13 the explicit
+// discriminant literal (emit EDISC, dkind 14, and reseed the running discriminant), and 14 the
+// variant's payload type list (each type ident sums into the variant's `epayload`, a `)`
+// returns to mode 12). The payload scan emits no header record; only the internal size table
+// grows, so the declaration record stream is unchanged.
 fn header_enum(k: Word, v: Word) -> Word {
     if ps.mode == 9 {
         if k == 1 {
@@ -2145,6 +2245,7 @@ fn header_enum(k: Word, v: Word) -> Word {
             enums.edata[enums.enum_count] = enums.cur_enum;
             enums.evar[enums.enum_count] = v;
             enums.edisc[enums.enum_count] = enums.next_disc;
+            enums.epayload[enums.enum_count] = 0;
             enums.enum_count = enums.enum_count + 1;
             enums.next_disc = enums.next_disc + 1;
             ps.mode = 12;
@@ -2158,6 +2259,10 @@ fn header_enum(k: Word, v: Word) -> Word {
         } }
     } else {
     if ps.mode == 12 {
+        if k == 7 {
+            ps.mode = 14;
+            0
+        } else {
         if k == 17 {
             ps.mode = 13;
             0
@@ -2171,7 +2276,19 @@ fn header_enum(k: Word, v: Word) -> Word {
             5
         } else {
             0
-        } } }
+        } } } }
+    } else {
+    if ps.mode == 14 {
+        if k == 1 {
+            enums.epayload[enums.enum_count - 1] = enums.epayload[enums.enum_count - 1] + type_byte_size(v);
+            0
+        } else {
+        if k == 8 {
+            ps.mode = 12;
+            0
+        } else {
+            0
+        } }
     } else {
         if k == 12 {
             enums.edisc[enums.enum_count - 1] = v;
@@ -2181,7 +2298,7 @@ fn header_enum(k: Word, v: Word) -> Word {
         } else {
             0
         }
-    } } } }
+    } } } } }
 }
 
 // The data-block declaration modes: 4 expect `data` after a modifier, 5 the block name

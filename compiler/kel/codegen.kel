@@ -202,6 +202,7 @@ const data wire {
     getfieldnested: Word = 48,
     getindex: Word = 49,
     newcompositearray: Word = 50,
+    newcompositeenum: Word = 51,
     radix: Word = 64,
     item: Word = 4,
     pack: Word = 65536,
@@ -764,6 +765,22 @@ fn push_array_lit(p: Word) -> Word {
     0
 }
 
+// EnumInit (kind 18): a flat enum construction `E::V(payload...)`. Emit the child ops (the
+// discriminant literal first, then the payload expressions, all positional) then a
+// NewComposite(Flat{Enum, count, byte_size}) (op tag 51), packed `count + byte_size*65536`,
+// exactly like an array literal but the Enum composite kind.
+fn push_enum_init(p: Word) -> Word {
+    let count = ast.rhs[p];
+    let byte_size = ast.args[p];
+    let start = ast.lhs[p];
+    push_emit(wire.newcompositeenum + (count + byte_size * wire.pack) * wire.radix);
+    for i in 0..count limit 64 {
+        let idx = start + count - 1 - i;
+        push_visit(ast.call_args[idx]);
+    }
+    0
+}
+
 // FieldAccess (kind 28): a flat struct field read `obj.f`. Emit the object ops, then
 // GetField(Flat{offset, kind}) (op tag 47), the two operands packed as
 // `offset + kind*65536` where `kind` is the field's ScalarKind tag (Int 3, Bool 1, ...).
@@ -1006,6 +1023,7 @@ fn walk_step() -> Word {
             30 => push_field_access_nested(payload),
             31 => push_arrindex(payload),
             17 => push_array_lit(payload),
+            18 => push_enum_init(payload),
             _ => 0,
         };
     }
