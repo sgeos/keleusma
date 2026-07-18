@@ -2713,6 +2713,33 @@ fn self_host_compiles_tuple_field_access() {
     assert_self_host_byte_identical("fn gx(t: (Word, Word)) -> Word { t.0 + t.1 }");
 }
 
+// A TUPLE-TYPED STRUCT FIELD in the flat layout: a `(T, T, ...)` struct field is sized as the sum
+// of its element byte sizes, so a following scalar field gets the correct flat offset -- exactly
+// as an array-typed struct field is sized element*length. `step_struct_tuple_field` scans the
+// field's tuple type in `header_field` and sums it into the struct byte size. A read of the scalar
+// field AFTER the tuple field (`s.tag`) lowers byte-identically to the reference (offset past the
+// whole tuple field). Reading the tuple field itself (`s.p.0`) would use the FlatNested form, a
+// later increment.
+#[test]
+fn self_host_compiles_a_tuple_typed_struct_field() {
+    // The tuple field `p` is 16 bytes, so `tag` sits at flat offset 16.
+    assert_self_host_byte_identical(
+        "struct S { p: (Word, Word), tag: Word }\n\
+         fn f(s: S) -> Word { s.tag }",
+    );
+    // A mixed-scalar tuple field (Word + Byte = 9 bytes) before a scalar.
+    assert_self_host_byte_identical(
+        "struct M { pair: (Word, Byte), n: Word }\n\
+         fn g(m: M) -> Word { m.n }",
+    );
+    // A scalar before and after the tuple field: `lead` at 0, tuple `p` at 8 (16 bytes), `tag`
+    // at 24.
+    assert_self_host_byte_identical(
+        "struct T { lead: Word, p: (Word, Word), tag: Word }\n\
+         fn gt(s: T) -> Word { s.tag }",
+    );
+}
+
 // NESTED-composite field access `s.i.x` on a struct-typed parameter, reusing the FlatNested
 // GetField: parse.kel emits a FieldAccessNested (the whole inner struct, GetField(FlatNested
 // {offset, size, Struct})) then a scalar FieldAccess (GetField(Flat{offset within inner,

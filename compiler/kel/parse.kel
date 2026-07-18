@@ -215,6 +215,11 @@ private data ps {
     ta_tuple: Word,
     tts: Word,
     tts_off: Word,
+    // The struct-field tuple-type scan: `tf` active while reading a `(T, T, ...)` STRUCT FIELD
+    // type, `tf_size` its running byte size (summed to size the field, so a following field's
+    // flat offset is correct). Distinct from `tts`, which scans a tuple PARAMETER type.
+    tf: Word,
+    tf_size: Word,
     fa_phase: Word,
     fa_struct: Word,
     // The just-resolved field's flat byte offset, ScalarKind (or element kind for an array),
@@ -2621,11 +2626,41 @@ fn field_size_and_kind(fidx: Word, v: Word) -> Word {
     } } }
 }
 
+// A token inside a struct field's tuple type `(T, T, ...)`. A type ident sums its size into the
+// running tuple-field size; the `)` records the field's total size, advances the struct byte
+// size (so a following field's flat offset is correct), and ends the scan. Emits no record, so
+// the declaration record stream is unchanged; only the internal layout gains the field's size.
+// The field's ScalarKind is left 0 (a whole-tuple field read would use the FlatNested form, a
+// later increment); only sizing is needed here.
+fn step_struct_tuple_field(k: Word, v: Word) -> Word {
+    if k == Tok::Ident() as Word {
+        ps.tf_size = ps.tf_size + type_byte_size(v);
+        0
+    } else {
+    if k == Tok::RParen() as Word {
+        if ps.dvis == 3 {
+            let cur = structdefs.sd_count - 1;
+            let fidx = structdefs.sd_fstart[cur] + structdefs.sd_fcount[cur] - 1;
+            structdefs.sd_fsize[fidx] = ps.tf_size;
+            structdefs.sd_fkind[fidx] = 0;
+            structdefs.sd_bytesize[cur] = structdefs.sd_bytesize[cur] + ps.tf_size;
+        }
+        ps.tf = 0;
+        0
+    } else {
+        0
+    } }
+}
+
 // The field list: a PARAM per field name, a PTYPE per type (with an ASIZE for an array
 // field), a const `=` opening an initializer skip, the closing `}` ending the block. Each
 // field name commits the previous field to the layout table and opens a new one (default
-// length 1); an ASIZE sets its length; the `}` commits the last field.
+// length 1); an ASIZE sets its length; the `}` commits the last field. A `(T, T, ...)` field
+// type routes through `step_struct_tuple_field` to size the tuple field.
 fn header_field(k: Word, v: Word) -> Word {
+    if ps.tf == 1 {
+        step_struct_tuple_field(k, v)
+    } else {
     if k == 1 {
         if ps.arr == 1 {
             ps.arr = 2;
@@ -2683,6 +2718,16 @@ fn header_field(k: Word, v: Word) -> Word {
         }
         0
     } else {
+    if k == 7 {
+        // A `(` opening a struct field's tuple type `(T, T, ...)`: scan its element types in
+        // `step_struct_tuple_field` to size the field.
+        if ps.ptype == 1 {
+            ps.ptype = 0;
+            ps.tf = 1;
+            ps.tf_size = 0;
+        }
+        0
+    } else {
     if k == 12 {
         if ps.arr == 2 {
             ps.arr = 0;
@@ -2720,7 +2765,7 @@ fn header_field(k: Word, v: Word) -> Word {
         5
     } else {
         0
-    } } } } } } }
+    } } } } } } } } }
 }
 
 // Mode 2: the signature scan, ending when the first `{` at depth zero arms the body walk.
