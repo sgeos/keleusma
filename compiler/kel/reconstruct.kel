@@ -226,6 +226,22 @@ fn step(k: Word, a: Word) -> Word {
         rs.ca = args_start + count;
         emit(17, byte_size, args_start, count)
     } else {
+    if k == 18 {
+        // EnumInit: `arg` packs `byte_size * 1024 + count`. The children are positional (the
+        // discriminant literal first, then the payload expressions), like an ArrayLit, so pop
+        // them in source order with no FieldPos and emit the EnumInit node whose arg is the
+        // enum's flat byte size, lhs the child-slice start, rhs the child count, which codegen's
+        // `push_enum_init` consumes.
+        let byte_size = a / 1024;
+        let count = a % 1024;
+        let args_start = rs.ca;
+        for j in 0..count limit 64 {
+            let node = pop();
+            io.call_args[args_start + count - 1 - j] = node;
+        }
+        rs.ca = args_start + count;
+        emit(18, byte_size, args_start, count)
+    } else {
     if k == 32 {
         // A SlotRecord carries one of the pending `for` loop's five frame slots.
         rs.pending[rs.pcount] = a;
@@ -290,7 +306,7 @@ fn step(k: Word, a: Word) -> Word {
         emit(22, base, scrut, lit_count)
     } else {
         0
-    } } } } } } } } } } } } }
+    } } } } } } } } } } } } } }
 }
 
 // Reconstruct one record range on a fresh work stack (the node array and the side

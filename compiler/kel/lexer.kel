@@ -59,13 +59,13 @@ require word >= 32;
 // name's bytes in `bytes`, so the host recovers the id-to-spelling map the parser
 // stage's `limit`/`require`/chunk-name inputs are expressed in without re-lexing.
 // The table lives in shared data (not private) precisely so the host can read it.
-// Sized to hold the parse.kel stage source (the largest stage, 68KB, ~870 distinct
+// Sized to hold the parse.kel stage source (the largest stage, ~100KB, ~870 distinct
 // identifiers). The wire-format V2 twenty-four-bit data operands raised the shared
 // segment ceiling from 64KB to 16MB, so `bytes` may exceed 64KB and the intern
 // arrays sit past a 64KB byte offset; the whole `src` block stays far under 16MB.
 shared data src {
     len: Word,
-    bytes: [Byte; 98304],
+    bytes: [Byte; 131072],
     istart: [Word; 1280],
     ilen: [Word; 1280],
     icount: Word,
