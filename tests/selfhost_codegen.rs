@@ -773,6 +773,12 @@ fn decode_op(w: i64) -> Op {
             count: (operand % 65536) as u16,
             byte_size: (operand / 65536) as u16,
         }),
+        // A flat tuple construction: same packing, Tuple composite kind.
+        52 => Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Tuple,
+            count: (operand % 65536) as u16,
+            byte_size: (operand / 65536) as u16,
+        }),
         // A flat struct field read: the operand packs offset + kind_tag*65536.
         47 => Op::GetField(StructField::Flat {
             offset: (operand % 65536) as u16,
@@ -1765,8 +1771,9 @@ fn self_compile_codegen_atomic_functions() {
     // struct construction and field access); 39 with `push_const_value` and `push_break`
     // for the user-written `break;` statement; 41 with `push_field_access_nested` and
     // `push_arrindex` for struct array-element access; 42 with `push_array_lit` for array
-    // literals; 43 with `push_enum_init` for enum payload construction.
-    const EXPECTED_SELF_COMPILE: usize = 43;
+    // literals; 43 with `push_enum_init` for enum payload construction; 44 with
+    // `push_tuple_init` for tuple construction.
+    const EXPECTED_SELF_COMPILE: usize = 44;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -2295,6 +2302,27 @@ fn reconstruct_into(
                 });
                 (nodes.len() - 1) as i64
             }
+            19 => {
+                // TupleInit: arg packs byte_size * 1024 + count (byte_size = count * word_bytes).
+                // Positional children like an ArrayLit (no FieldPos), popped in source order,
+                // then the codegen TupleInit node whose arg is the byte size, lhs the
+                // element-slice start, rhs the count.
+                let byte_size = arg.div_euclid(1024);
+                let count = arg.rem_euclid(1024);
+                let mut popped: Vec<i64> = (0..count)
+                    .map(|_| stack.pop().expect("tuple element value"))
+                    .collect();
+                popped.reverse();
+                let args_start = call_args.len() as i64;
+                call_args.extend(popped);
+                nodes.push(Node {
+                    kind: 19,
+                    arg: byte_size,
+                    lhs: args_start,
+                    rhs: count,
+                });
+                (nodes.len() - 1) as i64
+            }
             other => panic!("reconstruct_body: unsupported node kind {other}"),
         };
         stack.push(idx);
@@ -2626,6 +2654,29 @@ fn self_host_compiles_enum_payload_construction() {
         "enum E { A(Word), B }\n\
          fn tag() -> Word { E::B() as Word }",
     );
+}
+
+// TUPLE construction `(a, b, ...)`: a `(` in operand position first pushes a `Paren` marker
+// (grouping and a tuple are indistinguishable until a `,`); the first top-level `,` promotes it
+// to a `TupleMark` and the `)` emits the element ops then NewComposite(Flat{Tuple, count,
+// byte_size = count * word_bytes}) -- like an array literal but the Tuple composite kind, and
+// `(expr)` stays plain grouping. Byte-identity only, as the result is a composite. Word-sized
+// elements only (a mixed-scalar tuple's byte_size needs per-element type inference the pipeline
+// lacks), matching the array-literal limitation.
+#[test]
+fn self_host_compiles_a_tuple_construction() {
+    // A two- and three-element tuple: byte_size = count * 8.
+    assert_self_host_byte_identical("fn mk(a: Word, b: Word) -> (Word, Word) { (a, b) }");
+    assert_self_host_byte_identical(
+        "fn mk3(a: Word, b: Word, c: Word) -> (Word, Word, Word) { (a, b, c) }",
+    );
+    // Arithmetic elements, exercising the per-element operator drain at each `,`.
+    assert_self_host_byte_identical("fn g(a: Word) -> (Word, Word) { (a + 1, a * 2) }");
+    // A single `(expr)` is grouping, not a tuple: the Paren is never promoted.
+    assert_self_host_byte_identical("fn paren(a: Word) -> Word { (a) + 1 }");
+    // A parenthesised sub-expression as a tuple element keeps its grouping Paren distinct from
+    // the outer TupleMark.
+    assert_self_host_byte_identical("fn nest(a: Word, b: Word) -> (Word, Word) { ((a + b), b) }");
 }
 
 // NESTED-composite field access `s.i.x` on a struct-typed parameter, reusing the FlatNested
