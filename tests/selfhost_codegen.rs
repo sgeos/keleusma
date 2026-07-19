@@ -2801,6 +2801,31 @@ fn self_host_compiles_let_bound_composite_field_access() {
     assert_self_host_byte_identical("fn f(a: Word) -> Word { let t = (a + 1, a * 2); t.0 }");
 }
 
+// LET bound to a struct-returning CALL, then field access `let p = mk(); p.field`: the parser
+// records each function's struct return type (`chunkret.ret_struct`), so a `let` bound to such a
+// call tags the binding with the struct and `p.field` resolves -- byte-identical to the reference.
+// This closes the common `let x = constructor(); x.field` case (previously the call cleared the
+// pending composite type, leaving `x` untyped).
+#[test]
+fn self_host_compiles_let_bound_call_field_access() {
+    assert_self_host_byte_identical(
+        "struct P { a: Word, b: Word }\n\
+         fn mk() -> P { P { a: 5, b: 6 } }\n\
+         fn h() -> Word { let p = mk(); p.b }",
+    );
+    // Both fields, combined; and a call with an argument.
+    assert_self_host_byte_identical(
+        "struct P { a: Word, b: Word }\n\
+         fn mk(x: Word) -> P { P { a: x, b: x } }\n\
+         fn h(x: Word) -> Word { let p = mk(x); p.a + p.b }",
+    );
+    // A non-struct-returning call in a let stays untyped (no field access): the binding reads whole.
+    assert_self_host_byte_identical(
+        "fn dbl(x: Word) -> Word { x + x }\n\
+         fn h(x: Word) -> Word { let n = dbl(x); n + 1 }",
+    );
+}
+
 // LET-BOUND ARRAY element access `let a = [..]; a[i]`: a `let` whose value root is an array literal
 // records the binding's element kind (all-Word arrays, ScalarKind Int) so a later `a[i]` arms the
 // same ArrIndex/GetIndex postfix the struct array-field read uses, minus the FlatNested extraction

@@ -208,6 +208,9 @@ private data ps {
     pname: Word,
     ptype: Word,
     rtype: Word,
+    // The chunk index (into `toks.chunks`) of the function currently being declared, so its return
+    // type can be recorded in `chunkret`.
+    cur_chunk: Word,
     arr: Word,
     arr_ret: Word,
     dvis: Word,
@@ -536,6 +539,13 @@ private data enums {
     // parse is sequential, so no reentrancy hazard.
     esz_scratch: Word,
     emax_scratch: Word,
+}
+
+// Per chunk (function, indexed as in `toks.chunks`), the struct type it returns (its declaration
+// index plus one, else 0). A `let x = f()` bound to a call of a struct-returning function tags the
+// binding with that struct so `x.field` access resolves -- like a binding to a direct construction.
+private data chunkret {
+    ret_struct: [Word; 256],
 }
 
 // The tuple-parameter-type layout table, accumulated as each `(T, T, ...)` parameter type
@@ -1233,10 +1243,12 @@ fn step_closing() -> Word {
             }
             call.call_sp = call.call_sp - 1;
             ops.expect_operand = 0;
-            // A call is the value's root: clear the pending composite-type tracking (a call
-            // returning a composite is not a construction the parser can layout-track).
+            // A call is the value's root: set the pending composite type to the callee's struct
+            // return type (0 for a non-struct return), so a `let x = f()` bound to a struct-
+            // returning call tags the binding and `x.field` resolves. Tuple/array returns are not
+            // yet layout-tracked here, so they clear.
             stmt.pending_ctuple = 0;
-            stmt.pending_cstruct = 0;
+            stmt.pending_cstruct = chunkret.ret_struct[call.call_chunk[call.call_sp]];
             stmt.pending_carray = 0;
             Node::Call() as Word + (call.call_chunk[call.call_sp] + call.call_count[call.call_sp] * 256) * 64
         } else {
@@ -2550,6 +2562,14 @@ fn header_step(k: Word, v: Word) -> Word {
             ps.arr = 0;
             ps.arr_ret = 0;
             ps.pcount = 0;
+            // Capture this function's chunk index (its name's position in `toks.chunks`) so its
+            // return type is recorded against it.
+            ps.cur_chunk = 0;
+            for i in 0..toks.chunk_count limit 256 {
+                if toks.chunks[i] == v {
+                    ps.cur_chunk = i;
+                }
+            }
             ps.mode = 2;
             ps.dkind + v * 64
         } else {
@@ -3105,6 +3125,13 @@ fn header_sig(k: Word, v: Word) -> Word {
         } else {
             if ps.rtype == 1 {
                 ps.rtype = 0;
+                // Record a struct return type for the current chunk, so a `let x = f()` bound to a
+                // call of this function arms `x.field` access.
+                for i in 0..structdefs.sd_count limit 64 {
+                    if structdefs.sd_name[i] == v {
+                        chunkret.ret_struct[ps.cur_chunk] = i + 1;
+                    }
+                }
                 7 + v * 64
             } else {
                 0
