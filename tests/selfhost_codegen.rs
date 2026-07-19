@@ -32,7 +32,8 @@ use keleusma::ast::{
     Literal, Param, Pattern, Stmt, UnaryOp,
 };
 use keleusma::bytecode::{
-    ArrayElem, ConstValue, Module, NewCompositeOperand, Op, StructField, TupleField, Value,
+    ArrayElem, ConstValue, EnumField, Module, NewCompositeOperand, Op, StructField, TupleField,
+    Value,
 };
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
@@ -841,6 +842,21 @@ fn decode_op(w: i64) -> Op {
             ((operand / 1024) % 1024) as u16,
             (operand / 1048576) as u16,
         ),
+        // A flat enum-payload field read: operand packs offset + kind_tag*65536.
+        55 => Op::GetEnumField(EnumField::Flat {
+            offset: (operand % 65536) as u16,
+            kind: match operand / 65536 {
+                0 => ScalarKind::Unit,
+                1 => ScalarKind::Bool,
+                2 => ScalarKind::Byte,
+                3 => ScalarKind::Int,
+                4 => ScalarKind::Fixed,
+                5 => ScalarKind::Float,
+                6 => ScalarKind::Text,
+                7 => ScalarKind::Opaque,
+                other => panic!("bad scalar kind tag {other}"),
+            },
+        }),
         other => panic!("unknown op tag {other} (word {w})"),
     }
 }
@@ -2908,6 +2924,27 @@ fn self_host_compiles_an_enum_value_match() {
     assert_self_host_byte_identical(
         "enum E { A, B, C }\n\
          fn w2(e: E) -> Word { match e { E::A() => 1, E::B() => 2, _ => 0 } }",
+    );
+    // PAYLOAD binding: `E::A(x) => x` extracts the payload (GetEnumField) and binds it to a slot
+    // after the arm's test slot; the arm result resolves the bound variable.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn pb(e: E) -> Word { match e { E::A(x) => x, E::B() => 0 } }",
+    );
+    // The bound payload used in an arithmetic expression.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn pa(e: E) -> Word { match e { E::A(x) => x + 1, E::B() => 0 } }",
+    );
+    // A multi-field payload `E::B(w, b)`: two GetEnumField reads (offsets 8 and 16), binding both.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B(Word, Byte), C }\n\
+         fn mb(e: E) -> Word { match e { E::A(x) => x, E::B(w, b) => w, E::C() => 0 } }",
+    );
+    // A payload match with a wildcard.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B, C }\n\
+         fn pw(e: E) -> Word { match e { E::A(x) => x, _ => 0 } }",
     );
 }
 

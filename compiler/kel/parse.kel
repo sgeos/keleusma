@@ -162,6 +162,10 @@ enum Node {
     EnumMatch = 39,
     EnumArm = 40,
     EnumMatchBuild = 41,
+    // A payload bind in an enum match arm pattern `E::V(x)`: a marker packing the field's flat
+    // offset, ScalarKind, and the bind slot (`off + kind*65536 + slot*524288`), so codegen emits
+    // `GetLocal(temp), GetEnumField(Flat{offset, kind}), SetLocal(slot)` before the arm result.
+    EnumBind = 42,
 }
 
 // The shunting-yard operator codes.
@@ -401,6 +405,10 @@ private data mat {
     match_isenum: [Word; 8],
     match_ename: [Word; 8],
     mpat_vname: Word,
+    // The current arm pattern's variant row index (into `enums`) for its payload field layout, and
+    // the running payload bind count (also the field cursor while reading `E::V(x, y)` binds).
+    mpat_vrow: Word,
+    mpat_pcount: Word,
     // Per open enum-value match, whether it has a `_` wildcard arm (1). The wildcard's result is
     // emitted after the variant arms and before the Trap (a catch-all), with no IsEnum test.
     match_haswc: [Word; 8],
@@ -511,6 +519,15 @@ private data enums {
     // variant). A construction reads the enum's flat body size as eight (the discriminant) plus
     // the largest `epayload` across the enum's variants; see `enum_bytesize`.
     epayload: [Word; 256],
+    // Per variant row, the flat per-payload-field layout for a payload match `E::V(x, y)`:
+    // `evfstart`/`evfcount` bound the variant's field run in `evfoff`/`evfkind` (per-field flat
+    // byte offset -- eight for the discriminant plus preceding field sizes -- and ScalarKind).
+    // `evfcursor` is the running append cursor.
+    evfstart: [Word; 256],
+    evfcount: [Word; 256],
+    evfoff: [Word; 512],
+    evfkind: [Word; 512],
+    evfcursor: Word,
     enum_count: Word,
     cur_enum: Word,
     next_disc: Word,
@@ -929,9 +946,11 @@ fn step_mpat(k: Word, v: Word) -> Word {
         if k == Tok::Ident() as Word {
             mat.mpat_vname = v;
             mat.enum_disc = 0;
+            mat.mpat_vrow = 0;
             for i in 0..enums.enum_count limit 256 {
                 if enums.edata[i] == mat.enum_name andalso enums.evar[i] == v {
                     mat.enum_disc = enums.edisc[i];
+                    mat.mpat_vrow = i;
                 }
             }
             mat.mpat_phase = 3;
@@ -941,19 +960,46 @@ fn step_mpat(k: Word, v: Word) -> Word {
     if mat.mpat_phase == 3 {
         if k == Tok::LParen() as Word {
             mat.mpat_phase = 4;
+            if mat.match_isenum[mat.match_sp - 1] == 1 {
+                // Reserve this arm's IsEnum test slot before its payload bind slots, so parse's
+                // slot numbers match codegen's allocation (temp, then per arm: test, binds).
+                stmt.slot_count = stmt.slot_count + 1;
+                mat.mpat_pcount = 0;
+            }
         }
         0
     } else {
-        mat.mpat_phase = 0;
-        mat.match_argcount[mat.match_sp - 1] = mat.match_argcount[mat.match_sp - 1] + 1;
-        mat.match_phase[mat.match_sp - 1] = 3;
-        if mat.match_isenum[mat.match_sp - 1] == 1 {
-            // An enum-value match arm: emit an EnumArm marker carrying the variant name id and its
-            // discriminant (packed), for the IsEnum lowering; the arm result follows.
-            Node::EnumArm() as Word + (mat.mpat_vname * 65536 + mat.enum_disc) * 64
+        if mat.match_isenum[mat.match_sp - 1] == 1 andalso k == Tok::Ident() as Word {
+            // A payload bind variable `x` in `E::V(x)`: allocate its frame slot, register it as a
+            // let binding so the arm result resolves it, look up the field's flat offset and kind
+            // from the variant layout, and emit an EnumBind marker.
+            let slot = ps.pcount + stmt.slot_count;
+            stmt.slot_count = stmt.slot_count + 1;
+            stmt.let_names[stmt.let_count] = v;
+            stmt.scope_slot[stmt.let_count] = slot;
+            stmt.let_tuple[stmt.let_count] = 0;
+            stmt.let_struct[stmt.let_count] = 0;
+            stmt.let_array[stmt.let_count] = 0;
+            stmt.let_count = stmt.let_count + 1;
+            let fi = enums.evfstart[mat.mpat_vrow] + mat.mpat_pcount;
+            mat.mpat_pcount = mat.mpat_pcount + 1;
+            Node::EnumBind() as Word + (enums.evfoff[fi] + enums.evfkind[fi] * 65536 + slot * 524288) * 64
         } else {
-            Node::Literal() as Word + mat.enum_disc * 64
-        }
+        if k == Tok::Comma() as Word {
+            0
+        } else {
+            // `)`: the pattern is complete.
+            mat.mpat_phase = 0;
+            mat.match_argcount[mat.match_sp - 1] = mat.match_argcount[mat.match_sp - 1] + 1;
+            mat.match_phase[mat.match_sp - 1] = 3;
+            if mat.match_isenum[mat.match_sp - 1] == 1 {
+                // Emit an EnumArm marker packing the variant name, discriminant, and payload bind
+                // count for the IsEnum lowering; the arm result follows.
+                Node::EnumArm() as Word + ((mat.mpat_vname * 65536 + mat.enum_disc) * 8 + mat.mpat_pcount) * 64
+            } else {
+                Node::Literal() as Word + mat.enum_disc * 64
+            }
+        } }
     } } }
 }
 
@@ -2622,6 +2668,8 @@ fn header_enum(k: Word, v: Word) -> Word {
             enums.evar[enums.enum_count] = v;
             enums.edisc[enums.enum_count] = enums.next_disc;
             enums.epayload[enums.enum_count] = 0;
+            enums.evfstart[enums.enum_count] = enums.evfcursor;
+            enums.evfcount[enums.enum_count] = 0;
             enums.enum_count = enums.enum_count + 1;
             enums.next_disc = enums.next_disc + 1;
             ps.mode = 12;
@@ -2656,10 +2704,18 @@ fn header_enum(k: Word, v: Word) -> Word {
     } else {
     if ps.mode == 14 {
         if k == 1 {
-            enums.epayload[enums.enum_count - 1] = enums.epayload[enums.enum_count - 1] + type_byte_size(v);
+            // A payload field type: record its flat offset (8 + preceding field sizes) and
+            // ScalarKind for a later payload match, then add its size to the running sum.
+            let vi = enums.enum_count - 1;
+            let fi = enums.evfstart[vi] + enums.evfcount[vi];
+            enums.evfoff[fi] = 8 + enums.epayload[vi];
+            enums.evfkind[fi] = scalar_kind_of(v);
+            enums.evfcount[vi] = enums.evfcount[vi] + 1;
+            enums.epayload[vi] = enums.epayload[vi] + type_byte_size(v);
             0
         } else {
         if k == 8 {
+            enums.evfcursor = enums.evfstart[enums.enum_count - 1] + enums.evfcount[enums.enum_count - 1];
             ps.mode = 12;
             0
         } else {

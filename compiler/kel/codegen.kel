@@ -206,6 +206,7 @@ const data wire {
     newcompositetuple: Word = 52,
     gettuplefield: Word = 53,
     isenum: Word = 54,
+    getenumfield: Word = 55,
     radix: Word = 64,
     item: Word = 4,
     pack: Word = 65536,
@@ -1001,25 +1002,40 @@ fn push_enum_match(p: Word) -> Word {
     let ename = ast.match_parts[base + 1];
     let n = ast.rhs[p];
     let scrut = ast.lhs[p];
-    let haswc = ast.match_parts[base + 2 + n * 3];
-    st.let_count = st.let_count + 1 + n;
+    let haswc = ast.match_parts[base + 2 + n * 20];
+    st.let_count = st.let_count + 1;
     push_emit(wire.mendloop);
     push_emit(wire.trap + wire.nomatch * wire.radix);
     // A `_` wildcard's result and Break emit after the variant arms and before the Trap (pushed
     // here so the LIFO walk emits them in that order).
     if haswc == 1 {
         push_emit(wire.mbreak);
-        push_visit(ast.match_parts[base + 2 + n * 3 + 1]);
+        push_visit(ast.match_parts[base + 2 + n * 20 + 1]);
     }
     for j in 0..n limit 64 {
         let k = n - 1 - j;
-        let vname = ast.match_parts[base + 2 + k * 3];
-        let disc = ast.match_parts[base + 2 + k * 3 + 1];
-        let result = ast.match_parts[base + 2 + k * 3 + 2];
-        let testslot = temp + 1 + k;
+        let armb = base + 2 + k * 20;
+        let vname = ast.match_parts[armb];
+        let disc = ast.match_parts[armb + 1];
+        let result = ast.match_parts[armb + 2];
+        let pc = ast.match_parts[armb + 3];
+        let testslot = ast.match_parts[armb + 4];
+        st.let_count = st.let_count + 1 + pc;
         push_emit(wire.mendif);
         push_emit(wire.mbreak);
         push_visit(result);
+        // Payload binds emit after the If and before the result: per field, GetLocal(temp),
+        // GetEnumField(Flat{offset, kind}), SetLocal(bindslot). Pushed in reverse field order so
+        // the LIFO walk emits field 0 first.
+        for fj in 0..pc limit 4 {
+            let f = pc - 1 - fj;
+            let off = ast.match_parts[armb + 5 + f * 3];
+            let kind = ast.match_parts[armb + 5 + f * 3 + 1];
+            let slot = ast.match_parts[armb + 5 + f * 3 + 2];
+            push_emit(wire.setlocal + slot * wire.radix);
+            push_emit(wire.getenumfield + (off + kind * 65536) * wire.radix);
+            push_emit(wire.getlocal + temp * wire.radix);
+        }
         push_emit(wire.mif);
         push_emit(wire.getlocal + testslot * wire.radix);
         push_emit(wire.popn + 1 * wire.radix);
