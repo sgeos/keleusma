@@ -340,17 +340,17 @@ fn host_recovers_parser_metadata_from_lexer_output() {
 }
 
 // Flat shared-data slot indices of parse.kel's `toks` block, matching the parser
-// harness: len, packed[16384] (one `tok+payload*64` word per token), limit_id,
+// harness: len, packed[24576] (one `tok+payload*64` word per token), limit_id,
 // chunk_count, chunks[256], require_id, in declaration order.
 const P_LEN: usize = 0;
 const P_PACKED: usize = 1;
-const P_LIMIT_ID: usize = 1 + 16384;
-const P_CHUNK_COUNT: usize = 1 + 16384 + 1;
-const P_CHUNKS: usize = 1 + 16384 + 2;
-const P_REQUIRE_ID: usize = 1 + 16384 + 2 + 256;
-const P_WORD_ID: usize = 1 + 16384 + 2 + 256 + 1;
-const P_BYTE_ID: usize = 1 + 16384 + 2 + 256 + 2;
-const P_BOOL_ID: usize = 1 + 16384 + 2 + 256 + 3;
+const P_LIMIT_ID: usize = 1 + 24576;
+const P_CHUNK_COUNT: usize = 1 + 24576 + 1;
+const P_CHUNKS: usize = 1 + 24576 + 2;
+const P_REQUIRE_ID: usize = 1 + 24576 + 2 + 256;
+const P_WORD_ID: usize = 1 + 24576 + 2 + 256 + 1;
+const P_BYTE_ID: usize = 1 + 24576 + 2 + 256 + 2;
+const P_BOOL_ID: usize = 1 + 24576 + 2 + 256 + 3;
 
 /// Compile parse.kel on a 64MB thread; its deeply nested source overflows the
 /// default 2MB test-thread stack in the host compiler's recursive-descent parse.

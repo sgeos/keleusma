@@ -835,6 +835,12 @@ fn decode_op(w: i64) -> Op {
                 other => panic!("bad scalar kind tag {other}"),
             },
         }),
+        // An IsEnum test: operand packs ename_pool + vname_pool*1024 + disc_pool*1024*1024.
+        54 => Op::IsEnum(
+            (operand % 1024) as u16,
+            ((operand / 1024) % 1024) as u16,
+            (operand / 1048576) as u16,
+        ),
         other => panic!("unknown op tag {other} (word {w})"),
     }
 }
@@ -1795,8 +1801,9 @@ fn self_compile_codegen_atomic_functions() {
     // literals; 43 with `push_enum_init` for enum payload construction; 44 with
     // `push_tuple_init` for tuple construction; 45 with `push_tuple_field` for tuple field access;
     // 46 with `drain_tags` for the tagged constant-pool protocol; 47 with `push_strlit` for
-    // string literals; 49 with the extracted `intern_int`/`intern_str` pool-interning helpers.
-    const EXPECTED_SELF_COMPILE: usize = 49;
+    // string literals; 49 with the extracted `intern_int`/`intern_str` pool-interning helpers;
+    // 51 with `push_enum_isenum`/`push_enum_match` for enum-value match.
+    const EXPECTED_SELF_COMPILE: usize = 51;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -1831,13 +1838,13 @@ const BR_LEX_ICOUNT: usize = 1 + 131072 + 1280 + 1280;
 // word per token), then the scalar and chunk-table inputs.
 const BR_P_LEN: usize = 0;
 const BR_P_PACKED: usize = 1;
-const BR_P_LIMIT_ID: usize = 1 + 16384;
-const BR_P_CHUNK_COUNT: usize = 1 + 16384 + 1;
-const BR_P_CHUNKS: usize = 1 + 16384 + 2;
-const BR_P_REQUIRE_ID: usize = 1 + 16384 + 2 + 256;
-const BR_P_WORD_ID: usize = 1 + 16384 + 2 + 256 + 1;
-const BR_P_BYTE_ID: usize = 1 + 16384 + 2 + 256 + 2;
-const BR_P_BOOL_ID: usize = 1 + 16384 + 2 + 256 + 3;
+const BR_P_LIMIT_ID: usize = 1 + 24576;
+const BR_P_CHUNK_COUNT: usize = 1 + 24576 + 1;
+const BR_P_CHUNKS: usize = 1 + 24576 + 2;
+const BR_P_REQUIRE_ID: usize = 1 + 24576 + 2 + 256;
+const BR_P_WORD_ID: usize = 1 + 24576 + 2 + 256 + 1;
+const BR_P_BYTE_ID: usize = 1 + 24576 + 2 + 256 + 2;
+const BR_P_BOOL_ID: usize = 1 + 24576 + 2 + 256 + 3;
 
 fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
     match vm.get_shared(buf, slot).expect("get_shared") {
@@ -2860,6 +2867,38 @@ fn self_host_compiles_string_escapes() {
     assert_self_host_byte_identical("fn f() -> Text { \"back\\\\slash\" }"); // escaped backslash
     // Multiple escapes in one string, and an escaped quote that must not terminate early.
     assert_self_host_byte_identical("fn f() -> Text { \"line1\\nline2\\ttabbed\" }");
+}
+
+// ENUM-VALUE MATCH (Part A, unit variants): `match e { E::A() => .., E::B() => .. }` over an
+// enum-typed scrutinee lowers to the IsEnum virtual loop (GetLocal(temp), SetLocal(temp), Loop,
+// then per arm GetLocal(temp), IsEnum(ename, vname, disc), SetLocal(test), PopN(1),
+// GetLocal(test), If, <result>, Break, EndIf, then Trap, EndLoop), byte-identical to the
+// reference. The enum/variant names intern as StaticStr and the discriminant as Int; the IsEnum
+// interning is a process-time work item so the constant pool interleaves per arm exactly like the
+// reference. All-variant arms only (no wildcard); payload binding is Part B.
+#[test]
+fn self_host_compiles_an_enum_value_match() {
+    // Two variant arms with literal results (distinct Int constants per arm, interleaved pool).
+    let m = assert_self_host_byte_identical(
+        "enum E { A, B }\n\
+         fn f(e: E) -> Word { match e { E::A() => 100, E::B() => 200 } }",
+    );
+    let _ = m;
+    // Three variants.
+    assert_self_host_byte_identical(
+        "enum E { A, B, C }\n\
+         fn g(e: E) -> Word { match e { E::A() => 1, E::B() => 2, E::C() => 3 } }",
+    );
+    // Explicit discriminants.
+    assert_self_host_byte_identical(
+        "enum K { Lo = 10, Hi = 20 }\n\
+         fn h(k: K) -> Word { match k { K::Lo() => 1, K::Hi() => 2 } }",
+    );
+    // An arm result that is the scrutinee-independent parameter (a Local, no new constant).
+    assert_self_host_byte_identical(
+        "enum E { A, B }\n\
+         fn p(e: E, x: Word) -> Word { match e { E::A() => x, E::B() => x } }",
+    );
 }
 
 // NESTED-composite field access `s.i.x` on a struct-typed parameter, reusing the FlatNested

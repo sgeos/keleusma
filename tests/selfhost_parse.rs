@@ -51,13 +51,13 @@ use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capa
 // is one packed `tok+payload*64` word per token (not two `kinds`/`vals` arrays).
 const LEN: usize = 0;
 const PACKED: usize = 1;
-const LIMIT_ID: usize = 1 + 16384;
-const CHUNK_COUNT: usize = 1 + 16384 + 1;
-const CHUNKS: usize = 1 + 16384 + 2;
-const REQUIRE_ID: usize = 1 + 16384 + 2 + 256;
-const WORD_ID: usize = 1 + 16384 + 2 + 256 + 1;
-const BYTE_ID: usize = 1 + 16384 + 2 + 256 + 2;
-const BOOL_ID: usize = 1 + 16384 + 2 + 256 + 3;
+const LIMIT_ID: usize = 1 + 24576;
+const CHUNK_COUNT: usize = 1 + 24576 + 1;
+const CHUNKS: usize = 1 + 24576 + 2;
+const REQUIRE_ID: usize = 1 + 24576 + 2 + 256;
+const WORD_ID: usize = 1 + 24576 + 2 + 256 + 1;
+const BYTE_ID: usize = 1 + 24576 + 2 + 256 + 2;
+const BOOL_ID: usize = 1 + 24576 + 2 + 256 + 3;
 
 /// Map the reference token stream into the stage's unified `(kind, value)` pairs. The
 /// operator codes follow the retired body.kel scheme (`Plus` 21 upward); the header
