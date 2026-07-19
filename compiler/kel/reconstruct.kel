@@ -68,6 +68,10 @@ private data rs {
     mp: Word,
     pending: [Word; 8],
     pcount: Word,
+    // Per enum-value match, the EnumArm markers' packed `vname*65536 + disc` in source arm order;
+    // `epcount` the running count. Drained by EnumMatchBuild into the match_parts enum layout.
+    epending: [Word; 64],
+    epcount: Word,
     // The construction field-position stack, parallel to the node stack: a FieldPos record
     // pushes the next field value's declaration slot, and StructInit pops one per field value
     // to place it in declaration order (a construction may write fields out of order).
@@ -134,6 +138,33 @@ fn is_binary(k: Word) -> Word {
 
 fn is_unary(k: Word) -> Word {
     if k == 6 orelse k == 10 orelse k == 13 orelse k == 24 orelse k == 26 orelse k == 28 orelse k == 29 orelse k == 30 orelse k == 37 { 1 } else { 0 }
+}
+
+// EnumMatchBuild assembly: arg packs `temp + count*1024 + ename*1048576`. Pop `count` arm
+// results, read the `count` EnumArm (vname, disc) pairs from `epending`, pop the scrutinee, and
+// lay out the match_parts enum entry as [temp][ename][per arm: vname, disc, result]; build the
+// EnumMatch node (kind 39): arg the entry start, lhs the scrutinee, rhs the arm count. Held out of
+// `step` so that function's node forest stays within the codegen work buffers.
+fn build_enum_match(a: Word) -> Word {
+    let temp = a % 1024;
+    let count = (a / 1024) % 1024;
+    let ename = a / 1048576;
+    let base = rs.mp;
+    io.match_parts[base] = temp;
+    io.match_parts[base + 1] = ename;
+    for p in 0..count limit 64 {
+        let res = pop();
+        let arm = count - 1 - p;
+        io.match_parts[base + 2 + arm * 3 + 2] = res;
+    }
+    for kk in 0..count limit 64 {
+        io.match_parts[base + 2 + kk * 3] = rs.epending[kk] / 65536;
+        io.match_parts[base + 2 + kk * 3 + 1] = rs.epending[kk] % 65536;
+    }
+    rs.mp = base + 2 + count * 3;
+    rs.epcount = 0;
+    let scrut = pop();
+    emit(39, base, scrut, count)
 }
 
 // Process one record, folding it into a node and leaving that node's index on the
@@ -320,8 +351,19 @@ fn step(k: Word, a: Word) -> Word {
         let scrut = pop();
         emit(22, base, scrut, lit_count)
     } else {
+    if k == 40 {
+        // EnumArm marker: record this arm's packed (vname, disc) in source order. Emits no node.
+        rs.epending[rs.epcount] = a;
+        rs.epcount = rs.epcount + 1;
         0
-    } } } } } } } } } } } } } } }
+    } else {
+    if k == 41 {
+        // EnumMatchBuild: assemble the IsEnum-loop match_parts and build the EnumMatch node.
+        // Held in its own function to keep `step`'s node forest within the codegen work buffers.
+        build_enum_match(a)
+    } else {
+        0
+    } } } } } } } } } } } } } } } } }
 }
 
 // Reconstruct one record range on a fresh work stack (the node array and the side
