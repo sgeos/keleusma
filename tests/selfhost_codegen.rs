@@ -2899,6 +2899,16 @@ fn self_host_compiles_an_enum_value_match() {
         "enum E { A, B }\n\
          fn p(e: E, x: Word) -> Word { match e { E::A() => x, E::B() => x } }",
     );
+    // A `_` wildcard catch-all arm: emitted after the variant arms, before the Trap, with no test.
+    assert_self_host_byte_identical(
+        "enum E { A, B, C }\n\
+         fn w(e: E) -> Word { match e { E::A() => 1, _ => 9 } }",
+    );
+    // Two variant arms then a wildcard.
+    assert_self_host_byte_identical(
+        "enum E { A, B, C }\n\
+         fn w2(e: E) -> Word { match e { E::A() => 1, E::B() => 2, _ => 0 } }",
+    );
 }
 
 // NESTED-composite field access `s.i.x` on a struct-typed parameter, reusing the FlatNested

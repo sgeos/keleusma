@@ -148,10 +148,18 @@ fn is_unary(k: Word) -> Word {
 fn build_enum_match(a: Word) -> Word {
     let temp = a % 1024;
     let count = (a / 1024) % 1024;
-    let ename = a / 1048576;
+    let haswc = (a / 1048576) % 2;
+    let ename = a / 2097152;
     let base = rs.mp;
     io.match_parts[base] = temp;
     io.match_parts[base + 1] = ename;
+    // The wildcard result (if any) is on top of the stack, above the variant-arm results. Pop it
+    // first, then the `count` variant results in reverse (source order into the parts), then the
+    // scrutinee. The wildcard flag and result sit just past the per-arm entries.
+    io.match_parts[base + 2 + count * 3] = haswc;
+    if haswc == 1 {
+        io.match_parts[base + 2 + count * 3 + 1] = pop();
+    }
     for p in 0..count limit 64 {
         let res = pop();
         let arm = count - 1 - p;
@@ -161,7 +169,7 @@ fn build_enum_match(a: Word) -> Word {
         io.match_parts[base + 2 + kk * 3] = rs.epending[kk] / 65536;
         io.match_parts[base + 2 + kk * 3 + 1] = rs.epending[kk] % 65536;
     }
-    rs.mp = base + 2 + count * 3;
+    rs.mp = base + 2 + count * 3 + 2;
     rs.epcount = 0;
     let scrut = pop();
     emit(39, base, scrut, count)
