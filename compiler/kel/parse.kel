@@ -211,6 +211,11 @@ private data ps {
     // The chunk index (into `toks.chunks`) of the function currently being declared, so its return
     // type can be recorded in `chunkret`.
     cur_chunk: Word,
+    // The return-type tuple scan `-> (T, T, ...)`: `rtts` active, `rtts_count` the element count,
+    // `rtts_allword` 1 while every element so far is a `Word` (a mixed tuple is not layout-tracked).
+    rtts: Word,
+    rtts_count: Word,
+    rtts_allword: Word,
     arr: Word,
     arr_ret: Word,
     dvis: Word,
@@ -541,11 +546,14 @@ private data enums {
     emax_scratch: Word,
 }
 
-// Per chunk (function, indexed as in `toks.chunks`), the struct type it returns (its declaration
-// index plus one, else 0). A `let x = f()` bound to a call of a struct-returning function tags the
-// binding with that struct so `x.field` access resolves -- like a binding to a direct construction.
+// Per chunk (function, indexed as in `toks.chunks`), the composite type it returns, so a
+// `let x = f()` bound to a call tags the binding like a direct construction. `ret_struct` is the
+// returned struct's declaration index plus one (else 0). `ret_tuple` is the element count of an
+// all-Word tuple return (>= 2, else 0), so a let-bound tuple call arms `x.N` access (all-Word
+// only, matching tuple construction).
 private data chunkret {
     ret_struct: [Word; 256],
+    ret_tuple: [Word; 256],
 }
 
 // The tuple-parameter-type layout table, accumulated as each `(T, T, ...)` parameter type
@@ -838,6 +846,30 @@ fn scalar_kind_of(v: Word) -> Word {
     } else {
         0
     } } }
+}
+
+// A token inside a return-type tuple `-> (T, T, ...)` during the signature scan. Counts the
+// elements and tracks whether all are `Word`; the `)` records the count for the current chunk (so
+// a let bound to a call of this function arms `x.N` access) only when the tuple is all-Word. Emits
+// no signature record, matching the prior (skipped) handling of a tuple return type.
+fn step_ret_tuple_type(k: Word, v: Word) -> Word {
+    if k == Tok::Ident() as Word {
+        ps.rtts_count = ps.rtts_count + 1;
+        if v != toks.word_id {
+            ps.rtts_allword = 0;
+        }
+        0
+    } else {
+    if k == Tok::RParen() as Word {
+        if ps.rtts_allword == 1 {
+            chunkret.ret_tuple[ps.cur_chunk] = ps.rtts_count;
+        }
+        ps.rtts = 0;
+        ps.rtype = 0;
+        0
+    } else {
+        0
+    } }
 }
 
 // A token inside a tuple parameter type `(T, T, ...)` during the signature scan. A type ident
@@ -1243,11 +1275,10 @@ fn step_closing() -> Word {
             }
             call.call_sp = call.call_sp - 1;
             ops.expect_operand = 0;
-            // A call is the value's root: set the pending composite type to the callee's struct
-            // return type (0 for a non-struct return), so a `let x = f()` bound to a struct-
-            // returning call tags the binding and `x.field` resolves. Tuple/array returns are not
-            // yet layout-tracked here, so they clear.
-            stmt.pending_ctuple = 0;
+            // A call is the value's root: set the pending composite type to the callee's struct or
+            // all-Word-tuple return type (0 otherwise), so a `let x = f()` bound to the call tags
+            // the binding and `x.field`/`x.N` resolves. Array returns are not yet tracked, so clear.
+            stmt.pending_ctuple = chunkret.ret_tuple[call.call_chunk[call.call_sp]];
             stmt.pending_cstruct = chunkret.ret_struct[call.call_chunk[call.call_sp]];
             stmt.pending_carray = 0;
             Node::Call() as Word + (call.call_chunk[call.call_sp] + call.call_count[call.call_sp] * 256) * 64
@@ -3077,6 +3108,10 @@ fn header_field(k: Word, v: Word) -> Word {
 
 // Mode 2: the signature scan, ending when the first `{` at depth zero arms the body walk.
 fn header_sig(k: Word, v: Word) -> Word {
+    if ps.rtts == 1 {
+        // Inside a return-type tuple `-> (T, T, ...)`: count its all-Word elements for the chunk.
+        step_ret_tuple_type(k, v)
+    } else {
     if ps.tts == 1 {
         // Inside a tuple parameter type `(T, T, ...)`: the element types feed the tuple layout.
         step_tuple_type(k, v)
@@ -3173,6 +3208,14 @@ fn header_sig(k: Word, v: Word) -> Word {
             ps.tts_off = 0;
             0
         } else {
+        if ps.rtype == 1 andalso ps.pdepth == 0 {
+            // A return-type tuple `-> (T, T, ...)`: count its all-Word elements in
+            // `step_ret_tuple_type` (no pdepth change; the tuple's `(`/`)` are consumed by rtts).
+            ps.rtts = 1;
+            ps.rtts_count = 0;
+            ps.rtts_allword = 1;
+            0
+        } else {
             ps.pdepth = ps.pdepth + 1;
             if ps.pdepth == 1 {
                 if ps.pdone == 0 {
@@ -3180,7 +3223,7 @@ fn header_sig(k: Word, v: Word) -> Word {
                 }
             }
             0
-        }
+        } }
     } else {
     if k == 8 {
         ps.pdepth = ps.pdepth - 1;
@@ -3219,7 +3262,7 @@ fn header_sig(k: Word, v: Word) -> Word {
         } else {
             0
         }
-    } } } } } } } } }
+    } } } } } } } } } }
 }
 
 fn step() -> Word {

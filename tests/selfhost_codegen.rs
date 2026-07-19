@@ -2824,6 +2824,17 @@ fn self_host_compiles_let_bound_call_field_access() {
         "fn dbl(x: Word) -> Word { x + x }\n\
          fn h(x: Word) -> Word { let n = dbl(x); n + 1 }",
     );
+    // LET bound to a TUPLE-returning call, then index access `let t = mk(); t.N`: the parser records
+    // the function's all-Word tuple return element count (`chunkret.ret_tuple`), so the binding is
+    // tagged and `t.N` resolves through the same postfix a let-bound tuple construction uses.
+    assert_self_host_byte_identical(
+        "fn mk(a: Word, b: Word) -> (Word, Word) { (a, b) }\n\
+         fn h(a: Word, b: Word) -> Word { let t = mk(a, b); t.1 }",
+    );
+    assert_self_host_byte_identical(
+        "fn mk3(a: Word, b: Word, c: Word) -> (Word, Word, Word) { (a, b, c) }\n\
+         fn h3(a: Word, b: Word, c: Word) -> Word { let t = mk3(a, b, c); t.0 + t.2 }",
+    );
 }
 
 // LET-BOUND ARRAY element access `let a = [..]; a[i]`: a `let` whose value root is an array literal
