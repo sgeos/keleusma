@@ -401,6 +401,9 @@ private data mat {
     match_isenum: [Word; 8],
     match_ename: [Word; 8],
     mpat_vname: Word,
+    // Per open enum-value match, whether it has a `_` wildcard arm (1). The wildcard's result is
+    // emitted after the variant arms and before the Trap (a catch-all), with no IsEnum test.
+    match_haswc: [Word; 8],
 }
 
 // The data-field layout table, accumulated by the header as each `data` block is parsed
@@ -1359,6 +1362,7 @@ fn step_op(k: Word) -> Word {
         mat.match_phase[mat.match_sp] = 1;
         mat.match_argcount[mat.match_sp] = 0;
         mat.match_isenum[mat.match_sp] = 0;
+        mat.match_haswc[mat.match_sp] = 0;
         mat.match_sp = mat.match_sp + 1;
         ops.expect_operand = 1;
         0
@@ -1505,6 +1509,8 @@ fn step_match(k: Word, v: Word) -> Word {
         } else {
         if k == Tok::Underscore() as Word {
             mat.match_phase[sp] = 3;
+            // A `_` wildcard arm: its result becomes the enum match's catch-all (no IsEnum test).
+            mat.match_haswc[sp] = 1;
             0
         } else {
         if k == Tok::Ident() as Word {
@@ -1558,9 +1564,10 @@ fn step_match_build() -> Word {
     ops.expect_operand = 0;
     stmt.blockform = 1;
     if mat.match_isenum[sp] == 1 {
-        // An enum-value match: emit the EnumMatchBuild signal packing temp, arm count, and the
-        // enum name id. reconstruct assembles the IsEnum-loop parts and emits an EnumMatch node.
-        Node::EnumMatchBuild() as Word + (temp + ac * 1024 + mat.match_ename[sp] * 1048576) * 64
+        // An enum-value match: emit the EnumMatchBuild signal packing temp, arm count, the
+        // wildcard flag, and the enum name id. reconstruct assembles the IsEnum-loop parts and
+        // emits an EnumMatch node.
+        Node::EnumMatchBuild() as Word + (temp + ac * 1024 + mat.match_haswc[sp] * 1048576 + mat.match_ename[sp] * 2097152) * 64
     } else {
         Node::MatchBuild() as Word + (temp * 1024 + ac) * 64
     }
