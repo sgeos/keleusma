@@ -1795,8 +1795,8 @@ fn self_compile_codegen_atomic_functions() {
     // literals; 43 with `push_enum_init` for enum payload construction; 44 with
     // `push_tuple_init` for tuple construction; 45 with `push_tuple_field` for tuple field access;
     // 46 with `drain_tags` for the tagged constant-pool protocol; 47 with `push_strlit` for
-    // string literals.
-    const EXPECTED_SELF_COMPILE: usize = 47;
+    // string literals; 49 with the extracted `intern_int`/`intern_str` pool-interning helpers.
+    const EXPECTED_SELF_COMPILE: usize = 49;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"

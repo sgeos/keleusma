@@ -436,7 +436,14 @@ fn emit_op(word: Word) -> Word {
 // bounded scan (the scan bound is the pool capacity; the live-count guard skips
 // unfilled slots), then schedule `Const(index)`.
 fn push_literal(p: Word) -> Word {
-    let value = ast.args[p];
+    push_emit(wire.konst + intern_int(ast.args[p]) * wire.radix)
+}
+
+// Intern an Int `value` into the constant pool, deduplicating among Int (tag-0) entries, and
+// return its pool index. The shared interning core for `push_literal`/`push_const_value` and the
+// `IsEnum` discriminant operand; the tag-aware dedup keeps Int and StaticStr entries distinct even
+// when an Int value equals a StaticStr's intern id.
+fn intern_int(value: Word) -> Word {
     st.dup_idx = st.pool_count;
     for i in 0..st.pool_count limit 64 {
         if st.pool[i] == value andalso st.pool_tag[i] == 0 {
@@ -449,14 +456,13 @@ fn push_literal(p: Word) -> Word {
         st.pool_tag[st.pool_count] = 0;
         st.pool_count = st.pool_count + 1;
     }
-    push_emit(wire.konst + idx * wire.radix)
+    idx
 }
 
-// StrLit (kind 38): a string literal. Intern its content (the lexer intern id in `args`) as a
-// StaticStr pool entry (tag 1, deduplicating among StaticStr entries by intern id, since a given
-// string has one id), then schedule `Const(index)`. The host resolves the id to the string bytes.
-fn push_strlit(p: Word) -> Word {
-    let id = ast.args[p];
+// Intern a StaticStr (the lexer intern `id` of the string content) into the pool, deduplicating
+// among StaticStr (tag-1) entries, and return its pool index. The shared core for `push_strlit`
+// and the `IsEnum` enum-name/variant-name operands.
+fn intern_str(id: Word) -> Word {
     st.dup_idx = st.pool_count;
     for i in 0..st.pool_count limit 64 {
         if st.pool[i] == id andalso st.pool_tag[i] == 1 {
@@ -469,7 +475,13 @@ fn push_strlit(p: Word) -> Word {
         st.pool_tag[st.pool_count] = 1;
         st.pool_count = st.pool_count + 1;
     }
-    push_emit(wire.konst + idx * wire.radix)
+    idx
+}
+
+// StrLit (kind 38): a string literal. Intern its content (the lexer intern id in `args`) as a
+// StaticStr pool entry and schedule `Const(index)`. The host resolves the id to the string bytes.
+fn push_strlit(p: Word) -> Word {
+    push_emit(wire.konst + intern_str(ast.args[p]) * wire.radix)
 }
 
 // Local (kind 2): schedule GetLocal(slot).
@@ -870,19 +882,7 @@ fn push_arrindex(p: Word) -> Word {
 // its `Const(index)`. Used where a constant has no Literal node, such as a `break`'s outcome
 // code.
 fn push_const_value(value: Word) -> Word {
-    st.dup_idx = st.pool_count;
-    for i in 0..st.pool_count limit 64 {
-        if st.pool[i] == value andalso st.pool_tag[i] == 0 {
-            st.dup_idx = i;
-        }
-    }
-    let idx = st.dup_idx;
-    if idx == st.pool_count {
-        st.pool[st.pool_count] = value;
-        st.pool_tag[st.pool_count] = 0;
-        st.pool_count = st.pool_count + 1;
-    }
-    push_emit(wire.konst + idx * wire.radix)
+    push_emit(wire.konst + intern_int(value) * wire.radix)
 }
 
 // Break (kind 29): a user `break;` statement inside a `for .. limit` loop. The reference
