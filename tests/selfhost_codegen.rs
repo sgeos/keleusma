@@ -2990,6 +2990,13 @@ fn self_host_compiles_an_enum_value_match() {
          fn mk(x: Word) -> E { E::A(x) }\n\
          fn h(x: Word) -> Word { let e = mk(x); match e { E::A(y) => y, E::B() => 0 } }",
     );
+    // A LET bound to an enum CONSTRUCTION, then matched: `let e = E::A(x); match e { ... }`. The
+    // EnumInit tags the binding enum-typed (via the construction's enum name), so the match lowers
+    // to the IsEnum loop.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn h(x: Word) -> Word { let e = E::A(x); match e { E::A(y) => y, E::B() => 0 } }",
+    );
 }
 
 // NESTED-composite field access `s.i.x` on a struct-typed parameter, reusing the FlatNested

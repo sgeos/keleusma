@@ -509,6 +509,9 @@ private data call {
     // EnumMark), its `)` emits the EnumInit via `step_closing`.
     en_count: [Word; 8],
     en_bytesize: [Word; 8],
+    // Per open enum construction, the enum's name id, so a `let e = E::A(x)` binding is tagged
+    // enum-typed for a following `match e`.
+    en_ename: [Word; 8],
     en_sp: Word,
     // The tuple-construction context stack, parallel to the array-literal stack: `tp_count` the
     // running element count per open `(...)` tuple, `tp_sp` the nesting depth. A `(` first pushes
@@ -967,6 +970,7 @@ fn step_enum(k: Word, v: Word) -> Word {
             mat.enum_phase = 0;
             call.en_count[call.en_sp] = 1;
             call.en_bytesize[call.en_sp] = enum_bytesize(mat.enum_name);
+            call.en_ename[call.en_sp] = mat.enum_name;
             call.en_sp = call.en_sp + 1;
             ops.opstack[ops.opsp] = OpCode::EnumMark() as Word;
             ops.opsp = ops.opsp + 1;
@@ -1313,6 +1317,12 @@ fn step_closing() -> Word {
             }
             call.en_sp = call.en_sp - 1;
             ops.expect_operand = 0;
+            // An enum construction is the value's root: tag the pending composite type with the
+            // enum, so a `let e = E::A(x)` binding is enum-typed for a following `match e`.
+            stmt.pending_ctuple = 0;
+            stmt.pending_cstruct = 0;
+            stmt.pending_carray = 0;
+            stmt.pending_cenum = call.en_ename[call.en_sp] + 1;
             Node::EnumInit() as Word + (call.en_bytesize[call.en_sp] * 1024 + call.en_count[call.en_sp]) * 64
         } else {
         if top == OpCode::TupleMark() as Word {
