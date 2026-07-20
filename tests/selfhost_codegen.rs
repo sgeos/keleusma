@@ -821,6 +821,17 @@ fn decode_op(w: i64) -> Op {
                 other => panic!("bad scalar kind tag {other}"),
             },
         }),
+        // A flat-nested array-element read: operand packs size + variant*65536.
+        56 => Op::GetIndex(ArrayElem::FlatNested {
+            size: (operand % 65536) as u16,
+            variant: match operand / 65536 {
+                0 => CompositeKind::Tuple,
+                1 => CompositeKind::Array,
+                2 => CompositeKind::Struct,
+                3 => CompositeKind::Enum,
+                other => panic!("bad composite variant tag {other}"),
+            },
+        }),
         // A flat tuple field read: operand packs offset + kind_tag*65536.
         53 => Op::GetTupleField(TupleField::Flat {
             offset: (operand % 65536) as u16,
@@ -1818,8 +1829,9 @@ fn self_compile_codegen_atomic_functions() {
     // `push_tuple_init` for tuple construction; 45 with `push_tuple_field` for tuple field access;
     // 46 with `drain_tags` for the tagged constant-pool protocol; 47 with `push_strlit` for
     // string literals; 49 with the extracted `intern_int`/`intern_str` pool-interning helpers;
-    // 51 with `push_enum_isenum`/`push_enum_match` for enum-value match.
-    const EXPECTED_SELF_COMPILE: usize = 51;
+    // 51 with `push_enum_isenum`/`push_enum_match` for enum-value match; 52 with
+    // `push_arrindex_nested` for array-of-struct parameter element access.
+    const EXPECTED_SELF_COMPILE: usize = 52;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -3070,6 +3082,24 @@ fn self_host_compiles_a_scalar_array_parameter() {
     // A second array parameter alongside a scalar, each indexed.
     assert_self_host_byte_identical(
         "fn f(a: [Word; 2], b: [Word; 2], i: Word) -> Word { a[i] + b[0] }",
+    );
+}
+
+#[test]
+fn self_host_compiles_an_array_of_struct_parameter() {
+    // An array-of-STRUCT parameter `ps: [P; N]`, element-then-field accessed (`ps[i].x`). The
+    // element is a nested composite, so `ps[i]` emits GetIndex(FlatNested{size, Struct}) (extracting
+    // element i's bytes as a struct value, op tag 56, operand size + variant*65536) and the trailing
+    // `.field` reads into it via the ordinary struct field-access postfix (GetField(Flat{..})).
+    // `header_sig`'s array branch detects the struct element type and records the struct's decl
+    // index and byte size in `ps.parray_struct`/`ps.parray_size`; `resolve_plain_ident` arms a
+    // struct-array postfix (`ps.sa_phase`). Byte-identical to the reference.
+    assert_self_host_byte_identical("struct P { x: Word }\nfn f(ps: [P; 3]) -> Word { ps[1].x }");
+    // A multi-field element struct, a runtime index, and two accesses in an expression: the second
+    // field (`y`) sits at flat offset 8 within the extracted element.
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\n\
+         fn f(ps: [P; 3], i: Word) -> Word { ps[i].x + ps[0].y }",
     );
 }
 

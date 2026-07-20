@@ -133,6 +133,11 @@ enum Node {
     // A flat array-element read `p.xs[i]`: emits GetIndex(Flat{element kind}). lhs = the array
     // value (a FieldAccessNested), rhs = the index expression.
     ArrIndex = 31,
+    // A flat-NESTED array-element read `ps[i]` where each element is a composite (a struct): emits
+    // GetIndex(FlatNested{size, variant}), extracting element i's bytes as a composite value. arg
+    // packs size + variant*65536; lhs = the array value (a Local), rhs = the index. A following
+    // `.field` reads into the extracted composite via the ordinary field-access postfix.
+    ArrIndexNested = 43,
     // An array literal `[a, b, c]`: emits the element ops then NewComposite(Flat{Array, count,
     // byte_size}). Like a Call/StructInit, its elements ride the call_args side array.
     ArrayLit = 17,
@@ -246,6 +251,16 @@ private data ps {
     // ScalarKind plus one, so a body `xs[i]` access arms the array-index postfix and emits
     // GetIndex(Flat{kind}). Mirrors a let-bound array (`stmt.let_array`) for a parameter.
     parray: [Word; 32],
+    // Per value-parameter array-of-STRUCT binding: 0 if the element is not a declared struct, else
+    // the struct's declaration index plus one; `parray_size` the struct's flat byte size. A body
+    // `ps[i]` extracts element i as a nested struct (GetIndex(FlatNested{size, Struct})) and a
+    // following `.field` reads into it. `sa_phase`/`sa_struct`/`sa_size` are the postfix sub-state
+    // after such a parameter Local was emitted (1 awaits an optional `[`).
+    parray_struct: [Word; 32],
+    parray_size: [Word; 32],
+    sa_phase: Word,
+    sa_struct: Word,
+    sa_size: Word,
     // The array-access postfix after a let-bound array Local was emitted: `aa_phase` 1 awaits an
     // optional `[`, `aa_kind` the element ScalarKind for the GetIndex operand.
     aa_phase: Word,
@@ -482,9 +497,16 @@ private data da {
     iclosing: Word,
     // Set while an open `[...]` index belongs to a struct array-field access (`p.xs[i]`) rather
     // than a data-field index, so its closing `]` emits an ArrIndex (GetIndex) of the element
-    // kind instead of a data IndexRead. Nested struct-array indices are not supported.
+    // kind instead of a data IndexRead.
     fa_index: Word,
     fa_index_kind: Word,
+    // Set while an open `[...]` index belongs to an array-of-STRUCT access (`ps[i]`): the closing
+    // `]` emits an ArrIndexNested (GetIndex(FlatNested{size, Struct})) instead of a scalar ArrIndex,
+    // and arms the field-access postfix for the following `.field`. `fa_index_size` the element
+    // struct's byte size, `fa_index_struct` its declaration index (to arm the field postfix).
+    fa_index_nested: Word,
+    fa_index_size: Word,
+    fa_index_struct: Word,
     post_index: Word,
     pidx_base: Word,
     pidx_len: Word,
@@ -739,6 +761,23 @@ fn resolve_plain_ident(v: Word) -> Word {
             } else {
                 ps.found_flag = 0;
                 for i in 0..ps.pcount limit 32 {
+                    if ps.pnames[i] == v andalso ps.parray_struct[i] > 0 {
+                        ps.found_flag = 1;
+                        ps.found = i;
+                        ps.sa_struct = ps.parray_struct[i] - 1;
+                        ps.sa_size = ps.parray_size[i];
+                    }
+                }
+                if ps.found_flag == 1 {
+                    // An array-of-struct parameter: arm the struct-array-index postfix (a following
+                    // `[i]` emits GetIndex(FlatNested{size, Struct}) and arms `.field` access into
+                    // the extracted element); the parameter reads as its Local, indexed whole.
+                    ps.sa_phase = 1;
+                    ops.expect_operand = 0;
+                    Node::Local() as Word + ps.found * 64
+                } else {
+                ps.found_flag = 0;
+                for i in 0..ps.pcount limit 32 {
                     if ps.pnames[i] == v andalso ps.parray[i] > 0 {
                         ps.found_flag = 1;
                         ps.found = i;
@@ -763,6 +802,7 @@ fn resolve_plain_ident(v: Word) -> Word {
                         }
                     }
                     step_local(v)
+                }
                 }
             }
         }
@@ -1201,12 +1241,22 @@ fn step_iclosing() -> Word {
         } else {
             ops.opsp = ops.opsp - 1;
             if da.fa_index == 1 {
-                // A struct array-element access `p.xs[i]`: emit the ArrIndex (GetIndex) of the
-                // element kind directly (no read-vs-assign lookahead; array-element assignment
-                // is a later increment). It pops the index (top) and the FlatNested array value.
+                // An array-element access. A struct-element array (`ps[i]`, `fa_index_nested`)
+                // emits an ArrIndexNested (GetIndex(FlatNested{size, Struct}), variant Struct = 2)
+                // and arms the field-access postfix so a following `.field` reads into the extracted
+                // element; a scalar-element array (`xs[i]`/`p.xs[i]`) emits a scalar ArrIndex of the
+                // element kind. Both pop the index (top) and the array value. No read-vs-assign
+                // lookahead (array-element assignment is a later increment).
                 da.fa_index = 0;
                 ops.expect_operand = 0;
-                Node::ArrIndex() as Word + da.fa_index_kind * 64
+                if da.fa_index_nested == 1 {
+                    da.fa_index_nested = 0;
+                    ps.fa_phase = 1;
+                    ps.fa_struct = da.fa_index_struct;
+                    Node::ArrIndexNested() as Word + (da.fa_index_size + 2 * 65536) * 64
+                } else {
+                    Node::ArrIndex() as Word + da.fa_index_kind * 64
+                }
             } else {
                 da.idx_sp = da.idx_sp - 1;
                 da.pidx_base = da.idx_base[da.idx_sp];
@@ -2052,6 +2102,29 @@ fn step_arrayaccess(k: Word, v: Word) -> Word {
     }
 }
 
+// The struct-array-access postfix (ps.sa_phase 1), after an array-of-struct parameter Local was
+// emitted. A `[` opens the element index and marks the closing `]` to emit an ArrIndexNested
+// (GetIndex(FlatNested{size, Struct})), recording the element struct's byte size and declaration
+// index so the `]` can arm the field-access postfix for a following `.field`. A non-`[` token is
+// pushed back (the parameter was used whole).
+fn step_structarrayaccess(k: Word, v: Word) -> Word {
+    if k == Tok::LBracket() as Word {
+        ps.sa_phase = 0;
+        da.fa_index = 1;
+        da.fa_index_nested = 1;
+        da.fa_index_size = ps.sa_size;
+        da.fa_index_struct = ps.sa_struct;
+        ops.opstack[ops.opsp] = OpCode::IndexMark() as Word;
+        ops.opsp = ops.opsp + 1;
+        ops.expect_operand = 1;
+        v * 0
+    } else {
+        ps.sa_phase = 0;
+        ps.cursor = ps.cursor - 1;
+        0
+    }
+}
+
 // The normal parse-phase dispatch: a `let` binding's name or `=`, else an expression
 // token.
 fn step_dispatch_normal(k: Word, v: Word) -> Word {
@@ -2539,11 +2612,14 @@ fn body_step() -> Word {
             if ps.ta_phase >= 1 {
                 step_tupleaccess(k, v)
             } else {
+            if ps.sa_phase >= 1 {
+                step_structarrayaccess(k, v)
+            } else {
             if ps.aa_phase >= 1 {
                 step_arrayaccess(k, v)
             } else {
                 step_body_dispatch(k, v)
-            } } }
+            } } } }
         }
     } } } } } } } } } } }
 }
@@ -3219,10 +3295,22 @@ fn header_sig(k: Word, v: Word) -> Word {
         if ps.arr == 1 {
             ps.arr = 2;
             if ps.arr_ret == 0 {
-                // A scalar array PARAMETER `xs: [T; N]`: record the element ScalarKind (plus one) so
-                // a body `xs[i]` access arms the array-index postfix. A return-type array is not
+                // An array PARAMETER `xs: [T; N]`. If the element type names a declared struct,
+                // record the struct's declaration index (plus one) and flat byte size so a body
+                // `ps[i].field` extracts element i as a nested struct; otherwise record the element
+                // ScalarKind (plus one) so `xs[i]` reads a scalar. A return-type array is not
                 // recorded (no body access resolves through it).
-                ps.parray[ps.pcount - 1] = scalar_kind_of(v) + 1;
+                ps.found_flag = 0;
+                for i in 0..structdefs.sd_count limit 64 {
+                    if structdefs.sd_name[i] == v {
+                        ps.found_flag = 1;
+                        ps.parray_struct[ps.pcount - 1] = i + 1;
+                        ps.parray_size[ps.pcount - 1] = structdefs.sd_bytesize[i];
+                    }
+                }
+                if ps.found_flag == 0 {
+                    ps.parray[ps.pcount - 1] = scalar_kind_of(v) + 1;
+                }
                 6 + v * 64
             } else {
                 7 + v * 64
@@ -3238,6 +3326,7 @@ fn header_sig(k: Word, v: Word) -> Word {
                 ps.ptuple[ps.pcount] = 0;
                 ps.penum[ps.pcount] = 0;
                 ps.parray[ps.pcount] = 0;
+                ps.parray_struct[ps.pcount] = 0;
                 ps.pcount = ps.pcount + 1;
                 4 + v * 64
             } else {
