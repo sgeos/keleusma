@@ -242,6 +242,10 @@ private data ps {
     ptuple: [Word; 32],
     ta_phase: Word,
     ta_tuple: Word,
+    // Per value-parameter array-of-scalar binding: 0 if not an array type, else the element
+    // ScalarKind plus one, so a body `xs[i]` access arms the array-index postfix and emits
+    // GetIndex(Flat{kind}). Mirrors a let-bound array (`stmt.let_array`) for a parameter.
+    parray: [Word; 32],
     // The array-access postfix after a let-bound array Local was emitted: `aa_phase` 1 awaits an
     // optional `[`, `aa_kind` the element ScalarKind for the GetIndex operand.
     aa_phase: Word,
@@ -733,17 +737,33 @@ fn resolve_plain_ident(v: Word) -> Word {
                 ops.expect_operand = 0;
                 Node::Local() as Word + ps.found * 64
             } else {
-                // A non-struct, non-tuple parameter. If it is an enum-typed parameter serving as a
-                // `match` scrutinee (the open match is in its scrutinee phase 1), mark that match an
-                // enum-value match so it lowers to the IsEnum loop; the parameter still reads as a
-                // plain Local.
+                ps.found_flag = 0;
                 for i in 0..ps.pcount limit 32 {
-                    if ps.pnames[i] == v andalso ps.penum[i] > 0 andalso mat.match_sp > 0 andalso mat.match_phase[mat.match_sp - 1] == 1 {
-                        mat.match_isenum[mat.match_sp - 1] = 1;
-                        mat.match_ename[mat.match_sp - 1] = ps.penum[i] - 1;
+                    if ps.pnames[i] == v andalso ps.parray[i] > 0 {
+                        ps.found_flag = 1;
+                        ps.found = i;
+                        ps.aa_kind = ps.parray[i] - 1;
                     }
                 }
-                step_local(v)
+                if ps.found_flag == 1 {
+                    // A scalar array parameter: arm the array-index postfix (a following `[i]` emits
+                    // GetIndex(Flat{kind})); the parameter reads as its Local, indexed whole.
+                    ps.aa_phase = 1;
+                    ops.expect_operand = 0;
+                    Node::Local() as Word + ps.found * 64
+                } else {
+                    // A non-struct, non-tuple, non-array parameter. If it is an enum-typed parameter
+                    // serving as a `match` scrutinee (the open match is in its scrutinee phase 1),
+                    // mark that match an enum-value match so it lowers to the IsEnum loop; the
+                    // parameter still reads as a plain Local.
+                    for i in 0..ps.pcount limit 32 {
+                        if ps.pnames[i] == v andalso ps.penum[i] > 0 andalso mat.match_sp > 0 andalso mat.match_phase[mat.match_sp - 1] == 1 {
+                            mat.match_isenum[mat.match_sp - 1] = 1;
+                            mat.match_ename[mat.match_sp - 1] = ps.penum[i] - 1;
+                        }
+                    }
+                    step_local(v)
+                }
             }
         }
     }
@@ -3199,6 +3219,10 @@ fn header_sig(k: Word, v: Word) -> Word {
         if ps.arr == 1 {
             ps.arr = 2;
             if ps.arr_ret == 0 {
+                // A scalar array PARAMETER `xs: [T; N]`: record the element ScalarKind (plus one) so
+                // a body `xs[i]` access arms the array-index postfix. A return-type array is not
+                // recorded (no body access resolves through it).
+                ps.parray[ps.pcount - 1] = scalar_kind_of(v) + 1;
                 6 + v * 64
             } else {
                 7 + v * 64
@@ -3213,6 +3237,7 @@ fn header_sig(k: Word, v: Word) -> Word {
                 ps.pstruct[ps.pcount] = 0;
                 ps.ptuple[ps.pcount] = 0;
                 ps.penum[ps.pcount] = 0;
+                ps.parray[ps.pcount] = 0;
                 ps.pcount = ps.pcount + 1;
                 4 + v * 64
             } else {
@@ -3258,7 +3283,11 @@ fn header_sig(k: Word, v: Word) -> Word {
             }
         } }
     } else {
-    if k == 11 {
+    if k == 41 {
+        // A `[` opening an array type. `LBracket` is token class 41; the array element type
+        // (k==1 with `ps.arr == 1`) and the size close (the `IntLit`, k==12 with `ps.arr == 2`)
+        // complete it. A parameter array records its element ScalarKind (see the k==1 branch);
+        // a return-type array is consumed but not recorded (no body access resolves through it).
         if ps.ptype == 1 {
             ps.ptype = 0;
             ps.arr_ret = 0;
