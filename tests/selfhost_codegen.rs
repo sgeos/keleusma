@@ -3112,6 +3112,37 @@ fn self_host_compiles_a_struct_enum_payload_match() {
 }
 
 #[test]
+fn self_host_compiles_tuple_and_array_enum_payloads() {
+    // TUPLE- and ARRAY-typed enum payloads, matched and accessed. The enum-payload scan (mode 14)
+    // handles a `(T, ...)` field (building a tuple layout, `epf` sub-state 1) and a `[T; N]` field
+    // (recording the element kind, `epf` sub-state 2), each as ONE composite payload field with a
+    // nested-composite sentinel kind (tuple `30000 + size`, array `40000 + size`). The extraction is
+    // `GetEnumField(FlatNested{size, Tuple|Array})` (the getenumfieldnested op, variant decoded from
+    // the sentinel range), and the bound variable is tuple-/array-typed (`evftuple` -> `let_tuple`,
+    // `evfarrkind` -> `let_array`) so `t.N` / `a[j]` resolves. This required widening the EnumBind
+    // marker kind field to 16 bits (slot multiplier 16777216 -> 4294967296). Byte-identical; the
+    // struct-payload and scalar-payload cases still self-compile under the generalized encoding.
+    assert_self_host_byte_identical(
+        "enum E { A((Word, Word)), B }\n\
+         fn f(e: E) -> Word { match e { E::A(t) => t.0, E::B() => 0 } }",
+    );
+    // The second tuple element (offset 8 within the extracted tuple).
+    assert_self_host_byte_identical(
+        "enum E { A((Word, Word)), B }\n\
+         fn f(e: E) -> Word { match e { E::A(t) => t.1, E::B() => 0 } }",
+    );
+    // An array payload, element read at a constant and (below) a runtime index.
+    assert_self_host_byte_identical(
+        "enum E { A([Word; 2]), B }\n\
+         fn f(e: E) -> Word { match e { E::A(a) => a[1], E::B() => 0 } }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A([Word; 3]), B }\n\
+         fn f(e: E, i: Word) -> Word { match e { E::A(a) => a[i], E::B() => 0 } }",
+    );
+}
+
+#[test]
 fn self_host_compiles_a_scalar_array_parameter() {
     // A scalar array PARAMETER `xs: [Word; N]` indexed in the body. Previously the array-type
     // parse in `header_sig` gated its `[` on a dead token class (11, which no token emits), so an

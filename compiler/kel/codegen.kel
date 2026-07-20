@@ -1049,11 +1049,21 @@ fn push_enum_match(p: Word) -> Word {
             let kind = ast.match_parts[armb + 5 + f * 3 + 1];
             let slot = ast.match_parts[armb + 5 + f * 3 + 2];
             push_emit(wire.setlocal + slot * wire.radix);
+            // A composite payload uses a sentinel kind that encodes both the nested-composite
+            // variant and its byte size: an ARRAY element is `40000 + size` (variant 1), a TUPLE is
+            // `30000 + size` (variant 0), a STRUCT is `100 + size` (variant 2). Each emits
+            // GetEnumField(FlatNested{offset, size, variant}); a scalar (kind 0-7) the plain Flat.
+            if kind >= 40000 {
+                push_emit(wire.getenumfieldnested + (off + (kind - 40000) * 65536 + 1 * 4294967296) * wire.radix);
+            } else {
+            if kind >= 30000 {
+                push_emit(wire.getenumfieldnested + (off + (kind - 30000) * 65536 + 0 * 4294967296) * wire.radix);
+            } else {
             if kind >= 100 {
                 push_emit(wire.getenumfieldnested + (off + (kind - 100) * 65536 + 2 * 4294967296) * wire.radix);
             } else {
                 push_emit(wire.getenumfield + (off + kind * 65536) * wire.radix);
-            }
+            } } }
             push_emit(wire.getlocal + temp * wire.radix);
         }
         push_emit(wire.mif);

@@ -221,6 +221,14 @@ private data ps {
     rtts: Word,
     rtts_count: Word,
     rtts_allword: Word,
+    // Enum-payload COMPOSITE field scan (mode 14): `epf` 1 = inside a tuple payload `(T, ...)`, 2 =
+    // inside an array payload `[T; N]`, 0 = none. `epf_layout` the tuple layout index, `epf_off` its
+    // running offset; `epf_ekind`/`epf_esize` the array element ScalarKind and byte size.
+    epf: Word,
+    epf_layout: Word,
+    epf_off: Word,
+    epf_ekind: Word,
+    epf_esize: Word,
     arr: Word,
     arr_ret: Word,
     dvis: Word,
@@ -615,6 +623,11 @@ private data enums {
     // Per payload field, the struct declaration index (plus one) when the field is a struct, else 0,
     // so a `match E::A(p)` binding of a struct payload records `p`'s type and `p.field` resolves.
     evfstruct: [Word; 512],
+    // Per payload field, the tuple layout index (plus one) for a TUPLE payload, and the element
+    // ScalarKind (plus one) for an ARRAY payload, so a `match E::A(t)`/`E::A(a)` binding records the
+    // bound variable's type and `t.N`/`a[j]` resolves.
+    evftuple: [Word; 512],
+    evfarrkind: [Word; 512],
     evfcursor: Word,
     enum_count: Word,
     cur_enum: Word,
@@ -1058,6 +1071,115 @@ fn step_tuple_type(k: Word, v: Word) -> Word {
     } }
 }
 
+// One token of an enum variant's payload field list (mode 14). A scalar or struct field is a
+// single ident; a TUPLE payload `(T, ...)` and an ARRAY payload `[T; N]` are composite fields
+// scanned via the `epf` sub-state, each recorded as one field with a nested-composite sentinel kind
+// (tuple `30000 + size`, array `40000 + size`, struct `100 + size`) and a bind descriptor
+// (`evftuple`/`evfarrkind`/`evfstruct`) so a `match E::V(x)` binding resolves `x`'s composite type.
+// The closing `)` of the payload LIST ends the variant (mode -> 12).
+fn step_enum_payload(k: Word, v: Word) -> Word {
+    let vi = enums.enum_count - 1;
+    let fi = enums.evfstart[vi] + enums.evfcount[vi];
+    if ps.epf == 1 {
+        if k == Tok::Ident() as Word {
+            let li = ps.epf_layout - 1;
+            let base = tupledefs.tup_estart[li];
+            let ei = tupledefs.tup_ecount[li];
+            tupledefs.tup_eoffset[base + ei] = ps.epf_off;
+            tupledefs.tup_ekind[base + ei] = scalar_kind_of(v);
+            tupledefs.tup_ecount[li] = ei + 1;
+            ps.epf_off = ps.epf_off + type_byte_size(v);
+            0
+        } else {
+        if k == Tok::RParen() as Word {
+            let li = ps.epf_layout - 1;
+            tupledefs.tup_ecursor = tupledefs.tup_estart[li] + tupledefs.tup_ecount[li];
+            enums.evfkind[fi] = 30000 + ps.epf_off;
+            enums.evftuple[fi] = ps.epf_layout;
+            enums.evfcount[vi] = enums.evfcount[vi] + 1;
+            enums.epayload[vi] = enums.epayload[vi] + ps.epf_off;
+            ps.epf = 0;
+            0
+        } else {
+            0
+        } }
+    } else {
+    if ps.epf == 2 {
+        if k == Tok::Ident() as Word {
+            ps.epf_ekind = scalar_kind_of(v);
+            ps.epf_esize = type_byte_size(v);
+            0
+        } else {
+        if k == Tok::IntLit() as Word {
+            let sz = ps.epf_esize * v;
+            enums.evfkind[fi] = 40000 + sz;
+            enums.evfarrkind[fi] = ps.epf_ekind + 1;
+            enums.evfcount[vi] = enums.evfcount[vi] + 1;
+            enums.epayload[vi] = enums.epayload[vi] + sz;
+            0
+        } else {
+        if k == Tok::RBracket() as Word {
+            // The array payload field is complete (recorded at the size); close the epf scan.
+            ps.epf = 0;
+            0
+        } else {
+            0
+        } } }
+    } else {
+        if k == Tok::LParen() as Word {
+            // Open a TUPLE payload field: record its offset, a fresh tuple layout, and enter epf 1.
+            enums.evfoff[fi] = 8 + enums.epayload[vi];
+            enums.evfstruct[fi] = 0;
+            enums.evftuple[fi] = 0;
+            enums.evfarrkind[fi] = 0;
+            ps.epf = 1;
+            ps.epf_layout = tupledefs.tup_count + 1;
+            ps.epf_off = 0;
+            tupledefs.tup_estart[tupledefs.tup_count] = tupledefs.tup_ecursor;
+            tupledefs.tup_ecount[tupledefs.tup_count] = 0;
+            tupledefs.tup_count = tupledefs.tup_count + 1;
+            0
+        } else {
+        if k == Tok::LBracket() as Word {
+            // Open an ARRAY payload field: record its offset, enter epf 2 (element type then size).
+            enums.evfoff[fi] = 8 + enums.epayload[vi];
+            enums.evfstruct[fi] = 0;
+            enums.evftuple[fi] = 0;
+            enums.evfarrkind[fi] = 0;
+            ps.epf = 2;
+            0
+        } else {
+        if k == Tok::Ident() as Word {
+            // A scalar or struct payload field (see the enum-decl comment for the struct sentinel).
+            enums.evfoff[fi] = 8 + enums.epayload[vi];
+            ps.found_flag = 0;
+            enums.evfstruct[fi] = 0;
+            enums.evftuple[fi] = 0;
+            enums.evfarrkind[fi] = 0;
+            for i in 0..structdefs.sd_count limit 64 {
+                if structdefs.sd_name[i] == v {
+                    ps.found_flag = 1;
+                    enums.evfkind[fi] = 100 + structdefs.sd_bytesize[i];
+                    enums.evfstruct[fi] = i + 1;
+                }
+            }
+            if ps.found_flag == 0 {
+                enums.evfkind[fi] = scalar_kind_of(v);
+            }
+            enums.evfcount[vi] = enums.evfcount[vi] + 1;
+            enums.epayload[vi] = enums.epayload[vi] + type_byte_size(v);
+            0
+        } else {
+        if k == Tok::RParen() as Word {
+            enums.evfcursor = enums.evfstart[enums.enum_count - 1] + enums.evfcount[enums.enum_count - 1];
+            ps.mode = 12;
+            0
+        } else {
+            0
+        } } } }
+    } }
+}
+
 // The flat body size of an enum: eight bytes for the discriminant plus the largest payload
 // across the enum's variants. A construction of any variant carries this same size, matching
 // the reference (every variant of an enum shares the enum's flat footprint).
@@ -1207,15 +1329,17 @@ fn step_mpat(k: Word, v: Word) -> Word {
             stmt.slot_count = stmt.slot_count + 1;
             stmt.let_names[stmt.let_count] = v;
             stmt.scope_slot[stmt.let_count] = slot;
-            stmt.let_tuple[stmt.let_count] = 0;
-            // A STRUCT payload binds struct-typed (so `p.field` resolves); a scalar payload leaves 0.
+            // A composite payload binds the bound variable's composite type so `p.field`/`t.N`/`a[j]`
+            // resolves: a STRUCT payload sets `let_struct`, a TUPLE `let_tuple` (its layout), an
+            // ARRAY `let_array` (its element kind); a scalar payload leaves all 0.
+            stmt.let_tuple[stmt.let_count] = enums.evftuple[fi];
             stmt.let_struct[stmt.let_count] = enums.evfstruct[fi];
-            stmt.let_array[stmt.let_count] = 0;
+            stmt.let_array[stmt.let_count] = enums.evfarrkind[fi];
             stmt.let_array_struct[stmt.let_count] = 0;
             stmt.let_enum[stmt.let_count] = 0;
             stmt.let_count = stmt.let_count + 1;
             mat.mpat_pcount = mat.mpat_pcount + 1;
-            Node::EnumBind() as Word + (enums.evfoff[fi] + enums.evfkind[fi] * 65536 + slot * 16777216) * 64
+            Node::EnumBind() as Word + (enums.evfoff[fi] + enums.evfkind[fi] * 65536 + slot * 4294967296) * 64
         } else {
         if k == Tok::Comma() as Word {
             0
@@ -3070,38 +3194,7 @@ fn header_enum(k: Word, v: Word) -> Word {
         } } } }
     } else {
     if ps.mode == 14 {
-        if k == 1 {
-            // A payload field type: record its flat offset (8 + preceding field sizes) and kind for
-            // a later payload match, then add its size to the running sum. A STRUCT payload field is
-            // read out as a whole nested composite, so its kind is the sentinel `100 + struct byte
-            // size` (`push_enum_match` reads a kind >= 100 as GetEnumField(FlatNested{size, Struct}));
-            // a scalar payload keeps its plain ScalarKind (0-7).
-            let vi = enums.enum_count - 1;
-            let fi = enums.evfstart[vi] + enums.evfcount[vi];
-            enums.evfoff[fi] = 8 + enums.epayload[vi];
-            ps.found_flag = 0;
-            enums.evfstruct[fi] = 0;
-            for i in 0..structdefs.sd_count limit 64 {
-                if structdefs.sd_name[i] == v {
-                    ps.found_flag = 1;
-                    enums.evfkind[fi] = 100 + structdefs.sd_bytesize[i];
-                    enums.evfstruct[fi] = i + 1;
-                }
-            }
-            if ps.found_flag == 0 {
-                enums.evfkind[fi] = scalar_kind_of(v);
-            }
-            enums.evfcount[vi] = enums.evfcount[vi] + 1;
-            enums.epayload[vi] = enums.epayload[vi] + type_byte_size(v);
-            0
-        } else {
-        if k == 8 {
-            enums.evfcursor = enums.evfstart[enums.enum_count - 1] + enums.evfcount[enums.enum_count - 1];
-            ps.mode = 12;
-            0
-        } else {
-            0
-        } }
+        step_enum_payload(k, v)
     } else {
         if k == 12 {
             enums.edisc[enums.enum_count - 1] = v;
