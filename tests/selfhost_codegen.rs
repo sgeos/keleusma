@@ -3152,6 +3152,22 @@ fn self_host_compiles_a_let_bound_array_of_structs() {
     );
     // A scalar array literal still sizes count * 8 and arms the scalar index (regression guard).
     assert_self_host_byte_identical("fn f() -> Word { let a = [10, 20, 30]; a[1] }");
+    // A `let` bound to a STRUCT-element-array-RETURNING call, then element-then-field accessed
+    // (`let a = mk(); a[i].field` where `mk` returns `[P; N]`). The parser records the return
+    // array's element struct index and byte size (`chunkret.ret_array_struct`/`ret_array_size`),
+    // so the call sets `pending_carray_struct` and the binding arms the struct-array postfix -- the
+    // return analogue of the let-bound array-of-struct literal. Completes the array-of-structs
+    // surface across parameters, struct fields, literals, and returns.
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\n\
+         fn mk() -> [P; 2] { [P { x: 1 }, P { x: 2 }] }\n\
+         fn f() -> Word { let a = mk(); a[0].x }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\n\
+         fn mk() -> [P; 3] { [P { x: 1, y: 2 }, P { x: 3, y: 4 }, P { x: 5, y: 6 }] }\n\
+         fn f(i: Word) -> Word { let a = mk(); a[i].y }",
+    );
 }
 
 #[test]
