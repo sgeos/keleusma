@@ -3024,6 +3024,34 @@ fn self_host_compiles_an_enum_value_match() {
         "enum E { A(Word), B }\n\
          fn f(e: E, g: E) -> Word { match e { E::A(x) => match g { E::A(y) => x + y, E::B() => x }, E::B() => 0 } }",
     );
+    // Nesting in DIFFERENT positions, confirming the stack-discipline drain composes: an inner
+    // match inside a WILDCARD arm result (the wildcard result path, not a variant arm).
+    assert_self_host_byte_identical(
+        "enum E { A, B, C }\n\
+         fn f(e: E, g: E) -> Word { match e { E::A() => 1, _ => match g { E::A() => 2, _ => 3 } } }",
+    );
+    // An inner match whose arm result references the OUTER match's payload binding (cross-scope
+    // slot resolution: the outer bind slot stays live through the inner match).
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn f(e: E, g: E) -> Word { match e { E::A(x) => match g { E::A(y) => x, E::B() => x }, E::B() => 0 } }",
+    );
+    // A match EXPRESSION as a `let` value and as a call argument (the EnumMatch node in operand
+    // positions other than a bare statement or arm result).
+    assert_self_host_byte_identical(
+        "enum E { A, B }\n\
+         fn f(e: E) -> Word { let r = match e { E::A() => 1, E::B() => 2 }; r + 1 }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B }\n\
+         fn id(x: Word) -> Word { x }\n\
+         fn f(e: E) -> Word { id(match e { E::A() => 1, E::B() => 2 }) }",
+    );
+    // Triple-nested match: the stack-discipline drain generalizes to arbitrary nesting depth.
+    assert_self_host_byte_identical(
+        "enum E { A, B }\n\
+         fn f(a: E, b: E, c: E) -> Word { match a { E::A() => match b { E::A() => match c { E::A() => 1, E::B() => 2 }, E::B() => 3 }, E::B() => 4 } }",
+    );
 }
 
 // NESTED-composite field access `s.i.x` on a struct-typed parameter, reusing the FlatNested
