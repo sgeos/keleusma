@@ -263,14 +263,21 @@ private data ps {
     // `ts[i].N` extracts element i as a nested tuple (GetIndex(FlatNested{size, Tuple})) and reads
     // element N. Mutually exclusive with `parray_struct` and `parray` (tuple vs struct vs scalar).
     parray_tuple: [Word; 32],
+    // Per value-parameter array-of-ARRAY binding: 0 if the element is not an array, else the INNER
+    // element ScalarKind plus one; the inner array byte size rides `parray_size`. A body `m[i][j]`
+    // extracts inner array i as a nested array (GetIndex(FlatNested{size, Array})) then scalar-indexes
+    // element j (GetIndex(Flat{kind})). Mutually exclusive with `parray_struct`/`parray_tuple`/`parray`.
+    parray_arr: [Word; 32],
     sa_phase: Word,
     sa_struct: Word,
     sa_size: Word,
-    // The composite variant (0 Tuple, 2 Struct) of the just-armed struct/tuple-array postfix, and
-    // the tuple layout index for a tuple-array element, threaded into the `]` close so it emits the
-    // right nested-index variant and arms the matching field postfix (`.field` vs `.N`).
+    // The composite variant (0 Tuple, 1 Array, 2 Struct) of the just-armed composite-array postfix,
+    // the tuple layout index for a tuple element, and the inner element ScalarKind for an array
+    // element, threaded into the `]` close so it emits the right nested-index variant and arms the
+    // matching postfix (`.field` via fa_phase, `.N` via ta_phase, `[j]` via aa_phase).
     sa_variant: Word,
     sa_tuple: Word,
+    sa_arrkind: Word,
     // The array-access postfix after a let-bound array Local was emitted: `aa_phase` 1 awaits an
     // optional `[`, `aa_kind` the element ScalarKind for the GetIndex operand.
     aa_phase: Word,
@@ -532,6 +539,7 @@ private data da {
     // field postfix.
     fa_index_variant: Word,
     fa_index_tuple: Word,
+    fa_index_arrkind: Word,
     post_index: Word,
     pidx_base: Word,
     pidx_len: Word,
@@ -819,6 +827,13 @@ fn resolve_plain_ident(v: Word) -> Word {
                         ps.sa_tuple = ps.parray_tuple[i] - 1;
                         ps.sa_size = ps.parray_size[i];
                         ps.sa_variant = 0;
+                    }
+                    if ps.pnames[i] == v andalso ps.parray_arr[i] > 0 {
+                        ps.found_flag = 1;
+                        ps.found = i;
+                        ps.sa_arrkind = ps.parray_arr[i] - 1;
+                        ps.sa_size = ps.parray_size[i];
+                        ps.sa_variant = 1;
                     }
                 }
                 if ps.found_flag == 1 {
@@ -1320,6 +1335,14 @@ fn step_iclosing() -> Word {
                 ops.expect_operand = 0;
                 if da.fa_index_nested == 1 {
                     da.fa_index_nested = 0;
+                    if da.fa_index_variant == 1 {
+                        // An array element: emit GetIndex(FlatNested{size, Array = 1}) and arm the
+                        // scalar array-index postfix (a following `[j]` reads element j of the
+                        // extracted inner array with GetIndex(Flat{inner element kind})).
+                        ps.aa_phase = 1;
+                        ps.aa_kind = da.fa_index_arrkind;
+                        Node::ArrIndexNested() as Word + (da.fa_index_size + 1 * 65536) * 64
+                    } else {
                     if da.fa_index_variant == 0 {
                         // A tuple element: emit GetIndex(FlatNested{size, Tuple = 0}) and arm the
                         // tuple-field postfix (a following `.N` reads element N of the extracted
@@ -1333,6 +1356,7 @@ fn step_iclosing() -> Word {
                         ps.fa_phase = 1;
                         ps.fa_struct = da.fa_index_struct;
                         Node::ArrIndexNested() as Word + (da.fa_index_size + 2 * 65536) * 64
+                    }
                     }
                 } else {
                     Node::ArrIndex() as Word + da.fa_index_kind * 64
@@ -2213,6 +2237,7 @@ fn step_structarrayaccess(k: Word, v: Word) -> Word {
         da.fa_index_struct = ps.sa_struct;
         da.fa_index_variant = ps.sa_variant;
         da.fa_index_tuple = ps.sa_tuple;
+        da.fa_index_arrkind = ps.sa_arrkind;
         ops.opstack[ops.opsp] = OpCode::IndexMark() as Word;
         ops.opsp = ops.opsp + 1;
         ops.expect_operand = 1;
@@ -3391,6 +3416,38 @@ fn header_field(k: Word, v: Word) -> Word {
     } } } } } } } } }
 }
 
+// Record a parameter (mode 0) or return (mode 1) type name that names a declared struct or enum,
+// returning the PTYPE (6) or RTYPE (7) record. Extracted from `header_sig` so that function's
+// reconstructed node count (its four struct/enum scan loops inlined) stays under the per-function
+// reconstruct cap; parse.kel's own `header_sig` grew past it as the array-type surface expanded.
+fn header_type_ident(v: Word, mode: Word) -> Word {
+    if mode == 0 {
+        for i in 0..structdefs.sd_count limit 64 {
+            if structdefs.sd_name[i] == v {
+                ps.pstruct[ps.pcount - 1] = i + 1;
+            }
+        }
+        for i in 0..enums.enum_count limit 256 {
+            if enums.edata[i] == v {
+                ps.penum[ps.pcount - 1] = v + 1;
+            }
+        }
+        6 + v * 64
+    } else {
+        for i in 0..structdefs.sd_count limit 64 {
+            if structdefs.sd_name[i] == v {
+                chunkret.ret_struct[ps.cur_chunk] = i + 1;
+            }
+        }
+        for i in 0..enums.enum_count limit 256 {
+            if enums.edata[i] == v {
+                chunkret.ret_enum[ps.cur_chunk] = v + 1;
+            }
+        }
+        7 + v * 64
+    }
+}
+
 // Mode 2: the signature scan, ending when the first `{` at depth zero arms the body walk.
 fn header_sig(k: Word, v: Word) -> Word {
     if ps.rtts == 1 {
@@ -3413,6 +3470,15 @@ fn header_sig(k: Word, v: Word) -> Word {
             tupledefs.tup_ekind[base + ei] = scalar_kind_of(v);
             tupledefs.tup_ecount[li] = ei + 1;
             ps.tts_off = ps.tts_off + type_byte_size(v);
+            0
+        } else {
+        if ps.arr == 8 {
+            // The inner element type of an array-of-array parameter `[[T; N]; M]`: record the inner
+            // element ScalarKind (plus one) and stash its byte size in `tts_off` to multiply by the
+            // inner length at the `; N` (arr 9).
+            ps.parray_arr[ps.pcount - 1] = scalar_kind_of(v) + 1;
+            ps.tts_off = type_byte_size(v);
+            ps.arr = 9;
             0
         } else {
         if ps.arr == 1 {
@@ -3466,56 +3532,39 @@ fn header_sig(k: Word, v: Word) -> Word {
                 ps.parray[ps.pcount] = 0;
                 ps.parray_struct[ps.pcount] = 0;
                 ps.parray_tuple[ps.pcount] = 0;
+                ps.parray_arr[ps.pcount] = 0;
                 ps.pcount = ps.pcount + 1;
                 4 + v * 64
             } else {
             if ps.ptype == 1 {
                 ps.ptype = 0;
-                // Record whether this parameter's type names a declared struct (index + 1),
-                // so a body `p.field` access can resolve the field. A scalar type leaves 0.
-                for i in 0..structdefs.sd_count limit 64 {
-                    if structdefs.sd_name[i] == v {
-                        ps.pstruct[ps.pcount - 1] = i + 1;
-                    }
-                }
-                // Record whether this parameter's type names a declared enum (its name id + 1), so
-                // a `match` over the parameter lowers to the IsEnum virtual loop.
-                for i in 0..enums.enum_count limit 256 {
-                    if enums.edata[i] == v {
-                        ps.penum[ps.pcount - 1] = v + 1;
-                    }
-                }
-                6 + v * 64
+                // Record whether this parameter's type names a declared struct or enum (see
+                // `header_type_ident`), so a body `p.field` access or `match p` can resolve.
+                header_type_ident(v, 0)
             } else {
                 0
             } }
         } else {
             if ps.rtype == 1 {
                 ps.rtype = 0;
-                // Record a struct return type for the current chunk, so a `let x = f()` bound to a
-                // call of this function arms `x.field` access.
-                for i in 0..structdefs.sd_count limit 64 {
-                    if structdefs.sd_name[i] == v {
-                        chunkret.ret_struct[ps.cur_chunk] = i + 1;
-                    }
-                }
-                // Record an enum return type, so a `let e = f(); match e` lowers to IsEnum.
-                for i in 0..enums.enum_count limit 256 {
-                    if enums.edata[i] == v {
-                        chunkret.ret_enum[ps.cur_chunk] = v + 1;
-                    }
-                }
-                7 + v * 64
+                // Record a struct or enum return type for the current chunk (see
+                // `header_type_ident`), so `let x = f()` bound to the call arms `x.field`/`match x`.
+                header_type_ident(v, 1)
             } else {
                 0
             }
-        } } }
+        } } } }
     } else {
     if k == 41 {
         // A `[` opening an array type. `LBracket` is token class 41; the array element type
         // (k==1 with `ps.arr == 1`) and the size close (the `IntLit`, k==12 with `ps.arr == 2`)
         // complete it. A parameter array records its element ScalarKind (see the k==1 branch);
         // a return-type array is consumed but not recorded (no body access resolves through it).
+        // A second `[` while already in an array (`ps.arr == 1`) is an array-of-ARRAY element
+        // `[[T; N]; M]`: scan the inner element type (arr 8), its size (arr 9), close (arr 10).
+        if ps.arr == 1 {
+            ps.arr = 8;
+        } else {
         if ps.ptype == 1 {
             ps.ptype = 0;
             ps.arr_ret = 0;
@@ -3527,14 +3576,32 @@ fn header_sig(k: Word, v: Word) -> Word {
                 ps.arr = 1;
             }
         }
+        }
+        0
+    } else {
+    if k == 42 {
+        // The inner `]` closing an array-of-array element `[[T; N]; M]`: the inner array type is
+        // complete, so await the outer size (`; M`, k==12 with arr==2) as a scalar array would. The
+        // OUTER `]` (arr not 10) is a no-op, consumed here as before.
+        if ps.arr == 10 {
+            ps.arr = 2;
+        }
         0
     } else {
     if k == 12 {
+        if ps.arr == 9 {
+            // The inner length of an array-of-array parameter `[[T; N]; M]`: the inner array byte
+            // size is element_size (stashed in `tts_off`) * N; await the inner `]` (arr 10).
+            ps.parray_size[ps.pcount - 1] = ps.tts_off * v;
+            ps.arr = 10;
+            0
+        } else {
         if ps.arr == 2 {
             ps.arr = 0;
             8 + v * 64
         } else {
             0
+        }
         }
     } else {
     if k == 7 {
@@ -3627,7 +3694,7 @@ fn header_sig(k: Word, v: Word) -> Word {
         } else {
             0
         }
-    } } } } } } } } } }
+    } } } } } } } } } } }
 }
 
 fn step() -> Word {

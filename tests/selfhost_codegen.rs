@@ -3204,6 +3204,22 @@ fn self_host_compiles_an_array_of_tuple_parameter() {
     );
 }
 
+#[test]
+fn self_host_compiles_an_array_of_array_parameter() {
+    // An array-of-ARRAY parameter `m: [[T; N]; M]`, doubly indexed (`m[i][j]`). The outer index
+    // extracts inner array i as a nested array (GetIndex(FlatNested{inner-array size, Array})) and
+    // the inner index reads element j scalar (GetIndex(Flat{inner element kind})). `header_sig`
+    // scans the nested `[T; N]` element type via new `arr` states (8 element type, 9 inner size, 10
+    // inner close), recording the inner element kind (`ps.parray_arr`) and inner array byte size;
+    // `resolve_plain_ident` arms the composite-array postfix with variant Array, and the `]` close
+    // arms the scalar array-index postfix (`aa_phase`) for the second `[j]`. Byte-identical.
+    assert_self_host_byte_identical("fn f(m: [[Word; 2]; 2]) -> Word { m[0][1] }");
+    // Runtime indices, a non-square shape, and two double-indexed reads in an expression.
+    assert_self_host_byte_identical(
+        "fn f(m: [[Word; 3]; 2], i: Word, j: Word) -> Word { m[i][j] + m[0][0] }",
+    );
+}
+
 // NESTED-composite field access `s.i.x` on a struct-typed parameter, reusing the FlatNested
 // GetField: parse.kel emits a FieldAccessNested (the whole inner struct, GetField(FlatNested
 // {offset, size, Struct})) then a scalar FieldAccess (GetField(Flat{offset within inner,
