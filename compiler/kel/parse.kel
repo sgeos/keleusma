@@ -316,9 +316,13 @@ private data stmt {
     // Per `let` binding, 0 or the element ScalarKind plus one when the binding's value root was an
     // array literal, so a later `a[i]` access emits GetIndex(Flat{kind}).
     let_array: [Word; 64],
+    // Per `let` binding, 0 or the enum's name id plus one when the binding's value root returned an
+    // enum (a call of an enum-returning function), so a `match` over the binding lowers to IsEnum.
+    let_enum: [Word; 64],
     pending_ctuple: Word,
     pending_cstruct: Word,
     pending_carray: Word,
+    pending_cenum: Word,
     // A block's folded-statement table. Sized to the largest stage function body: a
     // codegen.kel emitter such as `push_forlimit` is a single flat block of about 78
     // statements, so 64 is too small; 256 covers the stage files with headroom. These
@@ -554,6 +558,9 @@ private data enums {
 private data chunkret {
     ret_struct: [Word; 256],
     ret_tuple: [Word; 256],
+    // Per chunk, the enum name id (plus one) it returns, else 0, so a `let e = f(); match e` over
+    // an enum-returning call lowers to the IsEnum virtual loop.
+    ret_enum: [Word; 256],
 }
 
 // The tuple-parameter-type layout table, accumulated as each `(T, T, ...)` parameter type
@@ -676,6 +683,13 @@ fn resolve_plain_ident(v: Word) -> Word {
             ops.expect_operand = 0;
             Node::Local() as Word + stmt.scope_slot[ps.let_hit] * 64
         } else {
+            // An enum-typed `let` binding serving as a `match` scrutinee (the open match is in its
+            // scrutinee phase 1) marks that match an enum-value match, so it lowers to the IsEnum
+            // loop; the binding still reads as a plain Local.
+            if stmt.let_enum[ps.let_hit] > 0 andalso mat.match_sp > 0 andalso mat.match_phase[mat.match_sp - 1] == 1 {
+                mat.match_isenum[mat.match_sp - 1] = 1;
+                mat.match_ename[mat.match_sp - 1] = stmt.let_enum[ps.let_hit] - 1;
+            }
             step_local(v)
         } } }
     } else {
@@ -1120,6 +1134,7 @@ fn step_iclosing() -> Word {
             stmt.pending_ctuple = 0;
             stmt.pending_cstruct = 0;
             stmt.pending_carray = 3 + 1;
+            stmt.pending_cenum = 0;
             Node::ArrayLit() as Word + (count * 8 * 1024 + count) * 64
         } else {
             ops.opsp = ops.opsp - 1;
@@ -1211,6 +1226,7 @@ fn emit_op(op: Word) -> Word {
     stmt.pending_ctuple = 0;
     stmt.pending_cstruct = 0;
     stmt.pending_carray = 0;
+    stmt.pending_cenum = 0;
     match op {
         OpCode::Neg() => Node::Neg() as Word,
         OpCode::Not() => Node::Not() as Word,
@@ -1275,12 +1291,14 @@ fn step_closing() -> Word {
             }
             call.call_sp = call.call_sp - 1;
             ops.expect_operand = 0;
-            // A call is the value's root: set the pending composite type to the callee's struct or
-            // all-Word-tuple return type (0 otherwise), so a `let x = f()` bound to the call tags
-            // the binding and `x.field`/`x.N` resolves. Array returns are not yet tracked, so clear.
+            // A call is the value's root: set the pending composite type to the callee's struct,
+            // all-Word-tuple, or enum return type (0 otherwise), so a `let x = f()` bound to the
+            // call tags the binding and `x.field`/`x.N`/`match x` resolves. Array returns are not
+            // yet tracked, so clear.
             stmt.pending_ctuple = chunkret.ret_tuple[call.call_chunk[call.call_sp]];
             stmt.pending_cstruct = chunkret.ret_struct[call.call_chunk[call.call_sp]];
             stmt.pending_carray = 0;
+            stmt.pending_cenum = chunkret.ret_enum[call.call_chunk[call.call_sp]];
             Node::Call() as Word + (call.call_chunk[call.call_sp] + call.call_count[call.call_sp] * 256) * 64
         } else {
         if top == OpCode::EnumMark() as Word {
@@ -1314,6 +1332,7 @@ fn step_closing() -> Word {
             stmt.pending_ctuple = call.tp_count[call.tp_sp];
             stmt.pending_cstruct = 0;
             stmt.pending_carray = 0;
+            stmt.pending_cenum = 0;
             Node::TupleInit() as Word + (call.tp_count[call.tp_sp] * 8 * 1024 + call.tp_count[call.tp_sp]) * 64
         } else {
             ops.opsp = ops.opsp - 1;
@@ -1401,6 +1420,7 @@ fn step_sc_closing() -> Word {
         stmt.pending_ctuple = 0;
         stmt.pending_cstruct = structdefs.sc_name[structdefs.sc_sp] + 1;
         stmt.pending_carray = 0;
+        stmt.pending_cenum = 0;
         Node::StructInit() as Word + (structdefs.sd_bytesize[structdefs.sc_name[structdefs.sc_sp]] * 1024 + structdefs.sc_count[structdefs.sc_sp]) * 64
     }
 }
@@ -2024,6 +2044,7 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
             stmt.pending_ctuple = 0;
             stmt.pending_cstruct = 0;
             stmt.pending_carray = 0;
+            stmt.pending_cenum = 0;
         }
         0
     } else {
@@ -2201,6 +2222,7 @@ fn step_draining() -> Word {
                     stmt.let_tuple[stmt.let_count] = 0;
                     stmt.let_struct[stmt.let_count] = 0;
                     stmt.let_array[stmt.let_count] = 0;
+                    stmt.let_enum[stmt.let_count] = 0;
                     if stmt.pending_ctuple > 0 {
                         let li = tupledefs.tup_count;
                         tupledefs.tup_estart[li] = tupledefs.tup_ecursor;
@@ -2218,12 +2240,17 @@ fn step_draining() -> Word {
                         } else {
                             if stmt.pending_carray > 0 {
                                 stmt.let_array[stmt.let_count] = stmt.pending_carray;
+                            } else {
+                                if stmt.pending_cenum > 0 {
+                                    stmt.let_enum[stmt.let_count] = stmt.pending_cenum;
+                                }
                             }
                         }
                     }
                     stmt.pending_ctuple = 0;
                     stmt.pending_cstruct = 0;
                     stmt.pending_carray = 0;
+                    stmt.pending_cenum = 0;
                     stmt.let_count = stmt.let_count + 1;
                     stmt.stmt_count = stmt.stmt_count + 1;
                     ops.draining = 0;
@@ -3165,6 +3192,12 @@ fn header_sig(k: Word, v: Word) -> Word {
                 for i in 0..structdefs.sd_count limit 64 {
                     if structdefs.sd_name[i] == v {
                         chunkret.ret_struct[ps.cur_chunk] = i + 1;
+                    }
+                }
+                // Record an enum return type, so a `let e = f(); match e` lowers to IsEnum.
+                for i in 0..enums.enum_count limit 256 {
+                    if enums.edata[i] == v {
+                        chunkret.ret_enum[ps.cur_chunk] = v + 1;
                     }
                 }
                 7 + v * 64
