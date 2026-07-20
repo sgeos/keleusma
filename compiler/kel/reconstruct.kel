@@ -138,7 +138,7 @@ fn is_leaf(k: Word) -> Word {
 }
 
 fn is_binary(k: Word) -> Word {
-    if k == 3 orelse k == 5 orelse k == 8 orelse k == 9 orelse k == 12 orelse k == 14 orelse k == 21 orelse k == 31 {
+    if k == 3 orelse k == 5 orelse k == 8 orelse k == 9 orelse k == 12 orelse k == 14 orelse k == 21 orelse k == 31 orelse k == 43 {
         1
     } else {
         0

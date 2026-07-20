@@ -207,6 +207,7 @@ const data wire {
     gettuplefield: Word = 53,
     isenum: Word = 54,
     getenumfield: Word = 55,
+    getindexnested: Word = 56,
     radix: Word = 64,
     item: Word = 4,
     pack: Word = 65536,
@@ -889,6 +890,17 @@ fn push_arrindex(p: Word) -> Word {
     0
 }
 
+// ArrIndexNested (kind 43): a flat-nested array-element read `ps[i]` where each element is a
+// composite (a struct). Emit the array-value ops (the Local), the index ops, then
+// GetIndex(FlatNested{size, variant}) (op tag 56), operand packed size + variant*65536. args = that
+// packing, lhs = the array value, rhs = the index. A following field access reads into the result.
+fn push_arrindex_nested(p: Word) -> Word {
+    push_emit(wire.getindexnested + ast.args[p] * wire.radix);
+    push_visit(ast.rhs[p]);
+    push_visit(ast.lhs[p]);
+    0
+}
+
 // Intern a raw constant value into the pool (deduplicating, like push_literal) and schedule
 // its `Const(index)`. Used where a constant has no Literal node, such as a `break`'s outcome
 // code.
@@ -1173,6 +1185,7 @@ fn walk_step() -> Word {
             37 => push_tuple_field(payload),
             38 => push_strlit(payload),
             39 => push_enum_match(payload),
+            43 => push_arrindex_nested(payload),
             _ => 0,
         };
     }
