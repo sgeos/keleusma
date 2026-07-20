@@ -3083,6 +3083,18 @@ fn self_host_compiles_a_scalar_array_parameter() {
     assert_self_host_byte_identical(
         "fn f(a: [Word; 2], b: [Word; 2], i: Word) -> Word { a[i] + b[0] }",
     );
+    // A `let` bound to a scalar-array-RETURNING call, then indexed (`let a = mk(); a[i]`). The
+    // parser records the scalar array return element kind (`chunkret.ret_array`) so the call sets
+    // `pending_carray` and the binding tags `let_array`, arming `a[i]` like a let-bound array
+    // literal. Completes the "let bound to a returning call" family (struct/tuple/enum already).
+    assert_self_host_byte_identical(
+        "fn mk() -> [Word; 3] { [1, 2, 3] }\n\
+         fn f() -> Word { let a = mk(); a[1] }",
+    );
+    assert_self_host_byte_identical(
+        "fn mk() -> [Word; 4] { [1, 2, 3, 4] }\n\
+         fn f(i: Word) -> Word { let a = mk(); a[i] + a[0] }",
+    );
 }
 
 #[test]
