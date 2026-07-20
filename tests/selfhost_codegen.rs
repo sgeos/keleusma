@@ -1846,10 +1846,10 @@ fn self_compile_codegen_atomic_functions() {
 // reconstruction to the control-flow, data-access, call, and yield kinds.
 // ---------------------------------------------------------------------------
 
-// Lexer `src` block slots: len(1) + bytes(131072) then the intern table.
-const BR_LEX_ISTART: usize = 1 + 131072;
-const BR_LEX_ILEN: usize = 1 + 131072 + 1280;
-const BR_LEX_ICOUNT: usize = 1 + 131072 + 1280 + 1280;
+// Lexer `src` block slots: len(1) + bytes(163840) then the intern table.
+const BR_LEX_ISTART: usize = 1 + 163840;
+const BR_LEX_ILEN: usize = 1 + 163840 + 1280;
+const BR_LEX_ICOUNT: usize = 1 + 163840 + 1280 + 1280;
 // Parser `toks` block slots: len(1), then the packed token array (one `tok+payload*64`
 // word per token), then the scalar and chunk-table inputs.
 const BR_P_LEN: usize = 0;
@@ -2981,6 +2981,14 @@ fn self_host_compiles_an_enum_value_match() {
     assert_self_host_byte_identical(
         "enum E { A(Word), B, C }\n\
          fn pw(e: E) -> Word { match e { E::A(x) => x, _ => 0 } }",
+    );
+    // A LET bound to an enum-returning CALL, then matched: `let e = mk(x); match e { ... }`. The
+    // parser records the enum return type (`chunkret.ret_enum`) so the binding is tagged
+    // enum-typed (`let_enum`) and the match over it lowers to the IsEnum loop like a parameter.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn mk(x: Word) -> E { E::A(x) }\n\
+         fn h(x: Word) -> Word { let e = mk(x); match e { E::A(y) => y, E::B() => 0 } }",
     );
 }
 
@@ -4982,7 +4990,7 @@ fn assemble_shared_layout(
 
 // The per-shared-slot byte layout the driver assembles from parse.kel's records equals
 // the reference compiler's, offset/kind/len for every element slot, for all four stage
-// sources (including lexer.kel's 131072-byte buffer whose later fields sit past 64 KB).
+// sources (including lexer.kel's 163840-byte buffer whose later fields sit past 64 KB).
 #[test]
 fn assembled_shared_layout_matches_the_reference() {
     let cases = [
