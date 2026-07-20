@@ -4121,6 +4121,25 @@ fn self_host_compiles_a_whole_program_byte_identically() {
          loop main(x: Word) -> Word { yield stride(bump(x)) }",
     );
     assert_self_host_yields(m4, 5, 40); // bump(5)=15; stride(15)=15*2+10=40
+
+    // A composite/enum integration program combining the features landed across this line of work:
+    // a struct constructor, a `let` bound to that struct-returning call with field access, a
+    // `let` bound to an enum construction, a `let` bound to a tuple construction with index
+    // access, and an enum-value `match` with a payload binding and a wildcard over the let-bound
+    // enum. All self-compile byte-identically at module scope and run.
+    let m5 = assert_self_host_byte_identical(
+        "enum Shape { Circle(Word), Empty } \
+         struct Point { x: Word, y: Word } \
+         fn mk(a: Word, b: Word) -> Point { Point { x: a, y: b } } \
+         fn compute(n: Word) -> Word { \
+             let p = mk(n, n); \
+             let s = Shape::Circle(p.x); \
+             let t = (p.x, p.y); \
+             match s { Shape::Circle(r) => r + t.0, Shape::Empty() => t.1 } \
+         } \
+         loop main(n: Word) -> Word { yield compute(n) }",
+    );
+    assert_self_host_yields(m5, 5, 10); // p=(5,5); s=Circle(5); t=(5,5); Circle(r=5) => 5 + t.0=5 = 10
 }
 
 // Exercises the raised per-function side-array capacity: a function with SEVEN `for .. limit`
