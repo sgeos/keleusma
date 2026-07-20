@@ -3262,10 +3262,21 @@ fn field_size_and_kind(fidx: Word, v: Word) -> Word {
     } else {
         structdefs.sd_fkind[fidx] = 0;
         structdefs.sd_matchsz = 1;
+        ps.found_flag = 0;
         for i in 0..structdefs.sd_count limit 64 {
             if structdefs.sd_name[i] == v {
+                ps.found_flag = 1;
                 structdefs.sd_matchsz = structdefs.sd_bytesize[i];
                 structdefs.sd_fstruct[fidx] = i + 1;
+            }
+        }
+        // An ENUM-typed field occupies the enum's whole flat body (8 + largest payload), not the
+        // 1-byte default; sizing it correctly keeps a following field's flat offset right.
+        if ps.found_flag == 0 {
+            for i in 0..enums.enum_count limit 256 {
+                if enums.edata[i] == v {
+                    structdefs.sd_matchsz = enum_bytesize(v);
+                }
             }
         }
         structdefs.sd_matchsz

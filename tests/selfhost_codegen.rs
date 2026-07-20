@@ -3143,6 +3143,31 @@ fn self_host_compiles_a_scalar_array_parameter() {
 }
 
 #[test]
+fn self_host_compiles_an_enum_typed_struct_field() {
+    // A struct with an ENUM-typed field sizes that field as the enum's whole flat body (8 + largest
+    // payload), not the 1-byte default -- so a following field's flat offset is correct.
+    // `field_size_and_kind` previously handled only struct-named field types; it now also recognizes
+    // an enum name and returns `enum_bytesize`. A unit enum (8 bytes):
+    assert_self_host_byte_identical(
+        "enum E { A, B }\n\
+         struct S { e: E, n: Word }\n\
+         fn f(s: S) -> Word { s.n }",
+    );
+    // A payload enum (still 8 for a single-Word payload, but via the payload-aware path).
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         struct S { e: E, n: Word }\n\
+         fn f(s: S) -> Word { s.n }",
+    );
+    // An enum-element ARRAY field is sized element_bytesize * length.
+    assert_self_host_byte_identical(
+        "enum E { A, B }\n\
+         struct S { es: [E; 3], n: Word }\n\
+         fn f(s: S) -> Word { s.n }",
+    );
+}
+
+#[test]
 fn self_host_compiles_a_struct_field_array_of_structs() {
     // A struct FIELD that is an array-of-struct (`H { ps: [P; N] }`), element-then-field accessed
     // (`h.ps[i].x`). `h.ps` extracts the whole array field (GetField(FlatNested{Array})); because
