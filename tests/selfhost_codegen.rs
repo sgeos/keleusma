@@ -3098,6 +3098,33 @@ fn self_host_compiles_a_scalar_array_parameter() {
 }
 
 #[test]
+fn self_host_compiles_a_struct_field_array_of_structs() {
+    // A struct FIELD that is an array-of-struct (`H { ps: [P; N] }`), element-then-field accessed
+    // (`h.ps[i].x`). `h.ps` extracts the whole array field (GetField(FlatNested{Array})); because
+    // the element type is a struct (`field_size_and_kind` already records `sd_fstruct` for the
+    // array element), the `]` emits GetIndex(FlatNested{element-struct size, Struct}) and arms the
+    // field-access postfix for the trailing `.field` -- reusing the `ArrIndexNested` / fa_index_nested
+    // path from the array-of-struct PARAMETER case. Byte-identical to the reference.
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\n\
+         struct H { ps: [P; 2] }\n\
+         fn f(h: H) -> Word { h.ps[1].x }",
+    );
+    // A scalar field before the array field (so the array sits at a nonzero flat offset), a
+    // multi-field element struct, and a runtime index.
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\n\
+         struct H { n: Word, ps: [P; 3] }\n\
+         fn f(h: H, i: Word) -> Word { h.ps[i].y + h.n }",
+    );
+    // A scalar-element array field still emits the scalar ArrIndex (regression guard).
+    assert_self_host_byte_identical(
+        "struct H { xs: [Word; 3] }\n\
+         fn f(h: H) -> Word { h.xs[1] }",
+    );
+}
+
+#[test]
 fn self_host_compiles_an_array_of_struct_parameter() {
     // An array-of-STRUCT parameter `ps: [P; N]`, element-then-field accessed (`ps[i].x`). The
     // element is a nested composite, so `ps[i]` emits GetIndex(FlatNested{size, Struct}) (extracting

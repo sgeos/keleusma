@@ -2017,10 +2017,21 @@ fn step_fieldaccess(k: Word, v: Word) -> Word {
         if k == Tok::LBracket() as Word {
             // Array element `p.xs[i]`: emit the FlatNested field read (the whole array value,
             // packed offset + size*65536 + Array-variant(1)*2^32), open the index (an
-            // IndexMark blocks precedence), and mark the closing `]` to emit the ArrIndex.
+            // IndexMark blocks precedence), and mark the closing `]` to emit the element read. A
+            // STRUCT-element array field (`fa_fstruct > 0`, e.g. `h.ps[i]`) marks the `]` to emit a
+            // GetIndex(FlatNested{element-struct size, Struct}) and arm `.field` access into the
+            // element (the `fa_index_nested` path); a scalar-element array field emits a scalar
+            // ArrIndex of the element kind.
             ps.fa_phase = 0;
-            da.fa_index = 1;
-            da.fa_index_kind = ps.fa_kind;
+            if ps.fa_fstruct > 0 {
+                da.fa_index = 1;
+                da.fa_index_nested = 1;
+                da.fa_index_size = structdefs.sd_bytesize[ps.fa_fstruct - 1];
+                da.fa_index_struct = ps.fa_fstruct - 1;
+            } else {
+                da.fa_index = 1;
+                da.fa_index_kind = ps.fa_kind;
+            }
             ops.opstack[ops.opsp] = OpCode::IndexMark() as Word;
             ops.opsp = ops.opsp + 1;
             ops.expect_operand = 1;
