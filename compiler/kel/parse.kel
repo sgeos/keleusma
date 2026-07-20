@@ -513,6 +513,12 @@ private data call {
     // enum-typed for a following `match e`.
     en_ename: [Word; 8],
     en_sp: Word,
+    // A unit enum construction `E::V()` (no `as`) as a VALUE: after the discriminant literal is
+    // emitted, `en_unit` arms the finalize that emits the count-1 EnumInit; `en_unit_bs` the enum's
+    // flat body size, `en_unit_ename` its name (to tag a `let` binding enum-typed).
+    en_unit: Word,
+    en_unit_bs: Word,
+    en_unit_ename: Word,
     // The tuple-construction context stack, parallel to the array-literal stack: `tp_count` the
     // running element count per open `(...)` tuple, `tp_sp` the nesting depth. A `(` first pushes
     // a `Paren` marker (grouping is indistinguishable until a `,`); the first top-level `,`
@@ -982,13 +988,36 @@ fn step_enum(k: Word, v: Word) -> Word {
     if mat.enum_phase == 5 {
         if k == Tok::As() as Word {
             mat.enum_phase = 6;
+            0
+        } else {
+            // Not `as`: `E::V()` is a unit enum construction as a VALUE. Emit the discriminant
+            // literal (element 0), arm the count-1 EnumInit finalize, and push this token back.
+            mat.enum_phase = 0;
+            call.en_unit = 1;
+            call.en_unit_bs = enum_bytesize(mat.enum_name);
+            call.en_unit_ename = mat.enum_name;
+            ps.cursor = ps.cursor - 1;
+            ops.expect_operand = 0;
+            Node::Literal() as Word + mat.enum_disc * 64
         }
-        0
     } else {
         mat.enum_phase = 0;
         ops.expect_operand = 0;
         Node::Literal() as Word + mat.enum_disc * 64
     } } } } }
+}
+
+// Finalize a unit enum construction `E::V()`: after its discriminant literal, emit the count-1
+// EnumInit (NewComposite(Flat{Enum, count 1, byte_size})) and tag the pending composite type with
+// the enum so a `let e = E::V()` binding is enum-typed for a following `match e`.
+fn step_enum_unit_finalize() -> Word {
+    call.en_unit = 0;
+    ops.expect_operand = 0;
+    stmt.pending_ctuple = 0;
+    stmt.pending_cstruct = 0;
+    stmt.pending_carray = 0;
+    stmt.pending_cenum = call.en_unit_ename + 1;
+    Node::EnumInit() as Word + (call.en_unit_bs * 1024 + 1) * 64
 }
 
 // The `::Variant()` of a unit enum-variant match pattern, folded to the variant's
@@ -2463,6 +2492,9 @@ fn body_step() -> Word {
     if da.store_emit == 1 {
         step_store_finalize()
     } else {
+    if call.en_unit == 1 {
+        step_enum_unit_finalize()
+    } else {
         if ps.cursor >= toks.len {
             ops.draining = 1;
             0
@@ -2484,7 +2516,7 @@ fn body_step() -> Word {
                 step_body_dispatch(k, v)
             } } }
         }
-    } } } } } } } } } }
+    } } } } } } } } } } }
 }
 
 // Reset the body-walk state for a fresh function body.
@@ -2526,6 +2558,7 @@ fn arm_body() -> Word {
     call.call_sp = 0;
     call.al_sp = 0;
     call.en_sp = 0;
+    call.en_unit = 0;
     call.tp_sp = 0;
     call.call_phase = 0;
     call.cdraining = 0;

@@ -2700,6 +2700,17 @@ fn self_host_compiles_enum_payload_construction() {
         "enum E { A(Word), B }\n\
          fn tag() -> Word { E::B() as Word }",
     );
+    // A UNIT enum construction as a value `E::V()` (no `as`): lowers to the discriminant literal
+    // then NewComposite(Flat{Enum, count 1, byte_size}), distinct from the `as Word` fold.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn mk() -> E { E::B() }",
+    );
+    // A unit construction bound to a let and matched, exercising the pending-cenum tagging.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn h(x: Word) -> Word { let e = E::B(); match e { E::A(y) => y, E::B() => x } }",
+    );
 }
 
 // TUPLE construction `(a, b, ...)`: a `(` in operand position first pushes a `Paren` marker
