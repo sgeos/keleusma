@@ -3125,6 +3125,36 @@ fn self_host_compiles_a_struct_field_array_of_structs() {
 }
 
 #[test]
+fn self_host_compiles_a_let_bound_array_of_structs() {
+    // An array-of-struct LITERAL bound to a `let`, then element-then-field accessed
+    // (`let a = [P{..}, ..]; a[i].field`). Two parts. (1) The array-literal close now sizes a
+    // struct-element array as count * element-struct-size (was count * 8, correct only for a
+    // single-Word-field element by coincidence), detected by the last element being a struct
+    // construction (`pending_cstruct` at the close). (2) The `let` records the element struct
+    // (`stmt.let_array_struct`/`let_array_size` via a new `pending_carray_struct`), so
+    // `resolve_plain_ident` arms the struct-array postfix (`sa_phase`) -- the let-binding analogue
+    // of an array-of-struct parameter, indexing the array Local directly (no FlatNested field
+    // extraction). Byte-identical to the reference.
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\n\
+         fn f() -> Word { let a = [P { x: 1 }, P { x: 2 }]; a[0].x }",
+    );
+    // A multi-field element struct (16 bytes): the construction sizes the array 32 (2 * 16), and
+    // the access reads field `y` at flat offset 8 within the extracted element under a runtime index.
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\n\
+         fn f(i: Word) -> Word { let a = [P { x: 1, y: 2 }, P { x: 3, y: 4 }]; a[i].y }",
+    );
+    // A multi-field struct-element array returned directly (construction byte_size fix, no access).
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\n\
+         fn f() -> [P; 2] { [P { x: 1, y: 2 }, P { x: 3, y: 4 }] }",
+    );
+    // A scalar array literal still sizes count * 8 and arms the scalar index (regression guard).
+    assert_self_host_byte_identical("fn f() -> Word { let a = [10, 20, 30]; a[1] }");
+}
+
+#[test]
 fn self_host_compiles_an_array_of_struct_parameter() {
     // An array-of-STRUCT parameter `ps: [P; N]`, element-then-field accessed (`ps[i].x`). The
     // element is a nested composite, so `ps[i]` emits GetIndex(FlatNested{size, Struct}) (extracting
