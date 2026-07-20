@@ -3188,6 +3188,22 @@ fn self_host_compiles_an_array_of_struct_parameter() {
     );
 }
 
+#[test]
+fn self_host_compiles_an_array_of_tuple_parameter() {
+    // An array-of-TUPLE parameter `ts: [(T, T, ...); N]`, element-then-field accessed (`ts[i].N`).
+    // The element is a nested tuple, so `ts[i]` emits GetIndex(FlatNested{size, Tuple}) and the
+    // trailing `.N` reads element N via the tuple-field postfix (GetTupleField). `header_sig` parses
+    // the `(...)` element type into a tuple layout bound to the parameter (`parray_tuple`, via a new
+    // `arr == 3` scan state); `resolve_plain_ident` arms the composite-array postfix with variant
+    // Tuple. The array-of-struct and array-of-tuple paths share `ArrIndexNested`, distinguished by a
+    // variant carried through the `]` close. Byte-identical to the reference.
+    assert_self_host_byte_identical("fn f(ts: [(Word, Word); 2]) -> Word { ts[0].0 }");
+    // A runtime index and two accesses (element 1 and element 0) in an expression.
+    assert_self_host_byte_identical(
+        "fn f(ts: [(Word, Word); 3], i: Word) -> Word { ts[i].1 + ts[0].0 }",
+    );
+}
+
 // NESTED-composite field access `s.i.x` on a struct-typed parameter, reusing the FlatNested
 // GetField: parse.kel emits a FieldAccessNested (the whole inner struct, GetField(FlatNested
 // {offset, size, Struct})) then a scalar FieldAccess (GetField(Flat{offset within inner,

@@ -258,9 +258,19 @@ private data ps {
     // after such a parameter Local was emitted (1 awaits an optional `[`).
     parray_struct: [Word; 32],
     parray_size: [Word; 32],
+    // Per value-parameter array-of-TUPLE binding: 0 if the element is not a tuple, else the tuple
+    // layout index (in `tupledefs`) plus one; the element byte size rides `parray_size`. A body
+    // `ts[i].N` extracts element i as a nested tuple (GetIndex(FlatNested{size, Tuple})) and reads
+    // element N. Mutually exclusive with `parray_struct` and `parray` (tuple vs struct vs scalar).
+    parray_tuple: [Word; 32],
     sa_phase: Word,
     sa_struct: Word,
     sa_size: Word,
+    // The composite variant (0 Tuple, 2 Struct) of the just-armed struct/tuple-array postfix, and
+    // the tuple layout index for a tuple-array element, threaded into the `]` close so it emits the
+    // right nested-index variant and arms the matching field postfix (`.field` vs `.N`).
+    sa_variant: Word,
+    sa_tuple: Word,
     // The array-access postfix after a let-bound array Local was emitted: `aa_phase` 1 awaits an
     // optional `[`, `aa_kind` the element ScalarKind for the GetIndex operand.
     aa_phase: Word,
@@ -517,6 +527,11 @@ private data da {
     fa_index_nested: Word,
     fa_index_size: Word,
     fa_index_struct: Word,
+    // The nested array-element composite variant (0 Tuple, 2 Struct) and, for a tuple element, its
+    // layout index, so the `]` close emits GetIndex(FlatNested{size, variant}) and arms the matching
+    // field postfix.
+    fa_index_variant: Word,
+    fa_index_tuple: Word,
     post_index: Word,
     pidx_base: Word,
     pidx_len: Word,
@@ -742,6 +757,7 @@ fn resolve_plain_ident(v: Word) -> Word {
             // let-binding analogue of an array-of-struct parameter.
             ps.sa_struct = stmt.let_array_struct[ps.let_hit] - 1;
             ps.sa_size = stmt.let_array_size[ps.let_hit];
+            ps.sa_variant = 2;
             ps.sa_phase = 1;
             ops.expect_operand = 0;
             Node::Local() as Word + stmt.scope_slot[ps.let_hit] * 64
@@ -795,12 +811,21 @@ fn resolve_plain_ident(v: Word) -> Word {
                         ps.found = i;
                         ps.sa_struct = ps.parray_struct[i] - 1;
                         ps.sa_size = ps.parray_size[i];
+                        ps.sa_variant = 2;
+                    }
+                    if ps.pnames[i] == v andalso ps.parray_tuple[i] > 0 {
+                        ps.found_flag = 1;
+                        ps.found = i;
+                        ps.sa_tuple = ps.parray_tuple[i] - 1;
+                        ps.sa_size = ps.parray_size[i];
+                        ps.sa_variant = 0;
                     }
                 }
                 if ps.found_flag == 1 {
-                    // An array-of-struct parameter: arm the struct-array-index postfix (a following
-                    // `[i]` emits GetIndex(FlatNested{size, Struct}) and arms `.field` access into
-                    // the extracted element); the parameter reads as its Local, indexed whole.
+                    // An array-of-struct or array-of-tuple parameter: arm the composite-array-index
+                    // postfix (a following `[i]` emits GetIndex(FlatNested{size, Struct|Tuple}) and
+                    // arms `.field`/`.N` access into the extracted element); the parameter reads as
+                    // its Local, indexed whole.
                     ps.sa_phase = 1;
                     ops.expect_operand = 0;
                     Node::Local() as Word + ps.found * 64
@@ -1295,9 +1320,20 @@ fn step_iclosing() -> Word {
                 ops.expect_operand = 0;
                 if da.fa_index_nested == 1 {
                     da.fa_index_nested = 0;
-                    ps.fa_phase = 1;
-                    ps.fa_struct = da.fa_index_struct;
-                    Node::ArrIndexNested() as Word + (da.fa_index_size + 2 * 65536) * 64
+                    if da.fa_index_variant == 0 {
+                        // A tuple element: emit GetIndex(FlatNested{size, Tuple = 0}) and arm the
+                        // tuple-field postfix (a following `.N` reads element N of the extracted
+                        // tuple).
+                        ps.ta_phase = 1;
+                        ps.ta_tuple = da.fa_index_tuple;
+                        Node::ArrIndexNested() as Word + (da.fa_index_size + 0 * 65536) * 64
+                    } else {
+                        // A struct element: emit GetIndex(FlatNested{size, Struct = 2}) and arm the
+                        // field-access postfix (a following `.field` reads into the extracted struct).
+                        ps.fa_phase = 1;
+                        ps.fa_struct = da.fa_index_struct;
+                        Node::ArrIndexNested() as Word + (da.fa_index_size + 2 * 65536) * 64
+                    }
                 } else {
                     Node::ArrIndex() as Word + da.fa_index_kind * 64
                 }
@@ -2074,6 +2110,7 @@ fn step_fieldaccess(k: Word, v: Word) -> Word {
                 da.fa_index_nested = 1;
                 da.fa_index_size = structdefs.sd_bytesize[ps.fa_fstruct - 1];
                 da.fa_index_struct = ps.fa_fstruct - 1;
+                da.fa_index_variant = 2;
             } else {
                 da.fa_index = 1;
                 da.fa_index_kind = ps.fa_kind;
@@ -2174,6 +2211,8 @@ fn step_structarrayaccess(k: Word, v: Word) -> Word {
         da.fa_index_nested = 1;
         da.fa_index_size = ps.sa_size;
         da.fa_index_struct = ps.sa_struct;
+        da.fa_index_variant = ps.sa_variant;
+        da.fa_index_tuple = ps.sa_tuple;
         ops.opstack[ops.opsp] = OpCode::IndexMark() as Word;
         ops.opsp = ops.opsp + 1;
         ops.expect_operand = 1;
@@ -3363,6 +3402,19 @@ fn header_sig(k: Word, v: Word) -> Word {
         step_tuple_type(k, v)
     } else {
     if k == 1 {
+        if ps.arr == 3 {
+            // A tuple element type inside an array-of-tuple parameter `[(T, T, ...); N]`: append it
+            // to the element tuple layout at the running byte offset. Emits no record (the layout
+            // is the payload); the closing `)` finalizes the element size.
+            let li = ps.parray_tuple[ps.pcount - 1] - 1;
+            let base = tupledefs.tup_estart[li];
+            let ei = tupledefs.tup_ecount[li];
+            tupledefs.tup_eoffset[base + ei] = ps.tts_off;
+            tupledefs.tup_ekind[base + ei] = scalar_kind_of(v);
+            tupledefs.tup_ecount[li] = ei + 1;
+            ps.tts_off = ps.tts_off + type_byte_size(v);
+            0
+        } else {
         if ps.arr == 1 {
             ps.arr = 2;
             if ps.arr_ret == 0 {
@@ -3413,6 +3465,7 @@ fn header_sig(k: Word, v: Word) -> Word {
                 ps.penum[ps.pcount] = 0;
                 ps.parray[ps.pcount] = 0;
                 ps.parray_struct[ps.pcount] = 0;
+                ps.parray_tuple[ps.pcount] = 0;
                 ps.pcount = ps.pcount + 1;
                 4 + v * 64
             } else {
@@ -3456,7 +3509,7 @@ fn header_sig(k: Word, v: Word) -> Word {
             } else {
                 0
             }
-        } }
+        } } }
     } else {
     if k == 41 {
         // A `[` opening an array type. `LBracket` is token class 41; the array element type
@@ -3485,6 +3538,18 @@ fn header_sig(k: Word, v: Word) -> Word {
         }
     } else {
     if k == 7 {
+        if ps.arr == 1 {
+            // A `(` opening the tuple element type of an array-of-tuple parameter `[(T, ...); N]`:
+            // open a fresh tuple layout bound to the parameter (`parray_tuple`), scan its element
+            // types in the k==1 `arr == 3` branch, and finalize the element size at the closing `)`.
+            ps.parray_tuple[ps.pcount - 1] = tupledefs.tup_count + 1;
+            tupledefs.tup_estart[tupledefs.tup_count] = tupledefs.tup_ecursor;
+            tupledefs.tup_ecount[tupledefs.tup_count] = 0;
+            tupledefs.tup_count = tupledefs.tup_count + 1;
+            ps.tts_off = 0;
+            ps.arr = 3;
+            0
+        } else {
         if ps.ptype == 1 andalso ps.pdepth == 1 {
             // A tuple parameter type `(T, T, ...)`: open a fresh tuple layout entry, bind it to the
             // current parameter, and scan its element types in `step_tuple_type`. The outer `(`
@@ -3512,15 +3577,26 @@ fn header_sig(k: Word, v: Word) -> Word {
                 }
             }
             0
-        } }
+        } } }
     } else {
     if k == 8 {
+        if ps.arr == 3 {
+            // The `)` closing an array-of-tuple parameter's element type: finalize the element
+            // tuple layout and record the element byte size (the running offset), then await the
+            // array size (`; N`, k==12 with arr==2) as a scalar array would.
+            let li = ps.parray_tuple[ps.pcount - 1] - 1;
+            tupledefs.tup_ecursor = tupledefs.tup_estart[li] + tupledefs.tup_ecount[li];
+            ps.parray_size[ps.pcount - 1] = ps.tts_off;
+            ps.arr = 2;
+            0
+        } else {
         ps.pdepth = ps.pdepth - 1;
         if ps.pdepth == 0 {
             ps.pdone = 1;
             ps.rtype = 1;
         }
         0
+        }
     } else {
     if k == 9 {
         if ps.pdepth == 1 {
