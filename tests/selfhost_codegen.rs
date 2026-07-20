@@ -3054,6 +3054,25 @@ fn self_host_compiles_an_enum_value_match() {
     );
 }
 
+#[test]
+fn self_host_compiles_a_scalar_array_parameter() {
+    // A scalar array PARAMETER `xs: [Word; N]` indexed in the body. Previously the array-type
+    // parse in `header_sig` gated its `[` on a dead token class (11, which no token emits), so an
+    // array parameter was silently read as a scalar and its `xs[i]` dropped. `header_sig` now
+    // opens the array on the real `LBracket` (41) and records the element ScalarKind in `ps.parray`
+    // (plus one), so a body `xs[i]` arms the array-index postfix and emits GetIndex(Flat{kind}),
+    // reusing the let-bound-array path. Byte-identical to the reference.
+    assert_self_host_byte_identical("fn f(xs: [Word; 3]) -> Word { xs[1] }");
+    // A runtime index and multiple accesses in an expression.
+    assert_self_host_byte_identical("fn f(xs: [Word; 3], i: Word) -> Word { xs[i] + xs[0] }");
+    // An array parameter used whole (not indexed) still reads as a plain Local.
+    assert_self_host_byte_identical("fn f(xs: [Word; 3]) -> Word { 7 }");
+    // A second array parameter alongside a scalar, each indexed.
+    assert_self_host_byte_identical(
+        "fn f(a: [Word; 2], b: [Word; 2], i: Word) -> Word { a[i] + b[0] }",
+    );
+}
+
 // NESTED-composite field access `s.i.x` on a struct-typed parameter, reusing the FlatNested
 // GetField: parse.kel emits a FieldAccessNested (the whole inner struct, GetField(FlatNested
 // {offset, size, Struct})) then a scalar FieldAccess (GetField(Flat{offset within inner,
