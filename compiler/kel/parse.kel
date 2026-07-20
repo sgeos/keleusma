@@ -421,6 +421,11 @@ private data mat {
     // the running payload bind count (also the field cursor while reading `E::V(x, y)` binds).
     mpat_vrow: Word,
     mpat_pcount: Word,
+    // The current arm's IsEnum test slot, captured at parse's slot allocation (`(`) so reconstruct
+    // uses parse's slot number directly rather than recomputing a forward counter. A recomputed
+    // counter cannot account for a nested match in a prior arm's result (which allocates slots
+    // between the arms), so carrying parse's allocation is what makes nested enum matches work.
+    mpat_tslot: Word,
     // Per open enum-value match, whether it has a `_` wildcard arm (1). The wildcard's result is
     // emitted after the variant arms and before the Trap (a catch-all), with no IsEnum test.
     match_haswc: [Word; 8],
@@ -1052,6 +1057,8 @@ fn step_mpat(k: Word, v: Word) -> Word {
             if mat.match_isenum[mat.match_sp - 1] == 1 {
                 // Reserve this arm's IsEnum test slot before its payload bind slots, so parse's
                 // slot numbers match codegen's allocation (temp, then per arm: test, binds).
+                // Capture the slot number so reconstruct emits it directly (see `mpat_tslot`).
+                mat.mpat_tslot = ps.pcount + stmt.slot_count;
                 stmt.slot_count = stmt.slot_count + 1;
                 mat.mpat_pcount = 0;
             }
@@ -1082,9 +1089,11 @@ fn step_mpat(k: Word, v: Word) -> Word {
             mat.match_argcount[mat.match_sp - 1] = mat.match_argcount[mat.match_sp - 1] + 1;
             mat.match_phase[mat.match_sp - 1] = 3;
             if mat.match_isenum[mat.match_sp - 1] == 1 {
-                // Emit an EnumArm marker packing the variant name, discriminant, and payload bind
-                // count for the IsEnum lowering; the arm result follows.
-                Node::EnumArm() as Word + ((mat.mpat_vname * 65536 + mat.enum_disc) * 8 + mat.mpat_pcount) * 64
+                // Emit an EnumArm marker packing the variant name, discriminant, payload bind
+                // count, and parse-allocated test slot for the IsEnum lowering; the arm result
+                // follows. The test slot is carried (not recomputed in reconstruct) so a nested
+                // match in a prior arm's result cannot desynchronize the arm test slots.
+                Node::EnumArm() as Word + (((mat.mpat_vname * 65536 + mat.enum_disc) * 8 + mat.mpat_pcount) * 1024 + mat.mpat_tslot) * 64
             } else {
                 Node::Literal() as Word + mat.enum_disc * 64
             }

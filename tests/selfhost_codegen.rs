@@ -3008,6 +3008,22 @@ fn self_host_compiles_an_enum_value_match() {
         "enum E { A(Word), B }\n\
          fn h(x: Word) -> Word { let e = E::A(x); match e { E::A(y) => y, E::B() => 0 } }",
     );
+    // NESTED match: a match in a prior arm's result allocates slots between the outer arms, so the
+    // outer arm tests must account for the inner match's slots. Parse allocates the test slots in
+    // emission order and carries each in its EnumArm marker (rather than reconstruct recomputing a
+    // forward counter that cannot see the inner match's allocation), and the EnumArm/EnumBind
+    // pending buffers are drained with stack discipline so the inner match (built first) pops only
+    // its own arms. Unit-variant nesting:
+    assert_self_host_byte_identical(
+        "enum E { A, B }\n\
+         fn f(e: E, g: E) -> Word { match e { E::A() => match g { E::A() => 1, E::B() => 2 }, E::B() => 3 } }",
+    );
+    // Payload-variant nesting: the inner match binds its own payload slots, and the outer arm B's
+    // test slot lands past every slot the inner match consumed.
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn f(e: E, g: E) -> Word { match e { E::A(x) => match g { E::A(y) => x + y, E::B() => x }, E::B() => 0 } }",
+    );
 }
 
 // NESTED-composite field access `s.i.x` on a struct-typed parameter, reusing the FlatNested

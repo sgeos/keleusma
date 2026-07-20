@@ -78,6 +78,9 @@ private data rs {
     bindcount: Word,
     bcur: Word,
     tslotcur: Word,
+    // Scratch for `build_enum_match`: the total payload binds across the match's arms, used to
+    // locate this match's EnumBind window on the (stack-discipline) `bindpending` buffer.
+    tbind: Word,
     // The construction field-position stack, parallel to the node stack: a FieldPos record
     // pushes the next field value's declaration slot, and StructInit pops one per field value
     // to place it in declaration order (a construction may write fields out of order).
@@ -160,10 +163,22 @@ fn build_enum_match(a: Word) -> Word {
     io.match_parts[base] = temp;
     io.match_parts[base + 1] = ename;
     // Per-arm stride is 20: [vname, disc, result, pcount, tslot, then up to 4 payload fields as
-    // (off, kind, slot) triples]. `tslot` is the arm's IsEnum test slot, a forward running counter
-    // from temp+1 advancing by 1 (the test) plus the arm's payload count. The wildcard flag and
-    // result sit just past the arm entries; the wildcard result (if any) is on top of the stack,
-    // above the variant results, so pop it first, then the variant results in reverse, then scrut.
+    // (off, kind, slot) triples]. Each EnumArm packs `(((vname*65536+disc)*8+pcount)*1024+tslot)`,
+    // where `tslot` is the arm's IsEnum test slot carried from parse's slot allocation (not a
+    // forward counter here), so a nested match in a prior arm's result -- which allocates slots
+    // between the arms -- cannot desynchronize the tests. The EnumArm/EnumBind pending buffers are
+    // STACKS: this match's arms are the top `count` EnumArms (base `ebase`) and its binds the top
+    // `tbind` EnumBinds (base `bbase`); a nested match (built first) pops its own entries, leaving
+    // the enclosing match's already-pushed data intact. Popping (not resetting) is the nesting fix.
+    // The wildcard flag and result sit just past the arm entries; the wildcard result (if any) is
+    // on top of the stack, above the variant results, so pop it first, then the variant results in
+    // reverse, then the scrutinee.
+    let ebase = rs.epcount - count;
+    rs.tbind = 0;
+    for kb in 0..count limit 64 {
+        rs.tbind = rs.tbind + (rs.epending[ebase + kb] / 1024) % 8;
+    }
+    let bbase = rs.bindcount - rs.tbind;
     io.match_parts[base + 2 + count * 20] = haswc;
     if haswc == 1 {
         io.match_parts[base + 2 + count * 20 + 1] = pop();
@@ -173,15 +188,15 @@ fn build_enum_match(a: Word) -> Word {
         let arm = count - 1 - p;
         io.match_parts[base + 2 + arm * 20 + 2] = res;
     }
-    rs.bcur = 0;
-    rs.tslotcur = temp + 1;
+    rs.bcur = bbase;
     for kk in 0..count limit 64 {
-        let packed = rs.epending[kk];
-        let pc = packed % 8;
-        io.match_parts[base + 2 + kk * 20] = packed / 524288;
-        io.match_parts[base + 2 + kk * 20 + 1] = (packed / 8) % 65536;
+        let packed = rs.epending[ebase + kk];
+        let rest = packed / 1024;
+        let pc = rest % 8;
+        io.match_parts[base + 2 + kk * 20] = rest / 524288;
+        io.match_parts[base + 2 + kk * 20 + 1] = (rest / 8) % 65536;
         io.match_parts[base + 2 + kk * 20 + 3] = pc;
-        io.match_parts[base + 2 + kk * 20 + 4] = rs.tslotcur;
+        io.match_parts[base + 2 + kk * 20 + 4] = packed % 1024;
         for f in 0..pc limit 4 {
             let bp = rs.bindpending[rs.bcur];
             io.match_parts[base + 2 + kk * 20 + 5 + f * 3] = bp % 65536;
@@ -189,11 +204,10 @@ fn build_enum_match(a: Word) -> Word {
             io.match_parts[base + 2 + kk * 20 + 5 + f * 3 + 2] = bp / 524288;
             rs.bcur = rs.bcur + 1;
         }
-        rs.tslotcur = rs.tslotcur + 1 + pc;
     }
     rs.mp = base + 2 + count * 20 + 2;
-    rs.epcount = 0;
-    rs.bindcount = 0;
+    rs.epcount = ebase;
+    rs.bindcount = bbase;
     let scrut = pop();
     emit(39, base, scrut, count)
 }
