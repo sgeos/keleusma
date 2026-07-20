@@ -615,6 +615,11 @@ private data chunkret {
     // a `let a = f(); a[i]` bound to the call arms `a[i]` access (scalar elements only, matching the
     // scalar array-parameter and let-bound-array cases).
     ret_array: [Word; 256],
+    // Per chunk, for a STRUCT-element array return `-> [P; N]`, the element struct's declaration
+    // index (plus one) and byte size, else 0, so a `let a = f(); a[i].field` bound to the call arms
+    // the struct-array postfix. Mutually exclusive with `ret_array` (scalar vs struct element).
+    ret_array_struct: [Word; 256],
+    ret_array_size: [Word; 256],
 }
 
 // The tuple-parameter-type layout table, accumulated as each `(T, T, ...)` parameter type
@@ -1449,7 +1454,8 @@ fn step_closing() -> Word {
             stmt.pending_ctuple = chunkret.ret_tuple[call.call_chunk[call.call_sp]];
             stmt.pending_cstruct = chunkret.ret_struct[call.call_chunk[call.call_sp]];
             stmt.pending_carray = chunkret.ret_array[call.call_chunk[call.call_sp]];
-            stmt.pending_carray_struct = 0;
+            stmt.pending_carray_struct = chunkret.ret_array_struct[call.call_chunk[call.call_sp]];
+            stmt.pending_carray_size = chunkret.ret_array_size[call.call_chunk[call.call_sp]];
             stmt.pending_cenum = chunkret.ret_enum[call.call_chunk[call.call_sp]];
             Node::Call() as Word + (call.call_chunk[call.call_sp] + call.call_count[call.call_sp] * 256) * 64
         } else {
@@ -3378,13 +3384,16 @@ fn header_sig(k: Word, v: Word) -> Word {
                 }
                 6 + v * 64
             } else {
-                // A scalar array RETURN `-> [T; N]`: record the element ScalarKind (plus one) so a
-                // `let a = f(); a[i]` bound to the call arms array-element access. A struct-element
-                // array return is left unrecorded (a later extension).
+                // An array RETURN `-> [T; N]`: a struct element records the element struct's decl
+                // index and byte size (`ret_array_struct`/`ret_array_size`), so a `let a = f();
+                // a[i].field` bound to the call arms the struct-array postfix; a scalar element
+                // records the element ScalarKind (`ret_array`), for `let a = f(); a[i]`.
                 ps.found_flag = 0;
                 for i in 0..structdefs.sd_count limit 64 {
                     if structdefs.sd_name[i] == v {
                         ps.found_flag = 1;
+                        chunkret.ret_array_struct[ps.cur_chunk] = i + 1;
+                        chunkret.ret_array_size[ps.cur_chunk] = structdefs.sd_bytesize[i];
                     }
                 }
                 if ps.found_flag == 0 {
