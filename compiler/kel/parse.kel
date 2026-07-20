@@ -601,6 +601,10 @@ private data chunkret {
     // Per chunk, the enum name id (plus one) it returns, else 0, so a `let e = f(); match e` over
     // an enum-returning call lowers to the IsEnum virtual loop.
     ret_enum: [Word; 256],
+    // Per chunk, the element ScalarKind (plus one) of a scalar array return `-> [T; N]`, else 0, so
+    // a `let a = f(); a[i]` bound to the call arms `a[i]` access (scalar elements only, matching the
+    // scalar array-parameter and let-bound-array cases).
+    ret_array: [Word; 256],
 }
 
 // The tuple-parameter-type layout table, accumulated as each `(T, T, ...)` parameter type
@@ -1404,12 +1408,11 @@ fn step_closing() -> Word {
             call.call_sp = call.call_sp - 1;
             ops.expect_operand = 0;
             // A call is the value's root: set the pending composite type to the callee's struct,
-            // all-Word-tuple, or enum return type (0 otherwise), so a `let x = f()` bound to the
-            // call tags the binding and `x.field`/`x.N`/`match x` resolves. Array returns are not
-            // yet tracked, so clear.
+            // all-Word-tuple, enum, or scalar-array return type (0 otherwise), so a `let x = f()`
+            // bound to the call tags the binding and `x.field`/`x.N`/`x[i]`/`match x` resolves.
             stmt.pending_ctuple = chunkret.ret_tuple[call.call_chunk[call.call_sp]];
             stmt.pending_cstruct = chunkret.ret_struct[call.call_chunk[call.call_sp]];
-            stmt.pending_carray = 0;
+            stmt.pending_carray = chunkret.ret_array[call.call_chunk[call.call_sp]];
             stmt.pending_cenum = chunkret.ret_enum[call.call_chunk[call.call_sp]];
             Node::Call() as Word + (call.call_chunk[call.call_sp] + call.call_count[call.call_sp] * 256) * 64
         } else {
@@ -3313,6 +3316,18 @@ fn header_sig(k: Word, v: Word) -> Word {
                 }
                 6 + v * 64
             } else {
+                // A scalar array RETURN `-> [T; N]`: record the element ScalarKind (plus one) so a
+                // `let a = f(); a[i]` bound to the call arms array-element access. A struct-element
+                // array return is left unrecorded (a later extension).
+                ps.found_flag = 0;
+                for i in 0..structdefs.sd_count limit 64 {
+                    if structdefs.sd_name[i] == v {
+                        ps.found_flag = 1;
+                    }
+                }
+                if ps.found_flag == 0 {
+                    chunkret.ret_array[ps.cur_chunk] = scalar_kind_of(v) + 1;
+                }
                 7 + v * 64
             }
         } else {
