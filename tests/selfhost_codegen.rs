@@ -853,6 +853,18 @@ fn decode_op(w: i64) -> Op {
             ((operand / 1024) % 1024) as u16,
             (operand / 1048576) as u16,
         ),
+        // A flat-nested enum-payload field read: operand packs offset + size*65536 + variant*2^32.
+        57 => Op::GetEnumField(EnumField::FlatNested {
+            offset: (operand % 65536) as u16,
+            size: ((operand / 65536) % 65536) as u16,
+            variant: match operand / 4294967296 {
+                0 => CompositeKind::Tuple,
+                1 => CompositeKind::Array,
+                2 => CompositeKind::Struct,
+                3 => CompositeKind::Enum,
+                other => panic!("bad composite variant tag {other}"),
+            },
+        }),
         // A flat enum-payload field read: operand packs offset + kind_tag*65536.
         55 => Op::GetEnumField(EnumField::Flat {
             offset: (operand % 65536) as u16,
@@ -3063,6 +3075,39 @@ fn self_host_compiles_an_enum_value_match() {
     assert_self_host_byte_identical(
         "enum E { A, B }\n\
          fn f(a: E, b: E, c: E) -> Word { match a { E::A() => match b { E::A() => match c { E::A() => 1, E::B() => 2 }, E::B() => 3 }, E::B() => 4 } }",
+    );
+}
+
+#[test]
+fn self_host_compiles_a_struct_enum_payload_match() {
+    // A STRUCT-typed enum payload matched (`enum E { A(P) }`, `match e { E::A(p) => .. }`). The
+    // payload is a whole nested struct, so its extraction is `GetEnumField(FlatNested{size, Struct})`
+    // (a new getenumfieldnested op, tag 57) rather than the scalar `GetEnumField(Flat{kind})`. The
+    // enum declaration marks a struct payload field with the sentinel kind `100 + struct byte size`
+    // (widening the EnumBind kind field from 3 to 8 bits) and records the payload struct index
+    // (`enums.evfstruct`), so the bound `p` is struct-typed and `p.field` resolves. Byte-identical.
+    // Payload bound but not field-accessed:
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\n\
+         enum E { A(P), B }\n\
+         fn f(e: E) -> Word { match e { E::A(p) => 1, E::B() => 0 } }",
+    );
+    // The bound struct's field read (`p.y`), a multi-field element struct.
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\n\
+         enum E { A(P), B }\n\
+         fn f(e: E) -> Word { match e { E::A(p) => p.y, E::B() => 0 } }",
+    );
+    // A mixed payload: a scalar field then a struct field, both bound and used.
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\n\
+         enum E { A(Word, P), B }\n\
+         fn f(e: E) -> Word { match e { E::A(w, p) => w + p.x, E::B() => 0 } }",
+    );
+    // A scalar payload still emits the plain GetEnumField(Flat{kind}) (regression guard).
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\n\
+         fn f(e: E) -> Word { match e { E::A(x) => x, E::B() => 0 } }",
     );
 }
 

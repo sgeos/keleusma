@@ -208,6 +208,7 @@ const data wire {
     isenum: Word = 54,
     getenumfield: Word = 55,
     getindexnested: Word = 56,
+    getenumfieldnested: Word = 57,
     radix: Word = 64,
     item: Word = 4,
     pack: Word = 65536,
@@ -1037,15 +1038,22 @@ fn push_enum_match(p: Word) -> Word {
         push_emit(wire.mbreak);
         push_visit(result);
         // Payload binds emit after the If and before the result: per field, GetLocal(temp),
-        // GetEnumField(Flat{offset, kind}), SetLocal(bindslot). Pushed in reverse field order so
-        // the LIFO walk emits field 0 first.
+        // GetEnumField(..), SetLocal(bindslot). Pushed in reverse field order so the LIFO walk emits
+        // field 0 first. A SCALAR field (kind 0-7) emits GetEnumField(Flat{offset, kind}); a STRUCT
+        // field (kind >= 100, the sentinel `100 + struct byte size`) emits GetEnumField(FlatNested
+        // {offset, size, Struct = 2}) via the getenumfieldnested op, extracting the whole nested
+        // struct so a following field read into the bound value resolves.
         for fj in 0..pc limit 4 {
             let f = pc - 1 - fj;
             let off = ast.match_parts[armb + 5 + f * 3];
             let kind = ast.match_parts[armb + 5 + f * 3 + 1];
             let slot = ast.match_parts[armb + 5 + f * 3 + 2];
             push_emit(wire.setlocal + slot * wire.radix);
-            push_emit(wire.getenumfield + (off + kind * 65536) * wire.radix);
+            if kind >= 100 {
+                push_emit(wire.getenumfieldnested + (off + (kind - 100) * 65536 + 2 * 4294967296) * wire.radix);
+            } else {
+                push_emit(wire.getenumfield + (off + kind * 65536) * wire.radix);
+            }
             push_emit(wire.getlocal + temp * wire.radix);
         }
         push_emit(wire.mif);
