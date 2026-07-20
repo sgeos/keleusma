@@ -200,8 +200,8 @@ fn build_enum_match(a: Word) -> Word {
         for f in 0..pc limit 4 {
             let bp = rs.bindpending[rs.bcur];
             io.match_parts[base + 2 + kk * 20 + 5 + f * 3] = bp % 65536;
-            io.match_parts[base + 2 + kk * 20 + 5 + f * 3 + 1] = (bp / 65536) % 8;
-            io.match_parts[base + 2 + kk * 20 + 5 + f * 3 + 2] = bp / 524288;
+            io.match_parts[base + 2 + kk * 20 + 5 + f * 3 + 1] = (bp / 65536) % 256;
+            io.match_parts[base + 2 + kk * 20 + 5 + f * 3 + 2] = bp / 16777216;
             rs.bcur = rs.bcur + 1;
         }
     }

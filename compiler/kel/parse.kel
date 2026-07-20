@@ -612,6 +612,9 @@ private data enums {
     evfcount: [Word; 256],
     evfoff: [Word; 512],
     evfkind: [Word; 512],
+    // Per payload field, the struct declaration index (plus one) when the field is a struct, else 0,
+    // so a `match E::A(p)` binding of a struct payload records `p`'s type and `p.field` resolves.
+    evfstruct: [Word; 512],
     evfcursor: Word,
     enum_count: Word,
     cur_enum: Word,
@@ -1199,17 +1202,20 @@ fn step_mpat(k: Word, v: Word) -> Word {
             // A payload bind variable `x` in `E::V(x)`: allocate its frame slot, register it as a
             // let binding so the arm result resolves it, look up the field's flat offset and kind
             // from the variant layout, and emit an EnumBind marker.
+            let fi = enums.evfstart[mat.mpat_vrow] + mat.mpat_pcount;
             let slot = ps.pcount + stmt.slot_count;
             stmt.slot_count = stmt.slot_count + 1;
             stmt.let_names[stmt.let_count] = v;
             stmt.scope_slot[stmt.let_count] = slot;
             stmt.let_tuple[stmt.let_count] = 0;
-            stmt.let_struct[stmt.let_count] = 0;
+            // A STRUCT payload binds struct-typed (so `p.field` resolves); a scalar payload leaves 0.
+            stmt.let_struct[stmt.let_count] = enums.evfstruct[fi];
             stmt.let_array[stmt.let_count] = 0;
+            stmt.let_array_struct[stmt.let_count] = 0;
+            stmt.let_enum[stmt.let_count] = 0;
             stmt.let_count = stmt.let_count + 1;
-            let fi = enums.evfstart[mat.mpat_vrow] + mat.mpat_pcount;
             mat.mpat_pcount = mat.mpat_pcount + 1;
-            Node::EnumBind() as Word + (enums.evfoff[fi] + enums.evfkind[fi] * 65536 + slot * 524288) * 64
+            Node::EnumBind() as Word + (enums.evfoff[fi] + enums.evfkind[fi] * 65536 + slot * 16777216) * 64
         } else {
         if k == Tok::Comma() as Word {
             0
@@ -3065,12 +3071,26 @@ fn header_enum(k: Word, v: Word) -> Word {
     } else {
     if ps.mode == 14 {
         if k == 1 {
-            // A payload field type: record its flat offset (8 + preceding field sizes) and
-            // ScalarKind for a later payload match, then add its size to the running sum.
+            // A payload field type: record its flat offset (8 + preceding field sizes) and kind for
+            // a later payload match, then add its size to the running sum. A STRUCT payload field is
+            // read out as a whole nested composite, so its kind is the sentinel `100 + struct byte
+            // size` (`push_enum_match` reads a kind >= 100 as GetEnumField(FlatNested{size, Struct}));
+            // a scalar payload keeps its plain ScalarKind (0-7).
             let vi = enums.enum_count - 1;
             let fi = enums.evfstart[vi] + enums.evfcount[vi];
             enums.evfoff[fi] = 8 + enums.epayload[vi];
-            enums.evfkind[fi] = scalar_kind_of(v);
+            ps.found_flag = 0;
+            enums.evfstruct[fi] = 0;
+            for i in 0..structdefs.sd_count limit 64 {
+                if structdefs.sd_name[i] == v {
+                    ps.found_flag = 1;
+                    enums.evfkind[fi] = 100 + structdefs.sd_bytesize[i];
+                    enums.evfstruct[fi] = i + 1;
+                }
+            }
+            if ps.found_flag == 0 {
+                enums.evfkind[fi] = scalar_kind_of(v);
+            }
             enums.evfcount[vi] = enums.evfcount[vi] + 1;
             enums.epayload[vi] = enums.epayload[vi] + type_byte_size(v);
             0
