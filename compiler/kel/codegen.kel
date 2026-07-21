@@ -1178,8 +1178,15 @@ fn push_struct_eq(p: Word) -> Word {
     let ta = ast.match_parts[base];
     let tb = ast.match_parts[base + 1];
     let count = ast.match_parts[base + 2];
-    // The `!=` flag rides just past the field list: `a != b` is the `==` loop then a `Not`.
+    // The `!=` flag rides just past the field list: `a != b` is the `==` loop then a `Not`. The
+    // accessor flag follows it: a tuple comparison reads fields with GetTupleField, a struct with
+    // GetField (both take the same offset+kind*65536 operand).
     let is_ne = ast.match_parts[base + 3 + count * 2];
+    let acc = if ast.match_parts[base + 3 + count * 2 + 1] == 1 {
+        wire.gettuplefield
+    } else {
+        wire.getfield
+    };
     st.let_count = st.let_count + 2;
     // Pre-intern the results in the reference's pool order (false before true): the reference emits
     // the false (mismatch) Const first, so it takes the lower pool index. `push_emit` runs in reverse
@@ -1203,9 +1210,9 @@ fn push_struct_eq(p: Word) -> Word {
         push_emit(wire.mif);
         push_emit(wire.lnot);
         push_emit(wire.cmpeq);
-        push_emit(wire.getfield + (off + kind * 65536) * wire.radix);
+        push_emit(acc + (off + kind * 65536) * wire.radix);
         push_emit(wire.getlocal + tb * wire.radix);
-        push_emit(wire.getfield + (off + kind * 65536) * wire.radix);
+        push_emit(acc + (off + kind * 65536) * wire.radix);
         push_emit(wire.getlocal + ta * wire.radix);
     }
     push_emit(wire.mloop);

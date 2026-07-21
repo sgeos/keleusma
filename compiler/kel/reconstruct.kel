@@ -234,7 +234,8 @@ fn build_struct_eq(a: Word) -> Word {
     let ta = a % 1024;
     let tb = (a / 1024) % 1024;
     let count = (a / 1048576) % 1024;
-    let is_ne = a / 1073741824;
+    let is_ne = (a / 1073741824) % 2;
+    let is_tuple = a / 2147483648;
     let base = rs.mp;
     io.match_parts[base] = ta;
     io.match_parts[base + 1] = tb;
@@ -244,9 +245,11 @@ fn build_struct_eq(a: Word) -> Word {
         io.match_parts[base + 3 + i * 2] = packed % 65536;
         io.match_parts[base + 3 + i * 2 + 1] = packed / 65536;
     }
-    // The `!=` flag rides just past the field list; codegen reads it to append a `Not`.
+    // The `!=` flag and the tuple/struct accessor flag ride just past the field list; codegen reads
+    // them to append a `Not` and to pick GetTupleField vs GetField.
     io.match_parts[base + 3 + count * 2] = is_ne;
-    rs.mp = base + 3 + count * 2 + 1;
+    io.match_parts[base + 3 + count * 2 + 1] = is_tuple;
+    rs.mp = base + 3 + count * 2 + 2;
     rs.sqcount = 0;
     let rhs = pop();
     let lhs = pop();
