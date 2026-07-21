@@ -549,15 +549,25 @@ fn push_byte_binop(p: Word) -> Word {
     };
     push_emit(wire.wordtobyte);
     push_emit(opw);
+    // Each operand is widened (ByteToWord). A LITERAL operand is a Word constant that must first be
+    // coerced to a Byte (WordToByte) before the widen, so a `byte band 15` masks against the Byte
+    // value of the constant -- a Byte variable is already a Byte and skips the coercion.
     push_emit(wire.bytetoword);
+    if ast.kinds[ast.rhs[p]] == 1 {
+        push_emit(wire.wordtobyte);
+    }
     push_visit(ast.rhs[p]);
     push_emit(wire.bytetoword);
+    if ast.kinds[ast.lhs[p]] == 1 {
+        push_emit(wire.wordtobyte);
+    }
     push_visit(ast.lhs[p])
 }
 
 // ByteArith (kind 45): an arithmetic op on two Byte operands, lowered to the UNCHECKED op with no
 // PopN or overflow guard (a Byte sum/product cannot overflow the word it is computed in). args = the
-// OpCode (add 1 / mul 2 / sub 3); lhs/rhs the operands.
+// OpCode (add 1 / mul 2 / sub 3); lhs/rhs the operands. A LITERAL operand is coerced to a Byte
+// (WordToByte); a Byte variable is left as-is (arithmetic keeps operands narrow, no widen).
 fn push_byte_arith(p: Word) -> Word {
     let opc = ast.args[p];
     let opw = match opc {
@@ -567,7 +577,13 @@ fn push_byte_arith(p: Word) -> Word {
         _ => wire.addop,
     };
     push_emit(opw);
+    if ast.kinds[ast.rhs[p]] == 1 {
+        push_emit(wire.wordtobyte);
+    }
     push_visit(ast.rhs[p]);
+    if ast.kinds[ast.lhs[p]] == 1 {
+        push_emit(wire.wordtobyte);
+    }
     push_visit(ast.lhs[p])
 }
 
