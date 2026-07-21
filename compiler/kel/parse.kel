@@ -162,6 +162,9 @@ enum Node {
     EnumEqVariant = 49,
     EnumEqBuild = 50,
     EnumEq = 51,
+    // A scalar payload field of an enum-eq variant (arg offset + kind*65536). Emitted after its
+    // EnumEqVariant, in field order; reconstruct interleaves it into the per-variant match_parts.
+    EnumEqField = 52,
     // An array literal `[a, b, c]`: emits the element ops then NewComposite(Flat{Array, count,
     // byte_size}). Like a Call/StructInit, its elements ride the call_args side array.
     ArrayLit = 17,
@@ -444,6 +447,13 @@ private data stmt {
     // 1 when the composite comparison is `!=` (the loop computes `==`, then codegen appends a `Not`);
     // 0 for `==`. Carried in the StructEqBuild/EnumEqBuild record and stored in match_parts.
     sq_ne: Word,
+    // Enum-eq drain sub-state for the payload fields interleaved after each variant record:
+    // `eq_phase` 1 while emitting a variant's fields, `eq_fcur` the field cursor, `eq_fcount` the
+    // current variant's field count, `eq_fstart` its first payload-field row in the enums table.
+    eq_phase: Word,
+    eq_fcur: Word,
+    eq_fcount: Word,
+    eq_fstart: Word,
     pending_ctuple: Word,
     pending_cstruct: Word,
     pending_carray: Word,
@@ -1718,14 +1728,20 @@ fn step_structeq_emit() -> Word {
     }
 }
 
-// Whether every variant of the named enum is a unit variant (no payload). This increment lowers
-// only all-unit `enum == enum` (a pure discriminant comparison); a payload variant would require the
-// reference's field-wise payload comparison, so a payload enum defers to the ordinary operator path.
-fn enum_all_unit(ename: Word) -> Word {
+// Whether every payload field of the named enum's variants is a SCALAR field (kind < 100, not a
+// nested struct/tuple/array whose sentinel kind is >= 100). A unit variant trivially qualifies. A
+// composite payload field would require the reference's recursive nested field-wise comparison, so
+// an enum carrying one defers to the ordinary operator path. Scalar payloads compare with a plain
+// `GetEnumField` + `CmpEq` per field, which `enum_eq_start`/`push_enum_eq` lower.
+fn enum_eq_supported(ename: Word) -> Word {
     stmt.sq_scan = 1;
     for i in 0..enums.enum_count limit 256 {
-        if enums.edata[i] == ename andalso enums.evfcount[i] > 0 {
-            stmt.sq_scan = 0;
+        if enums.edata[i] == ename {
+            for fj in 0..enums.evfcount[i] limit 32 {
+                if enums.evfkind[enums.evfstart[i] + fj] >= 100 {
+                    stmt.sq_scan = 0;
+                }
+            }
         }
     }
     stmt.sq_scan
@@ -1768,20 +1784,37 @@ fn enum_eq_start(op: Word) -> Word {
     }
     stmt.enumeq_emit = 1;
     stmt.sq_ename = ename;
-    stmt.sq_field = 1;
-    Node::EnumEqVariant() as Word + (enums.evar[stmt.sq_start] + enums.edisc[stmt.sq_start] * 65536) * 64
+    stmt.sq_field = 0;
+    enumeq_variant_record()
 }
 
-// Emit the next EnumEqVariant (one per variant, in discriminant order) then, once all are emitted,
-// the EnumEqBuild that reconstruct turns into the EnumEq node.
+// Emit variant `sq_field`'s EnumEqVariant record (packing its variant name, discriminant, and
+// payload field count) and arm the field sub-phase so `step_enumeq_emit` then drains that variant's
+// scalar payload fields before advancing.
+fn enumeq_variant_record() -> Word {
+    let row = stmt.sq_start + stmt.sq_field;
+    stmt.eq_fcount = enums.evfcount[row];
+    stmt.eq_fstart = enums.evfstart[row];
+    stmt.eq_fcur = 0;
+    stmt.eq_phase = 1;
+    Node::EnumEqVariant() as Word + (enums.evar[row] + enums.edisc[row] * 65536 + enums.evfcount[row] * 16777216) * 64
+}
+
+// Drain the enum-eq marker stream: for each variant, its EnumEqVariant record then one EnumEqField
+// per scalar payload field, then (all variants done) the EnumEqBuild.
 fn step_enumeq_emit() -> Word {
-    if stmt.sq_field < stmt.sq_count {
-        let row = stmt.sq_start + stmt.sq_field;
-        stmt.sq_field = stmt.sq_field + 1;
-        Node::EnumEqVariant() as Word + (enums.evar[row] + enums.edisc[row] * 65536) * 64
+    if stmt.eq_phase == 1 andalso stmt.eq_fcur < stmt.eq_fcount {
+        let fi = stmt.eq_fstart + stmt.eq_fcur;
+        stmt.eq_fcur = stmt.eq_fcur + 1;
+        Node::EnumEqField() as Word + (enums.evfoff[fi] + enums.evfkind[fi] * 65536) * 64
     } else {
-        stmt.enumeq_emit = 0;
-        Node::EnumEqBuild() as Word + (stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_count * 1048576 + stmt.sq_ename * 67108864 + stmt.sq_ne * 70368744177664) * 64
+        stmt.sq_field = stmt.sq_field + 1;
+        if stmt.sq_field < stmt.sq_count {
+            enumeq_variant_record()
+        } else {
+            stmt.enumeq_emit = 0;
+            Node::EnumEqBuild() as Word + (stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_count * 1048576 + stmt.sq_ename * 67108864 + stmt.sq_ne * 70368744177664) * 64
+        }
     }
 }
 
@@ -1801,7 +1834,7 @@ fn emit_op(op: Word) -> Word {
     // `enum == enum` / `enum != enum`: both operands are whole enum values (the LEFT's enum name
     // captured in `op_lenum`, the RIGHT's in `last_enum`), so lower a variant-iterating comparison
     // loop (a `!=` appends a `Not` in codegen).
-    if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_lenum[ops.opsp] > 0 andalso ps.last_enum > 0 andalso enum_all_unit(ops.op_lenum[ops.opsp] - 1) == 1 {
+    if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_lenum[ops.opsp] > 0 andalso ps.last_enum > 0 andalso enum_eq_supported(ops.op_lenum[ops.opsp] - 1) == 1 {
         enum_eq_start(op)
     } else {
     if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_lstruct[ops.opsp] > 0 andalso ps.last_struct > 0 {

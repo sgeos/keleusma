@@ -85,6 +85,15 @@ private data rs {
     // kind*65536) here; the StructEqBuild drains `sqcount` of them into the match_parts layout.
     sqpending: [Word; 128],
     sqcount: Word,
+    // Enum-eq payload-field accumulator: each EnumEqField record pushes its packed (offset +
+    // kind*65536) here in overall field order (across all variants); `build_enum_eq` pulls each
+    // variant's fields sequentially by that variant's declared field count. `eqcur` is the
+    // match_parts write cursor and `eqfcur` the field read cursor during assembly (state, not
+    // locals, since the nested variant/field walk mutates them).
+    eqfields: [Word; 256],
+    eqfcount: Word,
+    eqcur: Word,
+    eqfcur: Word,
     // The construction field-position stack, parallel to the node stack: a FieldPos record
     // pushes the next field value's declaration slot, and StructInit pops one per field value
     // to place it in declaration order (a construction may write fields out of order).
@@ -258,14 +267,31 @@ fn build_enum_eq(a: Word) -> Word {
     io.match_parts[base + 1] = tb;
     io.match_parts[base + 2] = ename;
     io.match_parts[base + 3] = vcount;
+    // Per variant lay [vname, disc, fcount, then fcount * (offset, kind)]; the payload fields are
+    // pulled sequentially from `eqfields` in overall order (each variant took its own count).
+    rs.eqcur = base + 4;
+    rs.eqfcur = 0;
     for i in 0..vcount limit 64 {
         let packed = rs.sqpending[i];
-        io.match_parts[base + 4 + i * 2] = packed % 65536;
-        io.match_parts[base + 4 + i * 2 + 1] = packed / 65536;
+        let vname = packed % 65536;
+        let disc = (packed / 65536) % 256;
+        let fcount = packed / 16777216;
+        io.match_parts[rs.eqcur] = vname;
+        io.match_parts[rs.eqcur + 1] = disc;
+        io.match_parts[rs.eqcur + 2] = fcount;
+        rs.eqcur = rs.eqcur + 3;
+        for f in 0..fcount limit 32 {
+            let fpacked = rs.eqfields[rs.eqfcur];
+            rs.eqfcur = rs.eqfcur + 1;
+            io.match_parts[rs.eqcur] = fpacked % 65536;
+            io.match_parts[rs.eqcur + 1] = fpacked / 65536;
+            rs.eqcur = rs.eqcur + 2;
+        }
     }
     // The `!=` flag rides just past the variant list; codegen reads it to append a `Not`.
-    io.match_parts[base + 4 + vcount * 2] = is_ne;
-    rs.mp = base + 4 + vcount * 2 + 1;
+    io.match_parts[rs.eqcur] = is_ne;
+    rs.mp = rs.eqcur + 1;
+    rs.eqfcount = 0;
     rs.sqcount = 0;
     let rhs = pop();
     let lhs = pop();
@@ -456,7 +482,7 @@ fn step(k: Word, a: Word) -> Word {
         let scrut = pop();
         emit(22, base, scrut, lit_count)
     } else {
-    if k == 40 orelse k == 41 orelse k == 42 orelse k == 46 orelse k == 47 orelse k == 49 orelse k == 50 {
+    if k == 40 orelse k == 41 orelse k == 42 orelse k == 46 orelse k == 47 orelse k == 49 orelse k == 50 orelse k == 52 {
         // The enum-match and struct-eq assembly markers/builds. Extracted into `step_assembly` to
         // keep this function's if/else nesting shallow (the reference compiler's recursion depth
         // scales with it; a deeper chain overflowed the default compile stack).
@@ -505,8 +531,15 @@ fn step_assembly(k: Word, a: Word) -> Word {
         // EnumEqBuild: assemble the variant-compare loop's match_parts and build the EnumEq node.
         build_enum_eq(a)
     } else {
+    if k == 52 {
+        // EnumEqField marker: accumulate this variant's packed scalar payload field (offset +
+        // kind*65536) in overall field order. No node.
+        rs.eqfields[rs.eqfcount] = a;
+        rs.eqfcount = rs.eqfcount + 1;
         0
-    } } } } } } }
+    } else {
+        0
+    } } } } } } } }
 }
 
 // Reconstruct one record range on a fresh work stack (the node array and the side
