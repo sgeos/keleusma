@@ -221,6 +221,7 @@ const data wire {
     visit: Word = 1,
     emit: Word = 2,
     emitisenum: Word = 3,
+    emitbool: Word = 0,
     nomatch: Word = 2,
     looplimit: Word = 7,
     ocok: Word = 1,
@@ -370,6 +371,17 @@ fn push_visit(node: Word) -> Word {
 // Push an EMIT work item carrying op wire `word` onto the work-stack.
 fn push_emit(word: Word) -> Word {
     st.stack[st.sp] = wire.emit + word * wire.item;
+    st.sp = st.sp + 1;
+    0
+}
+
+// Push a PROCESS-TIME bool Const work item (kind 0) carrying the bool `value` (0 or 1). Like
+// `push_enum_isenum`, the interning is deferred to when the item is processed in the forward walk
+// (see `walk_step`), so a result Const interns interleaved with any operand-construction constants
+// rather than ahead of them -- interning at push time runs in reverse and diverges from the
+// reference pool when an operand is itself a composite construction (e.g. a literal `E::A()` RHS).
+fn push_bool(value: Word) -> Word {
+    st.stack[st.sp] = wire.emitbool + value * wire.item;
     st.sp = st.sp + 1;
     0
 }
@@ -1236,12 +1248,17 @@ fn push_struct_eq(p: Word) -> Word {
 // so the loop tail traps (EnumVariantUnmapped = 4). match_parts holds [ta, tb, ename_id, vcount,
 // then per variant vname_id, disc, fcount, fcount*(offset, kind), then the != flag].
 //
-// The pool is pre-interned in the reference's emission order by a forward walk of the variable-stride
-// records (recording each variant's offset in `eq_voff` for the reverse emission walk): the enum
-// name; then per variant the variant name and discriminant; and the true/false result Consts during
-// the FIRST variant. Their order flips with that variant's payload: the reference adds the first
-// Const inside the field loop (a `false`) for a payload variant, but after the loop (a `true`) for a
-// unit variant, so a payload first variant interns false-then-true and a unit one true-then-false.
+// Pool interning is DEFERRED to emission time: the IsEnum ops go through `push_enum_isenum` (which
+// interns the enum name, variant name, and discriminant when the item is processed in the forward
+// walk) and the true/false result Consts through `push_bool`. A forward pre-pass records each
+// variant's variable-stride offset in `eq_voff` for the reverse emission walk, but interns nothing.
+// Deferring is what lets a LITERAL operand match: `e == E::A()` constructs its right operand first,
+// emitting the variant discriminant Const, so that discriminant must intern ahead of the loop's own
+// IsEnum discriminant -- pre-interning at push time runs in reverse and would place them wrong. For
+// a both-locals `a == b` (no operand constants) the deferred order equals the old pre-interned one:
+// per variant the IsEnum's (name, variant, disc), then the result Consts, whose order still follows
+// emission -- a payload first variant emits its in-field-loop `false` before the post-loop `true`,
+// a unit variant the reverse.
 fn push_enum_eq(p: Word) -> Word {
     let base = ast.args[p];
     let ta = ast.match_parts[base];
@@ -1249,22 +1266,12 @@ fn push_enum_eq(p: Word) -> Word {
     let ename = ast.match_parts[base + 2];
     let vcount = ast.match_parts[base + 3];
     st.let_count = st.let_count + 2;
-    let ename_idx = intern_str(ename);
+    // Forward pre-pass: record each variant's variable-stride offset (for the reverse emission
+    // walk) and advance to the `!=` flag. No interning here -- the pool is built at emission time.
     st.eq_cur = base + 4;
     for v in 0..vcount limit 64 {
         st.eq_voff[v] = st.eq_cur;
         let fcount = ast.match_parts[st.eq_cur + 2];
-        st.eq_vidx[v] = intern_str(ast.match_parts[st.eq_cur]);
-        st.eq_didx[v] = intern_int(ast.match_parts[st.eq_cur + 1]);
-        if v == 0 {
-            if fcount > 0 {
-                st.eq_false = intern_bool(0);
-                st.eq_true = intern_bool(1);
-            } else {
-                st.eq_true = intern_bool(1);
-                st.eq_false = intern_bool(0);
-            }
-        }
         st.eq_cur = st.eq_cur + 3 + fcount * 2;
     }
     // The `!=` flag rides just past the variant list: `a != b` is the `==` loop then a `Not`.
@@ -1279,15 +1286,16 @@ fn push_enum_eq(p: Word) -> Word {
         let v = vcount - 1 - vj;
         let voff = st.eq_voff[v];
         let fcount = ast.match_parts[voff + 2];
-        let isen = ename_idx + st.eq_vidx[v] * 1024 + st.eq_didx[v] * 1048576;
+        let vname = ast.match_parts[voff];
+        let disc = ast.match_parts[voff + 1];
         push_emit(wire.popn + 1 * wire.radix);
         push_emit(wire.mendif);
         push_emit(wire.mbreak);
-        push_emit(wire.konst + st.eq_false * wire.radix);
+        push_bool(0);
         push_emit(wire.popn + 1 * wire.radix);
         push_emit(wire.mendif);
         push_emit(wire.mbreak);
-        push_emit(wire.konst + st.eq_true * wire.radix);
+        push_bool(1);
         // The payload fields compare in the "both this variant" block, in forward order, so they are
         // pushed in reverse. Each: GetLocal(ta), GetEnumField, GetLocal(tb), GetEnumField, CmpEq,
         // Not, If, Const(false), Break, EndIf (a mismatch breaks false; else fall to the next field).
@@ -1297,7 +1305,7 @@ fn push_enum_eq(p: Word) -> Word {
             let kind = ast.match_parts[voff + 3 + f * 2 + 1];
             push_emit(wire.mendif);
             push_emit(wire.mbreak);
-            push_emit(wire.konst + st.eq_false * wire.radix);
+            push_bool(0);
             push_emit(wire.mif);
             push_emit(wire.lnot);
             push_emit(wire.cmpeq);
@@ -1308,11 +1316,11 @@ fn push_enum_eq(p: Word) -> Word {
         }
         push_emit(wire.popn + 1 * wire.radix);
         push_emit(wire.mif);
-        push_emit(wire.isenum + isen * wire.radix);
+        push_enum_isenum(ename, vname, disc);
         push_emit(wire.getlocal + tb * wire.radix);
         push_emit(wire.popn + 1 * wire.radix);
         push_emit(wire.mif);
-        push_emit(wire.isenum + isen * wire.radix);
+        push_enum_isenum(ename, vname, disc);
         push_emit(wire.getlocal + ta * wire.radix);
     }
     push_emit(wire.mloop);
@@ -1604,6 +1612,12 @@ fn walk_step() -> Word {
         let vname_pool = intern_str(st.isenum_v[payload]);
         let disc_pool = intern_int(st.isenum_d[payload]);
         emit_op(wire.isenum + (ename_pool + vname_pool * 1024 + disc_pool * 1048576) * wire.radix);
+    }
+    if ikind == wire.emitbool {
+        // Intern the bool NOW (in the forward walk order), then emit its Const. `payload` is the
+        // bool value (0 = false, 1 = true).
+        let bool_pool = intern_bool(payload);
+        emit_op(wire.konst + bool_pool * wire.radix);
     }
     if ikind == wire.visit {
         // Dispatch on the node kind. Written as a plain `match` on the kind field
