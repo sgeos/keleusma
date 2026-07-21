@@ -1860,8 +1860,8 @@ fn self_compile_codegen_atomic_functions() {
     // `push_arrindex_nested` for array-of-struct parameter element access; 53 with
     // `push_byte_binop` for Byte-operand bitwise promote-operate-truncate; 54 with
     // `push_byte_arith` for Byte-operand unchecked arithmetic; 56 with `push_struct_eq` and
-    // `intern_bool` for struct equality.
-    const EXPECTED_SELF_COMPILE: usize = 56;
+    // `intern_bool` for struct equality; 57 with `push_enum_eq` for all-unit enum equality.
+    const EXPECTED_SELF_COMPILE: usize = 57;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -6627,4 +6627,17 @@ fn self_host_compiles_struct_equality() {
     assert_self_host_byte_identical(
         "struct P { x: Word, y: Word, z: Byte }\nfn f(a: P, b: P) -> bool { a == b }",
     );
+}
+
+/// `enum == enum` for an all-unit enum self-compiles byte-identically: the self-hosted parser
+/// detects both operands as whole enum values, drains a per-variant marker stream, and codegen
+/// lowers the variant-iterating comparison loop, reproducing the reference `emit_enum_fieldwise_eq`
+/// discriminant comparison exactly (two, three, and single-variant enums).
+#[test]
+fn self_host_compiles_enum_equality() {
+    assert_self_host_byte_identical("enum E { A, B }\nfn f(a: E, b: E) -> bool { a == b }");
+    assert_self_host_byte_identical(
+        "enum Color { Red, Green, Blue }\nfn f(a: Color, b: Color) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical("enum One { Only }\nfn f(a: One, b: One) -> bool { a == b }");
 }

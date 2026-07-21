@@ -321,6 +321,15 @@ private data st {
     isenum_v: [Word; 64],
     isenum_d: [Word; 64],
     isenum_ctr: Word,
+    // Per-variant pre-interned pool indices for an `enum == enum` lowering (`push_enum_eq`): the
+    // variant-name StaticStr index and the discriminant Int index, filled in a forward pass so the
+    // pool order matches the reference, then read by the reverse emission pass.
+    eq_vidx: [Word; 64],
+    eq_didx: [Word; 64],
+    // Pre-interned true/false result pool indices for an `enum == enum` lowering (state, not locals,
+    // since a local cannot be reassigned inside the interning loop).
+    eq_true: Word,
+    eq_false: Word,
 }
 
 // Wire. The stage buffers ops, then streams each as `tag + operand*64`, 0 is
@@ -1192,6 +1201,60 @@ fn push_struct_eq(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
+// EnumEq (kind 51): `enum == enum` for an all-unit enum, lowered to a variant-iterating comparison
+// loop. Store both operands in two temps (ta = left, tb = right), then loop once over the variants:
+// per variant, peek-test the left temp with `IsEnum`; if it is this variant, peek-test the right;
+// both this variant -> break true, right a different variant -> break false; left not this variant
+// -> try the next. A well-typed value always matches a variant, so the loop tail traps
+// (EnumVariantUnmapped = 4). match_parts holds [ta, tb, ename_id, vcount, per variant vname_id, disc].
+// The pool entries are pre-interned in the reference's emission order (enum name; then per variant
+// the variant name and discriminant, and after the FIRST variant the true then false result Const),
+// so the reverse `push_emit` pass reproduces the reference pool byte-for-byte.
+fn push_enum_eq(p: Word) -> Word {
+    let base = ast.args[p];
+    let ta = ast.match_parts[base];
+    let tb = ast.match_parts[base + 1];
+    let ename = ast.match_parts[base + 2];
+    let vcount = ast.match_parts[base + 3];
+    st.let_count = st.let_count + 2;
+    let ename_idx = intern_str(ename);
+    for v in 0..vcount limit 64 {
+        st.eq_vidx[v] = intern_str(ast.match_parts[base + 4 + v * 2]);
+        st.eq_didx[v] = intern_int(ast.match_parts[base + 4 + v * 2 + 1]);
+        if v == 0 {
+            st.eq_true = intern_bool(1);
+            st.eq_false = intern_bool(0);
+        }
+    }
+    push_emit(wire.mendloop);
+    push_emit(wire.trap + 4 * wire.radix);
+    for vj in 0..vcount limit 64 {
+        let v = vcount - 1 - vj;
+        let isen = ename_idx + st.eq_vidx[v] * 1024 + st.eq_didx[v] * 1048576;
+        push_emit(wire.popn + 1 * wire.radix);
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_emit(wire.konst + st.eq_false * wire.radix);
+        push_emit(wire.popn + 1 * wire.radix);
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_emit(wire.konst + st.eq_true * wire.radix);
+        push_emit(wire.popn + 1 * wire.radix);
+        push_emit(wire.mif);
+        push_emit(wire.isenum + isen * wire.radix);
+        push_emit(wire.getlocal + tb * wire.radix);
+        push_emit(wire.popn + 1 * wire.radix);
+        push_emit(wire.mif);
+        push_emit(wire.isenum + isen * wire.radix);
+        push_emit(wire.getlocal + ta * wire.radix);
+    }
+    push_emit(wire.mloop);
+    push_emit(wire.setlocal + ta * wire.radix);
+    push_emit(wire.setlocal + tb * wire.radix);
+    push_visit(ast.rhs[p]);
+    push_visit(ast.lhs[p])
+}
+
 // YieldExpr (kind 24): `yield <expr>` emits the expression ops then `Yield`.
 // lhs = the yielded expression.
 fn push_yield(p: Word) -> Word {
@@ -1320,6 +1383,7 @@ fn walk_step() -> Word {
             38 => push_strlit(payload),
             39 => push_enum_match(payload),
             48 => push_struct_eq(payload),
+            51 => push_enum_eq(payload),
             43 => push_arrindex_nested(payload),
             _ => 0,
         };
