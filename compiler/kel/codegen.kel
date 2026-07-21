@@ -1382,7 +1382,9 @@ fn push_struct_eq_nested(p: Word) -> Word {
     let tb = ast.match_parts[base + 1];
     let topcount = ast.match_parts[base + 2];
     st.let_count = st.let_count + 2;
-    // Forward pass: record each top-level field's offset and count the nested fields' temps.
+    // Forward pass: record each top-level field's offset and count the nested fields' temps. An
+    // array field (variant 1) is a fixed 8 slots [1, ext_off, ext_size, 1, r2, l2, count, kind]; a
+    // struct/tuple field is 7 + subcount*2; a scalar field is 3.
     st.se_cur = base + 3;
     for f in 0..topcount limit 64 {
         st.se_foff[f] = st.se_cur;
@@ -1390,10 +1392,36 @@ fn push_struct_eq_nested(p: Word) -> Word {
             st.se_cur = st.se_cur + 3;
         } else {
             st.let_count = st.let_count + 2;
-            st.se_cur = st.se_cur + 7 + ast.match_parts[st.se_cur + 6] * 2;
+            if ast.match_parts[st.se_cur + 3] == 1 {
+                st.se_cur = st.se_cur + 8;
+            } else {
+                st.se_cur = st.se_cur + 7 + ast.match_parts[st.se_cur + 6] * 2;
+            }
         }
     }
     let is_ne = ast.match_parts[st.se_cur];
+    // Pre-intern the pool in the reference's emission order by replaying it field by field: a scalar
+    // field interns false; a nested struct/tuple field false then true; an array field its element
+    // index constants 0..count-1 then false then true. `intern_*` dedups, so first-occurrence order
+    // is what fixes the pool (the interleave of array index constants with the bools is field-order
+    // dependent, exactly like the reference).
+    for f in 0..topcount limit 64 {
+        let foff = st.se_foff[f];
+        if ast.match_parts[foff] == 0 {
+            intern_bool(0);
+        } else {
+            if ast.match_parts[foff + 3] == 1 {
+                for i in 0..ast.match_parts[foff + 6] limit 256 {
+                    intern_int(i);
+                }
+                intern_bool(0);
+                intern_bool(1);
+            } else {
+                intern_bool(0);
+                intern_bool(1);
+            }
+        }
+    }
     let false_idx = intern_bool(0);
     let true_idx = intern_bool(1);
     if is_ne == 1 {
@@ -1419,14 +1447,14 @@ fn push_struct_eq_nested(p: Word) -> Word {
             push_emit(wire.getfield + packed * wire.radix);
             push_emit(wire.getlocal + ta * wire.radix);
         } else {
-            // Nested-struct field: extract both sides into r2/l2, run the inner loop, negate, break.
+            // Nested field: extract both sides into r2/l2, run the inner loop, negate, break.
             let extp = ast.match_parts[foff + 1] + ast.match_parts[foff + 2] * 65536 + ast.match_parts[foff + 3] * 4294967296;
             let r2 = ast.match_parts[foff + 4];
             let l2 = ast.match_parts[foff + 5];
-            let subcount = ast.match_parts[foff + 6];
+            let variant = ast.match_parts[foff + 3];
             // The sub-field accessor follows the extract variant: Tuple (0) -> GetTupleField,
-            // Struct (2) -> GetField.
-            let subacc = if ast.match_parts[foff + 3] == 0 {
+            // Struct (2) -> GetField (an Array (1) uses the GetIndex element loop below).
+            let subacc = if variant == 0 {
                 wire.gettuplefield
             } else {
                 wire.getfield
@@ -1439,19 +1467,41 @@ fn push_struct_eq_nested(p: Word) -> Word {
             push_emit(wire.mendloop);
             push_emit(wire.mbreak);
             push_emit(wire.konst + true_idx * wire.radix);
-            for sj in 0..subcount limit 64 {
-                let s = subcount - 1 - sj;
-                let sp = ast.match_parts[foff + 7 + s * 2] + ast.match_parts[foff + 7 + s * 2 + 1] * 65536;
-                push_emit(wire.mendif);
-                push_emit(wire.mbreak);
-                push_emit(wire.konst + false_idx * wire.radix);
-                push_emit(wire.mif);
-                push_emit(wire.lnot);
-                push_emit(wire.cmpeq);
-                push_emit(subacc + sp * wire.radix);
-                push_emit(wire.getlocal + r2 * wire.radix);
-                push_emit(subacc + sp * wire.radix);
-                push_emit(wire.getlocal + l2 * wire.radix);
+            if variant == 1 {
+                // Array element inner loop: per element e compare l2[e] == r2[e] via GetIndex.
+                let acount = ast.match_parts[foff + 6];
+                let akind = ast.match_parts[foff + 7];
+                for ej in 0..acount limit 256 {
+                    let e = acount - 1 - ej;
+                    push_emit(wire.mendif);
+                    push_emit(wire.mbreak);
+                    push_emit(wire.konst + false_idx * wire.radix);
+                    push_emit(wire.mif);
+                    push_emit(wire.lnot);
+                    push_emit(wire.cmpeq);
+                    push_emit(wire.getindex + akind * wire.radix);
+                    push_emit(wire.konst + intern_int(e) * wire.radix);
+                    push_emit(wire.getlocal + r2 * wire.radix);
+                    push_emit(wire.getindex + akind * wire.radix);
+                    push_emit(wire.konst + intern_int(e) * wire.radix);
+                    push_emit(wire.getlocal + l2 * wire.radix);
+                }
+            } else {
+                let subcount = ast.match_parts[foff + 6];
+                for sj in 0..subcount limit 64 {
+                    let s = subcount - 1 - sj;
+                    let sp = ast.match_parts[foff + 7 + s * 2] + ast.match_parts[foff + 7 + s * 2 + 1] * 65536;
+                    push_emit(wire.mendif);
+                    push_emit(wire.mbreak);
+                    push_emit(wire.konst + false_idx * wire.radix);
+                    push_emit(wire.mif);
+                    push_emit(wire.lnot);
+                    push_emit(wire.cmpeq);
+                    push_emit(subacc + sp * wire.radix);
+                    push_emit(wire.getlocal + r2 * wire.radix);
+                    push_emit(subacc + sp * wire.radix);
+                    push_emit(wire.getlocal + l2 * wire.radix);
+                }
             }
             push_emit(wire.mloop);
             push_emit(wire.setlocal + l2 * wire.radix);
