@@ -6760,3 +6760,24 @@ fn self_host_compiles_nested_tuple_field_equality() {
         "struct Q { a: Word, b: Word }\nstruct P { q: Q, t: (Word, Word) }\nfn f(a: P, b: P) -> bool { a == b }",
     );
 }
+
+/// Array-in-struct nested equality self-compiles byte-identically: a struct with a scalar-array
+/// field extracts it (FlatNested variant Array) into fresh temps and compares elements with a
+/// per-element GetIndex inner loop. The element index constants interleave with the false/true bools
+/// in field-declaration order (verified by both array-first and scalar-first cases). Covers array `!=`
+/// and a struct mixing a nested struct and an array field.
+#[test]
+fn self_host_compiles_array_in_struct_equality() {
+    assert_self_host_byte_identical(
+        "struct P { xs: [Word; 3], x: Word }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word, xs: [Word; 3] }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { xs: [Word; 2] }\nfn f(a: P, b: P) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "struct Q { a: Word, b: Word }\nstruct P { q: Q, xs: [Word; 2] }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
+}

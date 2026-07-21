@@ -105,6 +105,9 @@ private data rs {
     se_innested: Word,
     se_subpos: Word,
     se_subn: Word,
+    // The current nested field's FlatNested variant (0 tuple, 1 array, 2 struct). An array field's
+    // single sub-record carries [count, kind] rather than a growing sub-field list.
+    se_curvariant: Word,
     // The construction field-position stack, parallel to the node stack: a FieldPos record
     // pushes the next field value's declaration slot, and StructInit pops one per field value
     // to place it in declaration order (a construction may write fields out of order).
@@ -601,13 +604,20 @@ fn step_assembly(k: Word, a: Word) -> Word {
         build_array_eq(a)
     } else {
     if k == 55 {
-        // StructEqNestedField: a scalar field. Inside a nested field it is a sub-field ([off, kind],
-        // sub-count bumped); at top level it is a tagged scalar field ([0, off, kind], setop bumped).
+        // StructEqNestedField: at top level a tagged scalar field ([0, off, kind], setop bumped);
+        // inside an ARRAY field the single [count, kind] record; inside a struct/tuple field a
+        // sub-field ([off, kind], sub-count bumped).
         if rs.se_innested == 1 {
-            rs.seb[rs.sebcur] = a % 65536;
-            rs.seb[rs.sebcur + 1] = a / 65536;
-            rs.sebcur = rs.sebcur + 2;
-            rs.se_subn = rs.se_subn + 1;
+            if rs.se_curvariant == 1 {
+                rs.seb[rs.sebcur] = a % 65536;
+                rs.seb[rs.sebcur + 1] = a / 65536;
+                rs.sebcur = rs.sebcur + 2;
+            } else {
+                rs.seb[rs.sebcur] = a % 65536;
+                rs.seb[rs.sebcur + 1] = a / 65536;
+                rs.sebcur = rs.sebcur + 2;
+                rs.se_subn = rs.se_subn + 1;
+            }
         } else {
             rs.seb[rs.sebcur] = 0;
             rs.seb[rs.sebcur + 1] = a % 65536;
@@ -618,25 +628,36 @@ fn step_assembly(k: Word, a: Word) -> Word {
         0
     } else {
     if k == 56 {
-        // StructEqNested header: [1, ext_off, ext_size, variant, r2, l2, subcount placeholder].
+        // StructEqNested header. Struct/tuple: [1, ext_off, ext_size, variant, r2, l2, subcount
+        // placeholder] (sub-fields follow). Array (variant 1): [1, ext_off, ext_size, 1, r2, l2]
+        // then a [count, kind] record.
         rs.seb[rs.sebcur] = 1;
         rs.seb[rs.sebcur + 1] = a % 65536;
         rs.seb[rs.sebcur + 2] = (a / 65536) % 65536;
         rs.seb[rs.sebcur + 3] = (a / 4294967296) % 4;
         rs.seb[rs.sebcur + 4] = (a / 17179869184) % 1024;
         rs.seb[rs.sebcur + 5] = a / 17592186044416;
-        rs.seb[rs.sebcur + 6] = 0;
-        rs.se_subpos = rs.sebcur + 6;
-        rs.sebcur = rs.sebcur + 7;
+        rs.se_curvariant = (a / 4294967296) % 4;
+        if rs.se_curvariant == 1 {
+            rs.sebcur = rs.sebcur + 6;
+        } else {
+            rs.seb[rs.sebcur + 6] = 0;
+            rs.se_subpos = rs.sebcur + 6;
+            rs.sebcur = rs.sebcur + 7;
+            rs.se_subn = 0;
+        }
         rs.setop = rs.setop + 1;
         rs.se_innested = 1;
-        rs.se_subn = 0;
         0
     } else {
     if k == 57 {
-        // StructEqNestedEnd: backpatch the sub-count and leave the nested field.
-        rs.seb[rs.se_subpos] = rs.se_subn;
-        rs.se_innested = 0;
+        // StructEqNestedEnd: backpatch the sub-count (struct/tuple only) and leave the nested field.
+        if rs.se_curvariant == 1 {
+            rs.se_innested = 0;
+        } else {
+            rs.seb[rs.se_subpos] = rs.se_subn;
+            rs.se_innested = 0;
+        }
         0
     } else {
     if k == 58 {
