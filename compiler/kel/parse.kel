@@ -176,6 +176,18 @@ enum Node {
     // lhs/rhs the two operands). codegen `push_array_eq` builds the GetIndex loop.
     ArrayEqBuild = 53,
     ArrayEq = 54,
+    // Nested-composite struct equality (a struct with a nested-struct field): its own isolated record
+    // set so the flat StructEq path is untouched. StructEqNestedField (55, arg offset + kind*65536) a
+    // scalar field (top-level or a nested struct's sub-field); StructEqNested (56, arg ext_off +
+    // ext_size*65536 + variant*2^32 + r2*2^34 + l2*2^44) a nested-struct field header (its scalar
+    // sub-fields follow as StructEqNestedField records); StructEqNestedEnd (57) closes a nested field;
+    // StructEqNestedBuild (58, arg ta + tb*1024 + topcount*1048576 + is_ne*1073741824) which
+    // reconstruct turns into a StructEqNestedNode (59). codegen `push_struct_eq_nested` builds it.
+    StructEqNestedField = 55,
+    StructEqNested = 56,
+    StructEqNestedEnd = 57,
+    StructEqNestedBuild = 58,
+    StructEqNestedNode = 59,
     // An array literal `[a, b, c]`: emits the element ops then NewComposite(Flat{Array, count,
     // byte_size}). Like a Call/StructInit, its elements ride the call_args side array.
     ArrayLit = 17,
@@ -463,6 +475,9 @@ private data stmt {
     // operator fold itself returns only the first record). `sq_struct` the struct index, `sq_field`
     // the running field cursor, `sq_count` the field count, `sq_ta`/`sq_tb` the two comparison temps.
     structeq_emit: Word,
+    // 1 while draining a nested-composite struct equality (its own record set and `step` function,
+    // isolated from the flat `structeq_emit` path).
+    structeq_nested: Word,
     // 1 when the pending composite-eq drain is over a TUPLE (read the layout from `tupledefs` and
     // emit GetTupleField in codegen) rather than a struct; 0 for a struct. `sq_struct` holds the
     // tuple layout index in the tuple case.
@@ -493,6 +508,15 @@ private data stmt {
     eq_fcur: Word,
     eq_fcount: Word,
     eq_fstart: Word,
+    // Nested struct-eq drain state. `se_phase` 1 while draining a nested field's scalar sub-fields;
+    // `se_subcur`/`se_subcount`/`se_substart` the sub-field cursor, count, and first row (in
+    // structdefs) of the nested struct; `se_r2`/`se_l2` the two fresh temps allocated for it.
+    se_phase: Word,
+    se_subcur: Word,
+    se_subcount: Word,
+    se_substart: Word,
+    se_r2: Word,
+    se_l2: Word,
     pending_ctuple: Word,
     pending_cstruct: Word,
     pending_carray: Word,
@@ -1841,6 +1865,108 @@ fn step_structeq_emit() -> Word {
     }
 }
 
+// Classify a struct for equality lowering: 0 = unsupported here (a nested TUPLE field, or a
+// nested-struct field that itself nests, defers to the ordinary operator path), 1 = FLAT (all
+// fields scalar -> `struct_eq_start`), 2 = NESTED (has a nested-struct field whose sub-fields are all
+// scalar -> `struct_eq_nested_start`). Sets `stmt.sq_found` = 1 when nested, so the caller routes.
+fn struct_eq_kind(idx: Word) -> Word {
+    stmt.sq_scan = 1;
+    stmt.sq_found = 0;
+    for f in 0..structdefs.sd_fcount[idx] limit 64 {
+        let fidx = structdefs.sd_fstart[idx] + f;
+        if structdefs.sd_ftuple[fidx] > 0 {
+            stmt.sq_scan = 0;
+        } else {
+        if structdefs.sd_fstruct[fidx] > 0 {
+            stmt.sq_found = 1;
+            let s = structdefs.sd_fstruct[fidx] - 1;
+            for g in 0..structdefs.sd_fcount[s] limit 64 {
+                let gidx = structdefs.sd_fstart[s] + g;
+                if structdefs.sd_fstruct[gidx] > 0 orelse structdefs.sd_ftuple[gidx] > 0 {
+                    stmt.sq_scan = 0;
+                }
+            }
+        } }
+    }
+    if stmt.sq_scan == 0 {
+        0
+    } else {
+        if stmt.sq_found == 1 {
+            2
+        } else {
+            1
+        }
+    }
+}
+
+// Begin a NESTED `struct == struct` lowering: allocate the two outer comparison temps, arm the
+// nested drain, and emit the first record. `structeq_nested_next` continues.
+fn struct_eq_nested_start(op: Word) -> Word {
+    let idx = ops.op_lstruct[ops.opsp] - 1;
+    stmt.sq_ne = 0;
+    if op == OpCode::NotEq() as Word {
+        stmt.sq_ne = 1;
+    }
+    ps.last_byte = 0;
+    ps.last_struct = 0;
+    ps.last_tuple = 0;
+    ps.last_array = 0;
+    stmt.pending_ctuple = 0;
+    stmt.pending_cstruct = 0;
+    stmt.pending_carray = 0;
+    stmt.pending_carray_struct = 0;
+    stmt.pending_cenum = 0;
+    stmt.sq_tb = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + 1;
+    stmt.sq_ta = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + 1;
+    stmt.structeq_nested = 1;
+    stmt.sq_struct = idx;
+    stmt.sq_count = structdefs.sd_fcount[idx];
+    stmt.sq_field = 0;
+    stmt.se_phase = 0;
+    structeq_nested_next()
+}
+
+// Drain the nested struct-eq record stream: top-level fields in order, each scalar
+// (StructEqNestedField) or a nested-struct header (StructEqNested) whose scalar sub-fields follow as
+// StructEqNestedField records then a StructEqNestedEnd; finally the StructEqNestedBuild.
+fn structeq_nested_next() -> Word {
+    if stmt.se_phase == 1 {
+        if stmt.se_subcur < stmt.se_subcount {
+            let fidx = stmt.se_substart + stmt.se_subcur;
+            stmt.se_subcur = stmt.se_subcur + 1;
+            Node::StructEqNestedField() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fkind[fidx] * 65536) * 64
+        } else {
+            stmt.se_phase = 0;
+            stmt.sq_field = stmt.sq_field + 1;
+            Node::StructEqNestedEnd() as Word
+        }
+    } else {
+        if stmt.sq_field < stmt.sq_count {
+            let fidx = structdefs.sd_fstart[stmt.sq_struct] + stmt.sq_field;
+            if structdefs.sd_fstruct[fidx] > 0 {
+                let s = structdefs.sd_fstruct[fidx] - 1;
+                let r2 = ps.pcount + stmt.slot_count;
+                stmt.slot_count = stmt.slot_count + 1;
+                let l2 = ps.pcount + stmt.slot_count;
+                stmt.slot_count = stmt.slot_count + 1;
+                stmt.se_substart = structdefs.sd_fstart[s];
+                stmt.se_subcount = structdefs.sd_fcount[s];
+                stmt.se_subcur = 0;
+                stmt.se_phase = 1;
+                Node::StructEqNested() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fsize[fidx] * 65536 + 2 * 4294967296 + r2 * 17179869184 + l2 * 17592186044416) * 64
+            } else {
+                stmt.sq_field = stmt.sq_field + 1;
+                Node::StructEqNestedField() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fkind[fidx] * 65536) * 64
+            }
+        } else {
+            stmt.structeq_nested = 0;
+            Node::StructEqNestedBuild() as Word + (stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_ne * 1048576) * 64
+        }
+    }
+}
+
 // Whether every payload field of the named enum's variants is a SCALAR field (kind < 100, not a
 // nested struct/tuple/array whose sentinel kind is >= 100). A unit variant trivially qualifies. A
 // composite payload field would require the reference's recursive nested field-wise comparison, so
@@ -1956,8 +2082,13 @@ fn emit_op(op: Word) -> Word {
     if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_lenum[ops.opsp] > 0 andalso ps.last_enum > 0 andalso enum_eq_supported(ops.op_lenum[ops.opsp] - 1) == 1 {
         enum_eq_start(op)
     } else {
-    if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_lstruct[ops.opsp] > 0 andalso ps.last_struct > 0 {
-        struct_eq_start(op)
+    if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_lstruct[ops.opsp] > 0 andalso ps.last_struct > 0 andalso struct_eq_kind(ops.op_lstruct[ops.opsp] - 1) > 0 {
+        // `struct_eq_kind` set `stmt.sq_found` = 1 for the nested case (a nested-struct field).
+        if stmt.sq_found == 1 {
+            struct_eq_nested_start(op)
+        } else {
+            struct_eq_start(op)
+        }
     } else {
     let bk = byte_op_kind(op);
     if bk == 1 {
@@ -3247,6 +3378,10 @@ fn step_folding() -> Word {
 
 // One step of the body walk: the active sub-state, or the next body token.
 fn body_step() -> Word {
+    if stmt.structeq_nested == 1 {
+        // A nested `struct == struct` fold armed the nested drain.
+        structeq_nested_next()
+    } else {
     if stmt.enumeq_emit == 1 {
         // An `enum == enum` fold armed the drain: emit the per-variant records then the build,
         // before any further token/operator processing continues.
@@ -3314,7 +3449,7 @@ fn body_step() -> Word {
                 step_body_dispatch(k, v)
             } } } }
         }
-    } } } } } } } } } } } } }
+    } } } } } } } } } } } } } }
 }
 
 // Reset the body-walk state for a fresh function body.
