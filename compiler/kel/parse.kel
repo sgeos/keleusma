@@ -1454,6 +1454,11 @@ fn step_enum_unit_finalize() -> Word {
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
     stmt.pending_cenum = call.en_unit_ename + 1;
+    // Mark this whole value as an enum so a following `==`/`!=` captures it as the LEFT operand's
+    // enum type (`op_lenum`), enabling enum equality with a literal construction on the left
+    // (`E::V() == e`). A bare `E::V()` value reaches here; `E::V() as Word` folds to a Literal
+    // earlier (phase 6) and never does, so a cast result stays scalar.
+    ps.last_enum = call.en_unit_ename + 1;
     Node::EnumInit() as Word + (call.en_unit_bs * 1024 + 1) * 64
 }
 
@@ -2273,6 +2278,10 @@ fn step_closing() -> Word {
             stmt.pending_carray = 0;
             stmt.pending_carray_struct = 0;
             stmt.pending_cenum = call.en_ename[call.en_sp] + 1;
+            // Mark this whole value as an enum so a following `==`/`!=` captures it as the LEFT
+            // operand's enum type (`op_lenum`), enabling `E::V(x) == e` with the payload
+            // construction on the left.
+            ps.last_enum = call.en_ename[call.en_sp] + 1;
             Node::EnumInit() as Word + (call.en_bytesize[call.en_sp] * 1024 + call.en_count[call.en_sp]) * 64
         } else {
         if top == OpCode::TupleMark() as Word {

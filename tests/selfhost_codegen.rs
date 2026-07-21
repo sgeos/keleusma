@@ -6678,18 +6678,20 @@ fn self_host_compiles_enum_payload_equality() {
     assert_self_host_byte_identical("enum E { A(Word), B }\nfn f(a: E, b: E) -> bool { a != b }");
 }
 
-/// Enum equality with a literal enum construction as the RIGHT operand self-compiles byte-identically:
-/// `e == E::A()` (and payload `e == E::A(1)`, and `!=`). The reference emits the RHS construction's
-/// discriminant `Const` before the comparison loop, so that discriminant must intern into the pool
-/// ahead of the loop's own `IsEnum` discriminant. codegen.kel's `push_enum_eq` therefore DEFERS all
-/// its pool interning to emission time (its `IsEnum`s through `push_enum_isenum`, its result `Const`s
-/// through the new `push_bool` process-time bool work item) rather than pre-interning at node-visit
-/// time; the both-locals `a == b` and `a != b` cases stay byte-identical because with no operand
-/// constants the deferred order equals the old pre-interned one. (A literal on the LEFT,
-/// `E::A() == e`, is a separate detection gap -- the parser does not yet capture a construction's
-/// enum operand type on the left of `==` -- and is not covered here.)
+/// Enum equality with a literal enum construction as EITHER operand self-compiles byte-identically:
+/// `e == E::A()`, `E::A() == e`, payload `e == E::A(1)`/`E::A(1) == e`, and the `!=` forms. Two
+/// fixes cooperate. (1) codegen: the reference emits a construction operand's discriminant `Const`
+/// before the comparison loop, so that discriminant must intern into the pool ahead of the loop's
+/// own `IsEnum` discriminant; codegen.kel's `push_enum_eq` therefore DEFERS all its pool interning to
+/// emission time (its `IsEnum`s through `push_enum_isenum`, its result `Const`s through the
+/// `push_bool` process-time work item) rather than pre-interning at node-visit time. The both-locals
+/// `a == b`/`a != b` cases stay byte-identical because with no operand constants the deferred order
+/// equals the old pre-interned one. (2) parser: a bare enum construction now marks its whole-value
+/// enum type (`ps.last_enum`), so a `==`/`!=` with the construction on the LEFT captures it as the
+/// left operand's enum type (`op_lenum`) and the detection fires; `Enum::V() as Word` casts fold to a
+/// Literal earlier and are unaffected, so a cast result stays scalar.
 #[test]
-fn self_host_compiles_literal_rhs_enum_equality() {
+fn self_host_compiles_literal_operand_enum_equality() {
     // Regression: both-locals enum eq stays byte-identical after the deferred-interning refactor.
     assert_self_host_byte_identical("enum E { A, B }\nfn f(a: E, b: E) -> bool { a == b }");
     assert_self_host_byte_identical("enum E { A, B }\nfn f(a: E, b: E) -> bool { a != b }");
@@ -6701,6 +6703,11 @@ fn self_host_compiles_literal_rhs_enum_equality() {
     assert_self_host_byte_identical(
         "enum Color { Red, Green, Blue }\nfn f(c: Color) -> bool { c == Color::Green() }",
     );
+    // A literal construction as the LEFT operand (`E::V() == e`): the parser now marks a bare enum
+    // construction's whole-value enum type so `op_lenum` captures it, enabling the same variant loop.
+    assert_self_host_byte_identical("enum E { A, B }\nfn f(e: E) -> bool { E::A() == e }");
+    assert_self_host_byte_identical("enum E { A, B }\nfn f(e: E) -> bool { E::B() != e }");
+    assert_self_host_byte_identical("enum E { A(Word), B }\nfn f(e: E) -> bool { E::A(1) == e }");
 }
 
 /// Word shift operators self-compile byte-identically: `lsl`/`asl` lower to `Shl`, `asr` to `Shr`

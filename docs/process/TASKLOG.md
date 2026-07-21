@@ -30,11 +30,18 @@ to emission time (`IsEnum`s via the existing `push_enum_isenum`; result `Const`s
 helper backed by a new `emitbool` process-time work item, kind 0 in the mod-4 item space), so a literal
 operand's construction constants intern in the reference's emission order. `a == b`/`a != b` stay
 byte-identical (deferred order equals the old order when operands carry no constants).
-`EXPECTED_SELF_COMPILE` 59->60. New test `self_host_compiles_literal_rhs_enum_equality`. Green:
-`selfhost_codegen` (100), `selfhost_parse`+`selfhost_pipeline` (9), clippy `--tests --all-features
--D warnings`, fmt. NOT covered (next follow-up): a literal on the LEFT (`E::A() == e`) still lowers to a
-scalar `CmpEq` -- a separate parse-detection gap (left-operand enum-type capture). See
-`REVERSE_PROMPT.md` for the authoritative session-27 handoff.
+`EXPECTED_SELF_COMPILE` 59->60. The eighty-sixth increment then closed the literal-on-the-LEFT case
+(`E::A() == e`, `E::A(1) == e`, `!=`): a parse-DETECTION fix in `parse.kel`, distinct from the codegen
+one. A bare enum construction now sets `ps.last_enum` at its two finalizes (unit and payload), so a
+`==`/`!=` with the construction on the left captures the enum type into `op_lenum` and the variant
+loop fires; `Enum::V() as Word` casts fold to a Literal earlier and are unaffected, confirmed by
+parse.kel still self-compiling byte-identically. Test renamed
+`self_host_compiles_literal_operand_enum_equality` with LEFT-operand cases added. Green (both
+increments): `selfhost_codegen` (100), `selfhost_parse`+`selfhost_pipeline` (9), clippy
+`--tests --all-features -D warnings`, fmt. NEXT follow-up: let-BOUND enum values on either side of `==`
+(`let x = E::A(); x == e`) still miss detection (a let binding does not populate `last_enum`); deeper
+recursive nesting; `lsr`; composite ordering. See `REVERSE_PROMPT.md` for the authoritative session-27
+handoff.
 
 **Playground/runtime (2026-07-09, session 23). PRIVATE-DATA `.data`-SECTION LOAD-TIME INITIALIZATION landed on `v0.2.3`.** Reported from the browser playground: the "Counter (loop + private data)" example faulted with `Op::CheckedAdd got Int and Unit` because a private scalar slot read before its first write observed the `Unit` sentinel. Private data is now script-initialized at load, the assembler `.data`-section model, invisible to the host. `DataLayout` gained `private_init: Vec<ConstValue>` (private-slot order); the compiler bakes each scalar private slot's `= literal` initializer or the type's zero (`Word`→0, `Byte`→0, `bool`→false, `Fixed`→0, `Float`→0.0), zero-fills scalar arrays element-wise, and leaves composite/`Text` slots `Unit` (write-before-read retained). Private scalar fields now admit an explicit `= literal`; `shared` fields and composite private fields still reject one. Both VM constructors (owned `Module` via `construct`, zero-copy via `view_bytes_zero_copy`) write the baked values into the persistent region; they persist across RESET and are not re-applied. Additive, no `BYTECODE_VERSION` bump per the operator's locked design; the golden fixture grew 308→316 bytes (one empty `ArchivedVec` in `None`-carrying modules). 17 new `tests/persistent_data.rs` tests including the exact Counter driven across a RESET (iter 1 reads the zero start → yields 5, iter 2 accumulates → 8). Docs updated: `LANGUAGE_DESIGN.md`, `GRAMMAR.md`, `WIRE_FORMAT.md`. Full gate green (default, signatures, all-features; clippy `--tests --all-features -D warnings`; fmt); wasm playground crate compiles against the updated core. Deferred: composite private slots (need arena flat-packing at construction).
 
