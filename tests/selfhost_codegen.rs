@@ -207,8 +207,16 @@ fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &
                 BinOp::Band => (3, 12),
                 BinOp::Bor => (3, 13),
                 BinOp::Bxor => (3, 14),
+                // Shift operators: `lsl`/`asl` -> Shl (27), `asr` -> Shr (28), `lsr` -> ShrL (29),
+                // matching parse.kel's `opcode_of`. codegen.kel's `push_binop` uses `lsl` to build
+                // the `lsr` mask, so the atomic harness must flatten it.
+                BinOp::Shl => (3, 27),
+                BinOp::AShl => (3, 27),
+                BinOp::ShrA => (3, 28),
+                BinOp::ShrL => (3, 29),
                 other => panic!(
-                    "increment handles arithmetic, comparisons, booleans, bitwise, got {other:?}"
+                    "increment handles arithmetic, comparisons, booleans, bitwise, shifts, got \
+                     {other:?}"
                 ),
             };
             ctx.nodes.push(Node {
@@ -1865,8 +1873,9 @@ fn self_compile_codegen_atomic_functions() {
     // `intern_bool` for struct equality; 57 with `push_enum_eq` for all-unit enum equality; 58 with
     // `push_array_eq` for array equality; 59 with `push_struct_eq_nested` for nested-composite
     // struct equality; 60 with `push_bool` (the deferred process-time bool Const work item that
-    // lets enum equality intern its result Consts at emission time, for literal-operand enum eq).
-    const EXPECTED_SELF_COMPILE: usize = 60;
+    // lets enum equality intern its result Consts at emission time, for literal-operand enum eq);
+    // 61 with `push_int_const` (the deferred process-time int Const work item for the `lsr` mask).
+    const EXPECTED_SELF_COMPILE: usize = 61;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -6730,6 +6739,32 @@ fn self_host_compiles_let_bound_enum_equality() {
     assert_self_host_byte_identical(
         "enum E { A(Word), B }\nfn f(e: E) -> bool { let x = E::A(1); x == e }",
     );
+}
+
+/// The `lsr` (logical, zero-fill right shift) operator with a CONSTANT amount self-compiles
+/// byte-identically, completing the shift family (the 79th increment did `lsl`/`asl`/`asr`). Unlike
+/// `asr` (a single `Shr`), `lsr` lowers to `Shr` then `band ((1 << (64 - k)) - 1)` to clear the
+/// sign-extended high bits, where k is the literal amount. Three cooperating pieces: (1) the lexer
+/// tokenizes `lsr` to a FREE low Tok slot (20) -- not 62/63, the EOF/PENDING sentinels, since tokens
+/// pack as `tok + payload*64` and must be < 64; (2) the parser maps it to a new `ShrL` opcode (29) at
+/// shift precedence; (3) codegen's `push_binop` emits the multi-op sequence, reading the rhs Literal's
+/// value to compute the mask via `((1 << (63 - k)) - 1) * 2 + 1` (overflow-free, no 19-digit literal
+/// the self-host lexer could not parse) and interning it as a DEFERRED int Const (`push_int_const`,
+/// reusing the kind-0 work item with payload >= 2) so it lands after the operand's own constants.
+/// A VARIABLE `lsr` amount (e.g. `a lsr k` or `a lsr 1 + 3`, whose amount is not a bare Literal) uses
+/// a runtime-mask branch in the reference and is NOT lowered here.
+#[test]
+fn self_host_compiles_const_lsr() {
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a lsr 2 }");
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a lsr 1 }");
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a lsr 7 }");
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a lsr 31 }");
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a lsr 63 }");
+    // `band` (precedence 6) binds looser than `lsr` (7), so the amount stays the literal `2`.
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a lsr 2 band 7 }");
+    // Regression: the other shifts still lower to single ops.
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a asr 2 }");
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a lsl 3 }");
 }
 
 /// Word shift operators self-compile byte-identically: `lsl`/`asl` lower to `Shl`, `asr` to `Shr`

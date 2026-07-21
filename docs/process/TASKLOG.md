@@ -41,11 +41,17 @@ increment then closed LET-BOUND enum equality (`let x = E::A(); x == e`, either 
 `let` binding already tracks its enum type in `let_enum`, so `resolve_plain_ident` now restores
 `ps.last_enum` from it after `step_local`, the let-binding analogue of the enum-parameter path. Scoped
 to let-bound-construction values; a let bound to a plain enum value (`let x = a; x == b`) does not set
-`let_enum` and stays the next follow-up. Test `self_host_compiles_let_bound_enum_equality` added. Green
-(all three increments): `selfhost_codegen` (101), `selfhost_parse`+`selfhost_pipeline` (9), clippy
-`--tests --all-features -D warnings`, fmt. NEXT follow-up: let-bound-to-plain-value enum eq; deeper
-recursive nesting; `lsr`; composite ordering. See `REVERSE_PROMPT.md` for the authoritative session-27
-handoff.
+`let_enum` and stays the next follow-up. Test `self_host_compiles_let_bound_enum_equality` added. The eighty-eighth increment then completed the
+SHIFT family with constant-amount `lsr` (logical right shift): lowers to `Shr` then a
+`band ((1 << (64 - k)) - 1)` mask. `lsr` tokenizes to a free low Tok slot (20, not the 62/63 EOF/PENDING
+sentinels), maps to a new `OpCode::ShrL` (29), and `push_binop` computes the mask overflow-free as
+`((1 << (63 - k)) - 1) * 2 + 1` (no 19-digit literal the self-host lexer would overflow) and interns it
+as a DEFERRED int Const (new `push_int_const`, reusing the kind-0 work item). `EXPECTED_SELF_COMPILE`
+60 -> 61. Variable-amount `lsr` (runtime mask + k==0 branch in the reference) is not lowered. Tests
+`self_host_compiles_const_lsr`. Green (all four increments): `selfhost_codegen` (102),
+`selfhost_parse`+`selfhost_pipeline` (9), clippy `--tests --all-features -D warnings`, fmt. NEXT
+follow-up: variable-amount `lsr`; let-bound-to-plain-value enum eq; deeper recursive nesting; composite
+ordering. See `REVERSE_PROMPT.md` for the authoritative session-27 handoff.
 
 **Playground/runtime (2026-07-09, session 23). PRIVATE-DATA `.data`-SECTION LOAD-TIME INITIALIZATION landed on `v0.2.3`.** Reported from the browser playground: the "Counter (loop + private data)" example faulted with `Op::CheckedAdd got Int and Unit` because a private scalar slot read before its first write observed the `Unit` sentinel. Private data is now script-initialized at load, the assembler `.data`-section model, invisible to the host. `DataLayout` gained `private_init: Vec<ConstValue>` (private-slot order); the compiler bakes each scalar private slot's `= literal` initializer or the type's zero (`Word`→0, `Byte`→0, `bool`→false, `Fixed`→0, `Float`→0.0), zero-fills scalar arrays element-wise, and leaves composite/`Text` slots `Unit` (write-before-read retained). Private scalar fields now admit an explicit `= literal`; `shared` fields and composite private fields still reject one. Both VM constructors (owned `Module` via `construct`, zero-copy via `view_bytes_zero_copy`) write the baked values into the persistent region; they persist across RESET and are not re-applied. Additive, no `BYTECODE_VERSION` bump per the operator's locked design; the golden fixture grew 308→316 bytes (one empty `ArchivedVec` in `None`-carrying modules). 17 new `tests/persistent_data.rs` tests including the exact Counter driven across a RESET (iter 1 reads the zero start → yields 5, iter 2 accumulates → 8). Docs updated: `LANGUAGE_DESIGN.md`, `GRAMMAR.md`, `WIRE_FORMAT.md`. Full gate green (default, signatures, all-features; clippy `--tests --all-features -D warnings`; fmt); wasm playground crate compiles against the updated core. Deferred: composite private slots (need arena flat-packing at construction).
 
