@@ -441,6 +441,9 @@ private data stmt {
     // `sq_scan` the all-unit flag, `sq_found` set once the first variant row is located.
     sq_scan: Word,
     sq_found: Word,
+    // 1 when the composite comparison is `!=` (the loop computes `==`, then codegen appends a `Not`);
+    // 0 for `==`. Carried in the StructEqBuild/EnumEqBuild record and stored in match_parts.
+    sq_ne: Word,
     pending_ctuple: Word,
     pending_cstruct: Word,
     pending_carray: Word,
@@ -1677,8 +1680,12 @@ fn byte_op_kind(op: Word) -> Word {
 // Begin a `struct == struct` lowering (both operands are whole structs): allocate the two
 // comparison temps (the next two frame slots), arm the drain, and return field 0's StructEqField
 // record. `step_structeq_emit` continues with the remaining fields then the StructEqBuild.
-fn struct_eq_start() -> Word {
+fn struct_eq_start(op: Word) -> Word {
     let idx = ops.op_lstruct[ops.opsp] - 1;
+    stmt.sq_ne = 0;
+    if op == OpCode::NotEq() as Word {
+        stmt.sq_ne = 1;
+    }
     ps.last_byte = 0;
     ps.last_struct = 0;
     stmt.pending_ctuple = 0;
@@ -1707,7 +1714,7 @@ fn step_structeq_emit() -> Word {
         Node::StructEqField() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fkind[fidx] * 65536) * 64
     } else {
         stmt.structeq_emit = 0;
-        Node::StructEqBuild() as Word + (stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_count * 1048576) * 64
+        Node::StructEqBuild() as Word + (stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_count * 1048576 + stmt.sq_ne * 1073741824) * 64
     }
 }
 
@@ -1727,8 +1734,12 @@ fn enum_all_unit(ename: Word) -> Word {
 // Begin an `enum == enum` lowering (both operands are whole enum values): allocate the two
 // comparison temps, find the enum's contiguous variant rows, arm the drain, and return variant 0's
 // EnumEqVariant record. `step_enumeq_emit` continues with the remaining variants then EnumEqBuild.
-fn enum_eq_start() -> Word {
+fn enum_eq_start(op: Word) -> Word {
     let ename = ops.op_lenum[ops.opsp] - 1;
+    stmt.sq_ne = 0;
+    if op == OpCode::NotEq() as Word {
+        stmt.sq_ne = 1;
+    }
     ps.last_byte = 0;
     ps.last_struct = 0;
     ps.last_enum = 0;
@@ -1770,7 +1781,7 @@ fn step_enumeq_emit() -> Word {
         Node::EnumEqVariant() as Word + (enums.evar[row] + enums.edisc[row] * 65536) * 64
     } else {
         stmt.enumeq_emit = 0;
-        Node::EnumEqBuild() as Word + (stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_count * 1048576 + stmt.sq_ename * 67108864) * 64
+        Node::EnumEqBuild() as Word + (stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_count * 1048576 + stmt.sq_ename * 67108864 + stmt.sq_ne * 70368744177664) * 64
     }
 }
 
@@ -1787,13 +1798,14 @@ fn emit_op(op: Word) -> Word {
     // function's node footprint stays small (parse.kel self-compiles under the per-function caps).
     // `struct == struct`: both operands are whole structs (the LEFT's type captured in `op_lstruct`,
     // the RIGHT's in `last_struct`), so lower a field-wise comparison loop (see `struct_eq_start`).
-    // `enum == enum`: both operands are whole enum values (the LEFT's enum name captured in
-    // `op_lenum`, the RIGHT's in `last_enum`), so lower a variant-iterating comparison loop.
-    if op == OpCode::Eq() as Word andalso ops.op_lenum[ops.opsp] > 0 andalso ps.last_enum > 0 andalso enum_all_unit(ops.op_lenum[ops.opsp] - 1) == 1 {
-        enum_eq_start()
+    // `enum == enum` / `enum != enum`: both operands are whole enum values (the LEFT's enum name
+    // captured in `op_lenum`, the RIGHT's in `last_enum`), so lower a variant-iterating comparison
+    // loop (a `!=` appends a `Not` in codegen).
+    if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_lenum[ops.opsp] > 0 andalso ps.last_enum > 0 andalso enum_all_unit(ops.op_lenum[ops.opsp] - 1) == 1 {
+        enum_eq_start(op)
     } else {
-    if op == OpCode::Eq() as Word andalso ops.op_lstruct[ops.opsp] > 0 andalso ps.last_struct > 0 {
-        struct_eq_start()
+    if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_lstruct[ops.opsp] > 0 andalso ps.last_struct > 0 {
+        struct_eq_start(op)
     } else {
     let bk = byte_op_kind(op);
     if bk == 1 {
