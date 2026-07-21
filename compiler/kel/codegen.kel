@@ -1317,6 +1317,54 @@ fn push_enum_eq(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
+// ArrayEq (kind 54): `array == array` (or `!=`) as a per-element comparison loop. match_parts holds
+// [ta, tb, count, kind, is_ne]. Store both operands in two temps, then loop: for each element index
+// e compare `a[e] == b[e]` via GetIndex; on the first mismatch break false, else after all elements
+// break true. The pool is pre-interned in the reference's order: the element index constants
+// 0..count-1 (in order), THEN the false and true result constants.
+fn push_array_eq(p: Word) -> Word {
+    let base = ast.args[p];
+    let ta = ast.match_parts[base];
+    let tb = ast.match_parts[base + 1];
+    let count = ast.match_parts[base + 2];
+    let kind = ast.match_parts[base + 3];
+    let is_ne = ast.match_parts[base + 4];
+    st.let_count = st.let_count + 2;
+    for e in 0..count limit 256 {
+        st.eq_vidx[e] = intern_int(e);
+    }
+    let false_idx = intern_bool(0);
+    let true_idx = intern_bool(1);
+    // A `!=` negates the loop result: `Not` is emitted LAST, so it is pushed FIRST (LIFO).
+    if is_ne == 1 {
+        push_emit(wire.lnot);
+    }
+    push_emit(wire.mendloop);
+    push_emit(wire.mbreak);
+    push_emit(wire.konst + true_idx * wire.radix);
+    for ej in 0..count limit 256 {
+        let e = count - 1 - ej;
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_emit(wire.konst + false_idx * wire.radix);
+        push_emit(wire.mif);
+        push_emit(wire.lnot);
+        push_emit(wire.cmpeq);
+        // tb's element read (forward-second), then ta's (forward-first): GetLocal, Const(e), GetIndex.
+        push_emit(wire.getindex + kind * wire.radix);
+        push_emit(wire.konst + st.eq_vidx[e] * wire.radix);
+        push_emit(wire.getlocal + tb * wire.radix);
+        push_emit(wire.getindex + kind * wire.radix);
+        push_emit(wire.konst + st.eq_vidx[e] * wire.radix);
+        push_emit(wire.getlocal + ta * wire.radix);
+    }
+    push_emit(wire.mloop);
+    push_emit(wire.setlocal + ta * wire.radix);
+    push_emit(wire.setlocal + tb * wire.radix);
+    push_visit(ast.rhs[p]);
+    push_visit(ast.lhs[p])
+}
+
 // YieldExpr (kind 24): `yield <expr>` emits the expression ops then `Yield`.
 // lhs = the yielded expression.
 fn push_yield(p: Word) -> Word {
@@ -1446,6 +1494,7 @@ fn walk_step() -> Word {
             39 => push_enum_match(payload),
             48 => push_struct_eq(payload),
             51 => push_enum_eq(payload),
+            54 => push_array_eq(payload),
             43 => push_arrindex_nested(payload),
             _ => 0,
         };
