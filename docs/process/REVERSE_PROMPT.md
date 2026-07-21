@@ -10,7 +10,23 @@ AI to Human communication channel.
 
 **Date**: 2026-07-21 (session 27)
 
-**THIS SESSION (eighty-sixth increment): literal-LEFT enum equality now self-compiles too.** With the
+**THIS SESSION (eighty-seventh increment): let-bound enum equality now self-compiles too.** After the
+literal-operand cases, `let x = E::A(); x == e` (either side, `==`/`!=`, unit and payload) still fell
+back to a scalar `CmpEq`: a let binding read as a bare `Local` with no enum operand type. A `let`
+binding already tracks its value's enum type in `stmt.let_enum` (populated from `pending_cenum` at
+bind, and already consumed to mark a `match x` scrutinee). Fix (one site in `parse.kel`):
+`resolve_plain_ident`, in its enum-let branch, now restores `ps.last_enum` from `let_enum[hit]` AFTER
+`step_local` (which had cleared it), the let-binding analogue of the enum-parameter path -- so the
+following `==`/`!=` captures the operand's enum type (`op_lenum`/`last_enum`) and the variant loop
+fires. Safe for parse.kel's own self-compile by the same argument as the eighty-sixth (no enum-let-`==`
+pattern exists there, or it would already have failed), confirmed by parse.kel still self-compiling
+byte-identically. Scoped to let-bound-CONSTRUCTION values (which set `let_enum`); a let bound to a plain
+enum VALUE (`let x = a; x == b`, `a` an enum param) does NOT set `let_enum` and stays undetected -- the
+next follow-up. Test `self_host_compiles_let_bound_enum_equality` added. One file changed:
+`compiler/kel/parse.kel`. Green: `selfhost_codegen` (101, incl. parse.kel self-compile),
+`selfhost_parse`+`selfhost_pipeline` (9), fmt, clippy `--tests --all-features -D warnings`.
+
+**PRIOR THIS SESSION (eighty-sixth increment): literal-LEFT enum equality now self-compiles too.** With the
 codegen deferred-interning fix in place, `E::A() == e` (and `E::B() != e`, payload `E::A(1) == e`) were
 still lowering to a scalar `CmpEq` in the self-host: a parse-DETECTION gap, distinct from the codegen
 fix. Root cause: `op_lenum` (the left operand's enum type, captured at operator push in
