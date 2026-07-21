@@ -6584,3 +6584,21 @@ fn self_host_compiles_byte_arithmetic_ops() {
     // Byte bitwise still promote-operate-truncates (the two Byte-op classes coexist).
     assert_self_host_byte_identical("fn f(a: Byte, b: Byte) -> Byte { a band b }");
 }
+
+#[test]
+fn self_host_compiles_byte_ops_with_literal_operands() {
+    // A Byte op against a LITERAL constant (the very common `mask` idiom, `a band 15`). The literal
+    // is a Word constant, so it is coerced to a Byte (WordToByte) before the Byte op sees it:
+    // bitwise emits `Const, WordToByte, ByteToWord` (coerce then widen), arithmetic emits
+    // `Const, WordToByte` (coerce, no widen). A Byte VARIABLE operand skips the coercion (it is
+    // already a Byte). `push_byte_binop`/`push_byte_arith` check each operand's node kind (Literal)
+    // and prepend the coercion. Byte-identical.
+    assert_self_host_byte_identical("fn f(a: Byte) -> Byte { a band 15 }");
+    assert_self_host_byte_identical("fn f(a: Byte) -> Byte { a bor 1 }");
+    assert_self_host_byte_identical("fn f(a: Byte) -> Byte { a + 5 }");
+    // A Byte VARIABLE operand (no literal) still skips the coercion (regression guard).
+    assert_self_host_byte_identical("fn f(a: Byte, b: Byte) -> Byte { a band b }");
+    // A Word op against a literal stays a plain Word op (the left operand is not Byte, so the Byte
+    // lowering never fires).
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a band 255 }");
+}
