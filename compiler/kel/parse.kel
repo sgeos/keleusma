@@ -517,6 +517,8 @@ private data stmt {
     se_substart: Word,
     se_r2: Word,
     se_l2: Word,
+    // 1 when the current nested field is a TUPLE (read sub-fields from `tupledefs`); 0 for a struct.
+    se_subistuple: Word,
     pending_ctuple: Word,
     pending_cstruct: Word,
     pending_carray: Word,
@@ -1874,15 +1876,21 @@ fn struct_eq_kind(idx: Word) -> Word {
     stmt.sq_found = 0;
     for f in 0..structdefs.sd_fcount[idx] limit 64 {
         let fidx = structdefs.sd_fstart[idx] + f;
-        if structdefs.sd_ftuple[fidx] > 0 {
-            stmt.sq_scan = 0;
-        } else {
         if structdefs.sd_fstruct[fidx] > 0 {
             stmt.sq_found = 1;
             let s = structdefs.sd_fstruct[fidx] - 1;
             for g in 0..structdefs.sd_fcount[s] limit 64 {
                 let gidx = structdefs.sd_fstart[s] + g;
                 if structdefs.sd_fstruct[gidx] > 0 orelse structdefs.sd_ftuple[gidx] > 0 {
+                    stmt.sq_scan = 0;
+                }
+            }
+        } else {
+        if structdefs.sd_ftuple[fidx] > 0 {
+            stmt.sq_found = 1;
+            let t = structdefs.sd_ftuple[fidx] - 1;
+            for g in 0..tupledefs.tup_ecount[t] limit 64 {
+                if tupledefs.tup_ekind[tupledefs.tup_estart[t] + g] >= 100 {
                     stmt.sq_scan = 0;
                 }
             }
@@ -1936,7 +1944,11 @@ fn structeq_nested_next() -> Word {
         if stmt.se_subcur < stmt.se_subcount {
             let fidx = stmt.se_substart + stmt.se_subcur;
             stmt.se_subcur = stmt.se_subcur + 1;
-            Node::StructEqNestedField() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fkind[fidx] * 65536) * 64
+            if stmt.se_subistuple == 1 {
+                Node::StructEqNestedField() as Word + (tupledefs.tup_eoffset[fidx] + tupledefs.tup_ekind[fidx] * 65536) * 64
+            } else {
+                Node::StructEqNestedField() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fkind[fidx] * 65536) * 64
+            }
         } else {
             stmt.se_phase = 0;
             stmt.sq_field = stmt.sq_field + 1;
@@ -1954,12 +1966,27 @@ fn structeq_nested_next() -> Word {
                 stmt.se_substart = structdefs.sd_fstart[s];
                 stmt.se_subcount = structdefs.sd_fcount[s];
                 stmt.se_subcur = 0;
+                stmt.se_subistuple = 0;
                 stmt.se_phase = 1;
                 Node::StructEqNested() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fsize[fidx] * 65536 + 2 * 4294967296 + r2 * 17179869184 + l2 * 17592186044416) * 64
             } else {
+            if structdefs.sd_ftuple[fidx] > 0 {
+                let t = structdefs.sd_ftuple[fidx] - 1;
+                let r2 = ps.pcount + stmt.slot_count;
+                stmt.slot_count = stmt.slot_count + 1;
+                let l2 = ps.pcount + stmt.slot_count;
+                stmt.slot_count = stmt.slot_count + 1;
+                stmt.se_substart = tupledefs.tup_estart[t];
+                stmt.se_subcount = tupledefs.tup_ecount[t];
+                stmt.se_subcur = 0;
+                stmt.se_subistuple = 1;
+                stmt.se_phase = 1;
+                // A nested tuple field extracts with FlatNested variant Tuple (0).
+                Node::StructEqNested() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fsize[fidx] * 65536 + r2 * 17179869184 + l2 * 17592186044416) * 64
+            } else {
                 stmt.sq_field = stmt.sq_field + 1;
                 Node::StructEqNestedField() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fkind[fidx] * 65536) * 64
-            }
+            } }
         } else {
             stmt.structeq_nested = 0;
             Node::StructEqNestedBuild() as Word + (stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_ne * 1048576) * 64

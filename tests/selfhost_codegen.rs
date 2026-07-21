@@ -6743,3 +6743,20 @@ fn self_host_compiles_nested_struct_equality() {
         "struct P { x: Word, y: Word }\nfn f(a: P, b: P) -> bool { a == b }",
     );
 }
+
+/// Nested-TUPLE-field struct equality self-compiles byte-identically: a struct containing a tuple
+/// field reuses the nested path, extracting the tuple (FlatNested variant Tuple) into fresh temps and
+/// comparing its elements with GetTupleField in the inner loop. Covers a tuple field beside a scalar,
+/// a tuple-only struct `!=`, and a struct mixing nested struct and nested tuple fields.
+#[test]
+fn self_host_compiles_nested_tuple_field_equality() {
+    assert_self_host_byte_identical(
+        "struct P { t: (Word, Word), x: Word }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { t: (Word, Word, Word) }\nfn f(a: P, b: P) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "struct Q { a: Word, b: Word }\nstruct P { q: Q, t: (Word, Word) }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
+}
