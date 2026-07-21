@@ -757,6 +757,9 @@ fn decode_op(w: i64) -> Op {
         44 => Op::Reset,
         45 => Op::ByteToWord,
         58 => Op::WordToByte,
+        59 => Op::Add,
+        60 => Op::Sub,
+        61 => Op::Mul,
         // A flat struct construction: the operand packs count + byte_size*65536.
         46 => Op::NewComposite(NewCompositeOperand::Flat {
             kind: CompositeKind::Struct,
@@ -1844,8 +1847,9 @@ fn self_compile_codegen_atomic_functions() {
     // string literals; 49 with the extracted `intern_int`/`intern_str` pool-interning helpers;
     // 51 with `push_enum_isenum`/`push_enum_match` for enum-value match; 52 with
     // `push_arrindex_nested` for array-of-struct parameter element access; 53 with
-    // `push_byte_binop` for Byte-operand bitwise promote-operate-truncate.
-    const EXPECTED_SELF_COMPILE: usize = 53;
+    // `push_byte_binop` for Byte-operand bitwise promote-operate-truncate; 54 with
+    // `push_byte_arith` for Byte-operand unchecked arithmetic.
+    const EXPECTED_SELF_COMPILE: usize = 54;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -1872,10 +1876,10 @@ fn self_compile_codegen_atomic_functions() {
 // reconstruction to the control-flow, data-access, call, and yield kinds.
 // ---------------------------------------------------------------------------
 
-// Lexer `src` block slots: len(1) + bytes(163840) then the intern table.
-const BR_LEX_ISTART: usize = 1 + 163840;
-const BR_LEX_ILEN: usize = 1 + 163840 + 1280;
-const BR_LEX_ICOUNT: usize = 1 + 163840 + 1280 + 1280;
+// Lexer `src` block slots: len(1) + bytes(196608) then the intern table.
+const BR_LEX_ISTART: usize = 1 + 196608;
+const BR_LEX_ILEN: usize = 1 + 196608 + 1280;
+const BR_LEX_ICOUNT: usize = 1 + 196608 + 1280 + 1280;
 // Parser `toks` block slots: len(1), then the packed token array (one `tok+payload*64`
 // word per token), then the scalar and chunk-table inputs.
 const BR_P_LEN: usize = 0;
@@ -5340,7 +5344,7 @@ fn assemble_shared_layout(
 
 // The per-shared-slot byte layout the driver assembles from parse.kel's records equals
 // the reference compiler's, offset/kind/len for every element slot, for all four stage
-// sources (including lexer.kel's 163840-byte buffer whose later fields sit past 64 KB).
+// sources (including lexer.kel's 196608-byte buffer whose later fields sit past 64 KB).
 #[test]
 fn assembled_shared_layout_matches_the_reference() {
     let cases = [
@@ -6564,4 +6568,19 @@ fn self_host_compiles_byte_bitwise_ops() {
     assert_self_host_byte_identical("fn f(a: Word, b: Word) -> Word { a band b }");
     // A chain of Word-operand bitwise ops.
     assert_self_host_byte_identical("fn f(a: Word, b: Word, c: Word) -> Word { a band b bor c }");
+}
+
+#[test]
+fn self_host_compiles_byte_arithmetic_ops() {
+    // An arithmetic op (+/-/*) on two BYTE operands lowers to the UNCHECKED op (Add/Sub/Mul), with
+    // no overflow guard and no PopN, since a Byte sum/product cannot overflow the word it is computed
+    // in -- unlike a Word `+`, which stays a CheckedAdd (+ PopN). `emit_op` emits a ByteArith node
+    // (kind 45) when both operands are Byte and the op is add/mul/sub (`byte_op_kind` returns 2).
+    assert_self_host_byte_identical("fn f(a: Byte, b: Byte) -> Byte { a + b }");
+    assert_self_host_byte_identical("fn f(a: Byte, b: Byte) -> Byte { a - b }");
+    assert_self_host_byte_identical("fn f(a: Byte, b: Byte) -> Byte { a * b }");
+    // Word arithmetic stays checked (regression guard).
+    assert_self_host_byte_identical("fn f(a: Word, b: Word) -> Word { a + b - a }");
+    // Byte bitwise still promote-operate-truncates (the two Byte-op classes coexist).
+    assert_self_host_byte_identical("fn f(a: Byte, b: Byte) -> Byte { a band b }");
 }

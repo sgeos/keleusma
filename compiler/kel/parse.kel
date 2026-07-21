@@ -143,6 +143,10 @@ enum Node {
     // (WordToByte). arg is the OpCode (Band/Bor/Bxor); lhs/rhs the two operands. A plain (Word)
     // bitwise op stays a BinOp.
     ByteBinOp = 44,
+    // An ARITHMETIC operator (+/-/*) on two BYTE operands, lowered to the UNCHECKED op (Add/Sub/Mul,
+    // no overflow guard and no PopN) since a Byte sum/product cannot overflow the word it is computed
+    // in. arg is the OpCode (Add/Mul/Sub); lhs/rhs the operands. A Word `+` stays a checked BinOp.
+    ByteArith = 45,
     // An array literal `[a, b, c]`: emits the element ops then NewComposite(Flat{Array, count,
     // byte_size}). Like a Call/StructInit, its elements ride the call_args side array.
     ArrayLit = 17,
@@ -1589,17 +1593,22 @@ fn prec_of(op: Word) -> Word {
     }
 }
 
-// Whether the operator now folding is a bitwise op (band/bor/bxor) on two BYTE operands: the LEFT
-// operand's Byte-ness was captured with the operator (`op_lbyte` at the just-popped slot), the RIGHT
-// operand's is `last_byte`. Held out of `emit_op` so that function's reconstructed node count stays
-// under the per-function caps.
-fn byte_bitwise_op(op: Word) -> Word {
+// The Byte-operand operator class of the operator now folding, when BOTH operands are Byte (the
+// LEFT operand's Byte-ness was captured with the operator in `op_lbyte` at the just-popped slot, the
+// RIGHT operand's is `last_byte`): 1 = BITWISE (band/bor/bxor, lowered promote-operate-truncate),
+// 2 = ARITHMETIC (add/mul/sub, lowered to the UNCHECKED op -- a Byte sum cannot overflow the word it
+// is computed in), 0 = none (a plain Word/other op). Held out of `emit_op` so that function's
+// reconstructed node count stays under the per-function caps.
+fn byte_op_kind(op: Word) -> Word {
     if ops.op_lbyte[ops.opsp] == 1 andalso ps.last_byte == 1 {
         if op == OpCode::Band() as Word orelse op == OpCode::Bor() as Word orelse op == OpCode::Bxor() as Word {
             1
         } else {
+        if op == OpCode::Add() as Word orelse op == OpCode::Mul() as Word orelse op == OpCode::Sub() as Word {
+            2
+        } else {
             0
-        }
+        } }
     } else {
         0
     }
@@ -1616,9 +1625,14 @@ fn emit_op(op: Word) -> Word {
     // A bitwise op (band/bor/bxor) on two BYTE operands lowers promote-operate-truncate (a Byte
     // result); any other operator yields a Word/bool. `byte_bitwise_op` does the detection so this
     // function's node footprint stays small (parse.kel self-compiles under the per-function caps).
-    if byte_bitwise_op(op) == 1 {
+    let bk = byte_op_kind(op);
+    if bk == 1 {
         ps.last_byte = 1;
         Node::ByteBinOp() as Word + op * 64
+    } else {
+    if bk == 2 {
+        ps.last_byte = 1;
+        Node::ByteArith() as Word + op * 64
     } else {
         ps.last_byte = 0;
         match op {
@@ -1629,7 +1643,7 @@ fn emit_op(op: Word) -> Word {
             OpCode::YieldMark() => Node::YieldExpr() as Word,
             _ => Node::BinOp() as Word + op * 64,
         }
-    }
+    } }
 }
 
 fn opcode_of(k: Word) -> Word {
