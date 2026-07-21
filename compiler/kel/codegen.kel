@@ -495,6 +495,25 @@ fn intern_str(id: Word) -> Word {
     idx
 }
 
+// Intern a Bool `value` (0 false, 1 true) into the constant pool, deduplicating among Bool (tag-2)
+// entries, and return its pool index. Used by `push_struct_eq` for the field-wise comparison's
+// false/true results (the reference bakes them as `ConstValue::Bool`, not Int).
+fn intern_bool(value: Word) -> Word {
+    st.dup_idx = st.pool_count;
+    for i in 0..st.pool_count limit 64 {
+        if st.pool[i] == value andalso st.pool_tag[i] == 2 {
+            st.dup_idx = i;
+        }
+    }
+    let idx = st.dup_idx;
+    if idx == st.pool_count {
+        st.pool[st.pool_count] = value;
+        st.pool_tag[st.pool_count] = 2;
+        st.pool_count = st.pool_count + 1;
+    }
+    idx
+}
+
 // StrLit (kind 38): a string literal. Intern its content (the lexer intern id in `args`) as a
 // StaticStr pool entry and schedule `Const(index)`. The host resolves the id to the string bytes.
 fn push_strlit(p: Word) -> Word {
@@ -1133,6 +1152,46 @@ fn push_enum_match(p: Word) -> Word {
     push_visit(scrut)
 }
 
+// StructEq (kind 48): `struct == struct` as a field-wise comparison loop. match_parts holds
+// [ta][tb][count][per field: offset, kind]. Store both operands in the two temps, then loop: for
+// each field compare `a.f == b.f`; on the first mismatch break false, else after all fields break
+// true. The Loop/Break/If markers are backpatched by `emit_op`. Two temps grow the frame.
+fn push_struct_eq(p: Word) -> Word {
+    let base = ast.args[p];
+    let ta = ast.match_parts[base];
+    let tb = ast.match_parts[base + 1];
+    let count = ast.match_parts[base + 2];
+    st.let_count = st.let_count + 2;
+    // Pre-intern the results in the reference's pool order (false before true): the reference emits
+    // the false (mismatch) Const first, so it takes the lower pool index. `push_emit` runs in reverse
+    // (LIFO), so interning here -- not at push time -- keeps the pool order correct.
+    let false_idx = intern_bool(0);
+    let true_idx = intern_bool(1);
+    push_emit(wire.mendloop);
+    push_emit(wire.mbreak);
+    push_emit(wire.konst + true_idx * wire.radix);
+    for fj in 0..count limit 64 {
+        let f = count - 1 - fj;
+        let off = ast.match_parts[base + 3 + f * 2];
+        let kind = ast.match_parts[base + 3 + f * 2 + 1];
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_emit(wire.konst + false_idx * wire.radix);
+        push_emit(wire.mif);
+        push_emit(wire.lnot);
+        push_emit(wire.cmpeq);
+        push_emit(wire.getfield + (off + kind * 65536) * wire.radix);
+        push_emit(wire.getlocal + tb * wire.radix);
+        push_emit(wire.getfield + (off + kind * 65536) * wire.radix);
+        push_emit(wire.getlocal + ta * wire.radix);
+    }
+    push_emit(wire.mloop);
+    push_emit(wire.setlocal + ta * wire.radix);
+    push_emit(wire.setlocal + tb * wire.radix);
+    push_visit(ast.rhs[p]);
+    push_visit(ast.lhs[p])
+}
+
 // YieldExpr (kind 24): `yield <expr>` emits the expression ops then `Yield`.
 // lhs = the yielded expression.
 fn push_yield(p: Word) -> Word {
@@ -1260,6 +1319,7 @@ fn walk_step() -> Word {
             37 => push_tuple_field(payload),
             38 => push_strlit(payload),
             39 => push_enum_match(payload),
+            48 => push_struct_eq(payload),
             43 => push_arrindex_nested(payload),
             _ => 0,
         };

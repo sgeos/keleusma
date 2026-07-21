@@ -147,6 +147,13 @@ enum Node {
     // no overflow guard and no PopN) since a Byte sum/product cannot overflow the word it is computed
     // in. arg is the OpCode (Add/Mul/Sub); lhs/rhs the operands. A Word `+` stays a checked BinOp.
     ByteArith = 45,
+    // `struct == struct` equality, lowered to a field-wise comparison loop. Emitted as a marker
+    // stream: a StructEqField (kind 46, arg offset + kind*65536) per field, then a StructEqBuild
+    // (kind 47, arg ta + tb*1024 + count*1048576) which reconstruct turns into a StructEq (kind 48,
+    // arg the match_parts base; lhs/rhs the two operands). codegen `push_struct_eq` builds the loop.
+    StructEqField = 46,
+    StructEqBuild = 47,
+    StructEq = 48,
     // An array literal `[a, b, c]`: emits the element ops then NewComposite(Flat{Array, count,
     // byte_size}). Like a Call/StructInit, its elements ride the call_args side array.
     ArrayLit = 17,
@@ -254,6 +261,12 @@ private data ps {
     // carry no Byte value, so this is always 0 there and the Byte lowering never fires for them.
     pbyte: [Word; 32],
     last_byte: Word,
+    // Operand-type tracking for `struct == struct` equality (a field-wise comparison loop): the
+    // struct declaration index (plus one) of the most recently emitted operand VALUE if it is a
+    // whole struct, else 0 (set at the whole-struct-emit pushback in `step_fieldaccess`, cleared for
+    // any other operand). No stage compares structs, so this is always 0 there and struct equality
+    // never fires for the stages.
+    last_struct: Word,
     // Per value-parameter struct binding: 0 if not a struct type, else the struct's
     // declaration index plus one; and the field-access postfix sub-state after a struct-typed
     // parameter Local was emitted (1 awaits an optional `.`, 2 reads the field name).
@@ -342,6 +355,9 @@ private data ops {
     // the operator is pushed. `emit_op` reads it (at the popped slot) to detect a Byte-operand
     // bitwise op. A marker slot's entry is unused (markers are never Byte bitwise ops).
     op_lbyte: [Word; 64],
+    // Parallel to `opstack`: the LEFT operand's struct type (plus one) of each pending operator, so
+    // `emit_op(Eq)` can detect a `struct == struct` comparison (both operands whole structs).
+    op_lstruct: [Word; 64],
     opsp: Word,
     pending_op: Word,
     pending_prec: Word,
@@ -388,6 +404,16 @@ private data stmt {
     // Per `let` binding, 0 or the enum's name id plus one when the binding's value root returned an
     // enum (a call of an enum-returning function), so a `match` over the binding lowers to IsEnum.
     let_enum: [Word; 64],
+    // A `struct == struct` fold arms this drain: it emits one StructEqField record per field (from
+    // the struct's declaration layout) then a StructEqBuild, over successive body-step calls (the
+    // operator fold itself returns only the first record). `sq_struct` the struct index, `sq_field`
+    // the running field cursor, `sq_count` the field count, `sq_ta`/`sq_tb` the two comparison temps.
+    structeq_emit: Word,
+    sq_struct: Word,
+    sq_field: Word,
+    sq_count: Word,
+    sq_ta: Word,
+    sq_tb: Word,
     pending_ctuple: Word,
     pending_cstruct: Word,
     pending_carray: Word,
@@ -750,7 +776,9 @@ fn step_local(v: Word) -> Word {
     ps.found = 0;
     ps.found_flag = 0;
     // This operand is Byte-typed only if it resolves to a Byte parameter (set below); default 0.
+    // It is a plain scalar/Local, not a whole struct, so clear the struct-operand tracking.
     ps.last_byte = 0;
+    ps.last_struct = 0;
     for i in 0..stmt.let_count limit 64 {
         if stmt.let_names[i] == v {
             ps.found = stmt.scope_slot[i];
@@ -1614,6 +1642,43 @@ fn byte_op_kind(op: Word) -> Word {
     }
 }
 
+// Begin a `struct == struct` lowering (both operands are whole structs): allocate the two
+// comparison temps (the next two frame slots), arm the drain, and return field 0's StructEqField
+// record. `step_structeq_emit` continues with the remaining fields then the StructEqBuild.
+fn struct_eq_start() -> Word {
+    let idx = ops.op_lstruct[ops.opsp] - 1;
+    ps.last_byte = 0;
+    ps.last_struct = 0;
+    stmt.pending_ctuple = 0;
+    stmt.pending_cstruct = 0;
+    stmt.pending_carray = 0;
+    stmt.pending_carray_struct = 0;
+    stmt.pending_cenum = 0;
+    stmt.sq_tb = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + 1;
+    stmt.sq_ta = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + 1;
+    stmt.structeq_emit = 1;
+    stmt.sq_struct = idx;
+    stmt.sq_count = structdefs.sd_fcount[idx];
+    stmt.sq_field = 1;
+    let fidx = structdefs.sd_fstart[idx];
+    Node::StructEqField() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fkind[fidx] * 65536) * 64
+}
+
+// Emit the next StructEqField (one per struct field, in declaration order) then, once all fields are
+// emitted, the StructEqBuild that reconstruct turns into the StructEq node.
+fn step_structeq_emit() -> Word {
+    if stmt.sq_field < stmt.sq_count {
+        let fidx = structdefs.sd_fstart[stmt.sq_struct] + stmt.sq_field;
+        stmt.sq_field = stmt.sq_field + 1;
+        Node::StructEqField() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fkind[fidx] * 65536) * 64
+    } else {
+        stmt.structeq_emit = 0;
+        Node::StructEqBuild() as Word + (stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_count * 1048576) * 64
+    }
+}
+
 fn emit_op(op: Word) -> Word {
     // Any operator applied to a `let` value's operand means the value's root is not a bare
     // composite construction, so clear the pending composite-type tracking (see `stmt`).
@@ -1625,6 +1690,11 @@ fn emit_op(op: Word) -> Word {
     // A bitwise op (band/bor/bxor) on two BYTE operands lowers promote-operate-truncate (a Byte
     // result); any other operator yields a Word/bool. `byte_bitwise_op` does the detection so this
     // function's node footprint stays small (parse.kel self-compiles under the per-function caps).
+    // `struct == struct`: both operands are whole structs (the LEFT's type captured in `op_lstruct`,
+    // the RIGHT's in `last_struct`), so lower a field-wise comparison loop (see `struct_eq_start`).
+    if op == OpCode::Eq() as Word andalso ops.op_lstruct[ops.opsp] > 0 andalso ps.last_struct > 0 {
+        struct_eq_start()
+    } else {
     let bk = byte_op_kind(op);
     if bk == 1 {
         ps.last_byte = 1;
@@ -1643,7 +1713,7 @@ fn emit_op(op: Word) -> Word {
             OpCode::YieldMark() => Node::YieldExpr() as Word,
             _ => Node::BinOp() as Word + op * 64,
         }
-    } }
+    } } }
 }
 
 fn opcode_of(k: Word) -> Word {
@@ -1675,9 +1745,11 @@ fn step_resolving() -> Word {
         emit_op(op)
     } else {
         ops.opstack[ops.opsp] = ops.pending_op;
-        // Capture the LEFT operand's Byte-ness with the operator so `emit_op` can detect a Byte
-        // bitwise op when this operator later folds (it reads `op_lbyte` at the popped slot).
+        // Capture the LEFT operand's Byte-ness and struct type with the operator so `emit_op` can
+        // detect a Byte bitwise op or a `struct == struct` when this operator later folds (it reads
+        // `op_lbyte`/`op_lstruct` at the popped slot).
         ops.op_lbyte[ops.opsp] = ps.last_byte;
+        ops.op_lstruct[ops.opsp] = ps.last_struct;
         ops.opsp = ops.opsp + 1;
         ops.resolving = 0;
         0
@@ -2286,7 +2358,10 @@ fn step_fieldaccess(k: Word, v: Word) -> Word {
         if k == Tok::Dot() as Word {
             ps.fa_phase = 2;
         } else {
+            // A struct-typed value used WHOLE (not field-accessed): record its struct type so a
+            // following `== struct` folds to a field-wise StructEq. The Local was already emitted.
             ps.fa_phase = 0;
+            ps.last_struct = ps.fa_struct + 1;
             ps.cursor = ps.cursor - 1;
         }
         0
@@ -2894,6 +2969,11 @@ fn step_folding() -> Word {
 
 // One step of the body walk: the active sub-state, or the next body token.
 fn body_step() -> Word {
+    if stmt.structeq_emit == 1 {
+        // A `struct == struct` fold armed the drain: emit the per-field records then the build,
+        // before any further token/operator processing continues.
+        step_structeq_emit()
+    } else {
     if ops.resolving == 1 {
         step_resolving()
     } else {
@@ -2951,7 +3031,7 @@ fn body_step() -> Word {
                 step_body_dispatch(k, v)
             } } } }
         }
-    } } } } } } } } } } }
+    } } } } } } } } } } } }
 }
 
 // Reset the body-walk state for a fresh function body.
