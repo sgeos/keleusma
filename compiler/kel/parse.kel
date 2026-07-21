@@ -292,6 +292,10 @@ private data ps {
     // parameter, else 0 (set in `step_local`, cleared for any other operand). No stage compares
     // enums, so this is always 0 there and enum equality never fires for the stages.
     last_enum: Word,
+    // The tuple layout index (plus one) of the most recently emitted operand VALUE if it is a whole
+    // tuple, else 0 (set at the whole-tuple-emit pushback in `step_tupleaccess`, cleared otherwise).
+    // Drives `tuple == tuple` equality (the struct-eq field loop with a GetTupleField accessor).
+    last_tuple: Word,
     // Per value-parameter struct binding: 0 if not a struct type, else the struct's
     // declaration index plus one; and the field-access postfix sub-state after a struct-typed
     // parameter Local was emitted (1 awaits an optional `.`, 2 reads the field name).
@@ -386,6 +390,9 @@ private data ops {
     // Parallel to `opstack`: the LEFT operand's enum name id (plus one) of each pending operator, so
     // `emit_op(Eq)` can detect an `enum == enum` comparison (both operands whole enum values).
     op_lenum: [Word; 64],
+    // Parallel to `opstack`: the LEFT operand's tuple layout index (plus one) of each pending
+    // operator, so `emit_op(Eq)` can detect a `tuple == tuple` comparison.
+    op_ltuple: [Word; 64],
     opsp: Word,
     pending_op: Word,
     pending_prec: Word,
@@ -437,6 +444,10 @@ private data stmt {
     // operator fold itself returns only the first record). `sq_struct` the struct index, `sq_field`
     // the running field cursor, `sq_count` the field count, `sq_ta`/`sq_tb` the two comparison temps.
     structeq_emit: Word,
+    // 1 when the pending composite-eq drain is over a TUPLE (read the layout from `tupledefs` and
+    // emit GetTupleField in codegen) rather than a struct; 0 for a struct. `sq_struct` holds the
+    // tuple layout index in the tuple case.
+    sq_istuple: Word,
     sq_struct: Word,
     sq_field: Word,
     sq_count: Word,
@@ -828,6 +839,7 @@ fn step_local(v: Word) -> Word {
     // It is a plain scalar/Local, not a whole struct, so clear the struct-operand tracking.
     ps.last_byte = 0;
     ps.last_struct = 0;
+    ps.last_tuple = 0;
     // This operand is a whole enum value only if it resolves to an enum-typed parameter (set below).
     ps.last_enum = 0;
     for i in 0..stmt.let_count limit 64 {
@@ -1710,8 +1722,10 @@ fn struct_eq_start(op: Word) -> Word {
     if op == OpCode::NotEq() as Word {
         stmt.sq_ne = 1;
     }
+    stmt.sq_istuple = 0;
     ps.last_byte = 0;
     ps.last_struct = 0;
+    ps.last_tuple = 0;
     stmt.pending_ctuple = 0;
     stmt.pending_cstruct = 0;
     stmt.pending_carray = 0;
@@ -1729,16 +1743,52 @@ fn struct_eq_start(op: Word) -> Word {
     Node::StructEqField() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fkind[fidx] * 65536) * 64
 }
 
-// Emit the next StructEqField (one per struct field, in declaration order) then, once all fields are
-// emitted, the StructEqBuild that reconstruct turns into the StructEq node.
+// Begin a `tuple == tuple` lowering: identical to `struct_eq_start` but the field (offset, kind)
+// pairs come from `tupledefs` and the `sq_istuple` flag makes codegen emit GetTupleField.
+fn tuple_eq_start(op: Word) -> Word {
+    let idx = ops.op_ltuple[ops.opsp] - 1;
+    stmt.sq_ne = 0;
+    if op == OpCode::NotEq() as Word {
+        stmt.sq_ne = 1;
+    }
+    stmt.sq_istuple = 1;
+    ps.last_byte = 0;
+    ps.last_struct = 0;
+    ps.last_tuple = 0;
+    stmt.pending_ctuple = 0;
+    stmt.pending_cstruct = 0;
+    stmt.pending_carray = 0;
+    stmt.pending_carray_struct = 0;
+    stmt.pending_cenum = 0;
+    stmt.sq_tb = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + 1;
+    stmt.sq_ta = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + 1;
+    stmt.structeq_emit = 1;
+    stmt.sq_struct = idx;
+    stmt.sq_count = tupledefs.tup_ecount[idx];
+    stmt.sq_field = 1;
+    let fidx = tupledefs.tup_estart[idx];
+    Node::StructEqField() as Word + (tupledefs.tup_eoffset[fidx] + tupledefs.tup_ekind[fidx] * 65536) * 64
+}
+
+// Emit the next StructEqField (one per field, in declaration order) then, once all fields are
+// emitted, the StructEqBuild that reconstruct turns into the StructEq node. Reads the field layout
+// from `tupledefs` for a tuple comparison (`sq_istuple`) or `structdefs` for a struct.
 fn step_structeq_emit() -> Word {
     if stmt.sq_field < stmt.sq_count {
-        let fidx = structdefs.sd_fstart[stmt.sq_struct] + stmt.sq_field;
+        let sf = stmt.sq_field;
         stmt.sq_field = stmt.sq_field + 1;
-        Node::StructEqField() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fkind[fidx] * 65536) * 64
+        if stmt.sq_istuple == 1 {
+            let fidx = tupledefs.tup_estart[stmt.sq_struct] + sf;
+            Node::StructEqField() as Word + (tupledefs.tup_eoffset[fidx] + tupledefs.tup_ekind[fidx] * 65536) * 64
+        } else {
+            let fidx = structdefs.sd_fstart[stmt.sq_struct] + sf;
+            Node::StructEqField() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fkind[fidx] * 65536) * 64
+        }
     } else {
         stmt.structeq_emit = 0;
-        Node::StructEqBuild() as Word + (stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_count * 1048576 + stmt.sq_ne * 1073741824) * 64
+        Node::StructEqBuild() as Word + (stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_count * 1048576 + stmt.sq_ne * 1073741824 + stmt.sq_istuple * 2147483648) * 64
     }
 }
 
@@ -1848,6 +1898,9 @@ fn emit_op(op: Word) -> Word {
     // `enum == enum` / `enum != enum`: both operands are whole enum values (the LEFT's enum name
     // captured in `op_lenum`, the RIGHT's in `last_enum`), so lower a variant-iterating comparison
     // loop (a `!=` appends a `Not` in codegen).
+    if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_ltuple[ops.opsp] > 0 andalso ps.last_tuple > 0 {
+        tuple_eq_start(op)
+    } else {
     if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_lenum[ops.opsp] > 0 andalso ps.last_enum > 0 andalso enum_eq_supported(ops.op_lenum[ops.opsp] - 1) == 1 {
         enum_eq_start(op)
     } else {
@@ -1872,7 +1925,7 @@ fn emit_op(op: Word) -> Word {
             OpCode::YieldMark() => Node::YieldExpr() as Word,
             _ => Node::BinOp() as Word + op * 64,
         }
-    } } } }
+    } } } } }
 }
 
 fn opcode_of(k: Word) -> Word {
@@ -1913,6 +1966,7 @@ fn step_resolving() -> Word {
         ops.op_lbyte[ops.opsp] = ps.last_byte;
         ops.op_lstruct[ops.opsp] = ps.last_struct;
         ops.op_lenum[ops.opsp] = ps.last_enum;
+        ops.op_ltuple[ops.opsp] = ps.last_tuple;
         ops.opsp = ops.opsp + 1;
         ops.resolving = 0;
         0
@@ -2616,7 +2670,10 @@ fn step_tupleaccess(k: Word, v: Word) -> Word {
         if k == Tok::Dot() as Word {
             ps.ta_phase = 2;
         } else {
+            // A tuple-typed value used WHOLE (not element-accessed): record its tuple layout so a
+            // following `== tuple` folds to a field-wise TupleEq. The Local was already emitted.
             ps.ta_phase = 0;
+            ps.last_tuple = ps.ta_tuple + 1;
             ps.cursor = ps.cursor - 1;
         }
         0

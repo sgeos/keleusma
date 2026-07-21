@@ -6690,3 +6690,19 @@ fn self_host_compiles_word_shifts() {
     assert_self_host_byte_identical("fn f(a: Word) -> Word { a lsl 2 band 7 }");
     assert_self_host_byte_identical("fn f(a: Word) -> Word { a lsl 1 + 3 }");
 }
+
+/// Tuple equality self-compiles byte-identically: `tuple == tuple` (and `!=`) reuses the struct-eq
+/// field-wise comparison loop with a GetTupleField accessor (the reference lowers both through the
+/// same `emit_composite_fieldwise_eq` field loop). Covers two- and three-element tuples, the `!=`
+/// form, and a struct `==` regression to confirm the shared lowering still selects GetField.
+#[test]
+fn self_host_compiles_tuple_equality() {
+    assert_self_host_byte_identical("fn f(a: (Word, Word), b: (Word, Word)) -> bool { a == b }");
+    assert_self_host_byte_identical(
+        "fn f(a: (Word, Word, Word), b: (Word, Word, Word)) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical("fn f(a: (Word, Word), b: (Word, Word)) -> bool { a != b }");
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
+}
