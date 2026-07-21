@@ -6657,3 +6657,18 @@ fn self_host_compiles_composite_inequality() {
         "enum Color { Red, Green, Blue }\nfn f(a: Color, b: Color) -> bool { a == b }",
     );
 }
+
+/// Payload-variant enum equality self-compiles byte-identically: an enum whose variants carry scalar
+/// payload lowers the reference `emit_enum_fieldwise_eq` per-field comparison (GetEnumField/CmpEq,
+/// first mismatch breaks false) inside the "both same variant" block, over the variable-stride
+/// match_parts layout. Covers a single payload field, multiple payload fields across multiple
+/// variants, and the `!=` form (whose true/false pool order flips because the first variant's first
+/// emitted Const is the in-field-loop false rather than the post-loop true).
+#[test]
+fn self_host_compiles_enum_payload_equality() {
+    assert_self_host_byte_identical("enum E { A(Word), B }\nfn f(a: E, b: E) -> bool { a == b }");
+    assert_self_host_byte_identical(
+        "enum E { A(Word, Word), B(Word) }\nfn f(a: E, b: E) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical("enum E { A(Word), B }\nfn f(a: E, b: E) -> bool { a != b }");
+}

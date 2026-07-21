@@ -326,6 +326,10 @@ private data st {
     // pool order matches the reference, then read by the reverse emission pass.
     eq_vidx: [Word; 64],
     eq_didx: [Word; 64],
+    // Per-variant match_parts start offset (the variable-stride records are not fixed-index, so the
+    // interning walk records each variant's offset for the emission walk) and the running walk cursor.
+    eq_voff: [Word; 64],
+    eq_cur: Word,
     // Pre-interned true/false result pool indices for an `enum == enum` lowering (state, not locals,
     // since a local cannot be reassigned inside the interning loop).
     eq_true: Word,
@@ -1207,33 +1211,48 @@ fn push_struct_eq(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
-// EnumEq (kind 51): `enum == enum` for an all-unit enum, lowered to a variant-iterating comparison
-// loop. Store both operands in two temps (ta = left, tb = right), then loop once over the variants:
-// per variant, peek-test the left temp with `IsEnum`; if it is this variant, peek-test the right;
-// both this variant -> break true, right a different variant -> break false; left not this variant
-// -> try the next. A well-typed value always matches a variant, so the loop tail traps
-// (EnumVariantUnmapped = 4). match_parts holds [ta, tb, ename_id, vcount, per variant vname_id, disc].
-// The pool entries are pre-interned in the reference's emission order (enum name; then per variant
-// the variant name and discriminant, and after the FIRST variant the true then false result Const),
-// so the reverse `push_emit` pass reproduces the reference pool byte-for-byte.
+// EnumEq (kind 51): `enum == enum` (or `!=`) for an enum whose variants carry only scalar payload,
+// lowered to a variant-iterating comparison loop. Store both operands in two temps (ta = left,
+// tb = right), then loop once over the variants: per variant, peek-test the left temp with `IsEnum`;
+// if it is this variant, peek-test the right; both this variant -> compare each scalar payload field
+// (GetEnumField/CmpEq, first mismatch breaks false) then break true; right a different variant ->
+// break false; left not this variant -> try the next. A well-typed value always matches a variant,
+// so the loop tail traps (EnumVariantUnmapped = 4). match_parts holds [ta, tb, ename_id, vcount,
+// then per variant vname_id, disc, fcount, fcount*(offset, kind), then the != flag].
+//
+// The pool is pre-interned in the reference's emission order by a forward walk of the variable-stride
+// records (recording each variant's offset in `eq_voff` for the reverse emission walk): the enum
+// name; then per variant the variant name and discriminant; and the true/false result Consts during
+// the FIRST variant. Their order flips with that variant's payload: the reference adds the first
+// Const inside the field loop (a `false`) for a payload variant, but after the loop (a `true`) for a
+// unit variant, so a payload first variant interns false-then-true and a unit one true-then-false.
 fn push_enum_eq(p: Word) -> Word {
     let base = ast.args[p];
     let ta = ast.match_parts[base];
     let tb = ast.match_parts[base + 1];
     let ename = ast.match_parts[base + 2];
     let vcount = ast.match_parts[base + 3];
-    // The `!=` flag rides just past the variant list: `a != b` is the `==` loop then a `Not`.
-    let is_ne = ast.match_parts[base + 4 + vcount * 2];
     st.let_count = st.let_count + 2;
     let ename_idx = intern_str(ename);
+    st.eq_cur = base + 4;
     for v in 0..vcount limit 64 {
-        st.eq_vidx[v] = intern_str(ast.match_parts[base + 4 + v * 2]);
-        st.eq_didx[v] = intern_int(ast.match_parts[base + 4 + v * 2 + 1]);
+        st.eq_voff[v] = st.eq_cur;
+        let fcount = ast.match_parts[st.eq_cur + 2];
+        st.eq_vidx[v] = intern_str(ast.match_parts[st.eq_cur]);
+        st.eq_didx[v] = intern_int(ast.match_parts[st.eq_cur + 1]);
         if v == 0 {
-            st.eq_true = intern_bool(1);
-            st.eq_false = intern_bool(0);
+            if fcount > 0 {
+                st.eq_false = intern_bool(0);
+                st.eq_true = intern_bool(1);
+            } else {
+                st.eq_true = intern_bool(1);
+                st.eq_false = intern_bool(0);
+            }
         }
+        st.eq_cur = st.eq_cur + 3 + fcount * 2;
     }
+    // The `!=` flag rides just past the variant list: `a != b` is the `==` loop then a `Not`.
+    let is_ne = ast.match_parts[st.eq_cur];
     // A `!=` negates the loop result: `Not` is emitted LAST, so it is pushed FIRST (LIFO).
     if is_ne == 1 {
         push_emit(wire.lnot);
@@ -1242,6 +1261,8 @@ fn push_enum_eq(p: Word) -> Word {
     push_emit(wire.trap + 4 * wire.radix);
     for vj in 0..vcount limit 64 {
         let v = vcount - 1 - vj;
+        let voff = st.eq_voff[v];
+        let fcount = ast.match_parts[voff + 2];
         let isen = ename_idx + st.eq_vidx[v] * 1024 + st.eq_didx[v] * 1048576;
         push_emit(wire.popn + 1 * wire.radix);
         push_emit(wire.mendif);
@@ -1251,6 +1272,24 @@ fn push_enum_eq(p: Word) -> Word {
         push_emit(wire.mendif);
         push_emit(wire.mbreak);
         push_emit(wire.konst + st.eq_true * wire.radix);
+        // The payload fields compare in the "both this variant" block, in forward order, so they are
+        // pushed in reverse. Each: GetLocal(ta), GetEnumField, GetLocal(tb), GetEnumField, CmpEq,
+        // Not, If, Const(false), Break, EndIf (a mismatch breaks false; else fall to the next field).
+        for fj in 0..fcount limit 32 {
+            let f = fcount - 1 - fj;
+            let off = ast.match_parts[voff + 3 + f * 2];
+            let kind = ast.match_parts[voff + 3 + f * 2 + 1];
+            push_emit(wire.mendif);
+            push_emit(wire.mbreak);
+            push_emit(wire.konst + st.eq_false * wire.radix);
+            push_emit(wire.mif);
+            push_emit(wire.lnot);
+            push_emit(wire.cmpeq);
+            push_emit(wire.getenumfield + (off + kind * 65536) * wire.radix);
+            push_emit(wire.getlocal + tb * wire.radix);
+            push_emit(wire.getenumfield + (off + kind * 65536) * wire.radix);
+            push_emit(wire.getlocal + ta * wire.radix);
+        }
         push_emit(wire.popn + 1 * wire.radix);
         push_emit(wire.mif);
         push_emit(wire.isenum + isen * wire.radix);
