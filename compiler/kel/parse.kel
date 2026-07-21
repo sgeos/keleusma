@@ -96,10 +96,15 @@ enum Tok {
     Break = 57,
     Str = 58,
     // Assembly-mnemonic shift keyword operators: `lsl` logical left, `asl` arithmetic left, `asr`
-    // arithmetic right. (`lsr` logical right needs a word-width mask and is not yet lowered here.)
+    // arithmetic right, `lsr` logical (zero-fill) right. `lsr` with a CONSTANT amount is lowered
+    // (Shr then a word-width mask clears the sign-extended high bits); a variable `lsr` amount is not
+    // yet lowered here.
     Lsl = 59,
     Asl = 60,
     Asr = 61,
+    // `lsr` takes a free low slot (20, a retired keyword's), not 62/63 -- those are the lexer's
+    // EOF and PENDING sentinels, and the token is packed as `tok + payload * 64` so it must be < 64.
+    Lsr = 20,
 }
 
 // The node-record kinds the body walk yields (a subset of body.kel's `enum Node`).
@@ -252,9 +257,11 @@ enum OpCode {
     EnumMark = 25,
     TupleMark = 26,
     // Word shift operators: `lsl`/`asl` both lower to Shl (a bare arithmetic left shift wraps like a
-    // logical one); `asr` lowers to Shr (arithmetic, sign-preserving). Both are ordinary binops.
+    // logical one); `asr` lowers to Shr (arithmetic, sign-preserving), ordinary single-op binops.
+    // `lsr` (logical right) lowers to Shr plus a mask (`ShrL`, a multi-op binop in codegen).
     Shl = 27,
     Shr = 28,
+    ShrL = 29,
 }
 
 // The merged parser state.
@@ -1752,6 +1759,7 @@ fn prec_of(op: Word) -> Word {
         // additive). Left-associative like the other binary operators.
         OpCode::Shl() => 7,
         OpCode::Shr() => 7,
+        OpCode::ShrL() => 7,
         OpCode::Band() => 6,
         OpCode::Bxor() => 5,
         OpCode::Bor() => 4,
@@ -2210,6 +2218,7 @@ fn opcode_of(k: Word) -> Word {
         Tok::Lsl() => OpCode::Shl() as Word,
         Tok::Asl() => OpCode::Shl() as Word,
         Tok::Asr() => OpCode::Shr() as Word,
+        Tok::Lsr() => OpCode::ShrL() as Word,
         Tok::Andalso() => OpCode::Andalso() as Word,
         Tok::Orelse() => OpCode::Orelse() as Word,
         _ => 0,

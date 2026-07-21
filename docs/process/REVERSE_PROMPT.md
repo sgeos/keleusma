@@ -10,7 +10,32 @@ AI to Human communication channel.
 
 **Date**: 2026-07-21 (session 27)
 
-**THIS SESSION (eighty-seventh increment): let-bound enum equality now self-compiles too.** After the
+**THIS SESSION (eighty-eighth increment): constant-amount `lsr` now self-compiles, completing the
+shift family.** After the operator chose "clean surface increment" (over the riskier let-bound-to-value
+enum eq), a gap sweep showed the composite-eq gaps all need recursion/composite machinery, so `lsr`
+(the shift family's missing member; the 79th did `lsl`/`asl`/`asr`) was the self-contained pick. Unlike
+`asr` (a single `Shr`), `lsr` lowers to `Shr` then `band ((1 << (64 - k)) - 1)` (clearing the
+sign-extended high bits), k the literal amount. Three cooperating pieces: (1) lexer.kel tokenizes `lsr`
+to a FREE low Tok slot (20, a retired keyword's) -- NOT 62/63, which are the lexer's EOF and PENDING
+sentinels; tokens pack as `tok + payload*64` so must be < 64, and 59/60/61 were already `lsl`/`asl`/`asr`
+(this token-space collision was the first bug: `lsr` at 62 read as EOF, so parse never reached DONE).
+(2) parse.kel maps `Tok::Lsr` -> a new `OpCode::ShrL` (29) at shift precedence (7). (3) codegen.kel's
+`push_binop` special-cases opc 29: it reads the rhs Literal's value k, emits value/Const(k)/Shr/
+Const(mask)/BitAnd, computes the mask as `((1 << (63 - k)) - 1) * 2 + 1` -- overflow-free and with NO
+19-digit literal (the second bug: a `9223372036854775807` literal made the self-host lexer's integer
+parse overflow, breaking codegen.kel's own self-compile), producing the identical value for every k in
+1..63 -- and interns it as a DEFERRED int Const via a new `push_int_const` that reuses the kind-0
+`emitbool` work item with payload >= 2 (indexing a new `defer_int` scratch), so the mask interns AFTER
+the operand's constants, matching the reference pool for any left operand. The atomic harness's Rust
+binop-flattener (third bug) gained the shift arms (Shl/AShl/ShrA/ShrL) since `push_binop` now uses
+`lsl`. `EXPECTED_SELF_COMPILE` 60 -> 61 for `push_int_const`. NOT lowered (next follow-up): a VARIABLE
+`lsr` amount (`a lsr k`, or `a lsr 1 + 3` whose amount is `1+3`, not a bare Literal), which the
+reference lowers with a runtime-mask k==0 branch. Test `self_host_compiles_const_lsr`. Four files
+changed: `compiler/kel/{lexer,parse,codegen}.kel`, `tests/selfhost_codegen.rs`. Green: `selfhost_codegen`
+(102, all stage self-compiles), `selfhost_parse`+`selfhost_pipeline` (9), fmt, clippy `--tests
+--all-features -D warnings`.
+
+**PRIOR THIS SESSION (eighty-seventh increment): let-bound enum equality now self-compiles too.** After the
 literal-operand cases, `let x = E::A(); x == e` (either side, `==`/`!=`, unit and payload) still fell
 back to a scalar `CmpEq`: a let binding read as a bare `Local` with no enum operand type. A `let`
 binding already tracks its value's enum type in `stmt.let_enum` (populated from `pending_cenum` at

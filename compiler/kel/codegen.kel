@@ -337,6 +337,12 @@ private data st {
     // since a local cannot be reassigned inside the interning loop).
     eq_true: Word,
     eq_false: Word,
+    // Per DEFERRED int-const emit (a `push_bool` work item, kind 0, whose payload is >= 2): the int
+    // value to intern when the item is processed in the forward walk, indexed by `payload - 2`. Used
+    // by `push_int_const` so a computed constant (e.g. an `lsr` mask) interns AFTER an operand's own
+    // constants, matching the reference pool order. `defer_ctr` is the running scratch cursor.
+    defer_int: [Word; 64],
+    defer_ctr: Word,
     // Nested struct-eq scratch: each top-level field's start offset in match_parts (recorded in the
     // forward pass so the reverse emission pass can locate the variable-stride records) and the
     // running forward-walk cursor.
@@ -383,6 +389,18 @@ fn push_emit(word: Word) -> Word {
 fn push_bool(value: Word) -> Word {
     st.stack[st.sp] = wire.emitbool + value * wire.item;
     st.sp = st.sp + 1;
+    0
+}
+
+// Push a PROCESS-TIME int Const work item (a kind-0 item whose payload is `2 + index`, distinguishing
+// it from `push_bool`'s 0/1 payloads). The value is stashed in `defer_int` and interned when the item
+// is processed in the forward walk, so a computed constant (an `lsr` mask) interns AFTER the operand
+// constants emitted before it, matching the reference pool order.
+fn push_int_const(value: Word) -> Word {
+    st.defer_int[st.defer_ctr] = value;
+    st.stack[st.sp] = wire.emitbool + (2 + st.defer_ctr) * wire.item;
+    st.sp = st.sp + 1;
+    st.defer_ctr = st.defer_ctr + 1;
     0
 }
 
@@ -566,6 +584,24 @@ fn push_local(p: Word) -> Word {
 // Only the checked arithmetic operators (1, 2, 3) take the PopN.
 fn push_binop(p: Word) -> Word {
     let opc = ast.args[p];
+    if opc == 29 {
+        // ShrL (logical right shift), constant amount only: `Shr` is arithmetic (sign-preserving), so
+        // the sign-extended high bits are masked off with `band ((1 << (word_bits - k)) - 1)`, where
+        // k is the constant shift amount (the rhs Literal). Emission: value, Const(k) [the rhs
+        // Literal], Shr, Const(mask), BitAnd. word_bits is 8 * 8 = 64. The mask Const is a DEFERRED
+        // int (push_int_const) so it interns AFTER k regardless of what the value emits before it.
+        // The mask (1 << (64 - k)) - 1 is computed as ((1 << (63 - k)) - 1) * 2 + 1: this avoids both
+        // `1 << 63` (which would set the sign bit so the following checked `- 1` traps at k = 1) and a
+        // 19-digit literal (which the self-host lexer's integer parse would overflow), while producing
+        // the identical value for every k in 1..63.
+        let k = ast.args[ast.rhs[p]];
+        let mask = ((1 lsl (63 - k)) - 1) * 2 + 1;
+        push_emit(wire.bitand);
+        push_int_const(mask);
+        push_emit(wire.shr);
+        push_visit(ast.rhs[p]);
+        push_visit(ast.lhs[p])
+    } else {
     // Arithmetic and bitwise are explicit; the wildcard covers the comparisons
     // (6..11 -> CmpEq..CmpGe, i.e. opc + 5).
     let opw = match opc {
@@ -587,6 +623,7 @@ fn push_binop(p: Word) -> Word {
     push_emit(opw);
     push_visit(ast.rhs[p]);
     push_visit(ast.lhs[p])
+    }
 }
 
 // ByteBinOp (kind 44): a bitwise op on two Byte operands, promote-operate-truncate. Each operand is
@@ -1614,10 +1651,15 @@ fn walk_step() -> Word {
         emit_op(wire.isenum + (ename_pool + vname_pool * 1024 + disc_pool * 1048576) * wire.radix);
     }
     if ikind == wire.emitbool {
-        // Intern the bool NOW (in the forward walk order), then emit its Const. `payload` is the
-        // bool value (0 = false, 1 = true).
-        let bool_pool = intern_bool(payload);
-        emit_op(wire.konst + bool_pool * wire.radix);
+        // A deferred Const, interned NOW (in the forward walk order) then emitted. `payload` 0/1 is a
+        // bool value; `payload` >= 2 is a deferred INT indexing `defer_int[payload - 2]`.
+        if payload < 2 {
+            let bool_pool = intern_bool(payload);
+            emit_op(wire.konst + bool_pool * wire.radix);
+        } else {
+            let int_pool = intern_int(st.defer_int[payload - 2]);
+            emit_op(wire.konst + int_pool * wire.radix);
+        }
     }
     if ikind == wire.visit {
         // Dispatch on the node kind. Written as a plain `match` on the kind field
