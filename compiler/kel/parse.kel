@@ -95,6 +95,11 @@ enum Tok {
     Impl = 56,
     Break = 57,
     Str = 58,
+    // Assembly-mnemonic shift keyword operators: `lsl` logical left, `asl` arithmetic left, `asr`
+    // arithmetic right. (`lsr` logical right needs a word-width mask and is not yet lowered here.)
+    Lsl = 59,
+    Asl = 60,
+    Asr = 61,
 }
 
 // The node-record kinds the body walk yields (a subset of body.kel's `enum Node`).
@@ -228,6 +233,10 @@ enum OpCode {
     ArrayMark = 24,
     EnumMark = 25,
     TupleMark = 26,
+    // Word shift operators: `lsl`/`asl` both lower to Shl (a bare arithmetic left shift wraps like a
+    // logical one); `asr` lowers to Shr (arithmetic, sign-preserving). Both are ordinary binops.
+    Shl = 27,
+    Shr = 28,
 }
 
 // The merged parser state.
@@ -1638,8 +1647,8 @@ fn step_store_finalize() -> Word {
 
 fn prec_of(op: Word) -> Word {
     match op {
-        OpCode::Neg() => 9,
-        OpCode::Not() => 9,
+        OpCode::Neg() => 10,
+        OpCode::Not() => 10,
         OpCode::Paren() => 0,
         OpCode::IndexMark() => 0,
         OpCode::YieldMark() => 0,
@@ -1652,11 +1661,16 @@ fn prec_of(op: Word) -> Word {
         OpCode::ArrayMark() => 0,
         OpCode::EnumMark() => 0,
         OpCode::TupleMark() => 0,
-        OpCode::Mul() => 8,
-        OpCode::Div() => 8,
-        OpCode::Mod() => 8,
-        OpCode::Add() => 7,
-        OpCode::Sub() => 7,
+        OpCode::Mul() => 9,
+        OpCode::Div() => 9,
+        OpCode::Mod() => 9,
+        OpCode::Add() => 8,
+        OpCode::Sub() => 8,
+        // Shifts bind looser than the additive operators and tighter than the bitwise operators
+        // (the C/Java convention, matching the reference `parse_shift_expr` between comparison and
+        // additive). Left-associative like the other binary operators.
+        OpCode::Shl() => 7,
+        OpCode::Shr() => 7,
         OpCode::Band() => 6,
         OpCode::Bxor() => 5,
         OpCode::Bor() => 4,
@@ -1877,6 +1891,9 @@ fn opcode_of(k: Word) -> Word {
         Tok::Band() => OpCode::Band() as Word,
         Tok::Bor() => OpCode::Bor() as Word,
         Tok::Bxor() => OpCode::Bxor() as Word,
+        Tok::Lsl() => OpCode::Shl() as Word,
+        Tok::Asl() => OpCode::Shl() as Word,
+        Tok::Asr() => OpCode::Shr() as Word,
         Tok::Andalso() => OpCode::Andalso() as Word,
         Tok::Orelse() => OpCode::Orelse() as Word,
         _ => 0,

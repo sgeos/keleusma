@@ -175,7 +175,10 @@ fn kw3(start: Word) -> Word {
     if a == 117 andalso b == 115 andalso c == 101 { 19 } else {   // use
     if a == 110 andalso b == 111 andalso c == 116 { 32 } else {   // not
     if a == 98 andalso b == 111 andalso c == 114 { 34 } else {    // bor
-    0 - 1 } } } } }
+    if a == 108 andalso b == 115 andalso c == 108 { 59 } else {   // lsl
+    if a == 97 andalso b == 115 andalso c == 108 { 60 } else {    // asl
+    if a == 97 andalso b == 115 andalso c == 114 { 61 } else {    // asr
+    0 - 1 } } } } } } } }
 }
 
 fn kw4(start: Word) -> Word {
