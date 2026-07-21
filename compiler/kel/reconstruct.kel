@@ -241,6 +241,31 @@ fn build_struct_eq(a: Word) -> Word {
     emit(48, base, lhs, rhs)
 }
 
+// EnumEqBuild: assemble the variant-compare loop's match_parts [ta, tb, ename, vcount, then per
+// variant: vname_id, disc] (each variant drained from `sqpending`, packed vname_id + disc*65536),
+// pop the two enum operands, and build the EnumEq node (kind 51). Mirrors `build_struct_eq`.
+fn build_enum_eq(a: Word) -> Word {
+    let ta = a % 1024;
+    let tb = (a / 1024) % 1024;
+    let vcount = (a / 1048576) % 64;
+    let ename = a / 67108864;
+    let base = rs.mp;
+    io.match_parts[base] = ta;
+    io.match_parts[base + 1] = tb;
+    io.match_parts[base + 2] = ename;
+    io.match_parts[base + 3] = vcount;
+    for i in 0..vcount limit 64 {
+        let packed = rs.sqpending[i];
+        io.match_parts[base + 4 + i * 2] = packed % 65536;
+        io.match_parts[base + 4 + i * 2 + 1] = packed / 65536;
+    }
+    rs.mp = base + 4 + vcount * 2;
+    rs.sqcount = 0;
+    let rhs = pop();
+    let lhs = pop();
+    emit(51, base, lhs, rhs)
+}
+
 // Process one record, folding it into a node and leaving that node's index on the
 // stack. An If (4) pops its else, then, and cond children, storing cond in `arg` and
 // the branches in lhs/rhs.
@@ -425,7 +450,7 @@ fn step(k: Word, a: Word) -> Word {
         let scrut = pop();
         emit(22, base, scrut, lit_count)
     } else {
-    if k == 40 orelse k == 41 orelse k == 42 orelse k == 46 orelse k == 47 {
+    if k == 40 orelse k == 41 orelse k == 42 orelse k == 46 orelse k == 47 orelse k == 49 orelse k == 50 {
         // The enum-match and struct-eq assembly markers/builds. Extracted into `step_assembly` to
         // keep this function's if/else nesting shallow (the reference compiler's recursion depth
         // scales with it; a deeper chain overflowed the default compile stack).
@@ -464,8 +489,18 @@ fn step_assembly(k: Word, a: Word) -> Word {
         // StructEqBuild: assemble the field-compare loop's match_parts and build the StructEq node.
         build_struct_eq(a)
     } else {
+    if k == 49 {
+        // EnumEqVariant marker: accumulate this variant's packed (vname_id + disc*65536). No node.
+        rs.sqpending[rs.sqcount] = a;
+        rs.sqcount = rs.sqcount + 1;
         0
-    } } } } }
+    } else {
+    if k == 50 {
+        // EnumEqBuild: assemble the variant-compare loop's match_parts and build the EnumEq node.
+        build_enum_eq(a)
+    } else {
+        0
+    } } } } } } }
 }
 
 // Reconstruct one record range on a fresh work stack (the node array and the side

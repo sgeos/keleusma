@@ -154,6 +154,14 @@ enum Node {
     StructEqField = 46,
     StructEqBuild = 47,
     StructEq = 48,
+    // `enum == enum` equality, lowered to a variant-iterating comparison loop. Emitted as a marker
+    // stream: an EnumEqVariant (kind 49, arg vname_id + disc*65536) per variant in discriminant
+    // order, then an EnumEqBuild (kind 50, arg ta + tb*1024 + vcount*1048576 + ename_id*67108864)
+    // which reconstruct turns into an EnumEq (kind 51, arg the match_parts base; lhs/rhs the two
+    // operands). codegen `push_enum_eq` builds the loop (per variant, nested IsEnum on both temps).
+    EnumEqVariant = 49,
+    EnumEqBuild = 50,
+    EnumEq = 51,
     // An array literal `[a, b, c]`: emits the element ops then NewComposite(Flat{Array, count,
     // byte_size}). Like a Call/StructInit, its elements ride the call_args side array.
     ArrayLit = 17,
@@ -267,6 +275,11 @@ private data ps {
     // any other operand). No stage compares structs, so this is always 0 there and struct equality
     // never fires for the stages.
     last_struct: Word,
+    // Operand-type tracking for `enum == enum` equality (a variant-iterating comparison loop): the
+    // enum name id (plus one) of the most recently emitted operand VALUE if it is a whole enum-typed
+    // parameter, else 0 (set in `step_local`, cleared for any other operand). No stage compares
+    // enums, so this is always 0 there and enum equality never fires for the stages.
+    last_enum: Word,
     // Per value-parameter struct binding: 0 if not a struct type, else the struct's
     // declaration index plus one; and the field-access postfix sub-state after a struct-typed
     // parameter Local was emitted (1 awaits an optional `.`, 2 reads the field name).
@@ -358,6 +371,9 @@ private data ops {
     // Parallel to `opstack`: the LEFT operand's struct type (plus one) of each pending operator, so
     // `emit_op(Eq)` can detect a `struct == struct` comparison (both operands whole structs).
     op_lstruct: [Word; 64],
+    // Parallel to `opstack`: the LEFT operand's enum name id (plus one) of each pending operator, so
+    // `emit_op(Eq)` can detect an `enum == enum` comparison (both operands whole enum values).
+    op_lenum: [Word; 64],
     opsp: Word,
     pending_op: Word,
     pending_prec: Word,
@@ -414,6 +430,17 @@ private data stmt {
     sq_count: Word,
     sq_ta: Word,
     sq_tb: Word,
+    // An `enum == enum` fold arms this drain: it emits one EnumEqVariant record per variant (from the
+    // enum's declaration, in discriminant order) then an EnumEqBuild, over successive body-step calls
+    // (reusing `sq_count`/`sq_field`/`sq_ta`/`sq_tb`). `sq_start` is the enum's first variant row and
+    // `sq_ename` the enum name id (both needed to emit the per-variant IsEnum records in codegen).
+    enumeq_emit: Word,
+    sq_start: Word,
+    sq_ename: Word,
+    // Scan scratch for the enum-eq helpers (locals are immutable, so accumulation uses state):
+    // `sq_scan` the all-unit flag, `sq_found` set once the first variant row is located.
+    sq_scan: Word,
+    sq_found: Word,
     pending_ctuple: Word,
     pending_cstruct: Word,
     pending_carray: Word,
@@ -779,6 +806,8 @@ fn step_local(v: Word) -> Word {
     // It is a plain scalar/Local, not a whole struct, so clear the struct-operand tracking.
     ps.last_byte = 0;
     ps.last_struct = 0;
+    // This operand is a whole enum value only if it resolves to an enum-typed parameter (set below).
+    ps.last_enum = 0;
     for i in 0..stmt.let_count limit 64 {
         if stmt.let_names[i] == v {
             ps.found = stmt.scope_slot[i];
@@ -791,6 +820,9 @@ fn step_local(v: Word) -> Word {
                 ps.found = i;
                 if ps.pbyte[i] == 1 {
                     ps.last_byte = 1;
+                }
+                if ps.penum[i] > 0 {
+                    ps.last_enum = ps.penum[i];
                 }
             }
         }
@@ -1679,6 +1711,69 @@ fn step_structeq_emit() -> Word {
     }
 }
 
+// Whether every variant of the named enum is a unit variant (no payload). This increment lowers
+// only all-unit `enum == enum` (a pure discriminant comparison); a payload variant would require the
+// reference's field-wise payload comparison, so a payload enum defers to the ordinary operator path.
+fn enum_all_unit(ename: Word) -> Word {
+    stmt.sq_scan = 1;
+    for i in 0..enums.enum_count limit 256 {
+        if enums.edata[i] == ename andalso enums.evfcount[i] > 0 {
+            stmt.sq_scan = 0;
+        }
+    }
+    stmt.sq_scan
+}
+
+// Begin an `enum == enum` lowering (both operands are whole enum values): allocate the two
+// comparison temps, find the enum's contiguous variant rows, arm the drain, and return variant 0's
+// EnumEqVariant record. `step_enumeq_emit` continues with the remaining variants then EnumEqBuild.
+fn enum_eq_start() -> Word {
+    let ename = ops.op_lenum[ops.opsp] - 1;
+    ps.last_byte = 0;
+    ps.last_struct = 0;
+    ps.last_enum = 0;
+    stmt.pending_ctuple = 0;
+    stmt.pending_cstruct = 0;
+    stmt.pending_carray = 0;
+    stmt.pending_carray_struct = 0;
+    stmt.pending_cenum = 0;
+    stmt.sq_tb = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + 1;
+    stmt.sq_ta = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + 1;
+    // The enum's variant rows are contiguous and in declaration (discriminant) order: find the first
+    // row and count them (state accumulators, since locals are immutable).
+    stmt.sq_start = 0;
+    stmt.sq_count = 0;
+    stmt.sq_found = 0;
+    for i in 0..enums.enum_count limit 256 {
+        if enums.edata[i] == ename {
+            if stmt.sq_found == 0 {
+                stmt.sq_start = i;
+                stmt.sq_found = 1;
+            }
+            stmt.sq_count = stmt.sq_count + 1;
+        }
+    }
+    stmt.enumeq_emit = 1;
+    stmt.sq_ename = ename;
+    stmt.sq_field = 1;
+    Node::EnumEqVariant() as Word + (enums.evar[stmt.sq_start] + enums.edisc[stmt.sq_start] * 65536) * 64
+}
+
+// Emit the next EnumEqVariant (one per variant, in discriminant order) then, once all are emitted,
+// the EnumEqBuild that reconstruct turns into the EnumEq node.
+fn step_enumeq_emit() -> Word {
+    if stmt.sq_field < stmt.sq_count {
+        let row = stmt.sq_start + stmt.sq_field;
+        stmt.sq_field = stmt.sq_field + 1;
+        Node::EnumEqVariant() as Word + (enums.evar[row] + enums.edisc[row] * 65536) * 64
+    } else {
+        stmt.enumeq_emit = 0;
+        Node::EnumEqBuild() as Word + (stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_count * 1048576 + stmt.sq_ename * 67108864) * 64
+    }
+}
+
 fn emit_op(op: Word) -> Word {
     // Any operator applied to a `let` value's operand means the value's root is not a bare
     // composite construction, so clear the pending composite-type tracking (see `stmt`).
@@ -1692,6 +1787,11 @@ fn emit_op(op: Word) -> Word {
     // function's node footprint stays small (parse.kel self-compiles under the per-function caps).
     // `struct == struct`: both operands are whole structs (the LEFT's type captured in `op_lstruct`,
     // the RIGHT's in `last_struct`), so lower a field-wise comparison loop (see `struct_eq_start`).
+    // `enum == enum`: both operands are whole enum values (the LEFT's enum name captured in
+    // `op_lenum`, the RIGHT's in `last_enum`), so lower a variant-iterating comparison loop.
+    if op == OpCode::Eq() as Word andalso ops.op_lenum[ops.opsp] > 0 andalso ps.last_enum > 0 andalso enum_all_unit(ops.op_lenum[ops.opsp] - 1) == 1 {
+        enum_eq_start()
+    } else {
     if op == OpCode::Eq() as Word andalso ops.op_lstruct[ops.opsp] > 0 andalso ps.last_struct > 0 {
         struct_eq_start()
     } else {
@@ -1713,7 +1813,7 @@ fn emit_op(op: Word) -> Word {
             OpCode::YieldMark() => Node::YieldExpr() as Word,
             _ => Node::BinOp() as Word + op * 64,
         }
-    } } }
+    } } } }
 }
 
 fn opcode_of(k: Word) -> Word {
@@ -1750,6 +1850,7 @@ fn step_resolving() -> Word {
         // `op_lbyte`/`op_lstruct` at the popped slot).
         ops.op_lbyte[ops.opsp] = ps.last_byte;
         ops.op_lstruct[ops.opsp] = ps.last_struct;
+        ops.op_lenum[ops.opsp] = ps.last_enum;
         ops.opsp = ops.opsp + 1;
         ops.resolving = 0;
         0
@@ -2969,6 +3070,11 @@ fn step_folding() -> Word {
 
 // One step of the body walk: the active sub-state, or the next body token.
 fn body_step() -> Word {
+    if stmt.enumeq_emit == 1 {
+        // An `enum == enum` fold armed the drain: emit the per-variant records then the build,
+        // before any further token/operator processing continues.
+        step_enumeq_emit()
+    } else {
     if stmt.structeq_emit == 1 {
         // A `struct == struct` fold armed the drain: emit the per-field records then the build,
         // before any further token/operator processing continues.
@@ -3031,7 +3137,7 @@ fn body_step() -> Word {
                 step_body_dispatch(k, v)
             } } } }
         }
-    } } } } } } } } } } } }
+    } } } } } } } } } } } } }
 }
 
 // Reset the body-walk state for a fresh function body.
