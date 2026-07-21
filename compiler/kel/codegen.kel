@@ -1424,6 +1424,13 @@ fn push_struct_eq_nested(p: Word) -> Word {
             let r2 = ast.match_parts[foff + 4];
             let l2 = ast.match_parts[foff + 5];
             let subcount = ast.match_parts[foff + 6];
+            // The sub-field accessor follows the extract variant: Tuple (0) -> GetTupleField,
+            // Struct (2) -> GetField.
+            let subacc = if ast.match_parts[foff + 3] == 0 {
+                wire.gettuplefield
+            } else {
+                wire.getfield
+            };
             push_emit(wire.mendif);
             push_emit(wire.mbreak);
             push_emit(wire.konst + false_idx * wire.radix);
@@ -1441,9 +1448,9 @@ fn push_struct_eq_nested(p: Word) -> Word {
                 push_emit(wire.mif);
                 push_emit(wire.lnot);
                 push_emit(wire.cmpeq);
-                push_emit(wire.getfield + sp * wire.radix);
+                push_emit(subacc + sp * wire.radix);
                 push_emit(wire.getlocal + r2 * wire.radix);
-                push_emit(wire.getfield + sp * wire.radix);
+                push_emit(subacc + sp * wire.radix);
                 push_emit(wire.getlocal + l2 * wire.radix);
             }
             push_emit(wire.mloop);
