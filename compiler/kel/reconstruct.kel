@@ -224,7 +224,8 @@ fn build_enum_match(a: Word) -> Word {
 fn build_struct_eq(a: Word) -> Word {
     let ta = a % 1024;
     let tb = (a / 1024) % 1024;
-    let count = a / 1048576;
+    let count = (a / 1048576) % 1024;
+    let is_ne = a / 1073741824;
     let base = rs.mp;
     io.match_parts[base] = ta;
     io.match_parts[base + 1] = tb;
@@ -234,7 +235,9 @@ fn build_struct_eq(a: Word) -> Word {
         io.match_parts[base + 3 + i * 2] = packed % 65536;
         io.match_parts[base + 3 + i * 2 + 1] = packed / 65536;
     }
-    rs.mp = base + 3 + count * 2;
+    // The `!=` flag rides just past the field list; codegen reads it to append a `Not`.
+    io.match_parts[base + 3 + count * 2] = is_ne;
+    rs.mp = base + 3 + count * 2 + 1;
     rs.sqcount = 0;
     let rhs = pop();
     let lhs = pop();
@@ -248,7 +251,8 @@ fn build_enum_eq(a: Word) -> Word {
     let ta = a % 1024;
     let tb = (a / 1024) % 1024;
     let vcount = (a / 1048576) % 64;
-    let ename = a / 67108864;
+    let ename = (a / 67108864) % 1048576;
+    let is_ne = a / 70368744177664;
     let base = rs.mp;
     io.match_parts[base] = ta;
     io.match_parts[base + 1] = tb;
@@ -259,7 +263,9 @@ fn build_enum_eq(a: Word) -> Word {
         io.match_parts[base + 4 + i * 2] = packed % 65536;
         io.match_parts[base + 4 + i * 2 + 1] = packed / 65536;
     }
-    rs.mp = base + 4 + vcount * 2;
+    // The `!=` flag rides just past the variant list; codegen reads it to append a `Not`.
+    io.match_parts[base + 4 + vcount * 2] = is_ne;
+    rs.mp = base + 4 + vcount * 2 + 1;
     rs.sqcount = 0;
     let rhs = pop();
     let lhs = pop();

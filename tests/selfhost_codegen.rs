@@ -6641,3 +6641,19 @@ fn self_host_compiles_enum_equality() {
     );
     assert_self_host_byte_identical("enum One { Only }\nfn f(a: One, b: One) -> bool { a == b }");
 }
+
+/// Composite `!=` self-compiles byte-identically: `struct != struct` and (all-unit) `enum != enum`
+/// lower to the same field-wise / variant-iterating comparison loop as `==`, followed by a `Not`,
+/// reproducing the reference (which appends `Op::Not` for `BinOp::NotEq` over a fieldwise compare).
+/// Interleaved `==` cases confirm the shared loop is unaffected.
+#[test]
+fn self_host_compiles_composite_inequality() {
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Byte }\nfn f(a: P, b: P) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical("struct P { x: Word }\nfn f(a: P, b: P) -> bool { a == b }");
+    assert_self_host_byte_identical("enum E { A, B }\nfn f(a: E, b: E) -> bool { a != b }");
+    assert_self_host_byte_identical(
+        "enum Color { Red, Green, Blue }\nfn f(a: Color, b: Color) -> bool { a == b }",
+    );
+}

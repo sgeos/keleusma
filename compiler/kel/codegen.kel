@@ -1170,12 +1170,18 @@ fn push_struct_eq(p: Word) -> Word {
     let ta = ast.match_parts[base];
     let tb = ast.match_parts[base + 1];
     let count = ast.match_parts[base + 2];
+    // The `!=` flag rides just past the field list: `a != b` is the `==` loop then a `Not`.
+    let is_ne = ast.match_parts[base + 3 + count * 2];
     st.let_count = st.let_count + 2;
     // Pre-intern the results in the reference's pool order (false before true): the reference emits
     // the false (mismatch) Const first, so it takes the lower pool index. `push_emit` runs in reverse
     // (LIFO), so interning here -- not at push time -- keeps the pool order correct.
     let false_idx = intern_bool(0);
     let true_idx = intern_bool(1);
+    // A `!=` negates the loop result: `Not` is emitted LAST, so it is pushed FIRST (LIFO).
+    if is_ne == 1 {
+        push_emit(wire.lnot);
+    }
     push_emit(wire.mendloop);
     push_emit(wire.mbreak);
     push_emit(wire.konst + true_idx * wire.radix);
@@ -1216,6 +1222,8 @@ fn push_enum_eq(p: Word) -> Word {
     let tb = ast.match_parts[base + 1];
     let ename = ast.match_parts[base + 2];
     let vcount = ast.match_parts[base + 3];
+    // The `!=` flag rides just past the variant list: `a != b` is the `==` loop then a `Not`.
+    let is_ne = ast.match_parts[base + 4 + vcount * 2];
     st.let_count = st.let_count + 2;
     let ename_idx = intern_str(ename);
     for v in 0..vcount limit 64 {
@@ -1225,6 +1233,10 @@ fn push_enum_eq(p: Word) -> Word {
             st.eq_true = intern_bool(1);
             st.eq_false = intern_bool(0);
         }
+    }
+    // A `!=` negates the loop result: `Not` is emitted LAST, so it is pushed FIRST (LIFO).
+    if is_ne == 1 {
+        push_emit(wire.lnot);
     }
     push_emit(wire.mendloop);
     push_emit(wire.trap + 4 * wire.radix);
