@@ -756,6 +756,7 @@ fn decode_op(w: i64) -> Op {
         43 => Op::Stream,
         44 => Op::Reset,
         45 => Op::ByteToWord,
+        58 => Op::WordToByte,
         // A flat struct construction: the operand packs count + byte_size*65536.
         46 => Op::NewComposite(NewCompositeOperand::Flat {
             kind: CompositeKind::Struct,
@@ -1842,8 +1843,9 @@ fn self_compile_codegen_atomic_functions() {
     // 46 with `drain_tags` for the tagged constant-pool protocol; 47 with `push_strlit` for
     // string literals; 49 with the extracted `intern_int`/`intern_str` pool-interning helpers;
     // 51 with `push_enum_isenum`/`push_enum_match` for enum-value match; 52 with
-    // `push_arrindex_nested` for array-of-struct parameter element access.
-    const EXPECTED_SELF_COMPILE: usize = 52;
+    // `push_arrindex_nested` for array-of-struct parameter element access; 53 with
+    // `push_byte_binop` for Byte-operand bitwise promote-operate-truncate.
+    const EXPECTED_SELF_COMPILE: usize = 53;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -6544,4 +6546,22 @@ loop main(resume: Word) -> Word {
             "composite-shared validity at cap={cap}"
         );
     }
+}
+
+#[test]
+fn self_host_compiles_byte_bitwise_ops() {
+    // A bitwise op (band/bor/bxor) on two BYTE operands lowers promote-operate-truncate: each
+    // operand is widened (ByteToWord), the op runs on words (BitAnd/BitOr/BitXor), the result is
+    // truncated (WordToByte). This is the first use of operand-type detection at an operator: a
+    // parameter's `Byte` type is recorded (`ps.pbyte`), `last_byte` tracks the last operand's
+    // Byte-ness through the precedence machinery (captured with each operator in `op_lbyte`), and
+    // `emit_op` emits a ByteBinOp node (kind 44) when both operands are Byte. Byte-identical.
+    assert_self_host_byte_identical("fn f(a: Byte, b: Byte) -> Byte { a band b }");
+    assert_self_host_byte_identical("fn f(a: Byte, b: Byte) -> Byte { a bor b }");
+    assert_self_host_byte_identical("fn f(a: Byte, b: Byte) -> Byte { a bxor b }");
+    // A Word-operand bitwise op stays a plain BinOp (BitAnd), no promote-operate-truncate
+    // (regression guard: the detection must fire only for Byte operands).
+    assert_self_host_byte_identical("fn f(a: Word, b: Word) -> Word { a band b }");
+    // A chain of Word-operand bitwise ops.
+    assert_self_host_byte_identical("fn f(a: Word, b: Word, c: Word) -> Word { a band b bor c }");
 }

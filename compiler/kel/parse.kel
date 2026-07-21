@@ -138,6 +138,11 @@ enum Node {
     // packs size + variant*65536; lhs = the array value (a Local), rhs = the index. A following
     // `.field` reads into the extracted composite via the ordinary field-access postfix.
     ArrIndexNested = 43,
+    // A BITWISE operator (band/bor/bxor) on two BYTE operands, lowered promote-operate-truncate:
+    // each operand is widened (ByteToWord), the op runs on words, and the result is truncated
+    // (WordToByte). arg is the OpCode (Band/Bor/Bxor); lhs/rhs the two operands. A plain (Word)
+    // bitwise op stays a BinOp.
+    ByteBinOp = 44,
     // An array literal `[a, b, c]`: emits the element ops then NewComposite(Flat{Array, count,
     // byte_size}). Like a Call/StructInit, its elements ride the call_args side array.
     ArrayLit = 17,
@@ -239,6 +244,12 @@ private data ps {
     pend_end: Word,
     pcount: Word,
     pnames: [Word; 32],
+    // Per value-parameter: 1 if the parameter's type is `Byte`, else 0, so a bitwise op on two Byte
+    // operands lowers promote-operate-truncate. `last_byte` tracks whether the most recently emitted
+    // operand VALUE is Byte-typed (set for a Byte parameter Local, cleared otherwise); the stages
+    // carry no Byte value, so this is always 0 there and the Byte lowering never fires for them.
+    pbyte: [Word; 32],
+    last_byte: Word,
     // Per value-parameter struct binding: 0 if not a struct type, else the struct's
     // declaration index plus one; and the field-access postfix sub-state after a struct-typed
     // parameter Local was emitted (1 awaits an optional `.`, 2 reads the field name).
@@ -323,6 +334,10 @@ private data ps {
 // then branch's tail, 4 an else branch's tail.
 private data ops {
     opstack: [Word; 64],
+    // Parallel to `opstack`: the Byte-ness of each pending operator's LEFT operand, captured when
+    // the operator is pushed. `emit_op` reads it (at the popped slot) to detect a Byte-operand
+    // bitwise op. A marker slot's entry is unused (markers are never Byte bitwise ops).
+    op_lbyte: [Word; 64],
     opsp: Word,
     pending_op: Word,
     pending_prec: Word,
@@ -493,10 +508,13 @@ private data mat {
 // `cur_*`/`has_field` fields hold the field under construction until its length is known
 // (a scalar at its type, an array at its ASIZE), committed at the next field or the `}`.
 private data fields {
-    fdata: [Word; 256],
-    ffield: [Word; 256],
-    fbase: [Word; 256],
-    flen: [Word; 256],
+    // The accumulated data-field layout table across ALL data blocks (one entry per field), used
+    // to resolve a body `block.field` to its slot. Sized 512 (was 256): parse.kel itself now
+    // declares 259 data-block fields, past the old 256, so parse.kel parsing parse.kel overflowed.
+    fdata: [Word; 512],
+    ffield: [Word; 512],
+    fbase: [Word; 512],
+    flen: [Word; 512],
     field_count: Word,
     base_ctr: Word,
     cur_block: Word,
@@ -727,6 +745,8 @@ private data structdefs {
 fn step_local(v: Word) -> Word {
     ps.found = 0;
     ps.found_flag = 0;
+    // This operand is Byte-typed only if it resolves to a Byte parameter (set below); default 0.
+    ps.last_byte = 0;
     for i in 0..stmt.let_count limit 64 {
         if stmt.let_names[i] == v {
             ps.found = stmt.scope_slot[i];
@@ -737,6 +757,9 @@ fn step_local(v: Word) -> Word {
         for i in 0..ps.pcount limit 32 {
             if ps.pnames[i] == v {
                 ps.found = i;
+                if ps.pbyte[i] == 1 {
+                    ps.last_byte = 1;
+                }
             }
         }
     }
@@ -910,7 +933,7 @@ fn step_ident(v: Word) -> Word {
         0
     } else {
     ps.found_flag = 0;
-    for i in 0..fields.field_count limit 256 {
+    for i in 0..fields.field_count limit 512 {
         if fields.fdata[i] == v {
             ps.found_flag = 1;
         }
@@ -1367,7 +1390,7 @@ fn step_dafield(k: Word, v: Word) -> Word {
     if k == 1 {
         da.da_base = 0;
         da.da_len = 1;
-        for i in 0..fields.field_count limit 256 {
+        for i in 0..fields.field_count limit 512 {
             if fields.fdata[i] == da.da_data andalso fields.ffield[i] == v {
                 da.da_base = fields.fbase[i];
                 da.da_len = fields.flen[i];
@@ -1566,6 +1589,22 @@ fn prec_of(op: Word) -> Word {
     }
 }
 
+// Whether the operator now folding is a bitwise op (band/bor/bxor) on two BYTE operands: the LEFT
+// operand's Byte-ness was captured with the operator (`op_lbyte` at the just-popped slot), the RIGHT
+// operand's is `last_byte`. Held out of `emit_op` so that function's reconstructed node count stays
+// under the per-function caps.
+fn byte_bitwise_op(op: Word) -> Word {
+    if ops.op_lbyte[ops.opsp] == 1 andalso ps.last_byte == 1 {
+        if op == OpCode::Band() as Word orelse op == OpCode::Bor() as Word orelse op == OpCode::Bxor() as Word {
+            1
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+
 fn emit_op(op: Word) -> Word {
     // Any operator applied to a `let` value's operand means the value's root is not a bare
     // composite construction, so clear the pending composite-type tracking (see `stmt`).
@@ -1574,13 +1613,22 @@ fn emit_op(op: Word) -> Word {
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
     stmt.pending_cenum = 0;
-    match op {
-        OpCode::Neg() => Node::Neg() as Word,
-        OpCode::Not() => Node::Not() as Word,
-        OpCode::Andalso() => Node::Andalso() as Word,
-        OpCode::Orelse() => Node::Orelse() as Word,
-        OpCode::YieldMark() => Node::YieldExpr() as Word,
-        _ => Node::BinOp() as Word + op * 64,
+    // A bitwise op (band/bor/bxor) on two BYTE operands lowers promote-operate-truncate (a Byte
+    // result); any other operator yields a Word/bool. `byte_bitwise_op` does the detection so this
+    // function's node footprint stays small (parse.kel self-compiles under the per-function caps).
+    if byte_bitwise_op(op) == 1 {
+        ps.last_byte = 1;
+        Node::ByteBinOp() as Word + op * 64
+    } else {
+        ps.last_byte = 0;
+        match op {
+            OpCode::Neg() => Node::Neg() as Word,
+            OpCode::Not() => Node::Not() as Word,
+            OpCode::Andalso() => Node::Andalso() as Word,
+            OpCode::Orelse() => Node::Orelse() as Word,
+            OpCode::YieldMark() => Node::YieldExpr() as Word,
+            _ => Node::BinOp() as Word + op * 64,
+        }
     }
 }
 
@@ -1613,6 +1661,9 @@ fn step_resolving() -> Word {
         emit_op(op)
     } else {
         ops.opstack[ops.opsp] = ops.pending_op;
+        // Capture the LEFT operand's Byte-ness with the operator so `emit_op` can detect a Byte
+        // bitwise op when this operator later folds (it reads `op_lbyte` at the popped slot).
+        ops.op_lbyte[ops.opsp] = ps.last_byte;
         ops.opsp = ops.opsp + 1;
         ops.resolving = 0;
         0
@@ -3546,6 +3597,10 @@ fn header_field(k: Word, v: Word) -> Word {
 // reconstruct cap; parse.kel's own `header_sig` grew past it as the array-type surface expanded.
 fn header_type_ident(v: Word, mode: Word) -> Word {
     if mode == 0 {
+        // Record a `Byte` scalar parameter so a bitwise op on it lowers promote-operate-truncate.
+        if v == toks.byte_id {
+            ps.pbyte[ps.pcount - 1] = 1;
+        }
         for i in 0..structdefs.sd_count limit 64 {
             if structdefs.sd_name[i] == v {
                 ps.pstruct[ps.pcount - 1] = i + 1;
@@ -3657,6 +3712,7 @@ fn header_sig(k: Word, v: Word) -> Word {
                 ps.parray_struct[ps.pcount] = 0;
                 ps.parray_tuple[ps.pcount] = 0;
                 ps.parray_arr[ps.pcount] = 0;
+                ps.pbyte[ps.pcount] = 0;
                 ps.pcount = ps.pcount + 1;
                 4 + v * 64
             } else {

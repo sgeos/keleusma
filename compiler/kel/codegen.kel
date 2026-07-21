@@ -209,6 +209,7 @@ const data wire {
     getenumfield: Word = 55,
     getindexnested: Word = 56,
     getenumfieldnested: Word = 57,
+    wordtobyte: Word = 58,
     radix: Word = 64,
     item: Word = 4,
     pack: Word = 65536,
@@ -529,6 +530,25 @@ fn push_binop(p: Word) -> Word {
     }
     push_emit(opw);
     push_visit(ast.rhs[p]);
+    push_visit(ast.lhs[p])
+}
+
+// ByteBinOp (kind 44): a bitwise op on two Byte operands, promote-operate-truncate. Each operand is
+// widened (ByteToWord), the op runs on words (BitAnd/BitOr/BitXor), and the result is truncated
+// (WordToByte). args = the OpCode (band 12 / bor 13 / bxor 14); lhs/rhs the operands.
+fn push_byte_binop(p: Word) -> Word {
+    let opc = ast.args[p];
+    let opw = match opc {
+        12 => wire.bitand,
+        13 => wire.bitor,
+        14 => wire.bitxor,
+        _ => wire.bitand,
+    };
+    push_emit(wire.wordtobyte);
+    push_emit(opw);
+    push_emit(wire.bytetoword);
+    push_visit(ast.rhs[p]);
+    push_emit(wire.bytetoword);
     push_visit(ast.lhs[p])
 }
 
@@ -1172,6 +1192,7 @@ fn walk_step() -> Word {
             1 => push_literal(payload),
             2 => push_local(payload),
             3 => push_binop(payload),
+            44 => push_byte_binop(payload),
             4 => push_if(payload),
             5 => push_letin(payload),
             6 => push_not(payload),
