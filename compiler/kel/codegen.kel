@@ -336,6 +336,11 @@ private data st {
     // since a local cannot be reassigned inside the interning loop).
     eq_true: Word,
     eq_false: Word,
+    // Nested struct-eq scratch: each top-level field's start offset in match_parts (recorded in the
+    // forward pass so the reverse emission pass can locate the variable-stride records) and the
+    // running forward-walk cursor.
+    se_foff: [Word; 64],
+    se_cur: Word,
 }
 
 // Wire. The stage buffers ops, then streams each as `tag + operand*64`, 0 is
@@ -1365,6 +1370,98 @@ fn push_array_eq(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
+// StructEqNestedNode (kind 59): a `struct == struct` (or `!=`) where a field is a nested struct.
+// match_parts holds [ta, tb, topcount, <tagged top-level fields>, is_ne]: a scalar field is
+// [0, offset, kind]; a nested-struct field is [1, ext_off, ext_size, variant, r2, l2, subcount,
+// subcount*(sub_off, sub_kind)]. A scalar field compares GetField/CmpEq; a nested field extracts
+// both sides (GetFieldNested) into two fresh temps and runs an inner comparison loop, then negates
+// its result to break the outer loop on inequality. Pool: false then true (like the flat path).
+fn push_struct_eq_nested(p: Word) -> Word {
+    let base = ast.args[p];
+    let ta = ast.match_parts[base];
+    let tb = ast.match_parts[base + 1];
+    let topcount = ast.match_parts[base + 2];
+    st.let_count = st.let_count + 2;
+    // Forward pass: record each top-level field's offset and count the nested fields' temps.
+    st.se_cur = base + 3;
+    for f in 0..topcount limit 64 {
+        st.se_foff[f] = st.se_cur;
+        if ast.match_parts[st.se_cur] == 0 {
+            st.se_cur = st.se_cur + 3;
+        } else {
+            st.let_count = st.let_count + 2;
+            st.se_cur = st.se_cur + 7 + ast.match_parts[st.se_cur + 6] * 2;
+        }
+    }
+    let is_ne = ast.match_parts[st.se_cur];
+    let false_idx = intern_bool(0);
+    let true_idx = intern_bool(1);
+    if is_ne == 1 {
+        push_emit(wire.lnot);
+    }
+    push_emit(wire.mendloop);
+    push_emit(wire.mbreak);
+    push_emit(wire.konst + true_idx * wire.radix);
+    for fj in 0..topcount limit 64 {
+        let f = topcount - 1 - fj;
+        let foff = st.se_foff[f];
+        if ast.match_parts[foff] == 0 {
+            // Scalar top-level field: the same block as the flat path.
+            let packed = ast.match_parts[foff + 1] + ast.match_parts[foff + 2] * 65536;
+            push_emit(wire.mendif);
+            push_emit(wire.mbreak);
+            push_emit(wire.konst + false_idx * wire.radix);
+            push_emit(wire.mif);
+            push_emit(wire.lnot);
+            push_emit(wire.cmpeq);
+            push_emit(wire.getfield + packed * wire.radix);
+            push_emit(wire.getlocal + tb * wire.radix);
+            push_emit(wire.getfield + packed * wire.radix);
+            push_emit(wire.getlocal + ta * wire.radix);
+        } else {
+            // Nested-struct field: extract both sides into r2/l2, run the inner loop, negate, break.
+            let extp = ast.match_parts[foff + 1] + ast.match_parts[foff + 2] * 65536 + ast.match_parts[foff + 3] * 4294967296;
+            let r2 = ast.match_parts[foff + 4];
+            let l2 = ast.match_parts[foff + 5];
+            let subcount = ast.match_parts[foff + 6];
+            push_emit(wire.mendif);
+            push_emit(wire.mbreak);
+            push_emit(wire.konst + false_idx * wire.radix);
+            push_emit(wire.mif);
+            push_emit(wire.lnot);
+            push_emit(wire.mendloop);
+            push_emit(wire.mbreak);
+            push_emit(wire.konst + true_idx * wire.radix);
+            for sj in 0..subcount limit 64 {
+                let s = subcount - 1 - sj;
+                let sp = ast.match_parts[foff + 7 + s * 2] + ast.match_parts[foff + 7 + s * 2 + 1] * 65536;
+                push_emit(wire.mendif);
+                push_emit(wire.mbreak);
+                push_emit(wire.konst + false_idx * wire.radix);
+                push_emit(wire.mif);
+                push_emit(wire.lnot);
+                push_emit(wire.cmpeq);
+                push_emit(wire.getfield + sp * wire.radix);
+                push_emit(wire.getlocal + r2 * wire.radix);
+                push_emit(wire.getfield + sp * wire.radix);
+                push_emit(wire.getlocal + l2 * wire.radix);
+            }
+            push_emit(wire.mloop);
+            push_emit(wire.setlocal + l2 * wire.radix);
+            push_emit(wire.setlocal + r2 * wire.radix);
+            push_emit(wire.getfieldnested + extp * wire.radix);
+            push_emit(wire.getlocal + tb * wire.radix);
+            push_emit(wire.getfieldnested + extp * wire.radix);
+            push_emit(wire.getlocal + ta * wire.radix);
+        }
+    }
+    push_emit(wire.mloop);
+    push_emit(wire.setlocal + ta * wire.radix);
+    push_emit(wire.setlocal + tb * wire.radix);
+    push_visit(ast.rhs[p]);
+    push_visit(ast.lhs[p])
+}
+
 // YieldExpr (kind 24): `yield <expr>` emits the expression ops then `Yield`.
 // lhs = the yielded expression.
 fn push_yield(p: Word) -> Word {
@@ -1495,6 +1592,7 @@ fn walk_step() -> Word {
             48 => push_struct_eq(payload),
             51 => push_enum_eq(payload),
             54 => push_array_eq(payload),
+            59 => push_struct_eq_nested(payload),
             43 => push_arrindex_nested(payload),
             _ => 0,
         };

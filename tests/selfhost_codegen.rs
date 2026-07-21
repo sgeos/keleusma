@@ -1863,8 +1863,9 @@ fn self_compile_codegen_atomic_functions() {
     // `push_byte_binop` for Byte-operand bitwise promote-operate-truncate; 54 with
     // `push_byte_arith` for Byte-operand unchecked arithmetic; 56 with `push_struct_eq` and
     // `intern_bool` for struct equality; 57 with `push_enum_eq` for all-unit enum equality; 58 with
-    // `push_array_eq` for array equality.
-    const EXPECTED_SELF_COMPILE: usize = 58;
+    // `push_array_eq` for array equality; 59 with `push_struct_eq_nested` for nested-composite
+    // struct equality.
+    const EXPECTED_SELF_COMPILE: usize = 59;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -6717,4 +6718,28 @@ fn self_host_compiles_array_equality() {
     assert_self_host_byte_identical("fn f(a: [Word; 3], b: [Word; 3]) -> bool { a == b }");
     assert_self_host_byte_identical("fn f(a: [Word; 2], b: [Word; 2]) -> bool { a != b }");
     assert_self_host_byte_identical("fn f(a: [Word; 4], b: [Word; 4]) -> bool { a == b }");
+}
+
+/// Nested-composite struct equality self-compiles byte-identically: a struct with a nested-struct
+/// field lowers to the reference's recursive fieldwise comparison -- each nested field is extracted
+/// (GetFieldNested) into two fresh temps and compared by an inner loop whose result negates to break
+/// the outer loop. Covers nested-then-scalar, scalar-then-nested, two nested fields, and the `!=`
+/// form; a flat struct `==` regression confirms the isolated nested path leaves the flat path intact.
+#[test]
+fn self_host_compiles_nested_struct_equality() {
+    assert_self_host_byte_identical(
+        "struct Q { a: Word, b: Word }\nstruct P { q: Q, x: Word }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct Q { a: Word, b: Word }\nstruct P { x: Word, q: Q }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct Q { a: Word }\nstruct R { b: Word, c: Word }\nstruct P { q: Q, r: R }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct Q { a: Word, b: Word }\nstruct P { q: Q, x: Word }\nfn f(a: P, b: P) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
 }

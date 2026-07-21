@@ -94,6 +94,17 @@ private data rs {
     eqfcount: Word,
     eqcur: Word,
     eqfcur: Word,
+    // Nested struct-eq layout scratch, streamed as records arrive. `seb` accumulates the tagged
+    // top-level field layout: a scalar field is [0, offset, kind]; a nested-struct field is
+    // [1, ext_off, ext_size, variant, r2, l2, subcount, subcount*(sub_off, sub_kind)]. `sebcur` the
+    // write cursor, `setop` the top-level field count, `se_innested` 1 while a nested field's
+    // sub-fields arrive, `se_subpos` the subcount slot to backpatch, `se_subn` the running sub-count.
+    seb: [Word; 256],
+    sebcur: Word,
+    setop: Word,
+    se_innested: Word,
+    se_subpos: Word,
+    se_subn: Word,
     // The construction field-position stack, parallel to the node stack: a FieldPos record
     // pushes the next field value's declaration slot, and StructInit pops one per field value
     // to place it in declaration order (a construction may write fields out of order).
@@ -322,6 +333,29 @@ fn build_array_eq(a: Word) -> Word {
     emit(54, base, lhs, rhs)
 }
 
+// StructEqNestedBuild: finalize the streamed nested layout into match_parts as
+// [ta, tb, topcount, <seb tagged field layout>, is_ne] and build the StructEqNestedNode (kind 59).
+fn build_struct_eq_nested(a: Word) -> Word {
+    let ta = a % 1024;
+    let tb = (a / 1024) % 1024;
+    let is_ne = a / 1048576;
+    let base = rs.mp;
+    io.match_parts[base] = ta;
+    io.match_parts[base + 1] = tb;
+    io.match_parts[base + 2] = rs.setop;
+    for i in 0..rs.sebcur limit 256 {
+        io.match_parts[base + 3 + i] = rs.seb[i];
+    }
+    io.match_parts[base + 3 + rs.sebcur] = is_ne;
+    rs.mp = base + 3 + rs.sebcur + 1;
+    rs.sebcur = 0;
+    rs.setop = 0;
+    rs.se_innested = 0;
+    let rhs = pop();
+    let lhs = pop();
+    emit(59, base, lhs, rhs)
+}
+
 // Process one record, folding it into a node and leaving that node's index on the
 // stack. An If (4) pops its else, then, and cond children, storing cond in `arg` and
 // the branches in lhs/rhs.
@@ -506,7 +540,7 @@ fn step(k: Word, a: Word) -> Word {
         let scrut = pop();
         emit(22, base, scrut, lit_count)
     } else {
-    if k == 40 orelse k == 41 orelse k == 42 orelse k == 46 orelse k == 47 orelse k == 49 orelse k == 50 orelse k == 52 orelse k == 53 {
+    if k == 40 orelse k == 41 orelse k == 42 orelse k == 46 orelse k == 47 orelse k == 49 orelse k == 50 orelse k == 52 orelse k == 53 orelse k == 55 orelse k == 56 orelse k == 57 orelse k == 58 {
         // The enum-match and struct-eq assembly markers/builds. Extracted into `step_assembly` to
         // keep this function's if/else nesting shallow (the reference compiler's recursion depth
         // scales with it; a deeper chain overflowed the default compile stack).
@@ -566,8 +600,51 @@ fn step_assembly(k: Word, a: Word) -> Word {
         // ArrayEqBuild: assemble the per-element compare loop's match_parts and build the ArrayEq.
         build_array_eq(a)
     } else {
+    if k == 55 {
+        // StructEqNestedField: a scalar field. Inside a nested field it is a sub-field ([off, kind],
+        // sub-count bumped); at top level it is a tagged scalar field ([0, off, kind], setop bumped).
+        if rs.se_innested == 1 {
+            rs.seb[rs.sebcur] = a % 65536;
+            rs.seb[rs.sebcur + 1] = a / 65536;
+            rs.sebcur = rs.sebcur + 2;
+            rs.se_subn = rs.se_subn + 1;
+        } else {
+            rs.seb[rs.sebcur] = 0;
+            rs.seb[rs.sebcur + 1] = a % 65536;
+            rs.seb[rs.sebcur + 2] = a / 65536;
+            rs.sebcur = rs.sebcur + 3;
+            rs.setop = rs.setop + 1;
+        }
         0
-    } } } } } } } } }
+    } else {
+    if k == 56 {
+        // StructEqNested header: [1, ext_off, ext_size, variant, r2, l2, subcount placeholder].
+        rs.seb[rs.sebcur] = 1;
+        rs.seb[rs.sebcur + 1] = a % 65536;
+        rs.seb[rs.sebcur + 2] = (a / 65536) % 65536;
+        rs.seb[rs.sebcur + 3] = (a / 4294967296) % 4;
+        rs.seb[rs.sebcur + 4] = (a / 17179869184) % 1024;
+        rs.seb[rs.sebcur + 5] = a / 17592186044416;
+        rs.seb[rs.sebcur + 6] = 0;
+        rs.se_subpos = rs.sebcur + 6;
+        rs.sebcur = rs.sebcur + 7;
+        rs.setop = rs.setop + 1;
+        rs.se_innested = 1;
+        rs.se_subn = 0;
+        0
+    } else {
+    if k == 57 {
+        // StructEqNestedEnd: backpatch the sub-count and leave the nested field.
+        rs.seb[rs.se_subpos] = rs.se_subn;
+        rs.se_innested = 0;
+        0
+    } else {
+    if k == 58 {
+        // StructEqNestedBuild: finalize the nested struct-eq node.
+        build_struct_eq_nested(a)
+    } else {
+        0
+    } } } } } } } } } } } } }
 }
 
 // Reconstruct one record range on a fresh work stack (the node array and the side
