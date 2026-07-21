@@ -213,6 +213,8 @@ const data wire {
     addop: Word = 59,
     subop: Word = 60,
     mulop: Word = 61,
+    shl: Word = 62,
+    shr: Word = 63,
     radix: Word = 64,
     item: Word = 4,
     pack: Word = 65536,
@@ -558,6 +560,8 @@ fn push_binop(p: Word) -> Word {
         12 => wire.bitand,
         13 => wire.bitor,
         14 => wire.bitxor,
+        27 => wire.shl,
+        28 => wire.shr,
         _ => opc + 5,
     };
     if opc < 4 {

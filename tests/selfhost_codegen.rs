@@ -760,6 +760,8 @@ fn decode_op(w: i64) -> Op {
         59 => Op::Add,
         60 => Op::Sub,
         61 => Op::Mul,
+        62 => Op::Shl,
+        63 => Op::Shr,
         // A flat struct construction: the operand packs count + byte_size*65536.
         46 => Op::NewComposite(NewCompositeOperand::Flat {
             kind: CompositeKind::Struct,
@@ -6671,4 +6673,20 @@ fn self_host_compiles_enum_payload_equality() {
         "enum E { A(Word, Word), B(Word) }\nfn f(a: E, b: E) -> bool { a == b }",
     );
     assert_self_host_byte_identical("enum E { A(Word), B }\nfn f(a: E, b: E) -> bool { a != b }");
+}
+
+/// Word shift operators self-compile byte-identically: `lsl`/`asl` lower to `Shl`, `asr` to `Shr`
+/// (ordinary single-op binops), with a constant or runtime-variable shift amount. Precedence sits
+/// between the additive and bitwise operators (the reference `parse_shift_expr` convention), verified
+/// by the mixed cases `a lsl 2 band 7` = `(a lsl 2) band 7` and `a lsl 1 + 3` = `a lsl (1 + 3)`.
+/// (`lsr` logical right, which needs a word-width mask, is not yet lowered.)
+#[test]
+fn self_host_compiles_word_shifts() {
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a lsl 2 }");
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a asl 3 }");
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a asr 2 }");
+    assert_self_host_byte_identical("fn f(a: Word, k: Word) -> Word { a lsl k }");
+    assert_self_host_byte_identical("fn f(a: Word, k: Word) -> Word { a asr k }");
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a lsl 2 band 7 }");
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { a lsl 1 + 3 }");
 }
