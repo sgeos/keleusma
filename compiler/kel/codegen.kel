@@ -210,6 +210,9 @@ const data wire {
     getindexnested: Word = 56,
     getenumfieldnested: Word = 57,
     wordtobyte: Word = 58,
+    addop: Word = 59,
+    subop: Word = 60,
+    mulop: Word = 61,
     radix: Word = 64,
     item: Word = 4,
     pack: Word = 65536,
@@ -549,6 +552,22 @@ fn push_byte_binop(p: Word) -> Word {
     push_emit(wire.bytetoword);
     push_visit(ast.rhs[p]);
     push_emit(wire.bytetoword);
+    push_visit(ast.lhs[p])
+}
+
+// ByteArith (kind 45): an arithmetic op on two Byte operands, lowered to the UNCHECKED op with no
+// PopN or overflow guard (a Byte sum/product cannot overflow the word it is computed in). args = the
+// OpCode (add 1 / mul 2 / sub 3); lhs/rhs the operands.
+fn push_byte_arith(p: Word) -> Word {
+    let opc = ast.args[p];
+    let opw = match opc {
+        1 => wire.addop,
+        2 => wire.mulop,
+        3 => wire.subop,
+        _ => wire.addop,
+    };
+    push_emit(opw);
+    push_visit(ast.rhs[p]);
     push_visit(ast.lhs[p])
 }
 
@@ -1193,6 +1212,7 @@ fn walk_step() -> Word {
             2 => push_local(payload),
             3 => push_binop(payload),
             44 => push_byte_binop(payload),
+            45 => push_byte_arith(payload),
             4 => push_if(payload),
             5 => push_letin(payload),
             6 => push_not(payload),
