@@ -6710,6 +6710,28 @@ fn self_host_compiles_literal_operand_enum_equality() {
     assert_self_host_byte_identical("enum E { A(Word), B }\nfn f(e: E) -> bool { E::A(1) == e }");
 }
 
+/// Enum equality with a LET-BOUND enum value self-compiles byte-identically:
+/// `let x = E::A(); x == e` (either side, `==`/`!=`). A `let` binding tracks its value's enum type in
+/// `let_enum` (already consumed for `match x`); `resolve_plain_ident` now restores `ps.last_enum` from
+/// it after `step_local` (which clears it), the let-binding analogue of an enum parameter, so the
+/// `==`/`!=` operand-type capture fires the variant comparison loop. Without this the binding read as a
+/// bare `Local` with no enum type and the comparison fell back to a scalar `CmpEq`.
+#[test]
+fn self_host_compiles_let_bound_enum_equality() {
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nfn f(e: E) -> bool { let x = E::A(); x == e }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nfn f(e: E) -> bool { let x = E::B(); e == x }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nfn f(e: E) -> bool { let x = E::A(); x != e }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\nfn f(e: E) -> bool { let x = E::A(1); x == e }",
+    );
+}
+
 /// Word shift operators self-compile byte-identically: `lsl`/`asl` lower to `Shl`, `asr` to `Shr`
 /// (ordinary single-op binops), with a constant or runtime-variable shift amount. Precedence sits
 /// between the additive and bitwise operators (the reference `parse_shift_expr` convention), verified

@@ -975,7 +975,15 @@ fn resolve_plain_ident(v: Word) -> Word {
                 mat.match_isenum[mat.match_sp - 1] = 1;
                 mat.match_ename[mat.match_sp - 1] = stmt.let_enum[ps.let_hit] - 1;
             }
-            step_local(v)
+            let ln = step_local(v);
+            // A let-bound enum value: `step_local` cleared `last_enum`; restore it from the binding's
+            // tracked enum type so a following `==`/`!=` captures it as the operand's enum type
+            // (`op_lenum`/`last_enum`), enabling enum equality with a let-bound enum operand
+            // (`let x = E::A(); x == e`), the let-binding analogue of an enum parameter.
+            if stmt.let_enum[ps.let_hit] > 0 {
+                ps.last_enum = stmt.let_enum[ps.let_hit];
+            }
+            ln
         } } } }
     } else {
         ps.found_flag = 0;

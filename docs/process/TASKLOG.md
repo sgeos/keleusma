@@ -36,10 +36,14 @@ one. A bare enum construction now sets `ps.last_enum` at its two finalizes (unit
 `==`/`!=` with the construction on the left captures the enum type into `op_lenum` and the variant
 loop fires; `Enum::V() as Word` casts fold to a Literal earlier and are unaffected, confirmed by
 parse.kel still self-compiling byte-identically. Test renamed
-`self_host_compiles_literal_operand_enum_equality` with LEFT-operand cases added. Green (both
-increments): `selfhost_codegen` (100), `selfhost_parse`+`selfhost_pipeline` (9), clippy
-`--tests --all-features -D warnings`, fmt. NEXT follow-up: let-BOUND enum values on either side of `==`
-(`let x = E::A(); x == e`) still miss detection (a let binding does not populate `last_enum`); deeper
+`self_host_compiles_literal_operand_enum_equality` with LEFT-operand cases added. The eighty-seventh
+increment then closed LET-BOUND enum equality (`let x = E::A(); x == e`, either side, `==`/`!=`): a
+`let` binding already tracks its enum type in `let_enum`, so `resolve_plain_ident` now restores
+`ps.last_enum` from it after `step_local`, the let-binding analogue of the enum-parameter path. Scoped
+to let-bound-construction values; a let bound to a plain enum value (`let x = a; x == b`) does not set
+`let_enum` and stays the next follow-up. Test `self_host_compiles_let_bound_enum_equality` added. Green
+(all three increments): `selfhost_codegen` (101), `selfhost_parse`+`selfhost_pipeline` (9), clippy
+`--tests --all-features -D warnings`, fmt. NEXT follow-up: let-bound-to-plain-value enum eq; deeper
 recursive nesting; `lsr`; composite ordering. See `REVERSE_PROMPT.md` for the authoritative session-27
 handoff.
 
