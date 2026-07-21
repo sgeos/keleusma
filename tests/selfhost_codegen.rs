@@ -914,11 +914,22 @@ fn next_word(vm: &mut Vm<'_, '_>, shared: &mut [u8]) -> i64 {
     }
 }
 
+/// Compile a stage `.kel` file on a large-stack thread. The reference recursive-descent compiler's
+/// stack use scales with the deepest expression nesting; the stage files' long `step`/`walk_step`
+/// dispatch chains push a default test-thread stack over its limit, so every stage compile runs here.
+fn compile_kel_file(path: &'static str) -> Module {
+    std::thread::Builder::new()
+        .stack_size(256 * 1024 * 1024)
+        .spawn(move || compile_src(&std::fs::read_to_string(path).expect("read stage .kel")))
+        .expect("spawn stage compile")
+        .join()
+        .expect("stage compile thread")
+}
+
 /// Drive the codegen; return its emitted ops, the constant pool it built, and the
 /// local-frame size (`local_count`) it computed.
 fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<(i64, i64)>, i64) {
-    let src = std::fs::read_to_string("compiler/kel/codegen.kel").expect("read codegen.kel");
-    let m = compile_src(&src);
+    let m = compile_kel_file("compiler/kel/codegen.kel");
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
@@ -1848,8 +1859,9 @@ fn self_compile_codegen_atomic_functions() {
     // 51 with `push_enum_isenum`/`push_enum_match` for enum-value match; 52 with
     // `push_arrindex_nested` for array-of-struct parameter element access; 53 with
     // `push_byte_binop` for Byte-operand bitwise promote-operate-truncate; 54 with
-    // `push_byte_arith` for Byte-operand unchecked arithmetic.
-    const EXPECTED_SELF_COMPILE: usize = 54;
+    // `push_byte_arith` for Byte-operand unchecked arithmetic; 56 with `push_struct_eq` and
+    // `intern_bool` for struct equality.
+    const EXPECTED_SELF_COMPILE: usize = 56;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -4341,6 +4353,8 @@ fn self_host_compile(src: &str) -> Module {
             .map(|&(v, t)| {
                 if t == 1 {
                     ConstValue::StaticStr(unescape_string(&names[v as usize]))
+                } else if t == 2 {
+                    ConstValue::Bool(v != 0)
                 } else {
                     ConstValue::Int(v)
                 }
@@ -4899,12 +4913,7 @@ const RC_HEAD_BODY_LEN: usize = RC_HEAD_COUNT + 1 + 16 * 3;
 fn reconstruct_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
     CACHED
-        .get_or_init(|| {
-            compile_src(
-                &std::fs::read_to_string("compiler/kel/reconstruct.kel")
-                    .expect("read reconstruct.kel"),
-            )
-        })
+        .get_or_init(|| compile_kel_file("compiler/kel/reconstruct.kel"))
         .clone()
 }
 
@@ -6601,4 +6610,21 @@ fn self_host_compiles_byte_ops_with_literal_operands() {
     // A Word op against a literal stays a plain Word op (the left operand is not Byte, so the Byte
     // lowering never fires).
     assert_self_host_byte_identical("fn f(a: Word) -> Word { a band 255 }");
+}
+
+#[test]
+fn self_host_compiles_struct_equality() {
+    // `struct == struct` lowers to a field-wise comparison loop, byte-identical. Both operands are
+    // stored in two temps; a `Loop` compares each field `a.f == b.f` and, on the first mismatch,
+    // breaks `false`, else after all fields breaks `true`. The two operands are detected as whole
+    // structs at the `==` fold (`op_lstruct`/`last_struct`); the per-field layout is drained as
+    // StructEqField records into a StructEqBuild that reconstruct turns into a StructEq node; codegen
+    // `push_struct_eq` emits the loop with false/true as Bool pool constants (a new tag-2 pool entry).
+    assert_self_host_byte_identical("struct P { x: Word }\nfn f(a: P, b: P) -> bool { a == b }");
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Byte }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word, z: Byte }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
 }

@@ -81,6 +81,10 @@ private data rs {
     // Scratch for `build_enum_match`: the total payload binds across the match's arms, used to
     // locate this match's EnumBind window on the (stack-discipline) `bindpending` buffer.
     tbind: Word,
+    // Struct-equality field accumulator: each StructEqField record pushes its packed (offset +
+    // kind*65536) here; the StructEqBuild drains `sqcount` of them into the match_parts layout.
+    sqpending: [Word; 128],
+    sqcount: Word,
     // The construction field-position stack, parallel to the node stack: a FieldPos record
     // pushes the next field value's declaration slot, and StructInit pops one per field value
     // to place it in declaration order (a construction may write fields out of order).
@@ -210,6 +214,31 @@ fn build_enum_match(a: Word) -> Word {
     rs.bindcount = bbase;
     let scrut = pop();
     emit(39, base, scrut, count)
+}
+
+// StructEqBuild assembly: `a` packs `ta + tb*1024 + count*1048576` (the two comparison temps and the
+// field count). Lay the field-compare loop's parameters into `match_parts` as [ta][tb][count][per
+// field: offset, kind] (each field drained from `sqpending`, packed offset + kind*65536), pop the
+// two struct operands, and build the StructEq node (kind 48): arg the entry base, lhs/rhs the
+// operands. codegen `push_struct_eq` reads this to emit the loop.
+fn build_struct_eq(a: Word) -> Word {
+    let ta = a % 1024;
+    let tb = (a / 1024) % 1024;
+    let count = a / 1048576;
+    let base = rs.mp;
+    io.match_parts[base] = ta;
+    io.match_parts[base + 1] = tb;
+    io.match_parts[base + 2] = count;
+    for i in 0..count limit 64 {
+        let packed = rs.sqpending[i];
+        io.match_parts[base + 3 + i * 2] = packed % 65536;
+        io.match_parts[base + 3 + i * 2 + 1] = packed / 65536;
+    }
+    rs.mp = base + 3 + count * 2;
+    rs.sqcount = 0;
+    let rhs = pop();
+    let lhs = pop();
+    emit(48, base, lhs, rhs)
 }
 
 // Process one record, folding it into a node and leaving that node's index on the
@@ -396,6 +425,19 @@ fn step(k: Word, a: Word) -> Word {
         let scrut = pop();
         emit(22, base, scrut, lit_count)
     } else {
+    if k == 40 orelse k == 41 orelse k == 42 orelse k == 46 orelse k == 47 {
+        // The enum-match and struct-eq assembly markers/builds. Extracted into `step_assembly` to
+        // keep this function's if/else nesting shallow (the reference compiler's recursion depth
+        // scales with it; a deeper chain overflowed the default compile stack).
+        step_assembly(k, a)
+    } else {
+        0
+    } } } } } } } } } } } } } } } }
+}
+
+// The enum-match and struct-eq assembly records: EnumArm/EnumBind markers accumulate into pending
+// buffers, EnumMatchBuild/StructEqBuild assemble the match_parts loop layout and build the node.
+fn step_assembly(k: Word, a: Word) -> Word {
     if k == 40 {
         // EnumArm marker: record this arm's packed (vname, disc, pcount) in source order. No node.
         rs.epending[rs.epcount] = a;
@@ -403,19 +445,27 @@ fn step(k: Word, a: Word) -> Word {
         0
     } else {
     if k == 42 {
-        // EnumBind marker: record a payload field's packed (off, kind, slot) in field order. No
-        // node. The wildcard EnumMatchBuild (k==41) drains these into the match_parts entries.
+        // EnumBind marker: record a payload field's packed (off, kind, slot) in field order. No node.
         rs.bindpending[rs.bindcount] = a;
         rs.bindcount = rs.bindcount + 1;
         0
     } else {
     if k == 41 {
         // EnumMatchBuild: assemble the IsEnum-loop match_parts and build the EnumMatch node.
-        // Held in its own function to keep `step`'s node forest within the codegen work buffers.
         build_enum_match(a)
     } else {
+    if k == 46 {
+        // StructEqField marker: accumulate this field's packed (offset + kind*65536). No node.
+        rs.sqpending[rs.sqcount] = a;
+        rs.sqcount = rs.sqcount + 1;
         0
-    } } } } } } } } } } } } } } } } } }
+    } else {
+    if k == 47 {
+        // StructEqBuild: assemble the field-compare loop's match_parts and build the StructEq node.
+        build_struct_eq(a)
+    } else {
+        0
+    } } } } }
 }
 
 // Reconstruct one record range on a fresh work stack (the node array and the side
