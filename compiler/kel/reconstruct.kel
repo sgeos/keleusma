@@ -301,6 +301,27 @@ fn build_enum_eq(a: Word) -> Word {
     emit(51, base, lhs, rhs)
 }
 
+// ArrayEqBuild: lay the per-element comparison loop's parameters [ta, tb, count, kind, is_ne] into
+// match_parts, pop the two array operands, and build the ArrayEq node (kind 54). codegen
+// `push_array_eq` reads this to emit the loop.
+fn build_array_eq(a: Word) -> Word {
+    let ta = a % 1024;
+    let tb = (a / 1024) % 1024;
+    let count = (a / 1048576) % 256;
+    let kind = (a / 268435456) % 256;
+    let is_ne = a / 68719476736;
+    let base = rs.mp;
+    io.match_parts[base] = ta;
+    io.match_parts[base + 1] = tb;
+    io.match_parts[base + 2] = count;
+    io.match_parts[base + 3] = kind;
+    io.match_parts[base + 4] = is_ne;
+    rs.mp = base + 5;
+    let rhs = pop();
+    let lhs = pop();
+    emit(54, base, lhs, rhs)
+}
+
 // Process one record, folding it into a node and leaving that node's index on the
 // stack. An If (4) pops its else, then, and cond children, storing cond in `arg` and
 // the branches in lhs/rhs.
@@ -485,7 +506,7 @@ fn step(k: Word, a: Word) -> Word {
         let scrut = pop();
         emit(22, base, scrut, lit_count)
     } else {
-    if k == 40 orelse k == 41 orelse k == 42 orelse k == 46 orelse k == 47 orelse k == 49 orelse k == 50 orelse k == 52 {
+    if k == 40 orelse k == 41 orelse k == 42 orelse k == 46 orelse k == 47 orelse k == 49 orelse k == 50 orelse k == 52 orelse k == 53 {
         // The enum-match and struct-eq assembly markers/builds. Extracted into `step_assembly` to
         // keep this function's if/else nesting shallow (the reference compiler's recursion depth
         // scales with it; a deeper chain overflowed the default compile stack).
@@ -541,8 +562,12 @@ fn step_assembly(k: Word, a: Word) -> Word {
         rs.eqfcount = rs.eqfcount + 1;
         0
     } else {
+    if k == 53 {
+        // ArrayEqBuild: assemble the per-element compare loop's match_parts and build the ArrayEq.
+        build_array_eq(a)
+    } else {
         0
-    } } } } } } } }
+    } } } } } } } } }
 }
 
 // Reconstruct one record range on a fresh work stack (the node array and the side

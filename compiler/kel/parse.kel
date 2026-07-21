@@ -170,6 +170,12 @@ enum Node {
     // A scalar payload field of an enum-eq variant (arg offset + kind*65536). Emitted after its
     // EnumEqVariant, in field order; reconstruct interleaves it into the per-variant match_parts.
     EnumEqField = 52,
+    // `array == array` (or `!=`), lowered to a per-element comparison loop. Emitted directly (no
+    // drain) as an ArrayEqBuild (kind 53, arg ta + tb*1024 + count*1048576 + kind*268435456 +
+    // is_ne*68719476736) which reconstruct turns into an ArrayEq (kind 54, arg the match_parts base;
+    // lhs/rhs the two operands). codegen `push_array_eq` builds the GetIndex loop.
+    ArrayEqBuild = 53,
+    ArrayEq = 54,
     // An array literal `[a, b, c]`: emits the element ops then NewComposite(Flat{Array, count,
     // byte_size}). Like a Call/StructInit, its elements ride the call_args side array.
     ArrayLit = 17,
@@ -296,6 +302,10 @@ private data ps {
     // tuple, else 0 (set at the whole-tuple-emit pushback in `step_tupleaccess`, cleared otherwise).
     // Drives `tuple == tuple` equality (the struct-eq field loop with a GetTupleField accessor).
     last_tuple: Word,
+    // 0 if the most recently emitted operand is not a whole scalar array, else the packed
+    // `length * 1024 + (element_kind + 1)` (set at the whole-array pushback in `step_arrayaccess`,
+    // cleared otherwise). Drives `array == array` equality (a per-element GetIndex comparison loop).
+    last_array: Word,
     // Per value-parameter struct binding: 0 if not a struct type, else the struct's
     // declaration index plus one; and the field-access postfix sub-state after a struct-typed
     // parameter Local was emitted (1 awaits an optional `.`, 2 reads the field name).
@@ -316,6 +326,9 @@ private data ps {
     // ScalarKind plus one, so a body `xs[i]` access arms the array-index postfix and emits
     // GetIndex(Flat{kind}). Mirrors a let-bound array (`stmt.let_array`) for a parameter.
     parray: [Word; 32],
+    // Per value-parameter scalar-array binding: the declared array length N (element count), captured
+    // at the `; N` size close. Needed by `array == array` equality to bound the per-element loop.
+    parray_len: [Word; 32],
     // Per value-parameter array-of-STRUCT binding: 0 if the element is not a declared struct, else
     // the struct's declaration index plus one; `parray_size` the struct's flat byte size. A body
     // `ps[i]` extracts element i as a nested struct (GetIndex(FlatNested{size, Struct})) and a
@@ -347,6 +360,9 @@ private data ps {
     // optional `[`, `aa_kind` the element ScalarKind for the GetIndex operand.
     aa_phase: Word,
     aa_kind: Word,
+    // The array length threaded from the scalar-array parameter that armed `aa_phase`, so the
+    // whole-array pushback can record it in `last_array` for `array == array` equality.
+    aa_len: Word,
     // The tuple layout index (plus one, 0 otherwise) of the just-resolved struct field, so a
     // following `.N` on a tuple-typed field reads a tuple element.
     fa_ftuple: Word,
@@ -393,6 +409,9 @@ private data ops {
     // Parallel to `opstack`: the LEFT operand's tuple layout index (plus one) of each pending
     // operator, so `emit_op(Eq)` can detect a `tuple == tuple` comparison.
     op_ltuple: [Word; 64],
+    // Parallel to `opstack`: the LEFT operand's packed array (length, element kind) of each pending
+    // operator, so `emit_op(Eq)` can detect an `array == array` comparison.
+    op_larray: [Word; 64],
     opsp: Word,
     pending_op: Word,
     pending_prec: Word,
@@ -840,6 +859,7 @@ fn step_local(v: Word) -> Word {
     ps.last_byte = 0;
     ps.last_struct = 0;
     ps.last_tuple = 0;
+    ps.last_array = 0;
     // This operand is a whole enum value only if it resolves to an enum-typed parameter (set below).
     ps.last_enum = 0;
     for i in 0..stmt.let_count limit 64 {
@@ -988,6 +1008,7 @@ fn resolve_plain_ident(v: Word) -> Word {
                         ps.found_flag = 1;
                         ps.found = i;
                         ps.aa_kind = ps.parray[i] - 1;
+                        ps.aa_len = ps.parray_len[i];
                     }
                 }
                 if ps.found_flag == 1 {
@@ -1772,6 +1793,34 @@ fn tuple_eq_start(op: Word) -> Word {
     Node::StructEqField() as Word + (tupledefs.tup_eoffset[fidx] + tupledefs.tup_ekind[fidx] * 65536) * 64
 }
 
+// Begin (and finish) an `array == array` lowering: allocate the two comparison temps and emit the
+// ArrayEqBuild record directly (an array needs no per-element drain -- codegen generates the loop
+// from the element count and kind). The packed operand carries ta, tb, count, element kind, and the
+// != flag.
+fn array_eq_start(op: Word) -> Word {
+    let packed = ops.op_larray[ops.opsp];
+    let kind = (packed % 1024) - 1;
+    let count = packed / 1024;
+    ps.last_byte = 0;
+    ps.last_struct = 0;
+    ps.last_tuple = 0;
+    ps.last_array = 0;
+    stmt.pending_ctuple = 0;
+    stmt.pending_cstruct = 0;
+    stmt.pending_carray = 0;
+    stmt.pending_carray_struct = 0;
+    stmt.pending_cenum = 0;
+    let tb = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + 1;
+    let ta = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + 1;
+    if op == OpCode::NotEq() as Word {
+        Node::ArrayEqBuild() as Word + (ta + tb * 1024 + count * 1048576 + kind * 268435456 + 68719476736) * 64
+    } else {
+        Node::ArrayEqBuild() as Word + (ta + tb * 1024 + count * 1048576 + kind * 268435456) * 64
+    }
+}
+
 // Emit the next StructEqField (one per field, in declaration order) then, once all fields are
 // emitted, the StructEqBuild that reconstruct turns into the StructEq node. Reads the field layout
 // from `tupledefs` for a tuple comparison (`sq_istuple`) or `structdefs` for a struct.
@@ -1898,6 +1947,9 @@ fn emit_op(op: Word) -> Word {
     // `enum == enum` / `enum != enum`: both operands are whole enum values (the LEFT's enum name
     // captured in `op_lenum`, the RIGHT's in `last_enum`), so lower a variant-iterating comparison
     // loop (a `!=` appends a `Not` in codegen).
+    if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_larray[ops.opsp] > 0 andalso ps.last_array > 0 {
+        array_eq_start(op)
+    } else {
     if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_ltuple[ops.opsp] > 0 andalso ps.last_tuple > 0 {
         tuple_eq_start(op)
     } else {
@@ -1925,7 +1977,7 @@ fn emit_op(op: Word) -> Word {
             OpCode::YieldMark() => Node::YieldExpr() as Word,
             _ => Node::BinOp() as Word + op * 64,
         }
-    } } } } }
+    } } } } } }
 }
 
 fn opcode_of(k: Word) -> Word {
@@ -1967,6 +2019,7 @@ fn step_resolving() -> Word {
         ops.op_lstruct[ops.opsp] = ps.last_struct;
         ops.op_lenum[ops.opsp] = ps.last_enum;
         ops.op_ltuple[ops.opsp] = ps.last_tuple;
+        ops.op_larray[ops.opsp] = ps.last_array;
         ops.opsp = ops.opsp + 1;
         ops.resolving = 0;
         0
@@ -2707,7 +2760,12 @@ fn step_arrayaccess(k: Word, v: Word) -> Word {
         ops.expect_operand = 1;
         v * 0
     } else {
+        // A scalar-array value used WHOLE (not indexed): record its length and element kind so a
+        // following `== array` folds to a per-element ArrayEq. The Local was already emitted.
         ps.aa_phase = 0;
+        if ps.aa_len > 0 {
+            ps.last_array = ps.aa_len * 1024 + ps.aa_kind + 1;
+        }
         ps.cursor = ps.cursor - 1;
         0
     }
@@ -4097,6 +4155,11 @@ fn header_sig(k: Word, v: Word) -> Word {
         } else {
         if ps.arr == 2 {
             ps.arr = 0;
+            // A scalar-array PARAMETER's length `; N`: record it (a return-type array is not a param
+            // and is not recorded). `v` is N.
+            if ps.arr_ret == 0 {
+                ps.parray_len[ps.pcount - 1] = v;
+            }
             8 + v * 64
         } else {
             0

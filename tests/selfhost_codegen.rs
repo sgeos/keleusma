@@ -1862,8 +1862,9 @@ fn self_compile_codegen_atomic_functions() {
     // `push_arrindex_nested` for array-of-struct parameter element access; 53 with
     // `push_byte_binop` for Byte-operand bitwise promote-operate-truncate; 54 with
     // `push_byte_arith` for Byte-operand unchecked arithmetic; 56 with `push_struct_eq` and
-    // `intern_bool` for struct equality; 57 with `push_enum_eq` for all-unit enum equality.
-    const EXPECTED_SELF_COMPILE: usize = 57;
+    // `intern_bool` for struct equality; 57 with `push_enum_eq` for all-unit enum equality; 58 with
+    // `push_array_eq` for array equality.
+    const EXPECTED_SELF_COMPILE: usize = 58;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -6705,4 +6706,15 @@ fn self_host_compiles_tuple_equality() {
     assert_self_host_byte_identical(
         "struct P { x: Word, y: Word }\nfn f(a: P, b: P) -> bool { a == b }",
     );
+}
+
+/// Array equality self-compiles byte-identically: `array == array` (and `!=`) lowers to a
+/// per-element comparison loop that reads each element with `GetIndex` (the reference lowers it
+/// through `composite_field_accessors`). The pool is pre-interned in the reference's order -- the
+/// element index constants 0..count-1 first, then false then true -- distinct from struct/tuple-eq.
+#[test]
+fn self_host_compiles_array_equality() {
+    assert_self_host_byte_identical("fn f(a: [Word; 3], b: [Word; 3]) -> bool { a == b }");
+    assert_self_host_byte_identical("fn f(a: [Word; 2], b: [Word; 2]) -> bool { a != b }");
+    assert_self_host_byte_identical("fn f(a: [Word; 4], b: [Word; 4]) -> bool { a == b }");
 }
