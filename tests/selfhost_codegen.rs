@@ -7122,3 +7122,348 @@ fn self_host_compiles_eager_and_or() {
     assert_self_host_byte_identical("fn f(a: bool, b: bool) -> bool { a andalso b }");
     assert_self_host_byte_identical("fn f(a: bool, b: bool) -> bool { a orelse b }");
 }
+
+// ============================================================================
+// Self-hosted construct-support boundary (characterization / inventory test).
+//
+// This test is the single, diffable source of truth for which language constructs
+// the self-hosted `.kel` pipeline (lexer -> parse -> reconstruct -> codegen, run on
+// the stack VM) reproduces BYTE-IDENTICALLY versus which still fall back to (diverge
+// from) the Rust reference compiler. Each case is classified empirically and asserted
+// against its expected classification:
+//
+//   Ok         the self-hosted pipeline emits byte-identical bytecode to the reference.
+//   Gap        the reference compiles it but the self-hosted pipeline diverges/does not
+//              handle it. A DELIBERATELY pinned non-support, not a bug to silence.
+//   RefRejects the Rust reference itself rejects the program (not valid input).
+//
+// The test fails on ANY mismatch, in BOTH directions:
+//   * Ok -> Gap  is a regression (a supported construct broke). Fix the code.
+//   * Gap -> Ok  means a gap was CLOSED (someone implemented it). That is good work,
+//                but you MUST move the case from Gap to Ok here in the same change, so
+//                the boundary stays accurate and the diff records exactly what moved.
+//
+// Keep this table in sync as the self-hosted subset grows toward full self-hosting.
+// ============================================================================
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Support {
+    Ok,
+    Gap,
+    RefRejects,
+}
+
+#[test]
+fn self_hosted_construct_support_boundary() {
+    use Support::{Gap, Ok as SOk, RefRejects};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    // (construct label, expected support, source). Labels are stable identifiers for the
+    // boundary; keep them descriptive. Grouped by category.
+    let cases: &[(&str, Support, &str)] = &[
+        // --- scalars -------------------------------------------------------------
+        (
+            "scalar/word_arith",
+            SOk,
+            "fn f(a: Word, b: Word) -> Word { a + b - a * b }",
+        ),
+        (
+            "scalar/word_divmod",
+            SOk,
+            "fn f(a: Word, b: Word) -> Word { a / b + a % b }",
+        ),
+        (
+            "scalar/word_cmp",
+            SOk,
+            "fn f(a: Word, b: Word) -> bool { a < b }",
+        ),
+        ("scalar/word_neg", SOk, "fn f(a: Word) -> Word { 0 - a }"),
+        (
+            "scalar/byte_arith",
+            SOk,
+            "fn f(a: Byte, b: Byte) -> Byte { a + b }",
+        ),
+        (
+            "scalar/byte_cmp",
+            SOk,
+            "fn f(a: Byte, b: Byte) -> bool { a < b }",
+        ),
+        // --- shifts / bitwise ----------------------------------------------------
+        ("op/shift_lsl", SOk, "fn f(a: Word) -> Word { a lsl 2 }"),
+        ("op/shift_asr", SOk, "fn f(a: Word) -> Word { a asr 2 }"),
+        (
+            "op/shift_lsr_const",
+            SOk,
+            "fn f(a: Word) -> Word { a lsr 2 }",
+        ),
+        (
+            "op/shift_lsr_var",
+            SOk,
+            "fn f(a: Word, k: Word) -> Word { a lsr k }",
+        ),
+        ("op/byte_shift", SOk, "fn f(a: Byte) -> Byte { a lsr 1 }"),
+        (
+            "op/bitwise_band",
+            SOk,
+            "fn f(a: Word, b: Word) -> Word { a band b }",
+        ),
+        ("op/bnot_word", SOk, "fn f(a: Word) -> Word { bnot a }"),
+        ("op/bnot_byte", SOk, "fn f(a: Byte) -> Byte { bnot a }"),
+        // --- booleans ------------------------------------------------------------
+        ("bool/not", SOk, "fn f(a: bool) -> bool { not a }"),
+        (
+            "bool/andalso",
+            SOk,
+            "fn f(a: bool, b: bool) -> bool { a andalso b }",
+        ),
+        (
+            "bool/orelse",
+            SOk,
+            "fn f(a: bool, b: bool) -> bool { a orelse b }",
+        ),
+        (
+            "bool/xor",
+            SOk,
+            "fn f(a: bool, b: bool) -> bool { a xor b }",
+        ),
+        (
+            "bool/and_eager",
+            SOk,
+            "fn f(a: bool, b: bool) -> bool { a and b }",
+        ),
+        (
+            "bool/or_eager",
+            SOk,
+            "fn f(a: bool, b: bool) -> bool { a or b }",
+        ),
+        // --- precedence boundary (the one in-set faithfulness defect) ------------
+        // `and`/`or` relative order and their order vs comparison ARE faithful; the
+        // defect is `xor`: it sits at comparison precedence in the self-host instead
+        // of below it, and `and` sits below `xor` instead of above it. So any grouping
+        // that depends on those two orderings diverges; everything else matches.
+        (
+            "prec/or_vs_and",
+            SOk,
+            "fn f(a: bool, b: bool, c: bool) -> bool { a or b and c }",
+        ),
+        (
+            "prec/or_vs_xor",
+            SOk,
+            "fn f(a: bool, b: bool, c: bool) -> bool { a or b xor c }",
+        ),
+        (
+            "prec/and_vs_cmp",
+            SOk,
+            "fn f(x: bool, y: Word, z: Word) -> bool { x and y < z }",
+        ),
+        (
+            "prec/xor_vs_eq_DEFECT",
+            Gap,
+            "fn f(a: bool, b: bool, c: bool) -> bool { a xor b == c }",
+        ),
+        (
+            "prec/and_vs_xor_DEFECT",
+            Gap,
+            "fn f(a: bool, b: bool, c: bool) -> bool { a and b xor c }",
+        ),
+        // --- control flow --------------------------------------------------------
+        (
+            "ctrl/if_else",
+            SOk,
+            "fn f(a: Word) -> Word { if a > 0 { 1 } else { 2 } }",
+        ),
+        (
+            "ctrl/match_int",
+            SOk,
+            "fn f(k: Word) -> Word { match k { 0 => 10, _ => 20 } }",
+        ),
+        (
+            "ctrl/for_limit",
+            SOk,
+            "private data acc { s: Word }\nfn f(n: Word) -> Word { acc.s = 0; for i in 0..n limit 8 { acc.s = acc.s + i; } acc.s }",
+        ),
+        (
+            "ctrl/loop_yield",
+            SOk,
+            "loop main(r: Word) -> Word { yield r }",
+        ),
+        // --- composites: construction / access -----------------------------------
+        (
+            "comp/struct_ctor",
+            SOk,
+            "struct P { x: Word }\nfn f() -> P { P { x: 1 } }",
+        ),
+        (
+            "comp/struct_field",
+            SOk,
+            "struct P { x: Word }\nfn f(p: P) -> Word { p.x }",
+        ),
+        ("comp/tuple_ctor", SOk, "fn f() -> (Word, Word) { (1, 2) }"),
+        (
+            "comp/tuple_field",
+            SOk,
+            "fn f(t: (Word, Word)) -> Word { t.0 }",
+        ),
+        ("comp/array_lit", SOk, "fn f() -> [Word; 3] { [1, 2, 3] }"),
+        (
+            "comp/array_index",
+            SOk,
+            "fn f(a: [Word; 3], i: Word) -> Word { a[i] }",
+        ),
+        (
+            "comp/enum_ctor",
+            SOk,
+            "enum E { A, B }\nfn f() -> E { E::A() }",
+        ),
+        (
+            "comp/enum_match",
+            SOk,
+            "enum E { A, B }\nfn f(e: E) -> Word { match e { E::A() => 1, E::B() => 2 } }",
+        ),
+        // --- composite equality: supported ---------------------------------------
+        (
+            "eq/struct",
+            SOk,
+            "struct P { x: Word }\nfn f(a: P, b: P) -> bool { a == b }",
+        ),
+        (
+            "eq/tuple",
+            SOk,
+            "fn f(a: (Word,Word), b: (Word,Word)) -> bool { a == b }",
+        ),
+        (
+            "eq/enum",
+            SOk,
+            "enum E { A, B }\nfn f(a: E, b: E) -> bool { a == b }",
+        ),
+        (
+            "eq/enum_literal",
+            SOk,
+            "enum E { A, B }\nfn f(e: E) -> bool { e == E::A() }",
+        ),
+        (
+            "eq/array",
+            SOk,
+            "fn f(a: [Word;3], b: [Word;3]) -> bool { a == b }",
+        ),
+        (
+            "eq/array_of_struct",
+            SOk,
+            "struct P { x: Word }\nfn f(a: [P;2], b: [P;2]) -> bool { a == b }",
+        ),
+        (
+            "eq/array_of_enum",
+            SOk,
+            "enum E { A, B }\nfn f(a: [E;2], b: [E;2]) -> bool { a == b }",
+        ),
+        (
+            "eq/array_of_tuple",
+            SOk,
+            "fn f(a: [(Word,Word);2], b: [(Word,Word);2]) -> bool { a == b }",
+        ),
+        (
+            "eq/array_of_array",
+            SOk,
+            "fn f(a: [[Word;2];2], b: [[Word;2];2]) -> bool { a == b }",
+        ),
+        (
+            "eq/nested_struct_in_struct",
+            SOk,
+            "struct I { v: Word }\nstruct S { i: I, w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        (
+            "eq/tuple_in_struct",
+            SOk,
+            "struct S { t: (Word,Word), w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        (
+            "eq/array_in_struct",
+            SOk,
+            "struct S { a: [Word;2], w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        // --- composite equality: pinned GAPS (nested-machinery frontier) ---------
+        (
+            "eq/enum_in_struct__GAP",
+            Gap,
+            "enum E { A, B }\nstruct S { e: E, w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        (
+            "eq/tuple_of_struct__GAP",
+            Gap,
+            "struct P { x: Word }\nfn f(a: (P, Word), b: (P, Word)) -> bool { a == b }",
+        ),
+        (
+            "eq/2level_struct__GAP",
+            Gap,
+            "struct I { v: Word }\nstruct M { i: I }\nstruct O { m: M }\nfn f(a: O, b: O) -> bool { a == b }",
+        ),
+        (
+            "eq/struct_arrayofstruct__GAP",
+            Gap,
+            "struct P { x: Word }\nstruct Q { ps: [P;2] }\nfn f(a: Q, b: Q) -> bool { a == b }",
+        ),
+        (
+            "eq/enum_struct_payload__GAP",
+            Gap,
+            "struct P { x: Word }\nenum E { A(P), B }\nfn f(a: E, b: E) -> bool { a == b }",
+        ),
+        // --- out of scope for the self-hosted subset -----------------------------
+        (
+            "scope/float_arith__GAP",
+            Gap,
+            "fn f(a: Float, b: Float) -> Float { a + b }",
+        ),
+        (
+            "scope/generic_fn__GAP",
+            Gap,
+            "fn id<T>(x: T) -> T { x }\nfn f() -> Word { id(1) }",
+        ),
+        // --- removed V0.1.x surface (reference rejects) --------------------------
+        (
+            "removed/closure__REJECT",
+            RefRejects,
+            "fn f() -> Word { let g = |x| x; g(1) }",
+        ),
+    ];
+
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let mut mismatches: Vec<String> = Vec::new();
+    let (mut n_ok, mut n_gap, mut n_rej) = (0usize, 0usize, 0usize);
+    for (label, expected, src) in cases {
+        let actual = if catch_unwind(AssertUnwindSafe(|| compile_src(src))).is_err() {
+            Support::RefRejects
+        } else if catch_unwind(AssertUnwindSafe(|| {
+            assert_self_host_byte_identical(src);
+        }))
+        .is_ok()
+        {
+            Support::Ok
+        } else {
+            Support::Gap
+        };
+        match actual {
+            Support::Ok => n_ok += 1,
+            Support::Gap => n_gap += 1,
+            Support::RefRejects => n_rej += 1,
+        }
+        if actual != *expected {
+            mismatches.push(format!("{label}: expected {expected:?}, got {actual:?}"));
+        }
+    }
+    std::panic::set_hook(prev);
+
+    assert!(
+        mismatches.is_empty(),
+        "self-hosted construct-support boundary changed. If a Gap became Ok, a gap was \
+         CLOSED -- move that case to Support::Ok here in the same change. If an Ok became \
+         Gap, a supported construct REGRESSED -- fix the code. Changes:\n  {}",
+        mismatches.join("\n  ")
+    );
+    // Sanity: the boundary keeps a non-trivial supported set and at least the known gaps.
+    assert!(n_ok >= 40, "supported set shrank unexpectedly (ok={n_ok})");
+    assert!(
+        n_gap >= 1 && n_rej >= 1,
+        "classifier degenerate (gap={n_gap}, rej={n_rej})"
+    );
+}
