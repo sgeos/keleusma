@@ -621,7 +621,7 @@ fn step(k: Word, a: Word) -> Word {
         let scrut = pop();
         emit(22, base, scrut, lit_count)
     } else {
-    if k == 40 orelse k == 41 orelse k == 42 orelse k == 46 orelse k == 47 orelse k == 49 orelse k == 50 orelse k == 52 orelse k == 53 orelse k == 55 orelse k == 56 orelse k == 57 orelse k == 58 orelse k == 61 orelse k == 63 {
+    if k == 40 orelse k == 41 orelse k == 42 orelse k == 46 orelse k == 47 orelse k == 48 orelse k == 49 orelse k == 50 orelse k == 52 orelse k == 53 orelse k == 55 orelse k == 56 orelse k == 57 orelse k == 58 orelse k == 61 orelse k == 63 {
         // The enum-match and struct-eq assembly markers/builds. Extracted into `step_assembly` to
         // keep this function's if/else nesting shallow (the reference compiler's recursion depth
         // scales with it; a deeper chain overflowed the default compile stack).
@@ -752,8 +752,16 @@ fn step_assembly(k: Word, a: Word) -> Word {
         // ArrayOfEnumEq node.
         build_array_of_enum_eq(a)
     } else {
+    if k == 48 {
+        // `bnot` signal: a unary node whose RECORD kind (48, free in the < 64 record space) maps to a
+        // NODE kind of 65 (node kinds live in the un-packed forest array, so may exceed 63). Fold the
+        // single operand into node 65; codegen `push_bnot` lowers it to `a bxor -1`. Routed through
+        // `step_assembly` (not inline in `step()`) to keep `step()`'s node count under the 1024 cap.
+        let c = pop();
+        emit(65, a, c, 0)
+    } else {
         0
-    } } } } } } } } } } } } } } }
+    } } } } } } } } } } } } } } } }
 }
 
 // Reconstruct one record range on a fresh work stack (the node array and the side

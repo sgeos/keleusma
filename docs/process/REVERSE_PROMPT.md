@@ -25,8 +25,26 @@ node/record kind (blocked by the full space) OR intricate nested-machinery surge
 `and`/`or`, enum-in-struct, 2+-level nesting. Freeing record-kind space (or a build-record + high node
 kind indirection like array-of-enum used) is the prerequisite for the operator gaps.
 
-**NEXT-INCREMENT RECIPE (worked out, not yet implemented): `bnot` (bitwise NOT) via the split
-record/node-kind pattern.** The 6-bit record-kind space is full, but the reconstruct `k == 36` case
+**THIS SESSION (ninety-fourth increment): `bnot` (Word) now self-compiles -- the first operator added
+past the FULL record-kind space, establishing the split record/node-kind pattern.** Implemented from the
+recipe below. `bnot a` = `a bxor -1` (`GetLocal, Const(-1), BitXor`). Lexer tokenizes `bnot` to the last
+free low Tok (11); parse pushes it as a unary prefix (`OpCode::Bnot = 30`, `prec_of => 10`) and
+`emit_op` yields RECORD kind 48 (free in the < 64 record space -- it is StructEq's node kind, a separate
+array); reconstruct maps record 48 -> NODE kind 65 (node kinds live in the un-packed forest array, so
+may exceed 63); codegen `push_bnot` emits the lowering with the `-1` DEFERRED via `push_int_const`.
+`EXPECTED_SELF_COMPILE` 64 -> 65. ONE gotcha: routing record 48 inline in reconstruct's `step()` tipped
+that huge function past the 1024-node-forest cap (`IndexOutOfBounds(1024,1024)` compiling
+reconstruct.kel), so the k==48 case lives in `step_assembly` (the established shallow-step pattern), NOT
+inline. Byte-identical on the first probe (once routed correctly), incl. compound operand `bnot (a+1)`,
+`bnot bnot a`, and precedence `bnot a band b`. Test `self_host_compiles_word_bnot`. Five files changed:
+`compiler/kel/{lexer,parse,reconstruct,codegen}.kel`, `tests/selfhost_codegen.rs`. Green:
+`selfhost_codegen` (108), `selfhost_parse`+`selfhost_pipeline` (9), fmt, clippy `-D warnings`. NEXT:
+Byte `bnot` (promote-operate-truncate, another >= 64 node kind); eager `and`/`or` (split-kind + spill +
+if/else branch); enum-in-struct / 2+-level nesting (nested-machinery surgery). The split-kind pattern is
+now proven, so the operator gaps are unblocked.
+
+**DONE (implemented above as the ninety-fourth increment) -- original recipe: `bnot` (bitwise NOT) via
+the split record/node-kind pattern.** The 6-bit record-kind space is full, but the reconstruct `k == 36` case
 (record 36 -> `emit(15, ...)`) is the precedent: a parse record kind < 64 can map to a NODE kind >= 64
 (node kinds live in the un-packed forest array). Reference lowering: `bnot a` = `a bxor -1` (Word:
 `GetLocal(a), Const(-1), BitXor`; Byte: wrapped in `ByteToWord`/`WordToByte`). Recipe (Word first,
