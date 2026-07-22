@@ -10,6 +10,47 @@ AI to Human communication channel.
 
 **Date**: 2026-07-21 (session 27)
 
+**IN-PROGRESS DESIGN (next increment, scoped this session, NOT yet implemented): array-of-struct
+equality `[P; N] == [P; N]`.** Scouted and partially prototyped, then reverted to keep the tree clean --
+it is a genuine multi-part feature (comparable to the 82nd nested-struct increment), not a surface add.
+Reference lowering (dumped): an outer break-loop, UNROLLED per element -- extract `a[e]`/`b[e]` as
+structs via `GetIndex(FlatNested{size, Struct})` into two temps, run an inner struct-eq field loop
+(GetField/CmpEq, break false on first mismatch / true if all match), and if that element result is
+false break the OUTER loop false; after all elements, break true. It composes `push_array_eq`'s outer
+with `push_struct_eq`'s inner. Full plan:
+- **Parse prerequisite (the non-obvious part).** Array-of-struct VALUES do not set `last_array` today
+  (only scalar arrays do, at the `aa_` whole-value branch ~parse.kel:3001), so `a == b` on struct
+  arrays is not even detected. Add: `ps.last_array_struct` (element struct index + 1) and `ps.sa_len`
+  (struct-array length) fields; `ops.op_larray_struct[64]` parallel to `op_larray`; capture
+  `sa_len = parray_len[i]` when arming the `sa_` postfix (~parse.kel:1031); in the `sa_` whole-value
+  branch (`step_structarrayaccess` non-`[` case, ~parse.kel:3029) set `last_array = sa_len*1024+1` and
+  `last_array_struct = sa_struct+1` when `sa_variant == 2`; clear `last_array_struct` in `step_local`
+  next to `last_array = 0`; capture `op_larray_struct[opsp] = last_array_struct` in `step_resolving`
+  next to the `op_larray` capture; add a detection branch in `emit_op` BEFORE the scalar array-eq check
+  (`op_larray_struct[opsp] > 0 andalso last_array_struct > 0` -> `array_of_struct_eq_start`) with a
+  matching extra `}` at emit_op's close. (All of the above was prototyped this session and works up to
+  the missing function; reverted.)
+- **Parse `array_of_struct_eq_start`.** Reuse the struct-eq field drain: allocate two temps, set
+  `structeq_emit=1`, `sq_struct`=element struct idx, `sq_count`=field count, `sq_field=1`, and NEW
+  `stmt.sq_arr=1`, `sq_arrcount`=`sa_len`, `sq_arrsize`=struct byte size; return field 0's
+  StructEqField record. In `step_structeq_emit`, at drain end, if `sq_arr==1` emit an
+  `ArrayOfStructEqBuild` (new Node kind, free: 61) carrying ta/tb/arrcount/arrsize/fieldcount/is_ne
+  instead of StructEqBuild, and reset `sq_arr`.
+- **Reconstruct.** Register kind 61 in the build-record set (line ~546) and dispatch (~581) to a new
+  `build_array_of_struct_eq` mirroring `build_struct_eq`: read the struct fields from `rs.sqpending`,
+  lay match_parts `[ta, tb, arrcount, arrsize, fieldcount, per-field(offset,kind), is_ne]`, emit a new
+  ArrayOfStructEq node (free kind, e.g. 62). Watch the bit-packing budget (arrsize can be large; the
+  EnumEqBuild packing at ~2^46 shows large packings work).
+- **Codegen `push_array_of_struct_eq`** (dispatch kind 62; add 62 to reconstruct `is_binary` if it is a
+  two-child node): unroll per element -- for e in 0..arrcount: emit `GetLocal(tb),Const(e),GetIndex
+  (FlatNested{arrsize,Struct}), GetLocal(ta),Const(e),GetIndex(...), SetLocal(inner_b),SetLocal
+  (inner_a), Loop, <inner field loop like push_struct_eq>, EndLoop, Not, If, Const(false), Break(outer),
+  EndIf`; after all elements `Const(true), Break(outer)`. Two outer temps + two inner temps PER element
+  (let_count grows by 2 + 2*arrcount). The index-constant pool order and the nested loop/if marker
+  backpatching (cf_mloop/cf_mif/cf_mbreak stacks) are the likely bug sources -- verify against the
+  dumped reference. `EXPECTED_SELF_COMPILE` bumps by 1 (push_array_of_struct_eq) [+1 more if a helper].
+  Sibling gaps after this: array-of-enum, enum-in-struct, 2+-level nesting, variable-amount shifts.
+
 **THIS SESSION (eighty-ninth increment): Byte-operand shifts now self-compile.** A gap sweep found the
 self-host handled NO Byte shifts (asr/lsl/asr/lsr all diverged), so this completes shifts for the Byte
 type (the byte analogue of the 79th's Word shifts and the 88th's Word `lsr`). A Byte shift is
