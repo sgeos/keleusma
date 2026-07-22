@@ -8,17 +8,16 @@ Current sprint source of truth.
 
 ## Current Phase
 
-**V0.2.x: post-publication research and pre-implementation cleanup.** V0.2.0 published on crates.io. The V0.3.0, V0.4.0, V0.5.0 strategy documents now carry resolved-design-questions sections from the 2026-05-21 autonomous research pass. The R4.1 LLVM coroutine retcon design is empirically validated against LLVM 22.1.6 on arm64-apple-darwin (2026-05-22). Cross-document consistency audit complete with five correction banners applied to stale R-docs.
+**V0.2.x: self-hosting the toolchain — language-surface expansion (as of 2026-07-22).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. `BYTECODE_VERSION` is 2 (widened from 1 by the V0.2.3 24-bit shared-data operands).
 
-- `keleusma-arena 0.2.0`, `keleusma-macros 0.2.0`, `keleusma 0.2.0`, `keleusma-bench 0.2.0`, `keleusma-cli 0.2.0` are live on crates.io.
-- V0.3.0, V0.4.0, V0.5.0 strategy docs reflect resolved design questions with provenance pointers to `tmp/research/r3_*.md`, `r4_*.md`, `r5_*.md`.
-- `tmp/research/llvm_retcon_spike/` carries the empirical M1 validation of R4.1's corrected retcon design.
-- `tmp/research/CONSISTENCY_AUDIT.md` records the cross-document audit.
-- `tmp/enrolled_keys_execution.md` carries the spec for a V0.2.x strict-mode enrolled-keys execution feature; implementation not yet started.
+- Fourteen byte-identical increments (the 85th through 98th) are **merged into `v0.2.3`**, completing the shift, bitwise, and array-of-composite-equality operator families and adding eager `and`/`or`. See the release plan in `compiler/MILESTONES.md` and the roadmap in `docs/roadmap/V0_2_X_ROADMAP.md`.
+- The construct-support boundary (which constructs the self-hosted pipeline reproduces byte-identically versus falls back to the reference) is pinned by the `self_hosted_construct_support_boundary` characterization test in `tests/selfhost_codegen.rs`.
+- Active work is on branch `feat-selfhost-nested-eq`: the nested-composite-equality frontier. `tuple-of-struct` is in progress (the `tup_estruct` prerequisite committed); `enum-in-struct` and 2+-level nesting follow. All three need deep surgery on the byte-identical nested state machine; see `REVERSE_PROMPT.md`.
+- Four encoding namespaces are now full (token, record/node-kind, wire-op) and the precedence scale is coarse; recent increments use reuse tricks (split kinds, ident-by-id keyword recognition, operand-form reuse). A design brief on widening these is pending operator decision (process-audit worklist item 6).
 
 ## Active Milestone
 
-**Self-hosting frontier (2026-07-21, session 27). Branch `feat-selfhost-language-surface`.** The 24-bit
+**Self-hosting language-surface phase — COMPLETED and merged into `v0.2.3` (2026-07-21/22); active work has moved to `feat-selfhost-nested-eq` (see Current Phase above).** The narrative below is the historical record of the fourteen increments (85th through 98th) of that phase; it will relocate to `docs/process/DESIGN_JOURNAL.md` in the channel-discipline cleanup (process-audit worklist item 5). The 24-bit
 shared-data widening (`BYTECODE_VERSION` 1->2, plan `peaceful-sleeping-codd.md`) was found ALREADY
 COMPLETE and green on resume -- `BYTECODE_VERSION = 2`, `MAX_DATA_ADDR = 1 << 24`, u24 inline +
 `POOL_TAG_U24_U24` encoding, u32 slot counts, raised stage buffers, and all FIVE whole-stage
