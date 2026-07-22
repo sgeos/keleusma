@@ -25,6 +25,38 @@ node/record kind (blocked by the full space) OR intricate nested-machinery surge
 `and`/`or`, enum-in-struct, 2+-level nesting. Freeing record-kind space (or a build-record + high node
 kind indirection like array-of-enum used) is the prerequisite for the operator gaps.
 
+**NESTED-MACHINERY FRONTIER ASSESSMENT (substantiated by reading the code, 2026-07-22).** After the
+ninety-eighth increment, I scouted the three remaining nested-composite-equality gaps
+(tuple-of-struct, enum-in-struct, 2+-level) to find a bounded increment and found NONE -- all require
+DEEP SURGERY on the intricate byte-identical nested struct-eq state machine (`struct_eq_nested_start`
++ `structeq_nested_next` in parse.kel, the 82nd-84th increment machinery), plus from-scratch tracking
+additions:
+- **tuple-of-struct** (`(P, W) == (P, W)`): the reference lowering is EXACTLY `push_struct_eq_nested`
+  with the top-level accessor swapped `GetField` -> `GetTupleField` (an `is_tuple_container` flag, so
+  the CODEGEN side is nearly solved). BUT the parse side is deep: `structeq_nested_next` is a streaming
+  state machine hard-coded to STRUCT containers (reads `structdefs.sd_fstart/sd_farraylen/sd_fstruct/
+  sd_ftuple/sd_foffset/sd_fkind/sd_fsize` at ~7 branch points); a tuple container needs a parallel
+  tupledefs traversal threaded through all of them. AND -- the blocker -- a tuple element's composite
+  type is under-tracked: `tup_ekind >= 100` encodes only `100 + struct byte SIZE`, NOT the struct
+  INDEX, which the inner field loop needs for the element struct's field layout. So a new
+  tuple-element-struct-index table (a `tup_estruct` analog) must be added and threaded through tuple
+  parsing first.
+- **enum-in-struct** (`struct { e: E, w: W }`): needs a NEW nested-field variant (enum) whose inner
+  loop is the enum VARIANT-DISPATCH (fundamentally different from the field loop), plus enum-struct-
+  field tracking (no `sd_fenum` today -- an enum field is sized correctly but typed as scalar kind 0).
+- **2+-level** (`struct O { m: M }`, M has a struct field): `struct_eq_kind` explicitly DEFERS when a
+  nested struct's sub-field is itself composite; making it work needs genuine RECURSION in the streaming
+  state machine (currently exactly one level).
+None is a clean flag like array-of-tuple was. Each is ~15-20 edits across the most intricate,
+regression-prone code (the byte-identical 82nd-84th nested tests are the blast radius). RECOMMENDATION:
+these deserve dedicated fresh effort, one at a time, each starting from the reference lowering dump and
+guarded by the existing nested-struct self-compile tests. tuple-of-struct is the most contained
+(codegen mostly solved) once the `tup_estruct` tracking is added. ALTERNATIVELY, the language-surface
+expansion phase (14 increments this session, completing four families and breaking two of three
+structural walls) is a natural point to MERGE into `v0.2.3` and consolidate before the deep-surgery
+phase -- the earlier `feat-selfhost-operator-typing` branch was merged the same way at this session's
+start.
+
 **THIS SESSION (ninety-eighth increment): eager boolean `and`/`or` now self-compile, breaking through
 the FULL Tok-space wall via the ident-by-id pattern.** The Tok space (0..61) is full, so `and`/`or`
 (needing two tokens) are lexed as IDENTIFIERS and recognized by interned id in OPERATOR position -- the
