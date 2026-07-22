@@ -7019,3 +7019,38 @@ fn self_host_compiles_byte_bnot() {
     // Word regression (still record 48 -> node 65).
     assert_self_host_byte_identical("fn f(a: Word) -> Word { bnot a }");
 }
+
+/// Array-of-tuple equality (`[(..); N] == [(..); N]`, and `!=`) self-compiles byte-identically. It is
+/// the array-of-struct lowering (90th) with a TUPLE element: the per-element extract is
+/// GetIndex(FlatNested Tuple) and the inner field loop uses GetTupleField over the `tupledefs` layout.
+/// Reuses the whole array-of-struct machinery via an `is_tuple` bit: parse tracks a whole `[(..); N]`
+/// value (`last_array_tuple`, the tuple byte size packed into the marker), `array_of_tuple_eq_start`
+/// runs the struct-eq drain with `sq_istuple = 1`, that flag rides the ArrayOfStructEqBuild as its
+/// is_tuple bit (bit 43), and codegen `push_array_of_struct_eq` picks the accessor/variant from it.
+#[test]
+fn self_host_compiles_array_of_tuple_equality() {
+    assert_self_host_byte_identical(
+        "fn f(a: [(Word, Word); 2], b: [(Word, Word); 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: [(Word, Word); 2], b: [(Word, Word); 2]) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: [(Word, Word, Word); 2], b: [(Word, Word, Word); 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: [(Word, Byte); 2], b: [(Word, Byte); 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: [(Word, Word); 3], b: [(Word, Word); 3]) -> bool { a == b }",
+    );
+    // array-of-struct regression (shared build node + codegen function).
+    assert_self_host_byte_identical(
+        "struct P { x: Word }
+fn f(a: [P; 2], b: [P; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Byte }
+fn f(a: [P; 2], b: [P; 2]) -> bool { a != b }",
+    );
+}
