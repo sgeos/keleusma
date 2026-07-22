@@ -10,8 +10,27 @@ AI to Human communication channel.
 
 **Date**: 2026-07-21 (session 27)
 
-**IN-PROGRESS DESIGN (next increment, scoped this session, NOT yet implemented): array-of-struct
-equality `[P; N] == [P; N]`.** Scouted and partially prototyped, then reverted to keep the tree clean --
+**THIS SESSION (ninetieth increment): array-of-struct equality `[P; N] == [P; N]` now self-compiles.**
+Implemented end to end from the design below, byte-identical on the FIRST codegen probe (the careful
+reference-structure analysis held). Parse: a whole `[P; N]` value now sets `last_array` plus a new
+`last_array_struct` marker (in the `sa_` postfix whole-value branch), captured into `op_larray_struct`
+at operator push, so `emit_op` routes to `array_of_struct_eq_start` (before the scalar array-eq check).
+That reuses the struct-eq field drain, flagged `stmt.sq_arr`, allocating 2 outer + 2*N inner temps, and
+closes with an `ArrayOfStructEqBuild` (node 61) that reconstruct's `build_array_of_struct_eq` assembles
+into an `ArrayOfStructEq` (node 62); codegen `push_array_of_struct_eq` unrolls per element (extract
+`a[e]`/`b[e]` via `GetIndex(FlatNested{arrsize,Struct})` = wire operand `arrsize + 2*65536` into the
+inner pair `ta+1+2*e`/`ta+2+2*e`, inner struct-eq field loop, break outer false on element inequality;
+true after all). `EXPECTED_SELF_COMPILE` 62 -> 63. ONE gotcha hit: adding ~60 lines pushed parse.kel to
+200632 bytes, past the lexer's 196608-byte `src.bytes` cap, so the source no longer self-lexed -- raised
+the cap to 245760 across lexer.kel and the four host drivers + `compiler/src/{main,selfhost}.rs` (all
+five `196608` -> `245760` sites). Test `self_host_compiles_array_of_struct_equality` (single/multi-field,
+Byte field, `!=`, N=2/3, multi-function). Green: `selfhost_codegen` (104, all stage self-compiles),
+`selfhost_parse`+`selfhost_pipeline` (9), fmt, clippy `-D warnings`, compiler subproject builds. Eight
+files changed. NEXT sibling gaps (same class): array-of-enum, enum-in-struct, 2+-level nesting,
+variable-amount shifts. The full design that guided this is retained below for reference.
+
+**COMPLETED DESIGN (implemented above as the ninetieth increment): array-of-struct
+equality `[P; N] == [P; N]`.** Scouted and prototyped, guiding the implementation --
 it is a genuine multi-part feature (comparable to the 82nd nested-struct increment), not a surface add.
 Reference lowering (dumped): an outer break-loop, UNROLLED per element -- extract `a[e]`/`b[e]` as
 structs via `GetIndex(FlatNested{size, Struct})` into two temps, run an inner struct-eq field loop

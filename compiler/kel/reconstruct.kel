@@ -336,6 +336,37 @@ fn build_array_eq(a: Word) -> Word {
     emit(54, base, lhs, rhs)
 }
 
+// ArrayOfStructEqBuild: `a` packs ta, tb, the element field count, the array element count, the `!=`
+// flag, and the element struct byte size. Lay match_parts as [ta, tb, arrcount, arrsize, fieldcount,
+// per field: offset, kind, is_ne] (fields drained from `sqpending`), pop the two array operands, and
+// build the ArrayOfStructEq node (kind 62). codegen `push_array_of_struct_eq` unrolls the per-element
+// GetIndex(FlatNested Struct) extraction and inner field loop.
+fn build_array_of_struct_eq(a: Word) -> Word {
+    let ta = a % 1024;
+    let tb = (a / 1024) % 1024;
+    let fieldcount = (a / 1048576) % 64;
+    let arrcount = (a / 67108864) % 256;
+    let is_ne = (a / 17179869184) % 2;
+    let arrsize = a / 34359738368;
+    let base = rs.mp;
+    io.match_parts[base] = ta;
+    io.match_parts[base + 1] = tb;
+    io.match_parts[base + 2] = arrcount;
+    io.match_parts[base + 3] = arrsize;
+    io.match_parts[base + 4] = fieldcount;
+    for i in 0..fieldcount limit 64 {
+        let packed = rs.sqpending[i];
+        io.match_parts[base + 5 + i * 2] = packed % 65536;
+        io.match_parts[base + 5 + i * 2 + 1] = packed / 65536;
+    }
+    io.match_parts[base + 5 + fieldcount * 2] = is_ne;
+    rs.mp = base + 5 + fieldcount * 2 + 1;
+    rs.sqcount = 0;
+    let rhs = pop();
+    let lhs = pop();
+    emit(62, base, lhs, rhs)
+}
+
 // StructEqNestedBuild: finalize the streamed nested layout into match_parts as
 // [ta, tb, topcount, <seb tagged field layout>, is_ne] and build the StructEqNestedNode (kind 59).
 fn build_struct_eq_nested(a: Word) -> Word {
@@ -543,7 +574,7 @@ fn step(k: Word, a: Word) -> Word {
         let scrut = pop();
         emit(22, base, scrut, lit_count)
     } else {
-    if k == 40 orelse k == 41 orelse k == 42 orelse k == 46 orelse k == 47 orelse k == 49 orelse k == 50 orelse k == 52 orelse k == 53 orelse k == 55 orelse k == 56 orelse k == 57 orelse k == 58 {
+    if k == 40 orelse k == 41 orelse k == 42 orelse k == 46 orelse k == 47 orelse k == 49 orelse k == 50 orelse k == 52 orelse k == 53 orelse k == 55 orelse k == 56 orelse k == 57 orelse k == 58 orelse k == 61 {
         // The enum-match and struct-eq assembly markers/builds. Extracted into `step_assembly` to
         // keep this function's if/else nesting shallow (the reference compiler's recursion depth
         // scales with it; a deeper chain overflowed the default compile stack).
@@ -664,8 +695,13 @@ fn step_assembly(k: Word, a: Word) -> Word {
         // StructEqNestedBuild: finalize the nested struct-eq node.
         build_struct_eq_nested(a)
     } else {
+    if k == 61 {
+        // ArrayOfStructEqBuild: assemble the per-element struct-eq loop's match_parts and build the
+        // ArrayOfStructEq node.
+        build_array_of_struct_eq(a)
+    } else {
         0
-    } } } } } } } } } } } } }
+    } } } } } } } } } } } } } }
 }
 
 // Reconstruct one record range on a fresh work stack (the node array and the side

@@ -1875,8 +1875,9 @@ fn self_compile_codegen_atomic_functions() {
     // struct equality; 60 with `push_bool` (the deferred process-time bool Const work item that
     // lets enum equality intern its result Consts at emission time, for literal-operand enum eq);
     // 61 with `push_int_const` (the deferred process-time int Const work item for the `lsr` mask);
-    // 62 with `push_byte_shift` for Byte-operand shifts (promote-operate-truncate).
-    const EXPECTED_SELF_COMPILE: usize = 62;
+    // 62 with `push_byte_shift` for Byte-operand shifts (promote-operate-truncate); 63 with
+    // `push_array_of_struct_eq` for array-of-struct equality (`[P; N] == [P; N]`).
+    const EXPECTED_SELF_COMPILE: usize = 63;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -1903,10 +1904,10 @@ fn self_compile_codegen_atomic_functions() {
 // reconstruction to the control-flow, data-access, call, and yield kinds.
 // ---------------------------------------------------------------------------
 
-// Lexer `src` block slots: len(1) + bytes(196608) then the intern table.
-const BR_LEX_ISTART: usize = 1 + 196608;
-const BR_LEX_ILEN: usize = 1 + 196608 + 1280;
-const BR_LEX_ICOUNT: usize = 1 + 196608 + 1280 + 1280;
+// Lexer `src` block slots: len(1) + bytes(245760) then the intern table.
+const BR_LEX_ISTART: usize = 1 + 245760;
+const BR_LEX_ILEN: usize = 1 + 245760 + 1280;
+const BR_LEX_ICOUNT: usize = 1 + 245760 + 1280 + 1280;
 // Parser `toks` block slots: len(1), then the packed token array (one `tok+payload*64`
 // word per token), then the scalar and chunk-table inputs.
 const BR_P_LEN: usize = 0;
@@ -5368,7 +5369,7 @@ fn assemble_shared_layout(
 
 // The per-shared-slot byte layout the driver assembles from parse.kel's records equals
 // the reference compiler's, offset/kind/len for every element slot, for all four stage
-// sources (including lexer.kel's 196608-byte buffer whose later fields sit past 64 KB).
+// sources (including lexer.kel's 245760-byte buffer whose later fields sit past 64 KB).
 #[test]
 fn assembled_shared_layout_matches_the_reference() {
     let cases = [
@@ -6887,5 +6888,38 @@ fn self_host_compiles_array_in_struct_equality() {
     );
     assert_self_host_byte_identical(
         "struct Q { a: Word, b: Word }\nstruct P { q: Q, xs: [Word; 2] }\nfn f(a: P, b: P) -> bool { a == b }",
+    );
+}
+
+/// Array-of-struct equality (`[P; N] == [P; N]`, and `!=`) self-compiles byte-identically. The
+/// reference unrolls per element: extract `a[e]`/`b[e]` as structs (GetIndex(FlatNested Struct)) into a
+/// fresh inner temp pair, run an inner struct-eq field loop (break false on the first field mismatch,
+/// true if all fields match), and if the element compared unequal break the OUTER loop false; after all
+/// elements break true. It composes `push_array_eq`'s outer loop with `push_struct_eq`'s inner field
+/// loop. Reaching it needed a parse prerequisite: a whole `[P; N]` value now sets `last_array` plus a
+/// new `last_array_struct` marker (the `sa_` postfix whole-value branch), captured into
+/// `op_larray_struct` at operator push, so `emit_op` routes to `array_of_struct_eq_start`; that reuses
+/// the struct-eq field drain, flagged `sq_arr`, to close with an ArrayOfStructEqBuild (node 61) that
+/// reconstruct assembles into an ArrayOfStructEq (node 62). Covers single- and multi-field elements, a
+/// Byte field, the `!=` form, and multiple element counts.
+#[test]
+fn self_host_compiles_array_of_struct_equality() {
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: [P; 2], b: [P; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\nfn f(a: [P; 2], b: [P; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: [P; 2], b: [P; 2]) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: [P; 3], b: [P; 3]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Byte }\nfn f(a: [P; 2], b: [P; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn g(a: [P; 2], b: [P; 2]) -> bool { a == b }\nfn f(a: [P; 2], b: [P; 2]) -> bool { a != b }",
     );
 }

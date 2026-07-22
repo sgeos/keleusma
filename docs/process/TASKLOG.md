@@ -53,10 +53,18 @@ as a DEFERRED int Const (new `push_int_const`, reusing the kind-0 work item). `E
 keys on the left operand's Byte flag alone (a new `emit_op` arm -> `Node::ByteShift` kind 60);
 `reconstruct` `is_binary` gained 60; codegen `push_byte_shift` lowers it, reusing the 88th's mask +
 `push_int_const`. `EXPECTED_SELF_COMPILE` 61 -> 62; constant amount only. Test
-`self_host_compiles_byte_shifts`. Green (all five increments): `selfhost_codegen` (103),
-`selfhost_parse`+`selfhost_pipeline` (9), clippy `--tests --all-features -D warnings`, fmt. NEXT
-follow-up: variable-amount shifts; let-bound-to-plain-value enum eq; deeper recursive nesting; composite
-ordering. See `REVERSE_PROMPT.md` for the authoritative session-27 handoff.
+`self_host_compiles_byte_shifts`. The ninetieth increment then landed ARRAY-OF-STRUCT equality
+(`[P; N] == [P; N]`): a whole struct-array value now sets a `last_array_struct` marker so `emit_op`
+routes to `array_of_struct_eq_start`, which reuses the struct-eq field drain (flag `sq_arr`) to close
+with ArrayOfStructEqBuild (node 61); reconstruct assembles ArrayOfStructEq (node 62); codegen
+`push_array_of_struct_eq` unrolls per element (GetIndex(FlatNested Struct) extract + inner field loop,
+break outer false on element inequality). Byte-identical on the first probe. `EXPECTED_SELF_COMPILE`
+62 -> 63. Adding ~60 lines pushed parse.kel past the lexer's 196608-byte source cap, so it was raised to
+245760 across lexer.kel + four host drivers + `compiler/src/{main,selfhost}.rs`. Test
+`self_host_compiles_array_of_struct_equality`. Green (all six increments): `selfhost_codegen` (104),
+`selfhost_parse`+`selfhost_pipeline` (9), clippy `--tests --all-features -D warnings`, fmt, compiler
+subproject builds. NEXT follow-up: array-of-enum, enum-in-struct, 2+-level nesting; variable-amount
+shifts. See `REVERSE_PROMPT.md` for the authoritative session-27 handoff.
 
 **Playground/runtime (2026-07-09, session 23). PRIVATE-DATA `.data`-SECTION LOAD-TIME INITIALIZATION landed on `v0.2.3`.** Reported from the browser playground: the "Counter (loop + private data)" example faulted with `Op::CheckedAdd got Int and Unit` because a private scalar slot read before its first write observed the `Unit` sentinel. Private data is now script-initialized at load, the assembler `.data`-section model, invisible to the host. `DataLayout` gained `private_init: Vec<ConstValue>` (private-slot order); the compiler bakes each scalar private slot's `= literal` initializer or the type's zero (`Word`→0, `Byte`→0, `bool`→false, `Fixed`→0, `Float`→0.0), zero-fills scalar arrays element-wise, and leaves composite/`Text` slots `Unit` (write-before-read retained). Private scalar fields now admit an explicit `= literal`; `shared` fields and composite private fields still reject one. Both VM constructors (owned `Module` via `construct`, zero-copy via `view_bytes_zero_copy`) write the baked values into the persistent region; they persist across RESET and are not re-applied. Additive, no `BYTECODE_VERSION` bump per the operator's locked design; the golden fixture grew 308→316 bytes (one empty `ArchivedVec` in `None`-carrying modules). 17 new `tests/persistent_data.rs` tests including the exact Counter driven across a RESET (iter 1 reads the zero start → yields 5, iter 2 accumulates → 8). Docs updated: `LANGUAGE_DESIGN.md`, `GRAMMAR.md`, `WIRE_FORMAT.md`. Full gate green (default, signatures, all-features; clippy `--tests --all-features -D warnings`; fmt); wasm playground crate compiles against the updated core. Deferred: composite private slots (need arena flat-packing at construction).
 
