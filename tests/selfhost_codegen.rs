@@ -1877,8 +1877,9 @@ fn self_compile_codegen_atomic_functions() {
     // 61 with `push_int_const` (the deferred process-time int Const work item for the `lsr` mask);
     // 62 with `push_byte_shift` for Byte-operand shifts (promote-operate-truncate); 63 with
     // `push_array_of_struct_eq` for array-of-struct equality (`[P; N] == [P; N]`); 64 with
-    // `push_array_of_enum_eq` for array-of-enum equality (`[E; N] == [E; N]`).
-    const EXPECTED_SELF_COMPILE: usize = 64;
+    // `push_array_of_enum_eq` for array-of-enum equality (`[E; N] == [E; N]`); 65 with `push_bnot`
+    // for the unary bitwise-NOT operator (`bnot a` = `a bxor -1`).
+    const EXPECTED_SELF_COMPILE: usize = 65;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -6984,4 +6985,21 @@ fn self_host_compiles_boolean_xor() {
     assert_self_host_byte_identical("fn f(a: bool, b: bool, c: bool) -> bool { a xor b xor c }");
     assert_self_host_byte_identical("fn f(a: bool, b: bool) -> bool { not (a xor b) }");
     assert_self_host_byte_identical("fn f(a: bool, b: bool) -> bool { a != b }");
+}
+
+/// The unary bitwise-NOT operator `bnot` (Word) self-compiles byte-identically. `bnot a` lowers to
+/// `a bxor -1` (GetLocal, Const(-1), BitXor). It is the first operator added past the FULL 6-bit
+/// record-kind space, using the split record/node-kind pattern (the reconstruct `k == 36` precedent):
+/// the lexer tokenizes `bnot` to the last free low Tok (11); parse pushes it as a unary prefix
+/// (OpCode::Bnot = 30) and `emit_op` yields RECORD kind 48 (free in the < 64 record space -- it is
+/// StructEq's node kind, a separate array); reconstruct maps record 48 -> NODE kind 65 (node kinds
+/// live in the un-packed forest array, so may exceed 63); codegen `push_bnot` emits the lowering with
+/// the `-1` DEFERRED via push_int_const. Byte `bnot` (promote-operate-truncate) is a follow-up.
+#[test]
+fn self_host_compiles_word_bnot() {
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { bnot a }");
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { bnot (a + 1) }");
+    // Precedence: `bnot` (10) binds tighter than `band` (6), so this is `(bnot a) band b`.
+    assert_self_host_byte_identical("fn f(a: Word, b: Word) -> Word { bnot a band b }");
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { bnot bnot a }");
 }

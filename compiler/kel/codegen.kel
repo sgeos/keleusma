@@ -773,6 +773,15 @@ fn push_not(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
+// Bnot (node kind 65): unary bitwise NOT, lowered to `a bxor -1`. Emission: the operand, Const(-1),
+// BitXor. The -1 is a DEFERRED int (push_int_const), interned at emission (its own pool entry, before
+// nothing since the operand emits first). The node carries its single operand in `lhs`.
+fn push_bnot(p: Word) -> Word {
+    push_emit(wire.bitxor);
+    push_int_const(0 - 1);
+    push_visit(ast.lhs[p])
+}
+
 // Cast (kind 26): a `Byte as Word` widening. Emit the operand ops then ByteToWord.
 // lhs = operand.
 fn push_cast(p: Word) -> Word {
@@ -1922,6 +1931,7 @@ fn walk_step() -> Word {
             4 => push_if(payload),
             5 => push_letin(payload),
             6 => push_not(payload),
+            65 => push_bnot(payload),
             7 => push_call(payload),
             8 => push_andalso(payload),
             9 => push_orelse(payload),

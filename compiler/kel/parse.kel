@@ -108,6 +108,9 @@ enum Tok {
     // The eager boolean `xor` (another free low slot). It lowers exactly like `!=` (`CmpNe`) on the two
     // bool operands, so `opcode_of` maps it straight to `NotEq` -- no new opcode or node kind needed.
     Xor = 18,
+    // `bnot` (bitwise NOT), a unary prefix operator taking the last free low Tok slot (11, unused in the
+    // token vocabulary). It lowers to `a bxor -1`; see `OpCode::Bnot` and `push_bnot`.
+    Bnot = 11,
 }
 
 // The node-record kinds the body walk yields (a subset of body.kel's `enum Node`).
@@ -284,6 +287,9 @@ enum OpCode {
     Shl = 27,
     Shr = 28,
     ShrL = 29,
+    // `bnot` (unary bitwise NOT). Lowered to `a bxor -1` by codegen `push_bnot`; a unary prefix like
+    // Not/Neg. emit_op yields it as record kind 48 (free as a record; reconstruct maps 48 -> node 65).
+    Bnot = 30,
 }
 
 // The merged parser state.
@@ -1804,6 +1810,7 @@ fn prec_of(op: Word) -> Word {
     match op {
         OpCode::Neg() => 10,
         OpCode::Not() => 10,
+        OpCode::Bnot() => 10,
         OpCode::Paren() => 0,
         OpCode::IndexMark() => 0,
         OpCode::YieldMark() => 0,
@@ -2377,6 +2384,8 @@ fn emit_op(op: Word) -> Word {
         match op {
             OpCode::Neg() => Node::Neg() as Word,
             OpCode::Not() => Node::Not() as Word,
+            // `bnot` yields record kind 48 (free in the record space); reconstruct maps it to node 65.
+            OpCode::Bnot() => 48,
             OpCode::Andalso() => Node::Andalso() as Word,
             OpCode::Orelse() => Node::Orelse() as Word,
             OpCode::YieldMark() => Node::YieldExpr() as Word,
@@ -2660,6 +2669,13 @@ fn step_op(k: Word) -> Word {
         ops.expect_operand = 1;
         0
     } else {
+    if k == Tok::Bnot() as Word {
+        // `bnot` is a unary prefix operator like `not`: push its OpCode and await the operand.
+        ops.opstack[ops.opsp] = OpCode::Bnot() as Word;
+        ops.opsp = ops.opsp + 1;
+        ops.expect_operand = 1;
+        0
+    } else {
     if k == Tok::Minus() as Word andalso ops.expect_operand == 1 {
         ops.opstack[ops.opsp] = OpCode::Neg() as Word;
         ops.opsp = ops.opsp + 1;
@@ -2676,7 +2692,7 @@ fn step_op(k: Word) -> Word {
         } else {
             0
         }
-    } } } } } } } }
+    } } } } } } } } }
 }
 
 // The conditional tokens `{`, `}`, `if`, `else`. A `{` after a condition drains it
