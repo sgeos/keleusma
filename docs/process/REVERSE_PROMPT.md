@@ -25,6 +25,41 @@ node/record kind (blocked by the full space) OR intricate nested-machinery surge
 `and`/`or`, enum-in-struct, 2+-level nesting. Freeing record-kind space (or a build-record + high node
 kind indirection like array-of-enum used) is the prerequisite for the operator gaps.
 
+**CONSOLIDATED + NEW BRANCH (2026-07-22).** The 14-increment language-surface phase (85th-98th) was
+merged into `v0.2.3` (fast-forward, `7a5167f..7c9713c`) after a GREEN comprehensive release gate
+(`scripts/release-gate.sh`: full feature matrix + cargo doc + md-links). `feat-selfhost-language-surface`
+was pruned (local + remote); a fresh `feat-selfhost-nested-eq` branch was cut from `v0.2.3` for the
+nested-machinery phase.
+
+**TUPLE-OF-STRUCT IMPLEMENTATION STARTING POINT (code-level, investigated 2026-07-22).** The first
+nested target. Concrete findings from reading the code:
+- `tupledefs` is `private data` (no host-driver lockstep to add a field).
+- PREREQUISITE (build first): `step_tuple_type` (parse.kel, the `ps.tts == 1` tuple-param element
+  parser) currently mis-types a STRUCT tuple element as scalar Int -- it sets
+  `tup_ekind = scalar_kind_of(v)` which returns 0 for a struct; only `tup_eoffset` and the
+  `type_byte_size(v)` advance are correct. Add a `tup_estruct: [Word; 256]` array to `tupledefs`,
+  and in `step_tuple_type` (and the array-of-tuple element parser at `ps.arr == 3`) detect a struct
+  element (scan `structdefs.sd_name`) and record `tup_estruct[base+ei] = struct_index + 1`. This is a
+  near-no-op for existing code IF no current test uses a tuple-with-struct-element (verify: the tested
+  tuples are all-scalar, e.g. `(Word,Word,Word)`), so it should stay byte-identical -- a safe first
+  commit.
+- Then DETECTION: a `tuple_eq_kind` analog (like `struct_eq_kind`) that classifies a tuple with a
+  composite element -> route `emit_op` to a tuple-container nested path.
+- Then STREAMING: `struct_eq_nested_start` + `structeq_nested_next` are hard-coded to struct containers
+  (read `structdefs.sd_fstart/sd_fcount/sd_farraylen/sd_fstruct/sd_ftuple/sd_foffset/sd_fkind/sd_fsize`).
+  Add an `is_tuple_container` flag and a parallel tupledefs traversal: a scalar tuple element ->
+  StructEqNestedField (tup_eoffset/tup_ekind); a struct tuple element (`tup_estruct > 0`) -> StructEqNested
+  extract (variant Struct 2) then the struct's sub-fields from `sd_fstart[tup_estruct-1]`.
+- Then BUILD/RECONSTRUCT: carry `is_tuple_container` on the StructEqNestedBuild record -> the
+  StructEqNestedNode.
+- Then CODEGEN (nearly solved): `push_struct_eq_nested` swaps ONLY the TOP-LEVEL accessor on
+  `is_tuple_container` -- scalar field `GetField` -> `GetTupleField`, nested extract
+  `getfieldnested` -> `gettuplefieldnested` (same FlatNested variant); the INNER loop over the struct
+  element stays `GetField`. Reference lowering confirmed: `[(P, W)]` extracts P via
+  `GetTupleField(FlatNested{Struct})`, inner loop uses `GetField`, scalar W via `GetTupleField(Flat)`.
+Guard every step with the existing nested-struct self-compile tests (82nd-84th increments) as the
+blast-radius check; commit only when green; revert to `7c9713c` if it does not converge.
+
 **NESTED-MACHINERY FRONTIER ASSESSMENT (substantiated by reading the code, 2026-07-22).** After the
 ninety-eighth increment, I scouted the three remaining nested-composite-equality gaps
 (tuple-of-struct, enum-in-struct, 2+-level) to find a bounded increment and found NONE -- all require
