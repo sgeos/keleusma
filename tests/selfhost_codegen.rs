@@ -1874,8 +1874,9 @@ fn self_compile_codegen_atomic_functions() {
     // `push_array_eq` for array equality; 59 with `push_struct_eq_nested` for nested-composite
     // struct equality; 60 with `push_bool` (the deferred process-time bool Const work item that
     // lets enum equality intern its result Consts at emission time, for literal-operand enum eq);
-    // 61 with `push_int_const` (the deferred process-time int Const work item for the `lsr` mask).
-    const EXPECTED_SELF_COMPILE: usize = 61;
+    // 61 with `push_int_const` (the deferred process-time int Const work item for the `lsr` mask);
+    // 62 with `push_byte_shift` for Byte-operand shifts (promote-operate-truncate).
+    const EXPECTED_SELF_COMPILE: usize = 62;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -6765,6 +6766,23 @@ fn self_host_compiles_const_lsr() {
     // Regression: the other shifts still lower to single ops.
     assert_self_host_byte_identical("fn f(a: Word) -> Word { a asr 2 }");
     assert_self_host_byte_identical("fn f(a: Word) -> Word { a lsl 3 }");
+}
+
+/// Byte-operand shifts with a CONSTANT amount self-compile byte-identically (mirroring the Word
+/// shifts, the byte analogue of `push_byte_binop`): the value widens (`ByteToWord`), shifts at word
+/// width, and the result truncates (`WordToByte`); the shift amount stays a plain `Const`, not
+/// widened. `lsl`/`asl` -> `Shl`, `asr` -> `Shr`, `lsr` -> `Shr` + the sign-bit mask. Detection keys
+/// on the LEFT operand's Byte flag alone (the amount is not a Byte, so the both-Byte `byte_op_kind`
+/// does not apply); parse emits a `ByteShift` node (kind 60) that codegen `push_byte_shift` lowers.
+#[test]
+fn self_host_compiles_byte_shifts() {
+    assert_self_host_byte_identical("fn f(a: Byte) -> Byte { a lsl 1 }");
+    assert_self_host_byte_identical("fn f(a: Byte) -> Byte { a asl 2 }");
+    assert_self_host_byte_identical("fn f(a: Byte) -> Byte { a asr 1 }");
+    assert_self_host_byte_identical("fn f(a: Byte) -> Byte { a lsr 1 }");
+    assert_self_host_byte_identical("fn f(a: Byte) -> Byte { a lsr 3 }");
+    // The result is a Byte, so it chains with a following Byte bitwise op.
+    assert_self_host_byte_identical("fn f(a: Byte) -> Byte { a lsr 1 band 7 }");
 }
 
 /// Word shift operators self-compile byte-identically: `lsl`/`asl` lower to `Shl`, `asr` to `Shr`

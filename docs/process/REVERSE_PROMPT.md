@@ -10,8 +10,24 @@ AI to Human communication channel.
 
 **Date**: 2026-07-21 (session 27)
 
-**THIS SESSION (eighty-eighth increment): constant-amount `lsr` now self-compiles, completing the
-shift family.** After the operator chose "clean surface increment" (over the riskier let-bound-to-value
+**THIS SESSION (eighty-ninth increment): Byte-operand shifts now self-compile.** A gap sweep found the
+self-host handled NO Byte shifts (asr/lsl/asr/lsr all diverged), so this completes shifts for the Byte
+type (the byte analogue of the 79th's Word shifts and the 88th's Word `lsr`). A Byte shift is
+promote-operate-truncate: the value widens (`ByteToWord`), shifts at word width, and the result
+truncates (`WordToByte`); the shift amount stays a plain `Const` (not widened -- it is a count, not a
+Byte). Detection keys on the LEFT operand's Byte flag ALONE (`op_lbyte`), since the amount is not a Byte
+so the both-Byte `byte_op_kind` does not apply -- added as a new arm in `emit_op` before the
+`byte_op_kind` check, emitting a new `Node::ByteShift` (kind 60). `reconstruct.kel`'s `is_binary` gained
+60 (a two-child node); `codegen.kel`'s new `push_byte_shift` lowers it (`lsl`/`asl` -> Shl, `asr` -> Shr,
+`lsr` -> Shr + the sign-bit mask, reusing the 88th's overflow-free mask and `push_int_const` deferred
+interning). `EXPECTED_SELF_COMPILE` 61 -> 62. Constant amount only (variable-amount Byte shift, like the
+Word case, is not lowered). Test `self_host_compiles_byte_shifts`. Four files changed:
+`compiler/kel/{parse,reconstruct,codegen}.kel`, `tests/selfhost_codegen.rs`. Green: `selfhost_codegen`
+(103, all stage self-compiles), `selfhost_parse`+`selfhost_pipeline` (9), fmt, clippy `--tests
+--all-features -D warnings`.
+
+**PRIOR THIS SESSION (eighty-eighth increment): constant-amount `lsr` now self-compiles, completing the
+Word shift family.** After the operator chose "clean surface increment" (over the riskier let-bound-to-value
 enum eq), a gap sweep showed the composite-eq gaps all need recursion/composite machinery, so `lsr`
 (the shift family's missing member; the 79th did `lsl`/`asl`/`asr`) was the self-contained pick. Unlike
 `asr` (a single `Shr`), `lsr` lowers to `Shr` then `band ((1 << (64 - k)) - 1)` (clearing the

@@ -193,6 +193,10 @@ enum Node {
     StructEqNestedEnd = 57,
     StructEqNestedBuild = 58,
     StructEqNestedNode = 59,
+    // A shift on a Byte operand (`byte lsl/asl/asr/lsr <const>`): promote-operate-truncate. Carries
+    // the shift OpCode (Shl/Shr/ShrL) in `arg`; codegen `push_byte_shift` widens the value, shifts,
+    // masks for `lsr`, and truncates. A binary node (value, shift amount).
+    ByteShift = 60,
     // An array literal `[a, b, c]`: emits the element ops then NewComposite(Flat{Array, count,
     // byte_size}). Like a Call/StructInit, its elements ride the call_args side array.
     ArrayLit = 17,
@@ -2178,6 +2182,13 @@ fn emit_op(op: Word) -> Word {
             struct_eq_start(op)
         }
     } else {
+    if ops.op_lbyte[ops.opsp] == 1 andalso (op == OpCode::Shl() as Word orelse op == OpCode::Shr() as Word orelse op == OpCode::ShrL() as Word) {
+        // A shift on a BYTE left operand: promote-operate-truncate (a Byte result). The shift amount
+        // (the right operand) is not a Byte, so `byte_op_kind` (which needs BOTH operands Byte) does
+        // not catch it; the left-operand Byte flag alone selects the byte-shift lowering.
+        ps.last_byte = 1;
+        Node::ByteShift() as Word + op * 64
+    } else {
     let bk = byte_op_kind(op);
     if bk == 1 {
         ps.last_byte = 1;
@@ -2196,7 +2207,7 @@ fn emit_op(op: Word) -> Word {
             OpCode::YieldMark() => Node::YieldExpr() as Word,
             _ => Node::BinOp() as Word + op * 64,
         }
-    } } } } } }
+    } } } } } } }
 }
 
 fn opcode_of(k: Word) -> Word {
