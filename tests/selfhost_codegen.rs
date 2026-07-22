@@ -6951,3 +6951,23 @@ fn self_host_compiles_array_of_enum_equality() {
         "enum E { A, B }\nfn f(a: [E; 2], b: [E; 2]) -> bool { a == b }\nfn g(a: [E; 2], b: [E; 2]) -> bool { a != b }",
     );
 }
+
+/// Variable-amount `lsr` (a runtime shift count) self-compiles byte-identically, completing the shift
+/// family (the 88th did the constant amount). Unlike a constant amount, the mask `(1 << (64 - k)) - 1`
+/// is computed at run time, so the value and amount spill to two fresh temps (allocated at
+/// `param_count + let_count`) and the lowering branches on `k == 0` (identity) else emits the runtime
+/// mask. Codegen-only: `push_binop`'s ShrL arm branches on whether the rhs is a Literal (constant) or
+/// not (variable). The mask constants (0, 1, 64) defer through `push_int_const` so they intern in
+/// emission order, matching the reference even when the amount is a compound expression (`a lsr (k + 1)`,
+/// whose `1` interns before the k==0 test's `0`).
+#[test]
+fn self_host_compiles_variable_lsr() {
+    assert_self_host_byte_identical("fn f(a: Word, k: Word) -> Word { a lsr k }");
+    assert_self_host_byte_identical("fn f(a: Word, k: Word) -> Word { let x = a + 1; x lsr k }");
+    assert_self_host_byte_identical("fn f(a: Word, k: Word) -> Word { a lsr (k + 1) }");
+    // Regression: the constant amount still takes the mask-fold path; the other variable shifts stay
+    // single ops.
+    assert_self_host_byte_identical("fn f(a: Word, k: Word) -> Word { a lsr 2 }");
+    assert_self_host_byte_identical("fn f(a: Word, k: Word) -> Word { a lsl k }");
+    assert_self_host_byte_identical("fn f(a: Word, k: Word) -> Word { a asr k }");
+}
