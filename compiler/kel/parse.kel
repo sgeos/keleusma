@@ -925,6 +925,11 @@ private data tupledefs {
     tup_ecount: [Word; 32],
     tup_eoffset: [Word; 256],
     tup_ekind: [Word; 256],
+    // Per tuple element, 0 if the element is a scalar, else the element STRUCT's declaration index + 1
+    // (the struct byte size still rides `type_byte_size` into the running offset). Enables tuple-of-
+    // struct equality: a tuple element's struct type is otherwise lost (a struct element is typed as
+    // scalar kind 0 by `scalar_kind_of`, keeping only its size). Nothing reads it until that lowering.
+    tup_estruct: [Word; 256],
     tup_ecursor: Word,
 }
 
@@ -1350,6 +1355,15 @@ fn step_tuple_type(k: Word, v: Word) -> Word {
         let ei = tupledefs.tup_ecount[li];
         tupledefs.tup_eoffset[base + ei] = ps.tts_off;
         tupledefs.tup_ekind[base + ei] = scalar_kind_of(v);
+        // A struct-typed element records its declaration index + 1 (for tuple-of-struct equality); a
+        // scalar element leaves it 0. The kind above stays `scalar_kind_of` (0 for a struct) and the
+        // offset advance uses the struct's byte size, unchanged.
+        tupledefs.tup_estruct[base + ei] = 0;
+        for i in 0..structdefs.sd_count limit 64 {
+            if structdefs.sd_name[i] == v {
+                tupledefs.tup_estruct[base + ei] = i + 1;
+            }
+        }
         tupledefs.tup_ecount[li] = ei + 1;
         ps.tts_off = ps.tts_off + type_byte_size(v);
         0
