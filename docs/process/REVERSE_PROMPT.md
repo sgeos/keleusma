@@ -25,8 +25,28 @@ node/record kind (blocked by the full space) OR intricate nested-machinery surge
 `and`/`or`, enum-in-struct, 2+-level nesting. Freeing record-kind space (or a build-record + high node
 kind indirection like array-of-enum used) is the prerequisite for the operator gaps.
 
-**THIS SESSION (ninety-fifth increment): Byte `bnot` now self-compiles, completing the `bnot` operator
-(and the bitwise family band/bor/bxor/bnot).** A Byte `bnot` is promote-operate-truncate: ByteToWord,
+**THIS SESSION (ninety-sixth increment): array-of-TUPLE equality `[(..); N] == [(..); N]` now
+self-compiles.** Pivoted here after finding eager `and`/`or` BLOCKED by a second structural wall: the
+6-bit Tok space (0..61, 62/63 EOF/PENDING sentinels) is now FULL -- the only "free" slot 4 is the
+lexer's `when`/arrow/unknown catch-all -- so `and`/`or` (needing two new tokens) require token
+reclamation, real infrastructure. Array-of-tuple needs NO new token: it is the array-of-struct lowering
+(90th) with a TUPLE element (GetIndex(FlatNested Tuple) extract + GetTupleField inner over the
+`tupledefs` layout), and the struct-eq drain already supports tuples via `sq_istuple`. Implemented by
+GENERALIZING the array-of-struct path with an `is_tuple` bit rather than duplicating it: parse tracks a
+whole `[(..); N]` value (`last_array_tuple`/`op_larray_tuple`, with the tuple byte size packed into the
+marker since `tupledefs` has no size-by-index), `array_of_tuple_eq_start` runs the struct-eq drain with
+`sq_istuple = 1`, that flag rides the ArrayOfStructEqBuild as its is_tuple bit (bit 43, arrsize bounded
+to 8 bits below it), reconstruct decodes it into match_parts, and codegen `push_array_of_struct_eq`
+picks the accessor (GetTupleField/GetField) and nested variant (Tuple 0 / Struct 2) from it. NO new
+node/record kind, NO new codegen function (EXPECTED_SELF_COMPILE stays 66). Byte-identical on the first
+probe. Test `self_host_compiles_array_of_tuple_equality` (2/3-element, Byte field, `!=`, N=2/3, plus
+array-of-struct regression). Three files changed: `compiler/kel/{parse,reconstruct,codegen}.kel`,
+`tests/selfhost_codegen.rs`. Green: `selfhost_codegen` (110), stage self-compiles, atomic count, fmt,
+clippy `-D warnings`. NEXT: eager `and`/`or` (needs Tok reclamation); enum-in-struct / 2+-level nesting
+(nested-machinery surgery); array-of-enum-payload or tuple-of-struct (composite-in-composite, deeper).
+
+**PRIOR THIS SESSION (ninety-fifth increment): Byte `bnot` now self-compiles, completing the `bnot`
+operator (and the bitwise family band/bor/bxor/bnot).** A Byte `bnot` is promote-operate-truncate: ByteToWord,
 Const(-1), BitXor, WordToByte. Detection keys on the operand's Byte flag (`last_byte`, still set at
 emit_op before the reset since `bnot` is unary): `emit_op` yields RECORD kind 51 -> NODE kind 66
 (`push_byte_bnot`), reusing the proven split record/node-kind pattern. `EXPECTED_SELF_COMPILE` 65 -> 66.

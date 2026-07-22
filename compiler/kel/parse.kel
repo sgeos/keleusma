@@ -363,6 +363,11 @@ private data ps {
     // enum-element array equality (`[E; N] == [E; N]`, a per-element GetIndex(FlatNested Enum) + inner
     // variant-dispatch loop).
     last_array_enum: Word,
+    // 0 if the most recently emitted operand is not a whole array-of-TUPLE, else `(tuple_layout_index
+    // + 1) + tuple_byte_size * 65536` (the size packed in because tupledefs has no size-by-index).
+    // Selects the tuple-element array equality (`[(..); N] == [(..); N]`, the array-of-struct loop with
+    // a GetTupleField accessor and a FlatNested Tuple extract).
+    last_array_tuple: Word,
     // The struct-array length captured when the `sa_` postfix is armed (the element count `N`),
     // needed by the struct-element array equality to unroll the per-element comparisons.
     sa_len: Word,
@@ -486,6 +491,8 @@ private data ops {
     // Parallel to `op_larray`: the LEFT operand's array-of-enum element enum name + 1 (0 otherwise),
     // so `emit_op(Eq)` can select the enum-element loop.
     op_larray_enum: [Word; 64],
+    // Parallel to `op_larray`: the LEFT operand's packed array-of-tuple marker (0 otherwise).
+    op_larray_tuple: [Word; 64],
     opsp: Word,
     pending_op: Word,
     pending_prec: Word,
@@ -966,6 +973,7 @@ fn step_local(v: Word) -> Word {
     ps.last_array = 0;
     ps.last_array_struct = 0;
     ps.last_array_enum = 0;
+    ps.last_array_tuple = 0;
     // This operand is a whole enum value only if it resolves to an enum-typed parameter (set below).
     ps.last_enum = 0;
     for i in 0..stmt.let_count limit 64 {
@@ -1099,6 +1107,7 @@ fn resolve_plain_ident(v: Word) -> Word {
                         ps.sa_tuple = ps.parray_tuple[i] - 1;
                         ps.sa_size = ps.parray_size[i];
                         ps.sa_variant = 0;
+                        ps.sa_len = ps.parray_len[i];
                     }
                     if ps.pnames[i] == v andalso ps.parray_arr[i] > 0 {
                         ps.found_flag = 1;
@@ -1991,6 +2000,46 @@ fn array_of_struct_eq_start(op: Word) -> Word {
     Node::StructEqField() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fkind[fidx] * 65536) * 64
 }
 
+// Begin a `[(..); N] == [(..); N]` (array-of-tuple) equality: identical to `array_of_struct_eq_start`
+// but the element is a TUPLE (`sq_istuple = 1`, layout from `tupledefs`, byte size unpacked from the
+// marker) so the drain emits tuple field records and codegen uses GetTupleField + a FlatNested Tuple
+// extract. The `sq_istuple` flag rides the ArrayOfStructEqBuild as its `is_tuple` bit.
+fn array_of_tuple_eq_start(op: Word) -> Word {
+    let idx = (ops.op_larray_tuple[ops.opsp] % 65536) - 1;
+    let tsize = ops.op_larray_tuple[ops.opsp] / 65536;
+    let count = ops.op_larray[ops.opsp] / 1024;
+    stmt.sq_ne = 0;
+    if op == OpCode::NotEq() as Word {
+        stmt.sq_ne = 1;
+    }
+    stmt.sq_istuple = 1;
+    ps.last_byte = 0;
+    ps.last_struct = 0;
+    ps.last_tuple = 0;
+    ps.last_array = 0;
+    ps.last_array_struct = 0;
+    ps.last_array_tuple = 0;
+    stmt.pending_ctuple = 0;
+    stmt.pending_cstruct = 0;
+    stmt.pending_carray = 0;
+    stmt.pending_carray_struct = 0;
+    stmt.pending_cenum = 0;
+    stmt.sq_tb = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + 1;
+    stmt.sq_ta = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + 1;
+    stmt.slot_count = stmt.slot_count + 2 * count;
+    stmt.structeq_emit = 1;
+    stmt.sq_struct = idx;
+    stmt.sq_count = tupledefs.tup_ecount[idx];
+    stmt.sq_field = 1;
+    stmt.sq_arr = 1;
+    stmt.sq_arrcount = count;
+    stmt.sq_arrsize = tsize;
+    let fidx = tupledefs.tup_estart[idx];
+    Node::StructEqField() as Word + (tupledefs.tup_eoffset[fidx] + tupledefs.tup_ekind[fidx] * 65536) * 64
+}
+
 // Emit the next StructEqField (one per field, in declaration order) then, once all fields are
 // emitted, the StructEqBuild that reconstruct turns into the StructEq node. Reads the field layout
 // from `tupledefs` for a tuple comparison (`sq_istuple`) or `structdefs` for a struct.
@@ -2008,10 +2057,12 @@ fn step_structeq_emit() -> Word {
     } else {
         stmt.structeq_emit = 0;
         if stmt.sq_arr == 1 {
-            // An array-of-struct drain: close with ArrayOfStructEqBuild carrying the element field
-            // count, the array element count, the `!=` flag, and the element struct byte size.
+            // An array-of-struct (or -tuple) drain: close with ArrayOfStructEqBuild carrying the
+            // element field count, the array element count, the `!=` flag, the element byte size, and
+            // the `is_tuple` bit (`sq_istuple`, set by `array_of_tuple_eq_start`). arrsize is bounded
+            // to 8 bits (35..42) so is_tuple sits at bit 43.
             stmt.sq_arr = 0;
-            Node::ArrayOfStructEqBuild() as Word + (stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_count * 1048576 + stmt.sq_arrcount * 67108864 + stmt.sq_ne * 17179869184 + stmt.sq_arrsize * 34359738368) * 64
+            Node::ArrayOfStructEqBuild() as Word + (stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_count * 1048576 + stmt.sq_arrcount * 67108864 + stmt.sq_ne * 17179869184 + stmt.sq_arrsize * 34359738368 + stmt.sq_istuple * 8796093022208) * 64
         } else {
             Node::StructEqBuild() as Word + (stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_count * 1048576 + stmt.sq_ne * 1073741824 + stmt.sq_istuple * 2147483648) * 64
         }
@@ -2344,6 +2395,9 @@ fn emit_op(op: Word) -> Word {
     if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_larray_struct[ops.opsp] > 0 andalso ps.last_array_struct > 0 {
         array_of_struct_eq_start(op)
     } else {
+    if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_larray_tuple[ops.opsp] > 0 andalso ps.last_array_tuple > 0 {
+        array_of_tuple_eq_start(op)
+    } else {
     if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_larray_enum[ops.opsp] > 0 andalso ps.last_array_enum > 0 andalso enum_eq_supported(ops.op_larray_enum[ops.opsp] - 1) == 1 {
         array_of_enum_eq_start(op)
     } else {
@@ -2398,7 +2452,7 @@ fn emit_op(op: Word) -> Word {
             OpCode::YieldMark() => Node::YieldExpr() as Word,
             _ => Node::BinOp() as Word + op * 64,
         }
-    } } } } } } } } } }
+    } } } } } } } } } } }
 }
 
 fn opcode_of(k: Word) -> Word {
@@ -2446,6 +2500,7 @@ fn step_resolving() -> Word {
         ops.op_larray[ops.opsp] = ps.last_array;
         ops.op_larray_struct[ops.opsp] = ps.last_array_struct;
         ops.op_larray_enum[ops.opsp] = ps.last_array_enum;
+        ops.op_larray_tuple[ops.opsp] = ps.last_array_tuple;
         ops.opsp = ops.opsp + 1;
         ops.resolving = 0;
         0
@@ -3239,6 +3294,10 @@ fn step_structarrayaccess(k: Word, v: Word) -> Word {
         if ps.sa_variant == 3 andalso ps.sa_len > 0 {
             ps.last_array = ps.sa_len * 1024 + 1;
             ps.last_array_enum = ps.sa_enum;
+        }
+        if ps.sa_variant == 0 andalso ps.sa_len > 0 {
+            ps.last_array = ps.sa_len * 1024 + 1;
+            ps.last_array_tuple = (ps.sa_tuple + 1) + ps.sa_size * 65536;
         }
         ps.cursor = ps.cursor - 1;
         0

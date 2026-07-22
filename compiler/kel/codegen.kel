@@ -1518,6 +1518,19 @@ fn push_array_of_struct_eq(p: Word) -> Word {
     let arrsize = ast.match_parts[base + 3];
     let fieldcount = ast.match_parts[base + 4];
     let is_ne = ast.match_parts[base + 5 + fieldcount * 2];
+    // is_tuple selects the accessor: a tuple element reads fields with GetTupleField and extracts with
+    // a FlatNested Tuple (variant 0); a struct element uses GetField and FlatNested Struct (variant 2).
+    let is_tuple = ast.match_parts[base + 5 + fieldcount * 2 + 1];
+    let acc = if is_tuple == 1 {
+        wire.gettuplefield
+    } else {
+        wire.getfield
+    };
+    let nvar = if is_tuple == 1 {
+        0
+    } else {
+        2
+    };
     st.let_count = st.let_count + 2 + 2 * arrcount;
     for e in 0..arrcount limit 64 {
         st.eq_vidx[e] = intern_int(e);
@@ -1555,19 +1568,19 @@ fn push_array_of_struct_eq(p: Word) -> Word {
             push_emit(wire.mif);
             push_emit(wire.lnot);
             push_emit(wire.cmpeq);
-            push_emit(wire.getfield + (off + kind * 65536) * wire.radix);
+            push_emit(acc + (off + kind * 65536) * wire.radix);
             push_emit(wire.getlocal + inner_b * wire.radix);
-            push_emit(wire.getfield + (off + kind * 65536) * wire.radix);
+            push_emit(acc + (off + kind * 65536) * wire.radix);
             push_emit(wire.getlocal + inner_a * wire.radix);
         }
         push_emit(wire.mloop);
-        // Extract a[e] then b[e] as structs into the inner temp pair.
+        // Extract a[e] then b[e] as the composite element into the inner temp pair.
         push_emit(wire.setlocal + inner_a * wire.radix);
         push_emit(wire.setlocal + inner_b * wire.radix);
-        push_emit(wire.getindexnested + (arrsize + 2 * 65536) * wire.radix);
+        push_emit(wire.getindexnested + (arrsize + nvar * 65536) * wire.radix);
         push_emit(wire.konst + st.eq_vidx[e] * wire.radix);
         push_emit(wire.getlocal + tb * wire.radix);
-        push_emit(wire.getindexnested + (arrsize + 2 * 65536) * wire.radix);
+        push_emit(wire.getindexnested + (arrsize + nvar * 65536) * wire.radix);
         push_emit(wire.konst + st.eq_vidx[e] * wire.radix);
         push_emit(wire.getlocal + ta * wire.radix);
     }

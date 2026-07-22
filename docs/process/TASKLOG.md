@@ -88,10 +88,15 @@ tipped `step()` past the 1024-node cap). `EXPECTED_SELF_COMPILE` 64 -> 65. Test
 family. Two reconstruct.kel node-cap gotchas fixed: extracted the bnot handlers into `step_bnot`, and
 replaced `step()`'s long assembly-set `orelse` chain with a RANGE check `k >= 40 andalso k <= 63`
 (identical routing, far fewer nodes, headroom for future operators). `EXPECTED_SELF_COMPILE` 65 -> 66.
-Test `self_host_compiles_byte_bnot`. Green (all eleven increments): `selfhost_codegen` (109),
+Test `self_host_compiles_byte_bnot`. The ninety-sixth increment then landed ARRAY-OF-TUPLE equality
+(`[(..); N] == [(..); N]`): the array-of-struct lowering with a tuple element, implemented by
+generalizing the shared array-of-struct build node + codegen with an `is_tuple` bit (no new
+token/node/record kind, no new codegen function). Found eager `and`/`or` blocked by a second wall -- the
+Tok space (0..61) is now FULL -- needing token reclamation. `EXPECTED_SELF_COMPILE` stays 66. Test
+`self_host_compiles_array_of_tuple_equality`. Green (all twelve increments): `selfhost_codegen` (110),
 `selfhost_parse`+`selfhost_pipeline` (9), clippy `--tests --all-features -D warnings`, fmt. NEXT
-follow-up: eager `and`/`or` (split-kind + branch, now tractable); enum-in-struct + 2+-level nesting. See
-`REVERSE_PROMPT.md` for the authoritative session-27 handoff.
+follow-up: eager `and`/`or` (Tok reclamation); enum-in-struct + 2+-level nesting (nested-machinery
+surgery). See `REVERSE_PROMPT.md` for the authoritative session-27 handoff.
 
 **Playground/runtime (2026-07-09, session 23). PRIVATE-DATA `.data`-SECTION LOAD-TIME INITIALIZATION landed on `v0.2.3`.** Reported from the browser playground: the "Counter (loop + private data)" example faulted with `Op::CheckedAdd got Int and Unit` because a private scalar slot read before its first write observed the `Unit` sentinel. Private data is now script-initialized at load, the assembler `.data`-section model, invisible to the host. `DataLayout` gained `private_init: Vec<ConstValue>` (private-slot order); the compiler bakes each scalar private slot's `= literal` initializer or the type's zero (`Word`→0, `Byte`→0, `bool`→false, `Fixed`→0, `Float`→0.0), zero-fills scalar arrays element-wise, and leaves composite/`Text` slots `Unit` (write-before-read retained). Private scalar fields now admit an explicit `= literal`; `shared` fields and composite private fields still reject one. Both VM constructors (owned `Module` via `construct`, zero-copy via `view_bytes_zero_copy`) write the baked values into the persistent region; they persist across RESET and are not re-applied. Additive, no `BYTECODE_VERSION` bump per the operator's locked design; the golden fixture grew 308→316 bytes (one empty `ArchivedVec` in `None`-carrying modules). 17 new `tests/persistent_data.rs` tests including the exact Counter driven across a RESET (iter 1 reads the zero start → yields 5, iter 2 accumulates → 8). Docs updated: `LANGUAGE_DESIGN.md`, `GRAMMAR.md`, `WIRE_FORMAT.md`. Full gate green (default, signatures, all-features; clippy `--tests --all-features -D warnings`; fmt); wasm playground crate compiles against the updated core. Deferred: composite private slots (need arena flat-packing at construction).
 

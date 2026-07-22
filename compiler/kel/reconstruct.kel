@@ -394,7 +394,9 @@ fn build_array_of_struct_eq(a: Word) -> Word {
     let fieldcount = (a / 1048576) % 64;
     let arrcount = (a / 67108864) % 256;
     let is_ne = (a / 17179869184) % 2;
-    let arrsize = a / 34359738368;
+    let arrsize = (a / 34359738368) % 256;
+    // `is_tuple` (bit 43): the element is a tuple (GetTupleField + FlatNested Tuple) not a struct.
+    let is_tuple = a / 8796093022208;
     let base = rs.mp;
     io.match_parts[base] = ta;
     io.match_parts[base + 1] = tb;
@@ -407,7 +409,8 @@ fn build_array_of_struct_eq(a: Word) -> Word {
         io.match_parts[base + 5 + i * 2 + 1] = packed / 65536;
     }
     io.match_parts[base + 5 + fieldcount * 2] = is_ne;
-    rs.mp = base + 5 + fieldcount * 2 + 1;
+    io.match_parts[base + 5 + fieldcount * 2 + 1] = is_tuple;
+    rs.mp = base + 5 + fieldcount * 2 + 2;
     rs.sqcount = 0;
     let rhs = pop();
     let lhs = pop();
