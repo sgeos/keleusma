@@ -2371,6 +2371,13 @@ fn emit_op(op: Word) -> Word {
         ps.last_byte = 1;
         Node::ByteShift() as Word + op * 64
     } else {
+    if op == OpCode::Bnot() as Word andalso ps.last_byte == 1 {
+        // Byte `bnot`: the operand is a Byte (its byte-ness is still in `last_byte` here, before the
+        // reset below), so lower promote-operate-truncate. Yields record kind 51 (free as a record;
+        // reconstruct maps 51 -> node 66); the result is a Byte.
+        ps.last_byte = 1;
+        51
+    } else {
     let bk = byte_op_kind(op);
     if bk == 1 {
         ps.last_byte = 1;
@@ -2391,7 +2398,7 @@ fn emit_op(op: Word) -> Word {
             OpCode::YieldMark() => Node::YieldExpr() as Word,
             _ => Node::BinOp() as Word + op * 64,
         }
-    } } } } } } } } }
+    } } } } } } } } } }
 }
 
 fn opcode_of(k: Word) -> Word {
