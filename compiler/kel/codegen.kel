@@ -782,6 +782,17 @@ fn push_bnot(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
+// ByteBnot (node kind 66): Byte bitwise NOT, promote-operate-truncate. The operand is widened
+// (ByteToWord), XORed with -1, and truncated (WordToByte). Emission: operand, ByteToWord, Const(-1),
+// BitXor, WordToByte.
+fn push_byte_bnot(p: Word) -> Word {
+    push_emit(wire.wordtobyte);
+    push_emit(wire.bitxor);
+    push_int_const(0 - 1);
+    push_emit(wire.bytetoword);
+    push_visit(ast.lhs[p])
+}
+
 // Cast (kind 26): a `Byte as Word` widening. Emit the operand ops then ByteToWord.
 // lhs = operand.
 fn push_cast(p: Word) -> Word {
@@ -1932,6 +1943,7 @@ fn walk_step() -> Word {
             5 => push_letin(payload),
             6 => push_not(payload),
             65 => push_bnot(payload),
+            66 => push_byte_bnot(payload),
             7 => push_call(payload),
             8 => push_andalso(payload),
             9 => push_orelse(payload),

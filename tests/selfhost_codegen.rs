@@ -1878,8 +1878,9 @@ fn self_compile_codegen_atomic_functions() {
     // 62 with `push_byte_shift` for Byte-operand shifts (promote-operate-truncate); 63 with
     // `push_array_of_struct_eq` for array-of-struct equality (`[P; N] == [P; N]`); 64 with
     // `push_array_of_enum_eq` for array-of-enum equality (`[E; N] == [E; N]`); 65 with `push_bnot`
-    // for the unary bitwise-NOT operator (`bnot a` = `a bxor -1`).
-    const EXPECTED_SELF_COMPILE: usize = 65;
+    // for the unary bitwise-NOT operator (`bnot a` = `a bxor -1`); 66 with `push_byte_bnot` for the
+    // Byte-operand `bnot` (promote-operate-truncate).
+    const EXPECTED_SELF_COMPILE: usize = 66;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -7002,4 +7003,19 @@ fn self_host_compiles_word_bnot() {
     // Precedence: `bnot` (10) binds tighter than `band` (6), so this is `(bnot a) band b`.
     assert_self_host_byte_identical("fn f(a: Word, b: Word) -> Word { bnot a band b }");
     assert_self_host_byte_identical("fn f(a: Word) -> Word { bnot bnot a }");
+}
+
+/// Byte-operand `bnot` self-compiles byte-identically, completing the bitwise-NOT operator (Word done
+/// in the 94th). A Byte `bnot` is promote-operate-truncate: ByteToWord, Const(-1), BitXor, WordToByte.
+/// Detection keys on the operand's Byte flag (`last_byte`, still set at emit_op before the reset,
+/// since `bnot` is unary), yielding RECORD kind 51 -> NODE kind 66 (`push_byte_bnot`), reusing the
+/// split record/node-kind pattern.
+#[test]
+fn self_host_compiles_byte_bnot() {
+    assert_self_host_byte_identical("fn f(a: Byte) -> Byte { bnot a }");
+    // Precedence: `bnot` (10) binds tighter than `band` (6): `(bnot a) band b`, both Byte.
+    assert_self_host_byte_identical("fn f(a: Byte, b: Byte) -> Byte { bnot a band b }");
+    assert_self_host_byte_identical("fn f(a: Byte) -> Byte { bnot bnot a }");
+    // Word regression (still record 48 -> node 65).
+    assert_self_host_byte_identical("fn f(a: Word) -> Word { bnot a }");
 }

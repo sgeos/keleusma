@@ -25,8 +25,26 @@ node/record kind (blocked by the full space) OR intricate nested-machinery surge
 `and`/`or`, enum-in-struct, 2+-level nesting. Freeing record-kind space (or a build-record + high node
 kind indirection like array-of-enum used) is the prerequisite for the operator gaps.
 
-**THIS SESSION (ninety-fourth increment): `bnot` (Word) now self-compiles -- the first operator added
-past the FULL record-kind space, establishing the split record/node-kind pattern.** Implemented from the
+**THIS SESSION (ninety-fifth increment): Byte `bnot` now self-compiles, completing the `bnot` operator
+(and the bitwise family band/bor/bxor/bnot).** A Byte `bnot` is promote-operate-truncate: ByteToWord,
+Const(-1), BitXor, WordToByte. Detection keys on the operand's Byte flag (`last_byte`, still set at
+emit_op before the reset since `bnot` is unary): `emit_op` yields RECORD kind 51 -> NODE kind 66
+(`push_byte_bnot`), reusing the proven split record/node-kind pattern. `EXPECTED_SELF_COMPILE` 65 -> 66.
+TWO reconstruct.kel node-cap gotchas resolved (both `IndexOutOfBounds(1024,1024)`): (1) the bnot record
+handlers were extracted into a `step_bnot` helper (record 48->65, 51->66) to keep `step_assembly` under
+the 1024-node forest cap; (2) `step()`'s long assembly-set `orelse` chain (k==40 orelse ... orelse
+k==63) was replaced with a RANGE check `k >= 40 andalso k <= 63` -- the assembly records occupy that
+contiguous range, the other values in it are caught earlier (43/44/45/60 binary/unary) or never arrive
+as records (54/59/62 node-only), so it routes identically while slashing `step()`'s node count and
+giving headroom for future operators. Byte-identical on the first probe (once the node-cap was fixed).
+Test `self_host_compiles_byte_bnot`. Four files changed:
+`compiler/kel/{parse,reconstruct,codegen}.kel`, `tests/selfhost_codegen.rs`. Green: `selfhost_codegen`
+(109), `selfhost_parse`+`selfhost_pipeline` (9), fmt, clippy `-D warnings`. NEXT: eager `and`/`or`
+(split-kind + spill + if/else branch -- the pattern + the freed node headroom make this tractable now);
+enum-in-struct / 2+-level nesting (nested-machinery surgery).
+
+**PRIOR THIS SESSION (ninety-fourth increment): `bnot` (Word) now self-compiles -- the first operator
+added past the FULL record-kind space, establishing the split record/node-kind pattern.** Implemented from the
 recipe below. `bnot a` = `a bxor -1` (`GetLocal, Const(-1), BitXor`). Lexer tokenizes `bnot` to the last
 free low Tok (11); parse pushes it as a unary prefix (`OpCode::Bnot = 30`, `prec_of => 10`) and
 `emit_op` yields RECORD kind 48 (free in the < 64 record space -- it is StructEq's node kind, a separate
