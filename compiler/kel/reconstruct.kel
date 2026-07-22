@@ -796,8 +796,16 @@ fn step_assembly(k: Word, a: Word) -> Word {
         // direct build (no field drain): lay [ta, tb, M, arrsize, N, innerkind, is_ne] and build.
         build_array_of_array_eq(a)
     } else {
+    if k == 59 {
+        // Eager `and`/`or`: record kind 59 (free as a record) -> node 68, `a` = is_or (0/1). A BINARY
+        // node: pop the two operands. codegen `push_andor` lowers it (spill left, eval right, then a
+        // value-If with condition = left, else-value false for `and` / Not(left) + true for `or`).
+        let rhs = pop();
+        let lhs = pop();
+        emit(68, a, lhs, rhs)
+    } else {
         0
-    } } } } } } } } } } } } } } } } }
+    } } } } } } } } } } } } } } } } } }
 }
 
 // Record 48 (Word `bnot`) -> node 65 (`push_bnot`, `a bxor -1`); record 51 (Byte `bnot`) -> node 66

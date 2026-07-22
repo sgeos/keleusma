@@ -36,6 +36,13 @@ shared data toks {
     word_id: Word,
     byte_id: Word,
     bool_id: Word,
+    // The interned ids of the eager boolean operators `and`/`or`, set by the host (like the other ids
+    // above). They are APPENDED here (after `bool_id`) so existing shared-slot offsets do not shift.
+    // Zero when unset; recognition is guarded on `> 0` so an unset id never misfires. The eager
+    // `and`/`or` are lexed as identifiers (the Tok space is full) and recognized by id in operator
+    // position -- the `limit`/`require`/`word`/`byte`/`bool` pattern.
+    and_id: Word,
+    or_id: Word,
 }
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
@@ -290,6 +297,11 @@ enum OpCode {
     // `bnot` (unary bitwise NOT). Lowered to `a bxor -1` by codegen `push_bnot`; a unary prefix like
     // Not/Neg. emit_op yields it as record kind 48 (free as a record; reconstruct maps 48 -> node 65).
     Bnot = 30,
+    // The eager boolean operators. `a and b` = `if a then b else false`; `a or b` = `if a then true
+    // else b` -- both EAGER (b always evaluated), distinct from the short-circuit `andalso`/`orelse`.
+    // emit_op yields record kind 59 with arg = is_or (0 = and, 1 = or); reconstruct maps 59 -> node 68.
+    And = 31,
+    Or = 32,
 }
 
 // The merged parser state.
@@ -1856,6 +1868,13 @@ fn prec_of(op: Word) -> Word {
         OpCode::Bor() => 4,
         OpCode::Andalso() => 2,
         OpCode::Orelse() => 1,
+        // Eager `and`/`or` sit in the logical band (below comparison). The self-host's integer scale is
+        // coarser than the reference's logical binding powers (Or 2, And 4), so it preserves only the
+        // relative order And > Or (correct for `a or b and c` = `a or (b and c)`); a case mixing eager
+        // and/or with a comparison or bitwise at a finer level is not faithfully ordered (as with the
+        // `xor`-as-NotEq approximation). The bridged stage files use `andalso`/`orelse`, not these.
+        OpCode::And() => 2,
+        OpCode::Or() => 1,
         _ => 3,
     }
 }
@@ -2503,6 +2522,10 @@ fn emit_op(op: Word) -> Word {
             OpCode::Not() => Node::Not() as Word,
             // `bnot` yields record kind 48 (free in the record space); reconstruct maps it to node 65.
             OpCode::Bnot() => 48,
+            // Eager `and`/`or`: record kind 59 (free as a record) with arg = is_or (0/1); reconstruct
+            // maps 59 -> node 68. `59 + is_or * 64` packs the arg into the record.
+            OpCode::And() => 59,
+            OpCode::Or() => 59 + 64,
             OpCode::Andalso() => Node::Andalso() as Word,
             OpCode::Orelse() => Node::Orelse() as Word,
             OpCode::YieldMark() => Node::YieldExpr() as Word,
@@ -3132,7 +3155,25 @@ fn step_normal(k: Word, v: Word) -> Word {
         Node::StrLit() as Word + v * 64
     } else {
     if k == Tok::Ident() as Word {
-        step_ident(v)
+        // In OPERATOR position (`expect_operand == 0`), an identifier whose id matches the eager
+        // boolean keywords `and`/`or` (host-supplied, guarded `> 0` so an unset id never misfires) is
+        // that operator, not a variable. Push it like any binary operator (via the resolving path).
+        if ops.expect_operand == 0 andalso toks.and_id > 0 andalso v == toks.and_id {
+            ops.pending_op = OpCode::And() as Word;
+            ops.pending_prec = prec_of(OpCode::And() as Word);
+            ops.resolving = 1;
+            ops.expect_operand = 1;
+            0
+        } else {
+        if ops.expect_operand == 0 andalso toks.or_id > 0 andalso v == toks.or_id {
+            ops.pending_op = OpCode::Or() as Word;
+            ops.pending_prec = prec_of(OpCode::Or() as Word);
+            ops.resolving = 1;
+            ops.expect_operand = 1;
+            0
+        } else {
+            step_ident(v)
+        } }
     } else {
     if k == Tok::LParen() as Word {
         ops.opstack[ops.opsp] = OpCode::Paren() as Word;

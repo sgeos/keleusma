@@ -793,6 +793,31 @@ fn push_byte_bnot(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
+// Andor (node kind 68): eager boolean `and`/`or`. `args` = is_or (0 = and, 1 = or). Both spill the
+// left operand to a fresh temp t, evaluate the right (the then-value, left on the stack), then a
+// value-If tests the condition (t for `and`; Not(t) for `or`) with an empty then-branch (the right
+// value stays) and an else-branch `PopN(1); Const(elsebool)` (elsebool = false for `and`, true for
+// `or`). Emission: value(left), SetLocal(t), value(right), GetLocal(t), [Not], If, Else, PopN(1),
+// Const(elsebool), EndIf. The temp is allocated at visit time so an outer `and`/`or` gets the lower
+// slot. The else-value Const DEFERS via push_bool (interned in emission order).
+fn push_andor(p: Word) -> Word {
+    let is_or = ast.args[p];
+    let t = ast.param_count + st.let_count;
+    st.let_count = st.let_count + 1;
+    push_emit(wire.endif);
+    push_bool(is_or);
+    push_emit(wire.popn + 1 * wire.radix);
+    push_emit(wire.els);
+    push_emit(wire.iff);
+    if is_or == 1 {
+        push_emit(wire.lnot);
+    }
+    push_emit(wire.getlocal + t * wire.radix);
+    push_visit(ast.rhs[p]);
+    push_emit(wire.setlocal + t * wire.radix);
+    push_visit(ast.lhs[p])
+}
+
 // Cast (kind 26): a `Byte as Word` widening. Emit the operand ops then ByteToWord.
 // lhs = operand.
 fn push_cast(p: Word) -> Word {
@@ -2036,6 +2061,7 @@ fn walk_step() -> Word {
             6 => push_not(payload),
             65 => push_bnot(payload),
             66 => push_byte_bnot(payload),
+            68 => push_andor(payload),
             7 => push_call(payload),
             8 => push_andalso(payload),
             9 => push_orelse(payload),

@@ -98,12 +98,19 @@ equality (`[[T; N]; M] == [[T; N]; M]`), completing the array-of-X family (struc
 array-of-struct outer unroll with an inner scalar array-eq loop, emitting its build record directly
 (record 54 -> node 67 via the split-kind reuse, no field drain). Bug fixed: the GetIndex ScalarKind
 numbering (Word=3/Byte=2/Bool=1) differs from struct-field numbering, so element-size keyed on kind 3.
-`EXPECTED_SELF_COMPILE` 66 -> 67. Test `self_host_compiles_array_of_array_equality`. Green (all thirteen
-increments): `selfhost_codegen` (111), `selfhost_parse`+`selfhost_pipeline` (9), clippy
-`--tests --all-features -D warnings`, fmt. THREE structural walls mapped: record-kind space (cleared by
-split-kind), Tok space (full, blocks operator tokens), nested-machinery surgery. NEXT follow-up: eager
-`and`/`or` (ident-by-id + host-driver lockstep); enum-in-struct + 2+-level nesting. See
-`REVERSE_PROMPT.md` for the authoritative session-27 handoff.
+`EXPECTED_SELF_COMPILE` 66 -> 67. Test `self_host_compiles_array_of_array_equality`. The ninety-eighth
+increment then broke through the FULL Tok-space wall with eager boolean `and`/`or`: lexed as identifiers
+and recognized by interned id in operator position (the `limit`/`require` pattern), with `and_id`/`or_id`
+appended to the `toks` block (no offset shift) and set only in `selfhost_codegen.rs` (other drivers
+auto-size and default to 0, guarded by `> 0`). `OpCode::And=31`/`Or=32`; the Ident dispatch intercepts
+operator-position ids; `emit_op` -> record 59 (arg=is_or) -> binary node 68; codegen `push_andor` lowers
+the eager if/else. The core-parser-dispatch change was verified safe by all five stage self-compiles
+staying byte-identical. Precedence caveat (same as xor): the coarse integer scale preserves only And >
+Or, so mixed-precedence cases are not faithfully ordered. `EXPECTED_SELF_COMPILE` 67 -> 68. Test
+`self_host_compiles_eager_and_or`. Green (all fourteen increments): `selfhost_codegen` (112),
+`selfhost_parse`+`selfhost_pipeline` (9), clippy `--tests --all-features -D warnings`, fmt, compiler
+subproject builds. NEXT follow-up: nested-machinery surgery (enum-in-struct, 2+-level nesting,
+tuple-of-struct). See `REVERSE_PROMPT.md` for the authoritative session-27 handoff.
 
 **Playground/runtime (2026-07-09, session 23). PRIVATE-DATA `.data`-SECTION LOAD-TIME INITIALIZATION landed on `v0.2.3`.** Reported from the browser playground: the "Counter (loop + private data)" example faulted with `Op::CheckedAdd got Int and Unit` because a private scalar slot read before its first write observed the `Unit` sentinel. Private data is now script-initialized at load, the assembler `.data`-section model, invisible to the host. `DataLayout` gained `private_init: Vec<ConstValue>` (private-slot order); the compiler bakes each scalar private slot's `= literal` initializer or the type's zero (`Word`→0, `Byte`→0, `bool`→false, `Fixed`→0, `Float`→0.0), zero-fills scalar arrays element-wise, and leaves composite/`Text` slots `Unit` (write-before-read retained). Private scalar fields now admit an explicit `= literal`; `shared` fields and composite private fields still reject one. Both VM constructors (owned `Module` via `construct`, zero-copy via `view_bytes_zero_copy`) write the baked values into the persistent region; they persist across RESET and are not re-applied. Additive, no `BYTECODE_VERSION` bump per the operator's locked design; the golden fixture grew 308→316 bytes (one empty `ArchivedVec` in `None`-carrying modules). 17 new `tests/persistent_data.rs` tests including the exact Counter driven across a RESET (iter 1 reads the zero start → yields 5, iter 2 accumulates → 8). Docs updated: `LANGUAGE_DESIGN.md`, `GRAMMAR.md`, `WIRE_FORMAT.md`. Full gate green (default, signatures, all-features; clippy `--tests --all-features -D warnings`; fmt); wasm playground crate compiles against the updated core. Deferred: composite private slots (need arena flat-packing at construction).
 
