@@ -10,8 +10,23 @@ AI to Human communication channel.
 
 **Date**: 2026-07-21 (session 27)
 
-**THIS SESSION (ninety-second increment): variable-amount `lsr` now self-compiles, fully completing the
-shift family.** Pivoted here from enum-in-struct (which needs from-scratch enum-struct-field tracking
+**THIS SESSION (ninety-third increment): eager boolean `xor` now self-compiles.** A gap sweep found
+several remaining gaps but also a STRUCTURAL WALL: the 6-bit record-kind space (parse-yielded records,
+`kind + arg*64`, must be < 64) is FULL, so any new operator needing its own node/record kind (`bnot` =
+`a bxor -1`; eager `and`/`or` = spill + if/else branch) is blocked without intricate workarounds. The
+clean exception is `xor`: its reference lowering is exactly `CmpNe`, identical to `!=` (`NotEq`), so it
+needs NO new kind -- the lexer tokenizes `xor` to a free low Tok slot (18) and `opcode_of` maps
+`Tok::Xor` -> `OpCode::NotEq`. Two files changed: `compiler/kel/{lexer,parse}.kel`. No codegen change,
+no new function (EXPECTED_SELF_COMPILE stays 64). Caveat: `xor` inherits `NotEq`'s (comparison)
+precedence, correct for `xor`-only chains but potentially wrong mixed with comparisons at a different
+level (untested, unusual). Test `self_host_compiles_boolean_xor`. Green: `selfhost_codegen` (107),
+`selfhost_parse`+`selfhost_pipeline` (9), fmt, clippy `-D warnings`. NEXT candidates all need a new
+node/record kind (blocked by the full space) OR intricate nested-machinery surgery: `bnot`, eager
+`and`/`or`, enum-in-struct, 2+-level nesting. Freeing record-kind space (or a build-record + high node
+kind indirection like array-of-enum used) is the prerequisite for the operator gaps.
+
+**PRIOR THIS SESSION (ninety-second increment): variable-amount `lsr` now self-compiles, fully
+completing the shift family.** Pivoted here from enum-in-struct (which needs from-scratch enum-struct-field tracking
 plus deep surgery on the intricate nested struct-eq layout -- the riskiest remaining piece) to this
 clean, CODEGEN-ONLY increment. `push_binop`'s ShrL arm (opc 29) now branches on whether the rhs is a
 Literal: a Literal takes the constant mask-fold path (88th); otherwise the variable path spills the

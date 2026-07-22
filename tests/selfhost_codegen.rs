@@ -6971,3 +6971,17 @@ fn self_host_compiles_variable_lsr() {
     assert_self_host_byte_identical("fn f(a: Word, k: Word) -> Word { a lsl k }");
     assert_self_host_byte_identical("fn f(a: Word, k: Word) -> Word { a asr k }");
 }
+
+/// The eager boolean `xor` self-compiles byte-identically. Its reference lowering is exactly `CmpNe`
+/// -- the same as `!=` (`NotEq`) -- so the lexer tokenizes `xor` to a free low Tok slot (18) and
+/// `opcode_of` maps it straight to `OpCode::NotEq`; no new opcode, node, or codegen path is needed
+/// (which matters because the 6-bit record-kind space is full). `bnot` and eager `and`/`or` are NOT
+/// added here: they need their own multi-op lowerings and hence new node kinds, blocked by the full
+/// record space.
+#[test]
+fn self_host_compiles_boolean_xor() {
+    assert_self_host_byte_identical("fn f(a: bool, b: bool) -> bool { a xor b }");
+    assert_self_host_byte_identical("fn f(a: bool, b: bool, c: bool) -> bool { a xor b xor c }");
+    assert_self_host_byte_identical("fn f(a: bool, b: bool) -> bool { not (a xor b) }");
+    assert_self_host_byte_identical("fn f(a: bool, b: bool) -> bool { a != b }");
+}
