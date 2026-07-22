@@ -677,6 +677,34 @@ fn push_byte_arith(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
+// ByteShift (kind 60): a shift on a Byte operand, promote-operate-truncate. The value is widened
+// (ByteToWord), shifted at word width, and the result truncated (WordToByte); the shift amount (rhs)
+// is a plain Const, NOT widened (it is a shift count, not a Byte value). args = the OpCode
+// (Shl 27 / Shr 28 / ShrL 29); lhs the value, rhs the constant amount. `lsr` (ShrL) additionally
+// masks off the sign-extended high bits, exactly as the Word case does (see `push_binop` opc 29),
+// with the same overflow-free mask and DEFERRED int interning.
+fn push_byte_shift(p: Word) -> Word {
+    let opc = ast.args[p];
+    push_emit(wire.wordtobyte);
+    if opc == 29 {
+        let k = ast.args[ast.rhs[p]];
+        let mask = ((1 lsl (63 - k)) - 1) * 2 + 1;
+        push_emit(wire.bitand);
+        push_int_const(mask);
+        push_emit(wire.shr);
+    } else {
+        let opw = if opc == 28 {
+            wire.shr
+        } else {
+            wire.shl
+        };
+        push_emit(opw);
+    }
+    push_visit(ast.rhs[p]);
+    push_emit(wire.bytetoword);
+    push_visit(ast.lhs[p])
+}
+
 // If-expression (kind 4): emit the condition ops, an If marker, the then-branch
 // ops, an Else marker, the else-branch ops, then EndIf. The If/Else targets are
 // backpatched in `emit_op`. Node: args = cond, lhs = then, rhs = else. Push in
@@ -1671,6 +1699,7 @@ fn walk_step() -> Word {
             3 => push_binop(payload),
             44 => push_byte_binop(payload),
             45 => push_byte_arith(payload),
+            60 => push_byte_shift(payload),
             4 => push_if(payload),
             5 => push_letin(payload),
             6 => push_not(payload),
