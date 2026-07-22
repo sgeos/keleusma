@@ -105,6 +105,9 @@ enum Tok {
     // `lsr` takes a free low slot (20, a retired keyword's), not 62/63 -- those are the lexer's
     // EOF and PENDING sentinels, and the token is packed as `tok + payload * 64` so it must be < 64.
     Lsr = 20,
+    // The eager boolean `xor` (another free low slot). It lowers exactly like `!=` (`CmpNe`) on the two
+    // bool operands, so `opcode_of` maps it straight to `NotEq` -- no new opcode or node kind needed.
+    Xor = 18,
 }
 
 // The node-record kinds the body walk yields (a subset of body.kel's `enum Node`).
@@ -2391,6 +2394,8 @@ fn opcode_of(k: Word) -> Word {
         Tok::Percent() => OpCode::Mod() as Word,
         Tok::EqEq() => OpCode::Eq() as Word,
         Tok::NotEq() => OpCode::NotEq() as Word,
+        // Eager boolean `xor` lowers identically to `!=` (`CmpNe`) on its two bool operands.
+        Tok::Xor() => OpCode::NotEq() as Word,
         Tok::Lt() => OpCode::Lt() as Word,
         Tok::Gt() => OpCode::Gt() as Word,
         Tok::LtEq() => OpCode::LtEq() as Word,
