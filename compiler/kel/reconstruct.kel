@@ -417,6 +417,32 @@ fn build_array_of_struct_eq(a: Word) -> Word {
     emit(62, base, lhs, rhs)
 }
 
+// ArrayOfArrayEqBuild (record 54): `a` packs ta, tb, M (outer count), arrsize (inner array byte size),
+// N (inner element count), innerkind, is_ne. Lay match_parts [ta, tb, M, arrsize, N, innerkind, is_ne]
+// and build the ArrayOfArrayEq node (kind 67). codegen `push_array_of_array_eq` unrolls the outer
+// GetIndex(FlatNested Array) extract and the inner scalar array-eq loop.
+fn build_array_of_array_eq(a: Word) -> Word {
+    let ta = a % 1024;
+    let tb = (a / 1024) % 1024;
+    let m = (a / 1048576) % 256;
+    let arrsize = (a / 268435456) % 256;
+    let innercount = (a / 68719476736) % 256;
+    let innerkind = (a / 17592186044416) % 8;
+    let is_ne = (a / 140737488355328) % 2;
+    let base = rs.mp;
+    io.match_parts[base] = ta;
+    io.match_parts[base + 1] = tb;
+    io.match_parts[base + 2] = m;
+    io.match_parts[base + 3] = arrsize;
+    io.match_parts[base + 4] = innercount;
+    io.match_parts[base + 5] = innerkind;
+    io.match_parts[base + 6] = is_ne;
+    rs.mp = base + 7;
+    let rhs = pop();
+    let lhs = pop();
+    emit(67, base, lhs, rhs)
+}
+
 // StructEqNestedBuild: finalize the streamed nested layout into match_parts as
 // [ta, tb, topcount, <seb tagged field layout>, is_ne] and build the StructEqNestedNode (kind 59).
 fn build_struct_eq_nested(a: Word) -> Word {
@@ -765,8 +791,13 @@ fn step_assembly(k: Word, a: Word) -> Word {
         // in a dedicated helper to keep both `step()` and `step_assembly` under the 1024-node cap.
         step_bnot(k, a)
     } else {
+    if k == 54 {
+        // ArrayOfArrayEqBuild: record kind 54 (a node value reused as a free record) -> node 67. A
+        // direct build (no field drain): lay [ta, tb, M, arrsize, N, innerkind, is_ne] and build.
+        build_array_of_array_eq(a)
+    } else {
         0
-    } } } } } } } } } } } } } } } }
+    } } } } } } } } } } } } } } } } }
 }
 
 // Record 48 (Word `bnot`) -> node 65 (`push_bnot`, `a bxor -1`); record 51 (Byte `bnot`) -> node 66
