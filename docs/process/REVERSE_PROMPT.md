@@ -31,6 +31,30 @@ merged into `v0.2.3` (fast-forward, `7a5167f..7c9713c`) after a GREEN comprehens
 was pruned (local + remote); a fresh `feat-selfhost-nested-eq` branch was cut from `v0.2.3` for the
 nested-machinery phase.
 
+**TUPLE-OF-STRUCT PROGRESS (2026-07-22, branch `feat-selfhost-nested-eq`).** Step 1 DONE and committed
+(`8faec09`): `tup_estruct: [Word; 256]` added to the private `tupledefs` block and populated in
+`step_tuple_type` with the element struct's decl index + 1 (a near-no-op; all self-compiles stay
+byte-identical). Remaining steps refined by further code reading:
+- A FOURTH structural wall was found: the codegen WIRE-OP space (1..63, packed as `op + operand*64`) is
+  FULL, so `GetTupleField(FlatNested)` (needed for the nested struct-element extract) gets NO new op
+  slot. SOLUTION: REUSE `gettuplefield` (op 53) with a nested OPERAND form, and distinguish flat vs
+  nested in the driver `decode_op` (tests/selfhost_codegen.rs ~line 850) by operand magnitude -- the
+  nested form packs `offset + size*65536 + variant*2^32` (variant bits above 2^32), which the flat form
+  (`offset + kind*65536`) never reaches. So `decode_op` arm 53 branches: `operand >= 2^32` (or has size
+  bits) -> `Op::GetTupleField(TupleField::FlatNested{offset,size,variant})`, else the existing
+  `TupleField::Flat`. (Verify `TupleField::FlatNested` exists in bytecode.rs; the struct analog
+  `StructField::FlatNested` is at decode arm 48.)
+- KIND NUMBERING (a known trap): a top-level tuple element uses `tup_ekind` = `scalar_kind_of` (Word=3);
+  the inner struct field uses `sd_fkind` (Word=0). Each is correct for its accessor (GetTupleField vs
+  GetField) -- do NOT cross them.
+- Remaining: `tuple_eq_kind` detector (composite tuple element via `tup_estruct > 0`) + `emit_op`
+  routing; `is_tuple_container` threaded through `struct_eq_nested_start`/`structeq_nested_next` se_phase
+  0 (read the container field from `tup_eoffset`/`tup_ekind`/`tup_estruct` instead of `sd_*`; se_phase 1
+  sub-field streaming is unchanged since the nested struct P is always `sd_*`); carry the flag on the
+  StructEqNestedBuild record -> node; codegen `push_struct_eq_nested` swaps ONLY the top-level accessor
+  (scalar `GetField`->`GetTupleField` op 53; nested extract `getfieldnested` op 48 -> `gettuplefield` op
+  53 with the nested operand form).
+
 **TUPLE-OF-STRUCT IMPLEMENTATION STARTING POINT (code-level, investigated 2026-07-22).** The first
 nested target. Concrete findings from reading the code:
 - `tupledefs` is `private data` (no host-driver lockstep to add a field).
