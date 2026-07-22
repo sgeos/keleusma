@@ -1879,8 +1879,9 @@ fn self_compile_codegen_atomic_functions() {
     // `push_array_of_struct_eq` for array-of-struct equality (`[P; N] == [P; N]`); 64 with
     // `push_array_of_enum_eq` for array-of-enum equality (`[E; N] == [E; N]`); 65 with `push_bnot`
     // for the unary bitwise-NOT operator (`bnot a` = `a bxor -1`); 66 with `push_byte_bnot` for the
-    // Byte-operand `bnot` (promote-operate-truncate).
-    const EXPECTED_SELF_COMPILE: usize = 66;
+    // Byte-operand `bnot` (promote-operate-truncate); 67 with `push_array_of_array_eq` for
+    // array-of-array equality (`[[T; N]; M] == [[T; N]; M]`).
+    const EXPECTED_SELF_COMPILE: usize = 67;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -7052,5 +7053,38 @@ fn f(a: [P; 2], b: [P; 2]) -> bool { a == b }",
     assert_self_host_byte_identical(
         "struct P { x: Word, y: Byte }
 fn f(a: [P; 2], b: [P; 2]) -> bool { a != b }",
+    );
+}
+
+/// Array-of-array equality (`[[T; N]; M] == [[T; N]; M]`, and `!=`) self-compiles byte-identically,
+/// completing the array-of-X family (X = struct/enum/tuple/array). It is the array-of-struct per-element
+/// outer unroll (extract a[e]/b[e] as inner arrays via GetIndex(FlatNested Array)) with an inner SCALAR
+/// array-eq loop (per element j: GetLocal, Const(j), GetIndex(Flat innerkind), CmpEq). Unlike the
+/// struct/tuple cases the inner needs no field drain, so it emits its build record directly, using the
+/// proven split-kind reuse: record kind 54 (the ArrayEq node value, free as a record) -> node 67. The
+/// inner element count is derived as inner_byte_size / element_size, where the GetIndex ScalarKind
+/// numbering has Word = 3 (8 bytes) and Byte/Bool = 2/1 (1 byte).
+#[test]
+fn self_host_compiles_array_of_array_equality() {
+    assert_self_host_byte_identical(
+        "fn f(a: [[Word; 2]; 2], b: [[Word; 2]; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: [[Word; 2]; 2], b: [[Word; 2]; 2]) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: [[Word; 3]; 2], b: [[Word; 3]; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: [[Byte; 2]; 2], b: [[Byte; 2]; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: [[Word; 2]; 3], b: [[Word; 2]; 3]) -> bool { a == b }",
+    );
+    // scalar array-eq + array-of-struct regression (shared machinery).
+    assert_self_host_byte_identical("fn f(a: [Word; 3], b: [Word; 3]) -> bool { a == b }");
+    assert_self_host_byte_identical(
+        "struct P { x: Word }
+fn f(a: [P; 2], b: [P; 2]) -> bool { a == b }",
     );
 }

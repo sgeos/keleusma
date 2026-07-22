@@ -25,7 +25,29 @@ node/record kind (blocked by the full space) OR intricate nested-machinery surge
 `and`/`or`, enum-in-struct, 2+-level nesting. Freeing record-kind space (or a build-record + high node
 kind indirection like array-of-enum used) is the prerequisite for the operator gaps.
 
-**THIS SESSION (ninety-sixth increment): array-of-TUPLE equality `[(..); N] == [(..); N]` now
+**THIS SESSION (ninety-seventh increment): array-of-ARRAY equality `[[T; N]; M] == [[T; N]; M]` now
+self-compiles, completing the array-of-X family (X = struct/enum/tuple/array).** Pivoted here after
+confirming eager `and`/`or` need TWO new tokens but the Tok space (0..61) is FULL -- and further that
+`and`/`or` via the ident-by-id pattern (like `limit`/`require`/`word`) would need host-driver lockstep
+across 5+ driver contexts (each sets the ids via `set_shared`); real infrastructure. Array-of-array
+needs no new token and reuses my array machinery. It is the array-of-struct outer per-element unroll
+(extract a[e]/b[e] via GetIndex(FlatNested Array)) with an inner SCALAR array-eq loop; unlike
+struct/tuple it needs NO field drain, so `array_of_array_eq_start` emits its build record DIRECTLY (like
+`array_eq_start`) via the proven split-kind reuse: RECORD kind 54 (the ArrayEq node value, free as a
+record; step_assembly routes it) -> NODE kind 67. Parse tracks a whole `[[T;N];M]` value
+(`last_array_arr`/`op_larray_arr`, inner kind + inner byte size packed); the inner element count is
+derived as inner_byte_size / element_size. ONE bug hit: the GetIndex ScalarKind numbering (`scalar_kind_of`)
+has Word = 3 / Byte = 2 / Bool = 1 (NOT the struct-field numbering Word = 0), so the element-size
+computation had to key on kind 3 = 8 bytes. `EXPECTED_SELF_COMPILE` 66 -> 67 (`push_array_of_array_eq`).
+Test `self_host_compiles_array_of_array_equality`. Three files changed:
+`compiler/kel/{parse,reconstruct,codegen}.kel`, `tests/selfhost_codegen.rs`. Green: `selfhost_codegen`
+(111), stage self-compiles, atomic count, fmt, clippy `-D warnings`. THREE structural walls are now
+mapped: (1) record-kind/Node-enum space (1..63) FULL -- cleared by the split-kind pattern; (2) Tok space
+(0..61) FULL -- blocks new operator tokens, needs reclamation or the ident-by-id + host-lockstep path;
+(3) nested struct-eq machinery surgery for enum-in-struct / 2+-level. NEXT: eager `and`/`or` (ident-by-id
++ host lockstep, the recommended path); enum-in-struct / 2+-level nesting.
+
+**PRIOR THIS SESSION (ninety-sixth increment): array-of-TUPLE equality `[(..); N] == [(..); N]` now
 self-compiles.** Pivoted here after finding eager `and`/`or` BLOCKED by a second structural wall: the
 6-bit Tok space (0..61, 62/63 EOF/PENDING sentinels) is now FULL -- the only "free" slot 4 is the
 lexer's `when`/arrow/unknown catch-all -- so `and`/`or` (needing two new tokens) require token

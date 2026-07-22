@@ -1591,6 +1591,85 @@ fn push_array_of_struct_eq(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
+// ArrayOfArrayEq (node kind 67): `[[T; N]; M] == [[T; N]; M]` (or `!=`). The array-of-struct per-element
+// outer unroll with an inner SCALAR array-eq loop: extract a[e]/b[e] as inner arrays (GetIndex
+// (FlatNested Array), variant 1) into the inner pair, compare their N elements (per element:
+// GetLocal, Const(j), GetIndex(Flat innerkind), CmpEq), break outer false on element inequality; break
+// true after all. match_parts: [ta, tb, M, arrsize, N, innerkind, is_ne]. Pool: the element index
+// constants 0..max(M,N)-1 (shared by both loops), then false, true.
+fn push_array_of_array_eq(p: Word) -> Word {
+    let base = ast.args[p];
+    let ta = ast.match_parts[base];
+    let tb = ast.match_parts[base + 1];
+    let m = ast.match_parts[base + 2];
+    let arrsize = ast.match_parts[base + 3];
+    let innercount = ast.match_parts[base + 4];
+    let innerkind = ast.match_parts[base + 5];
+    let is_ne = ast.match_parts[base + 6];
+    st.let_count = st.let_count + 2 + 2 * m;
+    let maxc = if m > innercount {
+        m
+    } else {
+        innercount
+    };
+    for c in 0..maxc limit 256 {
+        st.eq_vidx[c] = intern_int(c);
+    }
+    let false_idx = intern_bool(0);
+    let true_idx = intern_bool(1);
+    if is_ne == 1 {
+        push_emit(wire.lnot);
+    }
+    push_emit(wire.mendloop);
+    push_emit(wire.mbreak);
+    push_emit(wire.konst + true_idx * wire.radix);
+    for ej in 0..m limit 64 {
+        let e = m - 1 - ej;
+        let inner_b = ta + 1 + 2 * e;
+        let inner_a = ta + 2 + 2 * e;
+        // After the inner array-eq loop: negate; break OUTER false if this element compared unequal.
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_emit(wire.konst + false_idx * wire.radix);
+        push_emit(wire.mif);
+        push_emit(wire.lnot);
+        push_emit(wire.mendloop);
+        // Inner scalar array-eq loop over the extracted inner arrays: break true once all match.
+        push_emit(wire.mbreak);
+        push_emit(wire.konst + true_idx * wire.radix);
+        for jj in 0..innercount limit 256 {
+            let j = innercount - 1 - jj;
+            push_emit(wire.mendif);
+            push_emit(wire.mbreak);
+            push_emit(wire.konst + false_idx * wire.radix);
+            push_emit(wire.mif);
+            push_emit(wire.lnot);
+            push_emit(wire.cmpeq);
+            push_emit(wire.getindex + innerkind * wire.radix);
+            push_emit(wire.konst + st.eq_vidx[j] * wire.radix);
+            push_emit(wire.getlocal + inner_b * wire.radix);
+            push_emit(wire.getindex + innerkind * wire.radix);
+            push_emit(wire.konst + st.eq_vidx[j] * wire.radix);
+            push_emit(wire.getlocal + inner_a * wire.radix);
+        }
+        push_emit(wire.mloop);
+        // Extract a[e] then b[e] as inner arrays into the inner temp pair.
+        push_emit(wire.setlocal + inner_a * wire.radix);
+        push_emit(wire.setlocal + inner_b * wire.radix);
+        push_emit(wire.getindexnested + (arrsize + 1 * 65536) * wire.radix);
+        push_emit(wire.konst + st.eq_vidx[e] * wire.radix);
+        push_emit(wire.getlocal + tb * wire.radix);
+        push_emit(wire.getindexnested + (arrsize + 1 * 65536) * wire.radix);
+        push_emit(wire.konst + st.eq_vidx[e] * wire.radix);
+        push_emit(wire.getlocal + ta * wire.radix);
+    }
+    push_emit(wire.mloop);
+    push_emit(wire.setlocal + ta * wire.radix);
+    push_emit(wire.setlocal + tb * wire.radix);
+    push_visit(ast.rhs[p]);
+    push_visit(ast.lhs[p])
+}
+
 // ArrayOfEnumEq (kind 16): `[E; N] == [E; N]` (or `!=`). Composes `push_array_of_struct_eq`'s outer
 // per-element unroll with `push_enum_eq`'s inner variant-dispatch loop. match_parts:
 // [ta, tb, arrcount, arrsize, ename, vcount, per variant: vname, disc, fcount, fcount*(off, kind),
@@ -1989,6 +2068,7 @@ fn walk_step() -> Word {
             51 => push_enum_eq(payload),
             54 => push_array_eq(payload),
             62 => push_array_of_struct_eq(payload),
+            67 => push_array_of_array_eq(payload),
             64 => push_array_of_enum_eq(payload),
             59 => push_struct_eq_nested(payload),
             43 => push_arrindex_nested(payload),

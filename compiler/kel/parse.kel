@@ -368,6 +368,10 @@ private data ps {
     // Selects the tuple-element array equality (`[(..); N] == [(..); N]`, the array-of-struct loop with
     // a GetTupleField accessor and a FlatNested Tuple extract).
     last_array_tuple: Word,
+    // 0 if the most recently emitted operand is not a whole array-of-ARRAY (`[[T; N]; M]`), else
+    // `(inner_element_kind + 1) + inner_array_byte_size * 4096`. Selects the array-of-array equality
+    // (an outer per-element GetIndex(FlatNested Array) extract with an inner scalar array-eq loop).
+    last_array_arr: Word,
     // The struct-array length captured when the `sa_` postfix is armed (the element count `N`),
     // needed by the struct-element array equality to unroll the per-element comparisons.
     sa_len: Word,
@@ -493,6 +497,8 @@ private data ops {
     op_larray_enum: [Word; 64],
     // Parallel to `op_larray`: the LEFT operand's packed array-of-tuple marker (0 otherwise).
     op_larray_tuple: [Word; 64],
+    // Parallel to `op_larray`: the LEFT operand's packed array-of-array marker (0 otherwise).
+    op_larray_arr: [Word; 64],
     opsp: Word,
     pending_op: Word,
     pending_prec: Word,
@@ -974,6 +980,7 @@ fn step_local(v: Word) -> Word {
     ps.last_array_struct = 0;
     ps.last_array_enum = 0;
     ps.last_array_tuple = 0;
+    ps.last_array_arr = 0;
     // This operand is a whole enum value only if it resolves to an enum-typed parameter (set below).
     ps.last_enum = 0;
     for i in 0..stmt.let_count limit 64 {
@@ -1115,6 +1122,7 @@ fn resolve_plain_ident(v: Word) -> Word {
                         ps.sa_arrkind = ps.parray_arr[i] - 1;
                         ps.sa_size = ps.parray_size[i];
                         ps.sa_variant = 1;
+                        ps.sa_len = ps.parray_len[i];
                     }
                     if ps.pnames[i] == v andalso ps.parray_enum[i] > 0 {
                         ps.found_flag = 1;
@@ -2040,6 +2048,51 @@ fn array_of_tuple_eq_start(op: Word) -> Word {
     Node::StructEqField() as Word + (tupledefs.tup_eoffset[fidx] + tupledefs.tup_ekind[fidx] * 65536) * 64
 }
 
+// Begin a `[[T; N]; M] == [[T; N]; M]` (array-of-array) equality. Unlike the struct/tuple cases, the
+// inner is a scalar array-eq (no field drain), so this emits its build record DIRECTLY (like
+// `array_eq_start`). The record kind is 54 (the ArrayEq NODE value, unused as a RECORD -- the proven
+// split-kind reuse, as `bnot` reused 48); reconstruct maps record 54 -> node 67. Packs
+// [ta, tb, M, arrsize, N, innerkind, is_ne]: M the outer length, arrsize the inner array byte size
+// (the outer GetIndex(FlatNested Array) size), N the inner element count (= arrsize / element size),
+// innerkind the inner scalar kind. Two outer temps + 2*M inner temps.
+fn array_of_array_eq_start(op: Word) -> Word {
+    let marker = ops.op_larray_arr[ops.opsp];
+    let innerkind = (marker % 4096) - 1;
+    let arrsize = marker / 4096;
+    // The GetIndex ScalarKind numbering (`scalar_kind_of`): Word = 3 (8 bytes), Byte = 2 and Bool = 1
+    // (1 byte each). The inner element count is the inner array byte size divided by the element size.
+    let elemsize = if innerkind == 3 {
+        8
+    } else {
+        1
+    };
+    let innercount = arrsize / elemsize;
+    let m = ops.op_larray[ops.opsp] / 1024;
+    stmt.sq_ne = 0;
+    if op == OpCode::NotEq() as Word {
+        stmt.sq_ne = 1;
+    }
+    ps.last_byte = 0;
+    ps.last_struct = 0;
+    ps.last_tuple = 0;
+    ps.last_array = 0;
+    ps.last_array_struct = 0;
+    ps.last_array_tuple = 0;
+    ps.last_array_arr = 0;
+    stmt.pending_ctuple = 0;
+    stmt.pending_cstruct = 0;
+    stmt.pending_carray = 0;
+    stmt.pending_carray_struct = 0;
+    stmt.pending_cenum = 0;
+    let tb = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + 1;
+    let ta = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + 1;
+    stmt.slot_count = stmt.slot_count + 2 * m;
+    // Record kind 54 (a node value used as a free record kind), packed with the layout.
+    54 + (ta + tb * 1024 + m * 1048576 + arrsize * 268435456 + innercount * 68719476736 + innerkind * 17592186044416 + stmt.sq_ne * 140737488355328) * 64
+}
+
 // Emit the next StructEqField (one per field, in declaration order) then, once all fields are
 // emitted, the StructEqBuild that reconstruct turns into the StructEq node. Reads the field layout
 // from `tupledefs` for a tuple comparison (`sq_istuple`) or `structdefs` for a struct.
@@ -2398,6 +2451,9 @@ fn emit_op(op: Word) -> Word {
     if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_larray_tuple[ops.opsp] > 0 andalso ps.last_array_tuple > 0 {
         array_of_tuple_eq_start(op)
     } else {
+    if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_larray_arr[ops.opsp] > 0 andalso ps.last_array_arr > 0 {
+        array_of_array_eq_start(op)
+    } else {
     if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_larray_enum[ops.opsp] > 0 andalso ps.last_array_enum > 0 andalso enum_eq_supported(ops.op_larray_enum[ops.opsp] - 1) == 1 {
         array_of_enum_eq_start(op)
     } else {
@@ -2452,7 +2508,7 @@ fn emit_op(op: Word) -> Word {
             OpCode::YieldMark() => Node::YieldExpr() as Word,
             _ => Node::BinOp() as Word + op * 64,
         }
-    } } } } } } } } } } }
+    } } } } } } } } } } } }
 }
 
 fn opcode_of(k: Word) -> Word {
@@ -2501,6 +2557,7 @@ fn step_resolving() -> Word {
         ops.op_larray_struct[ops.opsp] = ps.last_array_struct;
         ops.op_larray_enum[ops.opsp] = ps.last_array_enum;
         ops.op_larray_tuple[ops.opsp] = ps.last_array_tuple;
+        ops.op_larray_arr[ops.opsp] = ps.last_array_arr;
         ops.opsp = ops.opsp + 1;
         ops.resolving = 0;
         0
@@ -3298,6 +3355,10 @@ fn step_structarrayaccess(k: Word, v: Word) -> Word {
         if ps.sa_variant == 0 andalso ps.sa_len > 0 {
             ps.last_array = ps.sa_len * 1024 + 1;
             ps.last_array_tuple = (ps.sa_tuple + 1) + ps.sa_size * 65536;
+        }
+        if ps.sa_variant == 1 andalso ps.sa_len > 0 {
+            ps.last_array = ps.sa_len * 1024 + 1;
+            ps.last_array_arr = (ps.sa_arrkind + 1) + ps.sa_size * 4096;
         }
         ps.cursor = ps.cursor - 1;
         0
