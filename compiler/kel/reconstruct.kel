@@ -315,6 +315,53 @@ fn build_enum_eq(a: Word) -> Word {
     emit(51, base, lhs, rhs)
 }
 
+// ArrayOfEnumEqBuild: mirrors `build_enum_eq` with the array element count and element byte size
+// prepended (compact 13-bit ename decode matching the parse packing). match_parts:
+// [ta, tb, arrcount, arrsize, ename, vcount, per variant: vname, disc, fcount, fcount*(off, kind),
+// is_ne]. Build the ArrayOfEnumEq node (kind 16).
+fn build_array_of_enum_eq(a: Word) -> Word {
+    let ta = a % 1024;
+    let tb = (a / 1024) % 1024;
+    let vcount = (a / 1048576) % 64;
+    let ename = (a / 67108864) % 8192;
+    let is_ne = (a / 549755813888) % 2;
+    let arrcount = (a / 1099511627776) % 256;
+    let arrsize = (a / 281474976710656) % 256;
+    let base = rs.mp;
+    io.match_parts[base] = ta;
+    io.match_parts[base + 1] = tb;
+    io.match_parts[base + 2] = arrcount;
+    io.match_parts[base + 3] = arrsize;
+    io.match_parts[base + 4] = ename;
+    io.match_parts[base + 5] = vcount;
+    rs.eqcur = base + 6;
+    rs.eqfcur = 0;
+    for i in 0..vcount limit 64 {
+        let packed = rs.sqpending[i];
+        let vname = packed % 65536;
+        let disc = (packed / 65536) % 256;
+        let fcount = packed / 16777216;
+        io.match_parts[rs.eqcur] = vname;
+        io.match_parts[rs.eqcur + 1] = disc;
+        io.match_parts[rs.eqcur + 2] = fcount;
+        rs.eqcur = rs.eqcur + 3;
+        for f in 0..fcount limit 32 {
+            let fpacked = rs.eqfields[rs.eqfcur];
+            rs.eqfcur = rs.eqfcur + 1;
+            io.match_parts[rs.eqcur] = fpacked % 65536;
+            io.match_parts[rs.eqcur + 1] = fpacked / 65536;
+            rs.eqcur = rs.eqcur + 2;
+        }
+    }
+    io.match_parts[rs.eqcur] = is_ne;
+    rs.mp = rs.eqcur + 1;
+    rs.eqfcount = 0;
+    rs.sqcount = 0;
+    let rhs = pop();
+    let lhs = pop();
+    emit(64, base, lhs, rhs)
+}
+
 // ArrayEqBuild: lay the per-element comparison loop's parameters [ta, tb, count, kind, is_ne] into
 // match_parts, pop the two array operands, and build the ArrayEq node (kind 54). codegen
 // `push_array_eq` reads this to emit the loop.
@@ -574,7 +621,7 @@ fn step(k: Word, a: Word) -> Word {
         let scrut = pop();
         emit(22, base, scrut, lit_count)
     } else {
-    if k == 40 orelse k == 41 orelse k == 42 orelse k == 46 orelse k == 47 orelse k == 49 orelse k == 50 orelse k == 52 orelse k == 53 orelse k == 55 orelse k == 56 orelse k == 57 orelse k == 58 orelse k == 61 {
+    if k == 40 orelse k == 41 orelse k == 42 orelse k == 46 orelse k == 47 orelse k == 49 orelse k == 50 orelse k == 52 orelse k == 53 orelse k == 55 orelse k == 56 orelse k == 57 orelse k == 58 orelse k == 61 orelse k == 63 {
         // The enum-match and struct-eq assembly markers/builds. Extracted into `step_assembly` to
         // keep this function's if/else nesting shallow (the reference compiler's recursion depth
         // scales with it; a deeper chain overflowed the default compile stack).
@@ -700,8 +747,13 @@ fn step_assembly(k: Word, a: Word) -> Word {
         // ArrayOfStructEq node.
         build_array_of_struct_eq(a)
     } else {
+    if k == 63 {
+        // ArrayOfEnumEqBuild: assemble the per-element enum-eq loop's match_parts and build the
+        // ArrayOfEnumEq node.
+        build_array_of_enum_eq(a)
+    } else {
         0
-    } } } } } } } } } } } } } }
+    } } } } } } } } } } } } } } }
 }
 
 // Reconstruct one record range on a fresh work stack (the node array and the side

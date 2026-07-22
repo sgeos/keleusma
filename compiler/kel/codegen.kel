@@ -1519,6 +1519,110 @@ fn push_array_of_struct_eq(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
+// ArrayOfEnumEq (kind 16): `[E; N] == [E; N]` (or `!=`). Composes `push_array_of_struct_eq`'s outer
+// per-element unroll with `push_enum_eq`'s inner variant-dispatch loop. match_parts:
+// [ta, tb, arrcount, arrsize, ename, vcount, per variant: vname, disc, fcount, fcount*(off, kind),
+// is_ne]. Per element: extract a[e]/b[e] as enums (GetIndex(FlatNested{arrsize, Enum}), wire operand
+// `arrsize + 3*65536`) into the inner pair (inner_b = ta+1+2*e, inner_a = ta+2+2*e), run the inner
+// enum-eq loop over that pair (deferred interning: IsEnum via push_enum_isenum, result Consts via
+// push_bool), and if the element compared unequal break the OUTER loop false; break true after all.
+// Only the element index constants are pre-interned (0..arrcount-1); everything else defers, matching
+// the reference pool [indices, then the enum name/variant/disc and result bools].
+fn push_array_of_enum_eq(p: Word) -> Word {
+    let base = ast.args[p];
+    let ta = ast.match_parts[base];
+    let tb = ast.match_parts[base + 1];
+    let arrcount = ast.match_parts[base + 2];
+    let arrsize = ast.match_parts[base + 3];
+    let ename = ast.match_parts[base + 4];
+    let vcount = ast.match_parts[base + 5];
+    // Forward pre-pass: record each variant's variable-stride offset and find the `!=` flag.
+    st.eq_cur = base + 6;
+    for v in 0..vcount limit 64 {
+        st.eq_voff[v] = st.eq_cur;
+        let fcount = ast.match_parts[st.eq_cur + 2];
+        st.eq_cur = st.eq_cur + 3 + fcount * 2;
+    }
+    let is_ne = ast.match_parts[st.eq_cur];
+    st.let_count = st.let_count + 2 + 2 * arrcount;
+    for e in 0..arrcount limit 64 {
+        st.eq_vidx[e] = intern_int(e);
+    }
+    if is_ne == 1 {
+        push_emit(wire.lnot);
+    }
+    push_emit(wire.mendloop);
+    push_emit(wire.mbreak);
+    push_bool(1);
+    for ej in 0..arrcount limit 64 {
+        let e = arrcount - 1 - ej;
+        let inner_b = ta + 1 + 2 * e;
+        let inner_a = ta + 2 + 2 * e;
+        // After the inner enum-eq loop: negate; if the element compared unequal, break OUTER false.
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_bool(0);
+        push_emit(wire.mif);
+        push_emit(wire.lnot);
+        // Inner enum-eq variant-dispatch loop over the extracted element pair.
+        push_emit(wire.mendloop);
+        push_emit(wire.trap + 4 * wire.radix);
+        for vj in 0..vcount limit 64 {
+            let v = vcount - 1 - vj;
+            let voff = st.eq_voff[v];
+            let fcount = ast.match_parts[voff + 2];
+            let vname = ast.match_parts[voff];
+            let disc = ast.match_parts[voff + 1];
+            push_emit(wire.popn + 1 * wire.radix);
+            push_emit(wire.mendif);
+            push_emit(wire.mbreak);
+            push_bool(0);
+            push_emit(wire.popn + 1 * wire.radix);
+            push_emit(wire.mendif);
+            push_emit(wire.mbreak);
+            push_bool(1);
+            for fj in 0..fcount limit 32 {
+                let f = fcount - 1 - fj;
+                let off = ast.match_parts[voff + 3 + f * 2];
+                let kind = ast.match_parts[voff + 3 + f * 2 + 1];
+                push_emit(wire.mendif);
+                push_emit(wire.mbreak);
+                push_bool(0);
+                push_emit(wire.mif);
+                push_emit(wire.lnot);
+                push_emit(wire.cmpeq);
+                push_emit(wire.getenumfield + (off + kind * 65536) * wire.radix);
+                push_emit(wire.getlocal + inner_b * wire.radix);
+                push_emit(wire.getenumfield + (off + kind * 65536) * wire.radix);
+                push_emit(wire.getlocal + inner_a * wire.radix);
+            }
+            push_emit(wire.popn + 1 * wire.radix);
+            push_emit(wire.mif);
+            push_enum_isenum(ename, vname, disc);
+            push_emit(wire.getlocal + inner_b * wire.radix);
+            push_emit(wire.popn + 1 * wire.radix);
+            push_emit(wire.mif);
+            push_enum_isenum(ename, vname, disc);
+            push_emit(wire.getlocal + inner_a * wire.radix);
+        }
+        push_emit(wire.mloop);
+        // Extract a[e] then b[e] as enums into the inner temp pair.
+        push_emit(wire.setlocal + inner_a * wire.radix);
+        push_emit(wire.setlocal + inner_b * wire.radix);
+        push_emit(wire.getindexnested + (arrsize + 3 * 65536) * wire.radix);
+        push_emit(wire.konst + st.eq_vidx[e] * wire.radix);
+        push_emit(wire.getlocal + tb * wire.radix);
+        push_emit(wire.getindexnested + (arrsize + 3 * 65536) * wire.radix);
+        push_emit(wire.konst + st.eq_vidx[e] * wire.radix);
+        push_emit(wire.getlocal + ta * wire.radix);
+    }
+    push_emit(wire.mloop);
+    push_emit(wire.setlocal + ta * wire.radix);
+    push_emit(wire.setlocal + tb * wire.radix);
+    push_visit(ast.rhs[p]);
+    push_visit(ast.lhs[p])
+}
+
 // StructEqNestedNode (kind 59): a `struct == struct` (or `!=`) where a field is a nested struct.
 // match_parts holds [ta, tb, topcount, <tagged top-level fields>, is_ne]: a scalar field is
 // [0, offset, kind]; a nested-struct field is [1, ext_off, ext_size, variant, r2, l2, subcount,
@@ -1811,6 +1915,7 @@ fn walk_step() -> Word {
             51 => push_enum_eq(payload),
             54 => push_array_eq(payload),
             62 => push_array_of_struct_eq(payload),
+            64 => push_array_of_enum_eq(payload),
             59 => push_struct_eq_nested(payload),
             43 => push_arrindex_nested(payload),
             _ => 0,

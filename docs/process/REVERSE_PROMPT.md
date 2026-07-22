@@ -10,7 +10,29 @@ AI to Human communication channel.
 
 **Date**: 2026-07-21 (session 27)
 
-**THIS SESSION (ninetieth increment): array-of-struct equality `[P; N] == [P; N]` now self-compiles.**
+**THIS SESSION (ninety-first increment): array-of-ENUM equality `[E; N] == [E; N]` now self-compiles.**
+The largest increment yet: it needed a from-scratch enum-array param prerequisite (enum-element arrays
+were untracked -- treated as scalar). Parse: a new `parray_enum` element-type (detected in the array
+element-type branch via `enums.edata`, sized by `enum_bytesize`); the `sa_` postfix gained variant 3
+(enum) arming `sa_enum`/`sa_len`; the whole-value branch sets `last_array` + a new `last_array_enum`,
+captured into `op_larray_enum`; `emit_op` routes to `array_of_enum_eq_start` (before the scalar
+array-eq check, gated by `enum_eq_supported`). That reuses the ENUM-eq variant drain (flag `sq_arr`),
+allocating 2 + 2*N temps, closing with an ArrayOfEnumEqBuild (record kind 63) that reconstruct's
+`build_array_of_enum_eq` assembles into an ArrayOfEnumEq node; codegen `push_array_of_enum_eq` composes
+the array-of-struct outer unroll with `push_enum_eq`'s inner variant-dispatch loop (deferred interning:
+IsEnum via `push_enum_isenum`, result Consts via `push_bool`; only the element indices pre-intern),
+extracting each element via `GetIndex(FlatNested{arrsize, Enum})` = wire operand `arrsize + 3*65536`.
+`EXPECTED_SELF_COMPILE` 63 -> 64. TWO gotchas: (1) node kind 16 collided with ForIn (the 6-bit record
+space `1..63` is FULL -- 16/22/25 are ForIn/match/multihead, not free), so the ArrayOfEnumEq NODE kind
+is 64, legal because node kinds live in the un-packed `kinds` forest array (records must stay < 64, node
+kinds need not); (2) parse.kel grew to 206578 bytes / ~25800 tokens, past the parser's 24576-token
+`toks.packed` cap, so it was raised to 40960 across parse.kel + the four host drivers +
+`compiler/src/{main,selfhost}.rs` (careful not to touch the lexer's 245760). Test
+`self_host_compiles_array_of_enum_equality`. Green: `selfhost_codegen` (105), `selfhost_parse`+
+`selfhost_pipeline` (9), fmt, clippy `-D warnings`, compiler subproject builds. Eight files changed.
+NEXT sibling gaps: enum-in-struct, 2+-level nesting, variable-amount shifts.
+
+**PRIOR THIS SESSION (ninetieth increment): array-of-struct equality `[P; N] == [P; N]` now self-compiles.**
 Implemented end to end from the design below, byte-identical on the FIRST codegen probe (the careful
 reference-structure analysis held). Parse: a whole `[P; N]` value now sets `last_array` plus a new
 `last_array_struct` marker (in the `sa_` postfix whole-value branch), captured into `op_larray_struct`

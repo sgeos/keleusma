@@ -28,7 +28,7 @@ require word >= 32;
 // site recovers `kind` as `packed % 64` and `payload` as `packed / 64`.
 shared data toks {
     len: Word,
-    packed: [Word; 24576],
+    packed: [Word; 40960],
     limit_id: Word,
     chunk_count: Word,
     chunks: [Word; 256],
@@ -203,6 +203,15 @@ enum Node {
     // match_parts base) that codegen `push_array_of_struct_eq` unrolls into the per-element loop.
     ArrayOfStructEqBuild = 61,
     ArrayOfStructEq = 62,
+    // Array-of-enum equality (`[E; N] == [E; N]`). Parse emits the element enum's variants as
+    // EnumEqVariant/EnumEqField records (reusing the enum-eq drain) then an ArrayOfEnumEqBuild (63);
+    // reconstruct assembles an ArrayOfEnumEq (64, arg the match_parts base) that codegen
+    // `push_array_of_enum_eq` unrolls into the per-element GetIndex(FlatNested Enum) + variant loop.
+    // The node kind is 64 (not < 64): the 6-bit record-kind space is full, but a NODE kind lives in
+    // the separate un-packed `kinds` forest array, so it may exceed 63. (16/22/25 are ForIn/match/
+    // multihead, not free.)
+    ArrayOfEnumEqBuild = 63,
+    ArrayOfEnumEq = 64,
     // An array literal `[a, b, c]`: emits the element ops then NewComposite(Flat{Array, count,
     // byte_size}). Like a Call/StructInit, its elements ride the call_args side array.
     ArrayLit = 17,
@@ -340,9 +349,17 @@ private data ps {
     // pushback in `step_structarrayaccess`, cleared otherwise). Selects the struct-element array
     // equality (`[P; N] == [P; N]`, a per-element GetIndex(FlatNested Struct) + inner field loop).
     last_array_struct: Word,
+    // 0 if the most recently emitted operand is not a whole array-of-ENUM, else the element enum's
+    // name token + 1 (set alongside `last_array` at the enum-array whole-value pushback). Selects the
+    // enum-element array equality (`[E; N] == [E; N]`, a per-element GetIndex(FlatNested Enum) + inner
+    // variant-dispatch loop).
+    last_array_enum: Word,
     // The struct-array length captured when the `sa_` postfix is armed (the element count `N`),
     // needed by the struct-element array equality to unroll the per-element comparisons.
     sa_len: Word,
+    // The element enum's name token + 1 captured when the `sa_` postfix is armed for an enum array,
+    // read at the whole-value pushback to set `last_array_enum`.
+    sa_enum: Word,
     // Per value-parameter struct binding: 0 if not a struct type, else the struct's
     // declaration index plus one; and the field-access postfix sub-state after a struct-typed
     // parameter Local was emitted (1 awaits an optional `.`, 2 reads the field name).
@@ -373,6 +390,11 @@ private data ps {
     // after such a parameter Local was emitted (1 awaits an optional `[`).
     parray_struct: [Word; 32],
     parray_size: [Word; 32],
+    // Per value-parameter array-of-ENUM binding: 0 if the array element type is not a declared enum,
+    // else the element enum's name token + 1 (the flat byte size rides `parray_size`). Drives the
+    // whole-value array-of-enum equality (`[E; N] == [E; N]`); mutually exclusive with the other
+    // `parray_*` element kinds.
+    parray_enum: [Word; 32],
     // Per value-parameter array-of-TUPLE binding: 0 if the element is not a tuple, else the tuple
     // layout index (in `tupledefs`) plus one; the element byte size rides `parray_size`. A body
     // `ts[i].N` extracts element i as a nested tuple (GetIndex(FlatNested{size, Tuple})) and reads
@@ -452,6 +474,9 @@ private data ops {
     // Parallel to `op_larray`: the LEFT operand's array-of-struct element struct index + 1 (0 if the
     // left operand is not an array-of-struct), so `emit_op(Eq)` can select the struct-element loop.
     op_larray_struct: [Word; 64],
+    // Parallel to `op_larray`: the LEFT operand's array-of-enum element enum name + 1 (0 otherwise),
+    // so `emit_op(Eq)` can select the enum-element loop.
+    op_larray_enum: [Word; 64],
     opsp: Word,
     pending_op: Word,
     pending_prec: Word,
@@ -931,6 +956,7 @@ fn step_local(v: Word) -> Word {
     ps.last_tuple = 0;
     ps.last_array = 0;
     ps.last_array_struct = 0;
+    ps.last_array_enum = 0;
     // This operand is a whole enum value only if it resolves to an enum-typed parameter (set below).
     ps.last_enum = 0;
     for i in 0..stmt.let_count limit 64 {
@@ -1071,6 +1097,14 @@ fn resolve_plain_ident(v: Word) -> Word {
                         ps.sa_arrkind = ps.parray_arr[i] - 1;
                         ps.sa_size = ps.parray_size[i];
                         ps.sa_variant = 1;
+                    }
+                    if ps.pnames[i] == v andalso ps.parray_enum[i] > 0 {
+                        ps.found_flag = 1;
+                        ps.found = i;
+                        ps.sa_enum = ps.parray_enum[i];
+                        ps.sa_size = ps.parray_size[i];
+                        ps.sa_variant = 3;
+                        ps.sa_len = ps.parray_len[i];
                     }
                 }
                 if ps.found_flag == 1 {
@@ -2192,6 +2226,56 @@ fn enum_eq_start(op: Word) -> Word {
     enumeq_variant_record()
 }
 
+// Begin a `[E; N] == [E; N]` (array-of-enum) equality: reuse the enum-eq variant drain for the ELEMENT
+// enum, but flag it an array drain (`sq_arr`) so it closes with an ArrayOfEnumEqBuild. Allocate the two
+// outer array temps plus two inner element temps PER element (2 + 2*N slots; codegen indexes the inner
+// pair for element e at `sq_ta + 1 + 2*e`). Return variant 0's EnumEqVariant record; `step_enumeq_emit`
+// drains the rest then the build.
+fn array_of_enum_eq_start(op: Word) -> Word {
+    let ename = ops.op_larray_enum[ops.opsp] - 1;
+    let count = ops.op_larray[ops.opsp] / 1024;
+    stmt.sq_ne = 0;
+    if op == OpCode::NotEq() as Word {
+        stmt.sq_ne = 1;
+    }
+    ps.last_byte = 0;
+    ps.last_struct = 0;
+    ps.last_enum = 0;
+    ps.last_array = 0;
+    ps.last_array_struct = 0;
+    ps.last_array_enum = 0;
+    stmt.pending_ctuple = 0;
+    stmt.pending_cstruct = 0;
+    stmt.pending_carray = 0;
+    stmt.pending_carray_struct = 0;
+    stmt.pending_cenum = 0;
+    stmt.sq_tb = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + 1;
+    stmt.sq_ta = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + 1;
+    // Reserve the per-element inner temp pairs (two per array element).
+    stmt.slot_count = stmt.slot_count + 2 * count;
+    stmt.sq_start = 0;
+    stmt.sq_count = 0;
+    stmt.sq_found = 0;
+    for i in 0..enums.enum_count limit 256 {
+        if enums.edata[i] == ename {
+            if stmt.sq_found == 0 {
+                stmt.sq_start = i;
+                stmt.sq_found = 1;
+            }
+            stmt.sq_count = stmt.sq_count + 1;
+        }
+    }
+    stmt.enumeq_emit = 1;
+    stmt.sq_ename = ename;
+    stmt.sq_field = 0;
+    stmt.sq_arr = 1;
+    stmt.sq_arrcount = count;
+    stmt.sq_arrsize = enum_bytesize(ename);
+    enumeq_variant_record()
+}
+
 // Emit variant `sq_field`'s EnumEqVariant record (packing its variant name, discriminant, and
 // payload field count) and arm the field sub-phase so `step_enumeq_emit` then drains that variant's
 // scalar payload fields before advancing.
@@ -2217,7 +2301,16 @@ fn step_enumeq_emit() -> Word {
             enumeq_variant_record()
         } else {
             stmt.enumeq_emit = 0;
-            Node::EnumEqBuild() as Word + (stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_count * 1048576 + stmt.sq_ename * 67108864 + stmt.sq_ne * 70368744177664) * 64
+            if stmt.sq_arr == 1 {
+                // An array-of-enum drain: close with ArrayOfEnumEqBuild. Compact packing (13-bit
+                // ename) leaves room for the array element count and element byte size above `is_ne`
+                // without the record overflowing: ta(10) tb(10) vcount(6) ename(13) is_ne(1)
+                // arrcount(8) arrsize(8).
+                stmt.sq_arr = 0;
+                Node::ArrayOfEnumEqBuild() as Word + (stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_count * 1048576 + stmt.sq_ename * 67108864 + stmt.sq_ne * 549755813888 + stmt.sq_arrcount * 1099511627776 + stmt.sq_arrsize * 281474976710656) * 64
+            } else {
+                Node::EnumEqBuild() as Word + (stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_count * 1048576 + stmt.sq_ename * 67108864 + stmt.sq_ne * 70368744177664) * 64
+            }
         }
     }
 }
@@ -2240,6 +2333,9 @@ fn emit_op(op: Word) -> Word {
     // loop (a `!=` appends a `Not` in codegen).
     if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_larray_struct[ops.opsp] > 0 andalso ps.last_array_struct > 0 {
         array_of_struct_eq_start(op)
+    } else {
+    if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_larray_enum[ops.opsp] > 0 andalso ps.last_array_enum > 0 andalso enum_eq_supported(ops.op_larray_enum[ops.opsp] - 1) == 1 {
+        array_of_enum_eq_start(op)
     } else {
     if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_larray[ops.opsp] > 0 andalso ps.last_array > 0 {
         array_eq_start(op)
@@ -2283,7 +2379,7 @@ fn emit_op(op: Word) -> Word {
             OpCode::YieldMark() => Node::YieldExpr() as Word,
             _ => Node::BinOp() as Word + op * 64,
         }
-    } } } } } } } }
+    } } } } } } } } }
 }
 
 fn opcode_of(k: Word) -> Word {
@@ -2328,6 +2424,7 @@ fn step_resolving() -> Word {
         ops.op_ltuple[ops.opsp] = ps.last_tuple;
         ops.op_larray[ops.opsp] = ps.last_array;
         ops.op_larray_struct[ops.opsp] = ps.last_array_struct;
+        ops.op_larray_enum[ops.opsp] = ps.last_array_enum;
         ops.opsp = ops.opsp + 1;
         ops.resolving = 0;
         0
@@ -3110,6 +3207,10 @@ fn step_structarrayaccess(k: Word, v: Word) -> Word {
         if ps.sa_variant == 2 andalso ps.sa_len > 0 {
             ps.last_array = ps.sa_len * 1024 + 1;
             ps.last_array_struct = ps.sa_struct + 1;
+        }
+        if ps.sa_variant == 3 andalso ps.sa_len > 0 {
+            ps.last_array = ps.sa_len * 1024 + 1;
+            ps.last_array_enum = ps.sa_enum;
         }
         ps.cursor = ps.cursor - 1;
         0
@@ -4378,6 +4479,21 @@ fn header_sig(k: Word, v: Word) -> Word {
                     }
                 }
                 if ps.found_flag == 0 {
+                    // An enum element type: record the enum name (+1) and its flat byte size so a
+                    // whole `[E; N]` value drives array-of-enum equality.
+                    stmt.sq_scan = 0;
+                    for i in 0..enums.enum_count limit 256 {
+                        if enums.edata[i] == v {
+                            stmt.sq_scan = 1;
+                        }
+                    }
+                    if stmt.sq_scan == 1 {
+                        ps.found_flag = 1;
+                        ps.parray_enum[ps.pcount - 1] = v + 1;
+                        ps.parray_size[ps.pcount - 1] = enum_bytesize(v);
+                    }
+                }
+                if ps.found_flag == 0 {
                     ps.parray[ps.pcount - 1] = scalar_kind_of(v) + 1;
                 }
                 6 + v * 64
@@ -4413,6 +4529,7 @@ fn header_sig(k: Word, v: Word) -> Word {
                 ps.parray_struct[ps.pcount] = 0;
                 ps.parray_tuple[ps.pcount] = 0;
                 ps.parray_arr[ps.pcount] = 0;
+                ps.parray_enum[ps.pcount] = 0;
                 ps.pbyte[ps.pcount] = 0;
                 ps.pcount = ps.pcount + 1;
                 4 + v * 64

@@ -1876,8 +1876,9 @@ fn self_compile_codegen_atomic_functions() {
     // lets enum equality intern its result Consts at emission time, for literal-operand enum eq);
     // 61 with `push_int_const` (the deferred process-time int Const work item for the `lsr` mask);
     // 62 with `push_byte_shift` for Byte-operand shifts (promote-operate-truncate); 63 with
-    // `push_array_of_struct_eq` for array-of-struct equality (`[P; N] == [P; N]`).
-    const EXPECTED_SELF_COMPILE: usize = 63;
+    // `push_array_of_struct_eq` for array-of-struct equality (`[P; N] == [P; N]`); 64 with
+    // `push_array_of_enum_eq` for array-of-enum equality (`[E; N] == [E; N]`).
+    const EXPECTED_SELF_COMPILE: usize = 64;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -1912,13 +1913,13 @@ const BR_LEX_ICOUNT: usize = 1 + 245760 + 1280 + 1280;
 // word per token), then the scalar and chunk-table inputs.
 const BR_P_LEN: usize = 0;
 const BR_P_PACKED: usize = 1;
-const BR_P_LIMIT_ID: usize = 1 + 24576;
-const BR_P_CHUNK_COUNT: usize = 1 + 24576 + 1;
-const BR_P_CHUNKS: usize = 1 + 24576 + 2;
-const BR_P_REQUIRE_ID: usize = 1 + 24576 + 2 + 256;
-const BR_P_WORD_ID: usize = 1 + 24576 + 2 + 256 + 1;
-const BR_P_BYTE_ID: usize = 1 + 24576 + 2 + 256 + 2;
-const BR_P_BOOL_ID: usize = 1 + 24576 + 2 + 256 + 3;
+const BR_P_LIMIT_ID: usize = 1 + 40960;
+const BR_P_CHUNK_COUNT: usize = 1 + 40960 + 1;
+const BR_P_CHUNKS: usize = 1 + 40960 + 2;
+const BR_P_REQUIRE_ID: usize = 1 + 40960 + 2 + 256;
+const BR_P_WORD_ID: usize = 1 + 40960 + 2 + 256 + 1;
+const BR_P_BYTE_ID: usize = 1 + 40960 + 2 + 256 + 2;
+const BR_P_BOOL_ID: usize = 1 + 40960 + 2 + 256 + 3;
 
 fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
     match vm.get_shared(buf, slot).expect("get_shared") {
@@ -6921,5 +6922,32 @@ fn self_host_compiles_array_of_struct_equality() {
     );
     assert_self_host_byte_identical(
         "struct P { x: Word }\nfn g(a: [P; 2], b: [P; 2]) -> bool { a == b }\nfn f(a: [P; 2], b: [P; 2]) -> bool { a != b }",
+    );
+}
+
+/// Array-of-enum equality (`[E; N] == [E; N]`, and `!=`) self-compiles byte-identically. Composes the
+/// array-of-struct outer per-element unroll with the enum-eq variant-dispatch inner loop: extract
+/// `a[e]`/`b[e]` as enums (GetIndex(FlatNested Enum)) into an inner pair, run the enum-eq loop (deferred
+/// interning) over it, break outer false on element inequality; break true after all. Needed a
+/// from-scratch enum-array param prerequisite (`parray_enum`, the `sa_` variant-3 whole-value path,
+/// `last_array_enum`/`op_larray_enum`), a new ArrayOfEnumEqBuild record (63) reusing the enum-eq drain,
+/// and an ArrayOfEnumEq node whose kind is 64 (the 6-bit record space is full, but node kinds live in
+/// the un-packed forest array so may exceed 63).
+#[test]
+fn self_host_compiles_array_of_enum_equality() {
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nfn f(a: [E; 2], b: [E; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nfn f(a: [E; 2], b: [E; 2]) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nfn f(a: [E; 3], b: [E; 3]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "enum Color { Red, Green, Blue }\nfn f(a: [Color; 2], b: [Color; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nfn f(a: [E; 2], b: [E; 2]) -> bool { a == b }\nfn g(a: [E; 2], b: [E; 2]) -> bool { a != b }",
     );
 }
