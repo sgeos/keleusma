@@ -25,7 +25,32 @@ node/record kind (blocked by the full space) OR intricate nested-machinery surge
 `and`/`or`, enum-in-struct, 2+-level nesting. Freeing record-kind space (or a build-record + high node
 kind indirection like array-of-enum used) is the prerequisite for the operator gaps.
 
-**THIS SESSION (ninety-seventh increment): array-of-ARRAY equality `[[T; N]; M] == [[T; N]; M]` now
+**THIS SESSION (ninety-eighth increment): eager boolean `and`/`or` now self-compile, breaking through
+the FULL Tok-space wall via the ident-by-id pattern.** The Tok space (0..61) is full, so `and`/`or`
+(needing two tokens) are lexed as IDENTIFIERS and recognized by interned id in OPERATOR position -- the
+`limit`/`require`/`word`/`byte`/`bool` pattern. The host supplies `and_id`/`or_id`, APPENDED to the
+`toks` block (after `bool_id`) so existing shared-slot offsets do not shift; the parser guards
+recognition on `> 0` so an unset id (default 0, or the -1 `id_of` returns when absent) never misfires --
+which is why only `selfhost_codegen.rs` needed the two `set_shared` calls, while the other drivers
+auto-size the grown block and safely leave the ids 0. `OpCode::And = 31`/`Or = 32`; the Ident dispatch
+intercepts an operator-position ident matching `and_id`/`or_id` and pushes it via the resolving path;
+`emit_op` yields RECORD kind 59 with arg = is_or (0/1); reconstruct routes 59 -> binary NODE 68 (pop
+lhs/rhs); codegen `push_andor` lowers `a and b` = `if a then b else false` / `a or b` = `if a then true
+else b` (EAGER, b always evaluated) via spill-left-to-temp + a value-If (condition = left / Not(left),
+else-value false / true). `EXPECTED_SELF_COMPILE` 67 -> 68. PRECEDENCE CAVEAT: the self-host's integer
+prec scale (Orelse 1, Andalso 2, comparison 3, bitwise 4-6) is coarser than the reference logical
+binding powers (Orelse 0, Andalso 1, Or 2, Xor 3, And 4), so `and`/`or` at prec 2/1 preserve only the
+relative order And > Or; a case mixing eager and/or with a comparison/bitwise at a finer level is not
+faithfully ordered (same approximation as `xor`-as-NotEq). The CRITICAL risk -- the ident-dispatch
+change touches the parser's core token routing -- was cleared: ALL FIVE stage self-compiles remain
+byte-identical (the strongest possible regression check). Byte-identical on the first probe. Test
+`self_host_compiles_eager_and_or`. Four files changed: `compiler/kel/{parse,reconstruct,codegen}.kel`,
+`tests/selfhost_codegen.rs`. Green: `selfhost_codegen` (112), `selfhost_parse`+`selfhost_pipeline` (9),
+fmt, clippy `-D warnings`, compiler subproject builds. NEXT: nested-machinery surgery (enum-in-struct,
+2+-level nesting, tuple-of-struct) is the remaining frontier; the precedence-scale limitation would
+need a wider prec representation to lift the and/or/xor caveat.
+
+**PRIOR THIS SESSION (ninety-seventh increment): array-of-ARRAY equality `[[T; N]; M] == [[T; N]; M]` now
 self-compiles, completing the array-of-X family (X = struct/enum/tuple/array).** Pivoted here after
 confirming eager `and`/`or` need TWO new tokens but the Tok space (0..61) is FULL -- and further that
 `and`/`or` via the ident-by-id pattern (like `limit`/`require`/`word`) would need host-driver lockstep

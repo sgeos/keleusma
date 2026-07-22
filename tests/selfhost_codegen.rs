@@ -1880,8 +1880,9 @@ fn self_compile_codegen_atomic_functions() {
     // `push_array_of_enum_eq` for array-of-enum equality (`[E; N] == [E; N]`); 65 with `push_bnot`
     // for the unary bitwise-NOT operator (`bnot a` = `a bxor -1`); 66 with `push_byte_bnot` for the
     // Byte-operand `bnot` (promote-operate-truncate); 67 with `push_array_of_array_eq` for
-    // array-of-array equality (`[[T; N]; M] == [[T; N]; M]`).
-    const EXPECTED_SELF_COMPILE: usize = 67;
+    // array-of-array equality (`[[T; N]; M] == [[T; N]; M]`); 68 with `push_andor` for the eager
+    // boolean `and`/`or` operators.
+    const EXPECTED_SELF_COMPILE: usize = 68;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -1923,6 +1924,9 @@ const BR_P_REQUIRE_ID: usize = 1 + 40960 + 2 + 256;
 const BR_P_WORD_ID: usize = 1 + 40960 + 2 + 256 + 1;
 const BR_P_BYTE_ID: usize = 1 + 40960 + 2 + 256 + 2;
 const BR_P_BOOL_ID: usize = 1 + 40960 + 2 + 256 + 3;
+// The eager `and`/`or` ids, appended after `bool_id` (see the `toks` block in parse.kel).
+const BR_P_AND_ID: usize = 1 + 40960 + 2 + 256 + 4;
+const BR_P_OR_ID: usize = 1 + 40960 + 2 + 256 + 5;
 
 fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
     match vm.get_shared(buf, slot).expect("get_shared") {
@@ -2025,6 +2029,10 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
     vm.set_shared(&mut shared, BR_P_BYTE_ID, Value::Int(id_of("Byte")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("Bool")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_AND_ID, Value::Int(id_of("and")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_OR_ID, Value::Int(id_of("or")))
         .unwrap();
     vm.set_shared(
         &mut shared,
@@ -4074,6 +4082,10 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
     vm.set_shared(&mut shared, BR_P_BYTE_ID, Value::Int(id_of("Byte")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("Bool")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_AND_ID, Value::Int(id_of("and")))
+        .unwrap();
+    vm.set_shared(&mut shared, BR_P_OR_ID, Value::Int(id_of("or")))
         .unwrap();
     vm.set_shared(
         &mut shared,
@@ -7087,4 +7099,26 @@ fn self_host_compiles_array_of_array_equality() {
         "struct P { x: Word }
 fn f(a: [P; 2], b: [P; 2]) -> bool { a == b }",
     );
+}
+
+/// The eager boolean operators `and`/`or` self-compile byte-identically. Unlike the short-circuit
+/// `andalso`/`orelse`, they are EAGER (`a and b` = `if a then b else false`, `a or b` = `if a then
+/// true else b`, b always evaluated). The Tok space (0..61) is full, so -- like `limit`/`require`/
+/// `word` -- they are lexed as IDENTIFIERS and recognized by interned id in OPERATOR position (the
+/// host supplies `and_id`/`or_id`, appended to the `toks` block; the parser guards on `> 0`). Codegen
+/// `push_andor` spills the left operand to a temp, evaluates the right, then a value-If (condition =
+/// left for `and`, Not(left) for `or`; else-value false / true). Precedence caveat: the self-host
+/// integer scale is coarser than the reference logical binding powers, so only non-mixed (or
+/// parenthesized) cases are faithfully ordered -- as with the `xor`-as-NotEq approximation.
+#[test]
+fn self_host_compiles_eager_and_or() {
+    assert_self_host_byte_identical("fn f(a: bool, b: bool) -> bool { a and b }");
+    assert_self_host_byte_identical("fn f(a: bool, b: bool) -> bool { a or b }");
+    assert_self_host_byte_identical("fn f(a: bool, b: bool) -> bool { (a xor b) and b }");
+    assert_self_host_byte_identical("fn f(a: bool, b: bool, c: bool) -> bool { a or b or c }");
+    assert_self_host_byte_identical("fn f(a: bool, b: bool, c: bool) -> bool { a and b and c }");
+    // regression: xor and the short-circuit andalso/orelse still work.
+    assert_self_host_byte_identical("fn f(a: bool, b: bool) -> bool { a xor b }");
+    assert_self_host_byte_identical("fn f(a: bool, b: bool) -> bool { a andalso b }");
+    assert_self_host_byte_identical("fn f(a: bool, b: bool) -> bool { a orelse b }");
 }
