@@ -10,7 +10,25 @@ AI to Human communication channel.
 
 **Date**: 2026-07-21 (session 27)
 
-**THIS SESSION (ninety-first increment): array-of-ENUM equality `[E; N] == [E; N]` now self-compiles.**
+**THIS SESSION (ninety-second increment): variable-amount `lsr` now self-compiles, fully completing the
+shift family.** Pivoted here from enum-in-struct (which needs from-scratch enum-struct-field tracking
+plus deep surgery on the intricate nested struct-eq layout -- the riskiest remaining piece) to this
+clean, CODEGEN-ONLY increment. `push_binop`'s ShrL arm (opc 29) now branches on whether the rhs is a
+Literal: a Literal takes the constant mask-fold path (88th); otherwise the variable path spills the
+value and the amount to two fresh temps (allocated at `ast.param_count + st.let_count`) and branches on
+`k == 0` (identity) else computes `(value asr k) band ((1 << (64 - k)) - 1)` at run time (Const 1,
+Const 64, GetLocal, CheckedSub, Shl, Const 1, CheckedSub, BitAnd). The mask constants (0, 1, 64) DEFER
+through `push_int_const` so they intern in emission order -- necessary for a compound amount like
+`a lsr (k + 1)`, whose `1` interns before the k==0 test's `0` (pre-interning failed this, the one bug
+hit). No parse/reconstruct change, no new function (EXPECTED_SELF_COMPILE stays 64). Test
+`self_host_compiles_variable_lsr` (simple, preceding-local, compound amount, plus const/lsl/asr
+regressions). Two files changed: `compiler/kel/codegen.kel`, `tests/selfhost_codegen.rs`. Green:
+`selfhost_codegen` (106), `selfhost_parse`+`selfhost_pipeline` (9), fmt, clippy `-D warnings`. Shifts are
+now COMPLETE (const + variable, Word + Byte, lsl/asl/asr/lsr). NEXT: enum-in-struct (the intricate one),
+2+-level nesting.
+
+**PRIOR THIS SESSION (ninety-first increment): array-of-ENUM equality `[E; N] == [E; N]` now
+self-compiles.**
 The largest increment yet: it needed a from-scratch enum-array param prerequisite (enum-element arrays
 were untracked -- treated as scalar). Parse: a new `parray_enum` element-type (detected in the array
 element-type branch via `enums.edata`, sized by `enum_bytesize`); the `sa_` postfix gained variant 3

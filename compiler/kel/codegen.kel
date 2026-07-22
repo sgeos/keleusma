@@ -585,10 +585,11 @@ fn push_local(p: Word) -> Word {
 fn push_binop(p: Word) -> Word {
     let opc = ast.args[p];
     if opc == 29 {
-        // ShrL (logical right shift), constant amount only: `Shr` is arithmetic (sign-preserving), so
-        // the sign-extended high bits are masked off with `band ((1 << (word_bits - k)) - 1)`, where
-        // k is the constant shift amount (the rhs Literal). Emission: value, Const(k) [the rhs
-        // Literal], Shr, Const(mask), BitAnd. word_bits is 8 * 8 = 64. The mask Const is a DEFERRED
+    if ast.kinds[ast.rhs[p]] == 1 {
+        // ShrL (logical right shift), CONSTANT amount (the rhs is a Literal): `Shr` is arithmetic
+        // (sign-preserving), so the sign-extended high bits are masked off with
+        // `band ((1 << (word_bits - k)) - 1)`, k the constant amount. Emission: value, Const(k) [the
+        // rhs Literal], Shr, Const(mask), BitAnd. word_bits is 8 * 8 = 64. The mask Const is a DEFERRED
         // int (push_int_const) so it interns AFTER k regardless of what the value emits before it.
         // The mask (1 << (64 - k)) - 1 is computed as ((1 << (63 - k)) - 1) * 2 + 1: this avoids both
         // `1 << 63` (which would set the sign bit so the following checked `- 1` traps at k = 1) and a
@@ -601,6 +602,44 @@ fn push_binop(p: Word) -> Word {
         push_emit(wire.shr);
         push_visit(ast.rhs[p]);
         push_visit(ast.lhs[p])
+    } else {
+        // ShrL, VARIABLE amount: the mask depends on k at run time, so spill the value and the amount
+        // to two fresh temps (t0 = value, t1 = amount) and branch on k == 0 (a zero shift is the
+        // identity; the runtime mask `1 << (64 - k)` would otherwise mask to a full-width no-op).
+        // Else compute `(value asr k) band ((1 << (64 - k)) - 1)` at run time. Emission mirrors the
+        // reference: GetLocal t0/t1, k==0 test (If value Else ...), then Shr and the runtime mask
+        // (Const 1, Const 64, GetLocal t1, CheckedSub, Shl, Const 1, CheckedSub, BitAnd). The mask
+        // constants (0, 1, 64) are DEFERRED (push_int_const) so they intern in emission order and
+        // interleave correctly with any constants the amount operand itself emits (e.g. the `1` of a
+        // compound `a lsr (k + 1)` interns before the k==0 test's `0`).
+        let t0 = ast.param_count + st.let_count;
+        let t1 = t0 + 1;
+        st.let_count = st.let_count + 2;
+        push_emit(wire.endif);
+        push_emit(wire.bitand);
+        push_emit(wire.popn + 2 * wire.radix);
+        push_emit(wire.checkedsub);
+        push_int_const(1);
+        push_emit(wire.shl);
+        push_emit(wire.popn + 2 * wire.radix);
+        push_emit(wire.checkedsub);
+        push_emit(wire.getlocal + t1 * wire.radix);
+        push_int_const(64);
+        push_int_const(1);
+        push_emit(wire.shr);
+        push_emit(wire.getlocal + t1 * wire.radix);
+        push_emit(wire.getlocal + t0 * wire.radix);
+        push_emit(wire.els);
+        push_emit(wire.getlocal + t0 * wire.radix);
+        push_emit(wire.iff);
+        push_emit(wire.cmpeq);
+        push_int_const(0);
+        push_emit(wire.getlocal + t1 * wire.radix);
+        push_emit(wire.setlocal + t1 * wire.radix);
+        push_visit(ast.rhs[p]);
+        push_emit(wire.setlocal + t0 * wire.radix);
+        push_visit(ast.lhs[p])
+    }
     } else {
     // Arithmetic and bitwise are explicit; the wildcard covers the comparisons
     // (6..11 -> CmpEq..CmpGe, i.e. opc + 5).
