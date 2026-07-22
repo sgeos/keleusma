@@ -324,13 +324,13 @@ fn run_parse_pipeline(path: &str) {
     // word per token (not two `kinds`/`vals` arrays), which halves its byte cost.
     const P_LEN: usize = 0;
     const P_PACKED: usize = 1;
-    const P_LIMIT_ID: usize = 1 + 24576;
-    const P_CHUNK_COUNT: usize = 1 + 24576 + 1;
-    const P_CHUNKS: usize = 1 + 24576 + 2;
-    const P_REQUIRE_ID: usize = 1 + 24576 + 2 + 256;
-    const P_WORD_ID: usize = 1 + 24576 + 2 + 256 + 1;
-    const P_BYTE_ID: usize = 1 + 24576 + 2 + 256 + 2;
-    const P_BOOL_ID: usize = 1 + 24576 + 2 + 256 + 3;
+    const P_LIMIT_ID: usize = 1 + 40960;
+    const P_CHUNK_COUNT: usize = 1 + 40960 + 1;
+    const P_CHUNKS: usize = 1 + 40960 + 2;
+    const P_REQUIRE_ID: usize = 1 + 40960 + 2 + 256;
+    const P_WORD_ID: usize = 1 + 40960 + 2 + 256 + 1;
+    const P_BYTE_ID: usize = 1 + 40960 + 2 + 256 + 2;
+    const P_BOOL_ID: usize = 1 + 40960 + 2 + 256 + 3;
 
     let input = std::fs::read(path).unwrap_or_else(|e| {
         eprintln!("cannot read {path}: {e}");
@@ -389,9 +389,9 @@ fn run_parse_pipeline(path: &str) {
         let len = read_word(&lvm, &lshared, LEX_ILEN + id) as usize;
         names.push(String::from_utf8_lossy(&input[start..start + len]).into_owned());
     }
-    if tokens.len() > 24576 {
+    if tokens.len() > 40960 {
         eprintln!(
-            "{} tokens; the parser stage caps input at 24576",
+            "{} tokens; the parser stage caps input at 40960",
             tokens.len()
         );
         std::process::exit(1);

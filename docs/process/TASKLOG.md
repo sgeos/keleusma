@@ -61,10 +61,18 @@ with ArrayOfStructEqBuild (node 61); reconstruct assembles ArrayOfStructEq (node
 break outer false on element inequality). Byte-identical on the first probe. `EXPECTED_SELF_COMPILE`
 62 -> 63. Adding ~60 lines pushed parse.kel past the lexer's 196608-byte source cap, so it was raised to
 245760 across lexer.kel + four host drivers + `compiler/src/{main,selfhost}.rs`. Test
-`self_host_compiles_array_of_struct_equality`. Green (all six increments): `selfhost_codegen` (104),
-`selfhost_parse`+`selfhost_pipeline` (9), clippy `--tests --all-features -D warnings`, fmt, compiler
-subproject builds. NEXT follow-up: array-of-enum, enum-in-struct, 2+-level nesting; variable-amount
-shifts. See `REVERSE_PROMPT.md` for the authoritative session-27 handoff.
+`self_host_compiles_array_of_struct_equality`. The ninety-first increment then landed ARRAY-OF-ENUM
+equality (`[E; N] == [E; N]`) -- the largest yet, needing a from-scratch enum-array param prerequisite
+(`parray_enum`, `sa_` variant 3, `last_array_enum`/`op_larray_enum`), reuse of the enum-eq drain flagged
+`sq_arr` closing with ArrayOfEnumEqBuild (63), and codegen `push_array_of_enum_eq` composing the
+array-of-struct outer with `push_enum_eq`'s deferred-interning inner. Two gotchas: node kind 16 collided
+with ForIn (the 6-bit record space is full), so the node kind is 64 (legal -- node kinds live in the
+un-packed forest array); and parse.kel grew past the 24576-token `toks.packed` cap, raised to 40960.
+`EXPECTED_SELF_COMPILE` 63 -> 64. Test `self_host_compiles_array_of_enum_equality`. Green (all seven
+increments): `selfhost_codegen` (105), `selfhost_parse`+`selfhost_pipeline` (9), clippy
+`--tests --all-features -D warnings`, fmt, compiler subproject builds. NEXT follow-up: enum-in-struct;
+2+-level nesting; variable-amount shifts. See `REVERSE_PROMPT.md` for the authoritative session-27
+handoff.
 
 **Playground/runtime (2026-07-09, session 23). PRIVATE-DATA `.data`-SECTION LOAD-TIME INITIALIZATION landed on `v0.2.3`.** Reported from the browser playground: the "Counter (loop + private data)" example faulted with `Op::CheckedAdd got Int and Unit` because a private scalar slot read before its first write observed the `Unit` sentinel. Private data is now script-initialized at load, the assembler `.data`-section model, invisible to the host. `DataLayout` gained `private_init: Vec<ConstValue>` (private-slot order); the compiler bakes each scalar private slot's `= literal` initializer or the type's zero (`Word`→0, `Byte`→0, `bool`→false, `Fixed`→0, `Float`→0.0), zero-fills scalar arrays element-wise, and leaves composite/`Text` slots `Unit` (write-before-read retained). Private scalar fields now admit an explicit `= literal`; `shared` fields and composite private fields still reject one. Both VM constructors (owned `Module` via `construct`, zero-copy via `view_bytes_zero_copy`) write the baked values into the persistent region; they persist across RESET and are not re-applied. Additive, no `BYTECODE_VERSION` bump per the operator's locked design; the golden fixture grew 308→316 bytes (one empty `ArchivedVec` in `None`-carrying modules). 17 new `tests/persistent_data.rs` tests including the exact Counter driven across a RESET (iter 1 reads the zero start → yields 5, iter 2 accumulates → 8). Docs updated: `LANGUAGE_DESIGN.md`, `GRAMMAR.md`, `WIRE_FORMAT.md`. Full gate green (default, signatures, all-features; clippy `--tests --all-features -D warnings`; fmt); wasm playground crate compiles against the updated core. Deferred: composite private slots (need arena flat-packing at construction).
 
