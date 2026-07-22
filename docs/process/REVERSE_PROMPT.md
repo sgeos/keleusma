@@ -25,6 +25,29 @@ node/record kind (blocked by the full space) OR intricate nested-machinery surge
 `and`/`or`, enum-in-struct, 2+-level nesting. Freeing record-kind space (or a build-record + high node
 kind indirection like array-of-enum used) is the prerequisite for the operator gaps.
 
+**NEXT-INCREMENT RECIPE (worked out, not yet implemented): `bnot` (bitwise NOT) via the split
+record/node-kind pattern.** The 6-bit record-kind space is full, but the reconstruct `k == 36` case
+(record 36 -> `emit(15, ...)`) is the precedent: a parse record kind < 64 can map to a NODE kind >= 64
+(node kinds live in the un-packed forest array). Reference lowering: `bnot a` = `a bxor -1` (Word:
+`GetLocal(a), Const(-1), BitXor`; Byte: wrapped in `ByteToWord`/`WordToByte`). Recipe (Word first,
+defer Byte):
+- lexer.kel kw4: `bnot` (b=98,n=110,o=111,t=116) -> Tok 11. NOTE Tok 4 is `when` (NOT free); the only
+  free low Tok is 11 (18/20 now xor/lsr). Verify 11 unused first.
+- parse.kel: `Tok::Bnot = 11`; `OpCode::Bnot = 30` (OpCode max is 29, so 30 is free); a unary-prefix
+  push mirroring the `Tok::Not` handler (`push OpCode::Bnot; expect_operand = 1`); `prec_of(Bnot) => 10`
+  (unary, like Not); in `emit_op`'s final `match op`, `OpCode::Bnot() => 48` (48 is free as a RECORD
+  kind -- it is StructEq's NODE kind, a separate array; `is_leaf`={1,2,11,20,38}, not 48; the assembly
+  build-set is {40,41,42,46,47,49,50,52,53,55,56,57,58,61,63}, not 48).
+- reconstruct.kel `step()`: add an explicit `if k == 48 { let c = pop(); emit(65, a, c, 0) }` (bnot
+  record 48 -> bnot node 65, unary: one child in lhs), alongside the `k == 36` case.
+- codegen.kel: `65 => push_bnot`; `fn push_bnot(p) { push_emit(wire.bitxor); push_int_const(0 - 1);
+  push_visit(ast.lhs[p]) }` -- the `-1` DEFERS via push_int_const (interns at emission; pool [Int(-1)]).
+- Byte `bnot` follow-up: detect a Byte operand (last_byte at emit_op) -> a ByteBnot node (another
+  >= 64 node kind) whose codegen wraps `push_bnot`'s body in ByteToWord/WordToByte, like push_byte_shift.
+Eager `and`/`or` need the same split-kind pattern plus a spill-temp + if/else branch codegen (reference:
+`a and b` = `t = a; if b then t else false`). enum-in-struct / 2+-level nesting still need deep nested
+struct-eq machinery surgery (enum-struct-field tracking + a sub-VARIANT layout shape).
+
 **PRIOR THIS SESSION (ninety-second increment): variable-amount `lsr` now self-compiles, fully
 completing the shift family.** Pivoted here from enum-in-struct (which needs from-scratch enum-struct-field tracking
 plus deep surgery on the intricate nested struct-eq layout -- the riskiest remaining piece) to this
