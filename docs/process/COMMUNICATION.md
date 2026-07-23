@@ -9,8 +9,11 @@ This document defines the protocol for structured communication between the huma
 | Document | Direction | Persistence |
 |----------|-----------|-------------|
 | [PROMPT.md](./PROMPT.md) | Human to AI | Committed with each prompt cycle |
-| [REVERSE_PROMPT.md](./REVERSE_PROMPT.md) | AI to Human | Overwritten after each task |
+| [REVERSE_PROMPT.md](./REVERSE_PROMPT.md) | AI to Human | Overwritten after each task (bounded latest-state handoff) |
+| [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.md) | AI to Human | Append-only (durable increment-by-increment reasoning) |
 | [TASKLOG.md](./TASKLOG.md) | Shared | Updated incrementally |
+
+`REVERSE_PROMPT.md` is bounded and overwritten each task; long-lived design reasoning that would otherwise make it grow without bound is appended to `DESIGN_JOURNAL.md` instead. The two were split on 2026-07-22 when `REVERSE_PROMPT.md` had accreted to ~362 KB (process-audit item 5).
 
 ## Forward Prompt
 
