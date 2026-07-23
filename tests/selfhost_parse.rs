@@ -45,7 +45,7 @@ use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
 use keleusma::token::TokenKind;
-use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
+use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, required_persistent_capacity_for};
 
 // Shared-data slot offsets, mirroring the `toks` block in parse.kel: the token stream
 // is one packed `tok+payload*64` word per token (not two `kinds`/`vals` arrays).
@@ -323,163 +323,160 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
     let mut cur_trait: Option<Vec<i64>> = None;
     let mut in_impl = false;
     let mut cur_impl: Option<Vec<i64>> = None;
-    let mut state = vm
+    let state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
-    for _ in 0..(kinds.len() * 4 + 16) {
-        match state {
-            VmState::Yielded(Value::Int(w)) => {
-                let code = w.rem_euclid(64);
-                let val = w.div_euclid(64);
-                if in_body {
-                    match code {
-                        0 => {}                // PENDING (a shunting-yard push, no record)
-                        15 => in_body = false, // the body's Done ends body mode
-                        35 => {} // FieldPos: a construction reorder marker, consumed by
-                        // reconstruct; not part of the parse-level node stream.
-                        _ => cur
+    let budget = kinds.len() * 4 + 16;
+    keleusma::selfhost_host::drive_parse_records(
+        &mut vm,
+        &mut shared,
+        state,
+        budget,
+        |code, val| {
+            if in_body {
+                match code {
+                    0 => {}                // PENDING (a shunting-yard push, no record)
+                    15 => in_body = false, // the body's Done ends body mode
+                    35 => {}               // FieldPos: a construction reorder marker, consumed by
+                    // reconstruct; not part of the parse-level node stream.
+                    _ => cur
+                        .as_mut()
+                        .expect("body node before START")
+                        .3
+                        .push((code, val)),
+                }
+            } else if in_guard {
+                match code {
+                    0 => {}                 // PENDING
+                    15 => in_guard = false, // the guard's Done ends guard mode
+                    35 => {}                // FieldPos: reorder marker, skipped (see above)
+                    _ => cur
+                        .as_mut()
+                        .expect("guard node before START")
+                        .4
+                        .push((code, val)),
+                }
+            } else if in_data {
+                match code {
+                    5 => in_data = false, // the data block's END
+                    _ => {}               // its fields, skipped this increment
+                }
+            } else if in_enum {
+                match code {
+                    5 => in_enum = false, // the enum's END
+                    _ => {}               // its variants, skipped this increment
+                }
+            } else if in_struct {
+                match code {
+                    // PARAM: a new field name; its type and array length follow.
+                    4 => cur_struct
+                        .as_mut()
+                        .expect("struct field before STRUCTSTART")
+                        .1
+                        .push((val, 0, 0)),
+                    // PTYPE: the current field's type name.
+                    6 => {
+                        cur_struct
                             .as_mut()
-                            .expect("body node before START")
-                            .3
-                            .push((code, val)),
-                    }
-                } else if in_guard {
-                    match code {
-                        0 => {}                 // PENDING
-                        15 => in_guard = false, // the guard's Done ends guard mode
-                        35 => {}                // FieldPos: reorder marker, skipped (see above)
-                        _ => cur
-                            .as_mut()
-                            .expect("guard node before START")
-                            .4
-                            .push((code, val)),
-                    }
-                } else if in_data {
-                    match code {
-                        5 => in_data = false, // the data block's END
-                        _ => {}               // its fields, skipped this increment
-                    }
-                } else if in_enum {
-                    match code {
-                        5 => in_enum = false, // the enum's END
-                        _ => {}               // its variants, skipped this increment
-                    }
-                } else if in_struct {
-                    match code {
-                        // PARAM: a new field name; its type and array length follow.
-                        4 => cur_struct
-                            .as_mut()
-                            .expect("struct field before STRUCTSTART")
+                            .expect("PTYPE before STRUCTSTART")
                             .1
-                            .push((val, 0, 0)),
-                        // PTYPE: the current field's type name.
-                        6 => {
-                            cur_struct
-                                .as_mut()
-                                .expect("PTYPE before STRUCTSTART")
-                                .1
-                                .last_mut()
-                                .expect("PTYPE before PARAM")
-                                .1 = val
-                        }
-                        // ASIZE: the current field is an array of this length.
-                        8 => {
-                            cur_struct
-                                .as_mut()
-                                .expect("ASIZE before STRUCTSTART")
-                                .1
-                                .last_mut()
-                                .expect("ASIZE before PARAM")
-                                .2 = val
-                        }
-                        5 => {
-                            parsed
-                                .structs
-                                .push(cur_struct.take().expect("struct END without STRUCTSTART"));
-                            in_struct = false;
-                        }
-                        _ => {} // PENDING and any other intra-struct record
+                            .last_mut()
+                            .expect("PTYPE before PARAM")
+                            .1 = val
                     }
-                } else if in_trait {
-                    match code {
-                        // MNAME: a method signature's name.
-                        21 => cur_trait
+                    // ASIZE: the current field is an array of this length.
+                    8 => {
+                        cur_struct
                             .as_mut()
-                            .expect("method name before TRAITSTART")
-                            .push(val),
-                        5 => {
-                            parsed
-                                .traits
-                                .push(cur_trait.take().expect("trait END without TRAITSTART"));
-                            in_trait = false;
-                        }
-                        _ => {} // signature params/return, skipped this increment
+                            .expect("ASIZE before STRUCTSTART")
+                            .1
+                            .last_mut()
+                            .expect("ASIZE before PARAM")
+                            .2 = val
                     }
-                } else if in_impl {
-                    match code {
-                        21 => cur_impl
-                            .as_mut()
-                            .expect("method name before IMPLSTART")
-                            .push(val), // MNAME: an impl method's name
-                        5 => {
-                            parsed
-                                .impls
-                                .push(cur_impl.take().expect("impl END without IMPLSTART"));
-                            in_impl = false;
-                        }
-                        _ => {} // method params/return/body, skipped this increment
+                    5 => {
+                        parsed
+                            .structs
+                            .push(cur_struct.take().expect("struct END without STRUCTSTART"));
+                        in_struct = false;
                     }
-                } else if in_use {
-                    match code {
-                        5 => in_use = false, // the use import's END
-                        _ => {}              // its path segments, skipped this increment
+                    _ => {} // PENDING and any other intra-struct record
+                }
+            } else if in_trait {
+                match code {
+                    // MNAME: a method signature's name.
+                    21 => cur_trait
+                        .as_mut()
+                        .expect("method name before TRAITSTART")
+                        .push(val),
+                    5 => {
+                        parsed
+                            .traits
+                            .push(cur_trait.take().expect("trait END without TRAITSTART"));
+                        in_trait = false;
                     }
-                } else {
-                    match code {
-                        0 => {} // PENDING
-                        1..=3 => cur = Some((code, val, Vec::new(), Vec::new(), Vec::new())),
-                        4 => cur.as_mut().expect("PARAM before START").2.push(val),
-                        6 | 7 | 8 => {} // PTYPE/RETTYPE/ASIZE: not checked this increment
-                        9 => in_data = true, // DSTART: a data block, skipped this increment
-                        10 => in_use = true, // USTART: a use import, skipped this increment
-                        12 => in_enum = true, // ENUMSTART: an enum, skipped this increment
-                        18 => {
-                            // STRUCTSTART: open a struct capture carrying its name id.
-                            in_struct = true;
-                            cur_struct = Some((val, Vec::new()));
-                        }
-                        19 => {
-                            // TRAITSTART: open a trait capture; MNAMEs fill its method list.
-                            in_trait = true;
-                            cur_trait = Some(Vec::new());
-                        }
-                        20 => {
-                            // IMPLSTART: open an impl capture; MNAMEs fill its method list.
-                            in_impl = true;
-                            cur_impl = Some(Vec::new());
-                        }
-                        16 => in_body = true,  // BSTART: a body forest follows
-                        17 => in_guard = true, // GSTART: a `when` guard forest follows
-                        5 => {
-                            let f = cur.take().expect("END before START");
-                            parsed.funcs.push(f);
-                        }
-                        15 => {
-                            assert!(cur.is_none(), "DONE mid-declaration");
-                            return parsed;
-                        }
-                        other => panic!("unexpected declaration kind {other}"),
+                    _ => {} // signature params/return, skipped this increment
+                }
+            } else if in_impl {
+                match code {
+                    21 => cur_impl
+                        .as_mut()
+                        .expect("method name before IMPLSTART")
+                        .push(val), // MNAME: an impl method's name
+                    5 => {
+                        parsed
+                            .impls
+                            .push(cur_impl.take().expect("impl END without IMPLSTART"));
+                        in_impl = false;
                     }
+                    _ => {} // method params/return/body, skipped this increment
+                }
+            } else if in_use {
+                match code {
+                    5 => in_use = false, // the use import's END
+                    _ => {}              // its path segments, skipped this increment
+                }
+            } else {
+                match code {
+                    0 => {} // PENDING
+                    1..=3 => cur = Some((code, val, Vec::new(), Vec::new(), Vec::new())),
+                    4 => cur.as_mut().expect("PARAM before START").2.push(val),
+                    6 | 7 | 8 => {} // PTYPE/RETTYPE/ASIZE: not checked this increment
+                    9 => in_data = true, // DSTART: a data block, skipped this increment
+                    10 => in_use = true, // USTART: a use import, skipped this increment
+                    12 => in_enum = true, // ENUMSTART: an enum, skipped this increment
+                    18 => {
+                        // STRUCTSTART: open a struct capture carrying its name id.
+                        in_struct = true;
+                        cur_struct = Some((val, Vec::new()));
+                    }
+                    19 => {
+                        // TRAITSTART: open a trait capture; MNAMEs fill its method list.
+                        in_trait = true;
+                        cur_trait = Some(Vec::new());
+                    }
+                    20 => {
+                        // IMPLSTART: open an impl capture; MNAMEs fill its method list.
+                        in_impl = true;
+                        cur_impl = Some(Vec::new());
+                    }
+                    16 => in_body = true,  // BSTART: a body forest follows
+                    17 => in_guard = true, // GSTART: a `when` guard forest follows
+                    5 => {
+                        let f = cur.take().expect("END before START");
+                        parsed.funcs.push(f);
+                    }
+                    15 => {
+                        assert!(cur.is_none(), "DONE mid-declaration");
+                        return std::ops::ControlFlow::Break(());
+                    }
+                    other => panic!("unexpected declaration kind {other}"),
                 }
             }
-            VmState::Reset => {}
-            other => panic!("unexpected VM state {other:?}"),
-        }
-        state = vm
-            .resume_with_shared(&mut shared, Value::Int(0))
-            .expect("resume");
-    }
-    panic!("parser did not reach DONE within the iteration budget");
+            std::ops::ControlFlow::Continue(())
+        },
+    );
+    parsed
 }
 
 /// Flatten an expression into its postorder node record sequence, mirroring the stage's
