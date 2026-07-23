@@ -112,6 +112,45 @@ milestone; track as follow-ups.
 - No `Vm::new_unchecked`. The record encoding is internal, so byte-identity of the
   final Module is the invariant that guards every increment.
 
+## Scope discovery (2026-07-23): the host driver is duplicated 6 ways
+
+Implementation surfaced that the parse-record reader is **not** a single site. It is
+duplicated across four files, and all six copies must adopt the two-word protocol in
+lockstep or every self-host test breaks:
+
+| File | Line | Role |
+|------|------|------|
+| `compiler/src/selfhost.rs` | 563 | subproject `parse_functions` |
+| `compiler/src/main.rs` | 464 | subproject binary driver |
+| `tests/selfhost_codegen.rs` | 4122 | the byte-identity tests' `parse_functions` |
+| `tests/selfhost_codegen.rs` | 2070 | the reconstruct-body bridge driver |
+| `tests/selfhost_parse.rs` | 332 | parse-stage test driver |
+| `tests/selfhost_pipeline.rs` | 433 | lexer-into-parse pipeline driver |
+
+The **token-stream** readers (`main.rs:222/378`, `selfhost_codegen.rs:1964`) and the
+**wire-op** readers (`selfhost_codegen.rs:993` `decode_op`) must NOT change for the
+record-stream increment; each edit must discriminate the record stream from those.
+
+This duplication is itself the root fragility the audit flagged — it is the same class
+that let the `compiler/src/selfhost.rs` decoder drift and ship `unknown op tag 62` into
+`v0.2.3` (audit item 4). It also recurs for every later Option E phase (token, wire-op
+streams). Two paths, now an operator decision:
+
+- **A. Push the two-word change through all six readers now.** Mechanical (the same
+  pair-read edit at each site), verifiable via the byte-identity corpus, gets Option E's
+  record stream done fastest. Perpetuates the duplication; each future phase repeats the
+  six-site surgery.
+- **B. Consolidate the parse-record reader into one shared driver first, then change the
+  protocol once.** Extract the driver into a reusable component in the `keleusma` crate so
+  both the main tests and the detached `compiler/` subproject use one copy; then the
+  two-word change is a single edit, and the drift hazard is retired for good. A
+  preparatory refactor, but it converts this and every later phase into one-site edits.
+
+Recommendation: **B**. The duplication is the exact fragility the audit named; removing it
+before touching the wire protocol is the higher-leverage order and de-risks the whole
+Option E arc. If speed to a first record-stream result matters more, **A** then a
+consolidation follow-up is defensible.
+
 ## Risk notes
 
 - The `main` loop and `step()` are on the hot path of every self-host compile;
