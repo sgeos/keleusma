@@ -33,6 +33,29 @@ When spawning agents from within a Claude Code session instead of separate
 terminals, the `Agent` tool's `isolation: "worktree"` option provides the same
 isolation automatically for agents that mutate files.
 
+### Worktrees or separate clones?
+
+Both give an agent an independent working directory on its own branch. The choice:
+
+- **Worktrees (the default, what `worktree.sh` uses).** One clone, many working
+  directories sharing a single `.git` object store, remotes, and hooks.
+  Disk-efficient, one fetch serves every tree, and a branch may be checked out in
+  at most one tree at a time — a useful guardrail against two agents editing the
+  same branch. Each tree gets its own `target/`, so builds do not collide. Best
+  for several agents on one machine.
+- **Separate clones (`git clone` per agent).** Full independence: each clone has
+  its own object store, config, hooks, and `target/`. Heavier on disk (a whole
+  copy apiece) and each fetches on its own, but there is zero shared state and two
+  clones may sit on the same branch. Best when agents run on different machines,
+  when you want total isolation from a shared hook or object store, or when you
+  deliberately want two checkouts of one branch.
+
+Recommendation: prefer worktrees on a single development machine — they are what
+the tooling here assumes and they avoid duplicating the object store — and reach
+for separate clones for cross-machine work or a fully decoupled checkout. Either
+way the per-branch handoffs, the merge protocol, and the gate discipline below
+apply unchanged.
+
 ## 2. Pick non-conflicting workstreams
 
 Parallelism only helps when the streams do not edit the same files. The table
@@ -94,16 +117,21 @@ entered one agent at a time.
 
 **Merge protocol (per branch, in turn):**
 
-1. Rebase the branch onto the current trunk tip: `git fetch origin v0.2.3 && git rebase origin/v0.2.3`.
-2. Run `scripts/release-gate.sh` to green (mandatory pre-merge gate).
-3. Re-check the trunk tip with `git ls-remote origin v0.2.3`. If it moved while
-   you were gating, another agent merged first — go back to step 1.
+Run [`scripts/merge-to-trunk.sh`](../../scripts/merge-to-trunk.sh) from the feature
+branch. It performs the whole serialization sequence and refuses to merge if the
+trunk moved under it:
+
+1. Rebase the branch onto the current trunk tip (`git fetch` + `git rebase origin/v0.2.3`).
+2. Run `scripts/release-gate.sh` to green (the mandatory pre-merge gate).
+3. Re-check the trunk tip. If it moved while the gate ran, another agent merged
+   first — abort and re-run (which rebases onto the new tip and re-gates).
 4. Fast-forward merge and push.
 
-This "rebase, gate, re-check tip, merge" loop is the serialization mechanism.
-There is no lock daemon; the `ls-remote` re-check in step 3 is the guard against a
-gate that raced another merge. A gate result is only valid for the exact trunk tip
-it ran against.
+The script is a dry-run by default (rebase and gate, then stop and print the
+commands); pass `--execute` to merge and push. Doing it by hand is fine too — the
+sequence above IS the protocol. The re-check in step 3 is the guard against a gate
+that raced another merge; a gate result is only valid for the exact trunk tip it
+ran against, so there is no lock daemon, just "gate, then confirm nothing moved."
 
 **Gate discipline (this is also process-audit item 1):**
 
@@ -123,7 +151,7 @@ it ran against.
 3. `scripts/worktree.sh new <branch>` per stream.
 4. Each agent iterates with `scripts/fast-check.sh`; per-branch handoff in
    `docs/process/handoffs/`.
-5. Merge back one at a time via the section 4 protocol.
+5. Merge back one at a time with `scripts/merge-to-trunk.sh` (section 4).
 6. `scripts/worktree.sh rm <branch>` when merged.
 
 ## Open dependency
