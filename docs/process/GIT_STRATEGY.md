@@ -33,6 +33,17 @@ Example branch names: `feat/type-checker`, `fix/parser-error-recovery`, `docs/ap
 
 Feature branches should not live longer than 24 hours. Long-lived branches accumulate merge conflicts and diverge from main in ways that are difficult to reconcile.
 
+## Parallel-Agent Development
+
+More than one agent or human may work concurrently. Each gets an isolated git
+worktree on its own feature branch cut from the active trunk, so working trees
+never collide, and the release line and the full gate are entered one branch at a
+time. The worktree helper is [`scripts/worktree.sh`](../../scripts/worktree.sh); the
+isolation, per-branch communication, merge-serialization, and gate-discipline
+rules are in [`PARALLEL_DEVELOPMENT.md`](./PARALLEL_DEVELOPMENT.md). Note that the
+self-hosted `compiler/` pipeline is internally lockstep and is not parallelizable
+until the P11 encoding-capacity change lands.
+
 ## Linear History
 
 Enforce rebase, not merge. Linear history keeps the commit log readable and makes bisecting straightforward. When merging a feature branch, rebase it onto main before completing the merge.

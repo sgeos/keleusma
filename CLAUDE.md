@@ -109,7 +109,7 @@ See `docs/process/PROCESS_STRATEGY.md` for the library engineering approach and 
 
 ## Git Workflow
 
-Trunk-based development with short-lived feature branches. See [`docs/process/GIT_STRATEGY.md`](docs/process/GIT_STRATEGY.md) for full details.
+Trunk-based development with short-lived feature branches. See [`docs/process/GIT_STRATEGY.md`](docs/process/GIT_STRATEGY.md) for full details. For running multiple agents concurrently (worktree isolation via `scripts/worktree.sh`, per-branch handoffs, and merge/gate serialization) see [`docs/process/PARALLEL_DEVELOPMENT.md`](docs/process/PARALLEL_DEVELOPMENT.md).
 
 Use scoped conventional commits: `<scope>: <imperative summary>`. Common scopes: `feat`, `fix`, `docs`, `refactor`, `chore`, `test`. Include `Co-Authored-By: Claude <noreply@anthropic.com>` when AI-assisted.
 
