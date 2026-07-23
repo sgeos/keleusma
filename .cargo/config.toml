@@ -14,9 +14,16 @@
 # `tn` runs the whole suite under cargo-nextest, which executes the 24
 # integration-test binaries in parallel rather than one at a time; it is a
 # no-op alias unless `cargo install cargo-nextest` has been run.
+#
+# Test tiers (process audit item 1): the ~198 self-hosted byte-identity tests
+# dominate wall-clock and are a merge-gate-only check. `tnq` is the routine tier
+# (skips them, what the pre-push hook runs); `tns` runs only the self-host
+# binaries; `tn` runs everything. The full suite gates a merge via release-gate.sh.
 [alias]
 qc = "check --workspace --all-targets"
 tl = "test --lib"
 lint = "clippy --workspace --all-targets -- -D warnings"
 tw = "test --workspace"
 tn = "nextest run --workspace"
+tnq = "nextest run --workspace --profile quick"
+tns = "nextest run --workspace -E 'binary(~selfhost)'"

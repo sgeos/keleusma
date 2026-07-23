@@ -80,7 +80,7 @@ Before pushing to the remote repository, verify the following:
 - The branch is rebased onto the latest main
 - No secrets, credentials, or sensitive data are included in the commit
 
-The push itself runs the cargo-husky pre-push hook (the full default-feature workspace, fmt, clippy, doc, markdown links). That hook does **not** exercise the `--no-default-features`/`signatures` feature matrix, and it does **not** run the detached `compiler/` subproject. Those live only in the pre-merge gate below.
+The push itself runs the cargo-husky pre-push hook (the default-feature workspace tests, fmt, clippy, doc, markdown links). Per the test tiers (process audit item 1), that hook runs the **routine `quick` tier**, which excludes the ~198 self-hosted byte-identity tests (the `selfhost_*` binaries); it also does **not** exercise the `--no-default-features`/`signatures` feature matrix, and it does **not** run the detached `compiler/` subproject. All three — the full self-host suite, the feature matrix, and the subproject — live only in the pre-merge gate below. This makes the pre-merge gate the sole enforcement point for self-host regressions on the release line, so running it before a merge is not optional.
 
 ## Pre-Merge Gate (mandatory)
 
