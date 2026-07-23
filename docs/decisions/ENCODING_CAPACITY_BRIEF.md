@@ -56,6 +56,55 @@ constraint is `payload_bits + radix_bits <= 63`, and the payloads are already ne
 limit. This corrects the "ample headroom" characterization of Option A below: the tag
 field is not the binding constraint — the total word budget is.
 
+### Investigation (2026-07-23): the single packed word is only a parse-emit artifact
+
+A read-only trace of the record stream found that the payload ceiling is far
+cheaper to remove than the packed encoding suggests, because the tag and payload
+are **already de-coupled everywhere except at the parse-emit boundary**:
+
+- Parse yields each record as one packed `kind + payload*64` word.
+- The host transport immediately splits it (`compiler/src/selfhost.rs:563`,
+  `let (code, val) = (w.rem_euclid(64), w.div_euclid(64))`) into **two parallel
+  arrays**, `rec_kind[]` and `rec_arg[]` (`reconstruct.kel:28-56`).
+- Reconstruct reads those two arrays separately (`reconstruct.kel:828`,
+  `step(io.rec_kind[start+i], io.rec_arg[start+i])`) and dispatches on them as two
+  independent parameters. It never sees the packed word.
+
+So the 63-bit total-word ceiling exists **only** because parse folds `kind` and
+`payload` into one `i64` before the host unfolds it. If parse instead emits the
+kind and the payload as two separate words (or the host reads a pair), the payload
+gets a full independent word and the record tag namespace becomes unbounded — and
+**reconstruct needs no change at all**, because it already consumes two arrays.
+
+Two further facts from the trace:
+
+- The workspace already uses the reference compiler's side-table idiom in the
+  self-host: `structdefs`, `tupledefs`, and `enums` (`parse.kel:859-984`) carry
+  per-entity fields out of band, indexed from the record. A fat record could join
+  that idiom instead of inline-packing.
+- The inter-stage record format is **internal** to the self-host pipeline. The
+  byte-identity corpus compares the final `Module` bytes, not the record stream,
+  so changing the record encoding does not, in itself, perturb byte-identity — the
+  corpus remains the safety net while the plumbing changes.
+
+**Option E (new, recommended): separate tag and payload into independent words.**
+Emit each record as a `(kind, payload)` pair rather than `kind + payload*64`. The
+payload becomes a full 63-bit word (extensible to further words if ever needed) and
+the tag namespace becomes unbounded, permanently retiring the total-word ceiling.
+Touch map from the trace: parse emit sites and the host transport
+(`selfhost.rs:561-630`) change; reconstruct is untouched. The identical structure
+applies to the token stream (lexer emit / parse consume) and the wire-op stream
+(codegen emit / `decode_op`), which can follow for uniformity once the record
+stream proves the pattern.
+- *Pro:* removes the ceiling instead of deferring it; unbounded tag space and a
+  full-word payload; **nearly free downstream** (reconstruct already two-array);
+  matches the existing two-array transport; the byte-identity corpus is unperturbed
+  in principle, so it stays as the verification net. This is the future-proof answer.
+- *Con:* still a coordinated differential-oracle change (parse emit + host
+  transport, then re-verify the whole corpus); the intermediate streams grow by one
+  word per record, which is immaterial for transient buffers, especially after the
+  24-bit shared-data ceiling lands.
+
 ### The workarounds already in use (and their cost)
 
 - **Token space:** eager `and`/`or` sidestep it via the *ident-by-id* pattern (lexed as
@@ -143,18 +192,22 @@ Gaps in `self_hosted_construct_support_boundary`.
 
 ## Recommendation
 
-If the roadmap will keep widening toward full self-hosting (it will), the packed spaces
-need real capacity, and the word-budget finding above changes the sequencing. A bare radix
-widening is **not** safe on its own: 7 bits is zero-margin and 8 bits overflows. The sound
-path is **D then A**: first de-pack the fattest payloads so the worst-case payload drops
-well below 56 bits, then widen the radix to a byte-aligned **8 bits** with comfortable
-margin. Widening straight to 8 bits without D would corrupt the fat records; widening to
-7 bits without D buys a doubled tag namespace at the cost of the last spare bit, so it is
-possible but fragile and I do not recommend it. I recommend treating **P1** as a separate,
-self-contained coordinated change (it is independent of the packed-space work). All of
-these are differential-oracle changes and must be landed as single, fully-re-verified steps
-against the byte-identity corpus and the boundary test — which is exactly the machinery
-that makes them safe to attempt.
+The operator asked for enough capacity to solve the problem durably, with future-proofing.
+The investigation makes **Option E** the clear answer, and it supersedes the earlier
+"D then A" sequencing. Because the tag and payload are already de-coupled downstream (two
+parallel arrays), emitting each record as an independent `(kind, payload)` pair removes the
+total-word ceiling entirely rather than deferring it: the payload gets a full word, the tag
+namespace becomes unbounded, and reconstruct is untouched. A bare radix widening (Option A)
+is a dead end here — 7 bits is zero-margin, 8 bits overflows — and the side-table stopgap
+(Option D / the investigation's "Scheme B") only relocates the fattest known record without
+lifting the ceiling, so it is not worth doing as a stepping stone when E is itself
+low-touch. Recommendation: **Option E for the record stream first** (the high-value,
+low-risk step that resolves the actual P11 wall), then extend the same two-word shape to the
+token and wire-op streams for uniform future-proofing. I continue to recommend treating
+**P1** (precedence) as a separate, self-contained change independent of the packed-space
+work. All of these are differential-oracle changes and must be landed as single,
+fully-re-verified steps against the byte-identity corpus and the boundary test — which is
+exactly the machinery that makes them safe to attempt.
 
 If the roadmap is near-term-bounded and only a few more constructs are expected, **Option
 B** (escape codes) or continued **C** may be proportionate, and **P2** (documented defects)
@@ -162,10 +215,12 @@ is defensible.
 
 ## Decision requested
 
-1. For the packed token/record/op spaces: **D then A (de-pack the fat payloads, then widen
-   to a byte-aligned 8 bits)** — the recommended path — or **B (escape codes)**, or **C
-   (continue reuse patterns)**? A bare **A at 7 bits** is available but zero-margin and not
-   recommended; a bare **A at 8 bits** is unsafe without D (it overflows the signed word).
+1. For the packed token/record/op spaces: **E (separate tag and payload into independent
+   words, record stream first, then token and wire-op)** — the recommended, future-proof
+   path that removes the ceiling and is nearly free downstream — or **B (escape codes)**, or
+   **C (continue reuse patterns)**? Bare **A (radix widening)** is not viable: 7 bits is
+   zero-margin, 8 bits overflows. The **D** side-table stopgap only defers the ceiling and
+   is not worth doing ahead of E.
 2. For precedence: **P1 (renumber to match the reference)** or **P2 (accept documented
    defects)**?
 3. Sequencing relative to the tuple-of-struct / nested-equality work in flight: land the
