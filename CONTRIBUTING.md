@@ -21,11 +21,15 @@ The full gate (every crate, every feature set, clippy, fmt, doc) is correct but 
 cargo qc     # type-check the whole workspace, no codegen (compile-error feedback)
 cargo tl     # run only the keleusma library unit tests (seconds after compile)
 cargo lint   # the exact clippy invocation CI gates on
-cargo tn     # the full workspace suite under nextest (parallel; needs cargo-nextest)
+cargo tnq    # ROUTINE tier: workspace suite minus the heavy self-host tests (nextest)
+cargo tns    # only the self-host byte-identity binaries (nextest)
+cargo tn     # the FULL workspace suite under nextest (parallel; needs cargo-nextest)
 cargo tw     # the full workspace suite under cargo's serial runner
 ```
 
-Install [`cargo-nextest`](https://nexte.st) (`cargo install cargo-nextest --locked`) to run the integration-test binaries in parallel rather than one at a time; the workspace has two dozen of them. nextest does not run doc-tests, so the full check pairs `cargo nextest run --workspace` with `cargo test --workspace --doc`. Reserve the full gate below for before opening a pull request; the pre-push hook runs it automatically.
+**Test tiers (process audit item 1).** The ~198 self-hosted byte-identity tests (the `selfhost_*` binaries) each compile whole `.kel` stage files and dominate the suite's wall-clock. They are a merge-gate-only differential-oracle check: `cargo tnq` (the routine tier) skips them and is what the pre-push hook runs; the FULL suite including them runs in [`scripts/release-gate.sh`](scripts/release-gate.sh) before a merge. The trade-off is deliberate — a self-host regression on a feature branch surfaces at the merge gate, not at push time — so when working on a self-host stage, iterate with `scripts/fast-check.sh` (below) and trust the mandatory pre-merge gate for the whole-corpus check.
+
+Install [`cargo-nextest`](https://nexte.st) (`cargo install cargo-nextest --locked`) to run the integration-test binaries in parallel rather than one at a time; the workspace has two dozen of them. nextest does not run doc-tests, so a check pairs a nextest run with `cargo test --workspace --doc`.
 
 For the self-hosted-compiler inner loop, [`scripts/fast-check.sh`](scripts/fast-check.sh) bundles fmt, clippy on the touched crate, and a test filter you pass in — the one construct or the one changed self-host stage in flight — so you get a seconds-scale signal without the full gate:
 
@@ -34,7 +38,7 @@ scripts/fast-check.sh 'test(self_host_compiles_word_bnot)'                  # on
 scripts/fast-check.sh 'test(self_host_compiles_parse_kel_byte_identically)' # only the changed stage
 ```
 
-Re-running only the changed stage's self-compile (rather than all five) is the fast form; the full five-stage self-compile stays in the pre-push hook and the merge gate. Deliberately no stage-bytecode memoization: a stale cache could mask a real byte-identity divergence, the worst failure for a differential oracle.
+Re-running only the changed stage's self-compile (rather than all five) is the fast form; the full five-stage self-compile stays in the merge gate (`scripts/release-gate.sh`), which the routine pre-push tier no longer runs. Deliberately no stage-bytecode memoization: a stale cache could mask a real byte-identity divergence, the worst failure for a differential oracle.
 
 The default nextest profile caps the run at four concurrent test processes (`test-threads` in [`.config/nextest.toml`](.config/nextest.toml)). nextest runs one process per test, so the full suite would otherwise spawn many at once; on a memory-constrained host the combined footprint plus parallel compilation can exhaust RAM and swap and wedge the run. Four processes keep peak memory modest while still finishing the library suite in a few seconds. The `ci` profile omits the cap because the CI runners have ample memory.
 

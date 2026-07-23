@@ -11,6 +11,21 @@
 # IMPORTANT: nextest does not execute doc-tests. Run those separately with
 #   cargo test --workspace --doc
 # The pre-push hook and CI do both.
+#
+# TEST TIERS (process audit item 1). The ~198 self-hosted byte-identity tests
+# (the `selfhost_*` binaries) each compile whole `.kel` stage files and dominate
+# the suite's wall-clock. They are a merge-gate-only differential-oracle check:
+#
+#   cargo nextest run --workspace                  # full (default): everything
+#   cargo nextest run --workspace --profile quick  # routine dev: skips self-host
+#   cargo tnq                                       #   alias for the quick run
+#   cargo tns                                       #   self-host binaries ONLY
+#
+# The `quick` tier is what the pre-push hook runs and what routine development
+# should use. The FULL suite (including self-host) runs in scripts/release-gate.sh
+# before a merge, via `cargo test --workspace`. Trade-off: a self-host regression
+# is caught at the merge gate, not at push time; when working ON a self-host stage,
+# iterate with `scripts/fast-check.sh 'test(<the-stage>_kel_byte_identically)'`.
 
 [profile.default]
 # Report every failing test in a run rather than stopping at the first, matching
@@ -31,6 +46,21 @@ failure-output = "immediate"
 # is a plain heap allocation of `capacity` bytes, 64 KiB by default. See B39.)
 test-threads = 4
 
+# Cap how many of the heavy self-hosted byte-identity tests run at once. Each
+# drives the full compile pipeline over a whole `.kel` file in-process (CPU- and
+# memory-heavy), so letting all of `test-threads` be self-host tests oversubscribes
+# a busy machine and inflates wall-clock (the `SLOW [>960s]` observation in the
+# process audit). Capping them to two concurrent leaves the other slots for light
+# tests. This applies to the default/ci profiles (full runs); the `quick` profile
+# excludes these tests entirely so the cap is moot there. max-threads is a tuning
+# knob — revisit on an idle machine if the full run is core-starved or contended.
+[test-groups]
+heavy-selfhost = { max-threads = 2 }
+
+[[profile.default.overrides]]
+filter = 'binary(~selfhost)'
+test-group = 'heavy-selfhost'
+
 # A profile for CI: same coverage, with a couple of retries to absorb the known
 # temp-file-race flake in keleusma-cli rather than failing the whole job. Select
 # it with `cargo nextest run --profile ci`.
@@ -38,3 +68,16 @@ test-threads = 4
 fail-fast = false
 failure-output = "immediate-final"
 retries = 2
+
+[[profile.ci.overrides]]
+filter = 'binary(~selfhost)'
+test-group = 'heavy-selfhost'
+
+# Routine-development tier: the necessary tests, excluding the heavy self-hosted
+# byte-identity suite. This is what the pre-push hook runs; the full suite runs at
+# the merge gate. Select with `--profile quick` (or the `cargo tnq` alias).
+[profile.quick]
+fail-fast = false
+failure-output = "immediate"
+test-threads = 4
+default-filter = 'not binary(~selfhost)'

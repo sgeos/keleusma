@@ -14,18 +14,26 @@
 
 set -eu
 
-# Tests: run the binaries in parallel with cargo-nextest when it is installed
-# (each integration-test file is a separate binary, and nextest runs them
-# concurrently instead of one-at-a-time). nextest does not execute doc-tests, so
-# run those separately. Fall back to the serial `cargo test` if nextest is not
-# installed (install it with: cargo install cargo-nextest --locked).
+# Tests: routine tier only (process audit item 1). This hook runs on every push,
+# which is "routine development", so it runs the `quick` nextest profile — the
+# necessary tests, EXCLUDING the ~198 self-hosted byte-identity tests (the
+# `selfhost_*` binaries) that dominate wall-clock. The FULL suite, including those
+# tests, is a merge-gate responsibility: run `scripts/release-gate.sh` before
+# merging into the release line (it is mandatory; see docs/process/GIT_STRATEGY.md).
+# Trade-off: a self-host regression on a feature branch is caught at the merge
+# gate, not at push time. When working ON a self-host stage, iterate with
+# `scripts/fast-check.sh 'test(<stage>_kel_byte_identically)'`.
+#
+# nextest runs the integration-test binaries in parallel; it does not run
+# doc-tests, so run those separately. Fall back to the serial `cargo test` if
+# nextest is not installed (install it with: cargo install cargo-nextest --locked).
 if cargo nextest --version >/dev/null 2>&1; then
-    echo "pre-push: cargo nextest run --workspace (parallel)"
-    cargo nextest run --workspace
+    echo "pre-push: cargo nextest run --workspace --profile quick (routine tier, self-host excluded)"
+    cargo nextest run --workspace --profile quick
     echo "pre-push: cargo test --workspace --doc (doc-tests)"
     cargo test --workspace --doc
 else
-    echo "pre-push: cargo test --workspace (install cargo-nextest for a parallel run)"
+    echo "pre-push: cargo test --workspace (install cargo-nextest for the fast routine tier)"
     cargo test --workspace
 fi
 
