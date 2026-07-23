@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # release-gate.sh — the local pre-release verification gate.
 #
-# Runs the same checks the CI workflow (.github/workflows/ci.yml) enforces, so a
-# green run here means CI will be green. It is a superset of the everyday
-# `cargo test && cargo clippy` and, critically, includes `cargo doc` under
+# Runs the checks the CI workflow (.github/workflows/ci.yml) enforces PLUS the
+# detached compiler/ subproject that CI never sees, so a green run here means CI
+# will be green AND the self-hosted compiler subproject is sound. It is a superset
+# of the everyday `cargo test && cargo clippy` and, critically, includes `cargo doc`
+# under
 # `-D warnings` — the check whose absence let a red CI Doc job ship alongside
 # V0.2.1 (broken intra-doc links). Do not cut this gate down to a subset before a
 # release; run it whole.
@@ -64,6 +66,17 @@ unset RUSTDOCFLAGS
 
 step "Relative Markdown links (check-md-links.kel)"
 cargo run -q -p keleusma-cli -- run scripts/check-md-links.kel
+
+# The self-hosted compiler at compiler/ is a DETACHED workspace: excluded from the
+# crate tarball, run by neither the pre-push hook nor CI. It reads the shared
+# kel/*.kel stage sources, so a change to those or to its Rust driver can break it
+# silently. Including it here is where that is caught before a merge to the release
+# line, and it makes this gate a SUPERSET of CI (which never sees the subproject). A
+# stale decoder here shipped `unknown op tag 62` into v0.2.3 undetected; the
+# `decoder_drift_guard` unit test in compiler/src/selfhost.rs is the fast standing
+# regression, and this step is the full check. (Process-audit 2026-07-22, item 4.)
+step "Detached compiler/ subproject (fmt, clippy, tests — gated nowhere else)"
+( cd compiler && cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings && cargo test )
 
 if [ "$RUN_MIRI" -eq 1 ]; then
   step "Miri — Tree Borrows (memory-safety regressions)"

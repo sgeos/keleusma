@@ -19,7 +19,11 @@
 //! package-local `kel/...` path then the repo-root `compiler/kel/...` path, so the
 //! commands work from either the subproject or the workspace root.
 
-use keleusma::bytecode::{ConstValue, Module, Op, Value};
+use keleusma::bytecode::{
+    ArrayElem, ConstValue, EnumField, Module, NewCompositeOperand, Op, StructField, TupleField,
+    Value,
+};
+use keleusma::value_layout::{CompositeKind, ScalarKind};
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 use keleusma::{Arena, compiler::compile, lexer::tokenize, parser::parse};
 
@@ -179,6 +183,32 @@ fn br_lex(src: &str) -> (Vec<(i64, i64)>, Vec<String>) {
     (toks, names)
 }
 
+// The flat-scalar and composite-variant tag decoders, shared by the composite/enum `decode_op` arms.
+// Identical mapping to the differential-oracle decoder in `tests/selfhost_codegen.rs`.
+fn scalar_kind_from_tag(t: i64) -> ScalarKind {
+    match t {
+        0 => ScalarKind::Unit,
+        1 => ScalarKind::Bool,
+        2 => ScalarKind::Byte,
+        3 => ScalarKind::Int,
+        4 => ScalarKind::Fixed,
+        5 => ScalarKind::Float,
+        6 => ScalarKind::Text,
+        7 => ScalarKind::Opaque,
+        other => panic!("bad scalar kind tag {other}"),
+    }
+}
+
+fn composite_kind_from_tag(t: i64) -> CompositeKind {
+    match t {
+        0 => CompositeKind::Tuple,
+        1 => CompositeKind::Array,
+        2 => CompositeKind::Struct,
+        3 => CompositeKind::Enum,
+        other => panic!("bad composite variant tag {other}"),
+    }
+}
+
 fn decode_op(w: i64) -> Op {
     let (tag, operand) = (w % 64, w / 64);
     match tag {
@@ -237,6 +267,83 @@ fn decode_op(w: i64) -> Op {
         43 => Op::Stream,
         44 => Op::Reset,
         45 => Op::ByteToWord,
+        // Op tags 46..=63 -- the composite/enum family and the scalar arithmetic/shift ops. These are
+        // ported verbatim from the differential-oracle decoder in `tests/selfhost_codegen.rs::decode_op`
+        // (the main workspace), which is the proven-correct reference. Kept in lockstep with that
+        // decoder; the `all_wire_ops_decode` regression test below guards against drift, and the
+        // `verify.sh` merge gate exercises this whole subproject so a future op cannot ride in undecoded.
+        58 => Op::WordToByte,
+        59 => Op::Add,
+        60 => Op::Sub,
+        61 => Op::Mul,
+        62 => Op::Shl,
+        63 => Op::Shr,
+        // A flat struct construction: the operand packs count + byte_size*65536.
+        46 => Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Struct,
+            count: (operand % 65536) as u16,
+            byte_size: (operand / 65536) as u16,
+        }),
+        // A flat array literal: same packing, Array composite kind.
+        50 => Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Array,
+            count: (operand % 65536) as u16,
+            byte_size: (operand / 65536) as u16,
+        }),
+        // A flat enum construction: same packing, Enum composite kind.
+        51 => Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Enum,
+            count: (operand % 65536) as u16,
+            byte_size: (operand / 65536) as u16,
+        }),
+        // A flat tuple construction: same packing, Tuple composite kind.
+        52 => Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Tuple,
+            count: (operand % 65536) as u16,
+            byte_size: (operand / 65536) as u16,
+        }),
+        // A flat struct field read: the operand packs offset + kind_tag*65536.
+        47 => Op::GetField(StructField::Flat {
+            offset: (operand % 65536) as u16,
+            kind: scalar_kind_from_tag(operand / 65536),
+        }),
+        // A flat-nested struct field read: operand packs offset + size*65536 + variant*2^32.
+        48 => Op::GetField(StructField::FlatNested {
+            offset: (operand % 65536) as u16,
+            size: ((operand / 65536) % 65536) as u16,
+            variant: composite_kind_from_tag(operand / 4294967296),
+        }),
+        // A flat array-element read: operand is the element ScalarKind tag.
+        49 => Op::GetIndex(ArrayElem::Flat {
+            kind: scalar_kind_from_tag(operand),
+        }),
+        // A flat-nested array-element read: operand packs size + variant*65536.
+        56 => Op::GetIndex(ArrayElem::FlatNested {
+            size: (operand % 65536) as u16,
+            variant: composite_kind_from_tag(operand / 65536),
+        }),
+        // A flat tuple field read: operand packs offset + kind_tag*65536.
+        53 => Op::GetTupleField(TupleField::Flat {
+            offset: (operand % 65536) as u16,
+            kind: scalar_kind_from_tag(operand / 65536),
+        }),
+        // An IsEnum test: operand packs ename_pool + vname_pool*1024 + disc_pool*1024*1024.
+        54 => Op::IsEnum(
+            (operand % 1024) as u16,
+            ((operand / 1024) % 1024) as u16,
+            (operand / 1048576) as u16,
+        ),
+        // A flat-nested enum-payload field read: operand packs offset + size*65536 + variant*2^32.
+        57 => Op::GetEnumField(EnumField::FlatNested {
+            offset: (operand % 65536) as u16,
+            size: ((operand / 65536) % 65536) as u16,
+            variant: composite_kind_from_tag(operand / 4294967296),
+        }),
+        // A flat enum-payload field read: operand packs offset + kind_tag*65536.
+        55 => Op::GetEnumField(EnumField::Flat {
+            offset: (operand % 65536) as u16,
+            kind: scalar_kind_from_tag(operand / 65536),
+        }),
         other => panic!("unknown op tag {other} (word {w})"),
     }
 }
@@ -2458,4 +2565,28 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
     assemble_resource_bounds(&mut module);
     self_host_module_bookkeeping(&mut module);
     module
+}
+
+#[cfg(test)]
+mod decoder_drift_guard {
+    use super::decode_op;
+
+    /// Every op tag the codegen can emit -- the full 6-bit wire-op space `1..=63` (the `wire` const
+    /// block in `kel/codegen.kel` assigns ops 1..=63 with no gap) -- must decode without hitting the
+    /// `unknown op tag` catch-all. This is the FAST guard against decoder DRIFT: an op added to the
+    /// codegen wire set but not to `decode_op` above fails this test in microseconds, rather than only
+    /// surfacing in a ~40-second stage self-compile. It is the standing regression for the
+    /// `unknown op tag 62` defect, which rode into the `v0.2.3` release line undetected because the
+    /// subproject decoder had fallen behind the emitted op set and nothing gated the subproject.
+    ///
+    /// A future op at a tag >= 64 is impossible (the word packs `tag + operand*64`, so tags are < 64);
+    /// a future GAP in `1..=63` would make this test slightly over-strict, which fails safe (it prompts
+    /// a look rather than letting an undecoded op ship).
+    #[test]
+    fn all_wire_op_tags_decode() {
+        for tag in 1..=63i64 {
+            // operand 0 is the minimal representative word for each tag; decode must not panic.
+            let _ = decode_op(tag);
+        }
+    }
 }

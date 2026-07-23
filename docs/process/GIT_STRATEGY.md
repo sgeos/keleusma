@@ -68,3 +68,17 @@ Before pushing to the remote repository, verify the following:
 - Commit messages follow the conventions described above
 - The branch is rebased onto the latest main
 - No secrets, credentials, or sensitive data are included in the commit
+
+The push itself runs the cargo-husky pre-push hook (the full default-feature workspace, fmt, clippy, doc, markdown links). That hook does **not** exercise the `--no-default-features`/`signatures` feature matrix, and it does **not** run the detached `compiler/` subproject. Those live only in the pre-merge gate below.
+
+## Pre-Merge Gate (mandatory)
+
+Before merging a feature branch into the active release line, run the full gate:
+
+```
+scripts/release-gate.sh
+```
+
+This is **mandatory, not optional**. It is a superset of the pre-push hook: it runs the `--no-default-features` and `signatures`/`signatures,shell` feature matrix **and** the detached `compiler/` subproject (`cd compiler && cargo test`), neither of which the pre-push hook nor CI covers. Skipping it is how a break reaches the release line undetected — for example, a stale decoder in `compiler/src/selfhost.rs` shipped `unknown op tag 62` into `v0.2.3` because the subproject was gated nowhere (process audit, 2026-07-22). A merge whose `release-gate.sh` is not green does not proceed.
+
+> **Known branching-model inconsistency (operator decision pending).** This document's "Trunk-Based Development" section states work merges into `main`, but current practice merges feature branches into the active `v0.2.x` release line, and `main` has diverged well behind it. CI triggers on `main` only, so the `v0.2.x` line is not CI-gated — which is *why* the pre-merge gate above is load-bearing. Reconciling the branching model (catch `main` up, or make CI track the release line) is an operator decision, flagged here so the gate's necessity is understood.
