@@ -456,90 +456,84 @@ fn run_parse_pipeline(path: &str) {
     let mut in_guard = false;
     let (mut cat, mut nm, mut params, mut body) = (0i64, 0i64, 0i64, 0i64);
     let (mut nfuncs, mut ndata, mut nenum, mut nuse) = (0, 0, 0, 0);
-    let mut state = pvm
+    let state = pvm
         .call_with_shared(&mut pshared, &[Value::Int(0)])
         .expect("call parser");
-    for _ in 0..(tokens.len() * 4 + 64) {
-        if let VmState::Yielded(Value::Int(w)) = state {
-            let (code, val) = (w.rem_euclid(64), w.div_euclid(64));
-            if in_body {
-                match code {
-                    0 => {}
-                    15 => in_body = false,
-                    _ => body += 1,
+    let budget = tokens.len() * 4 + 64;
+    keleusma::selfhost_host::drive_parse_records(&mut pvm, &mut pshared, state, budget, |code, val| {
+        if in_body {
+            match code {
+                0 => {}
+                15 => in_body = false,
+                _ => body += 1,
+            }
+        } else if in_guard {
+            if code == 15 {
+                in_guard = false; // the `when` guard forest's Done
+            }
+        } else if in_data {
+            if code == 5 {
+                in_data = false;
+            }
+        } else if in_enum {
+            if code == 5 {
+                in_enum = false;
+            }
+        } else if in_use {
+            if code == 5 {
+                in_use = false;
+            }
+        } else {
+            match code {
+                0 => {}
+                1..=3 => {
+                    cat = code;
+                    nm = val;
+                    params = 0;
+                    body = 0;
                 }
-            } else if in_guard {
-                if code == 15 {
-                    in_guard = false; // the `when` guard forest's Done
+                4 => params += 1,
+                6..=8 => {}
+                9 => {
+                    in_data = true;
+                    ndata += 1;
                 }
-            } else if in_data {
-                if code == 5 {
-                    in_data = false;
+                10 => {
+                    in_use = true;
+                    nuse += 1;
                 }
-            } else if in_enum {
-                if code == 5 {
-                    in_enum = false;
+                12 => {
+                    in_enum = true;
+                    nenum += 1;
                 }
-            } else if in_use {
-                if code == 5 {
-                    in_use = false;
+                16 => in_body = true,
+                17 => in_guard = true, // GSTART: a `when` guard forest, skipped in the summary
+                5 => {
+                    let kw = match cat {
+                        1 => "fn",
+                        2 => "yield",
+                        _ => "loop",
+                    };
+                    nfuncs += 1;
+                    println!(
+                        "  {kw:<6} {:<20} params {params}  body {body} nodes",
+                        name_of(nm)
+                    );
                 }
-            } else {
-                match code {
-                    0 => {}
-                    1..=3 => {
-                        cat = code;
-                        nm = val;
-                        params = 0;
-                        body = 0;
-                    }
-                    4 => params += 1,
-                    6..=8 => {}
-                    9 => {
-                        in_data = true;
-                        ndata += 1;
-                    }
-                    10 => {
-                        in_use = true;
-                        nuse += 1;
-                    }
-                    12 => {
-                        in_enum = true;
-                        nenum += 1;
-                    }
-                    16 => in_body = true,
-                    17 => in_guard = true, // GSTART: a `when` guard forest, skipped in the summary
-                    5 => {
-                        let kw = match cat {
-                            1 => "fn",
-                            2 => "yield",
-                            _ => "loop",
-                        };
-                        nfuncs += 1;
-                        println!(
-                            "  {kw:<6} {:<20} params {params}  body {body} nodes",
-                            name_of(nm)
-                        );
-                    }
-                    15 => {
-                        println!(
-                            "{nfuncs} functions, {ndata} data blocks, {nenum} enums, {nuse} use imports"
-                        );
-                        return;
-                    }
-                    other => {
-                        eprintln!("unexpected declaration record {other}");
-                        std::process::exit(1);
-                    }
+                15 => {
+                    println!(
+                        "{nfuncs} functions, {ndata} data blocks, {nenum} enums, {nuse} use imports"
+                    );
+                    return std::ops::ControlFlow::Break(());
+                }
+                other => {
+                    eprintln!("unexpected declaration record {other}");
+                    std::process::exit(1);
                 }
             }
         }
-        state = pvm
-            .resume_with_shared(&mut pshared, Value::Int(0))
-            .expect("resume parser");
-    }
-    eprintln!("parser did not reach DONE within the iteration budget");
-    std::process::exit(1);
+        std::ops::ControlFlow::Continue(())
+    });
 }
 
 /// The chunk table the parser needs: function-name ids in declaration order, from a
