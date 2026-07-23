@@ -22,17 +22,36 @@ yield. Removing that packing is the whole change; reconstruct is untouched.
 
 ## The protocol: a backward-compatible sentinel (enables incremental site migration)
 
-Add a parse global `emit_arg`, reset to a sentinel `-1` each iteration. The main
-loop yields the record as **two words** — the tag word `t`, then `emit_arg`:
+**Expression shape (proven pattern).** A `loop` body holding two sequential
+`yield`s is not evidenced in the pipeline; the proven idiom
+(`codegen.kel:2199-2213`) is a `loop` that delegates its single yield to a
+**guarded yielding function**, with the runtime propagating the callee's
+suspension. So the record's two words are emitted across two loop iterations by a
+two-phase state machine (a `ps.emit_phase` flag), one word per iteration:
 
 ```
-loop main(resume: Word) -> Word {
-    ps.emit_arg = -1;      // sentinel: "this record is still old-packed"
+// phase 1: emit the payload word saved on the previous iteration
+yield emit_record(resume: Word) -> Word when ps.emit_phase == 1 {
+    ps.emit_phase = 0;
+    yield ps.pending_arg;
+}
+// phase 0: compute the record; step() sets ps.emit_arg (-1 sentinel, or a real payload)
+yield emit_record(resume: Word) -> Word {
+    ps.emit_arg = 0 - 1;          // sentinel: "old-packed record"
     let t = step();
-    yield t;
-    yield ps.emit_arg;
+    ps.pending_arg = ps.emit_arg; // stash the payload word for phase 1
+    ps.emit_phase = 1;
+    yield t;                       // emit the tag word
+}
+loop main(resume: Word) -> Word {
+    yield emit_record(resume)
 }
 ```
+
+The host reads two consecutive yields per record, the tag word `t` then the
+payload word `arg`. The host's per-record iteration budget (`selfhost.rs:561`,
+`tokens.len()*16 + 256`) must roughly double, since each record now spans two
+iterations. New parse-state fields: `emit_phase`, `emit_arg`, `pending_arg`.
 
 Host reads the pair `(t, arg)`:
 - `arg == -1` — an un-migrated (old-packed) record: `code = t % 64`, `val = t / 64`
@@ -50,17 +69,18 @@ a big-bang rewrite of all ~40 `* 64` sites.
 ## Increments (each ends green; verify with the byte-identity corpus)
 
 **Increment 1 — install the transport, migrate zero sites (behavior-neutral).**
-- `parse.kel`: add `emit_arg` to the `ps` state; change the `main` loop to the
-  two-yield form above.
+- `parse.kel`: add `emit_phase`, `emit_arg`, `pending_arg` to the `ps` state; add the
+  guarded `emit_record` yielding function and point `main` at it (the two-phase shape
+  above).
 - `selfhost.rs`: restructure the yield-reading loop (`parse_functions`, 561-630) to
   read pairs `(t, arg)` and apply the sentinel rule, producing the same `(code, val)`
-  it produces today. No emit site changes yet.
+  it produces today; roughly double the iteration budget at line 561.
 - Verify: parse.kel still self-compiles byte-identically and the whole self-host
   suite is green. Because every record still takes the `arg == -1` path, the data
   handed to reconstruct is bit-for-bit identical, so the final Module bytes are
   unchanged. This increment only proves the two-word transport.
-- If the `loop` body cannot hold two `yield`s, fall back to a helper or a small
-  state machine in `step()`; confirm on a one-test `fast-check.sh` before the full run.
+- Bring-up check on one test first:
+  `scripts/fast-check.sh 'test(self_host_compiles_parse_kel_byte_identically)'`.
 
 **Increment 2 — migrate the fattest record to the two-word form (proof of headroom).**
 - `parse.kel:2457` `ArrayOfEnumEqBuild`: instead of `... * 64`, set `ps.emit_arg`
