@@ -26,6 +26,7 @@ use keleusma::bytecode::{
 use keleusma::value_layout::{CompositeKind, ScalarKind};
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 use keleusma::{Arena, compiler::compile, lexer::tokenize, parser::parse};
+use std::ops::ControlFlow;
 
 /// Read a stage source, trying the package-local then the repo-root path.
 fn read_stage(rel: &str) -> String {
@@ -555,78 +556,74 @@ pub fn parse_functions(
     let mut enum_records: Vec<(i64, i64)> = Vec::new();
     let (mut in_body, mut in_guard, mut in_data, mut in_enum, mut in_use) =
         (false, false, false, false, false);
-    let mut state = vm
+    let state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
-    for _ in 0..(tokens.len() * 16 + 256) {
-        if let VmState::Yielded(Value::Int(w)) = state {
-            let (code, val) = (w.rem_euclid(64), w.div_euclid(64));
-            if in_body {
-                match code {
-                    0 => {}
-                    15 => in_body = false,
-                    _ => cur.as_mut().unwrap().body.push((code, val)),
+    let budget = tokens.len() * 16 + 256;
+    keleusma::selfhost_host::drive_parse_records(&mut vm, &mut shared, state, budget, |code, val| {
+        if in_body {
+            match code {
+                0 => {}
+                15 => in_body = false,
+                _ => cur.as_mut().unwrap().body.push((code, val)),
+            }
+        } else if in_guard {
+            match code {
+                0 => {}
+                15 => in_guard = false,
+                _ => cur.as_mut().unwrap().guard.push((code, val)),
+            }
+        } else if in_data {
+            if code == 5 {
+                data_records.push((5, 0));
+                in_data = false;
+            } else if code != 0 {
+                data_records.push((code, val));
+            }
+        } else if in_enum {
+            if code == 5 {
+                enum_records.push((5, 0));
+                in_enum = false;
+            } else if code != 0 {
+                enum_records.push((code, val));
+            }
+        } else if in_use {
+            in_use = code != 5;
+        } else {
+            match code {
+                1..=3 => {
+                    cur = Some(ParsedFn {
+                        cat: code,
+                        name: val,
+                        params: 0,
+                        param_types: Vec::new(),
+                        return_type: 0,
+                        guard: Vec::new(),
+                        body: Vec::new(),
+                    })
                 }
-            } else if in_guard {
-                match code {
-                    0 => {}
-                    15 => in_guard = false,
-                    _ => cur.as_mut().unwrap().guard.push((code, val)),
+                4 => cur.as_mut().unwrap().params += 1,
+                6 => cur.as_mut().unwrap().param_types.push(val),
+                7 => cur.as_mut().unwrap().return_type = val,
+                9 => {
+                    in_data = true;
+                    data_records.push((9, val));
                 }
-            } else if in_data {
-                if code == 5 {
-                    data_records.push((5, 0));
-                    in_data = false;
-                } else if code != 0 {
-                    data_records.push((code, val));
+                10 => in_use = true,
+                12 => {
+                    in_enum = true;
+                    enum_records.push((12, val));
                 }
-            } else if in_enum {
-                if code == 5 {
-                    enum_records.push((5, 0));
-                    in_enum = false;
-                } else if code != 0 {
-                    enum_records.push((code, val));
-                }
-            } else if in_use {
-                in_use = code != 5;
-            } else {
-                match code {
-                    1..=3 => {
-                        cur = Some(ParsedFn {
-                            cat: code,
-                            name: val,
-                            params: 0,
-                            param_types: Vec::new(),
-                            return_type: 0,
-                            guard: Vec::new(),
-                            body: Vec::new(),
-                        })
-                    }
-                    4 => cur.as_mut().unwrap().params += 1,
-                    6 => cur.as_mut().unwrap().param_types.push(val),
-                    7 => cur.as_mut().unwrap().return_type = val,
-                    9 => {
-                        in_data = true;
-                        data_records.push((9, val));
-                    }
-                    10 => in_use = true,
-                    12 => {
-                        in_enum = true;
-                        enum_records.push((12, val));
-                    }
-                    16 => in_body = true,
-                    17 => in_guard = true,
-                    5 => fns.push(cur.take().unwrap()),
-                    15 => return (fns, names, data_records, enum_records),
-                    _ => {}
-                }
+                16 => in_body = true,
+                17 => in_guard = true,
+                5 => fns.push(cur.take().unwrap()),
+                15 => return ControlFlow::Break(()),
+                _ => {}
             }
         }
-        state = vm
-            .resume_with_shared(&mut shared, Value::Int(0))
-            .expect("resume");
-    }
-    panic!("parse.kel did not reach DONE");
+        ControlFlow::Continue(())
+    });
+    (fns, names, data_records, enum_records)
 }
 
 /// Self-host-compile a whole program: drive the pipeline over every function, reconstruct
