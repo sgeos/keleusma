@@ -15,6 +15,8 @@ This document defines the protocol for structured communication between the huma
 
 `REVERSE_PROMPT.md` is bounded and overwritten each task; long-lived design reasoning that would otherwise make it grow without bound is appended to `DESIGN_JOURNAL.md` instead. The two were split on 2026-07-22 when `REVERSE_PROMPT.md` had accreted to ~362 KB (process-audit item 5).
 
+These channels are single-writer and assume one active session. When more than one agent works concurrently, they must not overwrite each other. Each parallel agent writes a per-branch handoff under [`handoffs/`](./handoffs/README.md) instead of overwriting `REVERSE_PROMPT.md`, appends branch-tagged entries to `DESIGN_JOURNAL.md`, and edits only its own claimed `TASKLOG.md` row. See [`PARALLEL_DEVELOPMENT.md`](./PARALLEL_DEVELOPMENT.md) section 3 for the full parallel-channel protocol.
+
 ## Forward Prompt
 
 PROMPT.md is the human-to-AI instruction staging area. This file is **read-only for the AI agent**. The AI agent must never modify PROMPT.md, but should include it in commits if the human pilot has modified it.
