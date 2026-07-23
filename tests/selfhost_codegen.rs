@@ -2063,12 +2063,16 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
     // A struct (STRUCTSTART 18), trait (19), or impl (20) declaration is skipped until its
     // END so its fields/methods are not mistaken for a function's params or body.
     let mut in_skip_decl = false;
-    let mut state = vm
+    let state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
-    for _ in 0..(tokens.len() * 16 + 256) {
-        if let VmState::Yielded(Value::Int(w)) = state {
-            let (code, val) = (w.rem_euclid(64), w.div_euclid(64));
+    let budget = tokens.len() * 16 + 256;
+    keleusma::selfhost_host::drive_parse_records(
+        &mut vm,
+        &mut shared,
+        state,
+        budget,
+        |code, val| {
             if in_body {
                 match code {
                     0 => {}
@@ -2104,16 +2108,14 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
                     17 => in_guard = true,
                     18..=20 => in_skip_decl = true, // struct/trait/impl declaration
                     5 => last = (std::mem::take(&mut records), params, cur_cat),
-                    15 => return last,
+                    15 => return std::ops::ControlFlow::Break(()),
                     _ => {}
                 }
             }
-        }
-        state = vm
-            .resume_with_shared(&mut shared, Value::Int(0))
-            .expect("resume");
-    }
-    panic!("parse.kel did not reach DONE");
+            std::ops::ControlFlow::Continue(())
+        },
+    );
+    last
 }
 
 /// Rebuild the codegen node forest from parse.kel's postorder record stream with a
@@ -4115,12 +4117,16 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
     // A struct/trait/impl declaration (STRUCTSTART 18, TRAITSTART 19, IMPLSTART 20) is
     // skipped until its END; it contributes no chunk or scaffold record here.
     let mut in_skip_decl = false;
-    let mut state = vm
+    let state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
-    for _ in 0..(tokens.len() * 16 + 256) {
-        if let VmState::Yielded(Value::Int(w)) = state {
-            let (code, val) = (w.rem_euclid(64), w.div_euclid(64));
+    let budget = tokens.len() * 16 + 256;
+    keleusma::selfhost_host::drive_parse_records(
+        &mut vm,
+        &mut shared,
+        state,
+        budget,
+        |code, val| {
             if in_body {
                 match code {
                     0 => {}
@@ -4180,16 +4186,14 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
                     17 => in_guard = true,
                     18..=20 => in_skip_decl = true, // struct/trait/impl declaration
                     5 => fns.push(cur.take().unwrap()),
-                    15 => return (fns, names, data_records, enum_records),
+                    15 => return std::ops::ControlFlow::Break(()),
                     _ => {}
                 }
             }
-        }
-        state = vm
-            .resume_with_shared(&mut shared, Value::Int(0))
-            .expect("resume");
-    }
-    panic!("parse.kel did not reach DONE");
+            std::ops::ControlFlow::Continue(())
+        },
+    );
+    (fns, names, data_records, enum_records)
 }
 
 /// Combine the heads of a multiheaded function into the codegen Body codegen.kel's

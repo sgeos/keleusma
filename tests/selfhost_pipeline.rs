@@ -425,12 +425,16 @@ fn parse_via_lexer(src: &str) -> (usize, usize) {
     let (mut in_body, mut in_data, mut in_enum, mut in_use) = (false, false, false, false);
     let mut in_guard = false;
     let mut open_decl = false;
-    let mut state = vm
+    let state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
-    for _ in 0..(tokens.len() * 4 + 64) {
-        if let VmState::Yielded(Value::Int(w)) = state {
-            let code = w.rem_euclid(64);
+    let budget = tokens.len() * 4 + 64;
+    keleusma::selfhost_host::drive_parse_records(
+        &mut vm,
+        &mut shared,
+        state,
+        budget,
+        |code, _val| {
             if in_body {
                 match code {
                     0 => {}
@@ -470,17 +474,15 @@ fn parse_via_lexer(src: &str) -> (usize, usize) {
                     }
                     15 => {
                         assert!(!open_decl, "DONE mid-declaration");
-                        return (funcs, body_nodes);
+                        return std::ops::ControlFlow::Break(());
                     }
                     other => panic!("unexpected declaration kind {other}"),
                 }
             }
-        }
-        state = vm
-            .resume_with_shared(&mut shared, Value::Int(0))
-            .expect("resume");
-    }
-    panic!("parse.kel did not reach DONE within the iteration budget");
+            std::ops::ControlFlow::Continue(())
+        },
+    );
+    (funcs, body_nodes)
 }
 
 // The actual end-to-end pipeline: lexer.kel tokenizes real source, the host builds
