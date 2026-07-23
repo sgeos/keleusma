@@ -4,6 +4,10 @@
 
 Open decisions that may block near-term development.
 
+## P11. Encoding-space capacity for the self-hosted pipeline (OPEN)
+
+The self-hosted pipeline's three packed inter-stage encodings (token, record/node-kind, wire-op — all `X + payload*64`, so `X < 64`) are full, and the operator precedence scale is too coarse to match the reference's logical binding powers. Recent increments are increasingly intricate reuse workarounds (ident-by-id, split record/node kinds, operand-form overload), and the remaining full-language work needs clean capacity. A design brief laying out the options (widen the 6-bit field to 7 bits, escape codes, continue reuse; precedence renumber vs. accept documented defects) with tradeoffs and a recommendation is at [`ENCODING_CAPACITY_BRIEF.md`](./ENCODING_CAPACITY_BRIEF.md). **Awaiting operator decision** (process-audit worklist item 6). Past the autonomy boundary; not implemented.
+
 ## ~~P1. Type checker implementation~~ (Resolved)
 
 A static type checker is in place at `src/typecheck.rs` and is invoked from `compile`. Type errors are surfaced as `CompileError` before bytecode emission. The parser now represents the unit literal `()` as `Literal::Unit` rather than `Literal::Int(0)`. The compiler emits `Op::PushUnit` for the new variant. The type checker recognizes `Literal::Unit` as `Type::Unit`. Five existing tests that relied on lax behavior were updated to declare the types they reference.
