@@ -233,6 +233,11 @@ pub mod verify;
 #[cfg(feature = "verify")]
 pub mod verify_typed;
 
+/// Shared host-side driver for the self-hosted `.kel` stages, so the parse-record
+/// transport lives in one place instead of being copied into every consumer.
+#[cfg(all(feature = "compile", feature = "verify"))]
+pub mod selfhost_host;
+
 pub use keleusma_arena::{
     Arena, ArenaHandle, BottomHandle, Budget, EpochSaturated, Stale, TopHandle,
 };
