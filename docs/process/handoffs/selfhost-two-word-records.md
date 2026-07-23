@@ -15,11 +15,17 @@ plan in [P11_OPTION_E_PLAN.md](../../decisions/P11_OPTION_E_PLAN.md).
 
 ## State
 - Design, brief, and the phased implementation plan are committed. The protocol is
-  pinned: a backward-compatible sentinel (`emit_arg = -1`) via a **two-phase
-  guarded yielding function** `emit_record` (the proven `codegen.kel` `emit_next`
-  idiom — a `loop` body cannot hold two sequential yields), so emit sites migrate
-  one at a time, each byte-identical.
-- No code edits to `parse.kel` / `selfhost.rs` yet. The branch carries the plan only.
+  pinned: a backward-compatible sentinel (`emit_arg = -1`), implemented as a
+  `step()` wrapper (two-phase state machine, one yield per call, loop untouched).
+- **Increment 1 was attempted and reverted.** Implementation surfaced that the
+  parse-record host reader is duplicated across SIX sites in four files (see the
+  "Scope discovery" section of P11_OPTION_E_PLAN.md), not the single site the plan
+  assumed. The change is now paused at a green state (branch HEAD, plan docs only)
+  pending an operator decision: push the two-word change through all six readers
+  (path A), or consolidate the reader into one shared driver first (path B,
+  recommended). The parse.kel + subproject edits were mechanically correct but
+  incomplete without the test-file drivers, so they were restored to avoid a broken
+  working tree across the decision.
 
 ## Verification
 - md-links green. Items 1/7/P11-design already merged to `v0.2.3` (`1faf59f`,
