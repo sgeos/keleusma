@@ -2,8 +2,8 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-**Status**: RESOLVED — implemented on branch `feat/selfhost-two-word-records` (2026-07-24),
-pending merge to `v0.2.3`. Prepared 2026-07-22 (process-audit item 6); revised 2026-07-23
+**Status**: RESOLVED — merged to `v0.2.3` (2026-07-24) and CI-green. Prepared 2026-07-22
+(process-audit item 6); revised 2026-07-23
 with the total-word-budget finding. The operator chose the recommended path, implemented as:
 the **record** stream got Option E two-word transport (its payload was at the `i64` ceiling),
 while the **token** and **wire-op** streams got an 8-bit radix widening (their payloads had
@@ -233,6 +233,6 @@ is defensible.
    (the six-way host-driver duplication was consolidated first, then the transport, then the
    capacity increments); the nested-equality frontier is addressed by native `>= 64` tags.
 
-All of the above is implemented and verified byte-identical on the branch, pending merge.
+All of the above is implemented, verified byte-identical, and merged to `v0.2.3` (CI-green).
 The change was past the autonomy boundary and was taken with the operator's explicit
 direction at each step.
