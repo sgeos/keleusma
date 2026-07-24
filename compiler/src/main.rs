@@ -219,7 +219,7 @@ fn run_lexer(path: &str) {
                     println!("  EOF");
                     return;
                 } else {
-                    let (tok, payload) = (t.rem_euclid(64), t.div_euclid(64));
+                    let (tok, payload) = (t.rem_euclid(256), t.div_euclid(256));
                     let name = tok_name(tok);
                     if tok == 1 {
                         println!("  {name:<9} id {payload}");
@@ -375,7 +375,7 @@ fn run_parse_pipeline(path: &str) {
             } else if t == 62 {
                 break; // EOF
             } else {
-                tokens.push((t.rem_euclid(64), t.div_euclid(64)));
+                tokens.push((t.rem_euclid(256), t.div_euclid(256)));
             }
         }
         st = lvm
@@ -433,7 +433,7 @@ fn run_parse_pipeline(path: &str) {
             .unwrap();
     }
     for (i, &(k, v)) in tokens.iter().enumerate() {
-        pvm.set_shared(&mut pshared, P_PACKED + i, Value::Int(k + v * 64))
+        pvm.set_shared(&mut pshared, P_PACKED + i, Value::Int(k + v * 256))
             .unwrap();
     }
 
