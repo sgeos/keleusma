@@ -1,10 +1,13 @@
 name: CI
 
+# Trigger on `main` and any version branch (`v*`, e.g. the active `v0.2.x`
+# release line and future version lines), so a version branch cut from `main` is
+# CI-gated from the start, not only `main`.
 on:
   push:
-    branches: [main]
+    branches: [main, 'v*']
   pull_request:
-    branches: [main]
+    branches: [main, 'v*']
 
 env:
   CARGO_TERM_COLOR: always
@@ -239,6 +242,27 @@ jobs:
         run: |
           cd keleusma-lsp
           cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+
+  selfhost-compiler:
+    name: Self-hosted compiler subproject
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # compiler/ is a detached-workspace crate (its own [workspace]) depending on
+      # the core runtime by path, so the --workspace jobs above do not cover it. A
+      # change to the ISA or the .kel stages that breaks the byte-identical
+      # differential-oracle self-compile must fail here. This is the CI counterpart
+      # of scripts/release-gate.sh's subproject step — the gap that let a stale
+      # decoder ship `unknown op tag 62` on the release line (process audit item 4).
+      - name: Build, test, and lint the detached compiler subproject
+        run: |
+          cd compiler
+          cargo fmt --all -- --check
           cargo clippy --all-targets -- -D warnings
           cargo test
 
