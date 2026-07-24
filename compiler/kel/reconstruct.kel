@@ -650,7 +650,7 @@ fn step(k: Word, a: Word) -> Word {
         let scrut = pop();
         emit(22, base, scrut, lit_count)
     } else {
-    if k >= 40 andalso k <= 63 {
+    if (k >= 40 andalso k <= 63) orelse k == 65 {
         // The enum-match / struct-eq / bnot assembly records occupy the contiguous kind range 40..63.
         // (The values in that range that are NOT assembly records -- 43/44/45/60 binary or unary, and
         // 54/59/62 which are node-only kinds never yielded as records -- are handled earlier in `step`
@@ -786,8 +786,9 @@ fn step_assembly(k: Word, a: Word) -> Word {
         // ArrayOfEnumEq node.
         build_array_of_enum_eq(a)
     } else {
-    if k == 48 orelse k == 51 {
-        // The `bnot` family: a unary node whose RECORD kind (< 64) maps to a NODE kind >= 64. Handled
+    if k == 65 orelse k == 51 {
+        // The `bnot` family: Word bnot arrives on its native record kind 65 (P11 Option E), Byte bnot
+        // still on 51; both build a unary NODE kind >= 64. Handled
         // in a dedicated helper to keep both `step()` and `step_assembly` under the 1024-node cap.
         step_bnot(k, a)
     } else {
@@ -808,11 +809,11 @@ fn step_assembly(k: Word, a: Word) -> Word {
     } } } } } } } } } } } } } } } } } }
 }
 
-// Record 48 (Word `bnot`) -> node 65 (`push_bnot`, `a bxor -1`); record 51 (Byte `bnot`) -> node 66
+// Record 65 (Word `bnot`, its native tag) -> node 65 (`push_bnot`, `a bxor -1`); record 51 (Byte `bnot`) -> node 66
 // (`push_byte_bnot`, promote-operate-truncate). A unary node: one operand folded from the stack.
 fn step_bnot(k: Word, a: Word) -> Word {
     let c = pop();
-    if k == 48 {
+    if k == 65 {
         emit(65, a, c, 0)
     } else {
         emit(66, a, c, 0)
