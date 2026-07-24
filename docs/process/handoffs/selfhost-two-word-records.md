@@ -52,17 +52,18 @@ The transport removes the ceiling but is behavior-neutral until emit sites use i
    the raw kind 63, so its payload (which reached bit 55, one below the ceiling) rides
    its own word. Byte-identical; 89 + 83 tests green. This is the first emit site on the
    `emit_arg >= 0` full-word path.
-2. **Retire a split-tag workaround (CHECKPOINTED — needs care).** Give a record that
-   reuses a low tag for a high node kind its native `>= 64` tag: `parse.kel` emit_op
-   `OpCode::Bnot() => 48` -> `{ ps.emit_arg = 0; 65 }`; then dispatch record 65 in the
-   reconstruct(s). **Complication found:** changing a record *kind* (not just its
-   transport) ripples to EVERY reconstruct implementation — `reconstruct.kel`
-   `step`/`step_bnot` (lines 789/813, map 48->65) AND the Rust reconstruct in the tests
-   (`tests/selfhost_codegen.rs` `reconstruct_into`, and check `selfhost_parse.rs`). This
-   is the same kind/dispatch duplication the drivers had; audit each reconstruct site for
-   the `48` (and `59`, `54`) reuse before changing the tag. Best done on an idle machine
-   with the full byte-identity corpus, as its own increment.
-3. Later, the token and wire-op streams get the same two-word shape for uniformity.
+2. **DONE (`4796746`) — retired the `bnot` split-tag.** Word `bnot` now yields its
+   native record kind 65 (the first record kind >= 64, using the unbounded tag space).
+   `parse.kel` `bnot_record()` helper sets `emit_arg = 0` and returns 65 (a match arm
+   takes an expression, not a `{...}` block — the block form fails to parse, which cost
+   one verify cycle to learn). `reconstruct.kel`: the 40..63 routing gate now also admits
+   65, and `step_assembly`/`step_bnot` dispatch 65. The Rust `reconstruct_into` needed NO
+   change — it never processes bnot; only `reconstruct.kel` does. Byte-identical: 92 + 83
+   tests. The remaining split-tag reuses (record 59 -> node 68 for eager and/or; record 54
+   -> node 67 for array-of-array-eq) can be retired the same way when convenient.
+3. **Remaining (future):** the token stream (lexer -> parse) and wire-op stream (codegen
+   -> driver) get the same two-word shape for uniform future-proofing; and precedence P1
+   (renumber the self-host scale) is an independent change. Neither is started.
 
 ## Verification protocol
 - Curated subset + the full `selfhost_parse`/`selfhost_pipeline` binaries + the
