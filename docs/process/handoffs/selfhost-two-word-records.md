@@ -61,9 +61,21 @@ The transport removes the ceiling but is behavior-neutral until emit sites use i
    change — it never processes bnot; only `reconstruct.kel` does. Byte-identical: 92 + 83
    tests. The remaining split-tag reuses (record 59 -> node 68 for eager and/or; record 54
    -> node 67 for array-of-array-eq) can be retired the same way when convenient.
-3. **Remaining (future):** the token stream (lexer -> parse) and wire-op stream (codegen
-   -> driver) get the same two-word shape for uniform future-proofing; and precedence P1
-   (renumber the self-host scale) is an independent change. Neither is started.
+3. **DONE — token and wire-op streams widened.** `4047a21` (wire-op) and `20ae58f`
+   (token). Engineering finding: these two did NOT need two-word — unlike the record
+   stream's fat payload, their payloads have headroom, so an 8-bit RADIX WIDENING (tags
+   0..255) is safe and far simpler than two-word (no pair-reads, no layout shifts). Wire-op
+   is `wire.radix` + two `decode_op` splits; token is 17 sites of `64 -> 256` across the
+   lexer emit, host reads/writes, and parse reads. Both byte-identical (92 + 83 tests). So
+   all three inter-stage encodings now have ample tag headroom: record unbounded (two-word),
+   token and wire-op at 256.
+
+## Remaining Option E follow-ups (future, not started)
+- The record stream's other split-tag reuses can be retired like `bnot` did (record 59 ->
+  node 68 for eager and/or; record 54 -> node 67 for array-of-array-eq) when convenient.
+- Precedence P1 (renumber the self-host precedence scale to match the reference, fixing the
+  `a xor b == c` / `a and b xor c` faithfulness defects) is an independent change, still
+  open per the brief.
 
 ## Verification protocol
 - Curated subset + the full `selfhost_parse`/`selfhost_pipeline` binaries + the
