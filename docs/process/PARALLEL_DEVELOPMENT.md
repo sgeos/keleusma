@@ -74,24 +74,27 @@ when their owned paths do not overlap.
 
 ### The coupling that limits self-host parallelism (be honest about this)
 
-The self-hosted pipeline is **not** internally parallelizable right now, and this
-bounds how much true concurrency the roadmap currently offers:
+The self-hosted pipeline still has coupling that bounds true concurrency, though the
+biggest single blocker is now gone:
 
-- The encoding-capacity change (priority **P11**, see
-  [`docs/decisions/ENCODING_CAPACITY_BRIEF.md`](../decisions/ENCODING_CAPACITY_BRIEF.md))
-  touches every `.kel` stage and both Rust drivers in **lockstep**. It cannot be
-  split across agents and it must land before dependent self-host work.
-- The nested-equality frontier (tuple-of-struct, enum-in-struct, deeper nesting)
-  consumes the very encoding P11 changes, so it conflicts with P11 and with
-  itself. One self-host agent at a time.
-- A runtime wire-format change (for example the 24-bit shared-data widening plan)
-  edits `src/` **and** requires re-synchronising `compiler/`, so it is not
-  concurrent with any self-host work.
+- **P11 (encoding capacity) has LANDED** (2026-07-24, see
+  [`docs/decisions/ENCODING_CAPACITY_BRIEF.md`](../decisions/ENCODING_CAPACITY_BRIEF.md)):
+  the inter-stage encodings have ample tag headroom and the split-tag workarounds are
+  retired. New construct work no longer competes for scarce encoding slots, so several
+  self-host constructs that touch *disjoint* `.kel` code can now proceed in parallel — the
+  former hard serialization is lifted.
+- Remaining coupling: a change to the **shared inter-stage protocol** (a stage's record/
+  token/op format, or the host driver in `compiler/src/` — one shared `drive_parse_records`
+  after the consolidation) still needs cross-stage coordination and should be a single
+  stream. Likewise a runtime **wire-format** change edits `src/` and requires re-syncing
+  `compiler/`, so it is not concurrent with self-host work.
+- Two agents editing the *same* `.kel` stage still conflict; partition by stage or by
+  disjoint construct areas.
 
-Genuine near-term concurrency therefore lives across the *independent* streams:
-guide/book, arena, bench, the RTOS example, and any runtime feature that does not
-touch the wire format. Self-host work is effectively single-threaded until P11
-lands and de-couples the stages. Do not pretend otherwise when planning a fan-out.
+So near-term concurrency spans the independent streams (guide/book, arena, bench, the RTOS
+example, runtime features that do not touch the wire format) **and now** self-host construct
+work on disjoint areas. Reserve a single stream only for shared-protocol / wire-format
+changes.
 
 ## 3. Communication channels under parallelism
 
@@ -146,17 +149,18 @@ ran against, so there is no lock daemon, just "gate, then confirm nothing moved.
 ## 5. Checklist for launching a parallel burst
 
 1. Confirm the chosen streams own disjoint paths (section 2).
-2. Confirm no stream depends on a wire-format or P11 change that another stream is
-   making concurrently.
+2. Confirm no stream depends on a wire-format or shared inter-stage-protocol change
+   that another stream is making concurrently.
 3. `scripts/worktree.sh new <branch>` per stream.
 4. Each agent iterates with `scripts/fast-check.sh`; per-branch handoff in
    `docs/process/handoffs/`.
 5. Merge back one at a time with `scripts/merge-to-trunk.sh` (section 4).
 6. `scripts/worktree.sh rm <branch>` when merged.
 
-## Open dependency
+## Status
 
-Full self-host parallelism is gated on the **P11** encoding-capacity decision
-landing first (it de-couples the pipeline stages). Until then, keep self-host work
-single-threaded and parallelise only the independent streams in section 2. See
+The **P11** encoding-capacity change has landed (2026-07-24), which was the hard blocker
+on self-host parallelism — the inter-stage encodings now have headroom, so construct work
+on disjoint `.kel` areas can run in parallel (section 2). The remaining constraint is only
+shared-protocol / wire-format changes, which stay single-stream. See
 [`docs/decisions/ENCODING_CAPACITY_BRIEF.md`](../decisions/ENCODING_CAPACITY_BRIEF.md).
