@@ -50,18 +50,16 @@ increment-by-increment reasoning and frontier assessments live in
   loaded-machine confound. Per the audit's "keep only if wall-clock drops", the
   `heavy-selfhost` cap was REMOVED; `test-threads` remains the concurrency/memory bound.
 
-## Concerns / operator decisions pending
+## Branching model (resolved)
 
-- **`main` catch-up.** `main` is diverged behind `v0.2.3`, and its own `ci.yml` does not yet
-  carry the `v*` trigger (so a version branch cut from `main` would not be gated until it
-  picks up v0.2.3's workflow). The release line IS gated now, so this is no longer urgent,
-  but reconciling `main` (catch it up to the release line, or at least land the `v*` trigger
-  there) is an operator decision. Offered to prepare that PR.
+- **`main`'s CI config was updated** (2026-07-24, commit `4483f43`): its `ci.yml` now carries
+  the `v*` trigger and the `selfhost-compiler` job, so a version branch cut from `main` is
+  CI-gated from the start. The operator chose this over a full content catch-up, so `main`
+  remains 306 commits behind `v0.2.3` by design; catching it up (or a next version branch cut
+  from it) is a future call. Both `main` and `v0.2.3` are CI-gated.
 
 ## Next step
 
-All process-audit items are addressed. `main`'s `ci.yml` gets the `v*` trigger + a
-`selfhost-compiler` job (operator chose to update main's CI config, not a full catch-up).
-Then await operator direction on the next roadmap target — the nested-composite-equality
-frontier (enum-in-struct, tuple-of-struct, 2+-level) is now unblocked by the freed encoding
-capacity.
+All process-audit items are addressed (items 1–7) and the branching finding is resolved.
+Await operator direction on the next roadmap target — the nested-composite-equality frontier
+(enum-in-struct, tuple-of-struct, 2+-level) is now unblocked by the freed encoding capacity.
