@@ -295,7 +295,8 @@ enum OpCode {
     Shr = 28,
     ShrL = 29,
     // `bnot` (unary bitwise NOT). Lowered to `a bxor -1` by codegen `push_bnot`; a unary prefix like
-    // Not/Neg. emit_op yields it as record kind 48 (free as a record; reconstruct maps 48 -> node 65).
+    // Not/Neg. emit_op yields it on its NATIVE record kind 65 (== its node kind) via the two-word
+    // transport (P11 Option E); reconstruct dispatches record 65 directly.
     Bnot = 30,
     // The eager boolean operators. `a and b` = `if a then b else false`; `a or b` = `if a then true
     // else b` -- both EAGER (b always evaluated), distinct from the short-circuit `andalso`/`orelse`.
@@ -2478,6 +2479,14 @@ fn step_enumeq_emit() -> Word {
     }
 }
 
+// P11 Option E: Word `bnot`'s record. It sets `emit_arg = 0` so the two-word transport carries the
+// NATIVE tag 65 (>= 64) rather than the old reused record 48; a helper because a match arm takes an
+// expression, not a `{ ... }` block. reconstruct dispatches record 65 directly. Byte-identical.
+fn bnot_record() -> Word {
+    ps.emit_arg = 0;
+    65
+}
+
 fn emit_op(op: Word) -> Word {
     // Any operator applied to a `let` value's operand means the value's root is not a bare
     // composite construction, so clear the pending composite-type tracking (see `stmt`).
@@ -2550,8 +2559,11 @@ fn emit_op(op: Word) -> Word {
         match op {
             OpCode::Neg() => Node::Neg() as Word,
             OpCode::Not() => Node::Not() as Word,
-            // `bnot` yields record kind 48 (free in the record space); reconstruct maps it to node 65.
-            OpCode::Bnot() => 48,
+            // P11 Option E: `bnot` now yields its NATIVE record kind 65 (== its node kind) via the
+            // two-word transport (emit_arg = 0, a full-word tag), retiring the split-tag workaround
+            // that reused record 48. reconstruct dispatches record 65 directly. This is the first
+            // record kind >= 64 the unbounded tag space admits; it is byte-identical (node 65 either way).
+            OpCode::Bnot() => bnot_record(),
             // Eager `and`/`or`: record kind 59 (free as a record) with arg = is_or (0/1); reconstruct
             // maps 59 -> node 68. `59 + is_or * 64` packs the arg into the record.
             OpCode::And() => 59,

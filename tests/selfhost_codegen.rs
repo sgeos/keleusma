@@ -7009,9 +7009,9 @@ fn self_host_compiles_boolean_xor() {
 /// `a bxor -1` (GetLocal, Const(-1), BitXor). It is the first operator added past the FULL 6-bit
 /// record-kind space, using the split record/node-kind pattern (the reconstruct `k == 36` precedent):
 /// the lexer tokenizes `bnot` to the last free low Tok (11); parse pushes it as a unary prefix
-/// (OpCode::Bnot = 30) and `emit_op` yields RECORD kind 48 (free in the < 64 record space -- it is
-/// StructEq's node kind, a separate array); reconstruct maps record 48 -> NODE kind 65 (node kinds
-/// live in the un-packed forest array, so may exceed 63); codegen `push_bnot` emits the lowering with
+/// (OpCode::Bnot = 30) and `emit_op` yields its NATIVE RECORD kind 65 via the two-word transport
+/// (P11 Option E; record kinds may now exceed 63, matching the node kind); reconstruct dispatches
+/// record 65 directly; codegen `push_bnot` emits the lowering with
 /// the `-1` DEFERRED via push_int_const. Byte `bnot` (promote-operate-truncate) is a follow-up.
 #[test]
 fn self_host_compiles_word_bnot() {
