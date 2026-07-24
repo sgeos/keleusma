@@ -60,7 +60,7 @@ fn self_hosted_lexer_increment_1() {
                     tokens.push((62, 0));
                     break; // EOF
                 } else {
-                    tokens.push((t % 64, t / 64));
+                    tokens.push((t % 256, t / 256));
                 }
             }
             VmState::Reset => {}
@@ -108,7 +108,7 @@ fn lex_tokens(input: &[u8]) -> Vec<(i64, i64)> {
                     tokens.push((62, 0));
                     break; // EOF
                 } else {
-                    tokens.push((t % 64, t / 64));
+                    tokens.push((t % 256, t / 256));
                 }
             }
             VmState::Reset => {}
