@@ -1962,7 +1962,7 @@ fn br_lex(src: &str) -> (Vec<(i64, i64)>, Vec<String>) {
             } else if t == 62 {
                 break;
             } else {
-                toks.push((t.rem_euclid(64), t.div_euclid(64)));
+                toks.push((t.rem_euclid(256), t.div_euclid(256)));
             }
         }
         st = vm
@@ -2046,7 +2046,7 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
             .unwrap();
     }
     for (i, &(k, v)) in tokens.iter().enumerate() {
-        vm.set_shared(&mut shared, BR_P_PACKED + i, Value::Int(k + v * 64))
+        vm.set_shared(&mut shared, BR_P_PACKED + i, Value::Int(k + v * 256))
             .unwrap();
     }
 
@@ -4101,7 +4101,7 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
             .unwrap();
     }
     for (i, &(k, v)) in tokens.iter().enumerate() {
-        vm.set_shared(&mut shared, BR_P_PACKED + i, Value::Int(k + v * 64))
+        vm.set_shared(&mut shared, BR_P_PACKED + i, Value::Int(k + v * 256))
             .unwrap();
     }
 

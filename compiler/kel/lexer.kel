@@ -17,7 +17,7 @@
 // plain array indexing (R3.3); no `Text` native is needed for this increment.
 //
 // Token wire (increment 5, unified vocabulary). Each yielded Word is
-// `tok + payload*64`, where `tok` is the parser's `Tok` discriminant and
+// `tok + payload*256` (P11 Option E: 8-bit token radix), where `tok` is the parser's `Tok` discriminant and
 // `payload` is the token's datum, so the lexer's output stream IS the parser's
 // input stream and the two stages can be composed with no host-side adapter. Two
 // out-of-band markers ride above the Tok range (0..53), so they never collide
@@ -335,7 +335,7 @@ fn punct_op(b: Word) -> Word {
 }
 
 // The token word for a completed identifier run at `start` of `len` bytes, in the
-// unified wire `tok + payload*64`: a lone `_` is the Underscore token (Tok 50); a
+// unified wire `tok + payload*256`: a lone `_` is the Underscore token (Tok 50); a
 // keyword run is its Tok code with no payload; any other run is an Ident (Tok 1)
 // carrying its interned id as the payload.
 fn ident_token(start: Word, len: Word) -> Word {
@@ -343,7 +343,7 @@ fn ident_token(start: Word, len: Word) -> Word {
         50
     } else {
         let kc = keyword_code(start, len);
-        if kc >= 0 { kc } else { 1 + intern_id(start, len) * 64 }
+        if kc >= 0 { kc } else { 1 + intern_id(start, len) * 256 }
     }
 }
 
@@ -362,7 +362,7 @@ loop main(resume: Word) -> Word {
             // An integer ending at end of input: IntLit (Tok 12), value the payload.
             let v = st.val;
             st.kind = 0;
-            yield 12 + v * 64
+            yield 12 + v * 256
         } else {
             // A `//` comment ran to end of source with no trailing newline: no token.
             yield 62
@@ -392,7 +392,7 @@ loop main(resume: Word) -> Word {
                 // IntLit (Tok 12), the parsed value as the payload.
                 let v = st.val;
                 st.kind = 0;
-                yield 12 + v * 64
+                yield 12 + v * 256
             }
         } else {
         if st.kind == 5 {
@@ -419,7 +419,7 @@ loop main(resume: Word) -> Word {
                 let id = intern_id(st.start, st.val);
                 st.kind = 0;
                 st.cursor = st.cursor + 1;
-                yield 58 + id * 64
+                yield 58 + id * 256
             } else {
                 st.cursor = st.cursor + 1;
                 st.val = st.val + 1;

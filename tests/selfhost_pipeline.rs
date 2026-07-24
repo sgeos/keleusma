@@ -168,7 +168,7 @@ fn lex_full(src: &str) -> (Vec<(i64, i64)>, Vec<String>) {
                 reached_eof = true;
                 break;
             } else {
-                out.push((t % 64, t / 64));
+                out.push((t % 256, t / 256));
             }
         } else if !matches!(st, VmState::Reset) {
             panic!("unexpected {st:?}");
@@ -414,7 +414,7 @@ fn parse_via_lexer(src: &str) -> (usize, usize) {
             .unwrap();
     }
     for (i, &(k, v)) in tokens.iter().enumerate() {
-        vm.set_shared(&mut shared, P_PACKED + i, Value::Int(k + v * 64))
+        vm.set_shared(&mut shared, P_PACKED + i, Value::Int(k + v * 256))
             .unwrap();
     }
 

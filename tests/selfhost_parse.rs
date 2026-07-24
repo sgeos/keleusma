@@ -296,7 +296,7 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
             .expect("chunk");
     }
     for (i, (&k, &v)) in kinds.iter().zip(vals.iter()).enumerate() {
-        vm.set_shared(&mut shared, PACKED + i, Value::Int(k + v * 64))
+        vm.set_shared(&mut shared, PACKED + i, Value::Int(k + v * 256))
             .expect("token");
     }
 

@@ -25,7 +25,8 @@ require word >= 32;
 // segment is a flat 64KB host buffer of 8-byte words, so a two-array representation
 // costs 16 bytes per token and caps input near 4000 tokens; one packed array halves
 // that to 8 bytes per token, which is what lets the larger stage files fit. Each read
-// site recovers `kind` as `packed % 64` and `payload` as `packed / 64`.
+// site recovers `kind` as `packed % 256` and `payload` as `packed / 256` (P11 Option E: the
+// token radix is 8 bits, so the Tok tag space is 0..255 with 62/63 the EOF/PENDING sentinels).
 shared data toks {
     len: Word,
     packed: [Word; 40960],
@@ -110,7 +111,8 @@ enum Tok {
     Asl = 60,
     Asr = 61,
     // `lsr` takes a free low slot (20, a retired keyword's), not 62/63 -- those are the lexer's
-    // EOF and PENDING sentinels, and the token is packed as `tok + payload * 64` so it must be < 64.
+    // EOF and PENDING sentinels, and the token is packed as `tok + payload * 256` (P11 Option E),
+    // so tok must avoid the 62/63 sentinels (the tag space is otherwise 0..255).
     Lsr = 20,
     // The eager boolean `xor` (another free low slot). It lowers exactly like `!=` (`CmpNe`) on the two
     // bool operands, so `opcode_of` maps it straight to `NotEq` -- no new opcode or node kind needed.
@@ -3949,8 +3951,8 @@ fn body_step() -> Word {
             ops.draining = 1;
             0
         } else {
-            let k = toks.packed[ps.cursor] % 64;
-            let v = toks.packed[ps.cursor] / 64;
+            let k = toks.packed[ps.cursor] % 256;
+            let v = toks.packed[ps.cursor] / 256;
             ps.cursor = ps.cursor + 1;
             // A pending struct-field-access postfix intercepts the next token here, before the
             // normal dispatch, so the deep `step_dispatch_normal` chain is not deepened.
@@ -4955,8 +4957,8 @@ fn step_body() -> Word {
                 15
             }
         } else {
-            let k = toks.packed[ps.cursor] % 64;
-            let v = toks.packed[ps.cursor] / 64;
+            let k = toks.packed[ps.cursor] % 256;
+            let v = toks.packed[ps.cursor] / 256;
             ps.cursor = ps.cursor + 1;
             header_step(k, v)
         }
