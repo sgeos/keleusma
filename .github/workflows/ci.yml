@@ -1,8 +1,9 @@
 name: CI
 
 # Trigger on `main` and any version branch (`v*`, e.g. the active `v0.2.x`
-# release line and future version lines), so a version branch cut from `main` is
-# CI-gated from the start, not only `main`.
+# release line and future `v0.3.x` lines), so the WIP release line is CI-gated,
+# not only `main`. Reconciles the branching model: work merges into the active
+# release line, which CI now covers.
 on:
   push:
     branches: [main, 'v*']
@@ -257,8 +258,8 @@ jobs:
       # the core runtime by path, so the --workspace jobs above do not cover it. A
       # change to the ISA or the .kel stages that breaks the byte-identical
       # differential-oracle self-compile must fail here. This is the CI counterpart
-      # of scripts/release-gate.sh's subproject step — the gap that let a stale
-      # decoder ship `unknown op tag 62` on the release line (process audit item 4).
+      # of scripts/release-gate.sh's subproject step — closing the blind spot that
+      # let a stale decoder ship `unknown op tag 62` into v0.2.3 (process audit item 4).
       - name: Build, test, and lint the detached compiler subproject
         run: |
           cd compiler

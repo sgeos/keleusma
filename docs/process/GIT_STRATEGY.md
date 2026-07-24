@@ -90,6 +90,12 @@ Before merging a feature branch into the active release line, run the full gate:
 scripts/release-gate.sh
 ```
 
-This is **mandatory, not optional**. It is a superset of the pre-push hook: it runs the `--no-default-features` and `signatures`/`signatures,shell` feature matrix **and** the detached `compiler/` subproject (`cd compiler && cargo test`), neither of which the pre-push hook nor CI covers. Skipping it is how a break reaches the release line undetected — for example, a stale decoder in `compiler/src/selfhost.rs` shipped `unknown op tag 62` into `v0.2.3` because the subproject was gated nowhere (process audit, 2026-07-22). A merge whose `release-gate.sh` is not green does not proceed.
+This is the **recommended local pre-push mirror of CI**: it runs the `--no-default-features` and `signatures`/`signatures,shell` feature matrix **and** the detached `compiler/` subproject (`cd compiler && cargo test`) — the same coverage CI now provides (as of 2026-07-24 CI triggers on the `v*` release line and includes a `selfhost-compiler` subproject job). Run it before pushing to the release line so a break is caught locally in one pass rather than across several red CI jobs; CI is the authoritative gate. Historically the subproject was gated **nowhere**, which is how a stale decoder shipped `unknown op tag 62` into `v0.2.3` (process audit item 4); that gap is now closed in both places.
 
-> **Known branching-model inconsistency (operator decision pending).** This document's "Trunk-Based Development" section states work merges into `main`, but current practice merges feature branches into the active `v0.2.x` release line, and `main` has diverged well behind it. CI triggers on `main` only, so the `v0.2.x` line is not CI-gated — which is *why* the pre-merge gate above is load-bearing. Reconciling the branching model (catch `main` up, or make CI track the release line) is an operator decision, flagged here so the gate's necessity is understood.
+> **Branching model (reconciled 2026-07-24).** Work merges into the active `v0.2.x`
+> release line (not `main`, which has diverged behind it). CI now triggers on `main` **and**
+> any `v*` version branch and includes the full feature matrix plus the detached `compiler/`
+> subproject, so **the release line is CI-gated**. The document's older "merges into `main`"
+> framing reflects the eventual trunk model; until `main` is caught up, the `v*` line is the
+> CI-gated integration branch. (`main`'s own `ci.yml` should pick up the same `v*` trigger
+> when it is next updated, so version branches cut from `main` are gated from the start.)

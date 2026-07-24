@@ -46,14 +46,24 @@ failure-output = "immediate"
 # is a plain heap allocation of `capacity` bytes, 64 KiB by default. See B39.)
 test-threads = 4
 
-# Cap how many of the heavy self-hosted byte-identity tests run at once. Each
-# drives the full compile pipeline over a whole `.kel` file in-process (CPU- and
-# memory-heavy), so letting all of `test-threads` be self-host tests oversubscribes
-# a busy machine and inflates wall-clock (the `SLOW [>960s]` observation in the
-# process audit). Capping them to two concurrent leaves the other slots for light
-# tests. This applies to the default/ci profiles (full runs); the `quick` profile
-# excludes these tests entirely so the cap is moot there. max-threads is a tuning
-# knob — revisit on an idle machine if the full run is core-starved or contended.
+# Cap how many of the heavy self-hosted byte-identity tests run at once. Each drives the
+# full compile pipeline over a whole `.kel` file in-process, holding the source, the token
+# and record streams, and arena buffers — so they are the suite's MEMORY hogs, not just its
+# CPU hogs. The cap's primary rationale is memory: on a memory-constrained runner (a CI
+# ubuntu-latest VM has ~7 GB) letting `test-threads` of these run at once, on top of parallel
+# `rustc`, can exhaust RAM. Two concurrent bounds peak memory while the other test-thread
+# slots run light tests. Applies to the default/ci profiles (full runs); the `quick` profile
+# excludes these tests, so the cap is moot there.
+#
+# VALIDATION STATUS (process audit item 1): the audit asked to "keep the change only if total
+# gate wall-clock drops", measured on an idle machine. That measurement has NOT been done —
+# every attempt this development window has been confounded by an unrelated CPU-saturating
+# process (the `SLOW [>960s]` figure is itself likely that confound, not oversubscription; the
+# isolated cost is ~90s). On a many-core host (this dev box has 10) the CPU-oversubscription
+# concern is weak — `test-threads = 4` already keeps concurrency below the core count — so the
+# cap is retained on the MEMORY rationale (which holds on constrained CI runners) and is
+# conservative/safe, but `max-threads` should be re-measured on an idle machine and raised (or
+# the cap dropped) if the full run proves core-starved rather than memory-bound.
 [test-groups]
 heavy-selfhost = { max-threads = 2 }
 
