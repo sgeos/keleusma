@@ -306,6 +306,11 @@ enum OpCode {
     // transport (P11 Option E); reconstruct dispatches record 68 directly.
     And = 31,
     Or = 32,
+    // P11 precedence P1: `xor` is now its OWN OpCode (was folded onto `NotEq`), so it can carry the
+    // logical-band precedence (4, below comparison) that fixes `a xor b == c` and `a and b xor c`.
+    // It still LOWERS exactly like `!=`: `emit_op` maps it to a BinOp(NotEq) node, so codegen emits
+    // the same CmpNe wire op and the output stays byte-identical to the reference.
+    Xor = 33,
 }
 
 // The merged parser state.
@@ -1865,9 +1870,14 @@ fn step_store_finalize() -> Word {
 
 fn prec_of(op: Word) -> Word {
     match op {
-        OpCode::Neg() => 10,
-        OpCode::Not() => 10,
-        OpCode::Bnot() => 10,
+        // P11 precedence P1: a finer scale matching the reference's binding powers, so the logical band
+        // (orelse < andalso < or < xor < and) is distinct and sits below comparison. Higher binds
+        // tighter. The relative order of every non-logical operator is preserved from the old coarse
+        // scale, so their folding stays byte-identical; only `xor` (was tied with comparison) and the
+        // now-distinct logical operators re-fold, matching the reference.
+        OpCode::Neg() => 13,
+        OpCode::Not() => 13,
+        OpCode::Bnot() => 13,
         OpCode::Paren() => 0,
         OpCode::IndexMark() => 0,
         OpCode::YieldMark() => 0,
@@ -1880,30 +1890,30 @@ fn prec_of(op: Word) -> Word {
         OpCode::ArrayMark() => 0,
         OpCode::EnumMark() => 0,
         OpCode::TupleMark() => 0,
-        OpCode::Mul() => 9,
-        OpCode::Div() => 9,
-        OpCode::Mod() => 9,
-        OpCode::Add() => 8,
-        OpCode::Sub() => 8,
+        OpCode::Mul() => 12,
+        OpCode::Div() => 12,
+        OpCode::Mod() => 12,
+        OpCode::Add() => 11,
+        OpCode::Sub() => 11,
         // Shifts bind looser than the additive operators and tighter than the bitwise operators
         // (the C/Java convention, matching the reference `parse_shift_expr` between comparison and
         // additive). Left-associative like the other binary operators.
-        OpCode::Shl() => 7,
-        OpCode::Shr() => 7,
-        OpCode::ShrL() => 7,
-        OpCode::Band() => 6,
-        OpCode::Bxor() => 5,
-        OpCode::Bor() => 4,
+        OpCode::Shl() => 10,
+        OpCode::Shr() => 10,
+        OpCode::ShrL() => 10,
+        OpCode::Band() => 9,
+        OpCode::Bxor() => 8,
+        OpCode::Bor() => 7,
+        // The logical band, below comparison (the `_ => 6` default), matching the reference
+        // `logical_binding_power` (Orelse 0 < Andalso 1 < Or 2 < Xor 3 < And 4). `xor` gets an explicit
+        // arm here rather than the comparison-level default, fixing `a xor b == c` (now `a xor (b == c)`)
+        // and `a and b xor c` (now `(a and b) xor c`).
+        OpCode::And() => 5,
+        OpCode::Xor() => 4,
+        OpCode::Or() => 3,
         OpCode::Andalso() => 2,
         OpCode::Orelse() => 1,
-        // Eager `and`/`or` sit in the logical band (below comparison). The self-host's integer scale is
-        // coarser than the reference's logical binding powers (Or 2, And 4), so it preserves only the
-        // relative order And > Or (correct for `a or b and c` = `a or (b and c)`); a case mixing eager
-        // and/or with a comparison or bitwise at a finer level is not faithfully ordered (as with the
-        // `xor`-as-NotEq approximation). The bridged stage files use `andalso`/`orelse`, not these.
-        OpCode::And() => 2,
-        OpCode::Or() => 1,
-        _ => 3,
+        _ => 6,
     }
 }
 
@@ -2584,6 +2594,10 @@ fn emit_op(op: Word) -> Word {
             OpCode::Andalso() => Node::Andalso() as Word,
             OpCode::Orelse() => Node::Orelse() as Word,
             OpCode::YieldMark() => Node::YieldExpr() as Word,
+            // P11 precedence P1: `xor` lowers exactly like `!=` -- emit a BinOp(NotEq) node so codegen
+            // produces the same CmpNe wire op. Only its precedence differs from a plain `!=` (logical
+            // band, set in `prec_of`), which is what fixes the `xor`-vs-comparison folding.
+            OpCode::Xor() => Node::BinOp() as Word + OpCode::NotEq() as Word * 64,
             _ => Node::BinOp() as Word + op * 64,
         }
     } } } } } } } } } } } }
@@ -2599,7 +2613,7 @@ fn opcode_of(k: Word) -> Word {
         Tok::EqEq() => OpCode::Eq() as Word,
         Tok::NotEq() => OpCode::NotEq() as Word,
         // Eager boolean `xor` lowers identically to `!=` (`CmpNe`) on its two bool operands.
-        Tok::Xor() => OpCode::NotEq() as Word,
+        Tok::Xor() => OpCode::Xor() as Word,
         Tok::Lt() => OpCode::Lt() as Word,
         Tok::Gt() => OpCode::Gt() as Word,
         Tok::LtEq() => OpCode::LtEq() as Word,

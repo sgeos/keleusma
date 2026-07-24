@@ -7262,13 +7262,15 @@ fn self_hosted_construct_support_boundary() {
             "fn f(x: bool, y: Word, z: Word) -> bool { x and y < z }",
         ),
         (
-            "prec/xor_vs_eq_DEFECT",
-            Gap,
+            // P11 precedence P1 closed this: xor now sits in the logical band below comparison.
+            "prec/xor_vs_eq",
+            SOk,
             "fn f(a: bool, b: bool, c: bool) -> bool { a xor b == c }",
         ),
         (
-            "prec/and_vs_xor_DEFECT",
-            Gap,
+            // P11 precedence P1 closed this: and binds tighter than xor (both in the logical band).
+            "prec/and_vs_xor",
+            SOk,
             "fn f(a: bool, b: bool, c: bool) -> bool { a and b xor c }",
         ),
         // --- control flow --------------------------------------------------------
