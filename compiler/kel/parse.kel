@@ -308,6 +308,16 @@ enum OpCode {
 private data ps {
     cursor: Word,
     mode: Word,
+    // P11 Option E (two-word record transport). Each record is emitted as a (tag, payload)
+    // pair across two coroutine yields instead of one packed `tag + payload*64` word, so the
+    // payload has a full word and the tag namespace is unbounded. `emit_phase` alternates
+    // 0 (emit the tag word) / 1 (emit the payload word); an emit site sets `emit_arg` to its
+    // payload (the -1 sentinel, set by the wrapper before each record, means "old-packed
+    // record" and the host recovers tag = w%64, payload = w/64); `pending_arg` carries the
+    // payload word from the phase-0 computation to the phase-1 yield.
+    emit_phase: Word,
+    emit_arg: Word,
+    pending_arg: Word,
     dkind: Word,
     pdepth: Word,
     pdone: Word,
@@ -4903,7 +4913,7 @@ fn header_sig(k: Word, v: Word) -> Word {
     } } } } } } } } } } }
 }
 
-fn step() -> Word {
+fn step_body() -> Word {
     if ps.pend_end == 1 {
         ps.pend_end = 0;
         ps.mode = 0;
@@ -4933,6 +4943,24 @@ fn step() -> Word {
             header_step(k, v)
         }
     } } }
+}
+
+// P11 Option E: the two-phase record emitter. Phase 0 computes the record (via `step_body`)
+// and returns its tag word, stashing the payload for phase 1; phase 1 returns the payload
+// word. `step_body` leaves `emit_arg` at the -1 sentinel for an un-migrated (still packed)
+// record, so the host recovers the old (tag, payload) split; a migrated emit site instead
+// sets `emit_arg` to a full-word payload and returns a raw (possibly >= 64) tag.
+fn step() -> Word {
+    if ps.emit_phase == 1 {
+        ps.emit_phase = 0;
+        ps.pending_arg
+    } else {
+        ps.emit_arg = 0 - 1;
+        let w = step_body();
+        ps.pending_arg = ps.emit_arg;
+        ps.emit_phase = 1;
+        w
+    }
 }
 
 loop main(resume: Word) -> Word {
