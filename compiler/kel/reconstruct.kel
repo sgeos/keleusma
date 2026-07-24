@@ -650,7 +650,7 @@ fn step(k: Word, a: Word) -> Word {
         let scrut = pop();
         emit(22, base, scrut, lit_count)
     } else {
-    if (k >= 40 andalso k <= 63) orelse k == 65 {
+    if (k >= 40 andalso k <= 63) orelse k == 65 orelse k == 67 orelse k == 68 {
         // The enum-match / struct-eq / bnot assembly records occupy the contiguous kind range 40..63.
         // (The values in that range that are NOT assembly records -- 43/44/45/60 binary or unary, and
         // 54/59/62 which are node-only kinds never yielded as records -- are handled earlier in `step`
@@ -792,13 +792,13 @@ fn step_assembly(k: Word, a: Word) -> Word {
         // in a dedicated helper to keep both `step()` and `step_assembly` under the 1024-node cap.
         step_bnot(k, a)
     } else {
-    if k == 54 {
-        // ArrayOfArrayEqBuild: record kind 54 (a node value reused as a free record) -> node 67. A
-        // direct build (no field drain): lay [ta, tb, M, arrsize, N, innerkind, is_ne] and build.
+    if k == 67 {
+        // ArrayOfArrayEqBuild: its NATIVE record kind 67 (P11 Option E) -> node 67. A direct build
+        // (no field drain): lay [ta, tb, M, arrsize, N, innerkind, is_ne] and build.
         build_array_of_array_eq(a)
     } else {
-    if k == 59 {
-        // Eager `and`/`or`: record kind 59 (free as a record) -> node 68, `a` = is_or (0/1). A BINARY
+    if k == 68 {
+        // Eager `and`/`or`: its NATIVE record kind 68 (P11 Option E) -> node 68, `a` = is_or (0/1). A BINARY
         // node: pop the two operands. codegen `push_andor` lowers it (spill left, eval right, then a
         // value-If with condition = left, else-value false for `and` / Not(left) + true for `or`).
         let rhs = pop();
