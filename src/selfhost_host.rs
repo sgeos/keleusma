@@ -37,8 +37,29 @@ pub fn drive_parse_records<F>(
 {
     let mut state = state;
     for _ in 0..budget {
-        if let VmState::Yielded(Value::Int(w)) = state {
-            let (code, val) = (w.rem_euclid(64), w.div_euclid(64));
+        if let VmState::Yielded(Value::Int(t)) = state {
+            // Option E two-word transport: the tag word `t` is followed by its payload word on
+            // the next yield. Read it now.
+            let arg = loop {
+                state = vm
+                    .resume_with_shared(shared, Value::Int(0))
+                    .expect("resume parse.kel");
+                match state {
+                    VmState::Yielded(Value::Int(a)) => break a,
+                    // The productive `loop main` RESETs between its per-iteration yields, so the
+                    // payload word is the next Yielded after any intervening RESETs.
+                    VmState::Reset => {}
+                    other => panic!("parse.kel: expected a record payload word, got {other:?}"),
+                }
+            };
+            // The -1 sentinel marks an un-migrated (still packed) record: recover the classic
+            // tag = w % 64, payload = w / 64 split. A migrated emit site supplies its full-word
+            // payload directly with a raw (possibly >= 64) tag.
+            let (code, val) = if arg == -1 {
+                (t.rem_euclid(64), t.div_euclid(64))
+            } else {
+                (t, arg)
+            };
             if on_record(code, val).is_break() {
                 return;
             }
