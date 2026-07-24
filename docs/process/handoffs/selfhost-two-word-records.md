@@ -84,9 +84,13 @@ The transport removes the ceiling but is behavior-neutral until emit sites use i
   boundary-test defects `prec/xor_vs_eq` and `prec/and_vs_xor` from Gap to Ok. Verified:
   the boundary test, whole-stage self-compiles, and xor/eager tests all pass.
 
-The `ENCODING_CAPACITY_BRIEF.md` faithfulness Gaps for `xor`/`and` are now closed; the
-brief and the boundary-count note (was 45 Ok / 9 Gap / 1 RefRejects; now 47 / 7 / 1) can
-be refreshed. No known Option E work remains on this branch.
+The decision docs are refreshed to the implemented reality: `ENCODING_CAPACITY_BRIEF.md`
+(status RESOLVED, decision-taken section), `PRIORITY.md` (P11 struck through as resolved),
+and this plan doc (status IMPLEMENTED). The boundary count is now 47 Ok / 7 Gap / 1
+RefRejects (up from 45/9/1). The session-28 `REVERSE_PROMPT.md` still cites 45/9/1; it
+describes the `v0.2.3` base (correct until this branch merges) and, per the parallel-dev
+protocol, feature branches use this per-branch handoff rather than overwriting it. No known
+Option E work remains on this branch.
 
 ## Verification protocol
 - Curated subset + the full `selfhost_parse`/`selfhost_pipeline` binaries + the

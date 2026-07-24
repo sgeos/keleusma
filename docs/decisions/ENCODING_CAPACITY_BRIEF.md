@@ -2,12 +2,17 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-**Status**: OPEN — operator decision requested. Prepared 2026-07-22 in response to
-process-audit worklist item 6; **revised 2026-07-23** with the total-word-budget finding
-(the operator asked whether 8-bit is viable — the answer surfaced that the payloads, not
-the tag field, are the binding constraint). This is a brief, not a change; nothing here is
-implemented. It lays out the capacity constraints, the options with tradeoffs, and a
-recommendation, and stops for the operator.
+**Status**: RESOLVED — implemented on branch `feat/selfhost-two-word-records` (2026-07-24),
+pending merge to `v0.2.3`. Prepared 2026-07-22 (process-audit item 6); revised 2026-07-23
+with the total-word-budget finding. The operator chose the recommended path, implemented as:
+the **record** stream got Option E two-word transport (its payload was at the `i64` ceiling),
+while the **token** and **wire-op** streams got an 8-bit radix widening (their payloads had
+headroom, so two-word was unnecessary — see [P11_OPTION_E_PLAN.md](./P11_OPTION_E_PLAN.md)
+and the branch handoff). The nested-machinery frontier is addressed by native `>= 64` record
+tags (every split-tag workaround retired), and the precedence sub-decision was taken as **P1**
+(renumber to match the reference), closing the `xor`/`and` faithfulness Gaps. The options and
+tradeoffs below are retained as the decision record; the "decision requested" section is now
+answered inline.
 
 ## The problem
 
@@ -213,20 +218,21 @@ If the roadmap is near-term-bounded and only a few more constructs are expected,
 B** (escape codes) or continued **C** may be proportionate, and **P2** (documented defects)
 is defensible.
 
-## Decision requested
+## Decision taken (2026-07-24)
 
-1. For the packed token/record/op spaces: **E (separate tag and payload into independent
-   words, record stream first, then token and wire-op)** — the recommended, future-proof
-   path that removes the ceiling and is nearly free downstream — or **B (escape codes)**, or
-   **C (continue reuse patterns)**? Bare **A (radix widening)** is not viable: 7 bits is
-   zero-margin, 8 bits overflows. The **D** side-table stopgap only defers the ceiling and
-   is not worth doing ahead of E.
-2. For precedence: **P1 (renumber to match the reference)** or **P2 (accept documented
-   defects)**?
-3. Sequencing relative to the tuple-of-struct / nested-equality work in flight: land the
-   capacity change first (so the nested work is clean), or continue the nested work on the
-   current workarounds and revisit capacity later?
+1. Packed token/record/op spaces: **E for the record stream** (its fat payload was at the
+   ceiling, so two-word was required), and **an 8-bit radix widening for the token and
+   wire-op streams** (their payloads had headroom, so two-word would have been
+   over-engineering — a refinement of the "then token and wire-op" clause of E, chosen per
+   stream by its actual constraint). Options B/C/D were not used.
+2. Precedence: **P1** (renumber the self-host scale to match the reference). `xor` required
+   its own opcode first (it was folded onto `NotEq`); it now lowers to the same `CmpNe` wire
+   op, so the output stays byte-identical while its precedence is corrected. The two
+   faithfulness Gaps are closed.
+3. Sequencing: the capacity change landed as its own arc on `feat/selfhost-two-word-records`
+   (the six-way host-driver duplication was consolidated first, then the transport, then the
+   capacity increments); the nested-equality frontier is addressed by native `>= 64` tags.
 
-Per `PROCESS_STRATEGY.md`, this is past the autonomy boundary — it changes semantics and
-carries significant tradeoffs — so no option will be implemented without the operator's
-decision.
+All of the above is implemented and verified byte-identical on the branch, pending merge.
+The change was past the autonomy boundary and was taken with the operator's explicit
+direction at each step.
