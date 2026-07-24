@@ -27,33 +27,43 @@ protocol once. Done and verified:
 
 Six copies of the loop are now one. The behavior is byte-identical (pure refactor).
 
-## Exact next step — the two-word transport change (now a 2-edit payoff)
-Because every caller routes through `drive_parse_records`, the protocol change is
-localized:
+## State — two-word transport LANDED (`6852176`, behavior-neutral)
+The payoff of consolidating first: the transport change was a single edit to the
+shared driver plus the `parse.kel` emit.
 
-1. `src/selfhost_host.rs` `drive_parse_records`: pair-read. On a `Yielded(t)`, resume
-   once to read the payload word `arg`; then `(code,val) = if arg == -1 { (t%64, t/64) }
-   else { (t, arg) }`. The `for _ in 0..budget` still bounds records (each iteration
-   now consumes two yields), so **caller budgets do not change**.
-2. `compiler/kel/parse.kel`: the two-phase `step()` wrapper. Add `emit_phase`,
-   `emit_arg`, `pending_arg` to `private data ps` (line ~308); rename the existing
-   `fn step()` to `fn step_body()`; add a `fn step()` wrapper that on phase 0 sets
-   `emit_arg = 0 - 1`, calls `step_body()`, stashes `pending_arg = emit_arg`, sets
-   `emit_phase = 1`, returns the tag word; on phase 1 returns `pending_arg` and clears
-   the phase. The `loop main { yield step() }` is untouched.
+- `parse.kel`: two-phase `step()` wrapper (`emit_phase`/`emit_arg`/`pending_arg` on
+  `ps`). Phase 0 computes the record and yields the tag word, stashing the payload;
+  phase 1 yields the payload word. `ps` is private data, so the phase state persists
+  across the productive loop's per-iteration RESET — the one subtlety the design had
+  missed.
+- `src/selfhost_host.rs` `drive_parse_records`: pair-reads the `(tag, payload)`,
+  **skipping the RESET the loop emits between yields**, then `(code,val) = if arg == -1
+  { (t%64, t/64) } else { (t, arg) }`. The `-1` sentinel keeps every record on the old
+  path, so byte-identity holds; caller budgets are unchanged (each iteration still
+  bounds one record).
 
-With the `-1` sentinel, every record still travels the old path (`arg == -1`), so the
-change is behavior-neutral and byte-identical. Later increments migrate specific emit
-sites (the fat array-of-composite records, high tags) to a full-word payload / raw tag.
+Verified byte-identical: 89 main-workspace tests + 83 subproject tests; clippy clean.
 
-## Verification
-- Consolidation: subproject `cargo test` green; 89 main-workspace tests green; clippy
-  `-D warnings` clean on both.
-- For the two-word change, verify with the curated subset plus the full
-  `selfhost_parse`/`selfhost_pipeline` binaries plus the subproject, then
-  `scripts/release-gate.sh` before merge.
+## Next — capacity exploitation (the actual gain; each a small verified increment)
+The transport removes the ceiling but is behavior-neutral until emit sites use it:
+
+1. **Migrate the fattest record** (`parse.kel` `ArrayOfEnumEqBuild`, ~2457 in the
+   original): set `ps.emit_arg` to the (now unpacked) payload and return the raw kind
+   instead of `... * 64`. Same value/tag for now, so still byte-identical — proves a
+   real record round-trips the two-word path.
+2. **Retire a split-tag workaround**: give a record that currently reuses a low tag for
+   a high node kind (for example `bnot` -> record 48 -> node 65) its NATIVE high tag
+   (>= 64), adding the matching dispatch arm in `reconstruct.kel` `step_assembly`. First
+   use of the newly unbounded tag space; verify byte-identical.
+3. Later, the token and wire-op streams get the same two-word shape for uniformity.
+
+## Verification protocol
+- Curated subset + the full `selfhost_parse`/`selfhost_pipeline` binaries + the
+  subproject, then `scripts/release-gate.sh` before merge.
 
 ## Concern
-The byte-identity verification loop is slow and was confounded all session by an
-unrelated CPU-saturating process (EVE Online at ~85%). The two-word change is on the
-hot path of every self-host compile; verify on an idle machine for a trustworthy signal.
+The byte-identity loop is slow and was confounded all session by an unrelated
+CPU-saturating process (EVE Online ~85%). Verify on an idle machine for a clean signal.
+The branch is NOT merged to `v0.2.3` yet; the transport + consolidation are a coherent
+mergeable unit (behavior-neutral, drift-hazard-retiring) if the operator wants it in
+before the capacity increments.
