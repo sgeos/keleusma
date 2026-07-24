@@ -707,7 +707,8 @@ fn build_multihead(
 }
 
 fn decode_op(w: i64) -> Op {
-    let (tag, operand) = (w % 64, w / 64);
+    // P11 Option E: the op-word radix is 8 bits (256); the tag is `w % 256`, the operand `w / 256`.
+    let (tag, operand) = (w % 256, w / 256);
     match tag {
         1 => Op::Const(operand as u16),
         2 => Op::Return,

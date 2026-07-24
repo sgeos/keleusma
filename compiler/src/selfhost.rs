@@ -211,7 +211,8 @@ fn composite_kind_from_tag(t: i64) -> CompositeKind {
 }
 
 fn decode_op(w: i64) -> Op {
-    let (tag, operand) = (w % 64, w / 64);
+    // P11 Option E: the op-word radix is 8 bits (256); the tag is `w % 256`, the operand `w / 256`.
+    let (tag, operand) = (w % 256, w / 256);
     match tag {
         1 => Op::Const(operand as u16),
         2 => Op::Return,
@@ -2568,7 +2569,7 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
 mod decoder_drift_guard {
     use super::decode_op;
 
-    /// Every op tag the codegen can emit -- the full 6-bit wire-op space `1..=63` (the `wire` const
+    /// Every op tag the codegen can emit -- currently `1..=63` (the `wire` const
     /// block in `kel/codegen.kel` assigns ops 1..=63 with no gap) -- must decode without hitting the
     /// `unknown op tag` catch-all. This is the FAST guard against decoder DRIFT: an op added to the
     /// codegen wire set but not to `decode_op` above fails this test in microseconds, rather than only
@@ -2576,9 +2577,11 @@ mod decoder_drift_guard {
     /// `unknown op tag 62` defect, which rode into the `v0.2.3` release line undetected because the
     /// subproject decoder had fallen behind the emitted op set and nothing gated the subproject.
     ///
-    /// A future op at a tag >= 64 is impossible (the word packs `tag + operand*64`, so tags are < 64);
-    /// a future GAP in `1..=63` would make this test slightly over-strict, which fails safe (it prompts
-    /// a look rather than letting an undecoded op ship).
+    /// Since P11 Option E widened the op-word radix to 8 bits (`tag + operand*256`), a tag >= 64 is now
+    /// REPRESENTABLE, but the codegen still assigns only `1..=63`, so the sweep matches the emitted set;
+    /// extend the upper bound here when codegen first assigns an op tag >= 64. A future GAP in the
+    /// assigned set would make this test slightly over-strict, which fails safe (it prompts a look
+    /// rather than letting an undecoded op ship).
     #[test]
     fn all_wire_op_tags_decode() {
         for tag in 1..=63i64 {
