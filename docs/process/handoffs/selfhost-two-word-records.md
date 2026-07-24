@@ -70,12 +70,23 @@ The transport removes the ceiling but is behavior-neutral until emit sites use i
    all three inter-stage encodings now have ample tag headroom: record unbounded (two-word),
    token and wire-op at 256.
 
-## Remaining Option E follow-ups (future, not started)
-- The record stream's other split-tag reuses can be retired like `bnot` did (record 59 ->
-  node 68 for eager and/or; record 54 -> node 67 for array-of-array-eq) when convenient.
-- Precedence P1 (renumber the self-host precedence scale to match the reference, fixing the
-  `a xor b == c` / `a and b xor c` faithfulness defects) is an independent change, still
-  open per the brief.
+## Option E follow-ups — ALL DONE
+- **DONE (`fae5ef5`) — retired the last two split-tags.** Eager `and`/`or`: record 59 ->
+  native 68 (helper `andor_record(is_or)`). Array-of-array-eq: record 54 -> native 67
+  (also moved to a full-word payload, being a fat record). The 40..63 routing gate now
+  admits 67/68; step_assembly dispatches them. Every split-tag workaround is retired.
+- **DONE (`25e6adb`) — precedence P1.** Renumbered `prec_of` to a finer 13-level scale
+  matching the reference's binding powers (logical band orelse<andalso<or<xor<and, below
+  comparison), preserving every other relative order so those stay byte-identical. `xor`
+  needed its OWN opcode (it was folded onto `NotEq`): added `OpCode::Xor = 33`, redirected
+  `opcode_of`, and emit_op lowers it to a `BinOp(NotEq)` node (same CmpNe wire op, so the
+  output is byte-identical) while `prec_of` gives it precedence 4. Flipped the two
+  boundary-test defects `prec/xor_vs_eq` and `prec/and_vs_xor` from Gap to Ok. Verified:
+  the boundary test, whole-stage self-compiles, and xor/eager tests all pass.
+
+The `ENCODING_CAPACITY_BRIEF.md` faithfulness Gaps for `xor`/`and` are now closed; the
+brief and the boundary-count note (was 45 Ok / 9 Gap / 1 RefRejects; now 47 / 7 / 1) can
+be refreshed. No known Option E work remains on this branch.
 
 ## Verification protocol
 - Curated subset + the full `selfhost_parse`/`selfhost_pipeline` binaries + the
