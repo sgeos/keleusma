@@ -2464,7 +2464,13 @@ fn step_enumeq_emit() -> Word {
                 // without the record overflowing: ta(10) tb(10) vcount(6) ename(13) is_ne(1)
                 // arrcount(8) arrsize(8).
                 stmt.sq_arr = 0;
-                Node::ArrayOfEnumEqBuild() as Word + (stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_count * 1048576 + stmt.sq_ename * 67108864 + stmt.sq_ne * 549755813888 + stmt.sq_arrcount * 1099511627776 + stmt.sq_arrsize * 281474976710656) * 64
+                // P11 Option E: emit this record through the two-word transport (a full-word
+                // payload) instead of packing `payload * 64`. This is the fattest record — its
+                // payload reached bit 55, one bit below the i64 ceiling under the packed scheme —
+                // so moving it off the packed word gives it room to grow. Byte-identical: the host
+                // recovers the same (kind 63, payload) via the `emit_arg >= 0` path.
+                ps.emit_arg = stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_count * 1048576 + stmt.sq_ename * 67108864 + stmt.sq_ne * 549755813888 + stmt.sq_arrcount * 1099511627776 + stmt.sq_arrsize * 281474976710656;
+                Node::ArrayOfEnumEqBuild() as Word
             } else {
                 Node::EnumEqBuild() as Word + (stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_count * 1048576 + stmt.sq_ename * 67108864 + stmt.sq_ne * 70368744177664) * 64
             }
