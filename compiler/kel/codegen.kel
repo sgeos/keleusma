@@ -215,7 +215,11 @@ const data wire {
     mulop: Word = 61,
     shl: Word = 62,
     shr: Word = 63,
-    radix: Word = 64,
+    // P11 Option E: the op-word radix is 8 bits (256), not 6 (64), so the wire-op TAG space is
+    // 1..255 rather than 1..63. Safe as a radix widening (not two-word): the largest operand is
+    // ~2^48 (GetDataIndexed's two 24-bit fields), so `tag + operand*256` stays ~2^56, well within
+    // the i64 word. The host `decode_op` splits with the matching `% 256` / `/ 256`.
+    radix: Word = 256,
     item: Word = 4,
     pack: Word = 65536,
     visit: Word = 1,
