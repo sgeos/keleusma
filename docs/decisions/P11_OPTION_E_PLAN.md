@@ -2,10 +2,15 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-**Status**: APPROVED (operator, 2026-07-23) — "implement E, record stream first".
-Branch: `feat/selfhost-two-word-records`. Design rationale is in
-[`ENCODING_CAPACITY_BRIEF.md`](./ENCODING_CAPACITY_BRIEF.md); this file is the
-mechanical plan.
+**Status**: IMPLEMENTED (2026-07-24) on branch `feat/selfhost-two-word-records`, pending
+merge to `v0.2.3`. The record stream got the two-word transport described below; the token
+and wire-op streams got an 8-bit radix widening instead (their payloads had headroom, so
+two-word was unnecessary); every split-tag workaround was retired with native `>= 64` tags;
+and precedence P1 landed (`xor` given its own opcode). All byte-identical against the
+corpus. The branch handoff (`docs/process/handoffs/selfhost-two-word-records.md`) has the
+per-commit record. Design rationale is in
+[`ENCODING_CAPACITY_BRIEF.md`](./ENCODING_CAPACITY_BRIEF.md); this file is the mechanical
+plan, retained as the implementation record.
 
 ## What the investigation established
 

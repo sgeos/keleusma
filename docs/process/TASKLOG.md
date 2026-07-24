@@ -8,12 +8,12 @@ Current sprint source of truth.
 
 ## Current Phase
 
-**V0.2.x: self-hosting the toolchain — language-surface expansion (as of 2026-07-22).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. `BYTECODE_VERSION` is 2 (widened from 1 by the V0.2.3 24-bit shared-data operands).
+**V0.2.x: self-hosting the toolchain — language-surface expansion (as of 2026-07-24).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. `BYTECODE_VERSION` is 2 (widened from 1 by the V0.2.3 24-bit shared-data operands).
 
 - Fourteen byte-identical increments (the 85th through 98th) are **merged into `v0.2.3`**, completing the shift, bitwise, and array-of-composite-equality operator families and adding eager `and`/`or`. See the release plan in `compiler/MILESTONES.md` and the roadmap in `docs/roadmap/V0_2_X_ROADMAP.md`.
 - The construct-support boundary (which constructs the self-hosted pipeline reproduces byte-identically versus falls back to the reference) is pinned by the `self_hosted_construct_support_boundary` characterization test in `tests/selfhost_codegen.rs`.
-- Active work is on branch `feat-selfhost-nested-eq`: the nested-composite-equality frontier. `tuple-of-struct` is in progress (the `tup_estruct` prerequisite committed); `enum-in-struct` and 2+-level nesting follow. All three need deep surgery on the byte-identical nested state machine; see `REVERSE_PROMPT.md`.
-- Four encoding namespaces are now full (token, record/node-kind, wire-op) and the precedence scale is coarse; recent increments use reuse tricks (split kinds, ident-by-id keyword recognition, operand-form reuse). A design brief on widening these is pending operator decision (process-audit worklist item 6).
+- Active work is on branch `feat/selfhost-two-word-records`: the **P11 encoding-capacity change (Option E), complete and pending merge** (2026-07-24). The record stream moved to a two-word `(tag, payload)` transport (removing the single-word `i64` ceiling), the token and wire-op streams to an 8-bit radix, every split-tag workaround was retired with native `>= 64` tags, and precedence P1 fixed the `xor`/`and` faithfulness defects (`xor` got its own opcode). All byte-identical against the differential oracle; the six-way host-driver duplication was consolidated to one shared driver first. See [`docs/decisions/P11_OPTION_E_PLAN.md`](../decisions/P11_OPTION_E_PLAN.md) and the branch handoff.
+- The construct-support boundary characterization test is now **47 Ok / 7 Gap / 1 RefRejects** (the `xor`/`and` precedence Gaps closed). The remaining nested-composite-equality frontier (enum-in-struct, tuple-of-struct, 2+-level nesting) is now unblocked by the freed encoding capacity.
 
 ## Active Milestone
 
