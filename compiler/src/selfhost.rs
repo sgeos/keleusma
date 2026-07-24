@@ -561,69 +561,75 @@ pub fn parse_functions(
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
     let budget = tokens.len() * 16 + 256;
-    keleusma::selfhost_host::drive_parse_records(&mut vm, &mut shared, state, budget, |code, val| {
-        if in_body {
-            match code {
-                0 => {}
-                15 => in_body = false,
-                _ => cur.as_mut().unwrap().body.push((code, val)),
-            }
-        } else if in_guard {
-            match code {
-                0 => {}
-                15 => in_guard = false,
-                _ => cur.as_mut().unwrap().guard.push((code, val)),
-            }
-        } else if in_data {
-            if code == 5 {
-                data_records.push((5, 0));
-                in_data = false;
-            } else if code != 0 {
-                data_records.push((code, val));
-            }
-        } else if in_enum {
-            if code == 5 {
-                enum_records.push((5, 0));
-                in_enum = false;
-            } else if code != 0 {
-                enum_records.push((code, val));
-            }
-        } else if in_use {
-            in_use = code != 5;
-        } else {
-            match code {
-                1..=3 => {
-                    cur = Some(ParsedFn {
-                        cat: code,
-                        name: val,
-                        params: 0,
-                        param_types: Vec::new(),
-                        return_type: 0,
-                        guard: Vec::new(),
-                        body: Vec::new(),
-                    })
+    keleusma::selfhost_host::drive_parse_records(
+        &mut vm,
+        &mut shared,
+        state,
+        budget,
+        |code, val| {
+            if in_body {
+                match code {
+                    0 => {}
+                    15 => in_body = false,
+                    _ => cur.as_mut().unwrap().body.push((code, val)),
                 }
-                4 => cur.as_mut().unwrap().params += 1,
-                6 => cur.as_mut().unwrap().param_types.push(val),
-                7 => cur.as_mut().unwrap().return_type = val,
-                9 => {
-                    in_data = true;
-                    data_records.push((9, val));
+            } else if in_guard {
+                match code {
+                    0 => {}
+                    15 => in_guard = false,
+                    _ => cur.as_mut().unwrap().guard.push((code, val)),
                 }
-                10 => in_use = true,
-                12 => {
-                    in_enum = true;
-                    enum_records.push((12, val));
+            } else if in_data {
+                if code == 5 {
+                    data_records.push((5, 0));
+                    in_data = false;
+                } else if code != 0 {
+                    data_records.push((code, val));
                 }
-                16 => in_body = true,
-                17 => in_guard = true,
-                5 => fns.push(cur.take().unwrap()),
-                15 => return ControlFlow::Break(()),
-                _ => {}
+            } else if in_enum {
+                if code == 5 {
+                    enum_records.push((5, 0));
+                    in_enum = false;
+                } else if code != 0 {
+                    enum_records.push((code, val));
+                }
+            } else if in_use {
+                in_use = code != 5;
+            } else {
+                match code {
+                    1..=3 => {
+                        cur = Some(ParsedFn {
+                            cat: code,
+                            name: val,
+                            params: 0,
+                            param_types: Vec::new(),
+                            return_type: 0,
+                            guard: Vec::new(),
+                            body: Vec::new(),
+                        })
+                    }
+                    4 => cur.as_mut().unwrap().params += 1,
+                    6 => cur.as_mut().unwrap().param_types.push(val),
+                    7 => cur.as_mut().unwrap().return_type = val,
+                    9 => {
+                        in_data = true;
+                        data_records.push((9, val));
+                    }
+                    10 => in_use = true,
+                    12 => {
+                        in_enum = true;
+                        enum_records.push((12, val));
+                    }
+                    16 => in_body = true,
+                    17 => in_guard = true,
+                    5 => fns.push(cur.take().unwrap()),
+                    15 => return ControlFlow::Break(()),
+                    _ => {}
+                }
             }
-        }
-        ControlFlow::Continue(())
-    });
+            ControlFlow::Continue(())
+        },
+    );
     (fns, names, data_records, enum_records)
 }
 
