@@ -47,14 +47,21 @@ Verified byte-identical: 89 main-workspace tests + 83 subproject tests; clippy c
 ## Next — capacity exploitation (the actual gain; each a small verified increment)
 The transport removes the ceiling but is behavior-neutral until emit sites use it:
 
-1. **Migrate the fattest record** (`parse.kel` `ArrayOfEnumEqBuild`, ~2457 in the
-   original): set `ps.emit_arg` to the (now unpacked) payload and return the raw kind
-   instead of `... * 64`. Same value/tag for now, so still byte-identical — proves a
-   real record round-trips the two-word path.
-2. **Retire a split-tag workaround**: give a record that currently reuses a low tag for
-   a high node kind (for example `bnot` -> record 48 -> node 65) its NATIVE high tag
-   (>= 64), adding the matching dispatch arm in `reconstruct.kel` `step_assembly`. First
-   use of the newly unbounded tag space; verify byte-identical.
+1. **DONE (`c431ffd`) — migrated the fattest record.** `parse.kel`
+   `ArrayOfEnumEqBuild` (line ~2467) now sets `ps.emit_arg` to the payload and returns
+   the raw kind 63, so its payload (which reached bit 55, one below the ceiling) rides
+   its own word. Byte-identical; 89 + 83 tests green. This is the first emit site on the
+   `emit_arg >= 0` full-word path.
+2. **Retire a split-tag workaround (CHECKPOINTED — needs care).** Give a record that
+   reuses a low tag for a high node kind its native `>= 64` tag: `parse.kel` emit_op
+   `OpCode::Bnot() => 48` -> `{ ps.emit_arg = 0; 65 }`; then dispatch record 65 in the
+   reconstruct(s). **Complication found:** changing a record *kind* (not just its
+   transport) ripples to EVERY reconstruct implementation — `reconstruct.kel`
+   `step`/`step_bnot` (lines 789/813, map 48->65) AND the Rust reconstruct in the tests
+   (`tests/selfhost_codegen.rs` `reconstruct_into`, and check `selfhost_parse.rs`). This
+   is the same kind/dispatch duplication the drivers had; audit each reconstruct site for
+   the `48` (and `59`, `54`) reuse before changing the tag. Best done on an idle machine
+   with the full byte-identity corpus, as its own increment.
 3. Later, the token and wire-op streams get the same two-word shape for uniformity.
 
 ## Verification protocol
