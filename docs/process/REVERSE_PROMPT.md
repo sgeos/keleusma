@@ -15,7 +15,7 @@ increment-by-increment reasoning and frontier assessments live in
 
 ## Current state
 
-- **`v0.2.3` (release line) at `72a648e`, CI-GREEN.** The P11 encoding-capacity change
+- **`v0.2.3` (release line), CI-GREEN.** The P11 encoding-capacity change
   (Option E) is complete and merged: the record stream uses a two-word `(tag, payload)`
   transport (single-word `i64` ceiling removed), the token and wire-op streams an 8-bit
   radix, every split-tag workaround is retired with native `>= 64` record kinds, and
@@ -27,11 +27,12 @@ increment-by-increment reasoning and frontier assessments live in
 - **CI now gates the release line.** It triggers on `main` and any `v*` branch and includes
   a `selfhost-compiler` job for the detached subproject. The construct-support boundary is
   now **47 Ok / 7 Gap / 1 RefRejects** (the two precedence Gaps closed).
-- **`main` at `7494435`** is diverged behind `v0.2.3` (see Concerns).
+- **`main` at `4483f43`** is now a clean ancestor of `v0.2.3`, which was rebased to sit purely
+  ahead of it (see Branching model).
 
 ## Verification
 
-- The full CI gate is green on `v0.2.3` `72a648e`: feature matrix, the entire self-host
+- The full CI gate is green on `v0.2.3`: feature matrix, the entire self-host
   suite, the subproject, doc, miri, clippy, MSRV, no_std, LSP, WASM.
 - Enabling CI on the release line immediately caught two real defects that curated local
   runs (confounded by a CPU-saturating process all session) had missed — subproject fmt
@@ -40,7 +41,11 @@ increment-by-increment reasoning and frontier assessments live in
 
 ## Process-audit residual status
 
-- **Items 2–5, 7**: done and merged.
+- **Items 2–5, 7**: done and merged. Item 5's last residual (the `TASKLOG.md` Active Milestone
+  narrative) was relocated into the append-only `DESIGN_JOURNAL.md` on 2026-07-24, so `TASKLOG`
+  is now a bounded current-state file. Item 3's memoization was deliberately declined, because a
+  stale cache could mask a real oracle divergence, documented at the point of use in
+  `scripts/fast-check.sh`; the per-changed-stage re-compile it did call for is delivered there.
 - **Item 4 (gate blind spot)**: closed in both places — `release-gate.sh` and now a CI job.
 - **Item 6 (encoding capacity)**: implemented, merged, CI-green (Option E, above).
 - **Item 1 (nextest cap): DONE.** The tier split (routine `quick` vs full) is merged. The
@@ -52,11 +57,14 @@ increment-by-increment reasoning and frontier assessments live in
 
 ## Branching model (resolved)
 
-- **`main`'s CI config was updated** (2026-07-24, commit `4483f43`): its `ci.yml` now carries
-  the `v*` trigger and the `selfhost-compiler` job, so a version branch cut from `main` is
-  CI-gated from the start. The operator chose this over a full content catch-up, so `main`
-  remains 306 commits behind `v0.2.3` by design; catching it up (or a next version branch cut
-  from it) is a future call. Both `main` and `v0.2.3` are CI-gated.
+- **`v0.2.3` was rebased to sit purely ahead of `main`** (2026-07-24). `main` (`4483f43`) is now
+  a clean ancestor of `v0.2.3`, which is 307 ahead and 0 behind with a linear history, so the two
+  lines no longer diverge. The rebase preserved a byte-identical tree. `main`'s duplicate
+  frontend-fix was dropped as already-applied and the only conflict was ci.yml comment wording.
+  A local `v0.2.3-prerebase-backup` retains the pre-rebase tip pending cleanup.
+- **`main`'s `ci.yml`** (commit `4483f43`) carries the `v*` trigger and the `selfhost-compiler`
+  job, so both `main` and `v0.2.3` are CI-gated and any future version branch cut from either is
+  gated from the start.
 
 ## Next step
 
