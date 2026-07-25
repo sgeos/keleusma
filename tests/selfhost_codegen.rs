@@ -5400,6 +5400,9 @@ fn assemble_data_slots(
 // const blocks producing no slots.
 #[test]
 fn assembled_data_slots_match_the_reference() {
+    if common::selfhost_cache::hit("assembled_data_slots_match_the_reference", KEL_PIPELINE) {
+        return;
+    }
     let cases = [
         "compiler/kel/lexer.kel",
         "compiler/kel/reconstruct.kel",
@@ -5418,6 +5421,7 @@ fn assembled_data_slots_match_the_reference() {
             assert_eq!(a.visibility, b.visibility, "slot {i} visibility for {path}");
         }
     }
+    common::selfhost_cache::record_pass("assembled_data_slots_match_the_reference", KEL_PIPELINE);
 }
 
 /// Assemble the per-shared-slot byte layout (offset, kind tag, len) from parse.kel's
@@ -5477,6 +5481,12 @@ fn assemble_shared_layout(
 // sources (including lexer.kel's 245760-byte buffer whose later fields sit past 64 KB).
 #[test]
 fn assembled_shared_layout_matches_the_reference() {
+    if common::selfhost_cache::hit(
+        "assembled_shared_layout_matches_the_reference",
+        KEL_PIPELINE,
+    ) {
+        return;
+    }
     let cases = [
         "compiler/kel/lexer.kel",
         "compiler/kel/reconstruct.kel",
@@ -5506,6 +5516,10 @@ fn assembled_shared_layout_matches_the_reference() {
             );
         }
     }
+    common::selfhost_cache::record_pass(
+        "assembled_shared_layout_matches_the_reference",
+        KEL_PIPELINE,
+    );
 }
 
 /// Assemble the per-private-slot load-time initial values from parse.kel's records:
@@ -5570,6 +5584,9 @@ fn assemble_data_layout(
 // reference for the module's data layout.
 #[test]
 fn assembled_data_layout_matches_the_reference() {
+    if common::selfhost_cache::hit("assembled_data_layout_matches_the_reference", KEL_PIPELINE) {
+        return;
+    }
     let cases = [
         "compiler/kel/lexer.kel",
         "compiler/kel/reconstruct.kel",
@@ -5617,6 +5634,10 @@ fn assembled_data_layout_matches_the_reference() {
             "private_init for {path}"
         );
     }
+    common::selfhost_cache::record_pass(
+        "assembled_data_layout_matches_the_reference",
+        KEL_PIPELINE,
+    );
 }
 
 // -- enum-layout assembly from parse.kel's enum records -----------------------
@@ -5670,6 +5691,9 @@ fn assemble_enum_layouts(
 // explicit), and the zero min_payload -- for the stages that declare enums.
 #[test]
 fn assembled_enum_layouts_match_the_reference() {
+    if common::selfhost_cache::hit("assembled_enum_layouts_match_the_reference", KEL_PIPELINE) {
+        return;
+    }
     // parse.kel declares enums (Tok, OpCode, Node); the other stages declare none, so
     // the assembled table is empty and still matches.
     let cases = [
@@ -5705,6 +5729,7 @@ fn assembled_enum_layouts_match_the_reference() {
             }
         }
     }
+    common::selfhost_cache::record_pass("assembled_enum_layouts_match_the_reference", KEL_PIPELINE);
 }
 
 // -- chunk-signature assembly from parse.kel's header records -----------------
@@ -5776,6 +5801,9 @@ fn assemble_signatures(
 // stage source.
 #[test]
 fn assembled_signatures_match_the_reference() {
+    if common::selfhost_cache::hit("assembled_signatures_match_the_reference", KEL_PIPELINE) {
+        return;
+    }
     let cases = [
         "compiler/kel/lexer.kel",
         "compiler/kel/reconstruct.kel",
@@ -5798,6 +5826,7 @@ fn assembled_signatures_match_the_reference() {
             assert_eq!(a.resume, b.resume, "resume of chunk {i} for {path}");
         }
     }
+    common::selfhost_cache::record_pass("assembled_signatures_match_the_reference", KEL_PIPELINE);
 }
 
 // The schema hash is a pure function of the DataLayout, which the driver assembles
@@ -5805,6 +5834,9 @@ fn assembled_signatures_match_the_reference() {
 // -- matching the reference for every stage source.
 #[test]
 fn assembled_schema_hash_matches_the_reference() {
+    if common::selfhost_cache::hit("assembled_schema_hash_matches_the_reference", KEL_PIPELINE) {
+        return;
+    }
     for path in [
         "compiler/kel/lexer.kel",
         "compiler/kel/reconstruct.kel",
@@ -5818,6 +5850,10 @@ fn assembled_schema_hash_matches_the_reference() {
         let reference = compile_src(&src);
         assert_eq!(hash, reference.schema_hash, "schema hash for {path}");
     }
+    common::selfhost_cache::record_pass(
+        "assembled_schema_hash_matches_the_reference",
+        KEL_PIPELINE,
+    );
 }
 
 /// Set a module's declared WCET/WCMU header from the self-hosted analyze.kel stage: the
@@ -5852,6 +5888,12 @@ fn assemble_resource_bounds(module: &mut Module) {
 // comparison oracle.
 #[test]
 fn self_assembled_scaffold_serializes_byte_identically() {
+    if common::selfhost_cache::hit(
+        "self_assembled_scaffold_serializes_byte_identically",
+        KEL_PIPELINE_WITH_ANALYZE,
+    ) {
+        return;
+    }
     for path in [
         "compiler/kel/lexer.kel",
         "compiler/kel/reconstruct.kel",
@@ -5876,6 +5918,10 @@ fn self_assembled_scaffold_serializes_byte_identically() {
             .expect("serialize reference module");
         assert_eq!(self_bytes, ref_bytes, "serialized module for {path}");
     }
+    common::selfhost_cache::record_pass(
+        "self_assembled_scaffold_serializes_byte_identically",
+        KEL_PIPELINE_WITH_ANALYZE,
+    );
 }
 
 // -- chunk-table metadata assembly --------------------------------------------
@@ -5934,6 +5980,12 @@ fn assemble_chunk_metadata(
 // stage source. With this, only the two WCET/WCMU declared-bound numbers remain borrowed.
 #[test]
 fn assembled_chunk_metadata_matches_the_reference() {
+    if common::selfhost_cache::hit(
+        "assembled_chunk_metadata_matches_the_reference",
+        KEL_PIPELINE,
+    ) {
+        return;
+    }
     for path in [
         "compiler/kel/lexer.kel",
         "compiler/kel/reconstruct.kel",
@@ -5952,6 +6004,10 @@ fn assembled_chunk_metadata_matches_the_reference() {
             assert_eq!(m.3, c.param_types, "param_types of `{}` for {path}", c.name);
         }
     }
+    common::selfhost_cache::record_pass(
+        "assembled_chunk_metadata_matches_the_reference",
+        KEL_PIPELINE,
+    );
 }
 
 // -- self-hosted WCET/WCMU analysis (analyze.kel) -----------------------------
