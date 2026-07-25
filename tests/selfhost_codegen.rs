@@ -69,6 +69,62 @@ const KEL_CODEGEN_ONLY: &[&str] = &["compiler/kel/codegen.kel"];
 // source strings (in the binary), so analyze.kel is their only .kel input.
 const KEL_ANALYZE_ONLY: &[&str] = &["compiler/kel/analyze.kel"];
 
+/// Shared body for the parse_into_codegen_*_matches_the_reference tests (item 3 follow-up).
+/// For each `(source, input, expected)` case it drives the self-hosted lexer.kel + parse.kel
+/// then run_codegen (codegen.kel) over the source, asserts the emitted ops and local_count
+/// match the Rust reference, then builds and runs the module and asserts the value. Cached
+/// per case-set: the complete key covers the binary, the pipeline stages, and the cases (the
+/// cases live in the binary, but folding them in keeps the key correct if the helper is later
+/// called with a runtime-built case set). reconstruct_body is pure Rust, so KEL_PIPELINE is a
+/// safe superset (it includes reconstruct.kel, which these cases do not run).
+fn assert_parse_into_codegen_matches(cases: &[(&str, i64, i64)]) {
+    let key = format!("{cases:?}");
+    if common::selfhost_cache::hit_with("assert_parse_into_codegen_matches", KEL_PIPELINE, &key) {
+        return;
+    }
+    for &(src, input, expected) in cases {
+        let (records, param_count, category) = parse_function_records(src);
+        let body = reconstruct_body(&records, category);
+        let (emitted, pool, local_count) = run_codegen(&body, param_count);
+
+        let reference = compile_src(src);
+        let idx = reference
+            .chunks
+            .iter()
+            .position(|c| c.name == "main")
+            .unwrap();
+        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
+        assert_eq!(
+            local_count, reference.chunks[idx].local_count as i64,
+            "local_count for `{src}`"
+        );
+
+        let mut built = compile_src(src);
+        built.chunks[idx].ops = emitted;
+        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
+        built.chunks[idx].local_count = local_count as u16;
+        let need = required_persistent_capacity_for(&built);
+        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+        arena.resize_persistent(need).expect("resize");
+        let mut vm = Vm::new(built, &arena).expect("verify built");
+        // call_with_shared with an empty buffer equals call for no-shared programs, and
+        // handles the shared-data cases uniformly (one body for both test shapes).
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        match vm
+            .call_with_shared(&mut shared, &[Value::Int(input)])
+            .expect("call built")
+        {
+            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
+            other => panic!("unexpected result for `{src}`: {other:?}"),
+        }
+    }
+    common::selfhost_cache::record_pass_with(
+        "assert_parse_into_codegen_matches",
+        KEL_PIPELINE,
+        &key,
+    );
+}
+
 // Shared-data slot offsets, mirroring the `ast` block's field order in codegen.kel
 // (one slot per scalar, arrays contiguous). root=0, then the four length-512 node
 // arrays (`kinds`/`args`/`lhs`/`rhs`, sized for the stage's largest own function),
@@ -2503,36 +2559,7 @@ fn parse_into_codegen_arithmetic_matches_the_reference() {
         ("fn main(a: Word) -> Word { a bor 1 }", 4, 5),
         ("fn main(a: Word) -> Word { a bxor 3 }", 5, 6),
     ];
-    for &(src, input, expected) in cases {
-        let (records, param_count, category) = parse_function_records(src);
-        let body = reconstruct_body(&records, category);
-        let (emitted, pool, local_count) = run_codegen(&body, param_count);
-
-        let reference = compile_src(src);
-        let idx = reference
-            .chunks
-            .iter()
-            .position(|c| c.name == "main")
-            .unwrap();
-        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
-        assert_eq!(
-            local_count, reference.chunks[idx].local_count as i64,
-            "local_count for `{src}`"
-        );
-
-        let mut built = compile_src(src);
-        built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
-        built.chunks[idx].local_count = local_count as u16;
-        let need = required_persistent_capacity_for(&built);
-        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
-        arena.resize_persistent(need).expect("resize");
-        let mut vm = Vm::new(built, &arena).expect("verify built");
-        match vm.call(&[Value::Int(input)]).expect("call built") {
-            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
-            other => panic!("unexpected result for `{src}`: {other:?}"),
-        }
-    }
+    assert_parse_into_codegen_matches(cases);
 }
 
 // The layout bridge, end to end: lexer.kel tokenizes, parse.kel emits the construction
@@ -3495,36 +3522,7 @@ fn parse_into_codegen_blocks_and_control_flow_match_the_reference() {
             10,
         ),
     ];
-    for &(src, input, expected) in cases {
-        let (records, param_count, category) = parse_function_records(src);
-        let body = reconstruct_body(&records, category);
-        let (emitted, pool, local_count) = run_codegen(&body, param_count);
-
-        let reference = compile_src(src);
-        let idx = reference
-            .chunks
-            .iter()
-            .position(|c| c.name == "main")
-            .unwrap();
-        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
-        assert_eq!(
-            local_count, reference.chunks[idx].local_count as i64,
-            "local_count for `{src}`"
-        );
-
-        let mut built = compile_src(src);
-        built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
-        built.chunks[idx].local_count = local_count as u16;
-        let need = required_persistent_capacity_for(&built);
-        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
-        arena.resize_persistent(need).expect("resize");
-        let mut vm = Vm::new(built, &arena).expect("verify built");
-        match vm.call(&[Value::Int(input)]).expect("call built") {
-            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
-            other => panic!("unexpected result for `{src}`: {other:?}"),
-        }
-    }
+    assert_parse_into_codegen_matches(cases);
 }
 
 // The bridge over the scalar and indexed-read data-access kinds: a scalar DataRead
@@ -3575,36 +3573,7 @@ fn parse_into_codegen_data_access_reads_match_the_reference() {
             7,
         ),
     ];
-    for &(src, input, expected) in cases {
-        let (records, param_count, category) = parse_function_records(src);
-        let body = reconstruct_body(&records, category);
-        let (emitted, pool, local_count) = run_codegen(&body, param_count);
-
-        let reference = compile_src(src);
-        let idx = reference
-            .chunks
-            .iter()
-            .position(|c| c.name == "main")
-            .unwrap();
-        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
-        assert_eq!(
-            local_count, reference.chunks[idx].local_count as i64,
-            "local_count for `{src}`"
-        );
-
-        let mut built = compile_src(src);
-        built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
-        built.chunks[idx].local_count = local_count as u16;
-        let need = required_persistent_capacity_for(&built);
-        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
-        arena.resize_persistent(need).expect("resize");
-        let mut vm = Vm::new(built, &arena).expect("verify built");
-        match vm.call(&[Value::Int(input)]).expect("call built") {
-            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
-            other => panic!("unexpected result for `{src}`: {other:?}"),
-        }
-    }
+    assert_parse_into_codegen_matches(cases);
 }
 
 // The bridge over function calls: `main` calls a callee, so parse.kel resolves the
@@ -3640,36 +3609,7 @@ fn parse_into_codegen_calls_match_the_reference() {
             43,
         ),
     ];
-    for &(src, input, expected) in cases {
-        let (records, param_count, category) = parse_function_records(src);
-        let body = reconstruct_body(&records, category);
-        let (emitted, pool, local_count) = run_codegen(&body, param_count);
-
-        let reference = compile_src(src);
-        let idx = reference
-            .chunks
-            .iter()
-            .position(|c| c.name == "main")
-            .unwrap();
-        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
-        assert_eq!(
-            local_count, reference.chunks[idx].local_count as i64,
-            "local_count for `{src}`"
-        );
-
-        let mut built = compile_src(src);
-        built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
-        built.chunks[idx].local_count = local_count as u16;
-        let need = required_persistent_capacity_for(&built);
-        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
-        arena.resize_persistent(need).expect("resize");
-        let mut vm = Vm::new(built, &arena).expect("verify built");
-        match vm.call(&[Value::Int(input)]).expect("call built") {
-            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
-            other => panic!("unexpected result for `{src}`: {other:?}"),
-        }
-    }
+    assert_parse_into_codegen_matches(cases);
 }
 
 // A CONDITIONAL used as a CALL ARGUMENT (`f(if c { a } else { b })`). This is a reconstruct
@@ -3747,36 +3687,7 @@ fn parse_into_codegen_indexed_writes_match_the_reference() {
             41,
         ),
     ];
-    for &(src, input, expected) in cases {
-        let (records, param_count, category) = parse_function_records(src);
-        let body = reconstruct_body(&records, category);
-        let (emitted, pool, local_count) = run_codegen(&body, param_count);
-
-        let reference = compile_src(src);
-        let idx = reference
-            .chunks
-            .iter()
-            .position(|c| c.name == "main")
-            .unwrap();
-        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
-        assert_eq!(
-            local_count, reference.chunks[idx].local_count as i64,
-            "local_count for `{src}`"
-        );
-
-        let mut built = compile_src(src);
-        built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
-        built.chunks[idx].local_count = local_count as u16;
-        let need = required_persistent_capacity_for(&built);
-        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
-        arena.resize_persistent(need).expect("resize");
-        let mut vm = Vm::new(built, &arena).expect("verify built");
-        match vm.call(&[Value::Int(input)]).expect("call built") {
-            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
-            other => panic!("unexpected result for `{src}`: {other:?}"),
-        }
-    }
+    assert_parse_into_codegen_matches(cases);
 }
 
 // The bridge over the bounded `for .. limit` loop: the first construct whose
@@ -3804,36 +3715,7 @@ fn parse_into_codegen_for_limit_matches_the_reference() {
             30,
         ),
     ];
-    for &(src, input, expected) in cases {
-        let (records, param_count, category) = parse_function_records(src);
-        let body = reconstruct_body(&records, category);
-        let (emitted, pool, local_count) = run_codegen(&body, param_count);
-
-        let reference = compile_src(src);
-        let idx = reference
-            .chunks
-            .iter()
-            .position(|c| c.name == "main")
-            .unwrap();
-        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
-        assert_eq!(
-            local_count, reference.chunks[idx].local_count as i64,
-            "local_count for `{src}`"
-        );
-
-        let mut built = compile_src(src);
-        built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
-        built.chunks[idx].local_count = local_count as u16;
-        let need = required_persistent_capacity_for(&built);
-        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
-        arena.resize_persistent(need).expect("resize");
-        let mut vm = Vm::new(built, &arena).expect("verify built");
-        match vm.call(&[Value::Int(input)]).expect("call built") {
-            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
-            other => panic!("unexpected result for `{src}`: {other:?}"),
-        }
-    }
+    assert_parse_into_codegen_matches(cases);
 }
 
 // The bridge over the integer `match` expression: the MatchBuild signal assembles
@@ -3867,36 +3749,7 @@ fn parse_into_codegen_match_matches_the_reference() {
             20,
         ),
     ];
-    for &(src, input, expected) in cases {
-        let (records, param_count, category) = parse_function_records(src);
-        let body = reconstruct_body(&records, category);
-        let (emitted, pool, local_count) = run_codegen(&body, param_count);
-
-        let reference = compile_src(src);
-        let idx = reference
-            .chunks
-            .iter()
-            .position(|c| c.name == "main")
-            .unwrap();
-        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
-        assert_eq!(
-            local_count, reference.chunks[idx].local_count as i64,
-            "local_count for `{src}`"
-        );
-
-        let mut built = compile_src(src);
-        built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
-        built.chunks[idx].local_count = local_count as u16;
-        let need = required_persistent_capacity_for(&built);
-        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
-        arena.resize_persistent(need).expect("resize");
-        let mut vm = Vm::new(built, &arena).expect("verify built");
-        match vm.call(&[Value::Int(input)]).expect("call built") {
-            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
-            other => panic!("unexpected result for `{src}`: {other:?}"),
-        }
-    }
+    assert_parse_into_codegen_matches(cases);
 }
 
 // The bridge over `yield` in a `loop` function: YieldExpr is unary, and the loop
@@ -4026,36 +3879,7 @@ fn parse_into_codegen_combined_constructs_match_the_reference() {
             10,
         ),
     ];
-    for &(src, input, expected) in cases {
-        let (records, param_count, category) = parse_function_records(src);
-        let body = reconstruct_body(&records, category);
-        let (emitted, pool, local_count) = run_codegen(&body, param_count);
-
-        let reference = compile_src(src);
-        let idx = reference
-            .chunks
-            .iter()
-            .position(|c| c.name == "main")
-            .unwrap();
-        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
-        assert_eq!(
-            local_count, reference.chunks[idx].local_count as i64,
-            "local_count for `{src}`"
-        );
-
-        let mut built = compile_src(src);
-        built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
-        built.chunks[idx].local_count = local_count as u16;
-        let need = required_persistent_capacity_for(&built);
-        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
-        arena.resize_persistent(need).expect("resize");
-        let mut vm = Vm::new(built, &arena).expect("verify built");
-        match vm.call(&[Value::Int(input)]).expect("call built") {
-            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
-            other => panic!("unexpected result for `{src}`: {other:?}"),
-        }
-    }
+    assert_parse_into_codegen_matches(cases);
 }
 
 /// A parsed function from the record stream: parser category (1 fn, 2 yield, 3 loop),
@@ -4605,38 +4429,7 @@ fn parse_into_codegen_nested_for_matches_the_reference() {
             25,
         ),
     ];
-    for &(src, input, expected) in cases {
-        let (records, param_count, category) = parse_function_records(src);
-        let body = reconstruct_body(&records, category);
-        let (emitted, pool, local_count) = run_codegen(&body, param_count);
-        let reference = compile_src(src);
-        let idx = reference
-            .chunks
-            .iter()
-            .position(|c| c.name == "main")
-            .unwrap();
-        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
-        assert_eq!(
-            local_count, reference.chunks[idx].local_count as i64,
-            "local_count for `{src}`"
-        );
-        let mut built = compile_src(src);
-        built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
-        built.chunks[idx].local_count = local_count as u16;
-        let need = required_persistent_capacity_for(&built);
-        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
-        arena.resize_persistent(need).expect("resize");
-        let mut vm = Vm::new(built, &arena).expect("verify built");
-        let mut shared = vec![0u8; vm.shared_data_bytes()];
-        match vm
-            .call_with_shared(&mut shared, &[Value::Int(input)])
-            .expect("call")
-        {
-            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
-            other => panic!("unexpected result for `{src}`: {other:?}"),
-        }
-    }
+    assert_parse_into_codegen_matches(cases);
 }
 
 // The bridge over a `Byte as Word` cast, the last construct blocking lexer.kel: a Byte
@@ -4658,38 +4451,7 @@ fn parse_into_codegen_byte_cast_matches_the_reference() {
             1,
         ),
     ];
-    for &(src, input, expected) in cases {
-        let (records, param_count, category) = parse_function_records(src);
-        let body = reconstruct_body(&records, category);
-        let (emitted, pool, local_count) = run_codegen(&body, param_count);
-        let reference = compile_src(src);
-        let idx = reference
-            .chunks
-            .iter()
-            .position(|c| c.name == "main")
-            .unwrap();
-        assert_eq!(emitted, reference.chunks[idx].ops, "ops for `{src}`");
-        assert_eq!(
-            local_count, reference.chunks[idx].local_count as i64,
-            "local_count for `{src}`"
-        );
-        let mut built = compile_src(src);
-        built.chunks[idx].ops = emitted;
-        built.chunks[idx].constants = pool.iter().map(|&(v, _t)| ConstValue::Int(v)).collect();
-        built.chunks[idx].local_count = local_count as u16;
-        let need = required_persistent_capacity_for(&built);
-        let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
-        arena.resize_persistent(need).expect("resize");
-        let mut vm = Vm::new(built, &arena).expect("verify built");
-        let mut shared = vec![0u8; vm.shared_data_bytes()];
-        match vm
-            .call_with_shared(&mut shared, &[Value::Int(input)])
-            .expect("call")
-        {
-            VmState::Finished(Value::Int(n)) => assert_eq!(n, expected, "value for `{src}`"),
-            other => panic!("unexpected result for `{src}`: {other:?}"),
-        }
-    }
+    assert_parse_into_codegen_matches(cases);
 }
 
 // The whole of lexer.kel, the tokenizer stage, self-compiled: every one of its chunks is
