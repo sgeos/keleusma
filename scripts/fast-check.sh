@@ -12,9 +12,15 @@
 #
 # Item 3 of the 2026-07-22 process audit — "re-self-compile only the changed stage in
 # the inner loop": pass just that stage's `*_kel_byte_identically` filter here; the full
-# five-stage self-compile stays in the push hook and merge gate. (Memoization of stage
-# bytecode was deliberately NOT added: a stale cache could mask a real divergence, the
-# worst failure for a byte-identical differential oracle.)
+# five-stage self-compile stays in the push hook and merge gate.
+#
+# This lane sets KEL_SELFHOST_CACHE=1, which enables the COMPLETE-KEY memoization in
+# tests/common/mod.rs for the expensive whole-stage self-compile and analyze tests. A
+# result is reused only when the test binary (hence the whole Rust reference compiler,
+# VM, and wire format) AND every .kel input the test reads are byte-for-byte unchanged,
+# so a stale cache cannot mask a divergence. The gate leaves the variable unset and
+# always runs for real, so the memoization never affects a push or a merge. Measured:
+# the eight heaviest self-host tests drop from ~102s to ~0.02s on a warm cache.
 #
 # This is NOT sufficient before a push or merge. The push runs the cargo-husky pre-push
 # hook; a merge to the release line runs `scripts/release-gate.sh` (the mandatory gate,
@@ -39,12 +45,12 @@ cargo clippy ${CLIPPY_PKG} --tests --features "compile verify" -- -D warnings
 if [ -n "$FILTER" ]; then
   step "Tests matching: ${FILTER}"
   if cargo nextest --version >/dev/null 2>&1; then
-    cargo nextest run --features "compile verify" -E "$FILTER"
+    KEL_SELFHOST_CACHE=1 cargo nextest run --features "compile verify" -E "$FILTER"
   else
     echo "note: cargo-nextest not installed; falling back to a substring filter with cargo test" >&2
     # Best-effort: strip a leading `test(...)` wrapper to a bare substring for cargo test.
     SUB="$(printf '%s' "$FILTER" | sed -E 's/^test\((.*)\)$/\1/')"
-    cargo test --features "compile verify" "$SUB"
+    KEL_SELFHOST_CACHE=1 cargo test --features "compile verify" "$SUB"
   fi
 else
   printf '\n\033[1mfast-check: no test filter given.\033[0m Pass one, e.g.\n'

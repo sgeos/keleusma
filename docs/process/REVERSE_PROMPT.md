@@ -43,9 +43,13 @@ increment-by-increment reasoning and frontier assessments live in
 
 - **Items 2–5, 7**: done and merged. Item 5's last residual (the `TASKLOG.md` Active Milestone
   narrative) was relocated into the append-only `DESIGN_JOURNAL.md` on 2026-07-24, so `TASKLOG`
-  is now a bounded current-state file. Item 3's memoization was deliberately declined, because a
-  stale cache could mask a real oracle divergence, documented at the point of use in
-  `scripts/fast-check.sh`; the per-changed-stage re-compile it did call for is delivered there.
+  is now a bounded current-state file. Item 3's memoization is now IMPLEMENTED in the
+  complete-key form (`tests/common/mod.rs`, 2026-07-24): the expensive whole-stage
+  self-compile and analyze tests are memoized on a key of the test-binary identity (hence
+  the whole Rust reference compiler, VM, and wire format) plus every `.kel` input the test
+  reads, active only under `KEL_SELFHOST_CACHE=1` (the fast lane, never a gate). Verified
+  that gate mode never caches, a `.kel` or binary change forces a miss, and the eight
+  heaviest self-host tests drop from ~102s to ~0.02s on a warm cache.
 - **Item 4 (gate blind spot)**: closed in both places — `release-gate.sh` and now a CI job.
 - **Item 6 (encoding capacity)**: implemented, merged, CI-green (Option E, above).
 - **Item 1 (nextest cap): DONE.** The tier split (routine `quick` vs full) is merged. The

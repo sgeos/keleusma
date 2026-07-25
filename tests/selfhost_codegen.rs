@@ -41,6 +41,31 @@ use keleusma::parser::parse;
 use keleusma::value_layout::{CompositeKind, ScalarKind};
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 
+mod common;
+
+// Complete-key memoization input sets for the whole-stage self-compile tests
+// (process-audit item 3). Each set must be a SUPERSET of the .kel files the test
+// actually reads: under-listing an input is the one unsound mistake, because a
+// stale cache could then mask a real divergence. The four pipeline stages are the
+// compiler that self-hosts every stage, so a byte-identity test's input set is the
+// pipeline plus, only when distinct, the stage under test. See common::selfhost_cache.
+const KEL_PIPELINE: &[&str] = &[
+    "compiler/kel/lexer.kel",
+    "compiler/kel/parse.kel",
+    "compiler/kel/reconstruct.kel",
+    "compiler/kel/codegen.kel",
+];
+const KEL_PIPELINE_WITH_ANALYZE: &[&str] = &[
+    "compiler/kel/lexer.kel",
+    "compiler/kel/parse.kel",
+    "compiler/kel/reconstruct.kel",
+    "compiler/kel/codegen.kel",
+    "compiler/kel/analyze.kel",
+];
+// The atomic-coverage probe drives only codegen.kel: it parses with the Rust front
+// end and never runs the lexer, parse, or reconstruct stages.
+const KEL_CODEGEN_ONLY: &[&str] = &["compiler/kel/codegen.kel"];
+
 // Shared-data slot offsets, mirroring the `ast` block's field order in codegen.kel
 // (one slot per scalar, arrays contiguous). root=0, then the four length-512 node
 // arrays (`kinds`/`args`/`lhs`/`rhs`, sized for the stage's largest own function),
@@ -1724,6 +1749,9 @@ fn a_synthetic_multiheaded_function_compiles_byte_identically() {
 /// only asserts that the covered functions stay covered.
 #[test]
 fn self_compile_codegen_atomic_functions() {
+    if common::selfhost_cache::hit("self_compile_codegen_atomic_functions", KEL_CODEGEN_ONLY) {
+        return;
+    }
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
     let src = std::fs::read_to_string("compiler/kel/codegen.kel").expect("read codegen.kel");
@@ -1894,6 +1922,7 @@ fn self_compile_codegen_atomic_functions() {
         "codegen self-compile count changed (expected {EXPECTED_SELF_COMPILE}); \
          update the gate deliberately if codegen.kel changed. self-compiled: {ok:?}"
     );
+    common::selfhost_cache::record_pass("self_compile_codegen_atomic_functions", KEL_CODEGEN_ONLY);
 }
 
 // ---------------------------------------------------------------------------
@@ -4656,6 +4685,12 @@ fn parse_into_codegen_byte_cast_matches_the_reference() {
 // branches inside outer loops, Byte-as-Word casts, private and shared data, and calls.
 #[test]
 fn self_host_compiles_lexer_kel_byte_identically() {
+    if common::selfhost_cache::hit(
+        "self_host_compiles_lexer_kel_byte_identically",
+        KEL_PIPELINE,
+    ) {
+        return;
+    }
     let src = std::fs::read_to_string("compiler/kel/lexer.kel").expect("read lexer.kel");
     let module = self_host_compile(&src);
     let reference = compile_src(&src);
@@ -4670,6 +4705,10 @@ fn self_host_compiles_lexer_kel_byte_identically() {
             r.name
         );
     }
+    common::selfhost_cache::record_pass(
+        "self_host_compiles_lexer_kel_byte_identically",
+        KEL_PIPELINE,
+    );
 }
 
 // A `yield` written as the tail of an if branch (`if c { yield a } else { yield b }`) folds
@@ -4838,6 +4877,12 @@ fn parse_into_codegen_match_call_arms_match_the_reference() {
 // table past 64, and rewriting codegen.kel's one `|>` pipe to the `match` it desugars to.
 #[test]
 fn self_host_compiles_codegen_kel_byte_identically() {
+    if common::selfhost_cache::hit(
+        "self_host_compiles_codegen_kel_byte_identically",
+        KEL_PIPELINE,
+    ) {
+        return;
+    }
     let src = std::fs::read_to_string("compiler/kel/codegen.kel").expect("read codegen.kel");
     let module = self_host_compile(&src);
     let reference = compile_src(&src);
@@ -4852,6 +4897,10 @@ fn self_host_compiles_codegen_kel_byte_identically() {
             r.name
         );
     }
+    common::selfhost_cache::record_pass(
+        "self_host_compiles_codegen_kel_byte_identically",
+        KEL_PIPELINE,
+    );
 }
 
 // The whole of parse.kel, the parser stage, self-compiled: every one of its 42 chunks is
@@ -4866,6 +4915,12 @@ fn self_host_compiles_codegen_kel_byte_identically() {
 // ast/op buffers.
 #[test]
 fn self_host_compiles_parse_kel_byte_identically() {
+    if common::selfhost_cache::hit(
+        "self_host_compiles_parse_kel_byte_identically",
+        KEL_PIPELINE,
+    ) {
+        return;
+    }
     let src = std::fs::read_to_string("compiler/kel/parse.kel").expect("read parse.kel");
     let module = self_host_compile(&src);
     let reference = compile_src(&src);
@@ -4880,6 +4935,10 @@ fn self_host_compiles_parse_kel_byte_identically() {
             r.name
         );
     }
+    common::selfhost_cache::record_pass(
+        "self_host_compiles_parse_kel_byte_identically",
+        KEL_PIPELINE,
+    );
 }
 
 // reconstruct.kel, the reconstruction stage, self-compiled: every chunk is emitted by
@@ -4891,6 +4950,12 @@ fn self_host_compiles_parse_kel_byte_identically() {
 // helper calls -- no match, enum, struct, or generic), and is the smallest stage.
 #[test]
 fn self_host_compiles_reconstruct_kel_byte_identically() {
+    if common::selfhost_cache::hit(
+        "self_host_compiles_reconstruct_kel_byte_identically",
+        KEL_PIPELINE,
+    ) {
+        return;
+    }
     let src =
         std::fs::read_to_string("compiler/kel/reconstruct.kel").expect("read reconstruct.kel");
     let module = self_host_compile(&src);
@@ -4906,6 +4971,10 @@ fn self_host_compiles_reconstruct_kel_byte_identically() {
             r.name
         );
     }
+    common::selfhost_cache::record_pass(
+        "self_host_compiles_reconstruct_kel_byte_identically",
+        KEL_PIPELINE,
+    );
 }
 
 // -- reconstruct.kel: the self-hosted reconstruction stage --------------------
@@ -6178,6 +6247,12 @@ fn validate_module_via_kel(module: &Module, arena_capacity: i64) -> bool {
 // 288/128/96/64 (heap 0) for lexer/reconstruct/codegen/parse.
 #[test]
 fn analyze_via_kel_matches_the_reference() {
+    if common::selfhost_cache::hit(
+        "analyze_via_kel_matches_the_reference",
+        KEL_PIPELINE_WITH_ANALYZE,
+    ) {
+        return;
+    }
     for path in [
         "compiler/kel/lexer.kel",
         "compiler/kel/reconstruct.kel",
@@ -6205,6 +6280,10 @@ fn analyze_via_kel_matches_the_reference() {
             assert_eq!(heap, ref_heap as i64, "wcmu heap for {path} `{}`", c.name);
         }
     }
+    common::selfhost_cache::record_pass(
+        "analyze_via_kel_matches_the_reference",
+        KEL_PIPELINE_WITH_ANALYZE,
+    );
 }
 
 // analyze.kel handles `loop` regions with a self-hosted iteration-bound extraction. These
@@ -6299,6 +6378,12 @@ loop main(resume: Word) -> Word {
 // fifth self-compiling Keleusma stage, not merely Keleusma code the reference compiles.
 #[test]
 fn self_host_compiles_analyze_kel_byte_identically() {
+    if common::selfhost_cache::hit(
+        "self_host_compiles_analyze_kel_byte_identically",
+        KEL_PIPELINE_WITH_ANALYZE,
+    ) {
+        return;
+    }
     let src = std::fs::read_to_string("compiler/kel/analyze.kel").expect("read analyze.kel");
     let module = self_host_compile(&src);
     let reference = compile_src(&src);
@@ -6313,6 +6398,10 @@ fn self_host_compiles_analyze_kel_byte_identically() {
             r.name
         );
     }
+    common::selfhost_cache::record_pass(
+        "self_host_compiles_analyze_kel_byte_identically",
+        KEL_PIPELINE_WITH_ANALYZE,
+    );
 }
 
 // The fail-closed reject path: a loop whose bound cannot be statically extracted must be
@@ -6497,6 +6586,12 @@ loop main(resume: Word) -> Word {
 // synthetic call programs -- at capacities below, at, and above the module's Stream budget.
 #[test]
 fn validate_module_via_kel_is_a_drop_in_for_verify_resource_bounds() {
+    if common::selfhost_cache::hit(
+        "validate_module_via_kel_is_a_drop_in_for_verify_resource_bounds",
+        KEL_PIPELINE_WITH_ANALYZE,
+    ) {
+        return;
+    }
     use keleusma::bytecode::BlockType;
     let mut modules: Vec<Module> = Vec::new();
     for path in [
@@ -6555,6 +6650,10 @@ loop main(resume: Word) -> Word { io.out = f(3); yield io.out }"#,
             assert_eq!(self_valid, ref_valid, "validity at cap={cap}");
         }
     }
+    common::selfhost_cache::record_pass(
+        "validate_module_via_kel_is_a_drop_in_for_verify_resource_bounds",
+        KEL_PIPELINE_WITH_ANALYZE,
+    );
 }
 
 // The composite-shared-read copy-out heap term: reading a whole flat-composite shared slot
