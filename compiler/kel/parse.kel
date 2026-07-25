@@ -201,8 +201,9 @@ enum Node {
     // scalar field (top-level or a nested struct's sub-field); StructEqNested (56, arg ext_off +
     // ext_size*65536 + variant*2^32 + r2*2^34 + l2*2^44) a nested-struct field header (its scalar
     // sub-fields follow as StructEqNestedField records); StructEqNestedEnd (57) closes a nested field;
-    // StructEqNestedBuild (58, arg ta + tb*1024 + topcount*1048576 + is_ne*1073741824) which
-    // reconstruct turns into a StructEqNestedNode (59). codegen `push_struct_eq_nested` builds it.
+    // StructEqNestedBuild (58, arg ta + tb*1024 + is_ne*1048576 + is_tuple*2097152) which reconstruct
+    // turns into a StructEqNestedNode (59); `is_tuple` = 1 when the TOP-LEVEL container is a tuple, so
+    // codegen swaps the top-level accessors to GetTupleField. codegen `push_struct_eq_nested` builds it.
     StructEqNestedField = 55,
     StructEqNested = 56,
     StructEqNestedEnd = 57,
@@ -637,6 +638,11 @@ private data stmt {
     se_subisarray: Word,
     se_arrcount: Word,
     se_arrkind: Word,
+    // 1 when the nested struct-eq drain's TOP-LEVEL container is a TUPLE (read the top-level element
+    // layout from `tupledefs`, and codegen emits GetTupleField for the top-level accessors) rather
+    // than a struct; 0 for a struct container. Rides `is_tuple*2097152` in the StructEqNestedBuild
+    // record. The inner sub-field drain is unaffected (a struct element's sub-fields stay `sd_*`).
+    se_istuple_container: Word,
     pending_ctuple: Word,
     pending_cstruct: Word,
     pending_carray: Word,
@@ -2230,10 +2236,69 @@ fn struct_eq_kind(idx: Word) -> Word {
     }
 }
 
+// Classify a TUPLE for equality lowering, mirroring `struct_eq_kind`'s convention: 0 = defer to the
+// ordinary path (a nested tuple/array element, or a struct element that itself nests a composite
+// sub-field -- a 2+-level container); 1 = FLAT (every element scalar -> `tuple_eq_start`); 2 = NESTED
+// (at least one element is a struct whose sub-fields are all scalar -> `struct_eq_nested_start` with
+// the tuple-container flag). Sets `stmt.sq_found` = 1 for the nested case so the caller routes. A
+// tuple element's struct type rides `tup_estruct[fidx]` (> 0 => struct, its decl index is that - 1);
+// an array or nested-tuple element is flagged by its sentinel kind (`tup_ekind >= 100`).
+fn tuple_eq_kind(idx: Word) -> Word {
+    stmt.sq_scan = 1;
+    stmt.sq_found = 0;
+    for f in 0..tupledefs.tup_ecount[idx] limit 64 {
+        let fidx = tupledefs.tup_estart[idx] + f;
+        if tupledefs.tup_estruct[fidx] > 0 {
+            // A struct element: nested-supported only when the struct is one level deep (all its
+            // sub-fields scalar). A composite sub-field (nested struct/tuple/array) => defer.
+            stmt.sq_found = 1;
+            let s = tupledefs.tup_estruct[fidx] - 1;
+            for g in 0..structdefs.sd_fcount[s] limit 64 {
+                let gidx = structdefs.sd_fstart[s] + g;
+                if structdefs.sd_fstruct[gidx] > 0 orelse structdefs.sd_ftuple[gidx] > 0 orelse structdefs.sd_farraylen[gidx] > 0 {
+                    stmt.sq_scan = 0;
+                }
+            }
+        } else {
+            // A scalar element rides a real ScalarKind (< 100); an array or nested-tuple element
+            // carries a sentinel kind (>= 100) and is not yet supported by the nested machinery.
+            if tupledefs.tup_ekind[fidx] >= 100 {
+                stmt.sq_scan = 0;
+            }
+        }
+    }
+    if stmt.sq_scan == 0 {
+        0
+    } else {
+        if stmt.sq_found == 1 {
+            2
+        } else {
+            1
+        }
+    }
+}
+
 // Begin a NESTED `struct == struct` lowering: allocate the two outer comparison temps, arm the
 // nested drain, and emit the first record. `structeq_nested_next` continues.
 fn struct_eq_nested_start(op: Word) -> Word {
-    let idx = ops.op_lstruct[ops.opsp] - 1;
+    struct_eq_nested_start_kind(op, 0)
+}
+
+// Begin a NESTED tuple-of-struct `(P, W) == (P, W)` lowering: the same nested drain, but the
+// top-level container is a TUPLE. `is_tuple` selects the top-level layout table (`tupledefs` vs
+// `structdefs`) that `structeq_nested_next` phase 0 reads, and codegen swaps the top-level
+// accessors to GetTupleField. The inner sub-field drain (a struct element's scalar sub-fields) is
+// unaffected. Byte-identical to the reference's `emit_composite_fieldwise_eq` over a tuple type.
+fn tuple_eq_nested_start(op: Word) -> Word {
+    struct_eq_nested_start_kind(op, 1)
+}
+
+fn struct_eq_nested_start_kind(op: Word, is_tuple: Word) -> Word {
+    let idx = if is_tuple == 1 {
+        ops.op_ltuple[ops.opsp] - 1
+    } else {
+        ops.op_lstruct[ops.opsp] - 1
+    };
     stmt.sq_ne = 0;
     if op == OpCode::NotEq() as Word {
         stmt.sq_ne = 1;
@@ -2252,8 +2317,13 @@ fn struct_eq_nested_start(op: Word) -> Word {
     stmt.sq_ta = ps.pcount + stmt.slot_count;
     stmt.slot_count = stmt.slot_count + 1;
     stmt.structeq_nested = 1;
+    stmt.se_istuple_container = is_tuple;
     stmt.sq_struct = idx;
-    stmt.sq_count = structdefs.sd_fcount[idx];
+    stmt.sq_count = if is_tuple == 1 {
+        tupledefs.tup_ecount[idx]
+    } else {
+        structdefs.sd_fcount[idx]
+    };
     stmt.sq_field = 0;
     stmt.se_phase = 0;
     structeq_nested_next()
@@ -2283,6 +2353,30 @@ fn structeq_nested_next() -> Word {
         }
     } else {
         if stmt.sq_field < stmt.sq_count {
+            if stmt.se_istuple_container == 1 {
+                // The top-level container is a TUPLE: read the element layout from `tupledefs`. A
+                // scalar element (tup_estruct == 0) is a StructEqNestedField (its ScalarKind rides
+                // `tup_ekind`); a struct element (tup_estruct > 0) is a StructEqNested header with
+                // variant Struct (2), then its scalar sub-fields drain via the unchanged `sd_*` path.
+                let tfidx = tupledefs.tup_estart[stmt.sq_struct] + stmt.sq_field;
+                if tupledefs.tup_estruct[tfidx] > 0 {
+                    let s = tupledefs.tup_estruct[tfidx] - 1;
+                    let r2 = ps.pcount + stmt.slot_count;
+                    stmt.slot_count = stmt.slot_count + 1;
+                    let l2 = ps.pcount + stmt.slot_count;
+                    stmt.slot_count = stmt.slot_count + 1;
+                    stmt.se_substart = structdefs.sd_fstart[s];
+                    stmt.se_subcount = structdefs.sd_fcount[s];
+                    stmt.se_subcur = 0;
+                    stmt.se_subistuple = 0;
+                    stmt.se_subisarray = 0;
+                    stmt.se_phase = 1;
+                    Node::StructEqNested() as Word + (tupledefs.tup_eoffset[tfidx] + structdefs.sd_bytesize[s] * 65536 + 2 * 4294967296 + r2 * 17179869184 + l2 * 17592186044416) * 64
+                } else {
+                    stmt.sq_field = stmt.sq_field + 1;
+                    Node::StructEqNestedField() as Word + (tupledefs.tup_eoffset[tfidx] + tupledefs.tup_ekind[tfidx] * 65536) * 64
+                }
+            } else {
             let fidx = structdefs.sd_fstart[stmt.sq_struct] + stmt.sq_field;
             if structdefs.sd_farraylen[fidx] > 0 {
                 // Array-of-scalar field: extract with FlatNested variant Array (1); the single
@@ -2331,10 +2425,10 @@ fn structeq_nested_next() -> Word {
             } else {
                 stmt.sq_field = stmt.sq_field + 1;
                 Node::StructEqNestedField() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fkind[fidx] * 65536) * 64
-            } } }
+            } } } }
         } else {
             stmt.structeq_nested = 0;
-            Node::StructEqNestedBuild() as Word + (stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_ne * 1048576) * 64
+            Node::StructEqNestedBuild() as Word + (stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_ne * 1048576 + stmt.se_istuple_container * 2097152) * 64
         }
     }
 }
@@ -2541,8 +2635,14 @@ fn emit_op(op: Word) -> Word {
     if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_larray[ops.opsp] > 0 andalso ps.last_array > 0 {
         array_eq_start(op)
     } else {
-    if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_ltuple[ops.opsp] > 0 andalso ps.last_tuple > 0 {
-        tuple_eq_start(op)
+    if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_ltuple[ops.opsp] > 0 andalso ps.last_tuple > 0 andalso tuple_eq_kind(ops.op_ltuple[ops.opsp] - 1) > 0 {
+        // `tuple_eq_kind` set `stmt.sq_found` = 1 for the nested case (a struct element): lower via
+        // the nested drain with the tuple-container flag; otherwise (all-scalar) the flat tuple path.
+        if stmt.sq_found == 1 {
+            tuple_eq_nested_start(op)
+        } else {
+            tuple_eq_start(op)
+        }
     } else {
     if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_lenum[ops.opsp] > 0 andalso ps.last_enum > 0 andalso enum_eq_supported(ops.op_lenum[ops.opsp] - 1) == 1 {
         enum_eq_start(op)

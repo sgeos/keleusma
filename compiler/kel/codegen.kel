@@ -292,7 +292,12 @@ private data st {
     sp: Word,
     started: Word,
     ret_done: Word,
-    ops: [Word; 1024],
+    // The per-function emitted-op buffer, sized 2048 (was 1024): the composite-equality emitters --
+    // `push_struct_eq_nested` in particular, which now handles the tuple-of-struct top-level container
+    // -- exceed 1024 emitted ops for their own self-compilation. `st` is private data, so this size
+    // is internal to the program and does not touch the wire format, the shared-data layout, or
+    // `BYTECODE_VERSION`. The V2 16 MB shared ceiling admits the larger private frame.
+    ops: [Word; 2048],
     op_count: Word,
     emit_cursor: Word,
     cf_if: [Word; 32],
@@ -1833,6 +1838,9 @@ fn push_struct_eq_nested(p: Word) -> Word {
         }
     }
     let is_ne = ast.match_parts[st.se_cur];
+    // 1 when the TOP-LEVEL container is a tuple: swap only the top-level field accessors to
+    // GetTupleField (op 53). One slot past is_ne. The inner sub-field accessors are unchanged.
+    let is_tuple = ast.match_parts[st.se_cur + 1];
     // Pre-intern the pool in the reference's emission order by replaying it field by field: a scalar
     // field interns false; a nested struct/tuple field false then true; an array field its element
     // index constants 0..count-1 then false then true. `intern_*` dedups, so first-occurrence order
@@ -1857,6 +1865,20 @@ fn push_struct_eq_nested(p: Word) -> Word {
     }
     let false_idx = intern_bool(0);
     let true_idx = intern_bool(1);
+    // The two TOP-LEVEL accessors, selected once by the container kind: for a tuple container a
+    // scalar element reads GetTupleField (op 53) and a nested element extracts with GetTupleField
+    // (the FlatNested operand form is shared); for a struct container they are GetField (47) and
+    // GetFieldNested (48). The INNER sub-field accessors below are independent of this.
+    let topfieldacc = if is_tuple == 1 {
+        wire.gettuplefield
+    } else {
+        wire.getfield
+    };
+    let topnestacc = if is_tuple == 1 {
+        wire.gettuplefield
+    } else {
+        wire.getfieldnested
+    };
     if is_ne == 1 {
         push_emit(wire.lnot);
     }
@@ -1867,7 +1889,7 @@ fn push_struct_eq_nested(p: Word) -> Word {
         let f = topcount - 1 - fj;
         let foff = st.se_foff[f];
         if ast.match_parts[foff] == 0 {
-            // Scalar top-level field: the same block as the flat path.
+            // Scalar top-level field: the same block as the flat path (accessor `topfieldacc`).
             let packed = ast.match_parts[foff + 1] + ast.match_parts[foff + 2] * 65536;
             push_emit(wire.mendif);
             push_emit(wire.mbreak);
@@ -1875,9 +1897,9 @@ fn push_struct_eq_nested(p: Word) -> Word {
             push_emit(wire.mif);
             push_emit(wire.lnot);
             push_emit(wire.cmpeq);
-            push_emit(wire.getfield + packed * wire.radix);
+            push_emit(topfieldacc + packed * wire.radix);
             push_emit(wire.getlocal + tb * wire.radix);
-            push_emit(wire.getfield + packed * wire.radix);
+            push_emit(topfieldacc + packed * wire.radix);
             push_emit(wire.getlocal + ta * wire.radix);
         } else {
             // Nested field: extract both sides into r2/l2, run the inner loop, negate, break.
@@ -1886,7 +1908,8 @@ fn push_struct_eq_nested(p: Word) -> Word {
             let l2 = ast.match_parts[foff + 5];
             let variant = ast.match_parts[foff + 3];
             // The sub-field accessor follows the extract variant: Tuple (0) -> GetTupleField,
-            // Struct (2) -> GetField (an Array (1) uses the GetIndex element loop below).
+            // Struct (2) -> GetField (an Array (1) uses the GetIndex element loop below). This is the
+            // INNER accessor and is unaffected by the top-level container kind.
             let subacc = if variant == 0 {
                 wire.gettuplefield
             } else {
@@ -1939,9 +1962,9 @@ fn push_struct_eq_nested(p: Word) -> Word {
             push_emit(wire.mloop);
             push_emit(wire.setlocal + l2 * wire.radix);
             push_emit(wire.setlocal + r2 * wire.radix);
-            push_emit(wire.getfieldnested + extp * wire.radix);
+            push_emit(topnestacc + extp * wire.radix);
             push_emit(wire.getlocal + tb * wire.radix);
-            push_emit(wire.getfieldnested + extp * wire.radix);
+            push_emit(topnestacc + extp * wire.radix);
             push_emit(wire.getlocal + ta * wire.radix);
         }
     }

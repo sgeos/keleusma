@@ -448,7 +448,10 @@ fn build_array_of_array_eq(a: Word) -> Word {
 fn build_struct_eq_nested(a: Word) -> Word {
     let ta = a % 1024;
     let tb = (a / 1024) % 1024;
-    let is_ne = a / 1048576;
+    let is_ne = (a / 1048576) % 2;
+    // 1 when the TOP-LEVEL container is a tuple; codegen swaps the top-level accessors to
+    // GetTupleField. Appended to match_parts right after is_ne (one extra slot past the flat form).
+    let is_tuple = a / 2097152;
     let base = rs.mp;
     io.match_parts[base] = ta;
     io.match_parts[base + 1] = tb;
@@ -457,7 +460,8 @@ fn build_struct_eq_nested(a: Word) -> Word {
         io.match_parts[base + 3 + i] = rs.seb[i];
     }
     io.match_parts[base + 3 + rs.sebcur] = is_ne;
-    rs.mp = base + 3 + rs.sebcur + 1;
+    io.match_parts[base + 3 + rs.sebcur + 1] = is_tuple;
+    rs.mp = base + 3 + rs.sebcur + 2;
     rs.sebcur = 0;
     rs.setop = 0;
     rs.se_innested = 0;

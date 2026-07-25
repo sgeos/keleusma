@@ -931,6 +931,21 @@ fn decode_op(w: i64) -> Op {
                 other => panic!("bad composite variant tag {other}"),
             },
         }),
+        // A tuple field read. The flat-nested form (a nested composite tuple element extracted and
+        // re-wrapped) packs offset + size*65536 + variant*2^32, so its operand is >= 2^33 (variant
+        // Struct = 2); the flat form packs offset + kind_tag*65536 (< 2^20) and is disambiguated by
+        // the operand magnitude.
+        53 if operand >= 4294967296 => Op::GetTupleField(TupleField::FlatNested {
+            offset: (operand % 65536) as u16,
+            size: ((operand / 65536) % 65536) as u16,
+            variant: match operand / 4294967296 {
+                0 => CompositeKind::Tuple,
+                1 => CompositeKind::Array,
+                2 => CompositeKind::Struct,
+                3 => CompositeKind::Enum,
+                other => panic!("bad composite variant tag {other}"),
+            },
+        }),
         // A flat tuple field read: operand packs offset + kind_tag*65536.
         53 => Op::GetTupleField(TupleField::Flat {
             offset: (operand % 65536) as u16,
@@ -6903,6 +6918,31 @@ fn self_host_compiles_nested_tuple_field_equality() {
     );
 }
 
+/// Tuple-of-struct equality self-compiles byte-identically: a tuple whose element is a struct
+/// (`(P, Word) == (P, Word)`) reuses the nested drain with the top-level container flagged as a
+/// tuple. The top-level accessors become GetTupleField (op 53): a scalar element reads a flat
+/// tuple field, the struct element extracts as GetTupleField(FlatNested Struct) into fresh temps
+/// whose scalar sub-fields compare with the inner GetField loop. Covers struct-then-scalar,
+/// scalar-then-struct, the `!=` form, and a 2-field struct element; a flat `(Word, Word)` case
+/// guards that the all-scalar tuple path is left intact.
+#[test]
+fn self_host_compiles_tuple_of_struct_equality() {
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: (P, Word), b: (P, Word)) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: (P, Word), b: (P, Word)) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: (Word, P), b: (Word, P)) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\nfn f(a: (P, Word), b: (P, Word)) -> bool { a == b }",
+    );
+    // Flat-tuple regression guard: an all-scalar tuple must still take the flat tuple-eq path.
+    assert_self_host_byte_identical("fn f(a: (Word, Word), b: (Word, Word)) -> bool { a == b }");
+}
+
 /// Array-in-struct nested equality self-compiles byte-identically: a struct with a scalar-array
 /// field extracts it (FlatNested variant Array) into fresh temps and compares elements with a
 /// per-element GetIndex inner loop. The element index constants interleave with the false/true bools
@@ -7407,8 +7447,8 @@ fn self_hosted_construct_support_boundary() {
             "enum E { A, B }\nstruct S { e: E, w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
         ),
         (
-            "eq/tuple_of_struct__GAP",
-            Gap,
+            "eq/tuple_of_struct",
+            SOk,
             "struct P { x: Word }\nfn f(a: (P, Word), b: (P, Word)) -> bool { a == b }",
         ),
         (
