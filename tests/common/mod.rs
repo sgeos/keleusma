@@ -61,12 +61,15 @@ pub mod selfhost_cache {
     ///
     /// `DefaultHasher::new()` uses fixed keys, so the digest is stable across the
     /// separate processes that `record_pass` and `hit` run in under nextest.
-    fn complete_key(cache_id: &str, kel_inputs: &[&str]) -> Option<u64> {
+    fn complete_key(cache_id: &str, kel_inputs: &[&str], extra: &str) -> Option<u64> {
         if !enabled() {
             return None;
         }
         let mut h = std::collections::hash_map::DefaultHasher::new();
         cache_id.hash(&mut h);
+        // Per-call discriminant (for example the source snippet passed to a shared
+        // helper), so distinct inputs through one call site get distinct keys.
+        extra.hash(&mut h);
 
         // (1) Binary identity — captures every Rust-side input at once.
         let exe = std::env::current_exe().ok()?;
@@ -98,17 +101,28 @@ pub mod selfhost_cache {
     /// True when the caller may SKIP the expensive self-compile: caching is enabled
     /// and a PASS was recorded under the identical complete key.
     pub fn hit(cache_id: &str, kel_inputs: &[&str]) -> bool {
-        match complete_key(cache_id, kel_inputs) {
-            Some(k) => marker(k).exists(),
-            None => false,
-        }
+        hit_with(cache_id, kel_inputs, "")
     }
 
     /// Record that the caller's byte-identity assertion PASSED under the current
     /// complete key, so a future run with identical inputs may skip. No-op when
     /// caching is disabled.
     pub fn record_pass(cache_id: &str, kel_inputs: &[&str]) {
-        if let Some(k) = complete_key(cache_id, kel_inputs) {
+        record_pass_with(cache_id, kel_inputs, "")
+    }
+
+    /// Like [`hit`], plus an `extra` per-call discriminant folded into the key. Used
+    /// to cache a shared helper per source snippet, where `extra` is the snippet.
+    pub fn hit_with(cache_id: &str, kel_inputs: &[&str], extra: &str) -> bool {
+        match complete_key(cache_id, kel_inputs, extra) {
+            Some(k) => marker(k).exists(),
+            None => false,
+        }
+    }
+
+    /// Like [`record_pass`], plus an `extra` per-call discriminant folded into the key.
+    pub fn record_pass_with(cache_id: &str, kel_inputs: &[&str], extra: &str) {
+        if let Some(k) = complete_key(cache_id, kel_inputs, extra) {
             let _ = std::fs::write(marker(k), b"");
         }
     }

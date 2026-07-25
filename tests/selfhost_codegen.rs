@@ -65,6 +65,9 @@ const KEL_PIPELINE_WITH_ANALYZE: &[&str] = &[
 // The atomic-coverage probe drives only codegen.kel: it parses with the Rust front
 // end and never runs the lexer, parse, or reconstruct stages.
 const KEL_CODEGEN_ONLY: &[&str] = &["compiler/kel/codegen.kel"];
+// The synthetic-input analyze tests run analyze.kel over modules compiled from inline
+// source strings (in the binary), so analyze.kel is their only .kel input.
+const KEL_ANALYZE_ONLY: &[&str] = &["compiler/kel/analyze.kel"];
 
 // Shared-data slot offsets, mirroring the `ast` block's field order in codegen.kel
 // (one slot per scalar, arrays contiguous). root=0, then the four length-512 node
@@ -4434,6 +4437,17 @@ fn self_host_compile(src: &str) -> Module {
 /// Self-host-compile `src` and assert every chunk's ops, constant pool, and local_count
 /// are byte-identical to the Rust-hosted compiler's, returning the self-hosted module.
 fn assert_self_host_byte_identical(src: &str) -> Module {
+    // Cached per source snippet (item 3 follow-up). On a byte-identical PASS,
+    // self_host_compile only replaces each source chunk's ops/constants/local_count
+    // with values this function proves equal to the reference, so the self-hosted
+    // module equals compile_src(src) exactly. A hit therefore returns the fast
+    // reference build as an exact substitute for the callers that inspect the result,
+    // while skipping the four-stage self-host compile. The complete key covers the
+    // binary (hence the whole Rust compiler, VM, and wire format), the pipeline .kel
+    // stages, and `src`.
+    if common::selfhost_cache::hit_with("assert_self_host_byte_identical", KEL_PIPELINE, src) {
+        return compile_src(src);
+    }
     let module = self_host_compile(src);
     let reference = compile_src(src);
     assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");
@@ -4447,6 +4461,7 @@ fn assert_self_host_byte_identical(src: &str) -> Module {
             r.name
         );
     }
+    common::selfhost_cache::record_pass_with("assert_self_host_byte_identical", KEL_PIPELINE, src);
     module
 }
 
@@ -6293,6 +6308,12 @@ fn analyze_via_kel_matches_the_reference() {
 // multiply, the runtime-range `break` inside the loop, and nested control flow.
 #[test]
 fn analyze_via_kel_matches_the_reference_for_loops() {
+    if common::selfhost_cache::hit(
+        "analyze_via_kel_matches_the_reference_for_loops",
+        KEL_ANALYZE_ONLY,
+    ) {
+        return;
+    }
     let cases: &[&str] = &[
         // A plain accumulation loop.
         r#"require word >= 32;
@@ -6402,6 +6423,10 @@ fn self_host_compiles_analyze_kel_byte_identically() {
         "self_host_compiles_analyze_kel_byte_identically",
         KEL_PIPELINE_WITH_ANALYZE,
     );
+    common::selfhost_cache::record_pass(
+        "analyze_via_kel_matches_the_reference_for_loops",
+        KEL_ANALYZE_ONLY,
+    );
 }
 
 // The fail-closed reject path: a loop whose bound cannot be statically extracted must be
@@ -6411,6 +6436,12 @@ fn self_host_compiles_analyze_kel_byte_identically() {
 // non-canonical op) and asserts analyze.kel rejects exactly when the reference does.
 #[test]
 fn analyze_via_kel_rejects_an_inextractable_loop_like_the_reference() {
+    if common::selfhost_cache::hit(
+        "analyze_via_kel_rejects_an_inextractable_loop_like_the_reference",
+        KEL_ANALYZE_ONLY,
+    ) {
+        return;
+    }
     use keleusma::bytecode::Op;
     let src = r#"require word >= 32;
 private data d { s: Word }
@@ -6452,6 +6483,10 @@ loop main(resume: Word) -> Word {
     );
     let (_, _, _, reject) = analyze_via_kel(&chunk);
     assert!(reject, "analyze.kel should reject the mutated loop");
+    common::selfhost_cache::record_pass(
+        "analyze_via_kel_rejects_an_inextractable_loop_like_the_reference",
+        KEL_ANALYZE_ONLY,
+    );
 }
 
 // Native-call stack effects. No compiler stage calls a host native, so this injects a
@@ -6461,6 +6496,12 @@ loop main(resume: Word) -> Word {
 // 0x82), whose high bit the reference's native WCMU arm folds into the pop count.
 #[test]
 fn analyze_via_kel_matches_the_reference_for_native_calls() {
+    if common::selfhost_cache::hit(
+        "analyze_via_kel_matches_the_reference_for_native_calls",
+        KEL_ANALYZE_ONLY,
+    ) {
+        return;
+    }
     use keleusma::bytecode::Op;
     let src = r#"require word >= 32;
 private data d { s: Word }
@@ -6499,6 +6540,10 @@ loop main(resume: Word) -> Word {
         );
         assert_eq!(heap, ref_heap as i64, "wcmu heap with native n={n_args:#x}");
     }
+    common::selfhost_cache::record_pass(
+        "analyze_via_kel_matches_the_reference_for_native_calls",
+        KEL_ANALYZE_ONLY,
+    );
 }
 
 // The self-hosted validator: analyze.kel's `out_valid` verdict for a Stream chunk against an
@@ -6663,6 +6708,12 @@ loop main(resume: Word) -> Word { io.out = f(3); yield io.out }"#,
 // program whose shared read is composite -- where the shallow bound would under-count.
 #[test]
 fn validate_module_via_kel_folds_composite_shared_copyout() {
+    if common::selfhost_cache::hit(
+        "validate_module_via_kel_folds_composite_shared_copyout",
+        KEL_ANALYZE_ONLY,
+    ) {
+        return;
+    }
     use keleusma::bytecode::BlockType;
     let src = r#"require word >= 32;
 struct P { x: Word, y: Word }
@@ -6695,6 +6746,10 @@ loop main(resume: Word) -> Word {
             "composite-shared validity at cap={cap}"
         );
     }
+    common::selfhost_cache::record_pass(
+        "validate_module_via_kel_folds_composite_shared_copyout",
+        KEL_ANALYZE_ONLY,
+    );
 }
 
 #[test]
