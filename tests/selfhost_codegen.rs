@@ -3758,6 +3758,12 @@ fn parse_into_codegen_match_matches_the_reference() {
 // yields rather than finishing, so the yielded value is checked.
 #[test]
 fn parse_into_codegen_yield_in_a_loop_matches_the_reference() {
+    if common::selfhost_cache::hit(
+        "parse_into_codegen_yield_in_a_loop_matches_the_reference",
+        KEL_PIPELINE,
+    ) {
+        return;
+    }
     let cases: &[(&str, i64, i64)] = &[
         ("loop main(r: Word) -> Word { yield r + 1 }", 41, 42),
         ("loop main(r: Word) -> Word { yield r * 2 }", 21, 42),
@@ -3826,6 +3832,10 @@ fn parse_into_codegen_yield_in_a_loop_matches_the_reference() {
             other => panic!("unexpected result for `{src}`: {other:?}"),
         }
     }
+    common::selfhost_cache::record_pass(
+        "parse_into_codegen_yield_in_a_loop_matches_the_reference",
+        KEL_PIPELINE,
+    );
 }
 
 // Harden the bridge on combined and nested constructs: the individual kinds each
@@ -4496,6 +4506,12 @@ fn self_host_compiles_lexer_kel_byte_identically() {
 // This was the lexer.kel `main` blocker.
 #[test]
 fn parse_into_codegen_yield_in_if_branch_matches_the_reference() {
+    if common::selfhost_cache::hit(
+        "parse_into_codegen_yield_in_if_branch_matches_the_reference",
+        KEL_PIPELINE,
+    ) {
+        return;
+    }
     let cases: &[(&str, i64, i64)] = &[
         (
             "loop main(r: Word) -> Word { if r == 0 { yield 62 } else { yield 63 } }",
@@ -4544,6 +4560,10 @@ fn parse_into_codegen_yield_in_if_branch_matches_the_reference() {
             other => panic!("unexpected result for `{src}`: {other:?}"),
         }
     }
+    common::selfhost_cache::record_pass(
+        "parse_into_codegen_yield_in_if_branch_matches_the_reference",
+        KEL_PIPELINE,
+    );
 }
 
 // A `for .. limit` loop written inside an `if` branch closes as a for body, not the branch,
@@ -4553,6 +4573,12 @@ fn parse_into_codegen_yield_in_if_branch_matches_the_reference() {
 // nested `for`.
 #[test]
 fn parse_into_codegen_for_in_if_branch_matches_the_reference() {
+    if common::selfhost_cache::hit(
+        "parse_into_codegen_for_in_if_branch_matches_the_reference",
+        KEL_PIPELINE,
+    ) {
+        return;
+    }
     let cases: &[(&str, i64, i64)] = &[
         // a for as the sole content of an if-then branch (no else).
         (
@@ -4597,6 +4623,10 @@ fn parse_into_codegen_for_in_if_branch_matches_the_reference() {
             other => panic!("unexpected result for `{src}`: {other:?}"),
         }
     }
+    common::selfhost_cache::record_pass(
+        "parse_into_codegen_for_in_if_branch_matches_the_reference",
+        KEL_PIPELINE,
+    );
 }
 
 // A `match` whose arm results are function calls (`k => f(x)`), and matches with many
@@ -4605,6 +4635,12 @@ fn parse_into_codegen_for_in_if_branch_matches_the_reference() {
 // call-valued and high-arity forms independently.
 #[test]
 fn parse_into_codegen_match_call_arms_match_the_reference() {
+    if common::selfhost_cache::hit(
+        "parse_into_codegen_match_call_arms_match_the_reference",
+        KEL_PIPELINE,
+    ) {
+        return;
+    }
     let cases: &[(&str, i64, i64)] = &[
         (
             "fn g(x: Word) -> Word { x + 1 } fn h(x: Word) -> Word { x + 2 } fn main(k: Word) -> Word { match k { 0 => g(k), 1 => h(k), _ => g(k) } }",
@@ -4640,6 +4676,10 @@ fn parse_into_codegen_match_call_arms_match_the_reference() {
             other => panic!("unexpected result for `{src}`: {other:?}"),
         }
     }
+    common::selfhost_cache::record_pass(
+        "parse_into_codegen_match_call_arms_match_the_reference",
+        KEL_PIPELINE,
+    );
 }
 
 // The whole of codegen.kel, the code-generator stage, self-compiled: every one of its 35
