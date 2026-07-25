@@ -15,7 +15,49 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 ## Last Updated
 
-**Date**: 2026-07-24 (session 28)
+**Date**: 2026-07-25 (session 31)
+
+**FRONTIER RE-SCOUT, POST-P11 (2026-07-25). Supersedes the 2026-07-22 nested-equality recipe below.** The
+2026-07-22 tuple-of-struct / enum-in-struct / 2+-level assessments predate P11/Option E (2026-07-24), so
+their premise "the 6-bit record-kind space is FULL" no longer holds and their split-tag framing is obsolete.
+Re-scouted against the current stages, the picture separates cleanly into what P11 changed and what it did not:
+
+- **What P11 FREED for the frontier: the inter-stage record/node-kind space.** Records transport as a
+  two-word `(tag, payload)` (`src/selfhost_host.rs` `drive_parse_records`), so a new nested-equality record or
+  node kind uses a NATIVE tag `>= 64` directly (as records 65 `bnot`, 68 `and`/`or` already do) rather than
+  the old split-tag indirection (48->65, 59->68). Reconstruct's `step_assembly` already routes native tags.
+  New markers and flags for the nested machinery are now cheap.
+- **What P11 did NOT change: the runtime wire-op space (opcodes 1..63, `codegen.kel` radix 256).** That is a
+  SEPARATE namespace, still full, and is the rad-hard minimal ISA. Tuple-of-struct's nested extract therefore
+  STILL REUSES `GetTupleField` (op 53) with a nested operand form (operand `>= 2^32`, distinguished in the
+  driver `decode_op` from the flat `offset + kind*65536`), NOT a new opcode. P11's 256-radix operand widening
+  makes that large nested operand fit comfortably. No new opcode and no `BYTECODE_VERSION` bump -- the op-reuse
+  core of the 2026-07-22 recipe still stands; only its encoding-scarcity framing is superseded.
+- **The real blockers are nested-machinery surgery, independent of P11.** `struct_eq_nested_start` /
+  `structeq_nested_next` (`parse.kel` ~2235-2340) are hard-coded to STRUCT containers, and `struct_eq_kind`
+  (~2188-2231) DEFERS when a nested field is itself composite (2+-level) or an array-of-composite.
+
+**Smallest bounded next increment: TUPLE-OF-STRUCT** (`(P, W) == (P, W)`) -- still the 2026-07-22 pick, now
+with a simpler encoding path. Step 1 (`tup_estruct`, the tuple-element struct-index tracker) is committed and
+present in `v0.2.3`'s `parse.kel`. Remaining, each guarded by the byte-identical 82nd-84th nested-struct
+self-compiles:
+1. A `tuple_eq_kind` detector (composite tuple element via `tup_estruct > 0`).
+2. Thread an `is_tuple_container` flag through `struct_eq_nested_start` / `structeq_nested_next` (phase 0 reads
+   the container from `tup_eoffset`/`tup_ekind`/`tup_estruct` instead of `sd_*`; phase 1 is unchanged since the
+   nested struct P is always `sd_*`) and carry it on the `StructEqNestedBuild` record -> node (now a native
+   tag, no split-tag).
+3. Codegen `push_struct_eq_nested` (`codegen.kel` ~1812-1953) swaps ONLY the top-level accessor on the flag
+   (`GetField` op 47 -> `GetTupleField` op 53); the inner struct sub-field loop stays `GetField`.
+4. Driver `decode_op` (`tests/selfhost_codegen.rs` ~935) recognizes the op-53 nested operand form.
+KIND-NUMBERING TRAP (still applies): a top-level tuple element uses `tup_ekind` (`scalar_kind_of`, Word=3); the
+inner struct field uses `sd_fkind` (Word=0). Do not cross them. Estimate ~60-80 edits, medium-to-high risk (the
+nested-struct machine is the regression blast radius).
+
+The other gaps are NOT smaller: enum-in-struct needs a new variant-dispatch phase-1 branch in
+`structeq_nested_next` (very high effort); 2+-level needs the streaming machine to recurse (extreme);
+struct-of-array-of-struct is an intentional `struct_eq_kind` defer (array-of-composite); enum-struct-payload is
+TBD, likely an enum-in-struct subset. This is the current frontier recipe; the 2026-07-22 entries below are
+retained as history, superseded on their encoding framing but correct on the op-53 reuse.
 
 **SESSION 28 (P11 encoding-capacity change, Option E -- the record/token/wire-op namespaces widened; all byte-identical, MERGED to `v0.2.3` CI-green).** The four exhausted inter-stage encodings were widened rather than worked around further (process-audit item 6; operator chose Option E from the encoding-capacity brief). The RECORD stream (parse -> reconstruct), whose single-word `tag + payload*64` packing was at the `i64` ceiling (fat payload 56 bits, so radix 128 == `i64::MAX` with zero margin), moved to a TWO-WORD `(tag, payload)` transport: `reconstruct` already read two parallel arrays (`rec_kind[]`/`rec_arg[]`), so the shared driver pair-reads `(t, arg)` with a `-1` sentinel and skips the `Reset` the productive `loop main` emits between yields. The TOKEN (lexer -> parse) and WIRE-OP (codegen -> driver) streams, whose payloads had headroom, moved instead to an 8-bit radix (`k + v*256`, was `*64`) -- the lighter mechanism where a ceiling was not imminent. With the ceilings gone, every split-tag workaround (records 48/51/54/59 mapping to nodes 65/66/67/68) was retired for native `>= 64` tags read directly. Precedence P1 replaced the coarse integer `prec_of` with a 13-level scale (orelse < andalso < or < xor < and < comparison < bor < bxor < band < shift < add < mul < unary), fixing the `a xor b == c` and `a and b xor c` faithfulness defects; `xor` needed its own `OpCode::Xor = 33` (was folded onto `NotEq`) that still lowers to `BinOp(NotEq)` -> the same `CmpNe` wire op, so byte-identity held. The six-way host-driver duplication was consolidated to one shared `drive_parse_records` (`src/selfhost_host.rs`) BEFORE the transport change, so the widening touched one reader. Boundary test `self_hosted_construct_support_boundary` is now 47 Ok / 7 Gap / 1 RefRejects (the two precedence Gaps closed). CI now triggers on `main` + `v*` with a `selfhost-compiler` subproject job, and the `main`/`v0.2.3` divergence was reconciled by rebasing `v0.2.3` to sit purely ahead of `main`. Authoritative records: `docs/decisions/{ENCODING_CAPACITY_BRIEF,P11_OPTION_E_PLAN}.md`. This closes process-audit item 6; the remaining nested-composite-equality frontier (enum-in-struct, tuple-of-struct, 2+-level nesting) is now unblocked by the freed capacity.
 

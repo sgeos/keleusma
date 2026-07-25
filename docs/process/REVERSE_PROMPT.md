@@ -87,6 +87,8 @@ increment-by-increment reasoning and frontier assessments live in
 ## Next step
 
 All actionable process-audit items (1–6) are addressed and the branching finding is resolved;
-item 7's prep is now complete on both halves, pending only the operator's go. The next roadmap
-target is the nested-composite-equality frontier (tuple-of-struct, enum-in-struct, 2+-level),
-unblocked by the freed encoding capacity and now drivable by the autonomy loop substrate.
+item 7's prep is now complete on both halves, pending only the operator's go. The frontier was
+re-scouted post-P11 (2026-07-25, in `DESIGN_JOURNAL.md`), closing the last prep residual: the
+stale 2026-07-22 recipe is superseded, **tuple-of-struct** is the confirmed smallest-bounded
+first increment (step 1 `tup_estruct` already in `v0.2.3`), and it needs no new opcode (the
+nested extract reuses op 53). The frontier is now drivable by the autonomy loop substrate.

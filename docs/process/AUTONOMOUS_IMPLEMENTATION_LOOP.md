@@ -37,9 +37,14 @@ nested-composite-equality family:
 
 Floats and generics are the deferred tail (harder, out of the near-term queue). The
 authoritative next-step detail — the reference lowering, the `.kel` touch points, and the
-known traps — lives in the frontier assessments and the tuple-of-struct starting-point
-recipe in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.md). Read it before selecting; do not
-re-derive what is already scouted there.
+known traps — lives in the frontier assessments in
+[DESIGN_JOURNAL.md](./DESIGN_JOURNAL.md). Read the **newest** assessment before selecting;
+the current one is the 2026-07-25 post-P11 re-scout, which names tuple-of-struct as the
+smallest bounded increment and separates what P11 freed (inter-stage record/node kinds, now
+native tags) from what it did not (the runtime wire-op space, still minimal, so the nested
+extract reuses op 53 rather than adding an opcode). Do not re-derive what a current
+assessment has already scouted, but treat any recipe predating a major encoding or ISA change
+as leads to re-validate in the plan step, not as final plans.
 
 ## The increment cycle (the loop body)
 
