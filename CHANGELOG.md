@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **The shared-data segment ceiling rises from 64 KB to 16 MB (wire format V2,
-  `BYTECODE_VERSION` 1 → 2).** The shared byte-offset, unified data-slot index, and
+- **The shared-data segment ceiling rises from 64 KB to 16 MB (the wire format
+  widens but `BYTECODE_VERSION` stays 1, per the no-public-adoption stance).** The shared byte-offset, unified data-slot index, and
   indexed-array length operands of `GetData`, `SetData`, `GetDataIndexed`, and
   `SetDataIndexed` widen from sixteen to twenty-four bits, so a program may declare a
   shared segment (a large host-shared byte buffer, for instance) beyond the former 64 KB

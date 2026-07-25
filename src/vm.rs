@@ -11054,13 +11054,14 @@ mod tests {
         // raising the total to 300 bytes, and again for the
         // `WireAuxBody::native_return_shapes` table (A.2.1 native-result
         // seeding), whose empty `ArchivedVec` adds 8 more bytes for a total of
-        // 308. The wire format may change freely between development builds; a
-        // change a prior-version runtime could not read (here the V2 twenty-
-        // four-bit data operands) bumps BYTECODE_VERSION, which is 2 (byte
-        // four). Only the version byte and the CRC trailer differ from the V1
-        // golden bytes, since this program has no data segment.
+        // 308. The wire format may change freely between development builds.
+        // BYTECODE_VERSION is held at 1 (byte four) under the no-adoption
+        // policy: the V0.2.3 twenty-four-bit data-operand widening changed the
+        // format but not the version number, since there is no installed base
+        // to protect. Only the version byte and the CRC trailer differ from the
+        // pre-widening golden bytes, since this program has no data segment.
         let expected: alloc::vec::Vec<u8> = alloc::vec![
-            75, 69, 76, 69, 2, 0, 64, 0, 60, 1, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            75, 69, 76, 69, 1, 0, 64, 0, 60, 1, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 240, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 159, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -11071,8 +11072,8 @@ mod tests {
             255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 144, 255, 255, 255, 0,
-            0, 0, 0, 136, 255, 255, 255, 1, 0, 0, 0, 152, 255, 255, 255, 0, 0, 0, 0, 67, 239, 18,
-            140
+            0, 0, 0, 136, 255, 255, 255, 1, 0, 0, 0, 152, 255, 255, 255, 0, 0, 0, 0, 122, 91, 139,
+            23
         ];
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");

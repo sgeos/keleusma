@@ -3461,20 +3461,25 @@ pub const MAX_DATA_ADDR: u32 = 1 << 24;
 /// Wire format version for serialized bytecode. Bytecode produced under a
 /// different version is rejected at load time.
 ///
-/// V0.2 development releases briefly used version 2 before this crate
-/// achieved public adoption; the version was rolled back to 1 when the
-/// header was extended with the flags byte and the shared and private
-/// data byte counts. Bytecode produced under any earlier development
-/// build is rejected at load time on header-shape mismatch through the
-/// CRC trailer.
+/// The version number signals a compatibility commitment to consumers. This
+/// crate has no public adoption, so there is no installed base to protect, and
+/// the version is deliberately held at 1 across development wire-format changes
+/// rather than bumped on each one. This continues an established policy: V0.2
+/// development releases briefly used version 2 before adoption and rolled it back
+/// to 1 when the header gained the flags byte and the shared and private data
+/// byte counts.
 ///
-/// Version 2 widens the shared-data byte-offset, data-slot-index, and
+/// The V0.2.3 line widened the shared-data byte-offset, data-slot-index, and
 /// indexed-array-length operands of `GetData`/`SetData`/`GetDataIndexed`/
-/// `SetDataIndexed` from sixteen to twenty-four bits (raising the shared
-/// segment ceiling from 64 KB to 16 MB) without changing the four-byte
-/// opcode record or eight-byte operand-pool entry sizes. Version 1
-/// bytecode is rejected at load time on the version check.
-pub const BYTECODE_VERSION: u16 = 2;
+/// `SetDataIndexed` from sixteen to twenty-four bits (raising the shared-segment
+/// ceiling from 64 KB to 16 MB) without changing the four-byte opcode record or
+/// eight-byte operand-pool entry sizes. Under the no-adoption policy this is NOT
+/// a version bump; the number stays 1. The consequence, accepted deliberately, is
+/// that a module from an earlier development build shares version 1 with the wider
+/// format and would be accepted then mis-read rather than cleanly rejected on a
+/// version check -- moot while there is no saved bytecode in use, and revisited if
+/// the crate gains adoption.
+pub const BYTECODE_VERSION: u16 = 1;
 
 /// Word size in bits assumed by this binary build, encoded as the
 /// base-2 exponent. Actual width in bits is `1 << RUNTIME_WORD_BITS_LOG2`.

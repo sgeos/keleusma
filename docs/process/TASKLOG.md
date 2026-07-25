@@ -8,7 +8,7 @@ Current sprint source of truth.
 
 ## Current Phase
 
-**V0.2.x: self-hosting the toolchain — language-surface expansion (as of 2026-07-25).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. `BYTECODE_VERSION` is 2 (widened from 1 by the V0.2.3 24-bit shared-data operands).
+**V0.2.x: self-hosting the toolchain — language-surface expansion (as of 2026-07-25).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. `BYTECODE_VERSION` is 1 (the V0.2.3 24-bit shared-data operand widening deliberately did not bump it, under the no-public-adoption policy — see `src/bytecode.rs`).
 
 - Fourteen byte-identical increments (the 85th through 98th) are **merged into `v0.2.3`**, completing the shift, bitwise, and array-of-composite-equality operator families and adding eager `and`/`or`. See the release plan in `compiler/MILESTONES.md` and the roadmap in `docs/roadmap/V0_2_X_ROADMAP.md`.
 - The construct-support boundary (which constructs the self-hosted pipeline reproduces byte-identically versus falls back to the reference) is pinned by the `self_hosted_construct_support_boundary` characterization test in `tests/selfhost_codegen.rs`.

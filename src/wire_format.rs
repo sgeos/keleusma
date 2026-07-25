@@ -2576,7 +2576,7 @@ mod tests {
         assert_eq!(op, decoded);
     }
 
-    // The V2 twenty-four-bit data operands round-trip at values above the old
+    // The twenty-four-bit data operands round-trip at values above the old
     // sixteen-bit ceiling: `GetData`/`SetData` inline across three bytes and
     // `GetDataIndexed`/`SetDataIndexed` through the `(u24, u24)` pool entry.
     #[test]

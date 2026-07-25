@@ -1,4 +1,4 @@
-// The V2 twenty-four-bit data operands raise the shared-data ceiling from 64 KB
+// The twenty-four-bit data operands raise the shared-data ceiling from 64 KB
 // to 16 MB. These tests exercise the whole path for a shared segment larger than
 // 64 KB: the compiler bakes byte offsets and slot indices above 65535, the wire
 // format encodes and decodes them across a full serialize/deserialize round trip,
