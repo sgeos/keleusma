@@ -86,9 +86,15 @@ increment-by-increment reasoning and frontier assessments live in
 
 ## Next step
 
-All actionable process-audit items (1–6) are addressed and the branching finding is resolved;
-item 7's prep is now complete on both halves, pending only the operator's go. The frontier was
-re-scouted post-P11 (2026-07-25, in `DESIGN_JOURNAL.md`), closing the last prep residual: the
-stale 2026-07-22 recipe is superseded, **tuple-of-struct** is the confirmed smallest-bounded
-first increment (step 1 `tup_estruct` already in `v0.2.3`), and it needs no new opcode (the
-nested extract reuses op 53). The frontier is now drivable by the autonomy loop substrate.
+The autonomy loop is RUNNING. Increment 1 (**tuple-of-struct equality**) is DONE and byte-identical,
+implemented in the `feat/selfhost-nested-eq` worktree and merged to `v0.2.3`; the construct boundary is
+now **48 Ok / 6 Gap** (see the DESIGN_JOURNAL entry). Process-audit items 1–6 are addressed, the branching
+finding resolved, and item 7's environment is in use.
+
+The loop reaches a DECISION POINT here, per its stop discipline. The remaining nested-equality gaps are the
+harder tail, none clearly a small bounded increment: enum-in-struct needs a new variant-dispatch phase-1 branch
+in `structeq_nested_next` (very high effort), 2+-level needs the streaming machine to recurse (extreme), and
+struct-of-array-of-struct is an intentional `struct_eq_kind` defer. The loop should surface these to the
+operator rather than pick one unilaterally. Recommended: operator chooses whether to attempt enum-in-struct
+next (the most contained of the hard three) or to redirect to a different roadmap workstream (for example
+wiring the self-hosted stages into the shipping binary, Workstream A's highest-leverage residual).

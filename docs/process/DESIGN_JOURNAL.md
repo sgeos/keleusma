@@ -15,7 +15,22 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 ## Last Updated
 
-**Date**: 2026-07-25 (session 31)
+**Date**: 2026-07-25 (session 32)
+
+**AUTONOMY-LOOP INCREMENT 1 (2026-07-25): TUPLE-OF-STRUCT EQUALITY self-compiles byte-identically.** The first
+increment driven by the autonomous loop (`AUTONOMOUS_IMPLEMENTATION_LOOP.md`), run in the
+`feat/selfhost-nested-eq` worktree per the post-P11 re-scout recipe below. `(P, W) == (P, W)` (P a struct, W a
+scalar) now lowers byte-identically to the reference `emit_composite_fieldwise_eq`: the top-level tuple element
+reads via `GetTupleField` (op 53, `FlatNested` for the struct element, `Flat` for the scalar), the inner struct
+sub-fields via `GetField`. Implemented by reusing the nested-struct-equality machinery in place -- a
+`tuple_eq_kind` detector, an `is_tuple_container` flag carried as a payload bit at 2^21 on the
+`StructEqNestedBuild` record (single-word `*64` packing, no new tag), phase 0 reading the tuple container from
+`tupledefs`/`tup_estruct`, codegen swapping only the top-level accessor, and a driver `decode_op` op-53 nested
+form (operand >= 2^32). No new opcode, node/record kind, or `BYTECODE_VERSION`; `EXPECTED_SELF_COMPILE` stays 68.
+Boundary 47 -> 48 Ok, 7 -> 6 Gap. Verified byte-identical: the new `self_host_compiles_tuple_of_struct_equality`,
+all four whole-stage self-compiles, the nested-struct/nested-tuple blast-radius tests, and the boundary test.
+GOTCHA confirmed live: the top-level tuple element uses `tup_ekind` (scalar_kind_of, Word=3), the inner struct
+field `sd_fkind` (Word=0). The remaining gaps (enum-in-struct, 2+-level) are the harder frontier; see the re-scout.
 
 **FRONTIER RE-SCOUT, POST-P11 (2026-07-25). Supersedes the 2026-07-22 nested-equality recipe below.** The
 2026-07-22 tuple-of-struct / enum-in-struct / 2+-level assessments predate P11/Option E (2026-07-24), so
