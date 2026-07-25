@@ -85,4 +85,7 @@ if [ "$RUN_MIRI" -eq 1 ]; then
     --test marshall c1_null_text_pointer_marshals_to_empty_string_not_ub
 fi
 
+# Incidental sccache metrics capture (guarded; no-op without sccache).
+"$(dirname "$0")/sccache-metrics.sh" "release-gate" >/dev/null 2>&1 || true
+
 printf '\n\033[1;32m=== release gate: GREEN ===\033[0m\n'

@@ -51,4 +51,7 @@ else
   printf "  scripts/fast-check.sh 'test(self_host_compiles_word_bnot)'\n"
 fi
 
+# Incidental sccache metrics capture (guarded; no-op without sccache).
+"$(dirname "$0")/sccache-metrics.sh" "fast-check" >/dev/null 2>&1 || true
+
 printf '\n\033[1;32mfast-check: OK\033[0m\n'
