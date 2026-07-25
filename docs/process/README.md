@@ -10,6 +10,7 @@ Development workflow, communication protocol, and task tracking for Keleusma.
 |----------|-------------|
 | [PROCESS_STRATEGY.md](./PROCESS_STRATEGY.md) | Library engineering approach and agentic development loop |
 | [AUTONOMOUS_RESEARCH_LOOP.md](./AUTONOMOUS_RESEARCH_LOOP.md) | Self-firing research loop protocol for unattended AI sessions |
+| [AUTONOMOUS_IMPLEMENTATION_LOOP.md](./AUTONOMOUS_IMPLEMENTATION_LOOP.md) | The autonomy substrate for the self-host frontier: keep-going default, increment cycle, oracle signal, stop conditions (process-audit item 7) |
 | [COMMUNICATION.md](./COMMUNICATION.md) | Bidirectional human-AI communication protocol |
 | [PARALLEL_DEVELOPMENT.md](./PARALLEL_DEVELOPMENT.md) | Running multiple agents at once: worktree isolation, per-branch channels, merge serialization, gate discipline |
 | [GIT_STRATEGY.md](./GIT_STRATEGY.md) | Version control conventions |

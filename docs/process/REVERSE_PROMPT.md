@@ -11,7 +11,7 @@ increment-by-increment reasoning and frontier assessments live in
 
 ## Last Updated
 
-**Date**: 2026-07-24 (session 30)
+**Date**: 2026-07-25 (session 31)
 
 ## Current state
 
@@ -41,7 +41,7 @@ increment-by-increment reasoning and frontier assessments live in
 
 ## Process-audit residual status
 
-- **Items 2–5, 7**: done and merged. Item 5's last residual (the `TASKLOG.md` Active Milestone
+- **Items 2–5**: done and merged. Item 5's last residual (the `TASKLOG.md` Active Milestone
   narrative) was relocated into the append-only `DESIGN_JOURNAL.md` on 2026-07-24, so `TASKLOG`
   is now a bounded current-state file. Item 3's memoization is now IMPLEMENTED in the
   complete-key form (`tests/common/mod.rs`, 2026-07-24): the expensive whole-stage
@@ -49,7 +49,10 @@ increment-by-increment reasoning and frontier assessments live in
   the whole Rust reference compiler, VM, and wire format) plus every `.kel` input the test
   reads, active only under `KEL_SELFHOST_CACHE=1` (the fast lane, never a gate). Verified
   that gate mode never caches, a `.kel` or binary change forces a miss, and the eight
-  heaviest self-host tests drop from ~102s to ~0.02s on a warm cache.
+  heaviest self-host tests drop from ~102s to ~0.02s on a warm cache. Follow-ups (2026-07-25)
+  extended it to the assembled/scaffold family (~291s to ~0.024s) and the parse_into_codegen
+  bridge (~58s to ~5.2s, 14 of 16 via a shared cached helper), so every test category that
+  cost time is now cached, all CI-green.
 - **Item 4 (gate blind spot)**: closed in both places — `release-gate.sh` and now a CI job.
 - **Item 6 (encoding capacity)**: implemented, merged, CI-green (Option E, above).
 - **Item 1 (nextest cap): DONE.** The tier split (routine `quick` vs full) is merged. The
@@ -70,8 +73,20 @@ increment-by-increment reasoning and frontier assessments live in
   job, so both `main` and `v0.2.3` are CI-gated and any future version branch cut from either is
   gated from the start.
 
+## Item 7 (autonomy and parallelism)
+
+- **Parallelism**: infrastructure complete — worktree isolation, serialized merge, shared
+  caches (sccache plus the item-3 test memoization), CI gating, and a workstream-ownership map
+  with an honest coupling analysis in [PARALLEL_DEVELOPMENT.md](./PARALLEL_DEVELOPMENT.md).
+- **Autonomy**: the substrate is now written,
+  [AUTONOMOUS_IMPLEMENTATION_LOOP.md](./AUTONOMOUS_IMPLEMENTATION_LOOP.md) (2026-07-25). It
+  encodes the keep-going default (proceed on obvious increments without re-issue), the
+  increment cycle, the byte-identical oracle as the hard signal, and the explicit stop
+  conditions. Authorizing the loop to run remains the operator's call.
+
 ## Next step
 
-All process-audit items are addressed (items 1–7) and the branching finding is resolved.
-Await operator direction on the next roadmap target — the nested-composite-equality frontier
-(enum-in-struct, tuple-of-struct, 2+-level) is now unblocked by the freed encoding capacity.
+All actionable process-audit items (1–6) are addressed and the branching finding is resolved;
+item 7's prep is now complete on both halves, pending only the operator's go. The next roadmap
+target is the nested-composite-equality frontier (tuple-of-struct, enum-in-struct, 2+-level),
+unblocked by the freed encoding capacity and now drivable by the autonomy loop substrate.
