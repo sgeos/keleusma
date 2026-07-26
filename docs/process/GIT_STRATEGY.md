@@ -79,6 +79,14 @@ Supported `<scope>` values (branch names and commit subjects alike): `feat` (new
 - **Feature → version branch** and **version branch → `main`** use **no-fast-forward merge commits**
   (`git merge --no-ff`). The first-parent history of the target stays green; red work-in-progress
   lives only on the merged side branch, never on the target's spine.
+- **Keep nested branches fast-forwardable relative to their base.** While a feature or sub-feature
+  branch develops, keep it a **linear descendant of its base** (the version branch, or the parent
+  feature) — when the base advances, **rebase the branch onto it** rather than merging the base in.
+  The branch stays fast-forwardable (its base tip remains an ancestor of the branch tip), so the
+  eventual no-fast-forward merge wraps a clean linear series with no conflict. This is orthogonal to
+  the no-ff merge rule: the branch stays linear *toward* its base and is merged *into* the base with a
+  bubble. Rebasing rewrites the branch's own (possibly red) work-in-progress commits, which is fine
+  because a nested branch is private until it merges.
 - A merge **proceeds once the local full gate (`scripts/release-gate.sh`) is green** — see
   [Definition of Green](#definition-of-green). The merging agent does not wait for CI to start the
   merge, but CI is binding afterward.

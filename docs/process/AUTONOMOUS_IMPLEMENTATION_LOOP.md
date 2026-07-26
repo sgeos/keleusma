@@ -86,9 +86,10 @@ One pass over one gap:
    the bounded latest state and the next intended increment, and update `TASKLOG.md`.
 6. **Commit** with a scoped conventional message ending in the
    `Co-Authored-By: Claude ...` line.
-7. **Merge at a natural point**: when the full gate (`scripts/release-gate.sh`) is green,
-   merge the branch into `v0.2.3` with a **no-fast-forward merge commit** (`git merge --no-ff`),
-   push, and confirm CI is green. The green local gate authorizes the merge; CI is the binding
+7. **Merge at a natural point**: when the full gate (`scripts/release-gate.sh`) is green, first
+   **rebase the branch onto the current `v0.2.3` tip** (if `v0.2.3` advanced meanwhile — for example
+   a docs commit) so it stays fast-forwardable, then merge it into `v0.2.3` with a **no-fast-forward
+   merge commit** (`git merge --no-ff`), push, and confirm CI is green. The green local gate authorizes the merge; CI is the binding
    authority afterward, so a red CI result is remedied immediately (see
    [GIT_STRATEGY.md](./GIT_STRATEGY.md#definition-of-green)). The no-ff merge keeps the `v0.2.3`
    first-parent history green while preserving the per-increment commits on the merged bubble.
