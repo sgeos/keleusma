@@ -47,11 +47,23 @@ increment-by-increment reasoning and frontier assessments live in
 
 ## Next step
 
-Continue the loop. The remaining nested-equality gaps are the harder tail (per the boundary test and
-the DESIGN_JOURNAL re-scout): 2-level nesting (`struct O { m: M }` where M has a composite field —
-needs the streaming machine to recurse, rated extreme), struct-of-array-of-struct (an intentional
-`struct_eq_kind` defer), and enum-with-struct-payload. Per the task-ordering policy, the loop should
-next weigh a same-context nested-equality gap against switching workstreams (for example wiring the
-self-hosted stages into the shipping binary, Workstream A's highest-leverage residual). If every
-remaining same-context gap needs a genuine design decision (not merely deep work), that is a Stop —
-surface the options to the operator rather than pick unilaterally.
+Continue the loop with **enum-with-struct-payload equality** — the loop selected it per the
+task-ordering policy (same-context, and a Plan agent already scouted it as a BOUNDED increment, NOT a
+design-decision stop). The full edit-level plan is persisted at
+[`docs/decisions/ENUM_STRUCT_PAYLOAD_PLAN.md`](../decisions/ENUM_STRUCT_PAYLOAD_PLAN.md). It is the
+structural mirror of enum-in-struct (an inner struct-eq loop inside the outer enum dispatch), on the
+standalone `enum == enum` path (`push_enum_eq`/`eqfields`, NOT `push_struct_eq_nested`/`seb`), reusing
+the existing op-57 struct extract and the already-tracked `evfstruct` payload index. No new opcode,
+record, or node kind. Target: boundary 49 -> 50 Ok, 5 -> 4 Gap; `EXPECTED_SELF_COMPILE` 69 -> 70.
+
+This session checkpointed here (after completing and merging enum-in-struct, and scouting the next
+gap) under the loop's budget stop condition: enum-struct-payload is a full ~4-commit gate-heavy cycle
+of comparable effort, and starting it in an already-long session risked a half-done state. The next
+session implements it directly from the persisted plan — no operator decision is pending.
+
+The rest of the tail after enum-struct-payload: 2-level nesting (`struct O { m: M }` where M has a
+composite field — needs the streaming machine to recurse, rated extreme; likely a genuine
+design-decision stop) and struct-of-array-of-struct (an intentional `struct_eq_kind` defer). When
+enum-struct-payload lands, the loop should re-weigh those against switching workstreams (for example
+wiring the self-hosted stages into the shipping binary, Workstream A's highest-leverage residual),
+and surface a stop if the remaining same-context gaps each need a genuine design decision.
