@@ -1986,8 +1986,9 @@ fn self_compile_codegen_atomic_functions() {
     // array-of-array equality (`[[T; N]; M] == [[T; N]; M]`); 68 with `push_andor` for the eager
     // boolean `and`/`or` operators; 69 with `push_nested_enum_loop`, the variant-dispatch inner loop
     // for a nested enum field of a struct (factored out of `push_struct_eq_nested` to stay under the
-    // op-table capacity).
-    const EXPECTED_SELF_COMPILE: usize = 69;
+    // op-table capacity); 70 with `push_enum_struct_payload_loop`, the op-57 nested extract plus inner
+    // struct-eq loop for a STRUCT-payload enum variant field (factored out of `push_enum_eq`).
+    const EXPECTED_SELF_COMPILE: usize = 70;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -6977,6 +6978,35 @@ fn self_host_compiles_enum_in_struct_equality() {
     );
 }
 
+/// Enum-with-STRUCT-payload equality (`a == b` where an enum variant carries a struct payload)
+/// self-compiles byte-identically. The structural mirror of enum-in-struct on the standalone
+/// `enum == enum` path (`push_enum_eq`): the reference `emit_enum_fieldwise_eq` composed with
+/// `emit_composite_fieldwise_eq` extracts the struct payload of both operands with the op-57 nested
+/// extract into two fresh temps, runs an inner struct-eq loop over their scalar sub-fields, and
+/// negates the result to break the outer variant loop on inequality. Reuses the already-tracked
+/// `evfstruct` payload-struct index; no new opcode, record, or node kind. The inner loop's false/true
+/// consts stay DEFERRED (`push_bool`) like the rest of `push_enum_eq`, so the pool follows forward
+/// emission order without an eager pre-pass. Covers single- and multi-field struct payloads, `==` and
+/// `!=`, a struct payload beside a scalar payload in one variant, and a `A(Word, P)` field ordering.
+#[test]
+fn self_host_compiles_enum_struct_payload_equality() {
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nenum E { A(P), B }\nfn f(a: E, b: E) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nenum E { A(P), B }\nfn f(a: E, b: E) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\nenum E { A(P), B }\nfn f(a: E, b: E) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nenum E { A(P, Word), B }\nfn f(a: E, b: E) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nenum E { A(Word, P), B }\nfn f(a: E, b: E) -> bool { a == b }",
+    );
+}
+
 /// Array-in-struct nested equality self-compiles byte-identically: a struct with a scalar-array
 /// field extracts it (FlatNested variant Array) into fresh temps and compares elements with a
 /// per-element GetIndex inner loop. The element index constants interleave with the false/true bools
@@ -7479,12 +7509,17 @@ fn self_hosted_construct_support_boundary() {
             SOk,
             "enum E { A, B }\nstruct S { e: E, w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
         ),
-        // --- composite equality: pinned GAPS (nested-machinery frontier) ---------
         (
             "eq/tuple_of_struct",
             SOk,
             "struct P { x: Word }\nfn f(a: (P, Word), b: (P, Word)) -> bool { a == b }",
         ),
+        (
+            "eq/enum_struct_payload",
+            SOk,
+            "struct P { x: Word }\nenum E { A(P), B }\nfn f(a: E, b: E) -> bool { a == b }",
+        ),
+        // --- composite equality: pinned GAPS (nested-machinery frontier) ---------
         (
             "eq/2level_struct__GAP",
             Gap,
@@ -7494,11 +7529,6 @@ fn self_hosted_construct_support_boundary() {
             "eq/struct_arrayofstruct__GAP",
             Gap,
             "struct P { x: Word }\nstruct Q { ps: [P;2] }\nfn f(a: Q, b: Q) -> bool { a == b }",
-        ),
-        (
-            "eq/enum_struct_payload__GAP",
-            Gap,
-            "struct P { x: Word }\nenum E { A(P), B }\nfn f(a: E, b: E) -> bool { a == b }",
         ),
         // --- out of scope for the self-hosted subset -----------------------------
         (
