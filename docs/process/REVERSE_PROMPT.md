@@ -11,59 +11,57 @@ increment-by-increment reasoning and frontier assessments live in
 
 ## Last Updated
 
-**Date**: 2026-07-25 (session 33)
+**Date**: 2026-07-26 (session 34)
 
 ## Current state
 
-- **Autonomy loop RUNNING. Increment 2 (enum-in-struct equality) is COMPLETE, full gate GREEN,
-  merged to `v0.2.3`.** The loop selected it without an operator prompt (the context-switching-first
-  task-ordering policy). `s1 == s2` where a struct field is an enum now self-compiles byte-identically.
-- **Construct-support boundary: 49 Ok / 5 Gap / 1 RefRejects** (was 48 / 6 / 1). The tuple-of-struct
-  and enum-in-struct gaps are both closed.
-- No opcode, record/node kind, or `BYTECODE_VERSION` change (nested variant tag 3 rides record 56's
-  existing 2-bit field). `EXPECTED_SELF_COMPILE` 68 -> 69 (a factored `push_nested_enum_loop`).
+- **Autonomy loop RUNNING. Increment 3 (enum-with-struct-payload equality) is COMPLETE, full gate
+  GREEN, merged to `v0.2.3`.** The loop selected it without an operator prompt (context-switching-first
+  policy). `a == b` where an enum variant carries a struct payload (`struct P { x: Word }`,
+  `enum E { A(P), B }`) now self-compiles byte-identically.
+- **Construct-support boundary: 50 Ok / 4 Gap / 1 RefRejects** (was 49 / 5 / 1). The enum-struct-payload
+  gap is closed.
+- No opcode, record/node kind, or `BYTECODE_VERSION` change (reuses op 57 variant tag 2 and the tracked
+  `evfstruct` index). `EXPECTED_SELF_COMPILE` 69 → 70 (a factored `push_enum_struct_payload_loop`).
 
 ## Verification
 
-- Byte-identity oracle green: `self_host_compiles_enum_in_struct_equality` (unit/payload variants,
-  `==`/`!=`, nonzero enum-field offset, enum beside a nested struct), all five whole-stage
-  self-compiles (lexer/parse/reconstruct/codegen/analyze), the full nested-equality blast-radius
-  suite, `validate_module_via_kel`, and `self_hosted_construct_support_boundary`.
-- **Full `scripts/release-gate.sh` GREEN**: fmt, clippy `-D warnings`, the feature matrix (default,
-  no-default, signatures, signatures+shell), docs `-D warnings`, markdown links, and the detached
-  `compiler/` subproject. Merged to `v0.2.3` only after this.
+- Byte-identity oracle green: `self_host_compiles_enum_struct_payload_equality` (single/multi-field
+  payload, `==`/`!=`, struct-beside-scalar, `A(Word, P)`), all five whole-stage self-compiles, the full
+  enum-equality blast-radius suite (12 tests), `validate_module_via_kel`, the codegen self-compile count
+  (70), and `self_hosted_construct_support_boundary`.
+- **Full `scripts/release-gate.sh` GREEN**: fmt, clippy `-D warnings`, the feature matrix, docs
+  `-D warnings`, markdown links, and the detached `compiler/` subproject. Merged to `v0.2.3` only after
+  this.
 
 ## Implementation notes (for the next increment)
 
-- Two capacity gotchas recurred (the tuple-of-struct failure mode, caught by the FULL gate, not a
-  spot check): `push_struct_eq_nested` grew past the 1536 op cap (fixed by factoring
-  `push_nested_enum_loop`), and two per-chunk-op scan loops in `analyze.kel` were still bounded at
-  1024 (the tuple-of-struct sweep raised the op-table arrays but missed these — raised to 1536).
-  A future increment that grows a codegen chunk should check BOTH the op-table cap AND the analyze
-  scan-loop bounds.
-- The nested enum field interns its pool EAGERLY (replaying `push_enum_eq`'s order), which works only
-  because `s1 == s2` has no literal operand. A construct WITH a literal composite operand would need
-  the deferred path.
+- The interning stayed DEFERRED (`push_bool`) for the inner struct loop, NOT the eager pre-pass the
+  scouted plan suggested. `push_enum_eq` is uniformly deferred (unlike the fully-eager
+  `push_struct_eq_nested`), so deferred bools intern in forward-emission order and dedup into the
+  reference pool with no pre-pass. This is the cleaner pattern when the base emitter is deferred.
+- Extract temps r2/l2 are allocated in PARSE (monotonic `slot_count`, mirroring the reference's
+  `next_slot`, which `end_scope` never rewinds) and streamed to codegen. The codegen `let_count` is
+  bumped +2 per struct-payload field to keep the frame size in sync.
 
-## Next step
+## Next step — DECISION POINT: the same-context nested-equality frontier is exhausted of bounded work
 
-Continue the loop with **enum-with-struct-payload equality** — the loop selected it per the
-task-ordering policy (same-context, and a Plan agent already scouted it as a BOUNDED increment, NOT a
-design-decision stop). The full edit-level plan is persisted at
-[`docs/decisions/ENUM_STRUCT_PAYLOAD_PLAN.md`](../decisions/ENUM_STRUCT_PAYLOAD_PLAN.md). It is the
-structural mirror of enum-in-struct (an inner struct-eq loop inside the outer enum dispatch), on the
-standalone `enum == enum` path (`push_enum_eq`/`eqfields`, NOT `push_struct_eq_nested`/`seb`), reusing
-the existing op-57 struct extract and the already-tracked `evfstruct` payload index. No new opcode,
-record, or node kind. Target: boundary 49 -> 50 Ok, 5 -> 4 Gap; `EXPECTED_SELF_COMPILE` 69 -> 70.
+Continue the loop, but the next task selection reaches a decision point. The two remaining
+nested-equality Gaps are NOT obviously bounded roadmap tasks:
 
-This session checkpointed here (after completing and merging enum-in-struct, and scouting the next
-gap) under the loop's budget stop condition: enum-struct-payload is a full ~4-commit gate-heavy cycle
-of comparable effort, and starting it in an already-long session risked a half-done state. The next
-session implements it directly from the persisted plan — no operator decision is pending.
+- **2-level nesting** (`struct O { m: M }` where `M` has a composite field) — needs the streaming
+  drain to RECURSE (a nested composite field inside a nested composite field). Rated extreme in the
+  prior frontier assessment; it likely needs a genuine design decision about how to represent
+  arbitrary-depth recursion in the flat record stream (a stack, not the current fixed sub-phase). This
+  is a candidate STOP, not a mechanical increment.
+- **struct-of-array-of-struct** (`struct Q { ps: [P; 2] }`) — an intentional `struct_eq_kind` defer.
 
-The rest of the tail after enum-struct-payload: 2-level nesting (`struct O { m: M }` where M has a
-composite field — needs the streaming machine to recurse, rated extreme; likely a genuine
-design-decision stop) and struct-of-array-of-struct (an intentional `struct_eq_kind` defer). When
-enum-struct-payload lands, the loop should re-weigh those against switching workstreams (for example
-wiring the self-hosted stages into the shipping binary, Workstream A's highest-leverage residual),
-and surface a stop if the remaining same-context gaps each need a genuine design decision.
+Per the loop's stop conditions, when no remaining same-context candidate is a bounded roadmap task the
+loop should either switch workstreams (for example wiring the self-hosted stages into the shipping
+binary, Workstream A's highest-leverage residual) or surface a stop for operator direction. The next
+session should FIRST re-scout 2-level nesting: if a bounded approach exists (no new record/node kind, a
+tractable recursion), implement it; if it requires a new streaming-recursion design or an ISA change,
+STOP and surface the options rather than forcing it. Do not begin a workstream switch without weighing
+it against the operator's priorities.
+
+The seven-day rate-limit window remains the binding budget under heavy agent work; pace accordingly.
