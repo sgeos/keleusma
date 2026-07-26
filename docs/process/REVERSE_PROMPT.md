@@ -11,90 +11,66 @@ increment-by-increment reasoning and frontier assessments live in
 
 ## Last Updated
 
-**Date**: 2026-07-25 (session 31)
+**Date**: 2026-07-25 (session 33)
 
 ## Current state
 
-- **`v0.2.3` (release line), CI-GREEN.** The P11 encoding-capacity change
-  (Option E) is complete and merged: the record stream uses a two-word `(tag, payload)`
-  transport (single-word `i64` ceiling removed), the token and wire-op streams an 8-bit
-  radix, every split-tag workaround is retired with native `>= 64` record kinds, and
-  precedence P1 fixed the `xor`/`and` folding defects (`xor` became its own opcode that
-  still lowers to `CmpNe`). The six duplicated parse-record host drivers were consolidated
-  into one `keleusma::selfhost_host::drive_parse_records` first. See
-  [`docs/decisions/P11_OPTION_E_PLAN.md`](../decisions/P11_OPTION_E_PLAN.md) and
-  [`ENCODING_CAPACITY_BRIEF.md`](../decisions/ENCODING_CAPACITY_BRIEF.md) (both RESOLVED).
-- **CI now gates the release line.** It triggers on `main` and any `v*` branch and includes
-  a `selfhost-compiler` job for the detached subproject. The construct-support boundary is
-  now **47 Ok / 7 Gap / 1 RefRejects** (the two precedence Gaps closed).
-- **`main` at `4483f43`** is now a clean ancestor of `v0.2.3`, which was rebased to sit purely
-  ahead of it (see Branching model).
+- **Autonomy loop RUNNING.** It selected the next task on its own — enum-in-struct equality —
+  per the task-ordering policy committed in `AUTONOMOUS_IMPLEMENTATION_LOOP.md` (context-switching
+  avoidance first: stay inside the just-touched nested-equality machinery; no operator prompt for a
+  choice among bounded roadmap tasks). No operator direction was needed or requested.
+- **Increment 2 (enum-in-struct equality) STARTED. Commit A landed byte-identically.** Work is on
+  branch `feat/selfhost-nested-eq` in the worktree
+  `/Users/bsechter/projects/rust/keleusma-worktrees/selfhost-nested-eq`, at `cadd13e` (plus this
+  checkpoint's doc commit). The full edit-level plan is persisted at
+  [`docs/decisions/ENUM_IN_STRUCT_PLAN.md`](../decisions/ENUM_IN_STRUCT_PLAN.md).
+- **`v0.2.3` (release line) CI-GREEN at `ca468a1`.** The feature branch is unmerged (Commits B/C/D
+  incomplete), so the release line is untouched. Boundary still 48 Ok / 6 Gap on `v0.2.3`.
 
 ## Verification
 
-- The full CI gate is green on `v0.2.3`: feature matrix, the entire self-host
-  suite, the subproject, doc, miri, clippy, MSRV, no_std, LSP, WASM.
-- Enabling CI on the release line immediately caught two real defects that curated local
-  runs (confounded by a CPU-saturating process all session) had missed — subproject fmt
-  drift, and a token-radix site in `tests/selfhost_lexer.rs` the 8-bit widening had omitted.
-  Both fixed and green. This is the concrete value of gating the release line.
+- Commit A (`sd_fenum` tracker) verified byte-identical: 24 tests green, covering all five
+  whole-stage self-compiles (lexer/parse/reconstruct/codegen/analyze), the full nested-equality
+  suite, and `self_hosted_construct_support_boundary`. Nothing reads `sd_fenum` yet, so behavior
+  is provably unchanged — exactly the isolated-safe-first-commit the plan calls for.
+- The full `scripts/release-gate.sh` has NOT been run this session (only the targeted self-compile
+  and equality suite). It must be run before any merge to `v0.2.3`.
 
-## Process-audit residual status
+## Planning outcome (no STOP)
 
-- **Items 2–5**: done and merged. Item 5's last residual (the `TASKLOG.md` Active Milestone
-  narrative) was relocated into the append-only `DESIGN_JOURNAL.md` on 2026-07-24, so `TASKLOG`
-  is now a bounded current-state file. Item 3's memoization is now IMPLEMENTED in the
-  complete-key form (`tests/common/mod.rs`, 2026-07-24): the expensive whole-stage
-  self-compile and analyze tests are memoized on a key of the test-binary identity (hence
-  the whole Rust reference compiler, VM, and wire format) plus every `.kel` input the test
-  reads, active only under `KEL_SELFHOST_CACHE=1` (the fast lane, never a gate). Verified
-  that gate mode never caches, a `.kel` or binary change forces a miss, and the eight
-  heaviest self-host tests drop from ~102s to ~0.02s on a warm cache. Follow-ups (2026-07-25)
-  extended it to the assembled/scaffold family (~291s to ~0.024s) and the parse_into_codegen
-  bridge (~58s to ~5.2s, 14 of 16 via a shared cached helper), so every test category that
-  cost time is now cached, all CI-green.
-- **Item 4 (gate blind spot)**: closed in both places — `release-gate.sh` and now a CI job.
-- **Item 6 (encoding capacity)**: implemented, merged, CI-green (Option E, above).
-- **Item 1 (nextest cap): DONE.** The tier split (routine `quick` vs full) is merged. The
-  audit-mandated measurement finally ran on the idle 10-core box and **refuted the cap**: the
-  heavy self-host suite ran 1127s at `max-threads=2` versus 632s uncapped (1.8x slower — the
-  cap serialized the tests below the core count). The `SLOW [>960s]` figure was a
-  loaded-machine confound. Per the audit's "keep only if wall-clock drops", the
-  `heavy-selfhost` cap was REMOVED; `test-threads` remains the concurrency/memory bound.
+- A Plan agent mapped the reference lowering (`emit_composite_fieldwise_eq` composed with
+  `emit_enum_fieldwise_eq`, `src/compiler.rs:6651`/`:6844`) and the `.kel` touch points. **No STOP
+  condition:** no new opcode, no `BYTECODE_VERSION` bump, no new record/node kind. Nested variant
+  tag 3 (Enum) rides record 56's existing 2-bit variant field; the driver already decodes op-48
+  variant tag 3. The construct reuses the standalone `push_enum_eq`/`push_array_of_enum_eq`
+  variant-dispatch machinery with deferred interning.
 
-## Branching model (resolved)
+## Next step (the next session resumes here)
 
-- **`v0.2.3` was rebased to sit purely ahead of `main`** (2026-07-24). `main` (`4483f43`) is now
-  a clean ancestor of `v0.2.3`, which is 307 ahead and 0 behind with a linear history, so the two
-  lines no longer diverge. The rebase preserved a byte-identical tree. `main`'s duplicate
-  frontend-fix was dropped as already-applied and the only conflict was ci.yml comment wording.
-  A local `v0.2.3-prerebase-backup` retains the pre-rebase tip pending cleanup.
-- **`main`'s `ci.yml`** (commit `4483f43`) carries the `v*` trigger and the `selfhost-compiler`
-  job, so both `main` and `v0.2.3` are CI-gated and any future version branch cut from either is
-  gated from the start.
+Execute Commits B, C, D from `docs/decisions/ENUM_IN_STRUCT_PLAN.md` — they are coupled and only
+pass together (the enum test spans all three stages):
 
-## Item 7 (autonomy and parallelism)
+- **B (parse):** `struct_eq_kind` admits an enum field (guard on `sd_fenum > 0`; do NOT call
+  `enum_eq_supported`, which clobbers `sq_scan` — inline the scalar-only-payload scan); a phase-0
+  enum arm emitting a variant-3 `StructEqNested` header with r2/l2 temps; a phase-1 enum sub-phase
+  emitting the variant-dispatch sub-stream (reuse records 49/52 with a context flag).
+- **C (reconstruct):** an `se_curvariant==3` context routing records 49/52 into `seb`; record 57
+  closes it. If `seb` overflows a many-variant enum, bump its capacity (like the 1024->1536
+  op-table raise); that is not a STOP.
+- **D (codegen):** a variant-3 stride and emit branch in `push_struct_eq_nested`, copying the inner
+  loop from `push_array_of_enum_eq`; guard the forward `intern_bool` pre-pass to SKIP variant-3
+  (deferred interning). Keep it inline so `EXPECTED_SELF_COMPILE` stays 68.
 
-- **Parallelism**: infrastructure complete — worktree isolation, serialized merge, shared
-  caches (sccache plus the item-3 test memoization), CI gating, and a workstream-ownership map
-  with an honest coupling analysis in [PARALLEL_DEVELOPMENT.md](./PARALLEL_DEVELOPMENT.md).
-- **Autonomy**: the substrate is now written,
-  [AUTONOMOUS_IMPLEMENTATION_LOOP.md](./AUTONOMOUS_IMPLEMENTATION_LOOP.md) (2026-07-25). It
-  encodes the keep-going default (proceed on obvious increments without re-issue), the
-  increment cycle, the byte-identical oracle as the hard signal, and the explicit stop
-  conditions. Authorizing the loop to run remains the operator's call.
+Then: add `self_host_compiles_enum_in_struct_equality`, flip the `eq/enum_in_struct__GAP` boundary
+case (48 -> 49 Ok), verify byte-identity across the blast-radius suite, run the FULL
+`scripts/release-gate.sh` (the tuple-of-struct lesson), and on green fast-forward the branch into
+`v0.2.3`, push, and confirm CI green.
 
-## Next step
+## Why this session checkpointed here
 
-The autonomy loop is RUNNING. Increment 1 (**tuple-of-struct equality**) is DONE and byte-identical,
-implemented in the `feat/selfhost-nested-eq` worktree and merged to `v0.2.3`; the construct boundary is
-now **48 Ok / 6 Gap** (see the DESIGN_JOURNAL entry). Process-audit items 1–6 are addressed, the branching
-finding resolved, and item 7's environment is in use.
-
-The loop reaches a DECISION POINT here, per its stop discipline. The remaining nested-equality gaps are the
-harder tail, none clearly a small bounded increment: enum-in-struct needs a new variant-dispatch phase-1 branch
-in `structeq_nested_next` (very high effort), 2+-level needs the streaming machine to recurse (extreme), and
-struct-of-array-of-struct is an intentional `struct_eq_kind` defer. The loop should surface these to the
-operator rather than pick one unilaterally. Recommended: operator chooses whether to attempt enum-in-struct
-next (the most contained of the hard three) or to redirect to a different roadmap workstream (for example
-wiring the self-hosted stages into the shipping binary, Workstream A's highest-leverage residual).
+The loop's budget stop condition. This was a continued session (already compacted once) with
+elevated session-limit risk (earlier agents hit the "resets 4pm" cap mid-work). Commits B/C/D are
+~30-50 fragile edits in the most regression-prone machinery; attempting them in a fatigued context
+risked a botched, half-committed, non-byte-identical state. Landing the isolated-safe Commit A and
+persisting the complete plan leaves a clean, green, fully-resumable checkpoint. No operator decision
+is pending — the next session simply continues the loop.

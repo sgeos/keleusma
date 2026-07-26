@@ -15,7 +15,28 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 ## Last Updated
 
-**Date**: 2026-07-25 (session 32)
+**Date**: 2026-07-25 (session 33)
+
+**AUTONOMY-LOOP INCREMENT 2 (2026-07-25): ENUM-IN-STRUCT EQUALITY — STARTED, Commit A landed byte-identically.**
+The loop selected enum-in-struct as the next task without an operator prompt, per the newly-committed
+task-ordering policy (context-switching-avoidance first: it stays inside the just-touched nested-equality
+machinery). A Plan agent mapped the full reference lowering and edit-level recipe, persisted to
+[`docs/decisions/ENUM_IN_STRUCT_PLAN.md`](../decisions/ENUM_IN_STRUCT_PLAN.md). Planning found NO STOP condition:
+no new opcode, no `BYTECODE_VERSION` bump, no new record/node kind. The nested variant tag 3 (Enum) rides the
+existing 2-bit variant field of record 56, and the driver already decodes op-48 variant tag 3 ->
+`CompositeKind::Enum`. The construct reuses the standalone `push_enum_eq` / `push_array_of_enum_eq`
+variant-dispatch machinery (deferred interning), composed under the `push_struct_eq_nested` top-level field loop,
+exactly as the Rust reference composes `emit_composite_fieldwise_eq` with `emit_enum_fieldwise_eq`.
+**Commit A (cadd13e) is landed and verified byte-identical**: the `sd_fenum` tracker (enum NAME id + 1) added to
+`structdefs` and populated in `field_size_and_kind`; nothing reads it yet, so all five whole-stage self-compiles,
+the full nested-equality suite, and the boundary test pass unchanged (24 tests green). **Commits B (parse detector
++ variant-dispatch streaming), C (reconstruct `seb` assembly), and D (codegen inner loop) remain; they are coupled
+and only pass together.** This is the very-high-effort part (~30-50 edits in the most regression-prone machinery),
+deferred to the next session under the loop's budget stop condition (this was a continued/fatigued session with
+elevated session-limit risk). The next session executes B+C+D from the persisted plan, verifies via
+`KEL_SELFHOST_CACHE=1 scripts/fast-check.sh 'test(self_host_compiles_enum_in_struct_equality)'`, runs the FULL
+`scripts/release-gate.sh` before claiming complete (the tuple-of-struct lesson: a spot check misses op-table
+capacity regressions), and on green merges to `v0.2.3`. Target boundary: 48 -> 49 Ok, 6 -> 5 Gap.
 
 **AUTONOMY-LOOP INCREMENT 1 (2026-07-25): TUPLE-OF-STRUCT EQUALITY self-compiles byte-identically.** The first
 increment driven by the autonomous loop (`AUTONOMOUS_IMPLEMENTATION_LOOP.md`), run in the
