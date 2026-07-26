@@ -107,6 +107,35 @@ See `docs/process/PROCESS_STRATEGY.md` for the library engineering approach and 
 | `docs/process/PROMPT.md` | Human to AI instruction staging (read-only for AI) |
 | `docs/process/REVERSE_PROMPT.md` | AI to Human communication |
 
+## Compact Instructions
+
+When compacting this conversation (automatically or via `/compact`), preserve the following so a
+post-compaction turn resumes the autonomy loop without loss. Prefer pointers to the on-disk source of
+truth over prose, since these files are authoritative and current, and the summary is a convenience,
+not the source of truth.
+
+- **The three resume channels**, plus the instruction to re-read them fresh after compaction:
+  [`docs/process/REVERSE_PROMPT.md`](docs/process/REVERSE_PROMPT.md) (bounded latest state and the
+  next intended increment), [`docs/process/DESIGN_JOURNAL.md`](docs/process/DESIGN_JOURNAL.md)
+  (append-only increment reasoning, newest first), and
+  [`docs/process/TASKLOG.md`](docs/process/TASKLOG.md) (current sprint state).
+- **The active increment and its plan.** Which self-hosted-compiler gap is in progress or next, and
+  the path to its plan document under `docs/decisions/`. Do not re-derive a plan a persisted document
+  already holds.
+- **The construct-support boundary counts** (Ok / Gap / RefRejects), pinned by
+  `self_hosted_construct_support_boundary` in `tests/selfhost_codegen.rs`.
+- **Git position.** The active branch, its head commit, whether it is merged, and the origin state of
+  the version branch. Preserve any uncommitted or unmerged work and its verification status.
+- **In-flight verification.** Any running gate, CI run, or background agent, and what its result gates.
+- **The governing rules** that are easy to lose: the release-branch git strategy
+  ([`docs/process/GIT_STRATEGY.md`](docs/process/GIT_STRATEGY.md)), the rad-hard minimal-ISA
+  no-new-opcode constraint, the no-`BYTECODE_VERSION`-bump-without-authorization rule, the
+  byte-identical differential oracle as the correctness signal, and that irreversible or
+  outward-facing actions need confirmation.
+
+After compaction, before acting, re-read the three resume channels and the active plan document. They,
+the boundary test counts, and the git state are the true resume anchors.
+
 ## Git Workflow
 
 Release-branch model with a four-level hierarchy: `main` holds releases (always green; releases cut only from a green `main`); a `vX.Y.Z` version branch integrates the next version (green before merging to `main`); short-lived feature branches are cut from the version branch (intermediate commits may be red, tip green before merge) and merged back via a **no-fast-forward merge commit**; sub-feature branches are cut from and merged back into a feature. A merge proceeds on a green local `scripts/release-gate.sh`, with CI binding afterward (a red result remedied immediately). Direct commits to the version branch are allowed only for small green docs/process changes; all code flows through a feature branch. See [`docs/process/GIT_STRATEGY.md`](docs/process/GIT_STRATEGY.md) for full details. For running multiple agents concurrently (worktree isolation via `scripts/worktree.sh`, per-branch handoffs, and merge/gate serialization) see [`docs/process/PARALLEL_DEVELOPMENT.md`](docs/process/PARALLEL_DEVELOPMENT.md).
