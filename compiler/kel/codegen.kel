@@ -362,6 +362,10 @@ private data st {
     // running forward-walk cursor.
     se_foff: [Word; 64],
     se_cur: Word,
+    // DEPTH-2 struct-eq scratch: each sub-field's start offset in match_parts (a sub-field is variable
+    // length once a nested-struct sub-field can appear) and that walk's cursor.
+    se_sfoff: [Word; 64],
+    se_sfcur: Word,
 }
 
 // Wire. The stage buffers ops, then streams each as `tag + operand*64`, 0 is
@@ -1953,6 +1957,82 @@ fn push_nested_enum_loop(foff: Word, l2: Word, r2: Word, false_idx: Word, true_i
     push_emit(wire.mloop)
 }
 
+// Emit the inner comparison loop body of a nested struct/tuple field's sub-fields, over the container
+// temps l2 (left) / r2 (right). A sub-field is variable length: a SCALAR sub-field [sub_off, sub_kind
+// < 100] compares GetField(subacc)/CmpEq; a DEPTH-2 nested-struct sub-field [sub_off, 100+size,
+// subcount, r2', l2', subcount*(subsub_off, subsub_kind)] extracts both sides with GetFieldNested
+// (op 48) into two fresh temps and runs an inner struct-eq loop over its scalar sub-sub-fields, then
+// negates to break the parent loop on inequality. Factored out of `push_struct_eq_nested` to keep that
+// chunk under the op-table capacity (`eq/2level_struct`). Pool: `false_idx`/`true_idx` are shared with
+// the caller (dedup'd), so no new constants -- the eager pre-pass already interned false then true.
+fn push_struct_eq_subfields(sbase: Word, subcount: Word, l2: Word, r2: Word, subacc: Word, false_idx: Word, true_idx: Word) -> Word {
+    // Forward pass to locate each variable-length sub-field for the reverse emission below.
+    st.se_sfcur = sbase;
+    for s in 0..subcount limit 64 {
+        st.se_sfoff[s] = st.se_sfcur;
+        if ast.match_parts[st.se_sfcur + 1] >= 100 {
+            st.se_sfcur = st.se_sfcur + 5 + ast.match_parts[st.se_sfcur + 2] * 2;
+        } else {
+            st.se_sfcur = st.se_sfcur + 2;
+        }
+    }
+    for sj in 0..subcount limit 64 {
+        let s = subcount - 1 - sj;
+        let soff = st.se_sfoff[s];
+        let sub_off = ast.match_parts[soff];
+        let sub_kind = ast.match_parts[soff + 1];
+        if sub_kind >= 100 {
+            // DEPTH-2 nested-struct sub-field: extract into r2'/l2', inner struct-eq loop, negate/break.
+            let subsubcount = ast.match_parts[soff + 2];
+            let r2p = ast.match_parts[soff + 3];
+            let l2p = ast.match_parts[soff + 4];
+            let extp = sub_off + (sub_kind - 100) * 65536 + 2 * 4294967296;
+            push_emit(wire.mendif);
+            push_emit(wire.mbreak);
+            push_emit(wire.konst + false_idx * wire.radix);
+            push_emit(wire.mif);
+            push_emit(wire.lnot);
+            push_emit(wire.mendloop);
+            push_emit(wire.mbreak);
+            push_emit(wire.konst + true_idx * wire.radix);
+            for ssj in 0..subsubcount limit 64 {
+                let ss = subsubcount - 1 - ssj;
+                let ssp = ast.match_parts[soff + 5 + ss * 2] + ast.match_parts[soff + 5 + ss * 2 + 1] * 65536;
+                push_emit(wire.mendif);
+                push_emit(wire.mbreak);
+                push_emit(wire.konst + false_idx * wire.radix);
+                push_emit(wire.mif);
+                push_emit(wire.lnot);
+                push_emit(wire.cmpeq);
+                push_emit(wire.getfield + ssp * wire.radix);
+                push_emit(wire.getlocal + r2p * wire.radix);
+                push_emit(wire.getfield + ssp * wire.radix);
+                push_emit(wire.getlocal + l2p * wire.radix);
+            }
+            push_emit(wire.mloop);
+            push_emit(wire.setlocal + l2p * wire.radix);
+            push_emit(wire.setlocal + r2p * wire.radix);
+            push_emit(wire.getfieldnested + extp * wire.radix);
+            push_emit(wire.getlocal + r2 * wire.radix);
+            push_emit(wire.getfieldnested + extp * wire.radix);
+            push_emit(wire.getlocal + l2 * wire.radix);
+        } else {
+            let sp = sub_off + sub_kind * 65536;
+            push_emit(wire.mendif);
+            push_emit(wire.mbreak);
+            push_emit(wire.konst + false_idx * wire.radix);
+            push_emit(wire.mif);
+            push_emit(wire.lnot);
+            push_emit(wire.cmpeq);
+            push_emit(subacc + sp * wire.radix);
+            push_emit(wire.getlocal + r2 * wire.radix);
+            push_emit(subacc + sp * wire.radix);
+            push_emit(wire.getlocal + l2 * wire.radix);
+        }
+    }
+    0
+}
+
 // StructEqNestedNode (kind 59): a `struct == struct` (or `!=`) where a field is a nested struct.
 // match_parts holds [ta, tb, topcount, <tagged top-level fields>, is_ne]: a scalar field is
 // [0, offset, kind]; a nested-struct field is [1, ext_off, ext_size, variant, r2, l2, subcount,
@@ -1988,7 +2068,20 @@ fn push_struct_eq_nested(p: Word) -> Word {
                 }
                 st.se_cur = st.eq_cur;
             } else {
-                st.se_cur = st.se_cur + 7 + ast.match_parts[st.se_cur + 6] * 2;
+                // Struct/tuple nested field: [1, ext_off, ext_size, variant, r2, l2, subcount] then a
+                // variable-length sub-field list. A scalar sub-field is 2 words; a DEPTH-2
+                // nested-struct sub-field (sentinel kind >= 100) is 5 + subsubcount*2 and reserves two
+                // more frame temps.
+                let subcount = ast.match_parts[st.se_cur + 6];
+                st.se_cur = st.se_cur + 7;
+                for s in 0..subcount limit 64 {
+                    if ast.match_parts[st.se_cur + 1] >= 100 {
+                        st.let_count = st.let_count + 2;
+                        st.se_cur = st.se_cur + 5 + ast.match_parts[st.se_cur + 2] * 2;
+                    } else {
+                        st.se_cur = st.se_cur + 2;
+                    }
+                }
             } }
         }
     }
@@ -2127,20 +2220,7 @@ fn push_struct_eq_nested(p: Word) -> Word {
                 }
             } else {
                 let subcount = ast.match_parts[foff + 6];
-                for sj in 0..subcount limit 64 {
-                    let s = subcount - 1 - sj;
-                    let sp = ast.match_parts[foff + 7 + s * 2] + ast.match_parts[foff + 7 + s * 2 + 1] * 65536;
-                    push_emit(wire.mendif);
-                    push_emit(wire.mbreak);
-                    push_emit(wire.konst + false_idx * wire.radix);
-                    push_emit(wire.mif);
-                    push_emit(wire.lnot);
-                    push_emit(wire.cmpeq);
-                    push_emit(subacc + sp * wire.radix);
-                    push_emit(wire.getlocal + r2 * wire.radix);
-                    push_emit(subacc + sp * wire.radix);
-                    push_emit(wire.getlocal + l2 * wire.radix);
-                }
+                push_struct_eq_subfields(foff + 7, subcount, l2, r2, subacc, false_idx, true_idx);
             }
             push_emit(wire.mloop);
             }
