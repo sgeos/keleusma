@@ -15,53 +15,51 @@ increment-by-increment reasoning and frontier assessments live in
 
 ## Current state
 
-- **Autonomy loop RUNNING. Increment 3 (enum-with-struct-payload equality) is COMPLETE, full gate
-  GREEN, merged to `v0.2.3`.** The loop selected it without an operator prompt (context-switching-first
-  policy). `a == b` where an enum variant carries a struct payload (`struct P { x: Word }`,
-  `enum E { A(P), B }`) now self-compiles byte-identically.
-- **Construct-support boundary: 50 Ok / 4 Gap / 1 RefRejects** (was 49 / 5 / 1). The enum-struct-payload
-  gap is closed.
-- No opcode, record/node kind, or `BYTECODE_VERSION` change (reuses op 57 variant tag 2 and the tracked
-  `evfstruct` index). `EXPECTED_SELF_COMPILE` 69 → 70 (a factored `push_enum_struct_payload_loop`).
+- **Autonomy loop RUNNING. Increment 4 (2-level struct-nesting equality) is COMPLETE, full gate GREEN,
+  merged to `v0.2.3`.** `a == b` for `struct O { m: M }`, `struct M { i: I }`, `struct I { v: Word }`
+  (two levels of struct nesting) now self-compiles byte-identically.
+- **Construct-support boundary: 51 Ok / 3 Gap / 1 RefRejects** (was 50 / 4 / 1). The 2-level struct gap
+  is closed.
+- No opcode, record/node kind, or `BYTECODE_VERSION` change (reuses op 48 GetFieldNested, records
+  55/57/58, node 59, and the increment-3 sentinel-kind + packing-record streaming convention one level
+  deeper). `EXPECTED_SELF_COMPILE` 70 → 71 (a factored `push_struct_eq_subfields`).
 
 ## Verification
 
-- Byte-identity oracle green: `self_host_compiles_enum_struct_payload_equality` (single/multi-field
-  payload, `==`/`!=`, struct-beside-scalar, `A(Word, P)`), all five whole-stage self-compiles, the full
-  enum-equality blast-radius suite (12 tests), `validate_module_via_kel`, the codegen self-compile count
-  (70), and `self_hosted_construct_support_boundary`.
+- Byte-identity oracle green: `self_host_compiles_2level_struct_equality` (==/!=, 2-level beside a
+  scalar top field, multi-field deepest struct, middle struct with an extra scalar field), all five
+  whole-stage self-compiles, the full nested-eq blast-radius suite, `validate_module_via_kel`, the
+  codegen self-compile count (71), and `self_hosted_construct_support_boundary`.
 - **Full `scripts/release-gate.sh` GREEN**: fmt, clippy `-D warnings`, the feature matrix, docs
   `-D warnings`, markdown links, and the detached `compiler/` subproject. Merged to `v0.2.3` only after
   this.
 
 ## Implementation notes (for the next increment)
 
-- The interning stayed DEFERRED (`push_bool`) for the inner struct loop, NOT the eager pre-pass the
-  scouted plan suggested. `push_enum_eq` is uniformly deferred (unlike the fully-eager
-  `push_struct_eq_nested`), so deferred bools intern in forward-emission order and dedup into the
-  reference pool with no pre-pass. This is the cleaner pattern when the base emitter is deferred.
-- Extract temps r2/l2 are allocated in PARSE (monotonic `slot_count`, mirroring the reference's
-  `next_slot`, which `end_scope` never rewinds) and streamed to codegen. The codegen `let_count` is
-  bumped +2 per struct-payload field to keep the frame size in sync.
+- The load-bearing constraint on every DEPTH increase is the verifier's **no-recursion rule** (R4): a
+  `.kel` stage function may not self-recurse, so each extra nesting level is an explicit extra
+  phase/stack, not a copy-recurse. This is why the journal rated 2-level "extreme"; the ISA is
+  untouched. Increment 4 used a FIXED depth-2 extension (a `se_l2phase` in parse, `se_nsub_mode` in
+  reconstruct, `push_struct_eq_subfields` in codegen); a third struct level currently defers.
+- Byte-identity hinges on the slot-order: temps allocate depth-first, r2 before l2, +2 per level,
+  matching the reference's monotonic `next_slot` (never rewound by `end_scope`).
+- Interning stayed EAGER (push_struct_eq_nested is fully eager) and needed no change — pure struct
+  nesting adds no new constant values, so deeper false/true dedup into the existing bool indices.
 
-## Next step — DECISION POINT: the same-context nested-equality frontier is exhausted of bounded work
+## Next step — CONTINUE: struct-of-array-of-struct (bounded, same context)
 
-Continue the loop, but the next task selection reaches a decision point. The two remaining
-nested-equality Gaps are NOT obviously bounded roadmap tasks:
+The remaining nested-equality gap `eq/struct_arrayofstruct__GAP` (`struct Q { ps: [P; 2] }`, a struct
+field that is an array-of-struct) is the next same-context candidate. The frontier scout judged it
+BOUNDED: it reuses the depth scaffolding this increment established PLUS an array-element-is-composite
+sub-drain (the current array sub-drain, `se_subisarray`, only handles scalar elements). It composes the
+per-element unroll of `push_array_of_struct_eq` underneath a struct-field extraction. No ISA change is
+expected. The next session should scout the exact reference lowering (the `emit_composite_fieldwise_eq`
+recursion for an array-of-struct field), confirm no new record/node kind, then implement it the same
+way (parse sub-drain admit + stream, reconstruct seb layout, codegen inner per-element loop). If it
+turns out to need a new record/node kind or a general stack, STOP and surface.
 
-- **2-level nesting** (`struct O { m: M }` where `M` has a composite field) — needs the streaming
-  drain to RECURSE (a nested composite field inside a nested composite field). Rated extreme in the
-  prior frontier assessment; it likely needs a genuine design decision about how to represent
-  arbitrary-depth recursion in the flat record stream (a stack, not the current fixed sub-phase). This
-  is a candidate STOP, not a mechanical increment.
-- **struct-of-array-of-struct** (`struct Q { ps: [P; 2] }`) — an intentional `struct_eq_kind` defer.
-
-Per the loop's stop conditions, when no remaining same-context candidate is a bounded roadmap task the
-loop should either switch workstreams (for example wiring the self-hosted stages into the shipping
-binary, Workstream A's highest-leverage residual) or surface a stop for operator direction. The next
-session should FIRST re-scout 2-level nesting: if a bounded approach exists (no new record/node kind, a
-tractable recursion), implement it; if it requires a new streaming-recursion design or an ISA change,
-STOP and surface the options rather than forcing it. Do not begin a workstream switch without weighing
-it against the operator's priorities.
+After that, the same-context frontier is the deferred tail: a third struct level (needs a general depth
+stack, likely a design-decision stop) and floats/generics (out of scope for the subset). At that point
+re-weigh a workstream switch (for example wiring the self-hosted stages into the shipping binary).
 
 The seven-day rate-limit window remains the binding budget under heavy agent work; pace accordingly.

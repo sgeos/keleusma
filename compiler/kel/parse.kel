@@ -647,6 +647,20 @@ private data stmt {
     se_substart: Word,
     se_r2: Word,
     se_l2: Word,
+    // DEPTH-2 struct nesting sub-drain (a nested-struct field whose OWN sub-field is itself a struct
+    // with scalar leaves -- `eq/2level_struct`). When the phase-1 struct sub-drain hits a struct
+    // sub-field, it emits a nested-struct-sub-field header (a StructEqNestedField with the sentinel
+    // kind 100+bytesize, mirroring the enum-struct-payload sentinel), then a packing record carrying
+    // the subcount and two fresh depth-2 temps, then the deeper struct's scalar sub-sub-fields.
+    // `se_l2phase` 1 = emit the packing next, 2 = draining the deeper struct's sub-sub-fields (0 =
+    // inactive); `se_l2substart`/`se_l2subcount`/`se_l2subcur` the deeper struct's field range and
+    // cursor; `se_l2r2`/`se_l2l2` its two extract temps (r2 first, then l2, monotonic).
+    se_l2phase: Word,
+    se_l2substart: Word,
+    se_l2subcount: Word,
+    se_l2subcur: Word,
+    se_l2r2: Word,
+    se_l2l2: Word,
     // 1 when the current nested field is a TUPLE (read sub-fields from `tupledefs`); 0 for a struct.
     se_subistuple: Word,
     // Nested ARRAY field: `se_subisarray` 1, `se_arrcount`/`se_arrkind` the element count and kind
@@ -2247,8 +2261,21 @@ fn struct_eq_kind(idx: Word) -> Word {
             let s = structdefs.sd_fstruct[fidx] - 1;
             for g in 0..structdefs.sd_fcount[s] limit 64 {
                 let gidx = structdefs.sd_fstart[s] + g;
-                if structdefs.sd_fstruct[gidx] > 0 orelse structdefs.sd_ftuple[gidx] > 0 orelse structdefs.sd_farraylen[gidx] > 0 {
+                if structdefs.sd_ftuple[gidx] > 0 orelse structdefs.sd_farraylen[gidx] > 0 orelse structdefs.sd_fenum[gidx] > 0 {
+                    // A tuple/array/enum sub-field of a nested struct: 2-level of those still defers.
                     stmt.sq_scan = 0;
+                } else {
+                    if structdefs.sd_fstruct[gidx] > 0 {
+                        // A struct sub-field of a nested struct (2-level struct nesting): admit only
+                        // when its OWN sub-fields are all scalar; a third level defers.
+                        let s2 = structdefs.sd_fstruct[gidx] - 1;
+                        for h in 0..structdefs.sd_fcount[s2] limit 64 {
+                            let hidx = structdefs.sd_fstart[s2] + h;
+                            if structdefs.sd_fstruct[hidx] > 0 orelse structdefs.sd_ftuple[hidx] > 0 orelse structdefs.sd_farraylen[hidx] > 0 orelse structdefs.sd_fenum[hidx] > 0 {
+                                stmt.sq_scan = 0;
+                            }
+                        }
+                    }
                 }
             }
         } else {
@@ -2380,6 +2407,7 @@ fn struct_eq_nested_start_kind(op: Word, is_tuple: Word) -> Word {
     stmt.sq_field = 0;
     stmt.se_phase = 0;
     stmt.se_subisenum = 0;
+    stmt.se_l2phase = 0;
     structeq_nested_next()
 }
 
@@ -2414,23 +2442,63 @@ fn structeq_nested_next() -> Word {
                 }
             }
         } else {
+        if stmt.se_l2phase == 1 {
+            // Emit the depth-2 struct sub-field's packing record (subcount + r2*65536 + l2*2^32),
+            // then arm the sub-sub-field drain (subcount > 0) or advance past it (an empty struct).
+            if stmt.se_l2subcount == 0 {
+                stmt.se_l2phase = 0;
+                stmt.se_subcur = stmt.se_subcur + 1;
+            } else {
+                stmt.se_l2phase = 2;
+                stmt.se_l2subcur = 0;
+            }
+            Node::StructEqNestedField() as Word + (stmt.se_l2subcount + stmt.se_l2r2 * 65536 + stmt.se_l2l2 * 4294967296) * 64
+        } else {
+        if stmt.se_l2phase == 2 {
+            // Drain the depth-2 struct's scalar sub-sub-fields; on the last, advance the parent
+            // struct's sub-field cursor past the now fully emitted nested sub-field.
+            let g = stmt.se_l2substart + stmt.se_l2subcur;
+            stmt.se_l2subcur = stmt.se_l2subcur + 1;
+            if stmt.se_l2subcur == stmt.se_l2subcount {
+                stmt.se_l2phase = 0;
+                stmt.se_subcur = stmt.se_subcur + 1;
+            }
+            Node::StructEqNestedField() as Word + (structdefs.sd_foffset[g] + structdefs.sd_fkind[g] * 65536) * 64
+        } else {
         if stmt.se_subcur < stmt.se_subcount {
             let fidx = stmt.se_substart + stmt.se_subcur;
-            stmt.se_subcur = stmt.se_subcur + 1;
             if stmt.se_subisarray == 1 {
                 // The single record of an array field carries its element count and kind.
+                stmt.se_subcur = stmt.se_subcur + 1;
                 Node::StructEqNestedField() as Word + (stmt.se_arrcount + stmt.se_arrkind * 65536) * 64
             } else {
             if stmt.se_subistuple == 1 {
+                stmt.se_subcur = stmt.se_subcur + 1;
                 Node::StructEqNestedField() as Word + (tupledefs.tup_eoffset[fidx] + tupledefs.tup_ekind[fidx] * 65536) * 64
             } else {
+            if structdefs.sd_fstruct[fidx] > 0 {
+                // A DEPTH-2 struct sub-field (`struct M { i: I }` inside `struct O { m: M }`): allocate
+                // its two extract temps (r2 then l2, monotonic -- matching the reference next_slot),
+                // emit the sentinel header (kind 100+bytesize, like the enum-struct-payload sentinel),
+                // and arm the packing/sub-field drain. `se_subcur` advances only after the drain ends.
+                let s = structdefs.sd_fstruct[fidx] - 1;
+                stmt.se_l2r2 = ps.pcount + stmt.slot_count;
+                stmt.slot_count = stmt.slot_count + 1;
+                stmt.se_l2l2 = ps.pcount + stmt.slot_count;
+                stmt.slot_count = stmt.slot_count + 1;
+                stmt.se_l2substart = structdefs.sd_fstart[s];
+                stmt.se_l2subcount = structdefs.sd_fcount[s];
+                stmt.se_l2phase = 1;
+                Node::StructEqNestedField() as Word + (structdefs.sd_foffset[fidx] + (100 + structdefs.sd_bytesize[s]) * 65536) * 64
+            } else {
+                stmt.se_subcur = stmt.se_subcur + 1;
                 Node::StructEqNestedField() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fkind[fidx] * 65536) * 64
-            } }
+            } } }
         } else {
             stmt.se_phase = 0;
             stmt.sq_field = stmt.sq_field + 1;
             Node::StructEqNestedEnd() as Word
-        } }
+        } } } }
     } else {
         if stmt.sq_field < stmt.sq_count {
             if stmt.se_istuple_container == 1 {

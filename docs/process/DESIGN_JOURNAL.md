@@ -17,6 +17,45 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-07-26 (session 34)
 
+**AUTONOMY-LOOP INCREMENT 4 (2026-07-26): 2-LEVEL STRUCT-NESTING EQUALITY self-compiles byte-identically. COMPLETE, full gate GREEN, merged.**
+The loop continued past the increment-3 decision point on operator direction ("if all work needs doing and
+the ordering is arbitrary, keep looping and prioritize by the criteria"). A Plan agent scouted the frontier
+tail and returned BOUNDED for 2-level nesting; a critical correction to that scout: the total-language verifier
+FORBIDS recursion (R4, acyclic call graph — confirmed no stage fn self-recurses), so the scout's "recursive
+push_struct_eq_level" is inadmissible. The increment was instead done as a FIXED depth-2 extension of the
+existing single-level nested drain (an explicit extra phase, not a general stack — the smallest bounded step;
+depth-3 remains a Gap). `a == b` for `struct O { m: M }`, `struct M { i: I }`, `struct I { v: Word }` now lowers
+byte-identically to the reference `emit_composite_fieldwise_eq` recursing one more level. No new opcode, record,
+node kind, or `BYTECODE_VERSION`; reuses op 48 GetFieldNested, records 55/57/58, node 59, and the enum-struct-
+payload sentinel-kind (100+bytesize) + packing-record streaming convention from increment 3, applied one level
+deeper in the struct path.
+
+Implemented across parse/reconstruct/codegen plus test, mirroring increment 3's streaming pattern. **parse**:
+`struct_eq_kind` admits a nested struct whose struct sub-field has all-scalar leaves (still defers tuple/array/
+enum sub-fields and a third level). `structeq_nested_next` gained `se_l2phase` 1 (emit the packing record:
+subcount + r2*65536 + l2*2^32) / 2 (drain the deeper struct's scalar sub-sub-fields); when the phase-1 struct
+sub-drain hits a struct sub-field it allocates the deeper r2/l2 (monotonic, r2 then l2 — the reference next_slot
+is never rewound by end_scope), emits the sentinel header, and arms the sub-drain. **reconstruct**: `se_nsub_mode`
+1/2 lay the depth-2 sub-field into seb as [sub_off, 100+size, subcount, r2, l2, subcount*(subsub_off, subsub_kind)].
+**codegen**: the inner sub-field emitter was factored into `push_struct_eq_subfields` (`EXPECTED_SELF_COMPILE`
+70 -> 71) which, for a sentinel-kind sub-field, extracts with a second GetFieldNested into r2'/l2' and runs an
+inner struct-eq loop negated to break the middle loop; the stride pass handles the now-variable-length sub-field
+list and bumps `let_count` +2 per depth-2 sub-field. Interning stays EAGER (push_struct_eq_nested is fully
+eager) and needs NO change: pure struct nesting adds no new constant values, so the deeper false/true dedup into
+the existing two bool indices.
+
+KEY FINDINGS: (1) the verifier's no-recursion rule is the load-bearing constraint that makes every depth increase
+an explicit-phase/stack change, not a copy-recurse — this is why the journal rated 2-level "extreme"; the ISA
+itself is untouched. (2) The slot-order byte-identity hinge held: temps allocate depth-first, r2 before l2,
++2 per level, exactly matching the reference's monotonic next_slot. Boundary 50 -> 51 Ok, 4 -> 3 Gap. Verified:
+the new `self_host_compiles_2level_struct_equality` (==/!=, 2-level beside a scalar top field, multi-field deepest
+struct, middle struct with an extra scalar field), all five whole-stage self-compiles, the full nested-eq
+blast-radius suite, `validate_module_via_kel`, the codegen count (71), the boundary; then the FULL
+`scripts/release-gate.sh` GREEN. The remaining nested-eq gap is `eq/struct_arrayofstruct__GAP` (a struct field
+that is an array-of-struct) — the scout judged it BOUNDED, reusing this depth scaffolding plus an
+array-element-is-composite sub-drain; it is the next same-context candidate. A third struct level and the
+floats/generics tail remain deferred.
+
 **AUTONOMY-LOOP INCREMENT 3 (2026-07-26): ENUM-WITH-STRUCT-PAYLOAD EQUALITY self-compiles byte-identically. COMPLETE, full gate GREEN, merged.**
 The loop selected it without an operator prompt (context-switching-avoidance: it stayed inside the
 nested-equality machinery). `a == b` where an enum variant carries a STRUCT payload (`struct P { x: Word }`,

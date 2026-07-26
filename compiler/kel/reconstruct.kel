@@ -105,6 +105,14 @@ private data rs {
     se_innested: Word,
     se_subpos: Word,
     se_subn: Word,
+    // DEPTH-2 struct sub-field reassembly (`eq/2level_struct`). A nested-struct sub-field of a nested
+    // struct arrives as a header record (kind 100+bytesize, laid as a normal [off, kind] sub-field but
+    // counted once), followed by a packing record (subcount + r2*65536 + l2*2^32) then the deeper
+    // struct's scalar sub-sub-fields. `se_nsub_mode` 1 = the next k=55 is that packing, 2 = a
+    // sub-sub-field; `se_nsub_remaining` the sub-sub-fields still to read. The `seb` for such a
+    // sub-field is [sub_off, 100+size, subcount, r2, l2, subcount*(subsub_off, subsub_kind)].
+    se_nsub_mode: Word,
+    se_nsub_remaining: Word,
     // The current nested field's FlatNested variant (0 tuple, 1 array, 2 struct, 3 enum). An array
     // field's single sub-record carries [count, kind] rather than a growing sub-field list; an enum
     // field's sub-stream is EnumEqVariant/EnumEqField records routed into `seb` (see below).
@@ -495,6 +503,7 @@ fn build_struct_eq_nested(a: Word) -> Word {
     rs.sebcur = 0;
     rs.setop = 0;
     rs.se_innested = 0;
+    rs.se_nsub_mode = 0;
     let rhs = pop();
     let lhs = pop();
     emit(59, base, lhs, rhs)
@@ -780,10 +789,40 @@ fn step_assembly(k: Word, a: Word) -> Word {
                 rs.seb[rs.sebcur + 1] = a / 65536;
                 rs.sebcur = rs.sebcur + 2;
             } else {
+            if rs.se_nsub_mode == 1 {
+                // The packing record of a DEPTH-2 struct sub-field: subcount + r2*65536 + l2*2^32.
+                let subcount = a % 65536;
+                rs.seb[rs.sebcur] = subcount;
+                rs.seb[rs.sebcur + 1] = (a / 65536) % 65536;
+                rs.seb[rs.sebcur + 2] = a / 4294967296;
+                rs.sebcur = rs.sebcur + 3;
+                rs.se_nsub_remaining = subcount;
+                if subcount == 0 {
+                    rs.se_nsub_mode = 0;
+                } else {
+                    rs.se_nsub_mode = 2;
+                }
+            } else {
+            if rs.se_nsub_mode == 2 {
+                // A scalar sub-sub-field of the depth-2 struct: [off, kind].
+                rs.seb[rs.sebcur] = a % 65536;
+                rs.seb[rs.sebcur + 1] = a / 65536;
+                rs.sebcur = rs.sebcur + 2;
+                rs.se_nsub_remaining = rs.se_nsub_remaining - 1;
+                if rs.se_nsub_remaining == 0 {
+                    rs.se_nsub_mode = 0;
+                }
+            } else {
+                // A normal sub-field of the nested struct/tuple: [off, kind], counted once. A kind
+                // >= 100 marks a nested-struct sub-field whose packing + sub-sub-fields follow.
                 rs.seb[rs.sebcur] = a % 65536;
                 rs.seb[rs.sebcur + 1] = a / 65536;
                 rs.sebcur = rs.sebcur + 2;
                 rs.se_subn = rs.se_subn + 1;
+                if a / 65536 >= 100 {
+                    rs.se_nsub_mode = 1;
+                }
+            } }
             }
         } else {
             rs.seb[rs.sebcur] = 0;

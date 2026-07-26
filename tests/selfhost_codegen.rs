@@ -1988,7 +1988,9 @@ fn self_compile_codegen_atomic_functions() {
     // for a nested enum field of a struct (factored out of `push_struct_eq_nested` to stay under the
     // op-table capacity); 70 with `push_enum_struct_payload_loop`, the op-57 nested extract plus inner
     // struct-eq loop for a STRUCT-payload enum variant field (factored out of `push_enum_eq`).
-    const EXPECTED_SELF_COMPILE: usize = 70;
+    // 71 with `push_struct_eq_subfields`, the inner sub-field emitter factored out of
+    // `push_struct_eq_nested` to admit a DEPTH-2 nested-struct sub-field (`eq/2level_struct`).
+    const EXPECTED_SELF_COMPILE: usize = 71;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -7007,6 +7009,33 @@ fn self_host_compiles_enum_struct_payload_equality() {
     );
 }
 
+/// Two-level struct nesting equality (`struct O { m: M }`, `struct M { i: I }`, `struct I { v: Word }`,
+/// `a == b`) self-compiles byte-identically. The nested drain now carries a DEPTH-2 stack: a
+/// nested-struct field whose OWN sub-field is itself a struct (with scalar leaves) extracts the deeper
+/// struct with a second GetFieldNested (op 48) into a fresh temp pair and runs an inner struct-eq loop,
+/// negated to break the middle loop on inequality. The deeper temps allocate monotonically after the
+/// outer pair (matching the reference's non-rewinding `next_slot`). Reuses records 55/56/57/58, no new
+/// opcode/record/node kind. Covers `==`, `!=`, a 2-level struct beside a scalar top-level field, a
+/// multi-field deepest struct, and a three-in-a-row chain.
+#[test]
+fn self_host_compiles_2level_struct_equality() {
+    assert_self_host_byte_identical(
+        "struct I { v: Word }\nstruct M { i: I }\nstruct O { m: M }\nfn f(a: O, b: O) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct I { v: Word }\nstruct M { i: I }\nstruct O { m: M }\nfn f(a: O, b: O) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "struct I { v: Word }\nstruct M { i: I }\nstruct O { m: M, w: Word }\nfn f(a: O, b: O) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct I { v: Word, w: Word }\nstruct M { i: I }\nstruct O { m: M }\nfn f(a: O, b: O) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct I { v: Word }\nstruct M { i: I, j: Word }\nstruct O { m: M }\nfn f(a: O, b: O) -> bool { a == b }",
+    );
+}
+
 /// Array-in-struct nested equality self-compiles byte-identically: a struct with a scalar-array
 /// field extracts it (FlatNested variant Array) into fresh temps and compares elements with a
 /// per-element GetIndex inner loop. The element index constants interleave with the false/true bools
@@ -7519,12 +7548,12 @@ fn self_hosted_construct_support_boundary() {
             SOk,
             "struct P { x: Word }\nenum E { A(P), B }\nfn f(a: E, b: E) -> bool { a == b }",
         ),
-        // --- composite equality: pinned GAPS (nested-machinery frontier) ---------
         (
-            "eq/2level_struct__GAP",
-            Gap,
+            "eq/2level_struct",
+            SOk,
             "struct I { v: Word }\nstruct M { i: I }\nstruct O { m: M }\nfn f(a: O, b: O) -> bool { a == b }",
         ),
+        // --- composite equality: pinned GAPS (nested-machinery frontier) ---------
         (
             "eq/struct_arrayofstruct__GAP",
             Gap,
