@@ -10,7 +10,7 @@ a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`
-- **Parent commit** (the repository state this handoff describes): `9cfbe8a`
+- **Parent commit** (the repository state this handoff describes): `4396719`
 - **Written**: 2026-07-26
 - **Tree at write**: clean (all work committed and merged)
 
@@ -39,13 +39,13 @@ Steps, in order:
    `docs/process/DESIGN_JOURNAL.md` (newest entries: increments 3 and 4), and `docs/process/TASKLOG.md`.
    Confirm the live state matches this handoff, then say what you are about to do.
 3. **Next increment: struct-of-array-of-struct equality** — `eq/struct_arrayofstruct__GAP`
-   (`struct Q { ps: [P; 2] }`, a struct field that is an array-of-struct). The frontier scout judged it
-   BOUNDED: it reuses the depth scaffolding increment 4 established plus an array-element-is-composite
-   sub-drain (the current array sub-drain handles only scalar elements). Scout the exact reference
-   lowering first (`emit_composite_fieldwise_eq` for an array-of-struct field in `src/compiler.rs`),
-   confirm NO new opcode/record/node kind, then implement it the same way (parse sub-drain admit +
-   stream, reconstruct seb layout, codegen inner per-element loop composing `push_array_of_struct_eq`'s
-   unroll under a struct-field extraction). Work on a feature branch cut from `v0.2.3`.
+   (`struct Q { ps: [P; 2] }`, a struct field that is an array-of-struct). Already SCOUTED to a complete
+   four-stage blueprint at [`docs/decisions/STRUCT_ARRAYOFSTRUCT_PLAN.md`](../decisions/STRUCT_ARRAYOFSTRUCT_PLAN.md);
+   confirmed BOUNDED (no new opcode/record/node kind — the element-struct index is already tracked via
+   `sd_farraylen` + `sd_fstruct`, and `push_array_of_struct_eq` is the exact per-element template).
+   Implement DIRECTLY from that document — no re-scout needed. Sharp edge: emit the per-element loop
+   INLINE (not factored) so eager interning keeps the element indices before false/true. Work on a
+   feature branch cut from `v0.2.3`.
 4. **Verify** — the byte-identical differential oracle (the new construct test, all five whole-stage
    self-compiles, the nested-eq blast-radius suite, `validate_module_via_kel`, the boundary, the codegen
    count) then the FULL `scripts/release-gate.sh`.

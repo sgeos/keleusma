@@ -46,20 +46,28 @@ increment-by-increment reasoning and frontier assessments live in
 - Interning stayed EAGER (push_struct_eq_nested is fully eager) and needed no change — pure struct
   nesting adds no new constant values, so deeper false/true dedup into the existing bool indices.
 
-## Next step — CONTINUE: struct-of-array-of-struct (bounded, same context)
+## Next step — struct-of-array-of-struct: SCOUTED TO A COMPLETE BLUEPRINT, ready to implement
 
 The remaining nested-equality gap `eq/struct_arrayofstruct__GAP` (`struct Q { ps: [P; 2] }`, a struct
-field that is an array-of-struct) is the next same-context candidate. The frontier scout judged it
-BOUNDED: it reuses the depth scaffolding this increment established PLUS an array-element-is-composite
-sub-drain (the current array sub-drain, `se_subisarray`, only handles scalar elements). It composes the
-per-element unroll of `push_array_of_struct_eq` underneath a struct-field extraction. No ISA change is
-expected. The next session should scout the exact reference lowering (the `emit_composite_fieldwise_eq`
-recursion for an array-of-struct field), confirm no new record/node kind, then implement it the same
-way (parse sub-drain admit + stream, reconstruct seb layout, codegen inner per-element loop). If it
-turns out to need a new record/node kind or a general stack, STOP and surface.
+field that is an array-of-struct) is confirmed **BOUNDED** (no new opcode/record/node kind; the
+element-struct index is already tracked via `sd_farraylen` + `sd_fstruct`; `push_array_of_struct_eq` is
+the exact per-element codegen template), and the full edit-level plan is persisted at
+[`docs/decisions/STRUCT_ARRAYOFSTRUCT_PLAN.md`](../decisions/STRUCT_ARRAYOFSTRUCT_PLAN.md) — a four-stage
+blueprint (parse admit + array-of-struct sub-drain, reconstruct variant-1 packing, codegen inline
+per-element loop, test + boundary flip to 52 Ok / 2 Gap). Implement directly from that document. Key
+sharp edge: emit the per-element loop INLINE (not factored) so the eager interning keeps the
+element-index constants before false/true.
 
-After that, the same-context frontier is the deferred tail: a third struct level (needs a general depth
-stack, likely a design-decision stop) and floats/generics (out of scope for the subset). At that point
-re-weigh a workstream switch (for example wiring the self-hosted stages into the shipping binary).
+**Why this is a checkpoint, not a stop.** The increment is bounded and blueprinted, but this session has
+been heavy on the seven-day rate-limit budget (increments 3 and 4 merged, two full release gates, and
+two large implementation forks totalling roughly 900k tokens — the second fork deliberately stopped at a
+blueprint rather than risk a byte-identity commit from a saturated context). This is a clean,
+fully-merged boundary with a VALID handoff, so the loop pauses here to bank budget and resumes with
+`STRUCT_ARRAYOFSTRUCT_PLAN.md` next.
+
+After struct-of-array-of-struct, the same-context frontier is the deferred tail: a third struct level
+(needs a general depth stack rather than a fixed extra phase — likely a design-decision stop) and
+floats/generics (out of scope for the subset). At that point re-weigh a workstream switch (for example
+wiring the self-hosted stages into the shipping binary) and surface the choice.
 
 The seven-day rate-limit window remains the binding budget under heavy agent work; pace accordingly.
