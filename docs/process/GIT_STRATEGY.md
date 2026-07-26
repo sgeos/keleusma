@@ -22,6 +22,11 @@ integration trunk, and feature integration uses merge commits, not rebase-to-lin
 - Holds releases and is the single source of truth for what has shipped.
 - **Must always be green** — it compiles, passes the full gate, and its CI is green. A red `main` is
   remedied **immediately**, as the top priority, ahead of other work.
+- **Remedying a red `main`.** A trivial, urgent fix may be pushed **directly** to `main`, but the
+  more proper path is a short `fix/` branch cut from `main`, brought green, and merged back with a
+  no-fast-forward merge — it keeps the fix gated and reviewable. Either way, **forward-port the fix
+  to the active version branch** (merge `main` forward, or re-apply it there) so the two lines do not
+  diverge.
 - Releases are cut **only from an all-green `main`**.
 - Receives changes only by merging an all-green version branch (below). It is normal and expected for
   `main` to sit *behind* the active version branch between releases; that is the model working, not a
@@ -61,6 +66,9 @@ integration trunk, and feature integration uses merge commits, not rebase-to-lin
 - **Same process and standards as a feature branch**, except they are cut from a feature branch and
   merged back into **that feature branch** (not the version branch). Use them to decompose a large
   feature; the parent feature still merges into the version branch under the feature-branch rules.
+- Nesting is **nominally unbounded**, but **one level of sub-feature is the practical limit**. A
+  sub-sub-feature or deeper rarely makes sense and usually signals the parent feature should be split
+  instead.
 
 Supported `<scope>` values (branch names and commit subjects alike): `feat` (new feature), `fix`
 (bug fix), `docs` (documentation), `refactor` (code restructuring), `test` (tests), `chore`
