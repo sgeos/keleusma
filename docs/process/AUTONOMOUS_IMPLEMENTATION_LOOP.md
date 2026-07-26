@@ -87,7 +87,11 @@ One pass over one gap:
 6. **Commit** with a scoped conventional message ending in the
    `Co-Authored-By: Claude ...` line.
 7. **Merge at a natural point**: when the full gate (`scripts/release-gate.sh`) is green,
-   fast-forward the branch into `v0.2.3`, push, and confirm CI is green.
+   merge the branch into `v0.2.3` with a **no-fast-forward merge commit** (`git merge --no-ff`),
+   push, and confirm CI is green. The green local gate authorizes the merge; CI is the binding
+   authority afterward, so a red CI result is remedied immediately (see
+   [GIT_STRATEGY.md](./GIT_STRATEGY.md#definition-of-green)). The no-ff merge keeps the `v0.2.3`
+   first-parent history green while preserving the per-increment commits on the merged bubble.
 8. **Continue** to step 1 for the next gap. This is the keep-going default; no operator
    prompt is required to start the next increment.
 
@@ -130,8 +134,12 @@ writes the question into `REVERSE_PROMPT.md` when:
 
 ## Guardrails (always in force)
 
-- Feature branches are cut from and merged to `v0.2.3`, never `main`; merge only after a
-  green full gate; CI must be green after every push.
+- Feature branches are cut from and merged to `v0.2.3` (via a no-fast-forward merge commit),
+  never `main`; merge only after a green full gate; CI must be green after every push and a red
+  result remedied immediately. Feature-branch intermediate commits may be red, but the branch tip
+  must be green at merge. The full branch model is in [GIT_STRATEGY.md](./GIT_STRATEGY.md).
+- Direct commits to `v0.2.3` are allowed **only** for small green documentation or process-file
+  changes (the three resume channels, a plan doc); every code change flows through a feature branch.
 - Never bypass the pre-push gate (`--no-verify` is prohibited).
 - No new opcode or `BYTECODE_VERSION` bump without operator authorization.
 - Commit messages end with the `Co-Authored-By` line.

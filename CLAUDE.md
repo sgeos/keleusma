@@ -109,7 +109,7 @@ See `docs/process/PROCESS_STRATEGY.md` for the library engineering approach and 
 
 ## Git Workflow
 
-Trunk-based development with short-lived feature branches. See [`docs/process/GIT_STRATEGY.md`](docs/process/GIT_STRATEGY.md) for full details. For running multiple agents concurrently (worktree isolation via `scripts/worktree.sh`, per-branch handoffs, and merge/gate serialization) see [`docs/process/PARALLEL_DEVELOPMENT.md`](docs/process/PARALLEL_DEVELOPMENT.md).
+Release-branch model with a four-level hierarchy: `main` holds releases (always green; releases cut only from a green `main`); a `vX.Y.Z` version branch integrates the next version (green before merging to `main`); short-lived feature branches are cut from the version branch (intermediate commits may be red, tip green before merge) and merged back via a **no-fast-forward merge commit**; sub-feature branches are cut from and merged back into a feature. A merge proceeds on a green local `scripts/release-gate.sh`, with CI binding afterward (a red result remedied immediately). Direct commits to the version branch are allowed only for small green docs/process changes; all code flows through a feature branch. See [`docs/process/GIT_STRATEGY.md`](docs/process/GIT_STRATEGY.md) for full details. For running multiple agents concurrently (worktree isolation via `scripts/worktree.sh`, per-branch handoffs, and merge/gate serialization) see [`docs/process/PARALLEL_DEVELOPMENT.md`](docs/process/PARALLEL_DEVELOPMENT.md).
 
 Use scoped conventional commits: `<scope>: <imperative summary>`. Common scopes: `feat`, `fix`, `docs`, `refactor`, `chore`, `test`. Include `Co-Authored-By: Claude <noreply@anthropic.com>` when AI-assisted.
 

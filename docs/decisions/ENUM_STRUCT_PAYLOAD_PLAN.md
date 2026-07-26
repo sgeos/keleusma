@@ -130,5 +130,5 @@ Same as enum-in-struct: `KEL_SELFHOST_CACHE=1 scripts/fast-check.sh
 'test(self_host_compiles_enum_struct_payload_equality)'` for the inner loop; then the blast-radius
 suite (all five whole-stage self-compiles, the full equality suite, `validate_module_via_kel`, the
 boundary); then the FULL `scripts/release-gate.sh` before merge (it catches op-cap and analyze
-scan-bound regressions a spot check misses). On green, fast-forward the feature branch into `v0.2.3`,
-push, confirm CI green.
+scan-bound regressions a spot check misses). On green, merge the feature branch into `v0.2.3` with a
+no-fast-forward merge commit (`git merge --no-ff`), push, confirm CI green.
