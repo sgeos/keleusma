@@ -342,6 +342,11 @@ private data st {
     // interning walk records each variant's offset for the emission walk) and the running walk cursor.
     eq_voff: [Word; 64],
     eq_cur: Word,
+    // Per-field match_parts offset within the current variant (`push_enum_eq` emission walk): a
+    // scalar field is 2 words (off, kind) but a STRUCT-payload field is 5 + subcount*2, so the
+    // reverse emission cannot index by `f*2`. A forward pass per variant records each field's offset.
+    eq_foff: [Word; 32],
+    eq_fcur2: Word,
     // Pre-interned true/false result pool indices for an `enum == enum` lowering (state, not locals,
     // since a local cannot be reassigned inside the interning loop).
     eq_true: Word,
@@ -1397,6 +1402,56 @@ fn push_struct_eq(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
+// Emit a STRUCT-payload variant field of an `enum == enum`: the op-57 nested extract of both sides
+// into the two fresh temps r2/l2, then an inner struct-eq loop over their scalar sub-fields, negated
+// to break the outer variant loop on inequality. Mirrors the reference `emit_enum_fieldwise_eq`
+// composed with `emit_composite_fieldwise_eq`, and structurally matches `push_struct_eq_nested`'s
+// nested-struct block (op 57 for the enum-payload extract in place of op 48). match_parts at `foff`:
+// [off, kind, subcount, r2, l2, subcount*(sub_off, sub_kind)]. The four bools are DEFERRED (push_bool)
+// like the rest of `push_enum_eq`, so the pool order follows forward emission (no eager pre-pass);
+// factored out to keep `push_enum_eq` under the op-table capacity.
+fn push_enum_struct_payload_loop(foff: Word, off: Word, kind: Word, ta: Word, tb: Word) -> Word {
+    let subcount = ast.match_parts[foff + 2];
+    let r2 = ast.match_parts[foff + 3];
+    let l2 = ast.match_parts[foff + 4];
+    // The nested extract operand: byte offset, struct byte size (kind - 100), FlatNested variant 2.
+    let extp = off + (kind - 100) * 65536 + 2 * 4294967296;
+    // Outer negate/break (emitted last, so pushed first): Not, If, Const(false), Break, EndIf.
+    push_emit(wire.mendif);
+    push_emit(wire.mbreak);
+    push_bool(0);
+    push_emit(wire.mif);
+    push_emit(wire.lnot);
+    // Inner struct-eq loop tail: after the sub-fields, Const(true), Break, EndLoop.
+    push_emit(wire.mendloop);
+    push_emit(wire.mbreak);
+    push_bool(1);
+    // Inner struct-eq sub-fields, in reverse (forward is s = 0..subcount): GetLocal(l2), GetField,
+    // GetLocal(r2), GetField, CmpEq, Not, If, Const(false), Break, EndIf.
+    for sj in 0..subcount limit 64 {
+        let s = subcount - 1 - sj;
+        let sp = ast.match_parts[foff + 5 + s * 2] + ast.match_parts[foff + 5 + s * 2 + 1] * 65536;
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_bool(0);
+        push_emit(wire.mif);
+        push_emit(wire.lnot);
+        push_emit(wire.cmpeq);
+        push_emit(wire.getfield + sp * wire.radix);
+        push_emit(wire.getlocal + r2 * wire.radix);
+        push_emit(wire.getfield + sp * wire.radix);
+        push_emit(wire.getlocal + l2 * wire.radix);
+    }
+    push_emit(wire.mloop);
+    // The nested extract of both operands into r2/l2 (emitted first, so pushed last).
+    push_emit(wire.setlocal + l2 * wire.radix);
+    push_emit(wire.setlocal + r2 * wire.radix);
+    push_emit(wire.getenumfieldnested + extp * wire.radix);
+    push_emit(wire.getlocal + tb * wire.radix);
+    push_emit(wire.getenumfieldnested + extp * wire.radix);
+    push_emit(wire.getlocal + ta * wire.radix)
+}
+
 // EnumEq (kind 51): `enum == enum` (or `!=`) for an enum whose variants carry only scalar payload,
 // lowered to a variant-iterating comparison loop. Store both operands in two temps (ta = left,
 // tb = right), then loop once over the variants: per variant, peek-test the left temp with `IsEnum`;
@@ -1430,7 +1485,17 @@ fn push_enum_eq(p: Word) -> Word {
     for v in 0..vcount limit 64 {
         st.eq_voff[v] = st.eq_cur;
         let fcount = ast.match_parts[st.eq_cur + 2];
-        st.eq_cur = st.eq_cur + 3 + fcount * 2;
+        st.eq_cur = st.eq_cur + 3;
+        // Fields are variable-length: a scalar is 2 words (off, kind); a STRUCT payload (kind >= 100)
+        // is 5 + subcount*2 -- (off, kind, subcount, r2, l2) then subcount*(sub_off, sub_kind).
+        for f in 0..fcount limit 32 {
+            let kind = ast.match_parts[st.eq_cur + 1];
+            st.eq_cur = st.eq_cur + 2;
+            if kind >= 100 {
+                let subcount = ast.match_parts[st.eq_cur];
+                st.eq_cur = st.eq_cur + 3 + subcount * 2;
+            }
+        }
     }
     // The `!=` flag rides just past the variant list: `a != b` is the `==` loop then a `Not`.
     let is_ne = ast.match_parts[st.eq_cur];
@@ -1446,6 +1511,19 @@ fn push_enum_eq(p: Word) -> Word {
         let fcount = ast.match_parts[voff + 2];
         let vname = ast.match_parts[voff];
         let disc = ast.match_parts[voff + 1];
+        // Fields are variable-length (a STRUCT payload is 5 + subcount*2), and the emission below runs
+        // in reverse, so a forward pass records each field's match_parts offset. A struct-payload
+        // field also reserves its two extract temps in the frame (mirroring the reference next_slot).
+        st.eq_fcur2 = voff + 3;
+        for f in 0..fcount limit 32 {
+            st.eq_foff[f] = st.eq_fcur2;
+            let fkind = ast.match_parts[st.eq_fcur2 + 1];
+            st.eq_fcur2 = st.eq_fcur2 + 2;
+            if fkind >= 100 {
+                st.let_count = st.let_count + 2;
+                st.eq_fcur2 = st.eq_fcur2 + 3 + ast.match_parts[st.eq_fcur2] * 2;
+            }
+        }
         push_emit(wire.popn + 1 * wire.radix);
         push_emit(wire.mendif);
         push_emit(wire.mbreak);
@@ -1455,12 +1533,19 @@ fn push_enum_eq(p: Word) -> Word {
         push_emit(wire.mbreak);
         push_bool(1);
         // The payload fields compare in the "both this variant" block, in forward order, so they are
-        // pushed in reverse. Each: GetLocal(ta), GetEnumField, GetLocal(tb), GetEnumField, CmpEq,
-        // Not, If, Const(false), Break, EndIf (a mismatch breaks false; else fall to the next field).
+        // pushed in reverse. A SCALAR field (kind < 100): GetLocal(ta), GetEnumField, GetLocal(tb),
+        // GetEnumField, CmpEq, Not, If, Const(false), Break, EndIf (a mismatch breaks false; else fall
+        // to the next field). A STRUCT-payload field (kind >= 100): the op-57 nested extract plus an
+        // inner struct-eq loop, factored into `push_enum_struct_payload_loop` (keeps this chunk under
+        // the op-table capacity).
         for fj in 0..fcount limit 32 {
             let f = fcount - 1 - fj;
-            let off = ast.match_parts[voff + 3 + f * 2];
-            let kind = ast.match_parts[voff + 3 + f * 2 + 1];
+            let foff = st.eq_foff[f];
+            let off = ast.match_parts[foff];
+            let kind = ast.match_parts[foff + 1];
+            if kind >= 100 {
+                push_enum_struct_payload_loop(foff, off, kind, ta, tb);
+            } else {
             push_emit(wire.mendif);
             push_emit(wire.mbreak);
             push_bool(0);
@@ -1471,6 +1556,7 @@ fn push_enum_eq(p: Word) -> Word {
             push_emit(wire.getlocal + tb * wire.radix);
             push_emit(wire.getenumfield + (off + kind * 65536) * wire.radix);
             push_emit(wire.getlocal + ta * wire.radix);
+            }
         }
         push_emit(wire.popn + 1 * wire.radix);
         push_emit(wire.mif);

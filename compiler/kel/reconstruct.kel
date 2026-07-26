@@ -309,9 +309,30 @@ fn build_enum_eq(a: Word) -> Word {
         for f in 0..fcount limit 32 {
             let fpacked = rs.eqfields[rs.eqfcur];
             rs.eqfcur = rs.eqfcur + 1;
+            let kind = fpacked / 65536;
             io.match_parts[rs.eqcur] = fpacked % 65536;
-            io.match_parts[rs.eqcur + 1] = fpacked / 65536;
+            io.match_parts[rs.eqcur + 1] = kind;
             rs.eqcur = rs.eqcur + 2;
+            if kind >= 100 {
+                // STRUCT payload field: the next record packs subcount + r2*65536 + l2*2^32, then
+                // `subcount` packed (sub_off + sub_kind*65536) sub-fields. Lay
+                // [subcount, r2, l2, subcount*(sub_off, sub_kind)] after the (off, kind) header so
+                // codegen can extract into r2/l2 and build the inner struct-eq loop.
+                let sc = rs.eqfields[rs.eqfcur];
+                rs.eqfcur = rs.eqfcur + 1;
+                let subcount = sc % 65536;
+                io.match_parts[rs.eqcur] = subcount;
+                io.match_parts[rs.eqcur + 1] = (sc / 65536) % 65536;
+                io.match_parts[rs.eqcur + 2] = sc / 4294967296;
+                rs.eqcur = rs.eqcur + 3;
+                for s in 0..subcount limit 64 {
+                    let sp = rs.eqfields[rs.eqfcur];
+                    rs.eqfcur = rs.eqfcur + 1;
+                    io.match_parts[rs.eqcur] = sp % 65536;
+                    io.match_parts[rs.eqcur + 1] = sp / 65536;
+                    rs.eqcur = rs.eqcur + 2;
+                }
+            }
         }
     }
     // The `!=` flag rides just past the variant list; codegen reads it to append a `Not`.
