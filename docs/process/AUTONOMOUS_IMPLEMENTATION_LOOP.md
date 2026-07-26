@@ -46,11 +46,31 @@ extract reuses op 53 rather than adding an opcode). Do not re-derive what a curr
 assessment has already scouted, but treat any recipe predating a major encoding or ISA change
 as leads to re-validate in the plan step, not as final plans.
 
+## Choosing the next task (no operator prompt for roadmap ordering)
+
+When an increment finishes and the loop must pick the next task, and **every candidate is
+already on the roadmap**, the loop chooses on its own — it does NOT prompt the operator to
+direct by priority. Order the candidates:
+
+1. **Minimize context switching first.** Prefer a task in the same area as the just-finished
+   work — the same stage machinery, the same files, the same fresh understanding — over one
+   that changes context. Doing several increments in one area before switching is cheaper and
+   less error-prone than jumping between workstreams.
+2. **Then by priority.** Among tasks of comparable context cost, take the higher-priority or
+   higher-value one.
+
+Switch to a different workstream only when the current area is exhausted — its remaining
+candidates are all genuine stops (unbounded, or needing a design decision) or intentional
+defers. A choice among bounded roadmap tasks is the loop's to make; the operator prompt is
+reserved for the genuine decisions in the stop list below, not for roadmap task ordering.
+
 ## The increment cycle (the loop body)
 
 One pass over one gap:
 
-1. **Select** the next gap: the smallest bounded one per the DESIGN_JOURNAL frontier notes.
+1. **Select** the next task by the ordering policy above (context-switching first, then
+   priority) from the DESIGN_JOURNAL frontier notes; among same-context gaps, the smallest
+   bounded one.
 2. **Plan the lowering**: how the Rust reference compiler lowers the construct, and the
    minimal `.kel` changes to reproduce it byte-identically — typically a detector in
    `parse.kel`, routing in `reconstruct.kel`, and emission in `codegen.kel`. Reuse
@@ -95,8 +115,11 @@ writes the question into `REVERSE_PROMPT.md` when:
 - **The full gate goes red for a reason not attributable to the current increment**
   (pre-existing breakage), or the change would touch the shared inter-stage protocol or the
   runtime wire format, which couples stages and must be a single coordinated change.
-- **No remaining gap is bounded** — every candidate needs deep, regression-prone surgery
-  with a design choice. Surface the options instead of picking one unilaterally.
+- **No remaining candidate is a bounded roadmap task** — every option needs a genuine design
+  decision (not merely deep or high-effort work) or is off-roadmap. A mere choice among
+  bounded roadmap tasks is NOT a stop: order them by the policy above (context first, then
+  priority) and proceed without prompting. Surface only when the choice itself requires
+  operator judgment (a semantics change, a real tradeoff, or an off-roadmap direction).
 - **An irreversible or outward-facing action would be required** — a crates.io publish, a
   force-push of a shared line, a tag. Confirm first; a prior "keep going" does not license
   these.
