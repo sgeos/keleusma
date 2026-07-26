@@ -83,7 +83,9 @@ One pass over one gap:
    memoized fast lane makes this seconds-scale on unchanged stages.
 5. **Record** on all three channels: append the increment reasoning to `DESIGN_JOURNAL.md`
    (what, why, the byte-identity finding, the gotchas), overwrite `REVERSE_PROMPT.md` with
-   the bounded latest state and the next intended increment, and update `TASKLOG.md`.
+   the bounded latest state and the next intended increment, and update `TASKLOG.md`. The
+   handoff prompt [`HANDOFF.md`](./HANDOFF.md) is separate: it is not written every increment,
+   only before a planned compaction, and it is stamped with the current commit (see Guardrails).
 6. **Commit** with a scoped conventional message ending in the
    `Co-Authored-By: Claude ...` line.
 7. **Merge at a natural point**: when the full gate (`scripts/release-gate.sh`) is green, first
@@ -151,6 +153,12 @@ writes the question into `REVERSE_PROMPT.md` when:
 - Confirm before any irreversible or outward-facing action.
 - Update `DESIGN_JOURNAL.md` (append), `REVERSE_PROMPT.md` (overwrite), and `TASKLOG.md`
   every increment, so the loop is always resumable from a cold start.
+- Write/overwrite [`HANDOFF.md`](./HANDOFF.md) before a planned compaction — the self-contained
+  resume prompt, stamped with the current commit as its parent (commit the handoff last, so its
+  parent is exactly that commit). It is not kept always-current. On resume, validate it by comparing
+  its recorded parent commit to `git rev-parse HEAD~1`; on a mismatch, report it invalid-and-stale to
+  the operator and familiarize from the live channels instead, rather than trusting it. A resume
+  familiarizes and reports first; the keep-going default is for an active session, not a cold resume.
 
 ## Running it
 

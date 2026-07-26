@@ -89,9 +89,10 @@ A knowledge graph is maintained in `docs/`. Start at [`docs/README.md`](docs/REA
 See `docs/process/PROCESS_STRATEGY.md` for the library engineering approach and agentic development loop.
 
 **Session startup protocol**:
-1. Read [`docs/process/TASKLOG.md`](docs/process/TASKLOG.md) for current task state.
-2. Read [`docs/process/REVERSE_PROMPT.md`](docs/process/REVERSE_PROMPT.md) for last AI communication.
-3. Wait for human prompt before proceeding.
+1. Read [`docs/process/HANDOFF.md`](docs/process/HANDOFF.md) and run its validity check (compare its recorded parent commit to `git rev-parse HEAD~1`). Report the handoff as valid, or as invalid-and-stale on a mismatch, per its Validity section.
+2. Read [`docs/process/TASKLOG.md`](docs/process/TASKLOG.md) for current task state.
+3. Read [`docs/process/REVERSE_PROMPT.md`](docs/process/REVERSE_PROMPT.md) for last AI communication.
+4. Wait for human prompt before proceeding.
 
 **After completing each task**:
 1. Update task status in `docs/process/TASKLOG.md`.
@@ -114,6 +115,10 @@ post-compaction turn resumes the autonomy loop without loss. Prefer pointers to 
 truth over prose, since these files are authoritative and current, and the summary is a convenience,
 not the source of truth.
 
+- **The handoff prompt** [`docs/process/HANDOFF.md`](docs/process/HANDOFF.md), the self-contained
+  imperative resume prompt. It is written/overwritten before a planned compaction and stamped with the
+  commit it describes. On resume, validate it (compare its recorded parent commit to `git rev-parse
+  HEAD~1`); report it invalid-and-stale on a mismatch rather than trusting it.
 - **The three resume channels**, plus the instruction to re-read them fresh after compaction:
   [`docs/process/REVERSE_PROMPT.md`](docs/process/REVERSE_PROMPT.md) (bounded latest state and the
   next intended increment), [`docs/process/DESIGN_JOURNAL.md`](docs/process/DESIGN_JOURNAL.md)
@@ -133,8 +138,8 @@ not the source of truth.
   byte-identical differential oracle as the correctness signal, and that irreversible or
   outward-facing actions need confirmation.
 
-After compaction, before acting, re-read the three resume channels and the active plan document. They,
-the boundary test counts, and the git state are the true resume anchors.
+After compaction, before acting, validate `HANDOFF.md` and re-read the three resume channels and the
+active plan document. They, the boundary test counts, and the git state are the true resume anchors.
 
 ## Git Workflow
 
