@@ -27,11 +27,11 @@ require word >= 32;
 // target lookups (the reference's clamps).
 shared data dv {
     op_count: Word,
-    class: [Word; 1024],
-    arg: [Word; 1024],
-    dreq: [Word; 1024],
-    dnet: [Word; 1024],
-    is_term: [Word; 1024],
+    class: [Word; 1536],
+    arg: [Word; 1536],
+    dreq: [Word; 1536],
+    dnet: [Word; 1536],
+    is_term: [Word; 1536],
     out_reject: Word,
 }
 

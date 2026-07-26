@@ -873,22 +873,22 @@ const WA_ARENA_CAPACITY: usize = 5;
 const WA_REGION_START: usize = 6;
 const WA_REGION_END: usize = 7;
 const WA_COST: usize = 8;
-const WA_CLASS: usize = 8 + 1024;
-const WA_ARG: usize = 8 + 1024 * 2;
-const WA_GROWTH: usize = 8 + 1024 * 3;
-const WA_SHRINK: usize = 8 + 1024 * 4;
-const WA_HEAP: usize = 8 + 1024 * 5;
-const WA_OPK: usize = 8 + 1024 * 6;
-const WA_SLOT: usize = 8 + 1024 * 7;
-const WA_CVAL: usize = 8 + 1024 * 8;
-const WA_CINT: usize = 8 + 1024 * 9;
-const WA_CALLEE_SLOTS: usize = 8 + 1024 * 10;
-const WA_CALLEE_HEAP: usize = 8 + 1024 * 11;
-const WA_OUT_WCET: usize = 8 + 1024 * 12;
-const WA_OUT_STACK: usize = 8 + 1024 * 12 + 1;
-const WA_OUT_HEAP: usize = 8 + 1024 * 12 + 2;
-const WA_OUT_REJECT: usize = 8 + 1024 * 12 + 3;
-const WA_OUT_VALID: usize = 8 + 1024 * 12 + 4;
+const WA_CLASS: usize = 8 + 1536;
+const WA_ARG: usize = 8 + 1536 * 2;
+const WA_GROWTH: usize = 8 + 1536 * 3;
+const WA_SHRINK: usize = 8 + 1536 * 4;
+const WA_HEAP: usize = 8 + 1536 * 5;
+const WA_OPK: usize = 8 + 1536 * 6;
+const WA_SLOT: usize = 8 + 1536 * 7;
+const WA_CVAL: usize = 8 + 1536 * 8;
+const WA_CINT: usize = 8 + 1536 * 9;
+const WA_CALLEE_SLOTS: usize = 8 + 1536 * 10;
+const WA_CALLEE_HEAP: usize = 8 + 1536 * 11;
+const WA_OUT_WCET: usize = 8 + 1536 * 12;
+const WA_OUT_STACK: usize = 8 + 1536 * 12 + 1;
+const WA_OUT_HEAP: usize = 8 + 1536 * 12 + 2;
+const WA_OUT_REJECT: usize = 8 + 1536 * 12 + 3;
+const WA_OUT_VALID: usize = 8 + 1536 * 12 + 4;
 
 fn analyze_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
@@ -1020,7 +1020,7 @@ fn run_analyze_kel(
         }
         BlockType::Func | BlockType::Reentrant => (0, chunk.ops.len(), 0, 0),
     };
-    assert!(chunk.ops.len() <= 1024, "analyze.kel op-table capacity");
+    assert!(chunk.ops.len() <= 1536, "analyze.kel op-table capacity");
     let m = analyze_kel_module();
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -1108,7 +1108,7 @@ pub fn analyze_stream_chunk(chunk: &keleusma::bytecode::Chunk) -> (i64, i64, i64
 // (marshalled per chunk), pending that fixpoint's own self-hosting alongside the third pass. The
 // shared block `sv` lays out the scalars `op_count` (0), `local_count` (1), `const_count` (2),
 // `template_count` (3), `data_len` (4), `nchunks` (5), `word_bits` (6), `block_type` (7),
-// `calls_ay` (8); the arrays `class` (9..), `arg`, `opb`, `o1`, `o2`, `o3`, `mark` (each 1024
+// `calls_ay` (8); the arrays `class` (9..), `arg`, `opb`, `o1`, `o2`, `o3`, `mark` (each 1536
 // wide); and the verdict `out_reject`.
 
 const SV_OP_COUNT: usize = 0;
@@ -1121,13 +1121,13 @@ const SV_WORD_BITS: usize = 6;
 const SV_BLOCK_TYPE: usize = 7;
 const SV_CALLS_AY: usize = 8;
 const SV_CLASS: usize = 9;
-const SV_ARG: usize = 9 + 1024;
-const SV_OPB: usize = 9 + 1024 * 2;
-const SV_O1: usize = 9 + 1024 * 3;
-const SV_O2: usize = 9 + 1024 * 4;
-const SV_O3: usize = 9 + 1024 * 5;
-const SV_MARK: usize = 9 + 1024 * 6;
-const SV_OUT_REJECT: usize = 9 + 1024 * 7;
+const SV_ARG: usize = 9 + 1536;
+const SV_OPB: usize = 9 + 1536 * 2;
+const SV_O1: usize = 9 + 1536 * 3;
+const SV_O2: usize = 9 + 1536 * 4;
+const SV_O3: usize = 9 + 1536 * 5;
+const SV_MARK: usize = 9 + 1536 * 6;
+const SV_OUT_REJECT: usize = 9 + 1536 * 7;
 
 fn verify_structural_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
@@ -1218,7 +1218,7 @@ pub fn structural_reject_chunk_via_kel(
     always: &std::collections::BTreeSet<usize>,
 ) -> bool {
     assert!(
-        chunk.ops.len() <= 1024,
+        chunk.ops.len() <= 1536,
         "verify_structural.kel op-table capacity"
     );
     let m = verify_structural_kel_module();
@@ -1293,7 +1293,7 @@ pub fn structural_reject_chunk_via_kel(
 // verify_yield.kel decides whether every fall-through path of a chunk region passes through a
 // Yield (or a Call delegating to an always-yielding chunk), reproducing the reference
 // `analyze_yield_coverage`. Its shared block `yv` lays out `op_count` (0), `region_start` (1),
-// `region_end` (2); the arrays `class` (3..), `arg`, `mark`, `cay` (each 1024 wide, where `cay`
+// `region_end` (2); the arrays `class` (3..), `arg`, `mark`, `cay` (each 1536 wide, where `cay`
 // flags a Call to an always-yielding chunk); and the results `out_fell`, `out_hy`. The driver
 // runs it in two orchestrations, both self-hosting what was the reference borrow: the
 // always-yielding monotone fixpoint (over `[0, op_count)` per chunk) and the Stream productivity
@@ -1303,11 +1303,11 @@ const YV_OP_COUNT: usize = 0;
 const YV_REGION_START: usize = 1;
 const YV_REGION_END: usize = 2;
 const YV_CLASS: usize = 3;
-const YV_ARG: usize = 3 + 1024;
-const YV_MARK: usize = 3 + 1024 * 2;
-const YV_CAY: usize = 3 + 1024 * 3;
-const YV_OUT_FELL: usize = 3 + 1024 * 4;
-const YV_OUT_HY: usize = 3 + 1024 * 4 + 1;
+const YV_ARG: usize = 3 + 1536;
+const YV_MARK: usize = 3 + 1536 * 2;
+const YV_CAY: usize = 3 + 1536 * 3;
+const YV_OUT_FELL: usize = 3 + 1536 * 4;
+const YV_OUT_HY: usize = 3 + 1536 * 4 + 1;
 
 fn verify_yield_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
@@ -1327,7 +1327,7 @@ fn run_ayc(
 ) -> (bool, bool) {
     use keleusma::bytecode::Op;
     assert!(
-        chunk.ops.len() <= 1024,
+        chunk.ops.len() <= 1536,
         "verify_yield.kel op-table capacity"
     );
     let m = verify_yield_kel_module();
@@ -1419,17 +1419,17 @@ fn productivity_reject_via_kel(
 // a chunk tracking the absolute operand-stack depth through the structured control flow and
 // rejects any op that would underflow the operand stack (audit finding 3). Height-only (no
 // shapes), it is the frame-stack twin of verify_yield.kel. Its shared block `dv` lays out
-// `op_count` (0); the arrays `class` (1..), `arg`, `dreq`, `dnet`, `is_term` (each 1024 wide);
+// `op_count` (0); the arrays `class` (1..), `arg`, `dreq`, `dnet`, `is_term` (each 1536 wide);
 // and the verdict `out_reject`. `dreq`/`dnet` are the reference `op_depth_effect` (the actual
 // operand consumption, NOT the WCMU stack effect); `is_term` flags Trap/Return.
 
 const DV_OP_COUNT: usize = 0;
 const DV_CLASS: usize = 1;
-const DV_ARG: usize = 1 + 1024;
-const DV_DREQ: usize = 1 + 1024 * 2;
-const DV_DNET: usize = 1 + 1024 * 3;
-const DV_IS_TERM: usize = 1 + 1024 * 4;
-const DV_OUT_REJECT: usize = 1 + 1024 * 5;
+const DV_ARG: usize = 1 + 1536;
+const DV_DREQ: usize = 1 + 1536 * 2;
+const DV_DNET: usize = 1 + 1536 * 3;
+const DV_IS_TERM: usize = 1 + 1536 * 4;
+const DV_OUT_REJECT: usize = 1 + 1536 * 5;
 
 fn verify_depth_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
@@ -1445,7 +1445,7 @@ fn verify_depth_kel_module() -> Module {
 pub fn depth_reject_chunk_via_kel(chunk: &keleusma::bytecode::Chunk) -> bool {
     use keleusma::bytecode::Op;
     assert!(
-        chunk.ops.len() <= 1024,
+        chunk.ops.len() <= 1536,
         "verify_depth.kel op-table capacity"
     );
     let m = verify_depth_kel_module();
@@ -1535,25 +1535,25 @@ const TV_RESUME_SIZE: usize = 2;
 const TV_RESUME_KIND: usize = 3;
 const TV_EB_COUNT: usize = 4;
 const TV_CLASS: usize = 5;
-const TV_ARG: usize = 5 + 1024;
-const TV_IS_TERM: usize = 5 + 1024 * 2;
-const TV_TK: usize = 5 + 1024 * 3;
-const TV_REQ: usize = 5 + 1024 * 4;
-const TV_PROD: usize = 5 + 1024 * 5;
-const TV_TA: usize = 5 + 1024 * 6;
-const TV_TB: usize = 5 + 1024 * 7;
-const TV_TC: usize = 5 + 1024 * 8;
-const TV_RET_TAG: usize = 5 + 1024 * 9;
-const TV_RET_SIZE: usize = 5 + 1024 * 10;
-const TV_RET_KIND: usize = 5 + 1024 * 11;
-const TV_SEED_TAG: usize = 5 + 1024 * 12;
-const TV_SEED_SIZE: usize = 5 + 1024 * 12 + 256;
-const TV_SEED_KIND: usize = 5 + 1024 * 12 + 512;
-const TV_EB_VALS: usize = 5 + 1024 * 12 + 768;
-const TV_CP_TAG: usize = 5 + 1024 * 12 + 768 + 64;
-const TV_CP_SIZE: usize = 5 + 1024 * 12 + 768 + 64 + 8192;
-const TV_CP_KIND: usize = 5 + 1024 * 12 + 768 + 64 + 8192 * 2;
-const TV_OUT_REJECT: usize = 5 + 1024 * 12 + 768 + 64 + 8192 * 3;
+const TV_ARG: usize = 5 + 1536;
+const TV_IS_TERM: usize = 5 + 1536 * 2;
+const TV_TK: usize = 5 + 1536 * 3;
+const TV_REQ: usize = 5 + 1536 * 4;
+const TV_PROD: usize = 5 + 1536 * 5;
+const TV_TA: usize = 5 + 1536 * 6;
+const TV_TB: usize = 5 + 1536 * 7;
+const TV_TC: usize = 5 + 1536 * 8;
+const TV_RET_TAG: usize = 5 + 1536 * 9;
+const TV_RET_SIZE: usize = 5 + 1536 * 10;
+const TV_RET_KIND: usize = 5 + 1536 * 11;
+const TV_SEED_TAG: usize = 5 + 1536 * 12;
+const TV_SEED_SIZE: usize = 5 + 1536 * 12 + 256;
+const TV_SEED_KIND: usize = 5 + 1536 * 12 + 512;
+const TV_EB_VALS: usize = 5 + 1536 * 12 + 768;
+const TV_CP_TAG: usize = 5 + 1536 * 12 + 768 + 64;
+const TV_CP_SIZE: usize = 5 + 1536 * 12 + 768 + 64 + 12288;
+const TV_CP_KIND: usize = 5 + 1536 * 12 + 768 + 64 + 12288 * 2;
+const TV_OUT_REJECT: usize = 5 + 1536 * 12 + 768 + 64 + 12288 * 3;
 const TV_CP_STRIDE: usize = 8;
 
 fn verify_typed_kel_module() -> Module {
@@ -1699,7 +1699,7 @@ fn typed_run(
 ) -> bool {
     use keleusma::bytecode::Op;
     assert!(
-        chunk.ops.len() <= 1024,
+        chunk.ops.len() <= 1536,
         "verify_typed.kel op-table capacity"
     );
     let m = verify_typed_kel_module();

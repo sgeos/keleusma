@@ -75,13 +75,13 @@ shared data sv {
     word_bits: Word,
     block_type: Word,
     calls_ay: Word,
-    class: [Word; 1024],
-    arg: [Word; 1024],
-    opb: [Word; 1024],
-    o1: [Word; 1024],
-    o2: [Word; 1024],
-    o3: [Word; 1024],
-    mark: [Word; 1024],
+    class: [Word; 1536],
+    arg: [Word; 1536],
+    opb: [Word; 1536],
+    o1: [Word; 1536],
+    o2: [Word; 1536],
+    o3: [Word; 1536],
+    mark: [Word; 1536],
     out_reject: Word,
 }
 
@@ -91,10 +91,10 @@ shared data sv {
 // the stack height, `loop_depth` counts the open Loop frames (break containment), `le` is the
 // enclosing-loop-exit scratch, `bad` latches the first proven malformation.
 private data sd {
-    kind: [Word; 1024],
-    b_ip: [Word; 1024],
-    b_tgt: [Word; 1024],
-    b_else: [Word; 1024],
+    kind: [Word; 1536],
+    b_ip: [Word; 1536],
+    b_tgt: [Word; 1536],
+    b_else: [Word; 1536],
     depth: Word,
     loop_depth: Word,
     le: Word,
@@ -115,7 +115,7 @@ fn ne_bad(x: Word, y: Word) -> Word {
 }
 
 // Open an If frame for the `If` at `ip` with branch target `tgt`. A push past the static stack
-// capacity (unreachable while `op_count <= 1024`, since each op opens at most one block)
+// capacity (unreachable while `op_count <= 1536`, since each op opens at most one block)
 // latches `bad` rather than faulting.
 fn push_if(ip: Word, tgt: Word) -> Word {
     if sd.depth > 1023 {
@@ -148,7 +148,7 @@ fn push_loop(ip: Word, tgt: Word) -> Word {
 // on the stack. Only meaningful with `loop_depth > 0`, which every caller guarantees.
 fn innermost_loop_exit() -> Word {
     sd.le = 0;
-    for j in 0..1024 limit 1024 {
+    for j in 0..1536 limit 1536 {
         if sd.depth > j andalso sd.kind[j] == 2 {
             sd.le = sd.b_tgt[j];
         }
@@ -341,7 +341,7 @@ fn count_markers() -> Word {
     sd.yc = 0;
     sd.sc = 0;
     sd.rc = 0;
-    for ip in 0..1024 limit 1024 {
+    for ip in 0..1536 limit 1536 {
         if sv.op_count > ip {
             if sv.mark[ip] == 1 {
                 sd.yc = sd.yc + 1;
@@ -405,7 +405,7 @@ fn run() -> Word {
     sd.depth = 0;
     sd.loop_depth = 0;
     sd.bad = 0;
-    for ip in 0..1024 limit 1024 {
+    for ip in 0..1536 limit 1536 {
         if sv.op_count > ip {
             step(ip);
             check_opbounds(ip);
