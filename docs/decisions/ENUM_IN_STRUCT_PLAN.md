@@ -7,10 +7,13 @@ Working plan for the self-hosted-compiler nested-equality increment that makes
 for example `struct S { e: E, w: Word }` with `enum E { A, B(Word) }`. It flips the
 `eq/enum_in_struct__GAP` boundary case (48 Ok / 6 Gap becomes 49 Ok / 5 Gap).
 
-Status: **Commit A landed** (branch `feat/selfhost-nested-eq`, byte-identical).
-Commits B, C, D remain and are coupled (they only pass together). No STOP condition
-was found in planning: no new opcode, no `BYTECODE_VERSION` bump, no new record or node
-kind. The nested variant tag 3 (Enum) rides the existing 2-bit variant field of record 56.
+Status: **COMPLETE and merged to `v0.2.3`** (2026-07-25). All four commits landed byte-identically
+(A: `sd_fenum`; B/C/D: parse/reconstruct/codegen), the FULL `scripts/release-gate.sh` is GREEN, and
+the boundary moved 48 -> 49 Ok. No STOP condition materialized: no new opcode, no `BYTECODE_VERSION`
+bump, no new record or node kind. The nested variant tag 3 (Enum) rode the existing 2-bit variant
+field of record 56. Two capacity gotchas were fixed as predicted (a factored `push_nested_enum_loop`
+to stay under the 1536 op cap, `EXPECTED_SELF_COMPILE` 68 -> 69; and two `analyze.kel` per-chunk-op
+scan-loop bounds raised 1024 -> 1536). This document is retained as the implementation record.
 
 ## Reference ground truth (byte-identity target)
 

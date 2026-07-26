@@ -15,62 +15,43 @@ increment-by-increment reasoning and frontier assessments live in
 
 ## Current state
 
-- **Autonomy loop RUNNING.** It selected the next task on its own — enum-in-struct equality —
-  per the task-ordering policy committed in `AUTONOMOUS_IMPLEMENTATION_LOOP.md` (context-switching
-  avoidance first: stay inside the just-touched nested-equality machinery; no operator prompt for a
-  choice among bounded roadmap tasks). No operator direction was needed or requested.
-- **Increment 2 (enum-in-struct equality) STARTED. Commit A landed byte-identically.** Work is on
-  branch `feat/selfhost-nested-eq` in the worktree
-  `/Users/bsechter/projects/rust/keleusma-worktrees/selfhost-nested-eq`, at `cadd13e` (plus this
-  checkpoint's doc commit). The full edit-level plan is persisted at
-  [`docs/decisions/ENUM_IN_STRUCT_PLAN.md`](../decisions/ENUM_IN_STRUCT_PLAN.md).
-- **`v0.2.3` (release line) CI-GREEN at `ca468a1`.** The feature branch is unmerged (Commits B/C/D
-  incomplete), so the release line is untouched. Boundary still 48 Ok / 6 Gap on `v0.2.3`.
+- **Autonomy loop RUNNING. Increment 2 (enum-in-struct equality) is COMPLETE, full gate GREEN,
+  merged to `v0.2.3`.** The loop selected it without an operator prompt (the context-switching-first
+  task-ordering policy). `s1 == s2` where a struct field is an enum now self-compiles byte-identically.
+- **Construct-support boundary: 49 Ok / 5 Gap / 1 RefRejects** (was 48 / 6 / 1). The tuple-of-struct
+  and enum-in-struct gaps are both closed.
+- No opcode, record/node kind, or `BYTECODE_VERSION` change (nested variant tag 3 rides record 56's
+  existing 2-bit field). `EXPECTED_SELF_COMPILE` 68 -> 69 (a factored `push_nested_enum_loop`).
 
 ## Verification
 
-- Commit A (`sd_fenum` tracker) verified byte-identical: 24 tests green, covering all five
-  whole-stage self-compiles (lexer/parse/reconstruct/codegen/analyze), the full nested-equality
-  suite, and `self_hosted_construct_support_boundary`. Nothing reads `sd_fenum` yet, so behavior
-  is provably unchanged — exactly the isolated-safe-first-commit the plan calls for.
-- The full `scripts/release-gate.sh` has NOT been run this session (only the targeted self-compile
-  and equality suite). It must be run before any merge to `v0.2.3`.
+- Byte-identity oracle green: `self_host_compiles_enum_in_struct_equality` (unit/payload variants,
+  `==`/`!=`, nonzero enum-field offset, enum beside a nested struct), all five whole-stage
+  self-compiles (lexer/parse/reconstruct/codegen/analyze), the full nested-equality blast-radius
+  suite, `validate_module_via_kel`, and `self_hosted_construct_support_boundary`.
+- **Full `scripts/release-gate.sh` GREEN**: fmt, clippy `-D warnings`, the feature matrix (default,
+  no-default, signatures, signatures+shell), docs `-D warnings`, markdown links, and the detached
+  `compiler/` subproject. Merged to `v0.2.3` only after this.
 
-## Planning outcome (no STOP)
+## Implementation notes (for the next increment)
 
-- A Plan agent mapped the reference lowering (`emit_composite_fieldwise_eq` composed with
-  `emit_enum_fieldwise_eq`, `src/compiler.rs:6651`/`:6844`) and the `.kel` touch points. **No STOP
-  condition:** no new opcode, no `BYTECODE_VERSION` bump, no new record/node kind. Nested variant
-  tag 3 (Enum) rides record 56's existing 2-bit variant field; the driver already decodes op-48
-  variant tag 3. The construct reuses the standalone `push_enum_eq`/`push_array_of_enum_eq`
-  variant-dispatch machinery with deferred interning.
+- Two capacity gotchas recurred (the tuple-of-struct failure mode, caught by the FULL gate, not a
+  spot check): `push_struct_eq_nested` grew past the 1536 op cap (fixed by factoring
+  `push_nested_enum_loop`), and two per-chunk-op scan loops in `analyze.kel` were still bounded at
+  1024 (the tuple-of-struct sweep raised the op-table arrays but missed these — raised to 1536).
+  A future increment that grows a codegen chunk should check BOTH the op-table cap AND the analyze
+  scan-loop bounds.
+- The nested enum field interns its pool EAGERLY (replaying `push_enum_eq`'s order), which works only
+  because `s1 == s2` has no literal operand. A construct WITH a literal composite operand would need
+  the deferred path.
 
-## Next step (the next session resumes here)
+## Next step
 
-Execute Commits B, C, D from `docs/decisions/ENUM_IN_STRUCT_PLAN.md` — they are coupled and only
-pass together (the enum test spans all three stages):
-
-- **B (parse):** `struct_eq_kind` admits an enum field (guard on `sd_fenum > 0`; do NOT call
-  `enum_eq_supported`, which clobbers `sq_scan` — inline the scalar-only-payload scan); a phase-0
-  enum arm emitting a variant-3 `StructEqNested` header with r2/l2 temps; a phase-1 enum sub-phase
-  emitting the variant-dispatch sub-stream (reuse records 49/52 with a context flag).
-- **C (reconstruct):** an `se_curvariant==3` context routing records 49/52 into `seb`; record 57
-  closes it. If `seb` overflows a many-variant enum, bump its capacity (like the 1024->1536
-  op-table raise); that is not a STOP.
-- **D (codegen):** a variant-3 stride and emit branch in `push_struct_eq_nested`, copying the inner
-  loop from `push_array_of_enum_eq`; guard the forward `intern_bool` pre-pass to SKIP variant-3
-  (deferred interning). Keep it inline so `EXPECTED_SELF_COMPILE` stays 68.
-
-Then: add `self_host_compiles_enum_in_struct_equality`, flip the `eq/enum_in_struct__GAP` boundary
-case (48 -> 49 Ok), verify byte-identity across the blast-radius suite, run the FULL
-`scripts/release-gate.sh` (the tuple-of-struct lesson), and on green fast-forward the branch into
-`v0.2.3`, push, and confirm CI green.
-
-## Why this session checkpointed here
-
-The loop's budget stop condition. This was a continued session (already compacted once) with
-elevated session-limit risk (earlier agents hit the "resets 4pm" cap mid-work). Commits B/C/D are
-~30-50 fragile edits in the most regression-prone machinery; attempting them in a fatigued context
-risked a botched, half-committed, non-byte-identical state. Landing the isolated-safe Commit A and
-persisting the complete plan leaves a clean, green, fully-resumable checkpoint. No operator decision
-is pending — the next session simply continues the loop.
+Continue the loop. The remaining nested-equality gaps are the harder tail (per the boundary test and
+the DESIGN_JOURNAL re-scout): 2-level nesting (`struct O { m: M }` where M has a composite field —
+needs the streaming machine to recurse, rated extreme), struct-of-array-of-struct (an intentional
+`struct_eq_kind` defer), and enum-with-struct-payload. Per the task-ordering policy, the loop should
+next weigh a same-context nested-equality gap against switching workstreams (for example wiring the
+self-hosted stages into the shipping binary, Workstream A's highest-leverage residual). If every
+remaining same-context gap needs a genuine design decision (not merely deep work), that is a Stop —
+surface the options to the operator rather than pick unilaterally.

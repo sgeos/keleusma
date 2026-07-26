@@ -17,26 +17,42 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-07-25 (session 33)
 
-**AUTONOMY-LOOP INCREMENT 2 (2026-07-25): ENUM-IN-STRUCT EQUALITY — STARTED, Commit A landed byte-identically.**
-The loop selected enum-in-struct as the next task without an operator prompt, per the newly-committed
-task-ordering policy (context-switching-avoidance first: it stays inside the just-touched nested-equality
-machinery). A Plan agent mapped the full reference lowering and edit-level recipe, persisted to
-[`docs/decisions/ENUM_IN_STRUCT_PLAN.md`](../decisions/ENUM_IN_STRUCT_PLAN.md). Planning found NO STOP condition:
+**AUTONOMY-LOOP INCREMENT 2 (2026-07-25): ENUM-IN-STRUCT EQUALITY self-compiles byte-identically. COMPLETE, full gate GREEN, merged.**
+The loop selected enum-in-struct as the next task without an operator prompt, per the task-ordering
+policy (context-switching-avoidance first: it stayed inside the just-touched nested-equality machinery). A Plan
+agent mapped the full reference lowering and edit-level recipe, persisted to
+[`docs/decisions/ENUM_IN_STRUCT_PLAN.md`](../decisions/ENUM_IN_STRUCT_PLAN.md). NO STOP condition materialized:
 no new opcode, no `BYTECODE_VERSION` bump, no new record/node kind. The nested variant tag 3 (Enum) rides the
 existing 2-bit variant field of record 56, and the driver already decodes op-48 variant tag 3 ->
-`CompositeKind::Enum`. The construct reuses the standalone `push_enum_eq` / `push_array_of_enum_eq`
-variant-dispatch machinery (deferred interning), composed under the `push_struct_eq_nested` top-level field loop,
-exactly as the Rust reference composes `emit_composite_fieldwise_eq` with `emit_enum_fieldwise_eq`.
-**Commit A (cadd13e) is landed and verified byte-identical**: the `sd_fenum` tracker (enum NAME id + 1) added to
-`structdefs` and populated in `field_size_and_kind`; nothing reads it yet, so all five whole-stage self-compiles,
-the full nested-equality suite, and the boundary test pass unchanged (24 tests green). **Commits B (parse detector
-+ variant-dispatch streaming), C (reconstruct `seb` assembly), and D (codegen inner loop) remain; they are coupled
-and only pass together.** This is the very-high-effort part (~30-50 edits in the most regression-prone machinery),
-deferred to the next session under the loop's budget stop condition (this was a continued/fatigued session with
-elevated session-limit risk). The next session executes B+C+D from the persisted plan, verifies via
-`KEL_SELFHOST_CACHE=1 scripts/fast-check.sh 'test(self_host_compiles_enum_in_struct_equality)'`, runs the FULL
-`scripts/release-gate.sh` before claiming complete (the tuple-of-struct lesson: a spot check misses op-table
-capacity regressions), and on green merges to `v0.2.3`. Target boundary: 48 -> 49 Ok, 6 -> 5 Gap.
+`CompositeKind::Enum`. `s1 == s2` where a struct field is an enum now lowers byte-identically to the reference's
+`emit_composite_fieldwise_eq` composed with `emit_enum_fieldwise_eq`: the enum field extracts via
+GetField(FlatNested{Enum}) into fresh temps, then a variant-dispatch inner loop (mirroring the standalone
+`push_enum_eq`) compares, negated to break the outer loop on inequality.
+
+Implemented as four commits. **A (cadd13e)**: the `sd_fenum` tracker (enum NAME id + 1) in `structdefs`, byte-identical
+alone. **B (parse, in d11e203)**: `struct_eq_kind` admits an enum field (scalar-only-payload scan inlined to avoid
+the `enum_eq_supported`/`sq_scan` clobber); a phase-0 variant-3 header; a phase-1 enum sub-drain emitting
+EnumEqVariant (ename packed at bit 30) / EnumEqField records over parallel `se_e*` state (the standalone drain's
+`sq_field`/`sq_count`/`eq_*` belong to the top-level cursor, hence parallel accumulators). **C (reconstruct)**: a
+variant-3 context routes records 49/52 into the `seb` layout `[1, off, size, 3, r2, l2, ename, vcount, per variant:
+vname, disc, fcount, fcount*(off, kind)]`, backpatching vcount at StructEqNestedEnd. **D (codegen)**: a variant-3
+stride and emit branch, the inner loop factored into `push_nested_enum_loop`.
+
+KEY DESIGN INSIGHT: the enum inner loop's constants are interned EAGERLY (replaying `push_enum_eq`'s exact order in
+the pre-pass), NOT deferred. `intern_int`/`intern_str`/`intern_bool` share one pool index space, so eager consts
+always precede deferred ones; the reference builds one pool in forward-emission order where the first field's consts
+come first. Because `s1 == s2` has no literal operands, deferral (needed only for a literal `E::A()` operand) is
+unnecessary, so eager replay reproduces the reference pool order exactly and composes with the struct-eq
+pre-interned false/true. GOTCHAS (both the tuple-of-struct failure mode, caught by the FULL gate not a spot check):
+`push_struct_eq_nested` grew to 1826 ops (over the 1536 cap) -> factored `push_nested_enum_loop` out
+(`EXPECTED_SELF_COMPILE` 68 -> 69); and two per-chunk-op scan loops in `analyze.kel` (`trace_const`, the for-limit
+body scan) were still bounded at 1024 -> raised to 1536 (the tuple-of-struct sweep raised the op-table arrays but
+missed these scan loops). Boundary 48 -> 49 Ok, 6 -> 5 Gap. Verified byte-identical: the new
+`self_host_compiles_enum_in_struct_equality` (unit/payload, `==`/`!=`, nonzero offset, beside a nested struct), all
+five whole-stage self-compiles, the full nested-equality blast-radius suite, `validate_module_via_kel`, and the
+boundary; then the FULL `scripts/release-gate.sh` GREEN (feature matrix, docs -D warnings, the detached subproject).
+The remaining nested-equality gaps (2-level nesting, struct-of-array-of-struct, enum-with-struct-payload) are the
+harder tail; see the re-scout.
 
 **AUTONOMY-LOOP INCREMENT 1 (2026-07-25): TUPLE-OF-STRUCT EQUALITY self-compiles byte-identically.** The first
 increment driven by the autonomous loop (`AUTONOMOUS_IMPLEMENTATION_LOOP.md`), run in the
