@@ -1984,8 +1984,10 @@ fn self_compile_codegen_atomic_functions() {
     // for the unary bitwise-NOT operator (`bnot a` = `a bxor -1`); 66 with `push_byte_bnot` for the
     // Byte-operand `bnot` (promote-operate-truncate); 67 with `push_array_of_array_eq` for
     // array-of-array equality (`[[T; N]; M] == [[T; N]; M]`); 68 with `push_andor` for the eager
-    // boolean `and`/`or` operators.
-    const EXPECTED_SELF_COMPILE: usize = 68;
+    // boolean `and`/`or` operators; 69 with `push_nested_enum_loop`, the variant-dispatch inner loop
+    // for a nested enum field of a struct (factored out of `push_struct_eq_nested` to stay under the
+    // op-table capacity).
+    const EXPECTED_SELF_COMPILE: usize = 69;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -6948,6 +6950,33 @@ fn self_host_compiles_tuple_of_struct_equality() {
     assert_self_host_byte_identical("fn f(a: (Word, Word), b: (Word, Word)) -> bool { a == b }");
 }
 
+/// Enum-in-struct nested equality self-compiles byte-identically: a struct with an enum-typed field
+/// extracts it (FlatNested variant Enum, op 48) into fresh temps and compares them with a
+/// variant-dispatch inner loop (mirroring the standalone enum-eq), then negates to break the outer
+/// loop on inequality. The enum sub-stream rides EnumEqVariant/EnumEqField records routed into the
+/// `seb` layout under a variant-3 nested context, and the enum inner loop's constants are interned
+/// eagerly (replaying `push_enum_eq`'s order) so they compose with the struct-eq pre-interned
+/// false/true. Covers `==`/`!=`, unit-only and scalar-payload variants, a nonzero enum-field offset,
+/// and an enum field beside a nested struct.
+#[test]
+fn self_host_compiles_enum_in_struct_equality() {
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nstruct S { e: E, w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nstruct S { e: E, w: Word }\nfn f(a: S, b: S) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B(Word) }\nstruct S { e: E, w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B(Word) }\nstruct S { w: Word, e: E }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nstruct Q { a: Word }\nstruct S { q: Q, e: E }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+}
+
 /// Array-in-struct nested equality self-compiles byte-identically: a struct with a scalar-array
 /// field extracts it (FlatNested variant Array) into fresh temps and compares elements with a
 /// per-element GetIndex inner loop. The element index constants interleave with the false/true bools
@@ -7445,12 +7474,12 @@ fn self_hosted_construct_support_boundary() {
             SOk,
             "struct S { a: [Word;2], w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
         ),
-        // --- composite equality: pinned GAPS (nested-machinery frontier) ---------
         (
-            "eq/enum_in_struct__GAP",
-            Gap,
+            "eq/enum_in_struct",
+            SOk,
             "enum E { A, B }\nstruct S { e: E, w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
         ),
+        // --- composite equality: pinned GAPS (nested-machinery frontier) ---------
         (
             "eq/tuple_of_struct",
             SOk,

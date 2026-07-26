@@ -1808,6 +1808,65 @@ fn push_array_of_enum_eq(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
+// Emit the variant-dispatch inner loop for a nested ENUM field of a struct-eq-nested, over the
+// extracted temps l2 (left) / r2 (right). Factored out of `push_struct_eq_nested` to keep that
+// chunk under the op-table capacity. Mirrors `push_enum_eq` op-for-op with l2/r2 in place of ta/tb
+// and EAGER interning (the caller's pre-pass replayed the pool order), so it composes with the
+// struct-eq pre-interned false/true. seb variant layout at foff:
+// [1, off, size, 3, r2, l2, ename, vcount, per variant: vname, disc, fcount, fcount*(off, kind)].
+fn push_nested_enum_loop(foff: Word, l2: Word, r2: Word, false_idx: Word, true_idx: Word) -> Word {
+    let ename = ast.match_parts[foff + 6];
+    let vcount = ast.match_parts[foff + 7];
+    st.eq_cur = foff + 8;
+    for v in 0..vcount limit 64 {
+        st.eq_voff[v] = st.eq_cur;
+        let fc = ast.match_parts[st.eq_cur + 2];
+        st.eq_cur = st.eq_cur + 3 + fc * 2;
+    }
+    push_emit(wire.mendloop);
+    push_emit(wire.trap + 4 * wire.radix);
+    for vj in 0..vcount limit 64 {
+        let v = vcount - 1 - vj;
+        let voff = st.eq_voff[v];
+        let vname = ast.match_parts[voff];
+        let disc = ast.match_parts[voff + 1];
+        let fcount = ast.match_parts[voff + 2];
+        let isen = wire.isenum + (intern_str(ename) + intern_str(vname) * 1024 + intern_int(disc) * 1048576) * wire.radix;
+        push_emit(wire.popn + 1 * wire.radix);
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_emit(wire.konst + false_idx * wire.radix);
+        push_emit(wire.popn + 1 * wire.radix);
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_emit(wire.konst + true_idx * wire.radix);
+        for fj in 0..fcount limit 32 {
+            let f = fcount - 1 - fj;
+            let off = ast.match_parts[voff + 3 + f * 2];
+            let kind = ast.match_parts[voff + 3 + f * 2 + 1];
+            push_emit(wire.mendif);
+            push_emit(wire.mbreak);
+            push_emit(wire.konst + false_idx * wire.radix);
+            push_emit(wire.mif);
+            push_emit(wire.lnot);
+            push_emit(wire.cmpeq);
+            push_emit(wire.getenumfield + (off + kind * 65536) * wire.radix);
+            push_emit(wire.getlocal + r2 * wire.radix);
+            push_emit(wire.getenumfield + (off + kind * 65536) * wire.radix);
+            push_emit(wire.getlocal + l2 * wire.radix);
+        }
+        push_emit(wire.popn + 1 * wire.radix);
+        push_emit(wire.mif);
+        push_emit(isen);
+        push_emit(wire.getlocal + r2 * wire.radix);
+        push_emit(wire.popn + 1 * wire.radix);
+        push_emit(wire.mif);
+        push_emit(isen);
+        push_emit(wire.getlocal + l2 * wire.radix);
+    }
+    push_emit(wire.mloop)
+}
+
 // StructEqNestedNode (kind 59): a `struct == struct` (or `!=`) where a field is a nested struct.
 // match_parts holds [ta, tb, topcount, <tagged top-level fields>, is_ne]: a scalar field is
 // [0, offset, kind]; a nested-struct field is [1, ext_off, ext_size, variant, r2, l2, subcount,
@@ -1833,8 +1892,18 @@ fn push_struct_eq_nested(p: Word) -> Word {
             if ast.match_parts[st.se_cur + 3] == 1 {
                 st.se_cur = st.se_cur + 8;
             } else {
+            if ast.match_parts[st.se_cur + 3] == 3 {
+                // Enum field: header(6) + ename + vcount = 8, then per variant 3 + fcount*2.
+                let vc = ast.match_parts[st.se_cur + 7];
+                st.eq_cur = st.se_cur + 8;
+                for v in 0..vc limit 64 {
+                    let fc = ast.match_parts[st.eq_cur + 2];
+                    st.eq_cur = st.eq_cur + 3 + fc * 2;
+                }
+                st.se_cur = st.eq_cur;
+            } else {
                 st.se_cur = st.se_cur + 7 + ast.match_parts[st.se_cur + 6] * 2;
-            }
+            } }
         }
     }
     let is_ne = ast.match_parts[st.se_cur];
@@ -1858,9 +1927,32 @@ fn push_struct_eq_nested(p: Word) -> Word {
                 intern_bool(0);
                 intern_bool(1);
             } else {
+            if ast.match_parts[foff + 3] == 3 {
+                // Enum field: replay the variant-dispatch inner loop's constant order EAGERLY so the
+                // pool matches the reference (no literal operand occurs in `s1 == s2`, so deferral is
+                // unneeded). Per variant: the IsEnum triple (ename, vname, disc), then per scalar
+                // payload field a false, then true, then false -- exactly `push_enum_eq`'s emission.
+                let ename = ast.match_parts[foff + 6];
+                let vc = ast.match_parts[foff + 7];
+                st.eq_cur = foff + 8;
+                for v in 0..vc limit 64 {
+                    let vname = ast.match_parts[st.eq_cur];
+                    let disc = ast.match_parts[st.eq_cur + 1];
+                    let fc = ast.match_parts[st.eq_cur + 2];
+                    intern_str(ename);
+                    intern_str(vname);
+                    intern_int(disc);
+                    for fj in 0..fc limit 32 {
+                        intern_bool(0);
+                    }
+                    intern_bool(1);
+                    intern_bool(0);
+                    st.eq_cur = st.eq_cur + 3 + fc * 2;
+                }
+            } else {
                 intern_bool(0);
                 intern_bool(1);
-            }
+            } }
         }
     }
     let false_idx = intern_bool(0);
@@ -1920,6 +2012,11 @@ fn push_struct_eq_nested(p: Word) -> Word {
             push_emit(wire.konst + false_idx * wire.radix);
             push_emit(wire.mif);
             push_emit(wire.lnot);
+            if variant == 3 {
+                // Enum field: the variant-dispatch inner loop, factored into `push_nested_enum_loop`
+                // to keep this chunk under the op-table capacity.
+                push_nested_enum_loop(foff, l2, r2, false_idx, true_idx);
+            } else {
             push_emit(wire.mendloop);
             push_emit(wire.mbreak);
             push_emit(wire.konst + true_idx * wire.radix);
@@ -1960,6 +2057,7 @@ fn push_struct_eq_nested(p: Word) -> Word {
                 }
             }
             push_emit(wire.mloop);
+            }
             push_emit(wire.setlocal + l2 * wire.radix);
             push_emit(wire.setlocal + r2 * wire.radix);
             push_emit(topnestacc + extp * wire.radix);

@@ -209,7 +209,7 @@ fn trace_const(before_ip: Word, target_slot: Word) -> Word {
     an.trace_done = 0;
     // Scan backward; the first SetLocal(target_slot) is the most recent. `trace_done` stops
     // processing at it (an early `break` is avoided to stay in the self-compiling subset).
-    for k in 0..before_ip limit 1024 {
+    for k in 0..before_ip limit 1536 {
         if an.trace_done == 0 {
             let ip = before_ip - 1 - k;
             if wa.opk[ip] == 2 andalso wa.slot[ip] == target_slot {
@@ -240,7 +240,7 @@ fn advances_induction(loop_ip: Word, var_slot: Word, end_slot: Word) -> Word {
             } else {
                 an.vsets = 0;
                 an.bad = 0;
-                for k in 0..(endloop - body) limit 1024 {
+                for k in 0..(endloop - body) limit 1536 {
                     let ip = body + k;
                     if wa.opk[ip] == 2 {
                         if wa.slot[ip] == end_slot {

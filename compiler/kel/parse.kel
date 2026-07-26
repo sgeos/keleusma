@@ -643,6 +643,23 @@ private data stmt {
     // than a struct; 0 for a struct container. Rides `is_tuple*2097152` in the StructEqNestedBuild
     // record. The inner sub-field drain is unaffected (a struct element's sub-fields stay `sd_*`).
     se_istuple_container: Word,
+    // Nested ENUM field drain state (parallel accumulators, since the standalone enum-eq drain's
+    // `sq_field`/`sq_count`/`eq_*` belong to the top-level nested cursor). `se_subisenum` 1 while
+    // draining a nested enum field; `se_eename` the enum name id (for the IsEnum operand);
+    // `se_estart`/`se_ecount`/`se_ecur` the variant-row start, count, and cursor; `se_ephase` 1 while
+    // draining a variant's scalar payload fields; `se_efstart`/`se_efcount`/`se_efcur` that field
+    // sub-cursor. The drain emits an EnumEqVariant (49, ename packed in) per variant then an
+    // EnumEqField (52) per scalar payload field, which reconstruct routes into `seb` under the
+    // variant-3 nested context.
+    se_subisenum: Word,
+    se_eename: Word,
+    se_estart: Word,
+    se_ecount: Word,
+    se_ecur: Word,
+    se_ephase: Word,
+    se_efstart: Word,
+    se_efcount: Word,
+    se_efcur: Word,
     pending_ctuple: Word,
     pending_cstruct: Word,
     pending_carray: Word,
@@ -2227,7 +2244,23 @@ fn struct_eq_kind(idx: Word) -> Word {
                     stmt.sq_scan = 0;
                 }
             }
-        } } }
+        } else {
+        if structdefs.sd_fenum[fidx] > 0 {
+            // Enum field: nested-supported when every variant payload is scalar (a composite payload,
+            // sentinel kind >= 100, defers). Inlined here rather than via `enum_eq_supported` because
+            // that helper also writes `sq_scan`; this only ever sets it 0, preserving the accumulator.
+            stmt.sq_found = 1;
+            let en = structdefs.sd_fenum[fidx] - 1;
+            for i in 0..enums.enum_count limit 256 {
+                if enums.edata[i] == en {
+                    for fj in 0..enums.evfcount[i] limit 32 {
+                        if enums.evfkind[enums.evfstart[i] + fj] >= 100 {
+                            stmt.sq_scan = 0;
+                        }
+                    }
+                }
+            }
+        } } } }
     }
     if stmt.sq_scan == 0 {
         0
@@ -2330,6 +2363,7 @@ fn struct_eq_nested_start_kind(op: Word, is_tuple: Word) -> Word {
     };
     stmt.sq_field = 0;
     stmt.se_phase = 0;
+    stmt.se_subisenum = 0;
     structeq_nested_next()
 }
 
@@ -2338,6 +2372,32 @@ fn struct_eq_nested_start_kind(op: Word, is_tuple: Word) -> Word {
 // StructEqNestedField records then a StructEqNestedEnd; finally the StructEqNestedBuild.
 fn structeq_nested_next() -> Word {
     if stmt.se_phase == 1 {
+        if stmt.se_subisenum == 1 {
+            // Draining a nested ENUM field: for each variant emit an EnumEqVariant (with the enum
+            // name packed at bit 30 so reconstruct records it once), then that variant's scalar
+            // payload EnumEqField records, then a StructEqNestedEnd. Mirrors the standalone
+            // `enumeq_variant_record`/`step_enumeq_emit` drain but over the parallel `se_e*` state.
+            if stmt.se_ephase == 1 andalso stmt.se_efcur < stmt.se_efcount {
+                let fi = stmt.se_efstart + stmt.se_efcur;
+                stmt.se_efcur = stmt.se_efcur + 1;
+                Node::EnumEqField() as Word + (enums.evfoff[fi] + enums.evfkind[fi] * 65536) * 64
+            } else {
+                if stmt.se_ecur < stmt.se_ecount {
+                    let row = stmt.se_estart + stmt.se_ecur;
+                    stmt.se_efcount = enums.evfcount[row];
+                    stmt.se_efstart = enums.evfstart[row];
+                    stmt.se_efcur = 0;
+                    stmt.se_ephase = 1;
+                    stmt.se_ecur = stmt.se_ecur + 1;
+                    Node::EnumEqVariant() as Word + (enums.evar[row] + enums.edisc[row] * 65536 + enums.evfcount[row] * 16777216 + stmt.se_eename * 1073741824) * 64
+                } else {
+                    stmt.se_subisenum = 0;
+                    stmt.se_phase = 0;
+                    stmt.sq_field = stmt.sq_field + 1;
+                    Node::StructEqNestedEnd() as Word
+                }
+            }
+        } else {
         if stmt.se_subcur < stmt.se_subcount {
             let fidx = stmt.se_substart + stmt.se_subcur;
             stmt.se_subcur = stmt.se_subcur + 1;
@@ -2354,7 +2414,7 @@ fn structeq_nested_next() -> Word {
             stmt.se_phase = 0;
             stmt.sq_field = stmt.sq_field + 1;
             Node::StructEqNestedEnd() as Word
-        }
+        } }
     } else {
         if stmt.sq_field < stmt.sq_count {
             if stmt.se_istuple_container == 1 {
@@ -2427,9 +2487,35 @@ fn structeq_nested_next() -> Word {
                 // A nested tuple field extracts with FlatNested variant Tuple (0).
                 Node::StructEqNested() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fsize[fidx] * 65536 + r2 * 17179869184 + l2 * 17592186044416) * 64
             } else {
+            if structdefs.sd_fenum[fidx] > 0 {
+                let en = structdefs.sd_fenum[fidx] - 1;
+                let r2 = ps.pcount + stmt.slot_count;
+                stmt.slot_count = stmt.slot_count + 1;
+                let l2 = ps.pcount + stmt.slot_count;
+                stmt.slot_count = stmt.slot_count + 1;
+                // The enum's variant rows are contiguous; the first match sets the start row.
+                stmt.se_estart = 0;
+                stmt.se_ecount = 0;
+                for i in 0..enums.enum_count limit 256 {
+                    if enums.edata[i] == en {
+                        if stmt.se_ecount == 0 {
+                            stmt.se_estart = i;
+                        }
+                        stmt.se_ecount = stmt.se_ecount + 1;
+                    }
+                }
+                stmt.se_eename = en;
+                stmt.se_ecur = 0;
+                stmt.se_ephase = 0;
+                stmt.se_subisenum = 1;
+                stmt.se_phase = 1;
+                // A nested enum field extracts the whole enum body with FlatNested variant Enum (3);
+                // the variant-dispatch sub-stream follows as EnumEqVariant/EnumEqField records.
+                Node::StructEqNested() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fsize[fidx] * 65536 + 3 * 4294967296 + r2 * 17179869184 + l2 * 17592186044416) * 64
+            } else {
                 stmt.sq_field = stmt.sq_field + 1;
                 Node::StructEqNestedField() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fkind[fidx] * 65536) * 64
-            } } } }
+            } } } } }
         } else {
             stmt.structeq_nested = 0;
             Node::StructEqNestedBuild() as Word + (stmt.sq_ta + stmt.sq_tb * 1024 + stmt.sq_ne * 1048576 + stmt.se_istuple_container * 2097152) * 64
