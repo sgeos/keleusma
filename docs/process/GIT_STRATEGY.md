@@ -43,8 +43,14 @@ integration trunk, and feature integration uses merge commits, not rebase-to-lin
 
 - **Cut from the active version branch.** Naming convention `<scope>/<short-description>` (for
   example `feat/selfhost-nested-eq`, `fix/parser-error-recovery`).
-- **Intermediate commits may be red** — a feature branch is a workspace, and work-in-progress
-  commits need not each pass the gate.
+- **Intermediate commits may be red.** A feature branch is a workspace. A session may take several
+  commits, passing through red states, to converge on a working approach; only the branch **tip at
+  merge** must be green. Nothing on the branch is load-bearing until it merges, so a session should
+  commit freely to checkpoint work rather than hold a single large uncommitted change.
+- **Abandoning the branch is an acceptable outcome, not a failure.** If an approach does not
+  converge, discard the branch (delete it unmerged) and start a new one rather than force an unsound
+  approach to green. The version branch is only ever touched by green merges, so a dead-end feature
+  branch costs nothing but the branch itself. This is the worst case, and it is a normal one.
 - **Must be all-green before merging back** into the version branch (a green
   `scripts/release-gate.sh`).
 - Merge via a **no-fast-forward merge commit**, so the version branch's first-parent history stays

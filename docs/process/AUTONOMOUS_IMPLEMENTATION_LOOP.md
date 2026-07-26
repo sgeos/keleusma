@@ -115,7 +115,11 @@ writes the question into `REVERSE_PROMPT.md` when:
   a high node kind, the pattern array-of-enum used. If genuinely impossible, escalate with
   the options.
 - **The oracle diverges and two or three bounded attempts do not resolve it.** Record the
-  first differing op or offset and stop, rather than thrashing.
+  first differing op or offset and stop, rather than thrashing. Discarding the feature branch
+  (deleting it unmerged) and re-cutting a fresh one for a different approach is the expected,
+  acceptable move — `v0.2.3` only ever sees green merges, so an abandoned branch costs nothing but
+  itself. Do not force an unsound approach to green; abandon and re-approach, or surface the
+  divergence to the operator (see [GIT_STRATEGY.md](./GIT_STRATEGY.md#feature-branches)).
 - **The full gate goes red for a reason not attributable to the current increment**
   (pre-existing breakage), or the change would touch the shared inter-stage protocol or the
   runtime wire format, which couples stages and must be a single coordinated change.
