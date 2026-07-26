@@ -5845,22 +5845,22 @@ const WA_ARENA_CAPACITY: usize = 5;
 const WA_REGION_START: usize = 6;
 const WA_REGION_END: usize = 7;
 const WA_COST: usize = 8;
-const WA_CLASS: usize = 8 + 1024;
-const WA_ARG: usize = 8 + 1024 * 2;
-const WA_GROWTH: usize = 8 + 1024 * 3;
-const WA_SHRINK: usize = 8 + 1024 * 4;
-const WA_HEAP: usize = 8 + 1024 * 5;
-const WA_OPK: usize = 8 + 1024 * 6;
-const WA_SLOT: usize = 8 + 1024 * 7;
-const WA_CVAL: usize = 8 + 1024 * 8;
-const WA_CINT: usize = 8 + 1024 * 9;
-const WA_CALLEE_SLOTS: usize = 8 + 1024 * 10;
-const WA_CALLEE_HEAP: usize = 8 + 1024 * 11;
-const WA_OUT_WCET: usize = 8 + 1024 * 12;
-const WA_OUT_STACK: usize = 8 + 1024 * 12 + 1;
-const WA_OUT_HEAP: usize = 8 + 1024 * 12 + 2;
-const WA_OUT_REJECT: usize = 8 + 1024 * 12 + 3;
-const WA_OUT_VALID: usize = 8 + 1024 * 12 + 4;
+const WA_CLASS: usize = 8 + 1536;
+const WA_ARG: usize = 8 + 1536 * 2;
+const WA_GROWTH: usize = 8 + 1536 * 3;
+const WA_SHRINK: usize = 8 + 1536 * 4;
+const WA_HEAP: usize = 8 + 1536 * 5;
+const WA_OPK: usize = 8 + 1536 * 6;
+const WA_SLOT: usize = 8 + 1536 * 7;
+const WA_CVAL: usize = 8 + 1536 * 8;
+const WA_CINT: usize = 8 + 1536 * 9;
+const WA_CALLEE_SLOTS: usize = 8 + 1536 * 10;
+const WA_CALLEE_HEAP: usize = 8 + 1536 * 11;
+const WA_OUT_WCET: usize = 8 + 1536 * 12;
+const WA_OUT_STACK: usize = 8 + 1536 * 12 + 1;
+const WA_OUT_HEAP: usize = 8 + 1536 * 12 + 2;
+const WA_OUT_REJECT: usize = 8 + 1536 * 12 + 3;
+const WA_OUT_VALID: usize = 8 + 1536 * 12 + 4;
 
 fn analyze_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
@@ -5992,7 +5992,12 @@ fn run_analyze_kel(
         }
         BlockType::Func | BlockType::Reentrant => (0, chunk.ops.len(), 0, 0),
     };
-    assert!(chunk.ops.len() <= 1024, "analyze.kel op-table capacity");
+    assert!(
+        chunk.ops.len() <= 1536,
+        "analyze.kel op-table capacity: chunk `{}` has {} ops",
+        chunk.name,
+        chunk.ops.len()
+    );
     let m = analyze_kel_module();
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
