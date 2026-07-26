@@ -6,7 +6,18 @@ Working plan for the next self-hosted-compiler nested-equality increment: `a == 
 enum variant carries a STRUCT payload, for example `struct P { x: Word }`, `enum E { A(P), B }`.
 It flips the `eq/enum_struct_payload__GAP` boundary case (49 Ok / 5 Gap becomes 50 Ok / 4 Gap).
 
-Status: **SCOUTED, verdict BOUNDED — not started.** A Plan agent confirmed no design-decision
+Status: **COMPLETE — implemented, byte-identical.** Boundary moved 49 → 50 Ok (4 Gap / 1 RefRejects);
+`EXPECTED_SELF_COMPILE` 69 → 70 (the factored `push_enum_struct_payload_loop`). Two deliberate
+simplifications versus this scouted plan: (1) interning stayed DEFERRED (`push_bool`) rather than an
+eager pre-pass — `push_enum_eq` is uniformly deferred (unlike the fully-eager `push_struct_eq_nested`),
+so the inner struct loop's false/true follow forward-emission pool order for free and a literal operand
+is handled correctly too; (2) the subcount was streamed as its own record (packing the two extract
+temps r2/l2) rather than packed into the header, avoiding any high-bit record-transport risk. A
+dedicated `enum_eq_supported_wide` admits struct payloads on the standalone gate ONLY; the
+array-of-enum gate stays strictly scalar-only (no latent mis-compile). See the 2026-07-26
+DESIGN_JOURNAL entry.
+
+Original scouting (retained): A Plan agent confirmed no design-decision
 STOP: no new opcode, no `BYTECODE_VERSION` bump, no new record or node kind. This is the structural
 MIRROR of the completed enum-in-struct increment ([`ENUM_IN_STRUCT_PLAN.md`](./ENUM_IN_STRUCT_PLAN.md)):
 enum-in-struct put an inner enum-dispatch loop inside an outer struct-eq loop; this puts an inner

@@ -622,6 +622,22 @@ private data stmt {
     eq_fcur: Word,
     eq_fcount: Word,
     eq_fstart: Word,
+    // Enum-eq STRUCT-payload sub-drain: when a variant's payload field is a STRUCT (sentinel kind in
+    // [100, 30000)), its sub-fields stream as extra EnumEqField records -- first a raw subcount
+    // record, then one packed (sub_off + sub_kind*65536) per struct field. `eq_subphase` 1 = emit the
+    // subcount next, 2 = streaming the struct's sub-fields (0 = inactive); `eq_subcur`/`eq_subcount`
+    // the sub-field cursor and count; `eq_substruct` the struct's declaration index. Held one level
+    // deep only (a struct payload whose own field is composite defers, per `enum_eq_supported_wide`).
+    eq_subphase: Word,
+    eq_subcur: Word,
+    eq_subcount: Word,
+    eq_substruct: Word,
+    // The two fresh extract temps (`eq_subr2` first, then `eq_subl2`, matching the reference's
+    // `r2 = declare_local; l2 = declare_local` order) allocated for the current struct-payload field.
+    // Slots grow monotonically (the reference's `next_slot` is never rewound by `end_scope`), so each
+    // variant's struct-payload field gets a fresh pair. Carried in the subcount record for codegen.
+    eq_subr2: Word,
+    eq_subl2: Word,
     // Nested struct-eq drain state. `se_phase` 1 while draining a nested field's scalar sub-fields;
     // `se_subcur`/`se_subcount`/`se_substart` the sub-field cursor, count, and first row (in
     // structdefs) of the nested struct; `se_r2`/`se_l2` the two fresh temps allocated for it.
@@ -2542,6 +2558,39 @@ fn enum_eq_supported(ename: Word) -> Word {
     stmt.sq_scan
 }
 
+// Whether the named enum is supported by the standalone `enum == enum` path WITH one-level STRUCT
+// payloads admitted. A scalar payload (kind < 100) qualifies as in `enum_eq_supported`; a STRUCT
+// payload (sentinel kind in [100, 30000)) qualifies only when the payload struct is one level deep
+// (every sub-field scalar) -- a composite sub-field, or a TUPLE (30000+) / ARRAY (40000+) payload,
+// still defers to the ordinary operator path. Used ONLY by the standalone gate; the array-of-enum
+// gate keeps the strict scalar-only `enum_eq_supported` (its drain cannot lower struct payloads).
+fn enum_eq_supported_wide(ename: Word) -> Word {
+    stmt.sq_scan = 1;
+    for i in 0..enums.enum_count limit 256 {
+        if enums.edata[i] == ename {
+            for fj in 0..enums.evfcount[i] limit 32 {
+                let k = enums.evfkind[enums.evfstart[i] + fj];
+                if k >= 30000 {
+                    // TUPLE (30000+) or ARRAY (40000+) payload: defer.
+                    stmt.sq_scan = 0;
+                } else {
+                    if k >= 100 {
+                        // STRUCT payload: one level deep only. Reject if any sub-field is composite.
+                        let s = enums.evfstruct[enums.evfstart[i] + fj] - 1;
+                        for g in 0..structdefs.sd_fcount[s] limit 64 {
+                            let gidx = structdefs.sd_fstart[s] + g;
+                            if structdefs.sd_fstruct[gidx] > 0 orelse structdefs.sd_ftuple[gidx] > 0 orelse structdefs.sd_farraylen[gidx] > 0 orelse structdefs.sd_fenum[gidx] > 0 {
+                                stmt.sq_scan = 0;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    stmt.sq_scan
+}
+
 // Begin an `enum == enum` lowering (both operands are whole enum values): allocate the two
 // comparison temps, find the enum's contiguous variant rows, arm the drain, and return variant 0's
 // EnumEqVariant record. `step_enumeq_emit` continues with the remaining variants then EnumEqBuild.
@@ -2580,6 +2629,7 @@ fn enum_eq_start(op: Word) -> Word {
     stmt.enumeq_emit = 1;
     stmt.sq_ename = ename;
     stmt.sq_field = 0;
+    stmt.eq_subphase = 0;
     enumeq_variant_record()
 }
 
@@ -2642,16 +2692,56 @@ fn enumeq_variant_record() -> Word {
     stmt.eq_fstart = enums.evfstart[row];
     stmt.eq_fcur = 0;
     stmt.eq_phase = 1;
+    stmt.eq_subphase = 0;
     Node::EnumEqVariant() as Word + (enums.evar[row] + enums.edisc[row] * 65536 + enums.evfcount[row] * 16777216) * 64
 }
 
 // Drain the enum-eq marker stream: for each variant, its EnumEqVariant record then one EnumEqField
 // per scalar payload field, then (all variants done) the EnumEqBuild.
 fn step_enumeq_emit() -> Word {
+    if stmt.eq_phase == 1 andalso stmt.eq_subphase == 1 {
+        // A STRUCT-payload field's header was just emitted; emit the raw subcount record next, then
+        // either arm the sub-field stream (subcount > 0) or advance past the field (empty struct).
+        if stmt.eq_subcount == 0 {
+            stmt.eq_subphase = 0;
+            stmt.eq_fcur = stmt.eq_fcur + 1;
+        } else {
+            stmt.eq_subphase = 2;
+            stmt.eq_subcur = 0;
+        }
+        // The subcount record also carries the two extract temps: subcount + r2*65536 + l2*2^32.
+        Node::EnumEqField() as Word + (stmt.eq_subcount + stmt.eq_subr2 * 65536 + stmt.eq_subl2 * 4294967296) * 64
+    } else {
+    if stmt.eq_phase == 1 andalso stmt.eq_subphase == 2 {
+        // Stream the payload struct's sub-fields, one packed (sub_off + sub_kind*65536) each. On the
+        // last sub-field, disarm the sub-drain and advance the top-level field cursor.
+        let s = structdefs.sd_fstart[stmt.eq_substruct] + stmt.eq_subcur;
+        stmt.eq_subcur = stmt.eq_subcur + 1;
+        if stmt.eq_subcur == stmt.eq_subcount {
+            stmt.eq_subphase = 0;
+            stmt.eq_fcur = stmt.eq_fcur + 1;
+        }
+        Node::EnumEqField() as Word + (structdefs.sd_foffset[s] + structdefs.sd_fkind[s] * 65536) * 64
+    } else {
     if stmt.eq_phase == 1 andalso stmt.eq_fcur < stmt.eq_fcount {
         let fi = stmt.eq_fstart + stmt.eq_fcur;
-        stmt.eq_fcur = stmt.eq_fcur + 1;
-        Node::EnumEqField() as Word + (enums.evfoff[fi] + enums.evfkind[fi] * 65536) * 64
+        if enums.evfkind[fi] >= 100 {
+            // STRUCT payload (sentinel kind in [100, 30000)): emit the field header now, then arm the
+            // sub-drain to stream the subcount and the struct's sub-fields. `eq_fcur` advances only
+            // after the last sub-field so the header/subcount/sub records stay contiguous. Allocate the
+            // two extract temps here (r2 then l2), matching the reference's declare_local order.
+            stmt.eq_substruct = enums.evfstruct[fi] - 1;
+            stmt.eq_subcount = structdefs.sd_fcount[stmt.eq_substruct];
+            stmt.eq_subr2 = ps.pcount + stmt.slot_count;
+            stmt.slot_count = stmt.slot_count + 1;
+            stmt.eq_subl2 = ps.pcount + stmt.slot_count;
+            stmt.slot_count = stmt.slot_count + 1;
+            stmt.eq_subphase = 1;
+            Node::EnumEqField() as Word + (enums.evfoff[fi] + enums.evfkind[fi] * 65536) * 64
+        } else {
+            stmt.eq_fcur = stmt.eq_fcur + 1;
+            Node::EnumEqField() as Word + (enums.evfoff[fi] + enums.evfkind[fi] * 65536) * 64
+        }
     } else {
         stmt.sq_field = stmt.sq_field + 1;
         if stmt.sq_field < stmt.sq_count {
@@ -2676,6 +2766,7 @@ fn step_enumeq_emit() -> Word {
             }
         }
     }
+    } }
 }
 
 // P11 Option E: Word `bnot`'s record. It sets `emit_arg = 0` so the two-word transport carries the
@@ -2734,7 +2825,7 @@ fn emit_op(op: Word) -> Word {
             tuple_eq_start(op)
         }
     } else {
-    if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_lenum[ops.opsp] > 0 andalso ps.last_enum > 0 andalso enum_eq_supported(ops.op_lenum[ops.opsp] - 1) == 1 {
+    if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_lenum[ops.opsp] > 0 andalso ps.last_enum > 0 andalso enum_eq_supported_wide(ops.op_lenum[ops.opsp] - 1) == 1 {
         enum_eq_start(op)
     } else {
     if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_lstruct[ops.opsp] > 0 andalso ps.last_struct > 0 andalso struct_eq_kind(ops.op_lstruct[ops.opsp] - 1) > 0 {

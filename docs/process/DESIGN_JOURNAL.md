@@ -15,7 +15,45 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 ## Last Updated
 
-**Date**: 2026-07-25 (session 33)
+**Date**: 2026-07-26 (session 34)
+
+**AUTONOMY-LOOP INCREMENT 3 (2026-07-26): ENUM-WITH-STRUCT-PAYLOAD EQUALITY self-compiles byte-identically. COMPLETE, full gate GREEN, merged.**
+The loop selected it without an operator prompt (context-switching-avoidance: it stayed inside the
+nested-equality machinery). `a == b` where an enum variant carries a STRUCT payload (`struct P { x: Word }`,
+`enum E { A(P), B }`) now lowers byte-identically to the reference `emit_enum_fieldwise_eq` composed with
+`emit_composite_fieldwise_eq`: the struct payload of each operand extracts via GetEnumField(FlatNested{Struct})
+(op 57) into two fresh temps, an inner struct-eq loop compares their scalar sub-fields, and the result negates
+to break the outer variant loop on inequality. This is the standalone-enum-eq (`push_enum_eq`) mirror of
+increment 2's enum-in-struct (which lived on `push_struct_eq_nested`). No new opcode, record, node kind, or
+`BYTECODE_VERSION` change; it reuses op 57 (variant tag 2) and the already-tracked `evfstruct` payload index.
+
+Implemented across parse/reconstruct/codegen plus test. **parse**: a dedicated `enum_eq_supported_wide` admits a
+one-level struct payload (sentinel kind [100, 30000), all sub-fields scalar) on the STANDALONE gate only — the
+array-of-enum gate keeps the strict scalar-only `enum_eq_supported`, since its drain cannot lower a struct
+payload (a deliberate no-latent-mis-compile choice). `step_enumeq_emit` gained a two-phase sub-drain: per
+struct-payload field it streams a header EnumEqField, then a subcount record packing the two extract temps
+r2/l2 (allocated monotonically, mirroring the reference's `next_slot` which `end_scope` never rewinds), then
+the struct's sub-fields. **reconstruct**: `build_enum_eq` lays a struct-payload field as
+[off, kind, subcount, r2, l2, subcount*(sub_off, sub_kind)]. **codegen**: `push_enum_eq` now walks a
+variable-length field list (a struct field is 5 + subcount*2 words), reserves two frame temps per struct field,
+and routes it to the new `push_enum_struct_payload_loop` (factored to stay under the 1536-op cap;
+`EXPECTED_SELF_COMPILE` 69 → 70).
+
+KEY DESIGN INSIGHT (differs from the scouted plan): the inner struct loop's false/true consts stayed DEFERRED
+(`push_bool`), NOT eager. The plan mirrored `push_struct_eq_nested`'s eager pre-pass, but that function is
+FULLY eager whereas `push_enum_eq` is uniformly DEFERRED (to let a literal `E::A()` operand intern first). Kept
+deferred, the inner loop's bools intern at forward-emission time and dedup into the reference's forward-order
+pool ("E", "A", Int(0), Bool(false), Bool(true), "B", Int(1)) with no pre-pass — and this composes correctly
+for scalar-beside-struct and `A(Word, P)` orderings, verified byte-identical. Second simplification: the subcount
+rode its own record rather than high-bit-packing into the header, sidestepping any record-transport ceiling
+concern. GOTCHA watch (both clean this time): the analyze.kel per-chunk-op scan loops stayed within 1536 (the
+inner loop was factored, so `push_enum_eq` did not balloon), and no op-table cap was hit. Boundary 49 → 50 Ok,
+5 → 4 Gap. Verified: the new `self_host_compiles_enum_struct_payload_equality` (single/multi-field payload,
+`==`/`!=`, struct-beside-scalar, `A(Word, P)`), all five whole-stage self-compiles, the full enum-equality
+blast-radius suite (12 tests), `validate_module_via_kel`, the boundary, and the codegen self-compile count;
+then the FULL `scripts/release-gate.sh`. The remaining nested-equality gaps (2-level nesting,
+struct-of-array-of-struct) are the harder tail — 2-level needs the streaming machine to recurse (rated
+extreme, likely a design-decision stop), struct-of-array-of-struct is an intentional `struct_eq_kind` defer.
 
 **AUTONOMY-LOOP INCREMENT 2 (2026-07-25): ENUM-IN-STRUCT EQUALITY self-compiles byte-identically. COMPLETE, full gate GREEN, merged.**
 The loop selected enum-in-struct as the next task without an operator prompt, per the task-ordering
