@@ -998,6 +998,10 @@ private data structdefs {
     // `; N`. With `sd_fkind` (the element kind) it lets `array == array`-style nested equality compare
     // the field element-wise. An array-of-composite field also sets `sd_fstruct`/`sd_ftuple`.
     sd_farraylen: [Word; 512],
+    // For an enum-typed field, the enum's NAME id plus one (0 otherwise), so a nested enum-field
+    // equality `s.e == s.e` can find the enum's variant rows (keyed on `enums.edata[i] == name`,
+    // as `enum_eq_start` does) and emit the variant-dispatch inner loop.
+    sd_fenum: [Word; 512],
     sd_fname_ctr: Word,
     sc_fieldpos: Word,
     sc_sp: Word,
@@ -4579,6 +4583,7 @@ fn field_size_and_kind(fidx: Word, v: Word) -> Word {
             for i in 0..enums.enum_count limit 256 {
                 if enums.edata[i] == v {
                     structdefs.sd_matchsz = enum_bytesize(v);
+                    structdefs.sd_fenum[fidx] = v + 1;
                 }
             }
         }
