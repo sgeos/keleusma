@@ -561,30 +561,18 @@ fn chunk_ids_from_tokens(tokens: &[(i64, i64)]) -> Vec<i64> {
 /// subproject-only sources stay in `compiler/kel/`. `rel` is a `kel/<name>.kel` path;
 /// only its basename is significant.
 fn read_stage(rel: &str) -> String {
+    // The ten Rust-read stage sources now live canonically in the parent `keleusma`
+    // crate at `src/selfhost/kel/`; `prelude.kel` (not read here) stays in
+    // `compiler/kel/`. Resolve from either the workspace root or the subproject
+    // directory (`../`). `rel` is a `kel/<name>.kel` path; only the basename matters.
     let base = rel.rsplit('/').next().unwrap_or(rel);
-    let relocated = matches!(
-        base,
-        "lexer.kel" | "parse.kel" | "reconstruct.kel" | "codegen.kel"
-    );
-    let candidates: [String; 6] = if relocated {
-        [
-            format!("src/selfhost/kel/{base}"),
-            format!("../src/selfhost/kel/{base}"),
-            format!("compiler/{rel}"),
-            rel.to_string(),
-            format!("kel/{base}"),
-            format!("compiler/kel/{base}"),
-        ]
-    } else {
-        [
-            format!("compiler/kel/{base}"),
-            format!("kel/{base}"),
-            format!("../compiler/kel/{base}"),
-            format!("compiler/{rel}"),
-            rel.to_string(),
-            format!("src/selfhost/kel/{base}"),
-        ]
-    };
+    let candidates = [
+        format!("src/selfhost/kel/{base}"),
+        format!("../src/selfhost/kel/{base}"),
+        format!("compiler/kel/{base}"),
+        format!("kel/{base}"),
+        rel.to_string(),
+    ];
     for cand in &candidates {
         if let Ok(s) = std::fs::read_to_string(cand) {
             return s;

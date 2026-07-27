@@ -6,33 +6,27 @@
 
 /// Resolve a self-hosted stage source path to a readable on-disk path.
 ///
-/// The four pipeline stages (`lexer.kel`, `parse.kel`, `reconstruct.kel`,
-/// `codegen.kel`) are canonically owned by this crate at `src/selfhost/kel/`; the
-/// subproject-only sources (`analyze.kel`, the `verify_*.kel` family) stay in
-/// `compiler/kel/`. The historical test paths are `compiler/kel/<stage>.kel`, so this
-/// maps a request for one of the four relocated stages to its new location and passes
-/// everything else through unchanged. Only the basename of `p` is significant.
+/// The ten Rust-read stage sources (`lexer.kel`, `parse.kel`, `reconstruct.kel`,
+/// `codegen.kel`, `analyze.kel`, and the `verify_*.kel` family) are canonically owned by
+/// this crate at `src/selfhost/kel/` (only `prelude.kel` stays in `compiler/kel/`, and it
+/// is not read by these tests). The historical test paths are `compiler/kel/<stage>.kel`,
+/// so this maps a request to the new location by basename and passes anything unresolved
+/// through unchanged. Only the basename of `p` is significant.
 ///
 /// Note: callers hashing a path as a cache-key identity token should hash the ORIGINAL
 /// `p`, not the resolved path, so the key stays stable across the relocation; use this
 /// only to obtain the bytes to read.
 pub fn stage_path(p: &str) -> String {
     let base = p.rsplit('/').next().unwrap_or(p);
-    let relocated = matches!(
-        base,
-        "lexer.kel" | "parse.kel" | "reconstruct.kel" | "codegen.kel"
-    );
-    if relocated {
-        // From the workspace root (the cwd for `cargo test` in this crate).
-        let root = format!("src/selfhost/kel/{base}");
-        if std::path::Path::new(&root).exists() {
-            return root;
-        }
-        // Fallback for a non-root cwd.
-        let up = format!("../src/selfhost/kel/{base}");
-        if std::path::Path::new(&up).exists() {
-            return up;
-        }
+    // From the workspace root (the cwd for `cargo test` in this crate).
+    let root = format!("src/selfhost/kel/{base}");
+    if std::path::Path::new(&root).exists() {
+        return root;
+    }
+    // Fallback for a non-root cwd.
+    let up = format!("../src/selfhost/kel/{base}");
+    if std::path::Path::new(&up).exists() {
+        return up;
     }
     p.to_string()
 }

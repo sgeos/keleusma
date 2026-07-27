@@ -18,7 +18,7 @@ license = "0BSD"
 [workspace]
 
 [dependencies]
-keleusma = { path = "..", features = ["compile", "verify"] }
+keleusma = { path = "..", features = ["compile", "verify", "self-host"] }
 keleusma-arena = { path = "../keleusma-arena", features = ["alloc"] }
 
 [lib]
