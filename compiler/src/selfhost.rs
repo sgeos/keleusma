@@ -1873,7 +1873,11 @@ pub fn dl_reject_module_via_kel(module: &Module) -> bool {
     let fb = (1usize << module.float_bits_log2) / 8;
     let m = verify_datalayout_kel_module();
     let need = required_persistent_capacity_for(&m);
-    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    // The working region must hold verify_datalayout.kel's per-batch frames while it walks a stage's
+    // data layout; the self-hosted stages expand a large shared byte array to per-element slots (the
+    // lexer `src.bytes` buffer alone is hundreds of thousands of entries), so give a generous margin
+    // over the 64 KB default. This is a host-side test-harness arena, not a WCMU claim.
+    let mut arena = Arena::with_capacity(4 * 1024 * 1024 + need);
     arena.resize_persistent(need).expect("resize");
     let mut vm = Vm::new(m, &arena).expect("verify verify_datalayout.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
