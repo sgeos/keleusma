@@ -17,6 +17,41 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-07-26 (session 34)
 
+**AUTONOMY-LOOP INCREMENT 5 (2026-07-26): STRUCT-OF-ARRAY-OF-STRUCT EQUALITY self-compiles byte-identically. COMPLETE, full gate GREEN, merged. This closes the LAST nested-composite-equality gap.**
+`a == b` where a struct field is an array whose element is itself a struct (`struct P { x: Word }`,
+`struct Q { ps: [P; 2] }`) now lowers byte-identically to the reference `emit_composite_fieldwise_eq`
+(which recurses: array field -> per-element struct compare). Implemented by extending the nested drain's
+array sub-drain to admit a struct element, composing `push_array_of_struct_eq`'s per-element unroll under
+a struct-field array extraction. No new opcode/record/node kind or `BYTECODE_VERSION`; reuses op 48
+(GetFieldNested Array) and `getindexnested` (FlatNested Struct, variant 2). Boundary 51 -> 52 Ok, 3 -> 2 Gap;
+`EXPECTED_SELF_COMPILE` 71 -> 72 (a factored `push_arr_of_struct_inner`).
+
+Process note: a first implementation agent (fresh context, from the STRUCT_ARRAYOFSTRUCT_PLAN.md blueprint)
+STALLED mid-implementation (watchdog, 600s no progress) with parse + reconstruct edits done but codegen
+not started; I completed it by hand from the partial edits. The parse/reconstruct edits (streaming a
+`100 + arrsize` sentinel packing record via `se_arrsphase` / `se_arr_mode`, seb layout
+[1, off, size, 1, r2, l2, acount, 100+arrsize, fcount, fcount*(off,kind)]) matched the blueprint; I added
+the codegen per-element loop (inline first, then factored into `push_arr_of_struct_inner` when
+`push_struct_eq_nested` hit 1739 ops over the 1536 cap). Interning is EAGER via the existing variant-1
+pre-pass, which interns the element indices `0..acount-1` (per `composite_field_accessors`, which builds
+all element-index constants up front) then false/true -- correct without change.
+
+TWO CAPACITY WALLS hit and fixed (both host-side sizing, no ISA/wire impact): (1) parse.kel grew to
+245,770 bytes, 10 over the lexer `src.bytes` [Byte; 245760] source buffer, so it could not self-compile
+-- raised the buffer to 393216 (384 KB) across all lockstep offset constants (lexer.kel + the host driver
++ the test harnesses); (2) the bigger buffer expands the lexer's per-element shared-slot layout, so
+`verify_datalayout.kel` overflowed its 64 KB working arena walking the layout -- raised the
+`dl_reject_module_via_kel` test-harness arena to 4 MB. The cascade ended there (full gate green). LESSON:
+parse.kel now sits at ~245 KB with headroom to ~393 KB; a shared byte-array buffer resize expands the
+per-element data layout, so it can cascade into layout-verifier arena limits -- bump both together.
+
+Boundary now 52 Ok / 2 Gap / 1 RefRejects. The remaining Gaps are the genuine deferred tail: a THIRD
+struct nesting level (`eq/2level_struct` handles exactly depth-2 via a fixed extra phase; depth-3 needs a
+GENERAL depth stack -- a design decision, since the total-language verifier forbids the recursion that
+would make it trivial) and floats/generics (out of scope for the self-hosted subset). The same-context
+nested-composite-equality frontier is now EXHAUSTED of bounded roadmap work; the next loop decision is a
+workstream switch (for example wiring the self-hosted stages into the shipping binary), an operator call.
+
 **AUTONOMY-LOOP INCREMENT 4 (2026-07-26): 2-LEVEL STRUCT-NESTING EQUALITY self-compiles byte-identically. COMPLETE, full gate GREEN, merged.**
 The loop continued past the increment-3 decision point on operator direction ("if all work needs doing and
 the ordering is arbitrary, keep looping and prioritize by the criteria"). A Plan agent scouted the frontier
