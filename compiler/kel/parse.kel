@@ -668,6 +668,18 @@ private data stmt {
     se_subisarray: Word,
     se_arrcount: Word,
     se_arrkind: Word,
+    // Nested ARRAY-OF-STRUCT field (`eq/struct_arrayofstruct`): the array's element is itself a
+    // struct with all-scalar leaves. Extracts the whole array (FlatNested variant Array, 1) as a
+    // scalar array does, then emits ONE packing record `acount + (100 + arrsize)*65536 +
+    // fieldcount*2^32` (the `100 +` sentinel distinguishes a struct-element array from a scalar
+    // array, mirroring the depth-2 struct sentinel), and drains the element struct's scalar
+    // sub-fields as ordinary [off, kind] records. `se_arrsphase` 1 = emit that packing record next,
+    // then fall into the element-field sub-drain; `se_arr_asize` the element byte size (for the
+    // per-element GetIndex(FlatNested Struct)); `se_arr_fcount` the element field count.
+    se_arrsphase: Word,
+    se_arr_acount: Word,
+    se_arr_asize: Word,
+    se_arr_fcount: Word,
     // 1 when the nested struct-eq drain's TOP-LEVEL container is a TUPLE (read the top-level element
     // layout from `tupledefs`, and codegen emits GetTupleField for the top-level accessors) rather
     // than a struct; 0 for a struct container. Rides `is_tuple*2097152` in the StructEqNestedBuild
@@ -2248,13 +2260,24 @@ fn struct_eq_kind(idx: Word) -> Word {
     for f in 0..structdefs.sd_fcount[idx] limit 64 {
         let fidx = structdefs.sd_fstart[idx] + f;
         if structdefs.sd_farraylen[fidx] > 0 {
-            // Array field: an array of scalars is a supported nested field; an array of composites
-            // (its element type also set `sd_fstruct`/`sd_ftuple`) defers.
-            if structdefs.sd_fstruct[fidx] > 0 orelse structdefs.sd_ftuple[fidx] > 0 {
+            // Array field: an array of scalars is a supported nested field; an array whose element
+            // is a STRUCT with all-scalar sub-fields is supported (`eq/struct_arrayofstruct`); an
+            // array-of-tuple (or an array-of-struct whose element itself nests a composite) defers.
+            if structdefs.sd_ftuple[fidx] > 0 {
                 stmt.sq_scan = 0;
             } else {
+            if structdefs.sd_fstruct[fidx] > 0 {
                 stmt.sq_found = 1;
-            }
+                let es = structdefs.sd_fstruct[fidx] - 1;
+                for g in 0..structdefs.sd_fcount[es] limit 64 {
+                    let gidx = structdefs.sd_fstart[es] + g;
+                    if structdefs.sd_fstruct[gidx] > 0 orelse structdefs.sd_ftuple[gidx] > 0 orelse structdefs.sd_farraylen[gidx] > 0 orelse structdefs.sd_fenum[gidx] > 0 {
+                        stmt.sq_scan = 0;
+                    }
+                }
+            } else {
+                stmt.sq_found = 1;
+            } }
         } else {
         if structdefs.sd_fstruct[fidx] > 0 {
             stmt.sq_found = 1;
@@ -2408,6 +2431,7 @@ fn struct_eq_nested_start_kind(op: Word, is_tuple: Word) -> Word {
     stmt.se_phase = 0;
     stmt.se_subisenum = 0;
     stmt.se_l2phase = 0;
+    stmt.se_arrsphase = 0;
     structeq_nested_next()
 }
 
@@ -2441,6 +2465,14 @@ fn structeq_nested_next() -> Word {
                     Node::StructEqNestedEnd() as Word
                 }
             }
+        } else {
+        if stmt.se_arrsphase == 1 {
+            // The packing record of a struct-element ARRAY field: acount + (100 + arrsize)*65536 +
+            // fieldcount*2^32. The `100 +` sentinel distinguishes it from a scalar array's
+            // [count, kind] record. Then arm the element struct's scalar sub-field drain (the plain
+            // `se_subcur < se_subcount` path over `sd_*`, since the leaves are all scalar).
+            stmt.se_arrsphase = 0;
+            Node::StructEqNestedField() as Word + (stmt.se_arr_acount + (100 + stmt.se_arr_asize) * 65536 + stmt.se_arr_fcount * 4294967296) * 64
         } else {
         if stmt.se_l2phase == 1 {
             // Emit the depth-2 struct sub-field's packing record (subcount + r2*65536 + l2*2^32),
@@ -2498,7 +2530,7 @@ fn structeq_nested_next() -> Word {
             stmt.se_phase = 0;
             stmt.sq_field = stmt.sq_field + 1;
             Node::StructEqNestedEnd() as Word
-        } } } }
+        } } } } }
     } else {
         if stmt.sq_field < stmt.sq_count {
             if stmt.se_istuple_container == 1 {
@@ -2527,20 +2559,41 @@ fn structeq_nested_next() -> Word {
             } else {
             let fidx = structdefs.sd_fstart[stmt.sq_struct] + stmt.sq_field;
             if structdefs.sd_farraylen[fidx] > 0 {
-                // Array-of-scalar field: extract with FlatNested variant Array (1); the single
-                // sub-record carries the element count and kind for the per-element inner loop.
                 let r2 = ps.pcount + stmt.slot_count;
                 stmt.slot_count = stmt.slot_count + 1;
                 let l2 = ps.pcount + stmt.slot_count;
                 stmt.slot_count = stmt.slot_count + 1;
-                stmt.se_subcount = 1;
                 stmt.se_subcur = 0;
                 stmt.se_subistuple = 0;
+                stmt.se_phase = 1;
+                if structdefs.sd_fstruct[fidx] > 0 {
+                    // Array-OF-STRUCT field (`eq/struct_arrayofstruct`): extract the whole array
+                    // (FlatNested variant Array, 1) as a scalar array does, but the element is a
+                    // struct. Reserve the per-element inner temp pairs NOW (2*acount, monotonic after
+                    // r2/l2) so a following nested field's temps do not collide -- the reference
+                    // `next_slot` reserves them and is never rewound. `se_arrsphase` emits the packing
+                    // record first, then the element struct's scalar sub-fields drain via the plain
+                    // `sd_*` sub-field path.
+                    let es = structdefs.sd_fstruct[fidx] - 1;
+                    let acount = structdefs.sd_farraylen[fidx];
+                    stmt.slot_count = stmt.slot_count + 2 * acount;
+                    stmt.se_arrsphase = 1;
+                    stmt.se_arr_acount = acount;
+                    stmt.se_arr_asize = structdefs.sd_bytesize[es];
+                    stmt.se_arr_fcount = structdefs.sd_fcount[es];
+                    stmt.se_substart = structdefs.sd_fstart[es];
+                    stmt.se_subcount = structdefs.sd_fcount[es];
+                    stmt.se_subisarray = 0;
+                    Node::StructEqNested() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fsize[fidx] * 65536 + 1 * 4294967296 + r2 * 17179869184 + l2 * 17592186044416) * 64
+                } else {
+                // Array-of-scalar field: extract with FlatNested variant Array (1); the single
+                // sub-record carries the element count and kind for the per-element inner loop.
+                stmt.se_subcount = 1;
                 stmt.se_subisarray = 1;
                 stmt.se_arrcount = structdefs.sd_farraylen[fidx];
                 stmt.se_arrkind = structdefs.sd_fkind[fidx];
-                stmt.se_phase = 1;
                 Node::StructEqNested() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fsize[fidx] * 65536 + 1 * 4294967296 + r2 * 17179869184 + l2 * 17592186044416) * 64
+                }
             } else {
             if structdefs.sd_fstruct[fidx] > 0 {
                 let s = structdefs.sd_fstruct[fidx] - 1;

@@ -1989,8 +1989,10 @@ fn self_compile_codegen_atomic_functions() {
     // op-table capacity); 70 with `push_enum_struct_payload_loop`, the op-57 nested extract plus inner
     // struct-eq loop for a STRUCT-payload enum variant field (factored out of `push_enum_eq`).
     // 71 with `push_struct_eq_subfields`, the inner sub-field emitter factored out of
-    // `push_struct_eq_nested` to admit a DEPTH-2 nested-struct sub-field (`eq/2level_struct`).
-    const EXPECTED_SELF_COMPILE: usize = 71;
+    // `push_struct_eq_nested` to admit a DEPTH-2 nested-struct sub-field (`eq/2level_struct`); 72 with
+    // `push_arr_of_struct_inner`, the per-element struct loop for a struct-element ARRAY field (factored
+    // out of `push_struct_eq_nested` to stay under the op-table capacity, `eq/struct_arrayofstruct`).
+    const EXPECTED_SELF_COMPILE: usize = 72;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -2018,10 +2020,10 @@ fn self_compile_codegen_atomic_functions() {
 // reconstruction to the control-flow, data-access, call, and yield kinds.
 // ---------------------------------------------------------------------------
 
-// Lexer `src` block slots: len(1) + bytes(245760) then the intern table.
-const BR_LEX_ISTART: usize = 1 + 245760;
-const BR_LEX_ILEN: usize = 1 + 245760 + 1280;
-const BR_LEX_ICOUNT: usize = 1 + 245760 + 1280 + 1280;
+// Lexer `src` block slots: len(1) + bytes(393216) then the intern table.
+const BR_LEX_ISTART: usize = 1 + 393216;
+const BR_LEX_ILEN: usize = 1 + 393216 + 1280;
+const BR_LEX_ICOUNT: usize = 1 + 393216 + 1280 + 1280;
 // Parser `toks` block slots: len(1), then the packed token array (one `tok+payload*64`
 // word per token), then the scalar and chunk-table inputs.
 const BR_P_LEN: usize = 0;
@@ -5300,7 +5302,7 @@ fn assemble_shared_layout(
 
 // The per-shared-slot byte layout the driver assembles from parse.kel's records equals
 // the reference compiler's, offset/kind/len for every element slot, for all four stage
-// sources (including lexer.kel's 245760-byte buffer whose later fields sit past 64 KB).
+// sources (including lexer.kel's 393216-byte buffer whose later fields sit past 64 KB).
 #[test]
 fn assembled_shared_layout_matches_the_reference() {
     if common::selfhost_cache::hit(
@@ -7036,6 +7038,34 @@ fn self_host_compiles_2level_struct_equality() {
     );
 }
 
+/// Struct-of-array-of-struct equality (`struct Q { ps: [P; 2] }`, `a == b`) self-compiles
+/// byte-identically. A struct field that is an array whose element is itself a struct with scalar
+/// leaves extracts the whole array (GetFieldNested variant Array) into a temp pair, then per element
+/// extracts `a[e]`/`b[e]` as structs (getindexnested FlatNested Struct) into an inner temp pair and
+/// runs an inner struct-eq field loop, breaking the element loop false on a mismatch. It composes
+/// `push_array_of_struct_eq`'s per-element unroll under a struct-field array extraction; the element
+/// index constants intern before false/true (per `composite_field_accessors`). Reuses op 48 and the
+/// getindexnested op, records 55/56/57/58, node 59 — no new opcode/record/node kind. Covers `[P;2]`,
+/// `[P;3]`, a multi-field element, `!=`, and an array-of-struct beside a scalar top-level field.
+#[test]
+fn self_host_compiles_struct_arrayofstruct_equality() {
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nstruct Q { ps: [P; 2] }\nfn f(a: Q, b: Q) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nstruct Q { ps: [P; 3] }\nfn f(a: Q, b: Q) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\nstruct Q { ps: [P; 2] }\nfn f(a: Q, b: Q) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nstruct Q { ps: [P; 2] }\nfn f(a: Q, b: Q) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nstruct Q { ps: [P; 2], w: Word }\nfn f(a: Q, b: Q) -> bool { a == b }",
+    );
+}
+
 /// Array-in-struct nested equality self-compiles byte-identically: a struct with a scalar-array
 /// field extracts it (FlatNested variant Array) into fresh temps and compares elements with a
 /// per-element GetIndex inner loop. The element index constants interleave with the false/true bools
@@ -7553,10 +7583,9 @@ fn self_hosted_construct_support_boundary() {
             SOk,
             "struct I { v: Word }\nstruct M { i: I }\nstruct O { m: M }\nfn f(a: O, b: O) -> bool { a == b }",
         ),
-        // --- composite equality: pinned GAPS (nested-machinery frontier) ---------
         (
-            "eq/struct_arrayofstruct__GAP",
-            Gap,
+            "eq/struct_arrayofstruct",
+            SOk,
             "struct P { x: Word }\nstruct Q { ps: [P;2] }\nfn f(a: Q, b: Q) -> bool { a == b }",
         ),
         // --- out of scope for the self-hosted subset -----------------------------

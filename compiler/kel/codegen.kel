@@ -2033,6 +2033,59 @@ fn push_struct_eq_subfields(sbase: Word, subcount: Word, l2: Word, r2: Word, sub
     0
 }
 
+// Emit the per-element body of a struct-element ARRAY field of a struct-eq-nested (`eq/struct_arrayofstruct`),
+// over the extracted array temps l2 (left) / r2 (right). The caller's wrapper mloop/mendloop is the OUTER
+// per-element loop; per element e this extracts a[e]/b[e] as structs (getindexnested FlatNested Struct,
+// variant 2) into an inner temp pair (right = l2+1+2e, left = l2+2+2e, monotonic after the array's r2/l2)
+// and runs an inner struct-eq field loop, negated to break the outer loop on inequality. It is
+// `push_array_of_struct_eq`'s per-element body over l2/r2; false_idx/true_idx and the element-index
+// constants are pre-interned by the caller's eager pre-pass (dedup here). Factored out of
+// `push_struct_eq_nested` to keep that chunk under the op-table capacity. seb at foff:
+// [1, ext_off, ext_size, 1, r2, l2, acount, 100+arrsize, fcount, fcount*(off, kind)].
+fn push_arr_of_struct_inner(foff: Word, l2: Word, r2: Word, false_idx: Word, true_idx: Word) -> Word {
+    let acount = ast.match_parts[foff + 6];
+    let arrsize = ast.match_parts[foff + 7] - 100;
+    let fcount = ast.match_parts[foff + 8];
+    for ej in 0..acount limit 256 {
+        let e = acount - 1 - ej;
+        let inner_b = l2 + 1 + 2 * e;
+        let inner_a = l2 + 2 + 2 * e;
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_emit(wire.konst + false_idx * wire.radix);
+        push_emit(wire.mif);
+        push_emit(wire.lnot);
+        push_emit(wire.mendloop);
+        push_emit(wire.mbreak);
+        push_emit(wire.konst + true_idx * wire.radix);
+        for fj in 0..fcount limit 64 {
+            let ff = fcount - 1 - fj;
+            let eoff = ast.match_parts[foff + 9 + ff * 2];
+            let ekind = ast.match_parts[foff + 9 + ff * 2 + 1];
+            push_emit(wire.mendif);
+            push_emit(wire.mbreak);
+            push_emit(wire.konst + false_idx * wire.radix);
+            push_emit(wire.mif);
+            push_emit(wire.lnot);
+            push_emit(wire.cmpeq);
+            push_emit(wire.getfield + (eoff + ekind * 65536) * wire.radix);
+            push_emit(wire.getlocal + inner_b * wire.radix);
+            push_emit(wire.getfield + (eoff + ekind * 65536) * wire.radix);
+            push_emit(wire.getlocal + inner_a * wire.radix);
+        }
+        push_emit(wire.mloop);
+        push_emit(wire.setlocal + inner_a * wire.radix);
+        push_emit(wire.setlocal + inner_b * wire.radix);
+        push_emit(wire.getindexnested + (arrsize + 2 * 65536) * wire.radix);
+        push_emit(wire.konst + intern_int(e) * wire.radix);
+        push_emit(wire.getlocal + r2 * wire.radix);
+        push_emit(wire.getindexnested + (arrsize + 2 * 65536) * wire.radix);
+        push_emit(wire.konst + intern_int(e) * wire.radix);
+        push_emit(wire.getlocal + l2 * wire.radix);
+    }
+    0
+}
+
 // StructEqNestedNode (kind 59): a `struct == struct` (or `!=`) where a field is a nested struct.
 // match_parts holds [ta, tb, topcount, <tagged top-level fields>, is_ne]: a scalar field is
 // [0, offset, kind]; a nested-struct field is [1, ext_off, ext_size, variant, r2, l2, subcount,
@@ -2056,7 +2109,16 @@ fn push_struct_eq_nested(p: Word) -> Word {
         } else {
             st.let_count = st.let_count + 2;
             if ast.match_parts[st.se_cur + 3] == 1 {
-                st.se_cur = st.se_cur + 8;
+                // Array field. A scalar-element array is a fixed 8 slots [1, off, size, 1, r2, l2,
+                // count, kind]. A struct-element array (`eq/struct_arrayofstruct`, sentinel
+                // `slot+7 >= 100`) is [1, off, size, 1, r2, l2, acount, 100+arrsize, fcount] then
+                // fcount*(off, kind) = 9 + fcount*2, and reserves 2*acount per-element inner temps.
+                if ast.match_parts[st.se_cur + 7] >= 100 {
+                    st.let_count = st.let_count + 2 * ast.match_parts[st.se_cur + 6];
+                    st.se_cur = st.se_cur + 9 + ast.match_parts[st.se_cur + 8] * 2;
+                } else {
+                    st.se_cur = st.se_cur + 8;
+                }
             } else {
             if ast.match_parts[st.se_cur + 3] == 3 {
                 // Enum field: header(6) + ename + vcount = 8, then per variant 3 + fcount*2.
@@ -2200,8 +2262,15 @@ fn push_struct_eq_nested(p: Word) -> Word {
             push_emit(wire.mbreak);
             push_emit(wire.konst + true_idx * wire.radix);
             if variant == 1 {
-                // Array element inner loop: per element e compare l2[e] == r2[e] via GetIndex.
                 let acount = ast.match_parts[foff + 6];
+                if ast.match_parts[foff + 7] >= 100 {
+                    // Struct-element array (`eq/struct_arrayofstruct`): per element, extract a[e]/b[e]
+                    // as structs and run an inner struct-eq field loop. Factored into
+                    // `push_arr_of_struct_inner` to keep this chunk under the op-table capacity
+                    // (mirrors `push_nested_enum_loop` / `push_struct_eq_subfields`).
+                    push_arr_of_struct_inner(foff, l2, r2, false_idx, true_idx);
+                } else {
+                // Array-of-scalar element inner loop: per element e compare l2[e] == r2[e] via GetIndex.
                 let akind = ast.match_parts[foff + 7];
                 for ej in 0..acount limit 256 {
                     let e = acount - 1 - ej;
@@ -2217,6 +2286,7 @@ fn push_struct_eq_nested(p: Word) -> Word {
                     push_emit(wire.getindex + akind * wire.radix);
                     push_emit(wire.konst + intern_int(e) * wire.radix);
                     push_emit(wire.getlocal + l2 * wire.radix);
+                }
                 }
             } else {
                 let subcount = ast.match_parts[foff + 6];
