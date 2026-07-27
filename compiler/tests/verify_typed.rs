@@ -36,7 +36,16 @@ fn read_stage(rel: &str) -> String {
     let base = rel.rsplit('/').next().unwrap_or(rel);
     let relocated = matches!(
         base,
-        "lexer.kel" | "parse.kel" | "reconstruct.kel" | "codegen.kel"
+        "lexer.kel"
+            | "parse.kel"
+            | "reconstruct.kel"
+            | "codegen.kel"
+            | "analyze.kel"
+            | "verify_structural.kel"
+            | "verify_yield.kel"
+            | "verify_depth.kel"
+            | "verify_typed.kel"
+            | "verify_datalayout.kel"
     );
     let candidates: [String; 6] = if relocated {
         [
