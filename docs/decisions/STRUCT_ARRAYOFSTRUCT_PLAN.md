@@ -6,10 +6,13 @@ Blueprint for the next self-hosted-compiler nested-equality increment: `a == b` 
 is an array whose element is itself a struct, for example `struct P { x: Word }`, `struct Q { ps: [P; 2] }`.
 It flips the `eq/struct_arrayofstruct__GAP` boundary case (51 Ok / 3 Gap becomes 52 Ok / 2 Gap).
 
-Status: **SCOUTED to a complete blueprint, verdict BOUNDED — not yet implemented.** A scouting fork
-confirmed no design-decision STOP and produced the edit-level plan below, but deliberately committed no
-code: it judged a rushed byte-identity commit from a saturated context too risky and recommended a
-fresh focused session. Implement from this document.
+Status: **COMPLETE — implemented, byte-identical, merged (increment 5).** Boundary 51 → 52 Ok (2 Gap /
+1 RefRejects); `EXPECTED_SELF_COMPILE` 71 → 72 (a factored `push_arr_of_struct_inner`). Implemented per
+this blueprint (parse `se_arrsphase` sentinel/packing stream, reconstruct `se_arr_mode` reassembly,
+codegen `push_arr_of_struct_inner` per-element loop). Two host-side capacity bumps were also required
+(no ISA impact): the lexer `src.bytes` buffer 245760 → 393216 (parse.kel outgrew it), and the
+`dl_reject_module_via_kel` layout-verifier arena → 4 MB (the larger per-element layout). See the
+2026-07-26 DESIGN_JOURNAL entry. Original blueprint retained below.
 
 ## Why no STOP (feasibility confirmed)
 
