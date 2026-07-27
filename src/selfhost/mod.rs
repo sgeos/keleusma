@@ -2642,13 +2642,24 @@ impl core::fmt::Display for SelfHostError {
 
 impl std::error::Error for SelfHostError {}
 
-/// Compile a whole program with the self-hosted pipeline, returning the same
-/// [`Module`] the reference compiler would for an in-subset program at the host target.
+/// Compile a whole program with the self-hosted pipeline, returning a self-hosted-built
+/// [`Module`] for an in-subset program at the host target.
 ///
-/// This is the shipping entry behind `keleusma-cli --compiler self-hosted`. It refuses a
-/// non-host `target` (the pipeline is only validated at host width) and recovers any
-/// out-of-subset pipeline panic into [`SelfHostError::Unsupported`] rather than aborting
-/// the process, so the CLI can print a clean error and suggest `--compiler rust`.
+/// This is the shipping entry behind `keleusma-cli --compiler self-hosted`. It:
+/// 1. refuses a non-host `target` (the pipeline is only validated at host width);
+/// 2. recovers any out-of-subset pipeline panic into [`SelfHostError::Unsupported`]
+///    rather than aborting the process; and
+/// 3. cross-checks the self-hosted output against the reference compiler and rejects it
+///    if they diverge.
+///
+/// Step 3 is what makes the backend fail loudly on the whole subset boundary rather than
+/// only on constructs that crash a stage: the self-hosted pipeline silently mis-compiles
+/// some out-of-subset programs (for example float arithmetic) to a valid-but-wrong
+/// module, which neither a panic nor a load-time verify would catch. The reference is
+/// used ONLY as the correctness oracle — the returned module is the self-hosted one, so
+/// the emitted bytecode is genuinely self-hosted; when the two agree (an in-subset
+/// program) that agreement is the [construct-support boundary]'s guarantee. On any
+/// divergence the CLI prints a clean error suggesting `--compiler rust`.
 pub fn self_hosted_compile(
     src: &str,
     target: &crate::target::Target,
@@ -2660,21 +2671,50 @@ pub fn self_hosted_compile(
     {
         return Err(SelfHostError::NonHostTarget);
     }
-    // The pipeline `panic!`s on constructs outside the self-hosted subset. Recover those
-    // into a clean error; suppress the default panic output for the duration.
+    // The reference compile is the correctness oracle. If the reference itself rejects the
+    // program it is a plain compile error (the self-hosted compiler cannot do better), so
+    // surface it; otherwise its chunks are the yardstick for the divergence check below.
+    let reference = compile_reference(src)?;
+    // The pipeline `panic!`s on some out-of-subset constructs. Recover those into a clean
+    // error; suppress the default panic output for the duration.
     let prev = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     let owned = src.to_string();
     let result = std::panic::catch_unwind(move || self_host_compile_scratch(&owned));
     std::panic::set_hook(prev);
-    result.map_err(|payload| {
+    let module = result.map_err(|payload| {
         let detail = payload
             .downcast_ref::<&str>()
             .map(|s| s.to_string())
             .or_else(|| payload.downcast_ref::<String>().cloned())
             .unwrap_or_else(|| "unsupported construct".to_string());
         SelfHostError::Unsupported { detail }
-    })
+    })?;
+    // Correctness cross-check: the self-hosted compiled code (each chunk's ops, constant
+    // pool, and local count) must match the reference. A divergence means the program is
+    // outside the self-hosted subset; reject it rather than emit a wrong module.
+    if module.chunks.len() != reference.chunks.len()
+        || module.chunks.iter().zip(reference.chunks.iter()).any(|(m, r)| {
+            m.name != r.name
+                || m.ops != r.ops
+                || m.constants != r.constants
+                || m.local_count != r.local_count
+        })
+    {
+        return Err(SelfHostError::Unsupported {
+            detail: "the self-hosted output diverges from the reference compiler".to_string(),
+        });
+    }
+    Ok(module)
+}
+
+/// Compile `src` with the reference compiler, mapping any lex/parse/compile failure to
+/// [`SelfHostError::Unsupported`] with the reference's message. Used as the correctness
+/// oracle by [`self_hosted_compile`].
+fn compile_reference(src: &str) -> Result<Module, SelfHostError> {
+    let tokens = tokenize(src).map_err(|e| SelfHostError::Unsupported { detail: e.message })?;
+    let program = parse(&tokens).map_err(|e| SelfHostError::Unsupported { detail: e.message })?;
+    compile(&program).map_err(|e| SelfHostError::Unsupported { detail: e.message })
 }
 
 #[cfg(test)]
