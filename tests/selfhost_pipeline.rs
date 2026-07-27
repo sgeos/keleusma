@@ -136,7 +136,7 @@ fn shared_word(vm: &Vm, buf: &[u8], slot: usize) -> i64 {
 /// inputs are expressed in, obtained from the lexer's output with no re-lexing.
 fn lex_full(src: &str) -> (Vec<(i64, i64)>, Vec<String>) {
     let bytes = src.as_bytes();
-    let source = std::fs::read_to_string("compiler/kel/lexer.kel").expect("read lexer.kel");
+    let source = std::fs::read_to_string("src/selfhost/kel/lexer.kel").expect("read lexer.kel");
     let m = compile(&parse(&tokenize(&source).expect("lex")).expect("parse")).expect("compile");
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -358,7 +358,8 @@ fn compile_parse_stage() -> keleusma::bytecode::Module {
     std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
         .spawn(|| {
-            let stage = std::fs::read_to_string("compiler/kel/parse.kel").expect("read parse.kel");
+            let stage =
+                std::fs::read_to_string("src/selfhost/kel/parse.kel").expect("read parse.kel");
             compile(&parse(&tokenize(&stage).expect("lex parse.kel")).expect("parse parse.kel"))
                 .expect("compile parse.kel")
         })

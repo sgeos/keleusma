@@ -4,6 +4,39 @@
 //! test binary; it is pulled into a test file with `mod common;`.
 #![allow(dead_code)]
 
+/// Resolve a self-hosted stage source path to a readable on-disk path.
+///
+/// The four pipeline stages (`lexer.kel`, `parse.kel`, `reconstruct.kel`,
+/// `codegen.kel`) are canonically owned by this crate at `src/selfhost/kel/`; the
+/// subproject-only sources (`analyze.kel`, the `verify_*.kel` family) stay in
+/// `compiler/kel/`. The historical test paths are `compiler/kel/<stage>.kel`, so this
+/// maps a request for one of the four relocated stages to its new location and passes
+/// everything else through unchanged. Only the basename of `p` is significant.
+///
+/// Note: callers hashing a path as a cache-key identity token should hash the ORIGINAL
+/// `p`, not the resolved path, so the key stays stable across the relocation; use this
+/// only to obtain the bytes to read.
+pub fn stage_path(p: &str) -> String {
+    let base = p.rsplit('/').next().unwrap_or(p);
+    let relocated = matches!(
+        base,
+        "lexer.kel" | "parse.kel" | "reconstruct.kel" | "codegen.kel"
+    );
+    if relocated {
+        // From the workspace root (the cwd for `cargo test` in this crate).
+        let root = format!("src/selfhost/kel/{base}");
+        if std::path::Path::new(&root).exists() {
+            return root;
+        }
+        // Fallback for a non-root cwd.
+        let up = format!("../src/selfhost/kel/{base}");
+        if std::path::Path::new(&up).exists() {
+            return up;
+        }
+    }
+    p.to_string()
+}
+
 /// Fast-lane memoization for the expensive whole-stage self-compile byte-identity
 /// tests (process-audit item 3, the "complete key" form).
 ///
@@ -87,8 +120,10 @@ pub mod selfhost_cache {
         let mut inputs = kel_inputs.to_vec();
         inputs.sort_unstable();
         for p in inputs {
+            // Hash the ORIGINAL path string as the identity token so the key is stable
+            // across the stage relocation, but read the bytes from the resolved location.
             p.hash(&mut h);
-            let bytes = std::fs::read(p).ok()?; // unreadable input -> None -> no cache
+            let bytes = std::fs::read(super::stage_path(p)).ok()?; // unreadable input -> None -> no cache
             bytes.hash(&mut h);
         }
         Some(h.finish())

@@ -12,10 +12,43 @@
 
 use keleusma_selfhost::selfhost::{compile_src, self_host_compile};
 
+/// Read a stage source by basename. The four pipeline stages moved into the parent
+/// crate at `src/selfhost/kel/`; the subproject-only sources stay in `compiler/kel/`.
+fn read_stage(rel: &str) -> String {
+    let base = rel.rsplit('/').next().unwrap_or(rel);
+    let relocated = matches!(
+        base,
+        "lexer.kel" | "parse.kel" | "reconstruct.kel" | "codegen.kel"
+    );
+    let candidates: [String; 6] = if relocated {
+        [
+            format!("src/selfhost/kel/{base}"),
+            format!("../src/selfhost/kel/{base}"),
+            format!("compiler/{rel}"),
+            rel.to_string(),
+            format!("kel/{base}"),
+            format!("compiler/kel/{base}"),
+        ]
+    } else {
+        [
+            format!("compiler/kel/{base}"),
+            format!("kel/{base}"),
+            format!("../compiler/kel/{base}"),
+            format!("compiler/{rel}"),
+            rel.to_string(),
+            format!("src/selfhost/kel/{base}"),
+        ]
+    };
+    for cand in &candidates {
+        if let Ok(s) = std::fs::read_to_string(cand) {
+            return s;
+        }
+    }
+    panic!("cannot read stage `{rel}` (tried {candidates:?})");
+}
+
 fn assert_stage_self_compiles(rel: &str) {
-    let src = std::fs::read_to_string(rel)
-        .or_else(|_| std::fs::read_to_string(format!("compiler/{rel}")))
-        .unwrap_or_else(|e| panic!("cannot read {rel}: {e}"));
+    let src = read_stage(rel);
     let module = self_host_compile(&src);
     let reference = compile_src(&src);
     assert_eq!(

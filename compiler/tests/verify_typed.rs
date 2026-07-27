@@ -30,9 +30,39 @@ const WB: usize = 8;
 const FB: usize = 8;
 
 fn read_stage(rel: &str) -> String {
-    std::fs::read_to_string(rel)
-        .or_else(|_| std::fs::read_to_string(format!("compiler/{rel}")))
-        .unwrap_or_else(|e| panic!("cannot read {rel}: {e}"))
+    // The four pipeline stages moved into the parent crate at `src/selfhost/kel/`; the
+    // subproject-only sources (analyze.kel, verify_*.kel) stay in `compiler/kel/`. Only
+    // the basename of `rel` is significant; try the candidate list for its family.
+    let base = rel.rsplit('/').next().unwrap_or(rel);
+    let relocated = matches!(
+        base,
+        "lexer.kel" | "parse.kel" | "reconstruct.kel" | "codegen.kel"
+    );
+    let candidates: [String; 6] = if relocated {
+        [
+            format!("src/selfhost/kel/{base}"),
+            format!("../src/selfhost/kel/{base}"),
+            format!("compiler/{rel}"),
+            rel.to_string(),
+            format!("kel/{base}"),
+            format!("compiler/kel/{base}"),
+        ]
+    } else {
+        [
+            format!("compiler/kel/{base}"),
+            format!("kel/{base}"),
+            format!("../compiler/kel/{base}"),
+            format!("compiler/{rel}"),
+            rel.to_string(),
+            format!("src/selfhost/kel/{base}"),
+        ]
+    };
+    for cand in &candidates {
+        if let Ok(s) = std::fs::read_to_string(cand) {
+            return s;
+        }
+    }
+    panic!("cannot read stage `{rel}` (tried {candidates:?})");
 }
 
 fn base_module() -> Module {

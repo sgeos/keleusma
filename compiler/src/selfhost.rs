@@ -15,9 +15,13 @@
 //! sources its serialized module is byte-identical to the reference (see
 //! `tests/scaffold.rs`) without borrowing any field from it.
 //!
-//! The stage sources are read relative to the current directory, trying the
-//! package-local `kel/...` path then the repo-root `compiler/kel/...` path, so the
-//! commands work from either the subproject or the workspace root.
+//! The four pipeline stage sources (`lexer.kel`, `parse.kel`, `reconstruct.kel`,
+//! `codegen.kel`) are canonically owned by the parent `keleusma` crate at
+//! `src/selfhost/kel/` (the CLI ships them through the `self-host` feature), so this
+//! subproject reads them from there. The remaining subproject-only sources
+//! (`analyze.kel`, the `verify_*.kel` family, `prelude.kel`) stay in `compiler/kel/`.
+//! [`read_stage`] resolves either family from either the subproject directory or the
+//! workspace root by trying a candidate list.
 
 use keleusma::bytecode::{
     ArrayElem, ConstValue, EnumField, Module, NewCompositeOperand, Op, StructField, TupleField,
@@ -28,11 +32,48 @@ use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capa
 use keleusma::{Arena, compiler::compile, lexer::tokenize, parser::parse};
 use std::ops::ControlFlow;
 
-/// Read a stage source, trying the package-local then the repo-root path.
+/// Read a stage source by basename, resolving the two ownership families from either
+/// the subproject directory or the workspace root.
+///
+/// The four pipeline stages moved into the parent crate at `src/selfhost/kel/`; the
+/// subproject-only sources stay in `compiler/kel/`. `rel` is a `kel/<name>.kel` path;
+/// only its basename is significant. Each candidate is tried in order; the first that
+/// reads wins.
 fn read_stage(rel: &str) -> String {
-    std::fs::read_to_string(rel)
-        .or_else(|_| std::fs::read_to_string(format!("compiler/{rel}")))
-        .unwrap_or_else(|e| panic!("cannot read {rel}: {e}"))
+    let base = rel.rsplit('/').next().unwrap_or(rel);
+    let relocated = matches!(
+        base,
+        "lexer.kel" | "parse.kel" | "reconstruct.kel" | "codegen.kel"
+    );
+    let candidates: [String; 6] = if relocated {
+        [
+            // From the workspace root.
+            format!("src/selfhost/kel/{base}"),
+            // From the `compiler/` subproject directory.
+            format!("../src/selfhost/kel/{base}"),
+            // Fallbacks so a stale caller path still resolves.
+            format!("compiler/{rel}"),
+            rel.to_string(),
+            format!("kel/{base}"),
+            format!("compiler/kel/{base}"),
+        ]
+    } else {
+        [
+            // Subproject-only sources still live under compiler/kel/.
+            format!("compiler/kel/{base}"),
+            format!("kel/{base}"),
+            format!("../compiler/kel/{base}"),
+            format!("compiler/{rel}"),
+            rel.to_string(),
+            format!("src/selfhost/kel/{base}"),
+        ]
+    };
+    for cand in &candidates {
+        if let Ok(s) = std::fs::read_to_string(cand) {
+            return s;
+        }
+    }
+    panic!("cannot read stage `{rel}` (tried {candidates:?})");
 }
 
 /// Compile a stage or program source with the Rust-hosted reference compiler.
