@@ -96,11 +96,11 @@ const PARAM_COUNT: usize = 1 + 1024 * 4 + 256 * 5;
 
 const CATEGORY: usize = 1 + 1024 * 4 + 256 * 5 + 1;
 
-const BR_LEX_ISTART: usize = 1 + 245760;
+const BR_LEX_ISTART: usize = 1 + 393216;
 
-const BR_LEX_ILEN: usize = 1 + 245760 + 1280;
+const BR_LEX_ILEN: usize = 1 + 393216 + 1280;
 
-const BR_LEX_ICOUNT: usize = 1 + 245760 + 1280 + 1280;
+const BR_LEX_ICOUNT: usize = 1 + 393216 + 1280 + 1280;
 
 const BR_P_LEN: usize = 0;
 
