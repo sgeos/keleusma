@@ -10,7 +10,7 @@ a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`
-- **Parent commit** (the repository state this handoff describes): `4396719`
+- **Parent commit** (the repository state this handoff describes): `1022d72`
 - **Written**: 2026-07-26
 - **Tree at write**: clean (all work committed and merged)
 
@@ -25,50 +25,47 @@ advances the tip by one, so the state it describes is the parent of the handoff 
   parent versus actual `HEAD~1`), familiarize from the live channels — `REVERSE_PROMPT.md`,
   `DESIGN_JOURNAL.md`, `TASKLOG.md`, and the git log, always authoritative — and wait for instruction.
 
-## Resume prompt — CONTINUE THE LOOP
+## Resume prompt — SURFACE THE FORK (the bounded same-context frontier is exhausted)
 
-**The operator directed the loop to keep going on bounded work and order by the criteria (context-first,
-then priority), surfacing only at a genuine fork.** After the validity check passes, do **not** wait for
-a fresh go-ahead — proceed with the next increment. If the validity check **fails**, do the opposite:
-do not proceed, report invalid-and-stale, familiarize, and wait.
+**The nested-composite-equality family is now fully self-hosted (increments 1–5).** There is no
+remaining bounded same-context increment, so the loop's keep-going default does NOT apply here: the next
+move is a genuine operator-decision fork. After the validity check passes, do **not** autonomously start
+a design decision or a workstream switch. If the validity check **fails**, report invalid-and-stale,
+familiarize, and wait.
 
 Steps, in order:
 
 1. **Validate** — run the validity check above. Valid → continue. Invalid → stop and report.
-2. **Familiarize** — read `docs/process/REVERSE_PROMPT.md` (the next candidate is spelled out there),
-   `docs/process/DESIGN_JOURNAL.md` (newest entries: increments 3 and 4), and `docs/process/TASKLOG.md`.
-   Confirm the live state matches this handoff, then say what you are about to do.
-3. **Next increment: struct-of-array-of-struct equality** — `eq/struct_arrayofstruct__GAP`
-   (`struct Q { ps: [P; 2] }`, a struct field that is an array-of-struct). Already SCOUTED to a complete
-   four-stage blueprint at [`docs/decisions/STRUCT_ARRAYOFSTRUCT_PLAN.md`](../decisions/STRUCT_ARRAYOFSTRUCT_PLAN.md);
-   confirmed BOUNDED (no new opcode/record/node kind — the element-struct index is already tracked via
-   `sd_farraylen` + `sd_fstruct`, and `push_array_of_struct_eq` is the exact per-element template).
-   Implement DIRECTLY from that document — no re-scout needed. Sharp edge: emit the per-element loop
-   INLINE (not factored) so eager interning keeps the element indices before false/true. Work on a
-   feature branch cut from `v0.2.3`.
-4. **Verify** — the byte-identical differential oracle (the new construct test, all five whole-stage
-   self-compiles, the nested-eq blast-radius suite, `validate_module_via_kel`, the boundary, the codegen
-   count) then the FULL `scripts/release-gate.sh`.
-5. **Merge** — rebase onto the current `v0.2.3` tip if it advanced, no-fast-forward merge, push, confirm
-   CI green.
-6. **Record** — `DESIGN_JOURNAL.md` (append), `REVERSE_PROMPT.md` (overwrite), `TASKLOG.md`; restamp
-   this `HANDOFF.md` with the new commit before the next planned compaction.
-7. **Continue or stop** — if struct-of-array-of-struct needs a new record/node kind or a general depth
-   stack, STOP and surface. Otherwise, after it lands, the same-context frontier is the deferred tail
-   (a third struct level → likely a general-depth-stack design decision; floats/generics → out of
-   scope). At that point re-weigh a workstream switch (e.g. wiring the self-hosted stages into the
-   shipping binary) and surface the choice.
+2. **Familiarize** — read `docs/process/REVERSE_PROMPT.md` (the fork is spelled out there),
+   `docs/process/DESIGN_JOURNAL.md` (newest entries: increments 3–5), and `docs/process/TASKLOG.md`.
+   Confirm the live state matches this handoff.
+3. **Surface the fork to the operator** — the two remaining boundary Gaps are NOT bounded roadmap
+   increments: (a) **third-level struct nesting** needs a GENERAL depth stack in the drain (the
+   total-language verifier forbids the recursion that would make arbitrary depth trivial) — a design
+   decision; (b) **floats / generics** are out of scope for the self-hosted subset. The highest-leverage
+   alternative is a **workstream switch**: wiring the self-hosted stages into the shipping binary
+   (Workstream A). Present these options (design the depth stack / switch workstreams / pause) and wait
+   for direction. Do not pick among them autonomously — this is the operator's call per the loop's stop
+   conditions.
+
+If the operator directs one, then follow the normal increment cycle (feature branch off `v0.2.3`,
+byte-identity oracle + FULL `scripts/release-gate.sh`, no-ff merge, push, confirm CI, record on all
+three channels, restamp this HANDOFF before the next planned compaction).
 
 **Git position** (as of the Parent commit)
-- Branch `v0.2.3` at `9cfbe8a` (the increment-4 merge commit), in sync with origin, working tree clean.
+- Branch `v0.2.3` at `1022d72` (the increment-5 merge commit), in sync with origin, working tree clean.
 - `main` holds releases and sits behind `v0.2.3` by design. Branch model in
   `docs/process/GIT_STRATEGY.md` (release-branch, no-fast-forward merges up the hierarchy).
 
 **Done this arc**
-- Increments 1-4: tuple-of-struct, enum-in-struct, enum-with-struct-payload, 2-level-struct-nesting —
-  all implemented, byte-identical, full-gate-green, merged. Boundary now **51 Ok / 3 Gap / 1 RefRejects**,
+- Increments 1-5: tuple-of-struct, enum-in-struct, enum-with-struct-payload, 2-level-struct-nesting,
+  struct-of-array-of-struct — all implemented, byte-identical, full-gate-green, merged. The
+  nested-composite-equality family is fully self-hosted. Boundary now **52 Ok / 2 Gap / 1 RefRejects**,
   pinned by `self_hosted_construct_support_boundary` in `tests/selfhost_codegen.rs`;
-  `EXPECTED_SELF_COMPILE` is 71.
+  `EXPECTED_SELF_COMPILE` is 72.
+- Capacity: the lexer `src.bytes` source buffer was raised 245760 → 393216 (parse.kel outgrew it) and
+  the `dl_reject_module_via_kel` layout-verifier test arena to 4 MB. Resizing a shared byte-array buffer
+  expands the per-element data layout and can cascade into layout-verifier arena limits — bump together.
 
 **Key durable finding** (governs every remaining depth increment)
 - The total-language verifier FORBIDS recursion (R4, acyclic call graph); no `.kel` stage function may
