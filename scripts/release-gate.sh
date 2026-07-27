@@ -52,6 +52,9 @@ cargo test -p keleusma --features signatures
 step "Tests — keleusma signatures,shell (broad / docs.rs surface)"
 cargo test -p keleusma --features signatures,shell
 
+step "Tests — keleusma self-host (the self-hosted compile backend)"
+cargo test -p keleusma --features self-host
+
 # The Doc gate: mirror the CI Doc job exactly. -D warnings turns a broken or
 # private intra-doc link into an error. Each crate is documented at the same
 # feature set docs.rs uses so the signal matches the published docs.
