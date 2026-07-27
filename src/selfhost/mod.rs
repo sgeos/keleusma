@@ -593,75 +593,69 @@ pub fn parse_functions(
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
     let budget = tokens.len() * 16 + 256;
-    crate::selfhost_host::drive_parse_records(
-        &mut vm,
-        &mut shared,
-        state,
-        budget,
-        |code, val| {
-            if in_body {
-                match code {
-                    0 => {}
-                    15 => in_body = false,
-                    _ => cur.as_mut().unwrap().body.push((code, val)),
-                }
-            } else if in_guard {
-                match code {
-                    0 => {}
-                    15 => in_guard = false,
-                    _ => cur.as_mut().unwrap().guard.push((code, val)),
-                }
-            } else if in_data {
-                if code == 5 {
-                    data_records.push((5, 0));
-                    in_data = false;
-                } else if code != 0 {
-                    data_records.push((code, val));
-                }
-            } else if in_enum {
-                if code == 5 {
-                    enum_records.push((5, 0));
-                    in_enum = false;
-                } else if code != 0 {
-                    enum_records.push((code, val));
-                }
-            } else if in_use {
-                in_use = code != 5;
-            } else {
-                match code {
-                    1..=3 => {
-                        cur = Some(ParsedFn {
-                            cat: code,
-                            name: val,
-                            params: 0,
-                            param_types: Vec::new(),
-                            return_type: 0,
-                            guard: Vec::new(),
-                            body: Vec::new(),
-                        })
-                    }
-                    4 => cur.as_mut().unwrap().params += 1,
-                    6 => cur.as_mut().unwrap().param_types.push(val),
-                    7 => cur.as_mut().unwrap().return_type = val,
-                    9 => {
-                        in_data = true;
-                        data_records.push((9, val));
-                    }
-                    10 => in_use = true,
-                    12 => {
-                        in_enum = true;
-                        enum_records.push((12, val));
-                    }
-                    16 => in_body = true,
-                    17 => in_guard = true,
-                    5 => fns.push(cur.take().unwrap()),
-                    15 => return ControlFlow::Break(()),
-                    _ => {}
-                }
+    crate::selfhost_host::drive_parse_records(&mut vm, &mut shared, state, budget, |code, val| {
+        if in_body {
+            match code {
+                0 => {}
+                15 => in_body = false,
+                _ => cur.as_mut().unwrap().body.push((code, val)),
             }
-            ControlFlow::Continue(())
-        },
-    );
+        } else if in_guard {
+            match code {
+                0 => {}
+                15 => in_guard = false,
+                _ => cur.as_mut().unwrap().guard.push((code, val)),
+            }
+        } else if in_data {
+            if code == 5 {
+                data_records.push((5, 0));
+                in_data = false;
+            } else if code != 0 {
+                data_records.push((code, val));
+            }
+        } else if in_enum {
+            if code == 5 {
+                enum_records.push((5, 0));
+                in_enum = false;
+            } else if code != 0 {
+                enum_records.push((code, val));
+            }
+        } else if in_use {
+            in_use = code != 5;
+        } else {
+            match code {
+                1..=3 => {
+                    cur = Some(ParsedFn {
+                        cat: code,
+                        name: val,
+                        params: 0,
+                        param_types: Vec::new(),
+                        return_type: 0,
+                        guard: Vec::new(),
+                        body: Vec::new(),
+                    })
+                }
+                4 => cur.as_mut().unwrap().params += 1,
+                6 => cur.as_mut().unwrap().param_types.push(val),
+                7 => cur.as_mut().unwrap().return_type = val,
+                9 => {
+                    in_data = true;
+                    data_records.push((9, val));
+                }
+                10 => in_use = true,
+                12 => {
+                    in_enum = true;
+                    enum_records.push((12, val));
+                }
+                16 => in_body = true,
+                17 => in_guard = true,
+                5 => fns.push(cur.take().unwrap()),
+                15 => return ControlFlow::Break(()),
+                _ => {}
+            }
+        }
+        ControlFlow::Continue(())
+    });
     (fns, names, data_records, enum_records)
 }
 
@@ -956,10 +950,7 @@ fn analyze_class(op: &crate::bytecode::Op) -> (i64, i64) {
 /// `opk` tags the opcode (1 GetLocal, 2 SetLocal, 3 Const, 4 CmpGe, 5 BreakIf, 6 CheckedAdd,
 /// 7 PopN, 8 EndLoop, 9 Loop, 0 other); `slot` the GetLocal/SetLocal slot; `cval` the Const
 /// integer value or PopN count; `cint` 1 if a Const resolves to an integer.
-fn analyze_opk(
-    op: &crate::bytecode::Op,
-    chunk: &crate::bytecode::Chunk,
-) -> (i64, i64, i64, i64) {
+fn analyze_opk(op: &crate::bytecode::Op, chunk: &crate::bytecode::Chunk) -> (i64, i64, i64, i64) {
     use crate::bytecode::{ConstValue, Op};
     match op {
         Op::GetLocal(s) => (1, *s as i64, 0, 0),
@@ -1292,9 +1283,10 @@ pub fn structural_reject_chunk_via_kel(
     set(&vm, &mut shared, SV_BLOCK_TYPE, block_type_tag(chunk));
     // Whether the chunk delegates its yield to an always-yielding callee (the reference's
     // `calls_always_yielder`). Resolved from the marshalled always-yielding set.
-    let calls_ay = chunk.ops.iter().any(
-        |op| matches!(op, crate::bytecode::Op::Call(g, _) if always.contains(&(*g as usize))),
-    );
+    let calls_ay = chunk
+        .ops
+        .iter()
+        .any(|op| matches!(op, crate::bytecode::Op::Call(g, _) if always.contains(&(*g as usize))));
     set(&vm, &mut shared, SV_CALLS_AY, i64::from(calls_ay));
     for (i, op) in chunk.ops.iter().enumerate() {
         let (class, arg) = analyze_class(op);
@@ -1631,9 +1623,7 @@ fn typed_desc(
     wb: usize,
     fb: usize,
 ) -> (i64, i64, i64, i64, i64, i64, i64, i64, i64) {
-    use crate::bytecode::{
-        ArrayElem, EnumField, NewCompositeOperand, Op, StructField, TupleField,
-    };
+    use crate::bytecode::{ArrayElem, EnumField, NewCompositeOperand, Op, StructField, TupleField};
     use crate::value_layout::CompositeKind;
     let (class, arg) = analyze_class(op);
     let is_term = i64::from(matches!(op, Op::Return | Op::Trap(_)));
@@ -2282,10 +2272,7 @@ fn wire_shape_of(type_id: i64, names: &[String]) -> crate::bytecode::WireShape {
 
 /// Assemble the per-chunk signature table from the parsed functions, grouping
 /// same-named heads into one chunk and ordering by chunk name to match the module.
-fn assemble_signatures(
-    fns: &[ParsedFn],
-    names: &[String],
-) -> Vec<crate::bytecode::ChunkSignature> {
+fn assemble_signatures(fns: &[ParsedFn], names: &[String]) -> Vec<crate::bytecode::ChunkSignature> {
     use crate::bytecode::{ChunkSignature, WireShape};
     let mut chunks: Vec<(String, ChunkSignature)> = Vec::new();
     let mut i = 0;
@@ -2694,12 +2681,16 @@ pub fn self_hosted_compile(
     // pool, and local count) must match the reference. A divergence means the program is
     // outside the self-hosted subset; reject it rather than emit a wrong module.
     if module.chunks.len() != reference.chunks.len()
-        || module.chunks.iter().zip(reference.chunks.iter()).any(|(m, r)| {
-            m.name != r.name
-                || m.ops != r.ops
-                || m.constants != r.constants
-                || m.local_count != r.local_count
-        })
+        || module
+            .chunks
+            .iter()
+            .zip(reference.chunks.iter())
+            .any(|(m, r)| {
+                m.name != r.name
+                    || m.ops != r.ops
+                    || m.constants != r.constants
+                    || m.local_count != r.local_count
+            })
     {
         return Err(SelfHostError::Unsupported {
             detail: "the self-hosted output diverges from the reference compiler".to_string(),

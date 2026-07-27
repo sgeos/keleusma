@@ -28,7 +28,11 @@ fn self_hosted_matches_reference_for_in_subset_program() {
     );
     for (m, r) in sh.chunks.iter().zip(reference.chunks.iter()) {
         assert_eq!(m.name, r.name, "chunk order");
-        assert_eq!(m.ops, r.ops, "self-hosted ops must match reference for `{}`", r.name);
+        assert_eq!(
+            m.ops, r.ops,
+            "self-hosted ops must match reference for `{}`",
+            r.name
+        );
         assert_eq!(m.constants, r.constants, "constant pool for `{}`", r.name);
         assert_eq!(m.local_count, r.local_count, "local_count for `{}`", r.name);
     }

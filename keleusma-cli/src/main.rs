@@ -2494,7 +2494,8 @@ mod tests {
             .expect("encode release");
 
         // Debug build carries a debug pool on the calling chunk.
-        let debug_module = compile_source_with_target(src, None, true, Backend::Rust).expect("compile debug");
+        let debug_module =
+            compile_source_with_target(src, None, true, Backend::Rust).expect("compile debug");
         assert!(
             debug_module.chunks.iter().any(|c| c.debug_pool.is_some()),
             "a --debug compile should attach debug metadata"

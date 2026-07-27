@@ -1832,7 +1832,8 @@ fn self_compile_codegen_atomic_functions() {
     }
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    let src = std::fs::read_to_string(common::stage_path("compiler/kel/codegen.kel")).expect("read codegen.kel");
+    let src = std::fs::read_to_string(common::stage_path("compiler/kel/codegen.kel"))
+        .expect("read codegen.kel");
     let program = parse(&tokenize(&src).expect("lex codegen.kel")).expect("parse codegen.kel");
     let reference = compile_src(&src);
     let chunk_names: Vec<String> = reference.chunks.iter().map(|c| c.name.clone()).collect();
@@ -2054,8 +2055,10 @@ fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
 /// the id-to-spelling table recovered from the exposed intern table.
 fn br_lex(src: &str) -> (Vec<(i64, i64)>, Vec<String>) {
     let bytes = src.as_bytes();
-    let m =
-        compile_src(&std::fs::read_to_string(common::stage_path("compiler/kel/lexer.kel")).expect("read lexer.kel"));
+    let m = compile_src(
+        &std::fs::read_to_string(common::stage_path("compiler/kel/lexer.kel"))
+            .expect("read lexer.kel"),
+    );
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
@@ -2124,7 +2127,12 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
 
     let module = std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
-        .spawn(|| compile_src(&std::fs::read_to_string(common::stage_path("compiler/kel/parse.kel")).expect("read")))
+        .spawn(|| {
+            compile_src(
+                &std::fs::read_to_string(common::stage_path("compiler/kel/parse.kel"))
+                    .expect("read"),
+            )
+        })
         .expect("spawn")
         .join()
         .expect("join");
@@ -3957,7 +3965,12 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
         .collect();
     let module = std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
-        .spawn(|| compile_src(&std::fs::read_to_string(common::stage_path("compiler/kel/parse.kel")).expect("read")))
+        .spawn(|| {
+            compile_src(
+                &std::fs::read_to_string(common::stage_path("compiler/kel/parse.kel"))
+                    .expect("read"),
+            )
+        })
         .expect("spawn")
         .join()
         .expect("join");
@@ -4504,7 +4517,8 @@ fn self_host_compiles_lexer_kel_byte_identically() {
     ) {
         return;
     }
-    let src = std::fs::read_to_string(common::stage_path("compiler/kel/lexer.kel")).expect("read lexer.kel");
+    let src = std::fs::read_to_string(common::stage_path("compiler/kel/lexer.kel"))
+        .expect("read lexer.kel");
     let module = self_host_compile(&src);
     let reference = compile_src(&src);
     assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");
@@ -4726,7 +4740,8 @@ fn self_host_compiles_codegen_kel_byte_identically() {
     ) {
         return;
     }
-    let src = std::fs::read_to_string(common::stage_path("compiler/kel/codegen.kel")).expect("read codegen.kel");
+    let src = std::fs::read_to_string(common::stage_path("compiler/kel/codegen.kel"))
+        .expect("read codegen.kel");
     let module = self_host_compile(&src);
     let reference = compile_src(&src);
     assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");
@@ -4764,7 +4779,8 @@ fn self_host_compiles_parse_kel_byte_identically() {
     ) {
         return;
     }
-    let src = std::fs::read_to_string(common::stage_path("compiler/kel/parse.kel")).expect("read parse.kel");
+    let src = std::fs::read_to_string(common::stage_path("compiler/kel/parse.kel"))
+        .expect("read parse.kel");
     let module = self_host_compile(&src);
     let reference = compile_src(&src);
     assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");
@@ -4799,8 +4815,8 @@ fn self_host_compiles_reconstruct_kel_byte_identically() {
     ) {
         return;
     }
-    let src =
-        std::fs::read_to_string(common::stage_path("compiler/kel/reconstruct.kel")).expect("read reconstruct.kel");
+    let src = std::fs::read_to_string(common::stage_path("compiler/kel/reconstruct.kel"))
+        .expect("read reconstruct.kel");
     let module = self_host_compile(&src);
     let reference = compile_src(&src);
     assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");
