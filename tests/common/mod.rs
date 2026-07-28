@@ -4,6 +4,33 @@
 //! test binary; it is pulled into a test file with `mod common;`.
 #![allow(dead_code)]
 
+/// Resolve a self-hosted stage source path to a readable on-disk path.
+///
+/// The ten Rust-read stage sources (`lexer.kel`, `parse.kel`, `reconstruct.kel`,
+/// `codegen.kel`, `analyze.kel`, and the `verify_*.kel` family) are canonically owned by
+/// this crate at `src/selfhost/kel/` (only `prelude.kel` stays in `compiler/kel/`, and it
+/// is not read by these tests). The historical test paths are `compiler/kel/<stage>.kel`,
+/// so this maps a request to the new location by basename and passes anything unresolved
+/// through unchanged. Only the basename of `p` is significant.
+///
+/// Note: callers hashing a path as a cache-key identity token should hash the ORIGINAL
+/// `p`, not the resolved path, so the key stays stable across the relocation; use this
+/// only to obtain the bytes to read.
+pub fn stage_path(p: &str) -> String {
+    let base = p.rsplit('/').next().unwrap_or(p);
+    // From the workspace root (the cwd for `cargo test` in this crate).
+    let root = format!("src/selfhost/kel/{base}");
+    if std::path::Path::new(&root).exists() {
+        return root;
+    }
+    // Fallback for a non-root cwd.
+    let up = format!("../src/selfhost/kel/{base}");
+    if std::path::Path::new(&up).exists() {
+        return up;
+    }
+    p.to_string()
+}
+
 /// Fast-lane memoization for the expensive whole-stage self-compile byte-identity
 /// tests (process-audit item 3, the "complete key" form).
 ///
@@ -87,8 +114,10 @@ pub mod selfhost_cache {
         let mut inputs = kel_inputs.to_vec();
         inputs.sort_unstable();
         for p in inputs {
+            // Hash the ORIGINAL path string as the identity token so the key is stable
+            // across the stage relocation, but read the bytes from the resolved location.
             p.hash(&mut h);
-            let bytes = std::fs::read(p).ok()?; // unreadable input -> None -> no cache
+            let bytes = std::fs::read(super::stage_path(p)).ok()?; // unreadable input -> None -> no cache
             bytes.hash(&mut h);
         }
         Some(h.finish())

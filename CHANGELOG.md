@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The self-hosted compiler is selectable in the CLI: `keleusma compile
+  --compiler self-hosted` (default `rust`).** The reusable self-hosted compile
+  driver and its ten `.kel` stage sources moved from the detached `compiler/`
+  subproject into the shipping `keleusma` crate at `src/selfhost/`, behind a new
+  off-by-default `self-host` cargo feature (the runtime library stays `no_std`
+  and lean; `keleusma-cli` enables it so the flag ships). The new
+  `keleusma::selfhost::self_hosted_compile` entry runs a program through the
+  Keleusma-written pipeline at the host target and cross-checks its output
+  against the reference compiler, so any program outside the self-hosted subset
+  (floats, generics, `Text`, a non-host `--target`) fails loudly with a
+  `retry with --compiler rust` hint rather than emitting a wrong module. The
+  `compiler/` subproject now re-exports the driver from `keleusma::selfhost`.
 - **The shared-data segment ceiling rises from 64 KB to 16 MB (the wire format
   widens but `BYTECODE_VERSION` stays 1, per the no-public-adoption stance).** The shared byte-offset, unified data-slot index, and
   indexed-array length operands of `GetData`, `SetData`, `GetDataIndexed`, and

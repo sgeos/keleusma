@@ -83,6 +83,15 @@ rustdoc-args = ["--cfg", "docsrs"]
 [features]
 default = ["compile", "verify", "floats"]
 
+# Enables the self-hosted compile pipeline as a reusable library (`keleusma::selfhost`),
+# the backend behind `keleusma-cli --compiler self-hosted`. It embeds the ten Keleusma
+# stage sources (`src/selfhost/kel/*.kel`) via `include_str!` and shells them through the
+# VM, so it pulls in `std` (panic recovery, wide-stack threads) and requires `compile`
+# and `verify`. Off by default: the runtime library stays `no_std` and lean, and no
+# `no_std`/narrow-word target enables it. `keleusma-cli` turns it on so the shipping
+# binary always carries the `--compiler self-hosted` option.
+self-host = ["compile", "verify"]
+
 # Enables the `Float` type, the `Op::IntToFloat` and
 # `Op::FloatToInt` opcodes, the `Value::Float` and
 # `ConstValue::Float` variants, the f64 arithmetic arms in the

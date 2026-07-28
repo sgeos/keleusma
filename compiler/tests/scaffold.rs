@@ -11,10 +11,52 @@
 
 use keleusma_selfhost::selfhost::{compile_src, self_host_compile_full, self_host_compile_scratch};
 
+/// Read a stage source by basename. The four pipeline stages moved into the parent
+/// crate at `src/selfhost/kel/`; the subproject-only sources stay in `compiler/kel/`.
+fn read_stage(rel: &str) -> String {
+    let base = rel.rsplit('/').next().unwrap_or(rel);
+    let relocated = matches!(
+        base,
+        "lexer.kel"
+            | "parse.kel"
+            | "reconstruct.kel"
+            | "codegen.kel"
+            | "analyze.kel"
+            | "verify_structural.kel"
+            | "verify_yield.kel"
+            | "verify_depth.kel"
+            | "verify_typed.kel"
+            | "verify_datalayout.kel"
+    );
+    let candidates: [String; 6] = if relocated {
+        [
+            format!("src/selfhost/kel/{base}"),
+            format!("../src/selfhost/kel/{base}"),
+            format!("compiler/{rel}"),
+            rel.to_string(),
+            format!("kel/{base}"),
+            format!("compiler/kel/{base}"),
+        ]
+    } else {
+        [
+            format!("compiler/kel/{base}"),
+            format!("kel/{base}"),
+            format!("../compiler/kel/{base}"),
+            format!("compiler/{rel}"),
+            rel.to_string(),
+            format!("src/selfhost/kel/{base}"),
+        ]
+    };
+    for cand in &candidates {
+        if let Ok(s) = std::fs::read_to_string(cand) {
+            return s;
+        }
+    }
+    panic!("cannot read stage `{rel}` (tried {candidates:?})");
+}
+
 fn assert_scaffold_byte_identical(rel: &str) {
-    let src = std::fs::read_to_string(rel)
-        .or_else(|_| std::fs::read_to_string(format!("compiler/{rel}")))
-        .unwrap_or_else(|e| panic!("cannot read {rel}: {e}"));
+    let src = read_stage(rel);
     let self_bytes = self_host_compile_full(&src)
         .to_bytes()
         .unwrap_or_else(|e| panic!("serialize self-assembled module for {rel}: {e:?}"));
@@ -37,9 +79,7 @@ const EPHEMERAL_SRC: &str = "require word >= 32;\n\
 /// offset.
 fn assert_scratch_byte_identical(rel_or_src: &str, is_path: bool) {
     let src = if is_path {
-        std::fs::read_to_string(rel_or_src)
-            .or_else(|_| std::fs::read_to_string(format!("compiler/{rel_or_src}")))
-            .unwrap_or_else(|e| panic!("cannot read {rel_or_src}: {e}"))
+        read_stage(rel_or_src)
     } else {
         rel_or_src.to_string()
     };

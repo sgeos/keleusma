@@ -29,7 +29,7 @@ use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capa
 
 #[test]
 fn self_hosted_lexer_increment_1() {
-    let src = std::fs::read_to_string("compiler/kel/lexer.kel").expect("read lexer.kel");
+    let src = std::fs::read_to_string("src/selfhost/kel/lexer.kel").expect("read lexer.kel");
     let m = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -79,7 +79,7 @@ fn self_hosted_lexer_increment_1() {
 /// Drive the increment-1 lexer over `input` and collect its non-PENDING
 /// `(kind, value)` tokens through EOF. Shared by the increment-2 assertions.
 fn lex_tokens(input: &[u8]) -> Vec<(i64, i64)> {
-    let src = std::fs::read_to_string("compiler/kel/lexer.kel").expect("read lexer.kel");
+    let src = std::fs::read_to_string("src/selfhost/kel/lexer.kel").expect("read lexer.kel");
     let m = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);

@@ -83,6 +83,17 @@
 
 extern crate alloc;
 
+// The self-hosted compile driver (behind the `self-host` feature) shells the Keleusma
+// stages through the VM and needs `std` (panic recovery, wide-stack threads). This crate
+// is otherwise `no_std`; the feature and its `std` dependency are off by default.
+#[cfg(feature = "self-host")]
+extern crate std;
+
+/// The self-hosted compile pipeline as a reusable library (the `keleusma-cli
+/// --compiler self-hosted` backend). Off by default; requires `std`.
+#[cfg(feature = "self-host")]
+pub mod selfhost;
+
 /// Address-type abstraction used by the parametric [`vm::GenericVm`]
 /// to model the runtime's address width.
 pub mod address;

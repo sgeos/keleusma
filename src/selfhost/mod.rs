@@ -1,38 +1,67 @@
-//! The self-hosted compile pipeline as a reusable library.
+//! The self-hosted compile pipeline as a reusable library (gated by the `self-host`
+//! feature).
 //!
-//! This ports the stage drivers that prove the self-hosted stages self-compile
-//! (`../tests/selfhost_codegen.rs` in the parent `keleusma` crate) into the compiler
-//! subproject, so the `compile` command and the driver-level fixed-point test share
-//! one implementation. It drives all four Keleusma stages over a source:
-//! `kel/lexer.kel` tokenizes, `kel/parse.kel` emits a postorder record stream,
-//! `kel/reconstruct.kel` folds that into the (kind, arg, lhs, rhs) node forest, and
-//! `kel/codegen.kel` emits each chunk's ops, which are spliced into a module. The
-//! host only moves data between stages; the compile logic is Keleusma end to end.
-//! The [`self_host_compile`] entry splices only the self-hosted chunk ops onto the
-//! reference scaffold, whereas [`self_host_compile_full`] additionally assembles the
-//! module scaffold (data layout, enum-layout table, chunk signatures, schema hash, and
-//! declared WCET/WCMU header) from the pipeline output, so for the loop-free stage
-//! sources its serialized module is byte-identical to the reference (see
-//! `tests/scaffold.rs`) without borrowing any field from it.
+//! This drives the Keleusma stages over a source with the host only moving data between
+//! stages; the compile logic is Keleusma end to end. `kel/lexer.kel` tokenizes,
+//! `kel/parse.kel` emits a postorder record stream, `kel/reconstruct.kel` folds that
+//! into the (kind, arg, lhs, rhs) node forest, `kel/codegen.kel` emits each chunk's ops,
+//! and `kel/analyze.kel` supplies the declared WCET/WCMU header; the `kel/verify_*.kel`
+//! family provides the self-hosted verifier drivers. The [`self_host_compile`] entry
+//! splices only the self-hosted chunk ops onto the reference scaffold, whereas
+//! [`self_host_compile_scratch`] assembles the whole module (data layout, enum-layout
+//! table, chunk signatures, schema hash, WCET/WCMU header) from the pipeline output, so
+//! for the loop-free stage sources its serialized module is byte-identical to the
+//! reference without borrowing any field from it.
 //!
-//! The stage sources are read relative to the current directory, trying the
-//! package-local `kel/...` path then the repo-root `compiler/kel/...` path, so the
-//! commands work from either the subproject or the workspace root.
+//! [`self_hosted_compile`] is the shipping entry: it host-guards the target and maps any
+//! out-of-subset panic to a clean [`SelfHostError`] (the `keleusma-cli` `--compiler
+//! self-hosted` backend). All ten Rust-read stage sources are embedded via `include_str!`
+//! from `src/selfhost/kel/` (this crate is their canonical home; the detached `compiler/`
+//! subproject re-exports this module and its `main.rs`/tests drive it). `prelude.kel` is
+//! not read by the Rust host and stays in `compiler/kel/`.
 
-use keleusma::bytecode::{
+use alloc::boxed::Box;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec;
+use alloc::vec::Vec;
+use core::ops::ControlFlow;
+
+use crate::bytecode::{
     ArrayElem, ConstValue, EnumField, Module, NewCompositeOperand, Op, StructField, TupleField,
     Value,
 };
-use keleusma::value_layout::{CompositeKind, ScalarKind};
-use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
-use keleusma::{Arena, compiler::compile, lexer::tokenize, parser::parse};
-use std::ops::ControlFlow;
+use crate::value_layout::{CompositeKind, ScalarKind};
+use crate::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
+use crate::{Arena, compiler::compile, lexer::tokenize, parser::parse};
 
-/// Read a stage source, trying the package-local then the repo-root path.
+/// Read a stage source by basename, resolving the two ownership families from either
+/// the subproject directory or the workspace root.
+///
+/// The four pipeline stages moved into the parent crate at `src/selfhost/kel/`; the
+/// subproject-only sources stay in `compiler/kel/`. `rel` is a `kel/<name>.kel` path;
+/// only its basename is significant. Each candidate is tried in order; the first that
+/// reads wins.
 fn read_stage(rel: &str) -> String {
-    std::fs::read_to_string(rel)
-        .or_else(|_| std::fs::read_to_string(format!("compiler/{rel}")))
-        .unwrap_or_else(|e| panic!("cannot read {rel}: {e}"))
+    // All ten Rust-read stage sources are embedded in the crate at `src/selfhost/kel/`
+    // (beside this module) via `include_str!`, so the driver needs no filesystem access
+    // and works in an installed binary. `rel` is a `kel/<name>.kel` path; only the
+    // basename is significant.
+    let base = rel.rsplit('/').next().unwrap_or(rel);
+    let s: &str = match base {
+        "lexer.kel" => include_str!("kel/lexer.kel"),
+        "parse.kel" => include_str!("kel/parse.kel"),
+        "reconstruct.kel" => include_str!("kel/reconstruct.kel"),
+        "codegen.kel" => include_str!("kel/codegen.kel"),
+        "analyze.kel" => include_str!("kel/analyze.kel"),
+        "verify_structural.kel" => include_str!("kel/verify_structural.kel"),
+        "verify_yield.kel" => include_str!("kel/verify_yield.kel"),
+        "verify_depth.kel" => include_str!("kel/verify_depth.kel"),
+        "verify_typed.kel" => include_str!("kel/verify_typed.kel"),
+        "verify_datalayout.kel" => include_str!("kel/verify_datalayout.kel"),
+        other => panic!("unknown embedded stage source `{other}`"),
+    };
+    s.to_string()
 }
 
 /// Compile a stage or program source with the Rust-hosted reference compiler.
@@ -40,6 +69,9 @@ pub fn compile_src(src: &str) -> Module {
     compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile")
 }
 
+/// A reconstructed AST node in the flat `(kind, arg, lhs, rhs)` forest that
+/// `reconstruct.kel` emits and `codegen.kel` consumes. Public so the detached
+/// `compiler/` subproject (which re-exports this module) can drive the stages.
 pub struct Node {
     kind: i64,
     arg: i64,
@@ -561,75 +593,69 @@ pub fn parse_functions(
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call");
     let budget = tokens.len() * 16 + 256;
-    keleusma::selfhost_host::drive_parse_records(
-        &mut vm,
-        &mut shared,
-        state,
-        budget,
-        |code, val| {
-            if in_body {
-                match code {
-                    0 => {}
-                    15 => in_body = false,
-                    _ => cur.as_mut().unwrap().body.push((code, val)),
-                }
-            } else if in_guard {
-                match code {
-                    0 => {}
-                    15 => in_guard = false,
-                    _ => cur.as_mut().unwrap().guard.push((code, val)),
-                }
-            } else if in_data {
-                if code == 5 {
-                    data_records.push((5, 0));
-                    in_data = false;
-                } else if code != 0 {
-                    data_records.push((code, val));
-                }
-            } else if in_enum {
-                if code == 5 {
-                    enum_records.push((5, 0));
-                    in_enum = false;
-                } else if code != 0 {
-                    enum_records.push((code, val));
-                }
-            } else if in_use {
-                in_use = code != 5;
-            } else {
-                match code {
-                    1..=3 => {
-                        cur = Some(ParsedFn {
-                            cat: code,
-                            name: val,
-                            params: 0,
-                            param_types: Vec::new(),
-                            return_type: 0,
-                            guard: Vec::new(),
-                            body: Vec::new(),
-                        })
-                    }
-                    4 => cur.as_mut().unwrap().params += 1,
-                    6 => cur.as_mut().unwrap().param_types.push(val),
-                    7 => cur.as_mut().unwrap().return_type = val,
-                    9 => {
-                        in_data = true;
-                        data_records.push((9, val));
-                    }
-                    10 => in_use = true,
-                    12 => {
-                        in_enum = true;
-                        enum_records.push((12, val));
-                    }
-                    16 => in_body = true,
-                    17 => in_guard = true,
-                    5 => fns.push(cur.take().unwrap()),
-                    15 => return ControlFlow::Break(()),
-                    _ => {}
-                }
+    crate::selfhost_host::drive_parse_records(&mut vm, &mut shared, state, budget, |code, val| {
+        if in_body {
+            match code {
+                0 => {}
+                15 => in_body = false,
+                _ => cur.as_mut().unwrap().body.push((code, val)),
             }
-            ControlFlow::Continue(())
-        },
-    );
+        } else if in_guard {
+            match code {
+                0 => {}
+                15 => in_guard = false,
+                _ => cur.as_mut().unwrap().guard.push((code, val)),
+            }
+        } else if in_data {
+            if code == 5 {
+                data_records.push((5, 0));
+                in_data = false;
+            } else if code != 0 {
+                data_records.push((code, val));
+            }
+        } else if in_enum {
+            if code == 5 {
+                enum_records.push((5, 0));
+                in_enum = false;
+            } else if code != 0 {
+                enum_records.push((code, val));
+            }
+        } else if in_use {
+            in_use = code != 5;
+        } else {
+            match code {
+                1..=3 => {
+                    cur = Some(ParsedFn {
+                        cat: code,
+                        name: val,
+                        params: 0,
+                        param_types: Vec::new(),
+                        return_type: 0,
+                        guard: Vec::new(),
+                        body: Vec::new(),
+                    })
+                }
+                4 => cur.as_mut().unwrap().params += 1,
+                6 => cur.as_mut().unwrap().param_types.push(val),
+                7 => cur.as_mut().unwrap().return_type = val,
+                9 => {
+                    in_data = true;
+                    data_records.push((9, val));
+                }
+                10 => in_use = true,
+                12 => {
+                    in_enum = true;
+                    enum_records.push((12, val));
+                }
+                16 => in_body = true,
+                17 => in_guard = true,
+                5 => fns.push(cur.take().unwrap()),
+                15 => return ControlFlow::Break(()),
+                _ => {}
+            }
+        }
+        ControlFlow::Continue(())
+    });
     (fns, names, data_records, enum_records)
 }
 
@@ -904,8 +930,8 @@ fn analyze_kel_module() -> Module {
 /// exit a Break/BreakIf jumps to. (analyze.kel reads `arg` only for If and Loop; the EndLoop,
 /// Break, and BreakIf targets are ignored there and consumed only by verify_structural.kel's
 /// target-equality checks, so populating them does not affect the resource analysis.)
-fn analyze_class(op: &keleusma::bytecode::Op) -> (i64, i64) {
-    use keleusma::bytecode::Op;
+fn analyze_class(op: &crate::bytecode::Op) -> (i64, i64) {
+    use crate::bytecode::Op;
     match op {
         Op::If(t) => (1, *t as i64),
         Op::Else(e) => (2, *e as i64),
@@ -924,11 +950,8 @@ fn analyze_class(op: &keleusma::bytecode::Op) -> (i64, i64) {
 /// `opk` tags the opcode (1 GetLocal, 2 SetLocal, 3 Const, 4 CmpGe, 5 BreakIf, 6 CheckedAdd,
 /// 7 PopN, 8 EndLoop, 9 Loop, 0 other); `slot` the GetLocal/SetLocal slot; `cval` the Const
 /// integer value or PopN count; `cint` 1 if a Const resolves to an integer.
-fn analyze_opk(
-    op: &keleusma::bytecode::Op,
-    chunk: &keleusma::bytecode::Chunk,
-) -> (i64, i64, i64, i64) {
-    use keleusma::bytecode::{ConstValue, Op};
+fn analyze_opk(op: &crate::bytecode::Op, chunk: &crate::bytecode::Chunk) -> (i64, i64, i64, i64) {
+    use crate::bytecode::{ConstValue, Op};
     match op {
         Op::GetLocal(s) => (1, *s as i64, 0, 0),
         Op::SetLocal(s) => (2, *s as i64, 0, 0),
@@ -951,8 +974,8 @@ fn analyze_opk(
 /// reference WCMU native arm uses `during_peak = offset + 1` and `offset += 1 - n` with `n`
 /// the whole argument-count byte (the error-reify high bit included), which the generic
 /// accounting reproduces exactly as `growth = 1, shrink = n_full_byte`.
-fn analyze_stack_effect(op: &keleusma::bytecode::Op) -> (i64, i64) {
-    use keleusma::bytecode::Op;
+fn analyze_stack_effect(op: &crate::bytecode::Op) -> (i64, i64) {
+    use crate::bytecode::Op;
     match op {
         Op::CallVerifiedNative(_, n) | Op::CallExternalNative(_, n) => (1, *n as i64),
         _ => (op.stack_growth() as i64, op.stack_shrink() as i64),
@@ -965,11 +988,11 @@ fn analyze_stack_effect(op: &keleusma::bytecode::Op) -> (i64, i64) {
 /// is empty for the shallow empty-resolver form (copy-out zero, matching
 /// `wcmu_stream_iteration`) and the module's real layout for the transitive validator.
 fn analyze_op_heap(
-    op: &keleusma::bytecode::Op,
-    chunk: &keleusma::bytecode::Chunk,
-    shared_layout: &[keleusma::bytecode::SharedSlotLayout],
+    op: &crate::bytecode::Op,
+    chunk: &crate::bytecode::Chunk,
+    shared_layout: &[crate::bytecode::SharedSlotLayout],
 ) -> i64 {
-    use keleusma::bytecode::{Op, SHARED_SLOT_COMPOSITE_FLAG};
+    use crate::bytecode::{Op, SHARED_SLOT_COMPOSITE_FLAG};
     let slot_copyout = |slot: usize| -> i64 {
         shared_layout
             .get(slot)
@@ -995,13 +1018,13 @@ fn analyze_op_heap(
 /// callee folds in as zero. `shared_layout` sizes composite-shared-read copy-out (empty for
 /// the shallow form).
 fn run_analyze_kel(
-    chunk: &keleusma::bytecode::Chunk,
+    chunk: &crate::bytecode::Chunk,
     arena_capacity: i64,
     chunk_wcmu: &[(i64, i64)],
-    shared_layout: &[keleusma::bytecode::SharedSlotLayout],
+    shared_layout: &[crate::bytecode::SharedSlotLayout],
 ) -> (i64, i64, i64, bool, bool) {
-    use keleusma::bytecode::{BlockType, Op};
-    let vsb = keleusma::bytecode::VALUE_SLOT_SIZE_BYTES as i64;
+    use crate::bytecode::{BlockType, Op};
+    let vsb = crate::bytecode::VALUE_SLOT_SIZE_BYTES as i64;
     // The analysed region and the Stream/Reset positions (used only for a Stream chunk's WCET
     // overhead term; a Func/Reentrant chunk analyses its whole op range).
     let (region_start, region_end, sp, rp) = match chunk.block_type {
@@ -1090,7 +1113,7 @@ fn run_analyze_kel(
 /// Run analyze.kel over one Stream chunk (shallow, unbounded capacity) and report its
 /// per-iteration `(wcet, stack_bytes, heap_bytes, reject, valid)`. A thin reporting wrapper
 /// over `run_analyze_kel` with the empty resolver and empty layout.
-pub fn analyze_stream_chunk(chunk: &keleusma::bytecode::Chunk) -> (i64, i64, i64, bool, bool) {
+pub fn analyze_stream_chunk(chunk: &crate::bytecode::Chunk) -> (i64, i64, i64, bool, bool) {
     run_analyze_kel(chunk, i64::MAX, &[], &[])
 }
 
@@ -1150,9 +1173,9 @@ fn data_layout_slot_count(module: &Module) -> i64 {
 /// `o3` is the callee chunk's local count resolved here (0 when the callee index is out of
 /// range, in which case the callee-in-bounds check rejects first). An op with no operand index
 /// to validate yields `(0, 0, 0, 0)`.
-fn structural_opbounds(op: &keleusma::bytecode::Op, module: &Module) -> (i64, i64, i64, i64) {
-    use keleusma::bytecode::{NewCompositeOperand, Op, StructField};
-    use keleusma::value_layout::CompositeKind;
+fn structural_opbounds(op: &crate::bytecode::Op, module: &Module) -> (i64, i64, i64, i64) {
+    use crate::bytecode::{NewCompositeOperand, Op, StructField};
+    use crate::value_layout::CompositeKind;
     match op {
         Op::GetData(s) | Op::SetData(s) => (1, *s as i64, 0, 0),
         Op::GetDataIndexed(b, l) | Op::SetDataIndexed(b, l) => (2, *b as i64, *l as i64, 0),
@@ -1184,8 +1207,8 @@ fn structural_opbounds(op: &keleusma::bytecode::Op, module: &Module) -> (i64, i6
 
 /// Tag an op as a block-type marker for the second reference pass: 1 Yield, 2 Stream, 3 Reset,
 /// 0 other. The stage counts these to enforce each block type's marker profile.
-fn structural_marker(op: &keleusma::bytecode::Op) -> i64 {
-    use keleusma::bytecode::Op;
+fn structural_marker(op: &crate::bytecode::Op) -> i64 {
+    use crate::bytecode::Op;
     match op {
         Op::Yield => 1,
         Op::Stream => 2,
@@ -1195,8 +1218,8 @@ fn structural_marker(op: &keleusma::bytecode::Op) -> i64 {
 }
 
 /// The block type as the stage's tag: 0 Func, 1 Reentrant, 2 Stream.
-fn block_type_tag(chunk: &keleusma::bytecode::Chunk) -> i64 {
-    use keleusma::bytecode::BlockType;
+fn block_type_tag(chunk: &crate::bytecode::Chunk) -> i64 {
+    use crate::bytecode::BlockType;
     match chunk.block_type {
         BlockType::Func => 0,
         BlockType::Reentrant => 1,
@@ -1214,7 +1237,7 @@ fn block_type_tag(chunk: &keleusma::bytecode::Chunk) -> i64 {
 /// never run.
 pub fn structural_reject_chunk_via_kel(
     module: &Module,
-    chunk: &keleusma::bytecode::Chunk,
+    chunk: &crate::bytecode::Chunk,
     always: &std::collections::BTreeSet<usize>,
 ) -> bool {
     assert!(
@@ -1260,9 +1283,10 @@ pub fn structural_reject_chunk_via_kel(
     set(&vm, &mut shared, SV_BLOCK_TYPE, block_type_tag(chunk));
     // Whether the chunk delegates its yield to an always-yielding callee (the reference's
     // `calls_always_yielder`). Resolved from the marshalled always-yielding set.
-    let calls_ay = chunk.ops.iter().any(
-        |op| matches!(op, keleusma::bytecode::Op::Call(g, _) if always.contains(&(*g as usize))),
-    );
+    let calls_ay = chunk
+        .ops
+        .iter()
+        .any(|op| matches!(op, crate::bytecode::Op::Call(g, _) if always.contains(&(*g as usize))));
     set(&vm, &mut shared, SV_CALLS_AY, i64::from(calls_ay));
     for (i, op) in chunk.ops.iter().enumerate() {
         let (class, arg) = analyze_class(op);
@@ -1320,12 +1344,12 @@ fn verify_yield_kel_module() -> Module {
 /// some path falls through to `end`, and whether every such path yielded. `always` is the
 /// current always-yielding chunk set, which flags each `Call`'s delegated yield (`cay`).
 fn run_ayc(
-    chunk: &keleusma::bytecode::Chunk,
+    chunk: &crate::bytecode::Chunk,
     start: usize,
     end: usize,
     always: &std::collections::BTreeSet<usize>,
 ) -> (bool, bool) {
-    use keleusma::bytecode::Op;
+    use crate::bytecode::Op;
     assert!(
         chunk.ops.len() <= 1536,
         "verify_yield.kel op-table capacity"
@@ -1396,10 +1420,10 @@ pub fn self_hosted_always_yielding(module: &Module) -> std::collections::BTreeSe
 /// self-hosted kernel; `always` is the (self-hosted) always-yielding set. Non-Stream chunks and
 /// chunks missing a Stream/Reset marker are not rejected here (Pass 2 handles the latter).
 fn productivity_reject_via_kel(
-    chunk: &keleusma::bytecode::Chunk,
+    chunk: &crate::bytecode::Chunk,
     always: &std::collections::BTreeSet<usize>,
 ) -> bool {
-    use keleusma::bytecode::{BlockType, Op};
+    use crate::bytecode::{BlockType, Op};
     if chunk.block_type != BlockType::Stream {
         return false;
     }
@@ -1442,8 +1466,8 @@ fn verify_depth_kel_module() -> Module {
 /// (the reference `verify_stack_depth`). Marshals the control-flow `(class, arg)` table via
 /// `analyze_class`, the actual operand consumption `(dreq, dnet)` via `op_depth_effect`, and the
 /// Trap/Return terminator flag.
-pub fn depth_reject_chunk_via_kel(chunk: &keleusma::bytecode::Chunk) -> bool {
-    use keleusma::bytecode::Op;
+pub fn depth_reject_chunk_via_kel(chunk: &crate::bytecode::Chunk) -> bool {
+    use crate::bytecode::Op;
     assert!(
         chunk.ops.len() <= 1536,
         "verify_depth.kel op-table capacity"
@@ -1460,7 +1484,7 @@ pub fn depth_reject_chunk_via_kel(chunk: &keleusma::bytecode::Chunk) -> bool {
     set(&vm, &mut shared, DV_OP_COUNT, chunk.ops.len() as i64);
     for (i, op) in chunk.ops.iter().enumerate() {
         let (class, arg) = analyze_class(op);
-        let (req, net) = keleusma::verify::op_depth_effect(op, chunk);
+        let (req, net) = crate::verify::op_depth_effect(op, chunk);
         set(&vm, &mut shared, DV_CLASS + i, class);
         set(&vm, &mut shared, DV_ARG + i, arg);
         set(&vm, &mut shared, DV_DREQ + i, i64::from(req.max(0)));
@@ -1566,12 +1590,12 @@ fn verify_typed_kel_module() -> Module {
 /// The byte size of a scalar-shaped constant (`const_abs` restricted to its scalar arms), or
 /// `None` for a composite/unknown constant (which the reference leaves `Top`).
 fn const_scalar_size(
-    cv: Option<&keleusma::bytecode::ConstValue>,
+    cv: Option<&crate::bytecode::ConstValue>,
     wb: usize,
     fb: usize,
 ) -> Option<i64> {
-    use keleusma::bytecode::ConstValue;
-    use keleusma::value_layout::ScalarKind;
+    use crate::bytecode::ConstValue;
+    use crate::value_layout::ScalarKind;
     let sz = |k: ScalarKind| k.size_in_bytes(wb, fb) as i64;
     match cv {
         Some(ConstValue::Unit) => Some(sz(ScalarKind::Unit)),
@@ -1594,18 +1618,16 @@ fn const_scalar_size(
 /// `stack_growth`/`shrink`, which mis-state ops like `Yield`); `tk`/`ta`/`tb` is the shape
 /// transfer (see verify_typed.kel), 0 generic for every op except the shape producers/consumers.
 fn typed_desc(
-    op: &keleusma::bytecode::Op,
-    chunk: &keleusma::bytecode::Chunk,
+    op: &crate::bytecode::Op,
+    chunk: &crate::bytecode::Chunk,
     wb: usize,
     fb: usize,
 ) -> (i64, i64, i64, i64, i64, i64, i64, i64, i64) {
-    use keleusma::bytecode::{
-        ArrayElem, EnumField, NewCompositeOperand, Op, StructField, TupleField,
-    };
-    use keleusma::value_layout::CompositeKind;
+    use crate::bytecode::{ArrayElem, EnumField, NewCompositeOperand, Op, StructField, TupleField};
+    use crate::value_layout::CompositeKind;
     let (class, arg) = analyze_class(op);
     let is_term = i64::from(matches!(op, Op::Return | Op::Trap(_)));
-    let (r, net) = keleusma::verify::op_depth_effect(op, chunk);
+    let (r, net) = crate::verify::op_depth_effect(op, chunk);
     let req = i64::from(r.max(0));
     let prod = i64::from((net + r.max(0)).max(0));
     // The shape transfer kind, its operands, and (for flat composites) the composite kind `tc`
@@ -1668,9 +1690,9 @@ fn typed_desc(
 /// Lift a wire signature shape into the stage's `(tag, size, kind)` lattice, mirroring
 /// `AbsVal::from_wire`: Top -> (0,0,0); a decodable scalar -> (1, byte size, 0); a decodable flat
 /// composite -> (2, byte size, composite-kind tag); an undecodable tag -> Top.
-fn abs_from_wire(shape: &keleusma::bytecode::WireShape, wb: usize, fb: usize) -> (i64, i64, i64) {
-    use keleusma::bytecode::WireShape;
-    use keleusma::value_layout::{CompositeKind, ScalarKind};
+fn abs_from_wire(shape: &crate::bytecode::WireShape, wb: usize, fb: usize) -> (i64, i64, i64) {
+    use crate::bytecode::WireShape;
+    use crate::value_layout::{CompositeKind, ScalarKind};
     match shape {
         WireShape::Top => (0, 0, 0),
         WireShape::Scalar { kind } => match ScalarKind::from_tag(*kind) {
@@ -1692,12 +1714,12 @@ fn abs_from_wire(shape: &keleusma::bytecode::WireShape, wb: usize, fb: usize) ->
 /// size mismatch.
 fn typed_run(
     module: &Module,
-    chunk: &keleusma::bytecode::Chunk,
-    sig: Option<&keleusma::bytecode::ChunkSignature>,
+    chunk: &crate::bytecode::Chunk,
+    sig: Option<&crate::bytecode::ChunkSignature>,
     wb: usize,
     fb: usize,
 ) -> bool {
-    use keleusma::bytecode::Op;
+    use crate::bytecode::Op;
     assert!(
         chunk.ops.len() <= 1536,
         "verify_typed.kel op-table capacity"
@@ -1799,7 +1821,7 @@ fn typed_run(
 
 /// Run verify_typed.kel over one chunk in isolation (no seeding), the drop-in for
 /// `typed_check_chunk`.
-pub fn typed_reject_chunk_via_kel(module: &Module, chunk: &keleusma::bytecode::Chunk) -> bool {
+pub fn typed_reject_chunk_via_kel(module: &Module, chunk: &crate::bytecode::Chunk) -> bool {
     let wb = (1usize << module.word_bits_log2) / 8;
     let fb = (1usize << module.float_bits_log2) / 8;
     typed_run(module, chunk, None, wb, fb)
@@ -1862,8 +1884,8 @@ fn verify_datalayout_kel_module() -> Module {
 /// 1024-entry batch at a time (resuming the coroutine, the running state persisting in the shared
 /// buffer), so it scales to the self-hosted stages' tens-of-thousands-of-slot layouts.
 pub fn dl_reject_module_via_kel(module: &Module) -> bool {
-    use keleusma::bytecode::{SHARED_SLOT_COMPOSITE_FLAG, SlotVisibility};
-    use keleusma::value_layout::ScalarKind;
+    use crate::bytecode::{SHARED_SLOT_COMPOSITE_FLAG, SlotVisibility};
+    use crate::value_layout::ScalarKind;
     let Some(layout) = module.data_layout.as_ref() else {
         return false;
     };
@@ -1972,7 +1994,7 @@ pub fn dl_reject_module_via_kel(module: &Module) -> bool {
 /// topological order so callees precede callers), and the module is admitted iff no chunk has
 /// an inextractable bound and every Stream chunk's budget fits `arena_capacity`.
 pub fn validate_module_via_kel(module: &Module, arena_capacity: i64) -> bool {
-    use keleusma::bytecode::{BlockType, Op};
+    use crate::bytecode::{BlockType, Op};
     let n = module.chunks.len();
     // Topological order over the call graph (callees before callers), rejecting recursion --
     // the same DFS postorder `topological_call_order` computes.
@@ -2038,8 +2060,8 @@ pub fn validate_module_via_kel(module: &Module, arena_capacity: i64) -> bool {
 fn assemble_data_slots(
     data_records: &[(i64, i64)],
     names: &[String],
-) -> Vec<keleusma::bytecode::DataSlot> {
-    use keleusma::bytecode::{DataSlot, SlotVisibility};
+) -> Vec<crate::bytecode::DataSlot> {
+    use crate::bytecode::{DataSlot, SlotVisibility};
     struct Blk {
         name_id: i64,
         vis: i64,
@@ -2098,8 +2120,8 @@ fn assemble_data_slots(
 fn assemble_shared_layout(
     data_records: &[(i64, i64)],
     names: &[String],
-) -> Vec<keleusma::bytecode::SharedSlotLayout> {
-    use keleusma::bytecode::SharedSlotLayout;
+) -> Vec<crate::bytecode::SharedSlotLayout> {
+    use crate::bytecode::SharedSlotLayout;
     struct Blk {
         vis: i64,
         fields: Vec<(i64, i64)>, // (type name id, element count)
@@ -2149,8 +2171,8 @@ fn assemble_shared_layout(
 fn assemble_private_init(
     data_records: &[(i64, i64)],
     names: &[String],
-) -> Vec<keleusma::bytecode::ConstValue> {
-    use keleusma::bytecode::ConstValue;
+) -> Vec<crate::bytecode::ConstValue> {
+    use crate::bytecode::ConstValue;
     struct Blk {
         vis: i64,
         fields: Vec<(i64, i64)>, // (type name id, element count)
@@ -2189,8 +2211,8 @@ fn assemble_private_init(
 fn assemble_data_layout(
     data_records: &[(i64, i64)],
     names: &[String],
-) -> keleusma::bytecode::DataLayout {
-    keleusma::bytecode::DataLayout {
+) -> crate::bytecode::DataLayout {
+    crate::bytecode::DataLayout {
         slots: assemble_data_slots(data_records, names),
         shared_layout: assemble_shared_layout(data_records, names),
         private_composite_layout: Vec::new(),
@@ -2202,8 +2224,8 @@ fn assemble_data_layout(
 fn assemble_enum_layouts(
     enum_records: &[(i64, i64)],
     names: &[String],
-) -> Vec<keleusma::bytecode::EnumLayout> {
-    use keleusma::bytecode::{EnumLayout, EnumVariantDisc};
+) -> Vec<crate::bytecode::EnumLayout> {
+    use crate::bytecode::{EnumLayout, EnumVariantDisc};
     let mut layouts: Vec<EnumLayout> = Vec::new();
     let mut running = 0i64;
     for &(code, val) in enum_records {
@@ -2239,8 +2261,8 @@ fn assemble_enum_layouts(
 /// The flat shape of a stage boundary type: `Word` -> Int scalar (tag 3), `Byte` ->
 /// Byte scalar (tag 2), anything else the conservative `Top` the reference records for
 /// an unresolvable type.
-fn wire_shape_of(type_id: i64, names: &[String]) -> keleusma::bytecode::WireShape {
-    use keleusma::bytecode::WireShape;
+fn wire_shape_of(type_id: i64, names: &[String]) -> crate::bytecode::WireShape {
+    use crate::bytecode::WireShape;
     match names.get(type_id as usize).map(String::as_str) {
         Some("Word") => WireShape::Scalar { kind: 3 },
         Some("Byte") => WireShape::Scalar { kind: 2 },
@@ -2250,11 +2272,8 @@ fn wire_shape_of(type_id: i64, names: &[String]) -> keleusma::bytecode::WireShap
 
 /// Assemble the per-chunk signature table from the parsed functions, grouping
 /// same-named heads into one chunk and ordering by chunk name to match the module.
-fn assemble_signatures(
-    fns: &[ParsedFn],
-    names: &[String],
-) -> Vec<keleusma::bytecode::ChunkSignature> {
-    use keleusma::bytecode::{ChunkSignature, WireShape};
+fn assemble_signatures(fns: &[ParsedFn], names: &[String]) -> Vec<crate::bytecode::ChunkSignature> {
+    use crate::bytecode::{ChunkSignature, WireShape};
     let mut chunks: Vec<(String, ChunkSignature)> = Vec::new();
     let mut i = 0;
     while i < fns.len() {
@@ -2298,7 +2317,7 @@ fn assemble_resource_bounds(module: &mut Module) {
     let mut max_wcet = 0i64;
     let mut max_wcmu = 0i64;
     for c in &module.chunks {
-        if c.block_type != keleusma::bytecode::BlockType::Stream {
+        if c.block_type != crate::bytecode::BlockType::Stream {
             continue;
         }
         // The self-hosted analyze.kel driver already ported into this file: the shallow
@@ -2315,7 +2334,7 @@ fn assemble_resource_bounds(module: &mut Module) {
 /// Each chunk's `(name, param_count, block_type, param_types)` assembled from the parsed
 /// functions, in chunk-name order. The block type comes from the declaration category (fn ->
 /// Func, yield -> Reentrant, loop -> Stream); the parameter type tags map `Word`/`Byte` to
-/// their [`keleusma::bytecode::TypeTag`] (a stage boundary carries only scalar parameters). A
+/// their [`crate::bytecode::TypeTag`] (a stage boundary carries only scalar parameters). A
 /// multiheaded function is one chunk described by its first head.
 #[allow(clippy::type_complexity)]
 fn assemble_chunk_metadata(
@@ -2324,10 +2343,10 @@ fn assemble_chunk_metadata(
 ) -> Vec<(
     String,
     u8,
-    keleusma::bytecode::BlockType,
-    Vec<keleusma::bytecode::TypeTag>,
+    crate::bytecode::BlockType,
+    Vec<crate::bytecode::TypeTag>,
 )> {
-    use keleusma::bytecode::{BlockType, TypeTag};
+    use crate::bytecode::{BlockType, TypeTag};
     let tag_of = |type_id: i64| -> TypeTag {
         match names.get(type_id as usize).map(String::as_str) {
             Some("Word") => TypeTag::Word,
@@ -2374,7 +2393,7 @@ pub fn self_host_compile_full(src: &str) -> Module {
     let mut module = self_host_compile(src);
     let (fns, names, data_records, enum_records) = parse_functions(src);
     let dl = assemble_data_layout(&data_records, &names);
-    module.schema_hash = keleusma::bytecode::compute_schema_hash(Some(&dl));
+    module.schema_hash = crate::bytecode::compute_schema_hash(Some(&dl));
     module.data_layout = Some(dl);
     module.enum_layouts = assemble_enum_layouts(&enum_records, &names);
     module.signatures = assemble_signatures(&fns, &names);
@@ -2429,7 +2448,7 @@ fn self_host_module_bookkeeping(module: &mut Module) {
     );
     module.persistent_composite_bytes = 0;
     module.flags = if module.private_data_bytes == 0 {
-        keleusma::bytecode::FLAG_EPHEMERAL
+        crate::bytecode::FLAG_EPHEMERAL
     } else {
         0
     };
@@ -2442,7 +2461,7 @@ fn self_host_module_bookkeeping(module: &mut Module) {
 /// (tag 3) is eight bytes and a `Byte` (tag 2) is one byte at the 64-bit reference width, the
 /// same `(tag, size)` mapping `assemble_shared_layout` uses. Zero for a module with no shared
 /// slots.
-fn shared_data_bytes_of(shared_layout: &[keleusma::bytecode::SharedSlotLayout]) -> u32 {
+fn shared_data_bytes_of(shared_layout: &[crate::bytecode::SharedSlotLayout]) -> u32 {
     shared_layout
         .iter()
         .map(|e| {
@@ -2472,7 +2491,7 @@ fn shared_data_bytes_of(shared_layout: &[keleusma::bytecode::SharedSlotLayout]) 
 /// times `VALUE_SLOT_SIZE_BYTES`). The stages declare no natives, so `native_names` and
 /// `native_return_shapes` are empty.
 pub fn self_host_compile_scratch(src: &str) -> Module {
-    use keleusma::bytecode::{Chunk, ConstValue, SlotVisibility};
+    use crate::bytecode::{Chunk, ConstValue, SlotVisibility};
     let (fns, names, data_records, enum_records) = parse_functions(src);
 
     // Build each source chunk from the pipeline output. Group consecutive same-named heads
@@ -2526,7 +2545,7 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
     // The native names come from the `use` declarations; the stages declare none, so this is
     // empty and `native_return_shapes` is correspondingly empty.
     let native_names: Vec<String> = Vec::new();
-    let native_return_shapes: Vec<keleusma::bytecode::WireShape> = Vec::new();
+    let native_return_shapes: Vec<crate::bytecode::WireShape> = Vec::new();
 
     // The data layout, assembled from parse.kel's data-block records, drives both the shared
     // and private byte totals the reference derives from the same layout.
@@ -2538,15 +2557,15 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
         .filter(|s| s.visibility == SlotVisibility::Private)
         .count() as u32;
     let private_data_bytes =
-        private_slot_count.saturating_mul(keleusma::bytecode::VALUE_SLOT_SIZE_BYTES);
-    let schema_hash = keleusma::bytecode::compute_schema_hash(Some(&dl));
+        private_slot_count.saturating_mul(crate::bytecode::VALUE_SLOT_SIZE_BYTES);
+    let schema_hash = crate::bytecode::compute_schema_hash(Some(&dl));
 
     let enum_layouts = assemble_enum_layouts(&enum_records, &names);
     let signatures = assemble_signatures(&fns, &names);
 
     // The scalar bit widths are the host target's, matching the reference `compile`, which
     // compiles with `Target::host()`.
-    let target = keleusma::target::Target::host();
+    let target = crate::target::Target::host();
 
     let mut module = Module {
         chunks,
@@ -2573,6 +2592,120 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
     assemble_resource_bounds(&mut module);
     self_host_module_bookkeeping(&mut module);
     module
+}
+
+/// Why a self-hosted compile could not proceed. The self-hosted pipeline is not a
+/// general-purpose compiler: it accepts the self-hosted language subset at the host
+/// target width. `keleusma-cli`'s `--compiler self-hosted` maps these to a clear error
+/// suggesting `--compiler rust`.
+#[derive(Debug, Clone)]
+pub enum SelfHostError {
+    /// The requested target differs from the host width. The self-hosted pipeline is only
+    /// validated byte-identical to the reference at host word/address/float widths, so a
+    /// cross-width compile is refused rather than emitting an unverified module.
+    NonHostTarget,
+    /// The program is outside the self-hosted subset (for example floats, generics, or
+    /// `Text`), surfaced as a recovered pipeline panic.
+    Unsupported {
+        /// A best-effort description recovered from the pipeline panic payload.
+        detail: String,
+    },
+}
+
+impl core::fmt::Display for SelfHostError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            SelfHostError::NonHostTarget => write!(
+                f,
+                "the self-hosted compiler supports only the host target width"
+            ),
+            SelfHostError::Unsupported { detail } => write!(
+                f,
+                "the self-hosted compiler does not support this program ({detail})"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SelfHostError {}
+
+/// Compile a whole program with the self-hosted pipeline, returning a self-hosted-built
+/// [`Module`] for an in-subset program at the host target.
+///
+/// This is the shipping entry behind `keleusma-cli --compiler self-hosted`. It:
+/// 1. refuses a non-host `target` (the pipeline is only validated at host width);
+/// 2. recovers any out-of-subset pipeline panic into [`SelfHostError::Unsupported`]
+///    rather than aborting the process; and
+/// 3. cross-checks the self-hosted output against the reference compiler and rejects it
+///    if they diverge.
+///
+/// Step 3 is what makes the backend fail loudly on the whole subset boundary rather than
+/// only on constructs that crash a stage: the self-hosted pipeline silently mis-compiles
+/// some out-of-subset programs (for example float arithmetic) to a valid-but-wrong
+/// module, which neither a panic nor a load-time verify would catch. The reference is
+/// used ONLY as the correctness oracle — the returned module is the self-hosted one, so
+/// the emitted bytecode is genuinely self-hosted; when the two agree (an in-subset
+/// program) that agreement is the [construct-support boundary]'s guarantee. On any
+/// divergence the CLI prints a clean error suggesting `--compiler rust`.
+pub fn self_hosted_compile(
+    src: &str,
+    target: &crate::target::Target,
+) -> Result<Module, SelfHostError> {
+    let host = crate::target::Target::host();
+    if target.word_bits_log2 != host.word_bits_log2
+        || target.addr_bits_log2 != host.addr_bits_log2
+        || target.float_bits_log2 != host.float_bits_log2
+    {
+        return Err(SelfHostError::NonHostTarget);
+    }
+    // The reference compile is the correctness oracle. If the reference itself rejects the
+    // program it is a plain compile error (the self-hosted compiler cannot do better), so
+    // surface it; otherwise its chunks are the yardstick for the divergence check below.
+    let reference = compile_reference(src)?;
+    // The pipeline `panic!`s on some out-of-subset constructs. Recover those into a clean
+    // error; suppress the default panic output for the duration.
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let owned = src.to_string();
+    let result = std::panic::catch_unwind(move || self_host_compile_scratch(&owned));
+    std::panic::set_hook(prev);
+    let module = result.map_err(|payload| {
+        let detail = payload
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "unsupported construct".to_string());
+        SelfHostError::Unsupported { detail }
+    })?;
+    // Correctness cross-check: the self-hosted compiled code (each chunk's ops, constant
+    // pool, and local count) must match the reference. A divergence means the program is
+    // outside the self-hosted subset; reject it rather than emit a wrong module.
+    if module.chunks.len() != reference.chunks.len()
+        || module
+            .chunks
+            .iter()
+            .zip(reference.chunks.iter())
+            .any(|(m, r)| {
+                m.name != r.name
+                    || m.ops != r.ops
+                    || m.constants != r.constants
+                    || m.local_count != r.local_count
+            })
+    {
+        return Err(SelfHostError::Unsupported {
+            detail: "the self-hosted output diverges from the reference compiler".to_string(),
+        });
+    }
+    Ok(module)
+}
+
+/// Compile `src` with the reference compiler, mapping any lex/parse/compile failure to
+/// [`SelfHostError::Unsupported`] with the reference's message. Used as the correctness
+/// oracle by [`self_hosted_compile`].
+fn compile_reference(src: &str) -> Result<Module, SelfHostError> {
+    let tokens = tokenize(src).map_err(|e| SelfHostError::Unsupported { detail: e.message })?;
+    let program = parse(&tokens).map_err(|e| SelfHostError::Unsupported { detail: e.message })?;
+    compile(&program).map_err(|e| SelfHostError::Unsupported { detail: e.message })
 }
 
 #[cfg(test)]

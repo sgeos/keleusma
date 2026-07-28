@@ -163,14 +163,9 @@ fn run_lexer(path: &str) {
     use keleusma::bytecode::Value;
     use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 
-    // The lexer source lives beside this binary's package; try the package-local
-    // path first, then the repo-root path, so the command works from either.
-    let lexer_src = std::fs::read_to_string("kel/lexer.kel")
-        .or_else(|_| std::fs::read_to_string("compiler/kel/lexer.kel"))
-        .unwrap_or_else(|e| {
-            eprintln!("cannot read kel/lexer.kel: {e}");
-            std::process::exit(1);
-        });
+    // The lexer source is canonically owned by the parent crate at
+    // `src/selfhost/kel/`; `read_stage` resolves it from either directory.
+    let lexer_src = read_stage("kel/lexer.kel");
     let input = std::fs::read(path).unwrap_or_else(|e| {
         eprintln!("cannot read {path}: {e}");
         std::process::exit(1);
@@ -559,14 +554,32 @@ fn chunk_ids_from_tokens(tokens: &[(i64, i64)]) -> Vec<i64> {
     chunks
 }
 
-/// Read a pipeline-stage source, trying the package-local path then the repo root.
+/// Read a pipeline-stage source by basename, resolving the two ownership families from
+/// either the subproject directory or the workspace root.
+///
+/// The four pipeline stages moved into the parent crate at `src/selfhost/kel/`; the
+/// subproject-only sources stay in `compiler/kel/`. `rel` is a `kel/<name>.kel` path;
+/// only its basename is significant.
 fn read_stage(rel: &str) -> String {
-    std::fs::read_to_string(rel)
-        .or_else(|_| std::fs::read_to_string(format!("compiler/{rel}")))
-        .unwrap_or_else(|e| {
-            eprintln!("cannot read {rel}: {e}");
-            std::process::exit(1);
-        })
+    // The ten Rust-read stage sources now live canonically in the parent `keleusma`
+    // crate at `src/selfhost/kel/`; `prelude.kel` (not read here) stays in
+    // `compiler/kel/`. Resolve from either the workspace root or the subproject
+    // directory (`../`). `rel` is a `kel/<name>.kel` path; only the basename matters.
+    let base = rel.rsplit('/').next().unwrap_or(rel);
+    let candidates = [
+        format!("src/selfhost/kel/{base}"),
+        format!("../src/selfhost/kel/{base}"),
+        format!("compiler/kel/{base}"),
+        format!("kel/{base}"),
+        rel.to_string(),
+    ];
+    for cand in &candidates {
+        if let Ok(s) = std::fs::read_to_string(cand) {
+            return s;
+        }
+    }
+    eprintln!("cannot read stage `{rel}` (tried {candidates:?})");
+    std::process::exit(1);
 }
 
 /// Compile a stage source to a module, on a wide-stack thread when `deep` (the

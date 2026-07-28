@@ -11,54 +11,55 @@ increment-by-increment reasoning and frontier assessments live in
 
 ## Last Updated
 
-**Date**: 2026-07-26 (session 34)
+**Date**: 2026-07-27 (session 34)
 
 ## Current state
 
-- **Autonomy loop RUNNING. Increment 5 (struct-of-array-of-struct equality) is COMPLETE, full gate
-  GREEN, merged to `v0.2.3`.** `a == b` where a struct field is an array-of-struct
-  (`struct Q { ps: [P; 2] }`) now self-compiles byte-identically. **This closes the LAST
-  nested-composite-equality gap.**
-- **Construct-support boundary: 52 Ok / 2 Gap / 1 RefRejects** (was 51 / 3 / 1).
-- No opcode, record/node kind, or `BYTECODE_VERSION` change (reuses op 48 GetFieldNested and
-  `getindexnested` FlatNested Struct). `EXPECTED_SELF_COMPILE` 71 → 72 (a factored
-  `push_arr_of_struct_inner`).
+- **The self-hosted compiler is WIRED INTO THE SHIPPING CLI. COMPLETE, full gate GREEN, merged to
+  `v0.2.3`.** `keleusma-cli compile` gained `--compiler <rust|self-hosted>` (default `rust`, behavior
+  unchanged); `self-hosted` runs the Keleusma-written pipeline.
+- The self-host driver moved (history-preserving) from `compiler/src/selfhost.rs` to
+  `keleusma/src/selfhost/mod.rs` behind a `self-host` feature (off in the lib default, on in
+  `keleusma-cli`). All ten Rust-read `.kel` now live in `keleusma/src/selfhost/kel/` (`include_str!`'d;
+  works in an installed binary). `compiler/` is now a thin `pub use keleusma::selfhost::*` re-export
+  (still detached/excluded). New entry `keleusma::selfhost::self_hosted_compile(src, &Target) ->
+  Result<Module, SelfHostError>` (host-target-only; `catch_unwind` -> `Unsupported` for out-of-subset).
+- The construct-support boundary is UNCHANGED at **52 Ok / 2 Gap / 1 RefRejects** (this workstream added
+  no language constructs). No opcode/record/node/`BYTECODE_VERSION` change.
 
 ## Verification
 
-- Byte-identity oracle green: `self_host_compiles_struct_arrayofstruct_equality` (`[P;2]`, `[P;3]`,
-  multi-field element, `!=`, array-of-struct beside a scalar top field), all five whole-stage
-  self-compiles, the full nested-eq blast-radius suite, `validate_module_via_kel`, the codegen count
-  (72), and the boundary.
-- **Full `scripts/release-gate.sh` GREEN** (feature matrix, docs `-D warnings`, the detached
-  `compiler/` subproject). Merged only after this.
+- The `self-host` feature tests (`tests/self_hosted_backend.rs`): in-subset byte-identity vs the Rust
+  reference; `NonHostTarget` refused; out-of-subset (`Float`) rejected as `Unsupported`, not a panic.
+- CLI end-to-end (in-subset compiles, out-of-subset exits 1 with the retry hint, non-host refused); the
+  full detached `compiler/` subproject (86 tests, via the re-export); and the FULL
+  `scripts/release-gate.sh` all GREEN.
 
-## Capacity note (important for future parse.kel growth)
+## Notes for the next session
 
-Two host-side capacity walls were raised this increment (no ISA/wire impact): (1) parse.kel outgrew the
-lexer `src.bytes` source buffer, so it was raised **245760 → 393216** across all lockstep offset
-constants (lexer.kel, `compiler/src/main.rs`, `compiler/src/selfhost.rs`, `tests/selfhost_codegen.rs`,
-`tests/selfhost_pipeline.rs`); (2) the larger buffer expands the lexer's per-element shared-slot layout,
-so `verify_datalayout.kel`'s working arena in `dl_reject_module_via_kel` was raised to 4 MB. LESSON:
-resizing a shared byte-array buffer expands the per-element data layout and can cascade into
-layout-verifier arena limits — bump both together. parse.kel now has headroom to ~393 KB.
+- After a cross-workspace file move, sweep EVERY read-path helper in BOTH workspaces before the gate.
+  This move displaced `compiler/tests/*.rs` read helpers (the `relocated` predicate listed only the 4
+  Phase-1 stages; `validator.rs` read naively) — they surfaced one slow gate-run at a time. Run the whole
+  subproject suite (`cd compiler && cargo test`) at once to catch them together. `cargo fmt --all` does
+  NOT reach the detached `compiler/` workspace — format it separately (`cd compiler && cargo fmt`).
+- Delegated agents kept stalling on the 600s watchdog when long cargo builds ran in the FOREGROUND;
+  background+poll all long commands (the fix is proven).
 
-## Next step — OPERATOR-DECISION FORK: the same-context frontier is exhausted of bounded work
+## Next step — OPERATOR-DECISION FORK (no bounded same-context roadmap task remains)
 
-The nested-composite-equality family is fully self-hosted (tuple-of-struct, enum-in-struct,
-enum-with-struct-payload, 2-level struct nesting, struct-of-array-of-struct — increments 1–5). The two
-remaining Gaps are NOT bounded roadmap increments:
+Both the near-term self-host workstreams are now at their bounded end: the nested-composite-equality
+family is fully self-hosted (52 Ok), and the CLI-backend residual (Workstream A) is delivered. The
+remaining boundary Gaps are a genuine design decision (third-level struct nesting needs a general depth
+stack — the verifier forbids recursion) or out of scope (floats/generics). So the loop is again at an
+operator fork. Candidate directions to surface:
+- **New self-host language surface** — pick another construct family to self-host (would grow the boundary
+  again) — but the obvious nested-equality area is done; the next area needs operator selection.
+- **Third-level struct nesting** — generalize the fixed-depth drain to a bounded depth stack (a design
+  effort, previously rated extreme).
+- **Harden the new CLI backend** — e.g. thread the CLI preamble through self-hosted mode, or widen the
+  supported-subset error detail; documented limitations today.
+- **A different workstream** entirely (release cadence, other roadmap items).
+The next session should present these and wait for direction rather than auto-selecting.
 
-- **Third-level struct nesting** — `eq/2level_struct` handles exactly depth-2 via a fixed extra phase.
-  Depth-3 needs a GENERAL depth stack in the drain (the total-language verifier forbids the recursion
-  that would make arbitrary depth trivial). That is a design decision, not a copy-the-pattern increment
-  — a genuine STOP.
-- **Floats and generics** — out of scope for the self-hosted subset by policy.
-
-So the loop has reached a real fork: continue by **switching workstreams** (the highest-leverage
-residual is wiring the self-hosted stages into the shipping binary — Workstream A), or take on the
-third-level-nesting depth-stack design, or pause. This is an operator call per the loop's stop
-conditions (no remaining same-context candidate is a bounded roadmap task). The next session should
-surface these options rather than autonomously starting a design-decision or workstream switch.
-
-The seven-day rate-limit window remains the binding budget under heavy agent work; pace accordingly.
+The seven-day rate-limit window remains the binding budget under heavy agent work; this session was long
+and delegation-heavy — pace accordingly.

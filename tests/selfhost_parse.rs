@@ -163,7 +163,8 @@ fn compile_parse_stage() -> keleusma::bytecode::Module {
     std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
         .spawn(|| {
-            let stage = std::fs::read_to_string("compiler/kel/parse.kel").expect("read parse.kel");
+            let stage =
+                std::fs::read_to_string("src/selfhost/kel/parse.kel").expect("read parse.kel");
             compile(&parse(&tokenize(&stage).expect("lex parse.kel")).expect("parse parse.kel"))
                 .expect("compile parse.kel")
         })

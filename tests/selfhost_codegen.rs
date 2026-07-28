@@ -1030,7 +1030,11 @@ fn next_word(vm: &mut Vm<'_, '_>, shared: &mut [u8]) -> i64 {
 fn compile_kel_file(path: &'static str) -> Module {
     std::thread::Builder::new()
         .stack_size(256 * 1024 * 1024)
-        .spawn(move || compile_src(&std::fs::read_to_string(path).expect("read stage .kel")))
+        .spawn(move || {
+            compile_src(
+                &std::fs::read_to_string(common::stage_path(path)).expect("read stage .kel"),
+            )
+        })
         .expect("spawn stage compile")
         .join()
         .expect("stage compile thread")
@@ -1828,7 +1832,8 @@ fn self_compile_codegen_atomic_functions() {
     }
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    let src = std::fs::read_to_string("compiler/kel/codegen.kel").expect("read codegen.kel");
+    let src = std::fs::read_to_string(common::stage_path("compiler/kel/codegen.kel"))
+        .expect("read codegen.kel");
     let program = parse(&tokenize(&src).expect("lex codegen.kel")).expect("parse codegen.kel");
     let reference = compile_src(&src);
     let chunk_names: Vec<String> = reference.chunks.iter().map(|c| c.name.clone()).collect();
@@ -2050,8 +2055,10 @@ fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
 /// the id-to-spelling table recovered from the exposed intern table.
 fn br_lex(src: &str) -> (Vec<(i64, i64)>, Vec<String>) {
     let bytes = src.as_bytes();
-    let m =
-        compile_src(&std::fs::read_to_string("compiler/kel/lexer.kel").expect("read lexer.kel"));
+    let m = compile_src(
+        &std::fs::read_to_string(common::stage_path("compiler/kel/lexer.kel"))
+            .expect("read lexer.kel"),
+    );
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
@@ -2120,7 +2127,12 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
 
     let module = std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
-        .spawn(|| compile_src(&std::fs::read_to_string("compiler/kel/parse.kel").expect("read")))
+        .spawn(|| {
+            compile_src(
+                &std::fs::read_to_string(common::stage_path("compiler/kel/parse.kel"))
+                    .expect("read"),
+            )
+        })
         .expect("spawn")
         .join()
         .expect("join");
@@ -3953,7 +3965,12 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
         .collect();
     let module = std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
-        .spawn(|| compile_src(&std::fs::read_to_string("compiler/kel/parse.kel").expect("read")))
+        .spawn(|| {
+            compile_src(
+                &std::fs::read_to_string(common::stage_path("compiler/kel/parse.kel"))
+                    .expect("read"),
+            )
+        })
         .expect("spawn")
         .join()
         .expect("join");
@@ -4500,7 +4517,8 @@ fn self_host_compiles_lexer_kel_byte_identically() {
     ) {
         return;
     }
-    let src = std::fs::read_to_string("compiler/kel/lexer.kel").expect("read lexer.kel");
+    let src = std::fs::read_to_string(common::stage_path("compiler/kel/lexer.kel"))
+        .expect("read lexer.kel");
     let module = self_host_compile(&src);
     let reference = compile_src(&src);
     assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");
@@ -4722,7 +4740,8 @@ fn self_host_compiles_codegen_kel_byte_identically() {
     ) {
         return;
     }
-    let src = std::fs::read_to_string("compiler/kel/codegen.kel").expect("read codegen.kel");
+    let src = std::fs::read_to_string(common::stage_path("compiler/kel/codegen.kel"))
+        .expect("read codegen.kel");
     let module = self_host_compile(&src);
     let reference = compile_src(&src);
     assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");
@@ -4760,7 +4779,8 @@ fn self_host_compiles_parse_kel_byte_identically() {
     ) {
         return;
     }
-    let src = std::fs::read_to_string("compiler/kel/parse.kel").expect("read parse.kel");
+    let src = std::fs::read_to_string(common::stage_path("compiler/kel/parse.kel"))
+        .expect("read parse.kel");
     let module = self_host_compile(&src);
     let reference = compile_src(&src);
     assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");
@@ -4795,8 +4815,8 @@ fn self_host_compiles_reconstruct_kel_byte_identically() {
     ) {
         return;
     }
-    let src =
-        std::fs::read_to_string("compiler/kel/reconstruct.kel").expect("read reconstruct.kel");
+    let src = std::fs::read_to_string(common::stage_path("compiler/kel/reconstruct.kel"))
+        .expect("read reconstruct.kel");
     let module = self_host_compile(&src);
     let reference = compile_src(&src);
     assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");
@@ -5234,7 +5254,7 @@ fn assembled_data_slots_match_the_reference() {
         "compiler/kel/parse.kel",
     ];
     for path in cases {
-        let src = std::fs::read_to_string(path).expect("read stage");
+        let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
         let (_fns, names, data_records, _) = parse_functions(&src);
         let slots = assemble_data_slots(&data_records, &names);
         let reference = compile_src(&src);
@@ -5318,7 +5338,7 @@ fn assembled_shared_layout_matches_the_reference() {
         "compiler/kel/parse.kel",
     ];
     for path in cases {
-        let src = std::fs::read_to_string(path).expect("read stage");
+        let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
         let (_fns, names, data_records, _) = parse_functions(&src);
         let layout = assemble_shared_layout(&data_records, &names);
         let reference = compile_src(&src);
@@ -5418,7 +5438,7 @@ fn assembled_data_layout_matches_the_reference() {
         "compiler/kel/parse.kel",
     ];
     for path in cases {
-        let src = std::fs::read_to_string(path).expect("read stage");
+        let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
         let (_fns, names, data_records, _) = parse_functions(&src);
         let dl = assemble_data_layout(&data_records, &names);
         let reference = compile_src(&src);
@@ -5527,7 +5547,7 @@ fn assembled_enum_layouts_match_the_reference() {
         "compiler/kel/codegen.kel",
     ];
     for path in cases {
-        let src = std::fs::read_to_string(path).expect("read stage");
+        let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
         let (_fns, names, _data, enum_records) = parse_functions(&src);
         let layouts = assemble_enum_layouts(&enum_records, &names);
         let reference = compile_src(&src);
@@ -5635,7 +5655,7 @@ fn assembled_signatures_match_the_reference() {
         "compiler/kel/parse.kel",
     ];
     for path in cases {
-        let src = std::fs::read_to_string(path).expect("read stage");
+        let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
         let (fns, names, _data, _enums) = parse_functions(&src);
         let sigs = assemble_signatures(&fns, &names);
         let reference = compile_src(&src);
@@ -5667,7 +5687,7 @@ fn assembled_schema_hash_matches_the_reference() {
         "compiler/kel/codegen.kel",
         "compiler/kel/parse.kel",
     ] {
-        let src = std::fs::read_to_string(path).expect("read stage");
+        let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
         let (_fns, names, data_records, _enums) = parse_functions(&src);
         let dl = assemble_data_layout(&data_records, &names);
         let hash = keleusma::bytecode::compute_schema_hash(Some(&dl));
@@ -5724,7 +5744,7 @@ fn self_assembled_scaffold_serializes_byte_identically() {
         "compiler/kel/codegen.kel",
         "compiler/kel/parse.kel",
     ] {
-        let src = std::fs::read_to_string(path).expect("read stage");
+        let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
         let (fns, names, data_records, enum_records) = parse_functions(&src);
         // The self-hosted chunk ops, with the reference scaffold; then splice in the
         // driver-assembled components.
@@ -5816,7 +5836,7 @@ fn assembled_chunk_metadata_matches_the_reference() {
         "compiler/kel/codegen.kel",
         "compiler/kel/parse.kel",
     ] {
-        let src = std::fs::read_to_string(path).expect("read stage");
+        let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
         let (fns, names, _data, _enums) = parse_functions(&src);
         let meta = assemble_chunk_metadata(&fns, &names);
         let reference = compile_src(&src);
@@ -5874,7 +5894,8 @@ fn analyze_kel_module() -> Module {
     CACHED
         .get_or_init(|| {
             compile_src(
-                &std::fs::read_to_string("compiler/kel/analyze.kel").expect("read analyze.kel"),
+                &std::fs::read_to_string(common::stage_path("compiler/kel/analyze.kel"))
+                    .expect("read analyze.kel"),
             )
         })
         .clone()
@@ -6159,7 +6180,7 @@ fn analyze_via_kel_matches_the_reference() {
         "compiler/kel/codegen.kel",
         "compiler/kel/parse.kel",
     ] {
-        let src = std::fs::read_to_string(path).expect("read stage");
+        let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
         let m = compile_src(&src);
         for c in &m.chunks {
             if c.block_type != keleusma::bytecode::BlockType::Stream {
@@ -6290,7 +6311,8 @@ fn self_host_compiles_analyze_kel_byte_identically() {
     ) {
         return;
     }
-    let src = std::fs::read_to_string("compiler/kel/analyze.kel").expect("read analyze.kel");
+    let src = std::fs::read_to_string(common::stage_path("compiler/kel/analyze.kel"))
+        .expect("read analyze.kel");
     let module = self_host_compile(&src);
     let reference = compile_src(&src);
     assert_eq!(module.chunks.len(), reference.chunks.len(), "chunk count");
@@ -6531,7 +6553,7 @@ fn validate_module_via_kel_is_a_drop_in_for_verify_resource_bounds() {
         "compiler/kel/parse.kel",
     ] {
         modules.push(compile_src(
-            &std::fs::read_to_string(path).expect("read stage"),
+            &std::fs::read_to_string(common::stage_path(path)).expect("read stage"),
         ));
     }
     let synth: &[&str] = &[

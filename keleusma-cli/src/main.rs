@@ -141,6 +141,7 @@ fn print_help() {
     println!("                                    without running, for provisioning a host.");
     println!("  compile <file> [-o <output>] [--signing-key <keyfile>]");
     println!("                 [--encryption-key <keyfile>] [--target <name>] [--debug]");
+    println!("                 [--compiler <rust|self-hosted>]");
     println!("                                    Compile to bytecode. With --debug, emit");
     println!("                                    strippable debug metadata (source spans for");
     println!("                                    stack traces); remove it later with `strip`.");
@@ -156,6 +157,13 @@ fn print_help() {
     println!("                                    embedded_16, embedded_8. Programs are");
     println!("                                    validated against the selected target's");
     println!("                                    word, address, and float widths.");
+    println!("                                    --compiler selects the backend: rust");
+    println!("                                    (default, the reference compiler) or");
+    println!("                                    self-hosted (the Keleusma-written pipeline,");
+    println!("                                    host target only, self-hosted subset only:");
+    println!("                                    no floats, generics, or Text, and no CLI");
+    println!("                                    preamble). Out-of-subset programs error with");
+    println!("                                    a hint to retry with --compiler rust.");
     println!("  keygen --seed <out> --public <out>");
     println!("                                    Generate a fresh Ed25519 keypair from the");
     println!("                                    OS RNG. Writes the 32-byte signing seed to");
@@ -501,6 +509,7 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
     let mut encryption_key_path: Option<String> = None;
     let mut target: Option<keleusma::target::Target> = None;
     let mut emit_debug = false;
+    let mut backend = Backend::Rust;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -549,6 +558,23 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
             "--debug" => {
                 emit_debug = true;
                 i += 1;
+            }
+            "--compiler" => {
+                if i + 1 >= args.len() {
+                    eprintln!("error: --compiler requires a backend name (rust, self-hosted)");
+                    return ExitCode::FAILURE;
+                }
+                match args[i + 1].as_str() {
+                    "rust" => backend = Backend::Rust,
+                    "self-hosted" | "selfhosted" => backend = Backend::SelfHosted,
+                    other => {
+                        eprintln!(
+                            "error: unknown compiler backend `{other}` (expected rust or self-hosted)"
+                        );
+                        return ExitCode::FAILURE;
+                    }
+                }
+                i += 2;
             }
             other => {
                 eprintln!("error: unknown option `{}`", other);
@@ -604,7 +630,7 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let module = match compile_source_with_target(&source, target.as_ref(), emit_debug) {
+    let module = match compile_source_with_target(&source, target.as_ref(), emit_debug, backend) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("error: {}", e);
@@ -1552,19 +1578,56 @@ fn strip_subcommand(args: &[String]) -> ExitCode {
     }
 }
 
+/// Which compiler backend `compile` uses. `Rust` (default) is the in-tree
+/// reference compiler; `SelfHosted` is the Keleusma-written pipeline
+/// (`keleusma::selfhost`), selected by `--compiler self-hosted`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Backend {
+    Rust,
+    SelfHosted,
+}
+
 fn compile_source(source: &str) -> Result<keleusma::bytecode::Module, String> {
-    compile_source_with_target(source, None, false)
+    compile_source_with_target(source, None, false, Backend::Rust)
 }
 
 /// Compile the source through the standard pipeline, routing
 /// through [`compile_with_target`] when an explicit target is
 /// provided so the compiler validates the program against the
 /// target's word, address, and float widths before emitting.
+///
+/// With `backend == Backend::SelfHosted` the Keleusma-written pipeline compiles the
+/// user source directly (the CLI preamble is NOT injected, and only the self-hosted
+/// subset at the host target is supported); any out-of-subset program is reported as
+/// an error suggesting `--compiler rust`.
 fn compile_source_with_target(
     source: &str,
     target: Option<&keleusma::target::Target>,
     emit_debug: bool,
+    backend: Backend,
 ) -> Result<keleusma::bytecode::Module, String> {
+    if backend == Backend::SelfHosted {
+        // Resolve the target (host when absent), then run the self-hosted pipeline on the
+        // user source with any shebang line stripped. No preamble is prepended: the
+        // self-hosted compiler declares no natives, so the CLI preamble is out of subset.
+        let host_target;
+        let resolved_target = match target {
+            Some(t) => t,
+            None => {
+                host_target = keleusma::target::Target::host();
+                &host_target
+            }
+        };
+        let user_src: String = match source.strip_prefix("#!") {
+            Some(rest) => match rest.find('\n') {
+                Some(nl) => rest[nl + 1..].to_string(),
+                None => String::new(),
+            },
+            None => source.to_string(),
+        };
+        return keleusma::selfhost::self_hosted_compile(&user_src, resolved_target)
+            .map_err(|e| format!("self-hosted compile: {e}; retry with --compiler rust"));
+    }
     let mut combined = build_preamble();
     // A script may begin with a `#!/usr/bin/env keleusma` shebang so it
     // is directly executable. The lexer skips a shebang only when it is
@@ -2425,13 +2488,14 @@ mod tests {
         let src = "fn helper() -> Word { 1 }\nfn main() -> Word { helper() }";
 
         // Release build (no debug).
-        let release_bytes = compile_source_with_target(src, None, false)
+        let release_bytes = compile_source_with_target(src, None, false, Backend::Rust)
             .expect("compile release")
             .to_bytes()
             .expect("encode release");
 
         // Debug build carries a debug pool on the calling chunk.
-        let debug_module = compile_source_with_target(src, None, true).expect("compile debug");
+        let debug_module =
+            compile_source_with_target(src, None, true, Backend::Rust).expect("compile debug");
         assert!(
             debug_module.chunks.iter().any(|c| c.debug_pool.is_some()),
             "a --debug compile should attach debug metadata"

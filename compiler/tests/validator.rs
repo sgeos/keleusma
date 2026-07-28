@@ -28,8 +28,27 @@ fn stream_budget(module: &Module) -> i64 {
         .expect("at least one Stream chunk")
 }
 
+/// Resolve a `kel/<stage>.kel` stage source: the ten Rust-read stages now live in the parent
+/// `keleusma` crate at `src/selfhost/kel/` (tried relative to the subproject dir and the workspace
+/// root); the fallbacks cover a run from either directory.
+fn read_stage(path: &str) -> String {
+    let base = path.rsplit('/').next().unwrap_or(path);
+    for cand in [
+        format!("../src/selfhost/kel/{base}"),
+        format!("src/selfhost/kel/{base}"),
+        format!("../compiler/kel/{base}"),
+        format!("compiler/kel/{base}"),
+        path.to_string(),
+    ] {
+        if let Ok(s) = std::fs::read_to_string(&cand) {
+            return s;
+        }
+    }
+    panic!("cannot read stage `{path}`");
+}
+
 fn assert_agrees(path: &str) {
-    let src = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+    let src = read_stage(path);
     let module = compile_src(&src);
     let budget = stream_budget(&module);
     // Below, at, and above the budget. The reference admits iff the capacity is at least
