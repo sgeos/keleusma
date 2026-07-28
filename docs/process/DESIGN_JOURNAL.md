@@ -15,7 +15,43 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 ## Last Updated
 
-**Date**: 2026-07-26 (session 34)
+**Date**: 2026-07-27 (session 34)
+
+**WORKSTREAM SWITCH (2026-07-27): the self-hosted compiler is WIRED INTO THE SHIPPING CLI behind a `--compiler <rust|self-hosted>` flag (default rust). COMPLETE, full gate GREEN, merged.**
+After the nested-composite-equality family reached its bounded end (increments 1-5), the operator directed
+the highest-leverage workstream residual: expose the self-hosted pipeline in `keleusma-cli`. Two operator
+decisions shaped it (via AskUserQuestion): (1) RELOCATE the stage sources into `keleusma` as the single
+source of truth (not copy-with-drift-gate); (2) FAIL LOUDLY on out-of-subset programs (a clear error +
+`retry with --compiler rust`, never a silent fallback). A scouting Plan agent then found the compile path
+is entangled with analyze.kel (`self_host_compile_scratch` -> `assemble_resource_bounds` -> analyze.kel for
+the WCET/WCMU header), so a surgical 4-stage extraction was wrong; the operator authorized a WHOLE-FILE MOVE.
+
+Shape delivered: `compiler/src/selfhost.rs` moved (history-preserving `git mv`) to `keleusma/src/selfhost/mod.rs`
+behind a new `self-host` cargo feature (off in the lib default, ON in `keleusma-cli` so the runtime flag ships);
+all ten Rust-read `.kel` (the 4 pipeline stages + analyze + the five verify_*) relocated to
+`keleusma/src/selfhost/kel/` and embedded via `include_str!` (no filesystem access -> works in an installed
+binary); `prelude.kel` stays in `compiler/kel/` (not read by Rust). The detached `compiler/` subproject became a
+thin `pub use keleusma::selfhost::*` re-export (still detached/excluded; keeps its tests + bootstrap harness).
+New shipping entry `keleusma::selfhost::self_hosted_compile(src, &Target) -> Result<Module, SelfHostError>`:
+returns `NonHostTarget` for a non-host width (the pipeline is only byte-identity-validated at host width) and
+`catch_unwind`s the pipeline to map an out-of-subset program (floats/generics/Text) to `Unsupported { detail }`
+rather than a crash. `keleusma-cli`'s `compile_subcommand` parses `--compiler` into a `Backend` enum (default
+`Rust`, an early-return `SelfHosted` branch), so the RUST DEFAULT PATH IS BEHAVIORALLY UNCHANGED.
+
+PROCESS: this workstream was rocky under delegation — one implementation agent stalled after Phase 1 (relocation),
+one after finding the analyze entanglement (correctly STOPPED per instruction), and the whole-file-move agent
+finished the port + flag but its turn ended before the gate. The recurring stall cause was the 600s watchdog
+firing on long silent cargo builds run in the foreground; the fix is to background+poll all long commands. I
+finished the mop-up by hand: the whole-file move displaced test-harness read paths that surfaced one gate-run at
+a time (the `compiler/tests/*.rs` `read_stage` `relocated` predicate only listed the 4 Phase-1 stages, not the 6
+moved in Phase 2; `validator.rs` did a naive `fs::read_to_string("kel/X.kel")`). Fixed by widening the predicates
+to all ten stages and giving `validator.rs` a resolver, then running the WHOLE compiler subproject suite at once
+(86 tests green) rather than discovering stragglers one slow gate at a time. LESSON: after a cross-workspace file
+move, sweep every read-path helper (both workspaces) before the gate; and `cargo fmt --all` does NOT reach the
+detached `compiler/` workspace (format it separately). Verified: the `self-host` feature tests (in-subset
+byte-identity vs the reference, `NonHostTarget` refused, out-of-subset `Unsupported` not a panic), CLI end-to-end,
+the full compiler subproject (86 tests), and the FULL `scripts/release-gate.sh` all GREEN. No opcode/record/node/
+`BYTECODE_VERSION` change; the compiler/ detach is preserved.
 
 **AUTONOMY-LOOP INCREMENT 5 (2026-07-26): STRUCT-OF-ARRAY-OF-STRUCT EQUALITY self-compiles byte-identically. COMPLETE, full gate GREEN, merged. This closes the LAST nested-composite-equality gap.**
 `a == b` where a struct field is an array whose element is itself a struct (`struct P { x: Word }`,
