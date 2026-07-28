@@ -10,9 +10,11 @@ a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`
-- **Parent commit** (the repository state this handoff describes): `3a98b83`
+- **Parent commit** (the repository state this handoff describes): `8df4b08`
 - **Written**: 2026-07-27
 - **Tree at write**: clean (all work committed and merged)
+- **Context**: written immediately before a PLANNED COMPACTION. The operator will SELECT A DIRECTION on
+  resume, so the resume prompt below is deliberately present-the-fork-and-wait, not continue-the-loop.
 
 **Validity check — run on resume, before trusting this handoff.** On the branch above, compare the
 **Parent commit** to `git rev-parse HEAD~1`. Because this handoff file is itself committed, its commit
@@ -52,7 +54,8 @@ byte-identity oracle where applicable + FULL `scripts/release-gate.sh`, no-ff me
 record on all three channels, restamp this HANDOFF before the next planned compaction).
 
 **Git position** (as of the Parent commit)
-- Branch `v0.2.3` at `3a98b83` (the CLI-self-hosted-backend merge commit), in sync with origin, tree clean.
+- Branch `v0.2.3` at `8df4b08` (the CLI-self-hosted-backend merge `3a98b83` plus its handoff restamp),
+  in sync with origin, working tree clean, CI green.
 - `main` holds releases and sits behind `v0.2.3` by design. Branch model in
   `docs/process/GIT_STRATEGY.md` (release-branch, no-fast-forward merges up the hierarchy).
 
