@@ -10,8 +10,8 @@ a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`
-- **Parent commit** (the repository state this handoff describes): `1022d72`
-- **Written**: 2026-07-26
+- **Parent commit** (the repository state this handoff describes): `3a98b83`
+- **Written**: 2026-07-27
 - **Tree at write**: clean (all work committed and merged)
 
 **Validity check — run on resume, before trusting this handoff.** On the branch above, compare the
@@ -25,35 +25,34 @@ advances the tip by one, so the state it describes is the parent of the handoff 
   parent versus actual `HEAD~1`), familiarize from the live channels — `REVERSE_PROMPT.md`,
   `DESIGN_JOURNAL.md`, `TASKLOG.md`, and the git log, always authoritative — and wait for instruction.
 
-## Resume prompt — SURFACE THE FORK (the bounded same-context frontier is exhausted)
+## Resume prompt — SURFACE THE FORK (bounded same-context work is exhausted)
 
-**The nested-composite-equality family is now fully self-hosted (increments 1–5).** There is no
-remaining bounded same-context increment, so the loop's keep-going default does NOT apply here: the next
-move is a genuine operator-decision fork. After the validity check passes, do **not** autonomously start
-a design decision or a workstream switch. If the validity check **fails**, report invalid-and-stale,
-familiarize, and wait.
+**Two workstreams have now reached their bounded end: the nested-composite-equality family is fully
+self-hosted (increments 1–5, boundary 52 Ok), and the CLI self-hosted-backend residual is delivered
+(the `--compiler <rust|self-hosted>` flag).** There is no remaining bounded same-context task, so the
+loop's keep-going default does NOT apply: the next move is a genuine operator-decision fork. After the
+validity check passes, do **not** autonomously start a design decision or a new workstream. If the
+validity check **fails**, report invalid-and-stale, familiarize, and wait.
 
 Steps, in order:
 
 1. **Validate** — run the validity check above. Valid → continue. Invalid → stop and report.
-2. **Familiarize** — read `docs/process/REVERSE_PROMPT.md` (the fork is spelled out there),
-   `docs/process/DESIGN_JOURNAL.md` (newest entries: increments 3–5), and `docs/process/TASKLOG.md`.
-   Confirm the live state matches this handoff.
-3. **Surface the fork to the operator** — the two remaining boundary Gaps are NOT bounded roadmap
-   increments: (a) **third-level struct nesting** needs a GENERAL depth stack in the drain (the
-   total-language verifier forbids the recursion that would make arbitrary depth trivial) — a design
-   decision; (b) **floats / generics** are out of scope for the self-hosted subset. The highest-leverage
-   alternative is a **workstream switch**: wiring the self-hosted stages into the shipping binary
-   (Workstream A). Present these options (design the depth stack / switch workstreams / pause) and wait
-   for direction. Do not pick among them autonomously — this is the operator's call per the loop's stop
-   conditions.
+2. **Familiarize** — read `docs/process/REVERSE_PROMPT.md` (the fork options are spelled out there),
+   `docs/process/DESIGN_JOURNAL.md` (newest entries: increments 3–5 and the CLI-backend workstream), and
+   `docs/process/TASKLOG.md`. Confirm the live state matches this handoff.
+3. **Surface the fork to the operator** — present the candidate directions and wait: (a) a NEW self-host
+   language-surface area to self-host (grows the boundary again; needs operator selection of which
+   construct family); (b) **third-level struct nesting** — generalize the fixed-depth drain to a bounded
+   depth stack (a design effort, rated extreme); (c) **harden the new CLI backend** (thread the CLI
+   preamble through self-hosted mode; widen the supported-subset error detail); (d) a different
+   workstream (release cadence, other roadmap). Do not pick among them autonomously.
 
-If the operator directs one, then follow the normal increment cycle (feature branch off `v0.2.3`,
-byte-identity oracle + FULL `scripts/release-gate.sh`, no-ff merge, push, confirm CI, record on all
-three channels, restamp this HANDOFF before the next planned compaction).
+If the operator directs one, follow the normal increment cycle (feature branch off `v0.2.3`,
+byte-identity oracle where applicable + FULL `scripts/release-gate.sh`, no-ff merge, push, confirm CI,
+record on all three channels, restamp this HANDOFF before the next planned compaction).
 
 **Git position** (as of the Parent commit)
-- Branch `v0.2.3` at `1022d72` (the increment-5 merge commit), in sync with origin, working tree clean.
+- Branch `v0.2.3` at `3a98b83` (the CLI-self-hosted-backend merge commit), in sync with origin, tree clean.
 - `main` holds releases and sits behind `v0.2.3` by design. Branch model in
   `docs/process/GIT_STRATEGY.md` (release-branch, no-fast-forward merges up the hierarchy).
 
@@ -66,6 +65,13 @@ three channels, restamp this HANDOFF before the next planned compaction).
 - Capacity: the lexer `src.bytes` source buffer was raised 245760 → 393216 (parse.kel outgrew it) and
   the `dl_reject_module_via_kel` layout-verifier test arena to 4 MB. Resizing a shared byte-array buffer
   expands the per-element data layout and can cascade into layout-verifier arena limits — bump together.
+- CLI self-hosted backend (Workstream A): `keleusma-cli compile --compiler <rust|self-hosted>` (default
+  rust). The self-host driver moved (history-preserving) to `keleusma/src/selfhost/mod.rs` behind a
+  `self-host` feature; all ten Rust-read `.kel` relocated to `keleusma/src/selfhost/kel/` (`include_str!`);
+  `compiler/` is now a thin `pub use keleusma::selfhost::*` re-export (still detached). Entry
+  `keleusma::selfhost::self_hosted_compile` (host-only, `catch_unwind` → `Unsupported`). Full gate GREEN.
+  Read-path caveat: after such a cross-workspace move, sweep EVERY read helper in BOTH workspaces, and
+  format `compiler/` separately (`cargo fmt --all` does not reach the detached workspace).
 
 **Key durable finding** (governs every remaining depth increment)
 - The total-language verifier FORBIDS recursion (R4, acyclic call graph); no `.kel` stage function may
