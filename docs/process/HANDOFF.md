@@ -10,11 +10,12 @@ a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`
-- **Parent commit** (the repository state this handoff describes): `8df4b08`
-- **Written**: 2026-07-27
+- **Parent commit** (the repository state this handoff describes): `cf24f12`
+- **Written**: 2026-07-29
 - **Tree at write**: clean (all work committed and merged)
-- **Context**: written immediately before a PLANNED COMPACTION. The operator will SELECT A DIRECTION on
-  resume, so the resume prompt below is deliberately present-the-fork-and-wait, not continue-the-loop.
+- **Context**: written after merging the CLI-backend error-hardening increment (`cf24f12`). The bounded
+  same-context work is again exhausted, so the resume prompt below is deliberately
+  present-the-fork-and-wait, not continue-the-loop. The operator will SELECT A DIRECTION on resume.
 
 **Validity check — run on resume, before trusting this handoff.** On the branch above, compare the
 **Parent commit** to `git rev-parse HEAD~1`. Because this handoff file is itself committed, its commit
@@ -29,12 +30,13 @@ advances the tip by one, so the state it describes is the parent of the handoff 
 
 ## Resume prompt — SURFACE THE FORK (bounded same-context work is exhausted)
 
-**Two workstreams have now reached their bounded end: the nested-composite-equality family is fully
-self-hosted (increments 1–5, boundary 52 Ok), and the CLI self-hosted-backend residual is delivered
-(the `--compiler <rust|self-hosted>` flag).** There is no remaining bounded same-context task, so the
-loop's keep-going default does NOT apply: the next move is a genuine operator-decision fork. After the
-validity check passes, do **not** autonomously start a design decision or a new workstream. If the
-validity check **fails**, report invalid-and-stale, familiarize, and wait.
+**Three workstreams have now reached their bounded end: the nested-composite-equality family is fully
+self-hosted (increments 1–5, boundary 52 Ok), the CLI self-hosted-backend flag is delivered (`--compiler
+<rust|self-hosted>`), and the CLI-backend error surface is hardened (`ReferenceRejected` vs `Unsupported`
+classification, a gated retry hint, and a chunk-naming divergence detail).** There is no remaining bounded
+same-context task, so the loop's keep-going default does NOT apply: the next move is a genuine
+operator-decision fork. After the validity check passes, do **not** autonomously start a design decision or
+a new workstream. If the validity check **fails**, report invalid-and-stale, familiarize, and wait.
 
 Steps, in order:
 
@@ -42,24 +44,36 @@ Steps, in order:
 2. **Familiarize** — read `docs/process/REVERSE_PROMPT.md` (the fork options are spelled out there),
    `docs/process/DESIGN_JOURNAL.md` (newest entries: increments 3–5 and the CLI-backend workstream), and
    `docs/process/TASKLOG.md`. Confirm the live state matches this handoff.
-3. **Surface the fork to the operator** — present the candidate directions and wait: (a) a NEW self-host
-   language-surface area to self-host (grows the boundary again; needs operator selection of which
-   construct family); (b) **third-level struct nesting** — generalize the fixed-depth drain to a bounded
-   depth stack (a design effort, rated extreme); (c) **harden the new CLI backend** (thread the CLI
-   preamble through self-hosted mode; widen the supported-subset error detail); (d) a different
-   workstream (release cadence, other roadmap). Do not pick among them autonomously.
+3. **Surface the fork to the operator** — present the candidate directions and wait: (a) **third-level
+   struct nesting** — generalize the fixed-depth nested-equality drain to a bounded depth stack (closes one
+   of the 2 remaining Gaps; a design effort, rated extreme; the verifier forbids recursion so each depth is
+   an explicit phase); (b) a NEW self-host language-surface area to self-host (grows the boundary again;
+   needs operator selection of which construct family); (c) **native-call support in the self-hosted
+   pipeline** — add a native-call path to the self-hosted codegen (larger; this is the increment that would
+   in turn make threading the CLI preamble meaningful, which the just-merged hardening confirmed is
+   otherwise a hard boundary); (d) a different workstream (release cadence, other roadmap). Do not pick
+   among them autonomously. NOTE: "harden the CLI backend" was the previous fork's selection and is now
+   DONE — do not re-offer it.
 
 If the operator directs one, follow the normal increment cycle (feature branch off `v0.2.3`,
 byte-identity oracle where applicable + FULL `scripts/release-gate.sh`, no-ff merge, push, confirm CI,
 record on all three channels, restamp this HANDOFF before the next planned compaction).
 
 **Git position** (as of the Parent commit)
-- Branch `v0.2.3` at `8df4b08` (the CLI-self-hosted-backend merge `3a98b83` plus its handoff restamp),
-  in sync with origin, working tree clean, CI green.
+- Branch `v0.2.3` at `cf24f12` (the CLI-backend error-hardening merge; feature branch
+  `feat/cli-selfhost-error-detail` merged no-ff), plus this handoff restamp on top. In sync with origin,
+  working tree clean, local full gate green, CI binding after push.
 - `main` holds releases and sits behind `v0.2.3` by design. Branch model in
   `docs/process/GIT_STRATEGY.md` (release-branch, no-fast-forward merges up the hierarchy).
 
 **Done this arc**
+- CLI-backend error hardening (`cf24f12`): `SelfHostError::ReferenceRejected` (a genuine source error the
+  reference also rejects) split from `Unsupported` (a self-hosted-subset limitation);
+  `rust_backend_would_help()` gates the `retry with --compiler rust` hint so a plain compile error reports
+  without it; `describe_divergence` names the first diverging chunk and dimension. Threading the CLI
+  preamble was NOT attempted — a hard boundary, not an oversight: the self-hosted codegen emits no
+  native-call opcode (wire tags 1..=63 have `Op::Call` but no `CallExternalNative`/`CallVerifiedNative`).
+  No ISA/`.kel` change; three new backend tests; full gate green.
 - Increments 1-5: tuple-of-struct, enum-in-struct, enum-with-struct-payload, 2-level-struct-nesting,
   struct-of-array-of-struct — all implemented, byte-identical, full-gate-green, merged. The
   nested-composite-equality family is fully self-hosted. Boundary now **52 Ok / 2 Gap / 1 RefRejects**,
@@ -75,6 +89,13 @@ record on all three channels, restamp this HANDOFF before the next planned compa
   `keleusma::selfhost::self_hosted_compile` (host-only, `catch_unwind` → `Unsupported`). Full gate GREEN.
   Read-path caveat: after such a cross-workspace move, sweep EVERY read helper in BOTH workspaces, and
   format `compiler/` separately (`cargo fmt --all` does not reach the detached workspace).
+
+**Observed pre-existing warning** (not introduced this arc, not fixed — out of scope)
+- `src/vm.rs:8 use alloc::vec;` is flagged `unused_imports` in the `--no-default-features` `cargo test`
+  build only. The full gate stays GREEN because that step does not deny warnings, and the clippy
+  `-D warnings` step runs under a feature set where the import is used. A correct fix needs the right
+  `#[cfg(...)]` gate (which feature actually uses `vec!` in `vm.rs`); left for a dedicated small fix so as
+  not to widen an unrelated increment.
 
 **Key durable finding** (governs every remaining depth increment)
 - The total-language verifier FORBIDS recursion (R4, acyclic call graph); no `.kel` stage function may
