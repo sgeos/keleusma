@@ -61,7 +61,48 @@ fn non_host_target_is_refused() {
 fn out_of_subset_program_is_rejected_loudly() {
     let src = "fn main() -> Float { 1.0 + 2.0 }";
     match self_hosted_compile(src, &Target::host()) {
-        Err(SelfHostError::Unsupported { .. }) => {}
+        Err(e @ SelfHostError::Unsupported { .. }) => {
+            // An out-of-subset limitation: retrying with the Rust backend helps.
+            assert!(
+                e.rust_backend_would_help(),
+                "Unsupported should advise the Rust backend"
+            );
+        }
         other => panic!("expected Unsupported for an out-of-subset (float) program, got {other:?}"),
+    }
+}
+
+/// The `Unsupported` divergence detail names the diverging chunk rather than reporting an
+/// opaque "diverges from the reference". This is the operator-facing value of the backend
+/// hardening: the message points at the offending function.
+#[test]
+fn divergence_detail_names_the_diverging_chunk() {
+    let src = "fn main() -> Float { 1.0 + 2.0 }";
+    match self_hosted_compile(src, &Target::host()) {
+        Err(SelfHostError::Unsupported { detail }) => {
+            assert!(
+                detail.contains("chunk `main`"),
+                "divergence detail should name the diverging chunk, got: {detail}"
+            );
+        }
+        other => panic!("expected Unsupported with a chunk-naming detail, got {other:?}"),
+    }
+}
+
+/// A program the *reference* compiler also rejects (an undefined identifier) is classified
+/// as `ReferenceRejected`, NOT as a self-hosted-subset limitation. Retrying with the Rust
+/// backend would report the identical error, so `rust_backend_would_help` is false and the
+/// CLI reports it plainly without the misleading retry hint.
+#[test]
+fn genuine_source_error_is_reference_rejected_not_unsupported() {
+    let src = "fn main() -> Word { undefined_symbol }";
+    match self_hosted_compile(src, &Target::host()) {
+        Err(e @ SelfHostError::ReferenceRejected { .. }) => {
+            assert!(
+                !e.rust_backend_would_help(),
+                "a genuine source error must not advise the Rust backend"
+            );
+        }
+        other => panic!("expected ReferenceRejected for a genuine source error, got {other:?}"),
     }
 }

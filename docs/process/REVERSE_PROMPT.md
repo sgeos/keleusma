@@ -11,55 +11,53 @@ increment-by-increment reasoning and frontier assessments live in
 
 ## Last Updated
 
-**Date**: 2026-07-27 (session 34)
+**Date**: 2026-07-29 (session 35)
 
 ## Current state
 
-- **The self-hosted compiler is WIRED INTO THE SHIPPING CLI. COMPLETE, full gate GREEN, merged to
-  `v0.2.3`.** `keleusma-cli compile` gained `--compiler <rust|self-hosted>` (default `rust`, behavior
-  unchanged); `self-hosted` runs the Keleusma-written pipeline.
-- The self-host driver moved (history-preserving) from `compiler/src/selfhost.rs` to
-  `keleusma/src/selfhost/mod.rs` behind a `self-host` feature (off in the lib default, on in
-  `keleusma-cli`). All ten Rust-read `.kel` now live in `keleusma/src/selfhost/kel/` (`include_str!`'d;
-  works in an installed binary). `compiler/` is now a thin `pub use keleusma::selfhost::*` re-export
-  (still detached/excluded). New entry `keleusma::selfhost::self_hosted_compile(src, &Target) ->
-  Result<Module, SelfHostError>` (host-target-only; `catch_unwind` -> `Unsupported` for out-of-subset).
-- The construct-support boundary is UNCHANGED at **52 Ok / 2 Gap / 1 RefRejects** (this workstream added
-  no language constructs). No opcode/record/node/`BYTECODE_VERSION` change.
+- **The `--compiler self-hosted` backend error surface is HARDENED. COMPLETE, full gate GREEN, merged to
+  `v0.2.3`.** The operator selected "harden the CLI backend" at the post-compaction fork.
+- One of the two candidate sub-items was NOT pursued because it is a hard boundary rather than an
+  oversight. Threading the CLI preamble through self-hosted mode is impossible in this fork. The
+  self-hosted codegen emits no native-call opcode. Its emitted wire set is `decode_op` tags 1..=63,
+  which carry `Op::Call` but neither `CallExternalNative` nor `CallVerifiedNative`, and the CLI preamble
+  is entirely native `use` signatures. Native-call emission is a language-surface increment under a
+  different fork.
+- Delivered, the self-contained sub-item, richer subset-rejection errors, plus a correctness fix.
+  `SelfHostError` gained `ReferenceRejected { detail }` for a genuine source error the reference compiler
+  also rejects, distinct from a self-hosted-subset `Unsupported`. `rust_backend_would_help(&self)` is
+  false only for `ReferenceRejected`. The CLI now appends the `retry with --compiler rust` hint only when
+  it would help, and reports a genuine source error plainly. A new `describe_divergence` helper names the
+  first diverging chunk and the specific dimension, so the float case now reads "chunk `main`: op 1
+  diverges (Return vs reference Const(1))" rather than an opaque "diverges from the reference".
+- No opcode, record, node kind, or `BYTECODE_VERSION` change, no `.kel` change. The construct-support
+  boundary is UNCHANGED at **52 Ok / 2 Gap / 1 RefRejects**.
 
 ## Verification
 
-- The `self-host` feature tests (`tests/self_hosted_backend.rs`): in-subset byte-identity vs the Rust
-  reference; `NonHostTarget` refused; out-of-subset (`Float`) rejected as `Unsupported`, not a panic.
-- CLI end-to-end (in-subset compiles, out-of-subset exits 1 with the retry hint, non-host refused); the
-  full detached `compiler/` subproject (86 tests, via the re-export); and the FULL
-  `scripts/release-gate.sh` all GREEN.
-
-## Notes for the next session
-
-- After a cross-workspace file move, sweep EVERY read-path helper in BOTH workspaces before the gate.
-  This move displaced `compiler/tests/*.rs` read helpers (the `relocated` predicate listed only the 4
-  Phase-1 stages; `validator.rs` read naively) — they surfaced one slow gate-run at a time. Run the whole
-  subproject suite (`cd compiler && cargo test`) at once to catch them together. `cargo fmt --all` does
-  NOT reach the detached `compiler/` workspace — format it separately (`cd compiler && cargo fmt`).
-- Delegated agents kept stalling on the 600s watchdog when long cargo builds ran in the FOREGROUND;
-  background+poll all long commands (the fix is proven).
+- Three new `tests/self_hosted_backend.rs` tests pin the behavior. `ReferenceRejected` classification for
+  an undefined identifier with `rust_backend_would_help() == false`, the `Unsupported` divergence detail
+  naming `chunk `main``, and the `Unsupported` hint policy. All five backend tests pass.
+- CLI end to end confirmed. Out-of-subset float prints the chunk-naming detail plus the retry hint at
+  exit 1, a genuine source error prints a plain compile error with no retry hint at exit 1, and an
+  in-subset program compiles at exit 0.
+- The FULL `scripts/release-gate.sh` is GREEN.
 
 ## Next step — OPERATOR-DECISION FORK (no bounded same-context roadmap task remains)
 
-Both the near-term self-host workstreams are now at their bounded end: the nested-composite-equality
-family is fully self-hosted (52 Ok), and the CLI-backend residual (Workstream A) is delivered. The
-remaining boundary Gaps are a genuine design decision (third-level struct nesting needs a general depth
-stack — the verifier forbids recursion) or out of scope (floats/generics). So the loop is again at an
-operator fork. Candidate directions to surface:
-- **New self-host language surface** — pick another construct family to self-host (would grow the boundary
-  again) — but the obvious nested-equality area is done; the next area needs operator selection.
-- **Third-level struct nesting** — generalize the fixed-depth drain to a bounded depth stack (a design
-  effort, previously rated extreme).
-- **Harden the new CLI backend** — e.g. thread the CLI preamble through self-hosted mode, or widen the
-  supported-subset error detail; documented limitations today.
-- **A different workstream** entirely (release cadence, other roadmap items).
+The near-term self-host workstreams remain at their bounded end, and "harden the CLI backend" is now also
+delivered. The remaining boundary Gaps are a genuine design decision or out of scope. Candidate directions
+to surface, minus the now-resolved CLI-hardening option:
+- **Third-level struct nesting** — generalize the fixed-depth nested-equality drain to a bounded depth
+  stack (closes one of the 2 remaining Gaps). The verifier forbids recursion (R4), so each depth is an
+  explicit phase today. Previously rated EXTREME effort.
+- **New self-host language surface** — pick another construct family the reference emits that the `.kel`
+  stages still defer. Needs operator selection of which family.
+- **Native-call support in the self-hosted pipeline** — the language-surface increment that would in turn
+  make threading the CLI preamble meaningful. Larger; adds a native-call path to the self-hosted codegen.
+- **A different workstream** entirely — release cadence (a V0.2.3 cut), or backlog items (B32/B33/B34
+  prerequisites were recently filed).
+
 The next session should present these and wait for direction rather than auto-selecting.
 
-The seven-day rate-limit window remains the binding budget under heavy agent work; this session was long
-and delegation-heavy — pace accordingly.
+The seven-day rate-limit window remains the binding budget under heavy agent work; pace accordingly.

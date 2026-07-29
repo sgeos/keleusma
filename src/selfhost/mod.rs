@@ -2604,12 +2604,38 @@ pub enum SelfHostError {
     /// validated byte-identical to the reference at host word/address/float widths, so a
     /// cross-width compile is refused rather than emitting an unverified module.
     NonHostTarget,
-    /// The program is outside the self-hosted subset (for example floats, generics, or
-    /// `Text`), surfaced as a recovered pipeline panic.
-    Unsupported {
-        /// A best-effort description recovered from the pipeline panic payload.
+    /// The program does not compile under the *reference* compiler either: a genuine source
+    /// error (a lex, parse, or type error), not a self-hosted-subset limitation. Retrying
+    /// with `--compiler rust` reports the identical error, so the CLI does NOT suggest it.
+    ReferenceRejected {
+        /// The reference compiler's own diagnostic message.
         detail: String,
     },
+    /// The program is within the reference language but outside the self-hosted subset (for
+    /// example floats, generics, `Text`, or native calls). This surfaces either as a
+    /// recovered pipeline panic or as a divergence from the reference output; `detail` names
+    /// the diverging chunk and the first differing op where a divergence is the cause.
+    /// Retrying with `--compiler rust` compiles the program, so the CLI suggests it.
+    Unsupported {
+        /// A best-effort description: for a divergence, the diverging chunk and the first
+        /// differing op or dimension; for a stage panic, the recovered panic payload.
+        detail: String,
+    },
+}
+
+impl SelfHostError {
+    /// Whether retrying the compile with the Rust reference backend (`--compiler rust`)
+    /// would help. True for a self-hosted-subset limitation ([`Unsupported`]) and for a
+    /// cross-width target ([`NonHostTarget`], which the reference compiler supports). False
+    /// for a genuine source error ([`ReferenceRejected`]), where the reference reports the
+    /// identical error and the hint would only mislead.
+    ///
+    /// [`Unsupported`]: SelfHostError::Unsupported
+    /// [`NonHostTarget`]: SelfHostError::NonHostTarget
+    /// [`ReferenceRejected`]: SelfHostError::ReferenceRejected
+    pub fn rust_backend_would_help(&self) -> bool {
+        !matches!(self, SelfHostError::ReferenceRejected { .. })
+    }
 }
 
 impl core::fmt::Display for SelfHostError {
@@ -2619,6 +2645,9 @@ impl core::fmt::Display for SelfHostError {
                 f,
                 "the self-hosted compiler supports only the host target width"
             ),
+            SelfHostError::ReferenceRejected { detail } => {
+                write!(f, "the program does not compile ({detail})")
+            }
             SelfHostError::Unsupported { detail } => write!(
                 f,
                 "the self-hosted compiler does not support this program ({detail})"
@@ -2680,7 +2709,7 @@ pub fn self_hosted_compile(
     // Correctness cross-check: the self-hosted compiled code (each chunk's ops, constant
     // pool, and local count) must match the reference. A divergence means the program is
     // outside the self-hosted subset; reject it rather than emit a wrong module.
-    if module.chunks.len() != reference.chunks.len()
+    let diverges = module.chunks.len() != reference.chunks.len()
         || module
             .chunks
             .iter()
@@ -2690,22 +2719,78 @@ pub fn self_hosted_compile(
                     || m.ops != r.ops
                     || m.constants != r.constants
                     || m.local_count != r.local_count
-            })
-    {
+            });
+    if diverges {
         return Err(SelfHostError::Unsupported {
-            detail: "the self-hosted output diverges from the reference compiler".to_string(),
+            detail: describe_divergence(&module, &reference),
         });
     }
     Ok(module)
 }
 
 /// Compile `src` with the reference compiler, mapping any lex/parse/compile failure to
-/// [`SelfHostError::Unsupported`] with the reference's message. Used as the correctness
-/// oracle by [`self_hosted_compile`].
+/// [`SelfHostError::ReferenceRejected`] with the reference's message. Used as the
+/// correctness oracle by [`self_hosted_compile`]. A failure here is a genuine source error,
+/// distinct from a self-hosted-subset limitation, so it does not carry the `--compiler rust`
+/// retry hint.
 fn compile_reference(src: &str) -> Result<Module, SelfHostError> {
-    let tokens = tokenize(src).map_err(|e| SelfHostError::Unsupported { detail: e.message })?;
-    let program = parse(&tokens).map_err(|e| SelfHostError::Unsupported { detail: e.message })?;
-    compile(&program).map_err(|e| SelfHostError::Unsupported { detail: e.message })
+    let tokens =
+        tokenize(src).map_err(|e| SelfHostError::ReferenceRejected { detail: e.message })?;
+    let program =
+        parse(&tokens).map_err(|e| SelfHostError::ReferenceRejected { detail: e.message })?;
+    compile(&program).map_err(|e| SelfHostError::ReferenceRejected { detail: e.message })
+}
+
+/// Describe how the self-hosted `module` diverges from the `reference`, naming the first
+/// diverging chunk and the specific dimension (chunk count/order, op index, local frame,
+/// or constant pool). This turns the backend's out-of-subset rejection from an opaque
+/// "diverges from the reference" into an actionable pointer at the offending function.
+///
+/// Precondition: the two modules are known to differ (the caller checks equality first);
+/// the fallthrough message is retained only for total-function safety.
+fn describe_divergence(module: &Module, reference: &Module) -> String {
+    if module.chunks.len() != reference.chunks.len() {
+        return format!(
+            "self-hosted output has {} chunk(s), reference has {}",
+            module.chunks.len(),
+            reference.chunks.len()
+        );
+    }
+    for (m, r) in module.chunks.iter().zip(reference.chunks.iter()) {
+        if m.name != r.name {
+            return format!(
+                "chunk order diverges: `{}` vs reference `{}`",
+                m.name, r.name
+            );
+        }
+        if m.ops != r.ops {
+            return match m.ops.iter().zip(r.ops.iter()).position(|(a, b)| a != b) {
+                Some(i) => format!(
+                    "chunk `{}`: op {} diverges ({:?} vs reference {:?})",
+                    m.name, i, m.ops[i], r.ops[i]
+                ),
+                None => format!(
+                    "chunk `{}`: op count {} vs reference {}",
+                    m.name,
+                    m.ops.len(),
+                    r.ops.len()
+                ),
+            };
+        }
+        if m.local_count != r.local_count {
+            return format!(
+                "chunk `{}`: local frame size {} vs reference {}",
+                m.name, m.local_count, r.local_count
+            );
+        }
+        if m.constants != r.constants {
+            return format!(
+                "chunk `{}`: constant pool diverges from the reference",
+                m.name
+            );
+        }
+    }
+    "the self-hosted output diverges from the reference compiler".to_string()
 }
 
 #[cfg(test)]
