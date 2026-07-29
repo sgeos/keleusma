@@ -162,8 +162,10 @@ fn print_help() {
     println!("                                    self-hosted (the Keleusma-written pipeline,");
     println!("                                    host target only, self-hosted subset only:");
     println!("                                    no floats, generics, or Text, and no CLI");
-    println!("                                    preamble). Out-of-subset programs error with");
-    println!("                                    a hint to retry with --compiler rust.");
+    println!("                                    preamble). An out-of-subset program errors");
+    println!("                                    with a hint to retry with --compiler rust,");
+    println!("                                    naming the diverging function; a genuine");
+    println!("                                    source error is reported plainly.");
     println!("  keygen --seed <out> --public <out>");
     println!("                                    Generate a fresh Ed25519 keypair from the");
     println!("                                    OS RNG. Writes the 32-byte signing seed to");
@@ -1625,8 +1627,16 @@ fn compile_source_with_target(
             },
             None => source.to_string(),
         };
-        return keleusma::selfhost::self_hosted_compile(&user_src, resolved_target)
-            .map_err(|e| format!("self-hosted compile: {e}; retry with --compiler rust"));
+        return keleusma::selfhost::self_hosted_compile(&user_src, resolved_target).map_err(|e| {
+            // Only suggest the Rust backend when it would actually help. A genuine source
+            // error (the reference compiler rejects it too) reports identically under
+            // `--compiler rust`, so the hint would only mislead; report it plainly.
+            if e.rust_backend_would_help() {
+                format!("self-hosted compile: {e}; retry with --compiler rust")
+            } else {
+                format!("compile error: {e}")
+            }
+        });
     }
     let mut combined = build_preamble();
     // A script may begin with a `#!/usr/bin/env keleusma` shebang so it

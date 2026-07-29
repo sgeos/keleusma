@@ -15,7 +15,34 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 ## Last Updated
 
-**Date**: 2026-07-27 (session 34)
+**Date**: 2026-07-29 (session 35)
+
+**CLI-BACKEND HARDENING (2026-07-29): the `--compiler self-hosted` error surface now classifies genuine source errors apart from self-hosted-subset limitations and names the diverging chunk. COMPLETE, full gate GREEN, merged.**
+The operator selected "harden the CLI backend" at the post-compaction fork. Of the two candidate sub-items,
+threading the CLI preamble through self-hosted mode was found to be a HARD boundary, not an oversight, so it was
+NOT attempted. The self-hosted codegen emits no native-call opcode. Its emitted wire set is `decode_op` tags
+1..=63, which carry `Op::Call` but neither `CallExternalNative` nor `CallVerifiedNative`. The CLI preamble is
+entirely native `use` signatures, so any program that actually calls a preamble native cannot be emitted by the
+self-hosted pipeline and would fail the chunk-by-chunk cross-check unconditionally. Native-call support is a
+language-surface increment under a different fork, not CLI hardening. The existing "no preamble is prepended"
+code comment already documented this correctly.
+
+The delivered, self-contained increment is item two, richer subset-rejection errors, plus a correctness fix to
+a misleading hint. `SelfHostError` gained a `ReferenceRejected { detail }` variant for the case where the
+reference compiler itself rejects the program, which is a genuine lex, parse, or type error rather than a
+self-hosted limitation. A new `rust_backend_would_help(&self) -> bool` returns false only for that variant. The
+CLI now appends the `retry with --compiler rust` hint only when it would help, and reports a genuine source
+error plainly, because retrying with the Rust backend reports the identical error. The prior behavior appended
+the retry hint to every failure, which misled on a plain compile error. The divergence branch of
+`self_hosted_compile` now calls a new `describe_divergence` helper that names the first diverging chunk and the
+specific dimension, an op index with the differing op pair, the local frame size, the chunk count, or the
+constant pool, replacing the opaque "diverges from the reference compiler" string. Verified end to end. The
+float case now reads "chunk `main`: op 1 diverges (Return vs reference Const(1)); retry with --compiler rust",
+and an undefined-identifier program reads "compile error: the program does not compile (type error: undefined
+identifier `undefined_symbol`)" with no retry hint. No opcode, record, node kind, or `BYTECODE_VERSION` change,
+no self-hosted `.kel` change, and the construct-support boundary is unchanged at 52 Ok / 2 Gap / 1 RefRejects.
+Three new tests in `tests/self_hosted_backend.rs` pin the classification, the chunk-naming detail, and the
+hint policy. Full `scripts/release-gate.sh` GREEN.
 
 **WORKSTREAM SWITCH (2026-07-27): the self-hosted compiler is WIRED INTO THE SHIPPING CLI behind a `--compiler <rust|self-hosted>` flag (default rust). COMPLETE, full gate GREEN, merged.**
 After the nested-composite-equality family reached its bounded end (increments 1-5), the operator directed
