@@ -671,6 +671,14 @@ private data stmt {
     se_stk_r2: [Word; 8],
     se_stk_l2: [Word; 8],
     se_casc_active: Word,
+    // Admission scan (`struct_subtree_pure`): an explicit stack over a struct's transitively-nested
+    // STRUCT fields, checking the subtree is pure struct/scalar (no tuple/array/enum at any depth) so
+    // the arbitrary-depth nested struct-eq drain can lower it. `ssp_ok` accumulates the verdict.
+    // Bounded (array size 8); non-recursive (R4).
+    ssp_ok: Word,
+    ssp_sp: Word,
+    ssp_stk: [Word; 8],
+    ssp_cur: [Word; 8],
     // 1 when the current nested field is a TUPLE (read sub-fields from `tupledefs`); 0 for a struct.
     se_subistuple: Word,
     // Nested ARRAY field: `se_subisarray` 1, `se_arrcount`/`se_arrkind` the element count and kind
@@ -2260,10 +2268,45 @@ fn step_structeq_emit() -> Word {
     }
 }
 
+// 1 if struct `s`'s field subtree is PURE (every transitively-nested field is a scalar or another
+// struct), 0 if any nested field at any depth is a tuple, array, or enum (which the nested struct-eq
+// drain cannot lower deeper than its existing fixed forms). Walks the struct-nesting tree with an
+// explicit stack (R4 forbids recursion); the `for` cap bounds the total field count. This is what
+// admits ARBITRARY-depth struct-in-struct equality (`eq/3level_struct` and deeper).
+fn struct_subtree_pure(s: Word) -> Word {
+    stmt.ssp_ok = 1;
+    stmt.ssp_stk[0] = s;
+    stmt.ssp_cur[0] = 0;
+    stmt.ssp_sp = 1;
+    for i in 0..2048 limit 2048 {
+        if stmt.ssp_sp > 0 {
+            let top = stmt.ssp_sp - 1;
+            let cs = stmt.ssp_stk[top];
+            if stmt.ssp_cur[top] >= structdefs.sd_fcount[cs] {
+                stmt.ssp_sp = stmt.ssp_sp - 1;
+            } else {
+                let fidx = structdefs.sd_fstart[cs] + stmt.ssp_cur[top];
+                stmt.ssp_cur[top] = stmt.ssp_cur[top] + 1;
+                if structdefs.sd_ftuple[fidx] > 0 orelse structdefs.sd_farraylen[fidx] > 0 orelse structdefs.sd_fenum[fidx] > 0 {
+                    stmt.ssp_ok = 0;
+                } else {
+                    if structdefs.sd_fstruct[fidx] > 0 {
+                        stmt.ssp_stk[stmt.ssp_sp] = structdefs.sd_fstruct[fidx] - 1;
+                        stmt.ssp_cur[stmt.ssp_sp] = 0;
+                        stmt.ssp_sp = stmt.ssp_sp + 1;
+                    }
+                }
+            }
+        }
+    }
+    stmt.ssp_ok
+}
+
 // Classify a struct for equality lowering: 0 = unsupported here (a nested TUPLE field, or a
-// nested-struct field that itself nests, defers to the ordinary operator path), 1 = FLAT (all
-// fields scalar -> `struct_eq_start`), 2 = NESTED (has a nested-struct field whose sub-fields are all
-// scalar -> `struct_eq_nested_start`). Sets `stmt.sq_found` = 1 when nested, so the caller routes.
+// nested-struct field whose subtree contains a tuple/array/enum, defers to the ordinary operator
+// path), 1 = FLAT (all fields scalar -> `struct_eq_start`), 2 = NESTED (has a nested-struct field
+// whose subtree is pure struct/scalar, to arbitrary depth -> `struct_eq_nested_start`). Sets
+// `stmt.sq_found` = 1 when nested, so the caller routes.
 fn struct_eq_kind(idx: Word) -> Word {
     stmt.sq_scan = 1;
     stmt.sq_found = 0;
@@ -2290,26 +2333,11 @@ fn struct_eq_kind(idx: Word) -> Word {
             } }
         } else {
         if structdefs.sd_fstruct[fidx] > 0 {
+            // A nested-struct field: admit ARBITRARY-depth struct-in-struct nesting when the whole
+            // subtree is pure struct/scalar; a tuple, array, or enum anywhere in it defers.
             stmt.sq_found = 1;
-            let s = structdefs.sd_fstruct[fidx] - 1;
-            for g in 0..structdefs.sd_fcount[s] limit 64 {
-                let gidx = structdefs.sd_fstart[s] + g;
-                if structdefs.sd_ftuple[gidx] > 0 orelse structdefs.sd_farraylen[gidx] > 0 orelse structdefs.sd_fenum[gidx] > 0 {
-                    // A tuple/array/enum sub-field of a nested struct: 2-level of those still defers.
-                    stmt.sq_scan = 0;
-                } else {
-                    if structdefs.sd_fstruct[gidx] > 0 {
-                        // A struct sub-field of a nested struct (2-level struct nesting): admit only
-                        // when its OWN sub-fields are all scalar; a third level defers.
-                        let s2 = structdefs.sd_fstruct[gidx] - 1;
-                        for h in 0..structdefs.sd_fcount[s2] limit 64 {
-                            let hidx = structdefs.sd_fstart[s2] + h;
-                            if structdefs.sd_fstruct[hidx] > 0 orelse structdefs.sd_ftuple[hidx] > 0 orelse structdefs.sd_farraylen[hidx] > 0 orelse structdefs.sd_fenum[hidx] > 0 {
-                                stmt.sq_scan = 0;
-                            }
-                        }
-                    }
-                }
+            if struct_subtree_pure(structdefs.sd_fstruct[fidx] - 1) == 0 {
+                stmt.sq_scan = 0;
             }
         } else {
         if structdefs.sd_ftuple[fidx] > 0 {

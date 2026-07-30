@@ -366,6 +366,33 @@ private data st {
     // length once a nested-struct sub-field can appear) and that walk's cursor.
     se_sfoff: [Word; 64],
     se_sfcur: Word,
+    // GENERAL nested struct-eq emit stack (`push_struct_eq_subfields`), the reference
+    // `emit_composite_fieldwise_eq` recursion unrolled onto an explicit stack (R4 forbids recursion).
+    // Each frame f is a composite's sub-field list [es_sbase, es_subcount) with a REVERSE cursor
+    // es_cur, container temps es_l/es_r and sub-field accessor es_acc. A nested sub-field pushes a
+    // child frame; its loop-head + extract are deferred as the child's SUFFIX (es_has_suffix, the
+    // extract operand es_sfx_extp, and the parent temps es_sfx_pl/es_sfx_pr), emitted when the child
+    // completes -- so the child's ops land between the parent's loop-trailer and loop-head, exactly
+    // the reference nesting. es_sfoff[f*64 + s] holds frame f's direct sub-field offsets (es_walk is
+    // that forward pass's cursor). Bounded (8 frames) so worst-case time and memory stay static.
+    es_sp: Word,
+    es_sbase: [Word; 8],
+    es_subcount: [Word; 8],
+    es_cur: [Word; 8],
+    es_l: [Word; 8],
+    es_r: [Word; 8],
+    es_acc: [Word; 8],
+    es_has_suffix: [Word; 8],
+    es_sfx_extp: [Word; 8],
+    es_sfx_pl: [Word; 8],
+    es_sfx_pr: [Word; 8],
+    es_sfoff: [Word; 512],
+    es_walk: Word,
+    // Struct sub-field forest walk (`struct_forest_end`): a remaining-fields stack over the preorder
+    // record layout, used for the slot-count stride/temp count and for `nested_end`.
+    cs_cur: Word,
+    cs_sp: Word,
+    cs_rem: [Word; 8],
 }
 
 // Wire. The stage buffers ops, then streams each as `tag + operand*64`, 0 is
@@ -1957,6 +1984,61 @@ fn push_nested_enum_loop(foff: Word, l2: Word, r2: Word, false_idx: Word, true_i
     push_emit(wire.mloop)
 }
 
+// Walk the sub-field forest of `subcount` fields starting at `start` in match_parts, striding over
+// arbitrarily-nested struct sub-fields ([off, 100+size, subcount, r2, l2, fields...] = 5 + its own
+// forest), and return the end offset. When `count_temps` is 1, add 2 to `let_count` per nested struct
+// (its r2/l2 extract temps). The records are laid preorder, so one linear walk with a remaining-fields
+// stack visits the whole forest. Non-recursive (R4); the loop cap bounds the total field count.
+fn struct_forest_end(start: Word, subcount: Word, count_temps: Word) -> Word {
+    st.cs_cur = start;
+    st.cs_rem[0] = subcount;
+    st.cs_sp = 1;
+    for i in 0..2048 limit 2048 {
+        if st.cs_sp > 0 {
+            let top = st.cs_sp - 1;
+            if st.cs_rem[top] == 0 {
+                st.cs_sp = st.cs_sp - 1;
+            } else {
+                st.cs_rem[top] = st.cs_rem[top] - 1;
+                if ast.match_parts[st.cs_cur + 1] >= 100 {
+                    if count_temps == 1 {
+                        st.let_count = st.let_count + 2;
+                    }
+                    st.cs_rem[st.cs_sp] = ast.match_parts[st.cs_cur + 2];
+                    st.cs_cur = st.cs_cur + 5;
+                    st.cs_sp = st.cs_sp + 1;
+                } else {
+                    st.cs_cur = st.cs_cur + 2;
+                }
+            }
+        }
+    }
+    st.cs_cur
+}
+
+// The end offset of a nested-struct sub-field block at `off` ([off, 100+size, subcount, r2, l2,
+// fields...]): its 5-word header plus its sub-field forest.
+fn nested_end(off: Word) -> Word {
+    struct_forest_end(off + 5, ast.match_parts[off + 2], 0)
+}
+
+// Record each DIRECT sub-field offset of a frame's sub-field list (at `sbase`, `subcount` fields) into
+// es_sfoff[f*64 + s], striding over nested sub-fields with `nested_end`, so the reverse emission pass
+// can locate each variable-stride sub-field.
+fn es_compute_sfoff(f: Word, sbase: Word, subcount: Word) -> Word {
+    let fb = f * 64;
+    st.es_walk = sbase;
+    for s in 0..subcount limit 64 {
+        st.es_sfoff[fb + s] = st.es_walk;
+        if ast.match_parts[st.es_walk + 1] >= 100 {
+            st.es_walk = nested_end(st.es_walk);
+        } else {
+            st.es_walk = st.es_walk + 2;
+        }
+    }
+    0
+}
+
 // Emit the inner comparison loop body of a nested struct/tuple field's sub-fields, over the container
 // temps l2 (left) / r2 (right). A sub-field is variable length: a SCALAR sub-field [sub_off, sub_kind
 // < 100] compares GetField(subacc)/CmpEq; a DEPTH-2 nested-struct sub-field [sub_off, 100+size,
@@ -1966,68 +2048,83 @@ fn push_nested_enum_loop(foff: Word, l2: Word, r2: Word, false_idx: Word, true_i
 // chunk under the op-table capacity (`eq/2level_struct`). Pool: `false_idx`/`true_idx` are shared with
 // the caller (dedup'd), so no new constants -- the eager pre-pass already interned false then true.
 fn push_struct_eq_subfields(sbase: Word, subcount: Word, l2: Word, r2: Word, subacc: Word, false_idx: Word, true_idx: Word) -> Word {
-    // Forward pass to locate each variable-length sub-field for the reverse emission below.
-    st.se_sfcur = sbase;
-    for s in 0..subcount limit 64 {
-        st.se_sfoff[s] = st.se_sfcur;
-        if ast.match_parts[st.se_sfcur + 1] >= 100 {
-            st.se_sfcur = st.se_sfcur + 5 + ast.match_parts[st.se_sfcur + 2] * 2;
-        } else {
-            st.se_sfcur = st.se_sfcur + 2;
-        }
-    }
-    for sj in 0..subcount limit 64 {
-        let s = subcount - 1 - sj;
-        let soff = st.se_sfoff[s];
-        let sub_off = ast.match_parts[soff];
-        let sub_kind = ast.match_parts[soff + 1];
-        if sub_kind >= 100 {
-            // DEPTH-2 nested-struct sub-field: extract into r2'/l2', inner struct-eq loop, negate/break.
-            let subsubcount = ast.match_parts[soff + 2];
-            let r2p = ast.match_parts[soff + 3];
-            let l2p = ast.match_parts[soff + 4];
-            let extp = sub_off + (sub_kind - 100) * 65536 + 2 * 4294967296;
-            push_emit(wire.mendif);
-            push_emit(wire.mbreak);
-            push_emit(wire.konst + false_idx * wire.radix);
-            push_emit(wire.mif);
-            push_emit(wire.lnot);
-            push_emit(wire.mendloop);
-            push_emit(wire.mbreak);
-            push_emit(wire.konst + true_idx * wire.radix);
-            for ssj in 0..subsubcount limit 64 {
-                let ss = subsubcount - 1 - ssj;
-                let ssp = ast.match_parts[soff + 5 + ss * 2] + ast.match_parts[soff + 5 + ss * 2 + 1] * 65536;
-                push_emit(wire.mendif);
-                push_emit(wire.mbreak);
-                push_emit(wire.konst + false_idx * wire.radix);
-                push_emit(wire.mif);
-                push_emit(wire.lnot);
-                push_emit(wire.cmpeq);
-                push_emit(wire.getfield + ssp * wire.radix);
-                push_emit(wire.getlocal + r2p * wire.radix);
-                push_emit(wire.getfield + ssp * wire.radix);
-                push_emit(wire.getlocal + l2p * wire.radix);
+    // Frame 0: the given sub-field list, container (l2, r2), accessor `subacc`, no suffix.
+    st.es_sbase[0] = sbase;
+    st.es_subcount[0] = subcount;
+    st.es_l[0] = l2;
+    st.es_r[0] = r2;
+    st.es_acc[0] = subacc;
+    st.es_has_suffix[0] = 0;
+    es_compute_sfoff(0, sbase, subcount);
+    st.es_cur[0] = subcount - 1;
+    st.es_sp = 1;
+    // Reverse-DFS: process the top frame's sub-fields in reverse; a scalar emits its compare block, a
+    // nested struct emits the outer negate/break + loop trailer and PUSHES a child frame (its loop
+    // head + extract deferred as the child's suffix). When a frame's cursor falls below 0 it is
+    // drained: emit its suffix (if any) and pop. The loop cap bounds the frame/field traffic.
+    for i in 0..4096 limit 4096 {
+        if st.es_sp > 0 {
+            let top = st.es_sp - 1;
+            if st.es_cur[top] < 0 {
+                if st.es_has_suffix[top] == 1 {
+                    push_emit(wire.mloop);
+                    push_emit(wire.setlocal + st.es_l[top] * wire.radix);
+                    push_emit(wire.setlocal + st.es_r[top] * wire.radix);
+                    push_emit(wire.getfieldnested + st.es_sfx_extp[top] * wire.radix);
+                    push_emit(wire.getlocal + st.es_sfx_pr[top] * wire.radix);
+                    push_emit(wire.getfieldnested + st.es_sfx_extp[top] * wire.radix);
+                    push_emit(wire.getlocal + st.es_sfx_pl[top] * wire.radix);
+                }
+                st.es_sp = st.es_sp - 1;
+            } else {
+                let s = st.es_cur[top];
+                st.es_cur[top] = st.es_cur[top] - 1;
+                let fb = top * 64;
+                let soff = st.es_sfoff[fb + s];
+                let sub_off = ast.match_parts[soff];
+                let sub_kind = ast.match_parts[soff + 1];
+                if sub_kind >= 100 {
+                    // A nested-struct sub-field: emit the outer negate/break and the inner loop
+                    // trailer, then PUSH a child frame over its sub-fields (extracted into r2p/l2p; the
+                    // loop head + extract are the child's suffix, emitted on completion).
+                    let r2p = ast.match_parts[soff + 3];
+                    let l2p = ast.match_parts[soff + 4];
+                    let extp = sub_off + (sub_kind - 100) * 65536 + 2 * 4294967296;
+                    push_emit(wire.mendif);
+                    push_emit(wire.mbreak);
+                    push_emit(wire.konst + false_idx * wire.radix);
+                    push_emit(wire.mif);
+                    push_emit(wire.lnot);
+                    push_emit(wire.mendloop);
+                    push_emit(wire.mbreak);
+                    push_emit(wire.konst + true_idx * wire.radix);
+                    let child = st.es_sp;
+                    st.es_sbase[child] = soff + 5;
+                    st.es_subcount[child] = ast.match_parts[soff + 2];
+                    st.es_l[child] = l2p;
+                    st.es_r[child] = r2p;
+                    st.es_acc[child] = wire.getfield;
+                    st.es_has_suffix[child] = 1;
+                    st.es_sfx_extp[child] = extp;
+                    st.es_sfx_pl[child] = st.es_l[top];
+                    st.es_sfx_pr[child] = st.es_r[top];
+                    es_compute_sfoff(child, soff + 5, ast.match_parts[soff + 2]);
+                    st.es_cur[child] = ast.match_parts[soff + 2] - 1;
+                    st.es_sp = st.es_sp + 1;
+                } else {
+                    let sp = sub_off + sub_kind * 65536;
+                    push_emit(wire.mendif);
+                    push_emit(wire.mbreak);
+                    push_emit(wire.konst + false_idx * wire.radix);
+                    push_emit(wire.mif);
+                    push_emit(wire.lnot);
+                    push_emit(wire.cmpeq);
+                    push_emit(st.es_acc[top] + sp * wire.radix);
+                    push_emit(wire.getlocal + st.es_r[top] * wire.radix);
+                    push_emit(st.es_acc[top] + sp * wire.radix);
+                    push_emit(wire.getlocal + st.es_l[top] * wire.radix);
+                }
             }
-            push_emit(wire.mloop);
-            push_emit(wire.setlocal + l2p * wire.radix);
-            push_emit(wire.setlocal + r2p * wire.radix);
-            push_emit(wire.getfieldnested + extp * wire.radix);
-            push_emit(wire.getlocal + r2 * wire.radix);
-            push_emit(wire.getfieldnested + extp * wire.radix);
-            push_emit(wire.getlocal + l2 * wire.radix);
-        } else {
-            let sp = sub_off + sub_kind * 65536;
-            push_emit(wire.mendif);
-            push_emit(wire.mbreak);
-            push_emit(wire.konst + false_idx * wire.radix);
-            push_emit(wire.mif);
-            push_emit(wire.lnot);
-            push_emit(wire.cmpeq);
-            push_emit(subacc + sp * wire.radix);
-            push_emit(wire.getlocal + r2 * wire.radix);
-            push_emit(subacc + sp * wire.radix);
-            push_emit(wire.getlocal + l2 * wire.radix);
         }
     }
     0
@@ -2131,19 +2228,11 @@ fn push_struct_eq_nested(p: Word) -> Word {
                 st.se_cur = st.eq_cur;
             } else {
                 // Struct/tuple nested field: [1, ext_off, ext_size, variant, r2, l2, subcount] then a
-                // variable-length sub-field list. A scalar sub-field is 2 words; a DEPTH-2
-                // nested-struct sub-field (sentinel kind >= 100) is 5 + subsubcount*2 and reserves two
-                // more frame temps.
+                // variable-length sub-field list. `struct_forest_end` walks the whole (arbitrarily
+                // nested) sub-field forest, adding 2 to `let_count` per nested struct (its r2/l2 extract
+                // temps) and returning the end offset.
                 let subcount = ast.match_parts[st.se_cur + 6];
-                st.se_cur = st.se_cur + 7;
-                for s in 0..subcount limit 64 {
-                    if ast.match_parts[st.se_cur + 1] >= 100 {
-                        st.let_count = st.let_count + 2;
-                        st.se_cur = st.se_cur + 5 + ast.match_parts[st.se_cur + 2] * 2;
-                    } else {
-                        st.se_cur = st.se_cur + 2;
-                    }
-                }
+                st.se_cur = struct_forest_end(st.se_cur + 7, subcount, 1);
             } }
         }
     }
