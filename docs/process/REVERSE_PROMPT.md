@@ -13,10 +13,25 @@ increment-by-increment reasoning and frontier assessments live in
 
 **Date**: 2026-07-29 (session 35)
 
-## Current state
+## Current state — 3-level increment COMPLETE (branch green, pending full gate + merge)
 
-- **The `--compiler self-hosted` backend error surface is HARDENED. COMPLETE, full gate GREEN, merged to
-  `v0.2.3`.** The operator selected "harden the CLI backend" at the post-compaction fork.
+- **Third-level (and deeper) struct-nesting equality is COMPLETE on `feat/selfhost-3level-struct-eq`
+  (cut from `v0.2.3` at `4037174`).** Arbitrary-depth nested struct-in-struct equality self-compiles
+  byte-identically; the construct-support boundary moved **52 -> 53 Ok** (2 Gap / 1 RefRejects). All four
+  stages landed and verified via the differential oracle; the branch tip is green on the targeted
+  self-host suite. NEXT: FULL `scripts/release-gate.sh`, then no-ff merge into `v0.2.3`, push, confirm CI.
+  - Stage 1 (parse.kel, `13b922f`): `se_l2*` -> `se_stk_*` frame stack + `se_pop_cascade`.
+  - Stage 2 (reconstruct.kel, `c667875`): `se_nsub_mode` -> `se_nstk_*` stack + `se_nsub_pop`; recursive
+    `seb` grammar.
+  - Stages 3+4 (`4aefcf2`): codegen `push_struct_eq_subfields` -> explicit-stack reverse-DFS emitter
+    (`es_*`) + `struct_forest_end`/`nested_end`/`es_compute_sfoff`; and the ADMISSION fix — the fourth,
+    unanticipated depth-2 assumption: `struct_eq_kind` only descended two levels so `D==D` fell back to a
+    primitive compare. Generalized with `struct_subtree_pure`. `EXPECTED_SELF_COMPILE` 72 -> 75.
+  - No opcode/record/node/`BYTECODE_VERSION` change. The two remaining Gaps (`float_arith`, `generic_fn`)
+    are permanently out of scope; this ADDED a new `SOk` case.
+- **Previously this session: the `--compiler self-hosted` backend error surface was HARDENED. COMPLETE,
+  full gate GREEN, CI GREEN, merged to `v0.2.3` (`cf24f12`).** The operator selected "harden the CLI
+  backend" at the first post-compaction fork.
 - One of the two candidate sub-items was NOT pursued because it is a hard boundary rather than an
   oversight. Threading the CLI preamble through self-hosted mode is impossible in this fork. The
   self-hosted codegen emits no native-call opcode. Its emitted wire set is `decode_op` tags 1..=63,
@@ -43,21 +58,17 @@ increment-by-increment reasoning and frontier assessments live in
   in-subset program compiles at exit 0.
 - The FULL `scripts/release-gate.sh` is GREEN.
 
-## Next step — OPERATOR-DECISION FORK (no bounded same-context roadmap task remains)
+## Next step — FULL GATE + MERGE, then OPERATOR-DECISION FORK
 
-The near-term self-host workstreams remain at their bounded end, and "harden the CLI backend" is now also
-delivered. The remaining boundary Gaps are a genuine design decision or out of scope. Candidate directions
-to surface, minus the now-resolved CLI-hardening option:
-- **Third-level struct nesting** — generalize the fixed-depth nested-equality drain to a bounded depth
-  stack (closes one of the 2 remaining Gaps). The verifier forbids recursion (R4), so each depth is an
-  explicit phase today. Previously rated EXTREME effort.
-- **New self-host language surface** — pick another construct family the reference emits that the `.kel`
-  stages still defer. Needs operator selection of which family.
-- **Native-call support in the self-hosted pipeline** — the language-surface increment that would in turn
-  make threading the CLI preamble meaningful. Larger; adds a native-call path to the self-hosted codegen.
-- **A different workstream** entirely — release cadence (a V0.2.3 cut), or backlog items (B32/B33/B34
-  prerequisites were recently filed).
+1. Run the FULL `scripts/release-gate.sh` on `feat/selfhost-3level-struct-eq`. On green, no-ff merge into
+   `v0.2.3`, push (pre-push gate; keepalive), confirm CI green.
+2. Then the loop is again at an operator fork (no bounded same-context task remains). Candidate
+   directions to surface (do not auto-select):
+   - **New self-host language surface** — pick another construct family the `.kel` stages still defer.
+   - **Native-call support in the self-hosted pipeline** — larger; would make the CLI preamble meaningful.
+   - **Deeper nesting for the OTHER composites** — the arbitrary-depth generalization landed only for
+     struct-in-struct; nested tuple/array/enum still cap at their existing depths (the `es_*`/`se_stk_*`
+     machinery is now in place to extend them similarly if desired).
+   - **A different workstream** — release cadence (a V0.2.3 cut), backlog (B32/B33/B34).
 
-The next session should present these and wait for direction rather than auto-selecting.
-
-The seven-day rate-limit window remains the binding budget under heavy agent work; pace accordingly.
+The seven-day rate-limit window is the binding budget under heavy agent work; pace accordingly.

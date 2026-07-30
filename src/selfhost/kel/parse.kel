@@ -647,20 +647,38 @@ private data stmt {
     se_substart: Word,
     se_r2: Word,
     se_l2: Word,
-    // DEPTH-2 struct nesting sub-drain (a nested-struct field whose OWN sub-field is itself a struct
-    // with scalar leaves -- `eq/2level_struct`). When the phase-1 struct sub-drain hits a struct
-    // sub-field, it emits a nested-struct-sub-field header (a StructEqNestedField with the sentinel
-    // kind 100+bytesize, mirroring the enum-struct-payload sentinel), then a packing record carrying
-    // the subcount and two fresh depth-2 temps, then the deeper struct's scalar sub-sub-fields.
-    // `se_l2phase` 1 = emit the packing next, 2 = draining the deeper struct's sub-sub-fields (0 =
-    // inactive); `se_l2substart`/`se_l2subcount`/`se_l2subcur` the deeper struct's field range and
-    // cursor; `se_l2r2`/`se_l2l2` its two extract temps (r2 first, then l2, monotonic).
-    se_l2phase: Word,
-    se_l2substart: Word,
-    se_l2subcount: Word,
-    se_l2subcur: Word,
-    se_l2r2: Word,
-    se_l2l2: Word,
+    // GENERAL nested-struct DEPTH STACK (`eq/2level_struct` and deeper): a nested-struct field whose
+    // OWN sub-field is itself a struct pushes a frame here, generalizing the former fixed depth-2
+    // `se_l2*` scalars. Frame 0 (the immediate nested field of the top-level compare) stays in the
+    // `se_sub*` accumulators and closes with a StructEqNestedEnd; each DEEPER struct sub-field (depth
+    // >= 2) pushes a `se_stk_*` frame introduced by a sentinel StructEqNestedField (kind 100+bytesize,
+    // mirroring the enum-struct-payload sentinel) plus a packing record (subcount + r2*65536 +
+    // l2*2^32), then drains its own sub-fields BY COUNT with no end record. A stacked frame's struct
+    // sub-field pushes another frame, so the stream is a preorder walk of the field tree -- the
+    // reference `emit_composite_fieldwise_eq` recursion, unrolled onto an explicit stack because the
+    // verifier forbids recursion (R4). `se_sp` is the number of active stacked frames; `se_stk_phase`
+    // 1 = emit the packing record next, 2 = draining sub-fields. `se_stk_start`/`se_stk_count`/
+    // `se_stk_cur` the deeper struct's field-row range and cursor; `se_stk_r2`/`se_stk_l2` its two
+    // extract temps (r2 first, then l2, monotonic). The stack is bounded (array size 8) so worst-case
+    // execution time and memory stay statically bounded; a program nesting deeper diverges from the
+    // reference and is caught by the CLI backend's cross-check. `se_casc_active` guards the pop-cascade
+    // loop in `se_pop_cascade`.
+    se_sp: Word,
+    se_stk_phase: [Word; 8],
+    se_stk_start: [Word; 8],
+    se_stk_count: [Word; 8],
+    se_stk_cur: [Word; 8],
+    se_stk_r2: [Word; 8],
+    se_stk_l2: [Word; 8],
+    se_casc_active: Word,
+    // Admission scan (`struct_subtree_pure`): an explicit stack over a struct's transitively-nested
+    // STRUCT fields, checking the subtree is pure struct/scalar (no tuple/array/enum at any depth) so
+    // the arbitrary-depth nested struct-eq drain can lower it. `ssp_ok` accumulates the verdict.
+    // Bounded (array size 8); non-recursive (R4).
+    ssp_ok: Word,
+    ssp_sp: Word,
+    ssp_stk: [Word; 8],
+    ssp_cur: [Word; 8],
     // 1 when the current nested field is a TUPLE (read sub-fields from `tupledefs`); 0 for a struct.
     se_subistuple: Word,
     // Nested ARRAY field: `se_subisarray` 1, `se_arrcount`/`se_arrkind` the element count and kind
@@ -2250,10 +2268,45 @@ fn step_structeq_emit() -> Word {
     }
 }
 
+// 1 if struct `s`'s field subtree is PURE (every transitively-nested field is a scalar or another
+// struct), 0 if any nested field at any depth is a tuple, array, or enum (which the nested struct-eq
+// drain cannot lower deeper than its existing fixed forms). Walks the struct-nesting tree with an
+// explicit stack (R4 forbids recursion); the `for` cap bounds the total field count. This is what
+// admits ARBITRARY-depth struct-in-struct equality (`eq/3level_struct` and deeper).
+fn struct_subtree_pure(s: Word) -> Word {
+    stmt.ssp_ok = 1;
+    stmt.ssp_stk[0] = s;
+    stmt.ssp_cur[0] = 0;
+    stmt.ssp_sp = 1;
+    for i in 0..2048 limit 2048 {
+        if stmt.ssp_sp > 0 {
+            let top = stmt.ssp_sp - 1;
+            let cs = stmt.ssp_stk[top];
+            if stmt.ssp_cur[top] >= structdefs.sd_fcount[cs] {
+                stmt.ssp_sp = stmt.ssp_sp - 1;
+            } else {
+                let fidx = structdefs.sd_fstart[cs] + stmt.ssp_cur[top];
+                stmt.ssp_cur[top] = stmt.ssp_cur[top] + 1;
+                if structdefs.sd_ftuple[fidx] > 0 orelse structdefs.sd_farraylen[fidx] > 0 orelse structdefs.sd_fenum[fidx] > 0 {
+                    stmt.ssp_ok = 0;
+                } else {
+                    if structdefs.sd_fstruct[fidx] > 0 {
+                        stmt.ssp_stk[stmt.ssp_sp] = structdefs.sd_fstruct[fidx] - 1;
+                        stmt.ssp_cur[stmt.ssp_sp] = 0;
+                        stmt.ssp_sp = stmt.ssp_sp + 1;
+                    }
+                }
+            }
+        }
+    }
+    stmt.ssp_ok
+}
+
 // Classify a struct for equality lowering: 0 = unsupported here (a nested TUPLE field, or a
-// nested-struct field that itself nests, defers to the ordinary operator path), 1 = FLAT (all
-// fields scalar -> `struct_eq_start`), 2 = NESTED (has a nested-struct field whose sub-fields are all
-// scalar -> `struct_eq_nested_start`). Sets `stmt.sq_found` = 1 when nested, so the caller routes.
+// nested-struct field whose subtree contains a tuple/array/enum, defers to the ordinary operator
+// path), 1 = FLAT (all fields scalar -> `struct_eq_start`), 2 = NESTED (has a nested-struct field
+// whose subtree is pure struct/scalar, to arbitrary depth -> `struct_eq_nested_start`). Sets
+// `stmt.sq_found` = 1 when nested, so the caller routes.
 fn struct_eq_kind(idx: Word) -> Word {
     stmt.sq_scan = 1;
     stmt.sq_found = 0;
@@ -2280,26 +2333,11 @@ fn struct_eq_kind(idx: Word) -> Word {
             } }
         } else {
         if structdefs.sd_fstruct[fidx] > 0 {
+            // A nested-struct field: admit ARBITRARY-depth struct-in-struct nesting when the whole
+            // subtree is pure struct/scalar; a tuple, array, or enum anywhere in it defers.
             stmt.sq_found = 1;
-            let s = structdefs.sd_fstruct[fidx] - 1;
-            for g in 0..structdefs.sd_fcount[s] limit 64 {
-                let gidx = structdefs.sd_fstart[s] + g;
-                if structdefs.sd_ftuple[gidx] > 0 orelse structdefs.sd_farraylen[gidx] > 0 orelse structdefs.sd_fenum[gidx] > 0 {
-                    // A tuple/array/enum sub-field of a nested struct: 2-level of those still defers.
-                    stmt.sq_scan = 0;
-                } else {
-                    if structdefs.sd_fstruct[gidx] > 0 {
-                        // A struct sub-field of a nested struct (2-level struct nesting): admit only
-                        // when its OWN sub-fields are all scalar; a third level defers.
-                        let s2 = structdefs.sd_fstruct[gidx] - 1;
-                        for h in 0..structdefs.sd_fcount[s2] limit 64 {
-                            let hidx = structdefs.sd_fstart[s2] + h;
-                            if structdefs.sd_fstruct[hidx] > 0 orelse structdefs.sd_ftuple[hidx] > 0 orelse structdefs.sd_farraylen[hidx] > 0 orelse structdefs.sd_fenum[hidx] > 0 {
-                                stmt.sq_scan = 0;
-                            }
-                        }
-                    }
-                }
+            if struct_subtree_pure(structdefs.sd_fstruct[fidx] - 1) == 0 {
+                stmt.sq_scan = 0;
             }
         } else {
         if structdefs.sd_ftuple[fidx] > 0 {
@@ -2430,9 +2468,38 @@ fn struct_eq_nested_start_kind(op: Word, is_tuple: Word) -> Word {
     stmt.sq_field = 0;
     stmt.se_phase = 0;
     stmt.se_subisenum = 0;
-    stmt.se_l2phase = 0;
+    stmt.se_sp = 0;
     stmt.se_arrsphase = 0;
     structeq_nested_next()
+}
+
+// Pop the top nested-struct depth-stack frame (its records are fully emitted) and CASCADE upward:
+// advance the parent's sub-field cursor past the struct sub-field that spawned the popped frame, and
+// if the parent (itself a stacked frame) is thereby complete, pop it too and continue. When the stack
+// empties, the parent is frame 0 (the immediate nested field of the top-level compare), whose cursor
+// is `se_subcur`; frame 0's completion is emitted as a StructEqNestedEnd on the next drain step, so
+// the cascade stops at `se_sp == 0`. The `for` cap (16) safely over-estimates the stack depth (<= 8).
+// Non-recursive, per the verifier's acyclic-call-graph rule (R4).
+fn se_pop_cascade() -> Word {
+    stmt.se_casc_active = 1;
+    for i in 0..16 limit 16 {
+        if stmt.se_casc_active == 1 {
+            stmt.se_sp = stmt.se_sp - 1;
+            if stmt.se_sp == 0 {
+                stmt.se_subcur = stmt.se_subcur + 1;
+                stmt.se_casc_active = 0;
+            } else {
+                let p = stmt.se_sp - 1;
+                stmt.se_stk_cur[p] = stmt.se_stk_cur[p] + 1;
+                if stmt.se_stk_cur[p] == stmt.se_stk_count[p] {
+                    stmt.se_casc_active = 1;
+                } else {
+                    stmt.se_casc_active = 0;
+                }
+            }
+        }
+    }
+    0
 }
 
 // Drain the nested struct-eq record stream: top-level fields in order, each scalar
@@ -2474,28 +2541,50 @@ fn structeq_nested_next() -> Word {
             stmt.se_arrsphase = 0;
             Node::StructEqNestedField() as Word + (stmt.se_arr_acount + (100 + stmt.se_arr_asize) * 65536 + stmt.se_arr_fcount * 4294967296) * 64
         } else {
-        if stmt.se_l2phase == 1 {
-            // Emit the depth-2 struct sub-field's packing record (subcount + r2*65536 + l2*2^32),
-            // then arm the sub-sub-field drain (subcount > 0) or advance past it (an empty struct).
-            if stmt.se_l2subcount == 0 {
-                stmt.se_l2phase = 0;
-                stmt.se_subcur = stmt.se_subcur + 1;
+        if stmt.se_sp > 0 {
+            // Draining a STACKED (depth >= 2) struct frame. Phase 1 emits its packing record; phase 2
+            // drains its sub-fields, where a struct sub-field PUSHES a deeper frame and a scalar emits
+            // a record (popping and cascading up when it is the frame's last). This is the reference's
+            // recursive descent unrolled onto `se_stk_*`.
+            let top = stmt.se_sp - 1;
+            if stmt.se_stk_phase[top] == 1 {
+                // The frame's packing record (subcount + r2*65536 + l2*2^32). A non-empty struct arms
+                // its sub-field drain; an empty struct pops immediately (advancing the parent cursor).
+                let rec = Node::StructEqNestedField() as Word + (stmt.se_stk_count[top] + stmt.se_stk_r2[top] * 65536 + stmt.se_stk_l2[top] * 4294967296) * 64;
+                if stmt.se_stk_count[top] == 0 {
+                    se_pop_cascade();
+                } else {
+                    stmt.se_stk_phase[top] = 2;
+                    stmt.se_stk_cur[top] = 0;
+                }
+                rec
             } else {
-                stmt.se_l2phase = 2;
-                stmt.se_l2subcur = 0;
+                let g = stmt.se_stk_start[top] + stmt.se_stk_cur[top];
+                if structdefs.sd_fstruct[g] > 0 {
+                    // A DEEPER struct sub-field: emit the sentinel header (kind 100+bytesize) and PUSH a
+                    // new frame (r2 then l2, monotonic). This frame's cursor advances only when the
+                    // child frame pops (via `se_pop_cascade`).
+                    let s = structdefs.sd_fstruct[g] - 1;
+                    stmt.se_stk_start[stmt.se_sp] = structdefs.sd_fstart[s];
+                    stmt.se_stk_count[stmt.se_sp] = structdefs.sd_fcount[s];
+                    stmt.se_stk_cur[stmt.se_sp] = 0;
+                    stmt.se_stk_r2[stmt.se_sp] = ps.pcount + stmt.slot_count;
+                    stmt.slot_count = stmt.slot_count + 1;
+                    stmt.se_stk_l2[stmt.se_sp] = ps.pcount + stmt.slot_count;
+                    stmt.slot_count = stmt.slot_count + 1;
+                    stmt.se_stk_phase[stmt.se_sp] = 1;
+                    stmt.se_sp = stmt.se_sp + 1;
+                    Node::StructEqNestedField() as Word + (structdefs.sd_foffset[g] + (100 + structdefs.sd_bytesize[s]) * 65536) * 64
+                } else {
+                    // A scalar sub-field: emit it; if it is the frame's last, pop and cascade up.
+                    let rec = Node::StructEqNestedField() as Word + (structdefs.sd_foffset[g] + structdefs.sd_fkind[g] * 65536) * 64;
+                    stmt.se_stk_cur[top] = stmt.se_stk_cur[top] + 1;
+                    if stmt.se_stk_cur[top] == stmt.se_stk_count[top] {
+                        se_pop_cascade();
+                    }
+                    rec
+                }
             }
-            Node::StructEqNestedField() as Word + (stmt.se_l2subcount + stmt.se_l2r2 * 65536 + stmt.se_l2l2 * 4294967296) * 64
-        } else {
-        if stmt.se_l2phase == 2 {
-            // Drain the depth-2 struct's scalar sub-sub-fields; on the last, advance the parent
-            // struct's sub-field cursor past the now fully emitted nested sub-field.
-            let g = stmt.se_l2substart + stmt.se_l2subcur;
-            stmt.se_l2subcur = stmt.se_l2subcur + 1;
-            if stmt.se_l2subcur == stmt.se_l2subcount {
-                stmt.se_l2phase = 0;
-                stmt.se_subcur = stmt.se_subcur + 1;
-            }
-            Node::StructEqNestedField() as Word + (structdefs.sd_foffset[g] + structdefs.sd_fkind[g] * 65536) * 64
         } else {
         if stmt.se_subcur < stmt.se_subcount {
             let fidx = stmt.se_substart + stmt.se_subcur;
@@ -2509,18 +2598,19 @@ fn structeq_nested_next() -> Word {
                 Node::StructEqNestedField() as Word + (tupledefs.tup_eoffset[fidx] + tupledefs.tup_ekind[fidx] * 65536) * 64
             } else {
             if structdefs.sd_fstruct[fidx] > 0 {
-                // A DEPTH-2 struct sub-field (`struct M { i: I }` inside `struct O { m: M }`): allocate
-                // its two extract temps (r2 then l2, monotonic -- matching the reference next_slot),
-                // emit the sentinel header (kind 100+bytesize, like the enum-struct-payload sentinel),
-                // and arm the packing/sub-field drain. `se_subcur` advances only after the drain ends.
+                // A DEPTH-2 struct sub-field (`struct M { i: I }` inside `struct O { m: M }`): emit the
+                // sentinel header (kind 100+bytesize) and PUSH the first stacked frame (r2 then l2,
+                // monotonic -- matching the reference next_slot). `se_subcur` advances when it pops.
                 let s = structdefs.sd_fstruct[fidx] - 1;
-                stmt.se_l2r2 = ps.pcount + stmt.slot_count;
+                stmt.se_stk_start[0] = structdefs.sd_fstart[s];
+                stmt.se_stk_count[0] = structdefs.sd_fcount[s];
+                stmt.se_stk_cur[0] = 0;
+                stmt.se_stk_r2[0] = ps.pcount + stmt.slot_count;
                 stmt.slot_count = stmt.slot_count + 1;
-                stmt.se_l2l2 = ps.pcount + stmt.slot_count;
+                stmt.se_stk_l2[0] = ps.pcount + stmt.slot_count;
                 stmt.slot_count = stmt.slot_count + 1;
-                stmt.se_l2substart = structdefs.sd_fstart[s];
-                stmt.se_l2subcount = structdefs.sd_fcount[s];
-                stmt.se_l2phase = 1;
+                stmt.se_stk_phase[0] = 1;
+                stmt.se_sp = 1;
                 Node::StructEqNestedField() as Word + (structdefs.sd_foffset[fidx] + (100 + structdefs.sd_bytesize[s]) * 65536) * 64
             } else {
                 stmt.se_subcur = stmt.se_subcur + 1;
@@ -2530,7 +2620,7 @@ fn structeq_nested_next() -> Word {
             stmt.se_phase = 0;
             stmt.sq_field = stmt.sq_field + 1;
             Node::StructEqNestedEnd() as Word
-        } } } } }
+        } } } }
     } else {
         if stmt.sq_field < stmt.sq_count {
             if stmt.se_istuple_container == 1 {

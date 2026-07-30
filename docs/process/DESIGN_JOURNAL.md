@@ -17,6 +17,57 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-07-29 (session 35)
 
+**3-LEVEL STRUCT-NESTING EQUALITY (2026-07-29): COMPLETE on `feat/selfhost-3level-struct-eq`. Arbitrary-depth nested struct equality self-compiles byte-identically; boundary 52 -> 53 Ok. Four stages (parse, reconstruct, codegen, admission).**
+Stage 3 (codegen.kel): `push_struct_eq_subfields` became an explicit-stack reverse-DFS emitter (the
+`es_*` frame stack), with `struct_forest_end`/`nested_end`/`es_compute_sfoff` walking the recursive
+`seb` grammar for slot-count strides, temp counts, and per-frame sub-field offsets. Depth-1/2 ops stayed
+byte-identical; `EXPECTED_SELF_COMPILE` 72 -> 75 (three new self-compiling helpers). Stage 4: the missing
+piece. The differential oracle showed `D==D` compiling to a primitive `GetLocal/GetLocal/CmpEq` rather
+than a nested compare — a FOURTH depth-2 assumption the mapping had not surfaced: the ADMISSION scan
+`struct_eq_kind` only descended struct-in-struct two levels, so a depth-3 type failed admission and fell
+back to primitive `==`. Generalized with a new `struct_subtree_pure` explicit-stack scan (admit a struct
+whose subtree is pure struct/scalar to arbitrary depth; a tuple/array/enum anywhere still defers, matching
+what the drain lowers). LESSON: an increment's depth assumptions can hide in the ADMISSION/dispatch, not
+only the lowering — the differential oracle catches a silent mis-compile (valid-but-wrong primitive
+compare) that no self-compile or verify would. Verified: `eq/3level_struct` (D->C->B->A, plus `!=`,
+multi-field deepest, deep-beside-scalar, and a 4-deep chain) byte-identical; 2-level regression; boundary
+53 Ok; parse/reconstruct/codegen self-compile. No opcode/record/node/`BYTECODE_VERSION` change.
+
+Original checkpoint note (stages 1+2), retained:
+**Stages 1+2 (2026-07-29): parse.kel and reconstruct.kel generalized to bounded depth stacks.**
+The operator selected the general bounded-depth-stack approach (approach A) over the cheaper incremental
+fixed-depth-3 phase (approach B) at a design fork, knowing A is the largest/riskiest/most-token option.
+Both reach 52 -> 53 Ok; A generalizes to all depths. A mechanism-mapping agent first established that the
+existing depth-2 support is a HARDCODED special case (parse `se_l2phase`, reconstruct `se_nsub_mode`,
+codegen's inlined `push_struct_eq_subfields` depth-2 branch), not an extensible base. Correction to the
+earlier fork framing: the two boundary Gaps are `float_arith` and `generic_fn` (permanently out of scope),
+so this ADDS a new `SOk` case (52 -> 53), it does not flip an existing Gap.
+
+Decomposition (each stage keeps depth-1/2 output byte-identical, so each is an independently-green refactor
+verifiable by the existing `eq/2level_struct` fixture; only the final wiring needs all three plus depth-3):
+- Stage 1 (parse.kel, `13b922f`): the fixed `se_l2*` depth-2 fields became a general `se_stk_*` frame
+  stack with a `se_pop_cascade` helper (a struct sub-field at any depth pushes a frame; a scalar's last
+  field pops and cascades up, advancing the parent cursor). This is the reference
+  `emit_composite_fieldwise_eq` recursion unrolled onto an explicit stack (R4 forbids recursion). Verified:
+  boundary unchanged (52 Ok / 2 Gap / 1 RefRejects) and parse.kel self-compiles byte-identically.
+- Stage 2 (reconstruct.kel, `c667875`): `se_nsub_mode`/`se_nsub_remaining` became a general `se_nstk_*`
+  frame stack with a `se_nsub_pop` cascade. The `seb` grammar for a nested-struct sub-field is now
+  recursive `[off, 100+size, subcount, r2, l2, field*]`. A struct sub-field is counted when its header is
+  laid, so a frame completes when its child subtree finishes (the pop checks, not decrements, the parent's
+  remaining). Verified: boundary unchanged and reconstruct.kel self-compiles byte-identically.
+- Stage 3 (codegen.kel): NOT STARTED. `push_struct_eq_subfields`'s inlined depth-2 case must become an
+  explicit-stack reverse-DFS emitter (emission is reversed, so a nested field's descent lands between its
+  wrapper-close and its extract). Highest byte-identity risk. Full algorithm in the plan doc.
+
+CHECKPOINT RATIONALE: stage 3 is the most expensive, byte-identity-sensitive piece and needs several slow
+(~90-215s) verify cycles. With the seven-day rate-limit window as the binding budget and this session
+already long (a completed+merged CLI-hardening increment plus this investigation, design, and two stages),
+I banked the verified stages-1+2 checkpoint rather than rush a high-risk emitter toward possible budget
+exhaustion and a broken tree. Stages 1+2 are committed and green; stage 3 work will be uncommitted until
+byte-identical, so the checkpoint is safe. Design and turnkey continuation in
+[`docs/decisions/STRUCT_3LEVEL_PLAN.md`](../decisions/STRUCT_3LEVEL_PLAN.md). No opcode/record/node/
+`BYTECODE_VERSION` change; boundary still 52 Ok on the branch (depth-3 not yet wired).
+
 **CLI-BACKEND HARDENING (2026-07-29): the `--compiler self-hosted` error surface now classifies genuine source errors apart from self-hosted-subset limitations and names the diverging chunk. COMPLETE, full gate GREEN, merged.**
 The operator selected "harden the CLI backend" at the post-compaction fork. Of the two candidate sub-items,
 threading the CLI preamble through self-hosted mode was found to be a HARD boundary, not an oversight, so it was

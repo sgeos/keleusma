@@ -105,14 +105,21 @@ private data rs {
     se_innested: Word,
     se_subpos: Word,
     se_subn: Word,
-    // DEPTH-2 struct sub-field reassembly (`eq/2level_struct`). A nested-struct sub-field of a nested
-    // struct arrives as a header record (kind 100+bytesize, laid as a normal [off, kind] sub-field but
-    // counted once), followed by a packing record (subcount + r2*65536 + l2*2^32) then the deeper
-    // struct's scalar sub-sub-fields. `se_nsub_mode` 1 = the next k=55 is that packing, 2 = a
-    // sub-sub-field; `se_nsub_remaining` the sub-sub-fields still to read. The `seb` for such a
-    // sub-field is [sub_off, 100+size, subcount, r2, l2, subcount*(subsub_off, subsub_kind)].
-    se_nsub_mode: Word,
-    se_nsub_remaining: Word,
+    // GENERAL depth-2+ struct sub-field reassembly STACK (`eq/2level_struct` and deeper). A
+    // nested-struct sub-field arrives as a header record (kind 100+bytesize, laid as a normal
+    // [off, kind] sub-field and counted once), followed by a packing record (subcount + r2*65536 +
+    // l2*2^32) then that struct's own sub-fields -- each of which may itself be a nested-struct
+    // sub-field, recursing. The `seb` for a nested-struct sub-field is therefore, recursively,
+    // [off, 100+size, subcount, r2, l2, field*] where each `field` is a scalar [off, kind] or another
+    // such nested block. `se_sp2` is the number of active stacked frames; `se_nstk_phase` 1 = the next
+    // k=55 is that frame's packing record, 2 = a sub-field of it; `se_nstk_remaining` its sub-fields
+    // still to read (a struct sub-field is counted when its header is laid, so the parent is complete
+    // when its child subtree finishes -- `se_nsub_pop` cascades). `se_ncasc_active` guards that pop
+    // loop. Bounded (array size 8) so worst-case memory stays static; deeper defers to the reference.
+    se_sp2: Word,
+    se_nstk_phase: [Word; 8],
+    se_nstk_remaining: [Word; 8],
+    se_ncasc_active: Word,
     // Struct-element ARRAY field reassembly (`eq/struct_arrayofstruct`). A variant-1 (array) field
     // whose first k=55 record has a kind-part >= 100 is a struct-element array: that record is the
     // packing [acount, 100+arrsize, fieldcount], and the next `fieldcount` k=55 records are the
@@ -512,7 +519,7 @@ fn build_struct_eq_nested(a: Word) -> Word {
     rs.sebcur = 0;
     rs.setop = 0;
     rs.se_innested = 0;
-    rs.se_nsub_mode = 0;
+    rs.se_sp2 = 0;
     rs.se_arr_mode = 0;
     let rhs = pop();
     let lhs = pop();
@@ -718,6 +725,32 @@ fn step(k: Word, a: Word) -> Word {
     } } } } } } } } } } } } } } } }
 }
 
+// Pop the top depth-2+ struct reassembly frame (its sub-fields are fully laid into `seb`) and
+// CASCADE: a parent stacked frame whose `se_nstk_remaining` already reached 0 -- because its spawning
+// struct sub-field was counted when that sub-field's header was laid -- is complete too, so pop it as
+// well. The cascade stops at a frame with remaining > 0 or at `se_sp2 == 0` (back to frame 0, whose
+// `se_subn` was counted at header time and is backpatched by StructEqNestedEnd). The `for` cap (16)
+// safely over-estimates the stack depth (<= 8). Non-recursive, per the verifier's R4 rule.
+fn se_nsub_pop() -> Word {
+    rs.se_ncasc_active = 1;
+    for i in 0..16 limit 16 {
+        if rs.se_ncasc_active == 1 {
+            rs.se_sp2 = rs.se_sp2 - 1;
+            if rs.se_sp2 == 0 {
+                rs.se_ncasc_active = 0;
+            } else {
+                let p = rs.se_sp2 - 1;
+                if rs.se_nstk_remaining[p] == 0 {
+                    rs.se_ncasc_active = 1;
+                } else {
+                    rs.se_ncasc_active = 0;
+                }
+            }
+        }
+    }
+    0
+}
+
 // The enum-match and struct-eq assembly records: EnumArm/EnumBind markers accumulate into pending
 // buffers, EnumMatchBuild/StructEqBuild assemble the match_parts loop layout and build the node.
 fn step_assembly(k: Word, a: Word) -> Word {
@@ -828,40 +861,56 @@ fn step_assembly(k: Word, a: Word) -> Word {
                     }
                 }
             } else {
-            if rs.se_nsub_mode == 1 {
-                // The packing record of a DEPTH-2 struct sub-field: subcount + r2*65536 + l2*2^32.
-                let subcount = a % 65536;
-                rs.seb[rs.sebcur] = subcount;
-                rs.seb[rs.sebcur + 1] = (a / 65536) % 65536;
-                rs.seb[rs.sebcur + 2] = a / 4294967296;
-                rs.sebcur = rs.sebcur + 3;
-                rs.se_nsub_remaining = subcount;
-                if subcount == 0 {
-                    rs.se_nsub_mode = 0;
+            if rs.se_sp2 > 0 {
+                let top = rs.se_sp2 - 1;
+                if rs.se_nstk_phase[top] == 1 {
+                    // The packing record of a stacked struct frame: subcount + r2*65536 + l2*2^32.
+                    let subcount = a % 65536;
+                    rs.seb[rs.sebcur] = subcount;
+                    rs.seb[rs.sebcur + 1] = (a / 65536) % 65536;
+                    rs.seb[rs.sebcur + 2] = a / 4294967296;
+                    rs.sebcur = rs.sebcur + 3;
+                    rs.se_nstk_remaining[top] = subcount;
+                    if subcount == 0 {
+                        se_nsub_pop();
+                    } else {
+                        rs.se_nstk_phase[top] = 2;
+                    }
                 } else {
-                    rs.se_nsub_mode = 2;
+                    if a / 65536 >= 100 {
+                        // A DEEPER nested-struct sub-field: lay [off, 100+size], count it in this
+                        // frame (so the frame completes when its child subtree finishes), and PUSH a
+                        // child frame whose own packing record follows.
+                        rs.seb[rs.sebcur] = a % 65536;
+                        rs.seb[rs.sebcur + 1] = a / 65536;
+                        rs.sebcur = rs.sebcur + 2;
+                        rs.se_nstk_remaining[top] = rs.se_nstk_remaining[top] - 1;
+                        rs.se_nstk_phase[rs.se_sp2] = 1;
+                        rs.se_sp2 = rs.se_sp2 + 1;
+                    } else {
+                        // A scalar sub-field: [off, kind]; pop-cascade when this frame is drained.
+                        rs.seb[rs.sebcur] = a % 65536;
+                        rs.seb[rs.sebcur + 1] = a / 65536;
+                        rs.sebcur = rs.sebcur + 2;
+                        rs.se_nstk_remaining[top] = rs.se_nstk_remaining[top] - 1;
+                        if rs.se_nstk_remaining[top] == 0 {
+                            se_nsub_pop();
+                        }
+                    }
                 }
             } else {
-            if rs.se_nsub_mode == 2 {
-                // A scalar sub-sub-field of the depth-2 struct: [off, kind].
-                rs.seb[rs.sebcur] = a % 65536;
-                rs.seb[rs.sebcur + 1] = a / 65536;
-                rs.sebcur = rs.sebcur + 2;
-                rs.se_nsub_remaining = rs.se_nsub_remaining - 1;
-                if rs.se_nsub_remaining == 0 {
-                    rs.se_nsub_mode = 0;
-                }
-            } else {
-                // A normal sub-field of the nested struct/tuple: [off, kind], counted once. A kind
-                // >= 100 marks a nested-struct sub-field whose packing + sub-sub-fields follow.
+                // A frame-0 direct sub-field of the nested struct/tuple: [off, kind], counted once. A
+                // kind >= 100 marks a nested-struct sub-field whose packing + sub-fields follow (push
+                // the first stacked frame; its packing record is the next k=55).
                 rs.seb[rs.sebcur] = a % 65536;
                 rs.seb[rs.sebcur + 1] = a / 65536;
                 rs.sebcur = rs.sebcur + 2;
                 rs.se_subn = rs.se_subn + 1;
                 if a / 65536 >= 100 {
-                    rs.se_nsub_mode = 1;
+                    rs.se_nstk_phase[0] = 1;
+                    rs.se_sp2 = 1;
                 }
-            } }
+            }
             }
         } else {
             rs.seb[rs.sebcur] = 0;

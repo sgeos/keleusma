@@ -1997,7 +1997,10 @@ fn self_compile_codegen_atomic_functions() {
     // `push_struct_eq_nested` to admit a DEPTH-2 nested-struct sub-field (`eq/2level_struct`); 72 with
     // `push_arr_of_struct_inner`, the per-element struct loop for a struct-element ARRAY field (factored
     // out of `push_struct_eq_nested` to stay under the op-table capacity, `eq/struct_arrayofstruct`).
-    const EXPECTED_SELF_COMPILE: usize = 72;
+    // 75 with the 3-level nesting generalization (`eq/3level_struct`): `push_struct_eq_subfields` became
+    // an explicit-stack reverse-DFS emitter (arbitrary bounded depth), adding three helpers
+    // `struct_forest_end`, `nested_end`, and `es_compute_sfoff` (72 -> 75), all self-compiling.
+    const EXPECTED_SELF_COMPILE: usize = 75;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -7060,6 +7063,32 @@ fn self_host_compiles_2level_struct_equality() {
     );
 }
 
+/// THIRD-level (and deeper) struct-nesting equality self-compiles byte-identically. A struct field
+/// whose field is a struct whose field is a struct (`struct A{x} B{a:A} C{b:B} D{c:C}`, `p == q`)
+/// requires three nested struct extractions. The `push_struct_eq_subfields` explicit-stack reverse-DFS
+/// emitter (which unrolls the reference's recursive `emit_composite_fieldwise_eq` onto the `es_*`
+/// frame stack, R4 forbidding recursion) handles arbitrary bounded depth. No new opcode/record/node
+/// kind. Covers a 3-deep chain, `!=`, a multi-field deepest struct, a deep field beside a scalar top
+/// field, and a 4-deep chain (exercising the bounded stack past depth 3).
+#[test]
+fn self_host_compiles_3level_struct_equality() {
+    assert_self_host_byte_identical(
+        "struct A { x: Word }\nstruct B { a: A }\nstruct C { b: B }\nstruct D { c: C }\nfn f(p: D, q: D) -> bool { p == q }",
+    );
+    assert_self_host_byte_identical(
+        "struct A { x: Word }\nstruct B { a: A }\nstruct C { b: B }\nstruct D { c: C }\nfn f(p: D, q: D) -> bool { p != q }",
+    );
+    assert_self_host_byte_identical(
+        "struct A { x: Word, y: Word }\nstruct B { a: A }\nstruct C { b: B }\nstruct D { c: C }\nfn f(p: D, q: D) -> bool { p == q }",
+    );
+    assert_self_host_byte_identical(
+        "struct A { x: Word }\nstruct B { a: A }\nstruct C { b: B }\nstruct D { c: C, w: Word }\nfn f(p: D, q: D) -> bool { p == q }",
+    );
+    assert_self_host_byte_identical(
+        "struct A { x: Word }\nstruct B { a: A }\nstruct C { b: B }\nstruct D { c: C }\nstruct E { d: D }\nfn f(p: E, q: E) -> bool { p == q }",
+    );
+}
+
 /// Struct-of-array-of-struct equality (`struct Q { ps: [P; 2] }`, `a == b`) self-compiles
 /// byte-identically. A struct field that is an array whose element is itself a struct with scalar
 /// leaves extracts the whole array (GetFieldNested variant Array) into a temp pair, then per element
@@ -7604,6 +7633,11 @@ fn self_hosted_construct_support_boundary() {
             "eq/2level_struct",
             SOk,
             "struct I { v: Word }\nstruct M { i: I }\nstruct O { m: M }\nfn f(a: O, b: O) -> bool { a == b }",
+        ),
+        (
+            "eq/3level_struct",
+            SOk,
+            "struct A { x: Word }\nstruct B { a: A }\nstruct C { b: B }\nstruct D { c: C }\nfn f(p: D, q: D) -> bool { p == q }",
         ),
         (
             "eq/struct_arrayofstruct",
