@@ -7089,6 +7089,27 @@ fn self_host_compiles_3level_struct_equality() {
     );
 }
 
+/// A TUPLE whose struct element nests deeper than one level self-compiles byte-identically. The tuple
+/// container's struct-element sub-fields already drain through the arbitrary-depth frame-stack code; the
+/// admission `tuple_eq_kind` now uses `struct_subtree_pure` to admit an arbitrarily-deep pure
+/// struct/scalar element (a tuple/array/enum in the element's subtree still defers). Covers a tuple of a
+/// 2-level struct, a 3-level struct, `!=`, and a deep struct element beside a scalar element.
+#[test]
+fn self_host_compiles_tuple_of_deep_struct_equality() {
+    assert_self_host_byte_identical(
+        "struct I { v: Word }\nstruct M { i: I }\nfn f(a: (M, Word), b: (M, Word)) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct A { x: Word }\nstruct B { a: A }\nstruct C { b: B }\nfn f(a: (C, Word), b: (C, Word)) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct I { v: Word }\nstruct M { i: I }\nfn f(a: (M, Word), b: (M, Word)) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "struct I { v: Word }\nstruct M { i: I }\nfn f(a: (Word, M), b: (Word, M)) -> bool { a == b }",
+    );
+}
+
 /// Struct-of-array-of-struct equality (`struct Q { ps: [P; 2] }`, `a == b`) self-compiles
 /// byte-identically. A struct field that is an array whose element is itself a struct with scalar
 /// leaves extracts the whole array (GetFieldNested variant Array) into a temp pair, then per element
@@ -7623,6 +7644,11 @@ fn self_hosted_construct_support_boundary() {
             "eq/tuple_of_struct",
             SOk,
             "struct P { x: Word }\nfn f(a: (P, Word), b: (P, Word)) -> bool { a == b }",
+        ),
+        (
+            "eq/tuple_of_deep_struct",
+            SOk,
+            "struct I { v: Word }\nstruct M { i: I }\nfn f(a: (M, Word), b: (M, Word)) -> bool { a == b }",
         ),
         (
             "eq/enum_struct_payload",
