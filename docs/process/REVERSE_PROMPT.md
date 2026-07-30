@@ -13,24 +13,22 @@ increment-by-increment reasoning and frontier assessments live in
 
 **Date**: 2026-07-29 (session 35)
 
-## Current state — IN-PROGRESS increment on a feature branch (checkpoint)
+## Current state — 3-level increment COMPLETE (branch green, pending full gate + merge)
 
-- **Third-level struct-nesting equality (operator's second fork selection: the general bounded-depth
-  stack) is IN PROGRESS on `feat/selfhost-3level-struct-eq` (cut from `v0.2.3` at `4037174`).** Two of
-  three stages are DONE and verified green; stage 3 (the hardest) and the depth-3 wiring remain. The
-  branch is a clean, resumable checkpoint. Design and precise continuation in
-  [`docs/decisions/STRUCT_3LEVEL_PLAN.md`](../decisions/STRUCT_3LEVEL_PLAN.md).
-  - Stage 1 (parse.kel, `13b922f`): fixed depth-2 `se_l2*` -> general `se_stk_*` frame stack +
-    `se_pop_cascade`. Depth-1/2 records byte-identical. Boundary unchanged; parse.kel self-compiles.
-  - Stage 2 (reconstruct.kel, `c667875`): `se_nsub_mode` -> general `se_nstk_*` frame stack +
-    `se_nsub_pop`; recursive `seb` grammar. Depth-1/2 `seb` byte-identical. Boundary unchanged;
-    reconstruct.kel self-compiles.
-  - Stage 3 (codegen.kel): NOT STARTED. `push_struct_eq_subfields`'s inlined depth-2 case must become
-    an explicit-stack reverse-DFS emitter (R4 forbids the reference's recursion). Highest byte-identity
-    risk. Then stage 4 wires the `eq/3level_struct` boundary case (52 -> 53 Ok). Full design in the plan.
-  - NOTE: correction to the earlier fork framing — the two boundary Gaps are `float_arith` and
-    `generic_fn` (permanently out of scope). This increment ADDS a new `SOk` case (52 -> 53 Ok); it does
-    NOT flip an existing Gap.
+- **Third-level (and deeper) struct-nesting equality is COMPLETE on `feat/selfhost-3level-struct-eq`
+  (cut from `v0.2.3` at `4037174`).** Arbitrary-depth nested struct-in-struct equality self-compiles
+  byte-identically; the construct-support boundary moved **52 -> 53 Ok** (2 Gap / 1 RefRejects). All four
+  stages landed and verified via the differential oracle; the branch tip is green on the targeted
+  self-host suite. NEXT: FULL `scripts/release-gate.sh`, then no-ff merge into `v0.2.3`, push, confirm CI.
+  - Stage 1 (parse.kel, `13b922f`): `se_l2*` -> `se_stk_*` frame stack + `se_pop_cascade`.
+  - Stage 2 (reconstruct.kel, `c667875`): `se_nsub_mode` -> `se_nstk_*` stack + `se_nsub_pop`; recursive
+    `seb` grammar.
+  - Stages 3+4 (`4aefcf2`): codegen `push_struct_eq_subfields` -> explicit-stack reverse-DFS emitter
+    (`es_*`) + `struct_forest_end`/`nested_end`/`es_compute_sfoff`; and the ADMISSION fix — the fourth,
+    unanticipated depth-2 assumption: `struct_eq_kind` only descended two levels so `D==D` fell back to a
+    primitive compare. Generalized with `struct_subtree_pure`. `EXPECTED_SELF_COMPILE` 72 -> 75.
+  - No opcode/record/node/`BYTECODE_VERSION` change. The two remaining Gaps (`float_arith`, `generic_fn`)
+    are permanently out of scope; this ADDED a new `SOk` case.
 - **Previously this session: the `--compiler self-hosted` backend error surface was HARDENED. COMPLETE,
   full gate GREEN, CI GREEN, merged to `v0.2.3` (`cf24f12`).** The operator selected "harden the CLI
   backend" at the first post-compaction fork.
@@ -60,23 +58,17 @@ increment-by-increment reasoning and frontier assessments live in
   in-subset program compiles at exit 0.
 - The FULL `scripts/release-gate.sh` is GREEN.
 
-## Next step — RESUME STAGE 3 of the 3-level increment (branch `feat/selfhost-3level-struct-eq`)
+## Next step — FULL GATE + MERGE, then OPERATOR-DECISION FORK
 
-The increment is mid-flight at a clean, green checkpoint (stages 1+2 committed; branch NOT merged). To
-resume:
-1. `git checkout feat/selfhost-3level-struct-eq`; confirm HEAD is the stage-2 commit `c667875` (or the
-   later doc-checkpoint commit) and the working tree is clean.
-2. Implement **Stage 3** per `docs/decisions/STRUCT_3LEVEL_PLAN.md` "Stage 3 design": generalize
-   `push_struct_eq_subfields` (codegen.kel ~1968) from its inlined depth-2 case to an explicit-stack
-   reverse-DFS emitter; verify the depth-2 fixture stays byte-identical FIRST (a regression is a stop),
-   then generalize the slot-count and (if needed) intern passes.
-3. **Stage 4**: add `eq/3level_struct` to `self_hosted_construct_support_boundary` as `SOk` (52 -> 53 Ok)
-   and `self_host_compiles_3level_struct_equality`; run the full self-compile suite and the FULL
-   `scripts/release-gate.sh`; on green, no-ff merge into `v0.2.3`, push, confirm CI.
+1. Run the FULL `scripts/release-gate.sh` on `feat/selfhost-3level-struct-eq`. On green, no-ff merge into
+   `v0.2.3`, push (pre-push gate; keepalive), confirm CI green.
+2. Then the loop is again at an operator fork (no bounded same-context task remains). Candidate
+   directions to surface (do not auto-select):
+   - **New self-host language surface** — pick another construct family the `.kel` stages still defer.
+   - **Native-call support in the self-hosted pipeline** — larger; would make the CLI preamble meaningful.
+   - **Deeper nesting for the OTHER composites** — the arbitrary-depth generalization landed only for
+     struct-in-struct; nested tuple/array/enum still cap at their existing depths (the `es_*`/`se_stk_*`
+     machinery is now in place to extend them similarly if desired).
+   - **A different workstream** — release cadence (a V0.2.3 cut), backlog (B32/B33/B34).
 
-Inner-loop verification: `scripts/fast-check.sh 'test(self_host_compiles_2level_struct_equality)'` for
-the regression, then the boundary and codegen self-compile. Each stage self-compile / boundary run is
-~90-215s; background and poll to avoid the 600s watchdog.
-
-The seven-day rate-limit window is the binding budget; stage 3 is the most expensive, byte-identity-
-sensitive piece, so it was checkpointed here rather than rushed. Pace accordingly.
+The seven-day rate-limit window is the binding budget under heavy agent work; pace accordingly.

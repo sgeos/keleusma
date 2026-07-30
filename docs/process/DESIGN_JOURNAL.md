@@ -17,7 +17,24 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-07-29 (session 35)
 
-**3-LEVEL STRUCT-NESTING EQUALITY (2026-07-29): IN PROGRESS on `feat/selfhost-3level-struct-eq`. Stages 1+2 of 3 DONE and verified green; stage 3 (hardest) + wiring remain. A clean, resumable checkpoint.**
+**3-LEVEL STRUCT-NESTING EQUALITY (2026-07-29): COMPLETE on `feat/selfhost-3level-struct-eq`. Arbitrary-depth nested struct equality self-compiles byte-identically; boundary 52 -> 53 Ok. Four stages (parse, reconstruct, codegen, admission).**
+Stage 3 (codegen.kel): `push_struct_eq_subfields` became an explicit-stack reverse-DFS emitter (the
+`es_*` frame stack), with `struct_forest_end`/`nested_end`/`es_compute_sfoff` walking the recursive
+`seb` grammar for slot-count strides, temp counts, and per-frame sub-field offsets. Depth-1/2 ops stayed
+byte-identical; `EXPECTED_SELF_COMPILE` 72 -> 75 (three new self-compiling helpers). Stage 4: the missing
+piece. The differential oracle showed `D==D` compiling to a primitive `GetLocal/GetLocal/CmpEq` rather
+than a nested compare — a FOURTH depth-2 assumption the mapping had not surfaced: the ADMISSION scan
+`struct_eq_kind` only descended struct-in-struct two levels, so a depth-3 type failed admission and fell
+back to primitive `==`. Generalized with a new `struct_subtree_pure` explicit-stack scan (admit a struct
+whose subtree is pure struct/scalar to arbitrary depth; a tuple/array/enum anywhere still defers, matching
+what the drain lowers). LESSON: an increment's depth assumptions can hide in the ADMISSION/dispatch, not
+only the lowering — the differential oracle catches a silent mis-compile (valid-but-wrong primitive
+compare) that no self-compile or verify would. Verified: `eq/3level_struct` (D->C->B->A, plus `!=`,
+multi-field deepest, deep-beside-scalar, and a 4-deep chain) byte-identical; 2-level regression; boundary
+53 Ok; parse/reconstruct/codegen self-compile. No opcode/record/node/`BYTECODE_VERSION` change.
+
+Original checkpoint note (stages 1+2), retained:
+**Stages 1+2 (2026-07-29): parse.kel and reconstruct.kel generalized to bounded depth stacks.**
 The operator selected the general bounded-depth-stack approach (approach A) over the cheaper incremental
 fixed-depth-3 phase (approach B) at a design fork, knowing A is the largest/riskiest/most-token option.
 Both reach 52 -> 53 Ok; A generalizes to all depths. A mechanism-mapping agent first established that the

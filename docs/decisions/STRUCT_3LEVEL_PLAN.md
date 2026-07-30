@@ -8,10 +8,15 @@ example `struct A { x: Word }`, `struct B { a: A }`, `struct C { b: B }`, `struc
 `fn f(p: D, q: D) -> bool { p == q }`. Three nested struct extractions must lower byte-identically
 to the reference `emit_composite_fieldwise_eq`.
 
-Status: **PROPOSED — not yet implemented.** This blueprint records the design and a material
-cost and risk fork surfaced by the mechanism mapping. The operator selected the general
-bounded-depth-stack approach at the direction fork; the cheaper incremental alternative is
-recorded under "Cost and risk fork" for a final go decision before the long implementation.
+Status: **COMPLETE — implemented, byte-identical, boundary 52 -> 53 Ok.** All four stages landed
+(parse, reconstruct, codegen, and the admission check `struct_eq_kind`). The general
+bounded-depth-stack approach (operator's fork choice) generalizes nested struct-in-struct equality to
+arbitrary bounded depth. A fourth depth-2 assumption not anticipated in the original plan — the
+ADMISSION scan in `struct_eq_kind`, which had `D==D` fall back to a primitive compare — was found via
+the differential oracle and generalized with a new `struct_subtree_pure` explicit-stack scan. Verified:
+`eq/3level_struct` byte-identical, the 2-level regression, the boundary (53 Ok), and
+parse/reconstruct/codegen self-compile. `EXPECTED_SELF_COMPILE` 72 -> 75. No opcode/record/node/
+`BYTECODE_VERSION` change. See the 2026-07-29 DESIGN_JOURNAL entry.
 
 ## What "level" counts
 
