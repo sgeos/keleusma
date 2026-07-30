@@ -132,6 +132,69 @@ whole nested-equality blast-radius suite, `validate_module_via_kel`, the boundar
 self-compile count. Then the FULL `scripts/release-gate.sh` (one gate per worktree). On green, no-ff
 merge into `v0.2.3`, push, confirm CI.
 
+## Progress (2026-07-29)
+
+- **Stage 1 (parse.kel) — DONE, committed `13b922f`, verified green.** The fixed depth-2 `se_l2*`
+  fields are replaced by a general `se_stk_*` frame stack plus a `se_pop_cascade` helper. A struct
+  sub-field at any level pushes a frame; a scalar emits and, when the frame's last, pops and cascades
+  up (advancing the parent cursor, cascading through parents whose only remaining field was that
+  struct). Depth-1 and depth-2 record output is byte-identical. Verified: boundary unchanged
+  (52 Ok / 2 Gap / 1 RefRejects) and `self_host_compiles_parse_kel_byte_identically`.
+- **Stage 2 (reconstruct.kel) — DONE, committed `c667875`, verified green.** `se_nsub_mode`/
+  `se_nsub_remaining` are replaced by a general `se_nstk_*` frame stack plus a `se_nsub_pop` cascade.
+  The `seb` grammar for a nested-struct sub-field is now recursive: `[off, 100+size, subcount, r2, l2,
+  field*]` where each `field` is a scalar `[off, kind]` or another such block. A struct sub-field is
+  COUNTED when its header is laid, so a frame completes when its child subtree finishes and the pop
+  cascades (checking, not decrementing, the parent's remaining). Depth-1/2 `seb` bytes are
+  byte-identical. Verified: boundary unchanged and `self_host_compiles_reconstruct_kel_byte_identically`.
+- **Stage 3 (codegen.kel) — NOT STARTED.** Design below.
+
+## Stage 3 design — codegen explicit-stack reverse-DFS emitter (TODO)
+
+`push_struct_eq_nested` (codegen.kel ~2095) has three passes: a slot-count forward pass (~2104), an
+eager intern pass (~2159), and a REVERSE emission pass (~2215). The nested-struct case calls
+`push_struct_eq_subfields` (~1968), which emits a composite's sub-fields in reverse and INLINES the
+depth-2 nested case (extract into r2'/l2', an inner loop over SCALAR sub-sub-fields only, ~1998-2011).
+Three fixed-depth-2 assumptions must generalize, keeping depth-1/2 ops byte-identical:
+
+1. **Slot-count pass (~2139-2146).** The struct-field sub-loop counts `+2` temps per depth-2 struct
+   sub-field and strides `5 + subsubcount*2`. Generalize to a stack walk over the recursive `seb`
+   grammar: every nested-struct sub-field at any depth contributes `+2` temps (r2', l2') and its
+   stride is `5 + sum(child strides)`. The temp COUNT is what matters for `let_count`; walk the whole
+   `seb` subtree.
+
+2. **Intern pass (~2159-2200).** A nested struct/tuple field interns `false` then `true`. For depth-3
+   the interning order must still match the reference DFS: the reference interns per composite compare
+   `false` (per field, on inequality) then `true` (loop tail). Because all bools dedup to two indices
+   after the first occurrence, and the first nested field already interns false then true, deeper
+   levels add no NEW constants. So the intern pass likely needs NO change for the pure-struct case
+   (confirm by running the depth-3 fixture). If a mismatch appears, replay the nested sub-fields'
+   false/true in DFS order.
+
+3. **Emission (`push_struct_eq_subfields` ~1968).** The core change. The reversed emission for a
+   nested-struct sub-field is: `outer-negate-break` (mendif mbreak konst(false) mif lnot), then the
+   nested compare block (mendloop; konst(true) mbreak; ITS SUB-FIELDS reversed; mloop), then the
+   extract (setlocal(l2p) setlocal(r2p) getfieldnested(extp) getlocal(r2) getfieldnested(extp)
+   getlocal(l2)). "ITS SUB-FIELDS reversed" is the recursion. Replace the SCALAR-only inner loop with
+   an explicit-stack reverse-DFS: a frame is `{sbase, subcount, cur (reverse index), l, r}`. For a
+   scalar sub-field emit the scalar block; for a nested one, emit the outer-negate-break + loop-close,
+   then PUSH a child frame for its sub-fields, and record (on a parallel "pending extract" stack) the
+   loop-open + extract ops to emit once the child frame is exhausted. Because emission is reversed,
+   the child's ops land BETWEEN the loop-close and the loop-open+extract, which is exactly the
+   reference nesting. The seb offsets (`soff+2` subcount, `soff+3` r2', `soff+4` l2', `soff+5+...`
+   sub-fields) recurse one level deeper per frame. Watch the 1536 analyze op-table cap; a depth-3
+   unrolled compare grows the op count, so a helper factor (bump `EXPECTED_SELF_COMPILE`) may be
+   needed. This emitter is the highest byte-identity risk; verify the depth-2 fixture stays identical
+   FIRST (a regression there means the generalized emitter changed existing output — a stop), then the
+   new depth-3 fixture.
+
+## Stage 4 — wire depth-3 (TODO)
+
+Add `eq/3level_struct` (`struct A{x:Word} struct B{a:A} struct C{b:B} struct D{c:C}`,
+`fn f(p:D,q:D)->bool{p==q}`) to `self_hosted_construct_support_boundary` as `SOk` (52 -> 53 Ok), add
+`self_host_compiles_3level_struct_equality`, and confirm the whole self-compile suite plus the FULL
+`scripts/release-gate.sh` stay green before the no-ff merge into `v0.2.3`.
+
 ## Capacity risks
 
 - The analyze op-table cap is 1536 (`tests` assert). A depth-3 unrolled compare adds ops; factor a
