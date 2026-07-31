@@ -2390,15 +2390,12 @@ fn tuple_eq_kind(idx: Word) -> Word {
     for f in 0..tupledefs.tup_ecount[idx] limit 64 {
         let fidx = tupledefs.tup_estart[idx] + f;
         if tupledefs.tup_estruct[fidx] > 0 {
-            // A struct element: nested-supported only when the struct is one level deep (all its
-            // sub-fields scalar). A composite sub-field (nested struct/tuple/array) => defer.
+            // A struct element: nested-supported when its subtree is pure struct/scalar to ARBITRARY
+            // depth (the same frame-stack drain the top-level struct container uses). A tuple, array, or
+            // enum anywhere in the element's subtree still defers.
             stmt.sq_found = 1;
-            let s = tupledefs.tup_estruct[fidx] - 1;
-            for g in 0..structdefs.sd_fcount[s] limit 64 {
-                let gidx = structdefs.sd_fstart[s] + g;
-                if structdefs.sd_fstruct[gidx] > 0 orelse structdefs.sd_ftuple[gidx] > 0 orelse structdefs.sd_farraylen[gidx] > 0 {
-                    stmt.sq_scan = 0;
-                }
+            if struct_subtree_pure(tupledefs.tup_estruct[fidx] - 1) == 0 {
+                stmt.sq_scan = 0;
             }
         } else {
             // A scalar element rides a real ScalarKind (< 100); an array or nested-tuple element
