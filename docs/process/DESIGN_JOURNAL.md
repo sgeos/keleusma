@@ -15,7 +15,59 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 ## Last Updated
 
-**Date**: 2026-07-29 (session 35)
+**Date**: 2026-07-30 (session 36)
+
+**TUPLE-IN-TUPLE (2026-07-30): the planned increment was UNNECESSARY — the construct ALREADY self-compiles byte-identically. Delivered as boundary/regression pinning (54 -> 63 Ok) plus a corrected frontier map.**
+The handoff and `REVERSE_PROMPT` both recorded tuple-in-tuple as the next Gap, predicting a full
+multi-stage drain generalization: "the emit-DFS would need a per-frame accessor/variant (Tuple vs Struct)
+rather than the hardcoded `getfield`". That premise is FALSE. Before writing any stage code, a
+differential probe compared the self-hosted pipeline against the reference on `((Word, Word), Word) ==
+((Word, Word), Word)`: byte-identical. The pipeline already emits
+`GetTupleField(FlatNested { offset: 0, size: 16, variant: Tuple })` followed by a nested compare loop,
+matching the reference's recursive `emit_composite_fieldwise_eq`.
+
+A CONTROL was run before trusting that result, and is the methodological lesson of this increment: the
+same probe was pointed at the two known Gaps (`float_arith`, `generic_fn`), which correctly reported
+DIVERGE and PANIC. Without that control the "identical" readings would have been worthless, because
+`self_host_compile` builds on `compile_src(src)` and REPLACES chunk bodies — a silently skipped
+replacement would report identity trivially. (It does not: every function chunk's ops, constants, and
+`local_count` are replaced unconditionally, and `parse_functions` runs `parse.kel` over the WHOLE source,
+signatures included, so the tuple layout genuinely comes from the self-hosted stage.)
+
+Verified supported (all byte-identical incl. constants and `local_count`): nested element in first, last,
+and both positions; three levels of tuple nesting; a `Byte` leaf (which shifts the following outer
+element's flat offset); `!=`; a struct beside a nested tuple (a MIXED subtree); array-of-tuple; and
+nested-element ACCESS (`a.1` correctly resolving to flat offset 16, not 8 — this pins the LAYOUT, not
+just the equality lowering). Nine boundary cases plus `self_host_compiles_tuple_in_tuple_equality` now
+pin what was previously unguarded behavior. Boundary **56 -> 65 Ok**, 2 Gap / 1 RefRejects unchanged. No
+`.kel`, opcode, record, node, or `BYTECODE_VERSION` change — this increment adds ZERO product code.
+
+EPISTEMIC GAP, recorded deliberately rather than papered over: the MECHANISM was not localized. Reading
+`parse.kel` suggests the tuple-parameter-type scanner cannot represent nesting — `step_tuple_type`
+(~1457) is a flat state machine handling only `Ident` and `RParen` (the inner `(` is ignored and the
+inner `)` would terminate the whole scan), it has a single definition, there is no `tup_etuple` table
+analogous to `tup_estruct`, and no paren-depth state was found. That reading PREDICTS `a.1` lowering to
+offset 8; the measured output is 16. The reading is therefore wrong somewhere, and the correct
+explanation was not found before the budget for archaeology ran out. The behavior is nonetheless
+established by the project's stated correctness oracle with working controls. Anyone extending the tuple
+layout should re-derive the real mechanism FIRST rather than trusting the flat-scanner reading above.
+
+CORRECTED FRONTIER MAP (measured this session, same probe and control). Also already supported and
+currently UNPINNED — free boundary cases for whoever wants them: array-of-array
+(`[[Word;2];2] == [[Word;2];2]`) and an enum tuple payload (`enum E { A(Word, Word), B }`). Genuinely
+still GAPS (all measured DIVERGE): array-of-array nested in a struct; array-of-deep-struct; array of
+tuple-of-struct; enum with a deep struct payload; enum containing a struct containing an enum; enum with
+an array payload; `struct { t: (P, Word) }` (tuple-of-struct inside a struct); `struct { i: I }` where
+`I` holds an enum; and the same where `I` holds an array. So "deeper array/enum nesting" and "mixed
+subtrees involving array/enum" remain real work; "tuple-in-tuple" and "mixed subtrees involving tuples"
+do not.
+
+LESSON (generalizes past this increment): a conservative ADMISSION deferral is not evidence of a
+capability gap. `tup_ekind >= 100` does defer, exactly as the handoff said — but the path it defers TO
+already produces correct, byte-identical output. The 3-level struct case trained the opposite intuition
+(there, the deferral produced WRONG output and the oracle caught it), and that intuition was
+over-generalized into the handoff. PROBE BEFORE PLANNING: one differential probe with a control cost a
+few minutes and saved a multi-stage rewrite of three `.kel` stages.
 
 **TUPLE-OF-DEEP-STRUCT EQUALITY (2026-07-30): COMPLETE, merged to `v0.2.3`. The first payoff of the 3-level frame-stack machinery — extended to tuple containers by an admission-only change.**
 The operator chose "deeper nesting for the other composites" after the 3-level struct merge. The
