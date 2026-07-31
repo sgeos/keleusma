@@ -10,16 +10,15 @@ a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`
-- **Parent commit** (the repository state this handoff describes): `aa0d953`
+- **Parent commit** (the repository state this handoff describes): `4bac4a1`
 - **Written**: 2026-07-31
-- **Tree at write**: clean (all work committed and merged; `v0.2.3` tip is the tuple-of-deep-struct merge
-  `67539e7` plus its docs/handoff restamp commits)
-- **Context**: written after merging the tuple-of-deep-struct increment (`67539e7`), the first payoff of
-  the 3-level frame-stack machinery, and refreshed on operator request to ensure an up-to-date handoff.
-  The operator's active workstream is DEEPER NESTING FOR OTHER COMPOSITES; the smallest increment
-  (tuple-of-deep-struct) is done. This is a natural stopping point given the seven-day budget (THREE
-  CI-green increments merged this session). Resume the next increment (tuple-in-tuple) from
-  `REVERSE_PROMPT.md`, or the operator may redirect.
+- **Tree at write**: clean (all work committed, merged, and pushed; `v0.2.3` tip is the
+  tuple-in-tuple merge `4bac4a1` plus this handoff restamp commit)
+- **Context**: written after the tuple-in-tuple increment, which found the PLANNED WORK UNNECESSARY --
+  the construct already self-compiled byte-identically, so the increment became regression pinning plus
+  a corrected frontier map. Full gate GREEN, pushed, CI confirmed on `4bac4a1`. The operator's active
+  workstream is DEEPER NESTING FOR OTHER COMPOSITES, but the frontier map below is now MEASURED rather
+  than assumed. NOTE the environment caveat (broken Xcode) before running anything.
 
 **Validity check — run on resume, before trusting this handoff.** On the branch above, compare the
 **Parent commit** to `git rev-parse HEAD~1`. Because this handoff file is itself committed, its commit
@@ -32,95 +31,93 @@ advances the tip by one, so the state it describes is the parent of the handoff 
   parent versus actual `HEAD~1`), familiarize from the live channels — `REVERSE_PROMPT.md`,
   `DESIGN_JOURNAL.md`, `TASKLOG.md`, and the git log, always authoritative — and wait for instruction.
 
-## Resume prompt — CONTINUE THE DEEPER-NESTING WORKSTREAM, or surface a redirect
+## Resume prompt — PICK A MEASURED-REAL GAP, or redirect
 
-**This session merged THREE CI-green increments: the CLI-backend error-surface hardening, arbitrary-depth
-nested struct-in-struct equality (52 -> 53 Ok), and tuple-of-deep-struct (54 Ok).** The operator's ACTIVE
-workstream is DEEPER NESTING FOR OTHER COMPOSITES; the smallest increment within it (tuple-of-deep-struct)
-is done, and the paused turn RECOMMENDED stopping here for the seven-day budget after three merged
-increments. The NEXT bounded increment in the workstream is **tuple-in-tuple**. On resume, do NOT
-auto-start a large increment: confirm the operator still wants to spend budget on tuple-in-tuple (a full
-multi-stage effort, not admission-only) versus redirecting, then proceed. If the validity check **fails**,
-report invalid-and-stale, familiarize, and wait.
+**The last increment's headline is a CORRECTION: tuple-in-tuple did NOT need implementing.** The prior
+handoff recorded it as a Gap requiring a multi-stage drain generalization. That premise was FALSE. A
+differential probe (with a CONTROL -- see below) showed the pipeline already emits
+`GetTupleField(FlatNested { variant: Tuple })` plus a nested compare loop, byte-identical to the
+reference. The increment was redirected to pinning the previously unguarded support and correcting the
+frontier map. ZERO product code changed.
+
+**THE METHOD LESSON, which governs the next increment: PROBE BEFORE PLANNING.** A conservative ADMISSION
+deferral is NOT evidence of a capability gap -- the path it defers to may already be correct. One probe
+with a control cost minutes and saved a rewrite of three `.kel` stages. ALWAYS run the control (point the
+same probe at a known Gap such as `float_arith`); without it a false "identical" is indistinguishable
+from a real one, because `self_host_compile` builds on `compile_src` and replaces chunk bodies.
 
 Steps, in order:
 
 1. **Validate** — run the validity check above. Valid → continue. Invalid → stop and report.
-2. **Familiarize** — read `docs/process/REVERSE_PROMPT.md` (the ordered remaining gaps and the next step
-   are spelled out there), `docs/process/DESIGN_JOURNAL.md` (newest entries: tuple-of-deep-struct, then the
-   3-level nested-struct increment), and `docs/process/TASKLOG.md`. Confirm the live state matches this
-   handoff.
-3. **Confirm direction with the operator, then proceed** — the default next increment is **tuple-in-tuple**
-   (a tuple element that is itself a tuple; `tup_ekind >= 100` currently defers). Unlike tuple-of-deep-struct
-   this needs a real drain generalization: the codegen emit-DFS must carry a per-frame accessor/variant
-   (Tuple vs Struct) instead of the hardcoded `getfield`, and parse/reconstruct must thread the element
-   variant. Alternative directions if the operator redirects: (a) deeper array/enum nesting or mixed
-   subtrees (the other remaining deeper-nesting gaps); (b) a NEW self-host language surface; (c) native-call
-   support in the self-hosted pipeline (larger; would make threading the CLI preamble meaningful); (d) a
-   different workstream (release cadence, backlog). NOTE: "harden the CLI backend", "third-level struct
-   nesting", and "tuple-of-deep-struct" are DONE — do not re-offer them.
+2. **Fix the environment FIRST** — the OS update broke `Xcode.app` (`xcrun` cannot find `clang`; every
+   Rust link fails). Until the operator runs `sudo xcode-select -s /Library/Developer/CommandLineTools`,
+   EVERY cargo and git command needs the prefix `DEVELOPER_DIR=/Library/Developer/CommandLineTools`
+   (including `git push`, whose pre-push hook runs the gate). Check whether the fix has been applied
+   before assuming a build failure is a code problem.
+3. **Familiarize** — read `docs/process/REVERSE_PROMPT.md` (holds the MEASURED frontier map),
+   `docs/process/DESIGN_JOURNAL.md` (newest entry: tuple-in-tuple, incl. the unexplained mechanism), and
+   `docs/process/TASKLOG.md`.
+4. **Confirm direction with the operator, then proceed.** Do NOT auto-start. Options, measured this
+   session rather than assumed:
+   - **Cheapest (no product code)**: pin array-of-array (`[[Word;2];2] == [[Word;2];2]`) and an enum
+     tuple payload (`enum E { A(Word, Word), B }`) — both verified already supported but UNPINNED.
+   - **Smallest genuine capability gaps** (all measured DIVERGE): enum with an array payload;
+     `struct { t: (P, Word) }` (tuple-of-struct inside a struct); `struct { i: I }` where `I` holds an
+     enum or an array; array-of-array nested in a struct.
+   - **Larger gaps**: array-of-deep-struct; array of tuple-of-struct; enum with a deep struct payload;
+     enum containing a struct containing an enum.
+   - Or redirect entirely (new self-host language surface, native-call support, release cadence).
+   NOTE: tuple-in-tuple, tuple-of-deep-struct, 3-level struct nesting, mixed subtrees INVOLVING TUPLES,
+   and the CLI backend hardening are all DONE — do not re-offer them.
 
 Follow the normal increment cycle (feature branch off `v0.2.3`, byte-identity oracle + FULL
 `scripts/release-gate.sh`, no-ff merge, push, confirm CI, record on all three channels, restamp this
 HANDOFF before the next planned compaction).
 
 **Git position** (as of the Parent commit)
-- Branch `v0.2.3` tip is the tuple-of-deep-struct merge `67539e7` (feature branch
-  `feat/selfhost-tuple-deep-struct` merged no-ff) plus docs/handoff restamp commits (`aa0d953` and this
-  one). In sync with origin, working tree clean, local full gate GREEN, CI GREEN on `aa0d953`.
+- Branch `v0.2.3` tip is the tuple-in-tuple merge `4bac4a1` (feature branch
+  `feat/selfhost-tuple-in-tuple` merged no-ff) plus this handoff restamp commit. In sync with origin,
+  working tree clean, local full gate GREEN, CI GREEN on `4bac4a1`.
 - `main` holds releases and sits behind `v0.2.3` by design. Branch model in
   `docs/process/GIT_STRATEGY.md` (release-branch, no-fast-forward merges up the hierarchy).
 
-**Done this arc**
-- Tuple-of-deep-struct equality (`67539e7`): a tuple whose struct element nests arbitrarily deep is now
-  admitted — the tuple container's struct-element sub-fields already drained through the arbitrary-depth
-  frame stack, so only the admission `tuple_eq_kind` needed widening to `struct_subtree_pure`. NO new code
-  path; boundary +1 (`eq/tuple_of_deep_struct`). Demonstrates the reusability the 3-level generalization
-  unlocked: extending depth to a new composite container is an admission edit, not a stage rewrite.
-- Arbitrary-depth nested struct-in-struct equality (`5c93920`): the fixed depth-2 nested-equality special
-  case was generalized to a bounded depth stack across FOUR stages — parse.kel (`se_stk_*` + `se_pop_cascade`),
-  reconstruct.kel (`se_nstk_*` + `se_nsub_pop`, recursive `seb` grammar), codegen.kel (`push_struct_eq_subfields`
-  as an explicit-stack reverse-DFS emitter + `struct_forest_end`/`nested_end`/`es_compute_sfoff`), and the
-  ADMISSION scan `struct_eq_kind` (`struct_subtree_pure`). `eq/3level_struct` byte-identical; boundary
-  **52 → 53 Ok**; `EXPECTED_SELF_COMPILE` 72 → 75. LESSON: a depth assumption hid in the ADMISSION/dispatch
-  (a depth-3 type fell back to a primitive `==`), caught only by the byte-identical differential oracle — not
-  by self-compile or verify. No opcode/record/node/`BYTECODE_VERSION` change.
-- CLI-backend error hardening (`cf24f12`): `SelfHostError::ReferenceRejected` (a genuine source error the
-  reference also rejects) split from `Unsupported` (a self-hosted-subset limitation);
-  `rust_backend_would_help()` gates the `retry with --compiler rust` hint so a plain compile error reports
-  without it; `describe_divergence` names the first diverging chunk and dimension. Threading the CLI
-  preamble was NOT attempted — a hard boundary, not an oversight: the self-hosted codegen emits no
-  native-call opcode (wire tags 1..=63 have `Op::Call` but no `CallExternalNative`/`CallVerifiedNative`).
-  No ISA/`.kel` change; three new backend tests; full gate green.
-- Increments 1-5: tuple-of-struct, enum-in-struct, enum-with-struct-payload, 2-level-struct-nesting,
-  struct-of-array-of-struct — all implemented, byte-identical, full-gate-green, merged. The
-  nested-composite-equality family is fully self-hosted. Boundary now **52 Ok / 2 Gap / 1 RefRejects**,
-  pinned by `self_hosted_construct_support_boundary` in `tests/selfhost_codegen.rs`;
-  `EXPECTED_SELF_COMPILE` is 72.
-- Capacity: the lexer `src.bytes` source buffer was raised 245760 → 393216 (parse.kel outgrew it) and
-  the `dl_reject_module_via_kel` layout-verifier test arena to 4 MB. Resizing a shared byte-array buffer
-  expands the per-element data layout and can cascade into layout-verifier arena limits — bump together.
-- CLI self-hosted backend (Workstream A): `keleusma-cli compile --compiler <rust|self-hosted>` (default
-  rust). The self-host driver moved (history-preserving) to `keleusma/src/selfhost/mod.rs` behind a
-  `self-host` feature; all ten Rust-read `.kel` relocated to `keleusma/src/selfhost/kel/` (`include_str!`);
-  `compiler/` is now a thin `pub use keleusma::selfhost::*` re-export (still detached). Entry
-  `keleusma::selfhost::self_hosted_compile` (host-only, `catch_unwind` → `Unsupported`). Full gate GREEN.
-  Read-path caveat: after such a cross-workspace move, sweep EVERY read helper in BOTH workspaces, and
-  format `compiler/` separately (`cargo fmt --all` does not reach the detached workspace).
+**Boundary counts** — **65 Ok / 2 Gap / 1 RefRejects**, pinned by
+`self_hosted_construct_support_boundary` in `tests/selfhost_codegen.rs`. WARNING: the previously
+documented "54 Ok" was STALE BY 2 (the case list already held 56 before the last increment). Trust the
+test file, not a remembered number; recount with a grep if it matters.
 
-**Observed pre-existing warning** (not introduced this arc, not fixed — out of scope)
+**Open concern carried forward — an UNEXPLAINED MECHANISM**
+- How `parse.kel` represents a nested tuple PARAMETER TYPE was never localized. `step_tuple_type`
+  (~1457) reads as a flat state machine handling only `Ident`/`RParen`, has a single definition, there
+  is no `tup_etuple` table analogous to `tup_estruct`, and no paren-depth state was found. That reading
+  PREDICTS `a.1` on `((Word,Word),Word)` lowering to flat offset 8; the MEASURED output is 16. The
+  reading is therefore wrong somewhere. Behavior is established by the oracle with working controls, but
+  anyone extending the tuple layout must re-derive the real mechanism FIRST.
+
+**Done this arc**
+- Tuple-in-tuple (`4bac4a1`): no implementation needed; nine boundary cases plus
+  `self_host_compiles_tuple_in_tuple_equality` pin both element positions, three levels, a `Byte` leaf,
+  `!=`, a struct beside a nested tuple, array-of-tuple, and nested-element ACCESS (`a.1` → offset 16,
+  pinning the LAYOUT not just the equality). Boundary 56 → 65 Ok.
+- Tuple-of-deep-struct (`67539e7`), arbitrary-depth struct-in-struct (`5c93920`), CLI-backend error
+  hardening (`cf24f12`), and increments 1-5 (tuple-of-struct, enum-in-struct, enum-with-struct-payload,
+  2-level struct, struct-of-array-of-struct) — all merged, byte-identical, gate-green. See
+  `DESIGN_JOURNAL.md` for the reasoning on each.
+- Capacity: the lexer `src.bytes` source buffer is 393216 and the `dl_reject_module_via_kel` arena 4 MB.
+  Resizing a shared byte-array buffer expands the per-element data layout and can cascade into
+  layout-verifier arena limits — bump together.
+
+**Observed pre-existing warning** (not introduced, not fixed — out of scope)
 - `src/vm.rs:8 use alloc::vec;` is flagged `unused_imports` in the `--no-default-features` `cargo test`
-  build only. The full gate stays GREEN because that step does not deny warnings, and the clippy
-  `-D warnings` step runs under a feature set where the import is used. A correct fix needs the right
-  `#[cfg(...)]` gate (which feature actually uses `vec!` in `vm.rs`); left for a dedicated small fix so as
-  not to widen an unrelated increment.
+  build only. The full gate stays GREEN because that step does not deny warnings. A correct fix needs the
+  right `#[cfg(...)]` gate; left for a dedicated small fix.
 
 **Key durable finding** (governs every remaining depth increment)
 - The total-language verifier FORBIDS recursion (R4, acyclic call graph); no `.kel` stage function may
-  self-recurse. So each additional composite-nesting DEPTH is an explicit extra phase/stack in the
-  drain, not a copy-recurse — this is the real cost, not the ISA (which is untouched). Byte-identity
-  also hinges on the monotonic slot-order: extract temps allocate depth-first, r2 before l2, +2 per
-  level, matching the reference's `next_slot` (never rewound by `end_scope`).
+  self-recurse. So each additional composite-nesting DEPTH that genuinely needs work is an explicit extra
+  phase/stack in the drain, not a copy-recurse. Byte-identity also hinges on the monotonic slot-order:
+  extract temps allocate depth-first, r2 before l2, +2 per level, matching the reference's `next_slot`
+  (never rewound by `end_scope`).
 
 **Guardrails and stops (in force)**
 - Correctness signal: the byte-identical differential oracle. Correct iff the self-hosted stage output
