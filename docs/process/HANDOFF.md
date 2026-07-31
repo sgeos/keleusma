@@ -10,14 +10,16 @@ a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`
-- **Parent commit** (the repository state this handoff describes): `67539e7`
-- **Written**: 2026-07-30
-- **Tree at write**: clean (all work committed and merged)
+- **Parent commit** (the repository state this handoff describes): `aa0d953`
+- **Written**: 2026-07-31
+- **Tree at write**: clean (all work committed and merged; `v0.2.3` tip is the tuple-of-deep-struct merge
+  `67539e7` plus its docs/handoff restamp commits)
 - **Context**: written after merging the tuple-of-deep-struct increment (`67539e7`), the first payoff of
-  the 3-level frame-stack machinery. The operator's active workstream is DEEPER NESTING FOR OTHER
-  COMPOSITES; the smallest increment (tuple-of-deep-struct) is done. This is a natural stopping point
-  given the seven-day budget (THREE CI-green increments merged this session). Resume the next increment
-  (tuple-in-tuple) from `REVERSE_PROMPT.md`, or the operator may redirect.
+  the 3-level frame-stack machinery, and refreshed on operator request to ensure an up-to-date handoff.
+  The operator's active workstream is DEEPER NESTING FOR OTHER COMPOSITES; the smallest increment
+  (tuple-of-deep-struct) is done. This is a natural stopping point given the seven-day budget (THREE
+  CI-green increments merged this session). Resume the next increment (tuple-in-tuple) from
+  `REVERSE_PROMPT.md`, or the operator may redirect.
 
 **Validity check — run on resume, before trusting this handoff.** On the branch above, compare the
 **Parent commit** to `git rev-parse HEAD~1`. Because this handoff file is itself committed, its commit
@@ -30,41 +32,42 @@ advances the tip by one, so the state it describes is the parent of the handoff 
   parent versus actual `HEAD~1`), familiarize from the live channels — `REVERSE_PROMPT.md`,
   `DESIGN_JOURNAL.md`, `TASKLOG.md`, and the git log, always authoritative — and wait for instruction.
 
-## Resume prompt — SURFACE THE FORK (bounded same-context work is exhausted)
+## Resume prompt — CONTINUE THE DEEPER-NESTING WORKSTREAM, or surface a redirect
 
 **This session merged THREE CI-green increments: the CLI-backend error-surface hardening, arbitrary-depth
 nested struct-in-struct equality (52 -> 53 Ok), and tuple-of-deep-struct (54 Ok).** The operator's ACTIVE
 workstream is DEEPER NESTING FOR OTHER COMPOSITES; the smallest increment within it (tuple-of-deep-struct)
-is done. The NEXT bounded increment is **tuple-in-tuple** (see `REVERSE_PROMPT.md` for the ordered
-remaining gaps). This is a natural stopping point given the seven-day budget; on resume, either continue
-the workstream with tuple-in-tuple or let the operator redirect. If the validity check **fails**, report
-invalid-and-stale, familiarize, and wait.
+is done, and the paused turn RECOMMENDED stopping here for the seven-day budget after three merged
+increments. The NEXT bounded increment in the workstream is **tuple-in-tuple**. On resume, do NOT
+auto-start a large increment: confirm the operator still wants to spend budget on tuple-in-tuple (a full
+multi-stage effort, not admission-only) versus redirecting, then proceed. If the validity check **fails**,
+report invalid-and-stale, familiarize, and wait.
 
 Steps, in order:
 
 1. **Validate** — run the validity check above. Valid → continue. Invalid → stop and report.
-2. **Familiarize** — read `docs/process/REVERSE_PROMPT.md` (the fork options are spelled out there),
-   `docs/process/DESIGN_JOURNAL.md` (newest entry: the 3-level nested-struct increment), and
-   `docs/process/TASKLOG.md`. Confirm the live state matches this handoff.
-3. **Surface the fork to the operator** — present the candidate directions and wait: (a) a NEW self-host
-   language-surface area to self-host (grows the boundary again; needs operator selection of which
-   construct family); (b) **native-call support in the self-hosted pipeline** — add a native-call path to
-   the self-hosted codegen (larger; the increment that would make threading the CLI preamble meaningful, a
-   hard boundary otherwise); (c) **deeper nesting for the OTHER composites** — the arbitrary-depth
-   generalization landed only for struct-in-struct; nested tuple/array/enum still cap at their existing
-   depths, and the `es_*`/`se_stk_*`/`se_nstk_*` stack machinery is now in place to extend them similarly;
-   (d) a different workstream (release cadence, other roadmap). Do not pick among them autonomously. NOTE:
-   "harden the CLI backend" and "third-level struct nesting" were prior fork selections and are DONE — do
-   not re-offer them.
+2. **Familiarize** — read `docs/process/REVERSE_PROMPT.md` (the ordered remaining gaps and the next step
+   are spelled out there), `docs/process/DESIGN_JOURNAL.md` (newest entries: tuple-of-deep-struct, then the
+   3-level nested-struct increment), and `docs/process/TASKLOG.md`. Confirm the live state matches this
+   handoff.
+3. **Confirm direction with the operator, then proceed** — the default next increment is **tuple-in-tuple**
+   (a tuple element that is itself a tuple; `tup_ekind >= 100` currently defers). Unlike tuple-of-deep-struct
+   this needs a real drain generalization: the codegen emit-DFS must carry a per-frame accessor/variant
+   (Tuple vs Struct) instead of the hardcoded `getfield`, and parse/reconstruct must thread the element
+   variant. Alternative directions if the operator redirects: (a) deeper array/enum nesting or mixed
+   subtrees (the other remaining deeper-nesting gaps); (b) a NEW self-host language surface; (c) native-call
+   support in the self-hosted pipeline (larger; would make threading the CLI preamble meaningful); (d) a
+   different workstream (release cadence, backlog). NOTE: "harden the CLI backend", "third-level struct
+   nesting", and "tuple-of-deep-struct" are DONE — do not re-offer them.
 
-If the operator directs one, follow the normal increment cycle (feature branch off `v0.2.3`,
-byte-identity oracle where applicable + FULL `scripts/release-gate.sh`, no-ff merge, push, confirm CI,
-record on all three channels, restamp this HANDOFF before the next planned compaction).
+Follow the normal increment cycle (feature branch off `v0.2.3`, byte-identity oracle + FULL
+`scripts/release-gate.sh`, no-ff merge, push, confirm CI, record on all three channels, restamp this
+HANDOFF before the next planned compaction).
 
 **Git position** (as of the Parent commit)
-- Branch `v0.2.3` at `67539e7` (the tuple-of-deep-struct merge; feature branch
-  `feat/selfhost-tuple-deep-struct` merged no-ff), plus this handoff restamp on top. In sync with origin,
-  working tree clean, local full gate GREEN, CI binding after push.
+- Branch `v0.2.3` tip is the tuple-of-deep-struct merge `67539e7` (feature branch
+  `feat/selfhost-tuple-deep-struct` merged no-ff) plus docs/handoff restamp commits (`aa0d953` and this
+  one). In sync with origin, working tree clean, local full gate GREEN, CI GREEN on `aa0d953`.
 - `main` holds releases and sits behind `v0.2.3` by design. Branch model in
   `docs/process/GIT_STRATEGY.md` (release-branch, no-fast-forward merges up the hierarchy).
 
