@@ -7747,6 +7747,21 @@ fn self_hosted_construct_support_boundary() {
             SOk,
             "fn f(a: ((Word, Word), Word)) -> Word { a.1 }",
         ),
+        // Two further constructs measured as already supported but previously UNPINNED. Like the
+        // tuple-in-tuple family above, these record existing behavior rather than new code. Note the
+        // asymmetry they document: array-of-array is supported, but an array-of-array nested INSIDE a
+        // struct is not, and an enum TUPLE payload is supported while an enum ARRAY payload is not --
+        // so neither case generalizes to its enclosing-composite form.
+        (
+            "eq/array_of_array",
+            SOk,
+            "fn f(a: [[Word; 2]; 2], b: [[Word; 2]; 2]) -> bool { a == b }",
+        ),
+        (
+            "eq/enum_tuple_payload",
+            SOk,
+            "enum E { A(Word, Word), B }\nfn f(a: E, b: E) -> bool { a == b }",
+        ),
         (
             "eq/enum_struct_payload",
             SOk,

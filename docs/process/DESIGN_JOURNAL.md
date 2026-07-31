@@ -15,7 +15,40 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 ## Last Updated
 
-**Date**: 2026-07-30 (session 36)
+**Date**: 2026-07-31 (session 36)
+
+**ROADMAP BASELINE CORRECTION (2026-07-31): the V0.2.x Order-1 residual list was substantially STALE. Four of six listed residuals were already CLOSED; one unlisted gap was found. Boundary 65 -> 67 Ok.**
+Asked whether obvious roadmap work existed, the honest answer required checking the roadmap's claims
+rather than relaying them — the same session had just found a stale boundary count and a false gap
+premise, so the document's self-reported status had lost its credibility. Every Workstream A first-pass
+residual was re-probed against the code, each with a known-Gap control.
+
+MEASURED RESULT. Already CLOSED but still listed as open: (1) module scaffold assembly —
+`self_host_compile_scratch` assembles data layout, enum table, signatures, schema hash, and the
+WCET/WCMU header with NO reference borrow; (2) integration into the shipping tool — the CLI's
+`self_hosted_compile` calls that scratch path, so the artifact matches the claim; (3) a conditional used
+as a call argument — byte-identical; (4) a user-written `break;` statement — byte-identical inside
+`for … limit`. GENUINELY open: the type checker, the monomorphizer, and wire-format serialization (no
+`.kel` stage references `to_bytes`, parity, or CRC; the framing is host-side). Those three are the whole
+of what stands between the current state and the Order-1 gate, which is now marked "partly met".
+
+NEWLY IDENTIFIED, in no prior document: the `for … limit … on { ok => …, break(bi) => …, limit => … }`
+OUTCOME-ARM form DIVERGES from the reference. A bare `break;` self-hosts fine, so the gap is
+specifically the outcome-arm lowering and its index binding. Found incidentally while checking whether
+the roadmap's `break;` residual was real — the check that closed one item opened another.
+
+Also pinned two constructs measured as supported but UNGUARDED: `eq/array_of_array` and
+`eq/enum_tuple_payload`. Boundary **65 -> 67 Ok** (2 Gap / 1 RefRejects unchanged). Their comment records
+a non-obvious ASYMMETRY worth remembering: array-of-array is supported but array-of-array INSIDE a struct
+is not, and an enum TUPLE payload is supported while an enum ARRAY payload is not — neither case
+generalizes to its enclosing-composite form, so support cannot be inferred by analogy. No product code.
+
+LESSON, compounding the tuple-in-tuple one: a roadmap's status claims decay silently, because closing an
+item updates the code and the increment's own channels but rarely the roadmap that predicted it. Three
+separate stale claims surfaced in one day (the boundary count, the tuple-in-tuple premise, and four
+Order-1 residuals), all in the same direction — the documents UNDERSTATED what had landed and so pointed
+at work already done. The revised section carries an explicit banner telling the next reader to treat an
+unverified status claim as suspect until probed.
 
 **TUPLE-IN-TUPLE (2026-07-30): the planned increment was UNNECESSARY — the construct ALREADY self-compiles byte-identically. Delivered as boundary/regression pinning (54 -> 63 Ok) plus a corrected frontier map.**
 The handoff and `REVERSE_PROMPT` both recorded tuple-in-tuple as the next Gap, predicting a full
