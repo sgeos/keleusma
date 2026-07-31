@@ -7110,6 +7110,50 @@ fn self_host_compiles_tuple_of_deep_struct_equality() {
     );
 }
 
+/// A tuple element that is itself a TUPLE self-compiles byte-identically.
+///
+/// This case needed no stage change: the pipeline already lowers a nested tuple element to
+/// `GetTupleField(FlatNested { variant: Tuple })` followed by a nested compare loop, matching the
+/// reference's recursive `emit_composite_fieldwise_eq`. The support was nevertheless UNPINNED, so
+/// these assertions (and the `eq/tuple_in_tuple*` boundary cases) exist to catch a regression rather
+/// than to record newly written code.
+///
+/// Coverage is chosen so each case exercises a distinct offset or emission path: the nested element
+/// in first and last position (the outer element offsets differ), both elements nested, three levels
+/// of nesting, a narrow `Byte` leaf (which shifts the following outer element's flat offset), a
+/// struct beside a nested tuple (a MIXED subtree), and `!=` (the negated lowering).
+#[test]
+fn self_host_compiles_tuple_in_tuple_equality() {
+    assert_self_host_byte_identical(
+        "fn f(a: ((Word, Word), Word), b: ((Word, Word), Word)) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: (Word, (Word, Word)), b: (Word, (Word, Word))) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: ((Word, Word), (Word, Word)), b: ((Word, Word), (Word, Word))) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: (((Word, Word), Word), Word), b: (((Word, Word), Word), Word)) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: ((Word, Byte), Word), b: ((Word, Byte), Word)) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: ((Word, Word), Word), b: ((Word, Word), Word)) -> bool { a != b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: ((Word, Word), P), b: ((Word, Word), P)) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "fn f(a: [(Word, Word); 2], b: [(Word, Word); 2]) -> bool { a == b }",
+    );
+    // The nested element's own layout: `a.1` must resolve past the whole nested element (flat
+    // offset 16, not 8), so this pins the tuple layout and not merely the equality lowering.
+    assert_self_host_byte_identical("fn f(a: ((Word, Word), Word)) -> Word { a.1 }");
+    assert_self_host_byte_identical("fn f(a: (Word, (Word, Word))) -> Word { a.0 }");
+}
+
 /// Struct-of-array-of-struct equality (`struct Q { ps: [P; 2] }`, `a == b`) self-compiles
 /// byte-identically. A struct field that is an array whose element is itself a struct with scalar
 /// leaves extracts the whole array (GetFieldNested variant Array) into a temp pair, then per element
@@ -7649,6 +7693,59 @@ fn self_hosted_construct_support_boundary() {
             "eq/tuple_of_deep_struct",
             SOk,
             "struct I { v: Word }\nstruct M { i: I }\nfn f(a: (M, Word), b: (M, Word)) -> bool { a == b }",
+        ),
+        // Tuple-IN-tuple: a tuple element that is itself a tuple. Verified byte-identical
+        // (`GetTupleField(FlatNested { variant: Tuple })` plus a nested compare loop), so this
+        // needed no stage change; the cases below PIN that support against regression, which was
+        // previously unguarded. Both element positions, three levels, a narrow element (which moves
+        // the following element's flat offset), and `!=` are covered because each exercises a
+        // distinct offset/emission path.
+        (
+            "eq/tuple_in_tuple",
+            SOk,
+            "fn f(a: ((Word, Word), Word), b: ((Word, Word), Word)) -> bool { a == b }",
+        ),
+        (
+            "eq/tuple_in_tuple_last",
+            SOk,
+            "fn f(a: (Word, (Word, Word)), b: (Word, (Word, Word))) -> bool { a == b }",
+        ),
+        (
+            "eq/tuple_in_tuple_both",
+            SOk,
+            "fn f(a: ((Word, Word), (Word, Word)), b: ((Word, Word), (Word, Word))) -> bool { a == b }",
+        ),
+        (
+            "eq/tuple_in_tuple_3level",
+            SOk,
+            "fn f(a: (((Word, Word), Word), Word), b: (((Word, Word), Word), Word)) -> bool { a == b }",
+        ),
+        (
+            "eq/tuple_in_tuple_byte",
+            SOk,
+            "fn f(a: ((Word, Byte), Word), b: ((Word, Byte), Word)) -> bool { a == b }",
+        ),
+        (
+            "eq/tuple_in_tuple_neq",
+            SOk,
+            "fn f(a: ((Word, Word), Word), b: ((Word, Word), Word)) -> bool { a != b }",
+        ),
+        (
+            "eq/struct_in_nested_tuple",
+            SOk,
+            "struct P { x: Word }\nfn f(a: ((Word, Word), P), b: ((Word, Word), P)) -> bool { a == b }",
+        ),
+        (
+            "eq/array_of_tuple",
+            SOk,
+            "fn f(a: [(Word, Word); 2], b: [(Word, Word); 2]) -> bool { a == b }",
+        ),
+        // A nested-tuple element ACCESS: `a.1` must resolve past the nested element's whole flat
+        // size (offset 16, not 8), so this pins the layout itself, not just the equality lowering.
+        (
+            "tuple/nested_elem_access",
+            SOk,
+            "fn f(a: ((Word, Word), Word)) -> Word { a.1 }",
         ),
         (
             "eq/enum_struct_payload",
