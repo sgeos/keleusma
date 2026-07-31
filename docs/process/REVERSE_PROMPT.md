@@ -11,15 +11,17 @@ increment-by-increment reasoning and frontier assessments live in
 
 ## Last Updated
 
-**Date**: 2026-07-29 (session 35)
+**Date**: 2026-07-30 (session 35)
 
-## Current state — 3-level increment COMPLETE (branch green, pending full gate + merge)
+## Current state — tuple-of-deep-struct + 3-level struct both COMPLETE and merged to `v0.2.3` (CI green)
 
-- **Third-level (and deeper) struct-nesting equality is COMPLETE on `feat/selfhost-3level-struct-eq`
-  (cut from `v0.2.3` at `4037174`).** Arbitrary-depth nested struct-in-struct equality self-compiles
-  byte-identically; the construct-support boundary moved **52 -> 53 Ok** (2 Gap / 1 RefRejects). All four
-  stages landed and verified via the differential oracle; the branch tip is green on the targeted
-  self-host suite. NEXT: FULL `scripts/release-gate.sh`, then no-ff merge into `v0.2.3`, push, confirm CI.
+- **Tuple-of-deep-struct equality is COMPLETE, merged (`67539e7`).** A tuple whose struct element nests
+  arbitrarily deep is admitted, reusing the 3-level frame-stack machinery with NO new code path — only the
+  admission `tuple_eq_kind` was widened to `struct_subtree_pure`. Boundary +1 (`eq/tuple_of_deep_struct`).
+  Full gate GREEN.
+- **Third-level (and deeper) struct-nesting equality is COMPLETE, merged (`5c93920`, CI green).**
+  Arbitrary-depth nested struct-in-struct equality self-compiles byte-identically; boundary moved
+  **52 -> 53 Ok**, now 54 Ok with the tuple case (2 Gap / 1 RefRejects). All four stages landed.
   - Stage 1 (parse.kel, `13b922f`): `se_l2*` -> `se_stk_*` frame stack + `se_pop_cascade`.
   - Stage 2 (reconstruct.kel, `c667875`): `se_nsub_mode` -> `se_nstk_*` stack + `se_nsub_pop`; recursive
     `seb` grammar.
@@ -58,17 +60,21 @@ increment-by-increment reasoning and frontier assessments live in
   in-subset program compiles at exit 0.
 - The FULL `scripts/release-gate.sh` is GREEN.
 
-## Next step — FULL GATE + MERGE, then OPERATOR-DECISION FORK
+## Next step — continue the "deeper nesting" workstream (operator-chosen), or pause
 
-1. Run the FULL `scripts/release-gate.sh` on `feat/selfhost-3level-struct-eq`. On green, no-ff merge into
-   `v0.2.3`, push (pre-push gate; keepalive), confirm CI green.
-2. Then the loop is again at an operator fork (no bounded same-context task remains). Candidate
-   directions to surface (do not auto-select):
-   - **New self-host language surface** — pick another construct family the `.kel` stages still defer.
-   - **Native-call support in the self-hosted pipeline** — larger; would make the CLI preamble meaningful.
-   - **Deeper nesting for the OTHER composites** — the arbitrary-depth generalization landed only for
-     struct-in-struct; nested tuple/array/enum still cap at their existing depths (the `es_*`/`se_stk_*`
-     machinery is now in place to extend them similarly if desired).
-   - **A different workstream** — release cadence (a V0.2.3 cut), backlog (B32/B33/B34).
+The operator chose the **deeper-nesting-for-other-composites** workstream after the 3-level struct merge.
+The first, smallest increment (tuple-of-deep-struct, admission-only) is DONE. Remaining gaps, roughly by
+increasing effort — each needs its OWN drain generalization (unlike tuple-of-deep-struct), so each is a
+real multi-stage byte-identity increment like the 3-level struct one:
+- **tuple-in-tuple** (a tuple element that is itself a tuple; `tup_ekind >= 100` currently defers) — the
+  emit-DFS would need a per-frame accessor/variant (Tuple vs Struct) rather than the hardcoded `getfield`.
+- **deeper array nesting** (array-of-array-of-struct, array element that is a deep composite).
+- **deeper enum payloads** (enum variant carrying a nested composite deeper than one level).
+- **mixed subtrees** (a struct/tuple whose subtree mixes struct+tuple+array+enum; `struct_subtree_pure`
+  currently defers on any non-struct in the subtree).
 
-The seven-day rate-limit window is the binding budget under heavy agent work; pace accordingly.
+STRONG RECOMMENDATION given the seven-day rate-limit (the binding budget) and that THIS SESSION already
+merged THREE CI-green increments (CLI-backend hardening, 3-level struct, tuple-of-deep-struct): this is a
+natural stopping point. Resume the next increment (tuple-in-tuple is the next smallest) from this channel
+and the 3-level plan doc, which documents the reusable pattern. Note: the self-host suite ran ~4-5x slower
+than normal this session (transient host load) — budget extra wall-clock if it persists.

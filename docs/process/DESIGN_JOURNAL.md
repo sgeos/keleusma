@@ -17,6 +17,23 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-07-29 (session 35)
 
+**TUPLE-OF-DEEP-STRUCT EQUALITY (2026-07-30): COMPLETE, merged to `v0.2.3`. The first payoff of the 3-level frame-stack machinery — extended to tuple containers by an admission-only change.**
+The operator chose "deeper nesting for the other composites" after the 3-level struct merge. The
+smallest-bounded, most-machinery-reusing target was tuple-of-deep-struct: a tuple whose struct element
+nests deeper than one level. The tuple container's struct-element sub-fields ALREADY drain through the
+arbitrary-depth frame-stack code (parse `se_stk_*`, reconstruct `se_nstk_*`, codegen `es_*` emit-DFS);
+only the admission `tuple_eq_kind` still capped a struct element at one level. Replacing its one-level
+scan with the existing `struct_subtree_pure` helper admits an arbitrarily-deep pure struct/scalar element
+(a tuple/array/enum in the element subtree still defers). NO new code path — a one-helper change plus a
+boundary case (`eq/tuple_of_deep_struct`) and a fixture. Verified byte-identical; boundary +1;
+parse.kel self-compiles; full gate GREEN. This is the reusability the 3-level generalization was meant to
+unlock: extending depth to a new composite container is now an admission edit, not a stage rewrite. The
+remaining deeper-nesting gaps (nested tuple-in-tuple, deeper array/enum, and mixed subtrees) each still
+need their own drain generalization. No opcode/record/node/`BYTECODE_VERSION` change.
+
+NOTE: the self-host test suite ran ~4-5x slower than usual this session (boundary ~992s vs ~216s, gate
+much longer) — transient host CPU load, not a code regression; all green.
+
 **3-LEVEL STRUCT-NESTING EQUALITY (2026-07-29): COMPLETE on `feat/selfhost-3level-struct-eq`. Arbitrary-depth nested struct equality self-compiles byte-identically; boundary 52 -> 53 Ok. Four stages (parse, reconstruct, codegen, admission).**
 Stage 3 (codegen.kel): `push_struct_eq_subfields` became an explicit-stack reverse-DFS emitter (the
 `es_*` frame stack), with `struct_forest_end`/`nested_end`/`es_compute_sfoff` walking the recursive

@@ -10,12 +10,14 @@ a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`
-- **Parent commit** (the repository state this handoff describes): `5c93920`
-- **Written**: 2026-07-29
+- **Parent commit** (the repository state this handoff describes): `67539e7`
+- **Written**: 2026-07-30
 - **Tree at write**: clean (all work committed and merged)
-- **Context**: written after merging the arbitrary-depth nested-struct-equality increment (`5c93920`,
-  boundary 52 -> 53 Ok). The bounded same-context work is again exhausted, so the resume prompt below is
-  deliberately present-the-fork-and-wait, not continue-the-loop. The operator will SELECT A DIRECTION.
+- **Context**: written after merging the tuple-of-deep-struct increment (`67539e7`), the first payoff of
+  the 3-level frame-stack machinery. The operator's active workstream is DEEPER NESTING FOR OTHER
+  COMPOSITES; the smallest increment (tuple-of-deep-struct) is done. This is a natural stopping point
+  given the seven-day budget (THREE CI-green increments merged this session). Resume the next increment
+  (tuple-in-tuple) from `REVERSE_PROMPT.md`, or the operator may redirect.
 
 **Validity check — run on resume, before trusting this handoff.** On the branch above, compare the
 **Parent commit** to `git rev-parse HEAD~1`. Because this handoff file is itself committed, its commit
@@ -30,12 +32,13 @@ advances the tip by one, so the state it describes is the parent of the handoff 
 
 ## Resume prompt — SURFACE THE FORK (bounded same-context work is exhausted)
 
-**Four workstreams have now reached their bounded end this session: the nested-composite-equality family
-(increments 1–5), the CLI self-hosted-backend flag, the CLI-backend error-surface hardening, and
-arbitrary-depth nested struct-in-struct equality (boundary now 53 Ok).** There is no remaining bounded
-same-context task, so the loop's keep-going default does NOT apply: the next move is a genuine
-operator-decision fork. After the validity check passes, do **not** autonomously start a design decision or
-a new workstream. If the validity check **fails**, report invalid-and-stale, familiarize, and wait.
+**This session merged THREE CI-green increments: the CLI-backend error-surface hardening, arbitrary-depth
+nested struct-in-struct equality (52 -> 53 Ok), and tuple-of-deep-struct (54 Ok).** The operator's ACTIVE
+workstream is DEEPER NESTING FOR OTHER COMPOSITES; the smallest increment within it (tuple-of-deep-struct)
+is done. The NEXT bounded increment is **tuple-in-tuple** (see `REVERSE_PROMPT.md` for the ordered
+remaining gaps). This is a natural stopping point given the seven-day budget; on resume, either continue
+the workstream with tuple-in-tuple or let the operator redirect. If the validity check **fails**, report
+invalid-and-stale, familiarize, and wait.
 
 Steps, in order:
 
@@ -59,13 +62,18 @@ byte-identity oracle where applicable + FULL `scripts/release-gate.sh`, no-ff me
 record on all three channels, restamp this HANDOFF before the next planned compaction).
 
 **Git position** (as of the Parent commit)
-- Branch `v0.2.3` at `5c93920` (the arbitrary-depth nested-struct-equality merge; feature branch
-  `feat/selfhost-3level-struct-eq` merged no-ff), plus this handoff restamp on top. In sync with origin,
+- Branch `v0.2.3` at `67539e7` (the tuple-of-deep-struct merge; feature branch
+  `feat/selfhost-tuple-deep-struct` merged no-ff), plus this handoff restamp on top. In sync with origin,
   working tree clean, local full gate GREEN, CI binding after push.
 - `main` holds releases and sits behind `v0.2.3` by design. Branch model in
   `docs/process/GIT_STRATEGY.md` (release-branch, no-fast-forward merges up the hierarchy).
 
 **Done this arc**
+- Tuple-of-deep-struct equality (`67539e7`): a tuple whose struct element nests arbitrarily deep is now
+  admitted — the tuple container's struct-element sub-fields already drained through the arbitrary-depth
+  frame stack, so only the admission `tuple_eq_kind` needed widening to `struct_subtree_pure`. NO new code
+  path; boundary +1 (`eq/tuple_of_deep_struct`). Demonstrates the reusability the 3-level generalization
+  unlocked: extending depth to a new composite container is an admission edit, not a stage rewrite.
 - Arbitrary-depth nested struct-in-struct equality (`5c93920`): the fixed depth-2 nested-equality special
   case was generalized to a bounded depth stack across FOUR stages — parse.kel (`se_stk_*` + `se_pop_cascade`),
   reconstruct.kel (`se_nstk_*` + `se_nsub_pop`, recursive `seb` grammar), codegen.kel (`push_struct_eq_subfields`
