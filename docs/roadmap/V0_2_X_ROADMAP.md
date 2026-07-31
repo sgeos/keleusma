@@ -57,18 +57,33 @@ completion is V0.3.0.
 
 What exists today, so the plan starts from fact rather than aspiration:
 
-- **Compiler front and middle, self-compiling in tests.** Five Keleusma stages exist in
-  `compiler/kel/`: `lexer.kel`, `parse.kel`, `reconstruct.kel`, `codegen.kel`, and
-  `analyze.kel`. The first four self-compile byte-identically to the Rust compiler. This
-  covers lexing, parsing, AST reconstruction, and bytecode code generation.
-- **Resource analysis and validator, self-hosting in tests only.** `analyze.kel` computes
-  per-iteration WCET and WCMU and emits an arena-capacity validation verdict that is a
-  drop-in match for `verify_resource_bounds`, including transitive-call WCMU. This is proven
-  in `tests/selfhost_codegen.rs`. It is **not** wired into the `keleusma-selfhost` binary,
-  which still runs four stages and borrows the module scaffold and bounds from the reference.
-- **Everything else is Rust.** Type checking, monomorphization, the structural verifier, the
-  typed operand-stack verifier, wire-format serialization, the module scaffold assembly, the
-  VM runtime, the marshalling boundary, the target descriptor, and all cryptography.
+> **Revised 2026-07-31.** The previous text of this section understated what had landed: it said
+> the self-hosted path was "not wired into the binary" and "borrows the module scaffold and bounds
+> from the reference", and Workstream A listed four residuals that were in fact already closed.
+> Each line below was re-verified against the code by differential probe (with a known-Gap control
+> to prove the probe discriminates) rather than carried forward from the prior revision. Treat an
+> unverified status claim in this document as suspect until probed.
+
+- **Compiler front and middle, self-compiling in tests.** Five Keleusma stages exist (canonically
+  in `src/selfhost/kel/`, with `compiler/` re-exporting the driver): `lexer.kel`, `parse.kel`,
+  `reconstruct.kel`, `codegen.kel`, and `analyze.kel`. The first four self-compile byte-identically
+  to the Rust compiler. This covers lexing, parsing, AST reconstruction, and code generation.
+- **Resource analysis and validator, self-hosted.** `analyze.kel` computes per-iteration WCET and
+  WCMU and emits an arena-capacity verdict that is a drop-in match for `verify_resource_bounds`,
+  including transitive-call WCMU. The `verify_*.kel` family reproduces the whole of `verify()`
+  (structural, typed, data-layout), per Workstream B below.
+- **The scaffold borrow is CLOSED, and the path IS wired into the shipping tool.**
+  `self_host_compile_scratch` assembles the whole module — data layout, enum-layout table, chunk
+  signatures, schema hash, and the WCET/WCMU header — from pipeline output with no field borrowed
+  from the reference, and `keleusma::selfhost::self_hosted_compile` (the `keleusma compile
+  --compiler self-hosted` backend) calls that scratch path. The reference is retained deliberately
+  as the differential oracle and divergence check, which is the trust story below, NOT a scaffold
+  borrow. `self_host_compile` (the splice-onto-reference variant) still exists for stage-by-stage
+  testing.
+- **Still Rust.** Type checking, monomorphization, **wire-format serialization** (the framing
+  header, operand-pool encoding, parity, and CRC trailer are host `to_bytes`; no `.kel` stage emits
+  wire bytes), the VM runtime, the marshalling boundary, the target descriptor, and all
+  cryptography.
 
 See the residual register in [`docs/process/REVERSE_PROMPT.md`](../process/REVERSE_PROMPT.md)
 for the finer-grained open items behind this summary.
@@ -96,18 +111,23 @@ the host is glue.
 - Complete the monomorphizer in Keleusma. Over the subset the toolchain source uses no
   generics, so first-pass monomorphization is close to identity; the effort is real only
   when full-language generics arrive (Workstream F).
-- Self-host wire-format serialization. Today `codegen.kel` emits opcode records into shared
-  memory and a Rust driver frames them into a module and calls `to_bytes`. The framing
-  header, operand-pool encoding, parity, and CRC trailer must move into Keleusma so the
-  emitted artifact is produced end to end by the self-hosted path.
-- Self-host the module scaffold assembly. The `DataLayout`, enum layouts, typed-verifier
-  signatures, schema hash, and chunk-table metadata are assembled in a Rust test driver
-  today; they must be emitted by the self-hosted codegen.
-- Close the reconstruct gaps the subset needs: a conditional used as a call argument, and a
-  user-written `break;` statement (a parse plus reconstruct plus codegen node).
-- Integrate into the shipping tool. The self-hosted stages and scaffold assembly must be
-  driven by the `keleusma-selfhost` binary, not only by `tests/selfhost_codegen.rs`. This is
-  the highest-leverage residual: the artifact must match the claim.
+- Self-host wire-format serialization. **STILL OPEN.** Today `codegen.kel` emits opcode records
+  into shared memory and a Rust driver frames them into a module and calls `to_bytes`. The
+  framing header, operand-pool encoding, parity, and CRC trailer must move into Keleusma so the
+  emitted artifact is produced end to end by the self-hosted path. Verified 2026-07-31: no `.kel`
+  stage references `to_bytes`, parity, or CRC.
+- ~~Self-host the module scaffold assembly.~~ **CLOSED.** `self_host_compile_scratch` assembles
+  the `DataLayout`, enum layouts, typed-verifier signatures, schema hash, and chunk-table
+  metadata from pipeline output, borrowing no field from the reference.
+- ~~Close the reconstruct gaps the subset needs: a conditional used as a call argument, and a
+  user-written `break;` statement.~~ **CLOSED.** Both verified byte-identical on 2026-07-31
+  (`g(if a > 0 { 1 } else { 2 })`, and a bare `break;` inside `for … limit`).
+- ~~Integrate into the shipping tool.~~ **CLOSED.** `keleusma compile --compiler self-hosted`
+  drives the scratch path through `keleusma::selfhost::self_hosted_compile`.
+- **NEWLY IDENTIFIED (2026-07-31), not in the prior revision:** the `for … limit … on { ok => …,
+  break(bi) => …, limit => … }` **outcome-arm** form diverges from the reference. A bare `break;`
+  self-hosts correctly, so the gap is specifically the outcome-arm lowering and its index binding.
+  This is a bounded, well-scoped increment.
 
 **Full language (Workstream F).** Widen every stage to the full grammar.
 
@@ -267,7 +287,7 @@ version numbers past the current release are a plan, not a promise).
 
 | Order | Milestone | Workstreams | Gate |
 |-------|-----------|-------------|------|
-| 1 | Compiler self-hosting subset, wired into the binary | A (first pass) | The `keleusma-selfhost` tool compiles all five `.kel` stages end to end with no Rust scaffold borrow, and the result is byte-identical to the reference. |
+| 1 | Compiler self-hosting subset, wired into the binary | A (first pass) | The `keleusma-selfhost` tool compiles all five `.kel` stages end to end with no Rust scaffold borrow, and the result is byte-identical to the reference. **Partly met (2026-07-31)**: the scaffold borrow is closed and the path is wired into the shipping CLI. The gate is NOT met while the type checker, the monomorphizer, and wire-format serialization remain in Rust — those three are the whole of what stands between here and Order 1. |
 | 2 | Full validator in Keleusma | B (first pass) | The self-hosted validator reproduces the whole `verify()` verdict (structural, typed, resource) for the stage corpus, diff-tested against the reference. |
 | 3 | Trap analysis in the validator | C (first pass) | A `trap-free` verdict that the reference agrees with on a trapping and non-trapping corpus; a host no-check mode gated on it. |
 | 4 | Hosted runtime in Keleusma | D (first pass) | The meta-circular interpreter runs the self-hosted compiler's own output for the subset, with the interpreter-versus-interpreted bound composition resolved. |
