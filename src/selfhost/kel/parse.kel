@@ -679,6 +679,11 @@ private data stmt {
     ssp_sp: Word,
     ssp_stk: [Word; 8],
     ssp_cur: [Word; 8],
+    // Admission verdict for the ARRAY-of-struct / array-of-tuple equality paths (`elem_all_scalar`).
+    // Those drains are FLAT (one `StructEqField` per element field, closed by
+    // `ArrayOfStructEqBuild`) and have no nested form, so a composite element field must defer.
+    // Separate from `ssp_ok` so a nested call cannot clobber an in-progress subtree scan.
+    aes_ok: Word,
     // 1 when the current nested field is a TUPLE (read sub-fields from `tupledefs`); 0 for a struct.
     se_subistuple: Word,
     // Nested ARRAY field: `se_subisarray` 1, `se_arrcount`/`se_arrkind` the element count and kind
@@ -2273,6 +2278,40 @@ fn step_structeq_emit() -> Word {
 // drain cannot lower deeper than its existing fixed forms). Walks the struct-nesting tree with an
 // explicit stack (R4 forbids recursion); the `for` cap bounds the total field count. This is what
 // admits ARBITRARY-depth struct-in-struct equality (`eq/3level_struct` and deeper).
+// 1 if every field of the ARRAY ELEMENT type is a scalar, 0 if any is a composite (a struct, tuple,
+// array, or enum). `is_tuple` selects the element layout table: `tupledefs` for an array-of-tuple,
+// `structdefs` for an array-of-struct.
+//
+// This gates the array-of-struct and array-of-tuple equality paths, which are FLAT: they emit one
+// `StructEqField` (offset, kind) record per element field and close with `ArrayOfStructEqBuild`, and
+// neither the drain nor `push_arr_of_struct_inner` has a nested form. Without this gate a composite
+// element field is emitted as a scalar record and compared with a single `CmpEq` over its whole flat
+// body -- admitted, then SILENTLY MIS-COMPILED, the same class as the struct-field tuple-of-struct
+// bug. A struct element is invisible to a kind test alone: it carries `tup_ekind` 0 (Unit) and rides
+// `tup_estruct`, so both are checked.
+//
+// Mirrors the existing `enum_eq_supported` guard on the array-of-enum path; the array-of-struct and
+// array-of-tuple paths were the two dispatch arms that had no such guard.
+fn elem_all_scalar(idx: Word, is_tuple: Word) -> Word {
+    stmt.aes_ok = 1;
+    if is_tuple == 1 {
+        for g in 0..tupledefs.tup_ecount[idx] limit 64 {
+            let gi = tupledefs.tup_estart[idx] + g;
+            if tupledefs.tup_estruct[gi] > 0 orelse tupledefs.tup_ekind[gi] >= 100 {
+                stmt.aes_ok = 0;
+            }
+        }
+    } else {
+        for g in 0..structdefs.sd_fcount[idx] limit 64 {
+            let gi = structdefs.sd_fstart[idx] + g;
+            if structdefs.sd_fstruct[gi] > 0 orelse structdefs.sd_ftuple[gi] > 0 orelse structdefs.sd_farraylen[gi] > 0 orelse structdefs.sd_fenum[gi] > 0 {
+                stmt.aes_ok = 0;
+            }
+        }
+    }
+    stmt.aes_ok
+}
+
 fn struct_subtree_pure(s: Word) -> Word {
     stmt.ssp_ok = 1;
     stmt.ssp_stk[0] = s;
@@ -2330,6 +2369,16 @@ fn struct_eq_kind(idx: Word) -> Word {
                 }
             } else {
                 stmt.sq_found = 1;
+                // An array-of-SCALAR field is supported, but only when the element type was actually
+                // recognized as a scalar. A struct field that is an array-of-TUPLE
+                // (`struct S { g: [(P, Word); 2] }`) records neither `sd_ftuple` (that is set only for
+                // a bare tuple field) nor `sd_fstruct`, so it would otherwise land here and be
+                // compared as a flat scalar array -- admitted, then silently mis-compiled. A real
+                // scalar element leaves a non-zero ScalarKind; kind 0 (Unit) means the element type
+                // was a composite this scan cannot describe, so defer.
+                if structdefs.sd_fkind[fidx] == 0 {
+                    stmt.sq_scan = 0;
+                }
             } }
         } else {
         if structdefs.sd_fstruct[fidx] > 0 {
@@ -3044,10 +3093,10 @@ fn emit_op(op: Word) -> Word {
     // `enum == enum` / `enum != enum`: both operands are whole enum values (the LEFT's enum name
     // captured in `op_lenum`, the RIGHT's in `last_enum`), so lower a variant-iterating comparison
     // loop (a `!=` appends a `Not` in codegen).
-    if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_larray_struct[ops.opsp] > 0 andalso ps.last_array_struct > 0 {
+    if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_larray_struct[ops.opsp] > 0 andalso ps.last_array_struct > 0 andalso elem_all_scalar(ops.op_larray_struct[ops.opsp] - 1, 0) == 1 {
         array_of_struct_eq_start(op)
     } else {
-    if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_larray_tuple[ops.opsp] > 0 andalso ps.last_array_tuple > 0 {
+    if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_larray_tuple[ops.opsp] > 0 andalso ps.last_array_tuple > 0 andalso elem_all_scalar((ops.op_larray_tuple[ops.opsp] % 65536) - 1, 1) == 1 {
         array_of_tuple_eq_start(op)
     } else {
     if (op == OpCode::Eq() as Word orelse op == OpCode::NotEq() as Word) andalso ops.op_larray_arr[ops.opsp] > 0 andalso ps.last_array_arr > 0 {
@@ -5243,6 +5292,16 @@ fn header_sig(k: Word, v: Word) -> Word {
             let ei = tupledefs.tup_ecount[li];
             tupledefs.tup_eoffset[base + ei] = ps.tts_off;
             tupledefs.tup_ekind[base + ei] = scalar_kind_of(v);
+            // Record a struct-typed element's declaration index + 1, as the tuple-parameter and
+            // struct-field tuple scanners do. This is what lets `elem_all_scalar` SEE a struct
+            // element and defer: a struct carries kind 0 (Unit), so without it the admission scan
+            // reads the element as a scalar and the flat array-of-tuple drain mis-compiles it.
+            tupledefs.tup_estruct[base + ei] = 0;
+            for i in 0..structdefs.sd_count limit 64 {
+                if structdefs.sd_name[i] == v {
+                    tupledefs.tup_estruct[base + ei] = i + 1;
+                }
+            }
             tupledefs.tup_ecount[li] = ei + 1;
             ps.tts_off = ps.tts_off + type_byte_size(v);
             0

@@ -57,38 +57,35 @@ generalizes to its enclosing-composite form, so support must not be inferred by 
   `tests/for_limit.rs`. Bare `break;` then came out IDENTICAL and only the outcome-arm form diverged.
 - Boundary test green at 67 Ok; full `scripts/release-gate.sh` result recorded in the commit message.
 
-## Next step — array-of-tuple-of-struct (SCOPED, not started; it is NOT a reuse)
+## Next step — nested support for array elements (the frontier is now HONEST)
 
-Blueprint: [`../decisions/ARRAY_OF_TUPLE_OF_STRUCT_PLAN.md`](../decisions/ARRAY_OF_TUPLE_OF_STRUCT_PLAN.md).
-Probed with a control 2026-08-02: `[(P, Word); 2]` gives 83 self-hosted ops against 113 reference,
-and the struct-field form 73 against 128 — the SAME silent mis-compile signature
-(`GetTupleField(Flat { kind: Unit })` comparing a struct element as a scalar).
+The admission holes are closed, so every unsupported construct in this family now rejects loudly.
+That makes incremental work on nesting safe: a divergence is now attributable to the change under
+test, not to a pre-existing silent bug.
 
-**Correcting the expectation this channel set last increment:** it does NOT reuse the per-frame
-accessor machinery. The array-of-struct/tuple family is a DIFFERENT path —
-`array_of_tuple_eq_start` drives a flat `StructEqField` drain closed by `ArrayOfStructEqBuild`, with
-no nested form and no frame stack, and codegen's `push_arr_of_struct_inner` emits a fixed two-level
-scalar unroll. Closing the gap means either giving that family a nested form, or routing
-array-of-composite elements through the `StructEqNested` frame machinery (better long-term, and it
-would subsume array-of-deep-struct and array-of-array-in-struct, but it refactors a working
-byte-identical path). Recommended: the latter, with the former as fallback after two or three
-bounded attempts.
+The remaining work is unchanged in shape and blueprinted in
+[`../decisions/ARRAY_OF_TUPLE_OF_STRUCT_PLAN.md`](../decisions/ARRAY_OF_TUPLE_OF_STRUCT_PLAN.md):
+give the flat array family a nested form, or (preferred, and it would subsume array-of-deep-struct
+and array-of-array-in-struct) route array-of-composite elements through the `StructEqNested` frame
+machinery. Six Gaps now sit behind it, so the payoff is larger than when it was scoped.
 
-Also recorded so it is not rediscovered: the array-of-tuple element scanner (`ps.arr == 3` in
-`header_sig`) does not record `tup_estruct`, unlike the other two tuple scanners. Adding it is
-necessary but **verified not sufficient** — alone it changes nothing observable, so it was reverted
-rather than committed as dead code. Land it with the drain change.
+Also open, same context: the impure-element subtree (the general mixed-subtree problem), enum array
+payload, enum deep-struct payload, enum→struct→enum. Beyond this family the Order-1 gate needs the
+type checker, the monomorphizer, and wire-format serialization. Do NOT prompt the operator to order
+these — `AUTONOMOUS_IMPLEMENTATION_LOOP.md` settles it.
 
-Remaining queue after that: the impure-element subtree deferred by the last increment (the general
-mixed-subtree problem), enum array payload, enum deep-struct payload, enum→struct→enum, and
-array-of-array in a struct. Beyond this family, the Order-1 gate still needs the type checker, the
-monomorphizer, and wire-format serialization. Do NOT prompt the operator to order these.
+## Standing method notes
 
-## Standing method note
-
-PROBE BEFORE PLANNING, always with a control, and **probe what the admission ACCEPTS, not only what
-it rejects**. Both silent mis-compiles found so far were in constructs the admission happily
-accepted; a rejected construct fails loudly and is comparatively safe. When generalizing a drain,
-tighten its admission IN THE SAME CHANGE — descending further without a matching guard converts a
-shallow silent bug into a deeper one, which happened mid-increment on 2026-08-02 and was caught only
-because the impure cases were probed before the increment was declared done.
+1. **PROBE BEFORE PLANNING, always with a control**, and **probe what the admission ACCEPTS**. Every
+   silent mis-compile found so far was in a construct the admission accepted; a rejected construct
+   fails loudly and is comparatively safe.
+2. **When generalizing a drain, tighten its admission in the SAME change** — descending further
+   without a guard converts a shallow silent bug into a deeper one.
+3. **Close an admission hole BEFORE building support over it.** Otherwise every later increment must
+   distinguish "my change broke this" from "this was already wrong". Expect the boundary count to
+   move +Gap / 0 Ok when doing this; that is success, not regression.
+4. **When a "regression" appears, measure the pre-change behaviour before assuming authorship.** The
+   `[bool;2]` case looked like damage from the new guard and was in fact a pre-existing mis-compile
+   the guard had exposed; reverting would have restored a silent bug.
+5. **Do not trust op counts or lengths as a correctness proxy.** The worst case found diverged at an
+   identical op count, differing only in content. Only byte-identity catches that.

@@ -7156,6 +7156,58 @@ fn self_host_compiles_struct_tuple_of_struct_equality() {
     );
 }
 
+/// An ARRAY whose element type contains a composite must DEFER rather than be compared flat.
+///
+/// The array-of-struct and array-of-tuple equality paths are FLAT: they emit one `StructEqField`
+/// (offset, kind) record per element field and close with `ArrayOfStructEqBuild`, and neither the
+/// drain nor `push_arr_of_struct_inner` has a nested form. They were also the only two dispatch arms
+/// with no admission guard (the array-of-enum arm has always had `enum_eq_supported`), so a composite
+/// element field was emitted as a scalar record and compared with a single `CmpEq` over its whole
+/// flat body — admitted, then SILENTLY MIS-COMPILED.
+///
+/// Each case below produced a wrong-but-plausible op stream before `elem_all_scalar` was added. The
+/// last one is the most dangerous shape found: it diverged at the SAME op count as the reference
+/// (58 against 58), differing only in content, so nothing but the byte-identical oracle could have
+/// caught it.
+///
+/// These are Gaps by design. Full support means giving the flat array family a nested form, or
+/// routing array-of-composite elements through the `StructEqNested` frame machinery — see
+/// `docs/decisions/ARRAY_OF_TUPLE_OF_STRUCT_PLAN.md`.
+#[test]
+fn array_of_composite_element_defers() {
+    for src in [
+        // Array-of-tuple whose element is a struct, as a parameter and as a struct field.
+        "struct P { x: Word }\nfn f(a: [(P, Word); 2], b: [(P, Word); 2]) -> bool { a == b }",
+        "struct P { x: Word }\nstruct S { g: [(P, Word); 2] }\nfn f(a: S, b: S) -> bool { a == b }",
+        // Array-of-struct whose element nests another struct.
+        "struct I { v: Word }\nstruct M { i: I }\nfn f(a: [M; 2], b: [M; 2]) -> bool { a == b }",
+        // A struct field array whose element type is not a recognized scalar.
+        "struct S { a: [bool;2], w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
+    ] {
+        let reference = compile_src(src);
+        let module = self_host_compile(src);
+        let f = module
+            .chunks
+            .iter()
+            .find(|c| c.name == "f")
+            .expect("chunk f");
+        let r = reference
+            .chunks
+            .iter()
+            .find(|c| c.name == "f")
+            .expect("ref f");
+        // Assert the SHAPE of a deferral (a short primitive compare), not merely inequality. The
+        // bool case previously diverged at an IDENTICAL op count, so a length-agnostic `!=` check
+        // would have passed while the construct was still being mis-compiled.
+        assert!(
+            f.ops.len() < r.ops.len() / 2,
+            "expected a short deferral for `{src}`, got {} ops against the reference's {}",
+            f.ops.len(),
+            r.ops.len()
+        );
+    }
+}
+
 /// A tuple element whose struct subtree is NOT pure (it contains a tuple, array, or enum) must
 /// DEFER, not descend.
 ///
@@ -7867,6 +7919,24 @@ fn self_hosted_construct_support_boundary() {
             "eq/struct_tuple_of_impure_struct__GAP",
             Gap,
             "struct P { u: (Word, Word) }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        // The flat array-equality family has no nested form, so an array whose ELEMENT contains a
+        // composite defers. Each of these was previously admitted and silently mis-compiled; the
+        // last diverged at the same op count as the reference, differing only in content.
+        (
+            "eq/array_of_tuple_of_struct__GAP",
+            Gap,
+            "struct P { x: Word }\nfn f(a: [(P, Word); 2], b: [(P, Word); 2]) -> bool { a == b }",
+        ),
+        (
+            "eq/array_of_deep_struct__GAP",
+            Gap,
+            "struct I { v: Word }\nstruct M { i: I }\nfn f(a: [M; 2], b: [M; 2]) -> bool { a == b }",
+        ),
+        (
+            "eq/struct_field_array_of_tuple__GAP",
+            Gap,
+            "struct P { x: Word }\nstruct S { g: [(P, Word); 2] }\nfn f(a: S, b: S) -> bool { a == b }",
         ),
         (
             "eq/enum_struct_payload",

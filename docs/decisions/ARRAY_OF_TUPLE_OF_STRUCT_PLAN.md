@@ -5,9 +5,25 @@
 Blueprint for `[(P, Word); 2] == [(P, Word); 2]` — an ARRAY whose element is a TUPLE whose element
 is a STRUCT — and the same shape as a struct field (`struct S { g: [(P, Word); 2] }`).
 
-Status: **SCOPED, NOT IMPLEMENTED.** Probed and diagnosed 2026-08-02 with a known-Gap control.
-Deliberately NOT started: it is a full multi-stage increment, not an extension of the
-struct-field-tuple-of-struct work that preceded it. See "Why this is bigger than it looks".
+Status: **PARTIALLY ADDRESSED — the SILENT MIS-COMPILE is fixed; full support is still open.**
+
+2026-08-02: rather than build nested support first, the admission hole underneath it was closed.
+Four constructs were being admitted and silently mis-compiled by the flat array-equality family;
+all four now DEFER cleanly (a short primitive compare that diverges loudly and is caught by the
+CLI's reference cross-check) instead of emitting a wrong comparison. Boundary +4 Gap, 0 Ok.
+
+That was the right order: the flat family had NO admission guard at all, so every step toward
+nested support would have been built over a construct set that silently compiled wrong. The
+remaining work below — actual nested support — is unchanged in shape and is now safe to attempt
+incrementally, because anything not yet supported rejects loudly.
+
+**The four fixed mis-compiles**, each verified against the reference with a control:
+- `[(P, Word); 2]` as a parameter (83 wrong ops against 113 reference)
+- `struct S { g: [(P, Word); 2] }` (73 against 128)
+- `[M; 2]` where `M` nests a struct (33 against 93)
+- `struct S { a: [bool;2], w: Word }` — **the most dangerous shape found: it diverged at the SAME
+  op count as the reference (58 against 58), differing only in content.** A length-based or
+  count-based check would never have caught it; only the byte-identical oracle did.
 
 ## The measured divergence
 
