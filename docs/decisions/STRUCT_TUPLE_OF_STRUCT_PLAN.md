@@ -71,6 +71,10 @@ S 16 CmpEq
 
 ## Where each stage is wrong
 
+0. **The exact parse.kel edit is already written out below.** `se_pop_cascade` (~2480) advances
+   `se_subcur` when the stack empties, which is correct for a tuple sub-field too, so the pushed
+   frame needs no cascade change.
+
 1. **parse.kel — the `se_subistuple` sub-field drain (~2593).** The struct-field-is-a-tuple branch
    emits a scalar record unconditionally, ignoring `tup_estruct`:
 
@@ -100,6 +104,15 @@ S 16 CmpEq
 
    This is precisely the "per-frame accessor/variant" that an earlier handoff predicted for
    tuple-in-tuple and that turned out to be unnecessary there. It is genuinely required here.
+
+   **NO new record encoding is needed, and therefore this is NOT an inter-stage-protocol change**
+   (which would be a hard stop per the loop's stop list). Verified 2026-08-02: the header a struct
+   field that is a tuple emits already carries FlatNested **variant Tuple (0)** — parse.kel ~2699
+   omits the variant term, which encodes 0 — so reconstruct and codegen already receive the parent
+   block's kind. The emitter can therefore CHOOSE the accessor from the enclosing `seb` block's
+   existing variant rather than from a new sentinel: variant Tuple → `GetTupleField`, variant
+   Struct → `GetField`. Thread the parent variant down the `es_*` frame stack; do not invent a new
+   sentinel range, and do not add a record or node kind.
 
 4. **Admission.** Widen `struct_eq_kind`'s tuple branch to consult `tup_estruct` and require
    `struct_subtree_pure` of the element struct, so a deeper or mixed element still defers rather
@@ -133,3 +146,36 @@ The same per-frame-accessor machinery, once built, is what several remaining gap
 (array-of-tuple-of-struct, and mixed subtrees where the parent container kind varies). See the
 measured queue in [`../process/AUTONOMOUS_IMPLEMENTATION_LOOP.md`](../process/AUTONOMOUS_IMPLEMENTATION_LOOP.md)
 and the frontier map in [`../process/REVERSE_PROMPT.md`](../process/REVERSE_PROMPT.md).
+
+## The concrete parse.kel edit (stage 1)
+
+Replace the `se_subistuple == 1` branch's unconditional scalar emission with a `tup_estruct` check
+that mirrors the sibling `sd_fstruct` branch (~2597). Note it must NOT advance `se_subcur` — the
+cascade does that when the pushed frame pops:
+
+```
+if stmt.se_subistuple == 1 {
+    if tupledefs.tup_estruct[fidx] > 0 {
+        let s = tupledefs.tup_estruct[fidx] - 1;
+        stmt.se_stk_start[0] = structdefs.sd_fstart[s];
+        stmt.se_stk_count[0] = structdefs.sd_fcount[s];
+        stmt.se_stk_cur[0] = 0;
+        stmt.se_stk_r2[0] = ps.pcount + stmt.slot_count;
+        stmt.slot_count = stmt.slot_count + 1;
+        stmt.se_stk_l2[0] = ps.pcount + stmt.slot_count;
+        stmt.slot_count = stmt.slot_count + 1;
+        stmt.se_stk_phase[0] = 1;
+        stmt.se_sp = 1;
+        Node::StructEqNestedField() as Word
+            + (tupledefs.tup_eoffset[fidx] + (100 + structdefs.sd_bytesize[s]) * 65536) * 64
+    } else {
+        stmt.se_subcur = stmt.se_subcur + 1;
+        Node::StructEqNestedField() as Word
+            + (tupledefs.tup_eoffset[fidx] + tupledefs.tup_ekind[fidx] * 65536) * 64
+    }
+} else {
+```
+
+`se_sp = 1` (rather than an increment) is correct and matches `sd_fstruct`: this branch is only
+reached with the frame stack empty, since a non-empty stack is handled by the earlier `se_sp > 0`
+path.
