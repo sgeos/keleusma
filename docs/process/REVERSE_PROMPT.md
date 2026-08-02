@@ -11,7 +11,7 @@ increment-by-increment reasoning and frontier assessments live in
 
 ## Last Updated
 
-**Date**: 2026-07-31 (session 36)
+**Date**: 2026-08-02 (session 36)
 
 ## Headline — the V0.2.x roadmap's Order-1 residual list was substantially STALE
 
@@ -57,27 +57,41 @@ generalizes to its enclosing-composite form, so support must not be inferred by 
   `tests/for_limit.rs`. Bare `break;` then came out IDENTICAL and only the outcome-arm form diverged.
 - Boundary test green at 67 Ok; full `scripts/release-gate.sh` result recorded in the commit message.
 
-## Next step — the strategic fork is now sharp, and it needs an operator decision
+## Next step — IMPLEMENT `struct { t: (P, Word) }` (already selected; do not re-ask)
 
-The cheap work is done. What remains splits cleanly:
+The selection is MADE, by the loop's own ordering policy (context first, then priority), and the
+diagnosis is captured in [`../decisions/STRUCT_TUPLE_OF_STRUCT_PLAN.md`](../decisions/STRUCT_TUPLE_OF_STRUCT_PLAN.md).
+Do not reopen the choice — `AUTONOMOUS_IMPLEMENTATION_LOOP.md` forbids prompting the operator to
+order bounded roadmap tasks, and this session already violated that once.
 
-1. **Finish Order 1** — the type checker, the monomorphizer, and wire-format serialization. This is the
-   gate for everything downstream (the validator, trap analysis, and runtime all sit behind it). The type
-   checker is a multi-session effort against the seven-day window; the monomorphizer is near-identity
-   over the subset and is probably the cheapest of the three; wire-format serialization is
-   well-specified and self-contained, and may be the best value per token.
-2. **The `for … on` outcome-arm gap** — bounded, same shape as the increments that have been landing.
-3. **Continue subset-widening** — the remaining composite-nesting gaps (deeper array/enum, mixed
-   subtrees involving array/enum). Formally Workstream F, whose gate depends on Order 1.
+**The construct is currently MIS-COMPILED, not merely unsupported.** The admission admits it and the
+drain compares a struct element as if it were a scalar (`GetTupleField(Flat { kind: Unit })` + `CmpEq`
+where the reference extracts `FlatNested { variant: Struct }`, allocates a temp pair, and recurses).
+Measured: 44 self-hosted ops vs 59 reference, `local_count` 6 vs 8. That makes this a correctness fix
+with a boundary movement, not just a coverage increment.
 
-Recommendation: **wire-format serialization or the monomorphizer**, because they close Order 1 rather
-than widen a subset whose gate is behind Order 1 anyway. But this is the operator's call — the three
-differ by an order of magnitude in cost.
+Stage split (from the plan doc):
+1. **parse.kel — expected SMALL.** Mirror the sibling `sd_fstruct` branch (~2597) into the
+   `se_subistuple` sub-field drain (~2593): when `tup_estruct[fidx] > 0`, emit the sentinel header
+   `(tup_eoffset + (100 + sd_bytesize) * 65536)`, allocate `r2` then `l2` monotonically, and push a
+   frame. The existing `se_stk_*` machinery already fits — the element IS a struct, so its sub-fields
+   read `sd_*`.
+2. **reconstruct.kel — probably NOTHING.** The recursive `seb` grammar already nests at any depth.
+   Verify the depth-1/2 fixtures stay byte-identical before assuming work is needed.
+3. **codegen.kel — the real change.** The `es_*` emitter hardcodes `getfield`; the extract of the
+   struct element out of its parent TUPLE must be `GetTupleField` while the extract inside `P` stays
+   `GetField`. Each emit frame needs an ACCESSOR VARIANT chosen by the parent container's kind. This
+   same machinery is what array-of-tuple-of-struct and the mixed-subtree gaps will need.
+4. **Admission.** Widen `struct_eq_kind`'s tuple branch to consult `tup_estruct` and require
+   `struct_subtree_pure`, so a deeper or mixed element defers instead of being mis-lowered.
+
+Fixtures that must go from DIVERGE to IDENTICAL: `(P, Word)` (59 ops, `local_count` 8), `(P, P)`
+(74 ops), and `(P, Word), w: Word` (69 ops).
 
 ## Standing method note
 
-PROBE BEFORE PLANNING, and always with a control. Three separate stale claims surfaced in one day (the
-boundary count, the tuple-in-tuple gap premise, and four Order-1 residuals), **all in the same
-direction**: the documents understated what had landed and so pointed at work already done. A
-conservative admission deferral is not evidence of a gap either — the path it defers to may already be
-correct. Treat any unverified status claim in the roadmap as suspect until probed.
+PROBE BEFORE PLANNING, and always with a control (point the probe at `scope/float_arith__GAP` and
+confirm it reports DIVERGE; also confirm the REFERENCE accepts the source, since a reference rejection
+is not a self-host gap). Stale planning docs were this session's recurring theme: the boundary count,
+the tuple-in-tuple premise, four Order-1 residuals, and the loop doc's own task queue were all stale,
+**all understating what had landed**. Treat any recorded status claim as a lead, not a fact.
