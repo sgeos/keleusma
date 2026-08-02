@@ -26,14 +26,30 @@ crossed without interruption.
 
 The frontier is the self-hosted-subset boundary, pinned by the
 `self_hosted_construct_support_boundary` characterization test in
-`tests/selfhost_codegen.rs` (currently **47 Ok / 7 Gap / 1 RefRejects**). A successful
-increment moves one Gap to Ok. The near-term queue, smallest-bounded first, is the
-nested-composite-equality family:
+`tests/selfhost_codegen.rs` (**67 Ok / 2 Gap / 1 RefRejects** as of 2026-07-31 — recount with a
+grep rather than trusting this number; it was found stale by 2 on 2026-07-30). A successful
+increment moves a Gap to Ok or adds a new `SOk` case.
 
-- tuple-of-struct (`(P, W) == (P, W)`)
-- enum-in-struct (`struct { e: E, w: W }`)
-- 2+-level nesting (`struct O { m: M }` where `M` has a composite field)
-- struct-of-array-of-struct, enum-struct-payload
+**A boundary `Gap` entry is not the only source of work, and the count is a lagging indicator.**
+Most of the real queue is constructs that are simply absent from the case list. The measured
+queue as of 2026-07-31 (each probed against the reference with a control):
+
+- `for … limit … on { ok => …, break(bi) => …, limit => … }` outcome arms (a bare `break;`
+  already self-hosts; only the outcome-arm lowering and its index binding diverge)
+- `struct { t: (P, Word) }` — a struct field that is a tuple containing a struct. NOTE the
+  admission already ADMITS this and the drain then gets it wrong, which is the silent-wrong-output
+  class the 3-level struct increment was caught by; treat it as higher-risk than its size suggests
+- enum array payload; enum deep-struct payload; enum→struct→enum
+- array-of-array nested in a struct; array-of-deep-struct; array of tuple-of-struct
+- `struct { i: I }` where `I` holds an enum, and the same where `I` holds an array
+
+**Support does NOT generalize to the enclosing-composite form.** Array-of-array is supported but
+array-of-array inside a struct is not; an enum tuple payload is supported but an enum array payload
+is not. Never infer support by analogy — probe it.
+
+Beyond the subset frontier, the Order-1 gate (`V0_2_X_ROADMAP.md`) needs exactly three things: the
+type checker, the monomorphizer, and wire-format serialization. These are bounded roadmap tasks, so
+choosing among them is the loop's call, not the operator's.
 
 Floats and generics are the deferred tail (harder, out of the near-term queue). The
 authoritative next-step detail — the reference lowering, the `.kel` touch points, and the
@@ -71,6 +87,21 @@ One pass over one gap:
 1. **Select** the next task by the ordering policy above (context-switching first, then
    priority) from the DESIGN_JOURNAL frontier notes; among same-context gaps, the smallest
    bounded one.
+1a. **PROBE BEFORE PLANNING, ALWAYS WITH A CONTROL.** Before writing any stage code, compare the
+   self-hosted pipeline against the reference on the target construct. Then point the SAME probe at
+   a known Gap (`scope/float_arith__GAP`) and confirm it reports DIVERGE. Without that control a
+   false "identical" is indistinguishable from a real one, because `self_host_compile` builds on
+   `compile_src(src)` and replaces chunk bodies — a skipped replacement would report identity
+   trivially. Also confirm the REFERENCE accepts the source (`compile_src` alone): a reference
+   rejection is NOT a self-host gap, and bad probe syntax reads like one (the language has no
+   `let mut`, and a `for` needs `limit` — take valid syntax from `tests/for_limit.rs`).
+
+   This step is not optional bookkeeping. On 2026-07-30 an increment was authorized to implement
+   tuple-in-tuple across three `.kel` stages; a probe showed it already worked. On 2026-07-31 four
+   of six Order-1 residuals turned out already closed. **A recorded status claim is a lead, not a
+   fact** — including one in this document. Equally, a conservative ADMISSION deferral is not
+   evidence of a gap: the path it defers to may already be correct.
+
 2. **Plan the lowering**: how the Rust reference compiler lowers the construct, and the
    minimal `.kel` changes to reproduce it byte-identically — typically a detector in
    `parse.kel`, routing in `reconstruct.kel`, and emission in `codegen.kel`. Reuse
@@ -131,6 +162,23 @@ writes the question into `REVERSE_PROMPT.md` when:
   bounded roadmap tasks is NOT a stop: order them by the policy above (context first, then
   priority) and proceed without prompting. Surface only when the choice itself requires
   operator judgment (a semantics change, a real tradeoff, or an off-roadmap direction).
+
+  **None of the following is a fork, and none licenses a stop** (each has been used as a
+  rationalization and each is wrong):
+  - *"The candidates differ by an order of magnitude in cost."* Cost asymmetry is an ORDERING
+    input, not a decision point. Take the one that fits the remaining budget and say so.
+  - *"This one is multi-session / wants a dedicated run at the budget."* Then start it and
+    checkpoint at the budget stop; a large task is entered incrementally, not pre-authorized.
+  - *"All the work has to happen eventually, so which does the operator want first?"* If every
+    candidate must be done anyway, the order is the loop's to choose — that is precisely the
+    case the ordering policy exists to settle, so asking is pure deferral.
+  - *"The cheap work is exhausted."* Exhausting the cheap work is not a stop condition. Only an
+    exhausted FRONTIER is (see below), and cheap-work exhaustion is the normal state of a loop
+    that is making progress.
+
+  The test is not "is this choice significant?" but "does this choice require information only
+  the operator holds?" Effort, risk, and sequencing are the loop's to weigh; semantics,
+  tradeoffs the operator must own, and off-roadmap direction are not.
 - **An irreversible or outward-facing action would be required** — a crates.io publish, a
   force-push of a shared line, a tag. Confirm first; a prior "keep going" does not license
   these.
