@@ -17,6 +17,49 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-02 (session 36)
 
+**STRUCT-FIELD-TUPLE-OF-STRUCT (2026-08-02): COMPLETE. A silent MIS-COMPILE fixed, not a coverage gap closed. Boundary 67 -> 69 Ok, +1 deliberate Gap.**
+`struct S { t: (P, Word) }` was ADMITTED and then lowered WRONG: the drain compared the whole struct
+element as one scalar (`GetTupleField(Flat { kind: Unit })` + `CmpEq`) where the reference extracts
+`FlatNested { variant: Struct }`, allocates a temp pair, and recurses. 44 self-hosted ops against 59.
+The program compiled, verified, and ran — comparing the wrong bytes. Only the byte-identical oracle
+could see it. This is the second instance of that class (the 3-level struct increment was the first),
+and both were found the same way: probing a construct the admission ACCEPTS rather than one it rejects.
+
+ROOT CAUSE, three layers deep. A struct element of a tuple carries `tup_ekind` 0 (Unit) and rides
+`tup_estruct`. The admission's `tup_ekind >= 100` defer scan therefore cannot see it, and the
+`se_subistuple` sub-field drain emitted a scalar record for it. But the deepest layer was that
+`step_struct_tuple_field` NEVER WROTE `tup_estruct` at all — only `step_tuple_type` (tuple PARAMETER
+types) did — so for a struct FIELD's tuple the element's struct identity was never recorded. The
+first parse.kel edit changed nothing observable because the new branch was unreachable; the probe
+caught that immediately (op counts unchanged at 44), which is why the edit-then-measure loop matters
+more than the edit.
+
+THE FIX, matching the scouted stage split. parse.kel: record `tup_estruct` in
+`step_struct_tuple_field` (reset-then-search, since the flat element arrays are reused across
+layouts), and push a frame for a struct element in the `se_subistuple` drain rather than emitting a
+scalar (`se_subcur` must NOT advance — `se_pop_cascade` does it). reconstruct.kel: NOTHING, as
+predicted — the recursive `seb` grammar from the 3-level increment already nests. codegen.kel: the
+suffix extract now takes its accessor from `es_acc[top - 1]`, the PARENT frame, because the extract
+reads the child OUT OF its parent container — a tuple parent uses `GetTupleField` (its FlatNested
+operand form is shared), a struct parent `GetFieldNested`. No new record encoding was needed, so this
+never became an inter-stage-protocol change: the tuple field's header already carried variant Tuple.
+
+THE ADMISSION GUARD WAS LOAD-BEARING, NOT DEFENSIVE — the increment's main lesson. Teaching the drain
+to descend immediately RECREATED the original bug one level deeper: an element struct containing a
+tuple, array, or enum was descended into and then mis-lowered (59 ops against 84). Requiring
+`struct_subtree_pure` of the element makes those defer to a clean primitive compare, which diverges
+loudly and is caught by the CLI's reference cross-check. Generalizing a drain WITHOUT simultaneously
+tightening its admission converts a shallow silent bug into a deeper silent bug. Pinned by
+`struct_tuple_of_impure_struct_element_defers`, which asserts the deferral is SHORT (< half the
+reference) rather than merely unequal, so a regression into a wrong-but-long stream still fails.
+
+Depth came free: an element struct may nest arbitrarily deep, because the frame stack already handled
+depth once the descent happened. Verified byte-identical across both element positions, two struct
+elements, a multi-field element, a deep element, a trailing scalar field, and `!=`; nine prior
+fixtures held; all four `.kel` stages still self-compile byte-identically. No opcode, record, node
+kind, or `BYTECODE_VERSION` change.
+
+
 **LOOP-PROTOCOL FIX + STRUCT-TUPLE-OF-STRUCT SCOPED (2026-08-02): the loop stopped to ask a question the protocol already forbade. Rule hardened, then applied.**
 The operator's correction: when all the work must be done eventually, prioritize by what is already
 in context, then by priority order — and that belongs in the protocol. Checking
