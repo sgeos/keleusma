@@ -7110,6 +7110,92 @@ fn self_host_compiles_tuple_of_deep_struct_equality() {
     );
 }
 
+/// A struct field that is a TUPLE whose element is itself a STRUCT (`struct S { t: (P, Word) }`)
+/// self-compiles byte-identically.
+///
+/// This was previously MIS-COMPILED rather than unsupported: the admission admitted it and the drain
+/// then compared the whole struct element as a single scalar (`GetTupleField(Flat { kind: Unit })`
+/// plus `CmpEq`), because a struct element carries `tup_ekind` 0 (Unit) and rides `tup_estruct`,
+/// which neither the admission scan nor the tuple sub-field drain consulted. Only the byte-identical
+/// oracle could see it — the program compiled, verified, and ran while comparing the wrong bytes.
+///
+/// Three things were needed. `step_struct_tuple_field` now records `tup_estruct` for a struct-typed
+/// element (it previously only did so for a tuple PARAMETER type, so the element's struct identity
+/// was lost for a struct FIELD). The `se_subistuple` sub-field drain pushes a frame for such an
+/// element instead of emitting a scalar record. And the codegen `es_*` suffix extract now takes its
+/// accessor from the PARENT frame's kind — a tuple parent extracts with `GetTupleField`, a struct
+/// parent with `GetFieldNested` — since the extract reads the child out of its parent container.
+///
+/// Coverage spans the element in first and last position, two struct elements, a multi-field
+/// element, an arbitrarily-deep pure-struct element (the frame machinery already handled depth), a
+/// trailing scalar field after the tuple, and `!=`.
+#[test]
+fn self_host_compiles_struct_tuple_of_struct_equality() {
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nstruct S { t: (P, P) }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nstruct S { t: (P, Word), w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word, y: Word }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nstruct R { y: Word }\nstruct S { t: (P, R) }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    // The element struct may itself nest arbitrarily deep, so long as the subtree stays pure
+    // struct/scalar: the existing frame stack already handles depth once the descent happens.
+    assert_self_host_byte_identical(
+        "struct Q { z: Word }\nstruct P { q: Q }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a != b }",
+    );
+}
+
+/// A tuple element whose struct subtree is NOT pure (it contains a tuple, array, or enum) must
+/// DEFER, not descend.
+///
+/// This pins the admission guard, and it is the point of the guard rather than an edge case. Once
+/// the drain learned to descend into a struct element, an impure element would be descended into and
+/// then mis-lowered — the same silent-wrong-comparison class the fix above removes. Deferring yields
+/// a plain primitive compare that DIVERGES from the reference, so the construct reports as an
+/// ordinary unsupported Gap (loudly, via the CLI's reference cross-check) instead of silently
+/// comparing the wrong bytes.
+#[test]
+fn struct_tuple_of_impure_struct_element_defers() {
+    for src in [
+        "struct P { u: (Word, Word) }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+        "struct P { u: [Word;2] }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+        "enum E { A, B }\nstruct P { e: E }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+    ] {
+        let reference = compile_src(src);
+        let module = self_host_compile(src);
+        let f = module
+            .chunks
+            .iter()
+            .find(|c| c.name == "f")
+            .expect("chunk f");
+        let r = reference
+            .chunks
+            .iter()
+            .find(|c| c.name == "f")
+            .expect("ref f");
+        // The deferral is a short primitive compare; the reference emits the full structural one.
+        // Asserting the SHAPE (a deferral, much shorter) rather than merely "not equal" keeps this
+        // from silently passing if the drain regressed into emitting a wrong-but-long stream.
+        assert!(
+            f.ops.len() < r.ops.len() / 2,
+            "expected a short deferral for `{src}`, got {} ops against the reference's {}",
+            f.ops.len(),
+            r.ops.len()
+        );
+    }
+}
+
 /// A tuple element that is itself a TUPLE self-compiles byte-identically.
 ///
 /// This case needed no stage change: the pipeline already lowers a nested tuple element to
@@ -7761,6 +7847,26 @@ fn self_hosted_construct_support_boundary() {
             "eq/enum_tuple_payload",
             SOk,
             "enum E { A(Word, Word), B }\nfn f(a: E, b: E) -> bool { a == b }",
+        ),
+        // A struct field that is a tuple containing a struct. Previously MIS-COMPILED (admitted, then
+        // the struct element compared as one scalar); now descends correctly. The deep variant pins
+        // that the element's own subtree may nest arbitrarily far.
+        (
+            "eq/struct_tuple_of_struct",
+            SOk,
+            "struct P { x: Word }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        (
+            "eq/struct_tuple_of_deep_struct",
+            SOk,
+            "struct Q { z: Word }\nstruct P { q: Q }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        // The admission guard: an IMPURE element subtree must defer rather than descend and
+        // mis-lower. This is a Gap by design, not a missing feature.
+        (
+            "eq/struct_tuple_of_impure_struct__GAP",
+            Gap,
+            "struct P { u: (Word, Word) }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
         ),
         (
             "eq/enum_struct_payload",

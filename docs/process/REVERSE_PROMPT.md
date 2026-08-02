@@ -57,41 +57,27 @@ generalizes to its enclosing-composite form, so support must not be inferred by 
   `tests/for_limit.rs`. Bare `break;` then came out IDENTICAL and only the outcome-arm form diverged.
 - Boundary test green at 67 Ok; full `scripts/release-gate.sh` result recorded in the commit message.
 
-## Next step — IMPLEMENT `struct { t: (P, Word) }` (already selected; do not re-ask)
+## Next step — continue the same-context queue (no operator prompt needed)
 
-The selection is MADE, by the loop's own ordering policy (context first, then priority), and the
-diagnosis is captured in [`../decisions/STRUCT_TUPLE_OF_STRUCT_PLAN.md`](../decisions/STRUCT_TUPLE_OF_STRUCT_PLAN.md).
-Do not reopen the choice — `AUTONOMOUS_IMPLEMENTATION_LOOP.md` forbids prompting the operator to
-order bounded roadmap tasks, and this session already violated that once.
+The per-frame accessor machinery this increment built is what the neighbouring gaps need, so the
+loop's own ordering policy (context first) keeps it in this area. In order:
 
-**The construct is currently MIS-COMPILED, not merely unsupported.** The admission admits it and the
-drain compares a struct element as if it were a scalar (`GetTupleField(Flat { kind: Unit })` + `CmpEq`
-where the reference extracts `FlatNested { variant: Struct }`, allocates a temp pair, and recurses).
-Measured: 44 self-hosted ops vs 59 reference, `local_count` 6 vs 8. That makes this a correctness fix
-with a boundary movement, not just a coverage increment.
+1. **array-of-tuple-of-struct** (`[(P, Word); 2]`) — reuses the accessor work directly.
+2. **The impure-element subtree** just deferred here (`struct P { u: (Word, Word) }` inside a tuple):
+   closing it means letting a frame's children be non-struct, which is the general mixed-subtree
+   problem and the biggest remaining lever in this family.
+3. **enum array payload / enum deep-struct payload / enum→struct→enum**, then array-of-array in a
+   struct.
 
-Stage split (from the plan doc):
-1. **parse.kel — expected SMALL.** Mirror the sibling `sd_fstruct` branch (~2597) into the
-   `se_subistuple` sub-field drain (~2593): when `tup_estruct[fidx] > 0`, emit the sentinel header
-   `(tup_eoffset + (100 + sd_bytesize) * 65536)`, allocate `r2` then `l2` monotonically, and push a
-   frame. The existing `se_stk_*` machinery already fits — the element IS a struct, so its sub-fields
-   read `sd_*`.
-2. **reconstruct.kel — probably NOTHING.** The recursive `seb` grammar already nests at any depth.
-   Verify the depth-1/2 fixtures stay byte-identical before assuming work is needed.
-3. **codegen.kel — the real change.** The `es_*` emitter hardcodes `getfield`; the extract of the
-   struct element out of its parent TUPLE must be `GetTupleField` while the extract inside `P` stays
-   `GetField`. Each emit frame needs an ACCESSOR VARIANT chosen by the parent container's kind. This
-   same machinery is what array-of-tuple-of-struct and the mixed-subtree gaps will need.
-4. **Admission.** Widen `struct_eq_kind`'s tuple branch to consult `tup_estruct` and require
-   `struct_subtree_pure`, so a deeper or mixed element defers instead of being mis-lowered.
-
-Fixtures that must go from DIVERGE to IDENTICAL: `(P, Word)` (59 ops, `local_count` 8), `(P, P)`
-(74 ops), and `(P, Word), w: Word` (69 ops).
+Do NOT prompt the operator to order these — that is settled by
+[AUTONOMOUS_IMPLEMENTATION_LOOP.md](./AUTONOMOUS_IMPLEMENTATION_LOOP.md). Beyond this family, the
+Order-1 gate still needs the type checker, the monomorphizer, and wire-format serialization.
 
 ## Standing method note
 
-PROBE BEFORE PLANNING, and always with a control (point the probe at `scope/float_arith__GAP` and
-confirm it reports DIVERGE; also confirm the REFERENCE accepts the source, since a reference rejection
-is not a self-host gap). Stale planning docs were this session's recurring theme: the boundary count,
-the tuple-in-tuple premise, four Order-1 residuals, and the loop doc's own task queue were all stale,
-**all understating what had landed**. Treat any recorded status claim as a lead, not a fact.
+PROBE BEFORE PLANNING, always with a control, and **probe what the admission ACCEPTS, not only what
+it rejects**. Both silent mis-compiles found so far (3-level struct, and this one) were in constructs
+the admission happily accepted; a rejected construct fails loudly and is comparatively safe. When
+generalizing a drain, tighten its admission IN THE SAME CHANGE: descending further without a matching
+guard converts a shallow silent bug into a deeper one, which is exactly what happened mid-increment
+here and was caught only because the impure cases were probed before the increment was declared done.

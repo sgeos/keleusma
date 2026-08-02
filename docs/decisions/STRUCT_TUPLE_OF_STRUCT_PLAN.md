@@ -6,8 +6,22 @@ Blueprint for closing the `struct { t: (P, Word) }` equality gap in the self-hos
 struct field that is a TUPLE whose element is itself a STRUCT. For example
 `struct P { x: Word }`, `struct S { t: (P, Word) }`, `fn f(a: S, b: S) -> bool { a == b }`.
 
-Status: **SCOPED, NOT IMPLEMENTED.** Probed and diagnosed 2026-08-02 with a known-Gap control;
-the op-level divergence below is measured, not inferred.
+Status: **COMPLETE — implemented, byte-identical, boundary 67 -> 69 Ok (and +1 deliberate Gap).**
+Implemented 2026-08-02. The diagnosis below is retained because it is the record of a
+silent-mis-compile bug, not merely a coverage gap.
+
+**Outcome versus plan.** The stage split held, with one addition the scouting missed: parse.kel
+needed a SECOND edit, because `step_struct_tuple_field` never recorded `tup_estruct` at all (only
+`step_tuple_type`, for a tuple PARAMETER, did), so a struct element of a struct FIELD's tuple had no
+recorded identity for the drain to find. The first edit alone changed nothing observable — the new
+branch was unreachable. reconstruct.kel needed NOTHING, as predicted. codegen.kel needed the
+per-frame accessor, as predicted, and cost four lines: the suffix extract takes its accessor from
+`es_acc[top - 1]` (the PARENT frame), since it reads the child out of its parent container.
+
+**The admission guard proved load-bearing, not defensive.** Once the drain could descend, an element
+struct containing a tuple, array, or enum was descended into and then mis-lowered — recreating the
+very bug being fixed, one level deeper. `struct_subtree_pure` on the element makes those defer.
+Pinned by `struct_tuple_of_impure_struct_element_defers` and one deliberate `Gap` boundary case.
 
 ## Why this one is higher-risk than its size suggests
 

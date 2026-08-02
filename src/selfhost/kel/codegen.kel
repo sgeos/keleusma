@@ -2067,12 +2067,29 @@ fn push_struct_eq_subfields(sbase: Word, subcount: Word, l2: Word, r2: Word, sub
             let top = st.es_sp - 1;
             if st.es_cur[top] < 0 {
                 if st.es_has_suffix[top] == 1 {
+                    // The suffix extract reads the child OUT OF ITS PARENT container, so its accessor
+                    // follows the PARENT frame's kind, not the child's: a tuple parent extracts with
+                    // GetTupleField (whose FlatNested operand form is shared with the flat one), a
+                    // struct parent with GetFieldNested. This is what admits a struct element of a
+                    // struct field's tuple (`struct S { t: (P, Word) }`). A frame carrying a suffix
+                    // always has a parent, since frame 0 is created with `es_has_suffix` 0; the
+                    // `top > 0` guard keeps the index provably in range regardless.
+                    let pacc = if top > 0 {
+                        st.es_acc[top - 1]
+                    } else {
+                        wire.getfield
+                    };
+                    let sfxacc = if pacc == wire.gettuplefield {
+                        wire.gettuplefield
+                    } else {
+                        wire.getfieldnested
+                    };
                     push_emit(wire.mloop);
                     push_emit(wire.setlocal + st.es_l[top] * wire.radix);
                     push_emit(wire.setlocal + st.es_r[top] * wire.radix);
-                    push_emit(wire.getfieldnested + st.es_sfx_extp[top] * wire.radix);
+                    push_emit(sfxacc + st.es_sfx_extp[top] * wire.radix);
                     push_emit(wire.getlocal + st.es_sfx_pr[top] * wire.radix);
-                    push_emit(wire.getfieldnested + st.es_sfx_extp[top] * wire.radix);
+                    push_emit(sfxacc + st.es_sfx_extp[top] * wire.radix);
                     push_emit(wire.getlocal + st.es_sfx_pl[top] * wire.radix);
                 }
                 st.es_sp = st.es_sp - 1;

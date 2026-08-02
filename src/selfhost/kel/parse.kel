@@ -2344,8 +2344,22 @@ fn struct_eq_kind(idx: Word) -> Word {
             stmt.sq_found = 1;
             let t = structdefs.sd_ftuple[fidx] - 1;
             for g in 0..tupledefs.tup_ecount[t] limit 64 {
-                if tupledefs.tup_ekind[tupledefs.tup_estart[t] + g] >= 100 {
+                let gi = tupledefs.tup_estart[t] + g;
+                if tupledefs.tup_ekind[gi] >= 100 {
                     stmt.sq_scan = 0;
+                }
+                // A STRUCT element of the tuple is lowered by DESCENDING into it (the drain pushes a
+                // frame), which is correct to arbitrary depth only while the element's whole subtree
+                // is pure struct/scalar. A tuple, array, or enum anywhere inside the element must
+                // defer: the drain would descend and then mis-lower that sub-field, which is a silent
+                // wrong comparison rather than a clean rejection. A struct element is invisible to the
+                // `tup_ekind >= 100` test above, because it carries kind 0 (Unit) and rides
+                // `tup_estruct`. `struct_subtree_pure` touches only `ssp_*`, so it does not disturb
+                // the `sq_scan` accumulator.
+                if tupledefs.tup_estruct[gi] > 0 {
+                    if struct_subtree_pure(tupledefs.tup_estruct[gi] - 1) == 0 {
+                        stmt.sq_scan = 0;
+                    }
                 }
             }
         } else {
@@ -2591,8 +2605,29 @@ fn structeq_nested_next() -> Word {
                 Node::StructEqNestedField() as Word + (stmt.se_arrcount + stmt.se_arrkind * 65536) * 64
             } else {
             if stmt.se_subistuple == 1 {
+                if tupledefs.tup_estruct[fidx] > 0 {
+                    // A STRUCT element of a struct field's tuple (`struct S { t: (P, Word) }`): emit
+                    // the sentinel header (kind 100+bytesize) and PUSH a frame, exactly as a nested
+                    // struct sub-field does. A struct element carries `tup_ekind` 0 (Unit), so the
+                    // scalar path below would compare the whole struct as a scalar. The element IS a
+                    // struct, so its sub-fields read `sd_*` and the existing frame machinery applies
+                    // unchanged; `se_subcur` advances when the frame pops via `se_pop_cascade`, so it
+                    // must NOT advance here.
+                    let s = tupledefs.tup_estruct[fidx] - 1;
+                    stmt.se_stk_start[0] = structdefs.sd_fstart[s];
+                    stmt.se_stk_count[0] = structdefs.sd_fcount[s];
+                    stmt.se_stk_cur[0] = 0;
+                    stmt.se_stk_r2[0] = ps.pcount + stmt.slot_count;
+                    stmt.slot_count = stmt.slot_count + 1;
+                    stmt.se_stk_l2[0] = ps.pcount + stmt.slot_count;
+                    stmt.slot_count = stmt.slot_count + 1;
+                    stmt.se_stk_phase[0] = 1;
+                    stmt.se_sp = 1;
+                    Node::StructEqNestedField() as Word + (tupledefs.tup_eoffset[fidx] + (100 + structdefs.sd_bytesize[s]) * 65536) * 64
+                } else {
                 stmt.se_subcur = stmt.se_subcur + 1;
                 Node::StructEqNestedField() as Word + (tupledefs.tup_eoffset[fidx] + tupledefs.tup_ekind[fidx] * 65536) * 64
+                }
             } else {
             if structdefs.sd_fstruct[fidx] > 0 {
                 // A DEPTH-2 struct sub-field (`struct M { i: I }` inside `struct O { m: M }`): emit the
@@ -4992,6 +5027,17 @@ fn step_struct_tuple_field(k: Word, v: Word) -> Word {
             let ei = tupledefs.tup_ecount[li];
             tupledefs.tup_eoffset[base + ei] = ps.tf_size;
             tupledefs.tup_ekind[base + ei] = scalar_kind_of(v);
+            // A struct-typed element records its declaration index + 1, mirroring `step_tuple_type`
+            // for a tuple PARAMETER. Without this a struct element is indistinguishable from a
+            // scalar here (its `tup_ekind` is 0/Unit), and the nested-equality drain compares the
+            // whole struct as one scalar. Reset to 0 first: the flat element arrays are reused
+            // across tuple layouts, so a stale index would misread a later scalar element.
+            tupledefs.tup_estruct[base + ei] = 0;
+            for i in 0..structdefs.sd_count limit 64 {
+                if structdefs.sd_name[i] == v {
+                    tupledefs.tup_estruct[base + ei] = i + 1;
+                }
+            }
             tupledefs.tup_ecount[li] = ei + 1;
         }
         ps.tf_size = ps.tf_size + type_byte_size(v);
