@@ -10,14 +10,16 @@ a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`
-- **Parent commit** (the repository state this handoff describes): `81c0bd9`
-- **Written**: 2026-07-31
+- **Parent commit** (the repository state this handoff describes): `f74eb29`
+- **Written**: 2026-08-02
 - **Tree at write**: clean (all work committed, merged, and pushed; `v0.2.3` tip is the
   roadmap-baseline-correction merge `81c0bd9` plus this handoff restamp commit)
-- **Context**: written after two back-to-back correction increments. Neither wrote product code;
-  BOTH found that the recorded plan pointed at work already done. Full gate GREEN and CI GREEN on
-  `81c0bd9` (20/20 jobs). The cheap work is now EXHAUSTED — what remains is a genuine strategic fork
-  that needs an operator decision (see step 4).
+- **Context**: written after a loop-protocol compliance fix and the SCOPING of the next increment.
+  The loop had stopped to ask which bounded roadmap task to take next, which the protocol already
+  forbade; the stop list is now hardened and the rule was APPLIED rather than re-asked. The next
+  increment is SELECTED and fully specified in `docs/decisions/STRUCT_TUPLE_OF_STRUCT_PLAN.md`.
+  Tree clean, all pushed. CI GREEN on `81c0bd9`; the four docs commits after it are docs-only and
+  passed the pre-push gate.
 
 **Validity check — run on resume, before trusting this handoff.** On the branch above, compare the
 **Parent commit** to `git rev-parse HEAD~1`. Because this handoff file is itself committed, its commit
@@ -30,47 +32,47 @@ advances the tip by one, so the state it describes is the parent of the handoff 
   parent versus actual `HEAD~1`), familiarize from the live channels — `REVERSE_PROMPT.md`,
   `DESIGN_JOURNAL.md`, `TASKLOG.md`, and the git log, always authoritative — and wait for instruction.
 
-## Resume prompt — THE CHEAP WORK IS DONE; GET A DECISION BEFORE SPENDING BUDGET
+## Resume prompt — IMPLEMENT `struct { t: (P, Word) }`. The choice is MADE. Do not re-ask.
 
-**Read this first: the last two increments both found the plan STALE rather than finding work to do.**
-Tuple-in-tuple was recorded as a Gap needing a multi-stage rewrite — it already worked. Then four of six
-Workstream A Order-1 residuals were recorded as open — they were already closed. Three stale claims
-surfaced in one day (the boundary count, the tuple-in-tuple premise, four Order-1 residuals), **all in
-the same direction: understating what had landed.** Do not trust a status claim in any planning document
-until you have probed it.
+**Start here, not with a survey.** The next increment is selected, probed, diagnosed, and de-risked.
+The blueprint is [`../decisions/STRUCT_TUPLE_OF_STRUCT_PLAN.md`](../decisions/STRUCT_TUPLE_OF_STRUCT_PLAN.md)
+— it contains the measured op-level divergence, the stage split, and the concrete stage-1 `parse.kel`
+edit written out verbatim with its two traps. Do not re-derive it.
 
-**THE GOVERNING METHOD: PROBE BEFORE PLANNING, ALWAYS WITH A CONTROL.** Point the same probe at a known
-Gap (`scope/float_arith__GAP`) and confirm it reports DIVERGE. Without that control a false "identical"
-is indistinguishable from a real one, because `self_host_compile` builds on `compile_src(src)` and
-replaces chunk bodies — a skipped replacement would report identity trivially. Also: a REFERENCE
-rejection is NOT a self-host gap. Check `compile_src` alone first; several probe sources were rejected
-for bad syntax (the language has no `let mut`, and a `for` needs `limit` — take valid syntax from
-`tests/for_limit.rs`).
+**Read this before considering a stop.** On 2026-08-02 the loop stopped to ask the operator which
+bounded roadmap task to take next. `AUTONOMOUS_IMPLEMENTATION_LOOP.md` already forbade that in two
+places, and the stop list now additionally names and excludes the four rationalizations that were
+used: cost asymmetry, "wants a dedicated run at the budget", "it all has to happen anyway so which
+first", and "the cheap work is exhausted". The test is **"does this choice require information only
+the operator holds?"** — not "is this choice significant?". Effort, risk, and sequencing are yours.
 
 Steps, in order:
 
 1. **Validate** — run the validity check above. Valid → continue. Invalid → stop and report.
-2. **Familiarize** — read `docs/process/REVERSE_PROMPT.md` (the sharpened fork and the measured
-   frontier), `docs/process/DESIGN_JOURNAL.md` (newest two entries), and `docs/process/TASKLOG.md`.
-3. **Do NOT auto-start an increment.** The cheap, no-decision work is exhausted.
-4. **Put the fork to the operator.** What actually remains before the Order-1 gate is exactly three
-   things — the type checker, the monomorphizer, and wire-format serialization:
-   - **Wire-format serialization** — well-specified and self-contained (framing header, operand-pool
-     encoding, parity, CRC trailer; all host-side today, no `.kel` stage references `to_bytes`).
-     Probably the best value per token.
-   - **The monomorphizer** — near-identity over the subset, likely the cheapest of the three.
-   - **The type checker** — the largest and highest-risk port (Hindley-Milner is not a streaming
-     shape). Wants a dedicated run at the seven-day budget.
-   - **The `for … limit … on { ok/break(bi)/limit }` outcome-arm gap** — bounded, well-scoped, same
-     shape as recent increments. A bare `break;` self-hosts fine; only the outcome-arm form diverges.
-   - **More subset-widening** (deeper array/enum nesting, mixed subtrees involving array/enum) —
-     steady and low-risk, but Workstream F, whose gate sits BEHIND Order 1.
-   RECOMMENDATION: wire-format serialization or the monomorphizer, because they close Order 1 rather
-   than widen a subset gated behind it.
+2. **Familiarize** — the plan doc first, then `REVERSE_PROMPT.md` and the newest `DESIGN_JOURNAL.md`
+   entry. Skip `TASKLOG.md` detail unless something conflicts.
+3. **Implement, on a feature branch cut from `v0.2.3`.** Stage 1 parse.kel (small, written out),
+   stage 2 reconstruct.kel (probably NOTHING — verify the depth-1/2 fixtures first), stage 3
+   codegen.kel (the real work: thread the parent `seb` block's FlatNested variant down the `es_*`
+   frame stack so the extract picks `GetTupleField` vs `GetField`), stage 4 the admission.
+   Intermediate commits may be red; the tip must be green.
+4. **Verify** — depth-1/2 fixtures byte-identical FIRST (a regression there is a stop), then the
+   three new fixtures: `(P, Word)` → 59 ops / `local_count` 8, `(P, P)` → 74 ops, and
+   `(P, Word), w: Word` → 69 ops. Then the boundary case as `SOk`, then the FULL
+   `scripts/release-gate.sh`.
+5. **Land** — no-ff merge into `v0.2.3`, push, confirm CI, record on all three channels, prune the
+   merged branch, restamp this HANDOFF.
 
-Follow the normal increment cycle (feature branch off `v0.2.3`, byte-identity oracle + FULL
-`scripts/release-gate.sh`, no-ff merge, push, confirm CI, record on all three channels, prune the merged
-feature branch, restamp this HANDOFF).
+**This construct is currently MIS-COMPILED, not merely unsupported** — the admission admits it and
+the drain compares a struct element as a scalar. It is a correctness fix, so do not downgrade it to
+a coverage increment or weaken a fixture to reach green.
+
+**If it does not converge**: two or three bounded attempts, then abandon the branch and re-cut, per
+the stop list. Do not thrash, and never weaken the oracle.
+
+**After it lands**, the measured queue continues (same context, no operator prompt needed):
+array-of-tuple-of-struct and the mixed-subtree gaps reuse the SAME per-frame-accessor machinery this
+increment builds, so they should follow immediately while it is fresh.
 
 **Git position** (as of the Parent commit)
 - Branch `v0.2.3` tip is the roadmap-baseline-correction merge `81c0bd9` plus this restamp commit. In
