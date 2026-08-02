@@ -17,6 +17,47 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-02 (session 36)
 
+**ARRAY-OF-COMPOSITE ADMISSION (2026-08-02): FOUR silent mis-compiles closed by adding the guard the flat array family never had. Boundary +4 Gap, 0 Ok — and that is the point.**
+Set out to implement array-of-tuple-of-struct. Probing first showed the flat array-equality family
+(`array_of_struct_eq_start` / `array_of_tuple_eq_start` → `StructEqField` records →
+`ArrayOfStructEqBuild`) has NO nested form AND, unlike the array-of-enum arm with its long-standing
+`enum_eq_supported` guard, **no admission guard at all**. Any composite element field was emitted as
+a scalar record and compared with one `CmpEq` over its whole flat body: admitted, then silently
+mis-compiled.
+
+DECISION, and the reusable judgement: close the admission hole BEFORE building nested support. Every
+increment toward nesting would otherwise have been built over a construct set that silently compiled
+wrong, and each such increment would have had to distinguish "my change broke this" from "this was
+already wrong". Fixing admission first makes the frontier honest — everything unsupported now
+rejects loudly — at the cost of a boundary that moves +4 Gap and 0 Ok. A boundary count going the
+"wrong" way was the correct outcome here, which is worth remembering when the count is used as a
+progress proxy.
+
+FOUR constructs fixed: `[(P, Word); 2]` as a parameter (83 wrong ops against 113), the same as a
+struct field (73 against 128), `[M; 2]` where `M` nests a struct (33 against 93), and
+`struct S { a: [bool;2], w: Word }`. **The last is the most dangerous shape found in this codebase:
+it diverged at the SAME op count as the reference — 58 against 58, differing only in content.** Any
+heuristic based on op counts, lengths, or "looks structurally similar" would have passed it; only
+the byte-identical oracle caught it. It also demonstrates that these holes are not confined to the
+exotic nesting cases being hunted — a plain `[bool; 2]` struct field was mis-compiled.
+
+THE FIX: `elem_all_scalar(idx, is_tuple)` gates both unguarded dispatch arms, checking `tup_estruct`
+as well as kind (a struct element carries kind 0/Unit and is invisible to a kind test alone). The
+array-of-tuple element scanner (`ps.arr == 3`) had to start recording `tup_estruct` for the guard to
+SEE a struct element — the same recording that was probed and REVERTED as dead code hours earlier,
+because alone it changed nothing. It was never dead; it was half of a two-part fix, and the earlier
+plan's note that it was "necessary but not sufficient" is what made re-adding it obvious. A third
+hole needed a different key: a struct field that is an array-of-tuple records neither `sd_ftuple`
+(set only for a bare tuple field) nor `sd_fstruct`, so it was caught by requiring a recognized
+non-zero element ScalarKind.
+
+METHOD NOTE: the `[bool;2]` case was found only because the regression list included constructs
+believed safe and unrelated to the change. It initially read as a regression I had introduced;
+disabling the new guard showed it had been mis-compiled all along. **When a "regression" appears,
+measure the pre-change behaviour before assuming authorship** — here the truth was the opposite of
+the appearance, and reverting the guard would have restored a silent bug.
+
+
 **STRUCT-FIELD-TUPLE-OF-STRUCT (2026-08-02): COMPLETE. A silent MIS-COMPILE fixed, not a coverage gap closed. Boundary 67 -> 69 Ok, +1 deliberate Gap.**
 `struct S { t: (P, Word) }` was ADMITTED and then lowered WRONG: the drain compared the whole struct
 element as one scalar (`GetTupleField(Flat { kind: Unit })` + `CmpEq`) where the reference extracts
