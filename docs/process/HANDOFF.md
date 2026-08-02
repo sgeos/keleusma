@@ -10,16 +10,13 @@ a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`
-- **Parent commit** (the repository state this handoff describes): `f74eb29`
+- **Parent commit** (the repository state this handoff describes): `87e1138`
 - **Written**: 2026-08-02
 - **Tree at write**: clean (all work committed, merged, and pushed; `v0.2.3` tip is the
   roadmap-baseline-correction merge `81c0bd9` plus this handoff restamp commit)
-- **Context**: written after a loop-protocol compliance fix and the SCOPING of the next increment.
-  The loop had stopped to ask which bounded roadmap task to take next, which the protocol already
-  forbade; the stop list is now hardened and the rule was APPLIED rather than re-asked. The next
-  increment is SELECTED and fully specified in `docs/decisions/STRUCT_TUPLE_OF_STRUCT_PLAN.md`.
-  Tree clean, all pushed. CI GREEN on `81c0bd9`; the four docs commits after it are docs-only and
-  passed the pre-push gate.
+- **Context**: written after the struct-field-tuple-of-struct increment (a silent MIS-COMPILE fixed,
+  boundary 67 -> 69 Ok, CI GREEN on `3f97b42`) and the scoping of the next one. Tree clean, all
+  pushed. The next increment is selected and blueprinted; start by implementing it, not by surveying.
 
 **Validity check — run on resume, before trusting this handoff.** On the branch above, compare the
 **Parent commit** to `git rev-parse HEAD~1`. Because this handoff file is itself committed, its commit
@@ -32,57 +29,63 @@ advances the tip by one, so the state it describes is the parent of the handoff 
   parent versus actual `HEAD~1`), familiarize from the live channels — `REVERSE_PROMPT.md`,
   `DESIGN_JOURNAL.md`, `TASKLOG.md`, and the git log, always authoritative — and wait for instruction.
 
-## Resume prompt — IMPLEMENT `struct { t: (P, Word) }`. The choice is MADE. Do not re-ask.
+## Resume prompt — IMPLEMENT array-of-tuple-of-struct. The choice is MADE. Do not re-ask.
 
-**Start here, not with a survey.** The next increment is selected, probed, diagnosed, and de-risked.
-The blueprint is [`../decisions/STRUCT_TUPLE_OF_STRUCT_PLAN.md`](../decisions/STRUCT_TUPLE_OF_STRUCT_PLAN.md)
-— it contains the measured op-level divergence, the stage split, and the concrete stage-1 `parse.kel`
-edit written out verbatim with its two traps. Do not re-derive it.
+Blueprint: [`../decisions/ARRAY_OF_TUPLE_OF_STRUCT_PLAN.md`](../decisions/ARRAY_OF_TUPLE_OF_STRUCT_PLAN.md).
+Already probed with a control, so do not re-derive: `[(P, Word); 2]` gives 83 self-hosted ops against
+113 reference; the struct-field form 73 against 128.
 
-**Read this before considering a stop.** On 2026-08-02 the loop stopped to ask the operator which
-bounded roadmap task to take next. `AUTONOMOUS_IMPLEMENTATION_LOOP.md` already forbade that in two
-places, and the stop list now additionally names and excludes the four rationalizations that were
-used: cost asymmetry, "wants a dedicated run at the budget", "it all has to happen anyway so which
-first", and "the cheap work is exhausted". The test is **"does this choice require information only
-the operator holds?"** — not "is this choice significant?". Effort, risk, and sequencing are yours.
+**Read this before considering a stop.** `AUTONOMOUS_IMPLEMENTATION_LOOP.md` forbids prompting the
+operator to ORDER bounded roadmap tasks, and names the four rationalizations that do not license a
+stop (cost asymmetry, "wants a dedicated run", "it all has to happen anyway", "the cheap work is
+exhausted"). The test is **"does this choice require information only the operator holds?"**
+
+**The two hard-won method rules, which found both bugs so far:**
+1. **PROBE BEFORE PLANNING, always with a control** (point it at `scope/float_arith__GAP` and confirm
+   DIVERGE; also check the REFERENCE accepts the source — a reference rejection is not a self-host
+   gap). Two authorized increments turned out to be already done, and one plan was wrong about which
+   machinery applied.
+2. **Probe what the admission ACCEPTS, not only what it rejects,** and when generalizing a drain,
+   TIGHTEN ITS ADMISSION IN THE SAME CHANGE. Both silent mis-compiles found so far were in constructs
+   the admission accepted. On 2026-08-02, teaching a drain to descend recreated the same silent bug
+   one level deeper, caught only because the impure cases were probed before declaring done.
 
 Steps, in order:
 
-1. **Validate** — run the validity check above. Valid → continue. Invalid → stop and report.
-2. **Familiarize** — the plan doc first, then `REVERSE_PROMPT.md` and the newest `DESIGN_JOURNAL.md`
-   entry. Skip `TASKLOG.md` detail unless something conflicts.
-3. **Implement, on a feature branch cut from `v0.2.3`.** Stage 1 parse.kel (small, written out),
-   stage 2 reconstruct.kel (probably NOTHING — verify the depth-1/2 fixtures first), stage 3
-   codegen.kel (the real work: thread the parent `seb` block's FlatNested variant down the `es_*`
-   frame stack so the extract picks `GetTupleField` vs `GetField`), stage 4 the admission.
-   Intermediate commits may be red; the tip must be green.
-4. **Verify** — depth-1/2 fixtures byte-identical FIRST (a regression there is a stop), then the
-   three new fixtures: `(P, Word)` → 59 ops / `local_count` 8, `(P, P)` → 74 ops, and
-   `(P, Word), w: Word` → 69 ops. Then the boundary case as `SOk`, then the FULL
-   `scripts/release-gate.sh`.
+1. **Validate** — the check above. Valid → continue. Invalid → stop and report.
+2. **Familiarize** — the blueprint first, then `REVERSE_PROMPT.md`, then the newest
+   `DESIGN_JOURNAL.md` entry.
+3. **Implement** on a feature branch cut from `v0.2.3`. NOTE the blueprint's central correction: this
+   does NOT reuse the per-frame accessor machinery. The array-of-struct/tuple family is a separate
+   FLAT drain with no nested form. Prefer routing array-of-composite elements through the
+   `StructEqNested` frame machinery (it would also subsume array-of-deep-struct and
+   array-of-array-in-struct); fall back to giving the flat family its own nested form after two or
+   three bounded attempts. Also fold in the `tup_estruct` recording for the `ps.arr == 3` scanner —
+   necessary, but verified NOT sufficient alone, so it must land WITH the drain change.
+4. **Verify** — the large regression surface FIRST (`eq/array_of_tuple`, `eq/struct_arrayofstruct`,
+   `eq/array_in_struct`, `eq/array_of_array`, and the `!=` forms), then the two new fixtures, then the
+   boundary, then the FULL `scripts/release-gate.sh`.
 5. **Land** — no-ff merge into `v0.2.3`, push, confirm CI, record on all three channels, prune the
    merged branch, restamp this HANDOFF.
 
-**This construct is currently MIS-COMPILED, not merely unsupported** — the admission admits it and
-the drain compares a struct element as a scalar. It is a correctness fix, so do not downgrade it to
-a coverage increment or weaken a fixture to reach green.
+**If it does not converge**: two or three bounded attempts, then abandon the branch and re-cut with
+the fallback approach. Never weaken the oracle or a fixture to reach green.
 
-**If it does not converge**: two or three bounded attempts, then abandon the branch and re-cut, per
-the stop list. Do not thrash, and never weaken the oracle.
-
-**After it lands**, the measured queue continues (same context, no operator prompt needed):
-array-of-tuple-of-struct and the mixed-subtree gaps reuse the SAME per-frame-accessor machinery this
-increment builds, so they should follow immediately while it is fresh.
+**After it lands**, the same-context queue continues without an operator prompt: the impure-element
+subtree deferred on 2026-08-02 (the general mixed-subtree problem), enum array payload, enum
+deep-struct payload, enum→struct→enum, array-of-array in a struct. Beyond this family, the Order-1
+gate needs the type checker, the monomorphizer, and wire-format serialization.
 
 **Git position** (as of the Parent commit)
-- Branch `v0.2.3` tip is the roadmap-baseline-correction merge `81c0bd9` plus this restamp commit. In
-  sync with origin, tree clean, local full gate GREEN, CI GREEN on `81c0bd9` (20/20 jobs).
+- Branch `v0.2.3` tip is the array-of-tuple-of-struct SCOPING commit `87e1138` plus this restamp
+  commit. In sync with origin, tree clean. Last full gate GREEN and CI GREEN on `3f97b42` (20/20
+  jobs); the two commits after it are docs-only and passed the pre-push gate.
 - Local branches are pruned to `main`, `v0.2.3`, and `v0.2.3-prerebase-backup`. Origin holds only `main`
   and `v0.2.3`. **Do NOT delete `v0.2.3-prerebase-backup`**: it holds 309 commits not in `v0.2.3` and is
   a deliberate safety net, not clutter.
 - `main` holds releases and sits behind `v0.2.3` by design (`docs/process/GIT_STRATEGY.md`).
 
-**Boundary counts** — **67 Ok / 2 Gap / 1 RefRejects**, pinned by
+**Boundary counts** — **69 Ok / 3 Gap / 1 RefRejects**, pinned by
 `self_hosted_construct_support_boundary` in `tests/selfhost_codegen.rs`. Recount with a grep rather than
 trusting a remembered number; the figure in the docs was found stale by 2 on 2026-07-30.
 
