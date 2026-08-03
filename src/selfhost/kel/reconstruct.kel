@@ -106,6 +106,13 @@ private data rs {
     // record that follows must lay a fourth word (the element ScalarKind).
     se_lastarr: Word,
     se_wasarr: Word,
+    // 1 while inside a nested ENUM BLOCK (header sentinel 50000+size), whose variant records route
+    // into `seb` exactly as a depth-1 enum field's do. `se_blk_enamepos` is the reserved ename slot
+    // (filled from the first variant record) and `se_blk_evn` counts variants laid.
+    se_lastenum: Word,
+    se_enumblk: Word,
+    se_blk_enamepos: Word,
+    se_blk_evn: Word,
     // Nested struct-eq layout scratch, streamed as records arrive. `seb` accumulates the tagged
     // top-level field layout: a scalar field is [0, offset, kind]; a nested-struct field is
     // [1, ext_off, ext_size, variant, r2, l2, subcount, subcount*(sub_off, sub_kind)]. `sebcur` the
@@ -842,6 +849,16 @@ fn step_assembly(k: Word, a: Word) -> Word {
         // (vname + disc*65536 + fcount*16777216) into `sqpending`. Inside a nested enum field
         // (variant 3): record the enum name once (carried at bit 30 of the payload), then append
         // [vname, disc, fcount] into `seb` and count the variant.
+        if rs.se_enumblk == 1 {
+            if rs.se_blk_evn == 0 {
+                rs.seb[rs.se_blk_enamepos] = a / 1073741824;
+            }
+            rs.seb[rs.sebcur] = a % 65536;
+            rs.seb[rs.sebcur + 1] = (a / 65536) % 256;
+            rs.seb[rs.sebcur + 2] = (a / 16777216) % 64;
+            rs.sebcur = rs.sebcur + 3;
+            rs.se_blk_evn = rs.se_blk_evn + 1;
+        } else {
         if rs.se_innested == 1 andalso rs.se_curvariant == 3 {
             if rs.se_evn == 0 {
                 rs.seb[rs.se_enamepos] = a / 1073741824;
@@ -854,7 +871,7 @@ fn step_assembly(k: Word, a: Word) -> Word {
         } else {
             rs.sqpending[rs.sqcount] = a;
             rs.sqcount = rs.sqcount + 1;
-        }
+        } }
         0
     } else {
     if k == 50 {
@@ -865,7 +882,7 @@ fn step_assembly(k: Word, a: Word) -> Word {
         // EnumEqField marker. Standalone: accumulate the packed scalar payload field (offset +
         // kind*65536) into `eqfields` in overall field order. Nested enum field (variant 3): append
         // [off, kind] into `seb`.
-        if rs.se_innested == 1 andalso rs.se_curvariant == 3 {
+        if rs.se_enumblk == 1 orelse (rs.se_innested == 1 andalso rs.se_curvariant == 3) {
             rs.seb[rs.sebcur] = a % 65536;
             rs.seb[rs.sebcur + 1] = a / 65536;
             rs.sebcur = rs.sebcur + 2;
@@ -931,6 +948,15 @@ fn step_assembly(k: Word, a: Word) -> Word {
                     rs.seb[rs.sebcur + 2] = (a / 4294967296) % 65536;
                     rs.sebcur = rs.sebcur + 3;
                     rs.se_wasarr = rs.se_lastarr;
+                    if rs.se_lastenum == 1 {
+                        // [vcount, r2, l2] are laid below; reserve the ename slot after them. vcount
+                        // needs no backpatch (parse knows it); ename comes from the first variant.
+                        rs.seb[rs.sebcur + 3] = 0;
+                        rs.se_blk_enamepos = rs.sebcur + 3;
+                        rs.se_blk_evn = 0;
+                        rs.se_enumblk = 1;
+                        rs.se_lastenum = 0;
+                    }
                     if rs.se_lastarr == 1 {
                         rs.seb[rs.sebcur] = a / 281474976710656;
                         rs.sebcur = rs.sebcur + 1;
@@ -940,6 +966,12 @@ fn step_assembly(k: Word, a: Word) -> Word {
                     // An ARRAY block has NO sub-fields: its packing first field is the ELEMENT count,
                     // not a sub-field count, so it must pop immediately. Treating that count as a
                     // sub-field count made the frame swallow the following sibling field.
+                    if rs.se_enumblk == 1 {
+                        // Stay open: the variant records follow and the block's own End record pops.
+                        rs.sebcur = rs.sebcur + 1;
+                        rs.se_nstk_remaining[top] = 1;
+                        rs.se_nstk_phase[top] = 2;
+                    } else {
                     if rs.se_wasarr == 1 {
                         rs.se_nstk_remaining[top] = 0;
                         se_nsub_pop();
@@ -948,7 +980,7 @@ fn step_assembly(k: Word, a: Word) -> Word {
                         se_nsub_pop();
                     } else {
                         rs.se_nstk_phase[top] = 2;
-                    } }
+                    } } }
                 } else {
                     if a / 65536 >= 100 {
                         // A DEEPER nested-struct sub-field: lay [off, 100+size], count it in this
@@ -958,9 +990,12 @@ fn step_assembly(k: Word, a: Word) -> Word {
                         rs.seb[rs.sebcur + 1] = a / 65536;
                         rs.sebcur = rs.sebcur + 2;
                         rs.se_nstk_remaining[top] = rs.se_nstk_remaining[top] - 1;
+                        if a / 65536 >= 50000 {
+                            rs.se_lastenum = 1;
+                        } else {
                         if a / 65536 >= 40000 {
                             rs.se_lastarr = 1;
-                        }
+                        } }
                         rs.se_nstk_phase[rs.se_sp2] = 1;
                         rs.se_sp2 = rs.se_sp2 + 1;
                     } else {
@@ -983,9 +1018,12 @@ fn step_assembly(k: Word, a: Word) -> Word {
                 rs.sebcur = rs.sebcur + 2;
                 rs.se_subn = rs.se_subn + 1;
                 if a / 65536 >= 100 {
+                    if a / 65536 >= 50000 {
+                        rs.se_lastenum = 1;
+                    } else {
                     if a / 65536 >= 40000 {
                         rs.se_lastarr = 1;
-                    }
+                    } }
                     rs.se_nstk_phase[0] = 1;
                     rs.se_sp2 = 1;
                 }
@@ -1039,6 +1077,11 @@ fn step_assembly(k: Word, a: Word) -> Word {
     } else {
     if k == 57 {
         // StructEqNestedEnd: backpatch (sub-count for struct/tuple, vcount for enum) and leave.
+        if rs.se_enumblk == 1 {
+            rs.se_enumblk = 0;
+            rs.se_nstk_remaining[rs.se_sp2 - 1] = 0;
+            se_nsub_pop();
+        } else {
         if rs.se_curvariant == 1 {
             rs.se_innested = 0;
         } else {
@@ -1048,7 +1091,7 @@ fn step_assembly(k: Word, a: Word) -> Word {
         } else {
             rs.seb[rs.se_subpos] = rs.se_subn;
             rs.se_innested = 0;
-        } }
+        } } }
         0
     } else {
     if k == 58 {

@@ -388,6 +388,7 @@ private data st {
     es_sfx_pr: [Word; 8],
     es_sfoff: [Word; 512],
     es_walk: Word,
+    cs_walk: Word,
     // Struct sub-field forest walk (`struct_forest_end`): a remaining-fields stack over the preorder
     // record layout, used for the slot-count stride/temp count and for `nested_end`.
     cs_cur: Word,
@@ -1943,10 +1944,8 @@ fn push_array_of_enum_eq(p: Word) -> Word {
 // and EAGER interning (the caller's pre-pass replayed the pool order), so it composes with the
 // struct-eq pre-interned false/true. seb variant layout at foff:
 // [1, off, size, 3, r2, l2, ename, vcount, per variant: vname, disc, fcount, fcount*(off, kind)].
-fn push_nested_enum_loop(foff: Word, l2: Word, r2: Word, false_idx: Word, true_idx: Word) -> Word {
-    let ename = ast.match_parts[foff + 6];
-    let vcount = ast.match_parts[foff + 7];
-    st.eq_cur = foff + 8;
+fn push_nested_enum_loop(ename: Word, vcount: Word, vbase: Word, l2: Word, r2: Word, false_idx: Word, true_idx: Word) -> Word {
+    st.eq_cur = vbase;
     for v in 0..vcount limit 64 {
         st.eq_voff[v] = st.eq_cur;
         let fc = ast.match_parts[st.eq_cur + 2];
@@ -2016,6 +2015,29 @@ fn struct_forest_end(start: Word, subcount: Word, count_temps: Word) -> Word {
                     if count_temps == 1 {
                         st.let_count = st.let_count + 2;
                     }
+                    if ast.match_parts[st.cs_cur + 1] >= 50000 {
+                        // An ENUM block: [off, 50000+size, vcount, r2, l2, ename, per variant
+                        // (vname, disc, fcount, fcount*(off, kind))]. Stride it, and in mode 2 replay
+                        // its constant order exactly as the depth-1 enum field's eager pass does.
+                        let evc = ast.match_parts[st.cs_cur + 2];
+                        let ename = ast.match_parts[st.cs_cur + 5];
+                        st.cs_walk = st.cs_cur + 6;
+                        for ev in 0..evc limit 64 {
+                            let fc = ast.match_parts[st.cs_walk + 2];
+                            if count_temps == 2 {
+                                intern_str(ename);
+                                intern_str(ast.match_parts[st.cs_walk]);
+                                intern_int(ast.match_parts[st.cs_walk + 1]);
+                                for efj in 0..fc limit 32 {
+                                    intern_bool(0);
+                                }
+                                intern_bool(1);
+                                intern_bool(0);
+                            }
+                            st.cs_walk = st.cs_walk + 3 + fc * 2;
+                        }
+                        st.cs_cur = st.cs_walk;
+                    } else {
                     if ast.match_parts[st.cs_cur + 1] >= 40000 {
                         // An ARRAY block is a FIXED 6 words [off, 40000+size, acount, r2, l2, akind]
                         // with no sub-field forest, so it strides past rather than pushing a frame.
@@ -2031,7 +2053,7 @@ fn struct_forest_end(start: Word, subcount: Word, count_temps: Word) -> Word {
                     st.cs_rem[st.cs_sp] = ast.match_parts[st.cs_cur + 2];
                     st.cs_cur = st.cs_cur + 5;
                     st.cs_sp = st.cs_sp + 1;
-                    }
+                    } }
                 } else {
                     st.cs_cur = st.cs_cur + 2;
                 }
@@ -2044,11 +2066,14 @@ fn struct_forest_end(start: Word, subcount: Word, count_temps: Word) -> Word {
 // The end offset of a nested-struct sub-field block at `off` ([off, 100+size, subcount, r2, l2,
 // fields...]): its 5-word header plus its sub-field forest.
 fn nested_end(off: Word) -> Word {
+    if ast.match_parts[off + 1] >= 50000 {
+        struct_forest_end(off, 1, 0)
+    } else {
     if ast.match_parts[off + 1] >= 40000 {
         off + 6
     } else {
         struct_forest_end(off + 5, ast.match_parts[off + 2], 0)
-    }
+    } }
 }
 
 // Record each DIRECT sub-field offset of a frame's sub-field list (at `sbase`, `subcount` fields) into
@@ -2165,6 +2190,38 @@ fn push_struct_eq_subfields(sbase: Word, subcount: Word, l2: Word, r2: Word, sub
                     // The sentinel range names the block's KIND: 30000+size is a TUPLE (extract with
                     // FlatNested variant Tuple 0, compare its elements with GetTupleField), 100+size
                     // a STRUCT (variant 2, GetField). Same convention the enum-payload records use.
+                    if sub_kind >= 50000 {
+                        // An ENUM block: the variant-dispatch loop, then this block's loop-open and
+                        // extract (FlatNested variant Enum, 3). No child frame.
+                        let eextp = sub_off + (sub_kind - 50000) * 65536 + 3 * 4294967296;
+                        let pacc = if st.es_acc[top] == wire.gettuplefield {
+                            wire.gettuplefield
+                        } else {
+                            wire.getfieldnested
+                        };
+                        push_emit(wire.mendif);
+                        push_emit(wire.mbreak);
+                        push_emit(wire.konst + false_idx * wire.radix);
+                        push_emit(wire.mif);
+                        push_emit(wire.lnot);
+                        push_nested_enum_loop(
+                            ast.match_parts[soff + 5],
+                            ast.match_parts[soff + 2],
+                            soff + 6,
+                            l2p,
+                            r2p,
+                            false_idx,
+                            true_idx,
+                        );
+                        // `push_nested_enum_loop` emits its own loop-open, so do NOT add another
+                        // here (the struct/tuple/array blocks do, because their bodies do not).
+                        push_emit(wire.setlocal + l2p * wire.radix);
+                        push_emit(wire.setlocal + r2p * wire.radix);
+                        push_emit(pacc + eextp * wire.radix);
+                        push_emit(wire.getlocal + st.es_r[top] * wire.radix);
+                        push_emit(pacc + eextp * wire.radix);
+                        push_emit(wire.getlocal + st.es_l[top] * wire.radix);
+                    } else {
                     if sub_kind >= 40000 {
                         // An ARRAY block: no child frame. Emit the element loop inline, then this
                         // block's own loop-open + extract, then consume the slot in the parent.
@@ -2232,7 +2289,7 @@ fn push_struct_eq_subfields(sbase: Word, subcount: Word, l2: Word, r2: Word, sub
                     es_compute_sfoff(child, soff + 5, ast.match_parts[soff + 2]);
                     st.es_cur[child] = ast.match_parts[soff + 2] - 1;
                     st.es_sp = st.es_sp + 1;
-                    }
+                    } }
                 } else {
                     let sp = sub_off + sub_kind * 65536;
                     push_emit(wire.mendif);
@@ -2470,7 +2527,15 @@ fn push_struct_eq_nested(p: Word) -> Word {
             if variant == 3 {
                 // Enum field: the variant-dispatch inner loop, factored into `push_nested_enum_loop`
                 // to keep this chunk under the op-table capacity.
-                push_nested_enum_loop(foff, l2, r2, false_idx, true_idx);
+                push_nested_enum_loop(
+                    ast.match_parts[foff + 6],
+                    ast.match_parts[foff + 7],
+                    foff + 8,
+                    l2,
+                    r2,
+                    false_idx,
+                    true_idx,
+                );
             } else {
             push_emit(wire.mendloop);
             push_emit(wire.mbreak);
