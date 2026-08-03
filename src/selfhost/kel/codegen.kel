@@ -1943,10 +1943,8 @@ fn push_array_of_enum_eq(p: Word) -> Word {
 // and EAGER interning (the caller's pre-pass replayed the pool order), so it composes with the
 // struct-eq pre-interned false/true. seb variant layout at foff:
 // [1, off, size, 3, r2, l2, ename, vcount, per variant: vname, disc, fcount, fcount*(off, kind)].
-fn push_nested_enum_loop(foff: Word, l2: Word, r2: Word, false_idx: Word, true_idx: Word) -> Word {
-    let ename = ast.match_parts[foff + 6];
-    let vcount = ast.match_parts[foff + 7];
-    st.eq_cur = foff + 8;
+fn push_nested_enum_loop(ename: Word, vcount: Word, vbase: Word, l2: Word, r2: Word, false_idx: Word, true_idx: Word) -> Word {
+    st.eq_cur = vbase;
     for v in 0..vcount limit 64 {
         st.eq_voff[v] = st.eq_cur;
         let fc = ast.match_parts[st.eq_cur + 2];
@@ -2470,7 +2468,15 @@ fn push_struct_eq_nested(p: Word) -> Word {
             if variant == 3 {
                 // Enum field: the variant-dispatch inner loop, factored into `push_nested_enum_loop`
                 // to keep this chunk under the op-table capacity.
-                push_nested_enum_loop(foff, l2, r2, false_idx, true_idx);
+                push_nested_enum_loop(
+                    ast.match_parts[foff + 6],
+                    ast.match_parts[foff + 7],
+                    foff + 8,
+                    l2,
+                    r2,
+                    false_idx,
+                    true_idx,
+                );
             } else {
             push_emit(wire.mendloop);
             push_emit(wire.mbreak);
