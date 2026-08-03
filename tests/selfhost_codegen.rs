@@ -2000,7 +2000,10 @@ fn self_compile_codegen_atomic_functions() {
     // 75 with the 3-level nesting generalization (`eq/3level_struct`): `push_struct_eq_subfields` became
     // an explicit-stack reverse-DFS emitter (arbitrary bounded depth), adding three helpers
     // `struct_forest_end`, `nested_end`, and `es_compute_sfoff` (72 -> 75), all self-compiling.
-    const EXPECTED_SELF_COMPILE: usize = 75;
+    // 76 with `push_arr_scalar_inner`, the per-element GetIndex compare body of a nested scalar-ARRAY
+    // block (`eq/nested_array_subfield`), factored so the depth-1 array field and the nested array
+    // block share one emission form (75 -> 76).
+    const EXPECTED_SELF_COMPILE: usize = 76;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -7181,8 +7184,8 @@ fn array_of_composite_element_defers() {
         // for an array element.
         "struct P { x: Word }\nstruct S { g: [(P, Word); 2] }\nfn f(a: S, b: S) -> bool { a == b }",
         // An element whose struct subtree is IMPURE: descending would mis-lower the inner composite.
-        // A TUPLE inside is now supported, so this uses an ARRAY, which still has no nested form.
-        "struct P { u: [Word;2] }\nfn f(a: [(P, Word); 2], b: [(P, Word); 2]) -> bool { a == b }",
+        // Tuples and arrays inside are now supported, so this uses an ENUM, which is not.
+        "enum E { A, B }\nstruct P { e: E }\nfn f(a: [(P, Word); 2], b: [(P, Word); 2]) -> bool { a == b }",
         // A struct field array whose element type is not a recognized scalar.
         "struct S { a: [bool;2], w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
     ] {
@@ -7301,6 +7304,45 @@ fn self_host_compiles_nested_tuple_subfield_equality() {
     );
 }
 
+/// A scalar ARRAY sub-field nested at depth >= 2 self-compiles byte-identically.
+///
+/// The second mixed-subtree slice, after tuples. An array block is unlike a struct or tuple block in
+/// that it has NO sub-field forest: it is a fixed six-word seb block
+/// `[off, 40000+size, acount, r2, l2, akind]`, and its body is a per-element `GetIndex` compare
+/// rather than a field walk. It is pushed as a zero-child frame so the shared machinery still emits
+/// its packing record and pops, keeping it on the same path as the other block kinds.
+///
+/// Two things had to line up for byte-identity. The reference PRE-INTERNS an array's element index
+/// constants ahead of false/true, so the eager intern pass walks a nested field's forest for array
+/// blocks. And the packing record's first field is the ELEMENT count, not a sub-field count, so the
+/// block must pop immediately — treating it as a sub-field count made the frame swallow the
+/// following sibling field, which showed up as exactly one missing scalar compare.
+#[test]
+fn self_host_compiles_nested_array_subfield_equality() {
+    // Reached through a nested struct, at two and three levels.
+    assert_self_host_byte_identical(
+        "struct I { xs: [Word;2] }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct I { xs: [Word;2] }\nstruct Q { i: I }\nstruct S { q: Q }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    // Reached through a TUPLE element.
+    assert_self_host_byte_identical(
+        "struct P { xs: [Word;2] }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    // A sibling scalar AFTER the array: this is the case that caught the pop bug, since the array
+    // frame was consuming the following field as one of its own.
+    assert_self_host_byte_identical(
+        "struct I { xs: [Word;2], w: Word }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct I { xs: [Byte;4] }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct I { xs: [Word;2] }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a != b }",
+    );
+}
+
 /// A tuple element whose struct subtree is NOT pure (it contains a tuple, array, or enum) must
 /// DEFER, not descend.
 ///
@@ -7313,7 +7355,7 @@ fn self_host_compiles_nested_tuple_subfield_equality() {
 #[test]
 fn struct_tuple_of_impure_struct_element_defers() {
     for src in [
-        "struct P { u: [Word;2] }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+        "enum E { A, B }\nstruct P { e: E }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
         "enum E { A, B }\nstruct P { e: E }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
     ] {
         let reference = compile_src(src);
@@ -8024,9 +8066,20 @@ fn self_hosted_construct_support_boundary() {
         ),
         // An ARRAY inside the element subtree still has no nested form, so it defers.
         (
+            "eq/nested_array_subfield",
+            SOk,
+            "struct I { xs: [Word;2] }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        (
+            "eq/nested_array_subfield_sibling",
+            SOk,
+            "struct I { xs: [Word;2], w: Word }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        // An ENUM inside the element subtree still has no nested form, so it defers.
+        (
             "eq/struct_tuple_of_impure_struct__GAP",
             Gap,
-            "struct P { u: [Word;2] }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+            "enum E { A, B }\nstruct P { e: E }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
         ),
         // The flat array-equality family has no nested form, so an array whose ELEMENT contains a
         // composite defers. Each of these was previously admitted and silently mis-compiled; the

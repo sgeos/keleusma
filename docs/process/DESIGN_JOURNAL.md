@@ -17,6 +17,48 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-02 (session 36)
 
+**NESTED ARRAY SUB-FIELDS (2026-08-02): the second mixed-subtree slice. Boundary 75 -> 77 Ok.**
+Tuples at depth landed first; arrays are structurally different and needed more than an accessor
+swap. An array block has NO sub-field forest: it is a fixed SIX-word seb block
+`[off, 40000+size, acount, r2, l2, akind]`, and its body is a per-element `GetIndex` compare rather
+than a field walk. It is nonetheless pushed as a ZERO-CHILD frame so the shared machinery still emits
+its packing record and pops — keeping arrays on the same path as struct and tuple blocks instead of
+forking a parallel one. The element ScalarKind rides above `l2` in the packing record, using space
+that was already free, so no new record kind was needed.
+
+TWO BYTE-IDENTITY PIVOTS, both found by measurement:
+
+(1) CONSTANT POOL ORDER. The reference PRE-INTERNS an array's element index constants ahead of
+false/true, so first-occurrence order does not match use order — index 1 is interned before `false`
+even though it is used after it. The eager intern pass therefore had to walk a nested field's forest
+for array blocks (a third mode on `struct_forest_end`). Symptom: every length matched and only a
+`Const` operand differed, which is the signature of a pool-ordering bug rather than an emission bug.
+
+(2) THE PACKING RECORD'S FIRST FIELD IS THE ELEMENT COUNT, NOT A SUB-FIELD COUNT. Reconstruct used it
+to decide whether to pop, so an array block with 2 elements waited for 2 sub-field records and
+SWALLOWED the following sibling field. Symptom: exactly one scalar compare missing (10 ops), only in
+fixtures with a field after the array — which is why `struct I { xs: [Word;2], w: Word }` is now a
+pinned fixture. An array block must pop immediately regardless of that count.
+
+The trajectory was textbook convergence: 4 failures -> 2 (pool order fixed) -> 0 (pop fixed), with all
+nine regressions green throughout and lengths matching before contents did.
+
+Verified byte-identical across 13 fixtures: through a nested struct at two and three levels, through
+a tuple element, with a sibling scalar after the array, a `Byte` element array, and `!=`. All stages
+self-compile. No opcode, record, node kind, or `BYTECODE_VERSION` change.
+
+PROCESS NOTE: the FULL gate caught what targeted testing did not. `EXPECTED_SELF_COMPILE` pins the
+number of self-compiling codegen functions, and adding `push_arr_scalar_inner` took it 75 -> 76. The
+assertion is a DELIBERATE gate ("update the gate deliberately if codegen.kel changed"), not a bug --
+"0 functions with gaps" confirmed every function still round-trips. It exists so that growing the
+stage is an explicit act rather than a silent one, and it fires only in the full gate, which is the
+concrete argument for never landing on targeted tests alone.
+
+The impure-subtree Gap fixtures were RETARGETED a second time — from array to ENUM — since arrays at
+depth are now supported. Enum at depth is the last kind in this family and is the larger job, because
+enums need variant dispatch rather than a flat element or field walk.
+
+
 **NESTED TUPLE SUB-FIELDS (2026-08-02): the first slice of the general MIXED-SUBTREE problem. Boundary 72 -> 75 Ok.**
 A tuple field directly on the compared struct already worked (it rides `se_subistuple`), but a tuple
 reached through a nested struct, a tuple element, or an array element did not: the frame stack could

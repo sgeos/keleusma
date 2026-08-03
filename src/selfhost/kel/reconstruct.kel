@@ -102,6 +102,10 @@ private data rs {
     eqfcount: Word,
     eqcur: Word,
     eqfcur: Word,
+    // 1 when the nested-block header just laid carried the 40000+size ARRAY sentinel, so the packing
+    // record that follows must lay a fourth word (the element ScalarKind).
+    se_lastarr: Word,
+    se_wasarr: Word,
     // Nested struct-eq layout scratch, streamed as records arrive. `seb` accumulates the tagged
     // top-level field layout: a scalar field is [0, offset, kind]; a nested-struct field is
     // [1, ext_off, ext_size, variant, r2, l2, subcount, subcount*(sub_off, sub_kind)]. `sebcur` the
@@ -917,18 +921,34 @@ fn step_assembly(k: Word, a: Word) -> Word {
             if rs.se_sp2 > 0 {
                 let top = rs.se_sp2 - 1;
                 if rs.se_nstk_phase[top] == 1 {
-                    // The packing record of a stacked struct frame: subcount + r2*65536 + l2*2^32.
+                    // The packing record of a stacked frame: subcount + r2*65536 + l2*2^32. An ARRAY
+                    // block (its header carried the 40000+size sentinel) additionally carries the
+                    // element ScalarKind above l2, laying a fourth word so the block is
+                    // [off, 40000+size, acount, r2, l2, akind].
                     let subcount = a % 65536;
                     rs.seb[rs.sebcur] = subcount;
                     rs.seb[rs.sebcur + 1] = (a / 65536) % 65536;
-                    rs.seb[rs.sebcur + 2] = a / 4294967296;
+                    rs.seb[rs.sebcur + 2] = (a / 4294967296) % 65536;
                     rs.sebcur = rs.sebcur + 3;
+                    rs.se_wasarr = rs.se_lastarr;
+                    if rs.se_lastarr == 1 {
+                        rs.seb[rs.sebcur] = a / 281474976710656;
+                        rs.sebcur = rs.sebcur + 1;
+                        rs.se_lastarr = 0;
+                    }
                     rs.se_nstk_remaining[top] = subcount;
+                    // An ARRAY block has NO sub-fields: its packing first field is the ELEMENT count,
+                    // not a sub-field count, so it must pop immediately. Treating that count as a
+                    // sub-field count made the frame swallow the following sibling field.
+                    if rs.se_wasarr == 1 {
+                        rs.se_nstk_remaining[top] = 0;
+                        se_nsub_pop();
+                    } else {
                     if subcount == 0 {
                         se_nsub_pop();
                     } else {
                         rs.se_nstk_phase[top] = 2;
-                    }
+                    } }
                 } else {
                     if a / 65536 >= 100 {
                         // A DEEPER nested-struct sub-field: lay [off, 100+size], count it in this
@@ -938,6 +958,9 @@ fn step_assembly(k: Word, a: Word) -> Word {
                         rs.seb[rs.sebcur + 1] = a / 65536;
                         rs.sebcur = rs.sebcur + 2;
                         rs.se_nstk_remaining[top] = rs.se_nstk_remaining[top] - 1;
+                        if a / 65536 >= 40000 {
+                            rs.se_lastarr = 1;
+                        }
                         rs.se_nstk_phase[rs.se_sp2] = 1;
                         rs.se_sp2 = rs.se_sp2 + 1;
                     } else {
@@ -960,6 +983,9 @@ fn step_assembly(k: Word, a: Word) -> Word {
                 rs.sebcur = rs.sebcur + 2;
                 rs.se_subn = rs.se_subn + 1;
                 if a / 65536 >= 100 {
+                    if a / 65536 >= 40000 {
+                        rs.se_lastarr = 1;
+                    }
                     rs.se_nstk_phase[0] = 1;
                     rs.se_sp2 = 1;
                 }

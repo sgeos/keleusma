@@ -674,6 +674,11 @@ private data stmt {
     // Tuple and compare with GetTupleField); 0 for a struct frame. A tuple sub-field at depth >= 2
     // needs this: the top-level case rides `se_subistuple`, but a frame had no equivalent.
     se_stk_istup: [Word; 8],
+    // 1 when the frame is an ARRAY block: it has no sub-fields, so it pops immediately after its
+    // packing record, which carries the element count and ScalarKind.
+    se_stk_isarr: [Word; 8],
+    se_stk_acount: [Word; 8],
+    se_stk_akind: [Word; 8],
     se_casc_active: Word,
     // Admission scan (`struct_subtree_pure`): an explicit stack over a struct's transitively-nested
     // STRUCT fields, checking the subtree is pure struct/scalar (no tuple/array/enum at any depth) so
@@ -2298,6 +2303,27 @@ fn array_of_array_eq_start(op: Word) -> Word {
 // comparison temps r2 then l2 monotonically (matching the reference `next_slot`). Factored out of
 // `structeq_nested_next`, which is already near the per-block statement cap -- inlining a second
 // push there tripped a reconstruct loop limit.
+// Push a zero-child frame for an ARRAY sub-field block. The frame exists only so the shared
+// machinery emits the packing record and then pops (count 0), which keeps the array case on the same
+// path as struct and tuple blocks. `se_arr_kind` carries the element ScalarKind into that packing
+// record; the block's seb form is [off, 40000+size, acount, r2, l2, akind].
+fn se_push_array_frame(acount: Word, akind: Word) -> Word {
+    stmt.se_stk_start[stmt.se_sp] = 0;
+    stmt.se_stk_count[stmt.se_sp] = 0;
+    stmt.se_stk_cur[stmt.se_sp] = 0;
+    stmt.se_stk_istup[stmt.se_sp] = 0;
+    stmt.se_stk_isarr[stmt.se_sp] = 1;
+    stmt.se_stk_acount[stmt.se_sp] = acount;
+    stmt.se_stk_akind[stmt.se_sp] = akind;
+    stmt.se_stk_r2[stmt.se_sp] = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + 1;
+    stmt.se_stk_l2[stmt.se_sp] = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + 1;
+    stmt.se_stk_phase[stmt.se_sp] = 1;
+    stmt.se_sp = stmt.se_sp + 1;
+    0
+}
+
 fn se_push_frame(s: Word, is_tuple: Word) -> Word {
     stmt.se_stk_start[stmt.se_sp] = if is_tuple == 1 {
         tupledefs.tup_estart[s]
@@ -2311,6 +2337,7 @@ fn se_push_frame(s: Word, is_tuple: Word) -> Word {
     };
     stmt.se_stk_cur[stmt.se_sp] = 0;
     stmt.se_stk_istup[stmt.se_sp] = is_tuple;
+    stmt.se_stk_isarr[stmt.se_sp] = 0;
     stmt.se_stk_r2[stmt.se_sp] = ps.pcount + stmt.slot_count;
     stmt.slot_count = stmt.slot_count + 1;
     stmt.se_stk_l2[stmt.se_sp] = ps.pcount + stmt.slot_count;
@@ -2563,7 +2590,14 @@ fn struct_subtree_pure(s: Word) -> Word {
                         }
                     }
                 } else {
-                if structdefs.sd_farraylen[fidx] > 0 orelse structdefs.sd_fenum[fidx] > 0 {
+                if structdefs.sd_farraylen[fidx] > 0 {
+                    // An ARRAY sub-field of SCALARS is admitted (the drain emits a 40000+size block);
+                    // an array whose element is itself composite still defers.
+                    if structdefs.sd_fstruct[fidx] > 0 orelse structdefs.sd_fkind[fidx] == 0 {
+                        stmt.ssp_ok = 0;
+                    }
+                } else {
+                if structdefs.sd_fenum[fidx] > 0 {
                     stmt.ssp_ok = 0;
                 } else {
                     if structdefs.sd_fstruct[fidx] > 0 {
@@ -2571,7 +2605,7 @@ fn struct_subtree_pure(s: Word) -> Word {
                         stmt.ssp_cur[stmt.ssp_sp] = 0;
                         stmt.ssp_sp = stmt.ssp_sp + 1;
                     }
-                } }
+                } } }
             }
         }
     }
@@ -2847,7 +2881,13 @@ fn structeq_nested_next() -> Word {
             if stmt.se_stk_phase[top] == 1 {
                 // The frame's packing record (subcount + r2*65536 + l2*2^32). A non-empty struct arms
                 // its sub-field drain; an empty struct pops immediately (advancing the parent cursor).
-                let rec = Node::StructEqNestedField() as Word + (stmt.se_stk_count[top] + stmt.se_stk_r2[top] * 65536 + stmt.se_stk_l2[top] * 4294967296) * 64;
+                // For an ARRAY block the packing record carries the element COUNT (in the subcount
+                // slot) and the element ScalarKind above l2, which is otherwise unused space.
+                let rec = if stmt.se_stk_isarr[top] == 1 {
+                    Node::StructEqNestedField() as Word + (stmt.se_stk_acount[top] + stmt.se_stk_r2[top] * 65536 + stmt.se_stk_l2[top] * 4294967296 + stmt.se_stk_akind[top] * 281474976710656) * 64
+                } else {
+                    Node::StructEqNestedField() as Word + (stmt.se_stk_count[top] + stmt.se_stk_r2[top] * 65536 + stmt.se_stk_l2[top] * 4294967296) * 64
+                };
                 if stmt.se_stk_count[top] == 0 {
                     se_pop_cascade();
                 } else {
@@ -2864,6 +2904,11 @@ fn structeq_nested_next() -> Word {
                     let s = structdefs.sd_fstruct[g] - 1;
                     se_push_frame(s, 0);
                     Node::StructEqNestedField() as Word + (structdefs.sd_foffset[g] + (100 + structdefs.sd_bytesize[s]) * 65536) * 64
+                } else {
+                if stmt.se_stk_istup[top] == 0 andalso structdefs.sd_farraylen[g] > 0 andalso structdefs.sd_fstruct[g] == 0 {
+                    // An ARRAY sub-field of scalars: sentinel 40000+size, zero-child frame.
+                    se_push_array_frame(structdefs.sd_farraylen[g], structdefs.sd_fkind[g]);
+                    Node::StructEqNestedField() as Word + (structdefs.sd_foffset[g] + (40000 + structdefs.sd_fsize[g]) * 65536) * 64
                 } else {
                 if stmt.se_stk_istup[top] == 0 andalso structdefs.sd_ftuple[g] > 0 {
                     // A TUPLE sub-field at depth >= 2. Same shape as the struct case, but the sentinel
@@ -2886,7 +2931,7 @@ fn structeq_nested_next() -> Word {
                         se_pop_cascade();
                     }
                     rec
-                } }
+                } } }
             }
         } else {
         if stmt.se_subcur < stmt.se_subcount {
@@ -2931,6 +2976,12 @@ fn structeq_nested_next() -> Word {
                 se_push_frame(s, 0);
                 Node::StructEqNestedField() as Word + (structdefs.sd_foffset[fidx] + (100 + structdefs.sd_bytesize[s]) * 65536) * 64
             } else {
+            if structdefs.sd_farraylen[fidx] > 0 andalso structdefs.sd_fstruct[fidx] == 0 {
+                // A DEPTH-2 ARRAY sub-field: sentinel 40000+size, zero-child frame.
+                stmt.se_sp = 0;
+                se_push_array_frame(structdefs.sd_farraylen[fidx], structdefs.sd_fkind[fidx]);
+                Node::StructEqNestedField() as Word + (structdefs.sd_foffset[fidx] + (40000 + structdefs.sd_fsize[fidx]) * 65536) * 64
+            } else {
             if structdefs.sd_ftuple[fidx] > 0 {
                 // A DEPTH-2 TUPLE sub-field (`struct P { u: (Word, Word) }` inside `struct S { p: P }`):
                 // the same push as the struct case, but the frame reads `tupledefs` and the sentinel is
@@ -2942,7 +2993,7 @@ fn structeq_nested_next() -> Word {
             } else {
                 stmt.se_subcur = stmt.se_subcur + 1;
                 Node::StructEqNestedField() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fkind[fidx] * 65536) * 64
-            } } } }
+            } } } } }
         } else {
             stmt.se_phase = 0;
             stmt.sq_field = stmt.sq_field + 1;
