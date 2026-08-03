@@ -85,6 +85,14 @@ private data rs {
     // kind*65536) here; the StructEqBuild drains `sqcount` of them into the match_parts layout.
     sqpending: [Word; 128],
     sqcount: Word,
+    // Expansion of an ARRAY element's record stream into the recursive `seb` grammar
+    // (`build_array_of_struct_eq`). `aqe_rem` is the per-frame remaining sub-field count, `aqe_out`
+    // the running match_parts write cursor, `aqe_pack` 1 when the next record is a nested block's
+    // packing record (subcount + r2*65536 + l2*2^32). Frame 0 is the element's own field list.
+    aqe_sp: Word,
+    aqe_rem: [Word; 8],
+    aqe_out: Word,
+    aqe_pack: Word,
     // Enum-eq payload-field accumulator: each EnumEqField record pushes its packed (offset +
     // kind*65536) here in overall field order (across all variants); `build_enum_eq` pulls each
     // variant's fields sequentially by that variant's declared field count. `eqcur` is the
@@ -442,6 +450,21 @@ fn build_array_eq(a: Word) -> Word {
 // per field: offset, kind, is_ne] (fields drained from `sqpending`), pop the two array operands, and
 // build the ArrayOfStructEq node (kind 62). codegen `push_array_of_struct_eq` unrolls the per-element
 // GetIndex(FlatNested Struct) extraction and inner field loop.
+// Pop every ARRAY-element expansion frame whose sub-fields are exhausted. A nested block was already
+// counted against its parent when its header was laid, so completing a child only pops and re-checks
+// the parent -- it must not decrement again. Frame 0 (the element's own field list) never pops.
+// Bounded, non-recursive (R4).
+fn aqe_pop_done() -> Word {
+    for i in 0..8 limit 8 {
+        if rs.aqe_sp > 1 {
+            if rs.aqe_rem[rs.aqe_sp - 1] == 0 {
+                rs.aqe_sp = rs.aqe_sp - 1;
+            }
+        }
+    }
+    0
+}
+
 fn build_array_of_struct_eq(a: Word) -> Word {
     let ta = a % 1024;
     let tb = (a / 1024) % 1024;
@@ -457,14 +480,44 @@ fn build_array_of_struct_eq(a: Word) -> Word {
     io.match_parts[base + 2] = arrcount;
     io.match_parts[base + 3] = arrsize;
     io.match_parts[base + 4] = fieldcount;
-    for i in 0..fieldcount limit 64 {
+    // Expand the element's record stream into the recursive `seb` grammar. A scalar record lays
+    // [off, kind]; a nested block lays [off, 100+size] then, from the packing record that follows,
+    // [subcount, r2, l2], then its children. A block is COUNTED against its parent when its header
+    // is laid, so a completed child simply pops and re-checks the parent. With no nested block this
+    // reduces exactly to the previous fieldcount*2 pair copy.
+    rs.aqe_sp = 1;
+    rs.aqe_rem[0] = fieldcount;
+    rs.aqe_out = base + 5;
+    rs.aqe_pack = 0;
+    for i in 0..rs.sqcount limit 128 {
         let packed = rs.sqpending[i];
-        io.match_parts[base + 5 + i * 2] = packed % 65536;
-        io.match_parts[base + 5 + i * 2 + 1] = packed / 65536;
+        if rs.aqe_pack == 1 {
+            let subcount = packed % 65536;
+            io.match_parts[rs.aqe_out] = subcount;
+            io.match_parts[rs.aqe_out + 1] = (packed / 65536) % 65536;
+            io.match_parts[rs.aqe_out + 2] = packed / 4294967296;
+            rs.aqe_out = rs.aqe_out + 3;
+            rs.aqe_rem[rs.aqe_sp] = subcount;
+            rs.aqe_sp = rs.aqe_sp + 1;
+            rs.aqe_pack = 0;
+            aqe_pop_done();
+        } else {
+            let kind = packed / 65536;
+            io.match_parts[rs.aqe_out] = packed % 65536;
+            io.match_parts[rs.aqe_out + 1] = kind;
+            rs.aqe_out = rs.aqe_out + 2;
+            let top = rs.aqe_sp - 1;
+            rs.aqe_rem[top] = rs.aqe_rem[top] - 1;
+            if kind >= 100 {
+                rs.aqe_pack = 1;
+            } else {
+                aqe_pop_done();
+            }
+        }
     }
-    io.match_parts[base + 5 + fieldcount * 2] = is_ne;
-    io.match_parts[base + 5 + fieldcount * 2 + 1] = is_tuple;
-    rs.mp = base + 5 + fieldcount * 2 + 2;
+    io.match_parts[rs.aqe_out] = is_ne;
+    io.match_parts[rs.aqe_out + 1] = is_tuple;
+    rs.mp = rs.aqe_out + 2;
     rs.sqcount = 0;
     let rhs = pop();
     let lhs = pop();

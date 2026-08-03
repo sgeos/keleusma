@@ -68,8 +68,10 @@ Steps, in order:
 2. **Familiarize** — the blueprint, then `REVERSE_PROMPT.md`, then the newest `DESIGN_JOURNAL.md`.
 3. **Implement** on a feature branch cut from `v0.2.3`. Preferred: route array-of-composite elements
    through the `StructEqNested` frame machinery (it would subsume array-of-deep-struct and
-   array-of-array-in-struct). Fallback after two or three bounded attempts: give the flat array
-   family its own nested form.
+   array-of-array-in-struct). Fall back to giving the flat array family its own nested form only if
+   the frame-machinery route is shown structurally unable to express the reference's output — the
+   criterion is CONVERGENCE, not an attempt count, and a long red branch is fine while each step
+   narrows the divergence.
 4. **Verify** — the large regression surface FIRST (`eq/array_of_tuple`, `eq/struct_arrayofstruct`,
    `eq/array_in_struct`, `eq/array_of_array`, scalar arrays, and the `!=` forms), then flip the
    relevant `__GAP` boundary cases to `SOk`, then the FULL `scripts/release-gate.sh`.
