@@ -10,13 +10,13 @@ a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`
-- **Parent commit** (the repository state this handoff describes): `0bf9daf`
+- **Parent commit** (the repository state this handoff describes): `ff57dca`
 - **Written**: 2026-08-02
 - **Tree at write**: clean (all work committed, merged, and pushed; `v0.2.3` tip is the
   roadmap-baseline-correction merge `81c0bd9` plus this handoff restamp commit)
-- **Context**: written after nested TUPLE sub-fields at depth landed (boundary 75 Ok / 4 Gap /
-  1 RefRejects), the first slice of the mixed-subtree problem. Full gate GREEN, CI GREEN on
-  `0bf9daf`, tree clean, all pushed.
+- **Context**: written after nested scalar-ARRAY sub-fields landed (boundary 77 Ok / 4 Gap /
+  1 RefRejects), the second mixed-subtree slice after tuples. Full gate GREEN, CI GREEN on `ff57dca`,
+  tree clean, all pushed. ENUM at depth is the last kind in this family.
 
 **Validity check — run on resume, before trusting this handoff.** On the branch above, compare the
 **Parent commit** to `git rev-parse HEAD~1`. Because this handoff file is itself committed, its commit
@@ -29,62 +29,66 @@ advances the tip by one, so the state it describes is the parent of the handoff 
   parent versus actual `HEAD~1`), familiarize from the live channels — `REVERSE_PROMPT.md`,
   `DESIGN_JOURNAL.md`, `TASKLOG.md`, and the git log, always authoritative — and wait for instruction.
 
-## Resume prompt — IMPLEMENT array-at-depth, then enum-at-depth. The choice is MADE.
+## Resume prompt — IMPLEMENT enum-at-depth. The choice is MADE.
 
-Tuples at depth are done (`0bf9daf`). The same frame machinery now needs the other two composite
-kinds, in the SAME three dispatch sites (nested struct, tuple element, array element):
+Tuples (`0bf9daf`) and scalar arrays (`ff57dca`) at depth are done. ENUM is the last composite kind
+in this family and is the LARGEST of the three: enums need VARIANT DISPATCH, not a flat element or
+field walk, so it will NOT be a copy of either slice.
 
-1. **An ARRAY sub-field at depth** — `struct I { xs: [Word;2] }` inside `struct S { i: I }`, measured
-   DIVERGE and currently deferring. Do this first: the sentinel convention already exists (40000+size
-   for an array, mirroring the 30000+size just added for tuples), and `0bf9daf` is a near-exact
-   template.
-2. **An ENUM sub-field at depth** — larger, because enums need variant dispatch.
-3. A struct FIELD that is an array-of-tuple. NOTE: **not drain work.** The element layout is never
-   recorded — `parray_tuple` is parameter-only and a struct field's array element type goes through
-   `field_size_and_kind`, which accepts only an identifier. Needs a new layout table plus scanner
-   work, which is why it sits behind the drain items.
-4. The `[bool;2]`-shaped struct field array (element type not a recognized scalar).
+**The right template is the DEPTH-1 enum field, not the tuple/array blocks**: `se_subisenum` with the
+`se_e*` state in parse, and `push_nested_enum_loop` in codegen. Read those first. Note the eager
+intern pass already replays an enum field's constant order (ename, vname, disc, per-field false, then
+true, then false) — a nested enum block will have to replay the same order from wherever it sits in
+the forest, which is the analogue of the array index pre-interning that `ff57dca` had to add.
 
-**Read `0bf9daf` first** — it is the template, and its two traps are likely to recur.
+After that, in the same family:
+1. A struct FIELD that is an array-of-tuple. **NOT drain work** — the element layout is never
+   recorded (`parray_tuple` is parameter-only; a struct field's array element type goes through
+   `field_size_and_kind`, which accepts only an identifier). Needs a new layout table plus scanner
+   work, a genuine context switch, which is why it keeps being ordered behind the drain items.
+2. The `[bool;2]`-shaped struct field array (element type not a recognized scalar).
+3. An array whose ELEMENT is itself composite at depth (array blocks admit scalar elements only).
 
-**Read this before considering a stop.** `AUTONOMOUS_IMPLEMENTATION_LOOP.md` forbids prompting the
-operator to ORDER bounded roadmap tasks. The test is **"does this choice require information only the
-operator holds?"**
+Beyond this family the Order-1 gate needs the type checker, the monomorphizer, and wire-format
+serialization. `AUTONOMOUS_IMPLEMENTATION_LOOP.md` forbids prompting the operator to ORDER any of it.
 
-**The ten method rules. These found every bug so far; none is optional.**
+**The eleven method rules. These found every bug so far; none is optional.**
 1. **PROBE BEFORE PLANNING, always with a control**; also confirm the REFERENCE accepts the source.
 2. **Probe what the admission ACCEPTS, not only what it rejects.**
 3. **When generalizing a drain, tighten its admission IN THE SAME CHANGE.**
 4. **Close an admission hole BEFORE building support over it**; expect +Gap / 0 Ok when you do.
-5. **Never trust op counts or lengths as a correctness proxy** — the worst bug diverged at an
-   IDENTICAL op count. Assert byte-identity; for a deferral, assert its SHAPE.
+5. **Never trust op counts or lengths as a correctness proxy.** For a deferral, assert its SHAPE.
 6. **When a change that should be sufficient produces NO observable difference, suspect a path that
    BYPASSES the code you changed.**
 7. **Abandon on TRAJECTORY, not attempt count.** A hard increment may sit red for many commits and be
    healthy. Keep going while the divergence narrows and green fixtures stay green.
-8. **Admission helpers call each other and R4 forbids cycles.** Relaxing one by calling another can
-   make the stage unverifiable ("recursive call detected during WCMU topological sort"). Inline.
-9. **A self-compile failure in stage B can be caused by stage A merely GROWING.** `LoopLimitExceeded`
-   in an UNCHANGED reconstruct.kel meant a parse.kel block crossed a per-block cap. Factor into a
-   helper rather than raising a limit; the error names neither loop nor function, so ask "what did I
-   just make bigger?".
+8. **Admission helpers call each other and R4 forbids cycles.** Inline rather than reuse.
+9. **A self-compile failure in stage B can be caused by stage A merely GROWING.** Factor into a
+   helper rather than raising a limit.
 10. **When a construct becomes supported, RETARGET the Gap fixture that pinned it** rather than
-    deleting it, or the deferral it guarded silently stops being tested.
+    deleting it. This has happened twice already (tuple -> array -> enum) on the same fixtures.
+11. **Read the divergence SIGNATURE.** All lengths matching with one differing `Const` means a
+    constant-POOL ORDER bug. A fixed shortfall of one compare block, only where a sibling follows,
+    means a frame consumed a field it should not have. Each signature points at a different layer.
 
-Steps: validate → familiarize (`REVERSE_PROMPT.md`, newest `DESIGN_JOURNAL.md`, then `0bf9daf`) →
-implement on a feature branch off `v0.2.3` → verify the regression surface FIRST, then the new
+**Run the FULL gate before landing, always.** On `ff57dca` targeted tests passed while the full gate
+went red on `EXPECTED_SELF_COMPILE` (a deliberate counter of self-compiling codegen functions, bumped
+whenever codegen.kel gains one). Adding a codegen helper REQUIRES bumping it with a comment.
+
+Steps: validate → familiarize (`REVERSE_PROMPT.md`, newest `DESIGN_JOURNAL.md`, then the depth-1 enum
+path) → implement on a feature branch off `v0.2.3` → verify the regression surface FIRST, then the new
 fixtures, then the boundary, then the FULL `scripts/release-gate.sh` → no-ff merge, push, confirm CI,
 record on all three channels, prune the branch, restamp this HANDOFF.
 
 **Git position** (as of the Parent commit)
-- Branch `v0.2.3` tip is the nested-tuple-subfield merge `0bf9daf` plus this restamp commit. In sync
-  with origin, tree clean, local full gate GREEN (240 suites), CI GREEN on `0bf9daf`.
+- Branch `v0.2.3` tip is the nested-array-subfield merge `ff57dca` plus this restamp commit. In sync
+  with origin, tree clean, local full gate GREEN (240 suites), CI GREEN on `ff57dca`.
 - Local branches are pruned to `main`, `v0.2.3`, and `v0.2.3-prerebase-backup`. Origin holds only `main`
   and `v0.2.3`. **Do NOT delete `v0.2.3-prerebase-backup`**: it holds 309 commits not in `v0.2.3` and is
   a deliberate safety net, not clutter.
 - `main` holds releases and sits behind `v0.2.3` by design (`docs/process/GIT_STRATEGY.md`).
 
-**Boundary counts** — **75 Ok / 4 Gap / 1 RefRejects**, pinned by
+**Boundary counts** — **77 Ok / 4 Gap / 1 RefRejects**, pinned by
 `self_hosted_construct_support_boundary` in `tests/selfhost_codegen.rs`. Recount with a grep rather than
 trusting a remembered number; the figure in the docs was found stale by 2 on 2026-07-30.
 
