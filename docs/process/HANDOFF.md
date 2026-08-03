@@ -10,14 +10,13 @@ a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`
-- **Parent commit** (the repository state this handoff describes): `a03b1cf`
+- **Parent commit** (the repository state this handoff describes): `956fe22`
 - **Written**: 2026-08-02
 - **Tree at write**: clean (all work committed, merged, and pushed; `v0.2.3` tip is the
   roadmap-baseline-correction merge `81c0bd9` plus this handoff restamp commit)
-- **Context**: written after closing FOUR silent mis-compiles in the flat array-equality family by
-  adding the admission guard it never had. Boundary 69 Ok / 6 Gap / 1 RefRejects (+4 Gap, 0 Ok --
-  intended: closing an admission hole makes the frontier honest). Full gate GREEN; tree clean, all
-  pushed. The next increment is selected and blueprinted.
+- **Context**: written after nested ARRAY ELEMENT support landed (boundary 72 Ok / 4 Gap /
+  1 RefRejects). Full gate GREEN, CI GREEN on `956fe22`, tree clean, all pushed. The next increment
+  is selected and its shape is known from the one just completed.
 
 **Validity check — run on resume, before trusting this handoff.** On the branch above, compare the
 **Parent commit** to `git rev-parse HEAD~1`. Because this handoff file is itself committed, its commit
@@ -30,68 +29,54 @@ advances the tip by one, so the state it describes is the parent of the handoff 
   parent versus actual `HEAD~1`), familiarize from the live channels — `REVERSE_PROMPT.md`,
   `DESIGN_JOURNAL.md`, `TASKLOG.md`, and the git log, always authoritative — and wait for instruction.
 
-## Resume prompt — IMPLEMENT nested support for array elements. The choice is MADE. Do not re-ask.
+## Resume prompt — IMPLEMENT the struct-FIELD array-of-tuple path. The choice is MADE.
 
-Blueprint: [`../decisions/ARRAY_OF_TUPLE_OF_STRUCT_PLAN.md`](../decisions/ARRAY_OF_TUPLE_OF_STRUCT_PLAN.md).
-Six Gaps now sit behind this one construct, so the payoff is larger than when it was first scoped.
+A struct FIELD that is an array-of-tuple (`struct S { g: [(P, Word); 2] }`) still defers. It routes
+through the `StructEqNested` family's `se_arrsphase` path, which has its OWN flat element handling
+and was untouched by the element work just landed.
 
-**The frontier is now HONEST, which is what makes this safe to attempt incrementally.** As of
-`a03b1cf` every unsupported construct in this family REJECTS LOUDLY rather than compiling wrong, so a
-divergence is attributable to the change under test and not to a pre-existing silent bug. That was
-not true before; do not give it up.
+**This should be a close analogue of the increment just completed** (`956fe22`), which did exactly
+this for the TOP-LEVEL array-eq family. Read that commit and
+[`../decisions/ARRAY_OF_TUPLE_OF_STRUCT_PLAN.md`](../decisions/ARRAY_OF_TUPLE_OF_STRUCT_PLAN.md)
+first: the same two traps are likely to recur — an INTERLEAVED per-element temp layout, and a code
+path that emits the first element field inline and bypasses the drain.
 
 **Read this before considering a stop.** `AUTONOMOUS_IMPLEMENTATION_LOOP.md` forbids prompting the
 operator to ORDER bounded roadmap tasks and names the four rationalizations that do not license a
-stop (cost asymmetry, "wants a dedicated run", "it all has to happen anyway", "the cheap work is
-exhausted"). The test is **"does this choice require information only the operator holds?"**
+stop. The test is **"does this choice require information only the operator holds?"**
 
-**The five hard-won method rules. These found every bug so far; none is optional.**
+**The seven method rules. These found every bug so far; none is optional.**
 1. **PROBE BEFORE PLANNING, always with a control** (point it at `scope/float_arith__GAP`, confirm
-   DIVERGE; and check the REFERENCE accepts the source — a reference rejection is not a self-host gap).
-2. **Probe what the admission ACCEPTS, not only what it rejects.** Every silent mis-compile found so
-   far was in a construct the admission accepted.
-3. **When generalizing a drain, tighten its admission IN THE SAME CHANGE** — descending further
-   without a guard converts a shallow silent bug into a deeper one.
-4. **Close an admission hole BEFORE building support over it**, and expect the boundary to move
-   +Gap / 0 Ok when you do. That is success, not regression.
-5. **Never trust op counts or lengths as a correctness proxy.** The worst bug found diverged at an
-   IDENTICAL op count (58/58), differing only in content. Assert byte-identity; when asserting a
-   deferral, assert its SHAPE (under half the reference's ops), not mere inequality.
+   DIVERGE; and check the REFERENCE accepts the source).
+2. **Probe what the admission ACCEPTS, not only what it rejects.**
+3. **When generalizing a drain, tighten its admission IN THE SAME CHANGE.**
+4. **Close an admission hole BEFORE building support over it**; expect +Gap / 0 Ok when you do.
+5. **Never trust op counts or lengths as a correctness proxy** — the worst bug found diverged at an
+   IDENTICAL op count. Assert byte-identity; for a deferral, assert its SHAPE.
+6. **When a change that should be sufficient produces NO observable difference, suspect a path that
+   BYPASSES the code you changed.** This cost real time on `956fe22`.
+7. **Abandon on TRAJECTORY, not attempt count.** A hard increment may sit red for many commits and be
+   healthy. Keep going while the divergence narrows and green fixtures stay green.
 
-Plus: **when a "regression" appears, measure the pre-change behaviour before assuming authorship.**
-The `[bool;2]` case looked like damage from the new guard and was a pre-existing mis-compile it had
-exposed; reverting would have restored a silent bug.
-
-Steps, in order:
-
-1. **Validate** — the check above. Valid → continue. Invalid → stop and report.
-2. **Familiarize** — the blueprint, then `REVERSE_PROMPT.md`, then the newest `DESIGN_JOURNAL.md`.
-3. **Implement** on a feature branch cut from `v0.2.3`. Preferred: route array-of-composite elements
-   through the `StructEqNested` frame machinery (it would subsume array-of-deep-struct and
-   array-of-array-in-struct). Fall back to giving the flat array family its own nested form only if
-   the frame-machinery route is shown structurally unable to express the reference's output — the
-   criterion is CONVERGENCE, not an attempt count, and a long red branch is fine while each step
-   narrows the divergence.
-4. **Verify** — the large regression surface FIRST (`eq/array_of_tuple`, `eq/struct_arrayofstruct`,
-   `eq/array_in_struct`, `eq/array_of_array`, scalar arrays, and the `!=` forms), then flip the
-   relevant `__GAP` boundary cases to `SOk`, then the FULL `scripts/release-gate.sh`.
-5. **Land** — no-ff merge into `v0.2.3`, push, confirm CI, record on all three channels, prune the
-   merged branch, restamp this HANDOFF.
+Steps: validate → familiarize (`REVERSE_PROMPT.md`, newest `DESIGN_JOURNAL.md`) → implement on a
+feature branch off `v0.2.3` → verify the regression surface FIRST, then flip
+`eq/struct_field_array_of_tuple__GAP` to `SOk`, then the FULL `scripts/release-gate.sh` → no-ff merge,
+push, confirm CI, record on all three channels, prune the branch, restamp this HANDOFF.
 
 **After it lands**, same context, no operator prompt: the impure-element subtree (the general
-mixed-subtree problem), enum array payload, enum deep-struct payload, enum→struct→enum. Beyond this
-family the Order-1 gate needs the type checker, the monomorphizer, and wire-format serialization.
+mixed-subtree problem, the biggest remaining lever), enum array payload, enum deep-struct payload,
+enum→struct→enum, and the `[bool;2]`-shaped struct field array. Beyond this family the Order-1 gate
+needs the type checker, the monomorphizer, and wire-format serialization.
 
 **Git position** (as of the Parent commit)
-- Branch `v0.2.3` tip is the array-composite-admission merge `a03b1cf` plus this restamp commit. In
-  sync with origin, tree clean, local full gate GREEN (240 suites). CI was confirmed GREEN on the
-  prior code merge `3f97b42` (20/20 jobs); the run for `a03b1cf` was launched and should be checked.
+- Branch `v0.2.3` tip is the nested-array-element merge `956fe22` plus this restamp commit. In sync
+  with origin, tree clean, local full gate GREEN (240 suites), CI GREEN on `956fe22`.
 - Local branches are pruned to `main`, `v0.2.3`, and `v0.2.3-prerebase-backup`. Origin holds only `main`
   and `v0.2.3`. **Do NOT delete `v0.2.3-prerebase-backup`**: it holds 309 commits not in `v0.2.3` and is
   a deliberate safety net, not clutter.
 - `main` holds releases and sits behind `v0.2.3` by design (`docs/process/GIT_STRATEGY.md`).
 
-**Boundary counts** — **69 Ok / 6 Gap / 1 RefRejects**, pinned by
+**Boundary counts** — **72 Ok / 4 Gap / 1 RefRejects**, pinned by
 `self_hosted_construct_support_boundary` in `tests/selfhost_codegen.rs`. Recount with a grep rather than
 trusting a remembered number; the figure in the docs was found stale by 2 on 2026-07-30.
 
