@@ -148,12 +148,25 @@ writes the question into `REVERSE_PROMPT.md` when:
   is an operator decision. Prefer tag reuse plus module-side tables and a build-record with
   a high node kind, the pattern array-of-enum used. If genuinely impossible, escalate with
   the options.
-- **The oracle diverges and two or three bounded attempts do not resolve it.** Record the
-  first differing op or offset and stop, rather than thrashing. Discarding the feature branch
-  (deleting it unmerged) and re-cutting a fresh one for a different approach is the expected,
-  acceptable move — `v0.2.3` only ever sees green merges, so an abandoned branch costs nothing but
-  itself. Do not force an unsound approach to green; abandon and re-approach, or surface the
-  divergence to the operator (see [GIT_STRATEGY.md](./GIT_STRATEGY.md#feature-branches)).
+- **The oracle diverges and the branch is NOT CONVERGING toward green.** The criterion is the
+  TRAJECTORY, not an attempt count or a commit count. A hard increment may sit red for many
+  commits and still be healthy: `v0.2.3` only ever sees green merges, so a long red feature branch
+  costs nothing but itself, and there is no virtue in rushing it to green or in abandoning it early.
+
+  **Converging** (keep going, however long it takes): each step shrinks or relocates the divergence
+  to a narrower place; the first differing op moves later; regression fixtures that were passing
+  keep passing; a newly surfaced unknown is smaller than the one it replaced; the remaining work is
+  describable in concrete terms.
+
+  **Not converging** (stop, and abandon or re-approach): the divergence does not narrow across
+  successive changes; fixing one fixture reliably breaks another that had been green; each answer
+  reveals an unknown as large as the last; or the approach has been shown structurally unable to
+  express what the reference emits — a design fault no amount of iteration fixes.
+
+  When not converging, record the first differing op or offset and the structural reason, then
+  delete the branch unmerged and re-cut for a different approach, or surface it to the operator.
+  Never force an unsound approach to green, and never weaken the oracle or a fixture to get there
+  (see [GIT_STRATEGY.md](./GIT_STRATEGY.md#feature-branches)).
 - **The full gate goes red for a reason not attributable to the current increment**
   (pre-existing breakage), or the change would touch the shared inter-stage protocol or the
   runtime wire format, which couples stages and must be a single coordinated change.

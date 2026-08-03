@@ -71,7 +71,9 @@ So closing this gap means either:
   family.
 
 **Recommendation: (b), but scoped as its own increment with (a) as the fallback** if the byte-identity
-proves intractable within two or three bounded attempts.
+is shown structurally unable to express what the reference emits. The switch criterion is
+CONVERGENCE, not an attempt count: a long red branch is fine while each step narrows the
+divergence.
 
 ## A necessary but NOT sufficient first step
 
