@@ -2123,7 +2123,26 @@ fn push_struct_eq_subfields(sbase: Word, subcount: Word, l2: Word, r2: Word, sub
                     // loop head + extract are the child's suffix, emitted on completion).
                     let r2p = ast.match_parts[soff + 3] + tempbias;
                     let l2p = ast.match_parts[soff + 4] + tempbias;
-                    let extp = sub_off + (sub_kind - 100) * 65536 + 2 * 4294967296;
+                    // The sentinel range names the block's KIND: 30000+size is a TUPLE (extract with
+                    // FlatNested variant Tuple 0, compare its elements with GetTupleField), 100+size
+                    // a STRUCT (variant 2, GetField). Same convention the enum-payload records use.
+                    let is_tup_block = if sub_kind >= 30000 { 1 } else { 0 };
+                    let bsize = if is_tup_block == 1 {
+                        sub_kind - 30000
+                    } else {
+                        sub_kind - 100
+                    };
+                    let bvar = if is_tup_block == 1 {
+                        0
+                    } else {
+                        2
+                    };
+                    let bacc = if is_tup_block == 1 {
+                        wire.gettuplefield
+                    } else {
+                        wire.getfield
+                    };
+                    let extp = sub_off + bsize * 65536 + bvar * 4294967296;
                     push_emit(wire.mendif);
                     push_emit(wire.mbreak);
                     push_emit(wire.konst + false_idx * wire.radix);
@@ -2137,7 +2156,7 @@ fn push_struct_eq_subfields(sbase: Word, subcount: Word, l2: Word, r2: Word, sub
                     st.es_subcount[child] = ast.match_parts[soff + 2];
                     st.es_l[child] = l2p;
                     st.es_r[child] = r2p;
-                    st.es_acc[child] = wire.getfield;
+                    st.es_acc[child] = bacc;
                     st.es_has_suffix[child] = 1;
                     st.es_sfx_extp[child] = extp;
                     st.es_sfx_pl[child] = st.es_l[top];
