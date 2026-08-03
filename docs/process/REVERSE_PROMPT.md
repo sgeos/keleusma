@@ -57,35 +57,37 @@ generalizes to its enclosing-composite form, so support must not be inferred by 
   `tests/for_limit.rs`. Bare `break;` then came out IDENTICAL and only the outcome-arm form diverged.
 - Boundary test green at 67 Ok; full `scripts/release-gate.sh` result recorded in the commit message.
 
-## Next step — nested support for array elements (the frontier is now HONEST)
+## Next step — the struct-FIELD array path, then the mixed-subtree problem
 
-The admission holes are closed, so every unsupported construct in this family now rejects loudly.
-That makes incremental work on nesting safe: a divergence is now attributable to the change under
-test, not to a pre-existing silent bug.
+Nested array ELEMENTS are done for the top-level array-eq family (boundary 72 Ok / 4 Gap / 1
+RefRejects). The remaining Gaps, in order:
 
-The remaining work is unchanged in shape and blueprinted in
-[`../decisions/ARRAY_OF_TUPLE_OF_STRUCT_PLAN.md`](../decisions/ARRAY_OF_TUPLE_OF_STRUCT_PLAN.md):
-give the flat array family a nested form, or (preferred, and it would subsume array-of-deep-struct
-and array-of-array-in-struct) route array-of-composite elements through the `StructEqNested` frame
-machinery. Six Gaps now sit behind it, so the payoff is larger than when it was scoped.
+1. **A struct FIELD that is an array-of-tuple** (`struct S { g: [(P, Word); 2] }`). This routes
+   through the `StructEqNested` family's `se_arrsphase` path, which has its OWN flat element handling
+   and was untouched by the element work. The same treatment should apply: let its element body go
+   through the shared reverse-DFS emitter instead of a flat scalar loop.
+2. **The impure-element subtree** — an element struct containing a tuple, array, or enum. This is the
+   general mixed-subtree problem and the biggest remaining lever in this family.
+3. Enum array payload, enum deep-struct payload, enum→struct→enum.
+4. A struct field array whose element type is not a recognized scalar (the `[bool;2]` shape).
 
-Also open, same context: the impure-element subtree (the general mixed-subtree problem), enum array
-payload, enum deep-struct payload, enum→struct→enum. Beyond this family the Order-1 gate needs the
-type checker, the monomorphizer, and wire-format serialization. Do NOT prompt the operator to order
-these — `AUTONOMOUS_IMPLEMENTATION_LOOP.md` settles it.
+Beyond this family the Order-1 gate needs the type checker, the monomorphizer, and wire-format
+serialization. Do NOT prompt the operator to order any of this.
 
 ## Standing method notes
 
-1. **PROBE BEFORE PLANNING, always with a control**, and **probe what the admission ACCEPTS**. Every
-   silent mis-compile found so far was in a construct the admission accepted; a rejected construct
-   fails loudly and is comparatively safe.
-2. **When generalizing a drain, tighten its admission in the SAME change** — descending further
-   without a guard converts a shallow silent bug into a deeper one.
-3. **Close an admission hole BEFORE building support over it.** Otherwise every later increment must
-   distinguish "my change broke this" from "this was already wrong". Expect the boundary count to
-   move +Gap / 0 Ok when doing this; that is success, not regression.
-4. **When a "regression" appears, measure the pre-change behaviour before assuming authorship.** The
-   `[bool;2]` case looked like damage from the new guard and was in fact a pre-existing mis-compile
-   the guard had exposed; reverting would have restored a silent bug.
-5. **Do not trust op counts or lengths as a correctness proxy.** The worst case found diverged at an
-   identical op count, differing only in content. Only byte-identity catches that.
+1. **PROBE BEFORE PLANNING, always with a control**, and **probe what the admission ACCEPTS** — every
+   silent mis-compile found so far was in a construct the admission accepted.
+2. **When generalizing a drain, tighten its admission in the SAME change.**
+3. **Close an admission hole BEFORE building support over it**; expect +Gap / 0 Ok when you do.
+4. **When a "regression" appears, measure the pre-change behaviour before assuming authorship.**
+5. **Never trust op counts or lengths as a correctness proxy** — the worst bug found diverged at an
+   identical op count. Assert byte-identity; when asserting a deferral, assert its SHAPE.
+6. **When a change that should be sufficient produces NO observable difference, suspect a path that
+   BYPASSES the code you changed** rather than assuming the change is wrong. The array-eq start
+   functions emitted field 0 inline, skipping the drain entirely; every other piece was already
+   correct and the output still did not move.
+7. **Abandon a branch on TRAJECTORY, not attempt count.** A hard increment may sit red for many
+   commits and be perfectly healthy. Keep going while the divergence narrows and green fixtures stay
+   green; abandon when it stops narrowing, fixes break green fixtures, or the approach is
+   structurally unable to express the reference's output.

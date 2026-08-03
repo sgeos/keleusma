@@ -7176,11 +7176,12 @@ fn self_host_compiles_struct_tuple_of_struct_equality() {
 #[test]
 fn array_of_composite_element_defers() {
     for src in [
-        // Array-of-tuple whose element is a struct, as a parameter and as a struct field.
-        "struct P { x: Word }\nfn f(a: [(P, Word); 2], b: [(P, Word); 2]) -> bool { a == b }",
+        // A struct FIELD that is an array-of-tuple. The parameter form is now supported, but a
+        // struct field routes through the `StructEqNested` family, which still has no nested form
+        // for an array element.
         "struct P { x: Word }\nstruct S { g: [(P, Word); 2] }\nfn f(a: S, b: S) -> bool { a == b }",
-        // Array-of-struct whose element nests another struct.
-        "struct I { v: Word }\nstruct M { i: I }\nfn f(a: [M; 2], b: [M; 2]) -> bool { a == b }",
+        // An element whose struct subtree is IMPURE: descending would mis-lower the inner composite.
+        "struct P { u: (Word, Word) }\nfn f(a: [(P, Word); 2], b: [(P, Word); 2]) -> bool { a == b }",
         // A struct field array whose element type is not a recognized scalar.
         "struct S { a: [bool;2], w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
     ] {
@@ -7206,6 +7207,58 @@ fn array_of_composite_element_defers() {
             r.ops.len()
         );
     }
+}
+
+/// An ARRAY whose element contains a nested struct self-compiles byte-identically.
+///
+/// The array-equality family was FLAT: one `StructEqField` (offset, kind) record per element field,
+/// and a codegen loop that could only emit scalar compares. It now shares the `StructEqNested`
+/// machinery — parse descends with a frame stack emitting a sentinel header plus a packing record,
+/// reconstruct expands that stream into the recursive `seb` grammar, and codegen routes the element
+/// body through the same reverse-DFS emitter the struct/tuple cases use.
+///
+/// The byte-identity pivot was the TEMP LAYOUT. The reference allocates each element's temps
+/// INTERLEAVED (element pair, then that element's nested pairs, then the next element), not grouped,
+/// so the per-element stride grows with nesting. Because one shared field list serves every element,
+/// the seb holds element 0's temps and the emitter shifts them by `e * stride`.
+///
+/// Depth comes free once the descent exists: `[C; 2]` with `C -> B -> A` works without extra code.
+#[test]
+fn self_host_compiles_array_of_nested_element_equality() {
+    // Array-of-tuple whose element is a struct: both positions, two structs, `!=`, and array
+    // lengths 1 and 3 (the per-element unroll is length-sensitive).
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: [(P, Word); 2], b: [(P, Word); 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: [(Word, P); 2], b: [(Word, P); 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nstruct R { y: Word }\nfn f(a: [(P, R); 2], b: [(P, R); 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: [(P, Word); 1], b: [(P, Word); 1]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: [(P, Word); 3], b: [(P, Word); 3]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { x: Word }\nfn f(a: [(P, Word); 2], b: [(P, Word); 2]) -> bool { a != b }",
+    );
+    // Array-of-struct whose element nests further: one level, three levels, a nested field beside a
+    // scalar, and two nested siblings (which exercises the per-element temp stride most directly).
+    assert_self_host_byte_identical(
+        "struct I { v: Word }\nstruct M { i: I }\nfn f(a: [M; 2], b: [M; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct A { x: Word }\nstruct B { a: A }\nstruct C { b: B }\nfn f(a: [C; 2], b: [C; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct I { v: Word }\nstruct M { i: I, w: Word }\nfn f(a: [M; 2], b: [M; 2]) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct I { v: Word }\nstruct M { i: I, j: I }\nfn f(a: [M; 2], b: [M; 2]) -> bool { a == b }",
+    );
 }
 
 /// A tuple element whose struct subtree is NOT pure (it contains a tuple, array, or enum) must
@@ -7924,14 +7977,19 @@ fn self_hosted_construct_support_boundary() {
         // composite defers. Each of these was previously admitted and silently mis-compiled; the
         // last diverged at the same op count as the reference, differing only in content.
         (
-            "eq/array_of_tuple_of_struct__GAP",
-            Gap,
+            "eq/array_of_tuple_of_struct",
+            SOk,
             "struct P { x: Word }\nfn f(a: [(P, Word); 2], b: [(P, Word); 2]) -> bool { a == b }",
         ),
         (
-            "eq/array_of_deep_struct__GAP",
-            Gap,
+            "eq/array_of_deep_struct",
+            SOk,
             "struct I { v: Word }\nstruct M { i: I }\nfn f(a: [M; 2], b: [M; 2]) -> bool { a == b }",
+        ),
+        (
+            "eq/array_of_3level_struct",
+            SOk,
+            "struct A { x: Word }\nstruct B { a: A }\nstruct C { b: B }\nfn f(a: [C; 2], b: [C; 2]) -> bool { a == b }",
         ),
         (
             "eq/struct_field_array_of_tuple__GAP",

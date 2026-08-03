@@ -17,6 +17,46 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-02 (session 36)
 
+**NESTED ARRAY ELEMENTS (2026-08-02): the flat array-equality family now shares the StructEqNested machinery. Boundary 69 -> 72 Ok, 6 Gap -> 4.**
+The preferred route from the blueprint — routing array-of-composite elements through the existing
+frame machinery rather than giving the flat family its own nested form — worked, and was smaller than
+the fallback would have been. Landed as four verified steps, each byte-identical before the next:
+codegen routed through the shared reverse-DFS emitter; the per-element temp stride and `tempbias`;
+parse's interleaved reservation and `elem_nested_count`; then the drain, the reconstruct expansion,
+and the admission relaxation together.
+
+TWO THINGS THE BLUEPRINT MISSED, both found by measurement rather than reading.
+
+(1) THE TEMP LAYOUT IS INTERLEAVED. The reference allocates element 0's pair (4,5) then element 0's
+nested pair (6,7), then element 1's (8,9) and (10,11) — not all element pairs followed by all nested
+pairs. The old code assumed a fixed stride of 2, which is why `local_count` came out 8 against 12.
+Since ONE shared field list serves every element, the seb holds element 0's temps and the emitter
+shifts them by `e * stride`; emitting a seb per element would have multiplied `match_parts` by the
+array length. Element-0 block k sits at ta+3+2k (r2) and ta+4+2k (l2).
+
+(2) THE START FUNCTIONS BYPASSED THE DRAIN. `array_of_tuple_eq_start` and `array_of_struct_eq_start`
+emitted the FIRST element field inline and pre-advanced `sq_field` to 1. The drain was the only place
+that recognised a composite field, so field 0 was always compared as a scalar. Every other piece was
+correct and the output still did not move; delegating that first record to the drain was what made
+the descent fire. LESSON: when a change that should be sufficient produces NO observable difference,
+suspect a path that bypasses the code you changed, rather than assuming the change is wrong.
+
+CONVERGENCE, as a record of what the trajectory looked like: 83 ops (wrong shape) -> 113/113 with
+`local_count` 12/12 and ONE differing op (the extract variant, because the seb had become
+variable-length while codegen still read the trailing flags at a fixed offset) -> identical. Each
+step narrowed the divergence and no previously-green fixture regressed, which is the signal that
+matters — not the number of attempts (see the stop-list correction committed the same day).
+
+Depth came free once the descent existed: `[C; 2]` with C -> B -> A works with no extra code, as do
+two nested siblings, both element positions, `!=`, and array lengths 1/2/3. Verified byte-identical
+across all of those; all four `.kel` stages still self-compile. No opcode, record, node kind, or
+`BYTECODE_VERSION` change.
+
+STILL OPEN and deliberately so: a struct FIELD that is an array-of-tuple routes through the
+`StructEqNested` family's own `se_arrsphase` path, which has separate flat element handling; and an
+element whose struct subtree is impure still defers by admission.
+
+
 **ARRAY-OF-COMPOSITE ADMISSION (2026-08-02): FOUR silent mis-compiles closed by adding the guard the flat array family never had. Boundary +4 Gap, 0 Ok — and that is the point.**
 Set out to implement array-of-tuple-of-struct. Probing first showed the flat array-equality family
 (`array_of_struct_eq_start` / `array_of_tuple_eq_start` → `StructEqField` records →

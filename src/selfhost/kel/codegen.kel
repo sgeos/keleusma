@@ -1668,10 +1668,18 @@ fn push_array_of_struct_eq(p: Word) -> Word {
     let arrcount = ast.match_parts[base + 2];
     let arrsize = ast.match_parts[base + 3];
     let fieldcount = ast.match_parts[base + 4];
-    let is_ne = ast.match_parts[base + 5 + fieldcount * 2];
+    // The element field list is the recursive `seb` grammar, so it is VARIABLE length: a nested block
+    // occupies a 5-word header plus its own sub-forest. Walk it to find where the trailing flags sit,
+    // rather than assuming the old fixed `fieldcount * 2`. This walk also counts the per-element
+    // nested temp pairs via count_temps=1, which is what the stride below needs.
+    let before_temps = st.let_count;
+    let seb_end = struct_forest_end(base + 5, fieldcount, 1);
+    let estride = 2 + st.let_count - before_temps;
+    st.let_count = before_temps;
+    let is_ne = ast.match_parts[seb_end];
     // is_tuple selects the accessor: a tuple element reads fields with GetTupleField and extracts with
     // a FlatNested Tuple (variant 0); a struct element uses GetField and FlatNested Struct (variant 2).
-    let is_tuple = ast.match_parts[base + 5 + fieldcount * 2 + 1];
+    let is_tuple = ast.match_parts[seb_end + 1];
     let acc = if is_tuple == 1 {
         wire.gettuplefield
     } else {
@@ -1682,15 +1690,10 @@ fn push_array_of_struct_eq(p: Word) -> Word {
     } else {
         2
     };
-    // Per-element temp stride. The element pair is 2; every nested sub-field ANYWHERE in the
-    // element's subtree adds another pair, because the reference allocates each element's temps
-    // interleaved (element pair, then that element's nested pairs, then the next element) rather
-    // than grouping all element pairs first. `struct_forest_end` with count_temps=1 counts them by
-    // its let_count side effect, so snapshot and restore around it and add the real total once.
-    let before_temps = st.let_count;
-    struct_forest_end(base + 5, fieldcount, 1);
-    let estride = 2 + st.let_count - before_temps;
-    st.let_count = before_temps + 2 + estride * arrcount;
+    // Per-element temp stride: the element pair, plus a pair for every nested block anywhere in the
+    // element's subtree (counted by the walk above), because the reference allocates each element's
+    // temps interleaved rather than grouping all element pairs first.
+    st.let_count = st.let_count + 2 + estride * arrcount;
     for e in 0..arrcount limit 64 {
         st.eq_vidx[e] = intern_int(e);
     }

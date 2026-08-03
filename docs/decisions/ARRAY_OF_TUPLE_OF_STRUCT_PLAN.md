@@ -5,25 +5,26 @@
 Blueprint for `[(P, Word); 2] == [(P, Word); 2]` — an ARRAY whose element is a TUPLE whose element
 is a STRUCT — and the same shape as a struct field (`struct S { g: [(P, Word); 2] }`).
 
-Status: **PARTIALLY ADDRESSED — the SILENT MIS-COMPILE is fixed; full support is still open.**
+Status: **COMPLETE — implemented, byte-identical, boundary 69 -> 72 Ok (6 Gap -> 4).**
 
-2026-08-02: rather than build nested support first, the admission hole underneath it was closed.
-Four constructs were being admitted and silently mis-compiled by the flat array-equality family;
-all four now DEFER cleanly (a short primitive compare that diverges loudly and is caught by the
-CLI's reference cross-check) instead of emitting a wrong comparison. Boundary +4 Gap, 0 Ok.
+Landed in two increments. First the ADMISSION hole was closed (2026-08-02), turning four silent
+mis-compiles into clean deferrals; then nested support was implemented, flipping two of those Gaps to
+Ok plus a new 3-level case.
 
-That was the right order: the flat family had NO admission guard at all, so every step toward
-nested support would have been built over a construct set that silently compiled wrong. The
-remaining work below — actual nested support — is unchanged in shape and is now safe to attempt
-incrementally, because anything not yet supported rejects loudly.
+**Outcome versus plan.** The preferred route — routing array-of-composite elements through the
+`StructEqNested` machinery — worked, and was smaller than the fallback would have been. What the plan
+did NOT anticipate was the byte-identity pivot: the reference allocates each element's temps
+INTERLEAVED (element pair, then that element's nested pairs, then the next element), not grouped, so
+the per-element stride grows with nesting. Because one shared field list serves every element, the
+seb holds element 0's temps and the emitter shifts them by `e * stride` (the `tempbias` parameter).
 
-**The four fixed mis-compiles**, each verified against the reference with a control:
-- `[(P, Word); 2]` as a parameter (83 wrong ops against 113 reference)
-- `struct S { g: [(P, Word); 2] }` (73 against 128)
-- `[M; 2]` where `M` nests a struct (33 against 93)
-- `struct S { a: [bool;2], w: Word }` — **the most dangerous shape found: it diverged at the SAME
-  op count as the reference (58 against 58), differing only in content.** A length-based or
-  count-based check would never have caught it; only the byte-identical oracle did.
+The other unanticipated find: `array_of_tuple_eq_start` and `array_of_struct_eq_start` emitted the
+FIRST element field inline and pre-advanced `sq_field` to 1, silently bypassing the drain's composite
+check. Delegating that first record to the drain was what finally made the descent fire.
+
+STILL OPEN: a struct FIELD that is an array-of-tuple (`struct S { g: [(P, Word); 2] }`) routes through
+the `StructEqNested` family's `se_arrsphase` path, which has its own flat element handling and is
+untouched by this work. It remains a deliberate Gap.
 
 ## The measured divergence
 
