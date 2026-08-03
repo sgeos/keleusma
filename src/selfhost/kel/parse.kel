@@ -679,6 +679,16 @@ private data stmt {
     ssp_sp: Word,
     ssp_stk: [Word; 8],
     ssp_cur: [Word; 8],
+    // Nested-block counter for an ARRAY element type (`elem_nested_count`): an explicit stack over
+    // the element's transitively-nested STRUCT sub-fields. Frame 0 may be a TUPLE (`enc_istup`);
+    // deeper frames are always structs. Bounded (8); non-recursive (R4).
+    // Nested blocks in the array element's subtree, per element (see `elem_nested_count`).
+    sq_arrnested: Word,
+    enc_n: Word,
+    enc_sp: Word,
+    enc_stk: [Word; 8],
+    enc_cur: [Word; 8],
+    enc_istup: [Word; 8],
     // Admission verdict for the ARRAY-of-struct / array-of-tuple equality paths (`elem_all_scalar`).
     // Those drains are FLAT (one `StructEqField` per element field, closed by
     // `ArrayOfStructEqBuild`) and have no nested form, so a composite element field must defer.
@@ -2144,8 +2154,11 @@ fn array_of_struct_eq_start(op: Word) -> Word {
     stmt.slot_count = stmt.slot_count + 1;
     stmt.sq_ta = ps.pcount + stmt.slot_count;
     stmt.slot_count = stmt.slot_count + 1;
-    // Reserve the per-element inner temp pairs (two per array element).
-    stmt.slot_count = stmt.slot_count + 2 * count;
+    // Per-element temps: the element pair, plus a pair for every nested block in the element's
+    // subtree. The reference allocates these INTERLEAVED per element, so the stride is per element
+    // rather than a trailing run. With no nested block this is the previous `2 * count`.
+    stmt.sq_arrnested = elem_nested_count(idx, 0);
+    stmt.slot_count = stmt.slot_count + (2 + 2 * stmt.sq_arrnested) * count;
     stmt.structeq_emit = 1;
     stmt.sq_struct = idx;
     stmt.sq_count = structdefs.sd_fcount[idx];
@@ -2185,7 +2198,11 @@ fn array_of_tuple_eq_start(op: Word) -> Word {
     stmt.slot_count = stmt.slot_count + 1;
     stmt.sq_ta = ps.pcount + stmt.slot_count;
     stmt.slot_count = stmt.slot_count + 1;
-    stmt.slot_count = stmt.slot_count + 2 * count;
+    // Per-element temps: the element pair, plus a pair for every nested block in the element's
+    // subtree. The reference allocates these INTERLEAVED per element, so the stride is per element
+    // rather than a trailing run. With no nested block this is the previous `2 * count`.
+    stmt.sq_arrnested = elem_nested_count(idx, 1);
+    stmt.slot_count = stmt.slot_count + (2 + 2 * stmt.sq_arrnested) * count;
     stmt.structeq_emit = 1;
     stmt.sq_struct = idx;
     stmt.sq_count = tupledefs.tup_ecount[idx];
@@ -2292,6 +2309,49 @@ fn step_structeq_emit() -> Word {
 //
 // Mirrors the existing `enum_eq_supported` guard on the array-of-enum path; the array-of-struct and
 // array-of-tuple paths were the two dispatch arms that had no such guard.
+// The number of nested composite BLOCKS in an array element's subtree: every transitively-nested
+// struct sub-field contributes one. The reference allocates a temp PAIR per block per element, and
+// allocates them INTERLEAVED (element pair, then that element's blocks, then the next element), so
+// this count is the per-element stride contribution and must be known before the drain starts.
+// `is_tuple` selects frame 0's layout table; deeper frames are always structs.
+fn elem_nested_count(idx: Word, is_tuple: Word) -> Word {
+    stmt.enc_n = 0;
+    stmt.enc_stk[0] = idx;
+    stmt.enc_cur[0] = 0;
+    stmt.enc_istup[0] = is_tuple;
+    stmt.enc_sp = 1;
+    for i in 0..2048 limit 2048 {
+        if stmt.enc_sp > 0 {
+            let top = stmt.enc_sp - 1;
+            let cs = stmt.enc_stk[top];
+            let cnt = if stmt.enc_istup[top] == 1 {
+                tupledefs.tup_ecount[cs]
+            } else {
+                structdefs.sd_fcount[cs]
+            };
+            if stmt.enc_cur[top] >= cnt {
+                stmt.enc_sp = stmt.enc_sp - 1;
+            } else {
+                let c = stmt.enc_cur[top];
+                stmt.enc_cur[top] = c + 1;
+                let child = if stmt.enc_istup[top] == 1 {
+                    tupledefs.tup_estruct[tupledefs.tup_estart[cs] + c]
+                } else {
+                    structdefs.sd_fstruct[structdefs.sd_fstart[cs] + c]
+                };
+                if child > 0 {
+                    stmt.enc_n = stmt.enc_n + 1;
+                    stmt.enc_stk[stmt.enc_sp] = child - 1;
+                    stmt.enc_cur[stmt.enc_sp] = 0;
+                    stmt.enc_istup[stmt.enc_sp] = 0;
+                    stmt.enc_sp = stmt.enc_sp + 1;
+                }
+            }
+        }
+    }
+    stmt.enc_n
+}
+
 fn elem_all_scalar(idx: Word, is_tuple: Word) -> Word {
     stmt.aes_ok = 1;
     if is_tuple == 1 {
