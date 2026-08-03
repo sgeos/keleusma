@@ -10,7 +10,7 @@ a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`
-- **Parent commit** (the repository state this handoff describes): `337bf17`
+- **Parent commit** (the repository state this handoff describes): `5b58820`
 - **Written**: 2026-08-02
 - **Tree at write**: clean (all work committed, merged, and pushed; `v0.2.3` tip is the
   roadmap-baseline-correction merge `81c0bd9` plus this handoff restamp commit)
@@ -30,69 +30,71 @@ advances the tip by one, so the state it describes is the parent of the handoff 
   parent versus actual `HEAD~1`), familiarize from the live channels — `REVERSE_PROMPT.md`,
   `DESIGN_JOURNAL.md`, `TASKLOG.md`, and the git log, always authoritative — and wait for instruction.
 
-## Resume prompt — START ORDER 1. The drain item was PROBED and deferred. Do not re-ask.
+## Resume prompt — IMPLEMENT the TYPE CHECKER. It is the only unblocked Order-1 item.
 
-**The mixed-subtree family is closed.** Six increments took the composite-equality frontier from 56
-to 79 Ok. What remains in this family is NOT drain generalization:
+All three Order-1 remainders were probed on 2026-08-03 and the earlier recommendation was WITHDRAWN:
 
-- **Enum with a COMPOSITE payload** — PROBED 2026-08-03 and DEFERRED. It is NOT a contained
-  extension of the enum block: a struct payload fails at DEPTH 1 too (4 ops against 90), so the gap is
-  in the nested enum emitter generally, and array/tuple payloads fail even at TOP level. Needs new
-  payload plumbing across all three stages, mirroring `push_enum_struct_payload_loop`. Do not re-probe
-  it expecting a quick win.
-- **A struct FIELD that is an array-of-tuple**, and **the `[bool;2]`-shaped struct field array** —
-  these share ONE root cause: a struct field's array element type goes through `field_size_and_kind`,
-  which accepts only an identifier, so the element layout is never recorded. Fixing that means a new
-  layout table plus scanner work. A genuine context switch, and it would close two Gaps at once.
-- **An array whose ELEMENT is itself composite at depth** (array blocks admit scalar elements only).
+- **Wire-format serialization — PARTIALLY BLOCKED.** The roadmap's enumeration omitted that the
+  AUXILIARY BODY is `rkyv`-archived and carries everything except the opcode stream and operand pool.
+  Full self-hosting needs an operator decision (reimplement rkyv, or change the aux-body encoding — a
+  wire-format change, hence a `BYTECODE_VERSION` question), which is an ENUMERATED STOP. The
+  non-rkyv slices are bounded but leave the aux body host-supplied and do NOT meet the gate wording.
+  See [`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md).
+  **If the operator has since decided, that decision governs — re-read it before assuming this stop.**
+- **The monomorphizer — VACUOUS.** Identity over the subset; the `.kel` sources use no generics.
+  Porting it changes no emitted byte. Do not pick it as "the cheapest" expecting value.
+- **The type checker — UNBLOCKED and substantive.** The pipeline has NO type checking (its stages are
+  lexer, parse, reconstruct, codegen, plus analyze and verify_*). Ill-typed programs are caught today
+  only by the CLI's cross-check against the reference. Self-hosting it is what lets the self-hosted
+  compiler reject bad programs on its own. Over the monomorphic Word/Byte subset it is far smaller
+  than `typecheck.rs`'s 8601 lines.
 
-**DIRECTION: Order 1** (chosen, not open). With the drain family closed, the three Order-1 remainders are the
-higher-value work — they are the whole of what stands between here and the Order-1 gate:
-1. **Wire-format serialization** — self-contained and well-specified (framing header, operand-pool
-   encoding, parity, CRC trailer; all host-side today, no `.kel` stage references `to_bytes`).
-   Probably the best value per token.
-2. **The monomorphizer** — near-identity over the subset, likely the cheapest of the three.
-3. **The type checker** — largest and highest-risk (Hindley-Milner is not a streaming shape).
+**PROBE CAUTION, learned the hard way here:** `self_host_compile` calls `compile_src` FIRST and panics
+whenever the REFERENCE rejects, so any "does the self-hosted path reject?" probe run through it is
+CONFOUNDED and will report rejection for every ill-typed program. Probe the stages directly. More
+generally: check what a harness itself does before trusting its verdict — the same control discipline
+the byte-identity probes require.
 
-Start with **wire-format serialization** unless a probe says otherwise: it is self-contained, and
-unlike the last six increments it does not touch the equality machinery, so their large regression
-surface does not apply. `AUTONOMOUS_IMPLEMENTATION_LOOP.md` forbids prompting the operator to ORDER
-any of this.
+**Note the ORACLE DIFFERS for this item.** Every increment of the last arc used byte-identity of
+emitted ops. A type checker changes no output; its oracle is VERDICT AGREEMENT with the reference
+(accept/reject, and ideally the same error) over a corpus of well- and ill-typed programs. Build that
+corpus first, with both polarities, and treat a self-hosted ACCEPT of a reference-REJECT as the
+serious direction — that is the unsound one.
 
-**The thirteen method rules. These found every bug across six increments; none is optional.**
+Suggested first slice: the monomorphic scalar core — binary/unary operator operand types, assignment
+and return types, and undefined identifiers — over the subset the stages themselves use. Widen from
+there to composites.
+
+**The fourteen method rules. These found every bug across seven increments; none is optional.**
 1. **PROBE BEFORE PLANNING, always with a control**; confirm the REFERENCE accepts the source too.
-2. **Probe what the admission ACCEPTS, not only what it rejects.** Every silent mis-compile found was
-   in a construct the admission accepted.
+2. **Probe what the admission ACCEPTS, not only what it rejects.**
 3. **When generalizing a drain, tighten its admission IN THE SAME CHANGE.**
 4. **Close an admission hole BEFORE building support over it**; expect +Gap / 0 Ok when you do.
 5. **Never trust op counts as a correctness proxy.** For a deferral, assert its SHAPE.
 6. **When a sufficient-looking change produces NO observable difference, suspect a BYPASSING path.**
-7. **Abandon on TRAJECTORY, not attempt count.** Keep going while the divergence narrows and green
-   fixtures stay green.
+7. **Abandon on TRAJECTORY, not attempt count.**
 8. **Admission helpers call each other and R4 forbids cycles.** Inline rather than reuse.
 9. **A self-compile failure in stage B can be caused by stage A merely GROWING** — and if the first
-   factoring does not fix it, MEASURE which function is over. A ten-line probe over the harness names
-   it; the loop-limit error names neither loop nor function.
-10. **When a construct becomes supported, RETARGET the Gap fixture that pinned it.** Done three times
-    on the same fixtures (tuple -> array -> enum -> enum-with-composite-payload).
-11. **Read the divergence SIGNATURE.** One differing `Const` with matching lengths is a pool-ORDER
-    bug; a shortfall of one compare block only where a sibling follows is a frame over-consuming; ONE
-    extra `Loop` is a reused emitter that already emits its own.
-12. **Edit fixtures by POSITION, not string replacement**, when the same source appears in both a
-    positive and a negative test.
+   factoring does not fix it, MEASURE which function is over.
+10. **When a construct becomes supported, RETARGET the Gap fixture that pinned it.**
+11. **Read the divergence SIGNATURE** — pool-order, over-consuming frame, and duplicated loop-open all
+    have distinct shapes.
+12. **Edit fixtures by POSITION, not string replacement**, when a source appears in two tests.
 13. **The gate compiles the test crate more strictly than `cargo test`** (clippy `-D warnings`), and
-    `EXPECTED_SELF_COMPILE` must be bumped whenever codegen.kel gains a function. Both fire ONLY in
-    the full gate. Never land on targeted tests alone.
+    `EXPECTED_SELF_COMPILE` must be bumped when codegen.kel gains a function. Both fire ONLY in the
+    full gate.
+14. **A probe run through a harness that already invokes the reference cannot tell you what the
+    self-hosted path does alone.** Check the harness before trusting its verdict.
 
 Steps: validate → familiarize (`REVERSE_PROMPT.md`, newest `DESIGN_JOURNAL.md`) → probe → implement on
-a feature branch off `v0.2.3` → verify the regression surface FIRST, then the new fixtures, then the
-boundary, then the FULL `scripts/release-gate.sh` → no-ff merge, push, confirm CI, record on all three
-channels, prune the branch, restamp this HANDOFF.
+a feature branch off `v0.2.3` → verify verdict agreement on BOTH polarities, then the boundary, then
+the FULL `scripts/release-gate.sh` → no-ff merge, push, confirm CI, record on all three channels,
+prune the branch, restamp this HANDOFF.
 
 **Git position** (as of the Parent commit)
-- Branch `v0.2.3` tip is the probe-finding docs commit `337bf17` plus this restamp commit. In sync
-  with origin, tree clean. Last full gate GREEN (240 suites) and CI GREEN on the code merge `239aa9c`;
-  the commits after it are docs-only and passed the pre-push gate.
+- Branch `v0.2.3` tip is the Order-1 reassessment docs commit `5b58820` plus this restamp commit. In
+  sync with origin, tree clean. Last full gate GREEN (240 suites) and CI GREEN on the code merge
+  `239aa9c`; every commit after it is docs-only and passed the pre-push gate.
 - Local branches are pruned to `main`, `v0.2.3`, and `v0.2.3-prerebase-backup`. Origin holds only `main`
   and `v0.2.3`. **Do NOT delete `v0.2.3-prerebase-backup`**: it holds 309 commits not in `v0.2.3` and is
   a deliberate safety net, not clutter.
