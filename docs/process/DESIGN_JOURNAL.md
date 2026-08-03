@@ -17,6 +17,30 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-03 (session 36)
 
+**ENUM COMPOSITE PAYLOAD PROBED AND DEFERRED (2026-08-03). The composite-equality arc closes at 79 Ok; Order 1 is next.**
+The handoff said to probe the last drain-shaped item and take it only if contained. It is not. A
+struct payload fails at DEPTH 1 as well as at depth 2 (4 ops against 90), which locates the gap in the
+NESTED ENUM EMITTER rather than in the enum block just landed; array and tuple payloads fail even at
+TOP level. Supporting any of them means new payload plumbing across parse, reconstruct, and codegen,
+mirroring `push_enum_struct_payload_loop` from the top-level enum-eq path. A full increment, so it was
+deferred per the handoff's own instruction rather than started at the tail of the arc.
+
+Worth recording because the probe was cheap and the conclusion was the opposite of the expectation:
+the natural assumption was that a composite payload would be a small extension of the block, since the
+TOP-LEVEL enum-eq already supports a struct payload. The depth-1 measurement is what disproved it, and
+it took one probe. Probing at MORE THAN ONE DEPTH is what separated "my new block is incomplete" from
+"this capability was never in the nested emitter at all".
+
+ARC SUMMARY. Six increments took the composite-equality frontier from 56 to 79 Ok, of which two were
+CORRECTNESS fixes (constructs that compiled, verified, ran, and compared the wrong bytes) and one was
+an admission-hole closure that deliberately moved the count backwards (+4 Gap, 0 Ok) to make the
+frontier honest. No opcode, record kind, node kind, or `BYTECODE_VERSION` change in any of them: every
+new block kind reused existing record payload space via a sentinel range (100+ struct, 30000+ tuple,
+40000+ array, 50000+ enum), which is the tag-reuse pattern the rad-hard minimal-ISA constraint asks
+for. The remaining Gaps in the family are no longer drain generalizations, and two of them share a
+single scanner root cause.
+
+
 **NESTED ENUM SUB-FIELDS (2026-08-03): the mixed-subtree family is COMPLETE. Boundary 77 -> 79 Ok.**
 Third and last kind. Enums are unlike tuple and array blocks: the body is a VARIANT DISPATCH
 (`IsEnum` per variant, then that variant's payload compares), not a field or element walk. The block

@@ -57,44 +57,36 @@ generalizes to its enclosing-composite form, so support must not be inferred by 
   `tests/for_limit.rs`. Bare `break;` then came out IDENTICAL and only the outcome-arm form diverged.
 - Boundary test green at 67 Ok; full `scripts/release-gate.sh` result recorded in the commit message.
 
-## Next step — the mixed-subtree family is DONE; what remains is scanner work and Order 1
+## Next step — ORDER 1 (the drain family is closed and the last drain item was PROBED and deferred)
 
-Tuples, arrays and enums all nest now (boundary 79 Ok / 4 Gap / 1 RefRejects). The remaining Gaps in
-this family are no longer drain generalizations:
+**Probed 2026-08-03, with a control**: an enum with a COMPOSITE payload is NOT a contained extension
+of the enum block just landed. A struct payload fails at DEPTH 1 as well (`struct S { e: E, w: Word }`
+with `enum E { A(Q), B }` -> defers, 4 ops against 90), so the gap is in the NESTED ENUM EMITTER
+generally, not in the new block. Array and tuple payloads fail even at TOP level. Supporting them
+means new payload plumbing across parse, reconstruct, and codegen — mirroring what
+`push_enum_struct_payload_loop` does for the top-level enum-eq. That is a full increment, not a tail.
 
-1. **An enum with a COMPOSITE payload at depth** (`enum E { A(Q), B }`, `enum E { A([Word;2]), B }`).
-   The last drain-shaped item, and the smallest remaining one.
-2. **A struct FIELD that is an array-of-tuple.** NOT drain work: the element layout is never recorded
-   (`parray_tuple` is parameter-only; a struct field's array element type goes through
-   `field_size_and_kind`, which accepts only an identifier). Needs a new layout table plus scanner
-   work.
-3. The `[bool;2]`-shaped struct field array (element type not a recognized scalar) — same cause as 2.
-4. An array whose ELEMENT is itself composite at depth (array blocks admit scalar elements only).
+So the drain family is closed for now, and **Order 1 is the direction**. Its three remainders are the
+whole of what stands between here and the Order-1 gate:
 
-Then the Order-1 gate: the type checker, the monomorphizer, and wire-format serialization. Given the
-drain family is essentially closed, Order 1 is now the higher-value direction — wire-format
-serialization is self-contained and well-specified, and the monomorphizer is near-identity over the
-subset. Do NOT prompt the operator to order any of this.
+1. **Wire-format serialization** — self-contained and well-specified: the framing header, operand-pool
+   encoding, parity, and CRC trailer are all host-side today (no `.kel` stage references `to_bytes`,
+   parity, or CRC). Probably the best value per token, and it has no interaction with the equality
+   machinery, so the large regression surface of the last six increments does not apply.
+2. **The monomorphizer** — near-identity over the subset, likely the cheapest of the three.
+3. **The type checker** — largest and highest-risk (Hindley-Milner is not a streaming shape).
+
+Deferred in this family, for whenever it is picked up again:
+- Enum with a composite payload (struct, array, or tuple) — needs the payload plumbing above.
+- A struct FIELD that is an array-of-tuple, and the `[bool;2]`-shaped struct field array — these share
+  ONE root cause: a struct field's array element type goes through `field_size_and_kind`, which
+  accepts only an identifier, so the element layout is never recorded. One scanner fix closes both.
+- An array whose ELEMENT is itself composite at depth.
 
 ## Standing method notes
 
-1. **PROBE BEFORE PLANNING, always with a control**, and **probe what the admission ACCEPTS**.
-2. **When generalizing a drain, tighten its admission in the SAME change.**
-3. **Close an admission hole BEFORE building support over it**; expect +Gap / 0 Ok when you do.
-4. **When a "regression" appears, measure the pre-change behaviour before assuming authorship.**
-5. **Never trust op counts as a correctness proxy.** For a deferral, assert its SHAPE.
-6. **When a sufficient-looking change produces NO observable difference, suspect a BYPASSING path.**
-7. **Abandon on TRAJECTORY, not attempt count.**
-8. **Admission helpers call each other and R4 forbids cycles.** Inline rather than reuse.
-9. **A self-compile failure in stage B can be caused by stage A merely GROWING** — and if the first
-   factoring does not fix it, MEASURE which function is over rather than guessing again. A ten-line
-   probe over the harness names it; the loop-limit error does not.
-10. **When a construct becomes supported, RETARGET the Gap fixture that pinned it.** Done three times
-    now on the same fixtures (tuple -> array -> enum -> enum-with-composite-payload).
-11. **Read the divergence SIGNATURE.** One differing `Const` with matching lengths is a pool-ORDER
-    bug; a fixed shortfall of one compare block only where a sibling follows is a frame consuming a
-    field it should not; ONE extra `Loop` is a reused emitter that already emits its own.
-12. **Edit fixtures by POSITION, not string replacement**, when the same source appears in both a
-    positive and a negative test — a blind replace silently corrupted both.
-13. **The gate compiles the test crate more strictly than `cargo test`** (clippy `-D warnings`): a
-    one-element `for` left by collapsing a fixture list fails there and nowhere else.
+The thirteen rules are consolidated in [HANDOFF.md](./HANDOFF.md); they are not repeated here. The
+three most expensive lessons of this arc, in short: probe what the admission ACCEPTS (both silent
+mis-compiles were in accepted constructs); tighten admission in the same change as any drain
+generalization (otherwise a shallow silent bug becomes a deeper one); and never land on targeted tests
+alone (clippy `-D warnings` and `EXPECTED_SELF_COMPILE` fire only in the full gate).
