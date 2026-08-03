@@ -1682,7 +1682,15 @@ fn push_array_of_struct_eq(p: Word) -> Word {
     } else {
         2
     };
-    st.let_count = st.let_count + 2 + 2 * arrcount;
+    // Per-element temp stride. The element pair is 2; every nested sub-field ANYWHERE in the
+    // element's subtree adds another pair, because the reference allocates each element's temps
+    // interleaved (element pair, then that element's nested pairs, then the next element) rather
+    // than grouping all element pairs first. `struct_forest_end` with count_temps=1 counts them by
+    // its let_count side effect, so snapshot and restore around it and add the real total once.
+    let before_temps = st.let_count;
+    struct_forest_end(base + 5, fieldcount, 1);
+    let estride = 2 + st.let_count - before_temps;
+    st.let_count = before_temps + 2 + estride * arrcount;
     for e in 0..arrcount limit 64 {
         st.eq_vidx[e] = intern_int(e);
     }
@@ -1696,8 +1704,8 @@ fn push_array_of_struct_eq(p: Word) -> Word {
     push_emit(wire.konst + true_idx * wire.radix);
     for ej in 0..arrcount limit 64 {
         let e = arrcount - 1 - ej;
-        let inner_b = ta + 1 + 2 * e;
-        let inner_a = ta + 2 + 2 * e;
+        let inner_b = ta + 1 + e * estride;
+        let inner_a = ta + 2 + e * estride;
         // After the inner loop: negate its result and, if the element compared unequal, break the
         // OUTER loop false.
         push_emit(wire.mendif);
@@ -1709,21 +1717,22 @@ fn push_array_of_struct_eq(p: Word) -> Word {
         // Inner struct-eq field loop over the element: break true once all fields match.
         push_emit(wire.mbreak);
         push_emit(wire.konst + true_idx * wire.radix);
-        for fj in 0..fieldcount limit 64 {
-            let f = fieldcount - 1 - fj;
-            let off = ast.match_parts[base + 5 + f * 2];
-            let kind = ast.match_parts[base + 5 + f * 2 + 1];
-            push_emit(wire.mendif);
-            push_emit(wire.mbreak);
-            push_emit(wire.konst + false_idx * wire.radix);
-            push_emit(wire.mif);
-            push_emit(wire.lnot);
-            push_emit(wire.cmpeq);
-            push_emit(acc + (off + kind * 65536) * wire.radix);
-            push_emit(wire.getlocal + inner_b * wire.radix);
-            push_emit(acc + (off + kind * 65536) * wire.radix);
-            push_emit(wire.getlocal + inner_a * wire.radix);
-        }
+        // The element's sub-fields go through the shared reverse-DFS emitter rather than a flat
+        // scalar loop. For an all-scalar element this is byte-identical to the previous inline loop:
+        // the seb scalar sub-field grammar `(off, kind)` is exactly this record's field-list layout,
+        // so frame 0 walks the same pairs and emits the same blocks. Routing through it is what lets
+        // a COMPOSITE element sub-field (kind >= 100) descend, which the inline loop could not
+        // express -- see `docs/decisions/ARRAY_OF_TUPLE_OF_STRUCT_PLAN.md`.
+        push_struct_eq_subfields(
+            base + 5,
+            fieldcount,
+            inner_a,
+            inner_b,
+            acc,
+            false_idx,
+            true_idx,
+            e * estride,
+        );
         push_emit(wire.mloop);
         // Extract a[e] then b[e] as the composite element into the inner temp pair.
         push_emit(wire.setlocal + inner_a * wire.radix);
@@ -2047,7 +2056,12 @@ fn es_compute_sfoff(f: Word, sbase: Word, subcount: Word) -> Word {
 // negates to break the parent loop on inequality. Factored out of `push_struct_eq_nested` to keep that
 // chunk under the op-table capacity (`eq/2level_struct`). Pool: `false_idx`/`true_idx` are shared with
 // the caller (dedup'd), so no new constants -- the eager pre-pass already interned false then true.
-fn push_struct_eq_subfields(sbase: Word, subcount: Word, l2: Word, r2: Word, subacc: Word, false_idx: Word, true_idx: Word) -> Word {
+// `tempbias` is added to a nested sub-field's r2'/l2' temps. It is 0 for every caller whose sub-field
+// list is emitted once. The ARRAY caller reuses ONE sub-field list across all elements, but the
+// reference allocates each element's temps interleaved (element pair, then that element's nested
+// pairs, then the next element), so the seb stores element 0's temps and the array caller passes
+// `e * stride` to shift them onto element `e`.
+fn push_struct_eq_subfields(sbase: Word, subcount: Word, l2: Word, r2: Word, subacc: Word, false_idx: Word, true_idx: Word, tempbias: Word) -> Word {
     // Frame 0: the given sub-field list, container (l2, r2), accessor `subacc`, no suffix.
     st.es_sbase[0] = sbase;
     st.es_subcount[0] = subcount;
@@ -2104,8 +2118,8 @@ fn push_struct_eq_subfields(sbase: Word, subcount: Word, l2: Word, r2: Word, sub
                     // A nested-struct sub-field: emit the outer negate/break and the inner loop
                     // trailer, then PUSH a child frame over its sub-fields (extracted into r2p/l2p; the
                     // loop head + extract are the child's suffix, emitted on completion).
-                    let r2p = ast.match_parts[soff + 3];
-                    let l2p = ast.match_parts[soff + 4];
+                    let r2p = ast.match_parts[soff + 3] + tempbias;
+                    let l2p = ast.match_parts[soff + 4] + tempbias;
                     let extp = sub_off + (sub_kind - 100) * 65536 + 2 * 4294967296;
                     push_emit(wire.mendif);
                     push_emit(wire.mbreak);
@@ -2396,7 +2410,7 @@ fn push_struct_eq_nested(p: Word) -> Word {
                 }
             } else {
                 let subcount = ast.match_parts[foff + 6];
-                push_struct_eq_subfields(foff + 7, subcount, l2, r2, subacc, false_idx, true_idx);
+                push_struct_eq_subfields(foff + 7, subcount, l2, r2, subacc, false_idx, true_idx, 0);
             }
             push_emit(wire.mloop);
             }
