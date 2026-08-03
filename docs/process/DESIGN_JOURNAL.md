@@ -15,7 +15,53 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 ## Last Updated
 
-**Date**: 2026-08-02 (session 36)
+**Date**: 2026-08-03 (session 36)
+
+**NESTED ENUM SUB-FIELDS (2026-08-03): the mixed-subtree family is COMPLETE. Boundary 77 -> 79 Ok.**
+Third and last kind. Enums are unlike tuple and array blocks: the body is a VARIANT DISPATCH
+(`IsEnum` per variant, then that variant's payload compares), not a field or element walk. The block
+frame therefore carries no sub-field list at all — after its packing record it drives the same
+`se_e*` variant drain the depth-1 enum field uses, then pops. Seb form
+`[off, 50000+size, vcount, r2, l2, ename, per variant (vname, disc, fcount, fcount*(off, kind))]`.
+`push_nested_enum_loop` was first PARAMETERISED (ename, vcount, variant base) in a separate
+byte-identical refactor so the block could reuse it rather than grow a second copy of the dispatch.
+
+THREE FINDINGS.
+
+(1) The enum emitter emits its OWN loop-open, unlike the struct/tuple/array block bodies. Adding the
+usual `mloop` after it produced exactly one extra `Loop` — a one-op divergence that pointed straight
+at the asymmetry. Block kinds are NOT interchangeable in their emission contract; check what a reused
+emitter already emits before wrapping it.
+
+(2) THE CAPACITY TRAP RECURRED, AND FACTORING THE OBVIOUS THING WAS NOT ENOUGH. `LoopLimitExceeded`
+in the unchanged reconstruct.kel again. Factoring the enum drain out did not fix it; nor did factoring
+the admission check. Rather than keep guessing, the harness was instrumented to report WHICH function
+trapped: `structeq_nested_next`, at 1115 records. It had accumulated growth across four increments,
+so the fix was to factor its whole frame sub-field dispatch into `se_frame_subfield_next`. LESSON:
+when a capacity trap does not yield to the first factoring, MEASURE which function is over rather than
+guessing again — the loop-limit error names neither the loop nor the function, but a ten-line probe
+over the harness does.
+
+(3) A test-editing hazard, not a compiler one: retargeting the impure-subtree Gap fixture by
+string replacement hit the occurrence inside the NEW positive test instead, because that test now
+sits earlier in the file, silently turning a supported case into an impure one and duplicating the
+deferral entry. Two tests failed in a way that looked like a compiler bug and was not. Edit fixtures
+by POSITION when the same source string appears in both a positive and a negative test.
+
+Verified byte-identical across 22 fixtures: enum through a nested struct at two and three levels,
+through a tuple element, with a sibling scalar, with a scalar payload variant, `!=`, plus sixteen
+regressions spanning every construct in the family. All stages self-compile.
+
+(4) Two more fixture hazards, both caught by the gate rather than by targeted tests. Collapsing the
+retargeted Gap fixture to a single entry left a one-element `for`, which clippy rejects under
+`-D warnings` — the gate compiles the test crate more strictly than `cargo test` does. And the
+replacement case chosen for it, `enum E { A(Word, Word), B }`, does NOT defer: that is a variant with
+two SCALAR fields, not a tuple payload, so it was legitimately supported. `enum E { A([Word;2]), B }`
+is the real impure shape. Reading a variant's arity as a tuple is an easy misreading of this grammar.
+
+The impure Gap fixture was retargeted a THIRD time — tuple -> array -> enum -> enum-with-COMPOSITE-
+payload — since all three plain kinds now nest. That is the remaining frontier in this family.
+
 
 **NESTED ARRAY SUB-FIELDS (2026-08-02): the second mixed-subtree slice. Boundary 75 -> 77 Ok.**
 Tuples at depth landed first; arrays are structurally different and needed more than an accessor

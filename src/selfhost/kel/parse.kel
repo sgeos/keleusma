@@ -677,6 +677,11 @@ private data stmt {
     // 1 when the frame is an ARRAY block: it has no sub-fields, so it pops immediately after its
     // packing record, which carries the element count and ScalarKind.
     se_stk_isarr: [Word; 8],
+    // 1 when the frame is an ENUM block: after its packing record it drives the variant drain over
+    // the single `se_e*` state (enum payloads are scalar by admission, so one set suffices even at
+    // depth), then pops. `se_stk_evcount` is its variant count.
+    se_stk_isenum: [Word; 8],
+    se_stk_evcount: [Word; 8],
     se_stk_acount: [Word; 8],
     se_stk_akind: [Word; 8],
     se_casc_active: Word,
@@ -685,6 +690,7 @@ private data stmt {
     // the arbitrary-depth nested struct-eq drain can lower it. `ssp_ok` accumulates the verdict.
     // Bounded (array size 8); non-recursive (R4).
     ssp_ok: Word,
+    eps_ok: Word,
     ssp_sp: Word,
     ssp_stk: [Word; 8],
     ssp_cur: [Word; 8],
@@ -2307,12 +2313,123 @@ fn array_of_array_eq_start(op: Word) -> Word {
 // machinery emits the packing record and then pops (count 0), which keeps the array case on the same
 // path as struct and tuple blocks. `se_arr_kind` carries the element ScalarKind into that packing
 // record; the block's seb form is [off, 40000+size, acount, r2, l2, akind].
+// Push an ENUM block frame. Unlike struct/tuple frames it has no sub-field list; after its packing
+// record it drives the variant drain (the same `se_e*` machinery the depth-1 enum field uses) and
+// pops when the variants are exhausted. The block's seb form is
+// [off, 50000+size, vcount, r2, l2, ename, per variant (vname, disc, fcount, fcount*(off, kind))].
+fn se_push_enum_frame(en: Word) -> Word {
+    stmt.se_ecount = 0;
+    for i in 0..enums.enum_count limit 256 {
+        if enums.edata[i] == en {
+            if stmt.se_ecount == 0 {
+                stmt.se_estart = i;
+            }
+            stmt.se_ecount = stmt.se_ecount + 1;
+        }
+    }
+    stmt.se_eename = en;
+    stmt.se_ecur = 0;
+    stmt.se_ephase = 0;
+    stmt.se_stk_start[stmt.se_sp] = 0;
+    stmt.se_stk_count[stmt.se_sp] = 0;
+    stmt.se_stk_cur[stmt.se_sp] = 0;
+    stmt.se_stk_istup[stmt.se_sp] = 0;
+    stmt.se_stk_isarr[stmt.se_sp] = 0;
+    stmt.se_stk_isenum[stmt.se_sp] = 1;
+    stmt.se_stk_evcount[stmt.se_sp] = stmt.se_ecount;
+    stmt.se_stk_r2[stmt.se_sp] = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + 1;
+    stmt.se_stk_l2[stmt.se_sp] = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + 1;
+    stmt.se_stk_phase[stmt.se_sp] = 1;
+    stmt.se_sp = stmt.se_sp + 1;
+    0
+}
+
+// One record of an ENUM block's variant drain, over the shared `se_e*` state: per variant an
+// EnumEqVariant (enum name packed at bit 30) then that variant's scalar payload EnumEqField records.
+// When the variants are exhausted it POPS, rather than ending the whole nested drain as the depth-1
+// enum path does. Factored out of `structeq_nested_next`, which is at its per-block statement cap --
+// inlining this tripped a reconstruct loop limit, exactly as the second frame push did.
+// One record of a frame's sub-field drain: an ENUM block delegates to `se_enum_block_next`, and
+// otherwise the frame's next sub-field is dispatched by kind (array, tuple, deeper struct, or a
+// scalar that advances the cursor and pops on the frame's last). Factored out of
+// `structeq_nested_next` because that function had grown past the per-block cap that reconstruct
+// enforces at run time -- it trapped LoopLimitExceeded at 1115 records while compiling parse.kel.
+fn se_frame_subfield_next(top: Word) -> Word {
+    if stmt.se_stk_isenum[top] == 1 {
+        se_enum_block_next()
+    } else {
+    let g = stmt.se_stk_start[top] + stmt.se_stk_cur[top];
+    if stmt.se_stk_istup[top] == 0 andalso structdefs.sd_fstruct[g] > 0 {
+        // A DEEPER struct sub-field: emit the sentinel header (kind 100+bytesize) and PUSH a
+        // new frame (r2 then l2, monotonic). This frame's cursor advances only when the
+        // child frame pops (via `se_pop_cascade`).
+        let s = structdefs.sd_fstruct[g] - 1;
+        se_push_frame(s, 0);
+        Node::StructEqNestedField() as Word + (structdefs.sd_foffset[g] + (100 + structdefs.sd_bytesize[s]) * 65536) * 64
+    } else {
+    if stmt.se_stk_istup[top] == 0 andalso structdefs.sd_fenum[g] > 0 {
+        // An ENUM sub-field: sentinel 50000+size, enum block frame.
+        se_push_enum_frame(structdefs.sd_fenum[g] - 1);
+        Node::StructEqNestedField() as Word + (structdefs.sd_foffset[g] + (50000 + structdefs.sd_fsize[g]) * 65536) * 64
+    } else {
+    if stmt.se_stk_istup[top] == 0 andalso structdefs.sd_farraylen[g] > 0 andalso structdefs.sd_fstruct[g] == 0 {
+        // An ARRAY sub-field of scalars: sentinel 40000+size, zero-child frame.
+        se_push_array_frame(structdefs.sd_farraylen[g], structdefs.sd_fkind[g]);
+        Node::StructEqNestedField() as Word + (structdefs.sd_foffset[g] + (40000 + structdefs.sd_fsize[g]) * 65536) * 64
+    } else {
+    if stmt.se_stk_istup[top] == 0 andalso structdefs.sd_ftuple[g] > 0 {
+        // A TUPLE sub-field at depth >= 2. Same shape as the struct case, but the sentinel
+        // is 30000+size (the convention the enum-payload records already use for a tuple)
+        // so codegen can pick FlatNested variant Tuple and GetTupleField instead of Struct
+        // and GetField, and the pushed frame reads `tupledefs`.
+        let t = structdefs.sd_ftuple[g] - 1;
+        se_push_frame(t, 1);
+        Node::StructEqNestedField() as Word + (structdefs.sd_foffset[g] + (30000 + structdefs.sd_fsize[g]) * 65536) * 64
+    } else {
+        // A scalar sub-field (of a struct frame or a tuple frame): emit it; if it is the
+        // frame's last, pop and cascade up.
+        let rec = if stmt.se_stk_istup[top] == 1 {
+            Node::StructEqNestedField() as Word + (tupledefs.tup_eoffset[g] + tupledefs.tup_ekind[g] * 65536) * 64
+        } else {
+            Node::StructEqNestedField() as Word + (structdefs.sd_foffset[g] + structdefs.sd_fkind[g] * 65536) * 64
+        };
+        stmt.se_stk_cur[top] = stmt.se_stk_cur[top] + 1;
+        if stmt.se_stk_cur[top] == stmt.se_stk_count[top] {
+            se_pop_cascade();
+        }
+        rec
+    } } } } }
+}
+
+fn se_enum_block_next() -> Word {
+    if stmt.se_ephase == 1 andalso stmt.se_efcur < stmt.se_efcount {
+        let fi = stmt.se_efstart + stmt.se_efcur;
+        stmt.se_efcur = stmt.se_efcur + 1;
+        Node::EnumEqField() as Word + (enums.evfoff[fi] + enums.evfkind[fi] * 65536) * 64
+    } else {
+    if stmt.se_ecur < stmt.se_ecount {
+        let row = stmt.se_estart + stmt.se_ecur;
+        stmt.se_efcount = enums.evfcount[row];
+        stmt.se_efstart = enums.evfstart[row];
+        stmt.se_efcur = 0;
+        stmt.se_ephase = 1;
+        stmt.se_ecur = stmt.se_ecur + 1;
+        Node::EnumEqVariant() as Word + (enums.evar[row] + enums.edisc[row] * 65536 + enums.evfcount[row] * 16777216 + stmt.se_eename * 1073741824) * 64
+    } else {
+        se_pop_cascade();
+        Node::StructEqNestedEnd() as Word
+    } }
+}
+
 fn se_push_array_frame(acount: Word, akind: Word) -> Word {
     stmt.se_stk_start[stmt.se_sp] = 0;
     stmt.se_stk_count[stmt.se_sp] = 0;
     stmt.se_stk_cur[stmt.se_sp] = 0;
     stmt.se_stk_istup[stmt.se_sp] = 0;
     stmt.se_stk_isarr[stmt.se_sp] = 1;
+    stmt.se_stk_isenum[stmt.se_sp] = 0;
     stmt.se_stk_acount[stmt.se_sp] = acount;
     stmt.se_stk_akind[stmt.se_sp] = akind;
     stmt.se_stk_r2[stmt.se_sp] = ps.pcount + stmt.slot_count;
@@ -2338,6 +2455,7 @@ fn se_push_frame(s: Word, is_tuple: Word) -> Word {
     stmt.se_stk_cur[stmt.se_sp] = 0;
     stmt.se_stk_istup[stmt.se_sp] = is_tuple;
     stmt.se_stk_isarr[stmt.se_sp] = 0;
+    stmt.se_stk_isenum[stmt.se_sp] = 0;
     stmt.se_stk_r2[stmt.se_sp] = ps.pcount + stmt.slot_count;
     stmt.slot_count = stmt.slot_count + 1;
     stmt.se_stk_l2[stmt.se_sp] = ps.pcount + stmt.slot_count;
@@ -2562,6 +2680,25 @@ fn elem_all_scalar(idx: Word, is_tuple: Word) -> Word {
     stmt.aes_ok
 }
 
+// 1 if every variant payload field of enum `en` is a SCALAR, 0 if any is composite (sentinel kind
+// >= 100). This is what admits an enum sub-field at depth: the block drain emits variant records
+// whose payload fields must be scalar. Kept as its own function because `struct_subtree_pure` is at
+// its per-block statement cap; inlining the two nested loops tripped a reconstruct loop limit.
+// Writes only `eps_ok`, so it cannot disturb an in-progress `ssp_*` or `sq_scan` scan.
+fn enum_payloads_scalar(en: Word) -> Word {
+    stmt.eps_ok = 1;
+    for ei in 0..enums.enum_count limit 256 {
+        if enums.edata[ei] == en {
+            for efj in 0..enums.evfcount[ei] limit 32 {
+                if enums.evfkind[enums.evfstart[ei] + efj] >= 100 {
+                    stmt.eps_ok = 0;
+                }
+            }
+        }
+    }
+    stmt.eps_ok
+}
+
 fn struct_subtree_pure(s: Word) -> Word {
     stmt.ssp_ok = 1;
     stmt.ssp_stk[0] = s;
@@ -2598,7 +2735,9 @@ fn struct_subtree_pure(s: Word) -> Word {
                     }
                 } else {
                 if structdefs.sd_fenum[fidx] > 0 {
-                    stmt.ssp_ok = 0;
+                    if enum_payloads_scalar(structdefs.sd_fenum[fidx] - 1) == 0 {
+                        stmt.ssp_ok = 0;
+                    }
                 } else {
                     if structdefs.sd_fstruct[fidx] > 0 {
                         stmt.ssp_stk[stmt.ssp_sp] = structdefs.sd_fstruct[fidx] - 1;
@@ -2886,52 +3025,24 @@ fn structeq_nested_next() -> Word {
                 let rec = if stmt.se_stk_isarr[top] == 1 {
                     Node::StructEqNestedField() as Word + (stmt.se_stk_acount[top] + stmt.se_stk_r2[top] * 65536 + stmt.se_stk_l2[top] * 4294967296 + stmt.se_stk_akind[top] * 281474976710656) * 64
                 } else {
+                if stmt.se_stk_isenum[top] == 1 {
+                    Node::StructEqNestedField() as Word + (stmt.se_stk_evcount[top] + stmt.se_stk_r2[top] * 65536 + stmt.se_stk_l2[top] * 4294967296) * 64
+                } else {
                     Node::StructEqNestedField() as Word + (stmt.se_stk_count[top] + stmt.se_stk_r2[top] * 65536 + stmt.se_stk_l2[top] * 4294967296) * 64
-                };
+                } };
+                // An ENUM frame has no sub-field list but is NOT finished: its variant records follow.
+                if stmt.se_stk_isenum[top] == 1 {
+                    stmt.se_stk_phase[top] = 2;
+                } else {
                 if stmt.se_stk_count[top] == 0 {
                     se_pop_cascade();
                 } else {
                     stmt.se_stk_phase[top] = 2;
                     stmt.se_stk_cur[top] = 0;
-                }
+                } }
                 rec
             } else {
-                let g = stmt.se_stk_start[top] + stmt.se_stk_cur[top];
-                if stmt.se_stk_istup[top] == 0 andalso structdefs.sd_fstruct[g] > 0 {
-                    // A DEEPER struct sub-field: emit the sentinel header (kind 100+bytesize) and PUSH a
-                    // new frame (r2 then l2, monotonic). This frame's cursor advances only when the
-                    // child frame pops (via `se_pop_cascade`).
-                    let s = structdefs.sd_fstruct[g] - 1;
-                    se_push_frame(s, 0);
-                    Node::StructEqNestedField() as Word + (structdefs.sd_foffset[g] + (100 + structdefs.sd_bytesize[s]) * 65536) * 64
-                } else {
-                if stmt.se_stk_istup[top] == 0 andalso structdefs.sd_farraylen[g] > 0 andalso structdefs.sd_fstruct[g] == 0 {
-                    // An ARRAY sub-field of scalars: sentinel 40000+size, zero-child frame.
-                    se_push_array_frame(structdefs.sd_farraylen[g], structdefs.sd_fkind[g]);
-                    Node::StructEqNestedField() as Word + (structdefs.sd_foffset[g] + (40000 + structdefs.sd_fsize[g]) * 65536) * 64
-                } else {
-                if stmt.se_stk_istup[top] == 0 andalso structdefs.sd_ftuple[g] > 0 {
-                    // A TUPLE sub-field at depth >= 2. Same shape as the struct case, but the sentinel
-                    // is 30000+size (the convention the enum-payload records already use for a tuple)
-                    // so codegen can pick FlatNested variant Tuple and GetTupleField instead of Struct
-                    // and GetField, and the pushed frame reads `tupledefs`.
-                    let t = structdefs.sd_ftuple[g] - 1;
-                    se_push_frame(t, 1);
-                    Node::StructEqNestedField() as Word + (structdefs.sd_foffset[g] + (30000 + structdefs.sd_fsize[g]) * 65536) * 64
-                } else {
-                    // A scalar sub-field (of a struct frame or a tuple frame): emit it; if it is the
-                    // frame's last, pop and cascade up.
-                    let rec = if stmt.se_stk_istup[top] == 1 {
-                        Node::StructEqNestedField() as Word + (tupledefs.tup_eoffset[g] + tupledefs.tup_ekind[g] * 65536) * 64
-                    } else {
-                        Node::StructEqNestedField() as Word + (structdefs.sd_foffset[g] + structdefs.sd_fkind[g] * 65536) * 64
-                    };
-                    stmt.se_stk_cur[top] = stmt.se_stk_cur[top] + 1;
-                    if stmt.se_stk_cur[top] == stmt.se_stk_count[top] {
-                        se_pop_cascade();
-                    }
-                    rec
-                } } }
+                se_frame_subfield_next(top)
             }
         } else {
         if stmt.se_subcur < stmt.se_subcount {
@@ -2976,6 +3087,12 @@ fn structeq_nested_next() -> Word {
                 se_push_frame(s, 0);
                 Node::StructEqNestedField() as Word + (structdefs.sd_foffset[fidx] + (100 + structdefs.sd_bytesize[s]) * 65536) * 64
             } else {
+            if structdefs.sd_fenum[fidx] > 0 {
+                // A DEPTH-2 ENUM sub-field: sentinel 50000+size, enum block frame.
+                stmt.se_sp = 0;
+                se_push_enum_frame(structdefs.sd_fenum[fidx] - 1);
+                Node::StructEqNestedField() as Word + (structdefs.sd_foffset[fidx] + (50000 + structdefs.sd_fsize[fidx]) * 65536) * 64
+            } else {
             if structdefs.sd_farraylen[fidx] > 0 andalso structdefs.sd_fstruct[fidx] == 0 {
                 // A DEPTH-2 ARRAY sub-field: sentinel 40000+size, zero-child frame.
                 stmt.se_sp = 0;
@@ -2993,7 +3110,7 @@ fn structeq_nested_next() -> Word {
             } else {
                 stmt.se_subcur = stmt.se_subcur + 1;
                 Node::StructEqNestedField() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fkind[fidx] * 65536) * 64
-            } } } } }
+            } } } } } }
         } else {
             stmt.se_phase = 0;
             stmt.sq_field = stmt.sq_field + 1;

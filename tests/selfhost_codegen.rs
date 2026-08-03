@@ -7184,8 +7184,9 @@ fn array_of_composite_element_defers() {
         // for an array element.
         "struct P { x: Word }\nstruct S { g: [(P, Word); 2] }\nfn f(a: S, b: S) -> bool { a == b }",
         // An element whose struct subtree is IMPURE: descending would mis-lower the inner composite.
-        // Tuples and arrays inside are now supported, so this uses an ENUM, which is not.
-        "enum E { A, B }\nstruct P { e: E }\nfn f(a: [(P, Word); 2], b: [(P, Word); 2]) -> bool { a == b }",
+        // Tuples, arrays and plain enums inside are now supported, so this uses an enum with a
+        // COMPOSITE payload, which still has no nested form.
+        "struct Q { z: Word }\nenum E { A(Q), B }\nstruct P { e: E }\nfn f(a: [(P, Word); 2], b: [(P, Word); 2]) -> bool { a == b }",
         // A struct field array whose element type is not a recognized scalar.
         "struct S { a: [bool;2], w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
     ] {
@@ -7343,6 +7344,42 @@ fn self_host_compiles_nested_array_subfield_equality() {
     );
 }
 
+/// An ENUM sub-field nested at depth >= 2 self-compiles byte-identically.
+///
+/// The third and last mixed-subtree slice. Enums are unlike tuple and array blocks: the body is a
+/// VARIANT DISPATCH (`IsEnum` per variant, then that variant's payload compares), not a field or
+/// element walk. The block frame therefore has no sub-field list at all — after its packing record it
+/// drives the same `se_e*` variant drain the depth-1 enum field uses, then pops. Its seb form is
+/// `[off, 50000+size, vcount, r2, l2, ename, per variant (vname, disc, fcount, fcount*(off, kind))]`,
+/// and codegen reuses `push_nested_enum_loop`, which was parameterised for exactly this.
+///
+/// One asymmetry worth knowing: unlike the struct, tuple, and array blocks, the enum emitter emits
+/// its OWN loop-open, so the block must not add another. That showed up as exactly one extra `Loop`.
+#[test]
+fn self_host_compiles_nested_enum_subfield_equality() {
+    // Reached through a nested struct, at two and three levels.
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nstruct I { e: E }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nstruct I { e: E }\nstruct Q { i: I }\nstruct S { q: Q }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    // Reached through a TUPLE element.
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nstruct P { e: E }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    // A sibling scalar after the enum, a variant with a scalar payload, and `!=`.
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nstruct I { e: E, w: Word }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A(Word), B }\nstruct I { e: E }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "enum E { A, B }\nstruct I { e: E }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a != b }",
+    );
+}
+
 /// A tuple element whose struct subtree is NOT pure (it contains a tuple, array, or enum) must
 /// DEFER, not descend.
 ///
@@ -7355,8 +7392,10 @@ fn self_host_compiles_nested_array_subfield_equality() {
 #[test]
 fn struct_tuple_of_impure_struct_element_defers() {
     for src in [
-        "enum E { A, B }\nstruct P { e: E }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
-        "enum E { A, B }\nstruct P { e: E }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+        // All three composite kinds now nest, so the impure cases are enums with a COMPOSITE
+        // payload: a struct payload and an array payload, neither of which has a nested form.
+        "struct Q { z: Word }\nenum E { A(Q), B }\nstruct P { e: E }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+        "enum E { A([Word;2]), B }\nstruct P { e: E }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
     ] {
         let reference = compile_src(src);
         let module = self_host_compile(src);
@@ -8077,9 +8116,20 @@ fn self_hosted_construct_support_boundary() {
         ),
         // An ENUM inside the element subtree still has no nested form, so it defers.
         (
+            "eq/nested_enum_subfield",
+            SOk,
+            "enum E { A, B }\nstruct I { e: E }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        (
+            "eq/nested_enum_subfield_payload",
+            SOk,
+            "enum E { A(Word), B }\nstruct I { e: E }\nstruct S { i: I }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        // All three composite kinds now nest, so the impure case is an enum with a COMPOSITE payload.
+        (
             "eq/struct_tuple_of_impure_struct__GAP",
             Gap,
-            "enum E { A, B }\nstruct P { e: E }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+            "struct Q { z: Word }\nenum E { A(Q), B }\nstruct P { e: E }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
         ),
         // The flat array-equality family has no nested form, so an array whose ELEMENT contains a
         // composite defers. Each of these was previously admitted and silently mis-compiled; the
