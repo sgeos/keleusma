@@ -17,6 +17,37 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-03 (session 36)
 
+**ORDER-1 REASSESSED (2026-08-03): the recommended item was WRONG, and one of the three is blocked on an operator decision.**
+Probed all three remainders before starting any of them, and the probe overturned the plan recorded
+hours earlier in this same channel.
+
+WIRE-FORMAT SERIALIZATION is not the cheap self-contained item the roadmap describes. Its enumeration
+("framing header, operand-pool encoding, parity, CRC trailer") omits that the AUXILIARY BODY is
+`rkyv`-archived, and that body carries everything except the opcode stream and operand pool. rkyv is a
+zero-copy archive format with relative pointers, alignment and padding rules, and its own versioning;
+reproducing its layout byte-for-byte in Keleusma is disproportionate, and an rkyv upgrade would
+silently invalidate it. Full self-hosting of the artifact therefore needs an operator decision
+(reimplement rkyv, or change the aux-body encoding — a wire-format change, hence a
+`BYTECODE_VERSION` question), which is an ENUMERATED STOP. The non-rkyv slices remain bounded but
+leave the aux body host-supplied, so they do not meet the gate's wording.
+
+THE MONOMORPHIZER is IDENTITY over the self-hosting subset: the `.kel` sources use no generics, which
+is why the pipeline omits the pass entirely and still matches the reference byte-for-byte. Porting it
+would satisfy the checklist without changing a single emitted byte. Its cost is real only under
+full-language generics.
+
+THE TYPE CHECKER is the only unblocked item, and it is the substantive one: the self-hosted pipeline
+does NO type checking, so ill-typed programs are caught today only by the CLI's cross-check against
+the reference.
+
+A CONFOUNDED PROBE, recorded because the failure mode is easy to repeat: the first attempt asked "does
+the self-hosted path reject ill-typed programs?" through `self_host_compile`, which calls
+`compile_src` FIRST and therefore panics whenever the REFERENCE rejects. Every case reported
+"rejects", which looked like an answer and was noise. The control discipline that governs the
+byte-identity probes applies here too: check what the harness itself does before trusting its verdict.
+The structural argument (there is no typecheck stage in the pipeline) is what actually settles it.
+
+
 **ENUM COMPOSITE PAYLOAD PROBED AND DEFERRED (2026-08-03). The composite-equality arc closes at 79 Ok; Order 1 is next.**
 The handoff said to probe the last drain-shaped item and take it only if contained. It is not. A
 struct payload fails at DEPTH 1 as well as at depth 2 (4 ops against 90), which locates the gap in the

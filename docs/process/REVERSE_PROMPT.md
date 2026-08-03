@@ -57,36 +57,41 @@ generalizes to its enclosing-composite form, so support must not be inferred by 
   `tests/for_limit.rs`. Bare `break;` then came out IDENTICAL and only the outcome-arm form diverged.
 - Boundary test green at 67 Ok; full `scripts/release-gate.sh` result recorded in the commit message.
 
-## Next step — ORDER 1 (the drain family is closed and the last drain item was PROBED and deferred)
+## Next step — the TYPE CHECKER (the only unblocked Order-1 item), plus one operator decision
 
-**Probed 2026-08-03, with a control**: an enum with a COMPOSITE payload is NOT a contained extension
-of the enum block just landed. A struct payload fails at DEPTH 1 as well (`struct S { e: E, w: Word }`
-with `enum E { A(Q), B }` -> defers, 4 ops against 90), so the gap is in the NESTED ENUM EMITTER
-generally, not in the new block. Array and tuple payloads fail even at TOP level. Supporting them
-means new payload plumbing across parse, reconstruct, and codegen — mirroring what
-`push_enum_struct_payload_loop` does for the top-level enum-eq. That is a full increment, not a tail.
+All three Order-1 remainders were probed on 2026-08-03 and the picture changed:
 
-So the drain family is closed for now, and **Order 1 is the direction**. Its three remainders are the
-whole of what stands between here and the Order-1 gate:
+**Wire-format serialization — PARTIALLY BLOCKED, needs an operator decision.** The roadmap listed it
+as "framing header, operand-pool encoding, parity, CRC trailer", which omits the dominant cost: the
+AUXILIARY BODY is `rkyv`-archived and carries everything except the opcode stream and operand pool.
+Reproducing rkyv's zero-copy layout byte-for-byte in Keleusma is disproportionate and fragile. Full
+self-hosting of the artifact therefore needs a decision only the operator can make — reimplement
+rkyv, or CHANGE the aux-body encoding, which is a wire-format change and so a `BYTECODE_VERSION`
+question, an enumerated stop. The bounded non-rkyv slices (CRC-32, the opcode stream and operand
+pool, the framing header) can proceed without that decision but leave the aux body host-supplied, so
+they do NOT meet the gate's "no Rust scaffold borrow" wording. Scoping in
+[`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md).
 
-1. **Wire-format serialization** — self-contained and well-specified: the framing header, operand-pool
-   encoding, parity, and CRC trailer are all host-side today (no `.kel` stage references `to_bytes`,
-   parity, or CRC). Probably the best value per token, and it has no interaction with the equality
-   machinery, so the large regression surface of the last six increments does not apply.
-2. **The monomorphizer** — near-identity over the subset, likely the cheapest of the three.
-3. **The type checker** — largest and highest-risk (Hindley-Milner is not a streaming shape).
+**The monomorphizer — VACUOUS over the subset.** The `.kel` sources use no generics (the `impl`/
+`trait` hits in parse.kel are its own parser code for those keywords). Monomorphization is identity
+here, which is why the pipeline omits the pass and still matches the reference byte-for-byte. Porting
+it would tick the box without changing any output; its real cost arrives only with full-language
+generics (Workstream F). Do not pick it as "the cheapest" expecting value.
 
-Deferred in this family, for whenever it is picked up again:
-- Enum with a composite payload (struct, array, or tuple) — needs the payload plumbing above.
-- A struct FIELD that is an array-of-tuple, and the `[bool;2]`-shaped struct field array — these share
-  ONE root cause: a struct field's array element type goes through `field_size_and_kind`, which
-  accepts only an identifier, so the element layout is never recorded. One scanner fix closes both.
-- An array whose ELEMENT is itself composite at depth.
+**The type checker — UNBLOCKED, and the real work.** The self-hosted pipeline has NO type checking at
+all: its stages are lexer, parse, reconstruct, codegen (plus analyze and the verify_* family), and
+nothing validates types. Ill-typed programs are caught today only by the CLI's cross-check against the
+reference. Self-hosting it is what makes the self-hosted compiler able to reject bad programs on its
+own, and over the monomorphic Word/Byte subset it is far smaller than `typecheck.rs`'s 8601 lines.
+
+CAUTION on probing this one: `self_host_compile` calls `compile_src` FIRST, so it panics whenever the
+reference rejects. A naive "does the self-hosted path reject?" probe is CONFOUNDED and will report
+rejection for every ill-typed program regardless. Probe the stages directly, or reason from the stage
+list, rather than through that harness.
 
 ## Standing method notes
 
-The thirteen rules are consolidated in [HANDOFF.md](./HANDOFF.md); they are not repeated here. The
-three most expensive lessons of this arc, in short: probe what the admission ACCEPTS (both silent
-mis-compiles were in accepted constructs); tighten admission in the same change as any drain
-generalization (otherwise a shallow silent bug becomes a deeper one); and never land on targeted tests
-alone (clippy `-D warnings` and `EXPECTED_SELF_COMPILE` fire only in the full gate).
+The thirteen rules are consolidated in [HANDOFF.md](./HANDOFF.md). Add one from this probe: **a probe
+run through a harness that already invokes the reference cannot tell you what the self-hosted path
+does on its own** — check what the harness does before trusting its verdict, exactly as the control
+discipline requires for the byte-identity probes.
