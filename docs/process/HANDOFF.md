@@ -10,13 +10,14 @@ a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`
-- **Parent commit** (the repository state this handoff describes): `ff57dca`
+- **Parent commit** (the repository state this handoff describes): `239aa9c`
 - **Written**: 2026-08-02
 - **Tree at write**: clean (all work committed, merged, and pushed; `v0.2.3` tip is the
   roadmap-baseline-correction merge `81c0bd9` plus this handoff restamp commit)
-- **Context**: written after nested scalar-ARRAY sub-fields landed (boundary 77 Ok / 4 Gap /
-  1 RefRejects), the second mixed-subtree slice after tuples. Full gate GREEN, CI GREEN on `ff57dca`,
-  tree clean, all pushed. ENUM at depth is the last kind in this family.
+- **Context**: written after nested ENUM sub-fields landed, COMPLETING the mixed-subtree family --
+  tuples, arrays and enums all nest now (boundary 79 Ok / 4 Gap / 1 RefRejects). Full gate GREEN, CI
+  GREEN on `239aa9c`, tree clean, all pushed. The remaining Gaps in this family are NO LONGER drain
+  work, which changes the recommended direction (see below).
 
 **Validity check — run on resume, before trusting this handoff.** On the branch above, compare the
 **Parent commit** to `git rev-parse HEAD~1`. Because this handoff file is itself committed, its commit
@@ -29,66 +30,70 @@ advances the tip by one, so the state it describes is the parent of the handoff 
   parent versus actual `HEAD~1`), familiarize from the live channels — `REVERSE_PROMPT.md`,
   `DESIGN_JOURNAL.md`, `TASKLOG.md`, and the git log, always authoritative — and wait for instruction.
 
-## Resume prompt — IMPLEMENT enum-at-depth. The choice is MADE.
+## Resume prompt — PROBE the smallest drain item, else start ORDER 1. Do not re-ask.
 
-Tuples (`0bf9daf`) and scalar arrays (`ff57dca`) at depth are done. ENUM is the last composite kind
-in this family and is the LARGEST of the three: enums need VARIANT DISPATCH, not a flat element or
-field walk, so it will NOT be a copy of either slice.
+**The mixed-subtree family is closed.** Six increments took the composite-equality frontier from 56
+to 79 Ok. What remains in this family is NOT drain generalization:
 
-**The right template is the DEPTH-1 enum field, not the tuple/array blocks**: `se_subisenum` with the
-`se_e*` state in parse, and `push_nested_enum_loop` in codegen. Read those first. Note the eager
-intern pass already replays an enum field's constant order (ename, vname, disc, per-field false, then
-true, then false) — a nested enum block will have to replay the same order from wherever it sits in
-the forest, which is the analogue of the array index pre-interning that `ff57dca` had to add.
+- **Enum with a COMPOSITE payload at depth** (`enum E { A(Q), B }`, `enum E { A([Word;2]), B }`) —
+  the last drain-shaped item, and the smallest. PROBE this first: if it is a contained extension of
+  the enum block just landed, take it; if it needs new payload plumbing, prefer Order 1 below.
+- **A struct FIELD that is an array-of-tuple**, and **the `[bool;2]`-shaped struct field array** —
+  these share ONE root cause: a struct field's array element type goes through `field_size_and_kind`,
+  which accepts only an identifier, so the element layout is never recorded. Fixing that means a new
+  layout table plus scanner work. A genuine context switch, and it would close two Gaps at once.
+- **An array whose ELEMENT is itself composite at depth** (array blocks admit scalar elements only).
 
-After that, in the same family:
-1. A struct FIELD that is an array-of-tuple. **NOT drain work** — the element layout is never
-   recorded (`parray_tuple` is parameter-only; a struct field's array element type goes through
-   `field_size_and_kind`, which accepts only an identifier). Needs a new layout table plus scanner
-   work, a genuine context switch, which is why it keeps being ordered behind the drain items.
-2. The `[bool;2]`-shaped struct field array (element type not a recognized scalar).
-3. An array whose ELEMENT is itself composite at depth (array blocks admit scalar elements only).
+**RECOMMENDED DIRECTION: Order 1.** With the drain family closed, the three Order-1 remainders are the
+higher-value work — they are the whole of what stands between here and the Order-1 gate:
+1. **Wire-format serialization** — self-contained and well-specified (framing header, operand-pool
+   encoding, parity, CRC trailer; all host-side today, no `.kel` stage references `to_bytes`).
+   Probably the best value per token.
+2. **The monomorphizer** — near-identity over the subset, likely the cheapest of the three.
+3. **The type checker** — largest and highest-risk (Hindley-Milner is not a streaming shape).
 
-Beyond this family the Order-1 gate needs the type checker, the monomorphizer, and wire-format
-serialization. `AUTONOMOUS_IMPLEMENTATION_LOOP.md` forbids prompting the operator to ORDER any of it.
+`AUTONOMOUS_IMPLEMENTATION_LOOP.md` forbids prompting the operator to ORDER any of this. Probe, pick,
+proceed.
 
-**The eleven method rules. These found every bug so far; none is optional.**
-1. **PROBE BEFORE PLANNING, always with a control**; also confirm the REFERENCE accepts the source.
-2. **Probe what the admission ACCEPTS, not only what it rejects.**
+**The thirteen method rules. These found every bug across six increments; none is optional.**
+1. **PROBE BEFORE PLANNING, always with a control**; confirm the REFERENCE accepts the source too.
+2. **Probe what the admission ACCEPTS, not only what it rejects.** Every silent mis-compile found was
+   in a construct the admission accepted.
 3. **When generalizing a drain, tighten its admission IN THE SAME CHANGE.**
 4. **Close an admission hole BEFORE building support over it**; expect +Gap / 0 Ok when you do.
-5. **Never trust op counts or lengths as a correctness proxy.** For a deferral, assert its SHAPE.
-6. **When a change that should be sufficient produces NO observable difference, suspect a path that
-   BYPASSES the code you changed.**
-7. **Abandon on TRAJECTORY, not attempt count.** A hard increment may sit red for many commits and be
-   healthy. Keep going while the divergence narrows and green fixtures stay green.
+5. **Never trust op counts as a correctness proxy.** For a deferral, assert its SHAPE.
+6. **When a sufficient-looking change produces NO observable difference, suspect a BYPASSING path.**
+7. **Abandon on TRAJECTORY, not attempt count.** Keep going while the divergence narrows and green
+   fixtures stay green.
 8. **Admission helpers call each other and R4 forbids cycles.** Inline rather than reuse.
-9. **A self-compile failure in stage B can be caused by stage A merely GROWING.** Factor into a
-   helper rather than raising a limit.
-10. **When a construct becomes supported, RETARGET the Gap fixture that pinned it** rather than
-    deleting it. This has happened twice already (tuple -> array -> enum) on the same fixtures.
-11. **Read the divergence SIGNATURE.** All lengths matching with one differing `Const` means a
-    constant-POOL ORDER bug. A fixed shortfall of one compare block, only where a sibling follows,
-    means a frame consumed a field it should not have. Each signature points at a different layer.
+9. **A self-compile failure in stage B can be caused by stage A merely GROWING** — and if the first
+   factoring does not fix it, MEASURE which function is over. A ten-line probe over the harness names
+   it; the loop-limit error names neither loop nor function.
+10. **When a construct becomes supported, RETARGET the Gap fixture that pinned it.** Done three times
+    on the same fixtures (tuple -> array -> enum -> enum-with-composite-payload).
+11. **Read the divergence SIGNATURE.** One differing `Const` with matching lengths is a pool-ORDER
+    bug; a shortfall of one compare block only where a sibling follows is a frame over-consuming; ONE
+    extra `Loop` is a reused emitter that already emits its own.
+12. **Edit fixtures by POSITION, not string replacement**, when the same source appears in both a
+    positive and a negative test.
+13. **The gate compiles the test crate more strictly than `cargo test`** (clippy `-D warnings`), and
+    `EXPECTED_SELF_COMPILE` must be bumped whenever codegen.kel gains a function. Both fire ONLY in
+    the full gate. Never land on targeted tests alone.
 
-**Run the FULL gate before landing, always.** On `ff57dca` targeted tests passed while the full gate
-went red on `EXPECTED_SELF_COMPILE` (a deliberate counter of self-compiling codegen functions, bumped
-whenever codegen.kel gains one). Adding a codegen helper REQUIRES bumping it with a comment.
-
-Steps: validate → familiarize (`REVERSE_PROMPT.md`, newest `DESIGN_JOURNAL.md`, then the depth-1 enum
-path) → implement on a feature branch off `v0.2.3` → verify the regression surface FIRST, then the new
-fixtures, then the boundary, then the FULL `scripts/release-gate.sh` → no-ff merge, push, confirm CI,
-record on all three channels, prune the branch, restamp this HANDOFF.
+Steps: validate → familiarize (`REVERSE_PROMPT.md`, newest `DESIGN_JOURNAL.md`) → probe → implement on
+a feature branch off `v0.2.3` → verify the regression surface FIRST, then the new fixtures, then the
+boundary, then the FULL `scripts/release-gate.sh` → no-ff merge, push, confirm CI, record on all three
+channels, prune the branch, restamp this HANDOFF.
 
 **Git position** (as of the Parent commit)
-- Branch `v0.2.3` tip is the nested-array-subfield merge `ff57dca` plus this restamp commit. In sync
-  with origin, tree clean, local full gate GREEN (240 suites), CI GREEN on `ff57dca`.
+- Branch `v0.2.3` tip is the nested-enum-subfield merge `239aa9c` plus this restamp commit. In sync
+  with origin, tree clean, local full gate GREEN (240 suites), CI GREEN on `239aa9c`.
 - Local branches are pruned to `main`, `v0.2.3`, and `v0.2.3-prerebase-backup`. Origin holds only `main`
   and `v0.2.3`. **Do NOT delete `v0.2.3-prerebase-backup`**: it holds 309 commits not in `v0.2.3` and is
   a deliberate safety net, not clutter.
 - `main` holds releases and sits behind `v0.2.3` by design (`docs/process/GIT_STRATEGY.md`).
 
-**Boundary counts** — **77 Ok / 4 Gap / 1 RefRejects**, pinned by
+**Boundary counts** — **79 Ok / 4 Gap / 1 RefRejects**, pinned by
 `self_hosted_construct_support_boundary` in `tests/selfhost_codegen.rs`. Recount with a grep rather than
 trusting a remembered number; the figure in the docs was found stale by 2 on 2026-07-30.
 
