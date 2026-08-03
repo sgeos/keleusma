@@ -10,7 +10,7 @@ a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`
-- **Parent commit** (the repository state this handoff describes): `239aa9c`
+- **Parent commit** (the repository state this handoff describes): `337bf17`
 - **Written**: 2026-08-02
 - **Tree at write**: clean (all work committed, merged, and pushed; `v0.2.3` tip is the
   roadmap-baseline-correction merge `81c0bd9` plus this handoff restamp commit)
@@ -30,21 +30,23 @@ advances the tip by one, so the state it describes is the parent of the handoff 
   parent versus actual `HEAD~1`), familiarize from the live channels — `REVERSE_PROMPT.md`,
   `DESIGN_JOURNAL.md`, `TASKLOG.md`, and the git log, always authoritative — and wait for instruction.
 
-## Resume prompt — PROBE the smallest drain item, else start ORDER 1. Do not re-ask.
+## Resume prompt — START ORDER 1. The drain item was PROBED and deferred. Do not re-ask.
 
 **The mixed-subtree family is closed.** Six increments took the composite-equality frontier from 56
 to 79 Ok. What remains in this family is NOT drain generalization:
 
-- **Enum with a COMPOSITE payload at depth** (`enum E { A(Q), B }`, `enum E { A([Word;2]), B }`) —
-  the last drain-shaped item, and the smallest. PROBE this first: if it is a contained extension of
-  the enum block just landed, take it; if it needs new payload plumbing, prefer Order 1 below.
+- **Enum with a COMPOSITE payload** — PROBED 2026-08-03 and DEFERRED. It is NOT a contained
+  extension of the enum block: a struct payload fails at DEPTH 1 too (4 ops against 90), so the gap is
+  in the nested enum emitter generally, and array/tuple payloads fail even at TOP level. Needs new
+  payload plumbing across all three stages, mirroring `push_enum_struct_payload_loop`. Do not re-probe
+  it expecting a quick win.
 - **A struct FIELD that is an array-of-tuple**, and **the `[bool;2]`-shaped struct field array** —
   these share ONE root cause: a struct field's array element type goes through `field_size_and_kind`,
   which accepts only an identifier, so the element layout is never recorded. Fixing that means a new
   layout table plus scanner work. A genuine context switch, and it would close two Gaps at once.
 - **An array whose ELEMENT is itself composite at depth** (array blocks admit scalar elements only).
 
-**RECOMMENDED DIRECTION: Order 1.** With the drain family closed, the three Order-1 remainders are the
+**DIRECTION: Order 1** (chosen, not open). With the drain family closed, the three Order-1 remainders are the
 higher-value work — they are the whole of what stands between here and the Order-1 gate:
 1. **Wire-format serialization** — self-contained and well-specified (framing header, operand-pool
    encoding, parity, CRC trailer; all host-side today, no `.kel` stage references `to_bytes`).
@@ -52,8 +54,10 @@ higher-value work — they are the whole of what stands between here and the Ord
 2. **The monomorphizer** — near-identity over the subset, likely the cheapest of the three.
 3. **The type checker** — largest and highest-risk (Hindley-Milner is not a streaming shape).
 
-`AUTONOMOUS_IMPLEMENTATION_LOOP.md` forbids prompting the operator to ORDER any of this. Probe, pick,
-proceed.
+Start with **wire-format serialization** unless a probe says otherwise: it is self-contained, and
+unlike the last six increments it does not touch the equality machinery, so their large regression
+surface does not apply. `AUTONOMOUS_IMPLEMENTATION_LOOP.md` forbids prompting the operator to ORDER
+any of this.
 
 **The thirteen method rules. These found every bug across six increments; none is optional.**
 1. **PROBE BEFORE PLANNING, always with a control**; confirm the REFERENCE accepts the source too.
@@ -86,8 +90,9 @@ boundary, then the FULL `scripts/release-gate.sh` → no-ff merge, push, confirm
 channels, prune the branch, restamp this HANDOFF.
 
 **Git position** (as of the Parent commit)
-- Branch `v0.2.3` tip is the nested-enum-subfield merge `239aa9c` plus this restamp commit. In sync
-  with origin, tree clean, local full gate GREEN (240 suites), CI GREEN on `239aa9c`.
+- Branch `v0.2.3` tip is the probe-finding docs commit `337bf17` plus this restamp commit. In sync
+  with origin, tree clean. Last full gate GREEN (240 suites) and CI GREEN on the code merge `239aa9c`;
+  the commits after it are docs-only and passed the pre-push gate.
 - Local branches are pruned to `main`, `v0.2.3`, and `v0.2.3-prerebase-backup`. Origin holds only `main`
   and `v0.2.3`. **Do NOT delete `v0.2.3-prerebase-backup`**: it holds 309 commits not in `v0.2.3` and is
   a deliberate safety net, not clutter.
