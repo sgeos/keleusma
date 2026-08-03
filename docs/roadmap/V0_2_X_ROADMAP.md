@@ -111,11 +111,17 @@ the host is glue.
 - Complete the monomorphizer in Keleusma. Over the subset the toolchain source uses no
   generics, so first-pass monomorphization is close to identity; the effort is real only
   when full-language generics arrive (Workstream F).
-- Self-host wire-format serialization. **STILL OPEN.** Today `codegen.kel` emits opcode records
-  into shared memory and a Rust driver frames them into a module and calls `to_bytes`. The
-  framing header, operand-pool encoding, parity, and CRC trailer must move into Keleusma so the
-  emitted artifact is produced end to end by the self-hosted path. Verified 2026-07-31: no `.kel`
-  stage references `to_bytes`, parity, or CRC.
+- Self-host wire-format serialization. **STILL OPEN, and larger than this entry originally stated.**
+  Today `codegen.kel` emits opcode records into shared memory and a Rust driver frames them into a
+  module and calls `to_bytes`. The framing header, opcode stream, operand-pool encoding, and CRC
+  trailer are mechanical and self-hostable. **But the AUXILIARY BODY is `rkyv`-archived**, and it
+  carries everything else — chunk metadata, enum layouts, signatures, data layout, the WCET/WCMU
+  header, the schema hash. Reproducing rkyv's zero-copy layout byte-for-byte in Keleusma is
+  disproportionate and fragile (an rkyv upgrade would silently invalidate it), so full self-hosting of
+  the artifact needs an operator decision: reimplement rkyv, or CHANGE the aux-body encoding, which is
+  a wire-format change and therefore a `BYTECODE_VERSION` question. Scoping, and the bounded
+  non-rkyv slices, in
+  [`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md).
 - ~~Self-host the module scaffold assembly.~~ **CLOSED.** `self_host_compile_scratch` assembles
   the `DataLayout`, enum layouts, typed-verifier signatures, schema hash, and chunk-table
   metadata from pipeline output, borrowing no field from the reference.
