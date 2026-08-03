@@ -7181,7 +7181,8 @@ fn array_of_composite_element_defers() {
         // for an array element.
         "struct P { x: Word }\nstruct S { g: [(P, Word); 2] }\nfn f(a: S, b: S) -> bool { a == b }",
         // An element whose struct subtree is IMPURE: descending would mis-lower the inner composite.
-        "struct P { u: (Word, Word) }\nfn f(a: [(P, Word); 2], b: [(P, Word); 2]) -> bool { a == b }",
+        // A TUPLE inside is now supported, so this uses an ARRAY, which still has no nested form.
+        "struct P { u: [Word;2] }\nfn f(a: [(P, Word); 2], b: [(P, Word); 2]) -> bool { a == b }",
         // A struct field array whose element type is not a recognized scalar.
         "struct S { a: [bool;2], w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
     ] {
@@ -7261,6 +7262,45 @@ fn self_host_compiles_array_of_nested_element_equality() {
     );
 }
 
+/// A TUPLE sub-field nested at depth >= 2 self-compiles byte-identically.
+///
+/// A tuple field directly on the compared struct already worked (it rides `se_subistuple`), but a
+/// tuple reached through a nested struct, a tuple element, or an array element did not: the frame
+/// stack could only carry STRUCT frames, so it had no way to read `tupledefs` or to select the
+/// tuple accessor. Frames now carry an is-tuple flag, and a tuple block is marked with the 30000+size
+/// sentinel (the convention the enum-payload records already use) so codegen picks FlatNested variant
+/// Tuple with GetTupleField rather than Struct with GetField.
+///
+/// This is the first slice of the general MIXED-SUBTREE problem: a composite subtree whose node kinds
+/// vary. Arrays and enums at depth remain deliberate Gaps.
+#[test]
+fn self_host_compiles_nested_tuple_subfield_equality() {
+    // Reached through a nested struct, at two and three levels.
+    assert_self_host_byte_identical(
+        "struct P { u: (Word, Word) }\nstruct S { p: P }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { u: (Word, Word) }\nstruct Q { p: P }\nstruct S { q: Q }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    // Reached through a TUPLE element and through an ARRAY element.
+    assert_self_host_byte_identical(
+        "struct P { u: (Word, Word) }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { u: (Word, Word) }\nfn f(a: [(P, Word); 2], b: [(P, Word); 2]) -> bool { a == b }",
+    );
+    // A sibling scalar beside the tuple, a narrow element (which moves the following offset), and `!=`.
+    assert_self_host_byte_identical(
+        "struct P { u: (Word, Word), w: Word }\nstruct S { p: P }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { u: (Word, Byte) }\nstruct S { p: P }\nfn f(a: S, b: S) -> bool { a == b }",
+    );
+    assert_self_host_byte_identical(
+        "struct P { u: (Word, Word) }\nstruct S { p: P }\nfn f(a: S, b: S) -> bool { a != b }",
+    );
+}
+
 /// A tuple element whose struct subtree is NOT pure (it contains a tuple, array, or enum) must
 /// DEFER, not descend.
 ///
@@ -7273,7 +7313,6 @@ fn self_host_compiles_array_of_nested_element_equality() {
 #[test]
 fn struct_tuple_of_impure_struct_element_defers() {
     for src in [
-        "struct P { u: (Word, Word) }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
         "struct P { u: [Word;2] }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
         "enum E { A, B }\nstruct P { e: E }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
     ] {
@@ -7969,9 +8008,25 @@ fn self_hosted_construct_support_boundary() {
         // The admission guard: an IMPURE element subtree must defer rather than descend and
         // mis-lower. This is a Gap by design, not a missing feature.
         (
+            "eq/nested_tuple_subfield",
+            SOk,
+            "struct P { u: (Word, Word) }\nstruct S { p: P }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        (
+            "eq/nested_tuple_subfield_3level",
+            SOk,
+            "struct P { u: (Word, Word) }\nstruct Q { p: P }\nstruct S { q: Q }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        (
+            "eq/tuple_elem_struct_with_tuple",
+            SOk,
+            "struct P { u: (Word, Word) }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+        ),
+        // An ARRAY inside the element subtree still has no nested form, so it defers.
+        (
             "eq/struct_tuple_of_impure_struct__GAP",
             Gap,
-            "struct P { u: (Word, Word) }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
+            "struct P { u: [Word;2] }\nstruct S { t: (P, Word) }\nfn f(a: S, b: S) -> bool { a == b }",
         ),
         // The flat array-equality family has no nested form, so an array whose ELEMENT contains a
         // composite defers. Each of these was previously admitted and silently mis-compiled; the

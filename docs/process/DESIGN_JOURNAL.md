@@ -17,6 +17,43 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-02 (session 36)
 
+**NESTED TUPLE SUB-FIELDS (2026-08-02): the first slice of the general MIXED-SUBTREE problem. Boundary 72 -> 75 Ok.**
+A tuple field directly on the compared struct already worked (it rides `se_subistuple`), but a tuple
+reached through a nested struct, a tuple element, or an array element did not: the frame stack could
+carry only STRUCT frames, so it could not read `tupledefs` or select the tuple accessor. Frames now
+carry an is-tuple flag, and a tuple block is marked with the 30000+size sentinel — the convention the
+enum-payload records already use — so codegen picks FlatNested variant Tuple with GetTupleField
+instead of Struct with GetField. All three entry paths (nested struct, tuple element, array element)
+needed the same treatment, in three different dispatch sites.
+
+TWO GUARDRAILS FIRED, and both were the system working rather than obstacles.
+
+(1) THE VERIFIER CAUGHT A CALL CYCLE. Relaxing `struct_subtree_pure` to admit an all-scalar tuple by
+calling `elem_all_scalar` created `elem_all_scalar -> struct_subtree_pure -> elem_all_scalar`, and the
+WCMU topological sort rejected parse.kel outright: "recursive call detected". R4 forbids recursion, so
+the check was INLINED instead — the same reason the codebase already inlines `enum_eq_supported` at one
+site. Worth remembering when relaxing an admission predicate: these helpers call each other, and the
+acyclic-call-graph rule makes "just reuse the helper" a design constraint, not a style preference.
+
+(2) A CAPACITY TRAP, surfacing as `LoopLimitExceeded` inside reconstruct.kel while compiling parse.kel
+— even though reconstruct.kel was UNCHANGED this increment. Adding a second inline frame-push to
+`structeq_nested_next`, already one of the largest functions, pushed a block past a per-block cap that
+reconstruct then tripped at run time. Factoring the pushes into `se_push_frame(s, is_tuple)` fixed it
+and removed four copies of the same eleven lines. LESSON: a self-compile failure in stage B while
+compiling stage A can be caused purely by stage A GROWING; the fix is to factor, not to raise a limit.
+The error also names neither the loop nor the function, so the useful signal is "what did I just make
+bigger?".
+
+Verified byte-identical across 19 fixtures: all three entry paths, three levels, a sibling scalar, a
+narrow `Byte` element, `!=`, plus twelve regressions spanning the struct/tuple/array/enum families. All
+stages self-compile. No opcode, record, node kind, or `BYTECODE_VERSION` change — the 30000+ sentinel
+reuses an existing record's payload space, which is the tag-reuse pattern the ISA constraint prefers.
+
+Still deferred, deliberately: an ARRAY or ENUM at depth inside a composite subtree. The impure-subtree
+Gap fixture was RETARGETED from a tuple (now supported) to an array, so it still pins a real deferral
+rather than silently becoming vacuous.
+
+
 **NESTED ARRAY ELEMENTS (2026-08-02): the flat array-equality family now shares the StructEqNested machinery. Boundary 69 -> 72 Ok, 6 Gap -> 4.**
 The preferred route from the blueprint — routing array-of-composite elements through the existing
 frame machinery rather than giving the flat family its own nested form — worked, and was smaller than

@@ -670,6 +670,10 @@ private data stmt {
     se_stk_cur: [Word; 8],
     se_stk_r2: [Word; 8],
     se_stk_l2: [Word; 8],
+    // 1 when the frame's sub-fields are TUPLE elements (read `tupledefs`, extract with a FlatNested
+    // Tuple and compare with GetTupleField); 0 for a struct frame. A tuple sub-field at depth >= 2
+    // needs this: the top-level case rides `se_subistuple`, but a frame had no equivalent.
+    se_stk_istup: [Word; 8],
     se_casc_active: Word,
     // Admission scan (`struct_subtree_pure`): an explicit stack over a struct's transitively-nested
     // STRUCT fields, checking the subtree is pure struct/scalar (no tuple/array/enum at any depth) so
@@ -695,6 +699,8 @@ private data stmt {
     aq_r2: [Word; 8],
     aq_l2: [Word; 8],
     aq_phase: [Word; 8],
+    // 1 when the frame's sub-fields are TUPLE elements (read `tupledefs`), as `se_stk_istup`.
+    aq_istup: [Word; 8],
     aq_k: Word,
     aq_casc: Word,
     enc_n: Word,
@@ -2288,9 +2294,44 @@ fn array_of_array_eq_start(op: Word) -> Word {
 // ELEMENT 0's: the reference lays out tb, ta, then per element the element pair followed by that
 // element's blocks, so block k of element 0 sits at ta+3+2k (r2) and ta+4+2k (l2). Codegen adds
 // `e * stride` for later elements. r2 is allocated before l2, matching the reference `next_slot`.
-fn aq_push(s: Word) -> Word {
-    stmt.aq_start[stmt.aq_sp] = structdefs.sd_fstart[s];
-    stmt.aq_count[stmt.aq_sp] = structdefs.sd_fcount[s];
+// Push a nested-equality frame over struct `s`'s fields or tuple `s`'s elements, allocating the
+// comparison temps r2 then l2 monotonically (matching the reference `next_slot`). Factored out of
+// `structeq_nested_next`, which is already near the per-block statement cap -- inlining a second
+// push there tripped a reconstruct loop limit.
+fn se_push_frame(s: Word, is_tuple: Word) -> Word {
+    stmt.se_stk_start[stmt.se_sp] = if is_tuple == 1 {
+        tupledefs.tup_estart[s]
+    } else {
+        structdefs.sd_fstart[s]
+    };
+    stmt.se_stk_count[stmt.se_sp] = if is_tuple == 1 {
+        tupledefs.tup_ecount[s]
+    } else {
+        structdefs.sd_fcount[s]
+    };
+    stmt.se_stk_cur[stmt.se_sp] = 0;
+    stmt.se_stk_istup[stmt.se_sp] = is_tuple;
+    stmt.se_stk_r2[stmt.se_sp] = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + 1;
+    stmt.se_stk_l2[stmt.se_sp] = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + 1;
+    stmt.se_stk_phase[stmt.se_sp] = 1;
+    stmt.se_sp = stmt.se_sp + 1;
+    0
+}
+
+fn aq_push_kind(s: Word, is_tuple: Word) -> Word {
+    stmt.aq_start[stmt.aq_sp] = if is_tuple == 1 {
+        tupledefs.tup_estart[s]
+    } else {
+        structdefs.sd_fstart[s]
+    };
+    stmt.aq_count[stmt.aq_sp] = if is_tuple == 1 {
+        tupledefs.tup_ecount[s]
+    } else {
+        structdefs.sd_fcount[s]
+    };
+    stmt.aq_istup[stmt.aq_sp] = is_tuple;
     stmt.aq_cur[stmt.aq_sp] = 0;
     stmt.aq_r2[stmt.aq_sp] = stmt.sq_ta + 3 + 2 * stmt.aq_k;
     stmt.aq_l2[stmt.aq_sp] = stmt.sq_ta + 4 + 2 * stmt.aq_k;
@@ -2335,18 +2376,28 @@ fn step_structeq_emit() -> Word {
             Node::StructEqField() as Word + (stmt.aq_count[top] + stmt.aq_r2[top] * 65536 + stmt.aq_l2[top] * 4294967296) * 64
         } else {
             let g = stmt.aq_start[top] + stmt.aq_cur[top];
-            if structdefs.sd_fstruct[g] > 0 {
+            if stmt.aq_istup[top] == 0 andalso structdefs.sd_fstruct[g] > 0 {
                 let s = structdefs.sd_fstruct[g] - 1;
-                aq_push(s);
+                aq_push_kind(s, 0);
                 Node::StructEqField() as Word + (structdefs.sd_foffset[g] + (100 + structdefs.sd_bytesize[s]) * 65536) * 64
             } else {
-                let rec = Node::StructEqField() as Word + (structdefs.sd_foffset[g] + structdefs.sd_fkind[g] * 65536) * 64;
+            if stmt.aq_istup[top] == 0 andalso structdefs.sd_ftuple[g] > 0 {
+                // A TUPLE sub-field of an array element's struct: sentinel 30000+size, tuple frame.
+                let t = structdefs.sd_ftuple[g] - 1;
+                aq_push_kind(t, 1);
+                Node::StructEqField() as Word + (structdefs.sd_foffset[g] + (30000 + structdefs.sd_fsize[g]) * 65536) * 64
+            } else {
+                let rec = if stmt.aq_istup[top] == 1 {
+                    Node::StructEqField() as Word + (tupledefs.tup_eoffset[g] + tupledefs.tup_ekind[g] * 65536) * 64
+                } else {
+                    Node::StructEqField() as Word + (structdefs.sd_foffset[g] + structdefs.sd_fkind[g] * 65536) * 64
+                };
                 stmt.aq_cur[top] = stmt.aq_cur[top] + 1;
                 if stmt.aq_cur[top] == stmt.aq_count[top] {
                     aq_pop_cascade();
                 }
                 rec
-            }
+            } }
         }
     } else {
     if stmt.sq_field < stmt.sq_count {
@@ -2357,7 +2408,7 @@ fn step_structeq_emit() -> Word {
                 // A STRUCT element of an array-of-tuple: emit the sentinel header and descend.
                 // `sq_field` advances when the frame pops, via `aq_pop_cascade`.
                 let s = tupledefs.tup_estruct[fidx] - 1;
-                aq_push(s);
+                aq_push_kind(s, 0);
                 Node::StructEqField() as Word + (tupledefs.tup_eoffset[fidx] + (100 + structdefs.sd_bytesize[s]) * 65536) * 64
             } else {
                 stmt.sq_field = sf + 1;
@@ -2367,7 +2418,7 @@ fn step_structeq_emit() -> Word {
             let fidx = structdefs.sd_fstart[stmt.sq_struct] + sf;
             if stmt.sq_arr == 1 andalso structdefs.sd_fstruct[fidx] > 0 {
                 let s = structdefs.sd_fstruct[fidx] - 1;
-                aq_push(s);
+                aq_push_kind(s, 0);
                 Node::StructEqField() as Word + (structdefs.sd_foffset[fidx] + (100 + structdefs.sd_bytesize[s]) * 65536) * 64
             } else {
                 stmt.sq_field = sf + 1;
@@ -2498,7 +2549,21 @@ fn struct_subtree_pure(s: Word) -> Word {
             } else {
                 let fidx = structdefs.sd_fstart[cs] + stmt.ssp_cur[top];
                 stmt.ssp_cur[top] = stmt.ssp_cur[top] + 1;
-                if structdefs.sd_ftuple[fidx] > 0 orelse structdefs.sd_farraylen[fidx] > 0 orelse structdefs.sd_fenum[fidx] > 0 {
+                if structdefs.sd_ftuple[fidx] > 0 {
+                    // A TUPLE sub-field is admitted when all its elements are scalar: the drain now
+                    // pushes a tuple frame for it. A tuple containing a composite still defers.
+                    // Inlined rather than calling `elem_all_scalar`, which itself calls this function
+                    // for the array admission -- routing through it would form a call CYCLE, and the
+                    // verifier forbids recursion (R4, acyclic call graph).
+                    let ti = structdefs.sd_ftuple[fidx] - 1;
+                    for tg in 0..tupledefs.tup_ecount[ti] limit 64 {
+                        let tgi = tupledefs.tup_estart[ti] + tg;
+                        if tupledefs.tup_estruct[tgi] > 0 orelse tupledefs.tup_ekind[tgi] >= 100 {
+                            stmt.ssp_ok = 0;
+                        }
+                    }
+                } else {
+                if structdefs.sd_farraylen[fidx] > 0 orelse structdefs.sd_fenum[fidx] > 0 {
                     stmt.ssp_ok = 0;
                 } else {
                     if structdefs.sd_fstruct[fidx] > 0 {
@@ -2506,7 +2571,7 @@ fn struct_subtree_pure(s: Word) -> Word {
                         stmt.ssp_cur[stmt.ssp_sp] = 0;
                         stmt.ssp_sp = stmt.ssp_sp + 1;
                     }
-                }
+                } }
             }
         }
     }
@@ -2792,30 +2857,36 @@ fn structeq_nested_next() -> Word {
                 rec
             } else {
                 let g = stmt.se_stk_start[top] + stmt.se_stk_cur[top];
-                if structdefs.sd_fstruct[g] > 0 {
+                if stmt.se_stk_istup[top] == 0 andalso structdefs.sd_fstruct[g] > 0 {
                     // A DEEPER struct sub-field: emit the sentinel header (kind 100+bytesize) and PUSH a
                     // new frame (r2 then l2, monotonic). This frame's cursor advances only when the
                     // child frame pops (via `se_pop_cascade`).
                     let s = structdefs.sd_fstruct[g] - 1;
-                    stmt.se_stk_start[stmt.se_sp] = structdefs.sd_fstart[s];
-                    stmt.se_stk_count[stmt.se_sp] = structdefs.sd_fcount[s];
-                    stmt.se_stk_cur[stmt.se_sp] = 0;
-                    stmt.se_stk_r2[stmt.se_sp] = ps.pcount + stmt.slot_count;
-                    stmt.slot_count = stmt.slot_count + 1;
-                    stmt.se_stk_l2[stmt.se_sp] = ps.pcount + stmt.slot_count;
-                    stmt.slot_count = stmt.slot_count + 1;
-                    stmt.se_stk_phase[stmt.se_sp] = 1;
-                    stmt.se_sp = stmt.se_sp + 1;
+                    se_push_frame(s, 0);
                     Node::StructEqNestedField() as Word + (structdefs.sd_foffset[g] + (100 + structdefs.sd_bytesize[s]) * 65536) * 64
                 } else {
-                    // A scalar sub-field: emit it; if it is the frame's last, pop and cascade up.
-                    let rec = Node::StructEqNestedField() as Word + (structdefs.sd_foffset[g] + structdefs.sd_fkind[g] * 65536) * 64;
+                if stmt.se_stk_istup[top] == 0 andalso structdefs.sd_ftuple[g] > 0 {
+                    // A TUPLE sub-field at depth >= 2. Same shape as the struct case, but the sentinel
+                    // is 30000+size (the convention the enum-payload records already use for a tuple)
+                    // so codegen can pick FlatNested variant Tuple and GetTupleField instead of Struct
+                    // and GetField, and the pushed frame reads `tupledefs`.
+                    let t = structdefs.sd_ftuple[g] - 1;
+                    se_push_frame(t, 1);
+                    Node::StructEqNestedField() as Word + (structdefs.sd_foffset[g] + (30000 + structdefs.sd_fsize[g]) * 65536) * 64
+                } else {
+                    // A scalar sub-field (of a struct frame or a tuple frame): emit it; if it is the
+                    // frame's last, pop and cascade up.
+                    let rec = if stmt.se_stk_istup[top] == 1 {
+                        Node::StructEqNestedField() as Word + (tupledefs.tup_eoffset[g] + tupledefs.tup_ekind[g] * 65536) * 64
+                    } else {
+                        Node::StructEqNestedField() as Word + (structdefs.sd_foffset[g] + structdefs.sd_fkind[g] * 65536) * 64
+                    };
                     stmt.se_stk_cur[top] = stmt.se_stk_cur[top] + 1;
                     if stmt.se_stk_cur[top] == stmt.se_stk_count[top] {
                         se_pop_cascade();
                     }
                     rec
-                }
+                } }
             }
         } else {
         if stmt.se_subcur < stmt.se_subcount {
@@ -2838,6 +2909,7 @@ fn structeq_nested_next() -> Word {
                     stmt.se_stk_start[0] = structdefs.sd_fstart[s];
                     stmt.se_stk_count[0] = structdefs.sd_fcount[s];
                     stmt.se_stk_cur[0] = 0;
+                    stmt.se_stk_istup[0] = 0;
                     stmt.se_stk_r2[0] = ps.pcount + stmt.slot_count;
                     stmt.slot_count = stmt.slot_count + 1;
                     stmt.se_stk_l2[0] = ps.pcount + stmt.slot_count;
@@ -2855,20 +2927,22 @@ fn structeq_nested_next() -> Word {
                 // sentinel header (kind 100+bytesize) and PUSH the first stacked frame (r2 then l2,
                 // monotonic -- matching the reference next_slot). `se_subcur` advances when it pops.
                 let s = structdefs.sd_fstruct[fidx] - 1;
-                stmt.se_stk_start[0] = structdefs.sd_fstart[s];
-                stmt.se_stk_count[0] = structdefs.sd_fcount[s];
-                stmt.se_stk_cur[0] = 0;
-                stmt.se_stk_r2[0] = ps.pcount + stmt.slot_count;
-                stmt.slot_count = stmt.slot_count + 1;
-                stmt.se_stk_l2[0] = ps.pcount + stmt.slot_count;
-                stmt.slot_count = stmt.slot_count + 1;
-                stmt.se_stk_phase[0] = 1;
-                stmt.se_sp = 1;
+                stmt.se_sp = 0;
+                se_push_frame(s, 0);
                 Node::StructEqNestedField() as Word + (structdefs.sd_foffset[fidx] + (100 + structdefs.sd_bytesize[s]) * 65536) * 64
+            } else {
+            if structdefs.sd_ftuple[fidx] > 0 {
+                // A DEPTH-2 TUPLE sub-field (`struct P { u: (Word, Word) }` inside `struct S { p: P }`):
+                // the same push as the struct case, but the frame reads `tupledefs` and the sentinel is
+                // 30000+size so codegen picks FlatNested variant Tuple and GetTupleField.
+                let t = structdefs.sd_ftuple[fidx] - 1;
+                stmt.se_sp = 0;
+                se_push_frame(t, 1);
+                Node::StructEqNestedField() as Word + (structdefs.sd_foffset[fidx] + (30000 + structdefs.sd_fsize[fidx]) * 65536) * 64
             } else {
                 stmt.se_subcur = stmt.se_subcur + 1;
                 Node::StructEqNestedField() as Word + (structdefs.sd_foffset[fidx] + structdefs.sd_fkind[fidx] * 65536) * 64
-            } } }
+            } } } }
         } else {
             stmt.se_phase = 0;
             stmt.sq_field = stmt.sq_field + 1;
