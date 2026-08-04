@@ -10,86 +10,134 @@ a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`
-- **Parent commit** (the repository state this handoff describes): `5b58820`
-- **Written**: 2026-08-02
-- **Tree at write**: clean (all work committed, merged, and pushed; `v0.2.3` tip is the
-  roadmap-baseline-correction merge `81c0bd9` plus this handoff restamp commit)
-- **Context**: written after nested ENUM sub-fields landed, COMPLETING the mixed-subtree family --
-  tuples, arrays and enums all nest now (boundary 79 Ok / 4 Gap / 1 RefRejects). Full gate GREEN, CI
-  GREEN on `239aa9c`, tree clean, all pushed. The remaining Gaps in this family are NO LONGER drain
-  work, which changes the recommended direction (see below).
+- **Parent commit** (the repository state this handoff describes): `48a05f7`
+- **Written**: 2026-08-04
+- **Tree at write**: clean. One docs-only commit carrying the v2 design and this handoff, merged to
+  `v0.2.3` and pushed. No product code changed.
+- **Context**: the wire-format work has shifted from "replace rkyv" to a designed-from-requirements
+  format with its own crate. The operator has stated a six-point plan (below). Prototyping is live in
+  `secret/`, which is gitignored, and is NOT part of the documentation graph.
+- **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** It defines what must not
+  appear in this repository. Tracked material was sanitized against it on 2026-08-04.
 
-**Validity check — run on resume, before trusting this handoff.** On the branch above, compare the
-**Parent commit** to `git rev-parse HEAD~1`. Because this handoff file is itself committed, its commit
-advances the tip by one, so the state it describes is the parent of the handoff commit. The two match
-**only** when this handoff commit is still the branch tip and nothing has landed after it.
+**Validity check — run on resume, before trusting this handoff.** Compare the **Parent commit** above
+to `git rev-parse HEAD~1`.
 
 - **Match → VALID.** Proceed per the resume prompt below.
-- **Mismatch → INVALID and STALE.** A later commit, a no-fast-forward merge, or a rebase moved the tip.
-  Do **not** proceed and do **not** trust this handoff. Report the mismatch to the human pilot (recorded
-  parent versus actual `HEAD~1`), familiarize from the live channels — `REVERSE_PROMPT.md`,
-  `DESIGN_JOURNAL.md`, `TASKLOG.md`, and the git log, always authoritative — and wait for instruction.
+- **Mismatch → INVALID and STALE.** Report the mismatch, familiarize from `REVERSE_PROMPT.md`,
+  `DESIGN_JOURNAL.md`, `TASKLOG.md`, and the git log, and wait for instruction.
 
-## Resume prompt — IMPLEMENT the TYPE CHECKER. It is the only unblocked Order-1 item.
+## On resume after compaction — do these first
 
-All three Order-1 remainders were probed on 2026-08-03 and the earlier recommendation was WITHDRAWN:
+1. **Run the validity check above.** Mismatch → stop and report; do not trust anything below.
+2. **Read `secret/notes/APPENDIX_B.md` before writing ANY tracked file**, commit message, or code
+   comment for this work. It defines what must not appear in this repository. Tracked material was
+   sanitized against it on 2026-08-04. **Hard constraint, not a preference.**
+3. **Re-read the three channels fresh** — they are authoritative and current, and this handoff is a
+   convenience snapshot, not the source of truth:
+   [`REVERSE_PROMPT.md`](./REVERSE_PROMPT.md) (bounded latest state and next step),
+   [`DESIGN_JOURNAL.md`](./DESIGN_JOURNAL.md) (newest entry first), [`TASKLOG.md`](./TASKLOG.md).
+4. **Read the two design documents** listed under "Design documents" below. Do not re-derive what
+   they already record.
+5. **In-flight verification: NONE.** No gate, CI run, or background agent is pending. The one commit
+   on this branch is docs-only and has NOT been gated or pushed.
 
-- **Wire-format serialization — PARTIALLY BLOCKED.** The roadmap's enumeration omitted that the
-  AUXILIARY BODY is `rkyv`-archived and carries everything except the opcode stream and operand pool.
-  Full self-hosting needs an operator decision (reimplement rkyv, or change the aux-body encoding — a
-  wire-format change, hence a `BYTECODE_VERSION` question), which is an ENUMERATED STOP. The
-  non-rkyv slices are bounded but leave the aux body host-supplied and do NOT meet the gate wording.
-  See [`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md).
-  **If the operator has since decided, that decision governs — re-read it before assuming this stop.**
-- **The monomorphizer — VACUOUS.** Identity over the subset; the `.kel` sources use no generics.
-  Porting it changes no emitted byte. Do not pick it as "the cheapest" expecting value.
-- **The type checker — UNBLOCKED and substantive.** The pipeline has NO type checking (its stages are
-  lexer, parse, reconstruct, codegen, plus analyze and verify_*). Ill-typed programs are caught today
-  only by the CLI's cross-check against the reference. Self-hosting it is what lets the self-hosted
-  compiler reject bad programs on its own. Over the monomorphic Word/Byte subset it is far smaller
-  than `typecheck.rs`'s 8601 lines.
+## Resume prompt — THE WIRE-FORMAT PROGRAMME
 
-**PROBE CAUTION, learned the hard way here:** `self_host_compile` calls `compile_src` FIRST and panics
-whenever the REFERENCE rejects, so any "does the self-hosted path reject?" probe run through it is
-CONFOUNDED and will report rejection for every ill-typed program. Probe the stages directly. More
-generally: check what a harness itself does before trusting its verdict — the same control discipline
-the byte-identity probes require.
+The operator's plan, in order. Each step gates the next; do not skip ahead.
 
-**Note the ORACLE DIFFERS for this item.** Every increment of the last arc used byte-identity of
-emitted ops. A type checker changes no output; its oracle is VERDICT AGREEMENT with the reference
-(accept/reject, and ideally the same error) over a corpus of well- and ill-typed programs. Build that
-corpus first, with both polarities, and treat a self-hosted ACCEPT of a reference-REJECT as the
-serious direction — that is the unsound one.
+1. **Prototype the wire format until it can be locked in.**
+2. **Add a new wire-format crate**, usable by other projects as an alternative to `rkyv`, in the same
+   way `keleusma-arena` is nominally useful outside this repository.
+3. **Document the WHAT of the format, without the sensitive internal reasoning about the WHY.**
+4. **Implement the wire format in Rust.**
+5. **Port Keleusma to it.**
+6. **Self-host the wire format in Keleusma.** This implies **the Rust must be Keleusma-like**.
 
-Suggested first slice: the monomorphic scalar core — binary/unary operator operand types, assignment
-and return types, and undefined identifiers — over the subset the stages themselves use. Widen from
-there to composites.
+### Step 6 is a constraint on step 4, not a later concern
 
-**The fourteen method rules. These found every bug across seven increments; none is optional.**
-1. **PROBE BEFORE PLANNING, always with a control**; confirm the REFERENCE accepts the source too.
-2. **Probe what the admission ACCEPTS, not only what it rejects.**
-3. **When generalizing a drain, tighten its admission IN THE SAME CHANGE.**
-4. **Close an admission hole BEFORE building support over it**; expect +Gap / 0 Ok when you do.
-5. **Never trust op counts as a correctness proxy.** For a deferral, assert its SHAPE.
-6. **When a sufficient-looking change produces NO observable difference, suspect a BYPASSING path.**
-7. **Abandon on TRAJECTORY, not attempt count.**
-8. **Admission helpers call each other and R4 forbids cycles.** Inline rather than reuse.
-9. **A self-compile failure in stage B can be caused by stage A merely GROWING** — and if the first
-   factoring does not fix it, MEASURE which function is over.
-10. **When a construct becomes supported, RETARGET the Gap fixture that pinned it.**
-11. **Read the divergence SIGNATURE** — pool-order, over-consuming frame, and duplicated loop-open all
-    have distinct shapes.
-12. **Edit fixtures by POSITION, not string replacement**, when a source appears in two tests.
-13. **The gate compiles the test crate more strictly than `cargo test`** (clippy `-D warnings`), and
-    `EXPECTED_SELF_COMPILE` must be bumped when codegen.kel gains a function. Both fire ONLY in the
-    full gate.
-14. **A probe run through a harness that already invokes the reference cannot tell you what the
-    self-hosted path does alone.** Check the harness before trusting its verdict.
+Writing the Rust in a Keleusma-transliterable style is the single highest-leverage instruction here,
+because it makes step 6 a translation rather than a rewrite. Concretely, in the wire-format crate:
 
-Steps: validate → familiarize (`REVERSE_PROMPT.md`, newest `DESIGN_JOURNAL.md`) → probe → implement on
-a feature branch off `v0.2.3` → verify verdict agreement on BOTH polarities, then the boundary, then
-the FULL `scripts/release-gate.sh` → no-ff merge, push, confirm CI, record on all three channels,
-prune the branch, restamp this HANDOFF.
+- **No recursion.** Keleusma forbids it (R4). Walk with an explicit, bounded stack.
+- **Bounded loops** with a static cap, mirroring `for … limit N`.
+- **No dynamic allocation on the read path.** Borrowed views, never owned materialization.
+- **Fixed-size records, unrolled field access.** Literal place values (`1, 256, 65536, …`), not
+  computed shifts — validated in `secret/kel-format-probe/` as simultaneously the most graceful
+  Keleusma, the lowest-state, and the most hardware-like form.
+- **No traits, generics, or dynamic dispatch** in the codec core. Keleusma has none of it.
+- **State in explicit structs**, not local mutation — Keleusma has no `let mut`.
+
+### Where the prototype stands (all in `secret/`, gitignored)
+
+- `kel-format-probe/wireimage.kel` — Keleusma PRODUCER emitting a 160-byte artifact.
+- `kel-format-probe/image.py` — independent reference emitter. **Checksums agree at 4016.**
+- `silicon-prototype/wire_decode.vhd` + `tb_wire.vhd` — VHDL CONSUMER of those exact bytes.
+  **PASS**: magic, region count, both regions, absent-region not-found, all three chunk descriptors.
+- `silicon-prototype/tb_wire_corrupt.vhd` — one corrupted header copy outvoted AND flagged. **PASS.**
+- `silicon-prototype/secded_*` — (72,64) SECDED, exhaustively validated in Python AND simulated in
+  VHDL: 432/432 single-bit corrected, 15336/15336 double-bit detected.
+- Toolchain: `nvc` 1.23-devel installed at `/usr/local/bin/nvc`.
+
+### Lock-in is a judgement call, not a checklist
+
+**RESOLVED by the operator (2026-08-04): the criterion is practical and requires judgement.** A
+proof of concept needs only to be good enough to make a decision and move on. Do NOT gold-plate the
+prototype or hold the format hostage to exhaustive coverage.
+
+That said, two gaps are worth closing first because each could still change the record layouts, and
+changing them after step 4 is expensive:
+- The fetch path stops at the chunk descriptor. It does not follow `const_first`/`const_count` into a
+  constant table, nor resolve a string slice out of the pool. **This is the remaining layout-sensitive
+  step and the one most likely to force a change.**
+- Emission is only tested from a terminating `fn`. A real stage is `loop main` yielding incrementally,
+  which is where forward-only emission either pays off or does not.
+
+### Resolved by the operator, 2026-08-04
+
+1. **Crate scope: MECHANISM ONLY.** The crate provides regions, fixed-size records, pools, framing,
+   the ECC plane, and the integrity primitives. It must NOT depend on the Keleusma runtime and must
+   NOT hardcode `WireChunk` / `ConstValue`; Keleusma's schema layers on top, in the `keleusma` crate.
+   This is what makes it usable by other projects, which is the stated point.
+2. **Documentation boundary: see `secret/notes/APPENDIX_B.md`.** Read it BEFORE writing any tracked
+   documentation, commit message, or code comment for this work. The tracked design documents state
+   the format's engineering PROPERTIES only; requirements context lives in Appendix B and must not be
+   restated in tracked files. **This is a hard constraint, not a stylistic preference.**
+3. **Crate name**: `keleusma-wire`, paralleling `keleusma-arena`.
+4. **Step 6 covers BOTH encoder and decoder.** Confirmed. The encoder is needed for self-hosted
+   compilation; the decoder is needed because the `verify_*.kel` family consumes module data that the
+   host currently marshals for it, because the natural self-hosted oracle is encode-then-decode in
+   Keleusma and compare, and because the meta-circular runtime (Workstream D) and the Keleusma-hosted
+   runtime (V0.5.0) both have to read artifacts.
+
+### Design documents (authoritative, in the graph)
+
+- [`../decisions/WIRE_FORMAT_V2_WORD_ORIENTED.md`](../decisions/WIRE_FORMAT_V2_WORD_ORIENTED.md) —
+  the current design. Word-oriented, fixed-size records, parallel ECC plane, per-region encryption,
+  triplicated directory, plus the Keleusma-expressibility test and its three rules.
+- [`../decisions/WIRE_FORMAT_V2_FLAT_AUX.md`](../decisions/WIRE_FORMAT_V2_FLAT_AUX.md) — superseded on
+  record structure, but **its P10 analysis still governs**: string constants materialise as `KStr`
+  aliasing the image, so the accessor layer must be a BORROWED VIEW, never an owned decode.
+- `src/wire_aux.rs` on this branch implements the SUPERSEDED variable-length design. Its primitive
+  layer, tag discipline, and totality tests are reusable; **its record structure is not** and should
+  not be carried into the new crate unexamined.
+
+### Standing method rules
+
+The fourteen rules from the previous arc still apply, are recorded in the channels, and are not
+repeated here. The two that have earned their keep most recently:
+
+- **Cross-check across independent implementations.** The Keleusma/Python checksum disagreement (3968
+  vs 4016) localised a mistranscribed magic constant in one step. Build the cross-check before it is
+  needed, not after.
+- **Run the FULL gate before landing.** Clippy `-D warnings` and `EXPECTED_SELF_COMPILE` fire only
+  there, and a documented command (`cargo doc --workspace`) once disagreed with the gate's own doc
+  step, hiding a real defect in shipped docs.
+
+**Active increment**: step 1 of the six-step wire-format programme (prototype toward lock-in), moving
+into step 2 (the `keleusma-wire` crate). Plans are the two design documents below; the prototype is in
+`secret/` and is gitignored, so it is absent from every commit and must be rebuilt from
+`secret/silicon-prototype/README.md` if lost.
 
 **Git position** (as of the Parent commit)
 - Branch `v0.2.3` tip is the Order-1 reassessment docs commit `5b58820` plus this restamp commit. In
@@ -100,7 +148,8 @@ prune the branch, restamp this HANDOFF.
   a deliberate safety net, not clutter.
 - `main` holds releases and sits behind `v0.2.3` by design (`docs/process/GIT_STRATEGY.md`).
 
-**Boundary counts** — **79 Ok / 4 Gap / 1 RefRejects**, pinned by
+**Boundary counts** — **79 Ok / 4 Gap / 1 RefRejects**, UNCHANGED by the wire-format work (no product
+code has been touched for it). Pinned by
 `self_hosted_construct_support_boundary` in `tests/selfhost_codegen.rs`. Recount with a grep rather than
 trusting a remembered number; the figure in the docs was found stale by 2 on 2026-07-30.
 

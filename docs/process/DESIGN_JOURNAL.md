@@ -15,7 +15,57 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 ## Last Updated
 
-**Date**: 2026-08-03 (session 36)
+**Date**: 2026-08-04 (session 36)
+
+**WIRE FORMAT REDESIGNED FROM REQUIREMENTS (2026-08-04). The flat-aux record structure is superseded; a six-step programme replaces the incremental port.**
+The operator supplied the full requirement set, which added two the flat-aux design had never been
+tested against, and both condemned the same construct: length-prefixed variable-length records. A
+variable length makes the next field's position data-dependent, which hardware parsers handle only
+with dynamic multiplexer trees or shift registers, and P4-16 has no first-class TLV support at all; a
+bit flip inside a length prefix destroys the framing of everything after it rather than corrupting one
+field. Fixed strides, by contrast, are a shift rather than a back-patched two-pass write. Three
+requirements converging on one construct is the strongest signal the design pass produced.
+
+The resulting design is word-oriented: 64-bit unit, word-indexed offsets, fixed-size records with
+variable data in byte-addressed pools, a (72,64) SECDED plane held PARALLEL to the data rather than
+interleaved, per-region encryption, and a triplicated header and directory. Parallel rather than
+interleaved because interleaving parity with data would break contiguity and destroy the in-place
+string aliasing P10 depends on. Per-region rather than whole-body encryption for the same reason: an
+encrypted region cannot be read in place, so whole-body encryption would allocate per load.
+
+TWO SECONDARY WINS. Composite constants referencing a RANGE instead of nesting inline removes the
+recursion entirely, so the hostile-input depth guard becomes unnecessary rather than merely satisfied,
+and a Keleusma encoder needs no explicit-stack workaround for R4. And triplicating the header and
+directory converts the single catastrophic-failure point into a majority-vote read that is one gate
+per bit in hardware.
+
+THE KELEUSMA-EXPRESSIBILITY TEST, which the operator proposed and which turned out to be the most
+useful instrument of the session. The criterion: a good format should have a producer/consumer pair
+expressible gracefully in Keleusma. That is cheap evidence rather than taste, because Keleusma's
+constraints — totality, no recursion, bounded loops, static memory — are close to the constraints a
+hardware decoder and a corruption-tolerant format also live under. It was TESTED, not assumed: a
+producer and consumer were written and run against the real compiler. Unrolling multi-byte field
+access with literal place values removed every loop and two accumulator fields, and that form is
+simultaneously the most graceful Keleusma, the lowest-state, and the most hardware-like. Three rules
+follow: fixed widths small enough to unroll, dependency-ordered emission, and — the crisp form of the
+whole criterion — the format must be walkable WITHOUT A STACK.
+
+CROSS-LANGUAGE VALIDATION. A Keleusma producer and a Python reference emit a byte-identical artifact
+(checksum 4016), and a VHDL decoder consumes those exact bytes and recovers every field. The checksum
+caught a real defect immediately: a first-run disagreement of 3968 against 4016 localised, via the
+48-byte gap, to a mistranscribed magic constant. A separate testbench corrupts one header copy and
+confirms the vote both recovers the value AND raises the disagreement flag — asserting only the first
+would let unreported damage accumulate until the vote itself fails.
+
+A PROCESS FINDING WORTH KEEPING. Design documents were written before the recorded rationale for the
+existing choice was read. `RESOLVED.md` documents the deliberate postcard-to-rkyv switch, made to
+enable a zero-copy execution path, and the first version of this design asserted "fixed offsets beat
+relative pointers" without engaging it. Checking that rationale changed the design's constraints: it
+established that P10's true-zero-copy phase has LANDED (two comments calling it "the next iteration"
+are stale), that opcodes are no longer read in place, and that the live dependency is string constants
+aliasing the image — which is why the accessor layer must be a borrowed view. **PROBE BEFORE PLANNING
+has a documentation analogue: read the decision record before designing against it.**
+
 
 **WIRE FORMAT V2, STAGE 1 (2026-08-03): the flat aux-body codec. Operator-authorized encoding change and version bump.**
 The operator directed changing the aux-body encoding and bumping the wire version to 2, resolving the
