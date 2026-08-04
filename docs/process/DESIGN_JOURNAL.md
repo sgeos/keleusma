@@ -17,6 +17,47 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-03 (session 36)
 
+**WIRE FORMAT V2, STAGE 1 (2026-08-03): the flat aux-body codec. Operator-authorized encoding change and version bump.**
+The operator directed changing the aux-body encoding and bumping the wire version to 2, resolving the
+stop recorded earlier the same day. Scope was MEASURED before designing, and it is larger than the
+roadmap's "framing header, operand-pool encoding, parity, CRC trailer": the VM executes against
+archived types (`ArchivedConstValue`, `ArchivedBlockType`, `ArchivedSlotVisibility`,
+`ArchivedDataLayout`) -- 59 references across three files, 7 archived types, 3 zero-copy entry points
+including an `unsafe access_unchecked` in the hot path. This replaces the runtime's zero-copy
+representation, not merely a serializer.
+
+THE PROPERTY THAT DROVE THE DESIGN: in-place reads. Decoding into owned structures at load would
+allocate per load, against the WCMU guarantee and the `no_std` embedded story. The flat format is
+byte-addressed with an offset-indexed region directory, so reads stay in place. Fixed offsets are a
+BETTER fit here than rkyv's relative pointers -- every read is a bounds check plus an addition, which
+is auditable and statically bounded -- and the cutover will remove an `unsafe` from the hot path.
+
+Stage 1 delivers encode/decode for the whole body, with the rkyv path untouched. Two safety
+properties were built in deliberately rather than discovered: the decoder is TOTAL on malformed input
+(a test truncates a full body at every length and requires rejection at each), and because
+`ConstValue` is RECURSIVE it carries `MAX_CONST_DEPTH` so a hostile buffer cannot drive unbounded
+recursion into stack exhaustion. Discriminants are assigned explicitly rather than by declaration
+order, so reordering a Rust enum cannot silently change the wire encoding, and the floats tag is
+reserved unconditionally so a floats-built module read by a no-floats build fails loudly.
+
+TWO ISSUES THE FULL GATE CAUGHT THAT TARGETED TESTS DID NOT, both fixed here:
+
+(1) A warning I introduced -- `put_u64` unused in the `--no-default-features` build, since its only
+caller is the floats-gated arm. The gate stayed GREEN because that step does not deny warnings, which
+is exactly how the pre-existing `src/vm.rs` `alloc::vec` warning has survived. Fixed rather than added
+to that pile.
+
+(2) A PRE-EXISTING documentation defect, found by running the command CLAUDE.md documents rather than
+the one the gate runs. `cargo doc --workspace --no-deps` under `-D warnings` failed on four
+unresolved intra-doc links in `src/selfhost/mod.rs`. The gate never saw them because it documents
+keleusma with the docs.rs feature set, which EXCLUDES `self-host`; the CLI enables that feature, so
+the published CLI docs did reach the broken module. Two lessons: the documented everyday command and
+the gate's command had drifted apart, and the stricter one was the one nobody ran; and a module with
+doc comments in TWO places (an outer `///` on the `pub mod` declaration plus the inner `//!`) does not
+resolve unqualified names from both scopes, so qualifying them is the fix. The gate now documents with
+`self-host` explicitly so the hole cannot reopen.
+
+
 **ORDER-1 REASSESSED (2026-08-03): the recommended item was WRONG, and one of the three is blocked on an operator decision.**
 Probed all three remainders before starting any of them, and the probe overturned the plan recorded
 hours earlier in this same channel.
