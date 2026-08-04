@@ -61,6 +61,11 @@ cargo test -p keleusma --features self-host
 step "Docs (-D warnings) — the check that catches broken intra-doc links"
 export RUSTDOCFLAGS="-D warnings -A rustdoc::redundant-explicit-links"
 cargo doc -p keleusma       --no-deps --features signatures,encryption,shell
+# The docs.rs set above excludes `self-host`, so `src/selfhost/` was never
+# documented here and its broken intra-doc links survived four releases. The CLI
+# enables that feature, so the published CLI docs do reach it. Document it
+# explicitly rather than relying on the docs.rs set.
+cargo doc -p keleusma       --no-deps --features signatures,encryption,shell,self-host
 cargo doc -p keleusma-arena --no-deps --all-features
 cargo doc -p keleusma-macros --no-deps
 cargo doc -p keleusma-bench  --no-deps
