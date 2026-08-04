@@ -6,7 +6,10 @@ Design for the version-2 wire format. **Supersedes the flat-aux design in
 [`WIRE_FORMAT_V2_FLAT_AUX.md`](./WIRE_FORMAT_V2_FLAT_AUX.md)**, which remains accurate on the rkyv
 displacement and the P10 analysis but is **wrong on record structure**.
 
-Status: **DESIGN, superseding.** Operator requirements stated 2026-08-04.
+Status: **DESIGN, superseding.** Operator requirements stated 2026-08-04. **Revision 2 (2026-08-04)**
+carries the prototype through constant and string resolution and through a streaming emitter, which
+corrected two record layouts, promoted one implicit assumption to a checked invariant, and surfaced
+one open encoder decision. All four are marked in place below.
 
 ## Requirements
 
@@ -62,13 +65,27 @@ possess this document.
 
 ```
 aux := header_block ×3, region*
-header_block := magic u32, bom u16, version u16,
-                region_count u16, reserved u16, header_crc u32,
-                region_dir[region_count]
-region_dir entry := kind u16, flags u16, word_offset u32, word_length u32
+header_block := magic u32, bom u16, version u16,               -- 1 word
+                region_count u16, reserved u16, reserved u32,  -- 1 word
+                region_dir[region_count],                      -- 2 words each
+                block_crc u32, reserved u32                    -- 1 word, TRAILER
+region_dir entry := kind u16, flags u16, word_offset u32, word_length u32, reserved u32
 ```
 
 The header block and its directory are written **three times** and read by majority vote per word.
+
+**[Two corrections from the revision-2 prototype, 2026-08-04.]** Both were found by
+addressing the layout in hardware and in a streaming emitter rather than on paper, which is
+the reason open question 2 required that before freezing anything.
+
+- **The directory entry is 16 bytes, not 12.** A 12-byte entry contradicted this design's own
+  principle that every record is an integral number of words. The added reserved word restores
+  it and keeps entry *i* reachable by a shift.
+- **The block check is a trailer, not a header field.** Its input is the directory, which is
+  written after it, so a leading position would require back-patching and contradict the
+  forward-only emission rule outright. At the end of the block the emitter sums what it has
+  already written and appends the result, which in hardware is a running adder on the write
+  path — what a CRC generator already is.
 
 **[Rationale]** The directory is the only structure whose loss is total — without it no region is
 reachable. It is on the order of a hundred bytes. Triplicating the single catastrophic-failure point
@@ -97,9 +114,23 @@ contain no framing to corrupt.
 
 **[Rationale, and a second win]** Making composite constants reference a range instead of nesting
 **removes the recursion**. The superseded design needed a recursive decoder with a depth cap to guard
-against stack exhaustion on hostile input; a range-referencing table is walked iteratively with an
-explicit stack. That also removes the R4 problem flagged for the eventual Keleusma emitter — it no
-longer needs a recursion workaround, because there is no recursion.
+against stack exhaustion on hostile input; a range-referencing table is walked iteratively. That also
+removes the R4 problem flagged for the eventual Keleusma emitter — it no longer needs a recursion
+workaround, because there is no recursion.
+
+*(This paragraph originally said the iterative walk uses "an explicit stack". Revision 2 showed it
+needs no stack at all, under the invariant stated next.)*
+
+**[Required invariant, and it must be CHECKED]** A composite's range must lie **strictly after** the
+composite itself. Under that ordering, a bottom-up walk of the whole table is a single **reverse
+linear sweep**: by the time index *i* is reached, every child of *i* has already been computed. Not
+merely no recursion — no stack of any kind, and a statically bounded trip count. This was verified in
+all three languages (Python, Keleusma, VHDL), which agree on the same aggregate.
+
+The invariant is load-bearing and its violation is silent: a composite referencing an earlier range
+makes the sweep read entries that have not been computed yet, producing a **wrong answer rather than
+a fault**. It must therefore be validated by the encoder and re-validated on decode, not assumed from
+the fact that a natural emission order happens to satisfy it.
 
 ### ECC as a parallel plane, not interleaved
 
@@ -152,9 +183,20 @@ are very nearly the constraints a hardware decoder and a corruption-tolerant for
 So "graceful in Keleusma" and "good for silicon and durable artifacts" may be the same property seen
 from two directions, which makes the test cheap evidence about the design rather than a style preference.
 
-**It was tested, not assumed.** `secret/kel-format-probe/wirefmt.kel` implements an encoder and
-decoder for the region directory and a fixed-size chunk-descriptor table, compiles under the real
-compiler, and round-trips every field (3/3 directory entries, 3/3 chunk descriptors).
+**It was tested, not assumed.** The probes implement an encoder and decoder under the real compiler.
+Revision 2 (2026-08-04) carries the fetch path past the chunk descriptor into the constant table and
+out into the string pool, which is what open question 2 required before any layout is frozen:
+
+| Implementation | Result |
+|---|---|
+| Keleusma producer + consumer | 12/12, expected values taken from the independent reference |
+| Independent reference emitter | byte-identical to the Keleusma producer (checksum 5093) |
+| Hardware decoder, simulated | 24 checks, including constant fetch, string resolution, and the reverse sweep |
+| Keleusma streaming stage | 9/9 across suspensions |
+
+Both hardware testbenches were checked against a **negative control** — an expected value mutated and
+the failure confirmed to fire — since a testbench that passes on its first run has not yet been shown
+capable of failing.
 
 ### What came out graceful
 
@@ -183,6 +225,37 @@ arithmetic — and it is also the lower-WCMU form, since it holds less state. Th
 agreeing on one implementation detail is the strongest evidence so far that the word-oriented
 direction is right.
 
+### Streaming emission: a conflict this surfaced (2026-08-04)
+
+Rule 2 below says regions are emitted in dependency order so encoding is pure forward append. That
+holds for an emitter that knows every region's size up front. **It does not hold for a stage that
+discovers content incrementally**, which is what a compiler stage is, and testing that shape found
+two conflicts with the layout above:
+
+1. **A leading region directory cannot be written first.** Its contents are the region offsets and
+   lengths, which are unknown until emission finishes. Writing it first means back-patching.
+2. **Globally contiguous regions cannot be filled in one pass.** A stage that discovers a string and
+   a constant in the same unit of work would have to append to two different contiguous regions at
+   once; they would interleave and neither would remain contiguous.
+
+Neither makes the format unsuitable. They force a choice in the **encoder**:
+
+| Option | Consequence |
+|---|---|
+| **(a) One buffer per region**, concatenated at finalisation | Forward-only holds *per region* rather than globally; costs one cursor per region. Keeps the leading directory, the global string pool, and cross-chunk string sharing. |
+| **(b) Trailing directory plus per-unit segments** | Genuinely single-pass with no buffering. Loses cross-chunk string sharing; string offsets become segment-relative. |
+
+Option (b) was implemented and works, so the harder path is demonstrated rather than assumed.
+**Recommendation: (a).** A compiler holds the module in memory regardless, so true single-pass
+emission buys little, whereas a leading directory is better for hardware and for random access.
+**This is an operator decision** — it bears directly on the self-hostability requirement — and it is
+listed under open questions below.
+
+A third finding, about the language rather than the format, is worth carrying: **a resumed `yield`
+block continues from the suspension point with its parameter still bound to the original argument**,
+so an `if tick == n` dispatch ladder runs once and falls through. The natural shape for a streaming
+stage is a straight-line sequence of emissions separated by yields.
+
 ### Design rules this establishes
 
 1. **Every field width is fixed and small enough to unroll** (≤ 8 bytes). No loops in the primitives.
@@ -208,6 +281,11 @@ Honest accounting, because fixed-size records are not free:
   the whole test approach survive; the record structure does not.
 - **Losing the recursion guard.** Not a cost — the range-reference design removes the recursion that
   made the guard necessary. `MAX_CONST_DEPTH` becomes unnecessary rather than merely satisfied.
+  **It is replaced, not simply deleted**: the ordering-and-bounds invariant on composite ranges is now
+  the thing that must be validated on hostile input, and unlike the depth cap its violation is silent.
+- **Segment padding.** Every record being a whole number of words means short records round up. The
+  directory entry gained four reserved bytes for exactly this reason. **[Estimate, unverified]** small
+  against the constant table, which dominates.
 
 ## Staging
 
@@ -227,13 +305,24 @@ Honest accounting, because fixed-size records are not free:
    target word. Artifacts stay portable across targets, which cross-target reuse requires, and (72,64)
    SECDED is defined at 64.
 2. ~~**Is silicon decode a near-term target?**~~ **RESOLVED 2026-08-04: yes, near-term, not started.**
-   Preliminary VHDL prototyping lives in `secret/silicon-prototype/`. **Consequence: the record layouts
-   must be reviewed against a concrete fetch pipeline BEFORE they are frozen.** The prototype so far
-   covers the SECDED codec, the TMR vote, and directory addressing; it does NOT cover the end-to-end
-   path (walk directory, fetch chunk descriptor, resolve a constant), which is exactly the part that
-   would expose a bad record layout. Do not freeze the constant-table or chunk-descriptor layout until
-   that path is sketched.
+   Preliminary hardware prototyping lives in `secret/silicon-prototype/`. The consequence — that the
+   record layouts had to be reviewed against a concrete fetch pipeline before being frozen — has now
+   been **discharged**: the end-to-end path (walk directory, fetch chunk descriptor, follow the
+   constant range, resolve a string out of the pool, walk a nested composite) is implemented and
+   simulated. It found the two layout corrections recorded above, which is precisely what the
+   requirement was for. **The chunk-descriptor and constant-record layouts are now candidates for
+   freezing**; the directory entry and the block trailer changed and should be considered settled only
+   as of this revision.
 3. **Cross-generational authenticity** — reasoned below rather than left open.
+4. **OPEN, needs an operator decision: encoder strategy for streaming emission.** Option (a),
+   one buffer per region with a leading directory, or option (b), a trailing directory with per-unit
+   segments. See "Streaming emission: a conflict this surfaced" above. Recommendation is (a). This
+   blocks nothing today — the record layouts are the same either way — but it determines whether the
+   region directory leads or trails, so it should be settled before the crate is written.
+5. **OPEN, deferred deliberately: the ECC plane is unexercised end to end.** The codec is validated in
+   isolation and the parallel-plane rationale is argued, but no prototype artifact carries an ECC
+   region, so "parity beside the data preserves in-place aliasing" is reasoning rather than
+   demonstration. Additive through the directory, so it can land later without a format change.
 
 ## Authenticity provisions
 

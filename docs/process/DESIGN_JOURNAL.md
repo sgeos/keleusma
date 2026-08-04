@@ -15,7 +15,64 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 ## Last Updated
 
-**Date**: 2026-08-04 (session 36)
+**Date**: 2026-08-04 (session 37)
+
+**WIRE FORMAT PROTOTYPE REVISION 2 (2026-08-04): both layout-sensitive gaps closed. Two record layouts CORRECTED, one assumption promoted to a checked invariant, one encoder decision surfaced.**
+The design document required that the record layouts be reviewed against a concrete fetch pipeline
+before being frozen. That requirement is now discharged, and it earned its keep: carrying the path
+past the chunk descriptor into the constant table and out into the string pool, and testing emission
+from a yielding stage rather than a terminating `fn`, produced five findings that paper review had
+not.
+
+TWO LAYOUT CORRECTIONS. The directory entry was 12 bytes — one and a half words — which contradicts
+this design's own principle that every record is an integral number of words. It survived review
+because nothing had addressed it in hardware yet; a decoder computing entry addresses is where a
+non-power-of-two stride becomes visible. And the block check could not stay a header field: its input
+is the directory written after it, so a leading position requires back-patching, contradicting the
+forward-only rule outright. Moved to a trailer, where the emitter sums what it has already written
+and appends — in hardware a running adder on the write path, which is what a CRC generator already is.
+
+THE FINDING THAT MATTERS MOST is that the composite-range ordering invariant is load-bearing and its
+violation is SILENT. A composite constant references a range; if the range lies strictly after the
+composite, a bottom-up walk of the table is a single REVERSE LINEAR SWEEP — not merely no recursion,
+but no stack of any kind and a statically bounded trip count. That is the crisp form of design rule 3,
+now demonstrated in three languages rather than argued. But an encoder that ever emits a composite
+referencing an earlier range makes the sweep read uncomputed entries, producing a WRONG ANSWER rather
+than a fault. So `MAX_CONST_DEPTH` is not simply deleted by the range-reference design; it is REPLACED
+by an ordering-and-bounds invariant that must be validated on hostile input, and whose failure mode is
+worse because it is quiet.
+
+STREAMING EMISSION SURFACED A REAL CONFLICT, not a defect. Rule 2 ("regions are emitted in dependency
+order, so encoding is pure forward append") holds for an emitter that knows every region's size up
+front. A compiler stage does not. Two consequences: a leading directory cannot be written first
+because its contents are unknown until the end, and globally contiguous regions cannot be filled in
+one pass because a stage discovering a string and a constant in the same unit of work would have to
+append to two regions at once. The encoder must therefore either buffer per region (forward-only holds
+per region, keeps the leading directory and cross-chunk string sharing) or use a trailing directory
+with per-unit segments (true single pass, loses sharing). The harder option was IMPLEMENTED rather
+than assumed — 288 bytes, 9/9 — so the recommendation of the easier one rests on a demonstrated
+alternative. Recommending (a) and leaving it as an operator decision, since it bears on
+self-hostability.
+
+A LANGUAGE FINDING worth carrying beyond this work: a resumed `yield` block continues from the
+suspension point with its parameter STILL BOUND TO THE ORIGINAL ARGUMENT. So an `if tick == n`
+dispatch ladder runs exactly once and falls through. The first streaming probe did that and emitted
+one segment instead of three; the byte count caught it (176 against an expected 288, and 56+48+72
+localised it to a single segment immediately). Streaming stages want straight-line yields, which is
+also the shape that makes forward-only emission self-evident.
+
+That last point was originally INFERRED from the byte count, and since it was being written into a
+tracked design document it was then CONFIRMED by direct probe: a yield block printing its parameter at
+three successive resumption points prints the same value each time. Worth keeping as a habit — a byte
+count localises a fault precisely but does not establish the mechanism behind it.
+
+TWO METHOD POINTS. Both hardware testbenches passed on the first run, so each was checked against a
+NEGATIVE CONTROL — mutate an expected value, confirm the failure fires — because a testbench that has
+never failed has not been shown capable of failing. And the corrupt-image package, which was
+hand-maintained, had silently gone stale when the header block grew from 32 to 72 bytes; it is now
+generated from the same source as the clean image, and the testbench additionally asserts that the
+damaged copy differs from the voted value so it cannot pass vacuously.
+
 
 **WIRE FORMAT REDESIGNED FROM REQUIREMENTS (2026-08-04). The flat-aux record structure is superseded; a six-step programme replaces the incremental port.**
 The operator supplied the full requirement set, which added two the flat-aux design had never been

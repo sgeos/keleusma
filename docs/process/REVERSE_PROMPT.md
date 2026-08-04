@@ -57,30 +57,70 @@ layer, explicit tag discipline, and totality tests are reusable; **its record st
 
 ## Prototype state (all in `secret/`, gitignored, reproducible)
 
-- `kel-format-probe/wireimage.kel` — Keleusma **producer** emitting a 160-byte artifact.
-- `kel-format-probe/image.py` — independent reference emitter. **Checksums agree at 4016.**
-- `silicon-prototype/wire_decode.vhd` + `tb_wire.vhd` — VHDL **consumer** of those exact bytes.
-  **PASS** on magic, region count, both regions, absent-region not-found, all chunk descriptors.
-- `silicon-prototype/tb_wire_corrupt.vhd` — one corrupted header copy outvoted **and** flagged. PASS.
+- `kel-format-probe/wireimage.kel` — Keleusma **producer and consumer**, 408-byte artifact, 12/12.
+- `kel-format-probe/image.py` — independent reference emitter. **Checksums agree at 5093.** It also
+  generates both hardware image packages, so the clean and corrupt images cannot drift — they had,
+  before this revision.
+- `kel-format-probe/stream.kel` — Keleusma **streaming stage**, emitting across yields. 9/9.
+- `silicon-prototype/wire_decode.vhd` + `tb_wire.vhd` — hardware **consumer** of those exact bytes.
+  **PASS** on the header vote, block trailer, all three regions, absent-region not-found, every chunk
+  descriptor, every constant record, a string constant resolved to real pool bytes, and the
+  reverse-sweep aggregate.
+- `silicon-prototype/tb_wire_corrupt.vhd` — one corrupted header copy outvoted **and** flagged, and it
+  now asserts the damaged copy actually differs from the voted value so it cannot pass vacuously. PASS.
 - `silicon-prototype/secded_*` — (72,64) SECDED validated in Python and simulated in VHDL:
   432/432 single-bit corrected, 15336/15336 double-bit detected.
 - Toolchain: `nvc` 1.23-devel at `/usr/local/bin/nvc`. Build notes in
   `secret/silicon-prototype/README.md` — MacPorts needs `--enable-static-llvm`, and `make` will not
   relink an existing `bin/nvc` after reconfiguring.
 
-## Two gaps that could still move the record layouts
+## Both layout-sensitive gaps are now CLOSED (revision 2, 2026-08-04)
 
-Not lock-in gates (lock-in is judgement), but each is cheaper to find now than after step 4:
+The fetch path runs past the chunk descriptor into the constant table and out into the string pool,
+and emission is tested from a yielding stage. Results, each expected value taken from an independent
+implementation rather than from the code under test:
 
-1. **The fetch path stops at the chunk descriptor.** It does not follow `const_first`/`const_count`
-   into a constant table, nor resolve a string slice out of the pool.
-2. **Emission is only tested from a terminating `fn`.** A real stage is `loop main` yielding
-   incrementally, which is where forward-only emission either pays off or does not.
+| Implementation | Result |
+|---|---|
+| Keleusma producer + consumer (`wireimage.kel`) | 12/12 |
+| Reference emitter (`image.py`) | byte-identical, checksum 5093 |
+| Hardware decoder, simulated (`wire_decode.vhd`) | 24 checks |
+| Keleusma streaming stage (`stream.kel`) | 9/9 across suspensions |
+
+Both hardware testbenches were checked against a **negative control** (mutate an expected value,
+confirm the failure fires), since a testbench that passes first try has not been shown able to fail.
+
+**It found five things, which is why the design document required it before freezing.**
+
+1. **The directory entry was 12 bytes** — one and a half words, contradicting the format's own rule
+   that every record is an integral number of words. Now 16.
+2. **The block check cannot be a header field.** Its input is the directory written after it, so a
+   leading position requires back-patching. Moved to a trailer.
+3. **The composite-range ordering invariant is load-bearing and must be CHECKED.** A composite's range
+   must lie strictly after the composite; that is what makes a bottom-up walk a single reverse linear
+   sweep with no stack. Violating it yields a **wrong answer rather than a fault**, so it replaces
+   `MAX_CONST_DEPTH` as the hostile-input check rather than simply removing it.
+4. **A leading directory and globally contiguous regions are both incompatible with streaming
+   emission.** This forces an encoder choice — buffer per region (keeps the leading directory), or a
+   trailing directory with per-unit segments (true single pass). Option (b) was implemented and works;
+   **the recommendation is (a)**. Now an explicit open question in the design document.
+5. **Language finding**: a resumed `yield` block continues from the suspension point with its
+   parameter still bound to the original argument, so an `if tick == n` ladder runs once and falls
+   through. The first streaming probe did exactly that and emitted one segment instead of three; the
+   byte count caught it. Streaming stages want straight-line yields.
+
+## Open questions for the operator
+
+- **Encoder strategy (item 4 above).** Blocks nothing today — the record layouts are identical either
+  way — but it decides whether the directory leads or trails, so it wants settling before the crate.
+- **The ECC plane is still unexercised end to end.** The codec is validated in isolation; no prototype
+  artifact carries an ECC region. Additive through the directory, so deferrable without a format change.
 
 ## Next step
 
-Continue step 1, then step 2. The immediate technical question is whether constant and string-slice
-resolution survives the fixed-size-record layout unchanged.
+Step 2, the mechanism-only `keleusma-wire` crate. The chunk-descriptor and constant-record layouts are
+candidates for freezing; the directory entry and block trailer changed in this revision and should be
+treated as settled only as of it.
 
 ## Standing method notes
 
