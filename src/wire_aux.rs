@@ -136,6 +136,10 @@ fn put_u32(out: &mut Vec<u8>, v: u32) {
     out.extend_from_slice(&v.to_le_bytes());
 }
 
+/// Only the `floats` constant variant writes a raw `u64`; `get_u64` has an
+/// unconditional caller in `get_i64`, but this one does not, so it is gated to
+/// keep a no-floats build warning-free.
+#[cfg(feature = "floats")]
 fn put_u64(out: &mut Vec<u8>, v: u64) {
     out.extend_from_slice(&v.to_le_bytes());
 }
