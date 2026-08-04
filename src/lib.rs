@@ -142,6 +142,7 @@ pub mod value_layout;
 /// The stack-based virtual machine and its coroutine driver.
 pub mod vm;
 /// Wire-format encoding and decoding of compiled [`Module`]s.
+pub mod wire_aux;
 pub mod wire_format;
 /// Word-type abstraction used by the parametric [`vm::GenericVm`]
 /// to model the runtime's word width.

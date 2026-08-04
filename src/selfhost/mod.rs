@@ -6,15 +6,15 @@
 //! `kel/parse.kel` emits a postorder record stream, `kel/reconstruct.kel` folds that
 //! into the (kind, arg, lhs, rhs) node forest, `kel/codegen.kel` emits each chunk's ops,
 //! and `kel/analyze.kel` supplies the declared WCET/WCMU header; the `kel/verify_*.kel`
-//! family provides the self-hosted verifier drivers. The [`self_host_compile`] entry
+//! family provides the self-hosted verifier drivers. The [`crate::selfhost::self_host_compile`] entry
 //! splices only the self-hosted chunk ops onto the reference scaffold, whereas
-//! [`self_host_compile_scratch`] assembles the whole module (data layout, enum-layout
+//! [`crate::selfhost::self_host_compile_scratch`] assembles the whole module (data layout, enum-layout
 //! table, chunk signatures, schema hash, WCET/WCMU header) from the pipeline output, so
 //! for the loop-free stage sources its serialized module is byte-identical to the
 //! reference without borrowing any field from it.
 //!
-//! [`self_hosted_compile`] is the shipping entry: it host-guards the target and maps any
-//! out-of-subset panic to a clean [`SelfHostError`] (the `keleusma-cli` `--compiler
+//! [`crate::selfhost::self_hosted_compile`] is the shipping entry: it host-guards the target and maps any
+//! out-of-subset panic to a clean [`crate::selfhost::SelfHostError`] (the `keleusma-cli` `--compiler
 //! self-hosted` backend). All ten Rust-read stage sources are embedded via `include_str!`
 //! from `src/selfhost/kel/` (this crate is their canonical home; the detached `compiler/`
 //! subproject re-exports this module and its `main.rs`/tests drive it). `prelude.kel` is
@@ -2377,7 +2377,7 @@ fn assemble_chunk_metadata(
 }
 
 /// Self-host-compile a whole program with a from-scratch module scaffold: the
-/// self-hosted chunk ops (via [`self_host_compile`]) plus a data layout, schema hash,
+/// self-hosted chunk ops (via [`crate::selfhost::self_host_compile`]) plus a data layout, schema hash,
 /// enum-layout table, chunk signatures, per-chunk metadata, and declared WCET/WCMU header all
 /// assembled from the pipeline output (parse.kel's record stream and analyze.kel's verdict)
 /// rather than borrowed from the Rust reference. For the loop-free stage sources the
@@ -2730,7 +2730,7 @@ pub fn self_hosted_compile(
 
 /// Compile `src` with the reference compiler, mapping any lex/parse/compile failure to
 /// [`SelfHostError::ReferenceRejected`] with the reference's message. Used as the
-/// correctness oracle by [`self_hosted_compile`]. A failure here is a genuine source error,
+/// correctness oracle by [`crate::selfhost::self_hosted_compile`]. A failure here is a genuine source error,
 /// distinct from a self-hosted-subset limitation, so it does not carry the `--compiler rust`
 /// retry hint.
 fn compile_reference(src: &str) -> Result<Module, SelfHostError> {

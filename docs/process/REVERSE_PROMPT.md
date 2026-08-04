@@ -57,41 +57,28 @@ generalizes to its enclosing-composite form, so support must not be inferred by 
   `tests/for_limit.rs`. Bare `break;` then came out IDENTICAL and only the outcome-arm form diverged.
 - Boundary test green at 67 Ok; full `scripts/release-gate.sh` result recorded in the commit message.
 
-## Next step — the TYPE CHECKER (the only unblocked Order-1 item), plus one operator decision
+## Next step — wire format v2, stage 2: the accessor layer
 
-All three Order-1 remainders were probed on 2026-08-03 and the picture changed:
+Stage 1 (the flat aux-body codec) is merged and green. The staging is in
+[`../decisions/WIRE_FORMAT_V2_FLAT_AUX.md`](../decisions/WIRE_FORMAT_V2_FLAT_AUX.md):
 
-**Wire-format serialization — PARTIALLY BLOCKED, needs an operator decision.** The roadmap listed it
-as "framing header, operand-pool encoding, parity, CRC trailer", which omits the dominant cost: the
-AUXILIARY BODY is `rkyv`-archived and carries everything except the opcode stream and operand pool.
-Reproducing rkyv's zero-copy layout byte-for-byte in Keleusma is disproportionate and fragile. Full
-self-hosting of the artifact therefore needs a decision only the operator can make — reimplement
-rkyv, or CHANGE the aux-body encoding, which is a wire-format change and so a `BYTECODE_VERSION`
-question, an enumerated stop. The bounded non-rkyv slices (CRC-32, the opcode stream and operand
-pool, the framing header) can proceed without that decision but leave the aux body host-supplied, so
-they do NOT meet the gate's "no Rust scaffold borrow" wording. Scoping in
-[`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md).
+2. **The accessor layer** replacing the `Archived*` read surface, with the same API shape the VM uses
+   so the call sites change minimally. This is where the IN-PLACE READ property is either preserved or
+   lost — it is the point of the whole design, so no `Vec` materialization on the load path.
+3. **Cut the VM and loader over**, delete the rkyv path, bump `BYTECODE_VERSION` to 2. This is where
+   `CLAUDE.md`'s no-public-adoption policy text must change: it currently says the number stays at 1.
+4. **Drop the `rkyv` dependency** if nothing else needs it, and update `Cargo.toml`, the tech-stack
+   list, and `docs/spec/WIRE_FORMAT.md`.
+5. **Self-host the emitter** in Keleusma — the original goal. NOTE R4 forbids recursion, so the `.kel`
+   encoder must walk nested constants with an explicit stack, as the equality drains do.
 
-**The monomorphizer — VACUOUS over the subset.** The `.kel` sources use no generics (the `impl`/
-`trait` hits in parse.kel are its own parser code for those keywords). Monomorphization is identity
-here, which is why the pipeline omits the pass and still matches the reference byte-for-byte. Porting
-it would tick the box without changing any output; its real cost arrives only with full-language
-generics (Workstream F). Do not pick it as "the cheapest" expecting value.
-
-**The type checker — UNBLOCKED, and the real work.** The self-hosted pipeline has NO type checking at
-all: its stages are lexer, parse, reconstruct, codegen (plus analyze and the verify_* family), and
-nothing validates types. Ill-typed programs are caught today only by the CLI's cross-check against the
-reference. Self-hosting it is what makes the self-hosted compiler able to reject bad programs on its
-own, and over the monomorphic Word/Byte subset it is far smaller than `typecheck.rs`'s 8601 lines.
-
-CAUTION on probing this one: `self_host_compile` calls `compile_src` FIRST, so it panics whenever the
-reference rejects. A naive "does the self-hosted path reject?" probe is CONFOUNDED and will report
-rejection for every ill-typed program regardless. Probe the stages directly, or reason from the stage
-list, rather than through that harness.
+Also open, unrelated: the composite-equality family's remaining Gaps (enum composite payload; the
+struct-field array element scanner, which closes two Gaps at once), and the other Order-1 remainders
+(the monomorphizer is vacuous over the subset; the type checker is the substantive one).
 
 ## Standing method notes
 
-The thirteen rules are consolidated in [HANDOFF.md](./HANDOFF.md). Add one from this probe: **a probe
-run through a harness that already invokes the reference cannot tell you what the self-hosted path
-does on its own** — check what the harness does before trusting its verdict, exactly as the control
-discipline requires for the byte-identity probes.
+The fourteen rules are consolidated in [HANDOFF.md](./HANDOFF.md). Two reinforced this increment:
+**never land on targeted tests alone** — the full gate caught both a warning introduced here and a
+pre-existing doc defect that CI could not see; and **when a documented command and the gate's command
+disagree, run the stricter one**, because the gap between them is where defects live.
