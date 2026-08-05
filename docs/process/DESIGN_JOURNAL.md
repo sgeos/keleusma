@@ -17,6 +17,135 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-04 (session 37)
 
+**STEP 4 STAGE 1 (2026-08-04): the constant table, and a test suite that could not see what it was testing.**
+The container was schema-free by design; this is the schema. The interesting half is that `ConstValue`
+is a TREE and the format's claim is that composites reference a range rather than nesting — which
+removes recursion outright instead of capping it. Making that true needed breadth-first numbering with
+roots pinned to `0..n`, because a chunk indexes its constants positionally and the roots' order is not
+negotiable. Children are numbered after them, so every range points forward, which is precisely the
+condition under which a bottom-up walk is a single reverse linear sweep with no stack.
+
+The decoder RE-VALIDATES that ordering instead of trusting the encoder that produced its input. That
+is not ceremony: the violation is silent. A backwards range makes a reverse sweep read entries it has
+not computed yet, so the failure is a wrong answer rather than a fault, and the only way to keep it
+out is to check on the way in.
+
+A SIZING DECISION WORTH RECORDING. A struct constant needs a type name, field names and values; an
+enum needs a type name, variant, optional discriminant and payload. Sizing every record for the worst
+case means 32 bytes for an `Int` that needs 8. Side tables keep the constant record at two words and
+charge the space only to the constants that need it — the same shape as the container's own decision
+to reference pools rather than inline variable data.
+
+AND ONE SUBTLETY: field names are interned WITHOUT sharing, unlike every other name. Sharing is
+correct for the bytes but breaks `field_names_first + i` addressing, because a repeated name returns
+an earlier index and interrupts the run. Two structs with the same field names is the case that would
+otherwise have been found much later.
+
+THE FINDING THAT MATTERS MOST IS ABOUT TESTING, NOT THE FORMAT. A round-trip test failed with a
+message showing two values that PRINTED differently but compared equal. `ConstValue` has a
+hand-written `PartialEq` that deliberately ignores the enum discriminant. So `assert_eq!` on a round
+trip is blind to whether the discriminant survived, and every enum round-trip test in the new suite
+was passing VACUOUSLY with respect to it — all of them would have passed with the field dropped
+entirely from the encoder. My first instinct was that my assertion was wrong, which it was; the
+important part is that fixing the assertion alone would have left the rest of the suite blind. A
+`deep_eq` helper now compares the discriminant explicitly throughout. The general lesson: before
+trusting a round-trip test, check what the type's equality actually compares — a hand-written
+`PartialEq` that ignores a field turns every `assert_eq!` round trip into a partial check, silently.
+
+A PROCESS FAILURE, FOURTH INSTANCE. I lost another full gate by editing `Cargo.toml` and `lib.rs`
+while it ran; rustdoc compiled the new module against an `--extern` list resolved before the edit and
+failed with E0432. Four gates, ~25 minutes each, all lost to the same cause: starting the gate before
+the work has settled. Stating it plainly here because writing it down three times has not yet changed
+the behaviour.
+
+
+**ECC PLANE + DERIVE (2026-08-04): the crate becomes differentiated, and a gate hole of a familiar shape turns up.**
+The operator asked whether the crate was a genuine ecosystem contribution. The honest answer was "not
+yet": it was a directory plus fixed-stride tables, competing on ergonomics against `rkyv` and
+`flatbuffers` while deliberately not playing that game, and its one unusual property — corruption
+tolerance — covered only the header. The differentiator was the ECC plane, and it was one increment
+away because the (72,64) codec had already been validated in two independent implementations.
+
+THE DESIGN TENSION WORTH RECORDING. Correction requires writing, and the read path borrows an
+immutable buffer. An in-place corrector would have needed `&mut`, which would have killed the
+allocation-free aliasing property in order to deliver the fault tolerance — trading one selling point
+for another. The resolution is that correction returns a VALUE: clean reads still alias, and a
+detected fault yields the repaired word without touching the artifact. The caller decides whether to
+rewrite, which is also the right place for that decision, since scrubbing is a scheduling question.
+
+A CROSS-CHECK THAT WAS NOT ONE, CAUGHT ON REVIEW. The first version of the ECC tests asserted the same
+432/15336 pass counts as the reference model. That is structural agreement only: it shows both sides
+classify faults identically, and would NOT catch a matrix differing from the reference. Replaced with
+numerical vectors — actual check bytes for six patterns plus four sampled columns, taken from the
+reference. Counts are not a cross-check; values are.
+
+THE GATE HOLE, WHICH IS THE SAME SHAPE AS THE ONE FROM YESTERDAY. `release-gate.sh` runs
+`cargo test --workspace` at DEFAULT features and documents five crates BY NAME. So a new
+off-by-default feature is invisible to it, and a new crate's docs are never built under `-D warnings`.
+This is precisely how four broken intra-doc links in `src/selfhost/` survived four releases. The
+general form worth remembering: `--workspace` looks exhaustive and does not cover feature
+combinations, and any gate step that ENUMERATES targets silently omits whatever is added later.
+
+A PROCESS FAILURE OF MY OWN. I started the full gate three times and killed it three times, each time
+because I continued changing the tree after starting it. The gate takes ~25 minutes; starting it
+before the work has settled wastes the whole run and produces a result that describes a state that no
+longer exists. The discipline is: finish every change, verify locally with targeted commands, then
+gate once.
+
+ON PUBLICATION, ASKED AND ANSWERED HONESTLY. The crate is now PREPARED for publication and should
+still be HELD. Nothing consumes it; its only users are its own tests. `Region` gained a `covers` field
+the moment the second requirement arrived, which post-1.0 would have been a breaking change — concrete
+evidence that an API no workload has exercised is not ready to freeze. The preparation itself was
+worth doing regardless, and the operator's framing was right: `forbid(unsafe_code)`, `non_exhaustive`
+on the growable types, compiled README examples, and the gate coverage all improve the crate for
+internal use, independently of whether it is ever published.
+
+
+**STEP 2 COMPLETE (2026-08-04): the `keleusma-wire` container crate. Writing the real reader corrected the header structure a third time and exposed a totality hole in my own bounds checks.**
+The crate is mechanism-only as resolved: framing, a triplicated prologue and directory, fixed-stride
+record tables, byte pools, CRC-32, and the vote. No dependency on the Keleusma runtime, no hardcoded
+schema. Written under the step-6 constraint so the eventual Keleusma port is a transliteration rather
+than a rewrite — no recursion, static loop bounds, no read-path allocation, unrolled place-value field
+access, no traits or generics in the codec core.
+
+THE FINDING THAT MATTERS is a bootstrapping problem that neither paper design nor the prototype
+exposed, because the prototype's decoder hardcoded its block size. Voting the header requires locating
+copies 1 and 2, which requires the block stride, which — with the directory inside the block — depends
+on `region_count`, which is ITSELF inside the block being voted. A single bit flip in `region_count`
+would desynchronise the search for the very copies that exist to repair it. The field the vote most
+needed to protect was the field the vote could not proceed without. Splitting a FIXED-SIZE prologue
+out resolves it: three copies at fixed offsets 0, 16, 32, votable with no prior knowledge, and the
+voted `region_count` then makes the directory votable in turn.
+
+That also WITHDRAWS a correction I had made hours earlier the same day. The "block check must be a
+trailer" finding was real under the old structure — the check covered the directory, written
+afterwards, so a leading position meant back-patching. Once the prologue is split out, the check
+covers only fixed-size fields known before the first byte is written, so the trailer is unnecessary.
+The split subsumes it. Worth recording as a shape: a later, deeper fix can dissolve an earlier one
+rather than stacking on it, and leaving both in the document would have described a format nobody
+implements.
+
+A DEFECT I INTRODUCED AND CAUGHT. The scalar readers bounds-checked with `at + n <= len`, which
+overflows for `at` near `usize::MAX` and panics in a debug build — a totality hole in the exact
+functions whose contract is totality. It was found by writing a test at the extreme offset, not by
+reading the code, and the fix is a subtraction on the length, which cannot overflow. The general
+lesson is that "this function is total" is a claim to be tested at the boundary of the index type,
+not just at the boundary of the buffer.
+
+THE TEST THAT PROTECTS THE PROPERTY NOTHING ELSE WOULD. The read path must return slices INTO the
+caller's buffer; an owned decode would allocate per load and silently undo P10. Every value-checking
+test would still pass after such a regression, so the aliasing is asserted BY ADDRESS — the returned
+slice's pointer range must lie inside the input. Alongside it, 1536 single-bit fault injections across
+the protected header each require both correction and a `needs_scrub()` report, every truncation of a
+valid artifact is rejected, and every single-bit corruption anywhere is required not to panic. The
+`no_std` claim is tested by building for `wasm32v1-none` rather than declared.
+
+ONE ASSUMPTION IS FLAGGED, NOT BURIED. The encoder implements option (a), one buffer per region with a
+leading directory, per the standing recommendation, because no operator decision had been recorded.
+Option (b) stays implementable without touching any record layout; only the directory's position
+moves.
+
+
 **WIRE FORMAT PROTOTYPE REVISION 2 (2026-08-04): both layout-sensitive gaps closed. Two record layouts CORRECTED, one assumption promoted to a checked invariant, one encoder decision surfaced.**
 The design document required that the record layouts be reviewed against a concrete fetch pipeline
 before being frozen. That requirement is now discharged, and it earned its keep: carrying the path

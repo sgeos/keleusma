@@ -144,6 +144,10 @@ pub mod vm;
 /// Wire-format encoding and decoding of compiled [`Module`]s.
 pub mod wire_aux;
 pub mod wire_format;
+/// Keleusma's schema on the `keleusma-wire` container: the wire-format v2
+/// constant table. Parallel infrastructure — the `rkyv` path is untouched and
+/// nothing here is wired into the loader yet.
+pub mod wire_schema;
 /// Word-type abstraction used by the parametric [`vm::GenericVm`]
 /// to model the runtime's word width.
 pub mod word;

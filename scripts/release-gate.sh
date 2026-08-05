@@ -55,6 +55,16 @@ cargo test -p keleusma --features signatures,shell
 step "Tests — keleusma self-host (the self-hosted compile backend)"
 cargo test -p keleusma --features self-host
 
+# keleusma-wire ships an off-by-default `derive` feature, and its READER is meant
+# to work with no allocator at all. `cargo test --workspace` above runs DEFAULT
+# features only, so neither configuration would be exercised -- the same shape of
+# hole that let broken intra-doc links in src/selfhost/ survive four releases.
+step "Tests — keleusma-wire all features (derive)"
+cargo test -p keleusma-wire --all-features
+
+step "Tests — keleusma-wire no default features (allocator-free reader)"
+cargo test -p keleusma-wire --no-default-features
+
 # The Doc gate: mirror the CI Doc job exactly. -D warnings turns a broken or
 # private intra-doc link into an error. Each crate is documented at the same
 # feature set docs.rs uses so the signal matches the published docs.
@@ -70,6 +80,8 @@ cargo doc -p keleusma-arena --no-deps --all-features
 cargo doc -p keleusma-macros --no-deps
 cargo doc -p keleusma-bench  --no-deps
 cargo doc -p keleusma-cli    --no-deps
+cargo doc -p keleusma-wire   --no-deps --all-features
+cargo doc -p keleusma-wire-derive --no-deps
 unset RUSTDOCFLAGS
 
 step "Relative Markdown links (check-md-links.kel)"

@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **New workspace crates `keleusma-wire` and `keleusma-wire-derive`: a standalone
+  word-oriented binary container format.** Mechanism only — framing, a triplicated
+  prologue and region directory, fixed-stride record tables, byte pools, CRC-32,
+  a (72,64) SECDED parity plane, and an optional `#[derive(WireRecord)]` — with
+  **no dependency on the Keleusma runtime and no hardcoded schema**, so the crate
+  is usable by unrelated projects the way `keleusma-arena` is. The reader is
+  allocation-free (the `alloc` feature gates only the encoder) and returns slices
+  that alias the caller's buffer, so a payload is read in place. Corruption
+  handling is the differentiator: the prologue and directory are majority-voted
+  across three copies, and any region may carry a parity plane that corrects a
+  single-bit fault per 64-bit word and detects a double, with both paths
+  *reporting* the damage so a scrub can be scheduled rather than silently
+  repairing. Both crates are `#![forbid(unsafe_code)]`. Nothing in the `keleusma`
+  runtime consumes them yet; the schema layer that will replace the `rkyv` aux
+  body is not written. See `keleusma-wire/README.md` and
+  [`docs/decisions/WIRE_FORMAT_V2_WORD_ORIENTED.md`](docs/decisions/WIRE_FORMAT_V2_WORD_ORIENTED.md).
+
 - **The self-hosted compiler is selectable in the CLI: `keleusma compile
   --compiler self-hosted` (default `rust`).** The reusable self-hosted compile
   driver and its ten `.kel` stage sources moved from the detached `compiler/`

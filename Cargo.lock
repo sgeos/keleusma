@@ -348,6 +348,7 @@ dependencies = [
  "hkdf",
  "keleusma-arena",
  "keleusma-macros",
+ "keleusma-wire",
  "libm",
  "rkyv",
  "sdl3",
@@ -388,6 +389,22 @@ dependencies = [
 [[package]]
 name = "keleusma-macros"
 version = "0.2.2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "keleusma-wire"
+version = "0.1.0"
+dependencies = [
+ "keleusma-wire-derive",
+]
+
+[[package]]
+name = "keleusma-wire-derive"
+version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
