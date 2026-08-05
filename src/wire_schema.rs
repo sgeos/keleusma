@@ -44,7 +44,9 @@ use alloc::vec::Vec;
 
 use keleusma_wire::{Pool, RecordTable, WireBuilder, WireError, WireRecord, WireView};
 
-use crate::bytecode::{ChunkSignature, ConstValue, EnumLayout, StructTemplate, WireShape};
+use crate::bytecode::{
+    ChunkSignature, ConstValue, DataLayout, EnumLayout, StructTemplate, WireShape,
+};
 
 /// Region kinds. Assigned explicitly rather than by declaration order, so
 /// reordering this list cannot silently change an artifact's meaning.
@@ -69,6 +71,23 @@ pub mod kind {
     pub const ENUM_VARIANTS: u16 = 0x0018;
     /// Per-enum-type layout descriptors.
     pub const ENUM_LAYOUTS: u16 = 0x0019;
+    /// Data-segment slots. **Presence of this region is what distinguishes a
+    /// module with a data layout from one without**, so an absent region means
+    /// `None` while an empty one means `Some` with no slots.
+    pub const DATA_SLOTS: u16 = 0x001A;
+    /// Per-shared-slot byte layout in the host buffer.
+    pub const SHARED_LAYOUT: u16 = 0x001B;
+    /// Persistent-pool placement of private composite slots.
+    pub const PRIVATE_COMPOSITE: u16 = 0x001C;
+    /// The private-slot initialiser range into the constant table.
+    pub const DATA_INIT: u16 = 0x001D;
+}
+
+/// Slot visibility tags. Numbered from one so a zeroed record is invalid.
+pub mod visibility_tag {
+    #![allow(missing_docs)]
+    pub const SHARED: u8 = 1;
+    pub const PRIVATE: u8 = 2;
 }
 
 /// Shape tags. Numbered from one so an all-zero record is invalid rather than
@@ -1387,4 +1406,279 @@ pub fn encode_layouts(
     b.add_struct_templates(templates)?;
     b.add_enum_layouts(layouts)?;
     b.finish()
+}
+
+// ---------------------------------------------------------------------------
+// Data layout (stage 2b, increment 4)
+// ---------------------------------------------------------------------------
+
+/// One named data slot. A single word.
+#[derive(WireRecord, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DataSlotRecord {
+    /// Name index of the slot name.
+    pub name: u32,
+    /// See [`visibility_tag`].
+    pub visibility: u8,
+    /// Reserved.
+    pub reserved: u8,
+    /// Reserved; keeps the record one whole word.
+    pub reserved2: u16,
+}
+
+/// One shared slot's byte layout in the host buffer. A single word.
+#[derive(WireRecord, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SharedSlotRecord {
+    /// Byte offset within the host buffer.
+    pub offset: u32,
+    /// Scalar or composite kind tag; the high bit marks a composite.
+    pub kind: u8,
+    /// Reserved; keeps `len` at a fixed offset.
+    pub reserved: u8,
+    /// Flat composite body length; zero for a scalar slot.
+    pub len: u16,
+}
+
+/// One private composite slot's placement in the persistent pool. A single word.
+#[derive(WireRecord, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrivateCompositeRecord {
+    /// Unified data-slot index.
+    pub slot: u16,
+    /// Reserved; keeps `offset` at a fixed offset.
+    pub reserved: u16,
+    /// Byte offset within the persistent composite pool.
+    pub offset: u32,
+}
+
+/// The private-slot initialiser range into the shared constant table.
+#[derive(WireRecord, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DataInitRecord {
+    /// First constant index.
+    pub first: u32,
+    /// Number of initialisers.
+    pub count: u32,
+}
+
+impl SchemaBuilder {
+    /// Adds the data-segment layout.
+    ///
+    /// `private_init` is a forest of constant trees, so it goes through
+    /// [`Self::add_constant_pool`] and is referenced by range — the same shared
+    /// table a chunk's constants use, rather than a parallel copy of the
+    /// flattening machinery.
+    ///
+    /// # Errors
+    ///
+    /// Propagates a [`WireError`] from the container builder.
+    pub fn add_data_layout(&mut self, layout: &DataLayout) -> Result<(), WireError> {
+        use crate::bytecode::SlotVisibility;
+
+        let (first, count) = self.add_constant_pool(&layout.private_init);
+
+        let slots = self.b.region(kind::DATA_SLOTS, 0)?;
+        let shared = self.b.region(kind::SHARED_LAYOUT, 0)?;
+        let privcomp = self.b.region(kind::PRIVATE_COMPOSITE, 0)?;
+        let init = self.b.region(kind::DATA_INIT, 0)?;
+
+        for s in &layout.slots {
+            let name = self.names.intern(&s.name);
+            self.b.push_record(
+                slots,
+                &DataSlotRecord {
+                    name,
+                    visibility: match s.visibility {
+                        SlotVisibility::Shared => visibility_tag::SHARED,
+                        SlotVisibility::Private => visibility_tag::PRIVATE,
+                    },
+                    reserved: 0,
+                    reserved2: 0,
+                },
+            );
+        }
+        for l in &layout.shared_layout {
+            self.b.push_record(
+                shared,
+                &SharedSlotRecord {
+                    offset: l.offset,
+                    kind: l.kind,
+                    reserved: 0,
+                    len: l.len,
+                },
+            );
+        }
+        for p in &layout.private_composite_layout {
+            self.b.push_record(
+                privcomp,
+                &PrivateCompositeRecord {
+                    slot: p.slot,
+                    reserved: 0,
+                    offset: p.offset,
+                },
+            );
+        }
+        self.b.push_record(init, &DataInitRecord { first, count });
+        Ok(())
+    }
+}
+
+/// A **borrowed, allocation-free** view over the data-segment layout.
+#[derive(Debug, Clone, Copy)]
+pub struct DataLayoutTable<'a> {
+    pool: Pool<'a>,
+    names: RecordTable<'a>,
+    slots: RecordTable<'a>,
+    shared: RecordTable<'a>,
+    private_composite: RecordTable<'a>,
+    init: DataInitRecord,
+}
+
+impl<'a> DataLayoutTable<'a> {
+    /// Parses the data layout, or reports it absent.
+    ///
+    /// Returns `Ok(None)` when the artifact carries no data layout, which is a
+    /// module with no `data` block — distinct from a layout with zero slots.
+    ///
+    /// # Errors
+    ///
+    /// [`SchemaError`] for a malformed artifact. Never panics.
+    pub fn parse(bytes: &'a [u8]) -> Result<Option<Self>, SchemaError> {
+        let view = WireView::parse(bytes)?;
+        let Some(slots_region) = view.find_region(kind::DATA_SLOTS) else {
+            return Ok(None);
+        };
+        let region = |k: u16| view.find_region(k).ok_or(SchemaError::MissingRegion(k));
+
+        let init_table = view.typed_records::<DataInitRecord>(&region(kind::DATA_INIT)?)?;
+        let init = init_table
+            .get_as::<DataInitRecord>(0)
+            .ok_or(SchemaError::BadIndex)?;
+
+        let t = Self {
+            pool: view.pool(&region(kind::STRING_POOL)?)?,
+            names: view.typed_records::<NameRef>(&region(kind::NAMES)?)?,
+            slots: view.typed_records::<DataSlotRecord>(&slots_region)?,
+            shared: view.typed_records::<SharedSlotRecord>(&region(kind::SHARED_LAYOUT)?)?,
+            private_composite: view
+                .typed_records::<PrivateCompositeRecord>(&region(kind::PRIVATE_COMPOSITE)?)?,
+            init,
+        };
+
+        for i in 0..t.slot_count() {
+            let r = t.slot(i).ok_or(SchemaError::BadIndex)?;
+            if r.name as usize >= t.names.len() {
+                return Err(SchemaError::BadIndex);
+            }
+            if r.visibility != visibility_tag::SHARED && r.visibility != visibility_tag::PRIVATE {
+                return Err(SchemaError::UnknownTag(r.visibility as u16));
+            }
+        }
+        Ok(Some(t))
+    }
+
+    /// Number of declared slots.
+    #[inline]
+    pub fn slot_count(&self) -> usize {
+        self.slots.len()
+    }
+
+    /// The slot record at `index`.
+    #[inline]
+    pub fn slot(&self, index: usize) -> Option<DataSlotRecord> {
+        self.slots.get_as::<DataSlotRecord>(index)
+    }
+
+    /// Slot `index`'s name, as bytes aliasing the artifact.
+    #[inline]
+    pub fn slot_name(&self, index: usize) -> Option<&'a [u8]> {
+        let r = self.slot(index)?;
+        let n = self.names.get_as::<NameRef>(r.name as usize)?;
+        self.pool.slice(n.offset, n.length)
+    }
+
+    /// The shared-slot layout at `index`.
+    #[inline]
+    pub fn shared_slot(&self, index: usize) -> Option<SharedSlotRecord> {
+        self.shared.get_as::<SharedSlotRecord>(index)
+    }
+
+    /// Number of shared-slot layout entries.
+    #[inline]
+    pub fn shared_count(&self) -> usize {
+        self.shared.len()
+    }
+
+    /// The private-composite placement at `index`.
+    #[inline]
+    pub fn private_composite(&self, index: usize) -> Option<PrivateCompositeRecord> {
+        self.private_composite
+            .get_as::<PrivateCompositeRecord>(index)
+    }
+
+    /// Number of private-composite placements.
+    #[inline]
+    pub fn private_composite_count(&self) -> usize {
+        self.private_composite.len()
+    }
+
+    /// The constant range holding the private-slot initialisers.
+    #[inline]
+    pub fn private_init_range(&self) -> ConstRange {
+        (self.init.first, self.init.count)
+    }
+}
+
+/// Decodes the data layout into an owned value, or `None` if absent.
+///
+/// # Errors
+///
+/// [`SchemaError`] for any malformed artifact.
+pub fn decode_data_layout(bytes: &[u8]) -> Result<Option<DataLayout>, SchemaError> {
+    use crate::bytecode::{DataSlot, PrivateCompositeSlot, SharedSlotLayout, SlotVisibility};
+
+    let Some(t) = DataLayoutTable::parse(bytes)? else {
+        return Ok(None);
+    };
+
+    let mut slots = Vec::with_capacity(t.slot_count());
+    for i in 0..t.slot_count() {
+        let r = t.slot(i).ok_or(SchemaError::BadIndex)?;
+        let name = core::str::from_utf8(t.slot_name(i).ok_or(SchemaError::BadName)?)
+            .map(String::from)
+            .map_err(|_| SchemaError::BadName)?;
+        slots.push(DataSlot {
+            name,
+            visibility: if r.visibility == visibility_tag::SHARED {
+                SlotVisibility::Shared
+            } else {
+                SlotVisibility::Private
+            },
+        });
+    }
+
+    let mut shared_layout = Vec::with_capacity(t.shared_count());
+    for i in 0..t.shared_count() {
+        let r = t.shared_slot(i).ok_or(SchemaError::BadIndex)?;
+        shared_layout.push(SharedSlotLayout {
+            offset: r.offset,
+            kind: r.kind,
+            len: r.len,
+        });
+    }
+
+    let mut private_composite_layout = Vec::with_capacity(t.private_composite_count());
+    for i in 0..t.private_composite_count() {
+        let r = t.private_composite(i).ok_or(SchemaError::BadIndex)?;
+        private_composite_layout.push(PrivateCompositeSlot {
+            slot: r.slot,
+            offset: r.offset,
+        });
+    }
+
+    let private_init = decode_constant_pool(bytes, t.private_init_range())?;
+
+    Ok(Some(DataLayout {
+        slots,
+        shared_layout,
+        private_composite_layout,
+        private_init,
+    }))
 }
