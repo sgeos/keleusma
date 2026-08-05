@@ -266,13 +266,42 @@ one parse path and cannot drift on the ordering check.
 discriminates — an owned copy has the same value and a different address, so without the control the
 assertion would prove nothing.
 
+## CORRECTION: stage 2b is NOT one mechanical increment (probed 2026-08-05)
+
+The line previously here — "the remaining aux-body fields are flat vectors of scalars following the
+same mechanical pattern, so they are lower-risk" — is **wrong**, and it was written into this channel
+one increment earlier without being checked. A probe of the actual types:
+
+| Type | Actual shape |
+|---|---|
+| `StructTemplate` | `type_name: String`, `field_names: Vec<String>` |
+| `EnumLayout` | `type_name: String`, `variants: Vec<EnumVariantDisc>` (name + disc each), `min_payload` |
+| `ChunkSignature` | `params: Vec<WireShape>`, plus `ret` and `resume` shapes |
+| `WireShape` | a tagged union: `Top`, `Scalar { kind }`, `Composite { kind, size }` |
+| `DataLayout` | **three** nested `Vec`s of structs (`slots`, `shared_layout`, plus persistent placement) |
+| `WireChunk::debug_pool_bytes` | `Option<Vec<u8>>` — variable-length per chunk, needs a pool and a range |
+
+Every one needs the same table-plus-range treatment the constant table got. **Stage 2b is four or
+five separate increments, not one.** Ordered smallest-first by the loop's policy:
+
+1. **`WireShape`** — genuinely fixed-size once tagged; one small record. The others depend on it.
+2. **`ChunkSignature`** — three shape references plus a range into the shape table.
+3. **`StructTemplate`** — a type name plus a contiguous run of field names; reuses the `NAMES`
+   machinery and the `field_names_first + i` addressing already built and tested for struct constants.
+4. **`EnumLayout`** — structurally the same as (3) with a discriminant per sub-name.
+5. **`DataLayout`** — the largest; three parallel tables.
+6. **The scalar header block and `debug_pool_bytes`** — the header is genuinely flat; the debug pool
+   is opaque bytes into a region, deliberately kept unparsed so stripping stays a single assignment.
+
 ## Next step
 
-Stage 2b: the remaining aux-body regions (struct templates, param types, enum layouts, signatures,
-native return shapes, the scalar header block). These are flat vectors of scalars following the same
-mechanical pattern the constant table established, so they are lower-risk than what is now done.
-After that, step 5: routing the runtime through this accessor, which is where P10 is actually
-preserved or lost in practice rather than in principle.
+Increment 1 above (`WireShape`), then 2–6 in order. After those, step 5: routing the runtime through
+`ConstTable`, which is where P10 is preserved or lost in practice rather than in principle.
+
+**Method note that earned its keep twice today.** Run `cargo clippy --all-features`, the `-D warnings`
+doc build, and `cargo test --no-default-features` BEFORE the full gate, not after. Targeted tests
+structurally cannot see feature combinations or documentation, and both of this session's genuine
+gate reds were in exactly those two blind spots.
 
 ## Superseded next step (kept for context)
 

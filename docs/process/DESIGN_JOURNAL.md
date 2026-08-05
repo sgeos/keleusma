@@ -17,6 +17,28 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-04 (session 37)
 
+**STAGE 2b RESCOPED (2026-08-05): the probe caught a false claim I had written myself, one increment earlier.**
+The plan recorded in `REVERSE_PROMPT.md` said the remaining aux-body fields were "flat vectors of
+scalars following the same mechanical pattern, so they are lower-risk than what is now done." Probing
+the actual types before planning showed that is false in every case: `StructTemplate` holds a
+`Vec<String>`, `EnumLayout` a `Vec<EnumVariantDisc>`, `ChunkSignature` a `Vec<WireShape>`, `WireShape`
+is a tagged union rather than a scalar, `DataLayout` holds THREE nested `Vec`s of structs, and
+`debug_pool_bytes` is a per-chunk `Option<Vec<u8>>`. Each needs the same table-plus-range treatment
+the constant table got, so what was booked as one low-risk increment is four or five.
+
+WHAT MAKES THIS WORTH RECORDING is not the scoping error but its provenance. The loop's step 1a warns
+that a recorded status claim is a lead and not a fact, and explicitly says that includes claims in the
+process documents. This is the first time in the session the falsified claim was one I had written
+myself, in the previous increment, describing work I had not yet looked at. Confidence in a plan
+written while finishing adjacent work is worth exactly nothing until the types are read; the earlier
+tuple-in-tuple and Order-1 cases were inherited claims, which is a softer failure mode than
+manufacturing a fresh one.
+
+Had the probe been skipped, the likely outcome is a single branch attempting all six, discovering the
+nesting mid-implementation, and either sprawling or being abandoned. The correction costs one probe
+and zero product code.
+
+
 **STEP 4 STAGE 2a (2026-08-04): the borrowed accessor, and a probe that narrowed the requirement instead of confirming it.**
 The loop's step 1a says a recorded status claim is a lead, not a fact. This increment is the cleanest
 demonstration of that so far. The claim carried through three documents was "string constants
