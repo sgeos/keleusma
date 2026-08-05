@@ -1,0 +1,554 @@
+//! Keleusma's schema on top of the [`keleusma_wire`] container (wire format v2,
+//! stage 1: the constant table).
+//!
+//! The container knows nothing about Keleusma. This module supplies the part it
+//! deliberately omits: which region kinds exist, what each record means, and how a
+//! [`ConstValue`](crate::bytecode::ConstValue) tree becomes fixed-size records.
+//!
+//! # What this stage covers
+//!
+//! The **constant table** and its supporting pools, which is the part of the
+//! auxiliary body carrying the real design content. The remaining aux-body
+//! fields — struct templates, param types, enum layouts, signatures, native
+//! return shapes, the scalar header block — are flat vectors of scalars that
+//! follow the same mechanical pattern and land in later stages. The `rkyv` path
+//! is untouched; nothing here is wired into the loader yet.
+//!
+//! # The design point: recursion is removed, not merely bounded
+//!
+//! [`ConstValue`](crate::bytecode::ConstValue) is a tree. The superseded encoding nested
+//! children inline, which forced a recursive decoder and a depth cap to stop hostile input
+//! exhausting the stack. Here a composite instead references a **range** of
+//! entries in the same table, and the flattening guarantees that range lies
+//! strictly **after** the composite itself.
+//!
+//! That ordering is what makes the table walkable by a single reverse linear
+//! sweep with no stack at all — and it is checked rather than assumed, because
+//! its violation is silent: a backwards range makes a reverse sweep read entries
+//! it has not computed yet, producing a wrong answer rather than a fault. The
+//! encoder produces the ordering by construction (breadth-first numbering) and
+//! [`decode_constants`](crate::wire_schema::decode_constants) re-validates it on the way
+//! back in, since a decoder must not trust the encoder that produced its input.
+//!
+//! # Why side tables instead of wider records
+//!
+//! A struct constant needs a type name, field names, and field values; an enum
+//! needs a type name, a variant name, an optional discriminant, and payload
+//! values. Widening every constant record to fit the worst case would cost 32
+//! bytes for an `Int` that needs 8. Instead the two composite kinds reference
+//! small side tables, so the constant record stays two words and the space is
+//! paid only by the constants that need it.
+
+use alloc::string::String;
+use alloc::vec::Vec;
+
+use keleusma_wire::{WireBuilder, WireError, WireRecord, WireView};
+
+use crate::bytecode::ConstValue;
+
+/// Region kinds. Assigned explicitly rather than by declaration order, so
+/// reordering this list cannot silently change an artifact's meaning.
+pub mod kind {
+    /// Flat bytes: every name and string constant, concatenated.
+    pub const STRING_POOL: u16 = 0x0010;
+    /// `(offset, length)` slices into [`STRING_POOL`].
+    pub const NAMES: u16 = 0x0011;
+    /// The flattened constant table.
+    pub const CONSTS: u16 = 0x0012;
+    /// Per-struct-constant type and field-name references.
+    pub const STRUCT_AUX: u16 = 0x0013;
+    /// Per-enum-constant type, variant, and discriminant.
+    pub const ENUM_AUX: u16 = 0x0014;
+}
+
+/// Constant tags. Explicit, and never reordered: the numbering is the wire
+/// contract. The float tag is reserved unconditionally so an artifact written by
+/// a floats build fails loudly on a no-floats build rather than being misread.
+pub mod tag {
+    #![allow(missing_docs)]
+    pub const UNIT: u16 = 1;
+    pub const BOOL: u16 = 2;
+    pub const INT: u16 = 3;
+    pub const BYTE: u16 = 4;
+    pub const FIXED: u16 = 5;
+    pub const FLOAT: u16 = 6;
+    pub const STATIC_STR: u16 = 7;
+    pub const TUPLE: u16 = 8;
+    pub const ARRAY: u16 = 9;
+    pub const STRUCT: u16 = 10;
+    pub const ENUM: u16 = 11;
+    pub const NONE: u16 = 12;
+}
+
+/// Constant-record flag: an enum constant carries a resolved discriminant.
+pub const FLAG_HAS_DISCRIMINANT: u16 = 1 << 0;
+
+/// A slice of the string pool.
+#[derive(WireRecord, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NameRef {
+    /// Byte offset into the string pool.
+    pub offset: u32,
+    /// Byte length.
+    pub length: u32,
+}
+
+/// One constant. Two words: a tag word and a payload word.
+///
+/// The payload is read according to the tag — a scalar's bits, or a
+/// `(first, count)` range into this same table for a composite.
+#[derive(WireRecord, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConstRecord {
+    /// See [`tag`].
+    pub tag: u16,
+    /// See [`FLAG_HAS_DISCRIMINANT`].
+    pub flags: u16,
+    /// Name index for a string constant, or side-table index for a struct or
+    /// enum. Zero and unused otherwise.
+    pub aux: u32,
+    /// Scalar bits, or a `(first, count)` range packed as two `u32`s.
+    pub payload: u64,
+}
+
+/// Type and field names for one struct constant.
+#[derive(WireRecord, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StructAux {
+    /// Name index of the struct's type name.
+    pub type_name: u32,
+    /// Name index of this struct's first field name; field *i* is at
+    /// `field_names_first + i`.
+    pub field_names_first: u32,
+}
+
+/// Type, variant, and discriminant for one enum constant.
+#[derive(WireRecord, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnumAux {
+    /// Name index of the enum's type name.
+    pub type_name: u32,
+    /// Name index of the variant name.
+    pub variant: u32,
+    /// Resolved discriminant. Meaningful only when the constant record carries
+    /// [`FLAG_HAS_DISCRIMINANT`]; a bare zero here is not the same as `Some(0)`.
+    pub discriminant: i64,
+}
+
+impl ConstRecord {
+    /// Packs a `(first, count)` range into the payload word.
+    #[inline]
+    fn range(first: u32, count: u32) -> u64 {
+        first as u64 | ((count as u64) << 32)
+    }
+
+    /// Unpacks the payload as a `(first, count)` range.
+    #[inline]
+    pub fn as_range(&self) -> (u32, u32) {
+        (self.payload as u32, (self.payload >> 32) as u32)
+    }
+
+    /// True when this constant's payload is a range into the constant table.
+    #[inline]
+    pub fn is_composite(&self) -> bool {
+        matches!(self.tag, tag::TUPLE | tag::ARRAY | tag::STRUCT | tag::ENUM)
+    }
+}
+
+/// Accumulates the string pool and its name table, sharing repeated names.
+///
+/// Sharing is not merely a size optimisation: type and field names repeat
+/// heavily across a module's constants, and a shared pool is what lets a name be
+/// compared by index rather than by bytes.
+#[derive(Default)]
+struct Names {
+    pool: Vec<u8>,
+    refs: Vec<NameRef>,
+}
+
+impl Names {
+    fn intern(&mut self, s: &str) -> u32 {
+        let bytes = s.as_bytes();
+        // Linear scan. The name count per module is small, and a map would pull
+        // in hashing for no measurable benefit at this size.
+        for (i, r) in self.refs.iter().enumerate() {
+            let at = r.offset as usize;
+            if r.length as usize == bytes.len() && &self.pool[at..at + bytes.len()] == bytes {
+                return i as u32;
+            }
+        }
+        let offset = self.pool.len() as u32;
+        self.pool.extend_from_slice(bytes);
+        self.refs.push(NameRef {
+            offset,
+            length: bytes.len() as u32,
+        });
+        (self.refs.len() - 1) as u32
+    }
+}
+
+/// The encoded constant table and its side tables.
+#[derive(Default)]
+struct Tables {
+    consts: Vec<ConstRecord>,
+    struct_aux: Vec<StructAux>,
+    enum_aux: Vec<EnumAux>,
+    names: Names,
+}
+
+/// Flattens a constant forest into the fixed-size tables.
+///
+/// The roots occupy indices `0..roots.len()` **in order**, because a chunk
+/// indexes its constants by position. Children are numbered breadth-first after
+/// them, which is what guarantees every range points forward.
+fn flatten(roots: &[ConstValue]) -> Tables {
+    let mut t = Tables::default();
+
+    // Breadth-first. `queue` holds nodes whose records are not yet written;
+    // `next_index` is the index the next unallocated child will take.
+    let mut queue: Vec<&ConstValue> = roots.iter().collect();
+    let mut next_index = roots.len() as u32;
+    let mut head = 0usize;
+
+    while head < queue.len() {
+        let node = queue[head];
+        head += 1;
+
+        let record = match node {
+            ConstValue::Unit => ConstRecord {
+                tag: tag::UNIT,
+                flags: 0,
+                aux: 0,
+                payload: 0,
+            },
+            ConstValue::None => ConstRecord {
+                tag: tag::NONE,
+                flags: 0,
+                aux: 0,
+                payload: 0,
+            },
+            ConstValue::Bool(b) => ConstRecord {
+                tag: tag::BOOL,
+                flags: 0,
+                aux: 0,
+                payload: *b as u64,
+            },
+            ConstValue::Int(v) => ConstRecord {
+                tag: tag::INT,
+                flags: 0,
+                aux: 0,
+                payload: *v as u64,
+            },
+            ConstValue::Byte(v) => ConstRecord {
+                tag: tag::BYTE,
+                flags: 0,
+                aux: 0,
+                payload: *v as u64,
+            },
+            ConstValue::Fixed(v) => ConstRecord {
+                tag: tag::FIXED,
+                flags: 0,
+                aux: 0,
+                payload: *v as u64,
+            },
+            #[cfg(feature = "floats")]
+            ConstValue::Float(v) => ConstRecord {
+                tag: tag::FLOAT,
+                flags: 0,
+                aux: 0,
+                payload: v.to_bits(),
+            },
+            ConstValue::StaticStr(s) => {
+                let idx = t.names.intern(s);
+                ConstRecord {
+                    tag: tag::STATIC_STR,
+                    flags: 0,
+                    aux: idx,
+                    payload: 0,
+                }
+            }
+            ConstValue::Tuple(items) | ConstValue::Array(items) => {
+                let first = next_index;
+                next_index += items.len() as u32;
+                queue.extend(items.iter());
+                ConstRecord {
+                    tag: if matches!(node, ConstValue::Tuple(_)) {
+                        tag::TUPLE
+                    } else {
+                        tag::ARRAY
+                    },
+                    flags: 0,
+                    aux: 0,
+                    payload: ConstRecord::range(first, items.len() as u32),
+                }
+            }
+            ConstValue::Struct { type_name, fields } => {
+                let type_idx = t.names.intern(type_name);
+                // Field names are interned contiguously so field `i` is at
+                // `field_names_first + i` -- one index instead of one per field.
+                let names_first = t.names.refs.len() as u32;
+                for (name, _) in fields {
+                    t.names.intern_fresh(name);
+                }
+                let aux_idx = t.struct_aux.len() as u32;
+                t.struct_aux.push(StructAux {
+                    type_name: type_idx,
+                    field_names_first: names_first,
+                });
+
+                let first = next_index;
+                next_index += fields.len() as u32;
+                queue.extend(fields.iter().map(|(_, v)| v));
+                ConstRecord {
+                    tag: tag::STRUCT,
+                    flags: 0,
+                    aux: aux_idx,
+                    payload: ConstRecord::range(first, fields.len() as u32),
+                }
+            }
+            ConstValue::Enum {
+                type_name,
+                variant,
+                discriminant,
+                fields,
+            } => {
+                let type_idx = t.names.intern(type_name);
+                let variant_idx = t.names.intern(variant);
+                let aux_idx = t.enum_aux.len() as u32;
+                t.enum_aux.push(EnumAux {
+                    type_name: type_idx,
+                    variant: variant_idx,
+                    discriminant: discriminant.unwrap_or(0),
+                });
+
+                let first = next_index;
+                next_index += fields.len() as u32;
+                queue.extend(fields.iter());
+                ConstRecord {
+                    tag: tag::ENUM,
+                    flags: if discriminant.is_some() {
+                        FLAG_HAS_DISCRIMINANT
+                    } else {
+                        0
+                    },
+                    aux: aux_idx,
+                    payload: ConstRecord::range(first, fields.len() as u32),
+                }
+            }
+        };
+
+        t.consts.push(record);
+    }
+
+    t
+}
+
+impl Names {
+    /// Interns without sharing, so a run of field names stays contiguous.
+    ///
+    /// Sharing would be correct for the bytes but would break the
+    /// `field_names_first + i` addressing, since a repeated name would return an
+    /// earlier index and interrupt the run.
+    fn intern_fresh(&mut self, s: &str) -> u32 {
+        let bytes = s.as_bytes();
+        let offset = self.pool.len() as u32;
+        self.pool.extend_from_slice(bytes);
+        self.refs.push(NameRef {
+            offset,
+            length: bytes.len() as u32,
+        });
+        (self.refs.len() - 1) as u32
+    }
+}
+
+/// Encodes a constant forest into a container artifact.
+///
+/// # Errors
+///
+/// Propagates a [`WireError`] from the container builder.
+pub fn encode_constants(roots: &[ConstValue]) -> Result<Vec<u8>, WireError> {
+    let t = flatten(roots);
+
+    let mut b = WireBuilder::new();
+    let pool = b.region(kind::STRING_POOL, 0)?;
+    let names = b.region(kind::NAMES, 0)?;
+    let consts = b.region(kind::CONSTS, 0)?;
+    let saux = b.region(kind::STRUCT_AUX, 0)?;
+    let eaux = b.region(kind::ENUM_AUX, 0)?;
+
+    b.push(pool, &t.names.pool);
+    for r in &t.names.refs {
+        b.push_record(names, r);
+    }
+    for r in &t.consts {
+        b.push_record(consts, r);
+    }
+    for r in &t.struct_aux {
+        b.push_record(saux, r);
+    }
+    for r in &t.enum_aux {
+        b.push_record(eaux, r);
+    }
+
+    b.finish()
+}
+
+/// Why a constant table could not be read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SchemaError {
+    /// The container itself was malformed.
+    Container(WireError),
+    /// A required region is absent.
+    MissingRegion(u16),
+    /// A record index lies outside its table.
+    BadIndex,
+    /// A composite's range does not lie strictly after it, or overruns the
+    /// table. **Silent if unchecked** — see the module documentation.
+    BadRange,
+    /// A tag is not one this build understands. A floats-built artifact read by
+    /// a no-floats build lands here rather than being misread.
+    UnknownTag(u16),
+    /// A name slice lies outside the string pool, or is not valid UTF-8.
+    BadName,
+}
+
+impl From<WireError> for SchemaError {
+    fn from(e: WireError) -> Self {
+        Self::Container(e)
+    }
+}
+
+/// Decodes a constant forest, re-validating the ordering invariant.
+///
+/// `count` is the number of roots, which the caller knows from the chunk
+/// metadata. Roots occupy indices `0..count`.
+///
+/// # Errors
+///
+/// [`SchemaError`] for any malformed artifact. This function never panics.
+pub fn decode_constants(bytes: &[u8], count: usize) -> Result<Vec<ConstValue>, SchemaError> {
+    let view = WireView::parse(bytes)?;
+
+    let pool_region = view
+        .find_region(kind::STRING_POOL)
+        .ok_or(SchemaError::MissingRegion(kind::STRING_POOL))?;
+    let pool = view.pool(&pool_region)?;
+
+    let names_region = view
+        .find_region(kind::NAMES)
+        .ok_or(SchemaError::MissingRegion(kind::NAMES))?;
+    let names = view.typed_records::<NameRef>(&names_region)?;
+
+    let consts_region = view
+        .find_region(kind::CONSTS)
+        .ok_or(SchemaError::MissingRegion(kind::CONSTS))?;
+    let consts = view.typed_records::<ConstRecord>(&consts_region)?;
+
+    let saux_region = view
+        .find_region(kind::STRUCT_AUX)
+        .ok_or(SchemaError::MissingRegion(kind::STRUCT_AUX))?;
+    let saux = view.typed_records::<StructAux>(&saux_region)?;
+
+    let eaux_region = view
+        .find_region(kind::ENUM_AUX)
+        .ok_or(SchemaError::MissingRegion(kind::ENUM_AUX))?;
+    let eaux = view.typed_records::<EnumAux>(&eaux_region)?;
+
+    if count > consts.len() {
+        return Err(SchemaError::BadIndex);
+    }
+
+    // Validate every range BEFORE materialising anything. A backwards range is
+    // the silent failure this format's ordering invariant exists to prevent, so
+    // it is rejected up front rather than discovered mid-walk.
+    for i in 0..consts.len() {
+        let rec = consts
+            .get_as::<ConstRecord>(i)
+            .ok_or(SchemaError::BadIndex)?;
+        if rec.is_composite() {
+            let (first, n) = rec.as_range();
+            if !consts.range_is_forward(i, first, n) {
+                return Err(SchemaError::BadRange);
+            }
+        }
+    }
+
+    let name_of = |idx: u32| -> Result<String, SchemaError> {
+        let r = names
+            .get_as::<NameRef>(idx as usize)
+            .ok_or(SchemaError::BadIndex)?;
+        let slice = pool.slice(r.offset, r.length).ok_or(SchemaError::BadName)?;
+        core::str::from_utf8(slice)
+            .map(String::from)
+            .map_err(|_| SchemaError::BadName)
+    };
+
+    // Bottom-up by a single REVERSE LINEAR SWEEP. Every child has a higher index
+    // than its parent -- validated above -- so by the time index `i` is reached,
+    // everything it references is already built. No stack, no recursion, and the
+    // trip count is the table length.
+    let mut built: Vec<Option<ConstValue>> = (0..consts.len()).map(|_| None).collect();
+    for i in (0..consts.len()).rev() {
+        let rec = consts
+            .get_as::<ConstRecord>(i)
+            .ok_or(SchemaError::BadIndex)?;
+        let (first, n) = rec.as_range();
+
+        let children = |b: &mut Vec<Option<ConstValue>>| -> Result<Vec<ConstValue>, SchemaError> {
+            let mut out = Vec::with_capacity(n as usize);
+            for k in 0..n as usize {
+                out.push(b[first as usize + k].take().ok_or(SchemaError::BadRange)?);
+            }
+            Ok(out)
+        };
+
+        let value = match rec.tag {
+            tag::UNIT => ConstValue::Unit,
+            tag::NONE => ConstValue::None,
+            tag::BOOL => ConstValue::Bool(rec.payload != 0),
+            tag::INT => ConstValue::Int(rec.payload as i64),
+            tag::BYTE => ConstValue::Byte(rec.payload as u8),
+            tag::FIXED => ConstValue::Fixed(rec.payload as i64),
+            #[cfg(feature = "floats")]
+            tag::FLOAT => ConstValue::Float(f64::from_bits(rec.payload)),
+            tag::STATIC_STR => ConstValue::StaticStr(name_of(rec.aux)?),
+            tag::TUPLE => ConstValue::Tuple(children(&mut built)?),
+            tag::ARRAY => ConstValue::Array(children(&mut built)?),
+            tag::STRUCT => {
+                let aux = saux
+                    .get_as::<StructAux>(rec.aux as usize)
+                    .ok_or(SchemaError::BadIndex)?;
+                let values = children(&mut built)?;
+                let mut fields = Vec::with_capacity(values.len());
+                for (k, v) in values.into_iter().enumerate() {
+                    fields.push((name_of(aux.field_names_first + k as u32)?, v));
+                }
+                ConstValue::Struct {
+                    type_name: name_of(aux.type_name)?,
+                    fields,
+                }
+            }
+            tag::ENUM => {
+                let aux = eaux
+                    .get_as::<EnumAux>(rec.aux as usize)
+                    .ok_or(SchemaError::BadIndex)?;
+                ConstValue::Enum {
+                    type_name: name_of(aux.type_name)?,
+                    variant: name_of(aux.variant)?,
+                    discriminant: if rec.flags & FLAG_HAS_DISCRIMINANT != 0 {
+                        Some(aux.discriminant)
+                    } else {
+                        None
+                    },
+                    fields: children(&mut built)?,
+                }
+            }
+            other => return Err(SchemaError::UnknownTag(other)),
+        };
+
+        built[i] = Some(value);
+    }
+
+    let mut roots = Vec::with_capacity(count);
+    for slot in built.iter_mut().take(count) {
+        roots.push(slot.take().ok_or(SchemaError::BadIndex)?);
+    }
+    Ok(roots)
+}

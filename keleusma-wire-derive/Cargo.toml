@@ -1,0 +1,25 @@
+[package]
+name = "keleusma-wire-derive"
+version = "0.1.0"
+edition = "2024"
+publish = ["crates-io"]
+description = "Derive macro for keleusma-wire fixed-size records. Implementation detail of the keleusma-wire crate; depend on `keleusma-wire` with the `derive` feature rather than this crate directly."
+license = "0BSD"
+homepage = "https://github.com/sgeos/keleusma/tree/main/keleusma-wire"
+repository = "https://github.com/sgeos/keleusma"
+documentation = "https://docs.rs/keleusma-wire-derive"
+readme = "README.md"
+rust-version = "1.85"
+keywords = ["keleusma-wire", "proc-macro", "derive", "no-std", "binary"]
+categories = ["development-tools::procedural-macro-helpers"]
+
+[lib]
+proc-macro = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"

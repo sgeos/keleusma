@@ -6,10 +6,17 @@ Design for the version-2 wire format. **Supersedes the flat-aux design in
 [`WIRE_FORMAT_V2_FLAT_AUX.md`](./WIRE_FORMAT_V2_FLAT_AUX.md)**, which remains accurate on the rkyv
 displacement and the P10 analysis but is **wrong on record structure**.
 
-Status: **DESIGN, superseding.** Operator requirements stated 2026-08-04. **Revision 2 (2026-08-04)**
-carries the prototype through constant and string resolution and through a streaming emitter, which
-corrected two record layouts, promoted one implicit assumption to a checked invariant, and surfaced
-one open encoder decision. All four are marked in place below.
+Status: **DESIGN, superseding, and now PARTLY IMPLEMENTED.** Operator requirements stated
+2026-08-04. **Revision 2 (2026-08-04)** carried the prototype through constant and string resolution
+and through a streaming emitter; **the container layer then landed as the
+[`keleusma-wire`](../../keleusma-wire/README.md) crate**, which corrected the header structure again.
+Between them they changed three record layouts, promoted one implicit assumption to a checked
+invariant, and surfaced one open encoder decision. All are marked in place below.
+
+**Where the authority now sits.** For the container — framing, prologue, directory, record tables,
+pools — `keleusma-wire` is the implementation and its documentation is authoritative; this document
+records the reasoning. For everything above the container — what the regions mean, the constant and
+chunk record layouts, the ECC plane, encryption, authenticity — this document remains the design.
 
 ## Requirements
 
@@ -64,28 +71,36 @@ possess this document.
 ### Region directory, triplicated
 
 ```
-aux := header_block ×3, region*
-header_block := magic u32, bom u16, version u16,               -- 1 word
-                region_count u16, reserved u16, reserved u32,  -- 1 word
-                region_dir[region_count],                      -- 2 words each
-                block_crc u32, reserved u32                    -- 1 word, TRAILER
-region_dir entry := kind u16, flags u16, word_offset u32, word_length u32, reserved u32
+aux := prologue ×3, directory ×3, region*
+prologue        := magic u32, bom u16, version u16,            -- 1 word
+                   region_count u16, flags u16, crc32 u32      -- 1 word   (16 bytes, fixed)
+directory       := dir_entry[region_count]                     -- 2 words each
+dir_entry       := kind u16, flags u16, word_offset u32, word_length u32, reserved u32
 ```
 
-The header block and its directory are written **three times** and read by majority vote per word.
+The prologue and the directory are each written **three times** and read by majority vote per
+byte. Prologue copies sit at byte offsets 0, 16 and 32; directory copies follow at offset 48.
 
-**[Two corrections from the revision-2 prototype, 2026-08-04.]** Both were found by
-addressing the layout in hardware and in a streaming emitter rather than on paper, which is
-the reason open question 2 required that before freezing anything.
+**[Three corrections, 2026-08-04.]** The first two came from the revision-2 prototype, the third
+from writing the actual reader in [`keleusma-wire`](../../keleusma-wire/README.md). This is what
+open question 2 required before anything was frozen.
 
 - **The directory entry is 16 bytes, not 12.** A 12-byte entry contradicted this design's own
   principle that every record is an integral number of words. The added reserved word restores
   it and keeps entry *i* reachable by a shift.
-- **The block check is a trailer, not a header field.** Its input is the directory, which is
-  written after it, so a leading position would require back-patching and contradict the
-  forward-only emission rule outright. At the end of the block the emitter sums what it has
-  already written and appends the result, which in hardware is a running adder on the write
-  path — what a CRC generator already is.
+- **The prologue is SPLIT from the directory**, superseding the single "header block" above.
+  A bootstrapping problem, invisible until a real reader was written: voting the header requires
+  locating copies 1 and 2, which requires the block stride, which — with the directory inside the
+  block — depends on `region_count`, *which is itself inside the block being voted*. A single bit
+  flip in `region_count` would desynchronise the search for the very copies that exist to repair
+  it. The one field the vote most needed to protect was the one it could not proceed without.
+  A **fixed-size** prologue at fixed offsets is votable with no prior knowledge; its voted
+  `region_count` then makes the directory votable in turn.
+- **The check field returns to being inline, and the earlier "trailer" fix is withdrawn.**
+  The trailer was needed because the check covered the directory, which is written afterwards.
+  Once the prologue is split out, the check covers only the prologue's own fixed-size fields —
+  all known before the first byte is written — so no back-patching arises and no trailer is
+  needed. The split subsumes the trailer rather than sitting alongside it.
 
 **[Rationale]** The directory is the only structure whose loss is total — without it no region is
 reachable. It is on the order of a hundred bytes. Triplicating the single catastrophic-failure point
@@ -314,11 +329,12 @@ Honest accounting, because fixed-size records are not free:
    freezing**; the directory entry and the block trailer changed and should be considered settled only
    as of this revision.
 3. **Cross-generational authenticity** — reasoned below rather than left open.
-4. **OPEN, needs an operator decision: encoder strategy for streaming emission.** Option (a),
-   one buffer per region with a leading directory, or option (b), a trailing directory with per-unit
-   segments. See "Streaming emission: a conflict this surfaced" above. Recommendation is (a). This
-   blocks nothing today — the record layouts are the same either way — but it determines whether the
-   region directory leads or trails, so it should be settled before the crate is written.
+4. ~~**Encoder strategy for streaming emission.**~~ **RESOLVED 2026-08-04: option (a)** — one buffer
+   per region, leading directory. Forward-only append holds per region; the directory stays at the
+   front, which is what a hardware reader and a random-access reader both want; cross-region string
+   sharing is retained. Implemented in `keleusma-wire`. Option (b), a trailing directory with
+   per-unit segments, is demonstrated in the prototype and remains reachable without touching any
+   record layout, should genuinely single-pass emission ever be required.
 5. **OPEN, deferred deliberately: the ECC plane is unexercised end to end.** The codec is validated in
    isolation and the parallel-plane rationale is argued, but no prototype artifact carries an ECC
    region, so "parity beside the data preserves in-place aliasing" is reasoning rather than

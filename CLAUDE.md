@@ -47,6 +47,10 @@ keleusma/
 │   ├── Cargo.toml
 │   ├── README.md
 │   └── src/lib.rs             # Arena, BottomHandle, TopHandle, Budget, marks
+├── keleusma-wire/             # Standalone wire-format container (workspace member)
+│   ├── Cargo.toml
+│   ├── README.md
+│   └── src/                   # layout, scalar, crc, view (reader), build (encoder)
 ├── examples/
 │   ├── rogue/                 # Roguelike example (workspace [[example]])
 │   ├── piano_roll.rs          # SDL3 audio + hot-swap (workspace [[example]])
@@ -210,6 +214,6 @@ All public API functions return `Result` types with error structs that include s
 - **allocator-api2 0.4** (stable polyfill of the unstable allocator API, used by `keleusma-arena`)
 - **syn 2, quote 1, proc-macro2 1** (compile-time only, used by `keleusma-macros`)
 - **rkyv 0.8** (zero-copy archived bytecode format)
-- Cargo workspace with members: `keleusma` (runtime), `keleusma-macros` (proc-macro), `keleusma-arena` (standalone arena allocator), `keleusma-bench` (cost-model calibration), and `keleusma-cli` (CLI frontend).
+- Cargo workspace with members: `keleusma` (runtime), `keleusma-macros` (proc-macro), `keleusma-arena` (standalone arena allocator), `keleusma-wire` (standalone wire-format container), `keleusma-bench` (cost-model calibration), and `keleusma-cli` (CLI frontend).
 - Approximately 1168 keleusma lib tests plus 368 integration tests across 30 files (including 53 rogue-script, 40 marshall, the 96-test multi-word fixed-point suite, the 18-test const-generics suite, the struct-field-index and generic-methods suites, and the flat-composite, persistent-data, narrow-word VM, and zero-copy suites), 42 keleusma-arena, and 6 keleusma-bench tests across the workspace covering lexer, parser, type checker, monomorphizer, compiler, VM, verifier, marshall, flat-byte composites, multi-word fixed-point arithmetic, const generics, trait methods on generic types, operator families (bitwise, shift, boolean), arena, audio natives, utility natives, target descriptor, visitor pattern, signing, IFC labels, cost-model calibration, and integration tests.
 - The `examples/rtos/` directory carries a standalone crate (not a workspace member) implementing a cooperative RTOS microkernel; it depends on the parent `keleusma` runtime by path and ships its own toolchain pin, build.rs, memory.x, and probe-rs runner. Run with `cd examples/rtos && cargo run --release --bin three-task-std` (host) or `cd examples/rtos && cargo run --release --bin three-task-n6 --target thumbv8m.main-none-eabihf --no-default-features --features stm32n6570dk-platform` (STM32N6570-DK). See `examples/rtos/MANUAL.md`.
