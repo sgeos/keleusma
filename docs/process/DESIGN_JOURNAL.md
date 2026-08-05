@@ -17,6 +17,35 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-04 (session 37)
 
+**STAGE 2b INCREMENT 2 (2026-08-05): the probe forced an architecture change, not just a scoping one.**
+Struct templates and enum layouts both reference names, and the probe surfaced that the constant
+encoder had already claimed `STRING_POOL` and `NAMES` — and the container rejects a duplicate region
+kind. So a per-concern encoder for templates would have collided with the one that ran first. The
+composability refactor from the previous increment turned out to be necessary but insufficient:
+passing a shared `WireBuilder` is not enough when the genuinely shared state is the NAME INTERNER.
+
+`SchemaBuilder` now owns the interner. Each `add_*` contributes its records and interns whatever names
+it needs; `finish` emits the pool and the name table once, after every contributor has run. The payoff
+is larger than avoiding a collision: a type name mentioned by a constant AND by a struct template is
+stored once and is COMPARABLE BY INDEX, which no arrangement of independent encoders could have given.
+The test that matters builds constants, signatures, templates and layouts into one artifact, reads
+each back through its own accessor, and asserts the shared name resolves to the same index from both
+the constant side and the template side.
+
+ONE ASYMMETRY WORTH THE WORDS. Struct fields ride the name table directly, addressed as
+`field_names_first + i`. Enum variants cannot, because a bare run of names has nowhere to put the
+discriminant, so they get their own table keyed by a range. The two look parallel and are not, and
+following the struct pattern by analogy would have silently dropped every discriminant -- the same
+class of loss the `ConstValue` `PartialEq` blindness produced in the constant table, where a field
+that no comparison examined went unverified.
+
+THE PATTERN ACROSS THREE INCREMENTS is worth naming: each probe has changed something the plan
+assumed. First the requirement (aliasing is one accessor, not a stance), then the scope (stage 2b is
+five increments, not one), now the architecture (the interner is shared state, not per-encoder).
+The plans were not careless; they were written without opening the types, and that is reliably enough
+to be wrong.
+
+
 **STAGE 2b INCREMENT 1 (2026-08-05): shapes and signatures, and a rule correctly NOT carried over.**
 `WireShape` and `ChunkSignature` went in together because a shape table with no consumer is dead
 code. The probe confirmed the claim this time rather than falsifying it: the widest variant carries a
