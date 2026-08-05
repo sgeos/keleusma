@@ -44,7 +44,7 @@ use alloc::vec::Vec;
 
 use keleusma_wire::{Pool, RecordTable, WireBuilder, WireError, WireRecord, WireView};
 
-use crate::bytecode::{ChunkSignature, ConstValue, WireShape};
+use crate::bytecode::{ChunkSignature, ConstValue, EnumLayout, StructTemplate, WireShape};
 
 /// Region kinds. Assigned explicitly rather than by declaration order, so
 /// reordering this list cannot silently change an artifact's meaning.
@@ -63,6 +63,12 @@ pub mod kind {
     pub const SHAPES: u16 = 0x0015;
     /// Per-chunk signature descriptors.
     pub const SIGNATURES: u16 = 0x0016;
+    /// Struct construction templates.
+    pub const STRUCT_TEMPLATES: u16 = 0x0017;
+    /// Enum variant names and discriminants, referenced by range.
+    pub const ENUM_VARIANTS: u16 = 0x0018;
+    /// Per-enum-type layout descriptors.
+    pub const ENUM_LAYOUTS: u16 = 0x0019;
 }
 
 /// Shape tags. Numbered from one so an all-zero record is invalid rather than
@@ -203,7 +209,6 @@ struct Tables {
     consts: Vec<ConstRecord>,
     struct_aux: Vec<StructAux>,
     enum_aux: Vec<EnumAux>,
-    names: Names,
 }
 
 /// Flattens a constant forest into the fixed-size tables.
@@ -211,7 +216,7 @@ struct Tables {
 /// The roots occupy indices `0..roots.len()` **in order**, because a chunk
 /// indexes its constants by position. Children are numbered breadth-first after
 /// them, which is what guarantees every range points forward.
-fn flatten(roots: &[ConstValue]) -> Tables {
+fn flatten(roots: &[ConstValue], names: &mut Names) -> Tables {
     let mut t = Tables::default();
 
     // Breadth-first. `queue` holds nodes whose records are not yet written;
@@ -269,7 +274,7 @@ fn flatten(roots: &[ConstValue]) -> Tables {
                 payload: v.to_bits(),
             },
             ConstValue::StaticStr(s) => {
-                let idx = t.names.intern(s);
+                let idx = names.intern(s);
                 ConstRecord {
                     tag: tag::STATIC_STR,
                     flags: 0,
@@ -293,12 +298,12 @@ fn flatten(roots: &[ConstValue]) -> Tables {
                 }
             }
             ConstValue::Struct { type_name, fields } => {
-                let type_idx = t.names.intern(type_name);
+                let type_idx = names.intern(type_name);
                 // Field names are interned contiguously so field `i` is at
                 // `field_names_first + i` -- one index instead of one per field.
-                let names_first = t.names.refs.len() as u32;
+                let names_first = names.refs.len() as u32;
                 for (name, _) in fields {
-                    t.names.intern_fresh(name);
+                    names.intern_fresh(name);
                 }
                 let aux_idx = t.struct_aux.len() as u32;
                 t.struct_aux.push(StructAux {
@@ -322,8 +327,8 @@ fn flatten(roots: &[ConstValue]) -> Tables {
                 discriminant,
                 fields,
             } => {
-                let type_idx = t.names.intern(type_name);
-                let variant_idx = t.names.intern(variant);
+                let type_idx = names.intern(type_name);
+                let variant_idx = names.intern(variant);
                 let aux_idx = t.enum_aux.len() as u32;
                 t.enum_aux.push(EnumAux {
                     type_name: type_idx,
@@ -377,45 +382,229 @@ impl Names {
 ///
 /// Propagates a [`WireError`] from the container builder.
 pub fn encode_constants(roots: &[ConstValue]) -> Result<Vec<u8>, WireError> {
-    let mut b = WireBuilder::new();
-    add_constant_regions(&mut b, roots)?;
+    let mut b = SchemaBuilder::new();
+    b.add_constants(roots)?;
     b.finish()
 }
 
-/// Adds the constant-table regions to an existing builder.
-///
-/// Separate from [`encode_constants`] so the aux body can eventually be one
-/// artifact carrying every region, rather than several artifacts stitched
-/// together later. Building the composability in now costs nothing; retrofitting
-/// it would mean rewriting each encoder.
-///
-/// # Errors
-///
-/// Propagates a [`WireError`] from the builder.
-pub fn add_constant_regions(b: &mut WireBuilder, roots: &[ConstValue]) -> Result<(), WireError> {
-    let t = flatten(roots);
+/// One struct construction template.
+#[derive(WireRecord, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StructTemplateRecord {
+    /// Name index of the struct's type name.
+    pub type_name: u32,
+    /// Name index of the first field name; field *i* is at
+    /// `field_names_first + i`.
+    pub field_names_first: u32,
+    /// Number of fields.
+    pub field_count: u32,
+    /// Reserved; keeps the record two whole words.
+    pub reserved: u32,
+}
 
-    let pool = b.region(kind::STRING_POOL, 0)?;
-    let names = b.region(kind::NAMES, 0)?;
-    let consts = b.region(kind::CONSTS, 0)?;
-    let saux = b.region(kind::STRUCT_AUX, 0)?;
-    let eaux = b.region(kind::ENUM_AUX, 0)?;
+/// One enum variant: its name and discriminant.
+///
+/// A bare run of names could not carry the discriminants, so variants get their
+/// own table rather than riding the name table directly the way struct fields do.
+#[derive(WireRecord, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnumVariantRecord {
+    /// Name index of the variant name.
+    pub name: u32,
+    /// Reserved; keeps `disc` at a fixed offset.
+    pub reserved: u32,
+    /// Variant discriminant.
+    pub disc: i64,
+}
 
-    b.push(pool, &t.names.pool);
-    for r in &t.names.refs {
-        b.push_record(names, r);
-    }
-    for r in &t.consts {
-        b.push_record(consts, r);
-    }
-    for r in &t.struct_aux {
-        b.push_record(saux, r);
-    }
-    for r in &t.enum_aux {
-        b.push_record(eaux, r);
+/// One enum type's layout descriptor.
+#[derive(WireRecord, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnumLayoutRecord {
+    /// Name index of the enum's type name.
+    pub type_name: u32,
+    /// Index of this layout's first variant record.
+    pub variants_first: u32,
+    /// Number of variants.
+    pub variants_count: u32,
+    /// Largest-variant payload size in bytes; zero for a non-flat enum.
+    pub min_payload: u32,
+}
+
+/// Assembles the aux body, owning the state that must be shared across regions.
+///
+/// # Why this exists rather than free `add_*_regions` functions
+///
+/// The **name interner is shared**. Constants, struct templates and enum layouts
+/// all reference names, but the string pool and its index table are single
+/// regions, and the container rejects a duplicate region kind — so a per-concern
+/// encoder that declared its own `NAMES` would collide with the first one that
+/// ran. Interning centrally also means a type name mentioned by a constant and by
+/// a template is stored once and comparable by index.
+///
+/// Region kinds are declared as each concern is added; the pool and name table
+/// are emitted at [`Self::finish`], once every contributor has interned.
+#[derive(Default)]
+pub struct SchemaBuilder {
+    b: WireBuilder,
+    names: Names,
+}
+
+impl SchemaBuilder {
+    /// An empty builder.
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    Ok(())
+    /// Adds the constant table and its side tables.
+    ///
+    /// # Errors
+    ///
+    /// Propagates a [`WireError`] from the container builder.
+    pub fn add_constants(&mut self, roots: &[ConstValue]) -> Result<(), WireError> {
+        let t = flatten(roots, &mut self.names);
+
+        let consts = self.b.region(kind::CONSTS, 0)?;
+        let saux = self.b.region(kind::STRUCT_AUX, 0)?;
+        let eaux = self.b.region(kind::ENUM_AUX, 0)?;
+
+        for r in &t.consts {
+            self.b.push_record(consts, r);
+        }
+        for r in &t.struct_aux {
+            self.b.push_record(saux, r);
+        }
+        for r in &t.enum_aux {
+            self.b.push_record(eaux, r);
+        }
+        Ok(())
+    }
+
+    /// Adds the shape and signature tables.
+    ///
+    /// # Errors
+    ///
+    /// Propagates a [`WireError`] from the container builder.
+    pub fn add_signatures(&mut self, sigs: &[ChunkSignature]) -> Result<(), WireError> {
+        let mut shapes = Shapes::default();
+        let mut records = Vec::with_capacity(sigs.len());
+
+        for sig in sigs {
+            // Parameters unshared, so the run stays contiguous.
+            let params_first = shapes.recs.len() as u32;
+            for p in &sig.params {
+                shapes.append(p);
+            }
+            // Singles may share. Safe to intern after the run: shapes reference
+            // nothing, so unlike the constant table there is no ordering rule.
+            let ret = shapes.intern(&sig.ret);
+            let resume = shapes.intern(&sig.resume);
+
+            records.push(SignatureRecord {
+                params_first,
+                params_count: sig.params.len() as u32,
+                ret,
+                resume,
+            });
+        }
+
+        let shape_region = self.b.region(kind::SHAPES, 0)?;
+        let sig_region = self.b.region(kind::SIGNATURES, 0)?;
+        for r in &shapes.recs {
+            self.b.push_record(shape_region, r);
+        }
+        for r in &records {
+            self.b.push_record(sig_region, r);
+        }
+        Ok(())
+    }
+
+    /// Adds the struct-template table.
+    ///
+    /// Field names are interned **fresh** so each template's run stays
+    /// contiguous for `field_names_first + i`, the same reason struct constants
+    /// do it. Type names are shared.
+    ///
+    /// # Errors
+    ///
+    /// Propagates a [`WireError`] from the container builder.
+    pub fn add_struct_templates(&mut self, templates: &[StructTemplate]) -> Result<(), WireError> {
+        let mut records = Vec::with_capacity(templates.len());
+        for t in templates {
+            let type_name = self.names.intern(&t.type_name);
+            let field_names_first = self.names.refs.len() as u32;
+            for f in &t.field_names {
+                self.names.intern_fresh(f);
+            }
+            records.push(StructTemplateRecord {
+                type_name,
+                field_names_first,
+                field_count: t.field_names.len() as u32,
+                reserved: 0,
+            });
+        }
+
+        let region = self.b.region(kind::STRUCT_TEMPLATES, 0)?;
+        for r in &records {
+            self.b.push_record(region, r);
+        }
+        Ok(())
+    }
+
+    /// Adds the enum-layout table and its variant table.
+    ///
+    /// Variant names are interned **fresh** so a layout's variants form a
+    /// contiguous run; the variant records carry the discriminants, which a bare
+    /// name run could not.
+    ///
+    /// # Errors
+    ///
+    /// Propagates a [`WireError`] from the container builder.
+    pub fn add_enum_layouts(&mut self, layouts: &[EnumLayout]) -> Result<(), WireError> {
+        let mut variants = Vec::new();
+        let mut records = Vec::with_capacity(layouts.len());
+
+        for l in layouts {
+            let type_name = self.names.intern(&l.type_name);
+            let variants_first = variants.len() as u32;
+            for v in &l.variants {
+                let name = self.names.intern_fresh(&v.name);
+                variants.push(EnumVariantRecord {
+                    name,
+                    reserved: 0,
+                    disc: v.disc,
+                });
+            }
+            records.push(EnumLayoutRecord {
+                type_name,
+                variants_first,
+                variants_count: l.variants.len() as u32,
+                min_payload: l.min_payload,
+            });
+        }
+
+        let vregion = self.b.region(kind::ENUM_VARIANTS, 0)?;
+        let lregion = self.b.region(kind::ENUM_LAYOUTS, 0)?;
+        for r in &variants {
+            self.b.push_record(vregion, r);
+        }
+        for r in &records {
+            self.b.push_record(lregion, r);
+        }
+        Ok(())
+    }
+
+    /// Emits the artifact, appending the shared string pool and name table.
+    ///
+    /// # Errors
+    ///
+    /// Propagates a [`WireError`] from the container builder.
+    pub fn finish(mut self) -> Result<Vec<u8>, WireError> {
+        let pool = self.b.region(kind::STRING_POOL, 0)?;
+        let names = self.b.region(kind::NAMES, 0)?;
+        self.b.push(pool, &self.names.pool);
+        for r in &self.names.refs {
+            self.b.push_record(names, r);
+        }
+        self.b.finish()
+    }
 }
 
 /// Why a constant table could not be read.
@@ -821,51 +1010,9 @@ impl Shapes {
 ///
 /// Propagates a [`WireError`] from the builder.
 pub fn encode_signatures(sigs: &[ChunkSignature]) -> Result<Vec<u8>, WireError> {
-    let mut b = WireBuilder::new();
-    add_signature_regions(&mut b, sigs)?;
+    let mut b = SchemaBuilder::new();
+    b.add_signatures(sigs)?;
     b.finish()
-}
-
-/// Adds the shape and signature regions to an existing builder.
-///
-/// # Errors
-///
-/// Propagates a [`WireError`] from the builder.
-pub fn add_signature_regions(
-    b: &mut WireBuilder,
-    sigs: &[ChunkSignature],
-) -> Result<(), WireError> {
-    let mut shapes = Shapes::default();
-    let mut records = Vec::with_capacity(sigs.len());
-
-    for sig in sigs {
-        // Parameters first and unshared, so the run stays contiguous.
-        let params_first = shapes.recs.len() as u32;
-        for p in &sig.params {
-            shapes.append(p);
-        }
-        // Singles may share. Interning after the run is safe: shapes reference
-        // nothing, so unlike the constant table there is no ordering invariant.
-        let ret = shapes.intern(&sig.ret);
-        let resume = shapes.intern(&sig.resume);
-
-        records.push(SignatureRecord {
-            params_first,
-            params_count: sig.params.len() as u32,
-            ret,
-            resume,
-        });
-    }
-
-    let shape_region = b.region(kind::SHAPES, 0)?;
-    let sig_region = b.region(kind::SIGNATURES, 0)?;
-    for r in &shapes.recs {
-        b.push_record(shape_region, r);
-    }
-    for r in &records {
-        b.push_record(sig_region, r);
-    }
-    Ok(())
 }
 
 /// A **borrowed, allocation-free** view over an encoded signature table.
@@ -986,4 +1133,200 @@ pub fn decode_signatures(bytes: &[u8]) -> Result<Vec<ChunkSignature>, SchemaErro
         });
     }
     Ok(out)
+}
+
+/// A **borrowed, allocation-free** view over the struct-template and enum-layout
+/// tables.
+///
+/// Shares the string pool and name table with the constant table, so a type name
+/// mentioned by both is stored once.
+#[derive(Debug, Clone, Copy)]
+pub struct LayoutTable<'a> {
+    pool: Pool<'a>,
+    names: RecordTable<'a>,
+    templates: RecordTable<'a>,
+    variants: RecordTable<'a>,
+    layouts: RecordTable<'a>,
+}
+
+impl<'a> LayoutTable<'a> {
+    /// Parses and validates the template and layout tables.
+    ///
+    /// Every name reference and variant range is bounds-checked here, once, so
+    /// later accessors are total.
+    ///
+    /// # Errors
+    ///
+    /// [`SchemaError`] for any malformed artifact. Never panics.
+    pub fn parse(bytes: &'a [u8]) -> Result<Self, SchemaError> {
+        let view = WireView::parse(bytes)?;
+        let region = |k: u16| view.find_region(k).ok_or(SchemaError::MissingRegion(k));
+
+        let t = Self {
+            pool: view.pool(&region(kind::STRING_POOL)?)?,
+            names: view.typed_records::<NameRef>(&region(kind::NAMES)?)?,
+            templates: view
+                .typed_records::<StructTemplateRecord>(&region(kind::STRUCT_TEMPLATES)?)?,
+            variants: view.typed_records::<EnumVariantRecord>(&region(kind::ENUM_VARIANTS)?)?,
+            layouts: view.typed_records::<EnumLayoutRecord>(&region(kind::ENUM_LAYOUTS)?)?,
+        };
+
+        for i in 0..t.template_count() {
+            let r = t
+                .templates
+                .get_as::<StructTemplateRecord>(i)
+                .ok_or(SchemaError::BadIndex)?;
+            let end = (r.field_names_first as usize)
+                .checked_add(r.field_count as usize)
+                .ok_or(SchemaError::BadIndex)?;
+            if end > t.names.len() || r.type_name as usize >= t.names.len() {
+                return Err(SchemaError::BadIndex);
+            }
+        }
+        for i in 0..t.layout_count() {
+            let r = t
+                .layouts
+                .get_as::<EnumLayoutRecord>(i)
+                .ok_or(SchemaError::BadIndex)?;
+            let end = (r.variants_first as usize)
+                .checked_add(r.variants_count as usize)
+                .ok_or(SchemaError::BadIndex)?;
+            if end > t.variants.len() || r.type_name as usize >= t.names.len() {
+                return Err(SchemaError::BadIndex);
+            }
+        }
+        Ok(t)
+    }
+
+    /// Number of struct templates.
+    #[inline]
+    pub fn template_count(&self) -> usize {
+        self.templates.len()
+    }
+
+    /// Number of enum layouts.
+    #[inline]
+    pub fn layout_count(&self) -> usize {
+        self.layouts.len()
+    }
+
+    /// Bytes of name `index`, as a slice into the artifact.
+    #[inline]
+    pub fn name_bytes(&self, index: u32) -> Option<&'a [u8]> {
+        let r = self.names.get_as::<NameRef>(index as usize)?;
+        self.pool.slice(r.offset, r.length)
+    }
+
+    /// The raw template record at `index`.
+    #[inline]
+    pub fn template(&self, index: usize) -> Option<StructTemplateRecord> {
+        self.templates.get_as::<StructTemplateRecord>(index)
+    }
+
+    /// Field `field` of template `index`, as bytes aliasing the artifact.
+    #[inline]
+    pub fn template_field_name(&self, index: usize, field: usize) -> Option<&'a [u8]> {
+        let r = self.template(index)?;
+        if field >= r.field_count as usize {
+            return None;
+        }
+        self.name_bytes(r.field_names_first + field as u32)
+    }
+
+    /// The raw layout record at `index`.
+    #[inline]
+    pub fn layout(&self, index: usize) -> Option<EnumLayoutRecord> {
+        self.layouts.get_as::<EnumLayoutRecord>(index)
+    }
+
+    /// Variant `variant` of layout `index`: its name bytes and discriminant.
+    #[inline]
+    pub fn layout_variant(&self, index: usize, variant: usize) -> Option<(&'a [u8], i64)> {
+        let r = self.layout(index)?;
+        if variant >= r.variants_count as usize {
+            return None;
+        }
+        let v = self
+            .variants
+            .get_as::<EnumVariantRecord>(r.variants_first as usize + variant)?;
+        Some((self.name_bytes(v.name)?, v.disc))
+    }
+}
+
+/// Decodes struct templates into owned values.
+///
+/// # Errors
+///
+/// [`SchemaError`] for any malformed artifact.
+pub fn decode_struct_templates(bytes: &[u8]) -> Result<Vec<StructTemplate>, SchemaError> {
+    let t = LayoutTable::parse(bytes)?;
+    let name = |b: Option<&[u8]>| -> Result<String, SchemaError> {
+        core::str::from_utf8(b.ok_or(SchemaError::BadName)?)
+            .map(String::from)
+            .map_err(|_| SchemaError::BadName)
+    };
+
+    let mut out = Vec::with_capacity(t.template_count());
+    for i in 0..t.template_count() {
+        let r = t.template(i).ok_or(SchemaError::BadIndex)?;
+        let mut field_names = Vec::with_capacity(r.field_count as usize);
+        for f in 0..r.field_count as usize {
+            field_names.push(name(t.template_field_name(i, f))?);
+        }
+        out.push(StructTemplate {
+            type_name: name(t.name_bytes(r.type_name))?,
+            field_names,
+        });
+    }
+    Ok(out)
+}
+
+/// Decodes enum layouts into owned values.
+///
+/// # Errors
+///
+/// [`SchemaError`] for any malformed artifact.
+pub fn decode_enum_layouts(bytes: &[u8]) -> Result<Vec<EnumLayout>, SchemaError> {
+    use crate::bytecode::EnumVariantDisc;
+
+    let t = LayoutTable::parse(bytes)?;
+    let name = |b: Option<&[u8]>| -> Result<String, SchemaError> {
+        core::str::from_utf8(b.ok_or(SchemaError::BadName)?)
+            .map(String::from)
+            .map_err(|_| SchemaError::BadName)
+    };
+
+    let mut out = Vec::with_capacity(t.layout_count());
+    for i in 0..t.layout_count() {
+        let r = t.layout(i).ok_or(SchemaError::BadIndex)?;
+        let mut variants = Vec::with_capacity(r.variants_count as usize);
+        for v in 0..r.variants_count as usize {
+            let (nb, disc) = t.layout_variant(i, v).ok_or(SchemaError::BadIndex)?;
+            variants.push(EnumVariantDisc {
+                name: name(Some(nb))?,
+                disc,
+            });
+        }
+        out.push(EnumLayout {
+            type_name: name(t.name_bytes(r.type_name))?,
+            variants,
+            min_payload: r.min_payload,
+        });
+    }
+    Ok(out)
+}
+
+/// Encodes struct templates and enum layouts into one artifact.
+///
+/// # Errors
+///
+/// Propagates a [`WireError`] from the container builder.
+pub fn encode_layouts(
+    templates: &[StructTemplate],
+    layouts: &[EnumLayout],
+) -> Result<Vec<u8>, WireError> {
+    let mut b = SchemaBuilder::new();
+    b.add_struct_templates(templates)?;
+    b.add_enum_layouts(layouts)?;
+    b.finish()
 }

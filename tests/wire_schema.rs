@@ -915,3 +915,242 @@ fn signature_corruption_never_panics() {
         let _ = decode_signatures(&m);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Struct templates, enum layouts, and the shared name interner.
+// ---------------------------------------------------------------------------
+
+use keleusma::bytecode::{EnumLayout, EnumVariantDisc, StructTemplate};
+use keleusma::wire_schema::{
+    LayoutTable, SchemaBuilder, decode_enum_layouts, decode_struct_templates, encode_layouts,
+};
+
+fn tmpl(type_name: &str, fields: &[&str]) -> StructTemplate {
+    StructTemplate {
+        type_name: type_name.into(),
+        field_names: fields.iter().map(|s| (*s).into()).collect(),
+    }
+}
+
+fn layout(type_name: &str, variants: &[(&str, i64)], min_payload: u32) -> EnumLayout {
+    EnumLayout {
+        type_name: type_name.into(),
+        variants: variants
+            .iter()
+            .map(|(n, d)| EnumVariantDisc {
+                name: (*n).into(),
+                disc: *d,
+            })
+            .collect(),
+        min_payload,
+    }
+}
+
+#[test]
+fn struct_templates_round_trip() {
+    let want = vec![
+        tmpl("Point", &["x", "y"]),
+        tmpl("Empty", &[]),
+        // Same field names as the first, which must NOT be shared into it --
+        // each template's run has to stay contiguous.
+        tmpl("Other", &["x", "y", "z"]),
+    ];
+    let bytes = encode_layouts(&want, &[]).unwrap();
+    let back = decode_struct_templates(&bytes).unwrap();
+
+    assert_eq!(back.len(), want.len());
+    for (g, w) in back.iter().zip(&want) {
+        assert_eq!(g.type_name, w.type_name);
+        assert_eq!(g.field_names, w.field_names);
+    }
+}
+
+#[test]
+fn enum_layouts_round_trip_including_negative_discriminants() {
+    let want = vec![
+        layout("Colour", &[("Red", 0), ("Green", 1), ("Blue", 2)], 0),
+        layout("Signed", &[("Neg", -9_000_000_000), ("Max", i64::MAX)], 48),
+        layout("Nullary", &[], 0),
+    ];
+    let bytes = encode_layouts(&[], &want).unwrap();
+    let back = decode_enum_layouts(&bytes).unwrap();
+
+    assert_eq!(back.len(), want.len());
+    for (g, w) in back.iter().zip(&want) {
+        assert_eq!(g.type_name, w.type_name);
+        assert_eq!(g.min_payload, w.min_payload);
+        assert_eq!(g.variants.len(), w.variants.len());
+        for (gv, wv) in g.variants.iter().zip(&w.variants) {
+            assert_eq!(gv.name, wv.name);
+            assert_eq!(gv.disc, wv.disc, "discriminant must survive");
+        }
+    }
+}
+
+#[test]
+fn one_artifact_carries_every_region_and_shares_one_name_pool() {
+    // The architectural point. Constants, templates and enum layouts all
+    // reference names; the pool and name table are single regions and the
+    // container rejects duplicate kinds, so the interner has to be shared. This
+    // builds all of them into ONE artifact and reads each back.
+    let mut b = SchemaBuilder::new();
+    b.add_constants(&[ConstValue::Struct {
+        type_name: "Shared".into(),
+        fields: vec![("a".into(), ConstValue::Int(1))],
+    }])
+    .unwrap();
+    b.add_signatures(&[sig(vec![WireShape::Top], WireShape::Top, WireShape::Top)])
+        .unwrap();
+    b.add_struct_templates(&[tmpl("Shared", &["a"])]).unwrap();
+    b.add_enum_layouts(&[layout("E", &[("V", 1)], 8)]).unwrap();
+    let bytes = b.finish().unwrap();
+
+    // Every reader finds what it needs in the same artifact.
+    let ct = ConstTable::parse(&bytes).unwrap();
+    assert_eq!(ct.tag(0), Some(tag::STRUCT));
+    let st = SignatureTable::parse(&bytes).unwrap();
+    assert_eq!(st.len(), 1);
+    let lt = LayoutTable::parse(&bytes).unwrap();
+    assert_eq!(lt.template_count(), 1);
+    assert_eq!(lt.layout_count(), 1);
+
+    assert_eq!(
+        decode_struct_templates(&bytes).unwrap()[0].type_name,
+        "Shared"
+    );
+    assert_eq!(decode_enum_layouts(&bytes).unwrap()[0].type_name, "E");
+
+    // "Shared" is mentioned by a constant AND a template. It must be interned
+    // once, so both point at the same name index.
+    let const_type = ct.struct_aux(0).unwrap().type_name;
+    let tmpl_type = lt.template(0).unwrap().type_name;
+    assert_eq!(
+        const_type, tmpl_type,
+        "a type name used twice must be stored once and comparable by index"
+    );
+    assert_eq!(lt.name_bytes(tmpl_type), Some(&b"Shared"[..]));
+}
+
+#[test]
+fn field_and_variant_runs_are_contiguous() {
+    let bytes = encode_layouts(
+        &[tmpl("A", &["p", "q"]), tmpl("B", &["p"])],
+        &[
+            layout("E", &[("X", 1), ("Y", 2)], 0),
+            layout("F", &[("Z", 3)], 0),
+        ],
+    )
+    .unwrap();
+    let t = LayoutTable::parse(&bytes).unwrap();
+
+    assert_eq!(t.template_field_name(0, 0), Some(&b"p"[..]));
+    assert_eq!(t.template_field_name(0, 1), Some(&b"q"[..]));
+    assert_eq!(t.template_field_name(0, 2), None, "past the end");
+    assert_eq!(t.template_field_name(1, 0), Some(&b"p"[..]));
+
+    assert_eq!(t.layout_variant(0, 0), Some((&b"X"[..], 1)));
+    assert_eq!(t.layout_variant(0, 1), Some((&b"Y"[..], 2)));
+    assert_eq!(t.layout_variant(0, 2), None, "past the end");
+    assert_eq!(t.layout_variant(1, 0), Some((&b"Z"[..], 3)));
+    assert_eq!(t.layout_variant(9, 0), None, "no such layout");
+}
+
+#[test]
+fn layout_names_alias_the_artifact() {
+    // Same load-bearing property as the constant table's strings.
+    let bytes = encode_layouts(&[tmpl("Aliased", &["f"])], &[]).unwrap();
+    let t = LayoutTable::parse(&bytes).unwrap();
+    let n = t.template_field_name(0, 0).unwrap();
+
+    let base = bytes.as_ptr() as usize;
+    let at = n.as_ptr() as usize;
+    assert!(
+        at >= base && at + n.len() <= base + bytes.len(),
+        "name bytes must alias the artifact"
+    );
+
+    let copy = b"f".to_vec();
+    let copy_at = copy.as_ptr() as usize;
+    assert!(
+        !(copy_at >= base && copy_at + copy.len() <= base + bytes.len()),
+        "predicate must reject a copy, or the assertion is vacuous"
+    );
+}
+
+#[test]
+fn an_out_of_range_field_run_is_rejected() {
+    let mut bytes = encode_layouts(&[tmpl("A", &["p"])], &[]).unwrap();
+    let base = {
+        let view = WireView::parse(&bytes).unwrap();
+        view.find_region(keleusma::wire_schema::kind::STRUCT_TEMPLATES)
+            .unwrap()
+            .byte_offset()
+            .unwrap()
+    };
+    let at = base + keleusma::wire_schema::StructTemplateRecord::OFFSET_FIELD_COUNT;
+    bytes[at..at + 4].copy_from_slice(&999u32.to_le_bytes());
+    assert_eq!(
+        LayoutTable::parse(&bytes).unwrap_err(),
+        SchemaError::BadIndex
+    );
+}
+
+#[test]
+fn an_out_of_range_variant_run_is_rejected() {
+    let mut bytes = encode_layouts(&[], &[layout("E", &[("V", 1)], 0)]).unwrap();
+    let base = {
+        let view = WireView::parse(&bytes).unwrap();
+        view.find_region(keleusma::wire_schema::kind::ENUM_LAYOUTS)
+            .unwrap()
+            .byte_offset()
+            .unwrap()
+    };
+    let at = base + keleusma::wire_schema::EnumLayoutRecord::OFFSET_VARIANTS_COUNT;
+    bytes[at..at + 4].copy_from_slice(&999u32.to_le_bytes());
+    assert_eq!(
+        LayoutTable::parse(&bytes).unwrap_err(),
+        SchemaError::BadIndex
+    );
+}
+
+#[test]
+fn a_truncated_layout_artifact_is_rejected_at_every_length() {
+    let bytes = encode_layouts(&[tmpl("A", &["p"])], &[layout("E", &[("V", 1)], 0)]).unwrap();
+    for cut in 0..bytes.len() {
+        assert!(
+            LayoutTable::parse(&bytes[..cut]).is_err(),
+            "truncation to {cut} must be rejected"
+        );
+    }
+    assert!(LayoutTable::parse(&bytes).is_ok());
+}
+
+#[test]
+fn layout_corruption_never_panics() {
+    let bytes = encode_layouts(
+        &[tmpl("A", &["p", "q"])],
+        &[layout("E", &[("X", -1), ("Y", 2)], 16)],
+    )
+    .unwrap();
+    for pos in 0..bytes.len() {
+        let mut m = bytes.clone();
+        m[pos] ^= 0x80;
+        if let Ok(t) = LayoutTable::parse(&m) {
+            for i in 0..t.template_count().saturating_add(2) {
+                let _ = t.template(i);
+                for f in 0..4 {
+                    let _ = t.template_field_name(i, f);
+                }
+            }
+            for i in 0..t.layout_count().saturating_add(2) {
+                let _ = t.layout(i);
+                for v in 0..4 {
+                    let _ = t.layout_variant(i, v);
+                }
+            }
+            let _ = t.name_bytes(u32::MAX);
+        }
+        let _ = decode_struct_templates(&m);
+        let _ = decode_enum_layouts(&m);
+    }
+}

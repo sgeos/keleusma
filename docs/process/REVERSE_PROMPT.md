@@ -320,11 +320,31 @@ Two things fixed before they could matter:
   empty shape table a signature referencing shape 0 would pass and leave the accessors returning
   `None` rather than being total. Plain bounds now.
 
+## Stage 2b increment 2 DONE: struct templates, enum layouts, and a SHARED name interner
+
+`StructTemplate` and `EnumLayout` landed together. **44 tests.**
+
+**The probe forced an architectural change.** `add_constant_regions` already claimed `STRING_POOL` and
+`NAMES`, and the container **rejects duplicate region kinds** — so templates and enum layouts, which
+also reference names, could not declare them again. Composability at the *builder* level was not
+enough: the shared state is the **interner**.
+
+`SchemaBuilder` now owns it. Each `add_*` contributes records and interns names; `finish` emits the
+pool and name table once, after every contributor has run. A type name mentioned by both a constant
+and a template is stored once **and comparable by index**, which a per-concern encoder could never
+have achieved. There is a test building constants, signatures, templates and layouts into ONE
+artifact and reading each back, asserting the shared name resolves to the same index from both sides.
+
+Enum variants get their own table rather than riding the name run the way struct fields do, because a
+bare run of names cannot carry the discriminants.
+
 ## Next step
 
-Increment 2: `StructTemplate` (a type name plus a contiguous run of field names — reuses the `NAMES`
-machinery and the `field_names_first + i` addressing already built and tested). Then `EnumLayout`,
-`DataLayout`, and the scalar header plus debug pool. Then step 5. After those, step 5: routing the runtime through
+Increment 3: `DataLayout` — the largest remaining, with three parallel nested vectors
+(`slots`, `shared_layout`, and the persistent-placement list). Then the scalar header block and
+`debug_pool_bytes` (the header is genuinely flat; the debug pool stays opaque bytes into a region so
+stripping remains a single assignment). Then **step 5**, routing the runtime through these accessors,
+which is where P10 is preserved or lost in practice. After those, step 5: routing the runtime through
 `ConstTable`, which is where P10 is preserved or lost in practice rather than in principle.
 
 **Method note that earned its keep twice today.** Run `cargo clippy --all-features`, the `-D warnings`
