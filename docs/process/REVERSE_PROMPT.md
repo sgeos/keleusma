@@ -338,10 +338,31 @@ artifact and reading each back, asserting the shared name resolves to the same i
 Enum variants get their own table rather than riding the name run the way struct fields do, because a
 bare run of names cannot carry the discriminants.
 
+## Stage 2b increment 3 DONE: the constant table is multi-contributor
+
+**The probe found a fourth vector and it changed the plan.** `DataLayout` was recorded as having
+three nested vectors; it has **four**, and the fourth is `private_init: Vec<ConstValue>` — a forest of
+constant *trees*, not scalars.
+
+That matters beyond `DataLayout`. `encode_constants` pinned roots at `0..n`, which models **one**
+chunk's pool — but a module has one pool **per chunk**, so the constant table had to become
+multi-contributor regardless. Splitting that out first rather than bundling it into `DataLayout`.
+
+`add_constant_pool` returns a `(first, count)` range; flattening is **deferred to `finish`** so every
+pool's roots are concatenated and flattened once. Roots occupy the table's prefix in add order and
+children are numbered after **all** of them, which keeps the forward-ordering invariant intact while
+letting each contributor address its run as `first + i`. There is a test asserting the invariant
+survives across pools — if children were numbered per-pool, a later pool's root would collide with an
+earlier pool's child and the reverse sweep would read an uncomputed value.
+
+Also pinned: an artifact with no constants emits **no** constant regions, so `ConstTable::parse`
+reports absent rather than empty. 49 tests.
+
 ## Next step
 
-Increment 3: `DataLayout` — the largest remaining, with three parallel nested vectors
-(`slots`, `shared_layout`, and the persistent-placement list). Then the scalar header block and
+Increment 4: `DataLayout` proper, now that its `private_init` forest has somewhere to go — four
+tables (`slots`, `shared_layout`, `private_composite_layout`, and a constant range for
+`private_init`). Then the scalar header block and
 `debug_pool_bytes` (the header is genuinely flat; the debug pool stays opaque bytes into a region so
 stripping remains a single assignment). Then **step 5**, routing the runtime through these accessors,
 which is where P10 is preserved or lost in practice. After those, step 5: routing the runtime through

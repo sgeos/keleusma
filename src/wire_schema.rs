@@ -445,7 +445,19 @@ pub struct EnumLayoutRecord {
 pub struct SchemaBuilder {
     b: WireBuilder,
     names: Names,
+    /// Every contributor's constant roots, concatenated. Flattening is deferred
+    /// to [`SchemaBuilder::finish`] so all pools share one table.
+    const_roots: Vec<ConstValue>,
+    /// Set once any contributor asks for a constant pool, so an artifact with no
+    /// constants emits no constant regions rather than three empty ones.
+    wants_constants: bool,
 }
+
+/// A contributor's slice of the shared constant table: `(first, count)`.
+///
+/// Roots of every pool occupy the table's prefix in the order they were added,
+/// so a pool's constants are a contiguous run indexable as `first + i`.
+pub type ConstRange = (u32, u32);
 
 impl SchemaBuilder {
     /// An empty builder.
@@ -453,27 +465,38 @@ impl SchemaBuilder {
         Self::default()
     }
 
-    /// Adds the constant table and its side tables.
+    /// Adds one constant pool and returns its range in the shared table.
+    ///
+    /// # Why pools share one table
+    ///
+    /// A module has one constant pool **per chunk**, and `private_init` in the
+    /// data layout is a further forest of constant trees. Giving each its own
+    /// table would mean a region kind per contributor, which does not scale to a
+    /// per-chunk count, and would store a value used by two chunks twice.
+    ///
+    /// So flattening is **deferred to [`Self::finish`]**: every pool's roots are
+    /// concatenated first, then flattened once. Roots occupy the table's prefix
+    /// in the order they were added and children are numbered after all of them,
+    /// which keeps the forward-ordering invariant intact — a child still lands
+    /// strictly after its parent — while letting each contributor address its own
+    /// run as `first + i`.
+    pub fn add_constant_pool(&mut self, roots: &[ConstValue]) -> ConstRange {
+        let first = self.const_roots.len() as u32;
+        self.const_roots.extend_from_slice(roots);
+        self.wants_constants = true;
+        (first, roots.len() as u32)
+    }
+
+    /// Adds a single constant pool, discarding its range.
+    ///
+    /// Convenience for the common single-pool case and for tests.
     ///
     /// # Errors
     ///
-    /// Propagates a [`WireError`] from the container builder.
+    /// Never fails; the `Result` is kept for symmetry with the other `add_*`
+    /// methods and so a future capacity check is not a breaking change.
     pub fn add_constants(&mut self, roots: &[ConstValue]) -> Result<(), WireError> {
-        let t = flatten(roots, &mut self.names);
-
-        let consts = self.b.region(kind::CONSTS, 0)?;
-        let saux = self.b.region(kind::STRUCT_AUX, 0)?;
-        let eaux = self.b.region(kind::ENUM_AUX, 0)?;
-
-        for r in &t.consts {
-            self.b.push_record(consts, r);
-        }
-        for r in &t.struct_aux {
-            self.b.push_record(saux, r);
-        }
-        for r in &t.enum_aux {
-            self.b.push_record(eaux, r);
-        }
+        self.add_constant_pool(roots);
         Ok(())
     }
 
@@ -597,6 +620,25 @@ impl SchemaBuilder {
     ///
     /// Propagates a [`WireError`] from the container builder.
     pub fn finish(mut self) -> Result<Vec<u8>, WireError> {
+        // Constants are flattened here, once, over every contributor's roots
+        // together. Doing it per contributor would give each its own numbering
+        // and there is only one table.
+        if self.wants_constants {
+            let t = flatten(&self.const_roots, &mut self.names);
+            let consts = self.b.region(kind::CONSTS, 0)?;
+            let saux = self.b.region(kind::STRUCT_AUX, 0)?;
+            let eaux = self.b.region(kind::ENUM_AUX, 0)?;
+            for r in &t.consts {
+                self.b.push_record(consts, r);
+            }
+            for r in &t.struct_aux {
+                self.b.push_record(saux, r);
+            }
+            for r in &t.enum_aux {
+                self.b.push_record(eaux, r);
+            }
+        }
+
         let pool = self.b.region(kind::STRING_POOL, 0)?;
         let names = self.b.region(kind::NAMES, 0)?;
         self.b.push(pool, &self.names.pool);
@@ -821,13 +863,29 @@ impl<'a> ConstTable<'a> {
 ///
 /// [`SchemaError`] for any malformed artifact. This function never panics.
 pub fn decode_constants(bytes: &[u8], count: usize) -> Result<Vec<ConstValue>, SchemaError> {
+    decode_constant_pool(bytes, (0, count as u32))
+}
+
+/// Decodes one contributor's pool, given the range [`SchemaBuilder::add_constant_pool`]
+/// returned.
+///
+/// # Errors
+///
+/// [`SchemaError`] for any malformed artifact, or if the range lies outside the
+/// table.
+pub fn decode_constant_pool(
+    bytes: &[u8],
+    range: ConstRange,
+) -> Result<Vec<ConstValue>, SchemaError> {
     // One parse-and-validate path, shared with the borrowed accessor. Keeping a
     // second copy here would let the owned and borrowed readers drift apart, and
     // a drift in the ordering check is exactly the silent-wrong-answer class this
     // format is shaped to avoid.
     let t = ConstTable::parse(bytes)?;
 
-    if count > t.len() {
+    let (first, count) = (range.0 as usize, range.1 as usize);
+    let end = first.checked_add(count).ok_or(SchemaError::BadIndex)?;
+    if end > t.len() {
         return Err(SchemaError::BadIndex);
     }
 
@@ -895,7 +953,7 @@ pub fn decode_constants(bytes: &[u8], count: usize) -> Result<Vec<ConstValue>, S
     }
 
     let mut roots = Vec::with_capacity(count);
-    for slot in built.iter_mut().take(count) {
+    for slot in built.iter_mut().take(end).skip(first) {
         roots.push(slot.take().ok_or(SchemaError::BadIndex)?);
     }
     Ok(roots)

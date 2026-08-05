@@ -17,6 +17,32 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-04 (session 37)
 
+**STAGE 2b INCREMENT 3 (2026-08-05): a miscounted vector exposed a limitation in the constant table itself.**
+The plan said `DataLayout` had three nested vectors. It has four, and the fourth is
+`private_init: Vec<ConstValue>` -- a forest of constant TREES rather than scalars. That is the fourth
+consecutive probe to change something the plan asserted, and this one reached further than the
+increment it was scouting.
+
+WHAT IT EXPOSED. `encode_constants` pins roots at `0..n`. That silently models a module with ONE
+constant pool. A real module has one pool PER CHUNK, so the table had to become multi-contributor no
+matter what `DataLayout` needed; `private_init` merely made it visible one increment earlier than the
+chunk table would have. Splitting it out as its own increment kept `DataLayout` from carrying an
+unrelated restructure.
+
+THE NUMBERING IS THE WHOLE DESIGN. Flattening is deferred to `finish` so every pool's roots are
+concatenated and flattened ONCE. Roots occupy the table's prefix in add order; children are numbered
+after ALL roots, not after their own pool's. The distinction is not cosmetic: numbering children
+per-pool would let a later pool's root take an index an earlier pool's child already claimed, and
+since the decoder walks bottom-up by reverse sweep it would read an entry it had not computed --
+a wrong answer, not a fault, which is the failure mode this format keeps being shaped to avoid. There
+is a test asserting the invariant holds across three pools rather than trusting the construction.
+
+A SMALL DISTINCTION WORTH KEEPING. An artifact with no constants now emits no constant regions at
+all, so `ConstTable::parse` reports the regions ABSENT rather than reporting an empty table. Absent
+and empty mean different things to a reader, and collapsing them would have made a layout-only
+artifact indistinguishable from one whose constants failed to encode.
+
+
 **STAGE 2b INCREMENT 2 (2026-08-05): the probe forced an architecture change, not just a scoping one.**
 Struct templates and enum layouts both reference names, and the probe surfaced that the constant
 encoder had already claimed `STRING_POOL` and `NAMES` — and the container rejects a duplicate region
