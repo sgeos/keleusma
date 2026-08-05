@@ -1154,3 +1154,112 @@ fn layout_corruption_never_panics() {
         let _ = decode_enum_layouts(&m);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Multi-contributor constant pools.
+// ---------------------------------------------------------------------------
+
+use keleusma::wire_schema::decode_constant_pool;
+
+#[test]
+fn several_pools_share_one_table_with_disjoint_ranges() {
+    // A module has one constant pool per chunk, so the table has to serve many
+    // contributors. Each gets a contiguous run it can address as first + i.
+    let pool_a = [ConstValue::Int(10), ConstValue::StaticStr("a".into())];
+    let pool_b = [ConstValue::Tuple(vec![
+        ConstValue::Int(20),
+        ConstValue::Int(21),
+    ])];
+    let pool_c = [ConstValue::Byte(3)];
+
+    let mut b = SchemaBuilder::new();
+    let ra = b.add_constant_pool(&pool_a);
+    let rb = b.add_constant_pool(&pool_b);
+    let rc = b.add_constant_pool(&pool_c);
+    let bytes = b.finish().unwrap();
+
+    assert_eq!(ra, (0, 2));
+    assert_eq!(rb, (2, 1));
+    assert_eq!(rc, (3, 1));
+
+    let back_a = decode_constant_pool(&bytes, ra).unwrap();
+    let back_b = decode_constant_pool(&bytes, rb).unwrap();
+    let back_c = decode_constant_pool(&bytes, rc).unwrap();
+
+    assert_eq!(back_a.len(), 2);
+    assert!(deep_eq(&back_a[0], &pool_a[0]));
+    assert!(deep_eq(&back_a[1], &pool_a[1]));
+    assert!(deep_eq(&back_b[0], &pool_b[0]));
+    assert!(deep_eq(&back_c[0], &pool_c[0]));
+}
+
+#[test]
+fn the_forward_ordering_invariant_survives_multiple_pools() {
+    // Children are numbered after ALL roots, not after their own pool's roots.
+    // If that were wrong, a later pool's root could occupy an index a child of
+    // an earlier pool already claimed, and the reverse sweep would read a value
+    // that had not been computed.
+    let mut b = SchemaBuilder::new();
+    b.add_constant_pool(&[ConstValue::Tuple(vec![
+        ConstValue::Int(1),
+        ConstValue::Int(2),
+    ])]);
+    b.add_constant_pool(&[ConstValue::Array(vec![ConstValue::Int(3)])]);
+    b.add_constant_pool(&[ConstValue::Int(4)]);
+    let bytes = b.finish().unwrap();
+
+    let t = ConstTable::parse(&bytes).unwrap();
+    for i in 0..t.len() {
+        if let Some((first, n)) = t.range(i) {
+            assert!(
+                first as usize > i,
+                "record {i} range starts at {first}, not forward"
+            );
+            assert!((first + n) as usize <= t.len(), "record {i} range overruns");
+        }
+    }
+}
+
+#[test]
+fn a_pool_range_outside_the_table_is_rejected() {
+    let mut b = SchemaBuilder::new();
+    let r = b.add_constant_pool(&[ConstValue::Int(1)]);
+    let bytes = b.finish().unwrap();
+
+    assert!(decode_constant_pool(&bytes, r).is_ok());
+    assert_eq!(
+        decode_constant_pool(&bytes, (0, 99)).unwrap_err(),
+        SchemaError::BadIndex
+    );
+    assert_eq!(
+        decode_constant_pool(&bytes, (99, 1)).unwrap_err(),
+        SchemaError::BadIndex
+    );
+    // An empty range anywhere in bounds is legal and yields nothing.
+    assert_eq!(decode_constant_pool(&bytes, (0, 0)).unwrap().len(), 0);
+}
+
+#[test]
+fn an_artifact_with_no_constants_emits_no_constant_regions() {
+    // A layout-only artifact should not carry three empty constant regions, and
+    // ConstTable should say so rather than reporting an empty table.
+    let bytes = encode_layouts(&[tmpl("A", &["p"])], &[]).unwrap();
+    assert!(LayoutTable::parse(&bytes).is_ok());
+    assert!(
+        ConstTable::parse(&bytes).is_err(),
+        "absent is not the same as empty"
+    );
+}
+
+#[test]
+fn an_empty_pool_still_yields_a_usable_range() {
+    let mut b = SchemaBuilder::new();
+    let empty = b.add_constant_pool(&[]);
+    let full = b.add_constant_pool(&[ConstValue::Int(7)]);
+    let bytes = b.finish().unwrap();
+
+    assert_eq!(empty, (0, 0));
+    assert_eq!(full, (0, 1));
+    assert_eq!(decode_constant_pool(&bytes, empty).unwrap().len(), 0);
+    assert_eq!(decode_constant_pool(&bytes, full).unwrap().len(), 1);
+}
