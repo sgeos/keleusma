@@ -44,7 +44,7 @@ use alloc::vec::Vec;
 
 use keleusma_wire::{Pool, RecordTable, WireBuilder, WireError, WireRecord, WireView};
 
-use crate::bytecode::ConstValue;
+use crate::bytecode::{ChunkSignature, ConstValue, WireShape};
 
 /// Region kinds. Assigned explicitly rather than by declaration order, so
 /// reordering this list cannot silently change an artifact's meaning.
@@ -59,6 +59,20 @@ pub mod kind {
     pub const STRUCT_AUX: u16 = 0x0013;
     /// Per-enum-constant type, variant, and discriminant.
     pub const ENUM_AUX: u16 = 0x0014;
+    /// Flat operand shapes, referenced by index.
+    pub const SHAPES: u16 = 0x0015;
+    /// Per-chunk signature descriptors.
+    pub const SIGNATURES: u16 = 0x0016;
+}
+
+/// Shape tags. Numbered from one so an all-zero record is invalid rather than
+/// decoding as a valid `Top` — a zeroed region should not read as a well-formed
+/// table of "shape unknown" entries.
+pub mod shape_tag {
+    #![allow(missing_docs)]
+    pub const TOP: u16 = 1;
+    pub const SCALAR: u16 = 2;
+    pub const FLAT: u16 = 3;
 }
 
 /// Constant tags. Explicit, and never reordered: the numbering is the wire
@@ -363,9 +377,24 @@ impl Names {
 ///
 /// Propagates a [`WireError`] from the container builder.
 pub fn encode_constants(roots: &[ConstValue]) -> Result<Vec<u8>, WireError> {
+    let mut b = WireBuilder::new();
+    add_constant_regions(&mut b, roots)?;
+    b.finish()
+}
+
+/// Adds the constant-table regions to an existing builder.
+///
+/// Separate from [`encode_constants`] so the aux body can eventually be one
+/// artifact carrying every region, rather than several artifacts stitched
+/// together later. Building the composability in now costs nothing; retrofitting
+/// it would mean rewriting each encoder.
+///
+/// # Errors
+///
+/// Propagates a [`WireError`] from the builder.
+pub fn add_constant_regions(b: &mut WireBuilder, roots: &[ConstValue]) -> Result<(), WireError> {
     let t = flatten(roots);
 
-    let mut b = WireBuilder::new();
     let pool = b.region(kind::STRING_POOL, 0)?;
     let names = b.region(kind::NAMES, 0)?;
     let consts = b.region(kind::CONSTS, 0)?;
@@ -386,7 +415,7 @@ pub fn encode_constants(roots: &[ConstValue]) -> Result<Vec<u8>, WireError> {
         b.push_record(eaux, r);
     }
 
-    b.finish()
+    Ok(())
 }
 
 /// Why a constant table could not be read.
@@ -681,4 +710,280 @@ pub fn decode_constants(bytes: &[u8], count: usize) -> Result<Vec<ConstValue>, S
         roots.push(slot.take().ok_or(SchemaError::BadIndex)?);
     }
     Ok(roots)
+}
+
+// ---------------------------------------------------------------------------
+// Shapes and signatures (stage 2b, increment 1)
+// ---------------------------------------------------------------------------
+
+/// One flat operand shape. A single word.
+///
+/// [`WireShape`] is a tagged union whose widest variant carries a `u8` and a
+/// `u32`, so the whole thing fits one word with room to spare — no side table
+/// needed, unlike the struct and enum constants.
+#[derive(WireRecord, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShapeRecord {
+    /// See [`shape_tag`].
+    pub tag: u16,
+    /// `ScalarKind::to_tag` or `CompositeKind::to_tag` code. Zero for `Top`.
+    pub kind: u8,
+    /// Reserved; keeps `size` at a fixed offset.
+    pub reserved: u8,
+    /// Flat body byte length for `Flat`. Zero otherwise.
+    pub size: u32,
+}
+
+/// One chunk's signature: a range of parameter shapes plus two single shapes.
+#[derive(WireRecord, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SignatureRecord {
+    /// Index of this chunk's first parameter shape.
+    pub params_first: u32,
+    /// Number of parameter shapes.
+    pub params_count: u32,
+    /// Shape index of the return value.
+    pub ret: u32,
+    /// Shape index of what a `Yield`/resume pushes.
+    pub resume: u32,
+}
+
+impl ShapeRecord {
+    fn of(s: &WireShape) -> Self {
+        match s {
+            WireShape::Top => Self {
+                tag: shape_tag::TOP,
+                kind: 0,
+                reserved: 0,
+                size: 0,
+            },
+            WireShape::Scalar { kind } => Self {
+                tag: shape_tag::SCALAR,
+                kind: *kind,
+                reserved: 0,
+                size: 0,
+            },
+            WireShape::Flat { kind, size } => Self {
+                tag: shape_tag::FLAT,
+                kind: *kind,
+                reserved: 0,
+                size: *size,
+            },
+        }
+    }
+
+    /// Decodes back to a [`WireShape`], or `None` for an unrecognised tag.
+    pub fn to_shape(self) -> Option<WireShape> {
+        match self.tag {
+            shape_tag::TOP => Some(WireShape::Top),
+            shape_tag::SCALAR => Some(WireShape::Scalar { kind: self.kind }),
+            shape_tag::FLAT => Some(WireShape::Flat {
+                kind: self.kind,
+                size: self.size,
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// Accumulates the shape table.
+///
+/// Two admission modes, mirroring the names table and for the same reason: a
+/// parameter run must be **contiguous** so `params_first + i` addresses it, while
+/// a single `ret` or `resume` reference may be **shared**. `Top` dominates real
+/// modules — every non-Stream chunk resumes with it — so sharing the singles is
+/// worth having.
+#[derive(Default)]
+struct Shapes {
+    recs: Vec<ShapeRecord>,
+}
+
+impl Shapes {
+    /// Appends without sharing, keeping a run contiguous.
+    fn append(&mut self, s: &WireShape) -> u32 {
+        self.recs.push(ShapeRecord::of(s));
+        (self.recs.len() - 1) as u32
+    }
+
+    /// Reuses an identical entry if one exists.
+    fn intern(&mut self, s: &WireShape) -> u32 {
+        let want = ShapeRecord::of(s);
+        for (i, r) in self.recs.iter().enumerate() {
+            if *r == want {
+                return i as u32;
+            }
+        }
+        self.append(s)
+    }
+}
+
+/// Encodes per-chunk signatures into an artifact.
+///
+/// # Errors
+///
+/// Propagates a [`WireError`] from the builder.
+pub fn encode_signatures(sigs: &[ChunkSignature]) -> Result<Vec<u8>, WireError> {
+    let mut b = WireBuilder::new();
+    add_signature_regions(&mut b, sigs)?;
+    b.finish()
+}
+
+/// Adds the shape and signature regions to an existing builder.
+///
+/// # Errors
+///
+/// Propagates a [`WireError`] from the builder.
+pub fn add_signature_regions(
+    b: &mut WireBuilder,
+    sigs: &[ChunkSignature],
+) -> Result<(), WireError> {
+    let mut shapes = Shapes::default();
+    let mut records = Vec::with_capacity(sigs.len());
+
+    for sig in sigs {
+        // Parameters first and unshared, so the run stays contiguous.
+        let params_first = shapes.recs.len() as u32;
+        for p in &sig.params {
+            shapes.append(p);
+        }
+        // Singles may share. Interning after the run is safe: shapes reference
+        // nothing, so unlike the constant table there is no ordering invariant.
+        let ret = shapes.intern(&sig.ret);
+        let resume = shapes.intern(&sig.resume);
+
+        records.push(SignatureRecord {
+            params_first,
+            params_count: sig.params.len() as u32,
+            ret,
+            resume,
+        });
+    }
+
+    let shape_region = b.region(kind::SHAPES, 0)?;
+    let sig_region = b.region(kind::SIGNATURES, 0)?;
+    for r in &shapes.recs {
+        b.push_record(shape_region, r);
+    }
+    for r in &records {
+        b.push_record(sig_region, r);
+    }
+    Ok(())
+}
+
+/// A **borrowed, allocation-free** view over an encoded signature table.
+#[derive(Debug, Clone, Copy)]
+pub struct SignatureTable<'a> {
+    shapes: RecordTable<'a>,
+    sigs: RecordTable<'a>,
+}
+
+impl<'a> SignatureTable<'a> {
+    /// Parses and validates a signature artifact.
+    ///
+    /// Every parameter range is checked in bounds here, once, so later accessors
+    /// are total. Note there is **no forward-ordering rule** to enforce: a shape
+    /// references no other shape, so the recursion the constant table had to
+    /// linearise simply does not arise.
+    ///
+    /// # Errors
+    ///
+    /// [`SchemaError`] for any malformed artifact. Never panics.
+    pub fn parse(bytes: &'a [u8]) -> Result<Self, SchemaError> {
+        let view = WireView::parse(bytes)?;
+        let region = |k: u16| view.find_region(k).ok_or(SchemaError::MissingRegion(k));
+
+        let t = Self {
+            shapes: view.typed_records::<ShapeRecord>(&region(kind::SHAPES)?)?,
+            sigs: view.typed_records::<SignatureRecord>(&region(kind::SIGNATURES)?)?,
+        };
+
+        for i in 0..t.len() {
+            let rec = t.record(i).ok_or(SchemaError::BadIndex)?;
+            let end = (rec.params_first as usize)
+                .checked_add(rec.params_count as usize)
+                .ok_or(SchemaError::BadIndex)?;
+            // Plain bounds, no `max(1)` fudge: with an empty shape table a
+            // signature referencing shape 0 is malformed, and letting it through
+            // would leave the accessors returning `None` instead of being total.
+            if end > t.shapes.len()
+                || rec.ret as usize >= t.shapes.len()
+                || rec.resume as usize >= t.shapes.len()
+            {
+                return Err(SchemaError::BadIndex);
+            }
+        }
+        Ok(t)
+    }
+
+    /// Number of chunk signatures.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.sigs.len()
+    }
+
+    /// True when there are no signatures.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The raw signature record for chunk `index`.
+    #[inline]
+    pub fn record(&self, index: usize) -> Option<SignatureRecord> {
+        self.sigs.get_as::<SignatureRecord>(index)
+    }
+
+    /// The shape at `index` in the shape table.
+    #[inline]
+    pub fn shape(&self, index: u32) -> Option<WireShape> {
+        self.shapes
+            .get_as::<ShapeRecord>(index as usize)?
+            .to_shape()
+    }
+
+    /// Parameter `param` of chunk `index`.
+    #[inline]
+    pub fn param_shape(&self, index: usize, param: usize) -> Option<WireShape> {
+        let rec = self.record(index)?;
+        if param >= rec.params_count as usize {
+            return None;
+        }
+        self.shape(rec.params_first + param as u32)
+    }
+
+    /// The return shape of chunk `index`.
+    #[inline]
+    pub fn ret_shape(&self, index: usize) -> Option<WireShape> {
+        self.shape(self.record(index)?.ret)
+    }
+
+    /// The resume shape of chunk `index`.
+    #[inline]
+    pub fn resume_shape(&self, index: usize) -> Option<WireShape> {
+        self.shape(self.record(index)?.resume)
+    }
+}
+
+/// Decodes per-chunk signatures into owned values.
+///
+/// The tooling counterpart to [`SignatureTable`], as [`decode_constants`] is to
+/// [`ConstTable`]. Built on the same parse path so the two cannot drift.
+///
+/// # Errors
+///
+/// [`SchemaError`] for any malformed artifact.
+pub fn decode_signatures(bytes: &[u8]) -> Result<Vec<ChunkSignature>, SchemaError> {
+    let t = SignatureTable::parse(bytes)?;
+    let mut out = Vec::with_capacity(t.len());
+    for i in 0..t.len() {
+        let rec = t.record(i).ok_or(SchemaError::BadIndex)?;
+        let mut params = Vec::with_capacity(rec.params_count as usize);
+        for p in 0..rec.params_count as usize {
+            params.push(t.param_shape(i, p).ok_or(SchemaError::UnknownTag(0))?);
+        }
+        out.push(ChunkSignature {
+            params,
+            ret: t.ret_shape(i).ok_or(SchemaError::UnknownTag(0))?,
+            resume: t.resume_shape(i).ok_or(SchemaError::UnknownTag(0))?,
+        });
+    }
+    Ok(out)
 }

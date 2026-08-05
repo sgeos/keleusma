@@ -17,6 +17,35 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-04 (session 37)
 
+**STAGE 2b INCREMENT 1 (2026-08-05): shapes and signatures, and a rule correctly NOT carried over.**
+`WireShape` and `ChunkSignature` went in together because a shape table with no consumer is dead
+code. The probe confirmed the claim this time rather than falsifying it: the widest variant carries a
+`u8` and a `u32`, so the whole tagged union fits one word and needs no side table, unlike the struct
+and enum constants.
+
+THE INTERESTING PART IS A RULE THAT DOES **NOT** TRANSFER. The constant table's defining constraint is
+that a composite's range must lie strictly forward, because constants reference constants and the
+reverse sweep depends on it. Shapes reference nothing. So there is no ordering invariant to enforce
+here, and importing one by analogy would have added a check with nothing to check plus a validation
+step that could only ever pass. Recording it because the surrounding documents talk about the forward
+rule enough that the next increment might otherwise assume it is universal — it is a property of
+self-referential tables, not of the format.
+
+THE TENSION THAT DID TRANSFER is contiguity versus sharing, which field names already forced once. A
+parameter run must be addressable as `params_first + i`, so parameters are appended unshared; `ret`
+and `resume` are single references and may be interned. `Top` dominates real modules, since every
+non-Stream chunk resumes with it, so sharing the singles is worth having. Two admission modes on one
+table, exactly as the names table ended up.
+
+TWO THINGS FIXED BEFORE THEY COULD MATTER. The encoders are now composable — `add_*_regions` take an
+existing builder and `encode_*` are thin wrappers — because the aux body will eventually be one
+artifact carrying every region, and retrofitting that later would mean rewriting each encoder. And a
+hole in my own bounds check: `ret >= shapes.len().max(1)` meant a signature referencing shape 0
+against an EMPTY shape table would pass validation and then leave the accessors returning `None`
+instead of being total. The `.max(1)` was a reflex to avoid an empty-table edge case and it created
+exactly the class of defect the validation exists to prevent.
+
+
 **STAGE 2b RESCOPED (2026-08-05): the probe caught a false claim I had written myself, one increment earlier.**
 The plan recorded in `REVERSE_PROMPT.md` said the remaining aux-body fields were "flat vectors of
 scalars following the same mechanical pattern, so they are lower-risk than what is now done." Probing
