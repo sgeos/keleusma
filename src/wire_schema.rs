@@ -42,7 +42,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use keleusma_wire::{WireBuilder, WireError, WireRecord, WireView};
+use keleusma_wire::{Pool, RecordTable, WireBuilder, WireError, WireRecord, WireView};
 
 use crate::bytecode::ConstValue;
 
@@ -415,6 +415,185 @@ impl From<WireError> for SchemaError {
     }
 }
 
+/// A **borrowed, allocation-free** view over an encoded constant table.
+///
+/// This is the accessor the runtime wants, as distinct from [`decode_constants`],
+/// which materialises owned values for tooling and tests.
+///
+/// # The property this exists to preserve
+///
+/// A probe of the live runtime (2026-08-04) established what actually needs to be
+/// borrowed, which is narrower than "everything":
+///
+/// - A **non-empty top-level string constant** is loaded by minting a `KString`
+///   directly over the bytecode image's bytes — zero-copy, no per-load
+///   allocation. [`Self::str_bytes`] is the accessor that keeps that possible: it
+///   returns a slice **into the artifact**, so the pointer stays mintable.
+/// - An **empty** string is deliberately *not* aliased by the runtime, so that it
+///   need not rest on a non-null guarantee for a zero-length pointer.
+/// - A **composite's** string leaves are already copied today, materialising as
+///   owned values before the flat packer moves them into the arena. Borrowing
+///   them buys nothing the runtime uses.
+///
+/// So the hard requirement is exactly one accessor returning image-aliasing
+/// bytes; the rest may return values by copy, because scalars are registers and
+/// composites already copy. Stating it this precisely matters — over-constraining
+/// the accessor would have complicated it for no gain, and under-constraining it
+/// would have silently cost the one property that is load-bearing.
+///
+/// Validation happens once in [`Self::parse`], so every accessor afterwards is
+/// total and needs no further checking.
+#[derive(Debug, Clone, Copy)]
+pub struct ConstTable<'a> {
+    pool: Pool<'a>,
+    names: RecordTable<'a>,
+    consts: RecordTable<'a>,
+    struct_aux: RecordTable<'a>,
+    enum_aux: RecordTable<'a>,
+}
+
+impl<'a> ConstTable<'a> {
+    /// Parses and validates an encoded constant table.
+    ///
+    /// The ordering invariant is checked here, once, rather than on each access:
+    /// a composite's range must lie strictly after it. See the module docs for
+    /// why an unchecked violation is a wrong answer rather than a fault.
+    ///
+    /// # Errors
+    ///
+    /// [`SchemaError`] for any malformed artifact. Never panics.
+    pub fn parse(bytes: &'a [u8]) -> Result<Self, SchemaError> {
+        let view = WireView::parse(bytes)?;
+
+        let region = |k: u16| view.find_region(k).ok_or(SchemaError::MissingRegion(k));
+
+        let table = Self {
+            pool: view.pool(&region(kind::STRING_POOL)?)?,
+            names: view.typed_records::<NameRef>(&region(kind::NAMES)?)?,
+            consts: view.typed_records::<ConstRecord>(&region(kind::CONSTS)?)?,
+            struct_aux: view.typed_records::<StructAux>(&region(kind::STRUCT_AUX)?)?,
+            enum_aux: view.typed_records::<EnumAux>(&region(kind::ENUM_AUX)?)?,
+        };
+        table.validate_ordering()?;
+        Ok(table)
+    }
+
+    /// Rejects any composite whose range is not strictly forward or overruns.
+    fn validate_ordering(&self) -> Result<(), SchemaError> {
+        for i in 0..self.len() {
+            let rec = self.record(i).ok_or(SchemaError::BadIndex)?;
+            if rec.is_composite() {
+                let (first, n) = rec.as_range();
+                if !self.consts.range_is_forward(i, first, n) {
+                    return Err(SchemaError::BadRange);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Number of entries, roots and children together.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.consts.len()
+    }
+
+    /// True when the table holds no constants.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The raw record at `index`.
+    #[inline]
+    pub fn record(&self, index: usize) -> Option<ConstRecord> {
+        self.consts.get_as::<ConstRecord>(index)
+    }
+
+    /// The tag at `index`. See [`tag`].
+    #[inline]
+    pub fn tag(&self, index: usize) -> Option<u16> {
+        Some(self.record(index)?.tag)
+    }
+
+    /// **The image-aliasing accessor.** Bytes of a string constant, as a slice
+    /// into the artifact.
+    ///
+    /// Returns `None` when `index` is out of range or is not a string. The
+    /// returned slice aliases the caller's buffer, which is what allows the
+    /// runtime to mint a handle over it rather than copying.
+    #[inline]
+    pub fn str_bytes(&self, index: usize) -> Option<&'a [u8]> {
+        let rec = self.record(index)?;
+        if rec.tag != tag::STATIC_STR {
+            return None;
+        }
+        self.name_bytes(rec.aux)
+    }
+
+    /// [`Self::str_bytes`] validated as UTF-8. Still borrowed; still no copy.
+    #[inline]
+    pub fn str(&self, index: usize) -> Option<&'a str> {
+        core::str::from_utf8(self.str_bytes(index)?).ok()
+    }
+
+    /// Bytes of name `index`, as a slice into the artifact.
+    #[inline]
+    pub fn name_bytes(&self, index: u32) -> Option<&'a [u8]> {
+        let r = self.names.get_as::<NameRef>(index as usize)?;
+        self.pool.slice(r.offset, r.length)
+    }
+
+    /// A scalar constant's bits, whatever its width. The caller interprets them
+    /// by tag, exactly as the record does.
+    #[inline]
+    pub fn payload(&self, index: usize) -> Option<u64> {
+        Some(self.record(index)?.payload)
+    }
+
+    /// The `(first, count)` range of a composite, without materialising it.
+    ///
+    /// Validated forward at parse time, so a caller may index the range
+    /// directly.
+    #[inline]
+    pub fn range(&self, index: usize) -> Option<(u32, u32)> {
+        let rec = self.record(index)?;
+        if !rec.is_composite() {
+            return None;
+        }
+        Some(rec.as_range())
+    }
+
+    /// Type and field-name references for a struct constant.
+    #[inline]
+    pub fn struct_aux(&self, index: usize) -> Option<StructAux> {
+        let rec = self.record(index)?;
+        if rec.tag != tag::STRUCT {
+            return None;
+        }
+        self.struct_aux.get_as::<StructAux>(rec.aux as usize)
+    }
+
+    /// Type, variant, and discriminant for an enum constant.
+    ///
+    /// The discriminant is `None` unless the record carries
+    /// [`FLAG_HAS_DISCRIMINANT`]; a stored zero is not the same as `Some(0)`.
+    #[inline]
+    pub fn enum_aux(&self, index: usize) -> Option<(EnumAux, Option<i64>)> {
+        let rec = self.record(index)?;
+        if rec.tag != tag::ENUM {
+            return None;
+        }
+        let aux = self.enum_aux.get_as::<EnumAux>(rec.aux as usize)?;
+        let disc = if rec.flags & FLAG_HAS_DISCRIMINANT != 0 {
+            Some(aux.discriminant)
+        } else {
+            None
+        };
+        Some((aux, disc))
+    }
+}
+
 /// Decodes a constant forest, re-validating the ordering invariant.
 ///
 /// `count` is the number of roots, which the caller knows from the chunk
@@ -424,71 +603,30 @@ impl From<WireError> for SchemaError {
 ///
 /// [`SchemaError`] for any malformed artifact. This function never panics.
 pub fn decode_constants(bytes: &[u8], count: usize) -> Result<Vec<ConstValue>, SchemaError> {
-    let view = WireView::parse(bytes)?;
+    // One parse-and-validate path, shared with the borrowed accessor. Keeping a
+    // second copy here would let the owned and borrowed readers drift apart, and
+    // a drift in the ordering check is exactly the silent-wrong-answer class this
+    // format is shaped to avoid.
+    let t = ConstTable::parse(bytes)?;
 
-    let pool_region = view
-        .find_region(kind::STRING_POOL)
-        .ok_or(SchemaError::MissingRegion(kind::STRING_POOL))?;
-    let pool = view.pool(&pool_region)?;
-
-    let names_region = view
-        .find_region(kind::NAMES)
-        .ok_or(SchemaError::MissingRegion(kind::NAMES))?;
-    let names = view.typed_records::<NameRef>(&names_region)?;
-
-    let consts_region = view
-        .find_region(kind::CONSTS)
-        .ok_or(SchemaError::MissingRegion(kind::CONSTS))?;
-    let consts = view.typed_records::<ConstRecord>(&consts_region)?;
-
-    let saux_region = view
-        .find_region(kind::STRUCT_AUX)
-        .ok_or(SchemaError::MissingRegion(kind::STRUCT_AUX))?;
-    let saux = view.typed_records::<StructAux>(&saux_region)?;
-
-    let eaux_region = view
-        .find_region(kind::ENUM_AUX)
-        .ok_or(SchemaError::MissingRegion(kind::ENUM_AUX))?;
-    let eaux = view.typed_records::<EnumAux>(&eaux_region)?;
-
-    if count > consts.len() {
+    if count > t.len() {
         return Err(SchemaError::BadIndex);
     }
 
-    // Validate every range BEFORE materialising anything. A backwards range is
-    // the silent failure this format's ordering invariant exists to prevent, so
-    // it is rejected up front rather than discovered mid-walk.
-    for i in 0..consts.len() {
-        let rec = consts
-            .get_as::<ConstRecord>(i)
-            .ok_or(SchemaError::BadIndex)?;
-        if rec.is_composite() {
-            let (first, n) = rec.as_range();
-            if !consts.range_is_forward(i, first, n) {
-                return Err(SchemaError::BadRange);
-            }
-        }
-    }
-
     let name_of = |idx: u32| -> Result<String, SchemaError> {
-        let r = names
-            .get_as::<NameRef>(idx as usize)
-            .ok_or(SchemaError::BadIndex)?;
-        let slice = pool.slice(r.offset, r.length).ok_or(SchemaError::BadName)?;
+        let slice = t.name_bytes(idx).ok_or(SchemaError::BadName)?;
         core::str::from_utf8(slice)
             .map(String::from)
             .map_err(|_| SchemaError::BadName)
     };
 
     // Bottom-up by a single REVERSE LINEAR SWEEP. Every child has a higher index
-    // than its parent -- validated above -- so by the time index `i` is reached,
-    // everything it references is already built. No stack, no recursion, and the
-    // trip count is the table length.
-    let mut built: Vec<Option<ConstValue>> = (0..consts.len()).map(|_| None).collect();
-    for i in (0..consts.len()).rev() {
-        let rec = consts
-            .get_as::<ConstRecord>(i)
-            .ok_or(SchemaError::BadIndex)?;
+    // than its parent -- validated by `ConstTable::parse` -- so by the time index
+    // `i` is reached, everything it references is already built. No stack, no
+    // recursion, and the trip count is the table length.
+    let mut built: Vec<Option<ConstValue>> = (0..t.len()).map(|_| None).collect();
+    for i in (0..t.len()).rev() {
+        let rec = t.record(i).ok_or(SchemaError::BadIndex)?;
         let (first, n) = rec.as_range();
 
         let children = |b: &mut Vec<Option<ConstValue>>| -> Result<Vec<ConstValue>, SchemaError> {
@@ -512,9 +650,7 @@ pub fn decode_constants(bytes: &[u8], count: usize) -> Result<Vec<ConstValue>, S
             tag::TUPLE => ConstValue::Tuple(children(&mut built)?),
             tag::ARRAY => ConstValue::Array(children(&mut built)?),
             tag::STRUCT => {
-                let aux = saux
-                    .get_as::<StructAux>(rec.aux as usize)
-                    .ok_or(SchemaError::BadIndex)?;
+                let aux = t.struct_aux(i).ok_or(SchemaError::BadIndex)?;
                 let values = children(&mut built)?;
                 let mut fields = Vec::with_capacity(values.len());
                 for (k, v) in values.into_iter().enumerate() {
@@ -526,17 +662,11 @@ pub fn decode_constants(bytes: &[u8], count: usize) -> Result<Vec<ConstValue>, S
                 }
             }
             tag::ENUM => {
-                let aux = eaux
-                    .get_as::<EnumAux>(rec.aux as usize)
-                    .ok_or(SchemaError::BadIndex)?;
+                let (aux, discriminant) = t.enum_aux(i).ok_or(SchemaError::BadIndex)?;
                 ConstValue::Enum {
                     type_name: name_of(aux.type_name)?,
                     variant: name_of(aux.variant)?,
-                    discriminant: if rec.flags & FLAG_HAS_DISCRIMINANT != 0 {
-                        Some(aux.discriminant)
-                    } else {
-                        None
-                    },
+                    discriminant,
                     fields: children(&mut built)?,
                 }
             }

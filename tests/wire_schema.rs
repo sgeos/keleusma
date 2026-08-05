@@ -7,7 +7,7 @@
 
 use keleusma::bytecode::ConstValue;
 use keleusma::wire_schema::{
-    ConstRecord, SchemaError, decode_constants, encode_constants, kind, tag,
+    ConstRecord, ConstTable, SchemaError, decode_constants, encode_constants, kind, tag,
 };
 use keleusma_wire::{WireRecord, WireView};
 
@@ -438,5 +438,227 @@ fn the_float_tag_is_reserved_even_without_the_feature() {
             decode_constants(&bytes, 1).unwrap_err(),
             SchemaError::UnknownTag(tag::FLOAT)
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The borrowed accessor. The runtime reads through this; `decode_constants` is
+// the tooling path.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_string_constant_aliases_the_artifact_rather_than_copying() {
+    // THE load-bearing property. A probe of the live runtime showed a non-empty
+    // top-level string constant is loaded by minting a handle directly over the
+    // image's bytes; that is only possible if the accessor hands back a slice
+    // INTO the artifact. A test comparing values would pass just as well against
+    // an owned copy, so this asserts by ADDRESS.
+    let bytes =
+        encode_constants(&[ConstValue::StaticStr("aliased".into()), ConstValue::Int(1)]).unwrap();
+
+    let t = ConstTable::parse(&bytes).unwrap();
+    let s = t.str_bytes(0).expect("string constant");
+    assert_eq!(s, b"aliased");
+
+    let base = bytes.as_ptr() as usize;
+    let at = s.as_ptr() as usize;
+    assert!(
+        at >= base && at + s.len() <= base + bytes.len(),
+        "string bytes must alias the artifact, not be copied out of it"
+    );
+
+    // And as `&str`, still borrowed.
+    let as_str = t.str(0).unwrap();
+    assert_eq!(as_str, "aliased");
+    assert_eq!(as_str.as_ptr() as usize, at);
+
+    // Control: the address predicate must actually discriminate. An owned copy
+    // of the same bytes has the same VALUE and a different address, so if this
+    // predicate accepted it the test above would prove nothing.
+    let copy = b"aliased".to_vec();
+    let copy_at = copy.as_ptr() as usize;
+    assert!(
+        !(copy_at >= base && copy_at + copy.len() <= base + bytes.len()),
+        "predicate must reject a copy, or the aliasing assertion is vacuous"
+    );
+}
+
+#[test]
+fn str_bytes_reports_kind_rather_than_guessing() {
+    let bytes = encode_constants(&[
+        ConstValue::Int(5),
+        ConstValue::StaticStr("x".into()),
+        ConstValue::Tuple(vec![ConstValue::Int(1)]),
+    ])
+    .unwrap();
+    let t = ConstTable::parse(&bytes).unwrap();
+
+    assert!(t.str_bytes(0).is_none(), "an Int is not a string");
+    assert_eq!(t.str_bytes(1), Some(&b"x"[..]));
+    assert!(t.str_bytes(2).is_none(), "a Tuple is not a string");
+    assert!(t.str_bytes(999).is_none(), "out of range");
+}
+
+#[test]
+fn an_empty_string_constant_yields_an_empty_slice_not_none() {
+    // The runtime deliberately does NOT alias an empty string, so that it need
+    // not rest on a non-null guarantee for a zero-length pointer. That is the
+    // runtime's decision; the accessor's job is to report the bytes faithfully,
+    // and an empty string is a string.
+    let bytes = encode_constants(&[ConstValue::StaticStr(String::new())]).unwrap();
+    let t = ConstTable::parse(&bytes).unwrap();
+    assert_eq!(t.str_bytes(0), Some(&[][..]));
+    assert_eq!(t.str(0), Some(""));
+}
+
+#[test]
+fn scalar_and_range_accessors_agree_with_the_owned_decode() {
+    // The two readers must not drift. They share a parse path now; this pins
+    // that they also agree on what they report.
+    let roots = [
+        ConstValue::Int(-77),
+        ConstValue::Byte(9),
+        ConstValue::Bool(true),
+        ConstValue::Array(vec![ConstValue::Int(1), ConstValue::Int(2)]),
+    ];
+    let bytes = encode_constants(&roots).unwrap();
+    let t = ConstTable::parse(&bytes).unwrap();
+
+    assert_eq!(t.tag(0), Some(tag::INT));
+    assert_eq!(t.payload(0).map(|p| p as i64), Some(-77));
+    assert_eq!(t.tag(1), Some(tag::BYTE));
+    assert_eq!(t.payload(1).map(|p| p as u8), Some(9));
+    assert_eq!(t.tag(2), Some(tag::BOOL));
+    assert_eq!(t.payload(2), Some(1));
+
+    let (first, n) = t.range(3).expect("array has a range");
+    assert_eq!(n, 2);
+    assert!(first as usize > 3, "range must point forward");
+    assert_eq!(t.payload(first as usize).map(|p| p as i64), Some(1));
+    assert_eq!(t.payload(first as usize + 1).map(|p| p as i64), Some(2));
+
+    // A scalar has no range.
+    assert!(t.range(0).is_none());
+
+    let owned = decode_constants(&bytes, roots.len()).unwrap();
+    assert_eq!(owned.len(), 4);
+}
+
+#[test]
+fn composite_side_tables_are_reachable_without_materialising() {
+    let roots = [
+        ConstValue::Struct {
+            type_name: "P".into(),
+            fields: vec![
+                ("x".into(), ConstValue::Int(1)),
+                ("y".into(), ConstValue::Int(2)),
+            ],
+        },
+        ConstValue::Enum {
+            type_name: "E".into(),
+            variant: "V".into(),
+            discriminant: Some(3),
+            fields: vec![],
+        },
+        ConstValue::Enum {
+            type_name: "E".into(),
+            variant: "W".into(),
+            discriminant: None,
+            fields: vec![],
+        },
+    ];
+    let bytes = encode_constants(&roots).unwrap();
+    let t = ConstTable::parse(&bytes).unwrap();
+
+    let sa = t.struct_aux(0).expect("struct aux");
+    assert_eq!(t.name_bytes(sa.type_name), Some(&b"P"[..]));
+    assert_eq!(t.name_bytes(sa.field_names_first), Some(&b"x"[..]));
+    assert_eq!(t.name_bytes(sa.field_names_first + 1), Some(&b"y"[..]));
+
+    let (ea, disc) = t.enum_aux(1).expect("enum aux");
+    assert_eq!(t.name_bytes(ea.type_name), Some(&b"E"[..]));
+    assert_eq!(t.name_bytes(ea.variant), Some(&b"V"[..]));
+    assert_eq!(disc, Some(3));
+
+    // `None` must not read back as `Some(0)`.
+    let (_, disc) = t.enum_aux(2).expect("enum aux");
+    assert_eq!(disc, None);
+
+    // Kind checks, not guesses.
+    assert!(t.struct_aux(1).is_none(), "an enum is not a struct");
+    assert!(t.enum_aux(0).is_none(), "a struct is not an enum");
+}
+
+#[test]
+fn the_accessor_rejects_a_backwards_range_at_parse_time() {
+    // Same malformed input the owned decoder rejects. Validating once at parse
+    // is what lets every later accessor be total without re-checking.
+    let roots = [
+        ConstValue::Int(1),
+        ConstValue::Tuple(vec![ConstValue::Int(2), ConstValue::Int(3)]),
+    ];
+    let mut bytes = encode_constants(&roots).unwrap();
+    let (base, stride) = {
+        let t = ConstTable::parse(&bytes).unwrap();
+        let _ = t.len();
+        let view = keleusma_wire::WireView::parse(&bytes).unwrap();
+        let region = view.find_region(kind::CONSTS).unwrap();
+        (
+            region.byte_offset().unwrap(),
+            <ConstRecord as WireRecord>::STRIDE,
+        )
+    };
+    let at = base + stride + ConstRecord::OFFSET_PAYLOAD;
+    // (first = 0, count = 2). `first` is genuinely zero -- that is the defect
+    // being injected -- so the pack is written out rather than folded away.
+    let first: u32 = 0;
+    let count: u32 = 2;
+    let packed = first as u64 | ((count as u64) << 32);
+    bytes[at..at + 8].copy_from_slice(&packed.to_le_bytes());
+
+    assert_eq!(
+        ConstTable::parse(&bytes).unwrap_err(),
+        SchemaError::BadRange
+    );
+}
+
+#[test]
+fn the_accessor_is_total_on_a_truncated_artifact() {
+    let bytes = encode_constants(&[ConstValue::StaticStr("abc".into())]).unwrap();
+    for cut in 0..bytes.len() {
+        assert!(
+            ConstTable::parse(&bytes[..cut]).is_err(),
+            "truncation to {cut} must be rejected"
+        );
+    }
+    assert!(ConstTable::parse(&bytes).is_ok());
+}
+
+#[test]
+fn the_accessor_never_panics_under_corruption() {
+    let bytes = encode_constants(&[
+        ConstValue::Struct {
+            type_name: "S".into(),
+            fields: vec![("f".into(), ConstValue::StaticStr("v".into()))],
+        },
+        ConstValue::Array(vec![ConstValue::Int(1)]),
+    ])
+    .unwrap();
+
+    for pos in 0..bytes.len() {
+        let mut m = bytes.clone();
+        m[pos] ^= 0x80;
+        if let Ok(t) = ConstTable::parse(&m) {
+            for i in 0..t.len().saturating_add(2) {
+                let _ = t.tag(i);
+                let _ = t.payload(i);
+                let _ = t.range(i);
+                let _ = t.str_bytes(i);
+                let _ = t.str(i);
+                let _ = t.struct_aux(i);
+                let _ = t.enum_aux(i);
+            }
+            let _ = t.name_bytes(u32::MAX);
+        }
     }
 }

@@ -17,6 +17,37 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-04 (session 37)
 
+**STEP 4 STAGE 2a (2026-08-04): the borrowed accessor, and a probe that narrowed the requirement instead of confirming it.**
+The loop's step 1a says a recorded status claim is a lead, not a fact. This increment is the cleanest
+demonstration of that so far. The claim carried through three documents was "string constants
+materialise as `KStr` aliasing the image, so the accessor layer must be a borrowed view, never an
+owned decode." True, but imprecise in a way that would have cost real complexity.
+
+WHAT THE LIVE CODE ACTUALLY DOES. `chunk_const` aliases the image for a non-empty TOP-LEVEL
+`StaticStr` and only for that: it takes `bytes.as_ptr()` and mints a `KString` over the immortal
+image. An EMPTY string deliberately returns an owned value instead, so the runtime need not rest on a
+non-null guarantee for a zero-length pointer. A COMPOSITE's string leaves are already copied today --
+they materialise owned through `value_from_archived` and the flat packer moves them into the arena. And
+`chunk_const_str`, which looked at first glance like a counterexample because it calls `.to_string()`,
+is a separate helper off the hot path entirely.
+
+SO THE REQUIREMENT IS ONE ACCESSOR, NOT A DESIGN STANCE. Exactly one function must return bytes that
+alias the artifact; everything else may return values by copy, because scalars are registers and
+composites already copy. Over-constraining would have made the accessor harder for no gain;
+under-constraining would have silently dropped the one load-bearing property. Neither error is
+visible from the documents alone -- only from reading what the runtime does.
+
+THE TEST THAT PROTECTS IT, AND ITS CONTROL. Aliasing is asserted BY ADDRESS: the returned slice's
+pointer must lie inside the artifact. A value comparison would pass identically against an owned copy,
+which is precisely the regression worth preventing. And because a passing assertion has not been shown
+able to fail, the test also asserts that an owned copy of the SAME BYTES fails the same predicate --
+without that control the address check could have been vacuously true and nobody would know.
+
+ONE STRUCTURAL CHOICE. `decode_constants` was refactored onto `ConstTable` rather than left as a
+parallel reader. Two readers of the same format drift, and a drift in the ordering check is exactly
+the silent-wrong-answer class this format is shaped to avoid. One parse path, one validation.
+
+
 **STEP 4 STAGE 1 (2026-08-04): the constant table, and a test suite that could not see what it was testing.**
 The container was schema-free by design; this is the schema. The interesting half is that `ConstValue`
 is a TREE and the format's claim is that composites reference a range rather than nesting — which

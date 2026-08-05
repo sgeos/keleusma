@@ -239,10 +239,40 @@ round trips of `ConstValue` must not use `==`.**
   return shapes, the scalar header block — is not encoded yet. Those are flat vectors following the
   same mechanical pattern.
 
+## Stage 2a landed: the borrowed accessor (`ConstTable`)
+
+**The probe rewrote the requirement, which is why step 1a exists.** The recorded claim was "string
+constants materialise as `KStr` aliasing the image, so the accessor must be borrowed." Reading the
+live runtime showed the true requirement is narrower and more precise:
+
+- `chunk_const` **does** alias the image for a **non-empty top-level** `StaticStr` — it takes
+  `bytes.as_ptr()` and mints a `KString` over the immortal image. Confirmed, still true.
+- An **empty** string is deliberately NOT aliased, so the runtime need not rest on a non-null
+  guarantee for a zero-length pointer.
+- A **composite's** string leaves are **already copied today** — they materialise owned and the flat
+  packer moves them into the arena. Borrowing them buys nothing the runtime uses.
+- `chunk_const_str` is a separate helper that copies (`.to_string()`); it is not the hot value path.
+
+So the hard requirement is **exactly one accessor returning image-aliasing bytes**, not a
+borrow-everything design. Over-constraining would have complicated the accessor for no gain;
+under-constraining would have silently cost the one load-bearing property.
+
+`ConstTable<'a>` is that accessor: parse-and-validate once, then total allocation-free reads —
+`str_bytes` (the aliasing one), `str`, `tag`, `payload`, `range`, `name_bytes`, `struct_aux`,
+`enum_aux`. `decode_constants` was **refactored onto it**, so the owned and borrowed readers share
+one parse path and cannot drift on the ordering check.
+
+**24 tests.** The aliasing is asserted **by address**, with an inline control proving the predicate
+discriminates — an owned copy has the same value and a different address, so without the control the
+assertion would prove nothing.
+
 ## Next step
 
-Stage 2: the remaining aux-body regions, then the borrowed accessor. The accessor is the
-consequential one — see the P10 note above.
+Stage 2b: the remaining aux-body regions (struct templates, param types, enum layouts, signatures,
+native return shapes, the scalar header block). These are flat vectors of scalars following the same
+mechanical pattern the constant table established, so they are lower-risk than what is now done.
+After that, step 5: routing the runtime through this accessor, which is where P10 is actually
+preserved or lost in practice rather than in principle.
 
 ## Superseded next step (kept for context)
 
