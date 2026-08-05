@@ -662,3 +662,256 @@ fn the_accessor_never_panics_under_corruption() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Shapes and signatures.
+// ---------------------------------------------------------------------------
+
+use keleusma::bytecode::{ChunkSignature, WireShape};
+use keleusma::wire_schema::{
+    ShapeRecord, SignatureRecord, SignatureTable, decode_signatures, encode_signatures, shape_tag,
+};
+
+fn sig(params: Vec<WireShape>, ret: WireShape, resume: WireShape) -> ChunkSignature {
+    ChunkSignature {
+        params,
+        ret,
+        resume,
+    }
+}
+
+#[test]
+fn signatures_round_trip_across_every_shape_variant() {
+    let want = vec![
+        sig(
+            vec![
+                WireShape::Top,
+                WireShape::Scalar { kind: 3 },
+                WireShape::Flat { kind: 2, size: 48 },
+            ],
+            WireShape::Scalar { kind: 1 },
+            WireShape::Top,
+        ),
+        sig(vec![], WireShape::Top, WireShape::Top),
+        sig(
+            vec![WireShape::Flat {
+                kind: 7,
+                size: u32::MAX,
+            }],
+            WireShape::Flat { kind: 7, size: 0 },
+            WireShape::Scalar { kind: 255 },
+        ),
+    ];
+
+    let bytes = encode_signatures(&want).unwrap();
+    let back = decode_signatures(&bytes).unwrap();
+    assert_eq!(back.len(), want.len());
+    for (g, w) in back.iter().zip(&want) {
+        assert_eq!(g.params, w.params);
+        assert_eq!(g.ret, w.ret);
+        assert_eq!(g.resume, w.resume);
+    }
+}
+
+#[test]
+fn parameter_runs_are_contiguous_and_singles_are_shared() {
+    // The two admission modes. A parameter run must be addressable as
+    // `params_first + i`, so it cannot share; `ret`/`resume` may share, and
+    // `Top` dominates real modules so the sharing is worth having.
+    let sigs = vec![
+        sig(
+            vec![WireShape::Top, WireShape::Top],
+            WireShape::Top,
+            WireShape::Top,
+        ),
+        sig(vec![WireShape::Top], WireShape::Top, WireShape::Top),
+    ];
+    let bytes = encode_signatures(&sigs).unwrap();
+    let t = SignatureTable::parse(&bytes).unwrap();
+
+    // Contiguity: each parameter is reachable at its own offset.
+    for (i, s) in sigs.iter().enumerate() {
+        for p in 0..s.params.len() {
+            assert_eq!(
+                t.param_shape(i, p),
+                Some(WireShape::Top),
+                "sig {i} param {p}"
+            );
+        }
+        assert_eq!(t.param_shape(i, s.params.len()), None, "past the end");
+    }
+
+    // Sharing: three parameter entries are appended unshared, and the singles
+    // reuse an existing `Top` rather than adding four more.
+    let view = WireView::parse(&bytes).unwrap();
+    let region = view
+        .find_region(keleusma::wire_schema::kind::SHAPES)
+        .unwrap();
+    let shapes = view.typed_records::<ShapeRecord>(&region).unwrap();
+    assert_eq!(
+        shapes.len(),
+        3,
+        "3 unshared parameter entries, singles shared onto one of them"
+    );
+
+    let r0 = t.record(0).unwrap();
+    let r1 = t.record(1).unwrap();
+    assert_eq!(r0.params_first, 0);
+    assert_eq!(r0.params_count, 2);
+    assert_eq!(r1.params_first, 2);
+    assert_eq!(r1.params_count, 1);
+}
+
+#[test]
+fn distinct_shapes_are_not_collapsed() {
+    // Sharing must key on the whole record, not just the tag: two `Flat`s of
+    // different size are different shapes.
+    let sigs = vec![sig(
+        vec![],
+        WireShape::Flat { kind: 1, size: 8 },
+        WireShape::Flat { kind: 1, size: 16 },
+    )];
+    let bytes = encode_signatures(&sigs).unwrap();
+    let t = SignatureTable::parse(&bytes).unwrap();
+    assert_eq!(t.ret_shape(0), Some(WireShape::Flat { kind: 1, size: 8 }));
+    assert_eq!(
+        t.resume_shape(0),
+        Some(WireShape::Flat { kind: 1, size: 16 })
+    );
+    assert_ne!(t.record(0).unwrap().ret, t.record(0).unwrap().resume);
+}
+
+#[test]
+fn an_empty_signature_table_is_legal() {
+    let bytes = encode_signatures(&[]).unwrap();
+    let t = SignatureTable::parse(&bytes).unwrap();
+    assert!(t.is_empty());
+    assert_eq!(t.record(0), None);
+    assert_eq!(decode_signatures(&bytes).unwrap().len(), 0);
+}
+
+#[test]
+fn a_shape_record_is_one_word() {
+    // Fixed-size records are the format's premise; a shape that outgrew a word
+    // would need a side table like struct and enum constants do.
+    assert_eq!(<ShapeRecord as WireRecord>::STRIDE, 8);
+    assert_eq!(<SignatureRecord as WireRecord>::STRIDE, 16);
+}
+
+#[test]
+fn an_out_of_range_parameter_run_is_rejected() {
+    let sigs = vec![sig(vec![WireShape::Top], WireShape::Top, WireShape::Top)];
+    let mut bytes = encode_signatures(&sigs).unwrap();
+    let base = {
+        let view = WireView::parse(&bytes).unwrap();
+        view.find_region(keleusma::wire_schema::kind::SIGNATURES)
+            .unwrap()
+            .byte_offset()
+            .unwrap()
+    };
+    let at = base + SignatureRecord::OFFSET_PARAMS_COUNT;
+    bytes[at..at + 4].copy_from_slice(&999u32.to_le_bytes());
+    assert_eq!(
+        SignatureTable::parse(&bytes).unwrap_err(),
+        SchemaError::BadIndex
+    );
+}
+
+#[test]
+fn an_out_of_range_single_shape_is_rejected() {
+    let sigs = vec![sig(vec![], WireShape::Top, WireShape::Top)];
+    let mut bytes = encode_signatures(&sigs).unwrap();
+    let base = {
+        let view = WireView::parse(&bytes).unwrap();
+        view.find_region(keleusma::wire_schema::kind::SIGNATURES)
+            .unwrap()
+            .byte_offset()
+            .unwrap()
+    };
+    let at = base + SignatureRecord::OFFSET_RET;
+    bytes[at..at + 4].copy_from_slice(&50u32.to_le_bytes());
+    assert_eq!(
+        SignatureTable::parse(&bytes).unwrap_err(),
+        SchemaError::BadIndex
+    );
+}
+
+#[test]
+fn an_unknown_shape_tag_is_reported_rather_than_guessed() {
+    let sigs = vec![sig(vec![WireShape::Top], WireShape::Top, WireShape::Top)];
+    let mut bytes = encode_signatures(&sigs).unwrap();
+    let base = {
+        let view = WireView::parse(&bytes).unwrap();
+        view.find_region(keleusma::wire_schema::kind::SHAPES)
+            .unwrap()
+            .byte_offset()
+            .unwrap()
+    };
+    let at = base + ShapeRecord::OFFSET_TAG;
+    bytes[at..at + 2].copy_from_slice(&77u16.to_le_bytes());
+
+    // The table still parses -- bounds are fine -- but the shape does not decode.
+    let t = SignatureTable::parse(&bytes).unwrap();
+    assert_eq!(t.shape(0), None);
+    assert!(decode_signatures(&bytes).is_err());
+}
+
+#[test]
+fn a_zeroed_shape_record_is_not_a_valid_top() {
+    // Tags start at one precisely so a zeroed region does not read as a
+    // well-formed table of "shape unknown" entries.
+    assert_ne!(shape_tag::TOP, 0);
+    let zeroed = ShapeRecord {
+        tag: 0,
+        kind: 0,
+        reserved: 0,
+        size: 0,
+    };
+    assert_eq!(zeroed.to_shape(), None);
+}
+
+#[test]
+fn a_truncated_signature_artifact_is_rejected_at_every_length() {
+    let sigs = vec![sig(
+        vec![WireShape::Scalar { kind: 1 }],
+        WireShape::Top,
+        WireShape::Top,
+    )];
+    let bytes = encode_signatures(&sigs).unwrap();
+    for cut in 0..bytes.len() {
+        assert!(
+            SignatureTable::parse(&bytes[..cut]).is_err(),
+            "truncation to {cut} must be rejected"
+        );
+    }
+    assert!(SignatureTable::parse(&bytes).is_ok());
+}
+
+#[test]
+fn signature_corruption_never_panics() {
+    let sigs = vec![
+        sig(
+            vec![WireShape::Top, WireShape::Flat { kind: 1, size: 24 }],
+            WireShape::Scalar { kind: 2 },
+            WireShape::Top,
+        ),
+        sig(vec![], WireShape::Top, WireShape::Top),
+    ];
+    let bytes = encode_signatures(&sigs).unwrap();
+    for pos in 0..bytes.len() {
+        let mut m = bytes.clone();
+        m[pos] ^= 0x80;
+        if let Ok(t) = SignatureTable::parse(&m) {
+            for i in 0..t.len().saturating_add(2) {
+                let _ = t.record(i);
+                let _ = t.ret_shape(i);
+                let _ = t.resume_shape(i);
+                for p in 0..4 {
+                    let _ = t.param_shape(i, p);
+                }
+            }
+            let _ = t.shape(u32::MAX);
+        }
+        let _ = decode_signatures(&m);
+    }
+}

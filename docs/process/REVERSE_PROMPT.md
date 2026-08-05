@@ -293,9 +293,38 @@ five separate increments, not one.** Ordered smallest-first by the loop's policy
 6. **The scalar header block and `debug_pool_bytes`** — the header is genuinely flat; the debug pool
    is opaque bytes into a region, deliberately kept unparsed so stripping stays a single assignment.
 
+## Stage 2b increment 1 DONE: shapes and signatures
+
+`WireShape` and `ChunkSignature` landed together, because a shape table with no consumer is dead code.
+**35 tests.**
+
+The probe confirmed the claim this time: `WireShape`'s widest variant carries a `u8` and a `u32`, so
+the whole tagged union fits **one word** — no side table, unlike struct and enum constants.
+
+**The same contiguity-versus-sharing tension as field names, resolved the same way.** A parameter run
+must be contiguous so `params_first + i` addresses it, so parameters are appended **unshared**;
+`ret` and `resume` are single references and may be **interned**. `Top` dominates real modules (every
+non-Stream chunk resumes with it), so sharing the singles is worth having. A test pins both halves:
+three unshared parameter entries, singles collapsing onto one of them.
+
+**No forward-ordering rule applies here.** A shape references no other shape, so the recursion the
+constant table had to linearise simply does not arise — worth stating, because carrying that rule over
+by analogy would have added a check with nothing to check.
+
+Two things fixed before they could matter:
+- **The encoders are now composable.** `add_constant_regions` / `add_signature_regions` take an
+  existing builder; the `encode_*` functions are thin wrappers. The aux body will eventually be ONE
+  artifact carrying every region, and building that in now costs nothing where retrofitting would mean
+  rewriting each encoder.
+- **A hole in my own validation.** The bounds check read `ret >= shapes.len().max(1)`, so with an
+  empty shape table a signature referencing shape 0 would pass and leave the accessors returning
+  `None` rather than being total. Plain bounds now.
+
 ## Next step
 
-Increment 1 above (`WireShape`), then 2–6 in order. After those, step 5: routing the runtime through
+Increment 2: `StructTemplate` (a type name plus a contiguous run of field names — reuses the `NAMES`
+machinery and the `field_names_first + i` addressing already built and tested). Then `EnumLayout`,
+`DataLayout`, and the scalar header plus debug pool. Then step 5. After those, step 5: routing the runtime through
 `ConstTable`, which is where P10 is preserved or lost in practice rather than in principle.
 
 **Method note that earned its keep twice today.** Run `cargo clippy --all-features`, the `-D warnings`
