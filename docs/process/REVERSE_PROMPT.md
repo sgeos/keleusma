@@ -420,13 +420,34 @@ specifically, and `every_add_method_can_be_called_together`, which exercises **e
 one builder so the next `add_*` that claims a taken region fails there rather than in whichever
 combination nobody happened to test.
 
+## Stage 2 COMPLETE: the whole aux body round-trips (2026-08-05)
+
+`encode_aux_body` / `decode_aux_body` drive every `add_*` together — the first consumer that exercises
+the shared-state design end to end rather than one table at a time. **80 tests.**
+
+Per-chunk data is contributed first so each chunk record carries the ranges the contributions
+returned; a chunk cannot describe a range it never wrote. A dedicated test asserts ranges do not
+bleed between chunks, which is the failure the whole range design exists to prevent.
+
+**A real compiled module round-trips**, and the test asserts its own coverage so it cannot quietly
+become vacuous. Measured, not assumed: that corpus yields 3 chunks, 3 constants, 3 parameter types
+and 3 signatures — but **zero struct templates and zero natives**, which are covered only by the
+hand-built case. Worth knowing before treating "a real module round-trips" as blanket assurance.
+
+The pre-gate checks caught two defects again: unresolved `[WireAuxBody]` doc links (the two-doc-scope
+problem, third occurrence) and a test using `keleusma::lexer/parser/compiler`, which live behind the
+`compile` feature and so broke the runtime-only build. Both classes are invisible to targeted tests.
+
 ## Next step
 
-**Step 5**: route the runtime through these accessors. This is where P10 is preserved or lost in
-practice rather than in principle, and the narrow requirement established by probe still governs —
-exactly one accessor must return image-aliasing bytes (a non-empty top-level `StaticStr`); an empty
-string is deliberately not aliased and a composite's string leaves are already copied.
+**Step 5**: route the runtime through these accessors. The narrow requirement established by probe
+still governs — exactly one accessor must return image-aliasing bytes (a non-empty top-level
+`StaticStr`); an empty string is deliberately not aliased and a composite's string leaves are already
+copied today.
 
-Before that, one piece of stage 2 remains unbuilt: an **encoder from a real `Module`** driving all
-these `add_*` calls, and a round-trip against the existing test corpus. That is the first genuine
-consumer, and per the standing decision it is also the gate on publishing the crate.
+Sequencing worth thinking about before starting: the cutover replaces `Archived*` reads across
+`vm.rs` and `bytecode.rs` (59 references, 3 zero-copy entry points, one `unsafe access_unchecked`),
+so it is not one increment. A plausible split is (a) an aux-body encoder wired behind the existing
+`module_to_wire_bytes` with the rkyv path still authoritative, (b) the accessor read surface shaped
+to the VM's call sites, (c) the cutover proper. **Step (c) is where `BYTECODE_VERSION` would change,
+which is an operator decision and a hard stop.**

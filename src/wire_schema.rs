@@ -2245,3 +2245,164 @@ impl<'a> ModuleTable<'a> {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// The whole auxiliary body (stage 2, first real consumer)
+// ---------------------------------------------------------------------------
+
+/// Encodes a complete [`WireAuxBody`](crate::wire_format::WireAuxBody) into one artifact.
+///
+/// This is the first consumer that drives every `add_*` method together, and so
+/// the first thing that exercises the shared-state design end to end rather than
+/// one table at a time.
+///
+/// # Errors
+///
+/// Propagates a [`WireError`] from the container builder.
+pub fn encode_aux_body(aux: &crate::wire_format::WireAuxBody) -> Result<Vec<u8>, WireError> {
+    let mut b = SchemaBuilder::new();
+
+    // Per-chunk data first, so each chunk record can carry the ranges the
+    // contributions returned. A chunk cannot describe a range it did not write.
+    let mut metas = Vec::with_capacity(aux.chunks.len());
+    for c in &aux.chunks {
+        let constants = b.add_constant_pool(&c.constants);
+        let templates = b.add_struct_template_pool(&c.struct_templates);
+        let param_types = b.add_param_types(&c.param_types);
+        metas.push(ChunkMeta {
+            constants,
+            templates,
+            param_types,
+            local_count: c.local_count,
+            param_count: c.param_count,
+            block_type: c.block_type,
+            op_byte_offset: c.op_byte_offset,
+            op_record_count: c.op_record_count,
+        });
+    }
+    for (c, m) in aux.chunks.iter().zip(&metas) {
+        b.add_chunk(&c.name, m, c.debug_pool_bytes.as_deref())?;
+    }
+
+    b.add_signatures(&aux.signatures)?;
+    b.add_enum_layouts(&aux.enum_layouts)?;
+    b.add_natives(&aux.native_names, &aux.native_return_shapes)?;
+    if let Some(dl) = &aux.data_layout {
+        b.add_data_layout(dl)?;
+    }
+    b.add_header(&HeaderRecord {
+        entry_point: aux.entry_point.map_or(ABSENT, |e| e as u32),
+        word_bits_log2: aux.word_bits_log2,
+        addr_bits_log2: aux.addr_bits_log2,
+        float_bits_log2: aux.float_bits_log2,
+        flags: aux.flags,
+        wcet_cycles: aux.wcet_cycles,
+        wcmu_bytes: aux.wcmu_bytes,
+        shared_data_bytes: aux.shared_data_bytes,
+        private_data_bytes: aux.private_data_bytes,
+        schema_hash: aux.schema_hash,
+        reserved: 0,
+    })?;
+
+    b.finish()
+}
+
+/// Decodes a complete [`WireAuxBody`](crate::wire_format::WireAuxBody) from an artifact.
+///
+/// # Errors
+///
+/// [`SchemaError`] for any malformed artifact. Never panics.
+pub fn decode_aux_body(bytes: &[u8]) -> Result<crate::wire_format::WireAuxBody, SchemaError> {
+    use crate::wire_format::{WireAuxBody, WireChunk};
+
+    let m = ModuleTable::parse(bytes)?;
+    let header = m.header().ok_or(SchemaError::MissingRegion(kind::HEADER))?;
+    let params = ParamTypeTable::parse(bytes)?;
+
+    let name_of = |b: Option<&[u8]>| -> Result<String, SchemaError> {
+        core::str::from_utf8(b.ok_or(SchemaError::BadName)?)
+            .map(String::from)
+            .map_err(|_| SchemaError::BadName)
+    };
+
+    let templates = decode_struct_templates(bytes).unwrap_or_default();
+
+    let mut chunks = Vec::with_capacity(m.chunk_count());
+    for i in 0..m.chunk_count() {
+        let c = m.chunk(i).ok_or(SchemaError::BadIndex)?;
+        let constants = if c.consts_count == 0 {
+            Vec::new()
+        } else {
+            decode_constant_pool(bytes, (c.consts_first, c.consts_count))?
+        };
+        let first = c.templates_first as usize;
+        let end = first
+            .checked_add(c.templates_count as usize)
+            .ok_or(SchemaError::BadIndex)?;
+        let struct_templates = templates
+            .get(first..end)
+            .ok_or(SchemaError::BadIndex)?
+            .to_vec();
+        let param_types = match &params {
+            Some(p) => p.tags((c.param_types_first, c.param_types_count))?,
+            None => Vec::new(),
+        };
+
+        chunks.push(WireChunk {
+            name: name_of(m.chunk_name(i))?,
+            constants,
+            struct_templates,
+            local_count: c.local_count,
+            param_count: c.param_count,
+            block_type: m.chunk_block_type(i).ok_or(SchemaError::BadIndex)?,
+            param_types,
+            op_byte_offset: c.op_byte_offset,
+            op_record_count: c.op_record_count,
+            debug_pool_bytes: m.chunk_debug_bytes(i).map(<[u8]>::to_vec),
+        });
+    }
+
+    let sigs = SignatureTable::parse(bytes)
+        .ok()
+        .map(|_| decode_signatures(bytes))
+        .transpose()?
+        .unwrap_or_default();
+
+    let mut native_names = Vec::with_capacity(m.native_count());
+    let mut native_return_shapes = Vec::new();
+    let shapes = SignatureTable::parse(bytes).ok();
+    for i in 0..m.native_count() {
+        native_names.push(name_of(m.native_name(i))?);
+        let n = m.native(i).ok_or(SchemaError::BadIndex)?;
+        if n.ret_shape != ABSENT {
+            let s = shapes
+                .as_ref()
+                .and_then(|t| t.shape(n.ret_shape))
+                .ok_or(SchemaError::BadIndex)?;
+            native_return_shapes.push(s);
+        }
+    }
+
+    Ok(WireAuxBody {
+        chunks,
+        native_names,
+        entry_point: if header.entry_point == ABSENT {
+            None
+        } else {
+            Some(header.entry_point as usize)
+        },
+        data_layout: decode_data_layout(bytes)?,
+        word_bits_log2: header.word_bits_log2,
+        addr_bits_log2: header.addr_bits_log2,
+        float_bits_log2: header.float_bits_log2,
+        wcet_cycles: header.wcet_cycles,
+        wcmu_bytes: header.wcmu_bytes,
+        flags: header.flags,
+        shared_data_bytes: header.shared_data_bytes,
+        private_data_bytes: header.private_data_bytes,
+        schema_hash: header.schema_hash,
+        enum_layouts: decode_enum_layouts(bytes).unwrap_or_default(),
+        signatures: sigs,
+        native_return_shapes,
+    })
+}

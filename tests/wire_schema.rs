@@ -1955,3 +1955,297 @@ fn every_add_method_can_be_called_together() {
     assert!(ParamTypeTable::parse(&bytes).unwrap().is_some());
     assert!(ModuleTable::parse(&bytes).is_ok());
 }
+
+// ---------------------------------------------------------------------------
+// The whole auxiliary body: the first real consumer.
+// ---------------------------------------------------------------------------
+
+use keleusma::wire_format::{WireAuxBody, WireChunk};
+use keleusma::wire_schema::{decode_aux_body, encode_aux_body};
+
+fn assert_aux_eq(got: &WireAuxBody, want: &WireAuxBody) {
+    assert_eq!(got.chunks.len(), want.chunks.len(), "chunk count");
+    for (g, w) in got.chunks.iter().zip(&want.chunks) {
+        assert_eq!(g.name, w.name);
+        assert_eq!(g.local_count, w.local_count, "{}", w.name);
+        assert_eq!(g.param_count, w.param_count, "{}", w.name);
+        assert_eq!(g.block_type, w.block_type, "{}", w.name);
+        assert_eq!(g.param_types, w.param_types, "{}", w.name);
+        assert_eq!(g.op_byte_offset, w.op_byte_offset, "{}", w.name);
+        assert_eq!(g.op_record_count, w.op_record_count, "{}", w.name);
+        assert_eq!(g.debug_pool_bytes, w.debug_pool_bytes, "{}", w.name);
+        assert_eq!(g.constants.len(), w.constants.len(), "{} constants", w.name);
+        for (gc, wc) in g.constants.iter().zip(&w.constants) {
+            assert!(deep_eq(gc, wc), "{}: {gc:?} vs {wc:?}", w.name);
+        }
+        assert_eq!(
+            g.struct_templates.len(),
+            w.struct_templates.len(),
+            "{}",
+            w.name
+        );
+        for (gt, wt) in g.struct_templates.iter().zip(&w.struct_templates) {
+            assert_eq!(gt.type_name, wt.type_name);
+            assert_eq!(gt.field_names, wt.field_names);
+        }
+    }
+    assert_eq!(got.native_names, want.native_names);
+    assert_eq!(got.native_return_shapes, want.native_return_shapes);
+    assert_eq!(got.entry_point, want.entry_point);
+    assert_eq!(got.word_bits_log2, want.word_bits_log2);
+    assert_eq!(got.addr_bits_log2, want.addr_bits_log2);
+    assert_eq!(got.float_bits_log2, want.float_bits_log2);
+    assert_eq!(got.wcet_cycles, want.wcet_cycles);
+    assert_eq!(got.wcmu_bytes, want.wcmu_bytes);
+    assert_eq!(got.flags, want.flags);
+    assert_eq!(got.shared_data_bytes, want.shared_data_bytes);
+    assert_eq!(got.private_data_bytes, want.private_data_bytes);
+    assert_eq!(got.schema_hash, want.schema_hash);
+    assert_eq!(got.signatures.len(), want.signatures.len());
+    for (g, w) in got.signatures.iter().zip(&want.signatures) {
+        assert_eq!(g.params, w.params);
+        assert_eq!(g.ret, w.ret);
+        assert_eq!(g.resume, w.resume);
+    }
+    assert_eq!(got.enum_layouts.len(), want.enum_layouts.len());
+    for (g, w) in got.enum_layouts.iter().zip(&want.enum_layouts) {
+        assert_eq!(g.type_name, w.type_name);
+        assert_eq!(g.min_payload, w.min_payload);
+        assert_eq!(g.variants.len(), w.variants.len());
+        for (gv, wv) in g.variants.iter().zip(&w.variants) {
+            assert_eq!(gv.name, wv.name);
+            assert_eq!(gv.disc, wv.disc, "discriminant must survive");
+        }
+    }
+    assert_eq!(got.data_layout.is_some(), want.data_layout.is_some());
+}
+
+fn chunk(name: &str, constants: Vec<ConstValue>, params: Vec<TypeTag>) -> WireChunk {
+    WireChunk {
+        name: name.into(),
+        constants,
+        struct_templates: vec![tmpl("T", &["a", "b"])],
+        local_count: 4,
+        param_count: params.len() as u8,
+        block_type: BlockType::Func,
+        param_types: params,
+        op_byte_offset: 32,
+        op_record_count: 9,
+        debug_pool_bytes: None,
+    }
+}
+
+fn rich_aux() -> WireAuxBody {
+    WireAuxBody {
+        chunks: vec![
+            chunk(
+                "main",
+                vec![
+                    ConstValue::Int(-1),
+                    ConstValue::StaticStr("hello".into()),
+                    ConstValue::Struct {
+                        type_name: "P".into(),
+                        fields: vec![("x".into(), ConstValue::Byte(2))],
+                    },
+                ],
+                vec![TypeTag::Word, TypeTag::Bool],
+            ),
+            chunk("tick", vec![], vec![]),
+            WireChunk {
+                debug_pool_bytes: Some(b"debug-bytes".to_vec()),
+                block_type: BlockType::Stream,
+                ..chunk("stream", vec![ConstValue::Unit], vec![TypeTag::Composite])
+            },
+        ],
+        native_names: vec!["host::a".into(), "host::b".into()],
+        entry_point: Some(0),
+        data_layout: Some(sample_layout()),
+        word_bits_log2: 6,
+        addr_bits_log2: 6,
+        float_bits_log2: 6,
+        wcet_cycles: 4242,
+        wcmu_bytes: 8484,
+        flags: 0x03,
+        shared_data_bytes: 256,
+        private_data_bytes: 128,
+        schema_hash: 0x1234_5678,
+        enum_layouts: vec![layout("E", &[("A", 0), ("B", -7)], 24)],
+        signatures: vec![
+            sig(
+                vec![WireShape::Scalar { kind: 3 }],
+                WireShape::Top,
+                WireShape::Top,
+            ),
+            sig(vec![], WireShape::Flat { kind: 1, size: 8 }, WireShape::Top),
+            sig(vec![], WireShape::Top, WireShape::Top),
+        ],
+        native_return_shapes: vec![WireShape::Scalar { kind: 1 }, WireShape::Top],
+    }
+}
+
+#[test]
+fn a_whole_aux_body_round_trips() {
+    let want = rich_aux();
+    let bytes = encode_aux_body(&want).expect("encode");
+    let got = decode_aux_body(&bytes).expect("decode");
+    assert_aux_eq(&got, &want);
+}
+
+#[test]
+fn a_minimal_aux_body_round_trips() {
+    // The degenerate case: no chunks, no natives, no data layout, no entry point.
+    let want = WireAuxBody {
+        chunks: vec![],
+        native_names: vec![],
+        entry_point: None,
+        data_layout: None,
+        word_bits_log2: 6,
+        addr_bits_log2: 6,
+        float_bits_log2: 6,
+        wcet_cycles: 0,
+        wcmu_bytes: 0,
+        flags: 0,
+        shared_data_bytes: 0,
+        private_data_bytes: 0,
+        schema_hash: 0,
+        enum_layouts: vec![],
+        signatures: vec![],
+        native_return_shapes: vec![],
+    };
+    let bytes = encode_aux_body(&want).expect("encode");
+    let got = decode_aux_body(&bytes).expect("decode");
+    assert_aux_eq(&got, &want);
+    assert!(got.data_layout.is_none(), "absent stays absent");
+    assert!(got.entry_point.is_none());
+}
+
+#[test]
+fn per_chunk_ranges_do_not_bleed_between_chunks() {
+    // The failure this whole range design exists to prevent: chunk 1 seeing
+    // chunk 0's constants, templates, or parameter types.
+    let want = WireAuxBody {
+        chunks: vec![
+            chunk("a", vec![ConstValue::Int(1)], vec![TypeTag::Word]),
+            chunk(
+                "b",
+                vec![ConstValue::Int(2), ConstValue::Int(3)],
+                vec![TypeTag::Bool, TypeTag::Byte],
+            ),
+            chunk("c", vec![], vec![]),
+        ],
+        ..rich_aux()
+    };
+    let bytes = encode_aux_body(&want).unwrap();
+    let got = decode_aux_body(&bytes).unwrap();
+
+    assert_eq!(got.chunks[0].constants.len(), 1);
+    assert!(deep_eq(&got.chunks[0].constants[0], &ConstValue::Int(1)));
+    assert_eq!(got.chunks[1].constants.len(), 2);
+    assert!(deep_eq(&got.chunks[1].constants[0], &ConstValue::Int(2)));
+    assert!(deep_eq(&got.chunks[1].constants[1], &ConstValue::Int(3)));
+    assert_eq!(got.chunks[2].constants.len(), 0);
+
+    assert_eq!(got.chunks[0].param_types, vec![TypeTag::Word]);
+    assert_eq!(
+        got.chunks[1].param_types,
+        vec![TypeTag::Bool, TypeTag::Byte]
+    );
+    assert_eq!(got.chunks[2].param_types, Vec::<TypeTag>::new());
+
+    // Each chunk gets its own template run, not the concatenation.
+    for c in &got.chunks {
+        assert_eq!(c.struct_templates.len(), 1, "{}", c.name);
+        assert_eq!(c.struct_templates[0].field_names, vec!["a", "b"]);
+    }
+}
+
+#[test]
+fn the_aux_body_codec_is_total_under_truncation() {
+    let bytes = encode_aux_body(&rich_aux()).unwrap();
+    for cut in 0..bytes.len() {
+        assert!(
+            decode_aux_body(&bytes[..cut]).is_err(),
+            "truncation to {cut} must be rejected"
+        );
+    }
+    assert!(decode_aux_body(&bytes).is_ok());
+}
+
+#[test]
+fn the_aux_body_codec_never_panics_under_corruption() {
+    let bytes = encode_aux_body(&rich_aux()).unwrap();
+    for pos in 0..bytes.len() {
+        let mut m = bytes.clone();
+        m[pos] ^= 0x80;
+        let _ = decode_aux_body(&m);
+    }
+}
+
+// The lexer, parser and compiler live behind the `compile` feature, so this test
+// cannot exist in a runtime-only build. Gated rather than deleted: the realistic
+// corpus is worth having wherever the pipeline is present.
+#[cfg(feature = "compile")]
+#[test]
+fn a_real_compiled_module_round_trips() {
+    // Realistic data rather than hand-built: constants, templates, param types
+    // and block types as the compiler actually emits them.
+    let src = r#"
+        struct P { x: Word, y: Word }
+        fn helper(a: Word, b: Byte) -> Word { a + (b as Word) }
+        fn make() -> P { P { x: 1, y: 2 } }
+        fn main(n: Word) -> Word { n |> helper(3Byte) }
+    "#;
+    let tokens = keleusma::lexer::tokenize(src).expect("lex");
+    let program = keleusma::parser::parse(&tokens).expect("parse");
+    let module = keleusma::compiler::compile(&program).expect("compile");
+
+    // Assert what this corpus actually covers, so the test cannot quietly become
+    // vacuous if the compiler stops emitting one of these. Measured, not assumed:
+    // this program yields 3 chunks, 3 constants, 3 parameter types and 3
+    // signatures -- but ZERO struct templates and ZERO natives, which are
+    // exercised only by the hand-built `rich_aux` case above.
+    let consts: usize = module.chunks.iter().map(|c| c.constants.len()).sum();
+    let ptypes: usize = module.chunks.iter().map(|c| c.param_types.len()).sum();
+    assert!(module.chunks.len() >= 3, "expected several chunks");
+    assert!(consts >= 3, "expected real constants, got {consts}");
+    assert!(ptypes >= 3, "expected real parameter types, got {ptypes}");
+    assert!(!module.signatures.is_empty(), "expected real signatures");
+
+    let want = WireAuxBody {
+        chunks: module
+            .chunks
+            .iter()
+            .map(|c| WireChunk {
+                name: c.name.clone(),
+                constants: c.constants.clone(),
+                struct_templates: c.struct_templates.clone(),
+                local_count: c.local_count,
+                param_count: c.param_count,
+                block_type: c.block_type,
+                param_types: c.param_types.clone(),
+                op_byte_offset: 0,
+                op_record_count: c.ops.len() as u32,
+                debug_pool_bytes: None,
+            })
+            .collect(),
+        native_names: module.native_names.clone(),
+        entry_point: module.entry_point,
+        data_layout: module.data_layout.clone(),
+        word_bits_log2: module.word_bits_log2,
+        addr_bits_log2: module.addr_bits_log2,
+        float_bits_log2: module.float_bits_log2,
+        wcet_cycles: module.wcet_cycles,
+        wcmu_bytes: module.wcmu_bytes,
+        flags: module.flags,
+        shared_data_bytes: module.shared_data_bytes,
+        private_data_bytes: module.private_data_bytes,
+        schema_hash: module.schema_hash,
+        enum_layouts: module.enum_layouts.clone(),
+        signatures: module.signatures.clone(),
+        native_return_shapes: module.native_return_shapes.clone(),
+    };
+
+    let bytes = encode_aux_body(&want).expect("encode");
+    let got = decode_aux_body(&bytes).expect("decode");
+    assert_aux_eq(&got, &want);
+}
