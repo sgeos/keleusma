@@ -438,6 +438,40 @@ The pre-gate checks caught two defects again: unresolved `[WireAuxBody]` doc lin
 problem, third occurrence) and a test using `keleusma::lexer/parser/compiler`, which live behind the
 `compile` feature and so broke the runtime-only build. Both classes are invisible to targeted tests.
 
+## Corpus differential: the codec meets real compiler output (2026-08-05)
+
+`tests/wire_corpus.rs` round-trips **all ten self-hosted stage sources** — the largest real Keleusma
+programs that exist, `parse.kel` alone being 6022 lines. Measured coverage: **287 chunks, 2192
+constants, 287 signatures, 10 data layouts**. Runs in **2.45 s**.
+
+**It found a quadratic in the encoder within minutes of existing.** `Names::intern` was a linear scan,
+justified by a comment I wrote saying "the name count per module is small, and a map would pull in
+hashing for no measurable benefit at this size." The stage sources declare **thousands of data slots
+each** — 16913 in one — and every slot name is interned. Encoding went from under a second to over
+nine minutes as the count grew. Replaced with a `BTreeMap` (no hasher, so `no_std` is unaffected):
+**782 s → 2.45 s** for the full corpus.
+
+Also fixed while chasing it: `decode_aux_body` decoded each chunk's constant pool separately, and each
+call re-walked the whole table — quadratic in chunk count. `decode_constant_pools` now does one sweep
+for every range.
+
+### What this cost me, and the lesson
+
+I guessed the cause **three times** before measuring: first "the two biggest files dominate" (wrong —
+all eight others still timed out), then "it must be the build" (wrong — the build is 1 s), then
+"it's the quadratic decode" (real, but not the main cost). Each wrong guess cost a ten-minute timeout.
+The per-stage instrumentation that actually found it took one run.
+
+The corpus was also briefly split with the two largest stages behind `#[ignore]` to dodge the cost.
+That split is **removed** — it would have hidden the two most valuable inputs behind a flag nobody
+passes, to work around a defect that no longer exists.
+
+### Coverage caveat, asserted rather than implied
+
+The corpus emits **zero struct templates**. "The real corpus round-trips" therefore says nothing about
+the template table, which is covered only by hand-built cases. The test asserts `total_templates == 0`
+with a message telling whoever sees it fail to update this note.
+
 ## Next step
 
 **Step 5**: route the runtime through these accessors. The narrow requirement established by probe
@@ -445,9 +479,8 @@ still governs — exactly one accessor must return image-aliasing bytes (a non-e
 `StaticStr`); an empty string is deliberately not aliased and a composite's string leaves are already
 copied today.
 
-Sequencing worth thinking about before starting: the cutover replaces `Archived*` reads across
-`vm.rs` and `bytecode.rs` (59 references, 3 zero-copy entry points, one `unsafe access_unchecked`),
-so it is not one increment. A plausible split is (a) an aux-body encoder wired behind the existing
-`module_to_wire_bytes` with the rkyv path still authoritative, (b) the accessor read surface shaped
-to the VM's call sites, (c) the cutover proper. **Step (c) is where `BYTECODE_VERSION` would change,
-which is an operator decision and a hard stop.**
+The cutover replaces `Archived*` reads across `vm.rs` and `bytecode.rs` (59 references, 3 zero-copy
+entry points, one `unsafe access_unchecked`), so it is not one increment. Plausible split: (a) the
+encoder wired behind `module_to_wire_bytes` with rkyv still authoritative, (b) the accessor read
+surface shaped to the VM's call sites, (c) the cutover proper. **Step (c) is where
+`BYTECODE_VERSION` would change, which is an operator decision and a hard stop.**
