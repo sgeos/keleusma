@@ -17,6 +17,35 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-04 (session 37)
 
+**STAGE 2 COMPLETE (2026-08-05): the whole aux body round-trips, and a partially vacuous test caught by asking what it covers.**
+`encode_aux_body`/`decode_aux_body` are the first consumer to drive every `add_*` together. Everything
+before this exercised one table at a time, which is exactly the arrangement that let the `SHAPES`
+collision hide for an increment -- a whole-body encoder makes those combinations unavoidable rather
+than optional.
+
+THE ORDERING INSIDE THE ENCODER IS THE DESIGN. Per-chunk data is contributed FIRST, and each chunk
+record is then built from the ranges those contributions returned. A chunk therefore cannot describe a
+range it never wrote, because the range is not a number the caller supplies -- it is the receipt from
+the call that placed the data. The test that matters asserts ranges do not bleed between chunks, which
+is the failure the entire range design exists to prevent and would otherwise show up as chunk 1
+reading chunk 0's constants.
+
+THE VACUITY CHECK IS THE PART WORTH KEEPING. A real compiled module now round-trips, which reads like
+strong assurance. Before believing it I printed what the corpus actually contains: 3 chunks, 3
+constants, 3 parameter types, 3 signatures -- and ZERO struct templates and ZERO natives. So "a real
+module round-trips" covers less than it sounds like, and two of the tables are exercised only by
+hand-built data. The test now asserts its own coverage so it cannot silently hollow out if the
+compiler stops emitting one of them, and the gap is written down rather than left implied. This is the
+same instinct that caught the `PartialEq` blindness and the counts-are-not-a-cross-check problem:
+before trusting a test, ask what it would still pass with.
+
+THE PRE-GATE CHECKS EARNED THEIR KEEP AGAIN, catching an unresolved `[WireAuxBody]` doc link -- the
+two-doc-scope problem for the THIRD time -- and a test depending on `compile`-gated modules, which
+broke the runtime-only build. Neither is visible to `cargo test` at default features. Three
+occurrences of the doc-link issue is enough to say the qualification is not a habit I have formed;
+what has actually worked is running the doc build before the gate rather than remembering the rule.
+
+
 **STAGE 2b COMPLETE (2026-08-05): increment 6, and the same collision class twice.**
 The chunk table, natives, scalar header and debug pool close the aux body: every field of
 `WireAuxBody` and `WireChunk` now has somewhere to go. A chunk record is six words of fixed-size data
