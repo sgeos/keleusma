@@ -301,6 +301,24 @@ pub struct RecordTable<'a> {
 }
 
 impl<'a> RecordTable<'a> {
+    /// Views `bytes` as records of `stride`.
+    ///
+    /// For a caller that has already resolved a region's byte range and wants to
+    /// rebuild the table without walking the directory again — validate once,
+    /// then reconstruct cheaply.
+    ///
+    /// Returns `None` if `stride` is zero, is not a whole number of words, or
+    /// does not divide `bytes.len()`; the same conditions
+    /// [`WireView::records`] enforces, so a table built this way is
+    /// indistinguishable from one obtained through the directory.
+    #[inline]
+    pub fn from_bytes(bytes: &'a [u8], stride: usize) -> Option<Self> {
+        if stride == 0 || stride % WORD != 0 || bytes.len() % stride != 0 {
+            return None;
+        }
+        Some(Self { bytes, stride })
+    }
+
     /// Number of records.
     #[inline]
     pub fn len(&self) -> usize {
@@ -373,6 +391,15 @@ pub struct Pool<'a> {
 }
 
 impl<'a> Pool<'a> {
+    /// Views `bytes` as a byte pool.
+    ///
+    /// The counterpart to [`RecordTable::from_bytes`], for a caller rebuilding a
+    /// view from an already-resolved region range.
+    #[inline]
+    pub fn from_bytes(bytes: &'a [u8]) -> Self {
+        Self { bytes }
+    }
+
     /// The whole pool.
     #[inline]
     pub fn bytes(&self) -> &'a [u8] {

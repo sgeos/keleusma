@@ -44,6 +44,14 @@ use alloc::vec::Vec;
 
 use keleusma_wire::{Pool, RecordTable, WireBuilder, WireError, WireRecord, WireView};
 
+/// Convenience: a record type's stride as a plain const expression.
+trait StrideBytes {
+    const STRIDE_BYTES: usize;
+}
+impl<T: WireRecord> StrideBytes for T {
+    const STRIDE_BYTES: usize = <T as WireRecord>::STRIDE;
+}
+
 use crate::bytecode::{
     BlockType, ChunkSignature, ConstValue, DataLayout, EnumLayout, StructTemplate, TypeTag,
     WireShape,
@@ -2644,5 +2652,163 @@ impl<'a> AuxView<'a> {
     #[inline]
     pub fn module(&self) -> ModuleTable<'a> {
         self.module
+    }
+}
+
+/// Byte ranges of every region [`AuxView`] needs, resolved once.
+///
+/// # Why this exists
+///
+/// [`AuxView::parse`] walks the region directory and validates every table. That
+/// is right once per module load and wrong per access — the runtime reads a
+/// constant on every `LoadConst`, and today's `rkyv` accessor is an unchecked
+/// pointer cast, so a directory walk per read would be a real regression on the
+/// hot path.
+///
+/// Resolving to plain byte ranges separates the two costs: validate once at load
+/// producing an `AuxOffsets`, then rebuild the view per access by slicing, which
+/// is a handful of bounds checks and no directory walk.
+///
+/// Carries no borrow, so a caller can store it beside the bytecode image without
+/// a self-referential struct.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuxOffsets {
+    pool: (usize, usize),
+    names: (usize, usize),
+    consts: Option<(usize, usize)>,
+    struct_aux: Option<(usize, usize)>,
+    enum_aux: Option<(usize, usize)>,
+    templates: Option<(usize, usize)>,
+    variants: Option<(usize, usize)>,
+    layouts: Option<(usize, usize)>,
+    chunks: Option<(usize, usize)>,
+    natives: Option<(usize, usize)>,
+    header: Option<(usize, usize)>,
+    debug: Option<(usize, usize)>,
+}
+
+fn region_span(view: &WireView<'_>, kind: u16) -> Result<Option<(usize, usize)>, SchemaError> {
+    let Some(r) = view.find_region(kind) else {
+        return Ok(None);
+    };
+    let start = r.byte_offset().ok_or(SchemaError::BadIndex)?;
+    let len = r.byte_length().ok_or(SchemaError::BadIndex)?;
+    Ok(Some((start, len)))
+}
+
+impl AuxOffsets {
+    /// Validates an artifact and records where every region lives.
+    ///
+    /// Run this once per module load. The returned offsets are only meaningful
+    /// for the exact bytes they were resolved from.
+    ///
+    /// # Errors
+    ///
+    /// [`SchemaError`] for any malformed artifact.
+    pub fn resolve(bytes: &[u8]) -> Result<Self, SchemaError> {
+        // Full validation happens here, so the per-access path can skip it.
+        AuxView::parse(bytes)?;
+
+        let view = WireView::parse(bytes)?;
+        let required = |k: u16| -> Result<(usize, usize), SchemaError> {
+            region_span(&view, k)?.ok_or(SchemaError::MissingRegion(k))
+        };
+        Ok(Self {
+            pool: required(kind::STRING_POOL)?,
+            names: required(kind::NAMES)?,
+            consts: region_span(&view, kind::CONSTS)?,
+            struct_aux: region_span(&view, kind::STRUCT_AUX)?,
+            enum_aux: region_span(&view, kind::ENUM_AUX)?,
+            templates: region_span(&view, kind::STRUCT_TEMPLATES)?,
+            variants: region_span(&view, kind::ENUM_VARIANTS)?,
+            layouts: region_span(&view, kind::ENUM_LAYOUTS)?,
+            chunks: region_span(&view, kind::CHUNKS)?,
+            natives: region_span(&view, kind::NATIVES)?,
+            header: region_span(&view, kind::HEADER)?,
+            debug: region_span(&view, kind::DEBUG_POOL)?,
+        })
+    }
+}
+
+impl<'a> AuxView<'a> {
+    /// Rebuilds a view from already-resolved offsets, **without** re-validating.
+    ///
+    /// The fast path. [`AuxOffsets::resolve`] does the directory walk and the
+    /// validation once; this slices the recorded ranges, which is a handful of
+    /// bounds checks.
+    ///
+    /// # Correctness
+    ///
+    /// `offsets` must have been resolved from these exact `bytes`. Passing
+    /// offsets from a different artifact is not unsafe — every slice is
+    /// bounds-checked and this returns `None` on any mismatch — but the result
+    /// would be meaningless, so the caller is expected to keep the two together.
+    pub fn from_offsets(bytes: &'a [u8], offsets: &AuxOffsets) -> Option<Self> {
+        let span = |r: (usize, usize)| bytes.get(r.0..r.0.checked_add(r.1)?);
+        let opt_span = |r: Option<(usize, usize)>| -> Option<Option<&'a [u8]>> {
+            match r {
+                None => Some(None),
+                Some(x) => span(x).map(Some),
+            }
+        };
+        let table = |b: Option<&'a [u8]>, stride: usize| -> Option<Option<RecordTable<'a>>> {
+            match b {
+                None => Some(None),
+                Some(x) => RecordTable::from_bytes(x, stride).map(Some),
+            }
+        };
+
+        let pool = Pool::from_bytes(span(offsets.pool)?);
+        let names = RecordTable::from_bytes(span(offsets.names)?, NameRef::STRIDE_BYTES)?;
+
+        let consts_b = opt_span(offsets.consts)?;
+        let struct_aux_b = opt_span(offsets.struct_aux)?;
+        let enum_aux_b = opt_span(offsets.enum_aux)?;
+
+        // The constant tables travel together: a module either carries all three
+        // or none, which is what `add_constants` emits.
+        let consts = match (consts_b, struct_aux_b, enum_aux_b) {
+            (Some(c), Some(s), Some(e)) => Some(ConstTable {
+                pool,
+                names,
+                consts: RecordTable::from_bytes(c, ConstRecord::STRIDE_BYTES)?,
+                struct_aux: RecordTable::from_bytes(s, StructAux::STRIDE_BYTES)?,
+                enum_aux: RecordTable::from_bytes(e, EnumAux::STRIDE_BYTES)?,
+            }),
+            _ => None,
+        };
+
+        let layouts = LayoutTable {
+            pool,
+            names,
+            templates: table(
+                opt_span(offsets.templates)?,
+                StructTemplateRecord::STRIDE_BYTES,
+            )?,
+            variants: table(opt_span(offsets.variants)?, EnumVariantRecord::STRIDE_BYTES)?,
+            layouts: table(opt_span(offsets.layouts)?, EnumLayoutRecord::STRIDE_BYTES)?,
+        };
+
+        let module = ModuleTable {
+            pool,
+            names,
+            chunks: table(opt_span(offsets.chunks)?, ChunkRecord::STRIDE_BYTES)?,
+            natives: table(opt_span(offsets.natives)?, NativeRecord::STRIDE_BYTES)?,
+            header: match opt_span(offsets.header)? {
+                Some(h) => RecordTable::from_bytes(h, HeaderRecord::STRIDE_BYTES)?
+                    .get_as::<HeaderRecord>(0),
+                None => None,
+            },
+            debug: opt_span(offsets.debug)?.map(Pool::from_bytes),
+        };
+
+        Some(Self {
+            module,
+            consts,
+            layouts,
+            // The data layout is a cold read; resolving it lazily keeps this
+            // path to what the hot path actually touches.
+            data: None,
+        })
     }
 }

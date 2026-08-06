@@ -17,6 +17,36 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-04 (session 37)
 
+**CUTOVER INCREMENT 1 (2026-08-06): the operator authorised the version bump, and the port turned out not to be mechanical.**
+The stop is resolved -- `BYTECODE_VERSION` goes 1 to 2, on the grounds that the substrate itself has
+changed. Publication stays held.
+
+PROBING THE CUTOVER FOUND THE REAL DESIGN QUESTION, which the reference count had hidden. Fifty-nine
+`Archived*` references sounds like a large mechanical port; the difficulty is not the count but that
+`Vm::archived()` is an `unsafe rkyv::access_unchecked` over a byte range -- effectively free -- and
+`chunk_const` calls it on EVERY `LoadConst`. Swapping in a validating parse per access would trade a
+pointer cast for a directory walk plus full validation on the hot path. That is not a port, it is a
+regression wearing one.
+
+THE LIFETIME IS WHAT FORCES THE SHAPE. The obvious fix -- parse once and cache the `AuxView` -- does
+not work: the `Vm` owns the bytecode image and the view borrows from it, so caching it makes the
+struct self-referential. `AuxOffsets` resolves to plain byte ranges carrying NO borrow, which can sit
+beside the image without that problem, and `from_offsets` rebuilds the view by slicing. Validation is
+paid once at load; per access is a handful of bounds checks.
+
+THE TEST THAT MATTERS is that the fast and slow paths answer IDENTICALLY across every read. Two paths
+to the same bytes that can disagree is a defect that shows up as a value differing by which code
+route reached it -- untraceable in the field and invisible to a test that only exercises one path.
+Aliasing is re-asserted on the fast path as well, because a reconstruction that quietly copied would
+pass every value check while losing the one property the accessor exists for.
+
+ONE API ADDITION, DELIBERATELY IN THE CONTAINER. `RecordTable::from_bytes` and `Pool::from_bytes` are
+mechanism-level operations -- view these bytes as a table -- so they belong to `keleusma-wire` rather
+than being open-coded in the VM. Putting them in the schema layer would have meant the runtime
+reconstructing container internals by hand, which is exactly the coupling the crate split exists to
+prevent.
+
+
 **RANDOMISED INPUT TESTING (2026-08-06): a fuzz suite that would have tested nothing, caught by asking it what it covers.**
 This closes the "no fuzzing" gap I had named myself as a pre-publication blocker. Fixed-seed xorshift,
 no dependency and no nightly, so it runs in the ordinary gate at 2.6 seconds.
