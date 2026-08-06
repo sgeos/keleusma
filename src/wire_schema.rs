@@ -268,30 +268,31 @@ impl ConstRecord {
 /// Sharing is not merely a size optimisation: type and field names repeat
 /// heavily across a module's constants, and a shared pool is what lets a name be
 /// compared by index rather than by bytes.
+///
+/// # Why the index exists
+///
+/// This began as a linear scan, justified in a comment as "the name count per
+/// module is small". **That was wrong, and measurement killed it**: the
+/// self-hosted stage sources declare thousands of data slots each — 16913 in one
+/// case — and every slot name is interned. A scan makes interning quadratic, and
+/// encoding a mid-sized stage went from under a second to over nine minutes as
+/// the count grew. A `BTreeMap` keeps it logarithmic without pulling in a hasher,
+/// which matters for a `no_std` crate.
 #[derive(Default)]
 struct Names {
     pool: Vec<u8>,
     refs: Vec<NameRef>,
+    /// Name bytes to index, for `intern`. `intern_fresh` deliberately bypasses
+    /// lookup but still records the entry, so a later `intern` can share it.
+    index: alloc::collections::BTreeMap<alloc::vec::Vec<u8>, u32>,
 }
 
 impl Names {
     fn intern(&mut self, s: &str) -> u32 {
-        let bytes = s.as_bytes();
-        // Linear scan. The name count per module is small, and a map would pull
-        // in hashing for no measurable benefit at this size.
-        for (i, r) in self.refs.iter().enumerate() {
-            let at = r.offset as usize;
-            if r.length as usize == bytes.len() && &self.pool[at..at + bytes.len()] == bytes {
-                return i as u32;
-            }
+        if let Some(i) = self.index.get(s.as_bytes()) {
+            return *i;
         }
-        let offset = self.pool.len() as u32;
-        self.pool.extend_from_slice(bytes);
-        self.refs.push(NameRef {
-            offset,
-            length: bytes.len() as u32,
-        });
-        (self.refs.len() - 1) as u32
+        self.intern_fresh(s)
     }
 }
 
@@ -464,7 +465,11 @@ impl Names {
             offset,
             length: bytes.len() as u32,
         });
-        (self.refs.len() - 1) as u32
+        let idx = (self.refs.len() - 1) as u32;
+        // Record it for `intern` to share later. Overwriting an existing mapping
+        // is harmless: any index naming the same bytes is equally correct.
+        self.index.insert(bytes.to_vec(), idx);
+        idx
     }
 }
 
@@ -1045,16 +1050,44 @@ pub fn decode_constant_pool(
     bytes: &[u8],
     range: ConstRange,
 ) -> Result<Vec<ConstValue>, SchemaError> {
+    Ok(decode_constant_pools(bytes, &[range])?
+        .pop()
+        .unwrap_or_default())
+}
+
+/// Decodes several pools in **one pass** over the constant table.
+///
+/// # Why this exists
+///
+/// Decoding pools one at a time re-parses and re-materialises the whole table
+/// per call, which is quadratic in the number of contributors. A module has one
+/// pool per chunk, so a real module with a few hundred chunks made
+/// [`decode_aux_body`] pathologically slow — the corpus test found it at a
+/// scale hand-built cases never reach.
+///
+/// The ranges are root indices and are disjoint, so one sweep serves all of them.
+///
+/// # Errors
+///
+/// [`SchemaError`] for any malformed artifact, or if a range lies outside the
+/// table.
+pub fn decode_constant_pools(
+    bytes: &[u8],
+    ranges: &[ConstRange],
+) -> Result<Vec<Vec<ConstValue>>, SchemaError> {
     // One parse-and-validate path, shared with the borrowed accessor. Keeping a
     // second copy here would let the owned and borrowed readers drift apart, and
     // a drift in the ordering check is exactly the silent-wrong-answer class this
     // format is shaped to avoid.
     let t = ConstTable::parse(bytes)?;
 
-    let (first, count) = (range.0 as usize, range.1 as usize);
-    let end = first.checked_add(count).ok_or(SchemaError::BadIndex)?;
-    if end > t.len() {
-        return Err(SchemaError::BadIndex);
+    for r in ranges {
+        let end = (r.0 as usize)
+            .checked_add(r.1 as usize)
+            .ok_or(SchemaError::BadIndex)?;
+        if end > t.len() {
+            return Err(SchemaError::BadIndex);
+        }
     }
 
     let name_of = |idx: u32| -> Result<String, SchemaError> {
@@ -1120,11 +1153,17 @@ pub fn decode_constant_pool(
         built[i] = Some(value);
     }
 
-    let mut roots = Vec::with_capacity(count);
-    for slot in built.iter_mut().take(end).skip(first) {
-        roots.push(slot.take().ok_or(SchemaError::BadIndex)?);
+    let mut out = Vec::with_capacity(ranges.len());
+    for r in ranges {
+        let first = r.0 as usize;
+        let end = first + r.1 as usize;
+        let mut pool = Vec::with_capacity(r.1 as usize);
+        for slot in built.iter_mut().take(end).skip(first) {
+            pool.push(slot.take().ok_or(SchemaError::BadIndex)?);
+        }
+        out.push(pool);
     }
-    Ok(roots)
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -2327,14 +2366,23 @@ pub fn decode_aux_body(bytes: &[u8]) -> Result<crate::wire_format::WireAuxBody, 
 
     let templates = decode_struct_templates(bytes).unwrap_or_default();
 
-    let mut chunks = Vec::with_capacity(m.chunk_count());
+    // One sweep for every chunk's pool. Decoding them individually re-walks the
+    // whole table per chunk, which is quadratic in chunk count.
+    let mut ranges = Vec::with_capacity(m.chunk_count());
     for i in 0..m.chunk_count() {
         let c = m.chunk(i).ok_or(SchemaError::BadIndex)?;
-        let constants = if c.consts_count == 0 {
-            Vec::new()
-        } else {
-            decode_constant_pool(bytes, (c.consts_first, c.consts_count))?
-        };
+        ranges.push((c.consts_first, c.consts_count));
+    }
+    let mut pools = if ranges.is_empty() {
+        Vec::new()
+    } else {
+        decode_constant_pools(bytes, &ranges)?
+    };
+
+    let mut chunks = Vec::with_capacity(m.chunk_count());
+    for (i, pool) in pools.iter_mut().enumerate() {
+        let c = m.chunk(i).ok_or(SchemaError::BadIndex)?;
+        let constants = core::mem::take(pool);
         let first = c.templates_first as usize;
         let end = first
             .checked_add(c.templates_count as usize)

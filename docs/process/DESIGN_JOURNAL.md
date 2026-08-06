@@ -17,6 +17,40 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-04 (session 37)
 
+**CORPUS DIFFERENTIAL (2026-08-05): real input found a quadratic that every hand-built test had missed, and I guessed three times before measuring.**
+The ten self-hosted stage sources are the largest real Keleusma programs there are. Round-tripping the
+whole aux body through them is the evidence that would justify routing the runtime through this codec;
+every prior test used data I constructed, which means it exercised the shapes I thought of.
+
+IT PAID FOR ITSELF IMMEDIATELY. `Names::intern` was a linear scan, and I had written the justification
+myself: "the name count per module is small, and a map would pull in hashing for no measurable benefit
+at this size." The stage sources declare THOUSANDS of data slots each -- 16913 in one -- and
+`add_data_layout` interns every slot name. Encoding a mid-sized stage went from under a second to over
+nine minutes as the count grew. A `BTreeMap` (no hasher, so `no_std` is untouched) took the full corpus
+from 782 seconds to 2.45. Chasing it also surfaced a second quadratic: `decode_aux_body` decoded each
+chunk's constant pool separately and each call re-walked the entire table.
+
+THE METHOD FAILURE IS THE PART WORTH RECORDING. I guessed the cause three times before instrumenting.
+First "the two biggest source files dominate" -- wrong, the other eight still timed out. Then "it must
+be the build" -- wrong, the build is one second. Then "it's the quadratic decode" -- real, but not the
+main cost. Each wrong guess cost a ten-minute timeout, so roughly half an hour went to theorising.
+The per-stage instrumentation that actually located it took a single run and about a minute to write.
+This is the same failure as the wall-clock diagnostic earlier in the session: reaching for a plausible
+story instead of measuring the thing. Cheap instrumentation first is not a counsel of perfection, it is
+simply faster.
+
+A DECISION I ALMOST GOT WRONG. While the cost looked inherent I split the corpus, putting the two
+LARGEST stages behind `#[ignore]` -- which would have hidden the two most valuable inputs behind a
+flag nobody passes, permanently, to dodge a defect that turned out to be a one-line fix. It is removed.
+Worth remembering that a performance workaround applied to a test suite tends to remove exactly the
+coverage that was doing the most work.
+
+AND ONE HONEST LIMIT, ASSERTED RATHER THAN IMPLIED. The corpus emits ZERO struct templates. "The real
+corpus round-trips" therefore says nothing about the template table. The test asserts the zero, with a
+message telling whoever sees it fail to update the caveat, so the claim cannot drift into being wrong
+in either direction.
+
+
 **STAGE 2 COMPLETE (2026-08-05): the whole aux body round-trips, and a partially vacuous test caught by asking what it covers.**
 `encode_aux_body`/`decode_aux_body` are the first consumer to drive every `add_*` together. Everything
 before this exercised one table at a time, which is exactly the arrangement that let the `SHAPES`
