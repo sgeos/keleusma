@@ -495,6 +495,32 @@ so a wrong answer rather than a fault. A test pins that a chunk cannot reach pas
 `chunk_const_str_bytes` is the image-aliasing accessor, asserted **by address** with a control that
 the predicate rejects a copy. 85 tests.
 
+## Randomised input testing DONE — and the vacuity check earned its keep twice
+
+`tests/wire_fuzz.rs` closes the "no fuzzing" gap flagged as a pre-publication blocker. Fixed-seed
+xorshift, no new dependency, no nightly, 2.6 s. Four generators cover what the exhaustive tests
+structurally cannot: **multi-byte** corruption, **wholly random** bytes, **light payload perturbation
+under a valid header**, and **random truncation plus extension**.
+
+Plus one claim stronger than totality: appending bytes to a valid artifact must not change what it
+decodes to. The directory bounds every read, so trailing bytes are inert — if that fails, some reader
+is deriving a length from the buffer size instead of the directory.
+
+**The vacuity check is the part worth keeping.** A `count_parsing` assertion asks how many generated
+inputs actually reach the readers rather than dying at framing. It failed twice:
+
+| Generator | Inputs reaching the readers |
+|---|---|
+| Keep the 48-byte prologue, randomise the rest | **0 / 2000** |
+| Keep the whole header, randomise 25% of payload | **4 / 2000** |
+| Keep the whole header, change 1–4 payload bytes | **1581 / 2000** |
+
+The first failed because the **directory is triplicated and voted too**, so randomising past byte 48
+corrupts all three copies. The second because the decoder validates ordering, name indices, block tags
+and ranges — heavy corruption trips one before any reader runs, which is correct behaviour that also
+makes the test useless. Without that assertion I would have committed a fuzz suite exercising the
+magic-number check and nothing else, passing forever.
+
 ## Next step — AND THE STOP
 
 Increment 2 is the cutover: replace the `Archived*` reads in `vm.rs` and `bytecode.rs` with `AuxView`,

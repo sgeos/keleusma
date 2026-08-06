@@ -17,6 +17,30 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-04 (session 37)
 
+**RANDOMISED INPUT TESTING (2026-08-06): a fuzz suite that would have tested nothing, caught by asking it what it covers.**
+This closes the "no fuzzing" gap I had named myself as a pre-publication blocker. Fixed-seed xorshift,
+no dependency and no nightly, so it runs in the ordinary gate at 2.6 seconds.
+
+THE INTERESTING RESULT IS NOT THE SUITE, IT IS THE VACUITY CHECK. A `count_parsing` assertion asks how
+many generated inputs get past framing and into the readers. It failed twice, informatively. Preserving
+only the 48-byte prologue gave 0 of 2000, because the DIRECTORY is triplicated and voted as well, so
+randomising past byte 48 corrupts all three copies and every input dies on region bounds. Preserving
+the whole header but randomising a quarter of the payload gave 4 of 2000, because the decoder validates
+ordering, name indices, block tags and ranges, and heavy corruption trips one before any reader runs.
+That strictness is correct and is exactly what makes aggressive fuzzing useless against it. Changing one
+to four payload bytes gives 1581 of 2000.
+
+WITHOUT THE ASSERTION I WOULD HAVE COMMITTED A SUITE EXERCISING THE MAGIC NUMBER AND NOTHING ELSE, and
+it would have passed every run forever while reporting green. That is the most dangerous shape a test
+can have -- not failing wrongly but succeeding emptily -- and it is the third instance this arc, after
+the `PartialEq` blindness and the counts-are-not-a-cross-check problem. The habit that catches it is
+uniform: before trusting a test, ask what it would still pass with, then assert the answer.
+
+ONE CLAIM STRONGER THAN TOTALITY went in alongside: appending bytes to a valid artifact must not change
+what it decodes to. The directory bounds every read, so trailing bytes are inert; if that fails, some
+reader is taking a length from the buffer size rather than the directory.
+
+
 **STEP 5 INCREMENT 1 (2026-08-06): the runtime's read surface, and a planned increment that dissolved on inspection.**
 The plan recorded one increment earlier called for "the encoder wired behind `module_to_wire_bytes`
 with rkyv still authoritative". Probing what that would mean showed it is not a real increment at all:
