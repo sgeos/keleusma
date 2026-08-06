@@ -548,23 +548,63 @@ operations ("view these bytes as a table"), which keeps schema knowledge out of 
 
 90 schema tests.
 
-## Next: the cutover proper — NOT yet started
+## Cutover proper: STARTED, on a LOCAL RED BRANCH `feat/wire-cutover-proper`
 
-Remaining, in order:
+**`v0.2.3` is untouched and green at `435a3b2`.** The in-progress work is one local commit,
+`d3d459a`, which is **red by construction** and **not pushed** — the pre-push hook runs the full
+gate and a red branch cannot pass it, and bypassing that hook is prohibited. The branch is durable
+in the local repository; nothing is lost, but nothing is on origin either.
 
-1. **`module_to_wire_bytes`** builds the aux body with `encode_aux_body` instead of `rkyv::to_bytes`.
-2. **The loader** resolves `AuxOffsets` once and stores them on the `Vm`.
-3. **The 26 `archived()` call sites in `vm.rs`** move to `AuxView::from_offsets`. The hot ones are
-   `chunk_const` (1206), `chunk_const_str` (1415), `local_count` (1275), and the width readers.
-4. **`BYTECODE_VERSION` 1 → 2**, and update the no-public-adoption text in `CLAUDE.md`, which
-   currently states the number stays 1.
-5. **Drop the rkyv aux path.** Note the dependency does **not** go away: six uses of
-   `rkyv::util::AlignedVec` remain for buffer alignment, unrelated to the aux archive.
+### What `d3d459a` already does
 
-This is a coupled change — the format cannot be half-migrated — so the branch will be **red between
-commits**, which the loop permits provided the tip is green at merge.
+- `module_to_wire_bytes` (both sites, plain and signed) builds the aux body with `encode_aux_body`.
+- The cold loader path decodes with `decode_aux_body`, and the **8-byte-aligned scratch copy is
+  gone** — the v2 format is byte-addressed, so the decode reads the slice where it lies. That also
+  removes the class of bug the copy existed to prevent (unaligned decode on a 32-bit target).
+- **`BYTECODE_VERSION` is 2.**
 
-**The differential lever available for it**: `decode_aux_body` already round-trips every one of the
-ten self-hosted stages. After the cutover, the same corpus must still round-trip and the VM must
-still execute them, which is a real oracle rather than a smoke test.
+### Why it is red, and the warning that matters most
 
+322 lib tests fail. `Vm::archived()` is still `rkyv::access_unchecked` and now reinterprets the v2
+format as an rkyv archive, reading garbage.
+
+**The build is GREEN. The compiler does not catch any of this** — `access_unchecked` type-checks
+against any byte range. Every error in this port is invisible until runtime, so *do not* treat a
+clean `cargo build` as progress. The oracles are the test suite, the corpus round-trip, and VM
+execution of the ten self-hosted stages.
+
+### The remaining work, in order
+
+1. **Add the accessors `AuxView` still lacks**, enumerated from the call sites:
+   `op_record_count(chunk)`, `native_count()` / `native_name_bytes(idx)`,
+   `template_field_count(chunk, template)`, `enum_min_payload(index)`,
+   `enum_variant_count(index)`.
+2. **Store `AuxOffsets` on the `Vm`**, resolved once at construction, and replace
+   `fn archived(&self) -> &ArchivedWireAuxBody` with `fn aux(&self) -> AuxView<'_>` built via
+   `AuxView::from_offsets`. The offsets carry no borrow, which is why this works where caching an
+   `AuxView` does not.
+3. **Port the 26 `archived()` call sites** in `src/vm.rs`. Line numbers as of `d3d459a`:
+   1206 `chunk_const` (**hot**, and the P10 accessor), 1268 `chunk_op_count`,
+   1275 `chunk_local_count`, 1283/1291 word width, 1297 float width, 1306 `enum_variant_layout`,
+   1400 `chunk_count`, 1406 `native_name`, 1415 `chunk_const_str`, 1432 `struct_template`,
+   2330 `private_composite_pool_offset` (binary-searches the private-composite table).
+4. **Port the zero-copy entry** at `src/bytecode.rs:3886` (`rkyv::access::<ArchivedWireAuxBody>`),
+   and the alignment guard just above it at 3879, which the v2 format no longer needs.
+5. **Update `CLAUDE.md`**: it states `BYTECODE_VERSION` stays 1 under the no-public-adoption policy.
+   The operator authorised 2 on 2026-08-06 because the substrate itself changed. The accepted
+   hazard that text records — an old artifact being accepted-then-mis-read — is now *resolved* for
+   v1 artifacts, since they are rejected on the version check.
+6. **Do not expect the rkyv dependency to go away.** Six uses of `rkyv::util::AlignedVec` remain for
+   buffer alignment, unrelated to the aux archive. I said "drop the dependency" earlier; that was
+   wrong.
+
+### The oracle for this cutover
+
+`tests/wire_corpus.rs` already round-trips all ten self-hosted stages. After the port, the same
+corpus must still round-trip **and** the VM must still execute those stages. That is a real
+differential, not a smoke test, and it is why the corpus was built before the runtime was touched.
+
+## Publication
+
+**Still held.** The operator said "push, but do not yet publish" on 2026-08-06. Neither crate is
+published. Publishing is irreversible and outward-facing: confirm before any attempt.

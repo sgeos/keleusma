@@ -17,6 +17,31 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-04 (session 37)
 
+**CUTOVER PROPER, CHECKPOINTED RED (2026-08-06): the build stays green while the runtime reads garbage.**
+The encode and cold-decode swap plus the version bump went in cleanly and the crate COMPILES. It is
+also completely broken: 322 lib tests fail, because `Vm::archived()` is still
+`rkyv::access_unchecked` and now reinterprets the v2 format as an rkyv archive.
+
+THAT COMBINATION IS THE THING TO REMEMBER. `access_unchecked` type-checks against any byte range, so
+swapping the format underneath it produces no diagnostic at all. A cutover where the compiler is
+blind is a cutover where a clean build is worthless as evidence, and where a half-finished port can
+look finished. It is exactly the situation the corpus differential was built for, one increment
+before it was needed -- the ten self-hosted stages must still round-trip AND still execute, which no
+amount of type-checking can substitute for.
+
+I STOPPED HERE DELIBERATELY rather than pushing through the remaining twenty-six call sites. The port
+is well understood and the design is settled; what makes it unwise to rush is that every mistake in
+it is silent until runtime, in the hot path of the VM, at the end of a very long session. The branch
+is committed and durable locally but NOT pushed, because the pre-push hook runs the full gate and a
+red branch cannot pass it -- and bypassing that hook is prohibited. So the work survives in the
+repository while `v0.2.3` stays green and untouched, which is the right shape for an unfinished
+coupled change.
+
+ONE EARLIER CLAIM CORRECTED: I had said the cutover would let the rkyv dependency be dropped. It will
+not. Six uses of `rkyv::util::AlignedVec` remain for buffer alignment and have nothing to do with the
+aux archive.
+
+
 **CUTOVER INCREMENT 1 (2026-08-06): the operator authorised the version bump, and the port turned out not to be mechanical.**
 The stop is resolved -- `BYTECODE_VERSION` goes 1 to 2, on the grounds that the substrate itself has
 changed. Publication stays held.
