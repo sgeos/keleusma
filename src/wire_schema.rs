@@ -45,7 +45,7 @@ use alloc::vec::Vec;
 use keleusma_wire::{Pool, RecordTable, WireBuilder, WireError, WireRecord, WireView};
 
 use crate::bytecode::{
-    ChunkSignature, ConstValue, DataLayout, EnumLayout, StructTemplate, WireShape,
+    ChunkSignature, ConstValue, DataLayout, EnumLayout, StructTemplate, TypeTag, WireShape,
 };
 
 /// Region kinds. Assigned explicitly rather than by declaration order, so
@@ -81,6 +81,53 @@ pub mod kind {
     pub const PRIVATE_COMPOSITE: u16 = 0x001C;
     /// The private-slot initialiser range into the constant table.
     pub const DATA_INIT: u16 = 0x001D;
+    /// Flat bytes: every chunk's parameter type tags, concatenated.
+    ///
+    /// A byte pool rather than a record table because a type tag is one byte and
+    /// a whole-word record per tag would waste seven eighths of the region.
+    pub const PARAM_TYPES: u16 = 0x001E;
+}
+
+/// Parameter type tags. Numbered from one so a zeroed byte is invalid.
+pub mod type_tag {
+    #![allow(missing_docs)]
+    pub const COMPOSITE: u8 = 1;
+    pub const BYTE: u8 = 2;
+    pub const WORD: u8 = 3;
+    pub const FIXED: u8 = 4;
+    pub const FLOAT: u8 = 5;
+    pub const BOOL: u8 = 6;
+    pub const UNIT: u8 = 7;
+    pub const TEXT: u8 = 8;
+}
+
+/// Encodes a [`TypeTag`] as its wire byte.
+pub fn type_tag_byte(t: TypeTag) -> u8 {
+    match t {
+        TypeTag::Composite => type_tag::COMPOSITE,
+        TypeTag::Byte => type_tag::BYTE,
+        TypeTag::Word => type_tag::WORD,
+        TypeTag::Fixed => type_tag::FIXED,
+        TypeTag::Float => type_tag::FLOAT,
+        TypeTag::Bool => type_tag::BOOL,
+        TypeTag::Unit => type_tag::UNIT,
+        TypeTag::Text => type_tag::TEXT,
+    }
+}
+
+/// Decodes a wire byte back to a [`TypeTag`], or `None` if unrecognised.
+pub fn type_tag_from_byte(b: u8) -> Option<TypeTag> {
+    Some(match b {
+        type_tag::COMPOSITE => TypeTag::Composite,
+        type_tag::BYTE => TypeTag::Byte,
+        type_tag::WORD => TypeTag::Word,
+        type_tag::FIXED => TypeTag::Fixed,
+        type_tag::FLOAT => TypeTag::Float,
+        type_tag::BOOL => TypeTag::Bool,
+        type_tag::UNIT => TypeTag::Unit,
+        type_tag::TEXT => TypeTag::Text,
+        _ => return None,
+    })
 }
 
 /// Slot visibility tags. Numbered from one so a zeroed record is invalid.
@@ -470,6 +517,14 @@ pub struct SchemaBuilder {
     /// Set once any contributor asks for a constant pool, so an artifact with no
     /// constants emits no constant regions rather than three empty ones.
     wants_constants: bool,
+    /// Every contributor's struct templates, concatenated. Deferred for the same
+    /// reason constants are: templates are declared **per chunk**, so the table
+    /// serves many contributors and each needs a range rather than the whole of it.
+    template_pool: Vec<StructTemplate>,
+    wants_templates: bool,
+    /// Concatenated parameter type tags, one byte each.
+    param_types: Vec<u8>,
+    wants_param_types: bool,
 }
 
 /// A contributor's slice of the shared constant table: `(first, count)`.
@@ -568,26 +623,32 @@ impl SchemaBuilder {
     ///
     /// Propagates a [`WireError`] from the container builder.
     pub fn add_struct_templates(&mut self, templates: &[StructTemplate]) -> Result<(), WireError> {
-        let mut records = Vec::with_capacity(templates.len());
-        for t in templates {
-            let type_name = self.names.intern(&t.type_name);
-            let field_names_first = self.names.refs.len() as u32;
-            for f in &t.field_names {
-                self.names.intern_fresh(f);
-            }
-            records.push(StructTemplateRecord {
-                type_name,
-                field_names_first,
-                field_count: t.field_names.len() as u32,
-                reserved: 0,
-            });
-        }
-
-        let region = self.b.region(kind::STRUCT_TEMPLATES, 0)?;
-        for r in &records {
-            self.b.push_record(region, r);
-        }
+        self.add_struct_template_pool(templates);
         Ok(())
+    }
+
+    /// Adds one chunk's struct templates and returns its range in the shared table.
+    ///
+    /// Templates are declared **per chunk**, so like constants the table serves
+    /// many contributors. Emission is deferred to [`Self::finish`] so every
+    /// contributor's templates concatenate into one table and each gets a
+    /// contiguous run.
+    pub fn add_struct_template_pool(&mut self, templates: &[StructTemplate]) -> ConstRange {
+        let first = self.template_pool.len() as u32;
+        self.template_pool.extend_from_slice(templates);
+        self.wants_templates = true;
+        (first, templates.len() as u32)
+    }
+
+    /// Adds one chunk's parameter type tags, returning their `(offset, count)`
+    /// range in the parameter-type byte pool.
+    pub fn add_param_types(&mut self, types: &[TypeTag]) -> ConstRange {
+        let first = self.param_types.len() as u32;
+        for t in types {
+            self.param_types.push(type_tag_byte(*t));
+        }
+        self.wants_param_types = true;
+        (first, types.len() as u32)
     }
 
     /// Adds the enum-layout table and its variant table.
@@ -656,6 +717,36 @@ impl SchemaBuilder {
             for r in &t.enum_aux {
                 self.b.push_record(eaux, r);
             }
+        }
+
+        // Templates intern names, so they must be emitted before the name table
+        // is written out. Each contributor's field-name run stays contiguous
+        // because a template's names are interned consecutively.
+        if self.wants_templates {
+            let mut records = Vec::with_capacity(self.template_pool.len());
+            for t in &self.template_pool {
+                let type_name = self.names.intern(&t.type_name);
+                let field_names_first = self.names.refs.len() as u32;
+                for f in &t.field_names {
+                    self.names.intern_fresh(f);
+                }
+                records.push(StructTemplateRecord {
+                    type_name,
+                    field_names_first,
+                    field_count: t.field_names.len() as u32,
+                    reserved: 0,
+                });
+            }
+            let region = self.b.region(kind::STRUCT_TEMPLATES, 0)?;
+            for r in &records {
+                self.b.push_record(region, r);
+            }
+        }
+
+        if self.wants_param_types {
+            let region = self.b.region(kind::PARAM_TYPES, 0)?;
+            let bytes = core::mem::take(&mut self.param_types);
+            self.b.push(region, &bytes);
         }
 
         let pool = self.b.region(kind::STRING_POOL, 0)?;
@@ -1221,9 +1312,16 @@ pub fn decode_signatures(bytes: &[u8]) -> Result<Vec<ChunkSignature>, SchemaErro
 pub struct LayoutTable<'a> {
     pool: Pool<'a>,
     names: RecordTable<'a>,
-    templates: RecordTable<'a>,
-    variants: RecordTable<'a>,
-    layouts: RecordTable<'a>,
+    /// Absent when the module declares no struct templates.
+    ///
+    /// Unlike [`DataLayoutTable`], absent and empty mean the **same** thing
+    /// here: a module with no templates. `Option<DataLayout>` is semantically
+    /// meaningful — a module with no `data` block differs from one whose block
+    /// is empty — but "no struct templates" has only one reading, so an absent
+    /// region is simply an empty table rather than a distinct state.
+    templates: Option<RecordTable<'a>>,
+    variants: Option<RecordTable<'a>>,
+    layouts: Option<RecordTable<'a>>,
 }
 
 impl<'a> LayoutTable<'a> {
@@ -1239,20 +1337,26 @@ impl<'a> LayoutTable<'a> {
         let view = WireView::parse(bytes)?;
         let region = |k: u16| view.find_region(k).ok_or(SchemaError::MissingRegion(k));
 
+        let opt = |k: u16| view.find_region(k);
         let t = Self {
             pool: view.pool(&region(kind::STRING_POOL)?)?,
             names: view.typed_records::<NameRef>(&region(kind::NAMES)?)?,
-            templates: view
-                .typed_records::<StructTemplateRecord>(&region(kind::STRUCT_TEMPLATES)?)?,
-            variants: view.typed_records::<EnumVariantRecord>(&region(kind::ENUM_VARIANTS)?)?,
-            layouts: view.typed_records::<EnumLayoutRecord>(&region(kind::ENUM_LAYOUTS)?)?,
+            templates: match opt(kind::STRUCT_TEMPLATES) {
+                Some(r) => Some(view.typed_records::<StructTemplateRecord>(&r)?),
+                None => None,
+            },
+            variants: match opt(kind::ENUM_VARIANTS) {
+                Some(r) => Some(view.typed_records::<EnumVariantRecord>(&r)?),
+                None => None,
+            },
+            layouts: match opt(kind::ENUM_LAYOUTS) {
+                Some(r) => Some(view.typed_records::<EnumLayoutRecord>(&r)?),
+                None => None,
+            },
         };
 
         for i in 0..t.template_count() {
-            let r = t
-                .templates
-                .get_as::<StructTemplateRecord>(i)
-                .ok_or(SchemaError::BadIndex)?;
+            let r = t.template(i).ok_or(SchemaError::BadIndex)?;
             let end = (r.field_names_first as usize)
                 .checked_add(r.field_count as usize)
                 .ok_or(SchemaError::BadIndex)?;
@@ -1260,15 +1364,13 @@ impl<'a> LayoutTable<'a> {
                 return Err(SchemaError::BadIndex);
             }
         }
+        let variant_len = t.variants.map(|v| v.len()).unwrap_or(0);
         for i in 0..t.layout_count() {
-            let r = t
-                .layouts
-                .get_as::<EnumLayoutRecord>(i)
-                .ok_or(SchemaError::BadIndex)?;
+            let r = t.layout(i).ok_or(SchemaError::BadIndex)?;
             let end = (r.variants_first as usize)
                 .checked_add(r.variants_count as usize)
                 .ok_or(SchemaError::BadIndex)?;
-            if end > t.variants.len() || r.type_name as usize >= t.names.len() {
+            if end > variant_len || r.type_name as usize >= t.names.len() {
                 return Err(SchemaError::BadIndex);
             }
         }
@@ -1278,13 +1380,13 @@ impl<'a> LayoutTable<'a> {
     /// Number of struct templates.
     #[inline]
     pub fn template_count(&self) -> usize {
-        self.templates.len()
+        self.templates.map(|t| t.len()).unwrap_or(0)
     }
 
     /// Number of enum layouts.
     #[inline]
     pub fn layout_count(&self) -> usize {
-        self.layouts.len()
+        self.layouts.map(|t| t.len()).unwrap_or(0)
     }
 
     /// Bytes of name `index`, as a slice into the artifact.
@@ -1297,7 +1399,7 @@ impl<'a> LayoutTable<'a> {
     /// The raw template record at `index`.
     #[inline]
     pub fn template(&self, index: usize) -> Option<StructTemplateRecord> {
-        self.templates.get_as::<StructTemplateRecord>(index)
+        self.templates?.get_as::<StructTemplateRecord>(index)
     }
 
     /// Field `field` of template `index`, as bytes aliasing the artifact.
@@ -1313,7 +1415,7 @@ impl<'a> LayoutTable<'a> {
     /// The raw layout record at `index`.
     #[inline]
     pub fn layout(&self, index: usize) -> Option<EnumLayoutRecord> {
-        self.layouts.get_as::<EnumLayoutRecord>(index)
+        self.layouts?.get_as::<EnumLayoutRecord>(index)
     }
 
     /// Variant `variant` of layout `index`: its name bytes and discriminant.
@@ -1324,7 +1426,7 @@ impl<'a> LayoutTable<'a> {
             return None;
         }
         let v = self
-            .variants
+            .variants?
             .get_as::<EnumVariantRecord>(r.variants_first as usize + variant)?;
         Some((self.name_bytes(v.name)?, v.disc))
     }
@@ -1681,4 +1783,53 @@ pub fn decode_data_layout(bytes: &[u8]) -> Result<Option<DataLayout>, SchemaErro
         private_composite_layout,
         private_init,
     }))
+}
+
+/// A **borrowed** view over the parameter-type byte pool.
+///
+/// Tags are one byte each, so this is a flat pool rather than a record table —
+/// a whole-word record per tag would waste seven eighths of the region.
+#[derive(Debug, Clone, Copy)]
+pub struct ParamTypeTable<'a> {
+    bytes: &'a [u8],
+}
+
+impl<'a> ParamTypeTable<'a> {
+    /// Parses the parameter-type pool, or reports it absent.
+    ///
+    /// # Errors
+    ///
+    /// [`SchemaError`] for a malformed container. Never panics.
+    pub fn parse(bytes: &'a [u8]) -> Result<Option<Self>, SchemaError> {
+        let view = WireView::parse(bytes)?;
+        let Some(region) = view.find_region(kind::PARAM_TYPES) else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            bytes: view.pool(&region)?.bytes(),
+        }))
+    }
+
+    /// The raw tag bytes for a chunk's range, aliasing the artifact.
+    #[inline]
+    pub fn tag_bytes(&self, range: ConstRange) -> Option<&'a [u8]> {
+        let start = range.0 as usize;
+        let end = start.checked_add(range.1 as usize)?;
+        self.bytes.get(start..end)
+    }
+
+    /// Decodes a chunk's parameter type tags.
+    ///
+    /// # Errors
+    ///
+    /// [`SchemaError::BadIndex`] if the range is out of bounds, or
+    /// [`SchemaError::UnknownTag`] for an unrecognised tag byte.
+    pub fn tags(&self, range: ConstRange) -> Result<Vec<TypeTag>, SchemaError> {
+        let raw = self.tag_bytes(range).ok_or(SchemaError::BadIndex)?;
+        let mut out = Vec::with_capacity(raw.len());
+        for b in raw {
+            out.push(type_tag_from_byte(*b).ok_or(SchemaError::UnknownTag(*b as u16))?);
+        }
+        Ok(out)
+    }
 }
