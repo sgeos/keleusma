@@ -372,41 +372,35 @@ are pinned by a test.
 Every data record is **one word**, and every tag is numbered from one so a zeroed record is invalid
 rather than reading as a well-formed shared slot.
 
+## Stage 2b increment 5 DONE: per-chunk ranges for templates and parameter types
+
+**Another probe finding: `struct_templates` is per-CHUNK.** Increment 2 built a module-level template
+table with no ranges — incomplete rather than wrong, and it would have failed the moment a second
+chunk appeared. Templates now defer and concatenate exactly as constants do, with
+`add_struct_template_pool` returning a range. Field-name runs stay contiguous through the deferred
+interning because a template's names are interned consecutively.
+
+`param_types` is a per-chunk `Vec<TypeTag>` of **one-byte** values, so it is a **byte pool**, not a
+record table — a whole-word record per tag would waste seven eighths of the region.
+
+**A distinction drawn deliberately, not by reflex.** `LayoutTable` now treats absent template and
+enum regions as **empty**, whereas `DataLayoutTable` treats an absent region as **`None`**. That is
+not an inconsistency: `Option<DataLayout>` is semantically meaningful (a module with no `data` block
+differs from one whose block is empty), while "no struct templates" has only one reading. A module
+with templates but no enums is ordinary and must parse; a test pins it.
+
+64 tests.
+
 ## Next step
 
-Increment 5, the last of stage 2b: the **scalar header block** (entry point, the three width
-log2 fields, WCET/WCMU, flags, shared/private byte counts, schema hash — genuinely flat) and
-**`debug_pool_bytes`**, which stays opaque bytes into a region so stripping remains a single
-assignment. Also still outstanding from the chunk record: `native_names` with its parallel
-`native_return_shapes`, and the per-chunk metadata (name, local/param counts, block type, op offsets).
+Close stage 2b with the last pieces of the aux body:
+- **The chunk table** — per-chunk name, local/param counts, block type, op byte offset and record
+  count, plus the four ranges now available (constants, templates, param types, debug pool).
+- **`native_names`** with its parallel `native_return_shapes` (shape indices into the existing table).
+- **The scalar header block** — entry point, three width log2 fields, WCET/WCMU, flags,
+  shared/private byte counts, schema hash. Genuinely flat.
+- **`debug_pool_bytes`** — opaque bytes into a region, deliberately unparsed so stripping stays a
+  single assignment.
 
-After that, **step 5**: routing the runtime through these accessors, which is where P10 is preserved
-or lost in practice rather than in principle. Then the scalar header block and
-`debug_pool_bytes` (the header is genuinely flat; the debug pool stays opaque bytes into a region so
-stripping remains a single assignment). Then **step 5**, routing the runtime through these accessors,
-which is where P10 is preserved or lost in practice. After those, step 5: routing the runtime through
-`ConstTable`, which is where P10 is preserved or lost in practice rather than in principle.
-
-**Method note that earned its keep twice today.** Run `cargo clippy --all-features`, the `-D warnings`
-doc build, and `cargo test --no-default-features` BEFORE the full gate, not after. Targeted tests
-structurally cannot see feature combinations or documentation, and both of this session's genuine
-gate reds were in exactly those two blind spots.
-
-## Superseded next step (kept for context)
-
-Step 4 proper: the Keleusma schema on top of the container — region kinds, chunk descriptors, the
-constant table, the string pool. The revision-2 prototype validated those record layouts across three
-languages, but no Rust code emits them yet. That work is also what would qualify the container for
-publication, since it is the first real consumer.
-
-## Standing method notes
-
-The fourteen rules are consolidated in [HANDOFF.md](./HANDOFF.md). Two that earned their keep most
-recently:
-
-- **Cross-check across independent implementations.** A Keleusma/Python checksum disagreement (3968
-  against 4016) localised a mistranscribed magic constant in one step. Build the cross-check before
-  it is needed.
-- **Run the FULL gate before landing.** Clippy `-D warnings` and `EXPECTED_SELF_COMPILE` fire only
-  there, and the documented `cargo doc --workspace` command once disagreed with the gate's own doc
-  step, hiding a real defect in published documentation.
+Then **step 5**: routing the runtime through these accessors, where P10 is preserved or lost in
+practice rather than in principle.

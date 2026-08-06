@@ -17,6 +17,29 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-04 (session 37)
 
+**STAGE 2b INCREMENT 5 (2026-08-05): the same per-chunk lesson, a second time, and a distinction that only looks like an inconsistency.**
+`struct_templates` is declared PER CHUNK. Increment 2 built a module-level template table with no
+ranges, which was incomplete rather than wrong and would have failed the moment a second chunk
+appeared. This is the same shape of miss as the constant table in increment 3 -- a per-chunk vector
+modelled as if the module had exactly one of them -- and it is worth noting that having just made that
+mistake did not prevent making it again two increments later. The fix is identical: defer, concatenate,
+return a range.
+
+PARAMETER TYPES ARE A POOL, NOT A TABLE. A `TypeTag` is one byte. A whole-word record per tag would
+waste seven eighths of the region, so the tags go into a flat byte pool addressed by `(offset, count)`
+-- the same reasoning that puts strings in a pool rather than in fixed records. Fixed-size records are
+the format's premise for anything with structure; they are the wrong tool for a run of bytes.
+
+THE DISTINCTION THAT LOOKS LIKE AN INCONSISTENCY AND IS NOT. `DataLayoutTable` treats an absent region
+as `None`; `LayoutTable` now treats absent template and enum regions as EMPTY. The rule is not
+"absence always means X" but "does absence carry information the schema needs". `Option<DataLayout>`
+is semantically meaningful: a module with no `data` block is a different program from one whose block
+declares nothing. "No struct templates" has only one reading, so there is nothing for absence to
+distinguish and demanding the region would reject an ordinary module. Writing the two rules down
+together, with the reason, because a later reader would otherwise be right to suspect one of them of
+being a bug.
+
+
 **STAGE 2b INCREMENT 4 (2026-08-05): the data layout, and absence as a first-class encoding.**
 Four regions plus a constant range. `private_init` rides the shared multi-contributor constant table
 that increment 3 built, which is exactly why that increment was split out first -- had the two landed

@@ -1487,3 +1487,135 @@ fn data_layout_corruption_never_panics() {
         let _ = decode_data_layout(&m);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Per-chunk ranges: struct templates and parameter types.
+// ---------------------------------------------------------------------------
+
+use keleusma::bytecode::TypeTag;
+use keleusma::wire_schema::{ParamTypeTable, type_tag_byte, type_tag_from_byte};
+
+#[test]
+fn struct_templates_are_per_chunk_ranges() {
+    // Templates are declared per chunk, so the table serves many contributors
+    // exactly as the constant table does.
+    let mut b = SchemaBuilder::new();
+    let a = b.add_struct_template_pool(&[tmpl("A", &["x"]), tmpl("B", &["y", "z"])]);
+    let c = b.add_struct_template_pool(&[tmpl("C", &["w"])]);
+    let bytes = b.finish().unwrap();
+
+    assert_eq!(a, (0, 2));
+    assert_eq!(c, (2, 1));
+
+    let t = LayoutTable::parse(&bytes).unwrap();
+    assert_eq!(t.template_count(), 3);
+    // Each chunk's run is addressable at first + i, and field-name runs stayed
+    // contiguous through the deferred interning.
+    assert_eq!(t.template_field_name(a.0 as usize, 0), Some(&b"x"[..]));
+    assert_eq!(t.template_field_name(a.0 as usize + 1, 0), Some(&b"y"[..]));
+    assert_eq!(t.template_field_name(a.0 as usize + 1, 1), Some(&b"z"[..]));
+    assert_eq!(t.template_field_name(c.0 as usize, 0), Some(&b"w"[..]));
+}
+
+#[test]
+fn a_module_with_templates_but_no_enums_still_parses() {
+    // Absent and empty mean the SAME thing for templates and enum layouts --
+    // unlike Option<DataLayout>, "no struct templates" has only one reading. A
+    // reader that demanded the enum regions would reject a perfectly ordinary
+    // module.
+    let mut b = SchemaBuilder::new();
+    b.add_struct_template_pool(&[tmpl("Only", &["f"])]);
+    let bytes = b.finish().unwrap();
+
+    let t = LayoutTable::parse(&bytes).unwrap();
+    assert_eq!(t.template_count(), 1);
+    assert_eq!(t.layout_count(), 0, "absent enum regions read as empty");
+    assert_eq!(t.layout_variant(0, 0), None);
+    assert_eq!(decode_enum_layouts(&bytes).unwrap().len(), 0);
+}
+
+#[test]
+fn parameter_types_round_trip_as_a_byte_pool() {
+    let chunk_a = [TypeTag::Word, TypeTag::Byte, TypeTag::Bool];
+    let chunk_b = [TypeTag::Composite];
+
+    let mut b = SchemaBuilder::new();
+    let ra = b.add_param_types(&chunk_a);
+    let rb = b.add_param_types(&chunk_b);
+    let bytes = b.finish().unwrap();
+
+    assert_eq!(ra, (0, 3));
+    assert_eq!(rb, (3, 1));
+
+    let t = ParamTypeTable::parse(&bytes).unwrap().expect("present");
+    assert_eq!(t.tags(ra).unwrap(), chunk_a);
+    assert_eq!(t.tags(rb).unwrap(), chunk_b);
+    assert_eq!(t.tags((0, 0)).unwrap(), Vec::<TypeTag>::new());
+}
+
+#[test]
+fn parameter_type_bytes_alias_the_artifact() {
+    let mut b = SchemaBuilder::new();
+    let r = b.add_param_types(&[TypeTag::Word, TypeTag::Float]);
+    let bytes = b.finish().unwrap();
+    let t = ParamTypeTable::parse(&bytes).unwrap().unwrap();
+
+    let raw = t.tag_bytes(r).unwrap();
+    let base = bytes.as_ptr() as usize;
+    let at = raw.as_ptr() as usize;
+    assert!(at >= base && at + raw.len() <= base + bytes.len());
+
+    let copy = raw.to_vec();
+    let copy_at = copy.as_ptr() as usize;
+    assert!(!(copy_at >= base && copy_at + copy.len() <= base + bytes.len()));
+}
+
+#[test]
+fn every_type_tag_round_trips_and_zero_is_invalid() {
+    for t in [
+        TypeTag::Composite,
+        TypeTag::Byte,
+        TypeTag::Word,
+        TypeTag::Fixed,
+        TypeTag::Float,
+        TypeTag::Bool,
+        TypeTag::Unit,
+        TypeTag::Text,
+    ] {
+        let b = type_tag_byte(t);
+        assert_ne!(b, 0, "a zeroed byte must not be a valid tag");
+        assert_eq!(type_tag_from_byte(b), Some(t));
+    }
+    assert_eq!(type_tag_from_byte(0), None);
+    assert_eq!(type_tag_from_byte(200), None);
+}
+
+#[test]
+fn an_out_of_range_or_corrupt_param_range_is_reported() {
+    let mut b = SchemaBuilder::new();
+    let r = b.add_param_types(&[TypeTag::Word]);
+    let mut bytes = b.finish().unwrap();
+
+    let t = ParamTypeTable::parse(&bytes).unwrap().unwrap();
+    assert!(t.tags(r).is_ok());
+    assert_eq!(t.tags((0, 99)).unwrap_err(), SchemaError::BadIndex);
+    assert_eq!(t.tags((99, 1)).unwrap_err(), SchemaError::BadIndex);
+
+    // A corrupted tag byte is reported, not guessed.
+    let base = {
+        let view = WireView::parse(&bytes).unwrap();
+        view.find_region(keleusma::wire_schema::kind::PARAM_TYPES)
+            .unwrap()
+            .byte_offset()
+            .unwrap()
+    };
+    bytes[base] = 0;
+    let t = ParamTypeTable::parse(&bytes).unwrap().unwrap();
+    assert_eq!(t.tags(r).unwrap_err(), SchemaError::UnknownTag(0));
+}
+
+#[test]
+fn an_absent_param_type_pool_is_none() {
+    let bytes = encode_layouts(&[tmpl("A", &["p"])], &[]).unwrap();
+    assert!(ParamTypeTable::parse(&bytes).unwrap().is_none());
+}
