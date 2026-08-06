@@ -3479,7 +3479,7 @@ pub const MAX_DATA_ADDR: u32 = 1 << 24;
 /// format and would be accepted then mis-read rather than cleanly rejected on a
 /// version check -- moot while there is no saved bytecode in use, and revisited if
 /// the crate gains adoption.
-pub const BYTECODE_VERSION: u16 = 1;
+pub const BYTECODE_VERSION: u16 = 2;
 
 /// Word size in bits assumed by this binary build, encoded as the
 /// base-2 exponent. Actual width in bits is `1 << RUNTIME_WORD_BITS_LOG2`.
