@@ -17,6 +17,37 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-04 (session 37)
 
+**STAGE 2b COMPLETE (2026-08-05): increment 6, and the same collision class twice.**
+The chunk table, natives, scalar header and debug pool close the aux body: every field of
+`WireAuxBody` and `WireChunk` now has somewhere to go. A chunk record is six words of fixed-size data
+because every variable part it describes lives in a shared table and is referenced by range.
+
+TWO ENCODING CHOICES WORTH THE WORDS. Natives pair a name with its return shape in ONE record rather
+than two parallel regions, because `native_return_shapes` is literally parallel to `native_names` and
+was added additively -- exactly the arrangement where the two fall out of step, and a single record
+makes that impossible by construction. And `ABSENT` (`u32::MAX`) serves as the optional-index sentinel
+for `entry_point`, a native's return shape, and a chunk's debug pool: these index tables the container
+already bounds far below four billion entries, so the value is unreachable in a well-formed artifact,
+whereas a parallel presence flag is one more thing that can disagree with the field it describes. The
+sentinel also preserves `None` versus `Some(empty)` for the debug pool, which is a release build
+versus a debug build that emitted nothing.
+
+THE BUG, AND WHY IT IS THE INTERESTING PART. `add_natives` and `add_signatures` both declared
+`kind::SHAPES`. The container rejects a duplicate region kind, so calling both returned
+`DuplicateRegion` -- and it survived a whole increment because the only test that touched natives did
+not also add signatures. I even wrote a comment ASSERTING the two had separate shape tables, which was
+false the moment it was written.
+
+This is the identical defect class as the `NAMES` collision found in increment 2: a region is SHARED
+STATE, and any per-contributor table that declares it collides with the first contributor to run.
+Having diagnosed that exact failure four increments earlier did not prevent repeating it, which is now
+the second time in this arc that a lesson recorded in prose failed to transfer while a mechanical check
+caught the recurrence. So the remedy is mechanical: alongside the specific regression test there is now
+`every_add_method_can_be_called_together`, which drives every contributor through one builder. The next
+`add_*` that claims a taken region fails in that test rather than in whichever combination nobody
+thought to write.
+
+
 **STAGE 2b INCREMENT 5 (2026-08-05): the same per-chunk lesson, a second time, and a distinction that only looks like an inconsistency.**
 `struct_templates` is declared PER CHUNK. Increment 2 built a module-level template table with no
 ranges, which was incomplete rather than wrong and would have failed the moment a second chunk

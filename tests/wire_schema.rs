@@ -1619,3 +1619,339 @@ fn an_absent_param_type_pool_is_none() {
     let bytes = encode_layouts(&[tmpl("A", &["p"])], &[]).unwrap();
     assert!(ParamTypeTable::parse(&bytes).unwrap().is_none());
 }
+
+// ---------------------------------------------------------------------------
+// The chunk table, natives, header, and debug pool.
+// ---------------------------------------------------------------------------
+
+use keleusma::bytecode::BlockType;
+use keleusma::wire_schema::{ABSENT, ChunkMeta, HeaderRecord, ModuleTable, block_tag};
+
+fn meta(consts: (u32, u32), templates: (u32, u32), params: (u32, u32)) -> ChunkMeta {
+    ChunkMeta {
+        constants: consts,
+        templates,
+        param_types: params,
+        local_count: 7,
+        param_count: 2,
+        block_type: BlockType::Stream,
+        op_byte_offset: 64,
+        op_record_count: 12,
+    }
+}
+
+#[test]
+fn a_whole_module_assembles_into_one_artifact() {
+    // Everything stage 2b built, in one place: chunks referencing constants,
+    // templates and parameter types by range, plus natives, header, and debug.
+    let mut b = SchemaBuilder::new();
+
+    let c0 = b.add_constant_pool(&[ConstValue::Int(1), ConstValue::StaticStr("s".into())]);
+    let t0 = b.add_struct_template_pool(&[tmpl("P", &["x"])]);
+    let p0 = b.add_param_types(&[TypeTag::Word, TypeTag::Bool]);
+    b.add_chunk("main", &meta(c0, t0, p0), Some(b"dbg0"))
+        .unwrap();
+
+    let c1 = b.add_constant_pool(&[ConstValue::Byte(9)]);
+    let t1 = b.add_struct_template_pool(&[]);
+    let p1 = b.add_param_types(&[]);
+    b.add_chunk("tick", &meta(c1, t1, p1), None).unwrap();
+
+    b.add_natives(
+        &["host::log".to_string(), "host::now".to_string()],
+        &[WireShape::Scalar { kind: 3 }],
+    )
+    .unwrap();
+
+    b.add_header(&HeaderRecord {
+        entry_point: 0,
+        word_bits_log2: 6,
+        addr_bits_log2: 6,
+        float_bits_log2: 6,
+        flags: 0x01,
+        wcet_cycles: 1234,
+        wcmu_bytes: 5678,
+        shared_data_bytes: 64,
+        private_data_bytes: 32,
+        schema_hash: 0xDEADBEEF,
+        reserved: 0,
+    })
+    .unwrap();
+
+    let bytes = b.finish().unwrap();
+    let m = ModuleTable::parse(&bytes).unwrap();
+
+    assert_eq!(m.chunk_count(), 2);
+    assert_eq!(m.chunk_name(0), Some(&b"main"[..]));
+    assert_eq!(m.chunk_name(1), Some(&b"tick"[..]));
+    assert_eq!(m.chunk_block_type(0), Some(BlockType::Stream));
+
+    // The chunk's ranges address the shared tables it actually wrote into.
+    let ch = m.chunk(0).unwrap();
+    let vals = decode_constant_pool(&bytes, (ch.consts_first, ch.consts_count)).unwrap();
+    assert_eq!(vals.len(), 2);
+    assert!(deep_eq(&vals[0], &ConstValue::Int(1)));
+
+    let lt = LayoutTable::parse(&bytes).unwrap();
+    assert_eq!(
+        lt.template_field_name(ch.templates_first as usize, 0),
+        Some(&b"x"[..])
+    );
+
+    let pt = ParamTypeTable::parse(&bytes).unwrap().unwrap();
+    assert_eq!(
+        pt.tags((ch.param_types_first, ch.param_types_count))
+            .unwrap(),
+        vec![TypeTag::Word, TypeTag::Bool]
+    );
+
+    // Header and entry point.
+    let h = m.header().expect("header present");
+    assert_eq!(h.wcet_cycles, 1234);
+    assert_eq!(h.schema_hash, 0xDEADBEEF);
+    assert_eq!(h.word_bits_log2, 6);
+    assert_eq!(m.entry_point(), Some(0));
+
+    // Natives, with the second lacking a described return shape.
+    assert_eq!(m.native_count(), 2);
+    assert_eq!(m.native_name(0), Some(&b"host::log"[..]));
+    assert_ne!(m.native(0).unwrap().ret_shape, ABSENT);
+    assert_eq!(m.native(1).unwrap().ret_shape, ABSENT);
+}
+
+#[test]
+fn a_chunk_with_no_debug_metadata_differs_from_one_with_empty_metadata() {
+    // Option<Vec<u8>> again: None is a release build, Some(empty) is a debug
+    // build that happened to emit nothing. ABSENT keeps them apart.
+    let mut b = SchemaBuilder::new();
+    let r = (0, 0);
+    b.add_chunk("none", &meta(r, r, r), None).unwrap();
+    b.add_chunk("empty", &meta(r, r, r), Some(b"")).unwrap();
+    b.add_chunk("some", &meta(r, r, r), Some(b"xyz")).unwrap();
+    let bytes = b.finish().unwrap();
+
+    let m = ModuleTable::parse(&bytes).unwrap();
+    assert_eq!(m.chunk_debug_bytes(0), None, "None stays None");
+    assert_eq!(
+        m.chunk_debug_bytes(1),
+        Some(&[][..]),
+        "Some(empty) stays Some"
+    );
+    assert_eq!(m.chunk_debug_bytes(2), Some(&b"xyz"[..]));
+    assert_eq!(m.chunk(0).unwrap().debug_first, ABSENT);
+    assert_ne!(m.chunk(1).unwrap().debug_first, ABSENT);
+}
+
+#[test]
+fn an_absent_entry_point_is_none() {
+    let mut b = SchemaBuilder::new();
+    b.add_header(&HeaderRecord {
+        entry_point: ABSENT,
+        word_bits_log2: 6,
+        addr_bits_log2: 6,
+        float_bits_log2: 6,
+        flags: 0,
+        wcet_cycles: 0,
+        wcmu_bytes: 0,
+        shared_data_bytes: 0,
+        private_data_bytes: 0,
+        schema_hash: 0,
+        reserved: 0,
+    })
+    .unwrap();
+    let bytes = b.finish().unwrap();
+    let m = ModuleTable::parse(&bytes).unwrap();
+    assert_eq!(m.entry_point(), None);
+    assert!(m.header().is_some(), "the header is still present");
+}
+
+#[test]
+fn chunk_and_native_names_alias_the_artifact() {
+    let mut b = SchemaBuilder::new();
+    let r = (0, 0);
+    b.add_chunk("aliased", &meta(r, r, r), None).unwrap();
+    b.add_natives(&["nat".to_string()], &[]).unwrap();
+    let bytes = b.finish().unwrap();
+    let m = ModuleTable::parse(&bytes).unwrap();
+
+    let base = bytes.as_ptr() as usize;
+    for slice in [m.chunk_name(0).unwrap(), m.native_name(0).unwrap()] {
+        let at = slice.as_ptr() as usize;
+        assert!(at >= base && at + slice.len() <= base + bytes.len());
+    }
+    let copy = b"aliased".to_vec();
+    let copy_at = copy.as_ptr() as usize;
+    assert!(!(copy_at >= base && copy_at + copy.len() <= base + bytes.len()));
+}
+
+#[test]
+fn an_unknown_block_type_is_rejected() {
+    assert_ne!(block_tag::FUNC, 0);
+    let mut b = SchemaBuilder::new();
+    let r = (0, 0);
+    b.add_chunk("c", &meta(r, r, r), None).unwrap();
+    let mut bytes = b.finish().unwrap();
+
+    let base = {
+        let view = WireView::parse(&bytes).unwrap();
+        view.find_region(keleusma::wire_schema::kind::CHUNKS)
+            .unwrap()
+            .byte_offset()
+            .unwrap()
+    };
+    bytes[base + keleusma::wire_schema::ChunkRecord::OFFSET_BLOCK_TYPE] = 0;
+    assert!(matches!(
+        ModuleTable::parse(&bytes),
+        Err(SchemaError::UnknownTag(0))
+    ));
+}
+
+#[test]
+fn module_records_are_whole_words() {
+    use keleusma::wire_schema::{ChunkRecord, NativeRecord};
+    assert_eq!(<ChunkRecord as WireRecord>::STRIDE % 8, 0);
+    assert_eq!(<NativeRecord as WireRecord>::STRIDE, 8);
+    assert_eq!(<HeaderRecord as WireRecord>::STRIDE, 32);
+}
+
+#[test]
+fn a_truncated_module_artifact_is_rejected_at_every_length() {
+    let mut b = SchemaBuilder::new();
+    let r = (0, 0);
+    b.add_chunk("c", &meta(r, r, r), Some(b"d")).unwrap();
+    b.add_natives(&["n".to_string()], &[WireShape::Top])
+        .unwrap();
+    let bytes = b.finish().unwrap();
+    for cut in 0..bytes.len() {
+        assert!(
+            ModuleTable::parse(&bytes[..cut]).is_err(),
+            "truncation to {cut} must be rejected"
+        );
+    }
+    assert!(ModuleTable::parse(&bytes).is_ok());
+}
+
+#[test]
+fn module_corruption_never_panics() {
+    let mut b = SchemaBuilder::new();
+    let r = (0, 0);
+    b.add_chunk("c0", &meta(r, r, r), Some(b"dbg")).unwrap();
+    b.add_chunk("c1", &meta(r, r, r), None).unwrap();
+    b.add_natives(&["n0".to_string()], &[WireShape::Top])
+        .unwrap();
+    b.add_header(&HeaderRecord {
+        entry_point: 0,
+        word_bits_log2: 6,
+        addr_bits_log2: 6,
+        float_bits_log2: 6,
+        flags: 0,
+        wcet_cycles: 1,
+        wcmu_bytes: 2,
+        shared_data_bytes: 3,
+        private_data_bytes: 4,
+        schema_hash: 5,
+        reserved: 0,
+    })
+    .unwrap();
+    let bytes = b.finish().unwrap();
+
+    for pos in 0..bytes.len() {
+        let mut m = bytes.clone();
+        m[pos] ^= 0x80;
+        if let Ok(t) = ModuleTable::parse(&m) {
+            for i in 0..t.chunk_count().saturating_add(2) {
+                let _ = t.chunk(i);
+                let _ = t.chunk_name(i);
+                let _ = t.chunk_block_type(i);
+                let _ = t.chunk_debug_bytes(i);
+            }
+            for i in 0..t.native_count().saturating_add(2) {
+                let _ = t.native(i);
+                let _ = t.native_name(i);
+            }
+            let _ = t.header();
+            let _ = t.entry_point();
+            let _ = t.name_bytes(u32::MAX);
+        }
+    }
+}
+
+#[test]
+fn signatures_and_natives_can_coexist() {
+    // REGRESSION. Both contribute shapes, and SHAPES is a single region the
+    // container will not let two callers declare. This collided for one
+    // increment because the only test exercised natives WITHOUT signatures --
+    // the same blind spot that hid the NAMES collision earlier.
+    let mut b = SchemaBuilder::new();
+    b.add_signatures(&[sig(
+        vec![WireShape::Scalar { kind: 1 }],
+        WireShape::Top,
+        WireShape::Top,
+    )])
+    .unwrap();
+    b.add_natives(
+        &["n0".to_string(), "n1".to_string()],
+        &[WireShape::Flat { kind: 2, size: 16 }],
+    )
+    .unwrap();
+    let bytes = b.finish().unwrap();
+
+    // Both readers see their own entries, resolved through the one shape table.
+    let st = SignatureTable::parse(&bytes).unwrap();
+    assert_eq!(st.len(), 1);
+    assert_eq!(st.param_shape(0, 0), Some(WireShape::Scalar { kind: 1 }));
+    assert_eq!(st.ret_shape(0), Some(WireShape::Top));
+
+    let m = ModuleTable::parse(&bytes).unwrap();
+    assert_eq!(m.native_count(), 2);
+    let nat0 = m.native(0).unwrap();
+    assert_ne!(nat0.ret_shape, ABSENT);
+    assert_eq!(
+        st.shape(nat0.ret_shape),
+        Some(WireShape::Flat { kind: 2, size: 16 }),
+        "a native's return shape resolves in the shared table"
+    );
+    assert_eq!(m.native(1).unwrap().ret_shape, ABSENT);
+}
+
+#[test]
+fn every_add_method_can_be_called_together() {
+    // The general form of the collision above: exercise every contributor in one
+    // builder, so a future add_* that claims an already-claimed region fails
+    // here rather than in whichever combination nobody tested.
+    let mut b = SchemaBuilder::new();
+    let c = b.add_constant_pool(&[ConstValue::Int(1)]);
+    let t = b.add_struct_template_pool(&[tmpl("T", &["f"])]);
+    let p = b.add_param_types(&[TypeTag::Word]);
+    b.add_signatures(&[sig(vec![], WireShape::Top, WireShape::Top)])
+        .unwrap();
+    b.add_enum_layouts(&[layout("E", &[("V", 1)], 0)]).unwrap();
+    b.add_data_layout(&sample_layout()).unwrap();
+    b.add_chunk("c", &meta(c, t, p), Some(b"d")).unwrap();
+    b.add_natives(&["n".to_string()], &[WireShape::Top])
+        .unwrap();
+    b.add_header(&HeaderRecord {
+        entry_point: 0,
+        word_bits_log2: 6,
+        addr_bits_log2: 6,
+        float_bits_log2: 6,
+        flags: 0,
+        wcet_cycles: 0,
+        wcmu_bytes: 0,
+        shared_data_bytes: 0,
+        private_data_bytes: 0,
+        schema_hash: 0,
+        reserved: 0,
+    })
+    .unwrap();
+
+    let bytes = b.finish().expect("every contributor must coexist");
+
+    // Every reader finds its regions in the one artifact.
+    assert!(ConstTable::parse(&bytes).is_ok());
+    assert!(SignatureTable::parse(&bytes).is_ok());
+    assert!(LayoutTable::parse(&bytes).is_ok());
+    assert!(DataLayoutTable::parse(&bytes).unwrap().is_some());
+    assert!(ParamTypeTable::parse(&bytes).unwrap().is_some());
+    assert!(ModuleTable::parse(&bytes).is_ok());
+}
