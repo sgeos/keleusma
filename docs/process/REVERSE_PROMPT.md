@@ -472,15 +472,45 @@ The corpus emits **zero struct templates**. "The real corpus round-trips" theref
 the template table, which is covered only by hand-built cases. The test asserts `total_templates == 0`
 with a message telling whoever sees it fail to update this note.
 
-## Next step
+## Step 5, increment 1 DONE: `AuxView`, the runtime's read surface
 
-**Step 5**: route the runtime through these accessors. The narrow requirement established by probe
-still governs — exactly one accessor must return image-aliasing bytes (a non-empty top-level
-`StaticStr`); an empty string is deliberately not aliased and a composite's string leaves are already
-copied today.
+**The probe corrected the plan again.** I had sketched increment (a) as "the encoder wired behind
+`module_to_wire_bytes` with rkyv still authoritative". That is not a real increment: emitting both
+encodings changes the artifact and would force a `BYTECODE_VERSION` bump, which is a stop. So the
+first genuine step is the accessor.
 
-The cutover replaces `Archived*` reads across `vm.rs` and `bytecode.rs` (59 references, 3 zero-copy
-entry points, one `unsafe access_unchecked`), so it is not one increment. Plausible split: (a) the
-encoder wired behind `module_to_wire_bytes` with rkyv still authoritative, (b) the accessor read
-surface shaped to the VM's call sites, (c) the cutover proper. **Step (c) is where
-`BYTECODE_VERSION` would change, which is an operator decision and a hard stop.**
+**The VM's read surface is much smaller than the 59-reference count implies.** Enumerated from the
+archived call sites: per-chunk `constants`, `struct_templates` and `local_count`; `word_bits_log2` and
+`float_bits_log2`; `schema_hash`; `shared_data_bytes`; `data_layout`; `enum_layouts`. That is the
+whole of it.
+
+`AuxView` parses **once** and holds the sub-tables. Each individual table calls `WireView::parse`
+itself — right for tooling, which touches a table once; wrong for the runtime, which reads constants
+repeatedly during execution and would re-walk the directory every time.
+
+It also presents **chunk-relative** indices, because a chunk addresses its own pool from zero. Getting
+that mapping wrong would have each chunk reading whatever constants sit at its indices — in bounds,
+so a wrong answer rather than a fault. A test pins that a chunk cannot reach past its own pool.
+
+`chunk_const_str_bytes` is the image-aliasing accessor, asserted **by address** with a control that
+the predicate rejects a copy. 85 tests.
+
+## Next step — AND THE STOP
+
+Increment 2 is the cutover: replace the `Archived*` reads in `vm.rs` and `bytecode.rs` with `AuxView`,
+delete the rkyv aux path, and drop the dependency.
+
+**This requires `BYTECODE_VERSION` to change from 1 to 2, which is an operator decision and a hard
+stop under the loop's rules.** The reasoning to put to the operator:
+
+- The aux body's encoding changes completely, so a version-1 artifact read by a version-2 runtime
+  would be **accepted and mis-read** rather than cleanly rejected — exactly the hazard `CLAUDE.md`
+  documents and accepts under the no-public-adoption policy.
+- `CLAUDE.md` records that a bump was authorised once for this work (2026-08-03) and then **rolled
+  back** to 1 under that policy, as a version-2 bump was in V0.2.0. So the precedent runs both ways
+  and the decision is genuinely open.
+- The counter-argument for staying at 1 is the same as before: with no installed base there are no
+  consumers to protect, and the number is a compatibility commitment to consumers.
+
+**Do not proceed past this without an explicit decision.** Everything up to it — the schema, the
+accessors, the corpus validation — is complete and merged.

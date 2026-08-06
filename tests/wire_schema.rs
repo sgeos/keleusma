@@ -2249,3 +2249,180 @@ fn a_real_compiled_module_round_trips() {
     let got = decode_aux_body(&bytes).expect("decode");
     assert_aux_eq(&got, &want);
 }
+
+// ---------------------------------------------------------------------------
+// AuxView: the runtime's read surface.
+// ---------------------------------------------------------------------------
+
+use keleusma::wire_schema::AuxView;
+
+#[test]
+fn the_runtime_view_serves_chunk_relative_indices() {
+    // The VM addresses a chunk's constants from zero, not from the shared
+    // table's base. Getting that mapping wrong would have each chunk reading
+    // whichever constants happen to sit at its indices -- a wrong answer, not a
+    // fault, since the reads would all be in bounds.
+    let want = WireAuxBody {
+        chunks: vec![
+            chunk("a", vec![ConstValue::Int(10), ConstValue::Int(11)], vec![]),
+            chunk("b", vec![ConstValue::Int(20)], vec![]),
+            chunk("c", vec![], vec![]),
+        ],
+        ..rich_aux()
+    };
+    let bytes = encode_aux_body(&want).unwrap();
+    let v = AuxView::parse(&bytes).unwrap();
+
+    assert_eq!(v.chunk_count(), 3);
+    assert_eq!(v.const_count(0), Some(2));
+    assert_eq!(v.const_count(1), Some(1));
+    assert_eq!(v.const_count(2), Some(0));
+
+    // Chunk-relative index 0 means each chunk's OWN first constant.
+    assert_eq!(v.const_record(0, 0).unwrap().payload as i64, 10);
+    assert_eq!(v.const_record(0, 1).unwrap().payload as i64, 11);
+    assert_eq!(v.const_record(1, 0).unwrap().payload as i64, 20);
+
+    // A chunk cannot reach past its own pool into the next one's.
+    assert!(
+        v.const_record(0, 2).is_none(),
+        "chunk 0 has only 2 constants"
+    );
+    assert!(v.const_record(1, 1).is_none(), "chunk 1 has only 1");
+    assert!(v.const_record(2, 0).is_none(), "chunk 2 has none");
+    assert!(v.const_record(99, 0).is_none(), "no such chunk");
+}
+
+#[test]
+fn the_runtime_view_aliases_string_constants() {
+    // The load-bearing property, at the granularity the VM actually uses.
+    let want = WireAuxBody {
+        chunks: vec![
+            chunk("a", vec![ConstValue::Int(1)], vec![]),
+            chunk(
+                "b",
+                vec![ConstValue::StaticStr("aliased-here".into())],
+                vec![],
+            ),
+        ],
+        ..rich_aux()
+    };
+    let bytes = encode_aux_body(&want).unwrap();
+    let v = AuxView::parse(&bytes).unwrap();
+
+    let s = v.chunk_const_str_bytes(1, 0).expect("chunk 1 constant 0");
+    assert_eq!(s, b"aliased-here");
+
+    let base = bytes.as_ptr() as usize;
+    let at = s.as_ptr() as usize;
+    assert!(
+        at >= base && at + s.len() <= base + bytes.len(),
+        "string bytes must alias the artifact"
+    );
+
+    // Control: the predicate must reject a copy, or the assertion proves nothing.
+    let copy = b"aliased-here".to_vec();
+    let copy_at = copy.as_ptr() as usize;
+    assert!(!(copy_at >= base && copy_at + copy.len() <= base + bytes.len()));
+
+    // Kind and range are checked, not guessed.
+    assert!(
+        v.chunk_const_str_bytes(0, 0).is_none(),
+        "an Int is not a string"
+    );
+    assert!(v.chunk_const_str_bytes(1, 1).is_none(), "out of range");
+}
+
+#[test]
+fn the_runtime_view_serves_every_read_the_vm_makes() {
+    // Enumerated from the archived call sites in src/vm.rs: per-chunk constants,
+    // struct templates and local_count; the word and float widths; schema hash;
+    // shared data bytes; the data layout; and the enum layouts.
+    let want = rich_aux();
+    let bytes = encode_aux_body(&want).unwrap();
+    let v = AuxView::parse(&bytes).unwrap();
+
+    assert_eq!(v.local_count(0), Some(want.chunks[0].local_count));
+    assert!(v.const_count(0).is_some());
+    assert_eq!(v.template_count(0), Some(1));
+    assert_eq!(v.template_type_name(0, 0), Some(&b"T"[..]));
+    assert_eq!(v.template_field_name(0, 0, 0), Some(&b"a"[..]));
+    assert_eq!(v.template_field_name(0, 0, 1), Some(&b"b"[..]));
+    assert!(
+        v.template_field_name(0, 0, 2).is_none(),
+        "past the field run"
+    );
+
+    assert_eq!(v.word_bits_log2(), Some(want.word_bits_log2));
+    assert_eq!(v.float_bits_log2(), Some(want.float_bits_log2));
+    assert_eq!(v.schema_hash(), Some(want.schema_hash));
+    assert_eq!(v.shared_data_bytes(), Some(want.shared_data_bytes));
+
+    assert_eq!(v.enum_layout_count(), want.enum_layouts.len());
+    assert_eq!(v.enum_type_name(0), Some(&b"E"[..]));
+    assert_eq!(v.enum_variant(0, 1), Some((&b"B"[..], -7)));
+
+    let dl = v.data_layout().expect("data layout present");
+    assert_eq!(dl.slot_count(), sample_layout().slots.len());
+    assert_eq!(dl.slot_name(0), Some(&b"buffer"[..]));
+}
+
+#[test]
+fn the_runtime_view_parses_a_module_with_no_constants() {
+    // A module carrying no constants emits no constant regions. That is absence,
+    // not an error, and the view must still parse.
+    let mut b = SchemaBuilder::new();
+    b.add_chunk("only", &meta((0, 0), (0, 0), (0, 0)), None)
+        .unwrap();
+    b.add_header(&HeaderRecord {
+        entry_point: ABSENT,
+        word_bits_log2: 6,
+        addr_bits_log2: 6,
+        float_bits_log2: 6,
+        flags: 0,
+        wcet_cycles: 0,
+        wcmu_bytes: 0,
+        shared_data_bytes: 0,
+        private_data_bytes: 0,
+        schema_hash: 0,
+        reserved: 0,
+    })
+    .unwrap();
+    let bytes = b.finish().unwrap();
+
+    let v = AuxView::parse(&bytes).expect("must parse without constant regions");
+    assert_eq!(v.chunk_count(), 1);
+    assert_eq!(v.const_count(0), Some(0));
+    assert!(v.const_record(0, 0).is_none());
+    assert!(v.chunk_const_str_bytes(0, 0).is_none());
+    assert!(v.data_layout().is_none());
+}
+
+#[test]
+fn the_runtime_view_never_panics_under_corruption() {
+    let bytes = encode_aux_body(&rich_aux()).unwrap();
+    for pos in 0..bytes.len() {
+        let mut m = bytes.clone();
+        m[pos] ^= 0x80;
+        if let Ok(v) = AuxView::parse(&m) {
+            for c in 0..v.chunk_count().saturating_add(2) {
+                let _ = v.local_count(c);
+                let _ = v.const_count(c);
+                let _ = v.template_count(c);
+                for i in 0..4 {
+                    let _ = v.const_record(c, i);
+                    let _ = v.chunk_const_str_bytes(c, i);
+                    let _ = v.template_type_name(c, i);
+                    let _ = v.template_field_name(c, i, 0);
+                }
+            }
+            let _ = v.word_bits_log2();
+            let _ = v.schema_hash();
+            for i in 0..v.enum_layout_count().saturating_add(2) {
+                let _ = v.enum_type_name(i);
+                let _ = v.enum_variant(i, 0);
+            }
+            let _ = v.data_layout();
+        }
+    }
+}
