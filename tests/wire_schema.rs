@@ -2426,3 +2426,144 @@ fn the_runtime_view_never_panics_under_corruption() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Resolved offsets: validate once, reconstruct cheaply.
+// ---------------------------------------------------------------------------
+
+use keleusma::wire_schema::AuxOffsets;
+
+#[test]
+fn a_view_rebuilt_from_offsets_matches_one_parsed_from_scratch() {
+    // The whole point of the split: `resolve` pays for validation once, and
+    // `from_offsets` must then answer identically without re-walking anything.
+    // If the two ever disagree, the runtime would read different values from the
+    // same bytes depending on which path it took.
+    let bytes = encode_aux_body(&rich_aux()).unwrap();
+
+    let offsets = AuxOffsets::resolve(&bytes).expect("resolve");
+    let fast = AuxView::from_offsets(&bytes, &offsets).expect("rebuild");
+    let slow = AuxView::parse(&bytes).expect("parse");
+
+    assert_eq!(fast.chunk_count(), slow.chunk_count());
+    for c in 0..slow.chunk_count() {
+        assert_eq!(fast.local_count(c), slow.local_count(c), "chunk {c}");
+        assert_eq!(fast.const_count(c), slow.const_count(c), "chunk {c}");
+        assert_eq!(fast.template_count(c), slow.template_count(c), "chunk {c}");
+        for i in 0..4 {
+            assert_eq!(fast.const_record(c, i), slow.const_record(c, i), "{c}/{i}");
+            assert_eq!(
+                fast.chunk_const_str_bytes(c, i),
+                slow.chunk_const_str_bytes(c, i),
+                "{c}/{i}"
+            );
+            assert_eq!(
+                fast.template_field_name(c, i, 0),
+                slow.template_field_name(c, i, 0),
+                "{c}/{i}"
+            );
+        }
+    }
+    assert_eq!(fast.word_bits_log2(), slow.word_bits_log2());
+    assert_eq!(fast.float_bits_log2(), slow.float_bits_log2());
+    assert_eq!(fast.schema_hash(), slow.schema_hash());
+    assert_eq!(fast.shared_data_bytes(), slow.shared_data_bytes());
+    assert_eq!(fast.enum_layout_count(), slow.enum_layout_count());
+    for i in 0..slow.enum_layout_count() {
+        assert_eq!(fast.enum_type_name(i), slow.enum_type_name(i));
+        assert_eq!(fast.enum_variant(i, 0), slow.enum_variant(i, 0));
+    }
+}
+
+#[test]
+fn a_rebuilt_view_still_aliases_the_artifact() {
+    // The fast path must not quietly become a copying path.
+    let bytes = encode_aux_body(&WireAuxBody {
+        chunks: vec![chunk(
+            "a",
+            vec![ConstValue::StaticStr("fast-aliased".into())],
+            vec![],
+        )],
+        ..rich_aux()
+    })
+    .unwrap();
+
+    let offsets = AuxOffsets::resolve(&bytes).unwrap();
+    let v = AuxView::from_offsets(&bytes, &offsets).unwrap();
+    let s = v.chunk_const_str_bytes(0, 0).expect("string constant");
+    assert_eq!(s, b"fast-aliased");
+
+    let base = bytes.as_ptr() as usize;
+    let at = s.as_ptr() as usize;
+    assert!(at >= base && at + s.len() <= base + bytes.len());
+
+    let copy = b"fast-aliased".to_vec();
+    let copy_at = copy.as_ptr() as usize;
+    assert!(!(copy_at >= base && copy_at + copy.len() <= base + bytes.len()));
+}
+
+#[test]
+fn resolving_a_malformed_artifact_fails_rather_than_yielding_offsets() {
+    // Validation lives in `resolve`, so a bad artifact must be rejected there --
+    // otherwise the fast path would be handed offsets into unvalidated data.
+    let bytes = encode_aux_body(&rich_aux()).unwrap();
+    for cut in 0..bytes.len() {
+        assert!(
+            AuxOffsets::resolve(&bytes[..cut]).is_err(),
+            "truncation to {cut} must be rejected at resolve"
+        );
+    }
+    assert!(AuxOffsets::resolve(&bytes).is_ok());
+}
+
+#[test]
+fn offsets_from_a_different_artifact_do_not_produce_a_wrong_answer() {
+    // Not unsafe -- every slice is bounds-checked -- but it must not silently
+    // read plausible values out of the wrong buffer.
+    let big = encode_aux_body(&rich_aux()).unwrap();
+    let small = encode_aux_body(&WireAuxBody {
+        chunks: vec![],
+        native_names: vec![],
+        entry_point: None,
+        data_layout: None,
+        enum_layouts: vec![],
+        signatures: vec![],
+        native_return_shapes: vec![],
+        ..rich_aux()
+    })
+    .unwrap();
+
+    let big_offsets = AuxOffsets::resolve(&big).unwrap();
+    match AuxView::from_offsets(&small, &big_offsets) {
+        None => {}
+        Some(v) => {
+            // If it did rebuild, it must not claim the other artifact's chunks.
+            assert_ne!(
+                v.chunk_count(),
+                AuxView::parse(&big).unwrap().chunk_count(),
+                "offsets from another artifact yielded that artifact's shape"
+            );
+        }
+    }
+}
+
+#[test]
+fn rebuilding_never_panics_under_corruption() {
+    let bytes = encode_aux_body(&rich_aux()).unwrap();
+    let offsets = AuxOffsets::resolve(&bytes).unwrap();
+    for pos in 0..bytes.len() {
+        let mut m = bytes.clone();
+        m[pos] ^= 0x80;
+        // Deliberately reusing offsets from the CLEAN artifact against corrupt
+        // bytes: that is what a runtime would do if it validated at load and the
+        // image were damaged afterwards.
+        if let Some(v) = AuxView::from_offsets(&m, &offsets) {
+            for c in 0..v.chunk_count().saturating_add(2) {
+                let _ = v.const_record(c, 0);
+                let _ = v.chunk_const_str_bytes(c, 0);
+                let _ = v.template_field_name(c, 0, 0);
+            }
+            let _ = v.schema_hash();
+        }
+    }
+}

@@ -521,22 +521,50 @@ and ranges — heavy corruption trips one before any reader runs, which is corre
 makes the test useless. Without that assertion I would have committed a fuzz suite exercising the
 magic-number check and nothing else, passing forever.
 
-## Next step — AND THE STOP
+## THE STOP IS RESOLVED: operator authorised `BYTECODE_VERSION` 1 → 2 (2026-08-06)
 
-Increment 2 is the cutover: replace the `Archived*` reads in `vm.rs` and `bytecode.rs` with `AuxView`,
-delete the rkyv aux path, and drop the dependency.
+Reason given: the wire-format substrate itself has changed. **Publication remains held** — push, do
+not publish.
 
-**This requires `BYTECODE_VERSION` to change from 1 to 2, which is an operator decision and a hard
-stop under the loop's rules.** The reasoning to put to the operator:
+## Cutover increment 1 DONE: resolve once, reconstruct cheaply
 
-- The aux body's encoding changes completely, so a version-1 artifact read by a version-2 runtime
-  would be **accepted and mis-read** rather than cleanly rejected — exactly the hazard `CLAUDE.md`
-  documents and accepts under the no-public-adoption policy.
-- `CLAUDE.md` records that a bump was authorised once for this work (2026-08-03) and then **rolled
-  back** to 1 under that policy, as a version-2 bump was in V0.2.0. So the precedent runs both ways
-  and the decision is genuinely open.
-- The counter-argument for staying at 1 is the same as before: with no installed base there are no
-  consumers to protect, and the number is a compatibility commitment to consumers.
+Probing the cutover found the design question that actually matters. `Vm::archived()` is an
+`unsafe rkyv::access_unchecked` over a byte range — effectively free — and `chunk_const` calls it on
+**every `LoadConst`**. Replacing it with a validating parse per access would be a hot-path
+regression, so the port is not mechanical.
 
-**Do not proceed past this without an explicit decision.** Everything up to it — the schema, the
-accessors, the corpus validation — is complete and merged.
+`AuxOffsets::resolve` walks the directory and validates **once**, yielding plain byte ranges that
+carry **no borrow** — so a caller can store them beside the bytecode image without a self-referential
+struct, which is the reason the obvious "cache an `AuxView`" approach does not work.
+`AuxView::from_offsets` then rebuilds by slicing: a handful of bounds checks, no directory walk, no
+revalidation.
+
+The test that matters asserts the fast and slow paths **answer identically** across every read. If
+they diverged, the runtime would return different values from the same bytes depending on which path
+it took. Aliasing is re-asserted on the fast path too, so it cannot quietly become a copying path.
+
+`keleusma-wire` gained `RecordTable::from_bytes` and `Pool::from_bytes` — legitimate mechanism-level
+operations ("view these bytes as a table"), which keeps schema knowledge out of the VM.
+
+90 schema tests.
+
+## Next: the cutover proper — NOT yet started
+
+Remaining, in order:
+
+1. **`module_to_wire_bytes`** builds the aux body with `encode_aux_body` instead of `rkyv::to_bytes`.
+2. **The loader** resolves `AuxOffsets` once and stores them on the `Vm`.
+3. **The 26 `archived()` call sites in `vm.rs`** move to `AuxView::from_offsets`. The hot ones are
+   `chunk_const` (1206), `chunk_const_str` (1415), `local_count` (1275), and the width readers.
+4. **`BYTECODE_VERSION` 1 → 2**, and update the no-public-adoption text in `CLAUDE.md`, which
+   currently states the number stays 1.
+5. **Drop the rkyv aux path.** Note the dependency does **not** go away: six uses of
+   `rkyv::util::AlignedVec` remain for buffer alignment, unrelated to the aux archive.
+
+This is a coupled change — the format cannot be half-migrated — so the branch will be **red between
+commits**, which the loop permits provided the tip is green at merge.
+
+**The differential lever available for it**: `decode_aux_body` already round-trips every one of the
+ten self-hosted stages. After the cutover, the same corpus must still round-trip and the VM must
+still execute them, which is a real oracle rather than a smoke test.
+
