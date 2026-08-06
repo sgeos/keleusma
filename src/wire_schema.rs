@@ -45,7 +45,8 @@ use alloc::vec::Vec;
 use keleusma_wire::{Pool, RecordTable, WireBuilder, WireError, WireRecord, WireView};
 
 use crate::bytecode::{
-    ChunkSignature, ConstValue, DataLayout, EnumLayout, StructTemplate, TypeTag, WireShape,
+    BlockType, ChunkSignature, ConstValue, DataLayout, EnumLayout, StructTemplate, TypeTag,
+    WireShape,
 };
 
 /// Region kinds. Assigned explicitly rather than by declaration order, so
@@ -86,7 +87,32 @@ pub mod kind {
     /// A byte pool rather than a record table because a type tag is one byte and
     /// a whole-word record per tag would waste seven eighths of the region.
     pub const PARAM_TYPES: u16 = 0x001E;
+    /// Per-chunk metadata.
+    pub const CHUNKS: u16 = 0x001F;
+    /// Native function names paired with their return shapes.
+    pub const NATIVES: u16 = 0x0020;
+    /// The module's scalar header fields.
+    pub const HEADER: u16 = 0x0021;
+    /// Flat bytes: every chunk's strippable debug metadata, concatenated.
+    pub const DEBUG_POOL: u16 = 0x0022;
 }
+
+/// Block-type tags. Numbered from one so a zeroed record is invalid.
+pub mod block_tag {
+    #![allow(missing_docs)]
+    pub const FUNC: u8 = 1;
+    pub const REENTRANT: u8 = 2;
+    pub const STREAM: u8 = 3;
+}
+
+/// Sentinel for an absent optional index or offset.
+///
+/// Used for `entry_point`, a native's return shape, and a chunk's debug pool.
+/// A sentinel rather than a parallel flag because these are indices into tables
+/// the container already bounds far below four billion entries, so the value is
+/// unreachable in a well-formed artifact — and a flag would have to be kept in
+/// step with the field it describes, which is one more thing to get wrong.
+pub const ABSENT: u32 = u32::MAX;
 
 /// Parameter type tags. Numbered from one so a zeroed byte is invalid.
 pub mod type_tag {
@@ -525,6 +551,20 @@ pub struct SchemaBuilder {
     /// Concatenated parameter type tags, one byte each.
     param_types: Vec<u8>,
     wants_param_types: bool,
+    /// Per-chunk metadata records, emitted at finish.
+    chunks: Vec<ChunkRecord>,
+    wants_chunks: bool,
+    /// Concatenated strippable debug metadata.
+    debug_pool: Vec<u8>,
+    wants_debug: bool,
+    /// The shape table, shared by signatures and native return shapes.
+    ///
+    /// Shared for the same reason the name interner is: `SHAPES` is a single
+    /// region and the container rejects a duplicate kind, so two contributors
+    /// each declaring their own would collide. That collision was live for one
+    /// increment because the only test exercised natives without signatures.
+    shapes: Shapes,
+    wants_shapes: bool,
 }
 
 /// A contributor's slice of the shared constant table: `(first, count)`.
@@ -580,19 +620,18 @@ impl SchemaBuilder {
     ///
     /// Propagates a [`WireError`] from the container builder.
     pub fn add_signatures(&mut self, sigs: &[ChunkSignature]) -> Result<(), WireError> {
-        let mut shapes = Shapes::default();
         let mut records = Vec::with_capacity(sigs.len());
 
         for sig in sigs {
             // Parameters unshared, so the run stays contiguous.
-            let params_first = shapes.recs.len() as u32;
+            let params_first = self.shapes.recs.len() as u32;
             for p in &sig.params {
-                shapes.append(p);
+                self.shapes.append(p);
             }
             // Singles may share. Safe to intern after the run: shapes reference
             // nothing, so unlike the constant table there is no ordering rule.
-            let ret = shapes.intern(&sig.ret);
-            let resume = shapes.intern(&sig.resume);
+            let ret = self.shapes.intern(&sig.ret);
+            let resume = self.shapes.intern(&sig.resume);
 
             records.push(SignatureRecord {
                 params_first,
@@ -601,12 +640,9 @@ impl SchemaBuilder {
                 resume,
             });
         }
+        self.wants_shapes = true;
 
-        let shape_region = self.b.region(kind::SHAPES, 0)?;
         let sig_region = self.b.region(kind::SIGNATURES, 0)?;
-        for r in &shapes.recs {
-            self.b.push_record(shape_region, r);
-        }
         for r in &records {
             self.b.push_record(sig_region, r);
         }
@@ -746,6 +782,28 @@ impl SchemaBuilder {
         if self.wants_param_types {
             let region = self.b.region(kind::PARAM_TYPES, 0)?;
             let bytes = core::mem::take(&mut self.param_types);
+            self.b.push(region, &bytes);
+        }
+
+        if self.wants_shapes {
+            let region = self.b.region(kind::SHAPES, 0)?;
+            let recs = core::mem::take(&mut self.shapes.recs);
+            for r in &recs {
+                self.b.push_record(region, r);
+            }
+        }
+
+        if self.wants_chunks {
+            let region = self.b.region(kind::CHUNKS, 0)?;
+            let recs = core::mem::take(&mut self.chunks);
+            for r in &recs {
+                self.b.push_record(region, r);
+            }
+        }
+
+        if self.wants_debug {
+            let region = self.b.region(kind::DEBUG_POOL, 0)?;
+            let bytes = core::mem::take(&mut self.debug_pool);
             self.b.push(region, &bytes);
         }
 
@@ -1831,5 +1889,359 @@ impl<'a> ParamTypeTable<'a> {
             out.push(type_tag_from_byte(*b).ok_or(SchemaError::UnknownTag(*b as u16))?);
         }
         Ok(out)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The chunk table, natives, header, and debug pool (stage 2b, increment 6)
+// ---------------------------------------------------------------------------
+
+/// Per-chunk metadata. Six words.
+///
+/// Every variable-length part of a chunk lives in a shared table and is
+/// referenced here by range, so the record itself is fixed-size.
+#[derive(WireRecord, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChunkRecord {
+    /// Name index of the chunk name.
+    pub name: u32,
+    /// First constant, in the shared constant table.
+    pub consts_first: u32,
+    /// Number of constants.
+    pub consts_count: u32,
+    /// First struct template, in the shared template table.
+    pub templates_first: u32,
+    /// Number of struct templates.
+    pub templates_count: u32,
+    /// Byte offset of the parameter type tags in the parameter-type pool.
+    pub param_types_first: u32,
+    /// Number of parameter type tags.
+    pub param_types_count: u32,
+    /// Byte offset of this chunk's debug metadata, or [`ABSENT`] when the chunk
+    /// carries none. `ABSENT` distinguishes `None` from `Some(empty)`.
+    pub debug_first: u32,
+    /// Byte length of the debug metadata; zero when absent or empty.
+    pub debug_len: u32,
+    /// Byte offset into the opcode stream where this chunk's records start.
+    pub op_byte_offset: u32,
+    /// Number of opcode records in the chunk body.
+    pub op_record_count: u32,
+    /// Total local variable slots.
+    pub local_count: u16,
+    /// Number of parameters.
+    pub param_count: u8,
+    /// See [`block_tag`].
+    pub block_type: u8,
+}
+
+/// One native function: its name and, if described, its return shape.
+#[derive(WireRecord, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeRecord {
+    /// Name index of the native's name.
+    pub name: u32,
+    /// Shape index of the return value, or [`ABSENT`].
+    ///
+    /// The two are one record because `native_return_shapes` is parallel to
+    /// `native_names`; keeping them in separate regions would allow the pair to
+    /// fall out of step, which the additive-table history makes a live risk.
+    pub ret_shape: u32,
+}
+
+/// The module's scalar header fields. Four words.
+#[derive(WireRecord, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeaderRecord {
+    /// Entry-point chunk index, or [`ABSENT`].
+    pub entry_point: u32,
+    /// Runtime word width, as log2 of the bit width.
+    pub word_bits_log2: u8,
+    /// Runtime address width, log2 form.
+    pub addr_bits_log2: u8,
+    /// Runtime float width, log2 form.
+    pub float_bits_log2: u8,
+    /// Header flag byte.
+    pub flags: u8,
+    /// Declared WCET in cycles; zero means auto.
+    pub wcet_cycles: u32,
+    /// Declared WCMU in bytes; zero means auto.
+    pub wcmu_bytes: u32,
+    /// Shared-partition byte count.
+    pub shared_data_bytes: u32,
+    /// Private-partition byte count.
+    pub private_data_bytes: u32,
+    /// Schema hash for hot-swap compatibility.
+    pub schema_hash: u32,
+    /// Reserved; keeps the record four whole words.
+    pub reserved: u32,
+}
+
+/// Everything needed to emit one chunk's metadata record.
+///
+/// The ranges come from the `add_*` calls that placed the chunk's data, so a
+/// caller cannot accidentally describe a range it never wrote.
+#[derive(Debug, Clone, Copy)]
+pub struct ChunkMeta {
+    /// Range returned by [`SchemaBuilder::add_constant_pool`].
+    pub constants: ConstRange,
+    /// Range returned by [`SchemaBuilder::add_struct_template_pool`].
+    pub templates: ConstRange,
+    /// Range returned by [`SchemaBuilder::add_param_types`].
+    pub param_types: ConstRange,
+    /// Total local variable slots.
+    pub local_count: u16,
+    /// Number of parameters.
+    pub param_count: u8,
+    /// Block type.
+    pub block_type: BlockType,
+    /// Byte offset into the opcode stream.
+    pub op_byte_offset: u32,
+    /// Number of opcode records.
+    pub op_record_count: u32,
+}
+
+impl SchemaBuilder {
+    /// Adds one chunk's metadata record.
+    ///
+    /// `debug` is the chunk's strippable metadata: `None` for a release build,
+    /// which is stored distinctly from `Some(empty)`.
+    ///
+    /// # Errors
+    ///
+    /// Propagates a [`WireError`] from the container builder.
+    pub fn add_chunk(
+        &mut self,
+        name: &str,
+        meta: &ChunkMeta,
+        debug: Option<&[u8]>,
+    ) -> Result<(), WireError> {
+        let name_idx = self.names.intern(name);
+        let (debug_first, debug_len) = match debug {
+            Some(bytes) => {
+                let at = self.debug_pool.len() as u32;
+                self.debug_pool.extend_from_slice(bytes);
+                self.wants_debug = true;
+                (at, bytes.len() as u32)
+            }
+            None => (ABSENT, 0),
+        };
+
+        self.chunks.push(ChunkRecord {
+            name: name_idx,
+            consts_first: meta.constants.0,
+            consts_count: meta.constants.1,
+            templates_first: meta.templates.0,
+            templates_count: meta.templates.1,
+            param_types_first: meta.param_types.0,
+            param_types_count: meta.param_types.1,
+            debug_first,
+            debug_len,
+            op_byte_offset: meta.op_byte_offset,
+            op_record_count: meta.op_record_count,
+            local_count: meta.local_count,
+            param_count: meta.param_count,
+            block_type: match meta.block_type {
+                BlockType::Func => block_tag::FUNC,
+                BlockType::Reentrant => block_tag::REENTRANT,
+                BlockType::Stream => block_tag::STREAM,
+            },
+        });
+        self.wants_chunks = true;
+        Ok(())
+    }
+
+    /// Adds the native-function table.
+    ///
+    /// `return_shapes` may be shorter than `names`, or empty, which is the
+    /// additive case: a native without a described return shape records
+    /// [`ABSENT`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates a [`WireError`] from the container builder.
+    pub fn add_natives(
+        &mut self,
+        names: &[String],
+        return_shapes: &[WireShape],
+    ) -> Result<(), WireError> {
+        let mut records = Vec::with_capacity(names.len());
+        for (i, n) in names.iter().enumerate() {
+            let name = self.names.intern(n);
+            let ret_shape = match return_shapes.get(i) {
+                Some(s) => {
+                    self.wants_shapes = true;
+                    self.shapes.intern(s)
+                }
+                None => ABSENT,
+            };
+            records.push(NativeRecord { name, ret_shape });
+        }
+
+        let region = self.b.region(kind::NATIVES, 0)?;
+        for r in &records {
+            self.b.push_record(region, r);
+        }
+        Ok(())
+    }
+
+    /// Adds the module's scalar header.
+    ///
+    /// # Errors
+    ///
+    /// Propagates a [`WireError`] from the container builder.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_header(&mut self, header: &HeaderRecord) -> Result<(), WireError> {
+        let region = self.b.region(kind::HEADER, 0)?;
+        self.b.push_record(region, header);
+        Ok(())
+    }
+}
+
+/// A **borrowed, allocation-free** view over the chunk table, natives, and header.
+#[derive(Debug, Clone, Copy)]
+pub struct ModuleTable<'a> {
+    pool: Pool<'a>,
+    names: RecordTable<'a>,
+    chunks: Option<RecordTable<'a>>,
+    natives: Option<RecordTable<'a>>,
+    header: Option<HeaderRecord>,
+    debug: Option<Pool<'a>>,
+}
+
+impl<'a> ModuleTable<'a> {
+    /// Parses the module-level tables.
+    ///
+    /// # Errors
+    ///
+    /// [`SchemaError`] for any malformed artifact. Never panics.
+    pub fn parse(bytes: &'a [u8]) -> Result<Self, SchemaError> {
+        let view = WireView::parse(bytes)?;
+        let region = |k: u16| view.find_region(k).ok_or(SchemaError::MissingRegion(k));
+        let opt = |k: u16| view.find_region(k);
+
+        let header = match opt(kind::HEADER) {
+            Some(r) => view
+                .typed_records::<HeaderRecord>(&r)?
+                .get_as::<HeaderRecord>(0),
+            None => None,
+        };
+
+        let t = Self {
+            pool: view.pool(&region(kind::STRING_POOL)?)?,
+            names: view.typed_records::<NameRef>(&region(kind::NAMES)?)?,
+            chunks: match opt(kind::CHUNKS) {
+                Some(r) => Some(view.typed_records::<ChunkRecord>(&r)?),
+                None => None,
+            },
+            natives: match opt(kind::NATIVES) {
+                Some(r) => Some(view.typed_records::<NativeRecord>(&r)?),
+                None => None,
+            },
+            header,
+            debug: match opt(kind::DEBUG_POOL) {
+                Some(r) => Some(view.pool(&r)?),
+                None => None,
+            },
+        };
+
+        for i in 0..t.chunk_count() {
+            let c = t.chunk(i).ok_or(SchemaError::BadIndex)?;
+            if c.name as usize >= t.names.len() {
+                return Err(SchemaError::BadIndex);
+            }
+            if c.block_type != block_tag::FUNC
+                && c.block_type != block_tag::REENTRANT
+                && c.block_type != block_tag::STREAM
+            {
+                return Err(SchemaError::UnknownTag(c.block_type as u16));
+            }
+        }
+        for i in 0..t.native_count() {
+            let n = t.native(i).ok_or(SchemaError::BadIndex)?;
+            if n.name as usize >= t.names.len() {
+                return Err(SchemaError::BadIndex);
+            }
+        }
+        Ok(t)
+    }
+
+    /// Number of chunks.
+    #[inline]
+    pub fn chunk_count(&self) -> usize {
+        self.chunks.map(|t| t.len()).unwrap_or(0)
+    }
+
+    /// Number of natives.
+    #[inline]
+    pub fn native_count(&self) -> usize {
+        self.natives.map(|t| t.len()).unwrap_or(0)
+    }
+
+    /// The chunk record at `index`.
+    #[inline]
+    pub fn chunk(&self, index: usize) -> Option<ChunkRecord> {
+        self.chunks?.get_as::<ChunkRecord>(index)
+    }
+
+    /// The native record at `index`.
+    #[inline]
+    pub fn native(&self, index: usize) -> Option<NativeRecord> {
+        self.natives?.get_as::<NativeRecord>(index)
+    }
+
+    /// The module header, if present.
+    #[inline]
+    pub fn header(&self) -> Option<HeaderRecord> {
+        self.header
+    }
+
+    /// Bytes of name `index`, aliasing the artifact.
+    #[inline]
+    pub fn name_bytes(&self, index: u32) -> Option<&'a [u8]> {
+        let r = self.names.get_as::<NameRef>(index as usize)?;
+        self.pool.slice(r.offset, r.length)
+    }
+
+    /// Chunk `index`'s name, aliasing the artifact.
+    #[inline]
+    pub fn chunk_name(&self, index: usize) -> Option<&'a [u8]> {
+        self.name_bytes(self.chunk(index)?.name)
+    }
+
+    /// Native `index`'s name, aliasing the artifact.
+    #[inline]
+    pub fn native_name(&self, index: usize) -> Option<&'a [u8]> {
+        self.name_bytes(self.native(index)?.name)
+    }
+
+    /// Chunk `index`'s block type.
+    #[inline]
+    pub fn chunk_block_type(&self, index: usize) -> Option<BlockType> {
+        Some(match self.chunk(index)?.block_type {
+            block_tag::FUNC => BlockType::Func,
+            block_tag::REENTRANT => BlockType::Reentrant,
+            block_tag::STREAM => BlockType::Stream,
+            _ => return None,
+        })
+    }
+
+    /// Chunk `index`'s debug metadata, aliasing the artifact.
+    ///
+    /// `None` means the chunk carries none, which is distinct from `Some(&[])`.
+    #[inline]
+    pub fn chunk_debug_bytes(&self, index: usize) -> Option<&'a [u8]> {
+        let c = self.chunk(index)?;
+        if c.debug_first == ABSENT {
+            return None;
+        }
+        self.debug?.slice(c.debug_first, c.debug_len)
+    }
+
+    /// The entry-point chunk index, if the module declares one.
+    #[inline]
+    pub fn entry_point(&self) -> Option<usize> {
+        let h = self.header?;
+        if h.entry_point == ABSENT {
+            None
+        } else {
+            Some(h.entry_point as usize)
+        }
     }
 }

@@ -391,16 +391,42 @@ with templates but no enums is ordinary and must parse; a test pins it.
 
 64 tests.
 
+## STAGE 2b COMPLETE (2026-08-05): the whole aux body encodes
+
+Increment 6 closed it — the chunk table, natives, scalar header, and debug pool. **74 tests.**
+Every field of `WireAuxBody` and `WireChunk` now has a place in the schema.
+
+A chunk record is six words and holds only fixed-size data: name index, four ranges (constants,
+templates, parameter types, debug), op offsets, counts, and a block tag. Natives pair each name with
+its return shape in **one record**, because `native_return_shapes` is parallel to `native_names` and
+separate regions would let the pair fall out of step.
+
+**`ABSENT` (`u32::MAX`) is the optional-index sentinel** — used for `entry_point`, a native's
+return shape, and a chunk's debug pool. A sentinel rather than a parallel flag because these index
+tables the container already bounds far below four billion entries, and a flag would have to be kept
+in step with the field it describes. It also keeps `None` distinct from `Some(empty)` for the debug
+pool, which is a release build versus a debug build that emitted nothing.
+
+### A bug caught before landing, of a class that has now bitten twice
+
+`add_natives` and `add_signatures` **both declared `kind::SHAPES`**, and the container rejects a
+duplicate region — so calling both failed with `DuplicateRegion`. It survived a full increment
+because the only test exercised natives *without* signatures.
+
+This is the identical shape of defect as the `NAMES` collision in increment 2: **a region is shared
+state, and a per-contributor table collides.** The shape table now lives in `SchemaBuilder` and is
+emitted once at `finish`, like names. Two regression tests were added — one for this pair
+specifically, and `every_add_method_can_be_called_together`, which exercises **every** contributor in
+one builder so the next `add_*` that claims a taken region fails there rather than in whichever
+combination nobody happened to test.
+
 ## Next step
 
-Close stage 2b with the last pieces of the aux body:
-- **The chunk table** — per-chunk name, local/param counts, block type, op byte offset and record
-  count, plus the four ranges now available (constants, templates, param types, debug pool).
-- **`native_names`** with its parallel `native_return_shapes` (shape indices into the existing table).
-- **The scalar header block** — entry point, three width log2 fields, WCET/WCMU, flags,
-  shared/private byte counts, schema hash. Genuinely flat.
-- **`debug_pool_bytes`** — opaque bytes into a region, deliberately unparsed so stripping stays a
-  single assignment.
+**Step 5**: route the runtime through these accessors. This is where P10 is preserved or lost in
+practice rather than in principle, and the narrow requirement established by probe still governs —
+exactly one accessor must return image-aliasing bytes (a non-empty top-level `StaticStr`); an empty
+string is deliberately not aliased and a composite's string leaves are already copied.
 
-Then **step 5**: routing the runtime through these accessors, where P10 is preserved or lost in
-practice rather than in principle.
+Before that, one piece of stage 2 remains unbuilt: an **encoder from a real `Module`** driving all
+these `add_*` calls, and a round-trip against the existing test corpus. That is the first genuine
+consumer, and per the standing decision it is also the gate on publishing the crate.
