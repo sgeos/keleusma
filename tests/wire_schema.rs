@@ -1263,3 +1263,227 @@ fn an_empty_pool_still_yields_a_usable_range() {
     assert_eq!(decode_constant_pool(&bytes, empty).unwrap().len(), 0);
     assert_eq!(decode_constant_pool(&bytes, full).unwrap().len(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// Data-segment layout.
+// ---------------------------------------------------------------------------
+
+use keleusma::bytecode::{
+    DataLayout, DataSlot, PrivateCompositeSlot, SharedSlotLayout, SlotVisibility,
+};
+use keleusma::wire_schema::{DataLayoutTable, decode_data_layout, visibility_tag};
+
+fn sample_layout() -> DataLayout {
+    DataLayout {
+        slots: vec![
+            DataSlot {
+                name: "buffer".into(),
+                visibility: SlotVisibility::Shared,
+            },
+            DataSlot {
+                name: "counter".into(),
+                visibility: SlotVisibility::Private,
+            },
+            DataSlot {
+                name: "state".into(),
+                visibility: SlotVisibility::Private,
+            },
+        ],
+        shared_layout: vec![SharedSlotLayout {
+            offset: 4096,
+            kind: 0x80 | 2,
+            len: 64,
+        }],
+        private_composite_layout: vec![PrivateCompositeSlot {
+            slot: 2,
+            offset: 128,
+        }],
+        private_init: vec![ConstValue::Int(0), ConstValue::Unit],
+    }
+}
+
+#[test]
+fn a_data_layout_round_trips() {
+    let want = sample_layout();
+    let mut b = SchemaBuilder::new();
+    b.add_data_layout(&want).unwrap();
+    let bytes = b.finish().unwrap();
+
+    let got = decode_data_layout(&bytes).unwrap().expect("layout present");
+
+    assert_eq!(got.slots.len(), want.slots.len());
+    for (g, w) in got.slots.iter().zip(&want.slots) {
+        assert_eq!(g.name, w.name);
+        assert_eq!(g.visibility, w.visibility);
+    }
+    assert_eq!(got.shared_layout, want.shared_layout);
+    assert_eq!(got.private_composite_layout, want.private_composite_layout);
+    assert_eq!(got.private_init.len(), want.private_init.len());
+    for (g, w) in got.private_init.iter().zip(&want.private_init) {
+        assert!(deep_eq(g, w));
+    }
+}
+
+#[test]
+fn an_absent_data_layout_is_none_not_empty() {
+    // Region presence is what encodes Option<DataLayout>. A module with no data
+    // block must read back as None, and a module with an EMPTY data block must
+    // read back as Some -- collapsing them would lose a real distinction.
+    let bytes = encode_layouts(&[tmpl("A", &["p"])], &[]).unwrap();
+    assert!(
+        decode_data_layout(&bytes).unwrap().is_none(),
+        "absent → None"
+    );
+    assert!(DataLayoutTable::parse(&bytes).unwrap().is_none());
+
+    let mut b = SchemaBuilder::new();
+    b.add_data_layout(&DataLayout {
+        slots: vec![],
+        shared_layout: vec![],
+        private_composite_layout: vec![],
+        private_init: vec![],
+    })
+    .unwrap();
+    let bytes = b.finish().unwrap();
+    let got = decode_data_layout(&bytes).unwrap();
+    assert!(got.is_some(), "empty → Some, not None");
+    assert_eq!(got.unwrap().slots.len(), 0);
+}
+
+#[test]
+fn private_init_shares_the_constant_table_with_chunk_pools() {
+    // private_init is a forest of constant trees, so it goes through the same
+    // shared table rather than a parallel copy of the flattening machinery.
+    let mut b = SchemaBuilder::new();
+    let chunk = b.add_constant_pool(&[ConstValue::StaticStr("chunk".into())]);
+    b.add_data_layout(&DataLayout {
+        slots: vec![DataSlot {
+            name: "s".into(),
+            visibility: SlotVisibility::Private,
+        }],
+        shared_layout: vec![],
+        private_composite_layout: vec![],
+        private_init: vec![ConstValue::Tuple(vec![ConstValue::Int(5)])],
+    })
+    .unwrap();
+    let bytes = b.finish().unwrap();
+
+    let t = DataLayoutTable::parse(&bytes).unwrap().unwrap();
+    let init = t.private_init_range();
+    assert_ne!(init, chunk, "the two pools must occupy different ranges");
+
+    // Both readable from the one table.
+    let chunk_vals = decode_constant_pool(&bytes, chunk).unwrap();
+    let init_vals = decode_constant_pool(&bytes, init).unwrap();
+    assert!(deep_eq(
+        &chunk_vals[0],
+        &ConstValue::StaticStr("chunk".into())
+    ));
+    assert!(deep_eq(
+        &init_vals[0],
+        &ConstValue::Tuple(vec![ConstValue::Int(5)])
+    ));
+
+    // And the forward-ordering invariant still holds with a nested initialiser.
+    let ct = ConstTable::parse(&bytes).unwrap();
+    for i in 0..ct.len() {
+        if let Some((first, _)) = ct.range(i) {
+            assert!(first as usize > i, "record {i} range not forward");
+        }
+    }
+}
+
+#[test]
+fn slot_names_alias_the_artifact() {
+    let mut b = SchemaBuilder::new();
+    b.add_data_layout(&sample_layout()).unwrap();
+    let bytes = b.finish().unwrap();
+    let t = DataLayoutTable::parse(&bytes).unwrap().unwrap();
+
+    let n = t.slot_name(0).unwrap();
+    assert_eq!(n, b"buffer");
+    let base = bytes.as_ptr() as usize;
+    let at = n.as_ptr() as usize;
+    assert!(at >= base && at + n.len() <= base + bytes.len());
+
+    let copy = b"buffer".to_vec();
+    let copy_at = copy.as_ptr() as usize;
+    assert!(!(copy_at >= base && copy_at + copy.len() <= base + bytes.len()));
+}
+
+#[test]
+fn an_unknown_visibility_tag_is_rejected() {
+    // Zero is deliberately not a valid visibility, so a zeroed record cannot
+    // read as a well-formed shared slot.
+    assert_ne!(visibility_tag::SHARED, 0);
+    assert_ne!(visibility_tag::PRIVATE, 0);
+
+    let mut b = SchemaBuilder::new();
+    b.add_data_layout(&sample_layout()).unwrap();
+    let mut bytes = b.finish().unwrap();
+
+    let base = {
+        let view = WireView::parse(&bytes).unwrap();
+        view.find_region(keleusma::wire_schema::kind::DATA_SLOTS)
+            .unwrap()
+            .byte_offset()
+            .unwrap()
+    };
+    bytes[base + keleusma::wire_schema::DataSlotRecord::OFFSET_VISIBILITY] = 0;
+    assert!(matches!(
+        DataLayoutTable::parse(&bytes),
+        Err(SchemaError::UnknownTag(0))
+    ));
+}
+
+#[test]
+fn every_data_record_is_one_word() {
+    use keleusma::wire_schema::{DataInitRecord, PrivateCompositeRecord, SharedSlotRecord};
+    assert_eq!(
+        <keleusma::wire_schema::DataSlotRecord as WireRecord>::STRIDE,
+        8
+    );
+    assert_eq!(<SharedSlotRecord as WireRecord>::STRIDE, 8);
+    assert_eq!(<PrivateCompositeRecord as WireRecord>::STRIDE, 8);
+    assert_eq!(<DataInitRecord as WireRecord>::STRIDE, 8);
+}
+
+#[test]
+fn a_truncated_data_layout_is_rejected_at_every_length() {
+    let mut b = SchemaBuilder::new();
+    b.add_data_layout(&sample_layout()).unwrap();
+    let bytes = b.finish().unwrap();
+    for cut in 0..bytes.len() {
+        assert!(
+            DataLayoutTable::parse(&bytes[..cut]).is_err(),
+            "truncation to {cut} must be rejected"
+        );
+    }
+    assert!(DataLayoutTable::parse(&bytes).is_ok());
+}
+
+#[test]
+fn data_layout_corruption_never_panics() {
+    let mut b = SchemaBuilder::new();
+    b.add_data_layout(&sample_layout()).unwrap();
+    let bytes = b.finish().unwrap();
+
+    for pos in 0..bytes.len() {
+        let mut m = bytes.clone();
+        m[pos] ^= 0x80;
+        if let Ok(Some(t)) = DataLayoutTable::parse(&m) {
+            for i in 0..t.slot_count().saturating_add(2) {
+                let _ = t.slot(i);
+                let _ = t.slot_name(i);
+            }
+            for i in 0..t.shared_count().saturating_add(2) {
+                let _ = t.shared_slot(i);
+            }
+            for i in 0..t.private_composite_count().saturating_add(2) {
+                let _ = t.private_composite(i);
+            }
+            let _ = t.private_init_range();
+        }
+        let _ = decode_data_layout(&m);
+    }
+}

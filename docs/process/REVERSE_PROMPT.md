@@ -358,11 +358,30 @@ earlier pool's child and the reverse sweep would read an uncomputed value.
 Also pinned: an artifact with no constants emits **no** constant regions, so `ConstTable::parse`
 reports absent rather than empty. 49 tests.
 
+## Stage 2b increment 4 DONE: the data-segment layout
+
+Four regions — `DATA_SLOTS`, `SHARED_LAYOUT`, `PRIVATE_COMPOSITE`, `DATA_INIT` — plus a constant
+range for `private_init`, which rides the shared table rather than a parallel copy of the flattening
+machinery. **57 tests.**
+
+**`Option<DataLayout>` is encoded by region PRESENCE.** An absent `DATA_SLOTS` region means `None`; an
+empty one means `Some` with no slots. Collapsing those would make a module with no `data` block
+indistinguishable from one whose data block is empty, which are different programs. Both directions
+are pinned by a test.
+
+Every data record is **one word**, and every tag is numbered from one so a zeroed record is invalid
+rather than reading as a well-formed shared slot.
+
 ## Next step
 
-Increment 4: `DataLayout` proper, now that its `private_init` forest has somewhere to go — four
-tables (`slots`, `shared_layout`, `private_composite_layout`, and a constant range for
-`private_init`). Then the scalar header block and
+Increment 5, the last of stage 2b: the **scalar header block** (entry point, the three width
+log2 fields, WCET/WCMU, flags, shared/private byte counts, schema hash — genuinely flat) and
+**`debug_pool_bytes`**, which stays opaque bytes into a region so stripping remains a single
+assignment. Also still outstanding from the chunk record: `native_names` with its parallel
+`native_return_shapes`, and the per-chunk metadata (name, local/param counts, block type, op offsets).
+
+After that, **step 5**: routing the runtime through these accessors, which is where P10 is preserved
+or lost in practice rather than in principle. Then the scalar header block and
 `debug_pool_bytes` (the header is genuinely flat; the debug pool stays opaque bytes into a region so
 stripping remains a single assignment). Then **step 5**, routing the runtime through these accessors,
 which is where P10 is preserved or lost in practice. After those, step 5: routing the runtime through

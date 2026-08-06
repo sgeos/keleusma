@@ -17,6 +17,27 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-04 (session 37)
 
+**STAGE 2b INCREMENT 4 (2026-08-05): the data layout, and absence as a first-class encoding.**
+Four regions plus a constant range. `private_init` rides the shared multi-contributor constant table
+that increment 3 built, which is exactly why that increment was split out first -- had the two landed
+together, `DataLayout` would have carried a restructure of the constant table as incidental baggage
+and the numbering argument would have been buried inside a much larger diff.
+
+THE ENCODING DECISION WORTH RECORDING is that `Option<DataLayout>` is carried by REGION PRESENCE
+rather than by a flag. An absent `DATA_SLOTS` region means `None`; a present but empty one means
+`Some` with no slots. Those are different programs -- a module with no `data` block at all, versus one
+whose block declares nothing -- and a flag inside a region that only exists when the thing exists
+would have been redundant with the region itself. The container's directory already answers
+"is this present", so the schema should use that answer rather than duplicate it. Both directions are
+pinned by test, because the failure would be silent: a reader that treated absent as empty would
+simply see a module with no data slots and proceed.
+
+SMALL AND CONSISTENT: every data record is one word, and every tag space -- constant tags, shape tags,
+visibility tags -- is numbered from ONE, so a zeroed record is invalid rather than decoding as a
+well-formed default. That convention has now been applied four times and is worth keeping uniform;
+the cost is a wasted enum value and the benefit is that a zero-filled region never reads as valid data.
+
+
 **STAGE 2b INCREMENT 3 (2026-08-05): a miscounted vector exposed a limitation in the constant table itself.**
 The plan said `DataLayout` had three nested vectors. It has four, and the fourth is
 `private_init: Vec<ConstValue>` -- a forest of constant TREES rather than scalars. That is the fourth
