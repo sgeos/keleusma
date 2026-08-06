@@ -17,6 +17,34 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-04 (session 37)
 
+**STEP 5 INCREMENT 1 (2026-08-06): the runtime's read surface, and a planned increment that dissolved on inspection.**
+The plan recorded one increment earlier called for "the encoder wired behind `module_to_wire_bytes`
+with rkyv still authoritative". Probing what that would mean showed it is not a real increment at all:
+emitting both encodings changes the artifact, and changing the artifact forces a `BYTECODE_VERSION`
+bump, which is precisely the stop the staging was designed to defer. A preparatory step that triggers
+the thing it was preparing for is not preparation.
+
+WHAT THE PROBE FOUND INSTEAD is that the VM's read surface is far smaller than its raw reference count
+suggests. Fifty-nine `Archived*` references sounds like a large cutover; enumerated, they resolve to
+per-chunk `constants`, `struct_templates` and `local_count`, the word and float widths, `schema_hash`,
+`shared_data_bytes`, `data_layout`, and `enum_layouts`. Everything the accessors already provide. The
+scary number was mostly repetition of a handful of reads.
+
+THE DESIGN POINT is that per-table parsing is correct for tooling and wrong for a runtime. Each table
+calls `WireView::parse` itself, which is fine when a tool touches a table once and pathological when
+the VM reads constants during execution. `AuxView` parses once and holds the sub-tables, so a read is
+an index operation. It also exposes CHUNK-RELATIVE indices, because a chunk addresses its own pool
+from zero: mapping that wrong would leave every read in bounds and pointed at the wrong chunk's
+constants, which is a wrong answer rather than a fault -- the same failure class as the backwards
+range and the silently-ignored discriminant. A test pins that a chunk cannot reach past its own pool.
+
+AND THE ARC STOPS HERE, DELIBERATELY. The next increment is the cutover, which requires
+`BYTECODE_VERSION` to go from 1 to 2 -- an operator decision under the loop's rules, and one where the
+precedent runs both ways: a bump was authorised for this work on 2026-08-03 and then rolled back under
+the no-public-adoption policy, as a version-2 bump was during V0.2.0. Everything up to the stop is
+complete, merged, and validated against real compiler output.
+
+
 **CORPUS DIFFERENTIAL (2026-08-05): real input found a quadratic that every hand-built test had missed, and I guessed three times before measuring.**
 The ten self-hosted stage sources are the largest real Keleusma programs there are. Round-tripping the
 whole aux body through them is the evidence that would justify routing the runtime through this codec;

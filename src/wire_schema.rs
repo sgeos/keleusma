@@ -2454,3 +2454,195 @@ pub fn decode_aux_body(bytes: &[u8]) -> Result<crate::wire_format::WireAuxBody, 
         native_return_shapes,
     })
 }
+
+// ---------------------------------------------------------------------------
+// The runtime's read surface (step 5, increment 1)
+// ---------------------------------------------------------------------------
+
+/// A **single-parse, borrowed** view exposing exactly what the runtime reads.
+///
+/// # Why this exists rather than using the tables directly
+///
+/// Each individual table (`ConstTable`, `ModuleTable`, …) calls
+/// [`WireView::parse`] itself. That is right for tooling, which touches one table
+/// once, and wrong for the runtime, which reads constants and templates
+/// repeatedly during execution — it would re-walk the directory and re-validate
+/// on every access.
+///
+/// `AuxView` parses once and holds the sub-tables, so a read is an index
+/// operation. It also presents indices at the granularity the VM actually uses:
+/// **chunk-relative**, not table-global, because a chunk addresses its own
+/// constant pool from zero.
+///
+/// # The property that must not be lost
+///
+/// [`Self::chunk_const_str_bytes`] returns bytes **aliasing the artifact**, which
+/// is what allows the runtime to mint a handle over a string constant rather than
+/// copying it. A probe of the live runtime established that this is the one read
+/// where aliasing is load-bearing: an empty string is deliberately not aliased,
+/// and a composite's string leaves are already copied today.
+#[derive(Debug, Clone, Copy)]
+pub struct AuxView<'a> {
+    module: ModuleTable<'a>,
+    consts: Option<ConstTable<'a>>,
+    layouts: LayoutTable<'a>,
+    data: Option<DataLayoutTable<'a>>,
+}
+
+impl<'a> AuxView<'a> {
+    /// Parses an artifact once, validating every table it exposes.
+    ///
+    /// # Errors
+    ///
+    /// [`SchemaError`] for any malformed artifact. Never panics.
+    pub fn parse(bytes: &'a [u8]) -> Result<Self, SchemaError> {
+        Ok(Self {
+            module: ModuleTable::parse(bytes)?,
+            // A module with no constants carries no constant regions, which is
+            // absence rather than an error.
+            consts: match ConstTable::parse(bytes) {
+                Ok(t) => Some(t),
+                Err(SchemaError::MissingRegion(_)) => None,
+                Err(e) => return Err(e),
+            },
+            layouts: LayoutTable::parse(bytes)?,
+            data: DataLayoutTable::parse(bytes)?,
+        })
+    }
+
+    /// Number of chunks.
+    #[inline]
+    pub fn chunk_count(&self) -> usize {
+        self.module.chunk_count()
+    }
+
+    /// Chunk `chunk`'s local-slot count.
+    #[inline]
+    pub fn local_count(&self, chunk: usize) -> Option<u16> {
+        Some(self.module.chunk(chunk)?.local_count)
+    }
+
+    /// Number of constants in chunk `chunk`'s pool.
+    #[inline]
+    pub fn const_count(&self, chunk: usize) -> Option<u32> {
+        Some(self.module.chunk(chunk)?.consts_count)
+    }
+
+    /// Maps a chunk-relative constant index to its index in the shared table.
+    ///
+    /// Returns `None` when `index` is past the chunk's pool, so a chunk cannot
+    /// read another chunk's constants by overrunning its own range.
+    #[inline]
+    fn global_const(&self, chunk: usize, index: usize) -> Option<usize> {
+        let c = self.module.chunk(chunk)?;
+        if index >= c.consts_count as usize {
+            return None;
+        }
+        Some(c.consts_first as usize + index)
+    }
+
+    /// The constant record for chunk `chunk`'s constant `index`.
+    #[inline]
+    pub fn const_record(&self, chunk: usize, index: usize) -> Option<ConstRecord> {
+        self.consts?.record(self.global_const(chunk, index)?)
+    }
+
+    /// **The image-aliasing accessor.** Bytes of a string constant in chunk
+    /// `chunk`'s pool, as a slice into the artifact.
+    ///
+    /// `None` when the index is out of range or the constant is not a string.
+    #[inline]
+    pub fn chunk_const_str_bytes(&self, chunk: usize, index: usize) -> Option<&'a [u8]> {
+        self.consts?.str_bytes(self.global_const(chunk, index)?)
+    }
+
+    /// Number of struct templates in chunk `chunk`.
+    #[inline]
+    pub fn template_count(&self, chunk: usize) -> Option<u32> {
+        Some(self.module.chunk(chunk)?.templates_count)
+    }
+
+    /// Chunk `chunk`'s struct template `index`: its type name, aliasing the
+    /// artifact.
+    #[inline]
+    pub fn template_type_name(&self, chunk: usize, index: usize) -> Option<&'a [u8]> {
+        let c = self.module.chunk(chunk)?;
+        if index >= c.templates_count as usize {
+            return None;
+        }
+        let t = self.layouts.template(c.templates_first as usize + index)?;
+        self.layouts.name_bytes(t.type_name)
+    }
+
+    /// Field `field` of chunk `chunk`'s struct template `index`, aliasing the
+    /// artifact.
+    #[inline]
+    pub fn template_field_name(
+        &self,
+        chunk: usize,
+        index: usize,
+        field: usize,
+    ) -> Option<&'a [u8]> {
+        let c = self.module.chunk(chunk)?;
+        if index >= c.templates_count as usize {
+            return None;
+        }
+        self.layouts
+            .template_field_name(c.templates_first as usize + index, field)
+    }
+
+    /// Runtime word width, as log2 of the bit width.
+    #[inline]
+    pub fn word_bits_log2(&self) -> Option<u8> {
+        Some(self.module.header()?.word_bits_log2)
+    }
+
+    /// Runtime float width, log2 form.
+    #[inline]
+    pub fn float_bits_log2(&self) -> Option<u8> {
+        Some(self.module.header()?.float_bits_log2)
+    }
+
+    /// Schema hash, used to reject an incompatible hot swap.
+    #[inline]
+    pub fn schema_hash(&self) -> Option<u32> {
+        Some(self.module.header()?.schema_hash)
+    }
+
+    /// Shared-partition byte count.
+    #[inline]
+    pub fn shared_data_bytes(&self) -> Option<u32> {
+        Some(self.module.header()?.shared_data_bytes)
+    }
+
+    /// Number of enum layouts.
+    #[inline]
+    pub fn enum_layout_count(&self) -> usize {
+        self.layouts.layout_count()
+    }
+
+    /// Enum layout `index`: its type name, aliasing the artifact.
+    #[inline]
+    pub fn enum_type_name(&self, index: usize) -> Option<&'a [u8]> {
+        self.layouts
+            .name_bytes(self.layouts.layout(index)?.type_name)
+    }
+
+    /// Variant `variant` of enum layout `index`: name bytes and discriminant.
+    #[inline]
+    pub fn enum_variant(&self, index: usize, variant: usize) -> Option<(&'a [u8], i64)> {
+        self.layouts.layout_variant(index, variant)
+    }
+
+    /// The data-segment layout, if the module declares one.
+    #[inline]
+    pub fn data_layout(&self) -> Option<DataLayoutTable<'a>> {
+        self.data
+    }
+
+    /// The underlying module table, for reads this view does not wrap.
+    #[inline]
+    pub fn module(&self) -> ModuleTable<'a> {
+        self.module
+    }
+}
