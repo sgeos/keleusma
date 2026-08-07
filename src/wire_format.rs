@@ -1508,7 +1508,7 @@ pub fn parse_wire_sections(bytes: &[u8]) -> Result<WireSections<'_>, LoadError> 
 
 /// Read header-mirrored target widths and declared WCET / WCMU
 /// fields from a framed V0.2.0 wire-format buffer. Used by
-/// [`crate::bytecode::Module::access_bytes`] (and the VM's
+/// [`crate::bytecode::Module::validate_bytes`] (and the VM's
 /// zero-copy path) to surface the fast-path metadata without
 /// deserializing the auxiliary body.
 pub fn read_header_fields(bytes: &[u8]) -> Result<HeaderFields, LoadError> {

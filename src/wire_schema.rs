@@ -103,6 +103,16 @@ pub mod kind {
     pub const HEADER: u16 = 0x0021;
     /// Flat bytes: every chunk's strippable debug metadata, concatenated.
     pub const DEBUG_POOL: u16 = 0x0022;
+    /// Native return shapes, as shape indices.
+    ///
+    /// **Separate from [`NATIVES`] deliberately.** These were first encoded
+    /// paired with the names in one record, on the reasoning that two parallel
+    /// vectors are exactly the arrangement that falls out of step. That is true
+    /// — but they are ALREADY allowed to differ in length, and pairing them
+    /// silently DROPPED the surplus rather than preventing it. A round-trip test
+    /// with two shapes and no names caught it. Independent regions carry both
+    /// lengths, which is what fidelity requires.
+    pub const NATIVE_RETURNS: u16 = 0x0023;
 }
 
 /// Block-type tags. Numbered from one so a zeroed record is invalid.
@@ -1292,7 +1302,13 @@ pub fn encode_signatures(sigs: &[ChunkSignature]) -> Result<Vec<u8>, WireError> 
 #[derive(Debug, Clone, Copy)]
 pub struct SignatureTable<'a> {
     shapes: RecordTable<'a>,
-    sigs: RecordTable<'a>,
+    /// Absent when the module declares no per-chunk signatures.
+    ///
+    /// The shape table is shared with native return shapes, so an artifact may
+    /// carry shapes with no signatures at all. Demanding the signature region
+    /// would make those shapes unreadable — and "no signatures" has one reading,
+    /// so absent is simply empty here.
+    sigs: Option<RecordTable<'a>>,
 }
 
 impl<'a> SignatureTable<'a> {
@@ -1312,7 +1328,10 @@ impl<'a> SignatureTable<'a> {
 
         let t = Self {
             shapes: view.typed_records::<ShapeRecord>(&region(kind::SHAPES)?)?,
-            sigs: view.typed_records::<SignatureRecord>(&region(kind::SIGNATURES)?)?,
+            sigs: match view.find_region(kind::SIGNATURES) {
+                Some(r) => Some(view.typed_records::<SignatureRecord>(&r)?),
+                None => None,
+            },
         };
 
         for i in 0..t.len() {
@@ -1336,7 +1355,7 @@ impl<'a> SignatureTable<'a> {
     /// Number of chunk signatures.
     #[inline]
     pub fn len(&self) -> usize {
-        self.sigs.len()
+        self.sigs.map(|t| t.len()).unwrap_or(0)
     }
 
     /// True when there are no signatures.
@@ -1348,7 +1367,7 @@ impl<'a> SignatureTable<'a> {
     /// The raw signature record for chunk `index`.
     #[inline]
     pub fn record(&self, index: usize) -> Option<SignatureRecord> {
-        self.sigs.get_as::<SignatureRecord>(index)
+        self.sigs?.get_as::<SignatureRecord>(index)
     }
 
     /// The shape at `index` in the shape table.
@@ -1900,6 +1919,12 @@ pub struct ParamTypeTable<'a> {
 }
 
 impl<'a> ParamTypeTable<'a> {
+    /// Wraps an already-resolved parameter-type region.
+    #[inline]
+    pub fn from_bytes(bytes: &'a [u8]) -> Self {
+        Self { bytes }
+    }
+
     /// Parses the parameter-type pool, or reports it absent.
     ///
     /// # Errors
@@ -1980,17 +2005,25 @@ pub struct ChunkRecord {
     pub block_type: u8,
 }
 
-/// One native function: its name and, if described, its return shape.
+/// One native function's name.
 #[derive(WireRecord, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NativeRecord {
     /// Name index of the native's name.
     pub name: u32,
-    /// Shape index of the return value, or [`ABSENT`].
-    ///
-    /// The two are one record because `native_return_shapes` is parallel to
-    /// `native_names`; keeping them in separate regions would allow the pair to
-    /// fall out of step, which the additive-table history makes a live risk.
-    pub ret_shape: u32,
+    /// Reserved; keeps the record one whole word.
+    pub reserved: u32,
+}
+
+/// One native return shape, as an index into the shape table.
+///
+/// A separate table from [`NativeRecord`] because the two vectors may legally
+/// differ in length; see [`kind::NATIVE_RETURNS`].
+#[derive(WireRecord, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeReturnRecord {
+    /// Shape index of the return value.
+    pub shape: u32,
+    /// Reserved; keeps the record one whole word.
+    pub reserved: u32,
 }
 
 /// The module's scalar header fields. Four words.
@@ -2109,20 +2142,28 @@ impl SchemaBuilder {
         return_shapes: &[WireShape],
     ) -> Result<(), WireError> {
         let mut records = Vec::with_capacity(names.len());
-        for (i, n) in names.iter().enumerate() {
+        for n in names {
             let name = self.names.intern(n);
-            let ret_shape = match return_shapes.get(i) {
-                Some(s) => {
-                    self.wants_shapes = true;
-                    self.shapes.intern(s)
-                }
-                None => ABSENT,
-            };
-            records.push(NativeRecord { name, ret_shape });
+            records.push(NativeRecord { name, reserved: 0 });
+        }
+        // Both vectors are emitted at their own length. They are documented as
+        // parallel but are not required to be, and dropping the surplus would be
+        // silent data loss.
+        let mut shapes = Vec::with_capacity(return_shapes.len());
+        for s in return_shapes {
+            self.wants_shapes = true;
+            shapes.push(NativeReturnRecord {
+                shape: self.shapes.intern(s),
+                reserved: 0,
+            });
         }
 
         let region = self.b.region(kind::NATIVES, 0)?;
         for r in &records {
+            self.b.push_record(region, r);
+        }
+        let region = self.b.region(kind::NATIVE_RETURNS, 0)?;
+        for r in &shapes {
             self.b.push_record(region, r);
         }
         Ok(())
@@ -2148,6 +2189,7 @@ pub struct ModuleTable<'a> {
     names: RecordTable<'a>,
     chunks: Option<RecordTable<'a>>,
     natives: Option<RecordTable<'a>>,
+    native_returns: Option<RecordTable<'a>>,
     header: Option<HeaderRecord>,
     debug: Option<Pool<'a>>,
 }
@@ -2179,6 +2221,10 @@ impl<'a> ModuleTable<'a> {
             },
             natives: match opt(kind::NATIVES) {
                 Some(r) => Some(view.typed_records::<NativeRecord>(&r)?),
+                None => None,
+            },
+            native_returns: match opt(kind::NATIVE_RETURNS) {
+                Some(r) => Some(view.typed_records::<NativeReturnRecord>(&r)?),
                 None => None,
             },
             header,
@@ -2256,6 +2302,22 @@ impl<'a> ModuleTable<'a> {
     #[inline]
     pub fn native_name(&self, index: usize) -> Option<&'a [u8]> {
         self.name_bytes(self.native(index)?.name)
+    }
+
+    /// Number of declared native return shapes.
+    #[inline]
+    pub fn native_return_count(&self) -> usize {
+        self.native_returns.map(|t| t.len()).unwrap_or(0)
+    }
+
+    /// Shape index of native return `index`.
+    #[inline]
+    pub fn native_return_shape(&self, index: usize) -> Option<u32> {
+        Some(
+            self.native_returns?
+                .get_as::<NativeReturnRecord>(index)?
+                .shape,
+        )
     }
 
     /// Chunk `index`'s block type.
@@ -2425,18 +2487,19 @@ pub fn decode_aux_body(bytes: &[u8]) -> Result<crate::wire_format::WireAuxBody, 
         .unwrap_or_default();
 
     let mut native_names = Vec::with_capacity(m.native_count());
-    let mut native_return_shapes = Vec::new();
-    let shapes = SignatureTable::parse(bytes).ok();
     for i in 0..m.native_count() {
         native_names.push(name_of(m.native_name(i))?);
-        let n = m.native(i).ok_or(SchemaError::BadIndex)?;
-        if n.ret_shape != ABSENT {
-            let s = shapes
+    }
+    let shapes = SignatureTable::parse(bytes).ok();
+    let mut native_return_shapes = Vec::with_capacity(m.native_return_count());
+    for i in 0..m.native_return_count() {
+        let idx = m.native_return_shape(i).ok_or(SchemaError::BadIndex)?;
+        native_return_shapes.push(
+            shapes
                 .as_ref()
-                .and_then(|t| t.shape(n.ret_shape))
-                .ok_or(SchemaError::BadIndex)?;
-            native_return_shapes.push(s);
-        }
+                .and_then(|t| t.shape(idx))
+                .ok_or(SchemaError::BadIndex)?,
+        );
     }
 
     Ok(WireAuxBody {
@@ -2495,6 +2558,7 @@ pub struct AuxView<'a> {
     consts: Option<ConstTable<'a>>,
     layouts: LayoutTable<'a>,
     data: Option<DataLayoutTable<'a>>,
+    param_types: Option<ParamTypeTable<'a>>,
 }
 
 impl<'a> AuxView<'a> {
@@ -2515,6 +2579,7 @@ impl<'a> AuxView<'a> {
             },
             layouts: LayoutTable::parse(bytes)?,
             data: DataLayoutTable::parse(bytes)?,
+            param_types: ParamTypeTable::parse(bytes)?,
         })
     }
 
@@ -2648,6 +2713,63 @@ impl<'a> AuxView<'a> {
         self.data
     }
 
+    /// Number of opcode records in chunk `chunk`'s body.
+    #[inline]
+    pub fn op_record_count(&self, chunk: usize) -> Option<u32> {
+        Some(self.module.chunk(chunk)?.op_record_count)
+    }
+
+    /// Number of native functions the module references.
+    #[inline]
+    pub fn native_count(&self) -> usize {
+        self.module.native_count()
+    }
+
+    /// Native `index`'s name, aliasing the artifact.
+    #[inline]
+    pub fn native_name_bytes(&self, index: usize) -> Option<&'a [u8]> {
+        self.module.native_name(index)
+    }
+
+    /// Number of fields in chunk `chunk`'s struct template `index`.
+    #[inline]
+    pub fn template_field_count(&self, chunk: usize, index: usize) -> Option<u32> {
+        let c = self.module.chunk(chunk)?;
+        if index >= c.templates_count as usize {
+            return None;
+        }
+        Some(
+            self.layouts
+                .template(c.templates_first as usize + index)?
+                .field_count,
+        )
+    }
+
+    /// Padded-body payload size for enum layout `index`; zero for a non-flat enum.
+    #[inline]
+    pub fn enum_min_payload(&self, index: usize) -> Option<u32> {
+        Some(self.layouts.layout(index)?.min_payload)
+    }
+
+    /// Number of variants in enum layout `index`.
+    #[inline]
+    pub fn enum_variant_count(&self, index: usize) -> Option<u32> {
+        Some(self.layouts.layout(index)?.variants_count)
+    }
+
+    /// Parameter `index`'s type tag for chunk `chunk`.
+    #[inline]
+    pub fn param_type(&self, chunk: usize, index: usize) -> Option<TypeTag> {
+        let c = self.module.chunk(chunk)?;
+        if index >= c.param_types_count as usize {
+            return None;
+        }
+        let raw = self
+            .param_types?
+            .tag_bytes((c.param_types_first, c.param_types_count))?;
+        type_tag_from_byte(*raw.get(index)?)
+    }
+
     /// The underlying module table, for reads this view does not wrap.
     #[inline]
     pub fn module(&self) -> ModuleTable<'a> {
@@ -2685,6 +2807,12 @@ pub struct AuxOffsets {
     natives: Option<(usize, usize)>,
     header: Option<(usize, usize)>,
     debug: Option<(usize, usize)>,
+    native_returns: Option<(usize, usize)>,
+    data_slots: Option<(usize, usize)>,
+    shared_layout: Option<(usize, usize)>,
+    private_composite: Option<(usize, usize)>,
+    data_init: Option<(usize, usize)>,
+    param_types: Option<(usize, usize)>,
 }
 
 fn region_span(view: &WireView<'_>, kind: u16) -> Result<Option<(usize, usize)>, SchemaError> {
@@ -2726,6 +2854,12 @@ impl AuxOffsets {
             natives: region_span(&view, kind::NATIVES)?,
             header: region_span(&view, kind::HEADER)?,
             debug: region_span(&view, kind::DEBUG_POOL)?,
+            native_returns: region_span(&view, kind::NATIVE_RETURNS)?,
+            data_slots: region_span(&view, kind::DATA_SLOTS)?,
+            shared_layout: region_span(&view, kind::SHARED_LAYOUT)?,
+            private_composite: region_span(&view, kind::PRIVATE_COMPOSITE)?,
+            data_init: region_span(&view, kind::DATA_INIT)?,
+            param_types: region_span(&view, kind::PARAM_TYPES)?,
         })
     }
 }
@@ -2794,6 +2928,10 @@ impl<'a> AuxView<'a> {
             names,
             chunks: table(opt_span(offsets.chunks)?, ChunkRecord::STRIDE_BYTES)?,
             natives: table(opt_span(offsets.natives)?, NativeRecord::STRIDE_BYTES)?,
+            native_returns: table(
+                opt_span(offsets.native_returns)?,
+                NativeReturnRecord::STRIDE_BYTES,
+            )?,
             header: match opt_span(offsets.header)? {
                 Some(h) => RecordTable::from_bytes(h, HeaderRecord::STRIDE_BYTES)?
                     .get_as::<HeaderRecord>(0),
@@ -2802,13 +2940,38 @@ impl<'a> AuxView<'a> {
             debug: opt_span(offsets.debug)?.map(Pool::from_bytes),
         };
 
+        // The data layout is present only when the module declares one; region
+        // presence is what carries that distinction, so all four spans travel
+        // together exactly as `add_data_layout` emits them.
+        let data = match (
+            opt_span(offsets.data_slots)?,
+            opt_span(offsets.shared_layout)?,
+            opt_span(offsets.private_composite)?,
+            opt_span(offsets.data_init)?,
+        ) {
+            (Some(slots), Some(shared), Some(pc), Some(init_b)) => {
+                let init_table = RecordTable::from_bytes(init_b, DataInitRecord::STRIDE_BYTES)?;
+                Some(DataLayoutTable {
+                    pool,
+                    names,
+                    slots: RecordTable::from_bytes(slots, DataSlotRecord::STRIDE_BYTES)?,
+                    shared: RecordTable::from_bytes(shared, SharedSlotRecord::STRIDE_BYTES)?,
+                    private_composite: RecordTable::from_bytes(
+                        pc,
+                        PrivateCompositeRecord::STRIDE_BYTES,
+                    )?,
+                    init: init_table.get_as::<DataInitRecord>(0)?,
+                })
+            }
+            _ => None,
+        };
+
         Some(Self {
             module,
             consts,
             layouts,
-            // The data layout is a cold read; resolving it lazily keeps this
-            // path to what the hot path actually touches.
-            data: None,
+            data,
+            param_types: opt_span(offsets.param_types)?.map(ParamTypeTable::from_bytes),
         })
     }
 }

@@ -1667,6 +1667,87 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         }
     }
 
+    /// Lift an owned [`ConstValue`] into a runtime value at the module's
+    /// declared scalar widths.
+    ///
+    /// The v2 counterpart of [`Self::from_const_archived`]. Wire format v2
+    /// carries no rkyv archive, so a constant that is not served by the pooled
+    /// template cache is decoded from the schema into a `ConstValue` and lifted
+    /// here.
+    ///
+    /// Kept structurally identical to the archived version — same flat-or-boxed
+    /// choices, same discriminant handling — because the two must materialise a
+    /// given constant identically. A divergence would show up as a constant that
+    /// compares unequal to a runtime-built value of the same shape, which the
+    /// baked flat access would then read wrongly.
+    pub fn from_const(c: &ConstValue, word_bytes: usize, float_bytes: usize) -> Self {
+        match c {
+            ConstValue::Unit => Self::Unit,
+            ConstValue::Bool(b) => Self::Bool(*b),
+            ConstValue::Int(i) => Self::Int(W::from_i64_wrap(*i)),
+            ConstValue::Byte(b) => Self::Byte(*b),
+            ConstValue::Fixed(i) => Self::Fixed(W::from_i64_wrap(*i)),
+            #[cfg(feature = "floats")]
+            ConstValue::Float(f) => Self::Float(F::from_f64(*f)),
+            ConstValue::StaticStr(s) => Self::StaticStr(s.clone()),
+            ConstValue::Tuple(items) => Self::tuple_with_widths(
+                items
+                    .iter()
+                    .map(|c| Self::from_const(c, word_bytes, float_bytes))
+                    .collect(),
+                word_bytes,
+                float_bytes,
+            ),
+            ConstValue::Array(items) => Self::array_with_widths(
+                items
+                    .iter()
+                    .map(|c| Self::from_const(c, word_bytes, float_bytes))
+                    .collect(),
+                word_bytes,
+                float_bytes,
+            ),
+            ConstValue::Struct { type_name, fields } => Self::struct_with_widths(
+                type_name.clone(),
+                fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), Self::from_const(v, word_bytes, float_bytes)))
+                    .collect(),
+                word_bytes,
+                float_bytes,
+            ),
+            ConstValue::Enum {
+                type_name,
+                variant,
+                discriminant,
+                fields,
+            } => {
+                let materialised: alloc::vec::Vec<Self> = fields
+                    .iter()
+                    .map(|c| Self::from_const(c, word_bytes, float_bytes))
+                    .collect();
+                match discriminant {
+                    Some(disc) => Self::enum_with_widths(
+                        type_name.clone(),
+                        variant.clone(),
+                        *disc,
+                        materialised,
+                        // Constants carry no per-type padding hint; see the
+                        // archived version for why zero is correct here.
+                        0,
+                        word_bytes,
+                        float_bytes,
+                    ),
+                    None => Self::Enum(EnumBody::boxed(
+                        type_name.clone(),
+                        variant.clone(),
+                        materialised,
+                    )),
+                }
+            }
+            ConstValue::None => Self::None,
+        }
+    }
+
     pub fn from_const_archived(
         c: &ArchivedConstValue,
         word_bytes: usize,
@@ -3838,9 +3919,7 @@ impl Module {
     /// body is not aligned, or when the rkyv structural validator
     /// rejects the body. Returns the other `LoadError` variants for
     /// header validation failures.
-    pub fn access_bytes(
-        bytes: &[u8],
-    ) -> Result<&crate::wire_format::ArchivedWireAuxBody, LoadError> {
+    pub fn validate_bytes(bytes: &[u8]) -> Result<(), LoadError> {
         use alloc::format;
         // V0.2.0 Phase 7c routes the zero-copy view through the
         // wire format. `parse_wire_sections` validates the
@@ -3875,23 +3954,19 @@ impl Module {
         if header.wcmu_bytes == u32::MAX {
             return Err(LoadError::WcmuOverflow);
         }
+        // The v2 auxiliary body is byte-addressed, so the 8-byte alignment
+        // requirement the rkyv archive imposed is gone. A caller no longer needs
+        // an `AlignedVec` or a `#[repr(align(8))]` buffer for the zero-copy path.
         let sections = crate::wire_format::parse_wire_sections(bytes)?;
-        if !(sections.aux_body.as_ptr() as usize).is_multiple_of(8) {
-            return Err(LoadError::Codec(format!(
-                "auxiliary body not 8-byte aligned (slice base 0x{:x}); use Module::from_bytes for unaligned input",
-                bytes.as_ptr() as usize
-            )));
-        }
-        rkyv::access::<crate::wire_format::ArchivedWireAuxBody, rkyv::rancor::Error>(
-            sections.aux_body,
-        )
-        .map_err(|e| LoadError::Codec(format!("rkyv access failed: {}", e)))
+        crate::wire_schema::AuxOffsets::resolve(sections.aux_body)
+            .map_err(|e| LoadError::Codec(format!("aux body invalid: {:?}", e)))?;
+        Ok(())
     }
 
     /// Deserialize a module from an aligned byte slice without the
     /// AlignedVec copy step that [`Module::from_bytes`] performs.
     ///
-    /// Validates the framing through [`Module::access_bytes`] and then
+    /// Validates the framing through [`Module::validate_bytes`] and then
     /// calls `rkyv::deserialize` on the validated archived form. Returns
     /// an owned `Module` for compatibility with the existing execution
     /// path. The wire-format validation runs in place against the input
@@ -3903,7 +3978,7 @@ impl Module {
     /// `&ArchivedModule`. The current view path delivers in-place
     /// validation and is the architectural foundation for Phase 2.
     ///
-    /// Requires the body to be 8-byte aligned. See [`Module::access_bytes`]
+    /// Requires the body to be 8-byte aligned. See [`Module::validate_bytes`]
     /// for the alignment contract.
     pub fn view_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
         // V0.2.0 Phase 7c routes view_bytes through the wire
@@ -4109,74 +4184,6 @@ impl PartialEq for ConstValue {
 /// concatenated with no inter-field padding (a const enum is variant-sized,
 /// `min_payload` 0, which padding-tolerant flat-enum equality tolerates). This
 /// replaces the former path of materialising a `Flat(Inline)` body and copying
-/// its bytes out, now that the owned `Inline` form is gone.
-pub(crate) fn const_flat_bytes(
-    c: &ArchivedConstValue,
-    word_bytes: usize,
-    float_bytes: usize,
-) -> Option<alloc::vec::Vec<u8>> {
-    let mut buf = alloc::vec::Vec::new();
-    const_flat_bytes_into(c, word_bytes, float_bytes, &mut buf)?;
-    Some(buf)
-}
-
-fn const_flat_bytes_into(
-    c: &ArchivedConstValue,
-    word_bytes: usize,
-    float_bytes: usize,
-    buf: &mut alloc::vec::Vec<u8>,
-) -> Option<()> {
-    use ArchivedConstValue as A;
-    match c {
-        A::Unit => {}
-        A::Bool(b) => buf.push(u8::from(*b)),
-        A::Byte(b) => buf.push(*b),
-        A::Int(i) | A::Fixed(i) => {
-            let le = i.to_native().to_le_bytes();
-            buf.extend_from_slice(&le[..word_bytes]);
-        }
-        #[cfg(feature = "floats")]
-        A::Float(f) => {
-            let v = f.to_native();
-            match float_bytes {
-                8 => buf.extend_from_slice(&v.to_le_bytes()),
-                4 => buf.extend_from_slice(&(v as f32).to_le_bytes()),
-                _ => return None,
-            }
-        }
-        // A reference leaf has no position-independent flat body.
-        A::StaticStr(_) => return None,
-        // `Option::None` is the boxed `Option` representation (the access ops
-        // bake the boxed form for the generic `Option`), so a const carrying it
-        // is not flat-poolable.
-        A::None => return None,
-        A::Tuple(items) | A::Array(items) => {
-            for it in items.iter() {
-                const_flat_bytes_into(it, word_bytes, float_bytes, buf)?;
-            }
-        }
-        A::Struct { fields, .. } => {
-            for kv in fields.iter() {
-                const_flat_bytes_into(&kv.1, word_bytes, float_bytes, buf)?;
-            }
-        }
-        A::Enum {
-            discriminant,
-            fields,
-            ..
-        } => {
-            // An unresolved discriminant has no flat body (it stays boxed).
-            let disc = discriminant.as_ref()?.to_native();
-            let le = disc.to_le_bytes();
-            buf.extend_from_slice(&le[..word_bytes]);
-            for f in fields.iter() {
-                const_flat_bytes_into(f, word_bytes, float_bytes, buf)?;
-            }
-        }
-    }
-    Some(())
-}
-
 /// Convert an archived `ConstValue` to its owned [`Value`] form.
 ///
 /// Recursive. Materializes the entire value tree as owned. For
@@ -4191,6 +4198,76 @@ pub fn value_from_archived<W: crate::word::Word, F: crate::float::Float>(
     float_bytes: usize,
 ) -> GenericValue<W, F> {
     GenericValue::<W, F>::from_const_archived(archived, word_bytes, float_bytes)
+}
+
+/// Flat body bytes for an owned [`ConstValue`], or `None` when the constant has
+/// no position-independent flat body.
+///
+/// Wire format v2 carries no rkyv archive, so this replaced an archived twin
+/// rather than sitting beside one. Which constants it *refuses* is the part that
+/// matters: a string leaf, a bare `None`, and an enum with an unresolved
+/// discriminant all stay boxed, because none of them has a position-independent
+/// body the compiler's baked flat access could read.
+pub(crate) fn const_flat_bytes_owned(
+    c: &ConstValue,
+    word_bytes: usize,
+    float_bytes: usize,
+) -> Option<alloc::vec::Vec<u8>> {
+    let mut buf = alloc::vec::Vec::new();
+    const_flat_bytes_owned_into(c, word_bytes, float_bytes, &mut buf)?;
+    Some(buf)
+}
+
+fn const_flat_bytes_owned_into(
+    c: &ConstValue,
+    word_bytes: usize,
+    float_bytes: usize,
+    buf: &mut alloc::vec::Vec<u8>,
+) -> Option<()> {
+    match c {
+        ConstValue::Unit => {}
+        ConstValue::Bool(b) => buf.push(u8::from(*b)),
+        ConstValue::Byte(b) => buf.push(*b),
+        ConstValue::Int(i) | ConstValue::Fixed(i) => {
+            let le = i.to_le_bytes();
+            buf.extend_from_slice(&le[..word_bytes]);
+        }
+        #[cfg(feature = "floats")]
+        ConstValue::Float(f) => match float_bytes {
+            8 => buf.extend_from_slice(&f.to_le_bytes()),
+            4 => buf.extend_from_slice(&(*f as f32).to_le_bytes()),
+            _ => return None,
+        },
+        // A reference leaf has no position-independent flat body.
+        ConstValue::StaticStr(_) => return None,
+        // `Option::None` is the boxed `Option` representation, so a const
+        // carrying it is not flat-poolable.
+        ConstValue::None => return None,
+        ConstValue::Tuple(items) | ConstValue::Array(items) => {
+            for it in items {
+                const_flat_bytes_owned_into(it, word_bytes, float_bytes, buf)?;
+            }
+        }
+        ConstValue::Struct { fields, .. } => {
+            for (_, v) in fields {
+                const_flat_bytes_owned_into(v, word_bytes, float_bytes, buf)?;
+            }
+        }
+        ConstValue::Enum {
+            discriminant,
+            fields,
+            ..
+        } => {
+            // An unresolved discriminant has no flat body (it stays boxed).
+            let disc = (*discriminant)?;
+            let le = disc.to_le_bytes();
+            buf.extend_from_slice(&le[..word_bytes]);
+            for f in fields {
+                const_flat_bytes_owned_into(f, word_bytes, float_bytes, buf)?;
+            }
+        }
+    }
+    Some(())
 }
 
 /// Sign-extending truncation to a narrower-than-runtime word width.

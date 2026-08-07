@@ -663,7 +663,7 @@ fn module_bottom_reservations(module: &crate::bytecode::Module) -> (usize, usize
 /// loop reads from these vectors directly through `chunk_op` to
 /// avoid the per-fetch discriminant match against the archived form.
 ///
-/// The buffer's framing is validated through `Module::access_bytes`.
+/// The buffer's framing is validated through `Module::validate_bytes`.
 /// The op decoding uses `op_from_archived` for each op slot. This is
 /// the same conversion that the previous hot-path fetch performed;
 /// pre-decoding amortizes its cost across the VM lifetime instead of
@@ -778,14 +778,16 @@ fn decode_all_ops(bytes: &[u8]) -> Result<Vec<Vec<Op>>, VmError> {
     // `op_record_count`; the records decode through the shared
     // operand pool.
     let sections = crate::wire_format::parse_wire_sections(bytes)?;
-    let archived = rkyv::access::<crate::wire_format::ArchivedWireAuxBody, rkyv::rancor::Error>(
-        sections.aux_body,
-    )
-    .map_err(|e| crate::bytecode::LoadError::Codec(alloc::format!("rkyv access failed: {}", e)))?;
-    let mut all_ops: Vec<Vec<Op>> = Vec::with_capacity(archived.chunks.len());
-    for chunk in archived.chunks.iter() {
-        let start = chunk.op_byte_offset.to_native() as usize;
-        let record_count = chunk.op_record_count.to_native() as usize;
+    let aux = crate::wire_schema::AuxView::parse(sections.aux_body).map_err(|e| {
+        crate::bytecode::LoadError::Codec(alloc::format!("aux body invalid: {:?}", e))
+    })?;
+    let mut all_ops: Vec<Vec<Op>> = Vec::with_capacity(aux.chunk_count());
+    for chunk_idx in 0..aux.chunk_count() {
+        let chunk = aux.module().chunk(chunk_idx).ok_or_else(|| {
+            crate::bytecode::LoadError::Codec(alloc::string::String::from("chunk index"))
+        })?;
+        let start = chunk.op_byte_offset as usize;
+        let record_count = chunk.op_record_count as usize;
         let byte_span = record_count
             .checked_mul(crate::wire_format::OPCODE_RECORD_BYTES)
             .ok_or_else(|| {
@@ -929,6 +931,14 @@ pub struct GenericVm<
     F: crate::float::Float = f64,
 > {
     bytecode: BytecodeStore<'a>,
+    /// Region offsets into the auxiliary body, resolved and validated once when
+    /// the image is installed.
+    ///
+    /// The `Vm` owns the bytecode image and an `AuxView` borrows from it, so a
+    /// cached view would make this struct self-referential. `AuxOffsets` carries
+    /// no borrow, so it can sit here and the view is rebuilt per access by
+    /// slicing — which is what keeps `chunk_const` off a per-read directory walk.
+    aux_offsets: crate::wire_schema::AuxOffsets,
     /// Phantom marker for the script-visible address-width type
     /// parameter. No `GenericValue` variant carries an address
     /// payload, so `A` does not appear in any field directly.
@@ -1171,14 +1181,28 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// at an 8-byte aligned offset declared in the framing
     /// header. The bytes were validated at construction time,
     /// so `access_unchecked` is sound here.
-    fn archived(&self) -> &crate::wire_format::ArchivedWireAuxBody {
-        let bytes = self.bytecode.as_slice();
-        let aux_body_offset =
-            u32::from_le_bytes([bytes[48], bytes[49], bytes[50], bytes[51]]) as usize;
-        let aux_body_length =
-            u32::from_le_bytes([bytes[52], bytes[53], bytes[54], bytes[55]]) as usize;
-        let aux = &bytes[aux_body_offset..aux_body_offset + aux_body_length];
-        unsafe { rkyv::access_unchecked::<crate::wire_format::ArchivedWireAuxBody>(aux) }
+    fn aux(&self) -> crate::wire_schema::AuxView<'_> {
+        let aux = Self::aux_body_slice(self.bytecode.as_slice());
+        // Cannot fail: `aux_offsets` was resolved and validated from these exact
+        // bytes when the image was installed, and the image is replaced only
+        // through `replace_module`, which re-resolves. A panic here would mean
+        // that invariant is broken -- which the previous `access_unchecked` would
+        // have answered with undefined behaviour instead.
+        crate::wire_schema::AuxView::from_offsets(aux, &self.aux_offsets)
+            .expect("aux offsets do not match the installed image")
+    }
+
+    /// Test-only accessor for the auxiliary-body slice.
+    #[cfg(test)]
+    pub(crate) fn aux_body_slice_for_test(bytes: &[u8]) -> &[u8] {
+        Self::aux_body_slice(bytes)
+    }
+
+    /// The auxiliary-body section of a framed image, per the framing header.
+    fn aux_body_slice(bytes: &[u8]) -> &[u8] {
+        let offset = u32::from_le_bytes([bytes[48], bytes[49], bytes[50], bytes[51]]) as usize;
+        let length = u32::from_le_bytes([bytes[52], bytes[53], bytes[54], bytes[55]]) as usize;
+        &bytes[offset..offset + length]
     }
 
     /// Deserialize the current bytecode to an owned `Module`.
@@ -1203,27 +1227,27 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
 
     /// Materialize the constant at `(chunk_idx, idx)` from archived storage.
     fn chunk_const(&self, chunk_idx: usize, idx: usize) -> crate::bytecode::GenericValue<W, F> {
-        let chunk = &self.archived().chunks[chunk_idx];
         // A non-empty top-level string constant loads as a rodata-backed `KStr`
         // pointing directly at the immortal bytecode image, not an owned
         // `StaticStr` heap copy (B28 P3 item 4). This is zero-copy (no per-load
         // allocation) and WCET-flat (no construction-time scan), the 6502/NES
-        // "bake the ROM address" model. An empty string returns an owned empty
-        // `StaticStr`, both to avoid resting on the non-null guarantee of the
-        // archived empty-string pointer and because an empty body needs no
-        // handle. A composite constant that contains strings still materialises
+        // "bake the ROM address" model. Under the v2 format the bytes come from
+        // `AuxView::chunk_const_str_bytes`, which returns a subslice of the
+        // image -- the single accessor the whole borrowed-view design exists to
+        // preserve. An empty string returns an owned empty `StaticStr`, because
+        // an empty body needs no handle and a zero-length pointer should not be
+        // relied upon. A composite constant that contains strings still materialises
         // through `value_from_archived` below; its string leaves become owned
         // `StaticStr` there, which the flat packer copies into the arena as a
         // genuinely-owned (host-like) string.
-        if let crate::bytecode::ArchivedConstValue::StaticStr(s) = &chunk.constants[idx] {
-            let bytes = s.as_str().as_bytes();
+        if let Some(bytes) = self.aux().chunk_const_str_bytes(chunk_idx, idx) {
             if bytes.is_empty() {
                 return crate::bytecode::GenericValue::StaticStr(alloc::string::String::new());
             }
             let addr = bytes.as_ptr() as usize;
             let len = bytes.len();
-            // SAFETY: `addr` addresses `len` valid UTF-8 bytes inside
-            // `self.bytecode`, the immortal bytecode image the VM owns for its
+            // SAFETY: `addr` addresses `len` bytes inside `self.bytecode`, the
+            // immortal bytecode image the VM owns for its
             // whole lifetime and which only a hot swap replaces. The bytes are
             // read-only and the handle is never written through. The address
             // lies outside the arena's ephemeral region, so `addr_is_live`
@@ -1253,11 +1277,29 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // Materialise constants at the module-declared scalar widths so a
         // constant tuple's flat body matches the offsets the compiler
         // baked into its access instructions (B28 P2).
-        crate::bytecode::value_from_archived(
-            &chunk.constants[idx],
-            self.module_word_bytes(),
-            self.module_float_bytes(),
-        )
+        // Not pooled: decode this one constant from the schema and lift it.
+        // Decoding a single pool is the cold path by construction -- everything
+        // hot is either a string (aliased above) or a pooled composite template.
+        let aux = self.aux();
+        let Some(first) = aux
+            .module()
+            .chunk(chunk_idx)
+            .map(|c| (c.consts_first, c.consts_count))
+        else {
+            return crate::bytecode::GenericValue::Unit;
+        };
+        if idx >= first.1 as usize {
+            return crate::bytecode::GenericValue::Unit;
+        }
+        let bytes = Self::aux_body_slice(self.bytecode.as_slice());
+        match crate::wire_schema::decode_constant_pool(bytes, (first.0 + idx as u32, 1)) {
+            Ok(mut v) if !v.is_empty() => crate::bytecode::GenericValue::from_const(
+                &v.remove(0),
+                self.module_word_bytes(),
+                self.module_float_bytes(),
+            ),
+            _ => crate::bytecode::GenericValue::Unit,
+        }
     }
 
     /// Number of ops in the chunk. V0.2.0 Phase 7c reads the
@@ -1265,14 +1307,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// the no-longer-present `ops` vector; the ops themselves
     /// live in the opcode stream section.
     fn chunk_op_count(&self, chunk_idx: usize) -> usize {
-        self.archived().chunks[chunk_idx]
-            .op_record_count
-            .to_native() as usize
+        self.aux().op_record_count(chunk_idx).unwrap_or(0) as usize
     }
 
     /// Local-variable slot count for the chunk (includes parameters).
     fn chunk_local_count(&self, chunk_idx: usize) -> u16 {
-        self.archived().chunks[chunk_idx].local_count.to_native()
+        self.aux().local_count(chunk_idx).unwrap_or(0)
     }
 
     /// Module-wide word-width exponent. Used by the checked-
@@ -1280,7 +1320,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// `low` result when the bytecode declares a word size smaller
     /// than the runtime supports (cross-architecture portability).
     fn word_bits_log2(&self) -> u8 {
-        self.archived().word_bits_log2
+        self.aux().word_bits_log2().unwrap_or(6)
     }
 
     /// Module-declared word width in bytes. Used by the B28 flat
@@ -1288,13 +1328,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// width the compiler baked offsets against, so the runtime and
     /// the artefact agree regardless of the runtime `Word` width.
     fn module_word_bytes(&self) -> usize {
-        (1usize << self.archived().word_bits_log2) / 8
+        (1usize << self.aux().word_bits_log2().unwrap_or(6)) / 8
     }
 
     /// Module-declared float width in bytes. The companion of
     /// [`Self::module_word_bytes`] for floating-point fields.
     fn module_float_bytes(&self) -> usize {
-        (1usize << self.archived().float_bits_log2) / 8
+        (1usize << self.aux().float_bits_log2().unwrap_or(6)) / 8
     }
 
     /// The discriminant and padded-body payload size for `variant` of enum
@@ -1303,17 +1343,26 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// such enum (a built-in like `Option`, or a host type absent from the
     /// program's enums).
     fn enum_variant_layout(&self, type_name: &str, variant: &str) -> Option<(i64, usize)> {
-        for el in self.archived().enum_layouts.iter() {
-            if el.type_name.as_str() == type_name {
-                let min_payload = el.min_payload.to_native() as usize;
-                let disc = el
-                    .variants
-                    .iter()
-                    .find(|v| v.name.as_str() == variant)
-                    .map(|v| v.disc.to_native())
-                    .unwrap_or(0);
-                return Some((disc, min_payload));
+        // Names are compared as BYTES against the artifact rather than being
+        // decoded to `String` first: the accessor hands back slices aliasing the
+        // image, so a lookup allocates nothing.
+        let aux = self.aux();
+        for i in 0..aux.enum_layout_count() {
+            if aux.enum_type_name(i) != Some(type_name.as_bytes()) {
+                continue;
             }
+            let min_payload = aux.enum_min_payload(i).unwrap_or(0) as usize;
+            let count = aux.enum_variant_count(i).unwrap_or(0) as usize;
+            let mut disc = 0;
+            for v in 0..count {
+                if let Some((name, d)) = aux.enum_variant(i, v)
+                    && name == variant.as_bytes()
+                {
+                    disc = d;
+                    break;
+                }
+            }
+            return Some((disc, min_payload));
         }
         None
     }
@@ -1397,26 +1446,23 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
 
     /// Test whether a chunk index is in range.
     fn chunk_count(&self) -> usize {
-        self.archived().chunks.len()
+        self.aux().chunk_count()
     }
 
     /// Look up a native function name by index. Returns `None` if out of bounds.
     fn native_name(&self, idx: usize) -> Option<alloc::string::String> {
         use alloc::string::ToString;
-        self.archived()
-            .native_names
-            .get(idx)
-            .map(|s| s.as_str().to_string())
+        let aux = self.aux();
+        let bytes = aux.native_name_bytes(idx)?;
+        core::str::from_utf8(bytes).ok().map(|s| s.to_string())
     }
 
     /// Read a string-typed constant. Returns `None` if not a string.
     fn chunk_const_str(&self, chunk_idx: usize, idx: usize) -> Option<alloc::string::String> {
         use alloc::string::ToString;
-        let chunk = &self.archived().chunks[chunk_idx];
-        match &chunk.constants[idx] {
-            crate::bytecode::ArchivedConstValue::StaticStr(s) => Some(s.as_str().to_string()),
-            _ => None,
-        }
+        let aux = self.aux();
+        let bytes = aux.chunk_const_str_bytes(chunk_idx, idx)?;
+        core::str::from_utf8(bytes).ok().map(|s| s.to_string())
     }
 
     /// Look up a struct template's type name and field names.
@@ -1429,12 +1475,16 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         alloc::vec::Vec<alloc::string::String>,
     ) {
         use alloc::string::ToString;
-        let template = &self.archived().chunks[chunk_idx].struct_templates[idx];
-        let type_name = template.type_name.as_str().to_string();
-        let field_names: alloc::vec::Vec<_> = template
-            .field_names
-            .iter()
-            .map(|s| s.as_str().to_string())
+        let aux = self.aux();
+        let utf8 = |b: Option<&[u8]>| -> alloc::string::String {
+            b.and_then(|x| core::str::from_utf8(x).ok())
+                .unwrap_or_default()
+                .to_string()
+        };
+        let type_name = utf8(aux.template_type_name(chunk_idx, idx));
+        let count = aux.template_field_count(chunk_idx, idx).unwrap_or(0) as usize;
+        let field_names: alloc::vec::Vec<_> = (0..count)
+            .map(|f| utf8(aux.template_field_name(chunk_idx, idx, f)))
             .collect();
         (type_name, field_names)
     }
@@ -1525,7 +1575,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     });
                     // Rewrite the declared field to the auto-compute
                     // sentinel so the downstream serializer and the
-                    // load-time overflow check in `Module::access_bytes`
+                    // load-time overflow check in `Module::validate_bytes`
                     // do not re-reject the module. The warning preserves
                     // the original overflow signal for the host.
                     module.wcet_cycles = 0;
@@ -1898,14 +1948,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     ///
     /// The body of the framed bytecode must be 8-byte aligned within the
     /// slice. The runtime validates the framing in place via
-    /// [`Module::access_bytes`] and deserializes the archived form via
+    /// [`Module::validate_bytes`] and deserializes the archived form via
     /// `rkyv::deserialize`. Compared to [`Vm::load_bytes`], this path
     /// skips the body copy that arbitrary unaligned slices require.
     ///
     /// Hosts that wish to execute bytecode directly from `.rodata` or
     /// from a flash region typically arrange alignment through linker
     /// scripts or by wrapping the buffer in `rkyv::util::AlignedVec`.
-    /// See the documentation on [`Module::access_bytes`] for the
+    /// See the documentation on [`Module::validate_bytes`] for the
     /// alignment contract.
     ///
     /// True zero-copy execution against `&ArchivedModule` is the next
@@ -1937,7 +1987,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// Construct a VM that borrows bytecode directly from `bytes` without
     /// any deserialization. True zero-copy execution.
     ///
-    /// Validates the framing through [`Module::access_bytes`] and stores
+    /// Validates the framing through [`Module::validate_bytes`] and stores
     /// the slice. The execution loop reads from `&ArchivedModule` for
     /// every op-fetch and constant-load via the archived converters. No
     /// owned `Module` is materialized at any point.
@@ -1979,40 +2029,41 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // offset and length from. Validating the stripped slice while storing
         // the unstripped one was the desync that drove `rkyv::access_unchecked`
         // over a mis-located region (V0.2.1 security audit, findings 8 and 15).
-        // `access_bytes` and `decode_all_ops` strip again internally, an
+        // `validate_bytes` and `decode_all_ops` strip again internally, an
         // idempotent no-op on already-stripped bytes.
         let bytes = crate::wire_format::strip_shebang_prefix(bytes);
         // V0.2.0 Phase 7c routes zero-copy through the wire
-        // format. `access_bytes` validates the framing and
+        // format. `validate_bytes` validates the framing and
         // returns the archived auxiliary body slice; we use the
         // same slice (via `archived()` after construction)
         // throughout the VM lifetime.
-        let archived = Module::access_bytes(bytes)?;
+        // Validates framing, magic, CRC, version and widths.
+        Module::validate_bytes(bytes)?;
         // B16 step 8: width validation against this VM's W/A/F
         // trait parameters. The wire-format header carries the
         // declared widths at bytes 12 (word), 13 (address), and
         // 14 (float).
         Self::check_runtime_widths(bytes[12], bytes[13], bytes[14])?;
-        // Determine data segment slot counts from the archived
-        // auxiliary body. The data layout structure is shared
-        // with the legacy format; only the chunk-ops separation
-        // is new.
-        let (shared_count, private_count) = match archived.data_layout.as_ref() {
-            None => (0u32, 0u32),
-            Some(dl) => {
-                let mut shared = 0u32;
-                let mut private_ = 0u32;
-                for slot in dl.slots.iter() {
-                    match slot.visibility {
-                        crate::bytecode::ArchivedSlotVisibility::Shared => {
+        // Determine data segment slot counts from the auxiliary body.
+        let (shared_count, private_count) = {
+            let aux_bytes = Self::aux_body_slice(bytes);
+            let view = crate::wire_schema::AuxView::parse(aux_bytes)
+                .map_err(|e| VmError::TypeError(alloc::format!("aux body: {:?}", e)))?;
+            match view.data_layout() {
+                None => (0u32, 0u32),
+                Some(dl) => {
+                    let mut shared = 0u32;
+                    let mut private_ = 0u32;
+                    for i in 0..dl.slot_count() {
+                        let Some(slot) = dl.slot(i) else { continue };
+                        if slot.visibility == crate::wire_schema::visibility_tag::SHARED {
                             shared = shared.saturating_add(1);
-                        }
-                        crate::bytecode::ArchivedSlotVisibility::Private => {
+                        } else {
                             private_ = private_.saturating_add(1);
                         }
                     }
+                    (shared, private_)
                 }
-                (shared, private_)
             }
         };
         let private_storage_bytes =
@@ -2029,17 +2080,28 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             // Private slots initialize from the module's `.data`-section
             // initializer table (scalar zero or `= literal`); a slot with no
             // entry, or a module predating the table, falls back to `Unit`.
-            let word_bytes = (1usize << archived.word_bits_log2) / 8;
-            let float_bytes = (1usize << archived.float_bits_log2) / 8;
-            let inits = archived
-                .data_layout
-                .as_ref()
-                .map(|dl| dl.private_init.as_slice());
+            let aux_bytes = Self::aux_body_slice(bytes);
+            let word_bytes = (1usize << bytes[12]) / 8;
+            let float_bytes = (1usize << bytes[14]) / 8;
+            // The private-slot initialisers are a constant pool like any other,
+            // reached through the range the data layout records.
+            let inits: alloc::vec::Vec<crate::bytecode::ConstValue> =
+                match crate::wire_schema::AuxView::parse(aux_bytes)
+                    .ok()
+                    .and_then(|v| v.data_layout())
+                    .map(|dl| dl.private_init_range())
+                {
+                    Some(range) => crate::wire_schema::decode_constant_pool(aux_bytes, range)
+                        .unwrap_or_default(),
+                    None => alloc::vec::Vec::new(),
+                };
             for i in 0..private_count as usize {
-                let value = match inits.and_then(|s| s.get(i)) {
-                    Some(cv) => {
-                        crate::bytecode::value_from_archived::<W, F>(cv, word_bytes, float_bytes)
-                    }
+                let value = match inits.get(i) {
+                    Some(cv) => crate::bytecode::GenericValue::<W, F>::from_const(
+                        cv,
+                        word_bytes,
+                        float_bytes,
+                    ),
                     None => crate::bytecode::GenericValue::Unit,
                 };
                 // SAFETY: same justification as in `Vm::construct`.
@@ -2064,8 +2126,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         frames
             .try_reserve(MIN_FRAMES_RESERVE)
             .map_err(|_| out_of_arena_min(arena.capacity()))?;
+        // Resolve and validate the aux regions once, here. Every later read
+        // rebuilds a view from these offsets by slicing.
+        let aux_offsets = crate::wire_schema::AuxOffsets::resolve(Self::aux_body_slice(bytes))
+            .map_err(|e| VmError::TypeError(alloc::format!("aux body: {:?}", e)))?;
         let mut vm = Self {
             bytecode: BytecodeStore::Borrowed(bytes),
+            aux_offsets,
             _phantom_a: core::marker::PhantomData,
             decoded_ops,
             stack,
@@ -2266,8 +2333,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let ephemeral_opaques = pre_sized_bottom_vec::<
             alloc::sync::Arc<dyn crate::opaque::HostOpaque>,
         >(arena, reserve_opaque)?;
+        let aux_offsets = crate::wire_schema::AuxOffsets::resolve(Self::aux_body_slice(&aligned))
+            .map_err(|e| VmError::TypeError(alloc::format!("aux body: {:?}", e)))?;
         let mut vm = Self {
             bytecode: BytecodeStore::Owned(aligned),
+            aux_offsets,
             _phantom_a: core::marker::PhantomData,
             decoded_ops,
             stack,
@@ -2327,13 +2397,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// composite slot, neither of which has a table entry. The table is sorted
     /// ascending by slot, so this binary-searches it.
     fn private_composite_pool_offset(&self, slot: usize) -> Option<usize> {
-        let dl = self.archived().data_layout.as_ref()?;
+        let aux = self.aux();
+        let dl = aux.data_layout()?;
         let slot_u16 = u16::try_from(slot).ok()?;
-        let table = &dl.private_composite_layout;
-        table
-            .binary_search_by_key(&slot_u16, |e| e.slot.to_native())
-            .ok()
-            .map(|i| table[i].offset.to_native() as usize)
+        // The table is sorted ascending by slot and `validate_data_layout`
+        // proves it, so a binary search is available -- but the table holds at
+        // most one entry per private composite slot, so a scan is both simpler
+        // and bounded by the same count the search would be.
+        for i in 0..dl.private_composite_count() {
+            let e = dl.private_composite(i)?;
+            if e.slot == slot_u16 {
+                return Some(e.offset as usize);
+            }
+        }
+        None
     }
 
     /// The exclusive upper bound of the private-composite pool region that
@@ -2357,12 +2434,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             .arena
             .persistent_capacity()
             .saturating_sub(private_storage);
-        let Some(dl) = self.archived().data_layout.as_ref() else {
+        let aux = self.aux();
+        let Some(dl) = aux.data_layout() else {
             return pool;
         };
-        dl.private_composite_layout
-            .iter()
-            .map(|e| e.offset.to_native() as usize)
+        (0..dl.private_composite_count())
+            .filter_map(|i| dl.private_composite(i))
+            .map(|e| e.offset as usize)
             .filter(|&o| o > rel_offset)
             .min()
             .unwrap_or(pool)
@@ -2372,17 +2450,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// composite body length)` copied out of the archived table so the borrow
     /// of the bytecode image does not outlive the read (B28 item 2).
     fn shared_layout_entry(&self, slot: usize) -> (usize, u8, usize) {
-        let dl = self
-            .archived()
-            .data_layout
-            .as_ref()
+        let aux = self.aux();
+        let dl = aux
+            .data_layout()
             .expect("shared slot access requires a data layout");
-        let e = &dl.shared_layout[slot];
-        (
-            e.offset.to_native() as usize,
-            e.kind,
-            e.len.to_native() as usize,
-        )
+        let e = dl
+            .shared_slot(slot)
+            .expect("shared slot index within the declared layout");
+        (e.offset as usize, e.kind, e.len as usize)
     }
 
     /// Read a shared slot in place from the borrowed host buffer (B28 item 2).
@@ -2623,11 +2698,23 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             // local `pool`/`templates` are written here, then moved into
             // `self` once the borrow ends, avoiding an aliasing conflict with
             // the `&self.bytecode` that `archived()` holds.
-            let chunks = &self.archived().chunks;
-            for chunk in chunks.iter() {
+            // Decode each chunk's constant pool once, here, at construction.
+            // This is a build step, not a per-access path, so decoding to owned
+            // values costs one pass rather than anything on the hot path.
+            let aux_bytes = Self::aux_body_slice(self.bytecode.as_slice());
+            let ranges: alloc::vec::Vec<(u32, u32)> = {
+                let aux = self.aux();
+                (0..aux.chunk_count())
+                    .filter_map(|i| aux.module().chunk(i))
+                    .map(|c| (c.consts_first, c.consts_count))
+                    .collect()
+            };
+            let pools = crate::wire_schema::decode_constant_pools(aux_bytes, &ranges)
+                .unwrap_or_else(|_| ranges.iter().map(|_| alloc::vec::Vec::new()).collect());
+            for constants in &pools {
                 let mut row: alloc::vec::Vec<Option<crate::bytecode::GenericValue<W, F>>> =
-                    alloc::vec::Vec::with_capacity(chunk.constants.len());
-                for c in chunk.constants.iter() {
+                    alloc::vec::Vec::with_capacity(constants.len());
+                for c in constants {
                     row.push(Self::pool_const_template(c, wbytes, fbytes, &mut pool));
                 }
                 templates.push(row);
@@ -2649,14 +2736,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// is then returned as an `Arena` body. An empty composite body needs no
     /// handle and is left to the direct path.
     fn pool_const_template(
-        c: &crate::bytecode::ArchivedConstValue,
+        c: &crate::bytecode::ConstValue,
         word_bytes: usize,
         float_bytes: usize,
         pool: &mut alloc::vec::Vec<alloc::boxed::Box<[u8]>>,
     ) -> Option<crate::bytecode::GenericValue<W, F>> {
-        use crate::bytecode::{
-            ArchivedConstValue as A, ArrayBody, EnumBody, StructBody, TupleBody,
-        };
+        use crate::bytecode::{ArrayBody, ConstValue as A, EnumBody, StructBody, TupleBody};
         // Only a composite constant can carry a flat body; a scalar or string
         // constant short-circuits without the packing cost.
         if !matches!(
@@ -2672,7 +2757,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // boxed direct path. An empty body needs no pooled allocation and is
         // left to the direct path (it materialises as the always-valid `Empty`
         // body).
-        let bytes = crate::bytecode::const_flat_bytes(c, word_bytes, float_bytes)?;
+        let bytes = crate::bytecode::const_flat_bytes_owned(c, word_bytes, float_bytes)?;
         if bytes.is_empty() {
             return None;
         }
@@ -2746,7 +2831,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     ///
     /// Matches [`shared_data_bytes_for`] computed from the same module.
     pub fn shared_data_bytes(&self) -> usize {
-        self.archived().shared_data_bytes.to_native() as usize
+        self.aux().shared_data_bytes().unwrap_or(0) as usize
     }
 
     /// Read a scalar shared field out of a host-owned buffer between runs
@@ -3388,7 +3473,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // call [`Vm::replace_module_unchecked`] instead, which
         // bypasses this check and leaves the existing
         // size-and-arena verification as the only guard.
-        let current_hash: u32 = self.archived().schema_hash.to_native();
+        let current_hash: u32 = self.aux().schema_hash().unwrap_or(0);
         if current_hash != new_module.schema_hash {
             return Err(VmError::VerifyError(format!(
                 "schema mismatch on hot swap: current module schema_hash = {:#x}, new module schema_hash = {:#x}. Use `Vm::replace_module_unchecked` to force the swap if the data layout change is intentional.",
@@ -3638,6 +3723,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         self.reserved_opaque_capacity = reserve_opaque;
         // Install the new bytecode image and decoded ops built above (before
         // the drop), so the swap is transactional.
+        // Re-resolve against the new image: the offsets and the bytes must stay
+        // together, and a hot swap replaces the bytes.
+        self.aux_offsets = crate::wire_schema::AuxOffsets::resolve(Self::aux_body_slice(&aligned))
+            .map_err(|e| VmError::TypeError(alloc::format!("aux body: {:?}", e)))?;
         self.bytecode = BytecodeStore::Owned(aligned);
         self.decoded_ops = decoded_ops;
         self.shared_slot_count = new_shared;
@@ -4190,10 +4279,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         args: &[crate::bytecode::GenericValue<W, F>],
     ) -> Result<GenericVmState<W, F>, VmError> {
         let entry = self
-            .archived()
-            .entry_point
-            .as_ref()
-            .map(|e| e.to_native() as usize)
+            .aux()
+            .module()
+            .entry_point()
             .ok_or_else(|| VmError::InvalidBytecode(String::from("no entry point")))?;
         self.call_function(entry, args)
     }
@@ -4209,7 +4297,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// forwards. Cleared before the entry point returns so no captured pointer
     /// outlives the host's borrow.
     fn enter_shared(&mut self, shared: &mut [u8]) -> Result<(), VmError> {
-        let need = self.archived().shared_data_bytes.to_native() as usize;
+        let need = self.aux().shared_data_bytes().unwrap_or(0) as usize;
         if shared.len() != need {
             return Err(VmError::NativeError(format!(
                 "shared data buffer is {} bytes but the module declares {}; drive a module with shared data through `call_with_shared`/`resume_with_shared` with a buffer of `shared_data_bytes()`",
@@ -4238,11 +4326,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // the host's registered classification. Subsequent calls
         // skip the walk because the result is cached.
         self.verify_native_classifications()?;
-        let archived = self.archived();
-        let chunk = archived.chunks.get(chunk_idx).ok_or_else(|| {
+        let aux = self.aux();
+        let chunk = aux.module().chunk(chunk_idx).ok_or_else(|| {
             VmError::InvalidBytecode(format!("invalid chunk index: {}", chunk_idx))
         })?;
-        let local_count = chunk.local_count.to_native() as usize;
+        let local_count = chunk.local_count as usize;
         let param_count = chunk.param_count as usize;
 
         // Validate the argument count up front. Passing too few
@@ -4251,10 +4339,15 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // first use site with a confusing TypeError. Failing here
         // gives the host a clear signal that the call signature
         // is wrong before any bytecode runs.
+        let chunk_name = aux
+            .module()
+            .chunk_name(chunk_idx)
+            .and_then(|b| core::str::from_utf8(b).ok())
+            .unwrap_or("<chunk>");
         if args.len() != param_count {
             return Err(VmError::TypeError(format!(
                 "function `{}` expected {} argument{}, got {}",
-                chunk.name.as_str(),
+                chunk_name,
                 param_count,
                 if param_count == 1 { "" } else { "s" },
                 args.len()
@@ -4267,12 +4360,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // `Value`; primitive types accept only their matching
         // variant. The early rejection produces a clearer error
         // than the eventual TypeError at the first use site.
-        for (i, (arg, tag)) in args.iter().zip(chunk.param_types.iter()).enumerate() {
-            let tag = crate::bytecode::TypeTag::from_archived(tag);
+        for (i, arg) in args.iter().enumerate() {
+            let Some(tag) = aux.param_type(chunk_idx, i) else {
+                break;
+            };
             if !tag.admits(arg) {
                 return Err(VmError::TypeError(format!(
                     "function `{}` parameter {} expected {}, got {}",
-                    chunk.name.as_str(),
+                    chunk_name,
                     i,
                     tag.name(),
                     arg.type_name()
@@ -4415,14 +4510,16 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // For stream functions, update the parameter slot with the new input.
         // This ensures the next iteration sees the latest input.
         if let Some(base_frame) = self.frames.first().copied() {
-            let archived = self.archived();
-            let chunk = &archived.chunks[base_frame.chunk_idx];
-            let block_type = match &chunk.block_type {
-                crate::bytecode::ArchivedBlockType::Stream => BlockType::Stream,
-                crate::bytecode::ArchivedBlockType::Reentrant => BlockType::Reentrant,
-                crate::bytecode::ArchivedBlockType::Func => BlockType::Func,
-            };
-            let param_count = chunk.param_count;
+            let aux = self.aux();
+            let block_type = aux
+                .module()
+                .chunk_block_type(base_frame.chunk_idx)
+                .unwrap_or(BlockType::Func);
+            let param_count = aux
+                .module()
+                .chunk(base_frame.chunk_idx)
+                .map(|c| c.param_count)
+                .unwrap_or(0);
             if block_type == BlockType::Stream && param_count > 0 {
                 // Validate the resume value against the loop's
                 // parameter type. The yield expression inside the
@@ -4432,12 +4529,18 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 // the host a clear signal at the resume boundary
                 // rather than a confusing TypeError when the body
                 // first uses the resumed value.
-                if let Some(tag) = chunk.param_types.first() {
-                    let tag = crate::bytecode::TypeTag::from_archived(tag);
-                    if !tag.admits(&input) {
+                if let Some(tag) = aux.param_type(base_frame.chunk_idx, 0)
+                    && !tag.admits(&input)
+                {
+                    {
+                        let name = aux
+                            .module()
+                            .chunk_name(base_frame.chunk_idx)
+                            .and_then(|b| core::str::from_utf8(b).ok())
+                            .unwrap_or("<chunk>");
                         return Err(VmError::TypeError(format!(
                             "loop `{}` resume expected {}, got {}",
-                            chunk.name.as_str(),
+                            name,
                             tag.name(),
                             input.type_name()
                         )));
@@ -4534,9 +4637,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// or after `strip`). Decoded on demand; this is a cold path used
     /// only when a host resolves a fault, so it is not cached.
     fn chunk_debug_pool(&self, chunk_idx: usize) -> Option<crate::debug_meta::DebugPool> {
-        let chunk = self.archived().chunks.get(chunk_idx)?;
-        let bytes = chunk.debug_pool_bytes.as_ref()?;
-        crate::debug_meta::DebugPool::decode(bytes.as_slice()).ok()
+        let aux = self.aux();
+        let bytes = aux.module().chunk_debug_bytes(chunk_idx)?;
+        crate::debug_meta::DebugPool::decode(bytes).ok()
     }
 
     /// Resolve the most recent fault to a [`FaultSource`] through the
@@ -11061,19 +11164,43 @@ mod tests {
         // to protect. Only the version byte and the CRC trailer differ from the
         // pre-widening golden bytes, since this program has no data segment.
         let expected: alloc::vec::Vec<u8> = alloc::vec![
-            75, 69, 76, 69, 1, 0, 64, 0, 60, 1, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 240, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 159, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 109, 97, 105, 110, 255, 255, 255, 255, 200, 255, 255, 255,
-            1, 0, 0, 0, 240, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 228, 255, 255, 255, 0, 0, 0, 0,
-            0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
-            3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 176, 255, 255, 255, 1, 0, 0, 0, 224, 255,
-            255, 255, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 144, 255, 255, 255, 0,
-            0, 0, 0, 136, 255, 255, 255, 1, 0, 0, 0, 152, 255, 255, 255, 0, 0, 0, 0, 122, 91, 139,
-            23
+            75, 69, 76, 69, 2, 0, 64, 0, 220, 3, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 144, 3,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 159, 0, 0, 0, 88, 85, 65, 75, 255, 254, 2, 0,
+            15, 0, 0, 0, 128, 156, 85, 98, 88, 85, 65, 75, 255, 254, 2, 0, 15, 0, 0, 0, 128, 156,
+            85, 98, 88, 85, 65, 75, 255, 254, 2, 0, 15, 0, 0, 0, 128, 156, 85, 98, 22, 0, 0, 0, 96,
+            0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 24, 0, 0, 0, 98, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 25,
+            0, 0, 0, 98, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 0, 0, 0, 98, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 35, 0, 0, 0, 98, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 33, 0, 0, 0, 98, 0, 0, 0, 4,
+            0, 0, 0, 0, 0, 0, 0, 18, 0, 0, 0, 102, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 19, 0, 0, 0,
+            104, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 23, 0, 0, 0, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 30, 0, 0, 0, 104, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 104, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 31, 0, 0, 0, 106,
+            0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 112, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 17,
+            0, 0, 0, 113, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 22, 0, 0, 0, 96, 0, 0, 0, 2, 0, 0, 0, 0,
+            0, 0, 0, 24, 0, 0, 0, 98, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 25, 0, 0, 0, 98, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 32, 0, 0, 0, 98, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 35, 0, 0, 0, 98,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 33, 0, 0, 0, 98, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 18,
+            0, 0, 0, 102, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 19, 0, 0, 0, 104, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 20, 0, 0, 0, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 23, 0, 0, 0, 104, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 30, 0, 0, 0, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 21, 0, 0,
+            0, 104, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 31, 0, 0, 0, 106, 0, 0, 0, 6, 0, 0, 0, 0, 0,
+            0, 0, 16, 0, 0, 0, 112, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 17, 0, 0, 0, 113, 0, 0, 0, 1,
+            0, 0, 0, 0, 0, 0, 0, 22, 0, 0, 0, 96, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 24, 0, 0, 0, 98,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 25, 0, 0, 0, 98, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32,
+            0, 0, 0, 98, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 35, 0, 0, 0, 98, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 33, 0, 0, 0, 98, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 18, 0, 0, 0, 102, 0, 0, 0,
+            2, 0, 0, 0, 0, 0, 0, 0, 19, 0, 0, 0, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0,
+            104, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 23, 0, 0, 0, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 30, 0, 0, 0, 104, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 21, 0, 0, 0, 104, 0, 0, 0, 2, 0,
+            0, 0, 0, 0, 0, 0, 31, 0, 0, 0, 106, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 112,
+            0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 17, 0, 0, 0, 113, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0,
+            0, 0, 0, 0, 0, 2, 0, 3, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 0, 0,
+            0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 1, 109, 97, 105, 110, 0, 0, 0, 0, 0, 0, 0, 0, 4,
+            0, 0, 0, 236, 14, 11, 135
         ];
         let src = "fn main() -> Word { 1 }";
         let tokens = tokenize(src).expect("lex");
@@ -11098,7 +11225,7 @@ mod tests {
     fn bytecode_view_bytes_runs_aligned_input() {
         // Compile, serialize, and copy into an AlignedVec to obtain an
         // aligned slice. view_bytes validates in place via
-        // Module::access_bytes and deserializes without the AlignedVec
+        // Module::validate_bytes and deserializes without the AlignedVec
         // copy that load_bytes performs internally.
         let src = "fn main() -> Word { 7 + 35 }";
         let tokens = tokenize(src).expect("lex");
@@ -11123,7 +11250,7 @@ mod tests {
         // before deserialization. Unaligned input is therefore
         // handled gracefully without requiring the caller to align
         // the buffer. The zero-copy alignment contract is preserved
-        // by the distinct `Module::access_bytes` and
+        // by the distinct `Module::validate_bytes` and
         // `Vm::view_bytes_zero_copy` entry points; this test pins
         // the owned-decode tolerance.
         let src = "fn main() -> Word { 1 }";
@@ -11227,21 +11354,28 @@ mod tests {
     fn bytecode_archived_value_round_trip_matches_owned() {
         // value_from_archived materializes an owned Value from an
         // archived Value. Verify constants survive the round trip.
-        use crate::bytecode::value_from_archived;
         let src = "fn main() -> Word { 42 }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
         let bytes = module.to_bytes().expect("encode");
-        let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
-        aligned.extend_from_slice(&bytes);
-        let archived: &crate::wire_format::ArchivedWireAuxBody =
-            Module::access_bytes(&aligned).expect("access");
-        let main_chunk = &archived.chunks[0];
-        for (i, archived_val) in main_chunk.constants.iter().enumerate() {
+        // No `AlignedVec`: the v2 auxiliary body is byte-addressed, so the
+        // 8-byte alignment the rkyv archive required is gone.
+        Module::validate_bytes(&bytes).expect("validate");
+        let aux =
+            crate::wire_schema::AuxView::parse(crate::vm::Vm::aux_body_slice_for_test(&bytes))
+                .expect("aux view");
+        let count = aux.const_count(0).expect("chunk 0") as usize;
+        assert_eq!(count, module.chunks[0].constants.len());
+        for i in 0..count {
             // The bundled runtime is i64/f64, eight-byte scalars; the
             // into_value comparand uses the same widths (B28 P2).
-            let owned = value_from_archived(archived_val, 8, 8);
+            let decoded = crate::wire_schema::decode_constant_pool(
+                crate::vm::Vm::aux_body_slice_for_test(&bytes),
+                (aux.module().chunk(0).unwrap().consts_first + i as u32, 1),
+            )
+            .expect("decode");
+            let owned = crate::bytecode::Value::from_const(&decoded[0], 8, 8);
             let original = module.chunks[0].constants[i].clone().into_value();
             assert_eq!(
                 owned, original,
@@ -11252,28 +11386,25 @@ mod tests {
     }
 
     #[test]
-    fn bytecode_access_bytes_returns_archived_view() {
-        // access_bytes returns a borrowed `ArchivedWireAuxBody`
-        // under the V0.2.0 wire format. The archived form
-        // preserves the chunk count, the entry point, and the
-        // word and address sizes through native conversions.
+    fn bytecode_validate_bytes_admits_a_borrowed_view() {
+        // The v2 counterpart of the old `validate_bytes` test. `validate_bytes`
+        // checks framing without deserializing, and `AuxView` then reads the
+        // chunk count and declared widths straight out of the image -- with no
+        // alignment requirement, which the rkyv archive did impose.
         let src = "fn double(x: Word) -> Word { x * 2 }\nfn main() -> Word { double(21) }";
         let tokens = tokenize(src).expect("lex");
         let program = parse(&tokens).expect("parse");
         let module = compile(&program).expect("compile");
         let bytes = module.to_bytes().expect("encode");
-        let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
-        aligned.extend_from_slice(&bytes);
-        let archived: &crate::wire_format::ArchivedWireAuxBody =
-            Module::access_bytes(&aligned).expect("access");
-        assert_eq!(archived.chunks.len(), 2);
+
+        Module::validate_bytes(&bytes).expect("validate");
+        let aux =
+            crate::wire_schema::AuxView::parse(crate::vm::Vm::aux_body_slice_for_test(&bytes))
+                .expect("aux view");
+        assert_eq!(aux.chunk_count(), 2);
         assert_eq!(
-            archived.word_bits_log2,
-            crate::bytecode::RUNTIME_WORD_BITS_LOG2
-        );
-        assert_eq!(
-            archived.addr_bits_log2,
-            crate::bytecode::RUNTIME_ADDRESS_BITS_LOG2
+            aux.word_bits_log2(),
+            Some(crate::bytecode::RUNTIME_WORD_BITS_LOG2)
         );
     }
 

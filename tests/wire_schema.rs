@@ -1715,8 +1715,11 @@ fn a_whole_module_assembles_into_one_artifact() {
     // Natives, with the second lacking a described return shape.
     assert_eq!(m.native_count(), 2);
     assert_eq!(m.native_name(0), Some(&b"host::log"[..]));
-    assert_ne!(m.native(0).unwrap().ret_shape, ABSENT);
-    assert_eq!(m.native(1).unwrap().ret_shape, ABSENT);
+    // Return shapes live in their own table, at their own length: this module
+    // declares two natives but only one return shape.
+    assert_eq!(m.native_return_count(), 1);
+    assert!(m.native_return_shape(0).is_some());
+    assert!(m.native_return_shape(1).is_none());
 }
 
 #[test]
@@ -1904,14 +1907,17 @@ fn signatures_and_natives_can_coexist() {
 
     let m = ModuleTable::parse(&bytes).unwrap();
     assert_eq!(m.native_count(), 2);
-    let nat0 = m.native(0).unwrap();
-    assert_ne!(nat0.ret_shape, ABSENT);
+    assert_eq!(m.native_return_count(), 1);
+    let idx = m.native_return_shape(0).expect("first native has a shape");
     assert_eq!(
-        st.shape(nat0.ret_shape),
+        st.shape(idx),
         Some(WireShape::Flat { kind: 2, size: 16 }),
         "a native's return shape resolves in the shared table"
     );
-    assert_eq!(m.native(1).unwrap().ret_shape, ABSENT);
+    assert!(
+        m.native_return_shape(1).is_none(),
+        "only one shape was declared"
+    );
 }
 
 #[test]
@@ -2566,4 +2572,53 @@ fn rebuilding_never_panics_under_corruption() {
             let _ = v.schema_hash();
         }
     }
+}
+
+#[test]
+fn native_return_shapes_survive_when_there_are_no_native_names() {
+    // REGRESSION. These two vectors are documented as parallel but are not
+    // required to be, and a real module in the existing suite carries two
+    // return shapes and zero names. Encoding them as one paired record silently
+    // DROPPED the surplus -- data loss, not a mismatch, so nothing complained.
+    //
+    // The pairing was justified at the time by "two parallel vectors are exactly
+    // what falls out of step". True, and beside the point: they were already
+    // permitted to differ, so pairing them destroyed information rather than
+    // protecting it.
+    let mut b = SchemaBuilder::new();
+    b.add_natives(
+        &[],
+        &[WireShape::Flat { kind: 2, size: 24 }, WireShape::Top],
+    )
+    .unwrap();
+    let bytes = b.finish().unwrap();
+
+    let m = ModuleTable::parse(&bytes).unwrap();
+    assert_eq!(m.native_count(), 0, "no names were declared");
+    assert_eq!(m.native_return_count(), 2, "both shapes must survive");
+
+    let st = SignatureTable::parse(&bytes).unwrap();
+    assert_eq!(
+        st.shape(m.native_return_shape(0).unwrap()),
+        Some(WireShape::Flat { kind: 2, size: 24 })
+    );
+    assert_eq!(
+        st.shape(m.native_return_shape(1).unwrap()),
+        Some(WireShape::Top)
+    );
+}
+
+#[test]
+fn more_native_names_than_return_shapes_also_round_trips() {
+    // The other direction, which is the ordinary additive case: a module
+    // compiled before return shapes existed has names and no shapes.
+    let mut b = SchemaBuilder::new();
+    b.add_natives(&["a".to_string(), "b".to_string()], &[])
+        .unwrap();
+    let bytes = b.finish().unwrap();
+
+    let m = ModuleTable::parse(&bytes).unwrap();
+    assert_eq!(m.native_count(), 2);
+    assert_eq!(m.native_return_count(), 0);
+    assert_eq!(m.native_name(0), Some(&b"a"[..]));
 }
