@@ -10,6 +10,59 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
+**Date**: 2026-08-08 (session 39)
+
+## READ THIS FIRST — the cutover is performance-fixed but the gate has NOT run
+
+`feat/wire-cutover-proper` = `18b0da3`, **local only, not pushed**. It carries the wire-format v2
+cutover (`BYTECODE_VERSION` 2, operator-authorised 2026-08-06) plus the performance repair below.
+`v0.2.3` = `97320d0`, green and pushed.
+
+**The cutover as originally committed was correct and unshippable.** Every test passed; one of them
+took over 37 minutes against 54 seconds on `v0.2.3`. Two hot-path reads were doing work proportional
+to the whole module. Both are fixed:
+
+- `AuxResolved` resolves the module scalars once per installed image, instead of `Vm::aux()`
+  rebuilding fifteen sub-tables to read one scalar inside the interpreter loop.
+- `ConstTable::value` materialises one constant's subtree, with a scalar fast path, instead of
+  `decode_constant_pool` re-parsing the artifact and materialising every constant in the module per
+  constant load.
+
+Measured, same machine, uncontended, no memoization:
+
+| | `lexer.kel` self-compile |
+|---|---|
+| `v0.2.3` (rkyv) | 54.26 s |
+| cutover as committed | >2220 s (killed) |
+| **cutover fixed** | **30.29 s** |
+
+**Verified green**: 1231 lib tests, 94 schema tests, the ten-stage corpus, `fmt`,
+`clippy --workspace --all-targets -D warnings`.
+
+**NOT verified**: the full `scripts/release-gate.sh` — `signatures`, `signatures,shell`, `self-host`
+in full, both `keleusma-wire` configurations, the markdown-link check, and the detached `compiler/`
+subproject. **Do not merge until it is green.** Ask the operator to run it with
+`! scripts/release-gate.sh`; agent-launched background runs do not survive this environment.
+
+### Three things a resuming agent must not relearn the hard way
+
+1. **A killed gate orphans its test binary to PID 1**, still at full CPU. One was found burning four
+   cores for ten hours, halving the machine. Reap `target/debug/deps` strays before any gate.
+2. **Never measure performance on a build you have not just re-verified.** A 3.7× "speedup" recorded
+   during this session came from a build where constant loads were erroring out early and returning
+   `Unit`. The real figure was an 11% regression until a further fix landed.
+3. **A scalar constant record overlays its payload on the range bytes.** "Has children" is a question
+   about the tag, never the range fields. `Int(i64::MIN)` reads as a child count of 0x8000_0000, and a
+   differential test built from small integers passes right through it.
+
+### Still open
+
+- `CLAUDE.md` and the golden-bytes comment are corrected to wire format v2 on this branch.
+- Publication remains **held**. MSRV 1.85 still unverified.
+- A `v0.2.3` worktree for A/B measurement is parked outside the repo in the session scratchpad.
+
+---
+
 **Date**: 2026-08-04 (session 37)
 
 ## Current state — the wire-format programme, steps 1 and 2 done

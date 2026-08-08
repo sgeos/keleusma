@@ -1715,8 +1715,11 @@ fn a_whole_module_assembles_into_one_artifact() {
     // Natives, with the second lacking a described return shape.
     assert_eq!(m.native_count(), 2);
     assert_eq!(m.native_name(0), Some(&b"host::log"[..]));
-    assert_ne!(m.native(0).unwrap().ret_shape, ABSENT);
-    assert_eq!(m.native(1).unwrap().ret_shape, ABSENT);
+    // Return shapes live in their own table, at their own length: this module
+    // declares two natives but only one return shape.
+    assert_eq!(m.native_return_count(), 1);
+    assert!(m.native_return_shape(0).is_some());
+    assert!(m.native_return_shape(1).is_none());
 }
 
 #[test]
@@ -1904,14 +1907,17 @@ fn signatures_and_natives_can_coexist() {
 
     let m = ModuleTable::parse(&bytes).unwrap();
     assert_eq!(m.native_count(), 2);
-    let nat0 = m.native(0).unwrap();
-    assert_ne!(nat0.ret_shape, ABSENT);
+    assert_eq!(m.native_return_count(), 1);
+    let idx = m.native_return_shape(0).expect("first native has a shape");
     assert_eq!(
-        st.shape(nat0.ret_shape),
+        st.shape(idx),
         Some(WireShape::Flat { kind: 2, size: 16 }),
         "a native's return shape resolves in the shared table"
     );
-    assert_eq!(m.native(1).unwrap().ret_shape, ABSENT);
+    assert!(
+        m.native_return_shape(1).is_none(),
+        "only one shape was declared"
+    );
 }
 
 #[test]
@@ -2566,4 +2572,150 @@ fn rebuilding_never_panics_under_corruption() {
             let _ = v.schema_hash();
         }
     }
+}
+
+#[test]
+fn native_return_shapes_survive_when_there_are_no_native_names() {
+    // REGRESSION. These two vectors are documented as parallel but are not
+    // required to be, and a real module in the existing suite carries two
+    // return shapes and zero names. Encoding them as one paired record silently
+    // DROPPED the surplus -- data loss, not a mismatch, so nothing complained.
+    //
+    // The pairing was justified at the time by "two parallel vectors are exactly
+    // what falls out of step". True, and beside the point: they were already
+    // permitted to differ, so pairing them destroyed information rather than
+    // protecting it.
+    let mut b = SchemaBuilder::new();
+    b.add_natives(
+        &[],
+        &[WireShape::Flat { kind: 2, size: 24 }, WireShape::Top],
+    )
+    .unwrap();
+    let bytes = b.finish().unwrap();
+
+    let m = ModuleTable::parse(&bytes).unwrap();
+    assert_eq!(m.native_count(), 0, "no names were declared");
+    assert_eq!(m.native_return_count(), 2, "both shapes must survive");
+
+    let st = SignatureTable::parse(&bytes).unwrap();
+    assert_eq!(
+        st.shape(m.native_return_shape(0).unwrap()),
+        Some(WireShape::Flat { kind: 2, size: 24 })
+    );
+    assert_eq!(
+        st.shape(m.native_return_shape(1).unwrap()),
+        Some(WireShape::Top)
+    );
+}
+
+#[test]
+fn more_native_names_than_return_shapes_also_round_trips() {
+    // The other direction, which is the ordinary additive case: a module
+    // compiled before return shapes existed has names and no shapes.
+    let mut b = SchemaBuilder::new();
+    b.add_natives(&["a".to_string(), "b".to_string()], &[])
+        .unwrap();
+    let bytes = b.finish().unwrap();
+
+    let m = ModuleTable::parse(&bytes).unwrap();
+    assert_eq!(m.native_count(), 2);
+    assert_eq!(m.native_return_count(), 0);
+    assert_eq!(m.native_name(0), Some(&b"a"[..]));
+}
+
+// ---------------------------------------------------------------------------
+// Single-constant subtree reads (the VM's path)
+// ---------------------------------------------------------------------------
+
+/// `ConstTable::value` must agree with the full sweep for EVERY constant.
+///
+/// The two readers exist for different callers -- the sweep decodes a whole
+/// module once, `value` fetches one constant while the VM executes -- and a
+/// divergence between them would surface as a value that differs by which code
+/// route reached it. That is the untraceable-in-the-field class, so it is pinned
+/// here rather than left to the callers that happen to exercise both.
+///
+/// This also covers what a spot check would miss: `value` walks only the
+/// reachable set, so a bug in its worklist shows up as a wrong CHILD, not a
+/// wrong root, and only for nested shapes.
+#[test]
+fn single_constant_reads_agree_with_the_full_sweep() {
+    let roots = vec![
+        ConstValue::Int(7),
+        // Scalars whose PAYLOAD, if misread as a child range, is out of bounds.
+        //
+        // This is the specific regression: a scalar overlays its payload on the
+        // range bytes, so a reader that asks "has children" of the range instead
+        // of the tag sees `i64::MIN` as a child count of 0x8000_0000. A suite of
+        // small integers passes with that bug, because 7 decodes as a count of
+        // zero. Do not reduce these to tidy values.
+        ConstValue::Int(i64::MIN),
+        ConstValue::Int(i64::MAX),
+        ConstValue::Int(-1),
+        ConstValue::Fixed(i64::MIN),
+        ConstValue::StaticStr("hello".to_string()),
+        ConstValue::Unit,
+        ConstValue::Bool(true),
+        ConstValue::Byte(0xAB),
+        // Nested composites: the case where a reachable-set bug hides.
+        ConstValue::Tuple(vec![
+            ConstValue::Int(1),
+            ConstValue::Array(vec![
+                ConstValue::Int(2),
+                ConstValue::Tuple(vec![ConstValue::StaticStr("deep".to_string())]),
+            ]),
+        ]),
+        ConstValue::Struct {
+            type_name: "P".to_string(),
+            fields: vec![
+                ("x".to_string(), ConstValue::Int(3)),
+                (
+                    "inner".to_string(),
+                    ConstValue::Enum {
+                        type_name: "E".to_string(),
+                        variant: "V".to_string(),
+                        discriminant: Some(2),
+                        fields: vec![ConstValue::Int(4)],
+                    },
+                ),
+            ],
+        },
+    ];
+    let bytes = encode_constants(&roots).expect("encode");
+    let swept = decode_constants(&bytes, roots.len()).expect("sweep");
+    let t = ConstTable::parse(&bytes).expect("parse");
+
+    // Roots agree, compared with `deep_eq`: `ConstValue`'s `PartialEq` ignores
+    // the enum discriminant, so `==` here would pass with it dropped.
+    for (i, expected) in swept.iter().enumerate() {
+        let got = t.value(i).expect("value");
+        assert!(
+            deep_eq(&got, expected),
+            "root {i}: subtree read {got:?} disagrees with sweep {expected:?}"
+        );
+    }
+
+    // EVERY record, not just the roots -- children are where a worklist bug
+    // lives, and they are only reachable by global index.
+    assert!(
+        t.len() > roots.len(),
+        "expected child records beyond the {} roots, found {}; \
+         this test proves nothing about nesting if the table is flat",
+        roots.len(),
+        t.len()
+    );
+    for i in 0..t.len() {
+        t.value(i)
+            .unwrap_or_else(|e| panic!("constant {i} failed to materialise: {e:?}"));
+    }
+}
+
+/// An out-of-range index is an error, not a panic and not a silent `Unit`.
+#[test]
+fn single_constant_read_rejects_an_out_of_range_index() {
+    let bytes = encode_constants(&[ConstValue::Int(1)]).expect("encode");
+    let t = ConstTable::parse(&bytes).expect("parse");
+    assert!(t.value(0).is_ok());
+    assert!(matches!(t.value(1), Err(SchemaError::BadIndex)));
+    assert!(matches!(t.value(usize::MAX), Err(SchemaError::BadIndex)));
 }

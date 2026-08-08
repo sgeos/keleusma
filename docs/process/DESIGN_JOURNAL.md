@@ -17,6 +17,67 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-04 (session 37)
 
+**THE CUTOVER WAS CORRECT AND UNSHIPPABLE (2026-08-08): every test passed and one of them took 37 minutes.**
+The port was FUNCTIONALLY right -- dozens of byte-identical self-host tests reported ok, and no failure
+was ever seen anywhere. It was also unusable: `self_host_compiles_lexer_kel_byte_identically` ran 54s on
+`v0.2.3` and over 37 MINUTES on the cutover, at which point I killed it. An earlier session's run of the
+same suite had been left orphaned at nine hours and fifty-three minutes.
+
+THE SHAPE TO REMEMBER: a green suite says nothing about whether a read path stayed a read path. Both
+defects were a hot-path access doing work proportional to the WHOLE MODULE, and neither is visible to any
+assertion. `Vm::aux()` rebuilds fifteen sub-tables, and `module_word_bytes`, `chunk_local_count`,
+`chunk_op_count`, `chunk_count` and `shared_data_bytes` each rebuilt all of it to read ONE SCALAR from
+inside the interpreter loop. Worse, `chunk_const` fetched one constant through `decode_constant_pool`,
+which re-parses the artifact, allocates an n-element vector and materialises EVERY constant in the module
+to return one -- per constant load. That function's own doc comment warns that this is quadratic. The
+decoder had been fixed for exactly this; the VM then reintroduced it one increment later.
+
+WHAT ACTUALLY FOUND IT WAS A PROFILER, NOT A TEST, and not reasoning either. `sample` on the running
+process put `keleusma_wire::scalar::has` above `typecheck::type_of_expr` by four to one, which is not a
+thing that can be true of a compiler doing its job. Reading stacks then named the exact functions. Three
+sessions of this arc have now been lost to guessing at performance and one profile has solved it each
+time. Measure.
+
+I WAS WRONG TWICE IN THE COURSE OF FIXING IT, and both corrections are worth keeping.
+
+First, I claimed the cutover had turned a zero-copy load into an eager owned decode and had thereby
+undone P10. It had not. `module_from_wire_bytes` called `rkyv::from_bytes::<WireAuxBody>` before the
+cutover -- also a full owned deserialize. The load path changed implementation, not design. Checking
+`git show v0.2.3:` took one command and stopped a false design-regression claim from being recorded here.
+
+Second, and more instructive: I measured the fix at 14.54s and reported a 3.7x SPEEDUP over rkyv. That
+number came from a build with a live bug in it -- constant loads were erroring out early and returning
+`Unit`, so the VM was fast because it was not doing the work. The honest figure after the bug was fixed
+was 60.35s, an eleven percent REGRESSION, and only after a scalar fast path did it reach 30.29s. A
+performance measurement taken on a build whose correctness you have not just re-established is worthless,
+and a suspiciously good number is a symptom rather than a result.
+
+THE BUG INSIDE THE FIX IS THE BEST THING IN THIS ENTRY. My reachability walk called `as_range()` on every
+record. A SCALAR OVERLAYS ITS PAYLOAD ON THE RANGE BYTES, so `Int(i64::MIN)` read as a child count of
+0x8000_0000. The full sweep gets away with computing the range unconditionally because it consults the
+result only in the composite arms; a reachability walk has no such guard. "Does this record have
+children" is a question about the TAG and never about the range fields.
+
+AND THE DIFFERENTIAL TEST I HAD JUST WRITTEN FOR THIS PASSED WITH THAT BUG PRESENT, because every integer
+in it was small enough that its payload decoded as a child count of zero. `Int(7)` proves nothing here.
+The test now carries `i64::MIN`, `i64::MAX`, `-1` and `Fixed(i64::MIN)`, and I removed the guard to
+confirm it fails -- a test written for a bug I had already found still needed a negative control before
+it could be believed. That is the fourth succeed-emptily test this arc.
+
+ONE DESIGN POINT WORTH PRESERVING. `AuxResolved` bundles the cached scalars WITH the offsets they were
+derived from, behind a single constructor, rather than sitting beside them as sibling `Vm` fields. Three
+sites install an image, one of them the hot swap. Sibling fields would let a site refresh the offsets and
+forget the scalars, and the result reads as a plausible value from the PREVIOUS module rather than as a
+fault. Making the mistake unrepresentable was worth the small amount of extra structure.
+
+OPERATIONAL FINDING, unrelated but expensive: a killed background gate leaves its test binary ORPHANED to
+PID 1, still running at full tilt. One had been burning four cores for ten hours and was halving the
+machine. Reap `target/debug/deps` strays before starting a gate.
+
+Measured, same machine, uncontended, no memoization: `v0.2.3` 54.26s, cutover as committed >2220s,
+cutover fixed 30.29s. The v2 format is now 1.8x faster than the encoding it replaced.
+
+
 **CUTOVER PROPER, CHECKPOINTED RED (2026-08-06): the build stays green while the runtime reads garbage.**
 The encode and cold-decode swap plus the version bump went in cleanly and the crate COMPILES. It is
 also completely broken: 322 lib tests fail, because `Vm::archived()` is still

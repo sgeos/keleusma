@@ -1508,7 +1508,7 @@ pub fn parse_wire_sections(bytes: &[u8]) -> Result<WireSections<'_>, LoadError> 
 
 /// Read header-mirrored target widths and declared WCET / WCMU
 /// fields from a framed V0.2.0 wire-format buffer. Used by
-/// [`crate::bytecode::Module::access_bytes`] (and the VM's
+/// [`crate::bytecode::Module::validate_bytes`] (and the VM's
 /// zero-copy path) to surface the fast-path metadata without
 /// deserializing the auxiliary body.
 pub fn read_header_fields(bytes: &[u8]) -> Result<HeaderFields, LoadError> {
@@ -1633,7 +1633,7 @@ pub fn module_to_wire_bytes(module: &Module) -> Result<Vec<u8>, LoadError> {
         private_data_bytes: module.private_data_bytes,
         schema_hash: module.schema_hash,
     };
-    let aux_bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&aux)
+    let aux_bytes = crate::wire_schema::encode_aux_body(&aux)
         .map_err(|e| LoadError::Codec(format!("aux body encode failed: {}", e)))?;
 
     // Flatten operand pool to bytes.
@@ -1845,7 +1845,7 @@ pub fn module_to_signed_wire_bytes(
         private_data_bytes: module.private_data_bytes,
         schema_hash: module.schema_hash,
     };
-    let aux_bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&aux)
+    let aux_bytes = crate::wire_schema::encode_aux_body(&aux)
         .map_err(|e| LoadError::Codec(format!("aux body encode failed: {}", e)))?;
     let mut operand_pool_bytes: Vec<u8> =
         Vec::with_capacity(operand_pool.len() * OPERAND_POOL_ENTRY_BYTES);
@@ -2449,25 +2449,14 @@ pub fn module_from_wire_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
         });
     }
 
-    // Deserialize the auxiliary body. `rkyv::from_bytes` calls
-    // `rkyv::access` internally which validates the archive in
-    // place; the validation requires the buffer to be aligned to
-    // `align_of::<ArchivedWireAuxBody>()` (8 bytes). The
-    // `aux_body_bytes` subslice inherits the input buffer's
-    // alignment, which is not guaranteed for `include_bytes!`
-    // payloads, file reads, or arbitrary host-supplied byte
-    // sources. Copy into an 8-byte-aligned scratch buffer so the
-    // archive validation observes the required alignment on every
-    // target architecture. The legacy `Module::from_bytes` path
-    // (pre V0.2.0 Phase 7c) used the same pattern; the cutover
-    // dropped the copy step, which produced an unaligned decode
-    // on 32-bit targets where the input buffer happens to land at
-    // a 4-byte boundary.
-    let mut aligned: rkyv::util::AlignedVec<8> =
-        rkyv::util::AlignedVec::with_capacity(aux_body_bytes.len());
-    aligned.extend_from_slice(aux_body_bytes);
-    let aux = rkyv::from_bytes::<WireAuxBody, rkyv::rancor::Error>(&aligned)
-        .map_err(|e| LoadError::Codec(format!("aux body decode failed: {}", e)))?;
+    // Decode the auxiliary body. The v2 format is byte-addressed and
+    // imposes no alignment requirement, so the 8-byte-aligned scratch
+    // copy the rkyv path needed is gone -- with it the class of bug
+    // that copy existed to prevent, an unaligned decode on a 32-bit
+    // target where the input buffer happened to land at a 4-byte
+    // boundary. Decoding reads the slice where it lies.
+    let aux = crate::wire_schema::decode_aux_body(aux_body_bytes)
+        .map_err(|e| LoadError::Codec(format!("aux body decode failed: {:?}", e)))?;
 
     // Cross-check header-mirrored fields against the auxiliary
     // body. The header is the fast-path view; the aux body is
