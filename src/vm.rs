@@ -1311,7 +1311,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // through `value_from_archived` below; its string leaves become owned
         // `StaticStr` there, which the flat packer copies into the arena as a
         // genuinely-owned (host-like) string.
-        if let Some(bytes) = self.aux().chunk_const_str_bytes(chunk_idx, idx) {
+        // Built ONCE and reused by both reads below. The string probe runs on
+        // every constant load, so a second `self.aux()` on the value path meant
+        // rebuilding every sub-table twice per scalar load.
+        let aux = self.aux();
+        if let Some(bytes) = aux.chunk_const_str_bytes(chunk_idx, idx) {
             if bytes.is_empty() {
                 return crate::bytecode::GenericValue::StaticStr(alloc::string::String::new());
             }
@@ -1356,7 +1360,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // constant's subtree, so a scalar touches one record.
         let word_bytes = self.module_word_bytes();
         let float_bytes = self.module_float_bytes();
-        match self.aux().chunk_const_value(chunk_idx, idx) {
+        match aux.chunk_const_value(chunk_idx, idx) {
             Some(Ok(v)) => crate::bytecode::GenericValue::from_const(&v, word_bytes, float_bytes),
             _ => crate::bytecode::GenericValue::Unit,
         }

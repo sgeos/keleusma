@@ -17,6 +17,48 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-04 (session 37)
 
+**THE GUARDRAIL THAT WAS MISSING (2026-08-08, after the merge): nothing in the gate measures time.**
+The cutover merged green on all twelve gate steps. It would ALSO have merged green in its unshippable
+state, because a forty-fold slowdown is not expressible as a correctness assertion. That is the gap
+`tests/perf_canary.rs` closes -- a tripwire, not a benchmark, about two seconds, running wherever the
+suite runs.
+
+I VALIDATED IT AGAINST THE REAL REGRESSION instead of trusting it. Checking out the pre-repair `vm.rs`
+and `wire_schema.rs` takes the canary from 1.7s to 67.3s and trips the ceiling. This arc has produced
+four tests that succeeded emptily; a performance guard that has not been shown able to fail would have
+been the fifth, and the most reassuring of them.
+
+THE CEILING IS SET FROM THE FAILURE MODE, NOT FROM THE OBSERVED RUNTIME. Thirty seconds against a
+healthy 1.2s looks absurdly slack, and that is the point: a canary that fails on a loaded laptop gets
+disabled, and a disabled canary is worse than none. Against a factor of forty, an order of magnitude of
+headroom still fires on the first run. The test also asserts the arithmetic, because a pure timing check
+would pass if the loop were optimised into doing nothing.
+
+THE NUMBER THAT MAKES THE WHOLE CUTOVER WORTH IT, finally measured on the same loop across all three
+runtimes: rkyv 6.42s, v2 as first committed 67.29s, v2 repaired 1.23s. **The v2 read path is 5.2x faster
+than the encoding it replaced.** The end-to-end stage figure (54.26s to 30.29s, 1.8x) understates it,
+because that includes the reference front end doing unchanged work.
+
+I STOPPED OPTIMISING DELIBERATELY. An audit of all fifteen remaining `self.aux()` sites found none hot:
+`shared_layout_entry`, `private_composite_pool_offset`, `private_composite_slot_end`,
+`enum_variant_layout` and `struct_template` are per-composite-access or per-construction, not per-op, and
+the rest are load, swap or debug paths. Five times ahead of baseline is enough; the residue is a
+follow-up increment, and gold-plating it would have been the wrong call with the frontier waiting.
+
+OPERATIONAL, AND IT COMPOUNDS: an interrupted gate leaves its test binary reparented to PID 1 at full
+CPU. One had been burning four cores for ten hours. They accumulate one per interrupted run, and they
+corrupt exactly the timing signal the canary depends on -- a machine quietly at half capacity is how a
+canary produces a false alarm and then gets its ceiling raised for the wrong reason. `release-gate.sh`
+now reaps them as a preflight.
+
+PROCESS, from the operator: the full gate is required before every MERGE, not after every CHANGE.
+Codified as three tiers in PROCESS_STRATEGY.md. The feature matrix was deliberately NOT narrowed --
+batching increments gives roughly a five-fold saving at no cost to coverage, where narrowing gives maybe
+two-fold and makes precisely the "probably safe" hole that let broken intra-doc links survive four
+releases. This branch is itself the first use of that: canary, preflight, docs and the `chunk_const`
+optimisation batched behind one gate.
+
+
 **THE CUTOVER WAS CORRECT AND UNSHIPPABLE (2026-08-08): every test passed and one of them took 37 minutes.**
 The port was FUNCTIONALLY right -- dozens of byte-identical self-host tests reported ok, and no failure
 was ever seen anywhere. It was also unusable: `self_host_compiles_lexer_kel_byte_identically` ran 54s on

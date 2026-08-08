@@ -34,6 +34,23 @@ fi
 
 step() { printf '\n\033[1m=== %s ===\033[0m\n' "$1"; }
 
+# Reap orphaned test binaries before timing anything.
+#
+# When a gate is interrupted -- a closed laptop, a dropped session, a Ctrl-C --
+# cargo dies but the test binary it spawned is reparented to PID 1 and keeps
+# running at full tilt. On 2026-08-08 one had been burning four cores for ten
+# hours and was halving the machine; the gate running beside it doubled in speed
+# the moment it was reaped. These accumulate silently, one per interrupted run.
+#
+# This matters beyond wall-clock: the performance canary below reads elapsed
+# time, and a machine quietly running at half capacity is exactly how a canary
+# produces a false alarm and then gets its ceiling raised for the wrong reason.
+if pgrep -f "$(pwd)/target/debug/deps" >/dev/null 2>&1; then
+  echo "note: reaping orphaned test binaries from an earlier interrupted run" >&2
+  pkill -f "$(pwd)/target/debug/deps" || true
+  sleep 1
+fi
+
 step "Format (cargo fmt --check)"
 cargo fmt --check
 
