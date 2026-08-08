@@ -1073,6 +1073,170 @@ pub fn decode_constant_pool(
         .unwrap_or_default())
 }
 
+/// Whether a constant tag carries a child range.
+///
+/// A scalar record overlays its payload on the range bytes, so "does this record
+/// have children" is a question about the TAG and never about the range fields.
+/// Reading it the other way round makes an integer constant's value look like a
+/// list of child indices.
+fn is_composite_tag(t: u16) -> bool {
+    matches!(t, tag::TUPLE | tag::ARRAY | tag::STRUCT | tag::ENUM)
+}
+
+impl<'a> ConstTable<'a> {
+    /// Materialises the single constant at `root`, touching only its own subtree.
+    ///
+    /// # Why this exists
+    ///
+    /// [`decode_constant_pools`] is the right shape for decoding a whole module
+    /// once: it sweeps the table bottom-up and materialises everything. It is the
+    /// wrong shape for the VM, which wants **one** constant while executing. The
+    /// VM originally reached a single constant through
+    /// [`decode_constant_pool`], and that re-parsed the table (an O(n)
+    /// `validate_ordering`), allocated an n-element vector, materialised every
+    /// constant in the module, returned one and dropped the rest — per constant
+    /// load. On a real self-hosted stage compile that was a better than thirty-fold
+    /// slowdown against the encoding it replaced.
+    ///
+    /// This walks the reachable set instead, so the cost is the size of the one
+    /// constant. A scalar touches exactly one record.
+    ///
+    /// # How it stays stackless-equivalent and terminating
+    ///
+    /// The forward-ordering invariant — a composite's range lies strictly after
+    /// the composite, checked once by [`ConstTable::parse`] — does the work here
+    /// twice over. The worklist only ever pushes **higher** indices, so it cannot
+    /// cycle and the trip count is bounded by the table length. Building the
+    /// collected indices in **descending** order then guarantees every child is
+    /// built before its parent, without recursion.
+    ///
+    /// Note this does NOT re-validate the ordering: it relies on the check made
+    /// when the table was parsed. A table reached through
+    /// [`AuxView::from_offsets`] was validated when the image was installed.
+    ///
+    /// # Errors
+    ///
+    /// [`SchemaError`] for a malformed artifact or an out-of-range index.
+    pub fn value(&self, root: usize) -> Result<ConstValue, SchemaError> {
+        if root >= self.len() {
+            return Err(SchemaError::BadIndex);
+        }
+        // Scalar fast path. A scalar is the overwhelming majority of constant
+        // loads, and it needs neither of the collections below. Allocating two
+        // B-trees to return an `Int` is most of what this function costs, and it
+        // is measurable: the VM reaches here on the LoadConst path.
+        let rec = self.record(root).ok_or(SchemaError::BadIndex)?;
+        if !is_composite_tag(rec.tag) {
+            return match rec.tag {
+                tag::UNIT => Ok(ConstValue::Unit),
+                tag::NONE => Ok(ConstValue::None),
+                tag::BOOL => Ok(ConstValue::Bool(rec.payload != 0)),
+                tag::INT => Ok(ConstValue::Int(rec.payload as i64)),
+                tag::BYTE => Ok(ConstValue::Byte(rec.payload as u8)),
+                tag::FIXED => Ok(ConstValue::Fixed(rec.payload as i64)),
+                #[cfg(feature = "floats")]
+                tag::FLOAT => Ok(ConstValue::Float(f64::from_bits(rec.payload))),
+                tag::STATIC_STR => {
+                    let slice = self.name_bytes(rec.aux).ok_or(SchemaError::BadName)?;
+                    core::str::from_utf8(slice)
+                        .map(|s| ConstValue::StaticStr(String::from(s)))
+                        .map_err(|_| SchemaError::BadName)
+                }
+                other => Err(SchemaError::UnknownTag(other)),
+            };
+        }
+
+        let name_of = |idx: u32| -> Result<String, SchemaError> {
+            let slice = self.name_bytes(idx).ok_or(SchemaError::BadName)?;
+            core::str::from_utf8(slice)
+                .map(String::from)
+                .map_err(|_| SchemaError::BadName)
+        };
+
+        // Collect the reachable set. Children have strictly higher indices, so a
+        // worklist that only pushes forward terminates.
+        let mut reachable: alloc::collections::BTreeSet<usize> =
+            alloc::collections::BTreeSet::new();
+        let mut work: Vec<usize> = alloc::vec![root];
+        while let Some(i) = work.pop() {
+            if !reachable.insert(i) {
+                continue;
+            }
+            let rec = self.record(i).ok_or(SchemaError::BadIndex)?;
+            // ONLY a composite has a range. A scalar record overlays its payload
+            // on those same bytes, so calling `as_range` unconditionally reads an
+            // `Int`'s VALUE as a child range. The full sweep gets away with
+            // computing it for every record because it consults the result only
+            // in the composite arms; a reachability walk has no such guard and
+            // must branch on the tag first.
+            if !is_composite_tag(rec.tag) {
+                continue;
+            }
+            let (first, n) = rec.as_range();
+            for k in 0..n as usize {
+                let child = first as usize + k;
+                if child >= self.len() || child <= i {
+                    return Err(SchemaError::BadRange);
+                }
+                work.push(child);
+            }
+        }
+
+        // Build bottom-up. Descending index order is the same ordering the full
+        // sweep relies on, restricted to the reachable set.
+        let mut built: alloc::collections::BTreeMap<usize, ConstValue> =
+            alloc::collections::BTreeMap::new();
+        for &i in reachable.iter().rev() {
+            let rec = self.record(i).ok_or(SchemaError::BadIndex)?;
+            let (first, n) = rec.as_range();
+            let children = |b: &mut alloc::collections::BTreeMap<usize, ConstValue>| -> Result<Vec<ConstValue>, SchemaError> {
+                let mut out = Vec::with_capacity(n as usize);
+                for k in 0..n as usize {
+                    out.push(b.remove(&(first as usize + k)).ok_or(SchemaError::BadRange)?);
+                }
+                Ok(out)
+            };
+            let value = match rec.tag {
+                tag::UNIT => ConstValue::Unit,
+                tag::NONE => ConstValue::None,
+                tag::BOOL => ConstValue::Bool(rec.payload != 0),
+                tag::INT => ConstValue::Int(rec.payload as i64),
+                tag::BYTE => ConstValue::Byte(rec.payload as u8),
+                tag::FIXED => ConstValue::Fixed(rec.payload as i64),
+                #[cfg(feature = "floats")]
+                tag::FLOAT => ConstValue::Float(f64::from_bits(rec.payload)),
+                tag::STATIC_STR => ConstValue::StaticStr(name_of(rec.aux)?),
+                tag::TUPLE => ConstValue::Tuple(children(&mut built)?),
+                tag::ARRAY => ConstValue::Array(children(&mut built)?),
+                tag::STRUCT => {
+                    let aux = self.struct_aux(i).ok_or(SchemaError::BadIndex)?;
+                    let values = children(&mut built)?;
+                    let mut fields = Vec::with_capacity(values.len());
+                    for (k, v) in values.into_iter().enumerate() {
+                        fields.push((name_of(aux.field_names_first + k as u32)?, v));
+                    }
+                    ConstValue::Struct {
+                        type_name: name_of(aux.type_name)?,
+                        fields,
+                    }
+                }
+                tag::ENUM => {
+                    let (aux, discriminant) = self.enum_aux(i).ok_or(SchemaError::BadIndex)?;
+                    ConstValue::Enum {
+                        type_name: name_of(aux.type_name)?,
+                        variant: name_of(aux.variant)?,
+                        discriminant,
+                        fields: children(&mut built)?,
+                    }
+                }
+                other => return Err(SchemaError::UnknownTag(other)),
+            };
+            built.insert(i, value);
+        }
+        built.remove(&root).ok_or(SchemaError::BadIndex)
+    }
+}
+
 /// Decodes several pools in **one pass** over the constant table.
 ///
 /// # Why this exists
@@ -2627,6 +2791,25 @@ impl<'a> AuxView<'a> {
     #[inline]
     pub fn chunk_const_str_bytes(&self, chunk: usize, index: usize) -> Option<&'a [u8]> {
         self.consts?.str_bytes(self.global_const(chunk, index)?)
+    }
+
+    /// Materialises chunk `chunk`'s constant `index`, touching only that
+    /// constant's own subtree. See [`ConstTable::value`] for why this is not
+    /// [`decode_constant_pool`].
+    ///
+    /// `None` when the chunk or index is out of range or the artifact carries no
+    /// constants; `Some(Err(..))` when the constant itself is malformed. The two
+    /// are distinguished because absence is ordinary and corruption is not.
+    pub fn chunk_const_value(
+        &self,
+        chunk: usize,
+        index: usize,
+    ) -> Option<Result<ConstValue, SchemaError>> {
+        Some(
+            self.consts
+                .as_ref()?
+                .value(self.global_const(chunk, index)?),
+        )
     }
 
     /// Number of struct templates in chunk `chunk`.

@@ -2622,3 +2622,100 @@ fn more_native_names_than_return_shapes_also_round_trips() {
     assert_eq!(m.native_return_count(), 0);
     assert_eq!(m.native_name(0), Some(&b"a"[..]));
 }
+
+// ---------------------------------------------------------------------------
+// Single-constant subtree reads (the VM's path)
+// ---------------------------------------------------------------------------
+
+/// `ConstTable::value` must agree with the full sweep for EVERY constant.
+///
+/// The two readers exist for different callers -- the sweep decodes a whole
+/// module once, `value` fetches one constant while the VM executes -- and a
+/// divergence between them would surface as a value that differs by which code
+/// route reached it. That is the untraceable-in-the-field class, so it is pinned
+/// here rather than left to the callers that happen to exercise both.
+///
+/// This also covers what a spot check would miss: `value` walks only the
+/// reachable set, so a bug in its worklist shows up as a wrong CHILD, not a
+/// wrong root, and only for nested shapes.
+#[test]
+fn single_constant_reads_agree_with_the_full_sweep() {
+    let roots = vec![
+        ConstValue::Int(7),
+        // Scalars whose PAYLOAD, if misread as a child range, is out of bounds.
+        //
+        // This is the specific regression: a scalar overlays its payload on the
+        // range bytes, so a reader that asks "has children" of the range instead
+        // of the tag sees `i64::MIN` as a child count of 0x8000_0000. A suite of
+        // small integers passes with that bug, because 7 decodes as a count of
+        // zero. Do not reduce these to tidy values.
+        ConstValue::Int(i64::MIN),
+        ConstValue::Int(i64::MAX),
+        ConstValue::Int(-1),
+        ConstValue::Fixed(i64::MIN),
+        ConstValue::StaticStr("hello".to_string()),
+        ConstValue::Unit,
+        ConstValue::Bool(true),
+        ConstValue::Byte(0xAB),
+        // Nested composites: the case where a reachable-set bug hides.
+        ConstValue::Tuple(vec![
+            ConstValue::Int(1),
+            ConstValue::Array(vec![
+                ConstValue::Int(2),
+                ConstValue::Tuple(vec![ConstValue::StaticStr("deep".to_string())]),
+            ]),
+        ]),
+        ConstValue::Struct {
+            type_name: "P".to_string(),
+            fields: vec![
+                ("x".to_string(), ConstValue::Int(3)),
+                (
+                    "inner".to_string(),
+                    ConstValue::Enum {
+                        type_name: "E".to_string(),
+                        variant: "V".to_string(),
+                        discriminant: Some(2),
+                        fields: vec![ConstValue::Int(4)],
+                    },
+                ),
+            ],
+        },
+    ];
+    let bytes = encode_constants(&roots).expect("encode");
+    let swept = decode_constants(&bytes, roots.len()).expect("sweep");
+    let t = ConstTable::parse(&bytes).expect("parse");
+
+    // Roots agree, compared with `deep_eq`: `ConstValue`'s `PartialEq` ignores
+    // the enum discriminant, so `==` here would pass with it dropped.
+    for (i, expected) in swept.iter().enumerate() {
+        let got = t.value(i).expect("value");
+        assert!(
+            deep_eq(&got, expected),
+            "root {i}: subtree read {got:?} disagrees with sweep {expected:?}"
+        );
+    }
+
+    // EVERY record, not just the roots -- children are where a worklist bug
+    // lives, and they are only reachable by global index.
+    assert!(
+        t.len() > roots.len(),
+        "expected child records beyond the {} roots, found {}; \
+         this test proves nothing about nesting if the table is flat",
+        roots.len(),
+        t.len()
+    );
+    for i in 0..t.len() {
+        t.value(i)
+            .unwrap_or_else(|e| panic!("constant {i} failed to materialise: {e:?}"));
+    }
+}
+
+/// An out-of-range index is an error, not a panic and not a silent `Unit`.
+#[test]
+fn single_constant_read_rejects_an_out_of_range_index() {
+    let bytes = encode_constants(&[ConstValue::Int(1)]).expect("encode");
+    let t = ConstTable::parse(&bytes).expect("parse");
+    assert!(t.value(0).is_ok());
+    assert!(matches!(t.value(1), Err(SchemaError::BadIndex)));
+    assert!(matches!(t.value(usize::MAX), Err(SchemaError::BadIndex)));
+}

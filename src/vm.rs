@@ -918,6 +918,81 @@ impl<'a> BytecodeStore<'a> {
 /// local alias for ergonomic call sites.
 pub type Vm<'a, 'arena> = GenericVm<'a, 'arena, i64, u64, f64>;
 
+/// The auxiliary-body data the interpreter needs, resolved once per installed
+/// image.
+///
+/// # Why this exists
+///
+/// The `Vm` owns the bytecode image and an [`AuxView`](crate::wire_schema::AuxView)
+/// borrows from it, so a cached view would make the `Vm` self-referential.
+/// [`AuxOffsets`](crate::wire_schema::AuxOffsets) carries no borrow, so the view
+/// is rebuilt per access by slicing.
+///
+/// Rebuilding is cheap relative to a directory walk but **not** free: it
+/// reconstructs every sub-table. Profiling the self-hosted stage compiles showed
+/// `AuxView::from_offsets` dominating the interpreter's inner loop, because
+/// `module_word_bytes`, `chunk_local_count`, `chunk_op_count` and `chunk_count`
+/// each rebuilt all of it to read a single scalar. Those scalars cannot change
+/// while an image is installed, so they are resolved here instead.
+///
+/// # The invariant, and why it is a struct
+///
+/// The offsets and the scalars must describe **the same image**. A hot swap
+/// replaces the bytes, and there are three sites that install an image. Keeping
+/// the scalars in a separate `Vm` field would let one of those sites refresh the
+/// offsets and forget the scalars, which reads as a plausible value from the
+/// previous module rather than as a fault. Bundling them behind a single
+/// [`AuxResolved::resolve`] constructor makes that mistake unrepresentable.
+struct AuxResolved {
+    offsets: crate::wire_schema::AuxOffsets,
+    /// Base-2 log of the module's word width. `None` when the header is absent,
+    /// preserving each call site's own default rather than inventing one here.
+    word_bits_log2: Option<u8>,
+    /// Base-2 log of the module's float width. `None` as above.
+    float_bits_log2: Option<u8>,
+    chunk_count: usize,
+    /// Size of the module's shared-data segment. Read once per host call by
+    /// `enter_shared`, which is frequent enough that rebuilding the whole view
+    /// for one scalar is the same waste as the per-op accessors above.
+    shared_data_bytes: u32,
+    /// Per-chunk opcode-record counts, indexed by chunk index.
+    op_record_counts: Vec<u32>,
+    /// Per-chunk local-slot counts, indexed by chunk index.
+    local_counts: Vec<u16>,
+}
+
+impl AuxResolved {
+    /// Resolves the offsets and reads the cached scalars from one image.
+    ///
+    /// # Errors
+    ///
+    /// Returns the schema error if the auxiliary body is malformed.
+    fn resolve(aux: &[u8]) -> Result<Self, crate::wire_schema::SchemaError> {
+        let offsets = crate::wire_schema::AuxOffsets::resolve(aux)?;
+        // Cannot fail: the offsets were just resolved from these exact bytes.
+        // Reported rather than unwrapped, so a future change that breaks that
+        // coupling surfaces as a load error and not as a panic in a release VM.
+        let view = crate::wire_schema::AuxView::from_offsets(aux, &offsets)
+            .ok_or(crate::wire_schema::SchemaError::BadRange)?;
+        let chunk_count = view.chunk_count();
+        let mut op_record_counts = Vec::with_capacity(chunk_count);
+        let mut local_counts = Vec::with_capacity(chunk_count);
+        for i in 0..chunk_count {
+            op_record_counts.push(view.op_record_count(i).unwrap_or(0));
+            local_counts.push(view.local_count(i).unwrap_or(0));
+        }
+        Ok(Self {
+            word_bits_log2: view.word_bits_log2(),
+            float_bits_log2: view.float_bits_log2(),
+            chunk_count,
+            shared_data_bytes: view.shared_data_bytes().unwrap_or(0),
+            op_record_counts,
+            local_counts,
+            offsets,
+        })
+    }
+}
+
 /// Parametric stack-based virtual machine. The type parameters
 /// model the runtime's word, address, and float widths so a host
 /// can construct a narrow-width runtime (`GenericVm<i16, u16, f32>`)
@@ -931,14 +1006,10 @@ pub struct GenericVm<
     F: crate::float::Float = f64,
 > {
     bytecode: BytecodeStore<'a>,
-    /// Region offsets into the auxiliary body, resolved and validated once when
-    /// the image is installed.
-    ///
-    /// The `Vm` owns the bytecode image and an `AuxView` borrows from it, so a
-    /// cached view would make this struct self-referential. `AuxOffsets` carries
-    /// no borrow, so it can sit here and the view is rebuilt per access by
-    /// slicing — which is what keeps `chunk_const` off a per-read directory walk.
-    aux_offsets: crate::wire_schema::AuxOffsets,
+    /// Region offsets into the auxiliary body, plus the module-level scalars the
+    /// interpreter reads on its hot path, all resolved once when the image is
+    /// installed. See [`AuxResolved`].
+    aux_resolved: AuxResolved,
     /// Phantom marker for the script-visible address-width type
     /// parameter. No `GenericValue` variant carries an address
     /// payload, so `A` does not appear in any field directly.
@@ -1188,7 +1259,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // through `replace_module`, which re-resolves. A panic here would mean
         // that invariant is broken -- which the previous `access_unchecked` would
         // have answered with undefined behaviour instead.
-        crate::wire_schema::AuxView::from_offsets(aux, &self.aux_offsets)
+        crate::wire_schema::AuxView::from_offsets(aux, &self.aux_resolved.offsets)
             .expect("aux offsets do not match the installed image")
     }
 
@@ -1277,27 +1348,16 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // Materialise constants at the module-declared scalar widths so a
         // constant tuple's flat body matches the offsets the compiler
         // baked into its access instructions (B28 P2).
-        // Not pooled: decode this one constant from the schema and lift it.
-        // Decoding a single pool is the cold path by construction -- everything
-        // hot is either a string (aliased above) or a pooled composite template.
-        let aux = self.aux();
-        let Some(first) = aux
-            .module()
-            .chunk(chunk_idx)
-            .map(|c| (c.consts_first, c.consts_count))
-        else {
-            return crate::bytecode::GenericValue::Unit;
-        };
-        if idx >= first.1 as usize {
-            return crate::bytecode::GenericValue::Unit;
-        }
-        let bytes = Self::aux_body_slice(self.bytecode.as_slice());
-        match crate::wire_schema::decode_constant_pool(bytes, (first.0 + idx as u32, 1)) {
-            Ok(mut v) if !v.is_empty() => crate::bytecode::GenericValue::from_const(
-                &v.remove(0),
-                self.module_word_bytes(),
-                self.module_float_bytes(),
-            ),
+        // Not pooled: materialise this ONE constant from the already-validated
+        // table. This must not go through `decode_constant_pool`, which re-parses
+        // the artifact and materialises every constant in the module to return
+        // one -- quadratic here, and measured at a better than thirty-fold
+        // slowdown on a real stage compile. `chunk_const_value` walks the single
+        // constant's subtree, so a scalar touches one record.
+        let word_bytes = self.module_word_bytes();
+        let float_bytes = self.module_float_bytes();
+        match self.aux().chunk_const_value(chunk_idx, idx) {
+            Some(Ok(v)) => crate::bytecode::GenericValue::from_const(&v, word_bytes, float_bytes),
             _ => crate::bytecode::GenericValue::Unit,
         }
     }
@@ -1307,12 +1367,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// the no-longer-present `ops` vector; the ops themselves
     /// live in the opcode stream section.
     fn chunk_op_count(&self, chunk_idx: usize) -> usize {
-        self.aux().op_record_count(chunk_idx).unwrap_or(0) as usize
+        self.aux_resolved
+            .op_record_counts
+            .get(chunk_idx)
+            .copied()
+            .unwrap_or(0) as usize
     }
 
     /// Local-variable slot count for the chunk (includes parameters).
     fn chunk_local_count(&self, chunk_idx: usize) -> u16 {
-        self.aux().local_count(chunk_idx).unwrap_or(0)
+        self.aux_resolved
+            .local_counts
+            .get(chunk_idx)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Module-wide word-width exponent. Used by the checked-
@@ -1320,7 +1388,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// `low` result when the bytecode declares a word size smaller
     /// than the runtime supports (cross-architecture portability).
     fn word_bits_log2(&self) -> u8 {
-        self.aux().word_bits_log2().unwrap_or(6)
+        self.aux_resolved.word_bits_log2.unwrap_or(6)
     }
 
     /// Module-declared word width in bytes. Used by the B28 flat
@@ -1328,13 +1396,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// width the compiler baked offsets against, so the runtime and
     /// the artefact agree regardless of the runtime `Word` width.
     fn module_word_bytes(&self) -> usize {
-        (1usize << self.aux().word_bits_log2().unwrap_or(6)) / 8
+        (1usize << self.aux_resolved.word_bits_log2.unwrap_or(6)) / 8
     }
 
     /// Module-declared float width in bytes. The companion of
     /// [`Self::module_word_bytes`] for floating-point fields.
     fn module_float_bytes(&self) -> usize {
-        (1usize << self.aux().float_bits_log2().unwrap_or(6)) / 8
+        (1usize << self.aux_resolved.float_bits_log2.unwrap_or(6)) / 8
     }
 
     /// The discriminant and padded-body payload size for `variant` of enum
@@ -1446,7 +1514,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
 
     /// Test whether a chunk index is in range.
     fn chunk_count(&self) -> usize {
-        self.aux().chunk_count()
+        self.aux_resolved.chunk_count
     }
 
     /// Look up a native function name by index. Returns `None` if out of bounds.
@@ -2128,11 +2196,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             .map_err(|_| out_of_arena_min(arena.capacity()))?;
         // Resolve and validate the aux regions once, here. Every later read
         // rebuilds a view from these offsets by slicing.
-        let aux_offsets = crate::wire_schema::AuxOffsets::resolve(Self::aux_body_slice(bytes))
+        let aux_resolved = AuxResolved::resolve(Self::aux_body_slice(bytes))
             .map_err(|e| VmError::TypeError(alloc::format!("aux body: {:?}", e)))?;
         let mut vm = Self {
             bytecode: BytecodeStore::Borrowed(bytes),
-            aux_offsets,
+            aux_resolved,
             _phantom_a: core::marker::PhantomData,
             decoded_ops,
             stack,
@@ -2333,11 +2401,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let ephemeral_opaques = pre_sized_bottom_vec::<
             alloc::sync::Arc<dyn crate::opaque::HostOpaque>,
         >(arena, reserve_opaque)?;
-        let aux_offsets = crate::wire_schema::AuxOffsets::resolve(Self::aux_body_slice(&aligned))
+        let aux_resolved = AuxResolved::resolve(Self::aux_body_slice(&aligned))
             .map_err(|e| VmError::TypeError(alloc::format!("aux body: {:?}", e)))?;
         let mut vm = Self {
             bytecode: BytecodeStore::Owned(aligned),
-            aux_offsets,
+            aux_resolved,
             _phantom_a: core::marker::PhantomData,
             decoded_ops,
             stack,
@@ -2831,7 +2899,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     ///
     /// Matches [`shared_data_bytes_for`] computed from the same module.
     pub fn shared_data_bytes(&self) -> usize {
-        self.aux().shared_data_bytes().unwrap_or(0) as usize
+        self.aux_resolved.shared_data_bytes as usize
     }
 
     /// Read a scalar shared field out of a host-owned buffer between runs
@@ -3725,7 +3793,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // the drop), so the swap is transactional.
         // Re-resolve against the new image: the offsets and the bytes must stay
         // together, and a hot swap replaces the bytes.
-        self.aux_offsets = crate::wire_schema::AuxOffsets::resolve(Self::aux_body_slice(&aligned))
+        self.aux_resolved = AuxResolved::resolve(Self::aux_body_slice(&aligned))
             .map_err(|e| VmError::TypeError(alloc::format!("aux body: {:?}", e)))?;
         self.bytecode = BytecodeStore::Owned(aligned);
         self.decoded_ops = decoded_ops;
@@ -4297,7 +4365,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// forwards. Cleared before the entry point returns so no captured pointer
     /// outlives the host's borrow.
     fn enter_shared(&mut self, shared: &mut [u8]) -> Result<(), VmError> {
-        let need = self.aux().shared_data_bytes().unwrap_or(0) as usize;
+        let need = self.aux_resolved.shared_data_bytes as usize;
         if shared.len() != need {
             return Err(VmError::NativeError(format!(
                 "shared data buffer is {} bytes but the module declares {}; drive a module with shared data through `call_with_shared`/`resume_with_shared` with a buffer of `shared_data_bytes()`",
@@ -11122,47 +11190,36 @@ mod tests {
     )))]
     #[test]
     fn bytecode_golden_bytes_for_main_returning_one() {
-        // Pin the exact serialized form of a minimal Keleusma program
-        // under the V0.2.0 wire format (Phase 7c).
+        // Pin the exact serialized form of a minimal Keleusma program under
+        // wire format v2 (the V0.2.3 auxiliary-body cutover).
         //
         // Source: `fn main() -> Word { 1 }`
         //
         // Layout: 64-byte framing header + opcode stream (8 bytes:
-        // PushImmediate(5) + Return as 4-byte records) + empty
-        // operand pool + rkyv-archived WireAuxBody + 4-byte CRC.
-        // Total length: 316 bytes.
+        // PushImmediate(5) + Return as 4-byte records) + empty operand pool +
+        // the v2 auxiliary body at offset 72, length 912 + 4-byte CRC.
+        // Total length: 988 bytes. `BYTECODE_VERSION` is 2, little-endian at
+        // byte four; the operator authorised the bump on 2026-08-06 because the
+        // substrate itself changed. A version-1 artifact is now rejected on the
+        // version check rather than accepted and then mis-read.
         //
-        // The aux body grew by the optional per-chunk
-        // `WireChunk::debug_pool_bytes` field added for B29 (strippable
-        // debug metadata) and again for the `ConstValue::Enum`
-        // `discriminant: Option<i64>` field added for B28 P2 (flat-enum
-        // constants), and again for the `DataLayout::shared_layout` table of
-        // the B28 item 2 shared-data re-architecture (the no-new-opcode
-        // per-shared-slot layout): rkyv reserves space for the wider
-        // `ArchivedDataLayout` inside `Option<DataLayout>` even when it is
-        // `None`, which accounted for the increase to 252 bytes, and again for
-        // the `DataLayout::private_composite_layout` table of B28 item 2 step
-        // 6A (the linker-style fixed-address placement of every private
-        // composite slot, array elements included): rkyv reserves one more
-        // `ArchivedVec` (8 bytes) in the inline `ArchivedDataLayout` even when
-        // `None`, raising the total to 260 bytes, and again for the
-        // `WireAuxBody::enum_layouts` table (B37 / audit finding 25 follow-up:
-        // the per-enum variant-discriminant and padded-body sizes that let the
-        // runtime make a native-returned enum's flat body type-driven), whose
-        // empty `ArchivedVec` adds 8 more bytes for a total of 268, and again
-        // for the `WireAuxBody::signatures` table (A.2.1 Phase 2b: the typed
-        // operand-stack verifier's per-chunk parameter, return, and resume
-        // flat-shape descriptors), which for this one-chunk module carries one
-        // signature (no parameters, a scalar `Word` return, `Top` resume),
-        // raising the total to 300 bytes, and again for the
-        // `WireAuxBody::native_return_shapes` table (A.2.1 native-result
-        // seeding), whose empty `ArchivedVec` adds 8 more bytes for a total of
-        // 308. The wire format may change freely between development builds.
-        // BYTECODE_VERSION is held at 1 (byte four) under the no-adoption
-        // policy: the V0.2.3 twenty-four-bit data-operand widening changed the
-        // format but not the version number, since there is no installed base
-        // to protect. Only the version byte and the CRC trailer differ from the
-        // pre-widening golden bytes, since this program has no data segment.
+        // The auxiliary body opens with the `XUAK` prologue, triplicated at
+        // offsets 0, 16 and 32 and read by majority-of-three vote, followed by
+        // the region directory, likewise triplicated: 15 regions at 16 bytes
+        // each, so 720 of the 912 bytes. Adding the 48-byte prologue block,
+        // roughly 84% of the auxiliary body is framing and redundancy, leaving
+        // 144 bytes of payload.
+        //
+        // That ratio is a property of the format, not a defect, and it is worth
+        // stating because a minimal program is the worst case for it. The
+        // per-region directory cost is FIXED in the number of regions, not the
+        // data volume, so a module with one chunk and one constant pays it in
+        // full while a real module amortizes it across thousands of records.
+        //
+        // The expected bytes were regenerated at the cutover, deliberately and
+        // with operator assent, since the encoding changed wholesale. The
+        // round-trip below is the part that cannot be satisfied by regenerating:
+        // it loads the golden bytes and EXECUTES them.
         let expected: alloc::vec::Vec<u8> = alloc::vec![
             75, 69, 76, 69, 2, 0, 64, 0, 220, 3, 0, 0, 6, 6, 6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 64, 0, 0, 0, 8, 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 0, 144, 3,
