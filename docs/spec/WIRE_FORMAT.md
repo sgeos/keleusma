@@ -2,27 +2,37 @@
 
 > **Navigation**: [Spec](./README.md) | [Documentation Root](../README.md)
 
-This document specifies the V0.2.0 bytecode wire format. The format pairs a fixed-size 64-byte framing header with a section-partitioned body. The body partitions into a fixed-size opcode stream, a separately addressed operand pool for compound operands, and the in-place archived auxiliary data (chunk metadata, constant pool, struct templates, native names, data layout, the enum-layout table, and the typed-verifier signature and native-return descriptor tables) that the existing rkyv path produces.
+This document specifies the bytecode wire format. The format pairs a fixed-size 64-byte framing header with a section-partitioned body. The body partitions into a fixed-size opcode stream, a separately addressed operand pool for compound operands, and an auxiliary body carrying chunk metadata, the constant pool, struct templates, native names, the data layout, the enum-layout table, and the typed-verifier signature and native-return descriptor tables.
 
-V0.2.0 introduces the format. V0.1.x runtimes cannot read V0.2.0 bytecode. The framing-header `version` field resets to `1` to signal the discontinuity. The rkyv-archived encoding survives as the internal representation for the auxiliary body and as a cross-process transport mechanism, but the execution loop reads the opcode stream and the operand pool directly through the new fixed-size records.
+V0.2.0 introduced the format and its `version` field reset to `1`, signalling that V0.1.x runtimes cannot read V0.2.0 bytecode. The execution loop reads the opcode stream and the operand pool directly through fixed-size records.
 
-**Version 2.** The framing-header `version` field is now `2`. Version 2 widens the shared-data byte offset, unified data-slot index, and indexed-array length operands of `GetData`, `SetData`, `GetDataIndexed`, and `SetDataIndexed` from sixteen to twenty-four bits, raising the shared-segment ceiling from 64 KB to 16 MB. The widening reuses the three inline operand bytes (for `GetData`/`SetData`) and the six-byte operand-pool payload (for the indexed pair, under the new `(u24, u24)` tag `0x04`), so the four-byte opcode record and eight-byte pool entry are unchanged and bytecode size does not grow. `SharedSlotLayout::offset` becomes a `u32`. Version 1 bytecode is rejected at load on the version check. The change is documented per shape below.
+**Version 2 is the current format.** The framing-header `version` field is `2`. Two changes accumulated under that number, and they are separate matters that are easy to confuse.
+
+The first is an operand widening. The shared-data byte offset, the unified data-slot index, and the indexed-array length operands of `GetData`, `SetData`, `GetDataIndexed`, and `SetDataIndexed` widened from sixteen to twenty-four bits, raising the shared-segment ceiling from 64 KB to 16 MB. The widening reuses the three inline operand bytes for `GetData` and `SetData`, and the six-byte operand-pool payload for the indexed pair under the `(u24, u24)` tag `0x04`, so the four-byte opcode record and the eight-byte pool entry are unchanged and bytecode does not grow. `SharedSlotLayout::offset` becomes a `u32`. This change alone did **not** carry a version bump. It landed while the number was held at `1` under the no-public-adoption policy, and an earlier revision of this document wrongly attributed version 2 to it.
+
+The second is the change that did carry the bump. **The auxiliary body is no longer an rkyv archive.** It is now a self-describing container specified in [The auxiliary body container](#the-auxiliary-body-container) below and implemented by the standalone `keleusma-wire` crate, with Keleusma's schema layered on top in `src/wire_schema.rs`. The substrate itself changed, which is the ground on which the version moved to `2`.
+
+Version 1 bytecode is rejected at load on the version check rather than accepted and then misread.
 
 ## Status
 
 V0.2.0 Phase 7a publishes this specification and the wire-format types in `src/wire_format.rs`. The opcode encoder and decoder are implemented and exercised by round-trip tests covering every `Op` variant.
 
-V0.2.0 Phase 7b adds `wire_format::module_to_wire_bytes(&Module)` and `wire_format::module_from_wire_bytes(&[u8])` that round-trip an entire `Module` through the V0.2.0 wire format: 64-byte framing header, opcode stream, operand pool, rkyv-archived auxiliary body, CRC trailer.
+V0.2.0 Phase 7b adds `wire_format::module_to_wire_bytes(&Module)` and `wire_format::module_from_wire_bytes(&[u8])` that round-trip an entire `Module` through the wire format: 64-byte framing header, opcode stream, operand pool, auxiliary body, CRC trailer.
 
-V0.2.0 Phase 7c cuts the default `Module::to_bytes` / `Module::from_bytes` / `Module::access_bytes` over to the wire format. `Module::to_bytes` delegates to `module_to_wire_bytes`; `Module::from_bytes` delegates to `module_from_wire_bytes`; `Module::access_bytes` now returns `&ArchivedWireAuxBody` and validates the wire format. The VM's zero-copy path reads opcodes via the opcode stream section and accesses the auxiliary body through the wire-format header offsets. The rkyv archive of the full `Module` is no longer used at runtime; the rkyv-archived `WireAuxBody` is the only on-the-wire archived form. Programs that previously round-tripped through the legacy rkyv-only framing must be recompiled against the V0.2.0 toolchain.
+V0.2.0 Phase 7c cuts the default `Module::to_bytes` and `Module::from_bytes` over to the wire format. The VM's zero-copy path reads opcodes via the opcode stream section and accesses the auxiliary body through the wire-format header offsets. The rkyv archive of the full `Module` is no longer used at runtime. Programs that previously round-tripped through the legacy rkyv-only framing must be recompiled.
 
-The phased cutover preserves the existing test surface where possible. Tests that hand-patched legacy header byte offsets are retargeted at the new wire format layout, and the golden bytes fixture is refreshed to pin the V0.2.0 byte sequence for `fn main() -> Word { 1 }` (216 bytes total, with an 8-byte opcode stream and an empty operand pool).
+**The Phase 7c follow-on is complete.** The auxiliary body migrated from the rkyv archive to the container specified below, and no part of the runtime reads an rkyv archive. The rkyv dependency itself remains, used only for `rkyv::util::AlignedVec` as a buffer-alignment helper, which has nothing to do with the archive. `Module::access_bytes` became `Module::validate_bytes`, because the old signature returned `&ArchivedWireAuxBody`, a type that no longer describes anything on the wire.
+
+The container is byte-addressed and imposes no alignment requirement, so the eight-byte-aligned scratch copy the rkyv path needed is gone, and with it the class of fault that copy existed to prevent, namely an unaligned decode on a 32-bit target.
+
+The golden bytes fixture pins the byte sequence for `fn main() -> Word { 1 }` at 988 bytes: a 64-byte framing header, an 8-byte opcode stream, an empty operand pool, a 912-byte auxiliary body at offset 72, and the 4-byte CRC trailer. That a minimal program is dominated by framing is expected and is discussed under [Cost profile](#cost-profile).
 
 ## Design rationale
 
 The wire format is shaped by three concerns.
 
-First, decoder simplicity. Fixed-size opcode records remove the variable-length operand decoding step that the rkyv-archived enum representation requires. A decoder advances exactly four bytes per record without consulting a length field or a discriminator table. This shape suits a hardware decoder that pipelines record fetch and operand expansion in lockstep.
+First, decoder simplicity. Fixed-size opcode records remove the variable-length operand decoding step that the archived enum representation they replaced required. A decoder advances exactly four bytes per record without consulting a length field or a discriminator table. This shape suits a hardware decoder that pipelines record fetch and operand expansion in lockstep.
 
 Second, integrity at the record level. Each opcode record and each operand pool entry carry a parity bit covering the rest of the payload. Single bit flips are detected at the consumer site before the record reaches the dispatch table. The parity is cheap to compute and does not require a separate CRC pass.
 
@@ -32,7 +42,7 @@ The audit considered an alternative variable-length encoding that placed compoun
 
 ## Framing header
 
-The framing header is at least sixty-four bytes for unsigned modules and grows to accommodate an optional signature-extension block for signed modules. Multiples of eight preserve alignment for the eight-byte operand pool entries that follow when the body starts at a header-aligned offset. The header carries the magic, version, total length, target widths, flags, declared WCET and WCMU, the data segment sizes, section offsets and lengths for the opcode stream, operand pool, and rkyv-archived auxiliary body, and (when present) the cryptographic signature.
+The framing header is at least sixty-four bytes for unsigned modules and grows to accommodate an optional signature-extension block for signed modules. Multiples of eight preserve alignment for the eight-byte operand pool entries that follow when the body starts at a header-aligned offset. The header carries the magic, version, total length, target widths, flags, declared WCET and WCMU, the data segment sizes, section offsets and lengths for the opcode stream, operand pool, and auxiliary body, and (when present) the cryptographic signature.
 
 | Offset | Width | Field |
 |--------|-------|-------|
@@ -182,7 +192,7 @@ The body of the bytecode partitions into three sections after the framing header
 
 1. **Opcode stream.** Concatenated four-byte records for every chunk in declaration order. Per-chunk boundaries live in the auxiliary body's chunk table.
 2. **Operand pool.** Concatenated eight-byte entries indexed by the inline pool index in the opcode records that reference them.
-3. **Auxiliary body.** Constant pool, struct templates, chunk table (name, op offset, op count, local count, parameter types, and an optional per-chunk debug metadata section), native names, data layout, entry point index, a `schema_hash` (u32), the per-enum-type layout table (`enum_layouts`, added under B37 with the variant discriminants and padded-body sizes), and the typed-verifier descriptor tables (Annex A.2.1) that seed the typed operand-stack pass: a per-chunk signature table (`signatures`, the flat shape of each parameter, the return, and the Stream resume), and a per-native return-shape table (`native_return_shapes`, parallel to the native names). The verifier tables are additive and carry no `BYTECODE_VERSION` change; an empty table reproduces the unseeded behaviour. The auxiliary body uses the existing rkyv archived encoding through V0.2.x and migrates to a custom encoding under a Phase 7c follow-on.
+3. **Auxiliary body.** Constant pool, struct templates, chunk table (name, op offset, op count, local count, parameter types, and an optional per-chunk debug metadata section), native names, data layout, entry point index, a `schema_hash` (u32), the per-enum-type layout table (`enum_layouts`, added under B37 with the variant discriminants and padded-body sizes), and the typed-verifier descriptor tables (Annex A.2.1) that seed the typed operand-stack pass: a per-chunk signature table (`signatures`, the flat shape of each parameter, the return, and the Stream resume), and a per-native return-shape table (`native_return_shapes`, parallel to the native names). The verifier tables are additive and carry no `BYTECODE_VERSION` change; an empty table reproduces the unseeded behaviour. The auxiliary body is encoded in the container specified under [The auxiliary body container](#the-auxiliary-body-container). Each item named above occupies one or more regions of that container, listed in the region table there.
 
    The `schema_hash` is a CRC-32 of the data-segment layout, computed from a canonical serialisation of each slot's name and visibility in declaration order (`Module::schema_hash`). The runtime uses it to gate hot-swap compatibility: `Vm::replace_module` rejects a swap against an incompatible schema before any data is loaded. A module with no data layout reports zero.
 
@@ -209,6 +219,93 @@ The metadata never affects execution. Strippable annotations neither push nor po
 
 The compiler emits the field when invoked with debug enabled (`compiler::compile_with_options` with `emit_debug`, surfaced as `keleusma compile --debug`); the `keleusma strip` subcommand removes it. The encoded bytes are the canonical byte form of the chunk's debug pool. The record catalogue, the per-kind operand encodings, the byte layout, the read and query interface, and the runtime fault-localization path are specified in [DEBUG_METADATA.md](./DEBUG_METADATA.md); all twelve record kinds emit. The field was added within the V0.2.x line without a `BYTECODE_VERSION` bump, consistent with the project's no-production-traction stance; a runtime built before B29 does not know the optional section.
 
+## The auxiliary body container
+
+The auxiliary body is a self-describing container. The container itself assigns **no meaning** to any region; it locates payloads and nothing more. Region numbering, record strides, and field offsets all belong to the schema layer above it. That separation is what lets the container ship as the standalone `keleusma-wire` crate, reusable by a consumer whose content has nothing to do with Keleusma. Keleusma's schema lives in `src/wire_schema.rs`.
+
+Every unit is a 64-bit word, and every region and record occupies a whole number of words. Element *i* of any table therefore sits at `base + i * stride` with `stride` a power of two, so addressing is a shift rather than a multiply.
+
+### Artifact layout
+
+```text
+prologue  ×3        offsets 0, 16, 32          fixed 16 bytes each
+directory ×3        offset 48                  region_count × 16 bytes each
+regions                                        word-aligned payloads
+```
+
+The prologue and the directory are each stored in **three identical copies** and read by bitwise majority-of-three vote, so a single corrupted copy is both outvoted and reported.
+
+### Prologue, 16 bytes
+
+| Offset | Width | Field |
+|---|---|---|
+| 0 | u32 | magic, `0x4B41_5558`, appearing as the bytes `X`, `U`, `A`, `K` in file order |
+| 4 | u16 | byte-order marker, `0xFEFF`. A reader seeing `0xFFFE` knows the artifact is opposite-endian without consulting any external document |
+| 6 | u16 | format version, currently `2` |
+| 8 | u16 | region count |
+| 10 | u16 | flags |
+| 12 | u32 | CRC-32 of bytes 0 through 11 |
+
+### Directory entry, 16 bytes
+
+| Offset | Width | Field |
+|---|---|---|
+| 0 | u16 | region kind, opaque to the container |
+| 2 | u16 | region flags |
+| 4 | u32 | payload offset, **in words** from the start of the artifact |
+| 8 | u32 | payload length, in words |
+| 12 | u16 | `covers`, the kind of the region a parity plane protects. Zero and unused otherwise |
+| 14 | u16 | reserved |
+
+Region flags are `FLAG_ENCRYPTED` (bit 0, the payload cannot be read in place), `FLAG_ECC_PRESENT` (bit 1, a companion parity region covers this one), `FLAG_OPTIONAL` (bit 2, an unrecognised region may be skipped), and `FLAG_IS_ECC` (bit 3, this region is itself a parity plane and `covers` names its subject).
+
+The region count is bounded at 1024. The bound is not a schema limit but a totality one: a corrupted count must not drive an unbounded walk, and a reader's work must be statically bounded.
+
+### Why the prologue is separate from the directory
+
+This split resolves a bootstrapping problem, and it is the one part of the layout a reimplementation is most likely to get wrong.
+
+Voting the header requires locating copies one and two, which requires the block stride, which depends on `region_count`. Were the directory inside the voted block, `region_count` would itself sit inside the block being voted, and a single bit flip in it would desynchronise the search for the very copies that exist to repair it. The field the vote most needs to protect would be the field the vote cannot be performed without.
+
+A fixed-size prologue at fixed offsets is votable with no prior knowledge. The voted `region_count` then yields the directory stride, and the three directory copies are votable in turn.
+
+### Parity plane, optional
+
+A region may be protected by a companion region holding a (72,64) SECDED code: eight check bits per 64-bit data word, held in a **parallel** plane rather than interleaved with the data, so the protected payload stays readable in place. The plane corrects any single-bit error in a word and detects any double-bit error.
+
+Correction returns a **value** and never writes to the caller's buffer. An in-place corrector would require a mutable borrow, and the read path is allocation-free and immutable by construction.
+
+### Region kinds used by Keleusma's schema
+
+| Kind | Region | Kind | Region |
+|---|---|---|---|
+| `0x0010` | `STRING_POOL` | `0x001A` | `DATA_SLOTS` |
+| `0x0011` | `NAMES` | `0x001B` | `SHARED_LAYOUT` |
+| `0x0012` | `CONSTS` | `0x001C` | `PRIVATE_COMPOSITE` |
+| `0x0013` | `STRUCT_AUX` | `0x001D` | `DATA_INIT` |
+| `0x0014` | `ENUM_AUX` | `0x001E` | `PARAM_TYPES` |
+| `0x0015` | `SHAPES` | `0x001F` | `CHUNKS` |
+| `0x0016` | `SIGNATURES` | `0x0020` | `NATIVES` |
+| `0x0017` | `STRUCT_TEMPLATES` | `0x0021` | `HEADER` |
+| `0x0018` | `ENUM_VARIANTS` | `0x0022` | `DEBUG_POOL` |
+| `0x0019` | `ENUM_LAYOUTS` | `0x0023` | `NATIVE_RETURNS` |
+
+A region that is absent carries meaning. An absent `DATA_SLOTS` region denotes `None`, whereas an empty one denotes `Some` with no slots: a module with no `data` block and a module whose data block is empty are different programs. By contrast an absent `STRUCT_TEMPLATES` region simply denotes no templates, since that has only one reading. `u32::MAX` is the optional-index sentinel, used for the entry point, a native's return shape, and a chunk's debug pool.
+
+### The forward-ordering invariant
+
+A composite constant references a range of child constants that must lie **strictly after** the composite itself. Roots occupy the constant table's prefix; children are numbered after all roots.
+
+This is load-bearing rather than incidental. It is what allows the table to be materialised bottom-up by a single reverse linear sweep with no stack and no recursion, with the trip count bounded by the table length. A decoder **re-validates** the ordering rather than trusting the encoder that produced its input, because a violation yields a wrong answer rather than a fault.
+
+Two consequences bind any reader. First, a reader fetching one constant must not sweep the whole table; it walks the single constant's reachable set, which the ordering makes terminating because the worklist only ever advances. Second, **only a composite record carries a range.** A scalar record overlays its payload on those same bytes, so "does this record have children" is a question about the tag and never about the range fields. Asking it the other way round reads an integer constant's value as a list of child indices.
+
+### Cost profile
+
+The per-region directory cost is fixed in the number of regions rather than the data volume, and it is paid three times over. For the minimal program `fn main() -> Word { 1 }` the auxiliary body is 912 bytes, of which the 48-byte prologue block and the 720-byte triplicated directory account for roughly 84 percent, leaving 144 bytes of payload.
+
+That ratio is a property of the format rather than a defect, and a minimal program is its worst case. A module with one chunk and one constant pays the directory cost in full, while a real module amortises the same fixed cost across thousands of records.
+
 ## Wire format types
 
 The V0.2.0 Phase 7a release ships the following types in `src/wire_format.rs`:
@@ -224,4 +321,8 @@ The encoder accepts an `Op` and emits an `OpcodeRecord`, queueing pool entries t
 
 V0.1.x bytecode artefacts cannot be loaded by V0.2.0 runtimes. Hosts that have V0.1.x bytecode in flight at publication time recompile against the V0.2.0 toolchain. The framing-header `version` field resets to `1` to signal the discontinuity; V0.2.0 runtimes reject V0.1.x bytecode at the framing-level check.
 
-Within the V0.2.0 series, the Phase 7a release ships the wire-format types and tests but does not yet route the execution loop through them. `Module::to_bytes` and `Module::from_bytes` continue to produce and consume the V0.1.x-style framing plus rkyv body. Phase 7b switches the producer to emit the section-partitioned body and the consumer to read the opcode stream and operand pool through the new types; the auxiliary body remains rkyv. Phase 7c migrates the auxiliary body to a custom encoding and removes the rkyv dependency from the execution loop. The CRC trailer and the magic remain stable across all three phases.
+Within the V0.2.0 series, the Phase 7a release shipped the wire-format types and tests but did not route the execution loop through them. Phase 7b switched the producer to emit the section-partitioned body and the consumer to read the opcode stream and operand pool through the new types, with the auxiliary body still an rkyv archive. Phase 7c migrated the auxiliary body to the container specified above and removed the rkyv archive from the execution loop. All three phases are complete. The CRC trailer and the magic remained stable across them.
+
+Version 1 bytecode is rejected at load on the version check. The hazard the no-public-adoption policy had accepted, in which an older-format artifact sharing a version number is accepted and then misread, does not apply across the version 1 to version 2 boundary.
+
+**Not yet done.** The format is emitted and consumed only by the Rust implementation. A Keleusma-language encoder and decoder for this container are specified work that has not been written; the self-hosted compiler stages produce chunk bodies, and the Rust driver assembles the container around them.

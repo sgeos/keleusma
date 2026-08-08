@@ -1408,10 +1408,11 @@ pub struct HeaderFields {
 /// Parse a framed V0.2.0 wire-format buffer and return slices
 /// for the three body sections. Validates the framing header
 /// (magic, version, header length, total length), the CRC-32
-/// residue, and the section bounds. Does not deserialize the
-/// auxiliary body; callers feed `aux_body` to
-/// `rkyv::access::<ArchivedWireAuxBody, _>` or to
-/// `rkyv::from_bytes::<WireAuxBody, _>`.
+/// residue, and the section bounds. Does not decode the auxiliary
+/// body. Callers feed `aux_body` either to
+/// [`crate::wire_schema::AuxOffsets::resolve`] for a borrowed,
+/// resolve-once read surface, or to
+/// [`crate::wire_schema::decode_aux_body`] for an owned decode.
 ///
 /// The returned slices borrow from the input. Used by both
 /// [`module_from_wire_bytes`] and the VM's zero-copy view path.

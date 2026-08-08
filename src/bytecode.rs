@@ -3900,25 +3900,22 @@ impl Module {
         crate::wire_format::module_from_wire_bytes(bytes)
     }
 
-    /// Validate framing and return a borrowed archived view of the module.
+    /// Validate a framed module in place, without deserializing it.
     ///
-    /// Performs the same framing checks as [`Module::from_bytes`] (magic,
-    /// length, CRC residue, version, word size, address size) and then
-    /// runs `rkyv::access` on the body to obtain a `&'a ArchivedModule`
-    /// without deserialization.
+    /// Performs the same framing checks as [`Module::from_bytes`]: magic,
+    /// length, CRC residue, version, word size, and address size. It then
+    /// validates the structure of the auxiliary body.
     ///
-    /// The body must be 8-byte aligned within the slice. Because the
-    /// header is sixteen bytes, the body is 8-byte aligned within the
-    /// slice when the slice base itself is 8-byte aligned. Hosts that compute
-    /// or load bytecode into an `rkyv::util::AlignedVec` or a static
-    /// buffer with `#[repr(align(8))]` satisfy this requirement.
-    /// Bytecode placed by the linker into a section that aligns to at
-    /// least 8 bytes also satisfies it.
+    /// **No alignment requirement.** The wire format v2 auxiliary body is
+    /// byte-addressed, so this reads the slice where it lies. Earlier revisions
+    /// required an 8-byte-aligned body because the body was an rkyv archive
+    /// accessed in place; that constraint, and the aligned scratch copy hosts
+    /// needed to satisfy it, are gone.
     ///
-    /// Returns `LoadError::Codec` with an alignment message when the
-    /// body is not aligned, or when the rkyv structural validator
-    /// rejects the body. Returns the other `LoadError` variants for
-    /// header validation failures.
+    /// # Errors
+    ///
+    /// `LoadError::Codec` when the auxiliary body is malformed, or the
+    /// corresponding `LoadError` variant for a header validation failure.
     pub fn validate_bytes(bytes: &[u8]) -> Result<(), LoadError> {
         use alloc::format;
         // V0.2.0 Phase 7c routes the zero-copy view through the
