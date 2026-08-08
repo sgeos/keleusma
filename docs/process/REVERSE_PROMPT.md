@@ -12,11 +12,45 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 **Date**: 2026-08-08 (session 39)
 
-## READ THIS FIRST — the cutover is performance-fixed but the gate has NOT run
+## READ THIS FIRST — the cutover is MERGED and pushed
 
-`feat/wire-cutover-proper` = `18b0da3`, **local only, not pushed**. It carries the wire-format v2
-cutover (`BYTECODE_VERSION` 2, operator-authorised 2026-08-06) plus the performance repair below.
-`v0.2.3` = `97320d0`, green and pushed.
+**`v0.2.3` = `cd48c30`, pushed.** The wire-format v2 cutover is merged, on a green full gate (all
+twelve steps) and a green pre-push hook. `BYTECODE_VERSION` is 2.
+
+**In flight**: `feat/perf-guardrails`, batching the performance canary, the gate preflight, the
+tiered-verification process, and one more `chunk_const` optimisation. Tier 1 is green; the full
+gate for this batch has not yet run.
+
+### The headline number
+
+The v2 read path is **5.2× faster than the rkyv encoding it replaced**, measured on the same
+200k-iteration constant-load loop: rkyv 6.42 s, v2 as first committed 67.29 s, v2 repaired 1.23 s.
+End to end on a stage self-compile, 54.26 s → 30.29 s.
+
+### The guardrail that did not exist
+
+`tests/perf_canary.rs`. The cutover merged green on twelve gate steps and **would also have merged
+green while forty times slower**, because nothing measures time. The canary was validated against
+the real regression — reverting the repair takes it from 1.7 s to 67.3 s. Its ceiling is set from
+the failure mode, not the observed runtime; do not tighten it. If it fails, profile before touching
+it.
+
+`scripts/release-gate.sh` now reaps orphaned test binaries as a preflight. An interrupted gate
+leaves one reparented to PID 1 at full CPU, they accumulate, and they corrupt the canary's signal.
+
+### Verification tiers (PROCESS_STRATEGY.md, operator-directed 2026-08-08)
+
+Full gate before every **merge**, not after every **change**. Tier 0 `fast-check.sh` per edit,
+Tier 1 (clippy `--all-targets`, `--no-default-features`, the `-D warnings` doc build) per increment,
+Tier 2 full gate per merge, **batching three or four increments**. The feature matrix was
+deliberately not narrowed; the reasoning is recorded there.
+
+### Known follow-up, audited and consciously deferred
+
+Fifteen `self.aux()` sites remain; none is hot. `shared_layout_entry`,
+`private_composite_pool_offset`, `private_composite_slot_end`, `enum_variant_layout` and
+`struct_template` are per-composite-access or per-construction rather than per-op. A legitimate
+increment, not a blocker.
 
 **The cutover as originally committed was correct and unshippable.** Every test passed; one of them
 took over 37 minutes against 54 seconds on `v0.2.3`. Two hot-path reads were doing work proportional
