@@ -28,6 +28,23 @@
 //! If this fails, do not raise the ceiling as the first move. Profile it. The
 //! defect it is built to catch is a hot path doing work proportional to the
 //! whole module, and `cargo test` will keep saying the answers are correct.
+//!
+//! # Reference points
+//!
+//! Measured on one machine, uncontended, debug build, at 200k iterations. These
+//! are for ORIENTATION when triaging a failure, not thresholds — absolute
+//! numbers travel badly between machines, but the ratios do not.
+//!
+//! | Runtime | Elapsed |
+//! |---|---|
+//! | pre-cutover, rkyv-archived aux body | 6.4 s |
+//! | wire format v2, as first committed | 67.3 s |
+//! | wire format v2, repaired | 1.2 s |
+//!
+//! The middle row is the regression this guards against, and it is the reason
+//! the ceiling sits where it does. The bottom row being five times faster than
+//! the top is the actual payoff of the v2 read path; a future change that gives
+//! that back will show up here long before anyone notices it by hand.
 
 // Drives the compile front end and constructs a `Vm` (strict verification), so
 // it needs both `compile` and `verify`. Gate the whole file so the
