@@ -80,6 +80,33 @@ Rebasing rewrites history, so once `v0.3.0` is published each sync needs a
 sides, and the force-push hazard scales with how many sessions have built on the
 old history. A sync per increment is nearly free; a sync per week is not.
 
+#### Feature branches into `v0.3.0` land FAST-FORWARD, not `--no-ff`
+
+Raised by the `v0.3.0` session, and it is a real gap one level below where the
+policy was written. [`GIT_STRATEGY.md`](./GIT_STRATEGY.md) says feature branches
+merge into a version branch via a **no-fast-forward merge commit**. Under a rebase
+policy that reintroduces exactly the tangle the policy exists to remove: `v0.3.0`
+would accumulate merge commits from its own feature branches, and the next rebase
+onto `v0.2.3` would flatten or mangle them.
+
+**So the two version branches differ, deliberately:**
+
+| Branch | Feature branches land | Why |
+|---|---|---|
+| `v0.2.3` | `--no-ff` merge commit, per `GIT_STRATEGY.md` | nothing rebases it; the bubbles preserve per-increment history on a green first parent |
+| `v0.3.0` | rebase then **`--ff-only`** | it is itself rebased, so it must stay linear |
+
+`scripts/merge-to-trunk.sh` already does the right thing for `v0.3.0`: it rebases
+onto `origin/$TRUNK`, gates, re-checks the tip, then `git merge --ff-only`.
+
+**A pre-existing inconsistency this surfaced.** `merge-to-trunk.sh` has always used
+`--ff-only`, while `GIT_STRATEGY.md` prescribes `--no-ff`, so the script and the
+strategy document have disagreed for as long as both existed. Merges done by hand
+on `v0.2.3` have followed the document; merges done through the script have not.
+That is now a deliberate split rather than an accident, but `GIT_STRATEGY.md`
+should be reconciled — either by noting the `v0.3.0` exception, or by deciding
+which of the two the script ought to implement.
+
 ### Cross-branch code dependencies are read-only, declared, and one-directional
 
 `v0.3.0` reads `src/wire_schema.rs` (`AuxView`, `AuxOffsets`) and

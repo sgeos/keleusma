@@ -17,6 +17,40 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-04 (session 37)
 
+**NEGATIVE CONTROLS HAVE A BLIND SPOT (2026-08-09, from the v0.3.0 session): they catch a predicate that is too LOOSE, and are silent on one that is too STRICT.**
+I had recorded "run the control even when confident" as this arc's rule, in that session's own
+wording. It needs a qualification they paid four attempts to learn, and it lands squarely on the work
+I am about to do.
+
+Their assertion was that a counted-loop lowering emits a cycle. Three successive predicates tried to
+recover loop structure from the order LLVM prints basic blocks in. All three were too strict and never
+fired -- one matched labels with `strip_suffix(':')` against text LLVM writes as `op5:  ; preds = ...`,
+so it matched nothing at all. Each passed its negative control ("straight-line code must report no
+cycle") **trivially**, because a predicate that never fires satisfies a must-not-fire assertion for
+free.
+
+THE SHARPER RULE: a negative control validates the direction it is applied to and says NOTHING about
+the other. A too-loose predicate fires spuriously and the control catches it. A too-strict predicate
+never fires, and only a POSITIVE case -- an input that must produce a hit -- can catch that. Both
+directions belong in the test.
+
+This generalises the "ask what a test would still pass with" rule rather than replacing it. Five
+succeed-emptily tests this arc were all the too-loose kind: an equality that ignored a field, counts
+compared instead of values, a fuzz suite that never reached the readers, a differential built from
+integers too small to discriminate. A predicate that never fires is the same failure wearing the
+opposite sign, and I had no rule for it.
+
+IT APPLIES DIRECTLY TO CRC-32 IN KELEUSMA, which is the next increment. A differential against
+`crate::bytecode::crc32` is exactly the shape where a too-strict check hides: if the Keleusma function
+is never really invoked, or is exercised only over inputs where both sides return the same trivial
+value, the assertion looks identical to one that always succeeds. The test needs inputs that
+discriminate, and a demonstration that perturbing one input byte changes the answer -- not merely a
+demonstration that a broken implementation fails.
+
+Their general finding is also worth keeping: loop structure is a graph property and is not recoverable
+from text position.
+
+
 **THE GUARDRAIL THAT WAS MISSING (2026-08-08, after the merge): nothing in the gate measures time.**
 The cutover merged green on all twelve gate steps. It would ALSO have merged green in its unshippable
 state, because a forty-fold slowdown is not expressible as a correctness assertion. That is the gap
