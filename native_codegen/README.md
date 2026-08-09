@@ -4,16 +4,16 @@
 
 LLVM native code generation for verified Keleusma bytecode. V0.3.x Workstream A.
 
-**Status: early subset.** 22 of the instruction set's 66 opcodes lower. This is
+**Status: early subset.** 28 of the instruction set's 66 opcodes lower, including counted loops. This is
 not yet a code generator for the language; it is the beginning of one, with the
 differential oracle in place first so that widening the subset is checked from
 the start.
 
 Scoping for the remaining 44, and the two open analyses, is in
 [`docs/decisions/NATIVE_LOWERING_INVENTORY.md`](../docs/decisions/NATIVE_LOWERING_INVENTORY.md).
-**The next increment is structural rather than another opcode**: `Loop` and
-`Break` introduce backward jumps, which the current merge-depth walk cannot
-express, and almost everything real needs iteration.
+Loops are done. The next increments are the data segment and composites, which
+are also what a loop needs before it can accumulate: **Keleusma locals are
+immutable**, so `s = s + b` across iterations requires a data block.
 
 ## What it does today
 
@@ -22,11 +22,15 @@ and produces either a JIT-executed function or a native object file. Correctness
 is established by executing the same bytecode on the VM and requiring identical
 results.
 
-Supported opcodes: `GetLocal`, `SetLocal`, `PopN`, `Dup`, `CheckedAdd`,
-`CmpEq`, `CmpNe`, `CmpLt`, `CmpGt`, `CmpLe`, `CmpGe`, `Not`, `BitAnd`, `BitOr`,
-`BitXor`, `Shl`, `Shr`, `If`, `Else`, `EndIf`, `Return`, `Trap`. Anything else
+Supported opcodes: `GetLocal`, `SetLocal`, `PopN`, `Dup`, `Const` (scalars),
+`PushImmediate`, `CheckedAdd`, `CmpEq`, `CmpNe`, `CmpLt`, `CmpGt`, `CmpLe`,
+`CmpGe`, `Not`, `BitAnd`, `BitOr`, `BitXor`, `Shl`, `Shr`, `If`, `Else`,
+`EndIf`, `Loop`, `EndLoop`, `Break`, `BreakIf`, `Return`, `Trap`. Anything else
 is **refused** with `LowerError::UnsupportedOp` rather than lowered to something
 plausible.
+
+That covers straight-line arithmetic, structured conditionals, and **counted
+loops**: `for i in 0..3 { }` lowers and runs.
 
 Only 64-bit word width (`word_bits_log2 == 6`) is accepted.
 
