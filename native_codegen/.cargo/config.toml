@@ -1,0 +1,22 @@
+# Toolchain wiring for the LLVM backend.
+#
+# SCOPED TO THIS PACKAGE DELIBERATELY. A .cargo/config.toml at the repository
+# root would apply to every cargo invocation in the tree, including the parent
+# workspace's, and would make a MacPorts install a shared dependency of builds
+# that have nothing to do with LLVM. Keeping it here contains the blast radius.
+#
+# `force = false` is the default and is relied on: an LLVM_SYS_221_PREFIX
+# already present in the environment wins over the value below, so a machine
+# with LLVM 22.1 installed somewhere else needs no edit to this file.
+[env]
+LLVM_SYS_221_PREFIX = { value = "/opt/local/libexec/llvm-22", force = false }
+
+# MacPorts' LLVM 22 links against zstd, xml2 and ffi from /opt/local/lib, which
+# is not on the default search path. Without this the build succeeds and the
+# LINK fails with `library 'zstd' not found` -- the failure surfaces at ld, not
+# at the binding, which is the wrong layer to start debugging at.
+#
+# On a Homebrew or Linux install this line is unnecessary but harmless: a
+# search path that does not exist is ignored.
+[build]
+rustflags = ["-L", "native=/opt/local/lib"]

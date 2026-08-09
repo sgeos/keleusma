@@ -1,0 +1,30 @@
+# The LLVM native code generator (V0.3.x Workstream A).
+#
+# Standalone package with a detached [workspace] (like compiler/ and
+# examples/rtos): it is NOT a member of the parent workspace, so the parent's
+# `cargo test --workspace` never builds it and the released keleusma tarball
+# never carries it. That detachment is load-bearing here for a reason the other
+# detached packages do not have: this package requires an LLVM development
+# install. As a workspace member it would make LLVM a hard build dependency of
+# the whole repository, for everyone, including CI.
+#
+# It depends on the parent keleusma runtime by path. For now it consumes the
+# Rust reference compiler's in-memory `Module` (operator decision, 2026-08-08);
+# reading serialized artefacts through `keleusma::wire_schema` comes later.
+[package]
+name = "keleusma-native"
+version = "0.3.0-dev"
+edition = "2024"
+publish = false
+description = "LLVM native code generation for verified Keleusma bytecode (V0.3.x)."
+license = "0BSD"
+
+# Detached from the parent workspace.
+[workspace]
+
+[dependencies]
+keleusma = { path = "..", features = ["compile"] }
+inkwell = { version = "0.9", features = ["llvm22-1"] }
+
+[dev-dependencies]
+keleusma-arena = { path = "../keleusma-arena" }
