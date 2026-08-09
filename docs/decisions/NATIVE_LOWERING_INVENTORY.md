@@ -635,3 +635,60 @@ The pattern is identical every time: a symmetry in the test data conceals an
 asymmetry in the code. **Choosing test data that is asymmetric under every
 operation the code could confuse is not a refinement, it is the difference
 between a test and a decoration.**
+
+## Workstream B: the opcode shapes, measured, and the one decision that blocks it
+
+The mechanism probe above established that LLVM coroutines work and are
+reachable. This is the other half: what the compiler actually emits, which had
+not been written down anywhere.
+
+**A `yield` function is `BlockType::Reentrant`** and must contain a `yield`
+*expression*; the keyword is both a function category and an expression, and a
+category without an expression is rejected by structural verification.
+
+```
+yield step(a: Word) -> Word { yield a }
+  0 GetLocal(0)   1 Yield   2 Return
+```
+
+**A `loop` function is `BlockType::Stream`.**
+
+```
+loop main(a: Word) -> Word { let x = yield a; x }
+  0 Stream   1 GetLocal(0)   2 Yield   3 SetLocal(1)
+  4 GetLocal(1)   5 PopN(1)   6 Reset
+```
+
+Three things this settles, none of which is obvious from the opcode names:
+
+1. **`Yield` is pop-one, push-one.** It pops the yielded value and pushes the
+   resume value. `Return` at index 2 above pops exactly one operand, and
+   `SetLocal(1)` at index 3 stores the resume value. A lowering that treated it
+   as pop-only would underflow at the next instruction.
+2. **`Stream` is a label, not an operation.** Its VM arm is literally a no-op;
+   its whole purpose is to be the instruction `Reset` branches back to. It maps
+   to a basic block boundary and nothing else.
+3. **`Reset` is a backward branch plus state clearing**, and it is *observable*:
+   it clears locals to `Unit`, truncates the operand stack, resets both arena
+   bump pointers, and returns `VmState::Reset` to the host. A native lowering
+   that treated it as a plain jump would preserve state the VM discards.
+
+### The mapping, and the decision that blocks writing it
+
+`Stream` becomes the resume target block. `Yield` becomes `llvm.coro.suspend`,
+with the popped value delivered to the host and the resume value pushed on the
+continuation edge. `Reset` clears the locals and branches to the `Stream` block.
+The frame carries the locals, which is exactly what `coro-split` already does,
+and its size folds to a constant as measured above.
+
+**What blocks implementation is not the mechanism, it is the host ABI**: how a
+yielded value reaches the host and how a resume value is supplied. The VM's
+answer is `VmState::Yielded(v)` from `call`, and `resume(v)` back. Native has at
+least three candidate shapes — a host callback per yield, an out-parameter the
+ramp writes, or a returned continuation carrying the value — and they are not
+interchangeable, because the differential oracle has to observe the same yield
+SEQUENCE either way.
+
+That is a **Workstream D** decision (host ABI), and Workstream B should not be
+written against a guess at it. The mechanism is proven, the opcode shapes are
+measured, and the remaining blocker is a decision rather than a risk.
