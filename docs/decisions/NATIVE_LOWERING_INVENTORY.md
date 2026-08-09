@@ -348,6 +348,58 @@ This matters most for the interrupt-handler deliverable in Workstream D, where
 the roadmap names stack size as one of the hard problems Keleusma claims as a
 strength.
 
+#### Measured 2026-08-09 on real lowered programs: the pipeline decides the number
+
+The 2026-08-08 probe used a synthetic module with a hand-written `alloca`. This
+one runs the actual lowering over four Keleusma programs, and it changes the
+conclusion in a way the synthetic probe could not have shown.
+
+Frame size in bytes for `kel_entry`, `thumbv7em-none-eabihf`:
+
+| Program | `llc -O2` alone | `opt -O1` then `llc -O2` |
+|---|---|---|
+| `a + b` | 536 | **0** |
+| `if a > b { a * b } else { b - a }` | 552 | **16** |
+| `for i in 0..10 { } a / b` | 552 | **8** |
+| handled multiply with both arms | 616 | **20** |
+
+`opt -passes=mem2reg` alone accounts for the entire difference; after it, zero
+allocas remain. The optimisation level passed to `llc` is irrelevant, measured at
+`-O0`, `-O1`, `-O2` and `-Os`, which all give the same 536.
+
+**The finding: the frame is decided by which tool runs, not by the optimisation
+level.** `mem2reg` is a middle-end pass. `llc -O2` is an optimisation level above
+none and does not run it. 512 of those 536 bytes are `MAX_STACK` operand slots
+the program never touches.
+
+Three consequences, in descending order of how badly they bite:
+
+1. **A native worst-case-memory bound computed on an `llc`-only pipeline is
+   wrong by up to 30x**, and wrong in the unsafe direction only if you trust the
+   small number. It is a half-kilobyte per function on a part that may have four
+   kilobytes of stack in total.
+2. The lowering's own documentation asserted that `mem2reg` runs "at any
+   optimisation level above none". That was false and is corrected. It is the
+   kind of claim that reads as a fact about LLVM and is actually a fact about a
+   particular tool invocation.
+3. The 64-slot provisioning is what dominates the unoptimised frame, and the
+   verifier already computes the true figure as
+   `RuntimeFootprint::max_operand_slots`. Sizing the slot array from it, rather
+   than from a constant, is the obvious follow-up and is not done yet.
+
+**Also fixed while measuring this**: exceeding `MAX_STACK` panicked on a `Vec`
+index inside a library. Its doc comment asserted that exceeding it "is a lowering
+bug, not a program error", which was an assumption with nothing enforcing it. It
+is now `LowerError::OperandStackTooDeep`, a refusal like any other, which is what
+lets a caller raise the provisioning deliberately.
+
+**Still open**: whether the frame sizes are stable enough across LLVM versions to
+be a contract, and how `.rela.stack_sizes` is read for function identity in a
+multi-function module. Neither is answered here, and nothing above should be read
+as establishing that a native worst-case-memory bound is achievable end to end —
+only that the per-function number is obtainable and that obtaining it wrongly is
+easy.
+
 ### Whether the worst-case execution time bound transfers
 
 Recorded here because it bounds what the artefact may claim, and it is listed as

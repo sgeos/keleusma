@@ -33,8 +33,28 @@
 //! so basic blocks fall out directly with no control-flow-graph reconstruction.
 //! What does not fall out is SSA form for the operand stack across a merge.
 //! Rather than construct phis by hand, each stack slot is an alloca and LLVM's
-//! `mem2reg` performs the SSA construction at any optimisation level above
-//! none. This trades verbose IR at `-O0` for a whole class of absent bugs.
+//! `mem2reg` performs the SSA construction. This trades verbose IR for a whole
+//! class of absent bugs.
+//!
+//! **The allocas are removed by the MIDDLE END, not by an optimisation level**,
+//! and the difference is worth 30x of stack frame. An earlier version of this
+//! comment said mem2reg runs "at any optimisation level above none", which is
+//! wrong in the way that matters: `llc -O2` is an optimisation level above none
+//! and does not run it, because `mem2reg` is an `opt` pass. Measured on
+//! 2026-08-09 for `thumbv7em-none-eabihf`:
+//!
+//! | Program | `llc -O2` alone | `opt -O1` first |
+//! |---|---|---|
+//! | `a + b` | 536 bytes | 0 bytes |
+//! | branchy | 552 bytes | 16 bytes |
+//! | handled multiply | 616 bytes | 20 bytes |
+//!
+//! `opt -passes=mem2reg` alone accounts for the whole difference. 512 of those
+//! bytes are [`MAX_STACK`] slots that the program never uses. A pipeline that
+//! runs only `llc` therefore ships a half-kilobyte frame per function, which on
+//! a microcontroller is the difference between fitting and not, and any native
+//! worst-case-memory bound computed on the wrong pipeline is wrong by that
+//! factor.
 //!
 //! **Stack depth is per-block, not carried linearly.** The compile-time depth
 //! must be restored from the recorded incoming edges when entering a merge
@@ -107,6 +127,13 @@ pub enum LowerError {
     UnsupportedOp(String),
     /// The module declares a word width this backend does not lower.
     UnsupportedWordWidth(u8),
+    /// The chunk's operand stack is deeper than [`MAX_STACK`] provisions for.
+    ///
+    /// A refusal rather than a panic. The verifier already computes the exact
+    /// figure as `RuntimeFootprint::max_operand_slots`, so a caller that wants
+    /// to lower such a chunk can raise the provisioning deliberately instead of
+    /// discovering the ceiling through a crash.
+    OperandStackTooDeep { needed: usize, provisioned: usize },
 }
 
 impl core::fmt::Display for LowerError {
@@ -118,6 +145,14 @@ impl core::fmt::Display for LowerError {
             LowerError::UnsupportedWordWidth(w) => {
                 write!(f, "native lowering does not support word_bits_log2 = {w}")
             }
+            LowerError::OperandStackTooDeep {
+                needed,
+                provisioned,
+            } => write!(
+                f,
+                "chunk needs {needed} operand-stack slots, more than the {provisioned} \
+                 this backend provisions"
+            ),
         }
     }
 }
@@ -130,18 +165,40 @@ struct Lower<'ctx> {
     locals: Vec<PointerValue<'ctx>>,
     slots: Vec<PointerValue<'ctx>>,
     depth: usize,
+    /// The depth at which the provisioned slot array was first exceeded.
+    ///
+    /// Recorded rather than panicked. `MAX_STACK` is a provisioning ceiling
+    /// chosen by this backend, not a limit the language imposes, so a chunk
+    /// that needs more is a REFUSAL like any other unsupported construct — not
+    /// a crash inside a library. Indexing a `Vec` would have panicked, and the
+    /// claim that exceeding it "is a lowering bug, not a program error" was an
+    /// assumption with nothing enforcing it.
+    stack_overflow: Option<usize>,
 }
 
 impl<'ctx> Lower<'ctx> {
+    /// Index of the slot for `depth`, clamped so that an overflowing chunk
+    /// keeps building valid-but-discarded IR instead of panicking. The clamp is
+    /// only ever reached once `stack_overflow` is set, and the caller turns that
+    /// into an error before the function is handed back.
+    fn slot(&self, depth: usize) -> PointerValue<'ctx> {
+        self.slots[depth.min(self.slots.len() - 1)]
+    }
+
     fn push(&mut self, v: IntValue<'ctx>) {
-        self.b.build_store(self.slots[self.depth], v).unwrap();
+        if self.depth >= self.slots.len() {
+            self.stack_overflow.get_or_insert(self.depth);
+        }
+        let slot = self.slot(self.depth);
+        self.b.build_store(slot, v).unwrap();
         self.depth += 1;
     }
 
     fn pop(&mut self) -> IntValue<'ctx> {
         self.depth -= 1;
+        let slot = self.slot(self.depth);
         self.b
-            .build_load(self.i64t, self.slots[self.depth], "pop")
+            .build_load(self.i64t, slot, "pop")
             .unwrap()
             .into_int_value()
     }
@@ -384,6 +441,7 @@ pub fn lower_chunk<'ctx>(
         locals,
         slots,
         depth: 0,
+        stack_overflow: None,
     };
 
     // Operand-stack depth at each merge point, recorded per incoming edge.
@@ -757,6 +815,16 @@ pub fn lower_chunk<'ctx>(
             }
             other => return Err(LowerError::UnsupportedOp(format!("{other:?}"))),
         }
+    }
+
+    // Checked once at the end rather than at each push, because the slot array
+    // is a provisioning decision and the useful diagnostic is the depth the
+    // chunk actually needed.
+    if let Some(needed) = st.stack_overflow {
+        return Err(LowerError::OperandStackTooDeep {
+            needed: needed + 1,
+            provisioned: MAX_STACK,
+        });
     }
 
     Ok(func)
