@@ -115,6 +115,28 @@ cargo run -q -p keleusma-cli -- run scripts/check-md-links.kel
 step "Detached compiler/ subproject (fmt, clippy, tests — gated nowhere else)"
 ( cd compiler && cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings && cargo test )
 
+# The LLVM backend at native_codegen/ is a DETACHED workspace for the same
+# reasons as compiler/, plus one it does not have: it needs an LLVM 22.1
+# development install. As a workspace member it would make LLVM a hard build
+# dependency of the entire repository, for every developer and for CI.
+#
+# So this step SKIPS when LLVM is absent -- but it skips LOUDLY. A silent skip
+# is the same shape of hole that let four broken intra-doc links in
+# src/selfhost/ survive four releases: a step that quietly does nothing reads
+# as a step that passed. Anyone whose gate prints the skip notice has been told,
+# in terms, that the native lowering was not verified by this run.
+KEL_LLVM_PREFIX_DEFAULT=/opt/local/libexec/llvm-22
+if [ -n "${LLVM_SYS_221_PREFIX:-}" ] || [ -d "$KEL_LLVM_PREFIX_DEFAULT" ]; then
+  step "Detached native_codegen/ subproject (fmt, clippy, tests — gated nowhere else)"
+  ( cd native_codegen && cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings && cargo test )
+else
+  step "Detached native_codegen/ subproject — SKIPPED"
+  printf '  \033[1;33mNO LLVM 22.1 DEVELOPMENT INSTALL FOUND. THIS STEP DID NOT RUN.\033[0m\n'
+  printf '  The native lowering is UNVERIFIED by this gate. To run it, install\n'
+  printf '  LLVM 22.1 (MacPorts: sudo port install llvm-22) or set\n'
+  printf '  LLVM_SYS_221_PREFIX to an existing install. See native_codegen/README.md.\n'
+fi
+
 if [ "$RUN_MIRI" -eq 1 ]; then
   step "Miri — Tree Borrows (memory-safety regressions)"
   MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test -p keleusma-arena
