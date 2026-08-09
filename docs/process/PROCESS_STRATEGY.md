@@ -125,6 +125,43 @@ The canary was validated against the real regression rather than assumed to work
 repair takes it from 1.7 s to 67.3 s, tripping the ceiling. A performance guard that has not
 been shown able to fail is not a guard.
 
+### Do not build a strong gate and a weak gate for a human to choose between
+
+The obvious response to a 2h33m gate is a fast variant for routine work and the
+full one before anything that matters. **Reject that shape.** It produces a
+procedure that is sound on paper and catastrophic when not followed, and the
+deviation is silent — the cheap path passes, nothing announces that the expensive
+path was skipped, and the discipline erodes under exactly the schedule pressure
+the fast path was created to relieve.
+
+The safe form is not a better procedure. It is **removing the choice**:
+
+- **The complete check must be a MECHANISM, not a procedure.** CI runs on every
+  push to `main` and `v*`, unconditionally, in parallel jobs, with no one deciding
+  whether to invoke it. It cannot be forgotten, hurried, or skipped under
+  pressure. That is what makes it safe to be the authority.
+- **CI must be a strict SUPERSET of the local gate.** If the local gate checks
+  something CI does not, the local gate is load-bearing and cannot be trimmed
+  without losing coverage. Keeping that containment is the whole precondition.
+- **The local gate is then a fast pre-check, not an authority.** Trimming it costs
+  no coverage, only the latency of finding a failure in CI instead of locally.
+- **A deviation must be loud.** `merge-to-trunk.sh --skip-gate` exists and prints
+  a warning; that is the right shape. An escape hatch that is silent is the
+  dangerous kind.
+
+**This containment was NOT holding when it was checked on 2026-08-09.** CI lacked
+the `self-host` feature and every `keleusma-wire` configuration, and its Doc job
+lacked both new crates — while the local gate had all of them. The two checks had
+diverged in both directions, nobody had chosen that, and the informal two-tier
+system the design above forbids had accreted on its own. Closed in the same
+change that recorded this.
+
+The recurring cause is worth naming: **`release-gate.sh` and the CI Doc job both
+enumerate crates BY NAME**, so a new crate is invisible until someone remembers.
+That has now produced two coverage holes — broken intra-doc links in
+`src/selfhost/` surviving four releases, and `keleusma-wire` running four days with
+gate coverage and no CI coverage. Adding a crate means adding it to both.
+
 ### Reap orphans before timing anything
 
 An interrupted gate leaves its test binary reparented to PID 1, still at full CPU. One was found
