@@ -2,7 +2,7 @@
 //!
 //! # Scope
 //!
-//! This is an early subset: 31 of the instruction set's 66 opcodes. Everything
+//! This is an early subset: 35 of the instruction set's 66 opcodes. Everything
 //! else is refused rather than lowered to something plausible and wrong.
 //! Widening the subset is the work of subsequent increments, tracked in
 //! `docs/decisions/NATIVE_LOWERING_INVENTORY.md`.
@@ -182,6 +182,21 @@ impl<'ctx> Lower<'ctx> {
         opts: LowerOptions,
         wide: IntValue<'ctx>,
     ) {
+        let triple = self.checked_triple(ctx, wide);
+        self.push_triple(ctx, func, trap_bb, opts, triple);
+    }
+
+    /// Classify a 128-bit result into `(low, high, flag)` without pushing it.
+    ///
+    /// Separate from the push so the division family can OVERRIDE the triple
+    /// before it lands: a zero divisor reifies as flag `3` with the numerator in
+    /// the low slot, an outcome this classifier cannot produce because it
+    /// classifies a result and a zero divisor has none.
+    fn checked_triple(
+        &mut self,
+        ctx: &'ctx Context,
+        wide: IntValue<'ctx>,
+    ) -> (IntValue<'ctx>, IntValue<'ctx>, IntValue<'ctx>) {
         let i64t = self.i64t;
         let i128t = ctx.i128_type();
 
@@ -215,6 +230,59 @@ impl<'ctx> Lower<'ctx> {
             .build_select(ov, i64t.const_int(1, false), f2, "flag")
             .unwrap()
             .into_int_value();
+
+        (low, high, flag)
+    }
+
+    /// Return a divisor that makes a 64-bit `sdiv`/`srem` defined, given that
+    /// the caller has already excluded a zero divisor.
+    ///
+    /// The only remaining undefined case is `i64::MIN` divided by `-1`, whose
+    /// true quotient is not representable. Substituting `1` for the divisor in
+    /// exactly that case yields the VM's answer for both opcodes without a
+    /// corrective step afterwards; see the call site for why that is exact
+    /// rather than approximate.
+    fn guard_min_div_neg_one(
+        &mut self,
+        lhs: IntValue<'ctx>,
+        rhs: IntValue<'ctx>,
+        i64t: IntType<'ctx>,
+    ) -> IntValue<'ctx> {
+        let is_min = self
+            .b
+            .build_int_compare(
+                IntPredicate::EQ,
+                lhs,
+                i64t.const_int(i64::MIN as u64, true),
+                "ismin",
+            )
+            .unwrap();
+        let is_neg1 = self
+            .b
+            .build_int_compare(
+                IntPredicate::EQ,
+                rhs,
+                i64t.const_int(-1i64 as u64, true),
+                "isneg1",
+            )
+            .unwrap();
+        let both = self.b.build_and(is_min, is_neg1, "minneg1").unwrap();
+        self.b
+            .build_select(both, i64t.const_int(1, false), rhs, "safediv")
+            .unwrap()
+            .into_int_value()
+    }
+
+    /// Apply the overflow policy and push a `(low, high, flag)` triple.
+    fn push_triple(
+        &mut self,
+        ctx: &'ctx Context,
+        func: FunctionValue<'ctx>,
+        trap_bb: BasicBlock<'ctx>,
+        opts: LowerOptions,
+        (low, high, flag): (IntValue<'ctx>, IntValue<'ctx>, IntValue<'ctx>),
+    ) {
+        let i64t = self.i64t;
 
         if opts.overflow == OverflowPolicy::Trap {
             let cont = ctx.append_basic_block(func, "nooverflow");
@@ -426,6 +494,100 @@ pub fn lower_chunk<'ctx>(
                 let a = st.widen(v, i128t, "a128");
                 let wide = st.b.build_int_neg(a, "n128").unwrap();
                 st.push_checked_triple(ctx, func, trap_bb, opts, wide);
+            }
+            // The division family. Two undefined behaviours in LLVM have to be
+            // excluded before an `sdiv` or `srem` is emitted at all: a zero
+            // divisor, and `i64::MIN / -1`. The VM treats them DIFFERENTLY from
+            // each other and differently between the checked and unchecked
+            // forms, so each is handled on the VM's terms rather than by one
+            // blanket trap.
+            //
+            // | | zero divisor | `i64::MIN` by `-1` |
+            // |---|---|---|
+            // | `Div` | `VmError::DivisionByZero` | `i64::MIN`, no fault |
+            // | `Mod` | `VmError::DivisionByZero` | `0`, no fault |
+            // | `CheckedDiv(0)` | flag `3`, numerator in low | flag `1`, low `i64::MIN` |
+            // | `CheckedMod` | flag `3`, numerator in low | flag `0`, low `0` |
+            //
+            // Read out of `src/vm.rs` and then CONFIRMED BY EXECUTION. The
+            // inventory recorded that `i64::MIN / -1` traps like a zero divisor.
+            // It does not; it wraps.
+            Op::Div | Op::Mod => {
+                let rhs = st.pop();
+                let lhs = st.pop();
+
+                // A zero divisor faults. This is the one case in the family that
+                // reaches the trap block, and it must come first: everything
+                // after it may assume a non-zero divisor.
+                let cont = ctx.append_basic_block(func, "nonzerodivisor");
+                let zero =
+                    st.b.build_int_compare(IntPredicate::EQ, rhs, i64t.const_zero(), "divzero")
+                        .unwrap();
+                st.b.build_conditional_branch(zero, trap_bb, cont).unwrap();
+                st.b.position_at_end(cont);
+
+                // Substituting a divisor of 1 for the `i64::MIN / -1` case is
+                // not an approximation, it is exact for BOTH opcodes:
+                // `sdiv(i64::MIN, 1)` is `i64::MIN`, which is the wrapped
+                // quotient the VM returns, and `srem(i64::MIN, 1)` is `0`, which
+                // is the remainder it returns. No corrective select is needed
+                // afterwards, and none is emitted. The substitution is inert for
+                // every other input because the predicate names exactly one pair.
+                let safe = st.guard_min_div_neg_one(lhs, rhs, i64t);
+                let v = match op {
+                    Op::Div => st.b.build_int_signed_div(lhs, safe, "sdiv").unwrap(),
+                    _ => st.b.build_int_signed_rem(lhs, safe, "srem").unwrap(),
+                };
+                st.push(v);
+            }
+            // The checked forms do NOT fault on a zero divisor. They reify it as
+            // flag 3 with the numerator in the low slot, so a handled
+            // `zero_divisor(n)` arm can bind it; only an UNHANDLED zero divisor
+            // traps, and that trap is emitted by the compiler as an ordinary
+            // `Op::Trap` in the flag dispatch rather than by this opcode.
+            //
+            // Because there is no fault, the whole thing is branch-free: the
+            // divisor is forced to a safe non-zero value and the triple is then
+            // overridden by selects. Branch-free matters beyond tidiness here --
+            // a new basic block would have to be reconciled with the per-block
+            // operand-stack depth bookkeeping, and selects sidestep that.
+            Op::CheckedDiv(0) | Op::CheckedMod => {
+                let rhs = st.pop();
+                let lhs = st.pop();
+
+                let iszero =
+                    st.b.build_int_compare(IntPredicate::EQ, rhs, i64t.const_zero(), "divzero")
+                        .unwrap();
+                let nonzero =
+                    st.b.build_select(iszero, i64t.const_int(1, false), rhs, "nzdiv")
+                        .unwrap()
+                        .into_int_value();
+
+                // In 128 bits `i64::MIN / -1` is 2^63, which is representable,
+                // so unlike the unchecked forms no divisor substitution is
+                // needed for it -- the wide division is simply not undefined.
+                // That is exactly how the VM gets flag 1 with low `i64::MIN`.
+                let a = st.widen(lhs, i128t, "a128");
+                let c = st.widen(nonzero, i128t, "b128");
+                let wide = match op {
+                    Op::CheckedDiv(_) => st.b.build_int_signed_div(a, c, "q128").unwrap(),
+                    _ => st.b.build_int_signed_rem(a, c, "r128").unwrap(),
+                };
+
+                let (low, high, flag) = st.checked_triple(ctx, wide);
+                let low =
+                    st.b.build_select(iszero, lhs, low, "zdlow")
+                        .unwrap()
+                        .into_int_value();
+                let high =
+                    st.b.build_select(iszero, i64t.const_zero(), high, "zdhigh")
+                        .unwrap()
+                        .into_int_value();
+                let flag =
+                    st.b.build_select(iszero, i64t.const_int(3, false), flag, "zdflag")
+                        .unwrap()
+                        .into_int_value();
+                st.push_triple(ctx, func, trap_bb, opts, (low, high, flag));
             }
             // Comparisons. The VM's `compare_op` pops the right operand first,
             // then the left, and compares left against right; the order below

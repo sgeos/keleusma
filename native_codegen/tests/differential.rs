@@ -142,25 +142,30 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
     // whole file exists to prevent, and it would not be caught by any test that
     // only checks supported programs.
     //
-    // This case was `a * b` until multiplication entered the subset, at which
-    // point the test kept passing for the wrong reason for exactly as long as it
-    // took to run it. Division is the current boundary: `Op::Div` needs a
-    // zero-divisor guard and an `i64::MIN / -1` guard, both of which are
-    // undefined behaviour in LLVM, so it is refused until those exist.
-    let src = "fn main(a: Word, b: Word) -> Word { a / b }";
+    // This case was `a * b`, then `a / b`, and each time the opcode entered the
+    // subset the test went on passing for the wrong reason until someone
+    // noticed. **It is now self-checking**: it asserts the chosen source really
+    // does emit the opcode it names, so when `Op::Call` is implemented this test
+    // FAILS and has to be repointed deliberately rather than rotting quietly.
+    //
+    // `Op::Call` is Group 3: it needs multi-chunk lowering and the symbol
+    // mangling scheme, neither of which exists.
+    let src = "fn helper(x: Word) -> Word { x }
+               fn main(a: Word, b: Word) -> Word { helper(a) }";
     let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+
+    let entry = m
+        .chunks
+        .iter()
+        .find(|c| c.ops.iter().any(|op| matches!(op, Op::Call(_, _))))
+        .expect("this test is vacuous unless some chunk emits Op::Call");
+
     let ctx = Context::create();
     let lm = ctx.create_module("kel");
-    let err = lower_chunk(
-        &ctx,
-        &lm,
-        &m.chunks[0],
-        "kel_entry",
-        LowerOptions::default(),
-    );
+    let err = lower_chunk(&ctx, &lm, entry, "kel_entry", LowerOptions::default());
     assert!(
         err.is_err(),
-        "division is outside the supported subset and must be refused, not lowered"
+        "a call is outside the supported subset and must be refused, not lowered"
     );
 }
 
@@ -567,6 +572,39 @@ fn wrapping_negation_agrees_with_the_vm() {
 // word instead of the low one, so the induction variable never advanced. Any
 // future mutation run needs a hard timeout, and on macOS that is `gtimeout`,
 // since `timeout` does not exist.
+//
+// A second round covered the division family, and produced one of each of the
+// three ways a mutation can fail to fire:
+//
+// | Mutation | Result |
+// |---|---|
+// | zero-divisor guard branches past the trap | structural test fired |
+// | checked zero divisor puts the quotient in the low slot | fired |
+// | unsigned division instead of signed | 2 tests fired |
+// | `i64::MIN / -1` guard removed entirely | **nothing fired — REAL GAP** |
+// | checked zero divisor reports flag 0 instead of 3 | **nothing fired — VACUOUS TEST** |
+// | checked zero divisor leaves a stale high word | **nothing fired — UNOBSERVABLE** |
+//
+// The three are genuinely different and were nearly conflated:
+//
+//   * **Real gap.** Removing the `i64::MIN / -1` guard left all 23 behavioural
+//     tests passing, because AArch64's SDIV defines that input in hardware to
+//     the same value the VM returns. The undefined behaviour is real and the
+//     guard is required; no runtime test on this target can see it. Fixed by
+//     `the_division_lowering_guards_the_unrepresentable_quotient_structurally`,
+//     which now fires on this mutation.
+//   * **Vacuous test.** Reporting flag 0 instead of 3 changed nothing, because
+//     `ok(v) => v` and `zero_divisor(n) => n` both bind the low slot and on a
+//     zero divisor that slot holds the numerator either way. The test could not
+//     distinguish the arms it was written to distinguish. Fixed by returning
+//     `n + n` from one arm; it now fires.
+//   * **Unobservable.** A stale high word on a zero divisor cannot be reached by
+//     any Keleusma program: `zero_divisor(n)` binds one value, and the arm that
+//     binds a high word is guarded by a different flag. The lowering still
+//     matches the VM there, deliberately, so a future language change that
+//     exposes the slot does not silently inherit a divergence. **It is not
+//     tested and cannot be**, which is stated here rather than left for someone
+//     to discover by trusting the count of passing tests.
 
 /// The handled form binds `overflow(h, l)` with `h` the high word and `l` the
 /// low word. Each pair below returns a DIFFERENT half from each arm, so a
@@ -625,6 +663,292 @@ fn negation_overflow_reaches_the_overflow_arm_and_agrees() {
 // ---------------------------------------------------------------------------
 // The trap overflow policy
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// The division family
+//
+// Two things are undefined behaviour in LLVM and neither is undefined in the
+// VM: a zero divisor, and `i64::MIN` divided by `-1`. The VM's treatment
+// DIFFERS between them and between the checked and unchecked forms, which the
+// inventory got wrong until it was executed:
+//
+// | | zero divisor | `i64::MIN` by `-1` |
+// |---|---|---|
+// | `Div` | faults | `i64::MIN`, NO fault |
+// | `Mod` | faults | `0`, NO fault |
+// | `CheckedDiv(0)` | flag 3, numerator in low | flag 1, low `i64::MIN` |
+// | `CheckedMod` | flag 3, numerator in low | flag 0, low `0` |
+// ---------------------------------------------------------------------------
+
+/// Run `src` on the VM and return the error it raises, or `None` if it finishes.
+///
+/// Needed because a zero divisor is the one input where the differential oracle
+/// cannot be used at all: the VM raises `DivisionByZero` and native aborts
+/// through `llvm.trap`, and there is no value to compare. What CAN be checked is
+/// that the VM faults, which is what makes trapping the right lowering rather
+/// than a guess.
+fn vm_error(src: &str, args: &[i64]) -> Option<String> {
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let cap = auto_arena_capacity_for(&m, &[]).expect("arena capacity");
+    let arena = keleusma_arena::Arena::with_capacity(cap);
+    let mut vm = Vm::new(m, &arena).expect("vm");
+    let vals: Vec<Value> = args.iter().map(|&x| Value::Int(x)).collect();
+    vm.call(&vals).err().map(|e| format!("{e:?}"))
+}
+
+#[test]
+fn division_and_modulo_agree_with_the_vm_including_the_unrepresentable_quotient() {
+    // `i64::MIN / -1` is THE case. Its true quotient is 2^63, which is not
+    // representable, so LLVM's `sdiv` is undefined there -- but the VM wraps and
+    // returns `i64::MIN` rather than faulting. A lowering that emitted a bare
+    // `sdiv` has undefined behaviour on exactly the input the VM answers.
+    //
+    // The negative operands are not decoration: they pin that both languages
+    // truncate toward zero rather than flooring. `-7 / 2` is -3, not -4, and
+    // `-7 % 2` is -1, not 1.
+    for src in [
+        "fn main(a: Word, b: Word) -> Word { a / b }",
+        "fn main(a: Word, b: Word) -> Word { a % b }",
+    ] {
+        for args in [
+            [7, 2],
+            [-7, 2],
+            [7, -2],
+            [-7, -2],
+            [i64::MIN, -1],
+            [i64::MIN, 1],
+            [i64::MAX, -1],
+            [0, 5],
+            [5, 1],
+            [i64::MIN, 2],
+        ] {
+            assert_agrees(src, &args);
+        }
+    }
+}
+
+#[test]
+fn a_zero_divisor_faults_in_the_vm_which_is_why_native_traps() {
+    // The premise check for the test below. If the VM ever stopped faulting
+    // here, trapping natively would become a divergence rather than a match, and
+    // the structural assertion would be enforcing the wrong thing while still
+    // passing.
+    for src in [
+        "fn main(a: Word, b: Word) -> Word { a / b }",
+        "fn main(a: Word, b: Word) -> Word { a % b }",
+    ] {
+        assert_eq!(
+            vm_error(src, &[7, 0]).as_deref(),
+            Some("DivisionByZero"),
+            "the VM must fault on a zero divisor for {src:?}"
+        );
+        // MUST-NOT-FIRE CASE: a non-zero divisor must not fault, or the check
+        // above would be satisfied by a VM that faulted on everything.
+        assert_eq!(
+            vm_error(src, &[7, 2]),
+            None,
+            "a non-zero divisor must not fault for {src:?}"
+        );
+    }
+}
+
+/// Does the IR guard the divisor against zero before dividing?
+///
+/// Returns whether a conditional branch to the trap block appears BEFORE the
+/// first `sdiv`/`srem` in the text. Textual order is sound here, unlike for the
+/// loop back edge, because both instructions are emitted into the same straight
+/// line by the same opcode arm with no branch between them -- there is no graph
+/// to reconstruct. That is a claim about this lowering, not a general licence.
+fn divisor_is_guarded_before_dividing(ir: &str) -> bool {
+    let lines: Vec<&str> = ir.lines().collect();
+    let div = lines
+        .iter()
+        .position(|l| l.contains(" sdiv i64 ") || l.contains(" srem i64 "));
+    let guard = lines
+        .iter()
+        .position(|l| l.trim_start().starts_with("br i1 ") && l.contains("label %trap"));
+    match (div, guard) {
+        (Some(d), Some(g)) => g < d,
+        _ => false,
+    }
+}
+
+#[test]
+fn the_zero_divisor_guard_precedes_the_division_structurally() {
+    // RUNTIME BEHAVIOUR CANNOT DEMONSTRATE THIS. The differential oracle is
+    // unusable for a zero divisor -- the VM faults and native aborts, so there
+    // is nothing to compare -- and an UNGUARDED `sdiv` by zero is undefined
+    // behaviour, which means it may appear to work. A test that divided by zero
+    // and observed a crash would be testing the platform, not the lowering.
+    for src in [
+        "fn main(a: Word, b: Word) -> Word { a / b }",
+        "fn main(a: Word, b: Word) -> Word { a % b }",
+    ] {
+        // MUST-FIRE CASE: mutate the IR so the guard branches somewhere other
+        // than the trap block, and require the check to notice. Encoded rather
+        // than run once by hand, because an unencoded control decays.
+        let ir = lowered_ir(src);
+        let mutated: Vec<String> = ir
+            .lines()
+            .map(|l| {
+                if l.trim_start().starts_with("br i1 ") && l.contains("label %trap") {
+                    l.replace("label %trap", "label %nonzerodivisor")
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect();
+        assert!(
+            !divisor_is_guarded_before_dividing(&mutated.join("\n")),
+            "the guard check does not discriminate: it reported a guarded \
+             divisor for IR whose branch does not reach the trap block."
+        );
+
+        // MUST-NOT-FIRE CASE: the real lowering guards, so the check must be
+        // satisfied.
+        assert!(
+            divisor_is_guarded_before_dividing(&ir),
+            "the divisor must be tested against zero and branch to the trap \
+             block BEFORE the division for {src:?}. IR was:\n{ir}"
+        );
+    }
+}
+
+/// Does the division instruction take the GUARDED divisor as its operand?
+///
+/// `None` means no division was found. `Some(false)` is the check FIRING.
+///
+/// Same shape as [`shift_takes_masked_count`], and for the same reason: a
+/// must-fire case that removed the `i64::MIN / -1` guard entirely left all 23
+/// behavioural tests passing. AArch64's `SDIV` is architecturally defined to
+/// return `i64::MIN` for that input, which is the answer the VM gives, so the
+/// undefined behaviour does not manifest on this target at this optimisation
+/// level. The guard is still required — undefined behaviour is a licence for the
+/// optimiser rather than a promise about the hardware — so its presence is
+/// asserted directly.
+fn division_takes_guarded_divisor(ir: &str) -> Option<bool> {
+    ir.lines()
+        .find(|l| l.contains(" sdiv i64 ") || l.contains(" srem i64 "))
+        .map(|l| l.contains("%safediv"))
+}
+
+#[test]
+fn the_division_lowering_guards_the_unrepresentable_quotient_structurally() {
+    for src in [
+        "fn main(a: Word, b: Word) -> Word { a / b }",
+        "fn main(a: Word, b: Word) -> Word { a % b }",
+    ] {
+        let ir = lowered_ir(src);
+
+        // MUST-NOT-FIRE CASE: the real lowering guards, so the check is silent.
+        assert_eq!(
+            division_takes_guarded_divisor(&ir),
+            Some(true),
+            "the division must take the GUARDED divisor, not the raw one. \
+             Behavioural tests cannot catch this on AArch64, whose SDIV defines \
+             i64::MIN / -1 in hardware. IR was:\n{ir}"
+        );
+
+        // MUST-FIRE CASE: mutate the IR so the division consumes the raw
+        // divisor, and require the check to notice. Without this the predicate
+        // could be too strict and always report the guard present.
+        let mutated: Vec<String> = ir
+            .lines()
+            .map(|l| {
+                if l.contains(" sdiv i64 ") || l.contains(" srem i64 ") {
+                    l.replace("%safediv", "%pop1")
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect();
+        assert_eq!(
+            division_takes_guarded_divisor(&mutated.join("\n")),
+            Some(false),
+            "the guard check does not discriminate: it reported a guarded \
+             divisor for IR whose division takes the raw one."
+        );
+    }
+}
+
+/// The checked division forms, where a zero divisor is DATA rather than a fault.
+///
+/// This is the one place the differential oracle can cover a zero divisor at
+/// all, because the handled form binds it instead of trapping.
+/// The `zero_divisor` arm returns `n + n`, not `n`, and that asymmetry is
+/// load-bearing for the same reason `CMP_SOURCES` returns `b + b`.
+///
+/// With `=> n` the test was VACUOUS with respect to the flag. A must-fire case
+/// that reported flag 0 instead of 3 changed nothing observable, because the
+/// `ok(v)` arm binds the low slot, the `zero_divisor(n)` arm binds the low slot,
+/// and on a zero divisor the low slot holds the numerator either way. Both arms
+/// returned the same value, so taking the wrong one was undetectable. Doubling
+/// in one arm separates them for every non-zero numerator.
+const CHECKED_DIV_SOURCES: &[&str] = &[
+    "fn main(a: Word, b: Word) -> Word { a / b { ok(v) => v, overflow(h, l) => h, zero_divisor(n) => n + n } }",
+    "fn main(a: Word, b: Word) -> Word { a / b { ok(v) => v, overflow(h, l) => l, zero_divisor(n) => n + n } }",
+    "fn main(a: Word, b: Word) -> Word { a % b { ok(v) => v, zero_divisor(n) => n + n } }",
+];
+
+#[test]
+fn the_checked_division_forms_agree_with_the_vm_including_a_zero_divisor() {
+    // `[7, 0]` and `[i64::MIN, 0]` reach the `zero_divisor(n)` arm, which binds
+    // the NUMERATOR from the low slot. A lowering that put anything else there
+    // -- zero, or the quotient -- passes every non-zero case and fails only
+    // here.
+    //
+    // `[i64::MIN, -1]` is the other corner, and the two forms differ on it:
+    // checked division reports overflow with the wrapped quotient, while checked
+    // modulo reports success with 0. Both are covered because the sources above
+    // include each operator.
+    for src in CHECKED_DIV_SOURCES {
+        for args in [
+            [7, 2],
+            [-7, 2],
+            [7, 0],
+            [0, 0],
+            [i64::MIN, 0],
+            [i64::MAX, 0],
+            [i64::MIN, -1],
+            [i64::MIN, 1],
+            [-1, 0],
+        ] {
+            assert_agrees(src, &args);
+        }
+    }
+}
+
+#[test]
+fn a_fixed_point_divide_is_refused_rather_than_lowered_as_an_integer_one() {
+    // The same boundary as the fixed-point multiply: `CheckedDiv` carries the
+    // Q-format fraction-bit count and only zero is integer division.
+    let src = "fn main(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> { a / b { ok(v) => v, overflow(w) => w, zero_divisor(n) => n } }";
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    assert!(
+        m.chunks[0]
+            .ops
+            .iter()
+            .any(|op| matches!(op, Op::CheckedDiv(n) if *n != 0)),
+        "this test is vacuous unless the source actually emits a non-zero \
+         fraction-bit CheckedDiv; opcodes were {:?}",
+        m.chunks[0].ops
+    );
+
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    let err = lower_chunk(
+        &ctx,
+        &lm,
+        &m.chunks[0],
+        "kel_entry",
+        LowerOptions::default(),
+    );
+    assert!(
+        err.is_err(),
+        "a fixed-point divide carries a non-zero fraction-bit count and must be \
+         refused, not lowered as if the operand were absent"
+    );
+}
 
 /// Lower `src` under explicit options and return the IR, for the trap policy,
 /// which by construction has no differential case: it DIVERGES from the VM.
