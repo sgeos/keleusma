@@ -43,7 +43,7 @@ use inkwell::context::Context;
 use inkwell::module::Module as LlvmModule;
 use inkwell::types::IntType;
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
-use keleusma::bytecode::{Chunk, Op};
+use keleusma::bytecode::{Chunk, ConstValue, Op};
 use std::collections::BTreeMap;
 
 /// Maximum operand-stack depth the lowering provisions slots for.
@@ -193,10 +193,16 @@ pub fn lower_chunk<'ctx>(
 
     // One basic block per jump target. Keleusma's structured control flow means
     // the target set is exactly the operands of If and Else.
+    // NOTE `Loop`'s own operand is deliberately NOT collected. It duplicates the
+    // `Break` targets whenever a break exists, and manufactures a block with no
+    // incoming edge when one does not.
     let mut targets: Vec<usize> = Vec::new();
     for op in chunk.ops.iter() {
-        if let Op::If(t) | Op::Else(t) = op {
-            targets.push(*t as usize);
+        match op {
+            Op::If(t) | Op::Else(t) | Op::EndLoop(t) | Op::Break(t) | Op::BreakIf(t) => {
+                targets.push(*t as usize)
+            }
+            _ => {}
         }
     }
     targets.sort_unstable();
@@ -230,16 +236,37 @@ pub fn lower_chunk<'ctx>(
         }};
     }
 
+    // Whether the opcode stream has run past a terminator into code no edge
+    // reaches. The compiler emits this routinely: `break;` is an unconditional
+    // jump, and the arm's value push sits immediately after it, unreachable.
+    let mut dead = false;
+
     for (i, op) in chunk.ops.iter().enumerate() {
         if let Some(&bb) = blocks.get(&i) {
-            if st.b.get_insert_block().unwrap().get_terminator().is_none() {
+            if !dead && st.b.get_insert_block().unwrap().get_terminator().is_none() {
                 note!(i, st.depth);
                 st.b.build_unconditional_branch(bb).unwrap();
             }
             st.b.position_at_end(bb);
-            st.depth = *tdepth
-                .get(&i)
-                .expect("merge block with no recorded incoming edge");
+            match tdepth.get(&i) {
+                Some(&d) => {
+                    st.depth = d;
+                    dead = false;
+                }
+                // A block target no edge reaches. The exit of a `loop` with no
+                // `break` is the real case: it is a legitimate program, not a
+                // lowering bug, so it must not be an assertion failure.
+                None => {
+                    st.b.build_unreachable().unwrap();
+                    dead = true;
+                }
+            }
+        } else if !dead && st.b.get_insert_block().unwrap().get_terminator().is_some() {
+            dead = true;
+        }
+
+        if dead {
+            continue;
         }
 
         match op {
@@ -374,6 +401,81 @@ pub fn lower_chunk<'ctx>(
                 let v = st.pop();
                 st.push(v);
                 st.push(v);
+            }
+            // Scalar constants only. The compiler routes most literals here
+            // rather than through `PushImmediate`, including the bounds and
+            // stride of a range `for`, so this is required for iteration.
+            // Composite and string constants are Workstream C and are refused.
+            Op::Const(idx) => {
+                let cv = chunk.constants.get(*idx as usize).ok_or_else(|| {
+                    LowerError::UnsupportedOp(format!("Const({idx}) out of range"))
+                })?;
+                let v: i64 = match cv {
+                    ConstValue::Int(i) => *i,
+                    ConstValue::Byte(x) => *x as i64,
+                    ConstValue::Bool(b) => *b as i64,
+                    // Unit is pushed and popped without being read. Same
+                    // placeholder, same caveat, as `PushImmediate(0)`.
+                    ConstValue::Unit => 0,
+                    other => {
+                        return Err(LowerError::UnsupportedOp(format!(
+                            "Const holding {other:?}"
+                        )));
+                    }
+                };
+                let c = i64t.const_int(v as u64, true);
+                st.push(c);
+            }
+            // Encoding per `Op::PushImmediate`: 0 = Unit, 1 = true, 2 = false,
+            // 3 = None, 4..=19 = Int(operand - 4).
+            Op::PushImmediate(imm) => {
+                let v: i64 = match *imm {
+                    // Unit carries no value the lowering can read. It is pushed
+                    // as a block's result and popped again, and every loop the
+                    // compiler emits contains one. Zero is a placeholder, sound
+                    // only because nothing consumes it; if Unit ever reaches a
+                    // comparison, this is wrong.
+                    0 => 0,
+                    1 => 1,
+                    2 => 0,
+                    // `None` needs an Option representation this backend has not
+                    // settled. Refusing beats inventing one silently.
+                    3 => {
+                        return Err(LowerError::UnsupportedOp("PushImmediate(None)".into()));
+                    }
+                    n @ 4..=19 => (n as i64) - 4,
+                    other => {
+                        return Err(LowerError::UnsupportedOp(format!(
+                            "PushImmediate({other}) is reserved"
+                        )));
+                    }
+                };
+                let c = i64t.const_int(v as u64, true);
+                st.push(c);
+            }
+            // `Loop` is a runtime no-op. Its operand is the exit index, carried
+            // for `Break` and `BreakIf`, and the block for it is created from
+            // those rather than from here.
+            Op::Loop(_) => {}
+            // The back edge, and the whole of the backward-jump problem. The
+            // header's depth was established when it was first entered by
+            // fall-through, so the back edge only has to AGREE with it, which is
+            // exactly what `note!` asserts.
+            Op::EndLoop(t) | Op::Break(t) => {
+                note!(*t as usize, st.depth);
+                st.b.build_unconditional_branch(blocks[&(*t as usize)])
+                    .unwrap();
+            }
+            Op::BreakIf(t) => {
+                let c = st.pop();
+                let nz =
+                    st.b.build_int_compare(IntPredicate::NE, c, i64t.const_zero(), "brknz")
+                        .unwrap();
+                let cont = ctx.append_basic_block(func, &format!("nobrk{i}"));
+                note!(*t as usize, st.depth);
+                st.b.build_conditional_branch(nz, blocks[&(*t as usize)], cont)
+                    .unwrap();
+                st.b.position_at_end(cont);
             }
             Op::If(t) => {
                 let c = st.pop();
