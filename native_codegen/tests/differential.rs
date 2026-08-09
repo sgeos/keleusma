@@ -34,7 +34,9 @@ use inkwell::context::Context;
 use keleusma::bytecode::{Op, Value};
 use keleusma::vm::{Vm, auto_arena_capacity_for};
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
-use keleusma_native::{LowerOptions, OverflowPolicy, check_word_width, lower_chunk};
+use keleusma_native::{
+    LowerError, LowerOptions, MAX_STACK, OverflowPolicy, check_word_width, lower_chunk,
+};
 use std::collections::BTreeMap;
 
 /// Run `src` on the VM with `args`, returning the finished integer result.
@@ -582,6 +584,76 @@ fn the_reserved_and_option_immediates_are_refused() {
              refused, not given an invented value"
         );
     }
+}
+
+#[test]
+fn an_operand_stack_deeper_than_the_provisioning_is_refused_not_panicked() {
+    // `MAX_STACK` is a provisioning decision made by this backend, not a limit
+    // the language imposes. Its doc comment used to assert that exceeding it
+    // "is a lowering bug, not a program error" -- an assumption with nothing
+    // enforcing it. What actually happened was a `Vec` index panic inside a
+    // library, which is the worst of the three possible outcomes.
+    //
+    // The verifier already computes the true figure per module as
+    // `RuntimeFootprint::max_operand_slots`, so a caller can raise the
+    // provisioning deliberately. Refusing is what makes that possible.
+    let src = "fn main(a: Word, b: Word) -> Word { 7 }";
+    let base = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let konst = base.chunks[0]
+        .ops
+        .iter()
+        .find(|op| matches!(op, Op::Const(_)))
+        .copied()
+        .expect("the source must contain a Const load for this rewrite");
+
+    let mut m = base.clone();
+    let deep = MAX_STACK + 8;
+    m.chunks[0].ops = core::iter::repeat_n(konst, deep)
+        .chain(core::iter::once(Op::Return))
+        .collect();
+
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    match lower_chunk(
+        &ctx,
+        &lm,
+        &m.chunks[0],
+        "kel_entry",
+        LowerOptions::default(),
+    ) {
+        Err(LowerError::OperandStackTooDeep {
+            needed,
+            provisioned,
+        }) => {
+            assert_eq!(provisioned, MAX_STACK);
+            assert!(
+                needed > MAX_STACK,
+                "the reported requirement {needed} must exceed the provisioning"
+            );
+        }
+        Err(other) => panic!("expected OperandStackTooDeep, got {other:?}"),
+        Ok(_) => panic!("a chunk needing {deep} slots must be refused, not lowered"),
+    }
+
+    // MUST-NOT-FIRE CASE: a chunk that fits must still lower. Without this the
+    // refusal could be unconditional and the test would pass while the backend
+    // rejected everything.
+    let mut shallow = base.clone();
+    shallow.chunks[0].ops = core::iter::repeat_n(konst, 4)
+        .chain(core::iter::once(Op::Return))
+        .collect();
+    let lm2 = ctx.create_module("kel2");
+    assert!(
+        lower_chunk(
+            &ctx,
+            &lm2,
+            &shallow.chunks[0],
+            "kel_entry",
+            LowerOptions::default(),
+        )
+        .is_ok(),
+        "a chunk within the provisioning must lower"
+    );
 }
 
 #[test]
