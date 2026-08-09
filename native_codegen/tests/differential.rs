@@ -31,10 +31,10 @@
 
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
-use keleusma::bytecode::Value;
+use keleusma::bytecode::{Op, Value};
 use keleusma::vm::{Vm, auto_arena_capacity_for};
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
-use keleusma_native::{LowerOptions, check_word_width, lower_chunk};
+use keleusma_native::{LowerOptions, OverflowPolicy, check_word_width, lower_chunk};
 use std::collections::BTreeMap;
 
 /// Run `src` on the VM with `args`, returning the finished integer result.
@@ -71,6 +71,11 @@ fn native_result(src: &str, args: &[i64]) -> i64 {
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("jit");
     match args.len() {
+        1 => {
+            let f = unsafe { ee.get_function::<unsafe extern "C" fn(i64) -> i64>("kel_entry") }
+                .expect("symbol");
+            unsafe { f.call(args[0]) }
+        }
         2 => {
             let f =
                 unsafe { ee.get_function::<unsafe extern "C" fn(i64, i64) -> i64>("kel_entry") }
@@ -136,7 +141,13 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
     // something plausible for an unhandled opcode is the failure mode this
     // whole file exists to prevent, and it would not be caught by any test that
     // only checks supported programs.
-    let src = "fn main(a: Word, b: Word) -> Word { a * b }";
+    //
+    // This case was `a * b` until multiplication entered the subset, at which
+    // point the test kept passing for the wrong reason for exactly as long as it
+    // took to run it. Division is the current boundary: `Op::Div` needs a
+    // zero-divisor guard and an `i64::MIN / -1` guard, both of which are
+    // undefined behaviour in LLVM, so it is refused until those exist.
+    let src = "fn main(a: Word, b: Word) -> Word { a / b }";
     let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     let ctx = Context::create();
     let lm = ctx.create_module("kel");
@@ -149,7 +160,7 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
     );
     assert!(
         err.is_err(),
-        "multiplication is outside the supported subset and must be refused, not lowered"
+        "division is outside the supported subset and must be refused, not lowered"
     );
 }
 
@@ -447,4 +458,282 @@ fn small_integer_literals_agree_with_the_vm() {
             assert_agrees(src, &args);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Integer arithmetic
+//
+// `Op::Add`, `Op::Sub`, `Op::Mul` and `Op::Neg` are NOT what these exercise,
+// and the distinction is not pedantic. Consolidation B narrowed those four
+// opcodes away from `Int` operands: the compiler emits `Checked*; PopN(2)` for
+// every `Word` expression, and the VM raises a type error if an `Int` ever
+// reaches `Op::Add`. Verified by dumping the opcode stream, not inferred from
+// the opcode names. So the whole `Word` arithmetic surface is the checked
+// family, and the four unchecked opcodes are reachable only for `Byte`,
+// `Fixed` and `Float`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn wrapping_subtraction_agrees_with_the_vm() {
+    // `a - b` is `CheckedSub; PopN(2)`. The underflow cases are what pin the
+    // wrap: a lowering that computed a plain 64-bit difference passes every
+    // in-range case and differs from nothing until an operand pair leaves the
+    // range.
+    let src = "fn main(a: Word, b: Word) -> Word { a - b }";
+    for args in [
+        [7, 3],
+        [3, 7],
+        [0, 0],
+        [i64::MIN, 1],
+        [i64::MAX, -1],
+        [i64::MIN, i64::MAX],
+        [-1, i64::MIN],
+    ] {
+        assert_agrees(src, &args);
+    }
+}
+
+#[test]
+fn wrapping_multiplication_agrees_with_the_vm() {
+    // `a * b` is `CheckedMul(0); PopN(2)`. The `0` is the Q-format fraction-bit
+    // count, so zero fraction bits is exactly integer multiply; a non-zero count
+    // is fixed-point and is refused by the lowering.
+    let src = "fn main(a: Word, b: Word) -> Word { a * b }";
+    for args in [
+        [6, 7],
+        [-6, 7],
+        [-6, -7],
+        [0, i64::MAX],
+        [i64::MAX, 2],
+        [i64::MIN, 2],
+        [i64::MIN, -1],
+        [4611686018427387904, 8],
+    ] {
+        assert_agrees(src, &args);
+    }
+}
+
+#[test]
+fn wrapping_negation_agrees_with_the_vm() {
+    // `-a` is `CheckedNeg; PopN(2)`. `i64::MIN` is the entire point: it is the
+    // one input whose negation is not representable, and a lowering that
+    // negated in 64 bits rather than 128 loses the overflow outcome silently
+    // while still returning the right low word.
+    let src = "fn main(a: Word) -> Word { -a }";
+    for args in [[5], [-5], [0], [i64::MIN], [i64::MAX]] {
+        assert_agrees(src, &args);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The high word and the outcome flag
+//
+// Until this increment NOTHING in this file observed either. Every arithmetic
+// case went through `Checked*; PopN(2)`, which discards the flag and the high
+// word, so a lowering that computed both incorrectly -- or pushed them in the
+// wrong order -- passed the entire suite. The handled form is what makes them
+// observable, and probing showed it needs no opcode outside the current subset:
+// it lowers as a dispatch on the flag built from `Loop`, `CmpEq`, `If` and
+// `Break`, all of which already work.
+// ---------------------------------------------------------------------------
+
+// Must-fire results for the tests below, run 2026-08-09 by mutating the
+// lowering and re-running the suite.
+//
+// **These are MEASUREMENTS, NOT CONTROLS.** Each was executed once by hand and
+// its apparatus discarded, which by this project's own rule does not make it a
+// control: nothing re-runs them, so they decay silently as the lowering
+// changes. They are recorded because a recorded measurement beats an
+// unexecuted claim, not because they close the question.
+//
+// | Mutation | Result |
+// |---|---|
+// | push order of `low` and `high` swapped | 8 tests failed, and `loops_agree_with_the_vm` **hung** |
+// | high word shifted out by 63 instead of 64 | 2 tests failed |
+// | overflow and underflow flag codes swapped | 2 tests failed |
+// | multiply performed in 64 bits then widened | 1 test failed |
+// | negation performed in 64 bits then widened | 1 test failed |
+// | subtract operands reversed | 2 tests failed |
+// | arithmetic shift changed to logical | **NOTHING FAILED** |
+//
+// The last row is not a coverage gap. The mutation is semantically null: the
+// truncate to `i64` that follows the shift keeps only bits 0 to 63 of the
+// shifted value, and both shift kinds agree there. A mutation that changes no
+// behaviour cannot be a must-fire case, and reading it as a gap would have led
+// to writing a test that could never fail.
+//
+// The hang is worth carrying separately. A wrong lowering can emit
+// NON-TERMINATING native code -- there, the range `for` counter took the high
+// word instead of the low one, so the induction variable never advanced. Any
+// future mutation run needs a hard timeout, and on macOS that is `gtimeout`,
+// since `timeout` does not exist.
+
+/// The handled form binds `overflow(h, l)` with `h` the high word and `l` the
+/// low word. Each pair below returns a DIFFERENT half from each arm, so a
+/// lowering that swapped high for low is caught rather than hidden by symmetry.
+const HANDLED_SOURCES: &[&str] = &[
+    "fn main(a: Word, b: Word) -> Word { a + b { ok(v) => v, overflow(h, l) => h, underflow(h, l) => l } }",
+    "fn main(a: Word, b: Word) -> Word { a + b { ok(v) => v, overflow(h, l) => l, underflow(h, l) => h } }",
+    "fn main(a: Word, b: Word) -> Word { a * b { ok(v) => v, overflow(h, l) => h, underflow(h, l) => l } }",
+    "fn main(a: Word, b: Word) -> Word { a * b { ok(v) => v, overflow(h, l) => l, underflow(h, l) => h } }",
+    "fn main(a: Word, b: Word) -> Word { a - b { ok(v) => v, overflow(h, l) => h, underflow(h, l) => l } }",
+    "fn main(a: Word, b: Word) -> Word { a - b { ok(v) => v, overflow(h, l) => l, underflow(h, l) => h } }",
+];
+
+#[test]
+fn the_high_word_and_the_outcome_flag_agree_with_the_vm() {
+    // Inputs chosen so that all three flag values arise for each operator, and
+    // so that the high word is sometimes 0, sometimes -1, and sometimes neither.
+    //
+    // A high word of neither 0 nor -1 needs a product: addition and subtraction
+    // overflow by at most one bit, so their high word only ever distinguishes
+    // sign. `[2^62, 8]` gives a true product of 2^65, whose high word is 2 --
+    // the case that pins the shift amount rather than merely its sign.
+    for src in HANDLED_SOURCES {
+        for args in [
+            [3, 4],
+            [-3, 4],
+            [0, 0],
+            [i64::MAX, 1],
+            [i64::MIN, -1],
+            [i64::MAX, 2],
+            [i64::MIN, 2],
+            [i64::MIN, 3],
+            [4611686018427387904, 8],
+            [-4611686018427387904, 8],
+        ] {
+            assert_agrees(src, &args);
+        }
+    }
+}
+
+#[test]
+fn negation_overflow_reaches_the_overflow_arm_and_agrees() {
+    // `-i64::MIN` is the only negation that overflows, so this is a
+    // one-input test by construction. The in-range values are what show the
+    // dispatch does not fire spuriously.
+    for src in [
+        "fn main(a: Word) -> Word { -a { ok(v) => v, overflow(h, l) => h } }",
+        "fn main(a: Word) -> Word { -a { ok(v) => v, overflow(h, l) => l } }",
+    ] {
+        for args in [[i64::MIN], [i64::MAX], [0], [7], [-7]] {
+            assert_agrees(src, &args);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The trap overflow policy
+// ---------------------------------------------------------------------------
+
+/// Lower `src` under explicit options and return the IR, for the trap policy,
+/// which by construction has no differential case: it DIVERGES from the VM.
+fn lowered_ir_with(src: &str, opts: LowerOptions) -> String {
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    lower_chunk(&ctx, &lm, &m.chunks[0], "kel_entry", opts).expect("lower");
+    lm.print_to_string().to_string()
+}
+
+/// Does the IR branch CONDITIONALLY to the trap block?
+///
+/// `Op::Trap` emits an unconditional branch to the same block, so the
+/// conditional form is what distinguishes the overflow policy from an ordinary
+/// trap site. Matching on `br i1` rather than on the block name alone is what
+/// makes that distinction.
+fn traps_conditionally_on_overflow(ir: &str) -> bool {
+    ir.lines()
+        .any(|l| l.trim_start().starts_with("br i1 ") && l.contains("label %trap"))
+}
+
+#[test]
+fn the_trap_overflow_policy_emits_a_guard_on_every_checked_opcode() {
+    // The trap policy has NO differential case available, because it is defined
+    // as diverging from the VM: `add(i64::MAX, 1)` aborts here and wraps there.
+    // The oracle cannot speak to it, so the assertion is structural, and it
+    // needs the must-fire / must-not-fire pair for the reason the shift mask
+    // needed one.
+    //
+    // All four checked opcodes are covered because they now share one helper.
+    // That sharing is why the guard cannot be present on one and absent on
+    // another, and this test is what makes the claim checkable rather than
+    // merely stated.
+    for src in [
+        "fn main(a: Word, b: Word) -> Word { a + b }",
+        "fn main(a: Word, b: Word) -> Word { a - b }",
+        "fn main(a: Word, b: Word) -> Word { a * b }",
+        "fn main(a: Word) -> Word { -a }",
+    ] {
+        // MUST-FIRE CASE: the policy is on, so the guard must be present.
+        let trapping = lowered_ir_with(
+            src,
+            LowerOptions {
+                overflow: OverflowPolicy::Trap,
+            },
+        );
+        assert!(
+            traps_conditionally_on_overflow(&trapping),
+            "the trap policy must emit a conditional branch to the trap block \
+             for {src:?}. IR was:\n{trapping}"
+        );
+
+        // MUST-NOT-FIRE CASE: the default policy wraps, matching the VM, so
+        // there must be no guard. Without this the predicate could be trivially
+        // true and the must-fire case above would prove nothing.
+        let wrapping = lowered_ir_with(
+            src,
+            LowerOptions {
+                overflow: OverflowPolicy::Wrap,
+            },
+        );
+        assert!(
+            !traps_conditionally_on_overflow(&wrapping),
+            "the default wrapping policy must NOT emit an overflow trap for \
+             {src:?}; it diverges from the VM. IR was:\n{wrapping}"
+        );
+    }
+}
+
+#[test]
+fn a_fixed_point_multiply_is_refused_rather_than_lowered_as_an_integer_one() {
+    // `Op::CheckedMul` carries the Q-format fraction-bit count. The lowering
+    // matches `CheckedMul(0)` specifically, so a non-zero count falls through to
+    // the refusal arm. Lowering it as an integer multiply would be wrong by a
+    // factor of 2^n and would produce no error at all, which is the failure mode
+    // the subset boundary exists to prevent.
+    //
+    // If `Fixed` arithmetic ever enters the subset, this test must be changed
+    // deliberately -- as the division case above had to be when multiplication
+    // arrived -- rather than deleted.
+    // A bare `a * b` on `Fixed` emits `Op::FixedMul`, a different opcode
+    // entirely; only the handled form reaches `Op::CheckedMul` with a non-zero
+    // count. A `Fixed` overflow arm binds one value rather than two halves,
+    // because its high word is not meaningful.
+    let src = "fn main(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> { a * b { ok(v) => v, overflow(w) => w } }";
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    assert!(
+        m.chunks[0]
+            .ops
+            .iter()
+            .any(|op| matches!(op, Op::CheckedMul(n) if *n != 0)),
+        "this test is vacuous unless the source actually emits a non-zero \
+         fraction-bit CheckedMul; opcodes were {:?}",
+        m.chunks[0].ops
+    );
+
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    let err = lower_chunk(
+        &ctx,
+        &lm,
+        &m.chunks[0],
+        "kel_entry",
+        LowerOptions::default(),
+    );
+    assert!(
+        err.is_err(),
+        "a fixed-point multiply carries a non-zero fraction-bit count and must \
+         be refused, not lowered as if the operand were absent"
+    );
 }

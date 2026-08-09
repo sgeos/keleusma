@@ -28,12 +28,69 @@ deserves the same scepticism as any other.**
 
 ## Status
 
-**Lowered (28).** `GetLocal`, `SetLocal`, `PopN`, `Dup`, `Const` (scalars),
-`PushImmediate`, `CheckedAdd`, `CmpEq`, `CmpNe`, `CmpLt`, `CmpGt`, `CmpLe`,
-`CmpGe`, `Not`, `BitAnd`, `BitOr`, `BitXor`, `Shl`, `Shr`, `If`, `Else`,
-`EndIf`, `Loop`, `EndLoop`, `Break`, `BreakIf`, `Return`, `Trap`.
+**Lowered (31).** `GetLocal`, `SetLocal`, `PopN`, `Dup`, `Const` (scalars),
+`PushImmediate`, `CheckedAdd`, `CheckedSub`, `CheckedNeg`, `CheckedMul(0)`,
+`CmpEq`, `CmpNe`, `CmpLt`, `CmpGt`, `CmpLe`, `CmpGe`, `Not`, `BitAnd`, `BitOr`,
+`BitXor`, `Shl`, `Shr`, `If`, `Else`, `EndIf`, `Loop`, `EndLoop`, `Break`,
+`BreakIf`, `Return`, `Trap`.
 
-**Remaining (38),** grouped below by what they actually cost.
+**Remaining (35),** grouped below by what they actually cost.
+
+Two entries in that list are **partial**, and the count treats them as lowered
+because the unsupported case is refused rather than mislowered: `Const` handles
+scalar constants only, and `CheckedMul` handles a zero fraction-bit count only.
+A reader taking the count as a completeness measure would overstate coverage by
+two.
+
+## CORRECTED: `Add`, `Sub`, `Mul` and `Neg` are not the integer opcodes
+
+Group 1 below previously described `Add`, `Sub`, `Mul` and `Neg` as "direct LLVM
+integer operations" needing only a check of the overflow behaviour. **That
+premise is false**, and acting on it would have produced four lowerings that no
+compiler output ever reaches.
+
+Consolidation B narrowed all four away from `Int` operands. The reference
+compiler emits, at `src/compiler.rs` around line 8900:
+
+| Source | Opcodes |
+|---|---|
+| `a + b` on `Word` | `CheckedAdd; PopN(2)` |
+| `a - b` on `Word` | `CheckedSub; PopN(2)` |
+| `a * b` on `Word` | `CheckedMul(0); PopN(2)` |
+| `-a` on `Word` | `CheckedNeg; PopN(2)` |
+
+`Op::Add`, `Op::Sub`, `Op::Mul` and `Op::Neg` are emitted **only** when the
+operand type is explicitly `Byte`, `Fixed` or `Float`, and the VM raises a type
+error if an `Int` reaches any of them. So the whole `Word` arithmetic surface is
+the checked family, and it is now complete. The four unchecked opcodes move to a
+blocked status: they need the `Byte` representation settled, and `Fixed` and
+`Float` belong to Group 4.
+
+This also answers a Group 2 question recorded as unprobed. **`CheckedMul`'s `u8`
+operand is the Q-format fraction-bit count.** Zero is exactly integer multiply,
+which is what the compiler emits for `Word`; a non-zero count is fixed-point and
+is refused rather than lowered as if the operand were absent.
+
+Verified by dumping opcode streams from the reference compiler, not by reading
+opcode names. The names are actively misleading here, which is the whole reason
+this section exists.
+
+## The high word and the flag were unobserved until 2026-08-09
+
+Worth recording as a class of gap rather than as one fixed bug. Every arithmetic
+case in the suite went through `Checked*; PopN(2)`, which discards the flag and
+the high word. A lowering that computed either incorrectly — or pushed the
+triple in the wrong order — passed the entire suite. The opcode was "supported"
+and two thirds of its output were untested.
+
+The handled form `a * b { ok(v) => v, overflow(h, l) => h, ... }` makes both
+observable, and probing showed it needs **no opcode outside the existing
+subset**: it lowers as a dispatch on the flag built from `Loop`, `CmpEq`, `If`
+and `Break`. It had been available the entire time.
+
+The general form of the lesson: **an opcode that pushes more than it is usually
+asked for has untested outputs by default.** Ask what a passing suite would
+still permit to be wrong.
 
 ## DONE: the structural increment (loops)
 
@@ -147,8 +204,8 @@ distinguish it, not merely exercise it.
 
 | Opcode | Note |
 |---|---|
-| `Add` `Sub` `Mul` `Neg` | Direct LLVM integer operations. Confirm the VM's overflow behaviour first; do not assume it matches `CheckedAdd`'s discard-the-flag wrap. |
-| `CheckedSub` `CheckedNeg` | The three-slot `low, high, flag` pattern already implemented for `CheckedAdd`. |
+| ~~`CheckedSub` `CheckedNeg`~~ | **DONE.** The three-slot `low, high, flag` pattern, shared with `CheckedAdd` and `CheckedMul(0)` through one helper. |
+| `Add` `Sub` `Mul` `Neg` | **BLOCKED, and not what they look like.** See the correction above: these carry no `Int` operands and are reachable only for `Byte`, `Fixed` and `Float`. They wait on the `Byte` representation and on Group 4. |
 | `PushImmediate(u8)` | Encoding is documented: `0 = Unit`, `1 = true`, `2 = false`, `3 = None`, `4..19 = Int(operand - 4)`. **Blocks on one decision**: how `Unit` and `None` are represented in a flat i64 world. Refusing them is a legitimate first answer. |
 | `WordToByte` `ByteToWord` | Truncate and extend. Needs the `Byte` representation settled, including whether the extension is signed. |
 
@@ -156,11 +213,11 @@ distinguish it, not merely exercise it.
 
 | Opcode | The decision |
 |---|---|
-| `Div` `Mod` `CheckedDiv` `CheckedMod` | **Division by zero is undefined behaviour in LLVM** and a `VmError::DivisionByZero` in the VM. A guard branch to the trap block is mandatory, not optional. The same trap applies to `i64::MIN / -1`, which is also UB in LLVM. |
-| `CheckedMul(u8)` | Carries a `u8` operand whose meaning has not been probed. |
+| `Div` `Mod` `CheckedDiv` `CheckedMod` | **THE NEXT INCREMENT.** Division by zero is undefined behaviour in LLVM and a `VmError::DivisionByZero` in the VM. A guard branch to the trap block is mandatory, not optional. The same trap applies to `i64::MIN / -1`, which is also UB in LLVM. Note the checked forms do **not** trap on a zero divisor: the VM reifies it as flag `3` with the numerator in the low slot, so the handled `zero_divisor(n)` arm can bind it. Read the VM arm before lowering; the two forms differ. |
+| ~~`CheckedMul(u8)`~~ | **DONE for `0`.** The operand is the Q-format fraction-bit count; zero is integer multiply. A non-zero count is fixed-point and is refused. |
 | `Const(u16)` | Scalar constants are easy. Composite constants are not, and route into Group 4. |
 | `BoundsCheck(u16)` | A compare and a branch to trap. Cheap once the trap path carries a reason code. |
-| `Loop` `EndLoop` `Break` `BreakIf` | The structural work above. |
+| ~~`Loop` `EndLoop` `Break` `BreakIf`~~ | **DONE.** The structural work above. |
 
 ## Group 3 — the host and call boundary
 
