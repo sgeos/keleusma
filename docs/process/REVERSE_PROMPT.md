@@ -12,7 +12,32 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 **Date**: 2026-08-08 (session 39)
 
-## READ THIS FIRST — the cutover is MERGED and pushed
+## THE NEXT INCREMENT — step 6, slice 1: CRC-32 in Keleusma
+
+The six-step wire-format programme stands at **1, 2, 3, 4, 5 done; 6 not started.**
+
+**`docs/decisions/WIRE_FORMAT_SELFHOST_PLAN.md` was stale and would have misdirected you.** It
+concluded that self-hosting the wire format was blocked because the auxiliary body was rkyv, and
+recommended doing the monomorphizer and type checker instead. That blocker was removed by changing
+the wire format, which is what this whole programme did. The document is now re-scoped with the
+work re-sliced against the v2 container; read the top of it, not the 2026-08-03 body.
+
+**Slice 1 is CRC-32**, a pure bitwise table-free function over a byte range, oracle-checked against
+`crate::bytecode::crc32`. It is small, and it exists to establish the byte-emission harness every
+later slice needs.
+
+**Probe this first**, because it is not established and every slice inherits it: how a `.kel` stage
+addresses a byte buffer, for emission and for reading. The `secret/` prototype used a data segment.
+That prototype also **predates format lock-in** — it encodes a 12-byte directory entry where the
+shipped entry is 16, and the triplicated prologue postdates it entirely. Evidence of feasibility,
+not a starting implementation.
+
+**A constraint that will bite:** `ConstTable::value` uses `BTreeSet` and `BTreeMap`. Correct for the
+Rust VM, unavailable in Keleusma. The Keleusma decoder needs a bounded array-based walk. The
+forward-ordering invariant makes such a walk terminating, so the shape exists; it must be written
+rather than transliterated.
+
+## Completed this session — all merged, pushed, gate-green
 
 **`v0.2.3` = `cd48c30`, pushed.** The wire-format v2 cutover is merged, on a green full gate (all
 twelve steps) and a green pre-push hook. `BYTECODE_VERSION` is 2.

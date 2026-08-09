@@ -10,9 +10,9 @@ a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`
-- **Parent commit** (the repository state this handoff describes): `702c90f`
-- **Written**: 2026-08-07
-- **Tree at write**: clean. **The active work is on an UNPUSHED branch — see below.**
+- **Parent commit** (the repository state this handoff describes): `917da62`
+- **Written**: 2026-08-08
+- **Tree at write**: clean apart from this handoff commit. **Nothing unmerged, nothing unpushed.**
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
 **Validity check — run on resume.** Compare the **Parent commit** above to `git rev-parse HEAD~1`.
@@ -28,123 +28,107 @@ a resuming agent.
 3. **Re-read the three channels** — [`REVERSE_PROMPT.md`](./REVERSE_PROMPT.md),
    [`DESIGN_JOURNAL.md`](./DESIGN_JOURNAL.md) (newest first), [`TASKLOG.md`](./TASKLOG.md).
 4. **Read [`AUTONOMOUS_IMPLEMENTATION_LOOP.md`](./AUTONOMOUS_IMPLEMENTATION_LOOP.md).** Step 1a
-   (probe before planning) falsified something in **every** increment of this arc.
-5. **In-flight verification: NONE.** Any background run from the previous session is dead.
+   (probe before planning) falsified a recorded claim in **every** increment of this arc, including a
+   plan document that said the current work was blocked when it was not.
+5. **In-flight verification: NONE.** No background run survives a session boundary here.
 
-## THE ACTIVE WORK: a complete but UNVERIFIED cutover on an unpushed branch
+## THE STATE: everything is merged, pushed, and green
 
-```
-git checkout feat/wire-cutover-proper     # local only, NOT on origin
-```
+`v0.2.3` = `917da62`, in sync with origin, full gate green, CI green. **There is no unmerged work and
+no local-only branch.** This is a clean resume point, unlike the previous handoff.
 
-- **`v0.2.3` = `702c90f`** plus this handoff commit. Green, pushed, in sync with origin.
-- **`feat/wire-cutover-proper` = `c29abcf`.** The wire-format v2 cutover, **functionally complete**,
-  **committed**, **not pushed**, and **not fully verified**.
+The six-step wire-format programme:
 
-### What the cutover did
+| Step | State |
+|---|---|
+| 1. Prototype to lock-in | done |
+| 2. Standalone `keleusma-wire` crate | done, merged |
+| 3. Document the format | done, merged |
+| 4. Implement in Rust | done, merged |
+| 5. Port Keleusma to it | done, merged |
+| **6. Self-host it in Keleusma** | **not started — this is the work** |
 
-`BYTECODE_VERSION` is **2** (operator-authorised 2026-08-06: "the substrate itself has changed").
-The auxiliary body is the v2 format end to end; rkyv no longer touches it (the dependency stays —
-six `AlignedVec` uses are unrelated). Five rkyv paths were ported: both encode sites, the cold
-loader decode, the 26 `Vm::archived()` reads, the zero-copy validation entry, and `decode_all_ops`.
+`BYTECODE_VERSION` is **2**, operator-authorised 2026-08-06 because the substrate changed. A
+version-1 artifact is now rejected on the version check. Any further bump needs authorization.
 
-`Module::access_bytes` became `Module::validate_bytes` — the old signature returned
-`&ArchivedWireAuxBody`, a type that no longer describes anything. The v2 body is byte-addressed, so
-the 8-byte alignment requirement is gone everywhere.
+## THE NEXT INCREMENT: step 6, slice 1 — CRC-32 in Keleusma
 
-### VERIFICATION STATUS — the gate has NOT passed
+**Read `docs/decisions/WIRE_FORMAT_SELFHOST_PLAN.md` from the top.** It was stale until 2026-08-08:
+it concluded self-hosting was blocked on the rkyv auxiliary body and advised doing the monomorphizer
+and type checker instead. That blocker was removed by changing the wire format, which is what this
+programme did. It is now re-scoped, with seven slices against the v2 container.
 
-**Verified green**: format, clippy `--all-features -D warnings`, docs `-D warnings`, 1231 lib tests,
-92 schema tests, the ten-stage corpus differential, the randomised suite, `--no-default-features`.
-The default-features workspace pass reached 1963 log lines with zero failures before its session died.
+**Slice 1 is CRC-32.** Bitwise, table-free, a pure function over a byte range, so it transliterates
+directly. Oracle: `crate::bytecode::crc32` on random and edge-case buffers. It is small on purpose —
+its job is to establish the byte-emission harness every later slice needs.
 
-**NOT verified**: `signatures`, `signatures,shell`, `self-host`, both `keleusma-wire` feature
-configurations, the markdown-link check, and the detached `compiler/` subproject.
+**Probe before writing any of it**, because it is unsettled and every slice inherits it: how a `.kel`
+stage addresses a byte buffer, for emission and for reading. The `secret/kel-format-probe/` prototype
+used a data segment. That prototype **predates format lock-in** — 12-byte directory entries where the
+shipped entry is 16, and no triplicated prologue at all. Feasibility evidence, not a starting point.
 
-**Do not merge until a full `scripts/release-gate.sh` is green.** No failure has been seen anywhere,
-but absence of evidence is not verification.
+**Carry this constraint:** `ConstTable::value` uses `BTreeSet`/`BTreeMap`, which Keleusma does not
+have. The decoder needs a bounded array-based walk; the forward-ordering invariant is what makes one
+terminate. Write it, do not transliterate it.
 
-### TWO THINGS TO PUT TO THE OPERATOR
+## The performance guard, and why it exists
 
-1. **The golden-bytes test was regenerated** (`bytecode_golden_bytes_for_main_returning_one`).
-   Judged legitimate: the test's own message directs updating it deliberately after a version bump,
-   the bump is authorised, the round-trip half still EXECUTES the bytes, and the other failure was
-   diagnosed separately rather than blanket-updating. Regenerating an expectation is nevertheless how
-   real drift gets laundered, so it is flagged rather than buried. One-line revert if unwanted.
-2. **`CLAUDE.md` still says `BYTECODE_VERSION` stays 1** under the no-public-adoption policy. That
-   text is now wrong and must be updated. The hazard it records — an old artifact accepted-then-
-   mis-read — is *resolved* for v1 artifacts, which now fail the version check.
+`tests/perf_canary.rs` is new. The cutover merged green on twelve gate steps **and would also have
+merged green while forty times slower**, because nothing else measures time.
 
-## RUNNING THE GATE: the operator should do it
+- It is a **tripwire, not a benchmark.** The ceiling is deliberately slack.
+- **If it fails, profile before touching the ceiling.** The class it catches is a hot-path read that
+  has become proportional to the whole module. Correctness tests will keep passing.
+- It was validated by reverting the repair: 1.7 s becomes 67.3 s and it trips.
 
-Long background runs **do not survive** this environment. The operator closes the laptop and leaves
-WiFi range; every such run this session was killed mid-flight, with zero failures in the surviving
-logs. Elapsed-time readings are meaningless for the same reason (they include suspend).
+Reference points, debug, uncontended, 200k iterations: rkyv 6.4 s, v2 as first committed 67.3 s, v2
+repaired 1.2 s. **The v2 read path is 5.2× faster than rkyv.**
 
-**Ask the operator to run `! scripts/release-gate.sh` at merge points.** It survives a dropped
-session in a way an agent-launched background task does not.
+## Verification process — operator-directed, now binding
 
-## FASTER ITERATION — the lane that exists and was not used
+Full gate before every **merge**, not after every **change**. See
+[`PROCESS_STRATEGY.md`](./PROCESS_STRATEGY.md#tiered-verification).
 
-`scripts/fast-check.sh 'test(<filter>)'` is a seconds-scale inner loop (fmt, clippy on the touched
-crate, one test filter). `cargo-nextest` and `sccache` are installed and configured.
+- **Tier 0**, per edit: `scripts/fast-check.sh 'test(<filter>)'`.
+- **Tier 1**, per increment: `clippy --workspace --all-targets -D warnings`,
+  `cargo test -p keleusma --no-default-features`, and the `-D warnings` doc build. These three catch
+  what targeted tests structurally cannot.
+- **Tier 2**, per merge: `scripts/release-gate.sh`, **batching three or four increments**.
 
-**One caveat, learned the hard way**: the `KEL_SELFHOST_CACHE=1` memoization is a COMPLETE KEY — it
-reuses a result only when the test binary *and* every `.kel` input are byte-identical. Any Rust edit
-invalidates all of it. It accelerates `.kel` stage work, **not** Rust-side work like this cutover.
+A full gate is about 1h40m. **Run it in the background and monitor the log**; it survives fine when
+launched that way, contrary to the previous handoff's advice. The feature matrix was deliberately not
+narrowed — the reasoning is in the process doc.
 
-The process that would actually have helped, and should be used from here:
-
-- **Inner loop**: run only the tests for the work in hand, not full suites.
-- **Pre-gate** (minutes): clippy `--all-features`, the `-D warnings` doc build, and
-  `--no-default-features`. This caught four defects that targeted tests structurally cannot see.
-- **Gate**: once per merge, and **batch three or four increments per merge**. Roughly twenty full
-  gates were run this session, one per increment; the output would have been identical batched.
-
-## What is DONE, merged, and green on `v0.2.3`
-
-- **`keleusma-wire` + `keleusma-wire-derive`** — schema-free container: triplicated prologue and
-  directory, fixed-stride records, pools, CRC-32, (72,64) SECDED plane, `#[derive(WireRecord)]`.
-  Both `#![forbid(unsafe_code)]`; reader allocation-free; builds for `wasm32v1-none`.
-- **`src/wire_schema.rs`** — the whole aux body encodes and round-trips; `SchemaBuilder` owns the
-  shared state (name interner, shape table, constant table).
-- **`AuxView` / `AuxOffsets`** — the runtime read surface, resolve-once/reconstruct-cheaply.
-- **Validation** — 92 schema tests, the ten-stage corpus, randomised input testing.
-
-## The narrow requirement that still governs
-
-Exactly **one** accessor returns image-aliasing bytes: `AuxView::chunk_const_str_bytes`, for a
-**non-empty top-level** `StaticStr`. Empty strings are deliberately not aliased; a composite's string
-leaves are **already copied**. Asserted by address, with a control proving the predicate rejects a
-copy. Do not over-constrain into a borrow-everything design; do not lose that one property.
-
-## Also outstanding
-
-- **Publication HELD.** Operator: "push, but do not yet publish" (2026-08-06). Neither crate is
-  published. **Irreversible and outward-facing — confirm first.**
-- **MSRV 1.85 declared, never verified.**
-- **The corpus emits zero struct templates**; that table rests on hand-built cases. The corpus test
-  asserts the zero so the caveat cannot go stale.
+**Reap orphans before any gate or measurement.** An interrupted gate leaves its test binary
+reparented to PID 1 at full CPU; one was found burning four cores for ten hours. `release-gate.sh`
+now does this as a preflight.
 
 ## Method rules this arc validated
 
-- **Probe before planning.** Falsified a claim in every increment, including ones written by me one
-  increment earlier, and a limitation in already-merged code.
-- **Ask what a test would still pass with.** Four succeeded emptily before being caught:
-  `ConstValue::PartialEq` ignores the enum discriminant; ECC tests compared counts not values; the
-  fuzz suite reached the readers 0/2000 times; and pairing `native_return_shapes` with
-  `native_names` silently dropped the surplus.
-- **A green build proves nothing during a format cutover.** `access_unchecked` type-checks against
-  any byte range, so the compiler was blind for the whole port — 320 tests failed while it compiled.
-- **Measure, do not theorise.** Three wrong guesses about a performance cliff cost ~30 minutes;
-  instrumentation found it in one run.
-- **Do not touch the tree while a gate runs.** Four gates lost to this.
+- **Probe before planning.** It has now falsified a claim in every increment, including a persisted
+  plan document and a published specification.
+- **Ask what a test would still pass with.** Five have succeeded emptily this arc. The most recent
+  was a differential test written for a bug already in hand, which passed *with that bug present*
+  because every integer in it was small.
+- **Never measure performance on a build you have not just re-verified.** A 3.7× "speedup" this
+  session came from a build where constant loads were erroring out early.
+- **A green build proves nothing during a format cutover**, and a green suite proves nothing about
+  speed.
+- **Do not touch the tree while a gate runs.**
 
-**Boundary counts** — **79 Ok / 4 Gap / 1 RefRejects**, unchanged. Recount with a grep.
+## Also outstanding
 
-**Git**: `v0.2.3` = `702c90f` plus this handoff commit, in sync with origin. Local branches: `main`,
-`v0.2.3`, `v0.2.3-prerebase-backup`, `feat/wire-cutover-proper`. **Do NOT delete
-`v0.2.3-prerebase-backup`** (309 commits not in `v0.2.3`, a deliberate safety net).
+- **Publication HELD.** Nothing is published. **Irreversible and outward-facing — confirm first.**
+- **MSRV 1.85 declared, never verified.**
+- **Fifteen `self.aux()` sites remain, audited, none hot** — a legitimate follow-up, not a blocker.
+- **The corpus emits zero struct templates**; the corpus test asserts the zero so the caveat cannot
+  go stale.
 
-**Guardrails**: no new opcode without authorization; run the FULL gate before claiming complete;
-confirm before any irreversible or outward-facing action; never bypass the pre-push gate.
+**Boundary counts** — **79 Ok / 4 Gap / 1 RefRejects**. Recount with a grep rather than trusting this.
+
+**Git**: `v0.2.3` = `917da62` plus this handoff commit, in sync with origin. Local branches: `main`,
+`v0.2.3`, `v0.2.3-prerebase-backup`. **Do NOT delete `v0.2.3-prerebase-backup`** (309 commits not in
+`v0.2.3`, a deliberate safety net).
+
+**Guardrails**: no new opcode or `BYTECODE_VERSION` bump without authorization; full gate before any
+merge; confirm before any irreversible or outward-facing action; never bypass the pre-push gate.
