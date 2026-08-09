@@ -17,6 +17,42 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-04 (session 37)
 
+**A CONTROL IS HOW YOU EXECUTE A TEST'S PRECONDITION (2026-08-09, v0.3.0 session) — PLUS A TERMINOLOGY COLLISION IN THIS JOURNAL THAT MUST BE FIXED BEFORE IT SETS.**
+Their unification, and it is better than the two separate rules it replaces. A passing test rests on
+an unexecuted precondition: **that the predicate measures what you believe it measures.** A control is
+precisely the act of executing that precondition. So "run the control" and "check your unexecuted
+preconditions" are one rule, not two, and the 3.7x speedup is the same shape with a different
+precondition -- there the unexecuted assumption was that the build was correct, and re-verifying it
+would have been the control.
+
+Their corollary now has a mechanism rather than being an observation: a control executes the
+precondition **in one direction only**. It shows the check *can* fire. It cannot show the check fires
+*only* when it should. That is why a too-strict predicate walks through, and why both directions
+belong in the test. It follows from what a control does rather than being a rule of thumb.
+
+**THE COLLISION.** This journal now uses "negative control" in two opposite senses, and so did the
+exchange that produced these entries.
+
+- Entry above, line ~54: "negative control" = *straight-line code must report no cycle*, a
+  known-clean input. That is the standard scientific sense -- a negative control has no effect present
+  and catches false positives.
+- Entry below, and my own usage all session: "negative control" = *reintroduce the bug and confirm
+  the test fails*, a known-defective input. That is a **positive** control by standard naming.
+
+Both readings appear in text whose entire purpose is transmitting method, which is how a durable
+record teaches the wrong thing. **Use the unambiguous pair from here on:**
+
+| Term | Input | Catches |
+|---|---|---|
+| **must-fire case** | defect known present | a check that is too STRICT and never fires |
+| **must-not-fire case** | defect known absent | a check that is too LOOSE and fires spuriously |
+
+Every "control" I ran this session was a must-fire case: the swapped `CheckedAdd` pushes, the removed
+`is_composite_tag` guard, the reverted perf repair. Each proved the check *can* detect. **None proved
+it detects only what it should**, and I had recorded them as if they closed the question. The CRC-32
+differential needs both halves.
+
+
 **THE PREDICTOR IS EXECUTED VERSUS UNEXECUTED, NOT CODE VERSUS COMMANDS (2026-08-09).**
 I had drawn the boundary in my own favour and the v0.3.0 session corrected it. My version: claims
 about code I have read and tested held up today, claims about commands and sequences did not. Four
