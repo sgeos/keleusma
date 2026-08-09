@@ -28,16 +28,18 @@ deserves the same scepticism as any other.**
 
 ## Status
 
-**Lowered (22).** `GetLocal`, `SetLocal`, `PopN`, `Dup`, `CheckedAdd`,
-`CmpEq`, `CmpNe`, `CmpLt`, `CmpGt`, `CmpLe`, `CmpGe`, `Not`, `BitAnd`,
-`BitOr`, `BitXor`, `Shl`, `Shr`, `If`, `Else`, `EndIf`, `Return`, `Trap`.
+**Lowered (28).** `GetLocal`, `SetLocal`, `PopN`, `Dup`, `Const` (scalars),
+`PushImmediate`, `CheckedAdd`, `CmpEq`, `CmpNe`, `CmpLt`, `CmpGt`, `CmpLe`,
+`CmpGe`, `Not`, `BitAnd`, `BitOr`, `BitXor`, `Shl`, `Shr`, `If`, `Else`,
+`EndIf`, `Loop`, `EndLoop`, `Break`, `BreakIf`, `Return`, `Trap`.
 
-**Remaining (44),** grouped below by what they actually cost.
+**Remaining (38),** grouped below by what they actually cost.
 
-## The next increment is structural, not another opcode
+## DONE: the structural increment (loops)
 
-`Loop`, `EndLoop`, `Break` and `BreakIf` introduce **backward jumps**, and the
-current lowering cannot express one. Its merge-depth algorithm walks the opcode
+`Loop`, `EndLoop`, `Break` and `BreakIf` introduce **backward jumps**, which the
+original lowering could not express. **This is now implemented and passing.**
+The design below is retained because it proved correct in every particular. Its merge-depth algorithm walks the opcode
 stream linearly and requires every incoming edge to a block to have been
 recorded before that block is entered. That holds for `If`/`Else`/`EndIf`, whose
 targets are always forward. It does not hold for a loop back edge.
@@ -90,30 +92,53 @@ Do **not** collect `Loop`'s own exit operand as a block target. It duplicates
 the `Break` targets when a break exists and manufactures an unreachable block
 when one does not.
 
-### `for` is not the test vehicle, and the keyword is overloaded three ways
+### CORRECTED: a range `for` IS the test vehicle, and it lowers today
 
-The grammar distinguishes three constructs that are easy to conflate:
+An earlier revision of this document claimed a `for` statement drags in
+`Stream`, `Reset`, `Yield`, `NewComposite`, `Len`, `GetIndex`, `IsEnum`,
+`IsStruct` and `GetField`, and therefore could not exercise loops in isolation.
+**That was wrong.** It came from counting `Op::` occurrences across the whole of
+`compile_for`, which includes the paths for iterating over composites. Measured
+against real output instead, `for i in 0..3 { }` emits only:
+
+```
+Const SetLocal Loop GetLocal CmpGe BreakIf PushImmediate PopN CheckedAdd EndLoop Return
+```
+
+No coroutines, no composites. It is the canonical counted loop, and it now
+lowers and passes differentially.
+
+The keyword is still overloaded three ways, which is worth keeping:
 
 | Form | What it is |
 |---|---|
 | `loop { block }` | The divergent loop block. |
 | `loop name(..) -> T` | A **coroutine definition**, not a loop at all. |
-| `for x in it [limit n] on { .. }` | Bounded iteration, and what real code uses. |
+| `for x in it [limit n] on { .. }` | Bounded iteration. |
 
-Measured from the `for` lowering in `src/compiler.rs`, a `for` statement emits
-`Loop` and `EndLoop` **together with** `Stream`, `Reset`, `Yield`,
-`NewComposite`, `Len`, `GetIndex`, `IsEnum`, `IsStruct` and `GetField`. So a
-`for` loop is not a small program: it drags in coroutines and composites, most
-of Group 4.
+### What the verifier admits, which is narrower than what parses
 
-**Consequence for ordering.** The loop opcodes cannot be exercised in isolation
-through `for`. The only isolated vehicle is the `loop { }` block, which emits
-`Loop`, `EndLoop` and `Break` alone. Attempting to validate loop lowering with a
-`for` loop would fail on eight unrelated unsupported opcodes and prove nothing.
+A data-dependent `break` is **rejected**, not by the lowering but by
+`verify_resource_bounds`:
 
-None of the ten stage sources under `src/selfhost/kel/` contains a `loop { }`
-block; they iterate with `for`. So the divergent block needs purpose-written
-test programs rather than a corpus example.
+> `main: loop at instruction 2 has no statically extractable iteration bound;
+> strict mode requires loops with fall-through bodies to match the canonical
+> for-range pattern`
+
+So `loop { if x > b { break; } }` compiles and then fails verification. The
+admitted forms are the range `for`, and a `loop` whose break is unconditional
+and therefore trivially bounded. This is the conservative-verification stance
+working exactly as designed, and it means loop test programs must be chosen from
+what verifies rather than from what parses.
+
+### Locals are immutable, which bounds what a loop test can observe
+
+`s = s + b` inside a loop is rejected with "assignment is only supported for data
+block fields". Accumulating across iterations therefore needs a data block,
+which is a later increment. **Consequence: with the current subset a loop's
+iteration count is not observable**, so a differential test alone would pass
+against a lowering that dropped the loop entirely. That is why
+`the_range_for_lowering_actually_emits_a_back_edge` asserts the cycle directly.
 
 ## Group 1 — mechanical, no new design
 
@@ -276,3 +301,26 @@ name the mask.
 That is three layers: a defect, a test blind to it, and a fix blind in the same
 way. Each was found by the same cheap act of breaking the code on purpose.
 **Run the control even when — especially when — you are confident.**
+
+### And a fourth, from the loop increment: four predicates, all wrong
+
+`has_back_edge`, the assertion that the counted-loop lowering emits a cycle, took
+**four attempts**, and the first three passed their control while being wrong.
+
+1. `strip_suffix(':')` to find block labels. LLVM prints `op5:  ; preds = ...`,
+   so it recorded only `entry` and reported no back edge for a real loop.
+2. "branches to an earlier-defined block". Reported true for any branch to the
+   `trap` block, which is emitted near the top.
+3. "a predecessor defined later in the text". Same block, same cause, opposite
+   direction.
+4. Build the graph from the `preds` annotations and look for a cycle. Sound.
+
+**The lesson is not "write better heuristics".** It is that loop structure is a
+graph property and is not recoverable from the order blocks happen to be
+printed in. Three attempts were spent approximating a graph with text position.
+
+A second lesson, about controls themselves: attempt (1) was too STRICT, and the
+negative control could not catch it, because a predicate that never fires passes
+"straight-line code must report no cycle" trivially. **A negative control only
+catches a predicate that is too loose. A positive case is needed for the other
+direction, and both belong in the test.**
