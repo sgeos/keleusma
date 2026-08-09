@@ -38,6 +38,7 @@ use keleusma::vm::{Vm, auto_arena_capacity_for};
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use keleusma_native::{
     LowerError, LowerOptions, MAX_STACK, OverflowPolicy, check_word_width, lower_chunk,
+    lower_module,
 };
 use std::collections::BTreeMap;
 
@@ -146,30 +147,44 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
     // whole file exists to prevent, and it would not be caught by any test that
     // only checks supported programs.
     //
-    // This case was `a * b`, then `a / b`, and each time the opcode entered the
-    // subset the test went on passing for the wrong reason until someone
-    // noticed. **It is now self-checking**: it asserts the chosen source really
-    // does emit the opcode it names, so when `Op::Call` is implemented this test
-    // FAILS and has to be repointed deliberately rather than rotting quietly.
+    // This case was `a * b`, then `a / b`, then `Op::Call`, and each time the
+    // opcode entered the subset the test went on passing for the wrong reason.
+    // The self-checking assertion below was added to stop that, and **it did not
+    // stop it** for `Op::Call`: calls became supported through `lower_module`
+    // while `lower_chunk` still refused them, so the test kept passing on a
+    // refusal that no longer meant "outside the subset". A self-check on the
+    // OPCODE is not a self-check on the REASON.
     //
-    // `Op::Call` is Group 3: it needs multi-chunk lowering and the symbol
-    // mangling scheme, neither of which exists.
-    let src = "fn helper(x: Word) -> Word { x }
-               fn main(a: Word, b: Word) -> Word { helper(a) }";
+    // `Op::NewComposite` is the current boundary and does not have that
+    // weakness, because no entry point lowers it at all. It belongs to
+    // Workstream C, the flat byte composite representation.
+    let src = "struct P { x: Word, y: Word }
+               fn main(a: Word, b: Word) -> Word { let p = P { x: a, y: b }; p.x }";
     let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
 
     let entry = m
         .chunks
         .iter()
-        .find(|c| c.ops.iter().any(|op| matches!(op, Op::Call(_, _))))
-        .expect("this test is vacuous unless some chunk emits Op::Call");
+        .find(|c| c.ops.iter().any(|op| matches!(op, Op::NewComposite(_))))
+        .expect("this test is vacuous unless some chunk emits Op::NewComposite");
 
     let ctx = Context::create();
     let lm = ctx.create_module("kel");
-    let err = lower_chunk(&ctx, &lm, entry, "kel_entry", LowerOptions::default());
     assert!(
-        err.is_err(),
-        "a call is outside the supported subset and must be refused, not lowered"
+        lower_chunk(&ctx, &lm, entry, "kel_entry", LowerOptions::default()).is_err(),
+        "a composite construction is outside the supported subset and must be \
+         refused, not lowered"
+    );
+
+    // MUST-NOT-FIRE CASE, and the one whose absence let the `Op::Call` version
+    // rot: the WHOLE-MODULE path must refuse it too. Without this, "refused"
+    // can mean nothing more than "this entry point cannot see enough context",
+    // which is what happened when calls were implemented.
+    let lm2 = ctx.create_module("kel2");
+    assert!(
+        lower_module(&ctx, &lm2, &m, LowerOptions::default()).is_err(),
+        "lower_module must refuse it too; a refusal that only lower_chunk makes \
+         is not evidence the opcode is unsupported"
     );
 }
 
@@ -586,6 +601,135 @@ fn the_reserved_and_option_immediates_are_refused() {
              refused, not given an invented value"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Calls, and therefore multi-function programs
+// ---------------------------------------------------------------------------
+
+/// Compile `src`, lower EVERY chunk, and JIT the chunk named `entry`.
+///
+/// Selecting by name rather than by index is deliberate. Chunk order follows
+/// declaration order, so indexing would silently test the wrong function the
+/// moment a source declares its helpers after its entry point.
+fn native_result_multi(src: &str, entry: &str, args: &[i64]) -> i64 {
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let idx = m
+        .chunks
+        .iter()
+        .position(|c| c.name == entry)
+        .unwrap_or_else(|| {
+            panic!(
+                "no chunk named {entry:?}; chunks are {:?}",
+                m.chunks.iter().map(|c| &c.name).collect::<Vec<_>>()
+            )
+        });
+
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    lower_module(&ctx, &lm, &m, LowerOptions::default()).expect("lower module");
+    lm.verify().expect("LLVM module verification");
+
+    let ee = lm
+        .create_jit_execution_engine(OptimizationLevel::None)
+        .expect("jit");
+    let sym = format!("kel_chunk_{idx}");
+    match args.len() {
+        1 => {
+            let f = unsafe { ee.get_function::<unsafe extern "C" fn(i64) -> i64>(&sym) }
+                .expect("symbol");
+            unsafe { f.call(args[0]) }
+        }
+        2 => {
+            let f = unsafe { ee.get_function::<unsafe extern "C" fn(i64, i64) -> i64>(&sym) }
+                .expect("symbol");
+            unsafe { f.call(args[0], args[1]) }
+        }
+        n => panic!("test harness does not yet drive {n}-argument entry points"),
+    }
+}
+
+fn assert_multi_agrees(src: &str, args: &[i64]) {
+    let native = native_result_multi(src, "main", args);
+    let vm = vm_result(src, args);
+    assert_eq!(
+        native, vm,
+        "native and VM disagree for {src:?} with {args:?}: native={native}, vm={vm}"
+    );
+}
+
+#[test]
+fn calls_agree_with_the_vm() {
+    // **ARGUMENT ORDER IS THE WHOLE RISK HERE.** The VM sets the callee's frame
+    // base to `len - arg_count`, so arguments sit in declaration order with the
+    // last on top, and popping yields them reversed. A lowering that forgot the
+    // reversal is invisible for a one-argument callee, and invisible for any
+    // call whose arguments happen to be equal.
+    //
+    // `sub2(a, b)` is therefore the load-bearing case: it is asymmetric in its
+    // parameters, so swapping them changes the answer for every input where
+    // `a != b`.
+    for src in [
+        "fn id(x: Word) -> Word { x }
+         fn main(a: Word, b: Word) -> Word { id(a) + b }",
+        "fn sub2(x: Word, y: Word) -> Word { x - y }
+         fn main(a: Word, b: Word) -> Word { sub2(a, b) }",
+        // Argument EXPRESSIONS, not just operands, so the operand stack is
+        // non-trivial at the call site.
+        "fn sub2(x: Word, y: Word) -> Word { x - y }
+         fn main(a: Word, b: Word) -> Word { sub2(a + 1, b * 2) }",
+        // A call in one arm of a branch: the call must not disturb the
+        // per-block operand depth bookkeeping.
+        "fn dbl(x: Word) -> Word { x + x }
+         fn main(a: Word, b: Word) -> Word { if a > b { dbl(a) } else { b } }",
+        // Depth two through the acyclic call graph, and a callee declared AFTER
+        // its caller so the forward declaration is exercised.
+        "fn outer(x: Word) -> Word { inner(x) + 1 }
+         fn inner(x: Word) -> Word { x * 3 }
+         fn main(a: Word, b: Word) -> Word { outer(a) - b }",
+    ] {
+        for args in [
+            [7, 3],
+            [3, 7],
+            [-5, 2],
+            [0, 0],
+            [i64::MAX, 1],
+            [i64::MIN, -1],
+        ] {
+            assert_multi_agrees(src, &args);
+        }
+    }
+}
+
+#[test]
+fn a_call_is_still_refused_when_only_one_chunk_is_lowered() {
+    // `lower_chunk` cannot resolve a call: the target is an index into the
+    // module's chunk table, which a single chunk does not carry. Refusing is the
+    // only correct answer, and this pins that adding `lower_module` did not
+    // quietly make the single-chunk path emit a call to nothing.
+    let src = "fn helper(x: Word) -> Word { x }
+               fn main(a: Word, b: Word) -> Word { helper(a) }";
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let caller = m
+        .chunks
+        .iter()
+        .find(|c| c.ops.iter().any(|op| matches!(op, Op::Call(_, _))))
+        .expect("this test is vacuous unless some chunk emits Op::Call");
+
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    assert!(
+        lower_chunk(&ctx, &lm, caller, "kel_entry", LowerOptions::default()).is_err(),
+        "lower_chunk must refuse a call it cannot resolve"
+    );
+
+    // MUST-NOT-FIRE CASE: the same program through `lower_module` must succeed,
+    // or the refusal above would be indistinguishable from calls being broken.
+    let lm2 = ctx.create_module("kel2");
+    assert!(
+        lower_module(&ctx, &lm2, &m, LowerOptions::default()).is_ok(),
+        "lower_module must resolve the same call"
+    );
 }
 
 // ---------------------------------------------------------------------------
