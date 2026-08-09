@@ -28,13 +28,13 @@ deserves the same scepticism as any other.**
 
 ## Status
 
-**Lowered (36).** `GetLocal`, `SetLocal`, `PopN`, `Dup`, `Const` (scalars),
+**Lowered (39).** `GetLocal`, `SetLocal`, `PopN`, `Dup`, `Const` (scalars),
 `PushImmediate`, `CheckedAdd`, `CheckedSub`, `CheckedNeg`, `CheckedMul(0)`,
 `Div`, `Mod`, `CheckedDiv(0)`, `CheckedMod`, `CmpEq`, `CmpNe`, `CmpLt`, `CmpGt`,
 `CmpLe`, `CmpGe`, `Not`, `BitAnd`, `BitOr`, `BitXor`, `Shl`, `Shr`, `If`, `Else`,
-`EndIf`, `Loop`, `EndLoop`, `Break`, `BreakIf`, `Return`, `Trap`, `Call`.
+`EndIf`, `Loop`, `EndLoop`, `Break`, `BreakIf`, `Return`, `Trap`, `Call`, `WordToByte`, `ByteToWord`, `BoundsCheck`.
 
-**Remaining (30),** grouped below by what they actually cost.
+**Remaining (27),** grouped below by what they actually cost.
 
 Three entries in that list are **partial**, and the count treats them as lowered
 because the unsupported case is refused rather than mislowered: `Const` handles
@@ -692,3 +692,51 @@ SEQUENCE either way.
 That is a **Workstream D** decision (host ABI), and Workstream B should not be
 written against a guess at it. The mechanism is proven, the opcode shapes are
 measured, and the remaining blocker is a decision rather than a risk.
+
+## The `Byte` representation is settled; the unchecked opcodes are blocked on something else
+
+`WordToByte`, `ByteToWord` and `BoundsCheck` now lower. Two corrections follow.
+
+**The `Byte` representation is decided, and not by me.** The `v0.2.3` session
+measured that `Byte as Word` **zero-extends**, so `0xFF` reads as `255` rather
+than `-1`. A `Byte` therefore occupies a full `i64` slot holding `0..=255`, which
+makes `WordToByte` a mask and **`ByteToWord` a genuine no-op**. It is written as
+a no-op rather than as a redundant mask deliberately: if it ever needs to do
+work, the invariant has been broken somewhere else and masking here would hide
+that rather than fix it. This is the inventory item Group 1 recorded as
+"needs the `Byte` representation settled, including whether the extension is
+signed", and it was closed by a measurement from the other branch.
+
+**But that does NOT unblock `Add`, `Sub`, `Mul` and `Neg`, and the reason has
+changed.** Those four are reachable only for `Byte`, `Fixed` and `Float`. With
+`Byte` now settled, the remaining obstacle is that **the opcode does not say
+which type its operands are**, and the lowerings differ: a `Byte` add promotes,
+adds and masks to `0xFF`, while a `Fixed` add is a plain integer add of the raw
+bits with no mask. Choosing wrongly is silently wrong for every input above 255.
+
+So the blocker moved from "decide a representation" to "recover operand types",
+which is a different and larger problem — the auxiliary body's per-chunk
+signatures carry `WireShape` data, and the typed verifier already reconstructs
+operand shapes for exactly this purpose. Reusing that is the route. The inventory
+previously implied these were mechanical once `Byte` was decided; they are not.
+
+**`BoundsCheck` is unreachable from any compilable source.** It is emitted only
+for MULTI-LEVEL data-segment indexing, and only when the access is not
+single-level, because a single-level access lets the trailing
+`GetDataIndexed`/`SetDataIndexed` do the same check against a wider operand.
+Array indexing does not emit it either — `GetIndex` carries its own check. So it
+is tested by rewriting real bytecode, the same technique used for
+`PushImmediate`.
+
+Two properties of it that a plausible lowering gets wrong:
+
+- **It PEEKS, it does not pop.** The VM reads `stack.last()` and leaves the
+  operand for the indexing opcode that follows. A lowering that consumed it
+  leaves the next instruction reading the wrong slot, and the failure shows up as
+  a wrong VALUE rather than as an obvious stack error.
+- **The guard must be an UNSIGNED compare.** The VM rejects `value < 0 ||
+  value >= bound`; one `icmp uge` covers both, because a negative `i64`
+  reinterpreted as unsigned is enormous. A signed compare accepts every negative
+  index, and no in-range differential case would ever notice.
+
+Both are pinned by must-fire cases that were run and fail.

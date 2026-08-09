@@ -2,7 +2,7 @@
 //!
 //! # Scope
 //!
-//! This is an early subset: 36 of the instruction set's 66 opcodes. Everything
+//! This is an early subset: 39 of the instruction set's 66 opcodes. Everything
 //! else is refused rather than lowered to something plausible and wrong.
 //! Widening the subset is the work of subsequent increments, tracked in
 //! `docs/decisions/NATIVE_LOWERING_INVENTORY.md`.
@@ -192,6 +192,19 @@ impl<'ctx> Lower<'ctx> {
         let slot = self.slot(self.depth);
         self.b.build_store(slot, v).unwrap();
         self.depth += 1;
+    }
+
+    /// Read the top operand WITHOUT consuming it.
+    ///
+    /// Distinct from [`Lower::pop`] because `Op::BoundsCheck` peeks: the VM
+    /// reads `stack.last()` and leaves the operand for the indexing opcode that
+    /// follows.
+    fn peek(&mut self) -> IntValue<'ctx> {
+        let slot = self.slot(self.depth - 1);
+        self.b
+            .build_load(self.i64t, slot, "peek")
+            .unwrap()
+            .into_int_value()
     }
 
     fn pop(&mut self) -> IntValue<'ctx> {
@@ -914,6 +927,56 @@ fn lower_chunk_body<'ctx>(
                     }
                 };
                 st.push(ret);
+            }
+            // `Byte` occupies a full `i64` slot holding a value in `0..=255`.
+            // **That invariant is what makes `ByteToWord` free**, and it is the
+            // representation the reference implementation already implies: the
+            // `v0.2.3` session measured that `Byte as Word` zero-extends, so
+            // `0xFF` reads as `255` rather than `-1`.
+            //
+            // Every producer of a `Byte` must maintain the invariant. Today the
+            // only one is `WordToByte` below, which masks. The unchecked
+            // arithmetic opcodes would be the others, and they remain
+            // unsupported for an unrelated reason recorded in the inventory:
+            // `Op::Add` cannot be lowered without knowing whether its operands
+            // are `Byte` or `Fixed`, and the opcode does not say.
+            Op::WordToByte => {
+                let v = st.pop();
+                let m =
+                    st.b.build_and(v, i64t.const_int(0xFF, false), "tobyte")
+                        .unwrap();
+                st.push(m);
+            }
+            // A no-op, and deliberately written as one rather than as a
+            // redundant mask. If it ever needs to do work, the representation
+            // invariant above has been broken somewhere else and masking here
+            // would hide that rather than fix it.
+            Op::ByteToWord => {}
+            // Peek-and-trap. **`BoundsCheck` does NOT pop**; the VM reads
+            // `stack.last()` and leaves the operand in place for the indexing
+            // opcode that follows. A lowering that consumed it would corrupt
+            // every subsequent slot, and the differential oracle would show it
+            // as a wrong value rather than as a stack error.
+            //
+            // One UNSIGNED compare covers both failure directions. The VM
+            // rejects `value < 0 || value >= bound`; reinterpreting a negative
+            // `i64` as unsigned makes it enormous, so `uge bound` catches the
+            // negative case in the same instruction. `bound` is a `u16`, so it
+            // can never itself be large enough to make that reinterpretation
+            // ambiguous.
+            Op::BoundsCheck(bound) => {
+                let v = st.peek();
+                let cont = ctx.append_basic_block(func, "inbounds");
+                let bad =
+                    st.b.build_int_compare(
+                        IntPredicate::UGE,
+                        v,
+                        i64t.const_int(u64::from(*bound), false),
+                        "oob",
+                    )
+                    .unwrap();
+                st.b.build_conditional_branch(bad, trap_bb, cont).unwrap();
+                st.b.position_at_end(cont);
             }
             Op::Return => {
                 let v = st.pop();
