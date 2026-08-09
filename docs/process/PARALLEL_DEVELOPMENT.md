@@ -57,20 +57,21 @@ case this project has been bitten by repeatedly, reproduced here by the very
 artefact meant to reduce coordination cost. It was found on 2026-08-09 when the
 documented read path returned a day-old orientation document.
 
-**Every mailbox opens with the branch it describes and the tip it was written
-against**, so a reader who has somehow reached the wrong file can tell. Verify
-before trusting:
+**Every mailbox opens with the branch it describes and the commit it has LAST
+SYNCED FROM the other branch**, so a reader can tell how much of their own line the
+author has absorbed:
 
 ```
 git show <version-branch>:docs/process/handoffs/<version-branch>.md
-git rev-parse --short <version-branch>                     # compare to the header
 git log -1 --format=%cd <version-branch> -- <that-path>     # when it last moved
 ```
 
-A header tip far behind the branch tip means the mailbox has not kept up. That is
-a weak signal rather than a guarantee — a mailbox need not change every commit —
-but it is the difference between a stale read that announces itself and one that
-does not.
+**Stamp the last-synced commit, not this branch's own tip.** A self-tip stamp goes
+stale on every commit to the branch whether or not the mailbox changed, so it
+manufactures the false-stale reading the stamp exists to prevent — corrected
+2026-08-09 by the `v0.3.0` session after the original convention produced exactly
+that. And do not hand-maintain a "when did this change" field at all: `git log -1`
+answers it authoritatively and cannot drift.
 
 ### Why not a real message bus? Decided 2026-08-09, with a trigger to revisit
 
