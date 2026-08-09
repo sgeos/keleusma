@@ -2,10 +2,18 @@
 //!
 //! # Scope
 //!
-//! This is an early subset: 22 of the instruction set's 66 opcodes. Everything
+//! This is an early subset: 31 of the instruction set's 66 opcodes. Everything
 //! else is refused rather than lowered to something plausible and wrong.
 //! Widening the subset is the work of subsequent increments, tracked in
 //! `docs/decisions/NATIVE_LOWERING_INVENTORY.md`.
+//!
+//! The integer arithmetic surface is complete as of this increment, which is
+//! not the same set of opcodes it looks like. `Op::Add`, `Op::Sub`, `Op::Mul`
+//! and `Op::Neg` do **not** implement `Word` arithmetic; consolidation B
+//! narrowed them away from `Int` operands and the compiler emits
+//! `Checked{Add,Sub,Mul,Neg}; PopN(2)` instead. Those four unchecked opcodes
+//! remain unsupported here because they are reachable only for `Byte`, `Fixed`
+//! and `Float`, none of whose representations are settled.
 //!
 //! All 66 opcodes are emitted by the reference compiler, so there is no dead
 //! region of the instruction set to skip. Verified by enumeration, 2026-08-08.
@@ -136,6 +144,96 @@ impl<'ctx> Lower<'ctx> {
             .build_load(self.i64t, self.slots[self.depth], "pop")
             .unwrap()
             .into_int_value()
+    }
+
+    /// Sign-extend an operand into the 128-bit domain the checked arithmetic
+    /// opcodes compute in.
+    fn widen(&self, v: IntValue<'ctx>, i128t: IntType<'ctx>, name: &str) -> IntValue<'ctx> {
+        self.b.build_int_s_extend(v, i128t, name).unwrap()
+    }
+
+    /// Push the `(low, high, flag)` triple every integer checked arithmetic
+    /// opcode produces, given the exact result already computed in 128 bits.
+    ///
+    /// One helper serves add, subtract, negate and multiply because the VM
+    /// routes all four through the same `checked_arith_outputs` classifier
+    /// (`src/vm.rs`): only the wide expression differs. `low` is the
+    /// two's-complement-wrapped 64-bit result, `high` is the bits above it, and
+    /// `flag` is `0` in range, `1` above `i64::MAX`, `2` below `i64::MIN`.
+    ///
+    /// The shift below is arithmetic to mirror the VM's `>>` on `i128`, but
+    /// **the choice is unobservable here** and no test can distinguish it. Bit
+    /// `i` of the result is bit `i + 64` of the input for `i < 64` under both an
+    /// arithmetic and a logical shift; they differ only in bits 64 and above,
+    /// which the truncate to `i64` discards. Established by a must-fire case
+    /// that did not fire (2026-08-09) and then by the argument above, in that
+    /// order. Do not read a passing suite as evidence that the shift kind was
+    /// checked.
+    ///
+    /// This mirrors the classifier at `word_bits_log2 == 6` specifically, where
+    /// its `narrow` path is dead and `truncate_int_to_declared_width` is the
+    /// identity. [`check_word_width`] refuses every other width, so that
+    /// precondition is enforced rather than assumed.
+    fn push_checked_triple(
+        &mut self,
+        ctx: &'ctx Context,
+        func: FunctionValue<'ctx>,
+        trap_bb: BasicBlock<'ctx>,
+        opts: LowerOptions,
+        wide: IntValue<'ctx>,
+    ) {
+        let i64t = self.i64t;
+        let i128t = ctx.i128_type();
+
+        let low = self.b.build_int_truncate(wide, i64t, "low").unwrap();
+        let sh = self
+            .b
+            .build_right_shift(wide, i128t.const_int(64, false), true, "sh")
+            .unwrap();
+        let high = self.b.build_int_truncate(sh, i64t, "high").unwrap();
+
+        let maxv = i128t.const_int(i64::MAX as u64, false);
+        let minv = self
+            .b
+            .build_int_s_extend(i64t.const_int(i64::MIN as u64, true), i128t, "min")
+            .unwrap();
+        let ov = self
+            .b
+            .build_int_compare(IntPredicate::SGT, wide, maxv, "ov")
+            .unwrap();
+        let un = self
+            .b
+            .build_int_compare(IntPredicate::SLT, wide, minv, "un")
+            .unwrap();
+        let f2 = self
+            .b
+            .build_select(un, i64t.const_int(2, false), i64t.const_zero(), "f2")
+            .unwrap()
+            .into_int_value();
+        let flag = self
+            .b
+            .build_select(ov, i64t.const_int(1, false), f2, "flag")
+            .unwrap()
+            .into_int_value();
+
+        if opts.overflow == OverflowPolicy::Trap {
+            let cont = ctx.append_basic_block(func, "nooverflow");
+            let bad = self
+                .b
+                .build_int_compare(IntPredicate::NE, flag, i64t.const_zero(), "bad")
+                .unwrap();
+            self.b.build_conditional_branch(bad, trap_bb, cont).unwrap();
+            self.b.position_at_end(cont);
+        }
+
+        // Push order is low, high, flag, matching the VM at `src/vm.rs`. It is
+        // load-bearing: `Checked*; PopN(2)` discards flag and high specifically
+        // so that low survives as an uncaptured expression's value. Verified by
+        // execution, not taken from the opcode's doc comment, which was wrong
+        // about this until 2026-08-08.
+        self.push(low);
+        self.push(high);
+        self.push(flag);
     }
 }
 
@@ -284,56 +382,50 @@ pub fn lower_chunk<'ctx>(
             Op::PopN(n) => {
                 st.depth -= *n as usize;
             }
-            Op::CheckedAdd => {
+            // The integer arithmetic surface. `Op::Add`, `Op::Sub`, `Op::Mul`
+            // and `Op::Neg` are NOT part of it: consolidation B narrowed those
+            // four away from `Int` operands, so the compiler emits
+            // `Checked*; PopN(2)` for every `Word` expression and reserves the
+            // unchecked opcodes for `Byte`, `Fixed` and `Float`. Verified
+            // against `src/compiler.rs` and the VM's dispatch arms, which raise
+            // a type error on an `Int` reaching `Op::Add`.
+            Op::CheckedAdd | Op::CheckedSub => {
                 let rhs = st.pop();
                 let lhs = st.pop();
-                let a = st.b.build_int_s_extend(lhs, i128t, "a128").unwrap();
-                let c = st.b.build_int_s_extend(rhs, i128t, "b128").unwrap();
-                let sum = st.b.build_int_add(a, c, "s128").unwrap();
-
-                let low = st.b.build_int_truncate(sum, i64t, "low").unwrap();
-                let sh =
-                    st.b.build_right_shift(sum, i128t.const_int(64, false), true, "sh")
-                        .unwrap();
-                let high = st.b.build_int_truncate(sh, i64t, "high").unwrap();
-
-                let maxv = i128t.const_int(i64::MAX as u64, false);
-                let minv =
-                    st.b.build_int_s_extend(i64t.const_int(i64::MIN as u64, true), i128t, "min")
-                        .unwrap();
-                let ov =
-                    st.b.build_int_compare(IntPredicate::SGT, sum, maxv, "ov")
-                        .unwrap();
-                let un =
-                    st.b.build_int_compare(IntPredicate::SLT, sum, minv, "un")
-                        .unwrap();
-                let f2 =
-                    st.b.build_select(un, i64t.const_int(2, false), i64t.const_zero(), "f2")
-                        .unwrap()
-                        .into_int_value();
-                let flag =
-                    st.b.build_select(ov, i64t.const_int(1, false), f2, "flag")
-                        .unwrap()
-                        .into_int_value();
-
-                if opts.overflow == OverflowPolicy::Trap {
-                    let cont = ctx.append_basic_block(func, "nooverflow");
-                    let bad =
-                        st.b.build_int_compare(IntPredicate::NE, flag, i64t.const_zero(), "bad")
-                            .unwrap();
-                    st.b.build_conditional_branch(bad, trap_bb, cont).unwrap();
-                    st.b.position_at_end(cont);
-                }
-
-                // Push order is low, high, flag, matching the VM at
-                // `src/vm.rs`. It is load-bearing: `CheckedAdd; PopN(2)`
-                // discards flag and high specifically so that low survives as
-                // an uncaptured expression's value. Verified by execution, not
-                // taken from the opcode's doc comment, which was wrong about
-                // this until 2026-08-08.
-                st.push(low);
-                st.push(high);
-                st.push(flag);
+                let a = st.widen(lhs, i128t, "a128");
+                let c = st.widen(rhs, i128t, "b128");
+                let wide = match op {
+                    Op::CheckedAdd => st.b.build_int_add(a, c, "s128").unwrap(),
+                    _ => st.b.build_int_sub(a, c, "d128").unwrap(),
+                };
+                st.push_checked_triple(ctx, func, trap_bb, opts, wide);
+            }
+            // Both halves of the product are load-bearing for big-number
+            // multiplication, so the 128-bit product is computed in full rather
+            // than reduced to a 64-bit multiply with an overflow predicate.
+            //
+            // The `u8` operand is the Q-format fraction-bit count. The compiler
+            // emits `CheckedMul(0)` for `Word * Word`, and zero fraction bits is
+            // exactly integer multiply. A non-zero count is fixed-point, whose
+            // VM arm shifts the product and classifies through a different
+            // helper; it is refused here rather than lowered as if the operand
+            // were absent.
+            Op::CheckedMul(0) => {
+                let rhs = st.pop();
+                let lhs = st.pop();
+                let a = st.widen(lhs, i128t, "a128");
+                let c = st.widen(rhs, i128t, "b128");
+                let wide = st.b.build_int_mul(a, c, "p128").unwrap();
+                st.push_checked_triple(ctx, func, trap_bb, opts, wide);
+            }
+            // Negation in 128 bits rather than 64 is what makes `-i64::MIN`
+            // observable: at 64 bits it wraps to itself and the overflow flag
+            // would be unrecoverable.
+            Op::CheckedNeg => {
+                let v = st.pop();
+                let a = st.widen(v, i128t, "a128");
+                let wide = st.b.build_int_neg(a, "n128").unwrap();
+                st.push_checked_triple(ctx, func, trap_bb, opts, wide);
             }
             // Comparisons. The VM's `compare_op` pops the right operand first,
             // then the left, and compares left against right; the order below
