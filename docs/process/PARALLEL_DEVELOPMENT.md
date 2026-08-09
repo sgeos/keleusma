@@ -80,6 +80,32 @@ Rebasing rewrites history, so once `v0.3.0` is published each sync needs a
 sides, and the force-push hazard scales with how many sessions have built on the
 old history. A sync per increment is nearly free; a sync per week is not.
 
+#### Converting a merge-synced branch to a rebased one: the range is the trap
+
+If a branch was previously synced by **merging** the trunk in, then
+`git rebase --onto <new-base> <old-base>` is **the wrong range**, and it fails in
+a confusing place.
+
+`<old-base>` predates the commits that entered through the merge, so
+`<old-base>..HEAD` contains the *trunk's own* commits. The rebase then tries to
+replay the trunk's history back onto a base that already has a newer version of
+it, and conflicts in whatever file the trunk changed most recently — nowhere near
+the branch's actual work. This was hit for real on 2026-08-09: the conflict landed
+in `PARALLEL_DEVELOPMENT.md`, a file the branch had never touched.
+
+**Replay only the commits genuinely unique to the branch.** List them with
+`git log --no-merges --oneline <trunk>..<branch>` and cherry-pick that set onto the
+rebased base. The result is linear with no merge commits, and files that both sides
+edited in separate regions — `release-gate.sh` — come out carrying both changes.
+
+Once a branch is on the rebase policy this does not recur, because there are no
+merge commits to confuse the range. It is a one-time conversion hazard, and the
+habit that produces it is live as long as `GIT_STRATEGY.md` prescribes `--no-ff`.
+
+**Rehearse a history rewrite on throwaway refs before touching the real ones.**
+That is how the above was found rather than discovered mid-conflict. Setting
+`refs/backup/*` before starting costs nothing and makes any rewrite revertible.
+
 #### Feature branches into `v0.3.0` land FAST-FORWARD, not `--no-ff`
 
 Raised by the `v0.3.0` session, and it is a real gap one level below where the
