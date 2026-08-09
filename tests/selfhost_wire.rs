@@ -59,7 +59,27 @@ const WIRE_KEL: &str = include_str!("../src/selfhost/kel/wire.kel");
 
 /// `wire.bytes` capacity, matching the array declared in the source. A buffer
 /// longer than this is expected to trap rather than be truncated.
-const CAPACITY: usize = 4096;
+const CAPACITY: usize = 65536;
+
+/// Longest buffer the CRC corpus uses.
+///
+/// Deliberately far below `CAPACITY`. Slice 3 grew the array to 65536 to hold a
+/// full 1024-region directory, and running the whole corpus at that size would
+/// cost 8 x 65536 inner iterations per case in a debug build for no extra
+/// coverage — the checksum does not care how large the array is, only how many
+/// bytes it folds. The capacity boundary itself is exercised by a dedicated test.
+const CRC_CORPUS_MAX: usize = 4096;
+
+// Shared-block slot map. `set_shared` addresses slots, and the block is laid out
+// `len, bytes[65536], nregions, rkind[1024], rflags[1024], rlen[1024],
+// rcovers[1024], warg`. Every scalar was appended AFTER the byte array so that
+// `bytes[i]` stays at slot `1 + i` and no earlier seeding site moves.
+const NREGIONS_SLOT: usize = 1 + CAPACITY;
+const RKIND_SLOT: usize = NREGIONS_SLOT + 1;
+const RFLAGS_SLOT: usize = RKIND_SLOT + 1024;
+const RLEN_SLOT: usize = RFLAGS_SLOT + 1024;
+const RCOVERS_SLOT: usize = RLEN_SLOT + 1024;
+const WARG_SLOT: usize = RCOVERS_SLOT + 1024;
 
 /// Build a `Vm` over `src` with a persistent region sized for its private data.
 ///
@@ -110,11 +130,6 @@ fn crc_in_keleusma(src: &str, buf: &[u8]) -> i64 {
 
 // --- Slice 2 harness: emission and voting --------------------------------
 
-/// `wire.nregions` sits AFTER the byte array, so its slot is `1 + CAPACITY`.
-/// Appending scalars after the array is deliberate: prepending one would shift
-/// every `bytes[i]` slot and silently break every seeding site above.
-const NREGIONS_SLOT: usize = 1 + CAPACITY;
-
 /// Run command `cmd`, with `buf` pre-seeded into `bytes` and `nregions` set,
 /// and return both the result and the resulting byte array.
 fn run_cmd(
@@ -123,18 +138,48 @@ fn run_cmd(
     nregions: i64,
     seed: &[u8],
 ) -> Result<(i64, Vec<u8>), VmError> {
+    run_cmd_full(vm, cmd, nregions, seed, &[], 0, seed.len().max(64))
+}
+
+/// The general form: seed the byte array and the per-region input arrays, run
+/// `cmd`, and read back `read_len` bytes.
+///
+/// `read_len` is explicit because the array is 65536 slots and reading it all
+/// back through `get_shared` on every call would dominate the suite. Each test
+/// asks for the prefix it actually inspects.
+fn run_cmd_full(
+    vm: &mut Vm<'static, 'static>,
+    cmd: i64,
+    nregions: i64,
+    seed: &[u8],
+    regions: &Regions,
+    warg: i64,
+    read_len: usize,
+) -> Result<(i64, Vec<u8>), VmError> {
     let mut shared = vec![0u8; vm.shared_data_bytes()];
     vm.set_shared(&mut shared, 0, Value::Int(seed.len() as i64))?;
     vm.set_shared(&mut shared, NREGIONS_SLOT, Value::Int(nregions))?;
+    vm.set_shared(&mut shared, WARG_SLOT, Value::Int(warg))?;
     for (i, byte) in seed.iter().enumerate() {
         vm.set_shared(&mut shared, 1 + i, Value::Byte(*byte))?;
+    }
+    for (i, (kind, flags, len, covers)) in regions.iter().enumerate() {
+        vm.set_shared(&mut shared, RKIND_SLOT + i, Value::Int(i64::from(*kind)))?;
+        vm.set_shared(&mut shared, RFLAGS_SLOT + i, Value::Int(i64::from(*flags)))?;
+        vm.set_shared(&mut shared, RLEN_SLOT + i, Value::Int(*len as i64))?;
+        vm.set_shared(
+            &mut shared,
+            RCOVERS_SLOT + i,
+            Value::Int(i64::from(*covers)),
+        )?;
     }
     let ret = match vm.call_with_shared(&mut shared, &[Value::Int(cmd)])? {
         VmState::Finished(Value::Int(n)) => n,
         other => panic!("unexpected VM state: {other:?}"),
     };
-    let mut out = Vec::with_capacity(CAPACITY);
-    for i in 0..CAPACITY {
+    let n = read_len.min(CAPACITY);
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
         match vm.get_shared(&shared, 1 + i)? {
             Value::Byte(b) => out.push(b),
             other => panic!("slot {i} is not a Byte: {other:?}"),
@@ -208,7 +253,7 @@ fn corpus() -> Vec<(String, Vec<u8>)> {
         ("all ones, 64".into(), vec![0xFF; 64]),
         ("ascending 0..=255".into(), (0..=255u8).collect()),
         ("descending 255..=0".into(), (0..=255u8).rev().collect()),
-        ("at capacity".into(), vec![0xA5; CAPACITY]),
+        ("longest corpus buffer".into(), vec![0xA5; CRC_CORPUS_MAX]),
     ];
 
     // Pseudorandom buffers over a spread of lengths, including lengths either
@@ -243,8 +288,8 @@ fn the_corpus_covers_what_it_claims_to() {
         "no long buffer, so the loop is only exercised over short inputs"
     );
     assert!(
-        c.iter().any(|(_, b)| b.len() == CAPACITY),
-        "nothing at the array capacity, so the `limit` boundary is untested"
+        c.iter().any(|(_, b)| b.len() == CRC_CORPUS_MAX),
+        "nothing at the corpus maximum, so the long-buffer path is untested"
     );
     // Distinct inputs must give distinct checksums, or the harness is ignoring
     // its input and every later agreement is vacuous.
@@ -704,4 +749,281 @@ fn slice_one_still_answers_after_the_command_dispatch() {
     let mut vm = vm_for(WIRE_KEL);
     let (got, _) = run_cmd(&mut vm, CMD_CRC, 0, b"123456789").expect("run");
     assert_eq!(got as u32, 0xCBF4_3926);
+}
+
+// =========================================================================
+// SLICE 3 — the region directory
+// =========================================================================
+
+const CMD_DIR_KIND: i64 = 9;
+const CMD_FIND: i64 = 5;
+const CMD_DIR_DISAGREED: i64 = 6;
+const CMD_DIR_WORD_OFFSET: i64 = 7;
+const CMD_DIR_WORD_LEN: i64 = 8;
+const CMD_EMIT_HEADER: i64 = 10;
+
+/// One region's directory inputs: `(kind, flags, payload_len_bytes, covers)`.
+type RegionSpec = (u16, u16, usize, u16);
+/// A slice of region specs, as the emitter consumes them.
+type Regions = [RegionSpec];
+/// Named region sets for the differential corpus.
+type NamedRegionSets = Vec<(String, Vec<RegionSpec>)>;
+
+/// The header area (three prologues plus three directory copies) the reference
+/// emits for these regions, and the full artifact it emits.
+fn reference_artifact(regions: &Regions) -> Vec<u8> {
+    let mut b = keleusma_wire::WireBuilder::new();
+    for (kind, flags, len, _covers) in regions {
+        let id = b.region(*kind, *flags).expect("declare region");
+        b.push(id, &vec![0u8; *len]);
+    }
+    b.finish().expect("finish")
+}
+
+fn header_len(n: usize) -> usize {
+    48 + 48 * n
+}
+
+/// A spread of region sets, including payload lengths that are NOT multiples of
+/// eight. The rounding in `words_for` is correct for a multiple of eight either
+/// way, so a corpus without the awkward lengths cannot see a dropped round-up.
+fn region_sets() -> NamedRegionSets {
+    let mut out: NamedRegionSets = vec![
+        ("none".into(), vec![]),
+        ("one empty".into(), vec![(1, 0, 0, 0)]),
+    ];
+    out.push((
+        "lengths across the word boundary".into(),
+        vec![
+            (1, 0, 1, 0),
+            (2, 0, 7, 0),
+            (3, 0, 8, 0),
+            (4, 0, 9, 0),
+            (5, 0, 15, 0),
+            (6, 0, 16, 0),
+        ],
+    ));
+    out.push((
+        "flags set".into(),
+        vec![(10, 0b0100, 32, 0), (11, 0b0001, 5, 0)],
+    ));
+    let mut many: Vec<RegionSpec> = Vec::new();
+    for i in 0..64u16 {
+        many.push((100 + i, 0, (i as usize * 3) % 17, 0));
+    }
+    out.push(("sixty-four regions".into(), many));
+    out
+}
+
+#[test]
+fn the_region_sets_include_lengths_that_are_not_multiples_of_eight() {
+    // Vacuity guard for the corpus itself: without an awkward length, dropping
+    // the round-up in `words_for` is undetectable.
+    let awkward = region_sets()
+        .iter()
+        .flat_map(|(_, rs)| rs.iter().map(|(_, _, l, _)| *l).collect::<Vec<_>>())
+        .filter(|l| l % 8 != 0)
+        .count();
+    assert!(
+        awkward >= 5,
+        "only {awkward} non-multiple-of-8 payload lengths"
+    );
+}
+
+#[test]
+fn the_emitted_header_is_byte_identical_to_the_reference() {
+    let mut vm = vm_for(WIRE_KEL);
+    for (name, rs) in region_sets() {
+        let want = reference_artifact(&rs);
+        let hl = header_len(rs.len());
+        let (written, got) =
+            run_cmd_full(&mut vm, CMD_EMIT_HEADER, rs.len() as i64, &[], &rs, 0, hl).expect("run");
+        assert_eq!(written, hl as i64, "{name}: wrong header length reported");
+        assert_eq!(
+            got,
+            want[..hl],
+            "{name}: emitted header differs from the reference"
+        );
+    }
+}
+
+#[test]
+fn the_emitted_artifact_is_accepted_by_the_reference_reader() {
+    // The complementary direction. Payloads are all zero and the buffer starts
+    // zeroed, so reading back the reference's full length yields a complete
+    // artifact built by Keleusma.
+    let mut vm = vm_for(WIRE_KEL);
+    for (name, rs) in region_sets() {
+        let want = reference_artifact(&rs);
+        let (_, got) = run_cmd_full(
+            &mut vm,
+            CMD_EMIT_HEADER,
+            rs.len() as i64,
+            &[],
+            &rs,
+            0,
+            want.len(),
+        )
+        .expect("run");
+        assert_eq!(got, want, "{name}: whole artifact differs");
+        let view = keleusma_wire::WireView::parse(&got).expect("reference must accept it");
+        assert_eq!(
+            view.region_count() as usize,
+            rs.len(),
+            "{name}: region count"
+        );
+        assert!(!view.needs_scrub(), "{name}: fresh artifact needs no scrub");
+    }
+}
+
+#[test]
+fn the_keleusma_reader_recovers_every_regions_offset_length_and_kind() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (_, rs) = region_sets()
+        .into_iter()
+        .find(|(n, _)| n == "lengths across the word boundary")
+        .expect("case");
+    let hl = header_len(rs.len());
+    // Emit once, then read the emitted bytes back in as the input for each query,
+    // since every call gets a fresh shared buffer.
+    let (_, image) =
+        run_cmd_full(&mut vm, CMD_EMIT_HEADER, rs.len() as i64, &[], &rs, 0, hl).expect("emit");
+
+    let mut cursor = 6 * (rs.len() + 1); // header_words
+    for (i, (kind, _flags, len, _)) in rs.iter().enumerate() {
+        let words = len.div_ceil(8);
+        for (cmd, want, what) in [
+            (CMD_DIR_WORD_OFFSET, cursor as i64, "word offset"),
+            (CMD_DIR_WORD_LEN, words as i64, "word length"),
+            (CMD_DIR_KIND, i64::from(*kind), "kind"),
+        ] {
+            let (got, _) = run_cmd_full(&mut vm, cmd, rs.len() as i64, &image, &[], i as i64, 0)
+                .expect("read");
+            assert_eq!(got, want, "region {i}: {what}");
+        }
+        cursor += words;
+    }
+}
+
+#[test]
+fn dir_find_locates_each_kind_and_reports_an_absent_one() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (_, rs) = region_sets()
+        .into_iter()
+        .find(|(n, _)| n == "sixty-four regions")
+        .expect("case");
+    let hl = header_len(rs.len());
+    let (_, image) =
+        run_cmd_full(&mut vm, CMD_EMIT_HEADER, rs.len() as i64, &[], &rs, 0, hl).expect("emit");
+    for (i, (kind, ..)) in rs.iter().enumerate() {
+        let (got, _) = run_cmd_full(
+            &mut vm,
+            CMD_FIND,
+            rs.len() as i64,
+            &image,
+            &[],
+            i64::from(*kind),
+            0,
+        )
+        .expect("find");
+        assert_eq!(got, i as i64, "kind {kind} should be at index {i}");
+    }
+    let (missing, _) =
+        run_cmd_full(&mut vm, CMD_FIND, rs.len() as i64, &image, &[], 9999, 0).expect("find");
+    assert_eq!(missing, -1, "an absent kind must report not-found");
+}
+
+// --- must-fire ------------------------------------------------------------
+
+#[test]
+fn dropping_the_word_rounding_is_reported() {
+    // `words_for` without the round-up is correct for every multiple of eight
+    // and wrong otherwise, so this simultaneously checks the code and proves the
+    // corpus carries awkward lengths.
+    let mutant = mutate(WIRE_KEL, "    (nbytes + 7) lsr 3", "    nbytes lsr 3");
+    let mut vm = vm_for(&mutant);
+    let mut disagreed = 0;
+    for (_, rs) in region_sets() {
+        let want = reference_artifact(&rs);
+        let hl = header_len(rs.len());
+        let (_, got) =
+            run_cmd_full(&mut vm, CMD_EMIT_HEADER, rs.len() as i64, &[], &rs, 0, hl).expect("run");
+        if got != want[..hl] {
+            disagreed += 1;
+        }
+    }
+    assert!(
+        disagreed >= 3,
+        "dropping the word round-up went unreported on all but {disagreed} region sets"
+    );
+}
+
+#[test]
+fn a_wrong_starting_cursor_is_reported() {
+    let mutant = mutate(WIRE_KEL, "    6 * (n + 1)", "    6 * (n + 2)");
+    let mut vm = vm_for(&mutant);
+    let rs: Vec<RegionSpec> = vec![(1, 0, 8, 0), (2, 0, 8, 0)];
+    let want = reference_artifact(&rs);
+    let hl = header_len(rs.len());
+    let (_, got) =
+        run_cmd_full(&mut vm, CMD_EMIT_HEADER, rs.len() as i64, &[], &rs, 0, hl).expect("run");
+    assert_ne!(got, want[..hl], "a wrong header_words went unreported");
+}
+
+// --- the vote, and the bootstrap that makes it possible -------------------
+
+#[test]
+fn a_single_corrupt_directory_copy_is_outvoted_and_reported() {
+    let mut vm = vm_for(WIRE_KEL);
+    let rs: Vec<RegionSpec> = vec![(7, 0, 24, 0), (9, 0, 40, 0)];
+    let hl = header_len(rs.len());
+    let (_, good) =
+        run_cmd_full(&mut vm, CMD_EMIT_HEADER, rs.len() as i64, &[], &rs, 0, hl).expect("emit");
+    let span = rs.len() * 16;
+    for copy in 0..3usize {
+        for at in 0..span {
+            let mut buf = good.clone();
+            buf[48 + copy * span + at] ^= 0x20;
+            let (kind, _) = run_cmd_full(&mut vm, CMD_DIR_KIND, rs.len() as i64, &buf, &[], 0, 0)
+                .expect("read");
+            assert_eq!(kind, 7, "copy {copy} byte {at}: kind was not outvoted");
+            let (dis, _) =
+                run_cmd_full(&mut vm, CMD_DIR_DISAGREED, rs.len() as i64, &buf, &[], 0, 0)
+                    .expect("scrub");
+            assert_eq!(dis, 1, "copy {copy} byte {at}: damage not reported");
+        }
+    }
+}
+
+#[test]
+fn the_directory_is_still_read_when_a_prologue_copy_carries_a_damaged_region_count() {
+    // THE BOOTSTRAP CASE. The directory's stride comes from `region_count`, which
+    // lives in the prologue. If the stride were taken from an unvoted copy, a
+    // fault in that field would misplace every directory copy. Damaging each of
+    // the three copies in turn is what distinguishes a correct two-stage vote
+    // from one that happens to read the undamaged copy first.
+    let mut vm = vm_for(WIRE_KEL);
+    let rs: Vec<RegionSpec> = vec![(21, 0, 16, 0), (22, 0, 16, 0), (23, 0, 16, 0)];
+    let hl = header_len(rs.len());
+    let (_, good) =
+        run_cmd_full(&mut vm, CMD_EMIT_HEADER, rs.len() as i64, &[], &rs, 0, hl).expect("emit");
+
+    for copy in 0..3usize {
+        let mut buf = good.clone();
+        // Corrupt the region-count field (prologue offset 8) in one copy only.
+        buf[copy * 16 + 8] ^= 0x08;
+        // The prologue vote must still recover 3.
+        let (n, _) = run_cmd_full(&mut vm, CMD_PARSE_PROLOGUE, 3, &buf, &[], 0, 0).expect("parse");
+        assert_eq!(n, 3, "copy {copy}: region count not recovered");
+        // And with that count, every directory entry must still read correctly.
+        for (i, (kind, ..)) in rs.iter().enumerate() {
+            let (got, _) =
+                run_cmd_full(&mut vm, CMD_DIR_KIND, 3, &buf, &[], i as i64, 0).expect("read");
+            assert_eq!(
+                got,
+                i64::from(*kind),
+                "copy {copy}: entry {i} misread after a damaged region count"
+            );
+        }
+    }
 }

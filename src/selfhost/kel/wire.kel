@@ -43,13 +43,23 @@ require word >= 64;
 // appended AFTER the array so that mapping does not shift; `lexer.kel` orders its
 // shared block the same way and for the same reason.
 //
-// The capacity is a harness parameter. It is ample for the prologue, which is 48
-// bytes across all three copies, and will have to grow for the region directory,
-// which reaches 49200 bytes at the format's 1024-region ceiling.
+// The capacity is 65536, which clears the header area at the format's 1024-region
+// ceiling (48 + 48 * 1024 = 49200 bytes) with room for a small payload. The
+// shared segment's own ceiling is 16 MB, so this is not close to a limit.
 shared data wire {
     len: Word,
-    bytes: [Byte; 4096],
+    bytes: [Byte; 65536],
     nregions: Word,
+    // Per-region inputs to the directory emitter, indexed 0..nregions. `rlen` is
+    // the payload length in BYTES; the emitter converts to words. `rcovers` is
+    // meaningful only for a parity plane and is zero otherwise.
+    rkind: [Word; 1024],
+    rflags: [Word; 1024],
+    rlen: [Word; 1024],
+    rcovers: [Word; 1024],
+    // A general argument for commands that take one (a region index, a kind to
+    // look up). Appended last so no existing slot index moves.
+    warg: Word,
 }
 
 // The running checksum. It lives in a data block because locals are immutable:
@@ -65,6 +75,9 @@ private data crc {
 // iterations for the same reason the checksum does.
 private data st {
     dis: Word,
+    // The running word cursor while emitting the directory. A local cannot carry
+    // it across iterations, for the same reason the checksum accumulator cannot.
+    cur: Word,
 }
 
 // THE RANGE INVARIANT, which is why no masking appears below.
@@ -116,12 +129,12 @@ fn crc_end() -> Word {
 // Checksum `wire.bytes[at .. at + n]`.
 //
 // The `limit` equals the array capacity, so the loop is statically bounded at
-// 4096 iterations of eight inner steps. An `n` beyond the capacity overruns the
+// 65536 iterations of eight inner steps. An `n` beyond the capacity overruns the
 // cap and traps, which is the fail-loud default and is preferable to checksumming
 // a silently truncated prefix.
 fn crc_range(at: Word, n: Word) -> Word {
     crc_begin();
-    for i in 0..n limit 4096 {
+    for i in 0..n limit 65536 {
         crc_fold(wire.bytes[at + i] as Word);
     }
     crc_end()
@@ -288,6 +301,140 @@ fn parse_prologue() -> Word {
     voted_u16(8) } } } } }
 }
 
+
+// --- SLICE 3: the region directory ----------------------------------------
+//
+// Three copies of an n-entry table live at byte 48, each entry 16 bytes:
+//
+//   0  u16  kind          8  u32  word length
+//   2  u16  flags        12  u16  covers (parity planes only)
+//   4  u32  word offset  14  u16  reserved, zero
+//
+// THE BOOTSTRAP IS THE PART THAT MATTERS. The directory's stride is
+// `region_count * 16`, and `region_count` lives in the prologue. So the
+// directory can only be located after the PROLOGUE vote has recovered that
+// field. Taking the stride from an unvoted copy would desynchronise the search
+// for the very copies that repair it, which is the reason the prologue is a
+// separate fixed-size record in the first place.
+
+// Words occupied by the whole header area: three copies of an n-entry directory
+// plus the three 16-byte prologues. `48 + 48n` is always a multiple of 8, so
+// this is exact and needs no rounding, unlike a payload length.
+fn header_words(n: Word) -> Word {
+    6 * (n + 1)
+}
+
+// Bytes in one directory copy.
+fn dir_span() -> Word {
+    wire.nregions lsl 4
+}
+
+// Payload bytes rounded up to whole words. The rounding is the part a
+// transliteration drops: it is correct for a multiple of eight either way, and
+// wrong for everything else.
+fn words_for(nbytes: Word) -> Word {
+    (nbytes + 7) lsr 3
+}
+
+// Write the three directory copies and return the header area's byte length.
+// Offsets accumulate in emit order, starting past the header, exactly as the
+// reference does before it writes a single byte.
+fn emit_directory(n: Word) -> Word {
+    st.cur = header_words(n);
+    for i in 0..n limit 1024 {
+        put_u16(48 + (i lsl 4), wire.rkind[i]);
+        put_u16(48 + (i lsl 4) + 2, wire.rflags[i]);
+        put_u32(48 + (i lsl 4) + 4, st.cur);
+        put_u32(48 + (i lsl 4) + 8, words_for(wire.rlen[i]));
+        put_u16(48 + (i lsl 4) + 12, wire.rcovers[i]);
+        put_u16(48 + (i lsl 4) + 14, 0);
+        st.cur = st.cur + words_for(wire.rlen[i]);
+    }
+    for i in 0..(n lsl 4) limit 16384 {
+        wire.bytes[48 + (n lsl 4) + i] = wire.bytes[48 + i];
+        wire.bytes[48 + ((n lsl 4) lsl 1) + i] = wire.bytes[48 + i];
+    }
+    48 + (3 * (n lsl 4))
+}
+
+// One voted byte of directory copy-space, at entry `i`, field offset `off`.
+fn dir_voted_byte(i: Word, off: Word) -> Word {
+    maj3(
+        wire.bytes[48 + (i lsl 4) + off] as Word,
+        wire.bytes[48 + dir_span() + (i lsl 4) + off] as Word,
+        wire.bytes[48 + (dir_span() lsl 1) + (i lsl 4) + off] as Word,
+    )
+}
+
+fn dir_u16(i: Word, off: Word) -> Word {
+    dir_voted_byte(i, off) + (dir_voted_byte(i, off + 1) lsl 8)
+}
+
+fn dir_u32(i: Word, off: Word) -> Word {
+    dir_voted_byte(i, off)
+        + (dir_voted_byte(i, off + 1) lsl 8)
+        + (dir_voted_byte(i, off + 2) lsl 16)
+        + (dir_voted_byte(i, off + 3) lsl 24)
+}
+
+// 1 when any directory copy disagrees with the vote. Same scrub trigger as the
+// prologue's, over the whole copy-space rather than one record.
+fn directory_disagreed() -> Word {
+    st.dis = 0;
+    for i in 0..dir_span() limit 16384 {
+        st.dis = st.dis
+            bor neq(
+                wire.bytes[48 + i] as Word,
+                maj3(
+                    wire.bytes[48 + i] as Word,
+                    wire.bytes[48 + dir_span() + i] as Word,
+                    wire.bytes[48 + (dir_span() lsl 1) + i] as Word,
+                ),
+            )
+            bor neq(
+                wire.bytes[48 + dir_span() + i] as Word,
+                maj3(
+                    wire.bytes[48 + i] as Word,
+                    wire.bytes[48 + dir_span() + i] as Word,
+                    wire.bytes[48 + (dir_span() lsl 1) + i] as Word,
+                ),
+            )
+            bor neq(
+                wire.bytes[48 + (dir_span() lsl 1) + i] as Word,
+                maj3(
+                    wire.bytes[48 + i] as Word,
+                    wire.bytes[48 + dir_span() + i] as Word,
+                    wire.bytes[48 + (dir_span() lsl 1) + i] as Word,
+                ),
+            );
+    }
+    st.dis
+}
+
+// Emit the whole header area: the three prologue copies, then the three
+// directory copies. One call because the two share a buffer and a caller has no
+// reason to want half a header; also the shape a real emitter takes, which fills
+// the header before any payload.
+fn emit_header() -> Word {
+    emit_prologue(wire.nregions);
+    emit_directory(wire.nregions)
+}
+
+// Index of the first region with `kind`, or 0 - 1 when absent. A linear scan is
+// right here: the ceiling is 1024, the container assigns no ordering to kinds,
+// and a bounded scan keeps the worst case obvious.
+fn dir_find(kind: Word) -> Word {
+    st.cur = 0 - 1;
+    for i in 0..wire.nregions limit 1024 {
+        st.cur = if st.cur == 0 - 1 {
+            if dir_u16(i, 0) == kind { i } else { 0 - 1 }
+        } else {
+            st.cur
+        };
+    }
+    st.cur
+}
+
 // The host drives the module through a one-argument entry point, so the argument
 // selects the operation. An unrecognised command returns a distinct code rather
 // than a plausible value, so a caller that passes the wrong one finds out.
@@ -296,10 +443,24 @@ fn parse_prologue() -> Word {
 //   1  emit the prologue for `nregions`, returning bytes written
 //   2  validate the voted prologue, returning the region count or a negative code
 //   3  report whether any prologue copy disagreed with the vote
+//   4  emit the directory for `nregions`, returning the header byte length
+//   5  find the region index whose kind is `warg`, or 0 - 1
+//   6  report whether any directory copy disagreed with the vote
+//   7  the voted word offset of region `warg`
+//   8  the voted word length of region `warg`
+//   9  the voted kind of region `warg`
+//  10  emit the whole header area, returning its byte length
 fn main(cmd: Word) -> Word {
     if cmd == 0 { crc_range(0, wire.len) } else {
     if cmd == 1 { emit_prologue(wire.nregions) } else {
     if cmd == 2 { parse_prologue() } else {
     if cmd == 3 { prologue_disagreed() } else {
-    0 - 99 } } } }
+    if cmd == 4 { emit_directory(wire.nregions) } else {
+    if cmd == 5 { dir_find(wire.warg) } else {
+    if cmd == 6 { directory_disagreed() } else {
+    if cmd == 7 { dir_u32(wire.warg, 4) } else {
+    if cmd == 8 { dir_u32(wire.warg, 8) } else {
+    if cmd == 9 { dir_u16(wire.warg, 0) } else {
+    if cmd == 10 { emit_header() } else {
+    0 - 99 } } } } } } } } } } }
 }
