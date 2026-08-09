@@ -106,6 +106,34 @@ rather than codegen. "Probably safe" is how the two coverage holes above were ma
 saving is roughly two-fold where batching gives five-fold at no cost to coverage. Take the
 batching. Narrowing the matrix is an operator decision, not the loop's.
 
+### Run the gate in a worktree, not in the tree you are working in
+
+`scripts/release-gate.sh` reads the working tree, so running it directly freezes development
+for its whole duration. At ~2h33m per merge that was the largest single calendar-time cost in
+the loop, and it bought nothing: the gate is answering a question about one commit.
+
+`scripts/gate-in-worktree.sh <commit>` runs it in a **detached worktree pinned to that
+commit**, with its own `CARGO_TARGET_DIR`. Two things improve at once:
+
+- **The main tree stays free.** Slice N+1 is developed while slice N gates.
+- **The result is pinned by construction.** "A gate result is valid only for the tip it ran
+  against" stops being a discipline someone has to remember and becomes a property of the
+  mechanism — the same mechanism-over-procedure argument made below about CI. The script
+  re-checks that the tree is at the requested commit and refuses if it is dirty.
+
+**On the canary, which is the obvious objection.** This deliberately introduces concurrent
+load, and `tests/perf_canary.rs` wants a quiet machine. Accept it, because the error is
+directional: **load can only make the canary slower.** It can therefore produce a false
+positive, costing one re-run, and it cannot produce a false negative, which is the failure
+that would matter. A real regression stays visible under load.
+
+**`--setup-only` prepares and verifies the worktree without running the gate.** It exists so
+the setup path is testable without a 2.5-hour run, and it earned that on its first use: the
+reuse check compared an unnormalised path against git's resolved one, so the second
+invocation — the common case — tried to re-create an existing worktree and died. A guard that
+has not been shown to work is not a guard, and that applies to the tooling around the gate as
+much as to the gate.
+
 ### A green suite cannot see a performance regression
 
 On 2026-08-08 the wire-format v2 cutover was merged only after this was learned the hard way:
