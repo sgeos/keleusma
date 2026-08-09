@@ -15,6 +15,19 @@
 //! case that exercises one side of a branch proves nothing about the other.**
 //! When adding an opcode, add inputs that distinguish its paths, and satisfy
 //! yourself that each new case can actually fail.
+//!
+//! # Vocabulary
+//!
+//! "Negative control" is used in two opposite senses in ordinary speech and both
+//! appeared in this file, so it is avoided here in favour of an unambiguous pair:
+//!
+//! | Name | Input | Catches a check that is |
+//! |---|---|---|
+//! | **must-fire case** | defect known PRESENT | too STRICT (never fires) |
+//! | **must-not-fire case** | defect known ABSENT | too LOOSE (fires spuriously) |
+//!
+//! A structural check needs BOTH. A must-fire case shows the check *can* fire;
+//! it cannot show the check fires *only* when it should.
 
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
@@ -145,7 +158,7 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
 /// make each of these fail for a reason unrelated to what it is testing.
 /// The else branch is `b + b`, not `b`, and that asymmetry is load-bearing.
 ///
-/// An earlier version used `{ a } else { b }`. It passed a negative control
+/// An earlier version used `{ a } else { b }`. It passed a must-fire case
 /// that swapped `SLT` for `SLE`, because the two predicates differ only when
 /// `a == b`, and at `a == b` both branches return the same value. The test was
 /// vacuous with respect to exactly the distinction it claimed to draw. With
@@ -163,7 +176,7 @@ const CMP_SOURCES: &[&str] = &[
 #[test]
 fn every_comparison_agrees_with_the_vm() {
     // The equal cases are the discriminating ones, and they only discriminate
-    // because the branches differ. Confirmed by control: swapping SLT for SLE
+    // because the branches differ. Confirmed by a must-fire case: swapping SLT for SLE
     // now fails here, and did not before.
     for src in CMP_SOURCES {
         for args in [[2, 3], [9, 4], [5, 5], [i64::MIN, i64::MAX], [-3, -3]] {
@@ -236,7 +249,7 @@ fn the_shift_lowering_masks_the_count_structurally() {
     // RUNTIME BEHAVIOUR CANNOT DEMONSTRATE THIS, which is why the assertion is
     // structural rather than differential.
     //
-    // Established by negative control on 2026-08-08: deleting the mask from the
+    // Established by a must-fire case on 2026-08-08: deleting the mask from the
     // lowering left every behavioural shift case passing. AArch64's
     // shift-by-register instruction masks the count to its low six bits in
     // hardware, so an unmasked LLVM shift produces identical results on this
@@ -252,24 +265,58 @@ fn the_shift_lowering_masks_the_count_structurally() {
     ] {
         let ir = lowered_ir(src);
 
-        // Assert the shift CONSUMES the mask, not merely that a mask exists
-        // somewhere in the function. An earlier version of this assertion
-        // checked `ir.contains("and i64")`, and passed its own negative control:
-        // deleting the mask from the shift operand leaves the `and` computed
-        // but unused, so the text was still present. Checking for the presence
-        // of a value proves nothing about whether anything reads it.
-        let shift = ir
-            .lines()
-            .find(|l| l.contains(" shl i64 ") || l.contains(" ashr i64 "))
-            .unwrap_or_else(|| panic!("no shift instruction in emitted IR:\n{ir}"));
-        assert!(
-            shift.contains("%shmask"),
+        // MUST-NOT-FIRE CASE: defect known absent. The real lowering masks, so
+        // the check must stay silent.
+        assert_eq!(
+            shift_takes_masked_count(&ir),
+            Some(true),
             "the shift must take the MASKED count as its operand, not the raw \
              one. Behavioural tests cannot catch this on AArch64, whose \
-             shift-by-register masks in hardware. Shift instruction was:\n  \
-             {shift}\nfull IR:\n{ir}"
+             shift-by-register masks in hardware. IR was:\n{ir}"
+        );
+
+        // MUST-FIRE CASE: defect known present. Mutate the emitted IR so the
+        // shift consumes the raw count and require the check to notice.
+        //
+        // This encodes permanently a control that was previously an ad-hoc
+        // shell edit, run once by hand and preserved nowhere. Without it the
+        // predicate could become too strict -- always reporting the mask
+        // present -- and the must-not-fire case above would pass forever
+        // without noticing, which is exactly how the earlier
+        // `ir.contains("and i64")` version survived.
+        let mutated: Vec<String> = ir
+            .lines()
+            .map(|l| {
+                if l.contains(" shl i64 ") || l.contains(" ashr i64 ") {
+                    l.replace("%shmask", "%rawcount")
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect();
+        assert_eq!(
+            shift_takes_masked_count(&mutated.join("\n")),
+            Some(false),
+            "the mask check does not discriminate: it reported a masked shift \
+             for IR whose shift takes the raw count."
         );
     }
+}
+
+/// Does the shift instruction take the MASKED count as its operand?
+///
+/// `None` means no shift was found at all. Returning `Some(false)` is the check
+/// FIRING: it has detected the defect.
+///
+/// Asserting that a mask exists somewhere in the function is not enough. An
+/// earlier version checked `ir.contains("and i64")` and passed its must-fire
+/// case, because removing the mask from the shift OPERAND leaves the `and`
+/// computed and merely unused. The presence of a value says nothing about
+/// whether anything reads it.
+fn shift_takes_masked_count(ir: &str) -> Option<bool> {
+    ir.lines()
+        .find(|l| l.contains(" shl i64 ") || l.contains(" ashr i64 "))
+        .map(|l| l.contains("%shmask"))
 }
 
 /// Loops, and the two structural cases the design predicted.
@@ -307,7 +354,7 @@ fn has_back_edge(ir: &str) -> bool {
     //     the `trap` block, which is emitted near the top.
     // (3) "a pred defined later in the text" failed the same way, for the same
     //     block, in the other direction.
-    // Each was caught only by running the control. The lesson is that loop
+    // Each was caught only by running a must-fire case. The lesson is that loop
     // structure is not recoverable from text position; build the graph.
     let mut edges: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     let mut nodes: Vec<&str> = Vec::new();
@@ -374,8 +421,9 @@ fn the_range_for_lowering_actually_emits_a_back_edge() {
          the loop would pass every behavioural case in this file. IR was:\n{ir}"
     );
 
-    // Control on the control: a straight-line function must NOT report one, or
-    // the predicate is trivially true and proves nothing.
+    // MUST-NOT-FIRE CASE: defect known absent. Straight-line code has no cycle,
+    // so the check must stay silent. Without this the predicate could be
+    // trivially true and prove nothing.
     let straight = lowered_ir("fn main(a: Word, b: Word) -> Word { a + b }");
     assert!(
         !has_back_edge(&straight),

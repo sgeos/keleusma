@@ -269,7 +269,22 @@ passed straight through: `maxi(2, 3)` takes the else path and was correct, while
 that distinguish its paths and satisfy yourself that each case can actually
 fail.
 
-### Negative controls, run 2026-08-08, and what they found
+### Vocabulary, because "negative control" collided with itself
+
+This document used "negative control" in two opposite senses, and so did the
+tests. Both are replaced by an unambiguous pair, and the same pair is now used on
+the `v0.2.3` line:
+
+| Name | Input | Catches a check that is |
+|---|---|---|
+| **must-fire case** | defect known PRESENT | too STRICT (never fires) |
+| **must-not-fire case** | defect known ABSENT | too LOOSE (fires spuriously) |
+
+The collision was not harmless. It concealed a coverage gap: every structural
+check here had a must-fire case and only one had a must-not-fire case, while the
+term "control" made all of them look equally covered.
+
+### Must-fire and must-not-fire cases, run 2026-08-08, and what they found
 
 The whole suite passed on its first execution, having been written without a
 compiler. That is exactly when a control is skipped and exactly when it pays.
@@ -319,8 +334,14 @@ way. Each was found by the same cheap act of breaking the code on purpose.
 graph property and is not recoverable from the order blocks happen to be
 printed in. Three attempts were spent approximating a graph with text position.
 
-A second lesson, about controls themselves: attempt (1) was too STRICT, and the
-negative control could not catch it, because a predicate that never fires passes
-"straight-line code must report no cycle" trivially. **A negative control only
-catches a predicate that is too loose. A positive case is needed for the other
-direction, and both belong in the test.**
+A second lesson, and it now has a mechanism rather than being an observation.
+A **passing test rests on an unexecuted precondition** — that the check measures
+what you believe it measures — and a must-fire case is the act of executing that
+precondition. So "run the control" and "check your preconditions" were never two
+rules.
+
+The corollary follows from what a must-fire case *does*. It executes the
+precondition in **one direction only**: it shows the check can fire when it
+should. It cannot show the check fires only when it should. That is why attempt
+(1), which never fired at all, walked straight through. **Both halves belong in
+the test**, and both are now encoded rather than run once by hand in a shell.
