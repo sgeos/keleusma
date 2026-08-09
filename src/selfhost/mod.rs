@@ -19,6 +19,13 @@
 //! from `src/selfhost/kel/` (this crate is their canonical home; the detached `compiler/`
 //! subproject re-exports this module and its `main.rs`/tests drive it). `prelude.kel` is
 //! not read by the Rust host and stays in `compiler/kel/`.
+//!
+//! `src/selfhost/kel/` also holds **`wire.kel`, which is not one of those ten** and is
+//! deliberately absent from the `read_stage` table. It is the wire format being written in
+//! Keleusma (step 6 of the wire-format programme), and the driver does not run it because
+//! it does not yet emit an artifact. `tests/selfhost_wire.rs` compiles it directly against
+//! the Rust implementation. It joins the stage table when it produces bytes rather than a
+//! checksum. See `docs/decisions/WIRE_FORMAT_SELFHOST_PLAN.md`.
 
 use alloc::boxed::Box;
 use alloc::format;

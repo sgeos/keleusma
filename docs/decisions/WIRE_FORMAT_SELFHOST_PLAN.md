@@ -32,8 +32,8 @@ Smallest first, each independently verifiable against the Rust implementation by
 Slice 1 is unchanged from the original plan and is still the right place to start, because it
 establishes the byte-emission harness the rest depends on.
 
-1. **CRC-32.** A pure function over a byte range, bitwise and table-free, so it transliterates
-   directly. Oracle: `crate::bytecode::crc32` over random and edge-case buffers.
+1. ~~**CRC-32.**~~ **DONE 2026-08-09.** `src/selfhost/kel/wire.kel` plus the differential in
+   `tests/selfhost_wire.rs`. See [Slice 1 as built](#slice-1-as-built-2026-08-09) below.
 2. **Container primitives and the prologue.** Little-endian place-value writers and readers, the
    16-byte prologue, and the majority-of-three vote over its three copies. Oracle: the bytes
    `keleusma-wire` emits for the same input.
@@ -61,6 +61,56 @@ establishes the byte-emission harness the rest depends on.
 - **First thing to probe**, not yet established: how a `.kel` stage addresses a byte buffer for
   emission and for reading. The `secret/` prototype used a data segment. Settle this before slice 1,
   since every later slice inherits it.
+
+### Slice 1 as built (2026-08-09)
+
+`src/selfhost/kel/wire.kel` holds the Keleusma implementation; `tests/selfhost_wire.rs` holds the
+differential. Eleven tests, 0.67 s. The file is **not** in `read_stage`'s table and the driver does
+not run it, because it does not yet emit an artifact.
+
+**The oracle is a published constant, not our own code.** `crc32("123456789") == 0xCBF43926` is the
+standard CRC-32/ISO-HDLC check value, and both Rust implementations are already independently pinned
+to it (`keleusma-wire/src/crc.rs`, `src/vm.rs:11696`). The test compares against
+`keleusma_wire::crc32` rather than the `crate::bytecode::crc32` this plan named, only because the
+latter is `pub(crate)` and unreachable from an integration test. Same algorithm, same polynomial.
+
+**What the probe settled**, each executed against the reference rather than reasoned:
+
+| Question | Answer |
+|---|---|
+| Are locals immutable? | Yes, rejected at **parse**: "assignment is only supported for data block fields" |
+| Does a runtime-range `for` need `limit`? | Yes, rejected at **verify**, not at parse |
+| Is `lsr` a logical shift over the full word? | Yes: `(0 - 1) lsr 1` is `2^63 - 1` |
+| Does `Byte as Word` sign-extend? | No, it zero-extends: `0xFF` reads as 255 |
+| Bounded `for` inside a `fn`? | Yes, including nested, and across a call boundary |
+| Call in statement position? | Yes |
+
+**No masking is required, and this corrects a recorded design note.** The handoff expected the
+accumulator to need `band 0xFFFFFFFF` after each step. It does not. The accumulator is always in
+`[0, 2^32)`: it starts at `2^32 - 1`, a folded byte xors in under 256, a logical shift right leaves
+it under `2^31`, and the polynomial is under `2^32`. The invariant holds without help, so a mask
+would be dead work.
+
+**`require word >= 64`, not the `>= 32` every stage declares.** Copying the stages' directive by
+analogy would have been a silent defect. A 32-bit signed `Word` cannot hold either the initial value
+or the polynomial, and — verified against the reference — **a source carrying those literals compiles
+for a 32-bit target without complaint when no `require` is present.** Nothing else catches it.
+
+**One inherent blind spot, enumerated rather than estimated.** A polynomial mutation is undetectable
+on the empty buffer and on the single byte `0xFF`, and on nothing else. `0xFFFFFFFF xor 0xFF` is
+`0xFFFFFF00`, whose low eight bits are clear, so all eight iterations take the else branch and the
+polynomial is never consulted; exhausting all 256 single-byte inputs confirms `0xFF` is unique. The
+test asserts the blind set **exactly**, so a case that joins it fails loudly.
+
+**A consequence worth carrying forward:** the range invariant makes `asr` and `lsr` compute the same
+values here, so swapping them is *not* caught by the differential. That equivalence is pinned by its
+own test so it reads as understood rather than as an untested assumption.
+
+**Both control directions are encoded**, not run by hand: three independent must-fire mutations
+(polynomial, initial value, inner iteration count), a must-not-fire pass over a corpus whose coverage
+is itself asserted, a `mutate` helper that requires its anchor to occur exactly once so a stale
+anchor cannot silently test the unmutated source, and hostile-input cases for a length beyond the
+array capacity (traps, does not truncate) and a length shorter than the buffer.
 
 ### On the prototype
 

@@ -13,6 +13,81 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**STEP 6 SLICE 1 DONE: CRC-32 IN KELEUSMA (2026-08-09).** `src/selfhost/kel/wire.kel` plus
+`tests/selfhost_wire.rs`, 11 tests in 0.67 s. Tier 1 green. The slice is small by design: its job was
+the byte-buffer harness every later slice reuses.
+
+**THE PROBE APPARATUS FAILED FIRST, AND IT FAILED IN THE SHAPE THAT LOOKS LIKE A FINDING.** The first
+probe run reported six constructs rejected at `Vm::new`. Every one of those rejections was my arena
+carrying zero persistent capacity, so any module with a `private data` block failed for a reason with
+nothing to do with the language. Read at face value it would have been recorded as "private data
+blocks are not admitted here", which is false and would have redesigned the slice around it. What
+caught it was the P6 must-not-fire case -- a trivial valid source that must run -- and the P3 rows
+that ran clean because they declared no data block. **A probe needs its own control**, exactly as a
+test does; the probe is a measuring instrument and an uncalibrated instrument reports confidently.
+
+Two further apparatus defects in the same session, both of the same family. `set_shared` addresses
+SLOTS, not byte offsets, so seeding at `8 + i` for a `{len: Word, bytes: [Byte; N]}` block wrote past
+the array start and produced a plausible wrong checksum rather than an error. And the first
+`Vm<'static>` had one lifetime argument where the alias takes two, which at least failed at compile
+time. The checksum case is the dangerous one: it returned a number, and a number invites belief. It
+was caught only because the expected value was a **published constant** rather than something this
+codebase produced.
+
+**A RECORDED DESIGN NOTE WAS WRONG, AND IT WAS MINE.** The handoff said the accumulator must be
+masked to 32 bits after each step because `Word` is signed `i64`. It does not. `acc` is always in
+`[0, 2^32)` by construction: it starts at `2^32 - 1`, folding xors in under 256, `lsr 1` leaves it
+under `2^31`, and the polynomial is under `2^32`. A mask would be dead work. This is the fourth
+recorded-claim-falsified-by-probe in this arc, and the rule holds: **a recorded status claim is a
+lead, not a fact.**
+
+**COPYING `require word >= 32` BY ANALOGY WOULD HAVE BEEN A SILENT DEFECT.** Every pipeline stage
+declares it, so the reflex is to match. But a 32-bit signed `Word` cannot hold the initial value or
+the polynomial, and -- verified against the reference, not assumed -- **a source carrying those
+literals compiles for a 32-bit target with no complaint when no `require` is present.** Nothing in
+the toolchain rejects it. `wire.kel` declares `>= 64`, and the reference confirms that rejects both
+narrow targets. This is the "never infer support by analogy" rule appearing in a directive rather
+than in a construct.
+
+**THE MUST-FIRE CONTROL EARNED ITS KEEP ON ITS FIRST RUN, BY FAILING.** A mutated polynomial was
+expected to change the answer for every non-empty input. It does not change it for the single byte
+`0xFF`: `0xFFFFFFFF xor 0xFF` is `0xFFFFFF00`, whose low eight bits are clear, so all eight
+iterations take the else branch and the polynomial is never consulted. Enumerating all 256
+single-byte inputs shows `0xFF` is the only one. The right response was not to relax the assertion to
+a count but to assert the blind set **exactly**, so a case that joins it later fails loudly and has
+to be explained. A weakened assertion would have passed forever and taught nothing.
+
+**A COROLLARY THAT IS ITSELF A COVERAGE GAP, SO IT IS PINNED RATHER THAN LEFT IMPLICIT.** Because
+`acc` is never negative, `asr` and `lsr` compute identical values in this function -- so swapping
+them is invisible to the differential. That is a mutation the suite structurally cannot catch. It now
+has its own test asserting the equivalence, so a reader who notices the freedom finds it recorded as
+understood. `lsr` stays the spelling because it is the operation the algorithm calls for and it
+survives a weakening of the invariant.
+
+**CARRIED FORWARD FROM THE PREVIOUS `REVERSE_PROMPT.md`, which this session overwrites per its
+bounded-file spec.** Two items from the 2026-08-08 wire-cutover block were not otherwise recorded
+here, and both are load-bearing for anyone touching the read path.
+
+- **The cutover as first committed was correct and unshippable**, roughly forty times slower, with
+  every tier green because nothing measures time. `lexer.kel` self-compile: 54.26 s on the rkyv
+  encoding, over 2220 s (killed) as committed, 30.29 s repaired. The constant-load read path went
+  6.42 s to 67.29 s to 1.23 s, so the shipped v2 path is **5.2x faster than the rkyv encoding it
+  replaced**. Both defects were hot-path reads doing work proportional to the whole module:
+  `Vm::aux()` rebuilding fifteen sub-tables to read one scalar inside the interpreter loop, now
+  resolved once per installed image by `AuxResolved`; and `ConstTable::value` re-parsing the artifact
+  and materialising every constant in the module per constant load, now a subtree-only decode with a
+  scalar fast path.
+- **`ConstTable::value` is the function step 6 cannot transliterate.** It uses `BTreeSet` and
+  `BTreeMap`, which do not exist in Keleusma. The Keleusma decoder needs a bounded array-based walk;
+  the forward-ordering invariant is what makes such a walk terminating, so the shape exists and has
+  to be written rather than ported. This lands in slice 5, not slice 1.
+
+**ON THE MUTATION HARNESS.** `mutate` asserts its anchor occurs exactly once. Without that, an anchor
+that drifts silently yields the ORIGINAL source, and the must-fire test then compares a correct
+implementation against the oracle and reports "no divergence" -- indistinguishable from a check that
+is too strict, with the real fault in the mutation. `0xFFFFFFFF` appears twice in the source, so the
+initial-value anchor includes the assignment.
+
 ## Last Updated
 
 **Date**: 2026-08-04 (session 37)

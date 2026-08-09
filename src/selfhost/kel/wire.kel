@@ -1,0 +1,111 @@
+// src/selfhost/kel/wire.kel — the wire format, written in Keleusma.
+//
+// Step 6 of the six-step wire-format programme: the format the Rust runtime
+// reads and writes must also be producible by the self-hosted compiler, so the
+// emitted artifact is made end to end by the Keleusma-written path. The plan and
+// its slices are in docs/decisions/WIRE_FORMAT_SELFHOST_PLAN.md; the format
+// itself is specified in docs/spec/WIRE_FORMAT.md.
+//
+// SLICE 1 (this file, so far): CRC-32/ISO-HDLC. A pure function over a byte
+// range, computed bitwise with no lookup table, so it needs no data-dependent
+// load and eight fixed iterations per byte. It is deliberately the smallest
+// slice: its job is to establish the byte-buffer harness every later slice
+// reuses, not to be interesting on its own. Later slices add the container
+// primitives and prologue, the region directory, record tables and byte pools,
+// the schema layer, the opcode stream, and the framing header.
+//
+// This file is NOT yet a pipeline stage. `src/selfhost/mod.rs`'s `read_stage`
+// deliberately does not list it, because the self-hosted compile driver does not
+// run it; `tests/selfhost_wire.rs` compiles it directly. It moves into the
+// driver when it emits an artifact rather than a checksum.
+
+// WORD WIDTH. This is `>= 64`, not the `>= 32` every pipeline stage declares, and
+// the difference is load-bearing rather than cautious. The accumulator holds a
+// 32-bit unsigned value in a SIGNED word, so a 32-bit word cannot represent it:
+// both the initial value and the polynomial exceed the positive range of a signed
+// 32-bit integer. Nothing else catches this. A source carrying those literals
+// compiles for a 32-bit target without complaint when no `require` is present,
+// which was verified against the reference rather than assumed, so the guard has
+// to be written here or the miscompile is silent.
+require word >= 64;
+
+// The buffer the checksum runs over. The host fills `bytes[0..len]` and drives
+// `main`. `len` may be shorter than the array; a `len` LONGER than the array does
+// not read out of bounds, because the loop's `limit` caps iteration at the array
+// size and the overrun then traps as `LoopLimitExceeded` rather than truncating
+// silently. The capacity is a slice-1 harness parameter and is expected to grow
+// once real regions are checksummed.
+shared data wire {
+    len: Word,
+    bytes: [Byte; 4096],
+}
+
+// The running checksum. It lives in a data block because locals are immutable:
+// `a = a bxor b` on a local is rejected outright with "assignment is only
+// supported for data block fields", so an accumulator has nowhere else to live.
+// The consequence for callers is that the checksum is STATEFUL — `crc_begin`
+// must run before each independent message.
+private data crc {
+    acc: Word,
+}
+
+// THE RANGE INVARIANT, which is why no masking appears below.
+//
+// `acc` is always in [0, 2^32). It starts at 2^32 - 1; folding a byte xors in a
+// value under 256; a logical shift right by one leaves it under 2^31; and xoring
+// the polynomial, itself under 2^32, keeps it under 2^32. So the emulated
+// unsigned-32 arithmetic never needs a `band` against a 32-bit mask, and adding
+// one would be dead work rather than a safety net.
+//
+// The invariant is what makes the shift choice non-load-bearing: `acc` is never
+// negative, so `asr` would compute the same values as `lsr` here. `lsr` is still
+// the correct spelling, because it is the operation the algorithm calls for and
+// it stays correct if the invariant is ever weakened. A test pins the equivalence
+// so that a reader who notices it finds it recorded as deliberate.
+
+// Begin a new message. Returns the seeded accumulator so the function has a
+// useful value rather than a placeholder.
+fn crc_begin() -> Word {
+    crc.acc = 0xFFFFFFFF;
+    crc.acc
+}
+
+// Fold one byte into the running checksum and return the new accumulator.
+// `byte` is expected in [0, 255]; a wider value simply xors more bits in, which
+// is the caller's error rather than a fault here.
+//
+// The eight-iteration inner loop is a fixed range, so it needs no `limit` and
+// contributes a constant factor to the worst-case bound.
+fn crc_fold(byte: Word) -> Word {
+    crc.acc = crc.acc bxor byte;
+    for j in 0..8 {
+        crc.acc = if (crc.acc band 1) == 1 {
+            (crc.acc lsr 1) bxor 0xEDB88320
+        } else {
+            crc.acc lsr 1
+        };
+    }
+    crc.acc
+}
+
+// Finish a message. The final complement is separate from `crc_fold` so an
+// incremental producer can keep folding bytes and take the checksum only at the
+// end, which is the shape the region emitters in later slices need.
+fn crc_end() -> Word {
+    crc.acc bxor 0xFFFFFFFF
+}
+
+// Checksum `wire.bytes[0..wire.len]`. The parameter is unused and exists because
+// the host drives the module through a one-argument entry point.
+//
+// The `limit` equals the array capacity, so the loop is statically bounded at
+// 4096 iterations of eight inner steps. A `len` beyond the capacity overruns the
+// cap and traps, which is the fail-loud default and is preferable to checksumming
+// a silently truncated prefix.
+fn main(x: Word) -> Word {
+    crc_begin();
+    for i in 0..wire.len limit 4096 {
+        crc_fold(wire.bytes[i] as Word);
+    }
+    crc_end()
+}
