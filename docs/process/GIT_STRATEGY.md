@@ -93,6 +93,42 @@ Supported `<scope>` values (branch names and commit subjects alike): `feat` (new
 - **Direct commits** to the version branch or `main` are limited to small green documentation or
   process changes. Everything else flows through a feature branch.
 
+### Exception: a line that is itself rebased
+
+The no-fast-forward rule assumes the target is never rebased. A version branch kept as a linear
+extension of another — `v0.3.0` onto `v0.2.3` as of 2026-08-08 — breaks that assumption, and the
+rule fails in a way that is easy to miss.
+
+**`git rebase` drops merge commits.** So a `--no-ff` bubble on a rebased line is destroyed by the
+next sync, and the red work-in-progress it was protecting the spine from is replayed *onto the
+spine*. The bubble buys nothing and the invariant is silently lost.
+
+On such a line, land feature branches as **one green commit**, by squash or by keeping the branch
+to a single commit, then fast-forward:
+
+```
+git rebase origin/<line> && <gate> && git checkout <line> && git merge --squash <branch>
+```
+
+This keeps what the no-ff rule actually protects — no red commit ever on the spine — while staying
+linear and rebase-stable. The cost is the per-increment commits, which is the price of a rebased
+line and is why only lines that need linearity should be rebased.
+
+**A bare `--ff-only` is correct only when every commit on the branch is green.** It is not
+equivalent to the above; it puts each of the branch's commits on the spine individually, so a red
+intermediate lands on the target.
+
+### Note on `scripts/merge-to-trunk.sh`
+
+The script implements the **linear** form: rebase onto `origin/$TRUNK`, gate, re-check the tip, then
+`git merge --ff-only`. That is correct for a rebased line whose commits are all green, and it is
+**not** the `--no-ff` behaviour this section prescribes for an ordinary version branch.
+
+The script and this document have differed since both existed. No harm has resulted, because merges
+into `v0.2.3` have all been done by hand with `--no-ff`, and the script's users have been on the
+linear line. Know which form you want before running it: on a `--no-ff` line it will flatten a
+branch onto the spine without saying so.
+
 ## Definition of Green
 
 Two authorities, with a defined relationship:

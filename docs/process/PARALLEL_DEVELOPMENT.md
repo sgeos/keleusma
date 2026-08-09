@@ -221,11 +221,23 @@ onto `v0.2.3` would flatten or mangle them.
 
 | Branch | Feature branches land | Why |
 |---|---|---|
-| `v0.2.3` | `--no-ff` merge commit, per `GIT_STRATEGY.md` | nothing rebases it; the bubbles preserve per-increment history on a green first parent |
-| `v0.3.0` | rebase then **`--ff-only`** | it is itself rebased, so it must stay linear |
+| `v0.2.3` | `--no-ff` merge commit, per `GIT_STRATEGY.md` | nothing rebases it; the bubble keeps red work off the spine |
+| `v0.3.0` | rebase, then land as **one green commit** (squash) | it is itself rebased, so it must stay linear AND keep red off the spine |
 
-`scripts/merge-to-trunk.sh` already does the right thing for `v0.3.0`: it rebases
-onto `origin/$TRUNK`, gates, re-checks the tip, then `git merge --ff-only`.
+**Corrected 2026-08-09.** This table previously said `v0.3.0` should rebase then
+`--ff-only`, which quietly gave up the invariant `--no-ff` exists to protect.
+`git rebase` **drops merge commits**, so a bubble on a rebased line is destroyed
+by the next sync and its red work-in-progress is replayed onto the spine. A bare
+`--ff-only` has the same problem by a different route: it puts each of the
+branch's commits on the spine individually, red intermediates included.
+
+Squashing to one green commit keeps the spine green, stays linear, and survives
+rebasing. The cost is the per-increment commits. See
+[`GIT_STRATEGY.md`](./GIT_STRATEGY.md#exception-a-line-that-is-itself-rebased).
+
+`scripts/merge-to-trunk.sh` implements the `--ff-only` form, so it is correct only
+when every commit on the branch is green. Squash first, or verify each commit,
+before relying on it.
 
 **A pre-existing inconsistency this surfaced.** `merge-to-trunk.sh` has always used
 `--ff-only`, while `GIT_STRATEGY.md` prescribes `--no-ff`, so the script and the
