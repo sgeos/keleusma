@@ -170,9 +170,15 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
 }
 
 /// Every source below returns an *operand* rather than a literal, deliberately.
-/// `PushImmediate` is not in the supported subset, so `{ 1 } else { 0 }` would
-/// make each of these fail for a reason unrelated to what it is testing.
 /// The else branch is `b + b`, not `b`, and that asymmetry is load-bearing.
+///
+/// This comment used to justify the operands by claiming `PushImmediate` was
+/// outside the supported subset. **That was false when written and is still
+/// false**: the lowering has handled it since the first commit. The operands are
+/// worth keeping for the asymmetry reason below, which is the real one, but the
+/// stale justification is removed rather than left to be believed. A comment
+/// asserting a subset boundary is a claim about code and decays exactly like a
+/// test does, with nothing to fail when it stops being true.
 ///
 /// An earlier version used `{ a } else { b }`. It passed a must-fire case
 /// that swapped `SLT` for `SLE`, because the two predicates differ only when
@@ -446,6 +452,136 @@ fn the_range_for_lowering_actually_emits_a_back_edge() {
         "straight-line code reported a back edge, so the predicate does not \
          discriminate. IR was:\n{straight}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// `PushImmediate`, whose integer decode the compiler cannot reach
+// ---------------------------------------------------------------------------
+
+/// Run an already-built module on the VM, returning its finished integer.
+fn vm_result_of(m: keleusma::bytecode::Module, args: &[i64]) -> i64 {
+    let cap = auto_arena_capacity_for(&m, &[]).expect("arena capacity");
+    let arena = keleusma_arena::Arena::with_capacity(cap);
+    let mut vm = Vm::new(m, &arena).expect("vm");
+    let vals: Vec<Value> = args.iter().map(|&x| Value::Int(x)).collect();
+    match vm.call(&vals).expect("vm run") {
+        keleusma::vm::VmState::Finished(Value::Int(v)) => v,
+        other => panic!("unexpected VM outcome: {other:?}"),
+    }
+}
+
+/// Lower and JIT an already-built module's first chunk.
+fn native_result_of(m: &keleusma::bytecode::Module, args: &[i64]) -> i64 {
+    check_word_width(m.word_bits_log2).expect("word width");
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    lower_chunk(
+        &ctx,
+        &lm,
+        &m.chunks[0],
+        "kel_entry",
+        LowerOptions::default(),
+    )
+    .expect("lower");
+    lm.verify().expect("LLVM module verification");
+    let ee = lm
+        .create_jit_execution_engine(OptimizationLevel::None)
+        .expect("jit");
+    let f = unsafe { ee.get_function::<unsafe extern "C" fn(i64, i64) -> i64>("kel_entry") }
+        .expect("symbol");
+    unsafe { f.call(args[0], args[1]) }
+}
+
+#[test]
+fn the_inline_integer_encoding_agrees_with_the_vm() {
+    // **THE REFERENCE COMPILER NEVER EMITS THIS.** Probed across 16 source
+    // shapes covering literals, tuples, arrays, structs, enums, matches, calls,
+    // shifts, bounded loops and handled arithmetic: the only `PushImmediate`
+    // operands emitted are 0 (Unit) and 1/2 (the boolean literals). Every
+    // integer literal, including 0 through 15, routes through `Const` and the
+    // constant pool instead.
+    //
+    // So the `operand - 4` decode in the lowering had no reachable caller and no
+    // test. An off-by-one there would have been invisible: `small_integer_
+    // literals_agree_with_the_vm` looks like it covers this and does not, which
+    // is recorded in its own comment.
+    //
+    // The opcode is still part of the instruction set and a hand-written or
+    // future-compiler module may use it, so it is tested here by REWRITING real
+    // bytecode -- the same technique the typed-verifier conformance corpus uses.
+    // The VM accepts the rewritten module through the ordinary verified path,
+    // not through `new_unchecked`, so this is a genuine oracle rather than a
+    // trust-skip.
+    let src = "fn main(a: Word, b: Word) -> Word { 7 }";
+
+    // Both ends of the range and the boundaries, since an off-by-one in the
+    // decode still agrees somewhere in the middle if the error is a shift.
+    for imm in [4u8, 5, 6, 11, 18, 19] {
+        let base = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let mut m = base.clone();
+        let mut rewrote = 0;
+        for op in m.chunks[0].ops.iter_mut() {
+            if matches!(op, Op::Const(_)) {
+                *op = Op::PushImmediate(imm);
+                rewrote += 1;
+            }
+        }
+        assert_eq!(
+            rewrote, 1,
+            "this test is vacuous unless exactly one Const load was rewritten; \
+             the source's opcodes were {:?}",
+            base.chunks[0].ops
+        );
+
+        let native = native_result_of(&m, &[1, 2]);
+        let vm = vm_result_of(m, &[1, 2]);
+        assert_eq!(
+            native, vm,
+            "native and VM disagree on PushImmediate({imm}): native={native}, vm={vm}"
+        );
+        // Pin the absolute value too. Agreement alone would be satisfied by two
+        // implementations that shared the same wrong offset, and the VM is the
+        // oracle precisely because it is independent -- but the encoding is
+        // documented, so the documented value is checkable directly.
+        assert_eq!(
+            vm,
+            i64::from(imm) - 4,
+            "PushImmediate({imm}) must decode to Int({})",
+            imm - 4
+        );
+    }
+}
+
+#[test]
+fn the_reserved_and_option_immediates_are_refused() {
+    // MUST-NOT-FIRE for the acceptance above: operands outside the integer
+    // range must NOT be lowered. `3` is `None`, which needs an Option
+    // representation this backend has not settled, and 20 and above are
+    // reserved. Inventing a value for either would be the exact failure the
+    // subset boundary exists to prevent.
+    for imm in [3u8, 20, 255] {
+        let src = "fn main(a: Word, b: Word) -> Word { 7 }";
+        let mut m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        for op in m.chunks[0].ops.iter_mut() {
+            if matches!(op, Op::Const(_)) {
+                *op = Op::PushImmediate(imm);
+            }
+        }
+        let ctx = Context::create();
+        let lm = ctx.create_module("kel");
+        let err = lower_chunk(
+            &ctx,
+            &lm,
+            &m.chunks[0],
+            "kel_entry",
+            LowerOptions::default(),
+        );
+        assert!(
+            err.is_err(),
+            "PushImmediate({imm}) is outside the integer encoding and must be \
+             refused, not given an invented value"
+        );
+    }
 }
 
 #[test]
