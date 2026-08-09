@@ -31,6 +31,8 @@
 
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
+use inkwell::passes::PassBuilderOptions;
+use inkwell::targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine};
 use keleusma::bytecode::{Op, Value};
 use keleusma::vm::{Vm, auto_arena_capacity_for};
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
@@ -582,6 +584,89 @@ fn the_reserved_and_option_immediates_are_refused() {
             err.is_err(),
             "PushImmediate({imm}) is outside the integer encoding and must be \
              refused, not given an invented value"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The middle end is load-bearing, and this encodes that rather than recording it
+// ---------------------------------------------------------------------------
+
+/// Count the operand-stack allocas in a module's IR.
+fn alloca_count(ir: &str) -> usize {
+    ir.lines().filter(|l| l.contains("alloca i64")).count()
+}
+
+#[test]
+fn mem2reg_removes_every_operand_slot_alloca() {
+    // **WHY THIS IS A TEST AND NOT A NOTE.** The lowering models the operand
+    // stack as allocas and relies on `mem2reg` to build SSA form. Measured on
+    // 2026-08-09 for `thumbv7em-none-eabihf`, the difference that pass makes to
+    // the stack frame is 536 bytes against 0 for `a + b`, and 616 against 20 for
+    // a handled multiply. 512 of those bytes are `MAX_STACK` slots the program
+    // never touches.
+    //
+    // The trap that measurement exposed is that the frame is decided by WHICH
+    // TOOL RUNS, not by the optimisation level: `llc` at `-O0`, `-O1`, `-O2` and
+    // `-Os` all give 536, because `mem2reg` is a middle-end pass and `llc` does
+    // not run it. The lowering's own documentation had asserted the opposite.
+    //
+    // So the reliance is asserted here. If a future change makes an alloca
+    // survive `mem2reg` -- a slot address escaping, or an alloca emitted outside
+    // the entry block where it is no longer promotable -- this fails, instead of
+    // the frame quietly growing by half a kilobyte per function on a part that
+    // may have four kilobytes in total.
+    Target::initialize_native(&InitializationConfig::default()).expect("init native target");
+    let triple = TargetMachine::get_default_triple();
+    let machine = Target::from_triple(&triple)
+        .expect("target")
+        .create_target_machine(
+            &triple,
+            "generic",
+            "",
+            OptimizationLevel::Default,
+            RelocMode::Default,
+            CodeModel::Default,
+        )
+        .expect("target machine");
+
+    for src in [
+        "fn main(a: Word, b: Word) -> Word { a + b }",
+        "fn main(a: Word, b: Word) -> Word { if a > b { a * b } else { b - a } }",
+        "fn main(a: Word, b: Word) -> Word { for i in 0..10 { } a / b }",
+        "fn main(a: Word, b: Word) -> Word { a * b { ok(v) => v, overflow(h, l) => h, underflow(h, l) => l } }",
+    ] {
+        let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let ctx = Context::create();
+        let lm = ctx.create_module("kel");
+        lower_chunk(
+            &ctx,
+            &lm,
+            &m.chunks[0],
+            "kel_entry",
+            LowerOptions::default(),
+        )
+        .expect("lower");
+
+        // MUST-NOT-FIRE for the assertion below: the allocas have to be there
+        // BEFORE the pass, or "none afterwards" is satisfied by a lowering that
+        // never emitted any and the test proves nothing about `mem2reg`.
+        let before = alloca_count(&lm.print_to_string().to_string());
+        assert!(
+            before > MAX_STACK,
+            "the unoptimised lowering must emit an alloca per operand slot; \
+             found only {before} for {src:?}"
+        );
+
+        lm.run_passes("mem2reg", &machine, PassBuilderOptions::create())
+            .expect("mem2reg");
+
+        let after = alloca_count(&lm.print_to_string().to_string());
+        assert_eq!(
+            after, 0,
+            "mem2reg must promote every operand-slot alloca for {src:?}; \
+             {after} of {before} survived. Each survivor is 8 bytes of stack \
+             frame in every compiled function."
         );
     }
 }
