@@ -4,167 +4,146 @@
 
 The self-contained, imperative resume prompt, written **before a planned compaction** and validated
 on resume. Unlike the three resume channels it is **not** kept always-current. It is a snapshot
-stamped with the commit it describes, so a stale handoff self-reports as stale rather than misleading
-a resuming agent.
+stamped with the commit it describes, so a stale handoff self-reports as stale rather than
+misleading a resuming agent.
 
 ## Validity
 
-- **Branch**: `v0.2.3`
-- **Parent commit** (the repository state this handoff describes): `5ad58ab`
+- **Branch**: `v0.2.3`, or a feature branch cut from it.
+- **Parent commit**: `2886d96`
 - **Written**: 2026-08-09
-- **Tree at write**: clean. Everything merged and pushed. **No unmerged work anywhere.**
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
-**Validity check — run on resume.** Check **both**:
+**Check both.** `git rev-parse --abbrev-ref HEAD` is `v0.2.3` or a branch off it, and
+`git rev-parse HEAD~1` is the parent above.
 
-1. `git rev-parse --abbrev-ref HEAD` is `v0.2.3` (or a feature branch cut from it).
-2. `git rev-parse HEAD~1` equals the **Parent commit** above.
+The branch half is not redundant. `v0.3.0` exists for parallel native-codegen work and is rebased
+onto `v0.2.3`, so it can satisfy the commit check while this describes a different workstream. If
+you are on `v0.3.0` or a branch off it, read `docs/process/handoffs/v0.3.0.md` instead — **and do
+not overwrite this file**, which that session has explicitly asked.
 
-The branch check is not redundant. `v0.3.0` exists for parallel native-codegen work and is rebased
-onto `v0.2.3`, so it can satisfy the commit check while this document describes a different
-workstream. **A handoff that validates on the wrong branch is worse than a stale one.** If you are on
-`v0.3.0` or a branch cut from it, this is not yours — read
-`docs/process/handoffs/v0.3.0.md` instead.
+- **Both match → VALID.** **Commit mismatch → INVALID and STALE**, report it and orient from the
+  live channels. **Branch mismatch → NOT YOURS.**
 
-- **Both match → VALID.**
-- **Commit mismatch → INVALID and STALE.** Report it and familiarize from the live channels.
-- **Branch mismatch → NOT YOURS.**
+## FIRST, before anything else
 
-## On resume — do these first
+1. **Read `secret/notes/APPENDIX_B.md`** before writing any tracked file, commit message, or comment.
+2. **Read the other session's mailbox**: `git show origin/v0.3.0:docs/process/handoffs/v0.3.0.md`.
+   This is the protocol, not a courtesy.
+3. **Read this branch's mailbox**, [`handoffs/v0.2.3.md`](./handoffs/v0.2.3.md), and the three
+   channels: [`REVERSE_PROMPT.md`](./REVERSE_PROMPT.md),
+   [`DESIGN_JOURNAL.md`](./DESIGN_JOURNAL.md) (newest first), [`TASKLOG.md`](./TASKLOG.md).
+4. **Read [`AUTONOMOUS_IMPLEMENTATION_LOOP.md`](./AUTONOMOUS_IMPLEMENTATION_LOOP.md).** Its
+   probe-before-planning step has falsified a recorded claim in every increment of this arc.
 
-1. **Run the validity check.**
-2. **Read `secret/notes/APPENDIX_B.md` before writing ANY tracked file**, commit message, or comment.
-3. **Read the other session's mailbox**, which is the parallel-development protocol, not a courtesy:
-   `git show origin/v0.3.0:docs/process/handoffs/v0.3.0.md`
-4. **Re-read the three channels** — [`REVERSE_PROMPT.md`](./REVERSE_PROMPT.md),
-   [`DESIGN_JOURNAL.md`](./DESIGN_JOURNAL.md) (newest first), [`TASKLOG.md`](./TASKLOG.md) — and this
-   branch's mailbox, [`handoffs/v0.2.3.md`](./handoffs/v0.2.3.md).
-5. **Read [`AUTONOMOUS_IMPLEMENTATION_LOOP.md`](./AUTONOMOUS_IMPLEMENTATION_LOOP.md).** Step 1a
-   (probe before planning) has falsified a recorded claim in every increment of this arc, including a
-   published specification and a plan document that said the current work was blocked.
-6. **In-flight verification: NONE.**
+## THE GIT STATE — read carefully, three branches are in flight
 
-## THE STATE: clean, green, nothing outstanding
+| Ref | Commit | State |
+|---|---|---|
+| `v0.2.3` | `2886d96` | **AHEAD OF ORIGIN BY 1 — not pushed.** Deliberate; see below. |
+| `docs/spec-currency` | `912151a` | 3 commits, descendant of `v0.2.3`, verified, **unmerged** |
+| `feat/selfhost-wire-directory` | `d2f2fd7` | 4 commits, **NOT a descendant of `v0.2.3` — needs a rebase**, unmerged |
 
-`v0.2.3` = `5ad58ab`, in sync with origin, CI green. Working branch
-`feat/selfhost-wire-crc32` is cut from it with **no commits of its own yet**.
+**Why `v0.2.3` is unpushed.** The pre-push hook runs the test suite, and the other session's full
+gate was at its heaviest step. Push once the machine is free. Do not `--no-verify`.
 
-`BYTECODE_VERSION` is **2**. The auxiliary body is the wire format v2 container, not an rkyv
-archive, and [`../spec/WIRE_FORMAT.md`](../spec/WIRE_FORMAT.md) accurately describes it.
+**`feat/selfhost-wire-directory` branched from `9bf5125` and `v0.2.3` has advanced since.** Rebase
+it before merging, per the fast-forwardable rule in `GIT_STRATEGY.md`.
 
-The six-step wire-format programme: **1 to 5 done and merged; 6 is the active work.**
+**The merge plan, one gate for the batch**: rebase `feat/selfhost-wire-directory` onto `v0.2.3`,
+rebase `docs/spec-currency` on top of that, gate the combined tip ONCE, then merge both with
+`--no-ff`. `v0.2.3` is a normal version branch, so `--no-ff` is right; the squash exception applies
+only to the rebased `v0.3.0` line.
 
-## THE ACTIVE WORK: step 6 slice 1 — CRC-32 in Keleusma
+## THE WORK: wire-format step 6, slices 1 to 4 done
 
-Read [`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md) **from
-the top**, where it is re-scoped into seven slices. Its 2026-08-03 body says the work is blocked;
-that was true only while the auxiliary body was rkyv, and is superseded.
+`src/selfhost/kel/wire.kel` is the wire format written in Keleusma;
+`tests/selfhost_wire.rs` is its differential, **40 tests**. Slices 1 and 2 are merged; 3 and 4 are
+on the unmerged branch.
 
-**Slice 1 is CRC-32**, oracle-checked against `crate::bytecode::crc32` (`src/bytecode.rs:3697`,
-`CRC32_POLY = 0xEDB88320`, init `0xFFFFFFFF`, bitwise and table-free, final xor). It is small on
-purpose: its job is to establish the byte-emission harness every later slice needs.
+1. **CRC-32** — oracle is the published check value `0xCBF43926`.
+2. **Container primitives, the prologue, the majority-of-three vote** — oracle is byte identity
+   against `keleusma-wire`.
+3. **The region directory** — emission, lookup, triplicated vote.
+4. **Record tables and byte pools** — fixed-stride addressing from the voted directory.
 
-### What is already probed, so do not re-probe it
+**Next is slice 5, the schema layer, and it is DECOMPOSED already** into 5a to 5e in
+[`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md). Read that
+before starting: twenty region kinds and seventeen record types is too much for one increment, and
+the offsets are **generated by the derive with no implicit padding**, so they must be hardcoded and
+pinned against the generated constants rather than guessed.
 
-- **A `.kel` stage addresses a byte buffer as a `shared data` byte array.** `lexer.kel` already does
-  this, taking source from `src.bytes`. That is shipping code, not the `secret/` prototype.
-- The `secret/kel-format-probe/` prototype **predates format lock-in** — 12-byte directory entries
-  where the shipped entry is 16, and no triplicated prologue. Feasibility evidence only.
+### Facts about the language, each confirmed by execution
 
-### What to probe before writing, reported by the `v0.3.0` session and unverified by me
+- Locals are immutable — rejected at **parse**. Accumulators live in data blocks.
+- A runtime-range `for` needs `limit` — rejected at **verify**.
+- `Byte as Word` zero-extends; **`as Byte` truncates silently** (`300 as Byte` is 44).
+- `lsr` is logical over the full word. Division by zero **traps**; `andalso` short-circuits, and
+  the zero-stride guard depends on that.
+- `require word >= 32` does **not** protect constants above `i32::MAX`; with no `require` at all a
+  source carrying `0xFFFFFFFF` compiles for a 32-bit target. `wire.kel` declares `>= 64`.
 
-- **Locals are immutable.** `s = s + b` in a loop is rejected with "assignment is only supported for
-  data block fields", so a running CRC accumulator must live in a data block. This makes the function
-  stateful, so the harness has to reset between vectors.
-- **The verifier admits less than the parser.** A data-dependent `break` compiles and then fails
-  `verify_resource_bounds`. A CRC over a runtime-length buffer wants the `for … limit <const>` form.
+## Order-1: one of the three blockers is RETIRED
 
-Both match what is on file (no `let mut`; a `for` needs `limit`). **Confirm them against the
-reference anyway** — that is the rule neither session gets an exemption from.
+The roadmap named the type checker, the monomorphizer, and wire-format serialization.
 
-### A design point neither session has settled
+- **The monomorphizer obligation is empty for the first pass.** Monomorphization is an identity
+  transform on all ten stage sources, pinned by `tests/selfhost_monomorphize_identity.rs` with a
+  must-fire control. The subset declares no generics, traits, or const generic parameters.
+- **The type checker is smaller than feared.** `program.fn_expr_types` has exactly one consumption
+  site, `infer_expr_type`, for flat-access baking, and it falls through to a structural path when
+  absent. See [`../decisions/TYPECHECK_SELFHOST_PLAN.md`](../decisions/TYPECHECK_SELFHOST_PLAN.md).
 
-Keleusma's `Word` is signed `i64`; CRC-32 needs `u32` semantics. The shift must be logical (`lsr`,
-not `asr`) and the accumulator masked to 32 bits after each step. B19 supplies `lsr`, `bxor`, `band`.
+**SPIKE B IS SPECIFIED AND NOT RUN.** Force `program.fn_expr_types` empty and re-run the
+byte-identity corpus. Unchanged output reduces the type checker to rejection only; changed output
+names exactly the constructs that need inference. **It needs a quiet machine** — it runs the
+self-host corpus and must not run beside a gate.
 
-### The test must carry BOTH directions
+## Gating: never in the tree you are working in
 
-A differential against a known-good reference is exactly where a too-strict check hides. Required:
+`scripts/gate-in-worktree.sh <commit>` runs the gate in a detached worktree pinned to that commit,
+so the main tree stays free and the result is pinned by construction. `--setup-only` verifies the
+setup without a 2.5-hour run.
 
-- a **must-fire case** — inputs that discriminate, and a demonstration that perturbing one input byte
-  changes the answer;
-- a **must-not-fire case** — the check stays quiet when it should.
+**STOPPING A GATE: path-scoped, always.** A bare `pkill -f "release-gate.sh"` killed the other
+session's gate on 2026-08-09 and orphaned its `selfhost_codegen` at 98% CPU. **Both sessions made
+this identical mistake within one hour, each after reading the warning against it.** The script now
+refuses to start when a gate is running, but stopping one is still manual:
 
-An assertion that never fires is indistinguishable from one that always succeeds.
+```
+pkill -f "<gate dir>" ; pkill -f "<gate target>/debug/deps"
+```
 
-## Parallel development is ACTIVE — read this before touching anything shared
+The second is not optional — killing the driver leaves the children reparented to PID 1.
 
-`v0.3.0` carries native code generation in a separate session and worktree, rebased onto `v0.2.3`.
-The protocol is [`PARALLEL_DEVELOPMENT.md`](./PARALLEL_DEVELOPMENT.md) **section 0a**.
-
-- **Mailboxes are the channel.** One per version branch, on that branch, read with `git show`. The
-  operator is for decisions, not transport.
-- **Poll at increment boundaries.** The mailbox has no wake. Read theirs before starting an increment
-  and after finishing one.
-- **Do not touch `v0.3.0` or anything under `keleusma-worktrees/`.** There is one shared `.git`, so
-  their branches are visible here; visibility is not ownership.
-- **`scripts/release-gate.sh` is the one genuinely shared file.** My edits sit above the first
-  `step()` call; theirs at the end.
-- **They read `src/wire_schema.rs` (`AuxView`, `AuxOffsets`) and `src/bytecode.rs`.** Announce changes
-  to that surface in the mailbox before making them. `AuxResolved` in `src/vm.rs` is private and
-  outside it. Step 6 is additive `.kel` work and does not disturb them.
-- **Never run two full gates at once**, and reap orphans **path-scoped**:
-  `pkill -f "$PWD/target/debug/deps"`. Unscoped kills a sibling session's live run.
-
-## Verification
-
-Full gate before every **merge**, not after every **change**. See
-[`PROCESS_STRATEGY.md`](./PROCESS_STRATEGY.md#tiered-verification).
-
-- **Tier 0**, per edit: `scripts/fast-check.sh 'test(<filter>)'`.
-- **Tier 1**, per increment: `clippy --workspace --all-targets -D warnings`,
-  `cargo test -p keleusma --no-default-features`, and the `-D warnings` doc build.
-- **Tier 2**, per merge: `scripts/release-gate.sh`, **batching three or four increments**.
-
-The gate is **~2h33m** and is repetition-bound, not contention-bound: `selfhost_codegen` is 1008 s
-standalone at 4.85 of 10 cores and runs about four times across the feature matrix. Raising test
-parallelism buys nothing. Run it in the background and monitor the log.
-
-**CI is now a strict superset of the local gate**, which is what makes it safe as the authority — it
-is a mechanism, not a procedure. Do not create a strong gate and a weak gate for a human to choose
-between.
-
-`tests/perf_canary.rs` is a tripwire, not a benchmark. If it fires: rule out concurrent load, re-run
-alone, and profile before touching the ceiling.
+**A gate no longer makes the main tree look busy.** Check `pgrep -f release-gate.sh` or the
+mailbox banner, never the tree's cleanliness.
 
 ## Method rules this arc paid for
 
-- **A control executes a test's precondition** — that the predicate measures what you think it does.
-  It runs in **one direction only**, so a **must-fire** and a **must-not-fire** case are both needed.
-  Every control run on 2026-08-08 was must-fire, and all three were recorded as if they closed the
-  question.
-- **Executed beats reasoned**, and an executed claim is only as good as its **unexecuted
-  preconditions**. A measured 3.7× speedup this arc came from a build with a live bug in it.
-- **Rehearse a history rewrite on throwaway refs.** Two consecutive wrong rebase ranges were caught
-  that way.
-- **Prefer a pattern to an enumeration.** A by-name list has now produced three coverage holes.
-- **A recorded status claim is a lead, not a fact** — including one in this document.
+- **Check `$?` explicitly; never infer success from output.** `cargo clippy … | tail -4` hid a red
+  gate, because a pipe discards the exit status and an earlier crate's "Finished" line looked like
+  success. Appending `; echo` or `nohup … &` to a background command reports the wrapper's status,
+  not the work's. Three occurrences in one session.
+- **An implausibly fast pass is the signal.** A five-minute "green" on a 2.5-hour gate was the only
+  honest indication; the reported status was wrong.
+- **A probe needs its own control, exactly as a test does.** Six constructs looked rejected by the
+  language when the real cause was an arena with zero persistent capacity.
+- **A control runs in one direction only**, so a **must-fire** and a **must-not-fire** case are
+  both needed. A mutated CRC polynomial is provably undetectable on two inputs, and the blind set
+  is asserted exactly rather than the assertion being weakened.
+- **Prefer a pattern to an enumeration.** `tests/wire_corpus.rs` enumerates ten stage sources by
+  name while the directory holds eleven, and nothing reads the directory — see
+  `ENUMERATION_AUDIT` findings in the session scratchpad, not yet applied.
 
 ## Open, and held by the operator
 
-- **Trimming the gate's feature matrix**, worth roughly 34 minutes. Measured, not guessed. Not done
-  unilaterally because it weakens verification.
-- **Publication is HELD.** Nothing is published. Irreversible and outward-facing — confirm first.
+- **Publication remains HELD.** Nothing is published.
+- **Trimming the gate's feature matrix**, worth roughly 34 minutes, measured.
 - **MSRV 1.85 declared, never verified.**
-- **Fifteen `self.aux()` sites remain, audited, none hot** — a real follow-up, not a blocker.
+- **The other session asks** whether their branch needs its own full gate given the workspace is
+  byte-identical to `v0.2.3`; they measured it and are not acting on it. Their residual risk is
+  that the exception binds to a specific commit, and `v0.2.3` is advancing.
 
-**Boundary counts** — recount with a grep on `self_hosted_construct_support_boundary` in
-`tests/selfhost_codegen.rs` rather than trusting a number here.
-
-**Git**: `v0.2.3` = `5ad58ab` plus this handoff commit. Local branches include `main`, `v0.2.3`,
-`v0.3.0` (**theirs**), `feat/selfhost-wire-crc32` (mine, empty), `v0.2.3-prerebase-backup`, and the
-other session's `tmp/*` rehearsal refs. **Do NOT delete `v0.2.3-prerebase-backup`** or anything you
-do not own.
-
-**Guardrails**: no new opcode or `BYTECODE_VERSION` bump without authorization; full gate before any
-merge; confirm before any irreversible or outward-facing action; never bypass the pre-push gate.
+**Guardrails**: no new opcode or `BYTECODE_VERSION` bump without authorization; full gate before
+any merge; confirm before anything irreversible or outward-facing; never bypass the pre-push gate.
