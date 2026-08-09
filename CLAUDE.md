@@ -72,7 +72,7 @@ keleusma/
     ├── design/                # Grammar, type system, standard library
     ├── decisions/             # Resolved, priority, and backlog decisions
     ├── process/               # Workflow, communication, and task tracking
-    ├── reference/             # Glossary, instruction set
+    ├── reference/             # Glossary, related work (the instruction set is in spec/)
     └── roadmap/               # Development phases
 ```
 
