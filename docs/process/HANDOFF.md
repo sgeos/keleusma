@@ -15,11 +15,35 @@ a resuming agent.
 - **Tree at write**: clean apart from this handoff commit. **Nothing unmerged, nothing unpushed.**
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
-**Validity check — run on resume.** Compare the **Parent commit** above to `git rev-parse HEAD~1`.
+**Validity check — run on resume.** Check **both**:
 
-- **Match → VALID.** Proceed per the resume prompt.
-- **Mismatch → INVALID and STALE.** Report it, familiarize from the three channels and the git log,
-  and wait for instruction.
+1. `git rev-parse --abbrev-ref HEAD` equals the **Branch** above.
+2. `git rev-parse HEAD~1` equals the **Parent commit** above.
+
+The branch check is not redundant. `v0.3.0` was cut from `v0.2.3` on 2026-08-08 for parallel native
+codegen work, so a fast-forwarded `v0.3.0` satisfies the commit check while this document describes a
+different workstream entirely. **A handoff that validates on the wrong branch is worse than a stale
+one**, because nothing announces the mismatch. If you are not on the branch named above, read
+[`handoffs/`](./handoffs/) for your branch's own handoff instead.
+
+- **Both match → VALID.** Proceed per the resume prompt.
+- **Commit mismatch → INVALID and STALE.** Report it, familiarize from the three channels and the git
+  log, and wait for instruction.
+- **Branch mismatch → this handoff is NOT YOURS.** Do not act on it. See `handoffs/`.
+
+## Parallel development is active
+
+Two version branches are live. `v0.2.3` integrates the wire-format programme; `v0.3.0` carries native
+codegen in a separate session. Under parallelism the single-writer channel rules change — see
+[`PARALLEL_DEVELOPMENT.md`](./PARALLEL_DEVELOPMENT.md) section 3.
+
+- **Do not overwrite `REVERSE_PROMPT.md` from a parallel branch.** Write
+  `handoffs/<branch-leaf>.md` instead.
+- `DESIGN_JOURNAL.md` stays append-only with a dated, branch-tagged entry. Append/append conflicts
+  are trivial to resolve by keeping both.
+- **Do not run two full gates at once.** `release-gate.sh` saturates the machine and the self-host
+  tests already contend for cores; concurrent gates inflate every agent's wall-clock. Serialize them
+  at the merge point.
 
 ## On resume — do these first
 
