@@ -93,10 +93,26 @@ it, and conflicts in whatever file the trunk changed most recently — nowhere n
 the branch's actual work. This was hit for real on 2026-08-09: the conflict landed
 in `PARALLEL_DEVELOPMENT.md`, a file the branch had never touched.
 
-**Replay only the commits genuinely unique to the branch.** List them with
-`git log --no-merges --oneline <trunk>..<branch>` and cherry-pick that set onto the
-rebased base. The result is linear with no merge commits, and files that both sides
-edited in separate regions — `release-gate.sh` — come out carrying both changes.
+**Replay only the commits genuinely unique to the branch — and in a three-level
+topology, "unique" is measured against the VERSION BRANCH, not the trunk.**
+
+```
+git log --no-merges --oneline <old-version-branch-tip>..<feature-branch>
+```
+
+Cherry-pick that set onto the rebased base. The result is linear with no merge
+commits, and files that both sides edited in separate regions —
+`release-gate.sh` — come out carrying both changes.
+
+**Using the trunk as the endpoint is wrong here**, and this document said so until
+2026-08-09. `<trunk>..<feature-branch>` also returns the version branch's own
+commits, which the version branch's rebase has already replayed; cherry-picking
+that list applies them a second time. Everything between the trunk and the version
+branch is the version branch's history and is not the feature branch's to carry.
+
+The general form: the endpoint is the commit the feature branch was actually cut
+from, which under `trunk → version branch → feature branch` is the version
+branch's old tip.
 
 Once a branch is on the rebase policy this does not recur, because there are no
 merge commits to confuse the range. It is a one-time conversion hazard, and the

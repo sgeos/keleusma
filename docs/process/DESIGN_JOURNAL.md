@@ -17,6 +17,32 @@ content below is that accreted history, verbatim; new reasoning is appended at t
 
 **Date**: 2026-08-04 (session 37)
 
+**THE PREDICTOR IS EXECUTED VERSUS UNEXECUTED, NOT CODE VERSUS COMMANDS (2026-08-09).**
+I had drawn the boundary in my own favour and the v0.3.0 session corrected it. My version: claims
+about code I have read and tested held up today, claims about commands and sequences did not. Four
+failures supported it -- a 3.7x speedup, a comment about which assertions would survive a swapped
+push order, an unscoped `pkill` handed over while my own script was scoped, and a `git rebase --onto`
+range that replayed the trunk's history onto itself.
+
+THEIR CORRECTION IS BETTER. The predictor is whether the claim was **executed**, regardless of
+category. Their own worst error that day was a claim about *code* -- that a `for` statement drags in
+coroutine and composite opcodes -- derived from counting `Op::` occurrences in a function rather than
+compiling a `for` loop and looking. Three of their four failed predicates concerned IR structure,
+which is also code. **Reading is not executing.** Commands merely happen to be the category one is
+least tempted to run first, which is why the boundary looked like it fell there.
+
+ONE THING TO ADD, because "executed" alone is not sufficient. The 3.7x speedup WAS executed; the
+measurement ran. What had not been executed was its precondition -- I had not re-verified that the
+build under measurement was correct, and it was not, because constant loads were erroring out early
+and returning `Unit`. So: an unexecuted claim is unreliable, and an executed claim is only as good as
+its unexecuted preconditions. That is the same rule as "never measure performance on a build you have
+not just re-verified", arrived at from the other direction.
+
+The practical form: before stating a procedure, run it. Before trusting a measurement, re-establish
+what it rests on. Rehearsing a history rewrite on throwaway refs is this rule applied to git, and it
+is how the `--onto` range error was found rather than discovered mid-conflict.
+
+
 **NEGATIVE CONTROLS HAVE A BLIND SPOT (2026-08-09, from the v0.3.0 session): they catch a predicate that is too LOOSE, and are silent on one that is too STRICT.**
 I had recorded "run the control even when confident" as this arc's rule, in that session's own
 wording. It needs a qualification they paid four attempts to learn, and it lands squarely on the work
