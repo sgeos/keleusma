@@ -28,19 +28,19 @@ deserves the same scepticism as any other.**
 
 ## Status
 
-**Lowered (31).** `GetLocal`, `SetLocal`, `PopN`, `Dup`, `Const` (scalars),
+**Lowered (35).** `GetLocal`, `SetLocal`, `PopN`, `Dup`, `Const` (scalars),
 `PushImmediate`, `CheckedAdd`, `CheckedSub`, `CheckedNeg`, `CheckedMul(0)`,
-`CmpEq`, `CmpNe`, `CmpLt`, `CmpGt`, `CmpLe`, `CmpGe`, `Not`, `BitAnd`, `BitOr`,
-`BitXor`, `Shl`, `Shr`, `If`, `Else`, `EndIf`, `Loop`, `EndLoop`, `Break`,
-`BreakIf`, `Return`, `Trap`.
+`Div`, `Mod`, `CheckedDiv(0)`, `CheckedMod`, `CmpEq`, `CmpNe`, `CmpLt`, `CmpGt`,
+`CmpLe`, `CmpGe`, `Not`, `BitAnd`, `BitOr`, `BitXor`, `Shl`, `Shr`, `If`, `Else`,
+`EndIf`, `Loop`, `EndLoop`, `Break`, `BreakIf`, `Return`, `Trap`.
 
-**Remaining (35),** grouped below by what they actually cost.
+**Remaining (31),** grouped below by what they actually cost.
 
-Two entries in that list are **partial**, and the count treats them as lowered
+Three entries in that list are **partial**, and the count treats them as lowered
 because the unsupported case is refused rather than mislowered: `Const` handles
-scalar constants only, and `CheckedMul` handles a zero fraction-bit count only.
-A reader taking the count as a completeness measure would overstate coverage by
-two.
+scalar constants only, and `CheckedMul` and `CheckedDiv` handle a zero
+fraction-bit count only. A reader taking the count as a completeness measure
+would overstate coverage by three.
 
 ## CORRECTED: `Add`, `Sub`, `Mul` and `Neg` are not the integer opcodes
 
@@ -74,6 +74,32 @@ is refused rather than lowered as if the operand were absent.
 Verified by dumping opcode streams from the reference compiler, not by reading
 opcode names. The names are actively misleading here, which is the whole reason
 this section exists.
+
+## CORRECTED: `i64::MIN / -1` does not trap, and the four division opcodes differ
+
+Group 2 previously said of the division family that "the same trap applies to
+`i64::MIN / -1`". **It does not.** Confirmed by executing the VM rather than by
+reading the arm:
+
+| | zero divisor | `i64::MIN` by `-1` |
+|---|---|---|
+| `Div` | `VmError::DivisionByZero` | `i64::MIN`, **no fault** |
+| `Mod` | `VmError::DivisionByZero` | `0`, **no fault** |
+| `CheckedDiv(0)` | flag `3`, numerator in low | flag `1`, low `i64::MIN` |
+| `CheckedMod` | flag `3`, numerator in low | flag `0`, low `0` |
+
+Both inputs are undefined behaviour in LLVM and neither is undefined in the VM,
+so both need excluding — but only one of them by a trap. The lowering forces the
+divisor to `1` for the `i64::MIN / -1` case, which is exact rather than
+approximate for both opcodes: `sdiv(i64::MIN, 1)` is `i64::MIN` and
+`srem(i64::MIN, 1)` is `0`, which are the two answers wanted. The checked forms
+need no such substitution because the division is performed in 128 bits, where
+`2^63` is representable, and that is precisely how the VM arrives at flag `1`.
+
+Division and modulo also truncate toward zero in both, not floor: `-7 / 2` is
+`-3` and `-7 % 2` is `-1`. Had either language floored, a lowering that assumed
+agreement would be wrong on every negative dividend, which is a large fraction of
+real inputs rather than a corner.
 
 ## The high word and the flag were unobserved until 2026-08-09
 
@@ -213,7 +239,7 @@ distinguish it, not merely exercise it.
 
 | Opcode | The decision |
 |---|---|
-| `Div` `Mod` `CheckedDiv` `CheckedMod` | **THE NEXT INCREMENT.** Division by zero is undefined behaviour in LLVM and a `VmError::DivisionByZero` in the VM. A guard branch to the trap block is mandatory, not optional. The same trap applies to `i64::MIN / -1`, which is also UB in LLVM. Note the checked forms do **not** trap on a zero divisor: the VM reifies it as flag `3` with the numerator in the low slot, so the handled `zero_divisor(n)` arm can bind it. Read the VM arm before lowering; the two forms differ. |
+| ~~`Div` `Mod` `CheckedDiv(0)` `CheckedMod`~~ | **DONE.** See the correction below; the entry that stood here was wrong about `i64::MIN / -1`. |
 | ~~`CheckedMul(u8)`~~ | **DONE for `0`.** The operand is the Q-format fraction-bit count; zero is integer multiply. A non-zero count is fixed-point and is refused. |
 | `Const(u16)` | Scalar constants are easy. Composite constants are not, and route into Group 4. |
 | `BoundsCheck(u16)` | A compare and a branch to trap. Cheap once the trap path carries a reason code. |
