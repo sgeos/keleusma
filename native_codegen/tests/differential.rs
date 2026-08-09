@@ -22,6 +22,7 @@ use keleusma::bytecode::Value;
 use keleusma::vm::{Vm, auto_arena_capacity_for};
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use keleusma_native::{LowerOptions, check_word_width, lower_chunk};
+use std::collections::BTreeMap;
 
 /// Run `src` on the VM with `args`, returning the finished integer result.
 fn vm_result(src: &str, args: &[i64]) -> i64 {
@@ -268,5 +269,134 @@ fn the_shift_lowering_masks_the_count_structurally() {
              shift-by-register masks in hardware. Shift instruction was:\n  \
              {shift}\nfull IR:\n{ir}"
         );
+    }
+}
+
+/// Loops, and the two structural cases the design predicted.
+///
+/// `loop { break; }` shows both: the compiler emits the arm's Unit push
+/// immediately AFTER the unconditional `Break`, where no edge reaches it, and a
+/// `loop` whose exit is reached only by `break` never falls through to it.
+/// A data-dependent `break` is REJECTED BY THE VERIFIER, not by the lowering:
+/// "no statically extractable iteration bound; strict mode requires loops with
+/// fall-through bodies to match the canonical for-range pattern". So the
+/// admitted forms are the range `for`, which is that canonical pattern, and a
+/// loop whose break is unconditional and therefore trivially bounded.
+const LOOP_SOURCES: &[&str] = &[
+    "fn main(a: Word, b: Word) -> Word { loop { break; } a }",
+    "fn main(a: Word, b: Word) -> Word { for i in 0..3 { } a }",
+];
+
+/// Returns true if `ir` contains a branch to a block defined earlier in the
+/// text, i.e. a back edge. Written because a loop's ITERATION COUNT is not
+/// observable with the current opcode subset: Keleusma locals are immutable
+/// ("assignment is only supported for data block fields"), so accumulating
+/// across iterations needs a data block, which is a later increment. Without
+/// this, a lowering that dropped the loop entirely would pass every
+/// differential case.
+fn has_back_edge(ir: &str) -> bool {
+    // Builds the control-flow graph from LLVM's `preds` annotations and looks
+    // for a CYCLE. A block reachable from itself is a loop. That is a graph
+    // property, and unlike every earlier attempt it does not depend on the order
+    // blocks happen to be printed in.
+    //
+    // THREE EARLIER VERSIONS USED TEXT ORDER AND ALL THREE WERE WRONG.
+    // (1) `strip_suffix(':')` never matched, because LLVM prints
+    //     `op5:  ; preds = ...`; it reported no back edge for a real loop.
+    // (2) "branches to an earlier-defined block" reported true for any branch to
+    //     the `trap` block, which is emitted near the top.
+    // (3) "a pred defined later in the text" failed the same way, for the same
+    //     block, in the other direction.
+    // Each was caught only by running the control. The lesson is that loop
+    // structure is not recoverable from text position; build the graph.
+    let mut edges: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut nodes: Vec<&str> = Vec::new();
+    for line in ir.lines() {
+        if line.starts_with(char::is_whitespace) {
+            continue;
+        }
+        let Some((label, rest)) = line.split_once(':') else {
+            continue;
+        };
+        if label.is_empty() || label.contains(' ') {
+            continue;
+        }
+        nodes.push(label);
+        if let Some(preds) = rest.split("preds =").nth(1) {
+            for p in preds.split(',') {
+                let name = p.trim().trim_start_matches('%');
+                if !name.is_empty() {
+                    edges.entry(name).or_default().push(label);
+                }
+            }
+        }
+    }
+
+    fn reaches<'a>(
+        from: &'a str,
+        target: &'a str,
+        edges: &BTreeMap<&'a str, Vec<&'a str>>,
+        seen: &mut Vec<&'a str>,
+    ) -> bool {
+        if seen.contains(&from) {
+            return false;
+        }
+        seen.push(from);
+        for n in edges.get(from).map(|v| v.as_slice()).unwrap_or(&[]) {
+            if *n == target || reaches(n, target, edges, seen) {
+                return true;
+            }
+        }
+        false
+    }
+
+    nodes.iter().any(|n| reaches(n, n, &edges, &mut Vec::new()))
+}
+
+#[test]
+fn loops_agree_with_the_vm() {
+    for src in LOOP_SOURCES {
+        for args in [[9, 4], [1, 0], [i64::MAX, 3], [-2, 5]] {
+            assert_agrees(src, &args);
+        }
+    }
+}
+
+#[test]
+fn the_range_for_lowering_actually_emits_a_back_edge() {
+    // The differential cases above pin stack discipline THROUGH a loop, but
+    // cannot pin that the loop iterates, for the reason given on
+    // `has_back_edge`. Assert the back edge directly.
+    let ir = lowered_ir("fn main(a: Word, b: Word) -> Word { for i in 0..3 { } a }");
+    assert!(
+        has_back_edge(&ir),
+        "the range `for` lowering must emit a back edge; a lowering that dropped \
+         the loop would pass every behavioural case in this file. IR was:\n{ir}"
+    );
+
+    // Control on the control: a straight-line function must NOT report one, or
+    // the predicate is trivially true and proves nothing.
+    let straight = lowered_ir("fn main(a: Word, b: Word) -> Word { a + b }");
+    assert!(
+        !has_back_edge(&straight),
+        "straight-line code reported a back edge, so the predicate does not \
+         discriminate. IR was:\n{straight}"
+    );
+}
+
+#[test]
+fn small_integer_literals_agree_with_the_vm() {
+    // PushImmediate encodes Int(0..=15) inline. Both ends of that range, since
+    // an off-by-one in the `operand - 4` decode would still pass at one end.
+    // These route through `Const` and the chunk constant pool rather than
+    // through `PushImmediate`, which was the assumption before probing.
+    for src in [
+        "fn main(a: Word, b: Word) -> Word { if a > b { 0 } else { 15 } }",
+        "fn main(a: Word, b: Word) -> Word { if a > b { 15 } else { 1 } }",
+        "fn main(a: Word, b: Word) -> Word { a + 7 }",
+    ] {
+        for args in [[9, 4], [1, 2], [-5, -5]] {
+            assert_agrees(src, &args);
+        }
     }
 }
