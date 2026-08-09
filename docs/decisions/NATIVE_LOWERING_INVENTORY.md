@@ -101,6 +101,35 @@ Division and modulo also truncate toward zero in both, not floor: `-7 / 2` is
 agreement would be wrong on every negative dividend, which is a large fraction of
 real inputs rather than a corner.
 
+## An opcode being emitted does not mean its operands are
+
+The Status section above rested on a measured claim: all 66 opcodes are emitted
+by the reference compiler. True, and it hid something.
+
+`PushImmediate` is emitted. Its **operand space is not**. Probed across 16 source
+shapes covering literals, tuples, arrays, structs, enums, matches, calls, shifts,
+bounded loops and handled arithmetic, the only operands the compiler emits are
+`0` (`Unit`) and `1`/`2` (the boolean literals). **Every integer literal,
+including `0` through `15`, routes through `Const` and the constant pool
+instead**, so the documented `4..=19 = Int(operand - 4)` encoding has no
+reachable caller.
+
+The consequence is that the lowering's decode of that range carried an
+arithmetic offset that nothing exercised. An off-by-one would have been
+invisible, and the test named `small_integer_literals_agree_with_the_vm` looks
+from its title as though it covered exactly this. It does not; it covers the
+constant pool.
+
+It is now tested by **rewriting real bytecode** — substituting `PushImmediate`
+for a `Const` load in a compiled module — which the VM accepts through its
+ordinary verified path rather than through `new_unchecked`, so the oracle is
+genuine. The same technique reaches any opcode or operand the compiler declines
+to emit, and it is the general answer to this class of gap.
+
+**Generalisation worth carrying**: an enumeration over opcodes answers "is this
+instruction reachable", not "is this instruction's behaviour covered". For any
+opcode carrying an operand, ask the second question separately.
+
 ## The high word and the flag were unobserved until 2026-08-09
 
 Worth recording as a class of gap rather than as one fixed bug. Every arithmetic
@@ -232,7 +261,7 @@ distinguish it, not merely exercise it.
 |---|---|
 | ~~`CheckedSub` `CheckedNeg`~~ | **DONE.** The three-slot `low, high, flag` pattern, shared with `CheckedAdd` and `CheckedMul(0)` through one helper. |
 | `Add` `Sub` `Mul` `Neg` | **BLOCKED, and not what they look like.** See the correction above: these carry no `Int` operands and are reachable only for `Byte`, `Fixed` and `Float`. They wait on the `Byte` representation and on Group 4. |
-| `PushImmediate(u8)` | Encoding is documented: `0 = Unit`, `1 = true`, `2 = false`, `3 = None`, `4..19 = Int(operand - 4)`. **Blocks on one decision**: how `Unit` and `None` are represented in a flat i64 world. Refusing them is a legitimate first answer. |
+| ~~`PushImmediate(u8)`~~ | **DONE, partially, and this row contradicted the Status list above for two increments.** `Unit`, both booleans and the inline integers lower; `None` and the reserved operands are refused, which was the "legitimate first answer" this row proposed. See the note below on what the compiler actually emits. |
 | `WordToByte` `ByteToWord` | Truncate and extend. Needs the `Byte` representation settled, including whether the extension is signed. |
 
 ## Group 2 — one design decision each
