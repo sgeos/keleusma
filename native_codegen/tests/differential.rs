@@ -733,6 +733,149 @@ fn a_call_is_still_refused_when_only_one_chunk_is_lowered() {
 }
 
 // ---------------------------------------------------------------------------
+// Byte conversions and the bounds check
+// ---------------------------------------------------------------------------
+
+#[test]
+fn byte_conversions_agree_with_the_vm() {
+    // A `Byte` occupies a full i64 slot holding 0..=255, which is what makes
+    // `ByteToWord` a no-op. That representation is not arbitrary: the `v0.2.3`
+    // session measured that `Byte as Word` ZERO-extends, so `0xFF` reads as
+    // 255 rather than -1. A sign-extending lowering would agree on every input
+    // below 128 and differ on exactly half the range.
+    //
+    // `-1` and `256` are the cases that pin the mask. `i64::MAX` pins it at the
+    // other end, and `255`/`128` straddle the sign bit of the byte, which is
+    // where a sign-extending implementation first diverges.
+    for src in [
+        "fn main(a: Word, b: Word) -> Word { let x = a as Byte; x as Word }",
+        "fn main(a: Word, b: Word) -> Word { let x = (a + b) as Byte; x as Word }",
+    ] {
+        for args in [
+            [0, 0],
+            [1, 0],
+            [127, 0],
+            [128, 0],
+            [255, 0],
+            [256, 0],
+            [-1, 0],
+            [-128, 0],
+            [i64::MAX, 0],
+            [i64::MIN, 0],
+            [300, 0],
+        ] {
+            assert_agrees(src, &args);
+        }
+    }
+}
+
+/// Build a module whose entry chunk is `GetLocal(0); BoundsCheck(bound); Return`.
+///
+/// `Op::BoundsCheck` is emitted by the reference compiler ONLY for multi-level
+/// data-segment indexing, and the data-segment opcodes are Workstream D and
+/// unsupported here, so no compilable source reaches it. Rewriting real
+/// bytecode is the same technique used for `PushImmediate`'s integer encoding,
+/// and for the same reason: the opcode is part of the instruction set whether or
+/// not today's compiler emits it.
+fn bounds_check_module(bound: u16) -> keleusma::bytecode::Module {
+    let src = "fn main(a: Word, b: Word) -> Word { a }";
+    let mut m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    m.chunks[0].ops = vec![Op::GetLocal(0), Op::BoundsCheck(bound), Op::Return];
+    m
+}
+
+#[test]
+fn an_in_range_bounds_check_passes_the_operand_through_unchanged() {
+    // **`BoundsCheck` PEEKS, it does not pop.** The VM reads `stack.last()` and
+    // leaves the operand for the indexing opcode that follows. A lowering that
+    // consumed it would leave `Return` reading the wrong slot, and the failure
+    // would surface as a wrong VALUE rather than as an obvious stack error.
+    //
+    // That is exactly what this checks: the operand must survive the check and
+    // still be what `Return` yields.
+    for (bound, idx) in [(10u16, 0i64), (10, 9), (1, 0), (65535, 65534)] {
+        let m = bounds_check_module(bound);
+        let native = native_result_of(&m, &[idx, 0]);
+        let vm = vm_result_of(m, &[idx, 0]);
+        assert_eq!(
+            (native, vm),
+            (idx, idx),
+            "an in-range index must pass through unchanged for bound={bound}, idx={idx}"
+        );
+    }
+}
+
+#[test]
+fn an_out_of_range_bounds_check_faults_in_the_vm_which_is_why_native_traps() {
+    // The differential oracle cannot cover the failing case: the VM raises
+    // `IndexOutOfBounds` and native aborts through `llvm.trap`, so there is no
+    // value to compare. What is checkable is that the VM really does fault,
+    // which is what makes trapping the right lowering rather than a guess.
+    //
+    // **The negative index is the case that matters.** The lowering folds both
+    // failure directions into ONE unsigned compare, which is only correct
+    // because a negative i64 reinterpreted as unsigned is enormous. A signed
+    // compare against the bound would accept every negative index silently.
+    for (bound, idx) in [(10u16, 10i64), (10, 11), (1, 1), (10, -1), (10, i64::MIN)] {
+        let m = bounds_check_module(bound);
+        let cap = auto_arena_capacity_for(&m, &[]).expect("arena capacity");
+        let arena = keleusma_arena::Arena::with_capacity(cap);
+        let mut vm = Vm::new(m, &arena).expect("vm");
+        let err = vm.call(&[Value::Int(idx), Value::Int(0)]).err();
+        assert!(
+            matches!(err, Some(keleusma::vm::VmError::IndexOutOfBounds(_, _))),
+            "the VM must fault for bound={bound}, idx={idx}; got {err:?}"
+        );
+    }
+
+    // MUST-NOT-FIRE CASE: an in-range index must NOT fault, or the assertion
+    // above is satisfied by a check that rejects everything.
+    let m = bounds_check_module(10);
+    let cap = auto_arena_capacity_for(&m, &[]).expect("arena capacity");
+    let arena = keleusma_arena::Arena::with_capacity(cap);
+    let mut vm = Vm::new(m, &arena).expect("vm");
+    assert!(
+        vm.call(&[Value::Int(5), Value::Int(0)]).is_ok(),
+        "an in-range index must not fault"
+    );
+}
+
+#[test]
+fn the_bounds_check_guards_with_an_unsigned_compare() {
+    // Structural, because the failing path cannot be executed differentially.
+    // The predicate must be UNSIGNED: `icmp uge`. With `sge` every negative
+    // index passes the guard and reaches an out-of-bounds access, and no
+    // in-range differential case would ever notice.
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    let m = bounds_check_module(10);
+    lower_chunk(
+        &ctx,
+        &lm,
+        &m.chunks[0],
+        "kel_entry",
+        LowerOptions::default(),
+    )
+    .expect("lower");
+    let ir = lm.print_to_string().to_string();
+
+    let guard = ir
+        .lines()
+        .find(|l| l.contains("icmp") && l.contains("oob"))
+        .unwrap_or_else(|| panic!("no bounds-check compare found. IR was:\n{ir}"));
+    assert!(
+        guard.contains("icmp uge"),
+        "the bounds check must use an UNSIGNED compare so a negative index is \
+         caught; a signed compare accepts every negative value. Found: {guard}"
+    );
+    assert!(
+        ir.lines()
+            .any(|l| l.trim_start().starts_with("br i1 ") && l.contains("label %trap")),
+        "the bounds check must branch to the trap block. IR was:\n{ir}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The middle end is load-bearing, and this encodes that rather than recording it
 // ---------------------------------------------------------------------------
 
