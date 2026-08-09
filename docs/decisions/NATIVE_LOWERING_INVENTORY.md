@@ -286,9 +286,12 @@ distinguish it, not merely exercise it.
 These are not deferred out of convenience; each belongs to a workstream with its
 own design.
 
-- **`Stream`, `Yield`, `Reset`** — Workstream B, sub-coroutine lowering through
-  the returned-continuation intrinsic family. The roadmap identifies this as
-  where the risk concentrates, and it is the load-bearing primitive for V0.5.0.
+- **`Stream`, `Yield`, `Reset`** — Workstream B, sub-coroutine lowering. The
+  roadmap identifies this as where the risk concentrates, and it is the
+  load-bearing primitive for V0.5.0. **The mechanism is now probed and works at
+  both the LLVM and the binding layer**; see the Workstream B section below,
+  including the correction that BOTH intrinsic families are available and the
+  switched-resume form is the one demonstrated.
 - **`NewComposite`, `GetField`, `GetIndex`, `GetTupleField`, `GetEnumField`,
   `Len`, `IsEnum`, `IsStruct`** — the flat byte composite representation and
   arena residency, Workstream C.
@@ -528,3 +531,58 @@ must refuse it too. A refusal that only one entry point makes is not evidence
 that an opcode is unsupported. Generalised: when a check asserts that something
 fails, pin down what it fails *because of*, or the check survives the condition
 it was written to detect.
+
+## Workstream B probed 2026-08-09: the coroutine mechanism works, with three findings
+
+`V0_3_X_ROADMAP.md` calls sub-coroutine lowering "the load-bearing primitive"
+and "where the risk concentrates", and it had never been probed. It is now, at
+both layers, because the `.stack_sizes` probe showed that the LLVM layer working
+says nothing about the binding layer.
+
+**At the LLVM layer it works end to end.** A switched-resume coroutine verifies,
+splits into ramp, `.resume`, `.destroy` and `.cleanup`, consumes every coroutine
+intrinsic, and **executes**: driven under `lli` it yielded three successive
+values across two resumes and destroyed cleanly. All five coroutine passes are
+registered in LLVM 22.1.8.
+
+**At the binding layer it also works, and the obvious inference was wrong.**
+Every intrinsic that opens or closes a coroutine traffics in LLVM's `token`
+type, and inkwell has no token type — it panics with "FIXME: Unsupported type:
+Token" if one reaches its type enum. The natural conclusion is that coroutines
+are unreachable from this backend. **That conclusion is false.**
+`Intrinsic::find` plus `get_declaration` asks LLVM to construct the signature
+from the intrinsic's own definition, so no Rust code ever names the token type.
+All nine intrinsics declare successfully, both returned-continuation forms
+(`llvm.coro.id.retcon` and `.retcon.once`) are present, and the pass pipeline
+runs through `Module::run_passes`. Recorded because I nearly wrote the opposite
+down as a finding before testing it.
+
+Three results that bear on other workstreams:
+
+1. **The frame allocator survives `coro-split`.** The probe deliberately used a
+   named external allocator rather than `malloc`, and the split output still
+   calls it. **Workstream C's arena-resident coroutine frames are mechanically
+   supported**, not merely desirable.
+2. **The frame size folds to a compile-time constant.** After splitting, the
+   allocation reads `call ptr @kel_arena_alloc(i32 32)` — a literal. A
+   coroutine's memory contribution is therefore statically recoverable from the
+   emitted IR, which is what **Workstream E** needs for a native worst-case
+   memory bound. This does not by itself establish the bound; it establishes
+   that the input to one is obtainable.
+3. **`llvm.coro.end` returns `void` in LLVM 22, not `i1`.** Widely published
+   examples use `i1` and fail verification with "Intrinsic has incorrect return
+   type". Cheap to hit and confusing, because the diagnostic names the function
+   rather than the signature.
+
+**A correction to this document.** The Group 4 entry said Workstream B goes
+"through the returned-continuation intrinsic family". Both families are
+available, and the form demonstrated end to end here is the **switched-resume**
+one, which maps more directly onto a host that calls resume repeatedly. The
+returned-continuation form is an optimisation for one-shot coroutines, which is
+how `V0_4_0_NATIVE_CODEGEN.md` open question 3 frames it. The choice is a design
+decision, not an availability constraint.
+
+**Not established**: that Keleusma's `Stream`/`Yield`/`Reset` map onto this
+shape, that yielded values cross the boundary correctly, or that RESET semantics
+survive. Those are Workstream B proper. What is established is that the
+mechanism is reachable, behaves, and does not force `malloc`.
