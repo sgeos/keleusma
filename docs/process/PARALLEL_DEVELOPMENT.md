@@ -72,6 +72,44 @@ a weak signal rather than a guarantee — a mailbox need not change every commit
 but it is the difference between a stale read that announces itself and one that
 does not.
 
+### Why not a real message bus? Decided 2026-08-09, with a trigger to revisit
+
+Purpose-built agent-to-agent buses exist and are mature enough to adopt. The
+recurring design is a shared SQLite or Maildir append-only log with a per-harness
+hook and a **wake mechanism**, no broker and no network. `hcom` is the strongest
+candidate: permissively licensed, and it documents Claude Code support.
+
+**Not adopted yet, for one reason: communication is not the binding constraint.**
+The measured bottleneck is the gate at ~2h33m, and it is repetition-bound. A
+channel's ceiling is `1 / (1 - f_c)` where `f_c` is the fraction of time lost to
+coordination overhead, so a perfect channel buys almost nothing while `f_c` is
+small and the gate dominates. Fixing the gate is worth more than any channel.
+
+**The honest defect in the git mailbox is that it is pull-only.** There is no
+wake, so neither session knows when the other has written — which is why prose was
+being relayed through the operator to *signal*, not to carry content. Mitigated by
+convention rather than tooling, because coordination only matters at increment
+boundaries:
+
+> **Read the other session's mailbox before starting an increment and after
+> finishing one.** That is the whole polling protocol.
+
+**Adopt a real bus when** either of these holds:
+
+- signalling is needed *mid-increment* rather than at boundaries; or
+- a session acts on stale information more than once despite the boundary checks.
+
+**Then adopt, do not build.** Native inter-agent messaging is expected to land in
+the major harnesses within roughly six to twelve months, so anything bespoke here
+would be subsumed before it paid back. The git mailbox is zero investment and
+disposable, which is the correct posture against a capability that is
+commoditizing underneath us.
+
+One local note against the general advice: single-vendor mailbox features are
+usually ruled out for spanning a mixed fleet. **Both sessions here are Claude
+Code**, so that disqualifier does not apply, and a native feature is a legitimate
+candidate the moment one is available and stable.
+
 ### Give every coordination artefact the same treatment as a predicate
 
 Raised by the `v0.3.0` session, from the failure above. A mechanism introduced to
