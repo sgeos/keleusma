@@ -2,7 +2,7 @@
 //!
 //! # Scope
 //!
-//! This is an early subset: 35 of the instruction set's 66 opcodes. Everything
+//! This is an early subset: 36 of the instruction set's 66 opcodes. Everything
 //! else is refused rather than lowered to something plausible and wrong.
 //! Widening the subset is the work of subsequent increments, tracked in
 //! `docs/decisions/NATIVE_LOWERING_INVENTORY.md`.
@@ -70,8 +70,8 @@ use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module as LlvmModule;
 use inkwell::types::IntType;
-use inkwell::values::{FunctionValue, IntValue, PointerValue};
-use keleusma::bytecode::{Chunk, ConstValue, Op};
+use inkwell::values::{FunctionValue, IntValue, PointerValue, ValueKind};
+use keleusma::bytecode::{Chunk, ConstValue, Module, Op};
 use std::collections::BTreeMap;
 
 /// Maximum operand-stack depth the lowering provisions slots for.
@@ -384,10 +384,67 @@ pub fn lower_chunk<'ctx>(
     opts: LowerOptions,
 ) -> Result<FunctionValue<'ctx>, LowerError> {
     let i64t = ctx.i64_type();
-    let i128t = ctx.i128_type();
-
     let params: Vec<_> = (0..chunk.param_count).map(|_| i64t.into()).collect();
     let func = module.add_function(sym, i64t.fn_type(&params, false), None);
+    // No callees are visible, so any `Op::Call` is refused. A single chunk
+    // cannot resolve one: the target is an index into the module's chunk table,
+    // which this entry point does not receive.
+    lower_chunk_body(ctx, module, chunk, func, &[], opts)
+}
+
+/// Lower every chunk in a module, so that `Op::Call` resolves.
+///
+/// Functions are declared for all chunks BEFORE any body is lowered, which is
+/// what lets a call reference a chunk that has not been lowered yet. Declaration
+/// order would otherwise matter, and it should not: the type checker rejects
+/// direct and mutual recursion, so the call graph is acyclic, but "acyclic" does
+/// not mean "callees come first" in the chunk table.
+///
+/// Symbols are `kel_chunk_<index>`. **This is deliberately not the R4.2 mangling
+/// scheme.** That scheme encodes purity, category, module path and type
+/// arguments for EXTERNAL linkage across separately compiled artefacts, and it
+/// needs metadata a `Chunk` does not carry. Nothing here is externally linked
+/// yet, so an internal, obviously-provisional name is more honest than a
+/// half-implemented mangling that looks authoritative.
+pub fn lower_module<'ctx>(
+    ctx: &'ctx Context,
+    module: &LlvmModule<'ctx>,
+    program: &Module,
+    opts: LowerOptions,
+) -> Result<Vec<FunctionValue<'ctx>>, LowerError> {
+    check_word_width(program.word_bits_log2)?;
+    let i64t = ctx.i64_type();
+
+    let declared: Vec<FunctionValue<'ctx>> = program
+        .chunks
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let params: Vec<_> = (0..c.param_count).map(|_| i64t.into()).collect();
+            module.add_function(
+                &format!("kel_chunk_{i}"),
+                i64t.fn_type(&params, false),
+                None,
+            )
+        })
+        .collect();
+
+    for (chunk, func) in program.chunks.iter().zip(declared.iter()) {
+        lower_chunk_body(ctx, module, chunk, *func, &declared, opts)?;
+    }
+    Ok(declared)
+}
+
+fn lower_chunk_body<'ctx>(
+    ctx: &'ctx Context,
+    module: &LlvmModule<'ctx>,
+    chunk: &Chunk,
+    func: FunctionValue<'ctx>,
+    callees: &[FunctionValue<'ctx>],
+    opts: LowerOptions,
+) -> Result<FunctionValue<'ctx>, LowerError> {
+    let i64t = ctx.i64_type();
+    let i128t = ctx.i128_type();
 
     let b = ctx.create_builder();
     let entry = ctx.append_basic_block(func, "entry");
@@ -808,6 +865,55 @@ pub fn lower_chunk<'ctx>(
             Op::EndIf => {}
             Op::Trap(_) => {
                 st.b.build_unconditional_branch(trap_bb).unwrap();
+            }
+            // A direct call to another chunk. Only reachable through
+            // `lower_module`, which declares every chunk up front; `lower_chunk`
+            // passes no callees and therefore refuses.
+            //
+            // The VM sets the callee's frame base to `stack.len() - arg_count`,
+            // so the arguments sit in DECLARATION order with the last argument
+            // on top. Popping yields them in reverse, hence the reversal below.
+            // Getting this backwards is invisible for a one-argument callee and
+            // for any callee whose arguments happen to be equal, which is most
+            // of the obvious test cases.
+            Op::Call(idx, arg_count) => {
+                let callee = callees.get(*idx as usize).copied().ok_or_else(|| {
+                    LowerError::UnsupportedOp(format!(
+                        "Call({idx}, {arg_count}) needs the whole module; lower_module resolves \
+                         it, lower_chunk cannot"
+                    ))
+                })?;
+
+                // The VM tolerates an argument count below the callee's local
+                // count by filling the remainder with Unit. That is a distinct
+                // calling convention from a plain native call, so it is refused
+                // rather than approximated: an arity mismatch here would produce
+                // a call LLVM accepts and the VM does not agree with.
+                let declared = callee.count_params();
+                if u32::from(*arg_count) != declared {
+                    return Err(LowerError::UnsupportedOp(format!(
+                        "Call({idx}, {arg_count}) passes {arg_count} arguments to a chunk \
+                         declaring {declared} parameters; the VM's Unit-fill convention for a \
+                         short call is not lowered"
+                    )));
+                }
+
+                let mut args: Vec<_> = (0..*arg_count).map(|_| st.pop()).collect();
+                args.reverse();
+                let args: Vec<_> = args.into_iter().map(|a| a.into()).collect();
+
+                let ret = match st
+                    .b
+                    .build_call(callee, &args, "call")
+                    .unwrap()
+                    .try_as_basic_value()
+                {
+                    ValueKind::Basic(v) => v.into_int_value(),
+                    ValueKind::Instruction(_) => {
+                        unreachable!("every lowered chunk returns an i64, never void")
+                    }
+                };
+                st.push(ret);
             }
             Op::Return => {
                 let v = st.pop();
