@@ -30,6 +30,15 @@
 # If it fires: re-run alone before profiling, exactly as the existing failure
 # message says.
 #
+# STOPPING A GATE. Kill it PATH-SCOPED, never with a bare `pkill -f
+# release-gate.sh`. On 2026-08-09 that bare form killed a sibling session's gate
+# and left its `selfhost_codegen` binary orphaned at 98% CPU. Use:
+#
+#   pkill -f "<gate dir>"; pkill -f "<gate target>/debug/deps"
+#
+# The second command matters on its own: killing the driver leaves the cargo and
+# test children reparented to PID 1, still running.
+#
 # USAGE
 #   scripts/gate-in-worktree.sh                 # gate HEAD
 #   scripts/gate-in-worktree.sh <commit-ish>    # gate a specific commit
@@ -40,7 +49,13 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-REPO_ROOT="$(pwd)"
+# Anchor to the MAIN repository, not to whichever worktree this was invoked
+# from. `--git-common-dir` points at the shared `.git` even inside a worktree,
+# so its parent is the real repo root. Without this, running the script from a
+# worktree resolved `$REPO_ROOT/../keleusma-worktrees` to a NESTED
+# `keleusma-worktrees/keleusma-worktrees/`, which is where a sibling session's
+# gate actually ran on 2026-08-09.
+REPO_ROOT="$(cd "$(dirname "$(git rev-parse --git-common-dir)")" && pwd -P)"
 
 # First non-flag argument is the commit-ish; everything else passes through.
 COMMITISH="HEAD"
@@ -68,7 +83,12 @@ mkdir -p "$TREES_DIR"
 # That failed on the second invocation, which is the common case, and was caught
 # only because `--setup-only` made a second invocation cheap to try.
 TREES_DIR="$(cd "$TREES_DIR" && pwd -P)"
-GATE_DIR="$TREES_DIR/gate"
+# One gate worktree PER SESSION. Two sessions sharing a single `gate` directory
+# would fight over one checkout and one target dir, and the loser would gate
+# something other than what it asked for. `KEL_GATE_NAME` separates them; the
+# nested-path bug above is the only reason that collision did not happen the
+# first time both sessions ran this.
+GATE_DIR="$TREES_DIR/${KEL_GATE_NAME:-gate}"
 # A target directory OUTSIDE the worktree, and stable across runs, so the build
 # cache survives and only changed crates recompile. Inside the worktree it would
 # be discarded with the tree; shared with the main tree it would thrash, because
@@ -97,7 +117,20 @@ if [ -n "$(git -C "$GATE_DIR" status --porcelain)" ]; then
   exit 1
 fi
 
-LOG="${KEL_GATE_LOG:-"$TREES_DIR/gate-$SHORT.log"}"
+LOG="${KEL_GATE_LOG:-"$TREES_DIR/${KEL_GATE_NAME:-gate}-$SHORT.log"}"
+
+# Refuse to start while another gate is live anywhere on this machine. Two
+# concurrent gates contend for cores, which is what makes `tests/perf_canary.rs`
+# unreliable, and they make the "am I allowed to start one" question depend on
+# reading someone else's mailbox in time.
+if pgrep -f "release-gate.sh" >/dev/null 2>&1; then
+  echo "gate-worktree: a gate is ALREADY RUNNING on this machine; refusing to start a second." >&2
+  pgrep -fl "release-gate.sh" | head -3 >&2
+  echo "gate-worktree: stop it with a PATH-SCOPED kill, never a bare pkill -f release-gate.sh," >&2
+  echo "gate-worktree: which would also kill a sibling session's run:" >&2
+  echo "gate-worktree:   pkill -f \"\$GATE_DIR\" ; pkill -f \"\$GATE_TARGET/debug/deps\"" >&2
+  exit 2
+fi
 
 cat <<EOF
 gate-worktree: commit  $SHORT ($(git log -1 --format=%s "$COMMIT" | cut -c1-60))
