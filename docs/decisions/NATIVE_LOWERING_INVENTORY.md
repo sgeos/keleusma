@@ -28,13 +28,13 @@ deserves the same scepticism as any other.**
 
 ## Status
 
-**Lowered (35).** `GetLocal`, `SetLocal`, `PopN`, `Dup`, `Const` (scalars),
+**Lowered (36).** `GetLocal`, `SetLocal`, `PopN`, `Dup`, `Const` (scalars),
 `PushImmediate`, `CheckedAdd`, `CheckedSub`, `CheckedNeg`, `CheckedMul(0)`,
 `Div`, `Mod`, `CheckedDiv(0)`, `CheckedMod`, `CmpEq`, `CmpNe`, `CmpLt`, `CmpGt`,
 `CmpLe`, `CmpGe`, `Not`, `BitAnd`, `BitOr`, `BitXor`, `Shl`, `Shr`, `If`, `Else`,
-`EndIf`, `Loop`, `EndLoop`, `Break`, `BreakIf`, `Return`, `Trap`.
+`EndIf`, `Loop`, `EndLoop`, `Break`, `BreakIf`, `Return`, `Trap`, `Call`.
 
-**Remaining (31),** grouped below by what they actually cost.
+**Remaining (30),** grouped below by what they actually cost.
 
 Three entries in that list are **partial**, and the count treats them as lowered
 because the unsupported case is refused rather than mislowered: `Const` handles
@@ -278,7 +278,7 @@ distinguish it, not merely exercise it.
 
 | Opcode | Depends on |
 |---|---|
-| `Call(u16, u8)` | Multi-chunk lowering and the symbol mangling scheme resolved as R4.2 in the V0.4.0 strategy. Until then only single-chunk programs lower. |
+| ~~`Call(u16, u8)`~~ | **DONE** via `lower_module`, which declares every chunk before lowering any body so a call can reach a chunk declared later. Symbols are `kel_chunk_<index>`, deliberately NOT the R4.2 scheme: that encodes purity, category, module path and type arguments for EXTERNAL linkage and needs metadata a `Chunk` does not carry. Nothing is externally linked yet, so a provisional name is more honest than a half-implemented mangling that looks authoritative. A short call relying on the VM's Unit-fill convention is refused rather than approximated. |
 | `CallVerifiedNative` `CallExternalNative` | The native application binary interface, Workstream D. Not a Workstream A item. |
 
 ## Group 4 — the workstreams that own them
@@ -509,3 +509,22 @@ precondition in **one direction only**: it shows the check can fire when it
 should. It cannot show the check fires only when it should. That is why attempt
 (1), which never fired at all, walked straight through. **Both halves belong in
 the test**, and both are now encoded rather than run once by hand in a shell.
+
+## A self-check on the OPCODE is not a self-check on the REASON
+
+The subset-boundary test had rotted twice, passing for the wrong reason each
+time an opcode it named entered the subset. It was made self-checking: it now
+asserts that its chosen source really emits the opcode it claims to be testing.
+
+**That was not enough, and `Op::Call` proved it within one increment.** Calls
+became supported through `lower_module` while the single-chunk `lower_chunk`
+entry point still refused them, for a reason that had nothing to do with the
+subset — it cannot resolve a chunk index it was never given. The test went on
+passing. Its self-check confirmed the opcode was present and said nothing about
+why the refusal happened.
+
+The fix is a must-not-fire case on the OTHER entry point: the whole-module path
+must refuse it too. A refusal that only one entry point makes is not evidence
+that an opcode is unsupported. Generalised: when a check asserts that something
+fails, pin down what it fails *because of*, or the check survives the condition
+it was written to detect.
