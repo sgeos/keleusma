@@ -130,6 +130,7 @@ fn spike_report_corpus_coverage() {
     let mut chunks_total = 0usize;
     let mut chunks_lowerable = 0usize;
     let mut chunk_first_blocker: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut chunk_lengths: Vec<usize> = Vec::new();
 
     for path in &sources {
         let Ok(src) = std::fs::read_to_string(path) else {
@@ -166,6 +167,7 @@ fn spike_report_corpus_coverage() {
         compiled += 1;
         for c in &m.chunks {
             chunks_total += 1;
+            chunk_lengths.push(c.ops.len());
             let mut ok = true;
             let mut first: Option<&'static str> = None;
             for op in &c.ops {
@@ -231,5 +233,46 @@ fn spike_report_corpus_coverage() {
     for (name, n) in bl.iter().take(15) {
         println!("  {n:6}  {name}");
     }
+
+    // Chunk-length distribution, needed to compute the independence null
+    // properly rather than at the mean length. `p^L` is convex in `L`, so
+    // Jensen's inequality makes the mean-length figure a LOWER bound on the
+    // null; evaluating per chunk avoids relying on that direction.
+    println!("\nINDEPENDENCE NULL");
+    let p_inst = lowered_ops as f64 / total_ops as f64;
+    let null_per_chunk: f64 = chunk_lengths
+        .iter()
+        .map(|&l| p_inst.powi(l as i32))
+        .sum::<f64>()
+        / chunks_total as f64;
+    let null_at_mean = p_inst.powf(total_ops as f64 / chunks_total as f64);
+    println!("  p_inst                      {p_inst:.6}");
+    println!(
+        "  mean chunk length           {:.2}",
+        total_ops as f64 / chunks_total as f64
+    );
+    println!("  median chunk length         {}", {
+        let mut v = chunk_lengths.clone();
+        v.sort_unstable();
+        v[v.len() / 2]
+    });
+    println!("  null at mean length         {null_at_mean:.3e}");
+    println!("  null evaluated per chunk    {null_per_chunk:.3e}");
+    println!(
+        "  observed rho_unit           {:.6}",
+        chunks_lowerable as f64 / chunks_total as f64
+    );
+    println!(
+        "  clustering ratio Phi        {:.3e}",
+        (chunks_lowerable as f64 / chunks_total as f64) / null_per_chunk
+    );
+    println!(
+        "  rule-of-three upper bound on a zero-count instance rate: {:.3e}",
+        3.0 / total_ops as f64
+    );
+    println!(
+        "  rule-of-three upper bound on a zero-count chunk rate:    {:.3e}",
+        3.0 / chunks_total as f64
+    );
     println!("================\n");
 }
