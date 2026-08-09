@@ -34,9 +34,8 @@ establishes the byte-emission harness the rest depends on.
 
 1. ~~**CRC-32.**~~ **DONE 2026-08-09.** `src/selfhost/kel/wire.kel` plus the differential in
    `tests/selfhost_wire.rs`. See [Slice 1 as built](#slice-1-as-built-2026-08-09) below.
-2. **Container primitives and the prologue.** Little-endian place-value writers and readers, the
-   16-byte prologue, and the majority-of-three vote over its three copies. Oracle: the bytes
-   `keleusma-wire` emits for the same input.
+2. ~~**Container primitives and the prologue.**~~ **DONE 2026-08-09.** See
+   [Slice 2 as built](#slice-2-as-built-2026-08-09) below.
 3. **The region directory.** Emission and lookup, triplicated and voted, word-indexed offsets.
 4. **Record tables and byte pools.** Fixed-stride addressing, which is the shift-not-multiply case
    the format was shaped around.
@@ -111,6 +110,59 @@ own test so it reads as understood rather than as an untested assumption.
 is itself asserted, a `mutate` helper that requires its anchor to occur exactly once so a stale
 anchor cannot silently test the unmutated source, and hostile-input cases for a length beyond the
 array capacity (traps, does not truncate) and a length shorter than the buffer.
+
+### Slice 2 as built (2026-08-09)
+
+Place-value writers and readers, prologue emission, and the majority-of-three vote, all in
+`wire.kel`. The suite is now 23 tests, 0.97 s.
+
+**The oracle is byte identity**, not a single value: the 48 bytes Keleusma emits must equal the
+first 48 bytes `keleusma-wire` emits for the same region count, checked at 0, 1, 2, 7, 255, 256,
+1023 and 1024 regions. Two complementary directions are also asserted, because byte identity alone
+would pass if both sides were wrong in the same way. `WireView::parse` must **accept** what Keleusma
+emitted, and on a damaged artifact the Keleusma reader and the reference reader must **agree**.
+
+**What the probe settled:**
+
+| Question | Answer |
+|---|---|
+| Can a stage write into a shared byte array? | Yes, at literal and runtime indices, and from a `fn` |
+| Does a `[Byte]` element accept a `Word`? | No — the type checker demands an explicit `as Byte` |
+| Does `as Byte` fault on an out-of-range value? | **No, it truncates silently**: `300 as Byte` is 44 |
+| Does a place-value writer round-trip? | Yes, and it reproduces `MAGIC` as the bytes `X U A K` |
+
+The silent truncation is why the writers keep an explicit `band 255` that is arithmetically
+redundant with the cast. It states the narrowing where a reader can see it, rather than leaving it
+to an implicit conversion.
+
+**Two details of the reference that a transliteration would get wrong by default.**
+
+1. **`maj3` is a per-BIT majority**, `(a & b) | (a & c) | (b & c)`, not "pick the value that appears
+   at least twice". Where all three copies differ it synthesises a byte no copy contains, which is
+   the stronger behaviour: independent single-bit faults in three different copies are all repaired.
+   The distinction is invisible unless a case with three distinct bytes is exercised, so the suite
+   constructs one rather than hoping for it.
+2. **The prologue checksum is taken over the VOTED record, not the raw first copy.** So a vote that
+   repaired a byte is confirmed rather than merely trusted. Checksumming the raw copy would reject
+   an artifact the vote had already fixed. `wire.kel` keeps `crc_voted` separate from `crc_range`
+   for exactly this reason, and the 48-case single-bit injection test is what holds it in place.
+
+**Coverage.** Every one of the 48 single-bit positions across the three copies is injected and
+required both to be outvoted and to be reported as needing a scrub. Each malformed-field rejection
+carries its own code, and the order of the checks follows the reference exactly, because the code a
+caller sees for a doubly-malformed artifact is observable behaviour. The region-ceiling case
+recomputes a valid checksum over the oversized count, or it would be rejected at the checksum check
+first and would be testing the wrong thing.
+
+**A structural change to `wire.kel`.** `main` now dispatches on its argument, since the host drives
+the module through a one-argument entry point and there are four operations. Command 0 is slice 1's
+checksum, and a test re-pins its behaviour rather than assuming it survived the refactor. An
+unrecognised command returns a distinct code instead of a plausible value. New shared scalars are
+appended **after** the byte array so `bytes[i]` stays at slot `1 + i`; prepending one would silently
+shift every seeding site.
+
+**Still at a 4096-byte buffer.** Ample for the 48-byte prologue. The directory reaches 49200 bytes
+at the 1024-region ceiling, so slice 3 has to grow it.
 
 ### On the prototype
 

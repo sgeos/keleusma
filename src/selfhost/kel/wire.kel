@@ -29,15 +29,27 @@
 // to be written here or the miscompile is silent.
 require word >= 64;
 
-// The buffer the checksum runs over. The host fills `bytes[0..len]` and drives
-// `main`. `len` may be shorter than the array; a `len` LONGER than the array does
-// not read out of bounds, because the loop's `limit` caps iteration at the array
-// size and the overrun then traps as `LoopLimitExceeded` rather than truncating
-// silently. The capacity is a slice-1 harness parameter and is expected to grow
-// once real regions are checksummed.
+// The artifact buffer, used both as the input a checksum runs over and as the
+// output the emitters write into. The host fills or reads `bytes`, sets the
+// inputs, and drives `main` with a command.
+//
+// `len` may be shorter than the array; a `len` LONGER than the array does not
+// read out of bounds, because the loop's `limit` caps iteration at the array size
+// and the overrun then traps as `LoopLimitExceeded` rather than truncating
+// silently.
+//
+// SLOT ORDER MATTERS TO THE HOST. `set_shared` addresses slots, not byte
+// offsets, so `len` is slot 0 and `bytes[i]` is slot `1 + i`. New scalars are
+// appended AFTER the array so that mapping does not shift; `lexer.kel` orders its
+// shared block the same way and for the same reason.
+//
+// The capacity is a harness parameter. It is ample for the prologue, which is 48
+// bytes across all three copies, and will have to grow for the region directory,
+// which reaches 49200 bytes at the format's 1024-region ceiling.
 shared data wire {
     len: Word,
     bytes: [Byte; 4096],
+    nregions: Word,
 }
 
 // The running checksum. It lives in a data block because locals are immutable:
@@ -47,6 +59,12 @@ shared data wire {
 // must run before each independent message.
 private data crc {
     acc: Word,
+}
+
+// Scratch for the disagreement scan, which needs an accumulator across loop
+// iterations for the same reason the checksum does.
+private data st {
+    dis: Word,
 }
 
 // THE RANGE INVARIANT, which is why no masking appears below.
@@ -95,17 +113,193 @@ fn crc_end() -> Word {
     crc.acc bxor 0xFFFFFFFF
 }
 
-// Checksum `wire.bytes[0..wire.len]`. The parameter is unused and exists because
-// the host drives the module through a one-argument entry point.
+// Checksum `wire.bytes[at .. at + n]`.
 //
 // The `limit` equals the array capacity, so the loop is statically bounded at
-// 4096 iterations of eight inner steps. A `len` beyond the capacity overruns the
+// 4096 iterations of eight inner steps. An `n` beyond the capacity overruns the
 // cap and traps, which is the fail-loud default and is preferable to checksumming
 // a silently truncated prefix.
-fn main(x: Word) -> Word {
+fn crc_range(at: Word, n: Word) -> Word {
     crc_begin();
-    for i in 0..wire.len limit 4096 {
-        crc_fold(wire.bytes[i] as Word);
+    for i in 0..n limit 4096 {
+        crc_fold(wire.bytes[at + i] as Word);
     }
     crc_end()
+}
+
+// SLICE 2: container primitives, the prologue, and the majority-of-three vote.
+//
+// The container layout is specified in docs/spec/WIRE_FORMAT.md and implemented
+// by `keleusma-wire`. The prologue is 16 bytes held in three copies at the fixed
+// offsets 0, 16 and 32:
+//
+//   0  u32  magic, 0x4B415558, which is "KAUX" read little-endian
+//   4  u16  byte-order marker, 0xFEFF
+//   6  u16  format version, 2
+//   8  u16  region count
+//   10 u16  flags, currently zero
+//   12 u32  CRC-32 of bytes 0..12
+//
+// The copies sit at fixed offsets BY DEFINITION rather than at offsets derived
+// from a field, which is what makes them votable with no prior knowledge. A
+// directory placed inside the voted block would make locating the copies depend
+// on `region_count`, a field inside the block those copies exist to repair.
+
+// --- Little-endian place-value writers -----------------------------------
+//
+// `as Byte` TRUNCATES silently rather than faulting: `300 as Byte` is 44. The
+// explicit `band 255` is therefore not redundant with the cast. It states the
+// intent at the point the byte is formed, so a value that does not fit is
+// narrowed where a reader can see it rather than at an implicit conversion.
+
+fn put_u16(at: Word, v: Word) -> Word {
+    wire.bytes[at] = (v band 255) as Byte;
+    wire.bytes[at + 1] = ((v lsr 8) band 255) as Byte;
+    at + 2
+}
+
+fn put_u32(at: Word, v: Word) -> Word {
+    wire.bytes[at] = (v band 255) as Byte;
+    wire.bytes[at + 1] = ((v lsr 8) band 255) as Byte;
+    wire.bytes[at + 2] = ((v lsr 16) band 255) as Byte;
+    wire.bytes[at + 3] = ((v lsr 24) band 255) as Byte;
+    at + 4
+}
+
+// --- Little-endian place-value readers -----------------------------------
+//
+// `Byte as Word` zero-extends, so no masking is needed on the way in either.
+
+fn get_u16(at: Word) -> Word {
+    (wire.bytes[at] as Word) + ((wire.bytes[at + 1] as Word) lsl 8)
+}
+
+fn get_u32(at: Word) -> Word {
+    (wire.bytes[at] as Word)
+        + ((wire.bytes[at + 1] as Word) lsl 8)
+        + ((wire.bytes[at + 2] as Word) lsl 16)
+        + ((wire.bytes[at + 3] as Word) lsl 24)
+}
+
+// --- Emission ------------------------------------------------------------
+
+// Write the three prologue copies for `n` regions and return the number of bytes
+// written. The checksum covers the first twelve bytes of the record, so it is
+// computed after those fields are in place and before the record is replicated.
+fn emit_prologue(n: Word) -> Word {
+    put_u32(0, 0x4B415558);
+    put_u16(4, 0xFEFF);
+    put_u16(6, 2);
+    put_u16(8, n);
+    put_u16(10, 0);
+    put_u32(12, crc_range(0, 12));
+    for i in 0..16 {
+        wire.bytes[16 + i] = wire.bytes[i];
+        wire.bytes[32 + i] = wire.bytes[i];
+    }
+    48
+}
+
+// --- The majority-of-three vote ------------------------------------------
+
+// Per-BIT majority, which is what the reference computes. It is not "pick the
+// value that appears at least twice": where all three copies differ, this
+// synthesises a byte from the per-bit majorities, which is the stronger result
+// because independent single-bit faults in different copies are all repaired.
+fn maj3(a: Word, b: Word, c: Word) -> Word {
+    ((a band b) bor (a band c)) bor (b band c)
+}
+
+// One voted byte of prologue copy-space.
+fn voted_byte(i: Word) -> Word {
+    maj3(
+        wire.bytes[i] as Word,
+        wire.bytes[16 + i] as Word,
+        wire.bytes[32 + i] as Word,
+    )
+}
+
+fn voted_u16(at: Word) -> Word {
+    voted_byte(at) + (voted_byte(at + 1) lsl 8)
+}
+
+fn voted_u32(at: Word) -> Word {
+    voted_byte(at)
+        + (voted_byte(at + 1) lsl 8)
+        + (voted_byte(at + 2) lsl 16)
+        + (voted_byte(at + 3) lsl 24)
+}
+
+// Checksum the first `n` VOTED bytes.
+//
+// This is deliberately not `crc_range`, and the difference is load-bearing. The
+// reference checks the prologue's CRC against the voted record, so a vote that
+// repaired a byte is confirmed rather than merely trusted. Checksumming the raw
+// first copy would reject an artifact the vote had already fixed.
+fn crc_voted(n: Word) -> Word {
+    crc_begin();
+    for i in 0..n limit 16 {
+        crc_fold(voted_byte(i));
+    }
+    crc_end()
+}
+
+// 1 when `a` and `b` differ, 0 otherwise. Used instead of a bare `if` statement
+// so the disagreement scan is straight-line arithmetic with no branching.
+fn neq(a: Word, b: Word) -> Word {
+    if a == b { 0 } else { 1 }
+}
+
+// 1 when any prologue copy disagrees with the vote.
+//
+// The artifact still reads correctly, which is what the vote is for, but it has
+// taken damage and the margin that lets the NEXT fault also be survivable is
+// gone. Unreported damage accumulates silently until a second fault in the same
+// position defeats the vote, so this is a scrub trigger rather than a failure.
+fn prologue_disagreed() -> Word {
+    st.dis = 0;
+    for i in 0..16 {
+        st.dis = st.dis
+            bor neq(wire.bytes[i] as Word, voted_byte(i))
+            bor neq(wire.bytes[16 + i] as Word, voted_byte(i))
+            bor neq(wire.bytes[32 + i] as Word, voted_byte(i));
+    }
+    st.dis
+}
+
+// Validate the voted prologue and return the region count, or a negative code.
+//
+// The checks and their ORDER follow the reference exactly, because the code a
+// caller sees for a doubly-malformed artifact is part of the observable
+// behaviour: magic, then byte order, then version, then the checksum, then the
+// region ceiling.
+//
+//   -1  bad magic
+//   -2  foreign byte order
+//   -3  unsupported version
+//   -4  bad prologue checksum
+//   -5  region count above the format ceiling of 1024
+fn parse_prologue() -> Word {
+    if voted_u32(0) != 0x4B415558 { 0 - 1 } else {
+    if voted_u16(4) != 0xFEFF { 0 - 2 } else {
+    if voted_u16(6) != 2 { 0 - 3 } else {
+    if crc_voted(12) != voted_u32(12) { 0 - 4 } else {
+    if voted_u16(8) > 1024 { 0 - 5 } else {
+    voted_u16(8) } } } } }
+}
+
+// The host drives the module through a one-argument entry point, so the argument
+// selects the operation. An unrecognised command returns a distinct code rather
+// than a plausible value, so a caller that passes the wrong one finds out.
+//
+//   0  checksum `bytes[0..len]`
+//   1  emit the prologue for `nregions`, returning bytes written
+//   2  validate the voted prologue, returning the region count or a negative code
+//   3  report whether any prologue copy disagreed with the vote
+fn main(cmd: Word) -> Word {
+    if cmd == 0 { crc_range(0, wire.len) } else {
+    if cmd == 1 { emit_prologue(wire.nregions) } else {
+    if cmd == 2 { parse_prologue() } else {
+    if cmd == 3 { prologue_disagreed() } else {
+    0 - 99 } } } }
 }

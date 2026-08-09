@@ -13,6 +13,46 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**STEP 6 SLICE 2 DONE: CONTAINER PRIMITIVES, THE PROLOGUE, AND THE VOTE (2026-08-09).** The suite is
+now 23 tests in 0.97 s, and the oracle has strengthened from a single value to **byte identity**
+against what `keleusma-wire` emits.
+
+**TWO DETAILS OF THE REFERENCE THAT A TRANSLITERATION WOULD GET WRONG BY DEFAULT.** Both were found
+by reading the reference before writing, which is the whole point of the probe step, and neither is
+the sort of thing a passing test would have surfaced afterwards.
+
+1. **`maj3` is a per-BIT majority**, `(a & b) | (a & c) | (b & c)` -- not "pick the value that
+   appears at least twice". Where all three copies differ it synthesises a byte no copy contains,
+   and that is the stronger behaviour: three independent single-bit faults in three different copies
+   are all repaired, where a pick-the-duplicate vote has no answer at all. **The distinction is
+   invisible unless a case with three distinct bytes is exercised**, so the suite constructs one
+   deliberately rather than hoping the corpus contains it.
+2. **The prologue checksum is taken over the VOTED record, not the raw first copy.** A vote that
+   repaired a byte is thereby confirmed rather than merely trusted. Checksumming the raw copy would
+   reject an artifact the vote had already fixed -- a failure that only appears on damaged input, so
+   it would have shipped clean and failed exactly when the fault tolerance was needed. `crc_voted`
+   is kept separate from `crc_range` for this reason alone, and the 48-position single-bit injection
+   test is what holds it in place.
+
+**`as Byte` TRUNCATES SILENTLY.** `300 as Byte` is 44, with no fault. The type checker does insist on
+the cast -- assigning a bare `Word` to a `[Byte]` element is rejected -- so the narrowing is at least
+visible at the site. The writers keep an explicit `band 255` that is arithmetically redundant with
+the cast, because the redundancy states the intent where a reader sees it. This is a hazard the
+encoder will meet repeatedly as records grow wider.
+
+**BYTE IDENTITY ALONE IS NOT ENOUGH, AND SAYING SO COSTS TWO TESTS.** Identity against the
+reference's bytes would pass if both sides were wrong in the same way, and the three copies being
+mutually identical would pass if all three were zero. So the suite also asserts that `WireView::parse`
+**accepts** what Keleusma emitted, that the two readers **agree** on a damaged artifact, and that the
+emitted record is not all zeroes. Each of those is cheap and each closes a way for the headline
+assertion to be vacuous.
+
+**A PROBE FAILURE THAT WAS AGAIN THE APPARATUS.** One emission case was rejected with "private data
+block `d` is never mutated; declare it as `const data` instead" -- a real and rather good diagnostic,
+fired because my probe declared a scratch block it never used. It reads like a restriction on writing
+to shared arrays from a loop. It is not; the same shape works once the unused block is removed. Second
+time this session that an uncalibrated probe reported a language restriction that did not exist.
+
 **STEP 6 SLICE 1 DONE: CRC-32 IN KELEUSMA (2026-08-09).** `src/selfhost/kel/wire.kel` plus
 `tests/selfhost_wire.rs`, 11 tests in 0.67 s. Tier 1 green. The slice is small by design: its job was
 the byte-buffer harness every later slice reuses.

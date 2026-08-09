@@ -1,14 +1,21 @@
 //! Differential tests for `src/selfhost/kel/wire.kel`, the wire format written
 //! in Keleusma (step 6 of the wire-format programme).
 //!
-//! Slice 1 covers CRC-32/ISO-HDLC. The oracle is `keleusma_wire::crc32`, which
-//! is the same algorithm and polynomial as the runtime's own `bytecode::crc32`;
-//! both Rust implementations are independently pinned to the published check
-//! value `crc32("123456789") == 0xCBF43926` (`keleusma-wire/src/crc.rs` and
-//! `src/vm.rs`), so agreement here is agreement with a third-party constant
-//! rather than with whichever implementation happened to be written first.
-//! `bytecode::crc32` is `pub(crate)` and therefore unreachable from an
-//! integration test, which is why the oracle is spelled the other way.
+//! **Slice 1** covers CRC-32/ISO-HDLC. Its oracle is `keleusma_wire::crc32`,
+//! which is the same algorithm and polynomial as the runtime's own
+//! `bytecode::crc32`; both Rust implementations are independently pinned to the
+//! published check value `crc32("123456789") == 0xCBF43926`
+//! (`keleusma-wire/src/crc.rs` and `src/vm.rs`), so agreement here is agreement
+//! with a third-party constant rather than with whichever implementation
+//! happened to be written first. `bytecode::crc32` is `pub(crate)` and therefore
+//! unreachable from an integration test, which is why the oracle is spelled the
+//! other way.
+//!
+//! **Slice 2** covers the little-endian place-value primitives, the 16-byte
+//! prologue, and the majority-of-three vote. Its oracle is stronger: **byte
+//! identity** against what `keleusma-wire` emits for the same input, plus the
+//! complementary direction that `WireView::parse` accepts what Keleusma emitted,
+//! plus agreement with the reference reader on a damaged artifact.
 //!
 //! The suite carries controls in BOTH directions, because a differential
 //! against a known-good reference is exactly where a check that cannot fail
@@ -17,8 +24,9 @@
 //! - **must-not-fire** — over a corpus with asserted coverage, the Keleusma
 //!   implementation and the oracle agree and the comparison stays quiet;
 //! - **must-fire** — the same harness pointed at a deliberately mutated source
-//!   must report divergence. Two independent mutations are used, since a single
-//!   one could in principle be neutral.
+//!   must report divergence. Several independent mutations are used, since any
+//!   single one could in principle be neutral — and one of them, a mutated CRC
+//!   polynomial, provably is neutral on two inputs.
 //!
 //! An assertion that never fires is indistinguishable from one that always
 //! succeeds, so the must-fire cases are encoded here rather than run once by
@@ -98,6 +106,55 @@ fn run_crc_on(
 fn crc_in_keleusma(src: &str, buf: &[u8]) -> i64 {
     let mut vm = vm_for(src);
     run_crc_on(&mut vm, buf, buf.len() as i64).expect("run")
+}
+
+// --- Slice 2 harness: emission and voting --------------------------------
+
+/// `wire.nregions` sits AFTER the byte array, so its slot is `1 + CAPACITY`.
+/// Appending scalars after the array is deliberate: prepending one would shift
+/// every `bytes[i]` slot and silently break every seeding site above.
+const NREGIONS_SLOT: usize = 1 + CAPACITY;
+
+/// Run command `cmd`, with `buf` pre-seeded into `bytes` and `nregions` set,
+/// and return both the result and the resulting byte array.
+fn run_cmd(
+    vm: &mut Vm<'static, 'static>,
+    cmd: i64,
+    nregions: i64,
+    seed: &[u8],
+) -> Result<(i64, Vec<u8>), VmError> {
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.set_shared(&mut shared, 0, Value::Int(seed.len() as i64))?;
+    vm.set_shared(&mut shared, NREGIONS_SLOT, Value::Int(nregions))?;
+    for (i, byte) in seed.iter().enumerate() {
+        vm.set_shared(&mut shared, 1 + i, Value::Byte(*byte))?;
+    }
+    let ret = match vm.call_with_shared(&mut shared, &[Value::Int(cmd)])? {
+        VmState::Finished(Value::Int(n)) => n,
+        other => panic!("unexpected VM state: {other:?}"),
+    };
+    let mut out = Vec::with_capacity(CAPACITY);
+    for i in 0..CAPACITY {
+        match vm.get_shared(&shared, 1 + i)? {
+            Value::Byte(b) => out.push(b),
+            other => panic!("slot {i} is not a Byte: {other:?}"),
+        }
+    }
+    Ok((ret, out))
+}
+
+/// The first 48 bytes the reference emits for an artifact with `n` regions:
+/// three copies of the prologue. Built by declaring `n` empty regions, since the
+/// prologue's only region-dependent field is the count.
+fn reference_prologue(n: usize) -> Vec<u8> {
+    let mut b = keleusma_wire::WireBuilder::new();
+    for i in 0..n {
+        // Distinct kinds, because the container rejects a duplicate kind. The
+        // payloads are empty, so nothing past the header area is compared.
+        b.region(1 + i as u16, 0).expect("declare region");
+    }
+    let bytes = b.finish().expect("finish");
+    bytes[..48].to_vec()
 }
 
 /// Replace `from` with `to`, requiring the anchor to occur exactly once.
@@ -402,4 +459,249 @@ fn a_length_shorter_than_the_buffer_checksums_only_the_prefix() {
         got as u32, 0xCBF4_3926,
         "bytes past the declared length were included in the checksum"
     );
+}
+
+// =========================================================================
+// SLICE 2 — container primitives, the prologue, and the majority-of-three vote
+// =========================================================================
+//
+// The oracle here is stronger than slice 1's: it is BYTE IDENTITY against what
+// `keleusma-wire` emits for the same input, not agreement on a single value.
+
+/// Command selectors, mirroring `main`'s dispatch in wire.kel.
+const CMD_CRC: i64 = 0;
+const CMD_EMIT_PROLOGUE: i64 = 1;
+const CMD_PARSE_PROLOGUE: i64 = 2;
+const CMD_DISAGREED: i64 = 3;
+
+#[test]
+fn the_emitted_prologue_is_byte_identical_to_the_reference() {
+    let mut vm = vm_for(WIRE_KEL);
+    // Zero, one, a few, and the format's ceiling. The ceiling matters because
+    // `region_count` is a u16 field and 1024 is the largest admissible value.
+    for n in [0usize, 1, 2, 7, 255, 256, 1023, 1024] {
+        let (written, out) = run_cmd(&mut vm, CMD_EMIT_PROLOGUE, n as i64, &[]).expect("run");
+        assert_eq!(written, 48, "n = {n}: wrong byte count reported");
+        let want = reference_prologue(n);
+        assert_eq!(
+            &out[..48],
+            &want[..],
+            "n = {n}: emitted prologue differs from the reference"
+        );
+    }
+}
+
+#[test]
+fn the_three_emitted_copies_are_identical_to_each_other() {
+    // Byte identity against the reference would also pass if all three copies
+    // were wrong in the same way, so the replication is checked on its own.
+    let mut vm = vm_for(WIRE_KEL);
+    let (_, out) = run_cmd(&mut vm, CMD_EMIT_PROLOGUE, 3, &[]).expect("run");
+    assert_eq!(&out[0..16], &out[16..32], "copy 2 differs from copy 1");
+    assert_eq!(&out[0..16], &out[32..48], "copy 3 differs from copy 1");
+    // And that the record is not simply zeroes, which would satisfy the above.
+    assert_ne!(&out[0..16], &[0u8; 16], "the prologue was never written");
+}
+
+#[test]
+fn a_mutated_magic_constant_is_reported() {
+    // must-fire. The magic is the one field a transcription error is most likely
+    // to hit, and the prototype hit exactly that once.
+    let mutant = mutate(
+        WIRE_KEL,
+        "put_u32(0, 0x4B415558);",
+        "put_u32(0, 0x4B415559);",
+    );
+    let mut vm = vm_for(&mutant);
+    let (_, out) = run_cmd(&mut vm, CMD_EMIT_PROLOGUE, 1, &[]).expect("run");
+    assert_ne!(
+        &out[..48],
+        &reference_prologue(1)[..],
+        "a mutated magic constant produced byte-identical output"
+    );
+}
+
+#[test]
+fn a_mutated_place_value_writer_is_reported() {
+    // must-fire in the primitive rather than in a constant: swapping a shift
+    // amount reorders the bytes of every u32 the emitter writes.
+    let mutant = mutate(
+        WIRE_KEL,
+        "    wire.bytes[at + 2] = ((v lsr 16) band 255) as Byte;",
+        "    wire.bytes[at + 2] = ((v lsr 24) band 255) as Byte;",
+    );
+    let mut vm = vm_for(&mutant);
+    let (_, out) = run_cmd(&mut vm, CMD_EMIT_PROLOGUE, 1, &[]).expect("run");
+    assert_ne!(
+        &out[..48],
+        &reference_prologue(1)[..],
+        "a mutated place-value writer produced byte-identical output"
+    );
+}
+
+#[test]
+fn the_emitted_prologue_is_accepted_by_the_reference_reader() {
+    // The complementary direction to byte identity: the reference PARSER must
+    // accept what Keleusma emitted. For zero regions the 48-byte prologue is a
+    // complete artifact, so it can be handed to `WireView::parse` whole.
+    let mut vm = vm_for(WIRE_KEL);
+    let (_, out) = run_cmd(&mut vm, CMD_EMIT_PROLOGUE, 0, &[]).expect("run");
+    let view = keleusma_wire::WireView::parse(&out[..48]).expect("reference must accept it");
+    assert_eq!(view.region_count(), 0);
+    assert!(
+        !view.needs_scrub(),
+        "a freshly emitted artifact needs no scrub"
+    );
+}
+
+#[test]
+fn the_prologue_round_trips_through_the_keleusma_reader() {
+    let mut vm = vm_for(WIRE_KEL);
+    for n in [0i64, 1, 42, 1024] {
+        let (_, out) = run_cmd(&mut vm, CMD_EMIT_PROLOGUE, n, &[]).expect("emit");
+        let (got, _) = run_cmd(&mut vm, CMD_PARSE_PROLOGUE, 0, &out[..48]).expect("parse");
+        assert_eq!(got, n, "region count did not survive the round trip");
+        let (dis, _) = run_cmd(&mut vm, CMD_DISAGREED, 0, &out[..48]).expect("scrub");
+        assert_eq!(dis, 0, "an undamaged prologue reported disagreement");
+    }
+}
+
+#[test]
+fn the_reader_rejects_each_malformed_field_with_its_own_code() {
+    // Each case damages ALL THREE copies, since damaging one would be repaired
+    // by the vote -- which is the next test's subject, not this one.
+    let mut vm = vm_for(WIRE_KEL);
+    let (_, good) = run_cmd(&mut vm, CMD_EMIT_PROLOGUE, 4, &[]).expect("emit");
+    let good = &good[..48];
+
+    let damage = |at: usize, bytes: &[u8]| -> Vec<u8> {
+        let mut v = good.to_vec();
+        for copy in 0..3 {
+            v[copy * 16 + at..copy * 16 + at + bytes.len()].copy_from_slice(bytes);
+        }
+        v
+    };
+
+    for (label, buf, want) in [
+        ("bad magic", damage(0, &[0x00]), -1),
+        ("foreign byte order", damage(4, &[0xFE, 0xFF]), -2),
+        ("unsupported version", damage(6, &[0x03, 0x00]), -3),
+        ("bad checksum", damage(12, &[0x00, 0x00, 0x00, 0x00]), -4),
+    ] {
+        let (got, _) = run_cmd(&mut vm, CMD_PARSE_PROLOGUE, 0, &buf).expect("parse");
+        assert_eq!(got, want, "{label}: wrong rejection code");
+    }
+
+    // The region ceiling needs a valid checksum over the oversized count, or it
+    // would be rejected at the checksum check first and this case would be
+    // testing the wrong thing.
+    let mut over = good.to_vec();
+    over[8..10].copy_from_slice(&1025u16.to_le_bytes());
+    let check = keleusma_wire::crc32(&over[..12]);
+    over[12..16].copy_from_slice(&check.to_le_bytes());
+    for copy in 1..3 {
+        let (a, b) = over.split_at_mut(copy * 16);
+        b[..16].copy_from_slice(&a[..16]);
+    }
+    let (got, _) = run_cmd(&mut vm, CMD_PARSE_PROLOGUE, 0, &over).expect("parse");
+    assert_eq!(got, -5, "an over-ceiling region count was not rejected");
+}
+
+#[test]
+fn a_single_corrupt_copy_is_outvoted_and_reported() {
+    // This is what the triplication is for, and it is also where a raw-bytes
+    // checksum would betray the design: the reference checks the CRC against the
+    // VOTED record, so a vote that repaired a byte is confirmed rather than
+    // rejected. wire.kel does the same via `crc_voted`.
+    let mut vm = vm_for(WIRE_KEL);
+    let (_, good) = run_cmd(&mut vm, CMD_EMIT_PROLOGUE, 9, &[]).expect("emit");
+    let good = &good[..48];
+
+    for copy in 0..3usize {
+        for at in 0..16usize {
+            let mut buf = good.to_vec();
+            // Flip one bit, which is the fault the vote is specified against.
+            buf[copy * 16 + at] ^= 0x40;
+            let (got, _) = run_cmd(&mut vm, CMD_PARSE_PROLOGUE, 0, &buf).expect("parse");
+            assert_eq!(
+                got, 9,
+                "copy {copy} byte {at}: a single-bit fault was not outvoted"
+            );
+            let (dis, _) = run_cmd(&mut vm, CMD_DISAGREED, 0, &buf).expect("scrub");
+            assert_eq!(
+                dis, 1,
+                "copy {copy} byte {at}: damage was repaired but not reported"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_vote_agrees_with_the_reference_reader_on_a_damaged_artifact() {
+    // Cross-check the whole repair path against `WireView::parse` rather than
+    // only against wire.kel's own reader, so a shared misunderstanding of the
+    // vote cannot pass. Zero regions keeps the 48 bytes a complete artifact.
+    let mut vm = vm_for(WIRE_KEL);
+    let (_, good) = run_cmd(&mut vm, CMD_EMIT_PROLOGUE, 0, &[]).expect("emit");
+    for copy in 0..3usize {
+        for at in 0..16usize {
+            let mut buf = good[..48].to_vec();
+            buf[copy * 16 + at] ^= 0x01;
+            let view = keleusma_wire::WireView::parse(&buf).expect("reference outvotes it");
+            assert!(view.needs_scrub(), "reference did not report the damage");
+            let (got, _) = run_cmd(&mut vm, CMD_PARSE_PROLOGUE, 0, &buf).expect("parse");
+            assert_eq!(
+                got,
+                i64::from(view.region_count()),
+                "copy {copy} byte {at}: wire.kel and the reference voted differently"
+            );
+        }
+    }
+}
+
+#[test]
+fn maj3_is_a_per_bit_majority_not_a_pick_the_duplicate() {
+    // A must-fire for the vote's SEMANTICS. Where all three copies differ, a
+    // per-bit majority synthesises a byte no copy contains; "pick the value that
+    // appears twice" has no answer at all and would return an arbitrary copy.
+    // The distinction is invisible unless a case with three distinct bytes is
+    // exercised, so one is constructed here rather than hoped for.
+    let mut vm = vm_for(WIRE_KEL);
+    let (_, good) = run_cmd(&mut vm, CMD_EMIT_PROLOGUE, 5, &[]).expect("emit");
+    let mut buf = good[..48].to_vec();
+    // Three different single-bit faults, in three different copies, all in the
+    // same byte. Each bit is still a 2-of-3 majority, so the byte is fully
+    // recoverable, and it is recoverable ONLY per-bit.
+    buf[8] ^= 0x01;
+    buf[16 + 8] ^= 0x02;
+    buf[32 + 8] ^= 0x04;
+    assert_ne!(buf[8], buf[16 + 8]);
+    assert_ne!(buf[8], buf[32 + 8]);
+    assert_ne!(buf[16 + 8], buf[32 + 8]);
+    let (got, _) = run_cmd(&mut vm, CMD_PARSE_PROLOGUE, 0, &buf).expect("parse");
+    assert_eq!(got, 5, "three distinct copies were not repaired per-bit");
+    // The reference must reach the same conclusion.
+    let (_, good0) = run_cmd(&mut vm, CMD_EMIT_PROLOGUE, 0, &[]).expect("emit");
+    let mut b0 = good0[..48].to_vec();
+    b0[8] ^= 0x01;
+    b0[16 + 8] ^= 0x02;
+    b0[32 + 8] ^= 0x04;
+    let view = keleusma_wire::WireView::parse(&b0).expect("reference outvotes it");
+    assert_eq!(view.region_count(), 0);
+}
+
+#[test]
+fn an_unrecognised_command_returns_a_distinct_code() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (got, _) = run_cmd(&mut vm, 99, 0, &[]).expect("run");
+    assert_eq!(got, -99, "an unknown command did not report itself");
+}
+
+#[test]
+fn slice_one_still_answers_after_the_command_dispatch() {
+    // The checksum entry moved behind a command selector, so its old behaviour is
+    // re-pinned here rather than assumed to have survived the refactor.
+    let mut vm = vm_for(WIRE_KEL);
+    let (got, _) = run_cmd(&mut vm, CMD_CRC, 0, b"123456789").expect("run");
+    assert_eq!(got as u32, 0xCBF4_3926);
 }

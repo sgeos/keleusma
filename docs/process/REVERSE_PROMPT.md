@@ -17,19 +17,23 @@ entry before this overwrite.
 
 **Date**: 2026-08-09 (session 40)
 
-## Completed this session — step 6, slice 1: CRC-32 in Keleusma
+## Completed this session — step 6, slices 1 and 2
 
-**The six-step wire-format programme stands at 1 to 5 done and merged; step 6 slice 1 done,
-slices 2 to 7 open.**
+**The six-step wire-format programme stands at 1 to 5 done and merged; step 6 slices 1 and 2
+done, slices 3 to 7 open.** Both are on `feat/selfhost-wire-crc32`, two commits, unmerged.
 
-Two new files, on `feat/selfhost-wire-crc32`:
+Two new files:
 
 - **`src/selfhost/kel/wire.kel`** — CRC-32/ISO-HDLC written in Keleusma. It is deliberately
   **not** in `read_stage`'s table, because the self-hosted compile driver does not run it: it
   does not yet emit an artifact. It joins the table when it produces bytes rather than a
   checksum. The module doc in `src/selfhost/mod.rs` says so, since the directory's contract
   was previously "the ten stage sources".
-- **`tests/selfhost_wire.rs`** — the differential. Eleven tests, 0.67 s.
+- **`tests/selfhost_wire.rs`** — the differential. Twenty-three tests, 0.97 s.
+
+**Slice 1** is CRC-32/ISO-HDLC. **Slice 2** is the little-endian place-value primitives, the
+16-byte prologue, and the majority-of-three vote, and its oracle is stronger: **byte identity**
+against what `keleusma-wire` emits, at 0, 1, 2, 7, 255, 256, 1023 and 1024 regions.
 
 **Tier 1 green**: `fmt`, `clippy --workspace --all-targets` and `--all-features` at
 `-D warnings`, `cargo test -p keleusma --no-default-features`, and the `-D warnings` doc build.
@@ -81,15 +85,38 @@ reason unrelated to the language. Taken at face value it would have been recorde
 restriction and would have redesigned the slice. The trivial must-not-fire case in the probe is
 what exposed it. **A probe needs its own control, exactly as a test does.**
 
-## The next increment — step 6, slice 2
+### Slice 2 — two details of the reference a transliteration would get wrong
 
-**Container primitives and the prologue**: little-endian place-value writers and readers, the
-16-byte prologue, and the majority-of-three vote over its three copies. Oracle: the bytes
-`keleusma-wire` emits for the same input, so this is the first slice where the differential is
-byte identity rather than a single value.
+Both were found by reading the reference before writing, and neither is something a passing test
+would have surfaced afterwards.
 
-`wire.kel`'s buffer is a slice-1 harness parameter at 4096 bytes and is expected to grow. The
-`shared data` byte-array shape and the `set_shared` slot addressing are established and reusable.
+1. **`maj3` is a per-BIT majority**, `(a & b) | (a & c) | (b & c)`, not "pick the value that
+   appears at least twice". Where all three copies differ it synthesises a byte no copy contains,
+   which repairs three independent single-bit faults in three different copies. The distinction
+   is invisible unless a case with three distinct bytes is exercised, so the suite builds one.
+2. **The prologue checksum is taken over the VOTED record, not the raw first copy**, so a vote
+   that repaired a byte is confirmed rather than trusted. Checksumming the raw copy would reject
+   an artifact the vote had already fixed — a failure that appears only on damaged input, so it
+   would have shipped clean and failed exactly when the fault tolerance was needed.
+
+Also: **`as Byte` truncates silently** (`300 as Byte` is 44). The type checker does demand the
+cast, so the narrowing is visible at the site, and the writers keep an arithmetically redundant
+`band 255` to state it. This hazard recurs as records widen.
+
+**Byte identity alone would be vacuous in two ways**, so both are closed: `WireView::parse` must
+accept what Keleusma emitted, the two readers must agree on a damaged artifact, and the emitted
+record must not be all zeroes. Every one of the 48 single-bit positions across the three copies
+is injected and required both to be outvoted and to be reported as needing a scrub.
+
+## The next increment — step 6, slice 3
+
+**The region directory**: emission and lookup, triplicated and voted, word-indexed offsets. The
+vote machinery from slice 2 generalises to it, but the directory's stride depends on the voted
+region count, so the two-stage bootstrap is the thing to get right.
+
+**The buffer has to grow.** It is 4096 bytes, ample for the 48-byte prologue; the directory
+reaches 49200 bytes at the format's 1024-region ceiling. Growing it raises the `limit` on
+`crc_range` too, so the worst-case bound moves with it.
 
 ## Open, and held by the operator
 
