@@ -57,9 +57,13 @@ shared data wire {
     rflags: [Word; 1024],
     rlen: [Word; 1024],
     rcovers: [Word; 1024],
-    // A general argument for commands that take one (a region index, a kind to
-    // look up). Appended last so no existing slot index moves.
+    // General arguments for commands that take them: a region index, a kind to
+    // look up, a record stride, a record index, a field offset. Appended last so
+    // no existing slot index moves.
     warg: Word,
+    warg2: Word,
+    warg3: Word,
+    warg4: Word,
 }
 
 // The running checksum. It lives in a data block because locals are immutable:
@@ -435,6 +439,101 @@ fn dir_find(kind: Word) -> Word {
     st.cur
 }
 
+// --- SLICE 4: record tables and byte pools --------------------------------
+//
+// A region's payload is either a table of fixed-stride records or a
+// byte-addressed pool; the container assigns no meaning beyond that, which is
+// what keeps it reusable. Both are located from the VOTED directory, so every
+// address here rests on slices 2 and 3 having repaired the header first.
+//
+// Element `i` of a table is at `base + i * stride`. The format constrains every
+// record to a whole number of words specifically so that a stride which is also
+// a power of two makes this a shift; the multiply is kept here because the
+// container permits any word multiple, and a reader must handle the general
+// case rather than the convenient one.
+
+// A region's payload location, in bytes, from the voted directory.
+fn region_base(i: Word) -> Word {
+    dir_u32(i, 4) lsl 3
+}
+
+fn region_bytes(i: Word) -> Word {
+    dir_u32(i, 8) lsl 3
+}
+
+// A stride is valid when it is non-zero and a whole number of words. Zero is
+// rejected first and separately, because the divisibility test below divides by
+// it and division by zero TRAPS rather than yielding a sentinel.
+fn stride_ok(stride: Word) -> Word {
+    if stride != 0 andalso (stride band 7) == 0 { 1 } else { 0 }
+}
+
+// Whether `stride` divides `total`. Expressed through division rather than a
+// mask because a stride is only required to be a multiple of eight, not a power
+// of two, so `band (stride - 1)` would silently give the wrong answer for a
+// stride like 24.
+fn divides(total: Word, stride: Word) -> Word {
+    if (total / stride) * stride == total { 1 } else { 0 }
+}
+
+// Records in region `i` at `stride`, or 0 - 1 when the stride is inadmissible.
+//
+// The guard relies on `andalso` SHORT-CIRCUITING: `divides` divides by `stride`,
+// so evaluating it with a zero stride would trap. A test pins the short circuit
+// rather than trusting it.
+fn rec_count(i: Word, stride: Word) -> Word {
+    if stride_ok(stride) == 1 andalso divides(region_bytes(i), stride) == 1 {
+        region_bytes(i) / stride
+    } else {
+        0 - 1
+    }
+}
+
+// Byte address of field `off` within record `rec` of region `i`.
+fn rec_at(i: Word, stride: Word, rec: Word, off: Word) -> Word {
+    region_base(i) + (rec * stride) + off
+}
+
+fn rec_u8(i: Word, stride: Word, rec: Word, off: Word) -> Word {
+    wire.bytes[rec_at(i, stride, rec, off)] as Word
+}
+
+fn rec_u16(i: Word, stride: Word, rec: Word, off: Word) -> Word {
+    get_u16(rec_at(i, stride, rec, off))
+}
+
+fn rec_u32(i: Word, stride: Word, rec: Word, off: Word) -> Word {
+    get_u32(rec_at(i, stride, rec, off))
+}
+
+fn put_rec_u16(i: Word, stride: Word, rec: Word, off: Word, v: Word) -> Word {
+    put_u16(rec_at(i, stride, rec, off), v)
+}
+
+fn put_rec_u32(i: Word, stride: Word, rec: Word, off: Word, v: Word) -> Word {
+    put_u32(rec_at(i, stride, rec, off), v)
+}
+
+// A byte pool is the same region viewed without a stride.
+fn pool_u8(i: Word, off: Word) -> Word {
+    wire.bytes[region_base(i) + off] as Word
+}
+
+// Fill region `i` with `n` two-word records whose fields are a function of the
+// record index. The pattern is computed rather than supplied so the emitter can
+// be compared byte-for-byte against a reference that computes the same thing,
+// which tests the ADDRESSING arithmetic without also testing a data channel.
+fn emit_pattern_records(i: Word, n: Word) -> Word {
+    for r in 0..n limit 1024 {
+        put_rec_u32(i, 16, r, 0, (r * 7) + 1);
+        put_rec_u32(i, 16, r, 4, (r * 13) + 2);
+        put_rec_u16(i, 16, r, 8, (r band 255) + 3);
+        put_rec_u16(i, 16, r, 10, 0);
+        put_rec_u32(i, 16, r, 12, 0);
+    }
+    n
+}
+
 // The host drives the module through a one-argument entry point, so the argument
 // selects the operation. An unrecognised command returns a distinct code rather
 // than a plausible value, so a caller that passes the wrong one finds out.
@@ -450,6 +549,13 @@ fn dir_find(kind: Word) -> Word {
 //   8  the voted word length of region `warg`
 //   9  the voted kind of region `warg`
 //  10  emit the whole header area, returning its byte length
+//  11  byte base of region `warg`'s payload
+//  12  payload bytes of region `warg`
+//  13  record count of region `warg` at stride `warg2`, or 0 - 1
+//  14  u32 field `warg4` of record `warg3`, region `warg`, stride `warg2`
+//  15  u16 field `warg4` of record `warg3`, region `warg`, stride `warg2`
+//  16  byte `warg2` of region `warg` viewed as a pool
+//  17  fill region `warg` with `warg2` pattern records, then re-emit nothing
 fn main(cmd: Word) -> Word {
     if cmd == 0 { crc_range(0, wire.len) } else {
     if cmd == 1 { emit_prologue(wire.nregions) } else {
@@ -462,5 +568,12 @@ fn main(cmd: Word) -> Word {
     if cmd == 8 { dir_u32(wire.warg, 8) } else {
     if cmd == 9 { dir_u16(wire.warg, 0) } else {
     if cmd == 10 { emit_header() } else {
-    0 - 99 } } } } } } } } } } }
+    if cmd == 11 { region_base(wire.warg) } else {
+    if cmd == 12 { region_bytes(wire.warg) } else {
+    if cmd == 13 { rec_count(wire.warg, wire.warg2) } else {
+    if cmd == 14 { rec_u32(wire.warg, wire.warg2, wire.warg3, wire.warg4) } else {
+    if cmd == 15 { rec_u16(wire.warg, wire.warg2, wire.warg3, wire.warg4) } else {
+    if cmd == 16 { pool_u8(wire.warg, wire.warg2) } else {
+    if cmd == 17 { emit_header(); emit_pattern_records(wire.warg, wire.warg2) } else {
+    0 - 99 }}}}}}}}}}}}}}}}}}
 }

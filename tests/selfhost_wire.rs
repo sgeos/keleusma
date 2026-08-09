@@ -80,6 +80,9 @@ const RFLAGS_SLOT: usize = RKIND_SLOT + 1024;
 const RLEN_SLOT: usize = RFLAGS_SLOT + 1024;
 const RCOVERS_SLOT: usize = RLEN_SLOT + 1024;
 const WARG_SLOT: usize = RCOVERS_SLOT + 1024;
+const WARG2_SLOT: usize = WARG_SLOT + 1;
+const WARG3_SLOT: usize = WARG2_SLOT + 1;
+const WARG4_SLOT: usize = WARG3_SLOT + 1;
 
 /// Build a `Vm` over `src` with a persistent region sized for its private data.
 ///
@@ -156,10 +159,26 @@ fn run_cmd_full(
     warg: i64,
     read_len: usize,
 ) -> Result<(i64, Vec<u8>), VmError> {
+    run_cmd_args(vm, cmd, nregions, seed, regions, [warg, 0, 0, 0], read_len)
+}
+
+/// As `run_cmd_full`, with all four command arguments.
+fn run_cmd_args(
+    vm: &mut Vm<'static, 'static>,
+    cmd: i64,
+    nregions: i64,
+    seed: &[u8],
+    regions: &Regions,
+    args: [i64; 4],
+    read_len: usize,
+) -> Result<(i64, Vec<u8>), VmError> {
     let mut shared = vec![0u8; vm.shared_data_bytes()];
     vm.set_shared(&mut shared, 0, Value::Int(seed.len() as i64))?;
     vm.set_shared(&mut shared, NREGIONS_SLOT, Value::Int(nregions))?;
-    vm.set_shared(&mut shared, WARG_SLOT, Value::Int(warg))?;
+    vm.set_shared(&mut shared, WARG_SLOT, Value::Int(args[0]))?;
+    vm.set_shared(&mut shared, WARG2_SLOT, Value::Int(args[1]))?;
+    vm.set_shared(&mut shared, WARG3_SLOT, Value::Int(args[2]))?;
+    vm.set_shared(&mut shared, WARG4_SLOT, Value::Int(args[3]))?;
     for (i, byte) in seed.iter().enumerate() {
         vm.set_shared(&mut shared, 1 + i, Value::Byte(*byte))?;
     }
@@ -1026,4 +1045,271 @@ fn the_directory_is_still_read_when_a_prologue_copy_carries_a_damaged_region_cou
             );
         }
     }
+}
+
+// =========================================================================
+// SLICE 4 — record tables and byte pools
+// =========================================================================
+
+const CMD_REGION_BASE: i64 = 11;
+const CMD_REGION_BYTES: i64 = 12;
+const CMD_REC_COUNT: i64 = 13;
+const CMD_REC_U32: i64 = 14;
+const CMD_REC_U16: i64 = 15;
+const CMD_POOL_U8: i64 = 16;
+const CMD_EMIT_RECORDS: i64 = 17;
+
+/// The record pattern `emit_pattern_records` writes, computed independently
+/// here so the comparison is against a second implementation rather than
+/// against the code under test.
+fn pattern_record(r: usize) -> [u8; 16] {
+    let mut rec = [0u8; 16];
+    rec[0..4].copy_from_slice(&((r as u32 * 7) + 1).to_le_bytes());
+    rec[4..8].copy_from_slice(&((r as u32 * 13) + 2).to_le_bytes());
+    rec[8..10].copy_from_slice(&(((r as u32 % 256) + 3) as u16).to_le_bytes());
+    rec
+}
+
+#[test]
+fn a_region_payload_is_located_from_the_voted_directory() {
+    let mut vm = vm_for(WIRE_KEL);
+    let rs: Vec<RegionSpec> = vec![(1, 0, 32, 0), (2, 0, 5, 0), (3, 0, 64, 0)];
+    let hl = header_len(rs.len());
+    let (_, image) =
+        run_cmd_full(&mut vm, CMD_EMIT_HEADER, rs.len() as i64, &[], &rs, 0, hl).expect("emit");
+
+    // The reference's own view is the oracle for where each payload sits.
+    let art = reference_artifact(&rs);
+    let view = keleusma_wire::WireView::parse(&art).expect("parse");
+    for (i, _) in rs.iter().enumerate() {
+        let region = view.region_at(i as u16).expect("region");
+        let (base, _) = run_cmd_full(
+            &mut vm,
+            CMD_REGION_BASE,
+            rs.len() as i64,
+            &image,
+            &[],
+            i as i64,
+            0,
+        )
+        .expect("base");
+        let (len, _) = run_cmd_full(
+            &mut vm,
+            CMD_REGION_BYTES,
+            rs.len() as i64,
+            &image,
+            &[],
+            i as i64,
+            0,
+        )
+        .expect("len");
+        assert_eq!(base, (region.word_offset as i64) * 8, "region {i}: base");
+        assert_eq!(len, (region.word_length as i64) * 8, "region {i}: length");
+    }
+}
+
+#[test]
+fn the_stride_guard_rejects_what_the_reference_rejects() {
+    // `RecordTable::from_bytes` admits a stride only when it is non-zero, a
+    // whole number of words, and divides the region length. The Keleusma guard
+    // must agree, and it must not TRAP on the zero case: division by zero is a
+    // runtime fault, so this depends on `andalso` short-circuiting.
+    let mut vm = vm_for(WIRE_KEL);
+    let rs: Vec<RegionSpec> = vec![(1, 0, 48, 0)]; // 48 bytes = 6 words
+    let hl = header_len(rs.len());
+    let (_, image) =
+        run_cmd_full(&mut vm, CMD_EMIT_HEADER, rs.len() as i64, &[], &rs, 0, hl).expect("emit");
+    let art = reference_artifact(&rs);
+    let payload_len = 48usize;
+
+    for stride in [0usize, 1, 7, 8, 9, 16, 24, 32, 48, 64] {
+        let (got, _) = run_cmd_args(
+            &mut vm,
+            CMD_REC_COUNT,
+            rs.len() as i64,
+            &image,
+            &[],
+            [0, stride as i64, 0, 0],
+            0,
+        )
+        .expect("rec_count must not trap");
+        let want: i64 =
+            match keleusma_wire::RecordTable::from_bytes(&art[64..64 + payload_len], stride) {
+                Some(t) => t.len() as i64,
+                None => -1,
+            };
+        assert_eq!(got, want, "stride {stride}: disagreed with the reference");
+    }
+}
+
+#[test]
+fn a_zero_stride_is_reported_rather_than_trapping() {
+    // Pinned on its own, because the failure mode is a trap rather than a wrong
+    // answer, and because it rests entirely on `andalso` short-circuiting past a
+    // division by zero. If the guard were `band`-ed instead, this would fault.
+    let mut vm = vm_for(WIRE_KEL);
+    let rs: Vec<RegionSpec> = vec![(1, 0, 16, 0)];
+    let hl = header_len(rs.len());
+    let (_, image) =
+        run_cmd_full(&mut vm, CMD_EMIT_HEADER, rs.len() as i64, &[], &rs, 0, hl).expect("emit");
+    let (got, _) = run_cmd_args(&mut vm, CMD_REC_COUNT, 1, &image, &[], [0, 0, 0, 0], 0)
+        .expect("must not trap");
+    assert_eq!(got, -1, "a zero stride must report, not trap");
+}
+
+#[test]
+fn a_stride_that_is_a_word_multiple_but_not_a_power_of_two_is_handled() {
+    // 24 divides 48 and is a whole number of words, so the reference admits it.
+    // A reader that reached for `band (stride - 1)` as a cheap modulo would get
+    // this wrong, which is why `divides` uses real division.
+    let mut vm = vm_for(WIRE_KEL);
+    let rs: Vec<RegionSpec> = vec![(1, 0, 48, 0)];
+    let hl = header_len(rs.len());
+    let (_, image) =
+        run_cmd_full(&mut vm, CMD_EMIT_HEADER, rs.len() as i64, &[], &rs, 0, hl).expect("emit");
+    let (got, _) =
+        run_cmd_args(&mut vm, CMD_REC_COUNT, 1, &image, &[], [0, 24, 0, 0], 0).expect("run");
+    assert_eq!(got, 2, "stride 24 over 48 bytes is two records");
+}
+
+#[test]
+fn emitted_records_are_byte_identical_to_an_independent_construction() {
+    // Keleusma writes the records; the expected bytes are built here by a
+    // separate implementation of the same pattern, and the header comes from the
+    // reference builder. Nothing in the comparison is produced by wire.kel.
+    let mut vm = vm_for(WIRE_KEL);
+    for n in [1usize, 2, 7, 16] {
+        let rs: Vec<RegionSpec> = vec![(40, 0, n * 16, 0)];
+        let art = reference_artifact(&rs);
+        let (count, got) = run_cmd_args(
+            &mut vm,
+            CMD_EMIT_RECORDS,
+            1,
+            &[],
+            &rs,
+            [0, n as i64, 0, 0],
+            art.len(),
+        )
+        .expect("emit records");
+        assert_eq!(count, n as i64, "n = {n}: wrong record count returned");
+
+        let mut want = art.clone();
+        let view = keleusma_wire::WireView::parse(&art).expect("parse");
+        let base = (view.region_at(0).expect("region").word_offset as usize) * 8;
+        for r in 0..n {
+            want[base + r * 16..base + (r + 1) * 16].copy_from_slice(&pattern_record(r));
+        }
+        assert_eq!(got, want, "n = {n}: emitted records differ");
+    }
+}
+
+#[test]
+fn every_record_field_reads_back_through_the_keleusma_reader() {
+    let mut vm = vm_for(WIRE_KEL);
+    let n = 9usize;
+    let rs: Vec<RegionSpec> = vec![(40, 0, n * 16, 0)];
+    let art = reference_artifact(&rs);
+    let (_, image) = run_cmd_args(
+        &mut vm,
+        CMD_EMIT_RECORDS,
+        1,
+        &[],
+        &rs,
+        [0, n as i64, 0, 0],
+        art.len(),
+    )
+    .expect("emit");
+    for r in 0..n {
+        let want = pattern_record(r);
+        for (cmd, off, expect) in [
+            (
+                CMD_REC_U32,
+                0i64,
+                u32::from_le_bytes(want[0..4].try_into().unwrap()) as i64,
+            ),
+            (
+                CMD_REC_U32,
+                4,
+                u32::from_le_bytes(want[4..8].try_into().unwrap()) as i64,
+            ),
+            (
+                CMD_REC_U16,
+                8,
+                u16::from_le_bytes(want[8..10].try_into().unwrap()) as i64,
+            ),
+        ] {
+            let (got, _) = run_cmd_args(&mut vm, cmd, 1, &image, &[], [0, 16, r as i64, off], 0)
+                .expect("read");
+            assert_eq!(got, expect, "record {r} field at {off}");
+        }
+    }
+}
+
+#[test]
+fn a_region_read_as_a_pool_sees_the_same_bytes() {
+    // The same payload, addressed without a stride. A pool read and a record
+    // read of the same byte must agree, or the two addressing paths have
+    // diverged.
+    let mut vm = vm_for(WIRE_KEL);
+    let n = 4usize;
+    let rs: Vec<RegionSpec> = vec![(40, 0, n * 16, 0)];
+    let art = reference_artifact(&rs);
+    let (_, image) = run_cmd_args(
+        &mut vm,
+        CMD_EMIT_RECORDS,
+        1,
+        &[],
+        &rs,
+        [0, n as i64, 0, 0],
+        art.len(),
+    )
+    .expect("emit");
+    for r in 0..n {
+        let want = pattern_record(r);
+        for (byte, expect) in want.iter().enumerate() {
+            let (got, _) = run_cmd_args(
+                &mut vm,
+                CMD_POOL_U8,
+                1,
+                &image,
+                &[],
+                [0, (r * 16 + byte) as i64, 0, 0],
+                0,
+            )
+            .expect("pool read");
+            assert_eq!(got, i64::from(*expect), "pool byte {byte} of record {r}");
+        }
+    }
+}
+
+#[test]
+fn a_mutated_record_stride_is_reported() {
+    // must-fire on the addressing arithmetic itself: a wrong stride in the
+    // emitter overlaps or spreads the records.
+    let mutant = mutate(
+        WIRE_KEL,
+        "        put_rec_u32(i, 16, r, 0, (r * 7) + 1);",
+        "        put_rec_u32(i, 24, r, 0, (r * 7) + 1);",
+    );
+    let mut vm = vm_for(&mutant);
+    let n = 4usize;
+    let rs: Vec<RegionSpec> = vec![(40, 0, n * 16, 0)];
+    let art = reference_artifact(&rs);
+    let (_, got) = run_cmd_args(
+        &mut vm,
+        CMD_EMIT_RECORDS,
+        1,
+        &[],
+        &rs,
+        [0, n as i64, 0, 0],
+        art.len(),
+    )
+    .expect("emit");
+    let mut want = art.clone();
+    let view = keleusma_wire::WireView::parse(&art).expect("parse");
+    let base = (view.region_at(0).expect("r").word_offset as usize) * 8;
+    for r in 0..n {
+        want[base + r * 16..base + (r + 1) * 16].copy_from_slice(&pattern_record(r));
+    }
+    assert_ne!(got, want, "a mutated stride produced identical bytes");
 }
