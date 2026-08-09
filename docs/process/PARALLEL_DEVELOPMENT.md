@@ -11,6 +11,92 @@ The guiding principle is **isolate the mutable, serialize the shared**. Each age
 gets a private working tree and branch (isolated). The release line and the full
 gate are shared resources and are entered one agent at a time (serialized).
 
+## 0a. The collaboration strategy (2026-08-09)
+
+Two sessions ran in parallel for a day and the arrangement worked, in the sense
+that each caught real defects in the other's work. It also cost the operator an
+afternoon of relaying prose between them. This section is what that experience
+plus a measurement says the arrangement should be.
+
+### The governing principle: minimise seams, do not build machinery
+
+The multi-agent failure literature's consistent finding is that failures cluster
+**at the seams** — specification, inter-agent misalignment, and verification —
+rather than inside any single agent. More coordination surface means more failure,
+not more throughput. Every mechanism below is therefore chosen to *remove* a seam
+rather than to manage one, and nothing here is a new tool.
+
+The corollary is a standing rule: **adopt or reuse, never build orchestration.**
+Parallel execution over isolated worktrees is a solved, commoditised shape. If a
+coordination need genuinely outgrows what git and the filesystem provide, take
+something off the shelf. Do not write a bus.
+
+### git is already the message bus
+
+Worktrees share one object store, so each session can read the other's branch
+directly. That is the blackboard pattern the modern agent buses re-instantiate,
+available here with no protocol and no tooling:
+
+```
+git show <other-branch>:docs/process/handoffs/<leaf>.md     # read their state
+git log --oneline <mine>..<theirs>                          # what they landed
+```
+
+**Each session owns exactly one mailbox file**, `docs/process/handoffs/<leaf>.md`
+on its own branch, and writes anything the other needs there. The other session
+reads it with `git show`. No relaying of prose through the operator, no message
+format to agree, and the record is versioned and attributable for free.
+
+**Reserve the operator for decisions, not transport.** Escalate a genuine fork —
+a semantics change, a tradeoff needing judgment, an irreversible action. Do not
+escalate status, findings, or questions the other session can answer.
+
+### Read the other branch before assuming; state facts with their tip
+
+Every stale-document failure in this project has the same shape: a claim true when
+written and false when read. Under parallelism it gets worse, because the other
+branch moves while you reason.
+
+- **Before acting on anything about the other stream, read its current state.**
+- **Stamp claims with the tip they were established against.** A result is valid
+  only for the commit it was checked at, and that applies to gates, measurements,
+  and rehearsed command sequences alike.
+
+### Keep the shared surface small, and enumerate it
+
+Coordination cost is proportional to shared surface. Today it is exactly one file,
+[`scripts/release-gate.sh`](../../scripts/release-gate.sh), edited in separate
+regions. The three process channels are single-writer by assignment. Code
+dependencies across branches are read-only and declared.
+
+**Anything that becomes genuinely shared gets written down here, or it becomes an
+unowned conflict.**
+
+### The measured bottleneck is the gate, and it is repetition
+
+Measured 2026-08-09 on a ten-core machine, otherwise idle:
+
+| Quantity | Value |
+|---|---|
+| `selfhost_codegen`, standalone | 1008 s wall, 82 min CPU |
+| Parallelism achieved | 4.85 of 10 cores |
+| Full gate | ~2h33m |
+
+**The gate is not contention-bound.** It is *under*-subscribed, so raising test
+parallelism buys nothing; the tail is a few whole-stage self-compiles running
+alone. The cost is that this same 17-minute suite runs about four times, once per
+feature configuration, and the heavy self-host tests are insensitive to the
+features being varied (`signatures` is signing, `shell` is CLI surface).
+
+That matters for parallelism because the gate is the serial fraction, and by
+Amdahl the achievable speedup from adding a second stream is capped at `1/f`
+regardless of how well the sessions cooperate. **Reducing the gate is worth more
+than any coordination improvement**, and it is the lever to pull before adding
+process.
+
+Batching three or four increments per merge remains the cheapest available
+mitigation and costs no coverage.
+
 ## 0. Two version branches (the current arrangement, 2026-08-08)
 
 **Sections 1 to 5 assume several feature branches off ONE trunk. That is not the
