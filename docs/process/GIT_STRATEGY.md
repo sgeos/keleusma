@@ -93,6 +93,27 @@ Supported `<scope>` values (branch names and commit subjects alike): `feat` (new
 - **Direct commits** to the version branch or `main` are limited to small green documentation or
   process changes. Everything else flows through a feature branch.
 
+### `git add -A` after a branch switch is the dangerous case
+
+Untracked files survive a branch switch, but **ignore rules do not** — they are
+tracked content and change with the branch. So a working tree built under one
+branch, staged with `git add -A` on another whose ignore rules differ, sweeps in
+whatever the second branch does not know to ignore. Nothing warns; the files are
+simply untracked-and-unignored, which is exactly what `-A` is for.
+
+This happened on 2026-08-09: a package's `.gitignore` lived on a feature branch,
+the working tree was built there, and a `git add -A` on the version branch — which
+did not carry the package — staged 571 build artifacts.
+
+Two defences, in order of reliability:
+
+- **Put the rule at the repository root**, where it exists on every branch that
+  has the root file. `**/target/` covers every package, present or future, on
+  every branch. A rule in a package subdirectory protects only branches that
+  carry that subdirectory.
+- **Read `git status --short` before committing after any branch switch**, and
+  treat an unexpected file count as the signal it is.
+
 ### Exception: a line that is itself rebased
 
 The no-fast-forward rule assumes the target is never rebased. A version branch kept as a linear

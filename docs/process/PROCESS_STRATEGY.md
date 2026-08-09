@@ -156,11 +156,30 @@ diverged in both directions, nobody had chosen that, and the informal two-tier
 system the design above forbids had accreted on its own. Closed in the same
 change that recorded this.
 
-The recurring cause is worth naming: **`release-gate.sh` and the CI Doc job both
-enumerate crates BY NAME**, so a new crate is invisible until someone remembers.
-That has now produced two coverage holes — broken intra-doc links in
-`src/selfhost/` surviving four releases, and `keleusma-wire` running four days with
-gate coverage and no CI coverage. Adding a crate means adding it to both.
+### Prefer a pattern to an enumeration; a by-name list is a latent hole
+
+The same defect has now produced three separate failures in this repository, and
+in each case the fix is a rule that matches rather than a list that remembers.
+
+| Enumeration | What it missed | Cost |
+|---|---|---|
+| `release-gate.sh` lists crates by name | `keleusma-wire` | four days of gate coverage with no CI coverage |
+| CI Doc job lists crates by name | `src/selfhost/`, then both new crates | broken intra-doc links survived four releases |
+| Root `.gitignore` listed nested `target/` dirs by name | `native_codegen/target/` | 571 build artifacts swept into a commit |
+
+**A by-name list is correct on the day it is written and silently wrong the moment
+the set grows.** Nobody is at fault when it fails, which is exactly why it keeps
+happening. Where a pattern can express the intent — `**/target/` rather than one
+line per package — use the pattern. Where enumeration is unavoidable, put a
+comment at the point of failure saying what must be added, and expect that to work
+only sometimes.
+
+The `.gitignore` case carries an extra lesson for parallel work: **a guard that
+lives on one branch does not protect another.** A package's ignore rule in its own
+subdirectory is absent on any branch lacking that subdirectory, and untracked
+files survive a branch switch, so `git add -A` after switching sweeps whatever the
+new branch does not know to ignore. A rule at the repository root exists on every
+branch that has the root file and cannot go missing that way.
 
 ### Reap orphans before timing anything
 
