@@ -29,6 +29,19 @@
 //! defect it is built to catch is a hot path doing work proportional to the
 //! whole module, and `cargo test` will keep saying the answers are correct.
 //!
+//! # It reads wall-clock time, so concurrent load is a real false-positive source
+//!
+//! Raised by the parallel `v0.3.0` session, and correct: the same reasoning that
+//! makes an orphaned test binary corrupt this signal applies to *legitimate*
+//! concurrent work. A heavy build in another worktree can push this over without
+//! anything being wrong with the branch under test.
+//!
+//! The headroom absorbs a lot — a healthy run is around an order of magnitude
+//! under the ceiling — but it is not unlimited. **Under parallel development,
+//! suspect concurrent load before suspecting a regression**, and re-run alone
+//! before investigating. This is a second, independent argument for serialising
+//! full gates between sessions rather than only for throughput.
+//!
 //! # Reference points
 //!
 //! Measured on one machine, uncontended, debug build, at 200k iterations. These
@@ -119,12 +132,22 @@ fn constant_loads_in_a_loop_stay_fast() {
         "VM executed {ITERATIONS} constant-loading iterations in {elapsed:.2}s, \
          over the {CEILING_SECS}s tripwire.\n\
          \n\
-         Do NOT raise the ceiling as a first response. This guard exists because \
-         the wire-format v2 cutover shipped a runtime forty times slower with \
-         every correctness test passing. Profile the VM's inner loop and look \
-         for a per-access read that has become proportional to the whole module \
-         -- a rebuilt view, a re-parsed table, or a whole-pool decode behind what \
-         should be a single-record fetch. See tests/perf_canary.rs module docs."
+         FIRST, RULE OUT CONCURRENT LOAD. This reads wall-clock time, so a heavy \
+         build in another session or worktree on the same machine can push it \
+         over without anything being wrong with your branch. Under parallel \
+         development that is a likelier explanation than a regression. Re-run it \
+         alone before investigating, and reap any orphaned test binaries left by \
+         an interrupted gate (pkill -f \"$PWD/target/debug/deps\" -- SCOPE IT to \
+         your own worktree, an unscoped pattern kills a sibling session's live \
+         run).\n\
+         \n\
+         If it still fails alone: do NOT raise the ceiling as a first response. \
+         This guard exists because the wire-format v2 cutover shipped a runtime \
+         forty times slower with every correctness test passing. Profile the VM's \
+         inner loop and look for a per-access read that has become proportional \
+         to the whole module -- a rebuilt view, a re-parsed table, or a whole-pool \
+         decode behind what should be a single-record fetch. See the \
+         tests/perf_canary.rs module docs."
     );
 
     // Reported so a gradual drift is visible in the log even while passing. A
