@@ -42,10 +42,52 @@ git show <other-branch>:docs/process/handoffs/<leaf>.md     # read their state
 git log --oneline <mine>..<theirs>                          # what they landed
 ```
 
-**Each session owns exactly one mailbox file**, `docs/process/handoffs/<leaf>.md`
-on its own branch, and writes anything the other needs there. The other session
-reads it with `git show`. No relaying of prose through the operator, no message
-format to agree, and the record is versioned and attributable for free.
+**A mailbox lives on the VERSION branch, never on a feature branch.** Each session
+owns exactly one, `docs/process/handoffs/<version-branch>.md`, updated by **direct
+commit to the version branch** — which [`GIT_STRATEGY.md`](./GIT_STRATEGY.md)
+already permits for small green documentation and process changes, and a mailbox is
+exactly that.
+
+**This is not a stylistic preference; the alternative fails silently.** Any session
+doing real work is on a feature branch cut from its version branch, so a mailbox
+kept there sits one branch removed from where the convention says to look. The
+lookup then returns whatever the version branch last had — no error, no missing
+file, just older content that reads as current. That is the stale-but-plausible
+case this project has been bitten by repeatedly, reproduced here by the very
+artefact meant to reduce coordination cost. It was found on 2026-08-09 when the
+documented read path returned a day-old orientation document.
+
+**Every mailbox opens with the branch it describes and the tip it was written
+against**, so a reader who has somehow reached the wrong file can tell. Verify
+before trusting:
+
+```
+git show <version-branch>:docs/process/handoffs/<version-branch>.md
+git rev-parse --short <version-branch>                     # compare to the header
+git log -1 --format=%cd <version-branch> -- <that-path>     # when it last moved
+```
+
+A header tip far behind the branch tip means the mailbox has not kept up. That is
+a weak signal rather than a guarantee — a mailbox need not change every commit —
+but it is the difference between a stale read that announces itself and one that
+does not.
+
+### Give every coordination artefact the same treatment as a predicate
+
+Raised by the `v0.3.0` session, from the failure above. A mechanism introduced to
+remove a seam introduced a new one, which is precisely what the seam literature
+predicts and precisely what the artefact was supposed to avoid.
+
+So before relying on any coordination mechanism, run both directions on it, exactly
+as for a test predicate:
+
+- a **must-return-right case** — the documented path reaches the intended thing;
+- a **must-not-silently-return-wrong case** — when the path is wrong, stale, or
+  unreachable, does it say so, or does it hand back something plausible?
+
+The second is the one that gets skipped, and it is the one that matters. A
+coordination mechanism that fails loudly is recoverable. One that fails quietly
+propagates a wrong belief into both sessions at once.
 
 **Reserve the operator for decisions, not transport.** Escalate a genuine fork —
 a semantics change, a tradeoff needing judgment, an irreversible action. Do not
