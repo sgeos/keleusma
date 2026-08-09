@@ -11,6 +11,79 @@ The guiding principle is **isolate the mutable, serialize the shared**. Each age
 gets a private working tree and branch (isolated). The release line and the full
 gate are shared resources and are entered one agent at a time (serialized).
 
+## 0. Two version branches (the current arrangement, 2026-08-08)
+
+**Sections 1 to 5 assume several feature branches off ONE trunk. That is not the
+current topology, and the difference changes what they prescribe.** Two version
+branches are live:
+
+| Branch | Owns | Working tree |
+|---|---|---|
+| `v0.2.3` | The wire-format programme | the primary repo directory |
+| `v0.3.0` | Native code generation | `../keleusma-worktrees/<leaf>` |
+
+`v0.3.0` was cut from `v0.2.3` and they have since diverged. Feature branches are
+cut from whichever version branch owns the work, with `KEL_TRUNK=v0.3.0` where
+needed — both `worktree.sh` and `merge-to-trunk.sh` honour it.
+
+### The three channels are single-writer and belong to `v0.2.3`
+
+`REVERSE_PROMPT.md`, `DESIGN_JOURNAL.md`, and `TASKLOG.md` would conflict on
+**every** merge between version branches. `DESIGN_JOURNAL.md` is newest-first, so
+its conflict lands at the top of the file every single time.
+
+**`v0.3.0` therefore touches none of the three** and writes only
+`docs/process/handoffs/v0.3.0.md`, which exists **on `v0.3.0` only** and is
+deliberately not linked here, since a cross-branch link cannot resolve on this
+branch. `v0.2.3` keeps the three channels moving so there
+is a coherent history to inherit when `v0.3.0` becomes a line in its own right.
+This asymmetry is deliberate and the cost falls on `v0.3.0`.
+
+### The downstream branch owns syncing
+
+`v0.3.0` pulls from `v0.2.3`; `v0.2.3` never pushes into `v0.3.0`. One-directional
+ownership means nobody has to ask permission and nobody edits a branch they do not
+own.
+
+**Sync before starting each increment, not on a timer.** `v0.3.0` was cut two
+commits stale on 2026-08-08 and inherited a specification describing a format that
+no longer existed plus a plan document saying its own work was blocked. Drift here
+does not announce itself; it presents as confidently reading the wrong thing.
+
+### Cross-branch code dependencies are read-only, declared, and one-directional
+
+`v0.3.0` reads `src/wire_schema.rs` (`AuxView`, `AuxOffsets`) and
+`src/bytecode.rs`, and commits to modifying neither. `v0.2.3` commits to
+announcing changes to that surface before making them. If a widening is genuinely
+needed, it is requested rather than taken.
+
+Note `AuxResolved` in `src/vm.rs` is **private** and deliberately not part of that
+surface; it is a VM-internal cache. `AuxView` is the shared read surface.
+
+### Genuinely shared files
+
+[`scripts/release-gate.sh`](../../scripts/release-gate.sh) is the only one so far.
+Keep edits in separate regions — the orphan-reap preflight sits above the first
+`step()` call, per-package steps go at the end — and expect to rebase rather than
+merge when both lines touch it.
+
+### UNDECIDED: where `v0.3.0` merges
+
+To `v0.2.3`, or independently to `main`? **This has not been decided, and
+`merge-to-trunk.sh` defaults to `v0.2.3`, so the default will make the choice
+silently for whoever runs it first.** Settle it before the first `v0.3.0` merge.
+
+### What does not change
+
+Full-gate serialization (section 4) still binds, and matters more here than under
+sibling feature branches. A full gate runs about 2h30m, only one may run at a
+time, and the result reaches the other session only through the operator. Plan for
+roughly one merge per stream per half-day and batch accordingly.
+
+**Reap orphans with a PATH-SCOPED pattern.** `pkill -f "$PWD/target/debug/deps"`
+from the worktree whose gate died. An unscoped `pkill -f 'target/debug/deps'`
+matches every worktree on the machine and will kill a sibling session's live gate.
+
 ## 1. Isolation: one worktree and one branch per agent
 
 Every concurrent agent works in its own git worktree on its own short-lived
@@ -158,6 +231,11 @@ ran against, so there is no lock daemon, just "gate, then confirm nothing moved.
 6. `scripts/worktree.sh rm <branch>` when merged.
 
 ## Status
+
+**Two version branches have been live since 2026-08-08** — see section 0, which
+supersedes the single-trunk assumption in sections 1 to 5 where they differ. One
+open decision remains: whether `v0.3.0` merges to `v0.2.3` or independently to
+`main`.
 
 The **P11** encoding-capacity change has landed (2026-07-24), which was the hard blocker
 on self-host parallelism — the inter-stage encodings now have headroom, so construct work
