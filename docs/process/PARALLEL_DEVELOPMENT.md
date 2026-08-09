@@ -39,16 +39,46 @@ branch. `v0.2.3` keeps the three channels moving so there
 is a coherent history to inherit when `v0.3.0` becomes a line in its own right.
 This asymmetry is deliberate and the cost falls on `v0.3.0`.
 
-### The downstream branch owns syncing
+### The downstream branch REBASES, and owns doing it
 
-`v0.3.0` pulls from `v0.2.3`; `v0.2.3` never pushes into `v0.3.0`. One-directional
-ownership means nobody has to ask permission and nobody edits a branch they do not
-own.
+**Operator decision, 2026-08-08: `v0.3.0` is rebased onto `v0.2.3` as work
+proceeds, not merged.** Keeping it a linear extension means the eventual
+integration is a fast-forward rather than an accumulated tangle of merge commits.
+
+```
+git fetch origin && git checkout v0.3.0 && git rebase origin/v0.2.3
+```
+
+`v0.3.0` pulls; **`v0.2.3` never pushes into `v0.3.0`**. One-directional ownership
+means nobody edits a branch they do not own, and — critically under a rebase
+policy — nobody rewrites history under a session that has local work built on it.
 
 **Sync before starting each increment, not on a timer.** `v0.3.0` was cut two
 commits stale on 2026-08-08 and inherited a specification describing a format that
 no longer existed plus a plan document saying its own work was blocked. Drift here
 does not announce itself; it presents as confidently reading the wrong thing.
+
+#### What rebasing costs, stated plainly
+
+Rebasing rewrites history, so once `v0.3.0` is published each sync needs a
+**force-push**. That is normally a guarded action; here it is standing policy for
+`v0.3.0` specifically, and it carries obligations:
+
+- Use `--force-with-lease`, never a bare `--force`. It refuses when the remote
+  moved unexpectedly, which is the difference between overwriting your own stale
+  view and overwriting someone else's work.
+- **Only the branch owner force-pushes it**, and only when no other session has
+  unpushed work on top. Announce it rather than assume.
+- **Feature branches off `v0.3.0` must rebase after each such sync.**
+  `merge-to-trunk.sh` already rebases onto `origin/$TRUNK` before gating, so the
+  normal merge path handles this; a long-lived feature branch between syncs is the
+  case that needs manual attention.
+- A gate result is only valid for the exact tip it ran against. A rebase changes
+  the tip, so a gate that predates it must be re-run.
+
+**Rebase early and often.** The cost scales with how much has accumulated on both
+sides, and the force-push hazard scales with how many sessions have built on the
+old history. A sync per increment is nearly free; a sync per week is not.
 
 ### Cross-branch code dependencies are read-only, declared, and one-directional
 
@@ -67,11 +97,15 @@ Keep edits in separate regions — the orphan-reap preflight sits above the firs
 `step()` call, per-package steps go at the end — and expect to rebase rather than
 merge when both lines touch it.
 
-### UNDECIDED: where `v0.3.0` merges
+### Where `v0.3.0` merges
 
-To `v0.2.3`, or independently to `main`? **This has not been decided, and
-`merge-to-trunk.sh` defaults to `v0.2.3`, so the default will make the choice
-silently for whoever runs it first.** Settle it before the first `v0.3.0` merge.
+The rebase policy settles the mechanism: `v0.3.0` stays a linear extension of
+`v0.2.3`, so its integration is a fast-forward whenever it happens, and
+`merge-to-trunk.sh`'s `v0.2.3` default is the correct one rather than an accident.
+
+What remains open is only the *timing* — whether `v0.3.0` lands while `v0.2.3` is
+still the active line, or follows it to `main` afterwards. That is a release
+question rather than a branching one, and it does not need answering to proceed.
 
 ### What does not change
 
@@ -233,9 +267,10 @@ ran against, so there is no lock daemon, just "gate, then confirm nothing moved.
 ## Status
 
 **Two version branches have been live since 2026-08-08** — see section 0, which
-supersedes the single-trunk assumption in sections 1 to 5 where they differ. One
-open decision remains: whether `v0.3.0` merges to `v0.2.3` or independently to
-`main`.
+supersedes the single-trunk assumption in sections 1 to 5 where they differ.
+`v0.3.0` is kept a linear extension of `v0.2.3` by rebasing rather than merging
+(operator decision, 2026-08-08), which makes its eventual integration a
+fast-forward.
 
 The **P11** encoding-capacity change has landed (2026-07-24), which was the hard blocker
 on self-host parallelism — the inter-stage encodings now have headroom, so construct work
