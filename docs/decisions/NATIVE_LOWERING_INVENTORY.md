@@ -740,3 +740,60 @@ Two properties of it that a plausible lowering gets wrong:
   index, and no in-range differential case would ever notice.
 
 Both are pinned by must-fire cases that were run and fail.
+
+## Measured 2026-08-09: the remaining work is ordered wrongly, and by two orders of magnitude
+
+This document orders the remaining instructions by what each COSTS to implement.
+That says nothing about what each one BLOCKS, and the two orderings are not the
+same. Measured over the shipped corpus, fifty-eight compilable programs, 496
+chunks, 73,434 opcode instances:
+
+| Measure | Value |
+|---|---|
+| Opcode instances lowered | **87.3 percent** |
+| Chunks **fully** lowerable | **33.9 percent** |
+
+The divergence is the whole point. A chunk with one unsupported opcode is
+refused entirely, so instance-level coverage is not a capability measure. Eighty
+seven percent is a number no consumer of this backend can use.
+
+| Workstream | Blocking instances | Blocked chunks by first blocker |
+|---|---|---|
+| D, data segment | 7832 | **267** |
+| D, native ABI | 1057 | 9 |
+| C, composites | 331 | 28 |
+| B, sub-coroutines | 98 | 24 |
+| A, typed arithmetic | **0** | **0** |
+| float / fixed-point | **0** | **0** |
+
+**The data segment is 81 percent of blocked chunks.** It is the next increment,
+and it was not previously identified as such anywhere in this document.
+
+**The native ABI shows the instance-count trap in its clearest form**: second by
+instances, fourth by blocked chunks, because its instances concentrate in large
+chunks already blocked for other reasons.
+
+### The zero that falsified a recommendation made one session earlier
+
+`Add`, `Sub`, `Mul` and `Neg` — the class this document described as blocked on
+operand type recovery — occur **zero times** in the entire corpus. One session
+before this measurement I formally recommended operand type recovery as "clearly
+the highest-leverage remaining work" and offered to scope a research spike.
+
+Every step of that argument was correct: the four opcodes are reachable only for
+`Byte`, `Fixed` and `Float`; the opcode does not record which; the lowerings
+differ. **The conclusion was worthless.** The spike would have unblocked nothing.
+
+The lesson is not "reason more carefully". The reasoning contained no invalid
+step. It answered *what must be true before this can be implemented* and never
+asked *how often does this occur*. Those are independent questions, and a
+dependency argument cannot reveal the missing one from the inside. **Measure
+frequency before ordering by structure.** The corpus check cost about twenty
+minutes to write and two seconds to run.
+
+Caveats, since the corpus is not a sample of the eventual target population: it
+over-represents the self-hosted compiler, a text-processing workload with heavy
+data-segment use, and under-represents the signal-processing and embedded
+workloads the roadmap names. The zeroes are absence of evidence within THIS
+corpus. Re-measure when the target population changes. The instrument is
+`native_codegen/tests/spike_corpus_coverage.rs` and re-runs in two seconds.
