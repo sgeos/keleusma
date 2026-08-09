@@ -248,9 +248,15 @@ The strategy's open questions were addressed in a dedicated research loop (2026-
 
 ### LLVM version pin (R4.3, revised)
 
-**Recommendation**. Pin to LLVM 19 for V0.4.0. Upgrade through 20, 21, 22 in V0.4.x point releases as the ecosystem moves.
+**Recommendation, superseded 2026-08-08 — pin to LLVM 22.1. See the correction under R4.4.** The original recommendation follows.
+
+~~Pin to LLVM 19 for V0.4.0. Upgrade through 20, 21, 22 in V0.4.x point releases as the ecosystem moves.~~
+
+The staged upgrade path is unnecessary: LLVM 22.1.8 is already installed and active on the development machine, and it matches the LLVM `rustc` 22.1.6 is built against. Pinning to 19 would mean installing an older toolchain in order to upgrade away from it later.
 
 **Revision history**. R4.3 originally recommended LLVM 17 based on a 2025 cutoff in the source documents. Post-hoc verification surfaced that LLVM 22.1 is the current stable as of May 2026. Pinning at LLVM 17 is now three releases behind. LLVM 19 balances maturity (two releases old, widely available in distributions, supported by inkwell 0.8+) with currency.
+
+Revised again 2026-08-08. The maturity argument for 19 rested partly on inkwell 0.8 support, and inkwell 0.8.0 turns out to cap at `llvm20-1` regardless. With inkwell 0.9.0 accepting `llvm22-1`, and 22.1.8 already installed, the tradeoff that favoured 19 no longer holds.
 
 **Confidence**. Medium. The choice between LLVM 18, 19, 20, or even 22 is a judgment call; the point is that 17 is too old.
 
@@ -258,9 +264,15 @@ The strategy's open questions were addressed in a dedicated research loop (2026-
 
 **Recommendation**. Primary `inkwell` with the feature flag corresponding to the chosen LLVM version (for instance `llvm19-1` if pinning to LLVM 19). Escape hatch `llvm-sys` for intrinsics inkwell does not expose, concentrated in a small `coro_intrinsics.rs` module. `melior` (MLIR) deferred to long-term watch list.
 
-**Update**. inkwell 0.8.0 supports LLVM 11 through 22; inkwell 0.9.0 (April 2026) maintains active development. Whether inkwell exposes `coro.id.retcon` with a safe wrapper requires source-tree audit when implementation begins; if not, expect the `coro_intrinsics.rs` escape-hatch module to grow.
+**Update, superseded**. This entry recorded that inkwell 0.8.0 supports LLVM 11 through 22 and recommended 0.8.0. **That is wrong.**
 
-**Confidence**. High for the broad recommendation; medium for the specific feature-flag name without source-tree confirmation.
+**Correction, 2026-08-08, probed by the `v0.3.0` native codegen session.** inkwell 0.8.0's maximum is `llvm20-1`, and it **rejects** `llvm22-1`. Use **inkwell 0.9.0**, which accepts it and builds against `llvm-sys` 221.0.1 and LLVM 22.1.8. The version pin moves from LLVM 19 to **LLVM 22.1**, matching the LLVM that `rustc` 22.1.6 is built against. LLVM 22.1.8 was already installed and active on the development machine through MacPorts, so the planned install step is unnecessary.
+
+**Toolchain detail worth recording here rather than rediscovering.** MacPorts LLVM 22 needs `-L native=/opt/local/lib` on the link path, because its `zstd`, `xml2`, and `ffi` dependencies sit outside the default search path. Without it, emission fails at `ld` rather than at the binding, so the error points at the wrong layer.
+
+Whether inkwell exposes `coro.id.retcon` with a safe wrapper still requires a source-tree audit when implementation begins; if not, expect the `coro_intrinsics.rs` escape-hatch module to grow.
+
+**Confidence**. High for the broad recommendation and, now, for the version pin, which was probed against the installed toolchain rather than inferred from release notes. Medium for the `coro.id.retcon` surface, which remains unaudited.
 
 ### Symbol mangling scheme (R4.2)
 

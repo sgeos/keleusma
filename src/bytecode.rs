@@ -2355,17 +2355,33 @@ pub enum Op {
 
     /// Overflow-checked Word addition. Pops two `Value::Int`
     /// operands, computes the true sum in `i128`, and pushes three
-    /// slots: the high 64 bits as `Value::Int`, the low 64 bits as
-    /// `Value::Int`, and an outcome flag `Value::Int(0)` (ok),
-    /// `Value::Int(1)` (overflow), or `Value::Int(2)` (underflow).
+    /// slots in this order: the **low** 64 bits as `Value::Int`, the
+    /// **high** 64 bits as `Value::Int`, and an outcome flag
+    /// `Value::Int(0)` (ok), `Value::Int(1)` (overflow), or
+    /// `Value::Int(2)` (underflow). The flag therefore ends up on
+    /// top and the low word at the bottom of the three.
+    ///
+    /// **The order is load-bearing, not arbitrary.** An uncaptured
+    /// `a + b` lowers to this op followed by `PopN(2)`, which
+    /// discards the top two slots (flag and high) and leaves the low
+    /// word as the expression's value. Reversing low and high would
+    /// silently make every unchecked addition evaluate to the high
+    /// word, which is zero for ordinary sums and so would look
+    /// correct until the first result that overflows one word.
+    ///
     /// The compiler stashes all three into temporary locals at the
     /// dispatch site. The construct's surface form is `expr {
     /// ok(v) => ..., overflow(h, l) => ..., underflow(h, l) =>
     /// ... }`.
+    ///
+    /// This comment previously documented the order as high, low,
+    /// flag, contradicting the implementation at
+    /// `vm.rs` (`Op::CheckedAdd`). The implementation was correct.
     CheckedAdd,
     /// Overflow-checked Word subtraction. Same stack effect as
-    /// `Op::CheckedAdd`. The true difference is computed in `i128`
-    /// and split into high and low halves before the flag.
+    /// `Op::CheckedAdd`, including its push order: the true
+    /// difference is computed in `i128` and pushed low half, then
+    /// high half, then flag.
     CheckedSub,
     /// Overflow-checked multiplication parameterized by a Q-format
     /// fraction-bit count (B35 P3d-iii). The operand is `0` for
