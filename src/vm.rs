@@ -7443,6 +7443,53 @@ mod tests {
     use crate::lexer::tokenize;
     use crate::parser::parse;
 
+    /// `CheckedAdd` pushes low, high, flag — pinned by execution, not by prose.
+    ///
+    /// Raised by the parallel `v0.3.0` session, which read `Op::CheckedAdd`'s
+    /// doc comment (then claiming high, low, flag), read `PopN`'s, predicted that
+    /// an uncaptured `a + b` would evaluate to the HIGH word, and found it
+    /// evaluates to the low word. The comment was wrong; the implementation was
+    /// right.
+    ///
+    /// The order is load-bearing. An uncaptured `a + b` lowers to
+    /// `CheckedAdd; PopN(2)`, which discards flag and high and leaves low.
+    ///
+    /// Verified by swapping the two pushes in `Op::CheckedAdd` and re-running:
+    /// `add(2, 3)` then returns 0. A first draft of this comment claimed the
+    /// small cases would survive a swap and only the wide case could catch it.
+    /// That was wrong, and the control is what showed it — swapping the pushes
+    /// also swaps which slots `PopN(2)` discards, so the surviving value becomes
+    /// the high word and every case fails, not just the wide one.
+    ///
+    /// The `i64::MAX` case stays regardless. It is the only one that pins the
+    /// wrapping semantics of the low word rather than merely which slot survives.
+    #[test]
+    fn uncaptured_addition_yields_the_low_word_not_the_high() {
+        fn add(a: i64, b: i64) -> i64 {
+            let src = "fn main(a: Word, b: Word) -> Word { a + b }";
+            let module =
+                compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+            let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+            let mut vm = Vm::new(module, &arena).expect("verify");
+            match vm.call(&[Value::Int(a), Value::Int(b)]).expect("run") {
+                VmState::Finished(Value::Int(n)) => n,
+                other => panic!("unexpected VM state {other:?}"),
+            }
+        }
+
+        assert_eq!(add(2, 3), 5);
+        assert_eq!(add(-7, 3), -4);
+        // The discriminating case. The true sum needs 65 bits, so its high word
+        // is non-zero and its low word wraps. Reading the high word here would
+        // return 1 rather than i64::MIN.
+        assert_eq!(
+            add(i64::MAX, 1),
+            i64::MIN,
+            "uncaptured addition returned the high word; CheckedAdd's push order \
+             or the PopN(2) that follows it has changed"
+        );
+    }
+
     #[test]
     fn vm_error_category_three_way_split() {
         // Sanity-check that each VmError variant maps to the
