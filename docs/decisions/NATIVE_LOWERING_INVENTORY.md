@@ -586,3 +586,52 @@ decision, not an availability constraint.
 shape, that yielded values cross the boundary correctly, or that RESET semantics
 survive. Those are Workstream B proper. What is established is that the
 mechanism is reachable, behaves, and does not force `malloc`.
+
+## Ahead-of-time linkage works, which bears on roadmap open decision 2
+
+`V0_3_X_ROADMAP.md` success criterion 2 requires native artefacts to "link as
+static libraries against a host", and open decision 2 asks whether V0.3.x is
+ahead-of-time only or admits a just-in-time path. Every test in this package
+went through the JIT, which answers neither question: the JIT never writes an
+object file, never invokes a linker, and never crosses a platform calling
+convention.
+
+Both paths are now demonstrated. A Keleusma program compiles, lowers, optimises
+through `default<O2>`, writes a genuine object file, links against a C `main`
+with the system linker, executes as a separate process, and **agrees with the
+VM** across five argument pairs including the wrapping corner. The program spans
+a branch, a counted loop and a cross-function call, so the internal call resolves
+within the object rather than through JIT symbol lookup.
+
+**The contribution to open decision 2 is that it is not a feasibility question.**
+Both shapes work today on this target. The decision is about what to support and
+maintain, not about what is achievable, and the roadmap can be narrowed on those
+grounds.
+
+Three things only this path exercises, which is why it is not redundant with the
+JIT tests: the platform calling convention at a real boundary, external symbol
+emission and linkage as distinct from JIT symbol lookup, and the optimisation
+pipeline that actually ships. The JIT tests run at `OptimizationLevel::None`, so
+they never run the middle end whose absence costs 30x of stack frame.
+
+**Two claims of mine that this falsified**, both written confidently and neither
+checked before a mutation run:
+
+1. I asserted in a comment that a non-position-independent object "fails at `ld`
+   with a relocation error". **It does not**, on arm64 macOS: `RelocMode::Static`
+   links and runs. PIC is retained because it is right for the committed target
+   set, not because the alternative was observed to break. Untested on the Linux
+   and embedded targets.
+2. The test's callee was `fn scale(x, k) -> x * k`, called as `scale(a, 3)`. A
+   must-fire case that dropped the argument reversal in the lowering **left the
+   test passing, because multiplication is commutative**. The test read as though
+   it covered argument order across a linked boundary and could not have caught a
+   swap. The callee now subtracts and the same mutation fails it.
+
+The second is the **third vacuous test of this arc**, after the comparison test
+whose branches returned the same value and the checked-division test whose two
+arms bound the same slot. All three were found by mutation and none by reading.
+The pattern is identical every time: a symmetry in the test data conceals an
+asymmetry in the code. **Choosing test data that is asymmetric under every
+operation the code could confuse is not a refinement, it is the difference
+between a test and a decoration.**
