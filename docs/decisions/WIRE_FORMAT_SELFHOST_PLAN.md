@@ -497,6 +497,211 @@ Three further facts worth carrying:
   > correction, the first replacing a true statement with a false one, and both times the missing
   > step was counting records rather than looking for the region.
 
+### The driver: prep, measured 2026-08-10, BEFORE any code
+
+Every region kind now has an emitter. **Fourteen of the twenty are driven by real compiler
+output; six are oracled against the derive with constructed values**, because the corpus emits them
+empty. What remains is the driver,
+where values stop being decoded from the reference and start being computed. Probing it first
+changed its size, so this is recorded before anything is written.
+
+**A WHOLE small artifact fits in the buffer, so the first slice is end-to-end rather than
+per-region.** Measured auxiliary bodies:
+
+| Program | aux body | share of the 65,536-byte buffer | regions |
+|---|---|---|---|
+| `fn main() -> Word { 42 }` | **912** | **1.4%** | 15 |
+| two chunks | 1,008 | 1.5% | 15 |
+| one local constant | 928 | 1.4% | 15 |
+| a two-field shared data block | 1,152 | 1.8% | 19 |
+
+The residency problem that governs `lexer` does not arise at this size at all. **The first driver
+slice can therefore emit a COMPLETE artifact and compare it byte for byte**, which is a far smaller
+and more decisive step than "reimplement `SchemaBuilder`".
+
+For the minimal module the header area is 48 + 48x15 = 768 bytes and the payloads total 144, which
+sums exactly to the measured 912. The driver's arithmetic is checkable by hand at this scale.
+
+**THE REGION ORDER, MEASURED FROM THE DIRECTORY RATHER THAN INFERRED FROM THE CODE.** Byte identity
+depends on it entirely, and it is not the schema's numeric order:
+
+```
+SIGNATURES, ENUM_VARIANTS, ENUM_LAYOUTS, NATIVES, NATIVE_RETURNS,
+[DATA_SLOTS, SHARED_LAYOUT, PRIVATE_COMPOSITE, DATA_INIT],
+HEADER,
+CONSTS, STRUCT_AUX, ENUM_AUX, STRUCT_TEMPLATES, PARAM_TYPES, SHAPES, CHUNKS,
+[DEBUG_POOL],
+STRING_POOL, NAMES
+```
+
+It is the order the `add_*` calls run in, followed by everything `finish` defers. **Most regions are
+present with length ZERO rather than absent**, which is why the count is 15 and not 7. Only two
+groups are conditional:
+
+- the four data-layout regions, present only when the module has a data layout (15 -> 19)
+- `DEBUG_POOL`, present only under `emit_debug` (19 -> 20)
+
+**What the driver must COMPUTE rather than copy**, which is the whole of the remaining work:
+
+1. **Name interning with dedup**, feeding `STRING_POOL` and `NAMES`. `Names::intern` is a
+   `BTreeMap`; a linear scan is known to be catastrophic here rather than merely slow, so the
+   Keleusma side needs an index structure of its own.
+2. **Constant flattening**, breadth-first with roots pinned to `0..n`, feeding `CONSTS` plus the
+   `STRUCT_AUX` and `ENUM_AUX` side tables, and preserving the forward-ordering invariant that lets
+   a reader walk the table by one reverse sweep with no stack.
+3. **Per-chunk ranges** — `consts_first/count`, `templates_first/count`, `param_types_first/count` —
+   which are allocation results of the order the contributors ran in.
+4. **Region lengths and the directory**, which the host may patch afterwards rather than the emitter
+   computing up front.
+
+A minimal module needs one interned name, one constant root, and no templates, so **items 1 to 3 are
+nearly trivial at that size** while still being the real code paths. That is the first slice.
+
+#### The minimal module's complete input surface (measured 2026-08-10)
+
+Everything the encoder consumes for `fn main() -> Word { 42 }`, so the first slice knows exactly
+what the driver must marshal and nothing is discovered mid-implementation:
+
+| Input | Value |
+|---|---|
+| chunks | **1** — name `"main"`, `local_count` 0, `param_count` 0, `block_type` `Func` |
+| param types | none |
+| constants | **one root**, `Int(42)` |
+| struct templates | none |
+| signatures | **1** — no params, `ret` `Scalar{kind:3}`, `resume` `Top` |
+| enum layouts, natives, native returns, data layout | all absent |
+| entry point | `Some(0)` |
+| widths | `word`/`addr`/`float` all log2 = 6 |
+
+**The arithmetic closes exactly, which is the check that the list is complete.** Those inputs produce
+`STRING_POOL` 8, `NAMES` 8, `CONSTS` 16, `SHAPES` 16, `SIGNATURES` 16, `CHUNKS` 48, `HEADER` 32 —
+**144 bytes of payload** — and 48 + 48x15 = 768 of header area, totalling **912**, which is the
+measured artifact size to the byte. Nothing is unaccounted for.
+
+**One detail worth carrying**: a single signature with no parameters still produces **two** `SHAPES`
+records, for `ret` and `resume`. Shapes are interned and shared between signatures and native
+returns, so the driver's shape table is its own small interner rather than a per-signature array.
+
+#### The interner has TWO modes, and a deduping-only port would be wrong (measured 2026-08-10)
+
+I was about to build the driver's interner slice on an oracle that does not work, and probing killed
+it before any code existed.
+
+**The intended oracle**: recover the interner's input from a real artifact — `NAMES` gives the
+distinct names in order, `STRING_POOL` is measured to be a **pure concatenation** in that order
+(`non_append = 0` for every stage checked) — then feed that list to a Keleusma interner and require
+byte identity.
+
+**It fails, and the failure is informative.** Duplicate entries in `NAMES`, by stage:
+
+| stage | names | distinct | duplicate entries |
+|---|---|---|---|
+| `lexer` | 395,804 | 395,804 | 0 |
+| `analyze` | 20,147 | 20,147 | 0 |
+| `verify_yield` | 7,954 | 7,954 | 0 |
+| `verify_datalayout` | 3,086 | 3,086 | 0 |
+| **`parse`** | **58,053** | 58,033 | **20** |
+
+`parse` carries twenty `NAMES` entries whose bytes duplicate an earlier entry. Feeding the recovered
+distinct list through a deduping interner would produce 58,033 records where the reference produced
+58,053, so the artifacts could not match.
+
+**The cause is `intern_fresh`, and it exists for CONTIGUITY rather than freshness.** Two sites
+deliberately append even when the bytes already exist:
+
+- struct-constant field names (`wire_schema.rs:417`), so field `i` is at `field_names_first + i`
+- enum-variant names (`:730`), so a layout's variants are one contiguous run
+
+Deduping either would collapse a run and break `first + i` addressing. `parse` is the only corpus
+stage with enum layouts populated, which is exactly why it is the only one with duplicates.
+
+**Two consequences for the driver:**
+
+1. **The Keleusma interner needs both modes**, `intern` and `intern_fresh`, and the caller chooses.
+   A port that only dedups is not a simplification, it is a defect that would surface only on a
+   program with enum layouts or struct constants — neither of which the smallest test cases have.
+2. **The interner cannot be validated in isolation against the corpus.** Its input is not a list of
+   names but a list of (name, mode) pairs, and that sequence is a property of the caller, not
+   recoverable from the output. The interner therefore has to be tested as part of a whole-artifact
+   differential rather than as a standalone unit — which is another argument for the minimal
+   end-to-end first slice recorded above.
+
+#### The flattener's composite path is unreachable from the corpus (measured 2026-08-10)
+
+Every constant in every stage is a **scalar**. Measured over all ten sources:
+
+| | |
+|---|---|
+| constant nodes | **2,192** |
+| composite nodes | **0** |
+| maximum tree depth | **0** |
+
+So the breadth-first walk never enqueues a child, and **the corpus cannot distinguish a correct
+flattener from one that appends the roots and stops.** The forward-ordering invariant, the child
+numbering after the roots, and the `STRUCT_AUX` and `ENUM_AUX` side tables are all unexercised —
+which also explains why those two regions measured empty in every stage.
+
+The flattener therefore needs hand-built constant trees, oracled against `encode_aux_body` on a
+constructed module, exactly as the slice-8 record kinds were oracled against the derive.
+
+#### `Shapes` is a second interner with the SAME two modes, and opposite performance needs
+
+`Shapes::append` keeps a contiguous run and `Shapes::intern` reuses an identical entry — the same
+pair as `Names`. Two things follow, and they differ:
+
+- **`Shapes::intern` is a LINEAR SCAN** over the existing records. That is the shape of the defect
+  that made `Names::intern` take 782 seconds on this corpus before it became a `BTreeMap`.
+- **It is fine here, and the measurement says why**: shape counts peak at **102**, against 395,804
+  names. A Keleusma port should copy the linear scan for shapes and must not for names.
+
+#### THE PATTERN, WHICH IS NOW THREE FOR THREE
+
+The ten stage sources are the largest real Keleusma programs that exist, and this arc has now found
+three separate paths they cannot reach: six record kinds emitted empty, every composite constant,
+and the second interning mode. They are **large but semantically narrow** — no generics, no struct
+or enum constants, no natives, no struct templates, almost no composites of any kind.
+
+**Real compiler output is a strong oracle for VOLUME and a weak one for VARIETY.** Volume is what
+caught the quadratic interner and what deep batching needs; variety needs constructed cases. A slice
+should say which of the two it is buying, because "validated against the corpus" reads like both and
+is only ever one.
+
+### Emitter coverage matrix: which oracle backs which region kind
+
+Written after correcting an over-claim of my own, and kept because a roll-up sentence dropped a
+qualifier that every individual slice had recorded correctly. **A table cannot drop a qualifier.**
+
+**REAL** means driven by real compiler output — a strong oracle for volume, a weak one for variety.
+**DERIVE** means constructed values checked against `#[derive(WireRecord)]`'s `write_record` — the
+reverse. Both are legitimate; conflating them is not.
+
+| Region kind | Slice | Oracle | Note |
+|---|---|---|---|
+| `HEADER` | 2 | REAL | first schema emitter |
+| `CHUNKS` | 3 | REAL | widest record, 14 fields; forces batching |
+| `PARAM_TYPES` | 4 | REAL | byte pool; pad residues 0, 3, 4, 5, 7 |
+| `STRING_POOL` | 5 | REAL | 807 batches on `lexer` |
+| `NAMES` | 5 | REAL | 774 batches on `lexer` |
+| `DATA_SLOTS` | 6 | REAL | **capped at 2048 records**, stated in the test |
+| `SHARED_LAYOUT` | 6 | REAL | capped likewise |
+| `SHAPES` | 7 | REAL | |
+| `SIGNATURES` | 7 | REAL | |
+| `ENUM_VARIANTS` | 7 | REAL | only `parse` populates it |
+| `ENUM_LAYOUTS` | 7 | REAL | only `parse` populates it |
+| `DATA_INIT` | 7 | REAL | |
+| `CONSTS` | 7 | REAL | **scalars only** — no composite constant exists in the corpus |
+| `DEBUG_POOL` | 9 | REAL | needs `emit_debug`; the twentieth kind |
+| `STRUCT_AUX` | 8 | DERIVE | corpus emits it empty |
+| `ENUM_AUX` | 8 | DERIVE | corpus emits it empty |
+| `STRUCT_TEMPLATES` | 8 | DERIVE | corpus emits it empty |
+| `PRIVATE_COMPOSITE` | 8 | DERIVE | corpus emits it empty |
+| `NATIVES` | 8 | DERIVE | corpus emits it empty |
+| `NATIVE_RETURNS` | 8 | DERIVE | corpus emits it empty |
+
+**Fourteen REAL, six DERIVE.** Two REAL entries carry stated limits worth remembering: the per-slot
+tables are compared over their first 2048 records, and `CONSTS` sees scalars only, so the
+flattener's composite path is untested by any of this.
+
 ### On the prototype
 
 `secret/kel-format-probe/wirefmt.kel` proves the encoder and decoder are expressible in Keleusma, but

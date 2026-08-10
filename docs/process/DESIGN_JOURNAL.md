@@ -13,6 +13,89 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**AN OVER-CLAIM OF MY OWN, CAUGHT BY THE DISTINCTION I HAD JUST WRITTEN DOWN (2026-08-10).** Three
+separate summaries said every region kind is "emitted from real compiler output". **Six of the
+twenty are not.**
+
+`STRUCT_AUX`, `ENUM_AUX`, `STRUCT_TEMPLATES`, `PRIVATE_COMPOSITE`, `NATIVES` and `NATIVE_RETURNS`
+are emitted as EMPTY regions by every stage, so no real output can reach them. Slice 8 oracled them
+against `#[derive(WireRecord)]`'s `write_record` with **constructed** values, and the test file says
+so in capitals at the top of that section. The accurate split is **fourteen of twenty from real
+output** — thirteen the corpus populates, plus `DEBUG_POOL` from an `emit_debug` compile — and
+**six from independent construction.**
+
+**The per-slice writing was honest and the ROLL-UP was not.** Each slice recorded its own oracle
+correctly; the aggregate sentence quietly promoted the weaker six to the standard of the stronger
+fourteen. That is the failure mode of summarising: the qualifier lives in the detail and the
+headline drops it.
+
+**What caught it was the volume-versus-variety distinction recorded one increment earlier** — that
+real output is a strong oracle for volume and a weak one for variety, and a slice should say which
+it is buying. Applying that to my own summaries rather than only to future ones is what surfaced
+this. A rule written down is not yet a rule applied, which is the second time in two days that gap
+has cost something.
+
+Corrected in all three places. **Nothing about the code changed**; the tests were always doing what
+their comments said.
+
+
+**SLICE 10: THE DRIVER COMPUTES REGION LENGTHS, AND THE DEPTH LIMIT BIT A THIRD TIME
+(2026-08-10).** The first piece of the DRIVER rather than of the emitters. Every slice before it
+took its region lengths from the host; this derives them from record counts, which moves the stride
+of all seventeen record kinds onto the Keleusma side.
+
+**The oracle is a real module's own header area.** The reference's first `48 + 48n` bytes encode
+every region's offset and length, so if Keleusma derives the same lengths from COUNTS alone the two
+agree byte for byte across all ten stages. A wrong stride for any kind shifts every later offset.
+
+**The control perturbs a COUNT, not a length, and that distinction is the test.** Byte identity
+would also hold if the emitter ignored the counts and used the lengths it was handed, so perturbing
+a length would prove nothing about the stride table. Every non-empty region's count must be
+independently observable, and the test asserts at least five regions were non-empty so it cannot
+quietly degenerate. An unknown kind is rejected with its own code rather than sized zero, because a
+zero-length region parses fine and the mistake would surface as a wrong offset much later.
+
+**THE DEPTH LIMIT AGAIN, AND IT STILL DOES NOT LOOK LIKE A DEPTH ERROR.** Adding the twentieth arm
+to `dispatch_emit` made `wire.kel` stop compiling, and it presents as a **stack overflow in the test
+binary with SIGABRT**, not as a parse error — the third appearance of that symptom in this file. I
+recognised it from the record rather than debugging it and confirmed it in one run.
+
+**My recorded figure for the ceiling was wrong, and is now corrected at the site.** I had carried
+"24" from the documented expression-nesting limit and split `dispatch_frame` at 25 arms on that
+basis. The real practical ceiling for this chain shape is **nineteen arms**, because each arm nests
+more than one expression level. The driver now has its own `dispatch_driver` chain rather than
+borrowing the last slot of a full one.
+
+**Brace balance was verified programmatically, not by eye.** Earlier today I eyeballed a brace count
+as wrong when it was balanced, and wasted a hypothesis on it.
+
+
+**WIRING SLICE 9: `DEBUG_POOL`, AND EVERY REGION KIND IS NOW EMITTED FROM REAL OUTPUT
+(2026-08-10).** The last kind with no emitter coverage. 111 tests.
+
+**The plan document said this needed "a hand-built case or a compile with `emit_debug` on", and
+the second turned out to be reachable directly.** `compile_with_options` is public and
+`CompileOptions { emit_debug: true }` produces real strippable debug metadata: 7,368 bytes for
+`verify_datalayout`, 25,104 for `verify_yield`, 64,232 for `analyze`. So this is driven by real
+compiler output like every other populated kind, rather than by a fixture I invented — which is a
+materially stronger oracle than the slice-8 kinds got, and it was available all along.
+
+**No new Keleusma code.** `DEBUG_POOL` is a byte pool, so slice 4's `emit_pool_bytes` and
+`emit_pool_pad` already emit it; what was missing was a case, not an emitter. **That is the second
+time in this arc a "missing coverage" item needed only a driver** — slice 1 was the first, where the
+container header already worked and only the Rust side was absent. Worth generalising: when the
+mechanism is generic over its input, a coverage gap is usually a missing caller, and probing costs
+minutes where assuming costs a slice.
+
+**Twenty regions, not nineteen.** A debug compile emits the twentieth kind, and the test asserts
+that; the complementary test asserts a DEFAULT compile still emits nineteen and no `DEBUG_POOL`,
+which pins the reason the gap existed rather than just closing it. The pad residues reached are
+asserted too, so a corpus that happened to be word-aligned throughout would report that the shared
+pad path went unexercised instead of passing quietly.
+
+**Every region kind the format defines now has an emitter.** What remains
+before the self-hosted path produces an artifact is the driver alone.
+
 **A WCMU SOUNDNESS HOLE IN `verify()`, CLOSED — AND THE REPORTED PREMISE FOR IT WAS FALSE
 (2026-08-10).** The `v0.3.0` session found that `verify()` admits a chunk that can run off the end of
 its instructions without a terminating `Return`. `Op::Return` truncates the operand stack to the

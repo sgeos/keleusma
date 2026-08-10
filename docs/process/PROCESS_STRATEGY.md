@@ -209,6 +209,50 @@ files survive a branch switch, so `git add -A` after switching sweeps whatever t
 new branch does not know to ignore. A rule at the repository root exists on every
 branch that has the root file and cannot go missing that way.
 
+### Gate visibility: `scripts/gate-status.sh`, and the status-line hook
+
+A gate runs two to three and a half hours in a detached worktree, and with two sessions on one
+machine there may be several. "Is it still going, and where" was being answered by ad-hoc `pgrep`
+and `grep` at the prompt, which produced **three defects in a single day**, all of the same family
+— a convenience that quietly answers a different question:
+
+| Ad-hoc form | What it actually did |
+|---|---|
+| `pgrep -f "release-gate.sh"` | **matched its own shell**, so a waiter loop never exited and gating deadlocked for both sessions |
+| a header regex capped at 70 characters | silently skipped the 71-character last step; progress read "11 of 12" forever |
+| `cargo test … \| tail` in a background job | reported **tail's** exit status, not cargo's |
+
+`scripts/gate-status.sh` replaces all of it. Two properties are load-bearing:
+
+- **Liveness comes from the log's modification time and its verdict line, never from a process
+  lookup.** That makes the self-matching `pgrep` failure *unreachable by construction* rather than
+  by remembering, and it distinguishes RUNNING from STALLED, which a process check cannot.
+- **The header pattern is unanchored and unbounded.** Anchoring missed the ANSI escape that wraps
+  each header — this script reported `steps=0` for a twelve-step gate on its first run — and a
+  length cap is the same defect in another dress. The verdict line matches the header pattern too,
+  so it is excluded from the count; before that, gate summaries over-reported by one.
+
+**The bar is WEIGHTED by measured test time, not by step count.** Four of the twelve steps carry
+**91%** of the wall clock and eight carry about 9%, so a uniform bar would read ~50% within three
+minutes and then crawl for three hours — worse than no bar, because it invites exactly the wrong
+estimate of time remaining. Weights come from a completed run (12,594 s of test time). A finished
+gate is full; otherwise completed steps count in full and the current step counts a half, since
+intra-step progress is not observable from the log. If the step count ever exceeds the weight table
+the bar **degrades to uniform rather than mis-weighting**, which is this file's own rule applied to
+itself.
+
+The weights cover test time only, not compilation, so `Clippy` and `Docs` are under-weighted. That
+is a known and stated limitation rather than a hidden one.
+
+**The status line shows it automatically.** `~/.claude/statusline.sh` appends one line of stdout
+from an executable `scripts/statusline-segment.sh`, if the project has one. The contract is
+deliberately defensive, and every guard is tested: a hard timeout so a slow script degrades to
+silence, stderr discarded, a non-zero exit ignored, newlines stripped, and the output truncated.
+A project without the file contributes nothing.
+
+`scripts/` rather than `.claude/`, because `.claude/` is gitignored here and an integration point
+that is not version-controlled silently differs between machines.
+
 ### Reap orphans before timing anything
 
 An interrupted gate leaves its test binary reparented to PID 1, still at full CPU. One was found
