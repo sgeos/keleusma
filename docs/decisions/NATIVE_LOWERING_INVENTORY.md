@@ -2152,3 +2152,81 @@ of this class is unquantified. It needs a corpus count — compilation — and j
 the composite-constant count in the queue. Recording the question rather than
 assuming the class is worth implementing, on the same discipline that caught the
 chunk-versus-module error earlier in this document.
+
+## ROADMAP RECONCILIATION: "Workstream C" means two different things, and one is mine
+
+Checking today's findings against `docs/roadmap/V0_3_X_ROADMAP.md` — the actual
+planning document — turned up a labelling collision, a gate that may be
+mis-scoped, and a risk assessment that today's work arguably overturns.
+
+### The collision, which is my error
+
+The roadmap defines **`C. Arena-resident coroutine frames and the native arena
+model`**. Composites are not a roadmap workstream at all; they fall under
+**`A. Bytecode-to-LLVM-IR lowering`**, whose full pass "lowers every opcode of
+the full-language ISA".
+
+This document and the lowering use "Workstream C" for **composites** in seven
+places, including a string that ships inside a `LowerError`:
+
+| Site | Text |
+|---|---|
+| `src/lib.rs:451` | `"shared composite body; Workstream C"` |
+| `src/lib.rs:469` | `"Text slot; string representation is Workstream C"` |
+| `src/lib.rs:509` | `"shared array of composite bodies; Workstream C"` |
+| `src/lib.rs:1065` | `"Composite and string constants are Workstream C"` |
+| `tests/spike_corpus_coverage.rs:79` | `"C (composites)"` |
+| `tests/differential.rs:160` | `"Workstream C, the flat byte composite representation"` |
+| this document, twice | `"(Workstream C, composites)"` |
+
+And this document ALSO uses the label correctly, twice, for arena residency and
+coroutine frames. **So the same document uses one identifier in two incompatible
+senses**, which is worse than using the wrong one consistently: a reader
+cross-referencing to the roadmap lands in the wrong workstream, and a consumer
+reading a `LowerError` is told to consult a workstream about coroutine frames
+when the refusal is about composite bodies.
+
+**Correct label: `A (full pass)`.** Queued with the other fixes rather than
+applied, because four of the seven sites are in `src/lib.rs` and changing shipped
+strings wants a compile. The two in this document are prose and are corrected in
+place below by this section standing as the authority.
+
+### Order 1's gate may be mis-scoped, and I have not measured it
+
+The dependency table's Order 1 is `A (first pass)`, gated on **"the self-hosted
+compiler's own bytecode runs correctly as native code, differential-tested
+against the VM."**
+
+That gate is about a *specific ten-module subset* — the stages under
+`src/selfhost/kel/`. **Every coverage figure this document reports is
+corpus-wide, never restricted to that subset.** 20.7% of whole programs is not an
+answer to the Order-1 question.
+
+The prior is unfavourable: those stages are a compiler, so they manipulate
+tokens, syntax trees and symbol tables, which are composite-heavy by nature. If
+that holds, **Order 1 is gated on composites and therefore on the width stack**,
+which the table does not indicate. But it is a prior, not a measurement, and this
+document has already been wrong once today by reasoning from a plausible
+distribution instead of counting. Queued: coverage restricted to
+`src/selfhost/kel/`.
+
+### Workstream B's risk assessment is arguably overturned
+
+The roadmap says of B: *"This is the piece the V0.4.0 strategy identifies as
+where the risk concentrates."* Today's work weakens that for the common case:
+P2 is verified from the `Op::Reset` mechanism, P1 and P3 hold at 23 and 24 of 24,
+and 23 of 24 stream chunks are rotation candidates that would need **no coroutine
+intrinsics and no arena-resident frames at all**. If the rotation equivalence
+holds, both B and C shrink to a one-chunk minority.
+
+The boundary condition remains genuinely open and is the whole of the residual
+risk, so this is a case for restating the row, not deleting it.
+
+### Deliberately NOT edited
+
+I have not touched `V0_3_X_ROADMAP.md`. The `v0.2.3` session stated they intend
+to restate its Order-1 gate row and had not done so because the file sat inside
+their running gate. Editing the same table while that is outstanding manufactures
+a conflict in a shared planning document for no benefit. The proposals are
+recorded here and raised in the mailbox instead; whoever edits it should carry
+both.
