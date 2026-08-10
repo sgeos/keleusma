@@ -64,6 +64,7 @@ shared data wire {
     warg2: Word,
     warg3: Word,
     warg4: Word,
+    warg5: Word,
 }
 
 // The running checksum. It lives in a data block because locals are immutable:
@@ -943,6 +944,562 @@ fn elay_variant_disc(i: Word, k: Word) -> Word {
     )
 }
 
+// --- SLICE 5d: the data segment ------------------------------------------
+//
+// PRESENCE IS SEMANTIC HERE, WHICH IT IS NOWHERE ELSE IN THIS FILE.
+//
+// An absent `DATA_SLOTS` region means the module has NO data layout; an empty
+// one means it has a layout with no slots. Those are different programs, and
+// collapsing them is a silent wrong answer rather than a fault. Every other
+// count accessor in this file returns 0 for an absent region, which is right
+// for them and would be WRONG here — so the data segment splits the question in
+// two, exactly as slice 5c split a variant's bound from its value:
+// `data_layout_present` first, then the counts.
+
+fn kind_data_slots() -> Word { 0x001A }
+fn kind_shared_layout() -> Word { 0x001B }
+fn kind_private_composite() -> Word { 0x001C }
+fn kind_data_init() -> Word { 0x001D }
+
+// DataSlotRecord: name u32 @0, visibility u8 @4, reserved u8 @5. Packed to six
+// bytes, so the stride is the word it rounds up to, not the packed size.
+fn dslot_stride() -> Word { 8 }
+fn dslot_off_name() -> Word { 0 }
+fn dslot_off_visibility() -> Word { 4 }
+
+// SharedSlotRecord: offset u32 @0, kind u8 @4, reserved u8 @5, len u16 @6.
+fn sslot_stride() -> Word { 8 }
+fn sslot_off_offset() -> Word { 0 }
+fn sslot_off_kind() -> Word { 4 }
+fn sslot_off_len() -> Word { 6 }
+
+// PrivateCompositeRecord: slot u16 @0, reserved u16 @2, offset u32 @4.
+fn pcomp_stride() -> Word { 8 }
+fn pcomp_off_slot() -> Word { 0 }
+fn pcomp_off_offset() -> Word { 4 }
+
+// DataInitRecord: first u32 @0, count u32 @4. A range into the constant table.
+fn dinit_stride() -> Word { 8 }
+fn dinit_off_first() -> Word { 0 }
+fn dinit_off_count() -> Word { 4 }
+
+// 1 when the module has a data layout at all. Ask this BEFORE any count below;
+// a zero from `data_slot_count` means "a layout with no slots", not "no layout".
+fn data_layout_present() -> Word {
+    if dir_find(kind_data_slots()) == 0 - 1 { 0 } else { 1 }
+}
+
+// The counts. Each returns 0 - 1 when its region is absent rather than 0, so an
+// absent table is never mistaken for an empty one at any level, not just at the
+// top. A caller that wants the lenient reading can compare against 0 - 1 itself.
+fn data_slot_count() -> Word {
+    if dir_find(kind_data_slots()) == 0 - 1 { 0 - 1 } else {
+        rec_count(dir_find(kind_data_slots()), dslot_stride())
+    }
+}
+
+fn shared_slot_count() -> Word {
+    if dir_find(kind_shared_layout()) == 0 - 1 { 0 - 1 } else {
+        rec_count(dir_find(kind_shared_layout()), sslot_stride())
+    }
+}
+
+fn privcomp_count() -> Word {
+    if dir_find(kind_private_composite()) == 0 - 1 { 0 - 1 } else {
+        rec_count(dir_find(kind_private_composite()), pcomp_stride())
+    }
+}
+
+fn datainit_count() -> Word {
+    if dir_find(kind_data_init()) == 0 - 1 { 0 - 1 } else {
+        rec_count(dir_find(kind_data_init()), dinit_stride())
+    }
+}
+
+fn data_slot_name(i: Word) -> Word {
+    rec_u32(dir_find(kind_data_slots()), dslot_stride(), i, dslot_off_name())
+}
+
+fn data_slot_visibility(i: Word) -> Word {
+    rec_u8(dir_find(kind_data_slots()), dslot_stride(), i, dslot_off_visibility())
+}
+
+fn shared_slot_offset(i: Word) -> Word {
+    rec_u32(dir_find(kind_shared_layout()), sslot_stride(), i, sslot_off_offset())
+}
+
+fn shared_slot_kind(i: Word) -> Word {
+    rec_u8(dir_find(kind_shared_layout()), sslot_stride(), i, sslot_off_kind())
+}
+
+fn shared_slot_len(i: Word) -> Word {
+    rec_u16(dir_find(kind_shared_layout()), sslot_stride(), i, sslot_off_len())
+}
+
+fn privcomp_slot(i: Word) -> Word {
+    rec_u16(dir_find(kind_private_composite()), pcomp_stride(), i, pcomp_off_slot())
+}
+
+fn privcomp_offset(i: Word) -> Word {
+    rec_u32(dir_find(kind_private_composite()), pcomp_stride(), i, pcomp_off_offset())
+}
+
+fn datainit_first(i: Word) -> Word {
+    rec_u32(dir_find(kind_data_init()), dinit_stride(), i, dinit_off_first())
+}
+
+fn datainit_range_count(i: Word) -> Word {
+    rec_u32(dir_find(kind_data_init()), dinit_stride(), i, dinit_off_count())
+}
+
+// --- SLICE 5e: the module level ------------------------------------------
+//
+// The chunk table, the natives, and the scalar header. These reference
+// everything the earlier slices built, which is why they come last.
+//
+// TWO THINGS THE REFERENCE LEARNED THE HARD WAY, both preserved here.
+//
+// `ABSENT` is `u32::MAX`, the optional-index sentinel for an entry point, a
+// native's return shape, and a chunk's debug pool. A sentinel rather than a
+// parallel presence flag, because these index tables the container already
+// bounds far below four billion entries, and a flag would have to be kept in
+// step with the field it describes.
+//
+// NATIVES AND NATIVE_RETURNS ARE SEPARATE REGIONS. They were first encoded
+// paired in one record, on the reasoning that two parallel vectors are exactly
+// the arrangement that falls out of step. That reasoning was right about the
+// risk and wrong about the fix: the two are ALREADY allowed to differ in
+// length, and pairing them silently DROPPED the surplus instead of preventing
+// it. Independent regions carry both lengths, so the counts are asked for
+// separately here and a test gives them different lengths on purpose.
+
+fn kind_param_types() -> Word { 0x001E }
+fn kind_chunks() -> Word { 0x001F }
+fn kind_natives() -> Word { 0x0020 }
+fn kind_header() -> Word { 0x0021 }
+fn kind_debug_pool() -> Word { 0x0022 }
+fn kind_native_returns() -> Word { 0x0023 }
+
+// The optional-index sentinel, `u32::MAX`.
+fn absent_index() -> Word { 4294967295 }
+
+// ChunkRecord, six words. Eleven u32 fields, then local_count u16,
+// param_count u8, block_type u8.
+fn chunk_stride() -> Word { 48 }
+fn chunk_off_name() -> Word { 0 }
+fn chunk_off_consts_first() -> Word { 4 }
+fn chunk_off_consts_count() -> Word { 8 }
+fn chunk_off_templates_first() -> Word { 12 }
+fn chunk_off_templates_count() -> Word { 16 }
+fn chunk_off_param_types_first() -> Word { 20 }
+fn chunk_off_param_types_count() -> Word { 24 }
+fn chunk_off_debug_first() -> Word { 28 }
+fn chunk_off_debug_len() -> Word { 32 }
+fn chunk_off_op_byte_offset() -> Word { 36 }
+fn chunk_off_op_record_count() -> Word { 40 }
+fn chunk_off_local_count() -> Word { 44 }
+fn chunk_off_param_count() -> Word { 46 }
+fn chunk_off_block_type() -> Word { 47 }
+
+// NativeRecord and NativeReturnRecord: one index plus reserved, one word each.
+fn native_stride() -> Word { 8 }
+fn native_off_name() -> Word { 0 }
+fn natret_stride() -> Word { 8 }
+fn natret_off_shape() -> Word { 0 }
+
+// HeaderRecord, four words.
+fn header_stride() -> Word { 32 }
+fn header_off_entry_point() -> Word { 0 }
+fn header_off_word_bits_log2() -> Word { 4 }
+fn header_off_addr_bits_log2() -> Word { 5 }
+fn header_off_float_bits_log2() -> Word { 6 }
+fn header_off_flags() -> Word { 7 }
+fn header_off_wcet_cycles() -> Word { 8 }
+fn header_off_wcmu_bytes() -> Word { 12 }
+fn header_off_shared_data_bytes() -> Word { 16 }
+fn header_off_private_data_bytes() -> Word { 20 }
+fn header_off_schema_hash() -> Word { 24 }
+
+fn chunk_count() -> Word {
+    if dir_find(kind_chunks()) == 0 - 1 { 0 - 1 } else {
+        rec_count(dir_find(kind_chunks()), chunk_stride())
+    }
+}
+
+// A chunk's u32 field at `off`. Generic rather than fourteen named accessors,
+// because the OFFSETS are what must be right and they are named and pinned
+// above; a per-field command would multiply the dispatch without adding a
+// checkable fact.
+fn chunk_u32(i: Word, off: Word) -> Word {
+    rec_u32(dir_find(kind_chunks()), chunk_stride(), i, off)
+}
+
+fn chunk_local_count(i: Word) -> Word {
+    rec_u16(dir_find(kind_chunks()), chunk_stride(), i, chunk_off_local_count())
+}
+
+fn chunk_param_count(i: Word) -> Word {
+    rec_u8(dir_find(kind_chunks()), chunk_stride(), i, chunk_off_param_count())
+}
+
+fn chunk_block_type(i: Word) -> Word {
+    rec_u8(dir_find(kind_chunks()), chunk_stride(), i, chunk_off_block_type())
+}
+
+// 1 when chunk `i` carries a debug pool. `ABSENT` distinguishes "no debug
+// metadata" from "an empty debug pool", which is a release build versus a
+// debug build that emitted nothing.
+fn chunk_has_debug(i: Word) -> Word {
+    if chunk_u32(i, chunk_off_debug_first()) == absent_index() { 0 } else { 1 }
+}
+
+fn native_count() -> Word {
+    if dir_find(kind_natives()) == 0 - 1 { 0 - 1 } else {
+        rec_count(dir_find(kind_natives()), native_stride())
+    }
+}
+
+fn native_name(i: Word) -> Word {
+    rec_u32(dir_find(kind_natives()), native_stride(), i, native_off_name())
+}
+
+// Asked SEPARATELY from `native_count`, and deliberately not derived from it.
+fn native_return_count() -> Word {
+    if dir_find(kind_native_returns()) == 0 - 1 { 0 - 1 } else {
+        rec_count(dir_find(kind_native_returns()), natret_stride())
+    }
+}
+
+fn native_return_shape(i: Word) -> Word {
+    rec_u32(dir_find(kind_native_returns()), natret_stride(), i, natret_off_shape())
+}
+
+fn header_present() -> Word {
+    if dir_find(kind_header()) == 0 - 1 { 0 } else { 1 }
+}
+
+fn header_u32(off: Word) -> Word {
+    rec_u32(dir_find(kind_header()), header_stride(), 0, off)
+}
+
+fn header_u8(off: Word) -> Word {
+    rec_u8(dir_find(kind_header()), header_stride(), 0, off)
+}
+
+// 1 when the module declares no entry point.
+fn entry_point_absent() -> Word {
+    if header_u32(header_off_entry_point()) == absent_index() { 1 } else { 0 }
+}
+
+// --- SLICE 6a: the opcode record -----------------------------------------
+//
+// Every instruction is four bytes:
+//
+//   byte 0   bit 7 parity, bits 0..6 the opcode identifier
+//   byte 1   operand byte 0, low
+//   byte 2   operand byte 1
+//   byte 3   operand byte 2, high
+//
+// The operand is inline when it fits in twenty-four bits and is a pool index
+// otherwise; the pool is slice 6b. This slice is the record itself.
+//
+// THE PARITY IS COMPUTED BY A FOLD, NOT BY COUNTING BITS, and the equivalence
+// is worth stating because it is not obvious. The reference defines the parity
+// as the low bit of the TOTAL POPCOUNT of the four bytes, with the parity bit
+// itself masked to zero. That equals the bit-parity of `b0 bxor b1 bxor b2 bxor
+// b3`: bit `i` of the exclusive-or is the parity of bit `i` across the four
+// bytes, so summing those bits modulo two sums every bit of every byte modulo
+// two. Folding is three shifts instead of thirty-two, and a test compares the
+// two definitions across the whole opcode range rather than trusting the
+// algebra.
+
+// Bit-parity of one byte: 1 when an odd number of its bits are set.
+fn byte_parity(v: Word) -> Word {
+    ((((v bxor (v lsr 4)) bxor ((v bxor (v lsr 4)) lsr 2))
+        bxor (((v bxor (v lsr 4)) bxor ((v bxor (v lsr 4)) lsr 2)) lsr 1))
+        band 1)
+}
+
+// The parity bit for a record with opcode `id` and three operand bytes. The
+// identifier is masked to seven bits first, because the eighth is where the
+// answer goes and must not be counted.
+fn oprec_parity(id: Word, b1: Word, b2: Word, b3: Word) -> Word {
+    byte_parity(((id band 127) bxor b1) bxor (b2 bxor b3))
+}
+
+// Write one opcode record at byte offset `at`, returning the next offset.
+fn oprec_write(at: Word, id: Word, b1: Word, b2: Word, b3: Word) -> Word {
+    wire.bytes[at] = ((id band 127) bor (oprec_parity(id, b1, b2, b3) lsl 7)) as Byte;
+    wire.bytes[at + 1] = (b1 band 255) as Byte;
+    wire.bytes[at + 2] = (b2 band 255) as Byte;
+    wire.bytes[at + 3] = (b3 band 255) as Byte;
+    at + 4
+}
+
+// The opcode identifier, with the parity bit removed.
+fn oprec_id(at: Word) -> Word {
+    (wire.bytes[at] as Word) band 127
+}
+
+// Operand byte `k`, for k in 0..3.
+fn oprec_operand_byte(at: Word, k: Word) -> Word {
+    wire.bytes[at + 1 + k] as Word
+}
+
+// The inline operand as a little-endian twenty-four-bit value.
+fn oprec_operand_u24(at: Word) -> Word {
+    (wire.bytes[at + 1] as Word)
+        + ((wire.bytes[at + 2] as Word) lsl 8)
+        + ((wire.bytes[at + 3] as Word) lsl 16)
+}
+
+// The parity bit as stored.
+fn oprec_stored_parity(at: Word) -> Word {
+    ((wire.bytes[at] as Word) lsr 7) band 1
+}
+
+// 1 when the record's stored parity matches its contents. The parity covers
+// the whole record, so a single bit flip anywhere in the four bytes is
+// detected at the consumer.
+fn oprec_parity_ok(at: Word) -> Word {
+    if oprec_stored_parity(at)
+        == oprec_parity(
+            oprec_id(at),
+            oprec_operand_byte(at, 0),
+            oprec_operand_byte(at, 1),
+            oprec_operand_byte(at, 2),
+        )
+    { 1 } else { 0 }
+}
+
+// --- SLICE 6b: the operand pool ------------------------------------------
+//
+// An operand that does not fit in the record's twenty-four inline bits spills
+// to an eight-byte pool entry, and the record then carries the pool index
+// instead. An entry is:
+//
+//   byte 0    type tag
+//   byte 1    parity byte
+//   bytes 2-7 payload, laid out by the tag
+//
+// THE TWO PARITY SCHEMES IN THIS FORMAT ARE DIFFERENT, and conflating them is
+// the easy mistake. An opcode record carries a single BIT, the even parity of
+// the popcount of its four bytes. A pool entry carries a whole BYTE, the
+// exclusive-or of the tag byte and the six payload bytes — byte one is skipped,
+// because that is where the answer goes. A byte-wide check localises damage to
+// a bit position as well as detecting it, which is worth more in an
+// eight-byte entry than in a four-byte record.
+
+fn pool_stride() -> Word { 8 }
+fn pool_tag_u16_u16() -> Word { 1 }
+fn pool_tag_u16_u16_u8() -> Word { 2 }
+fn pool_tag_u16_u16_u16() -> Word { 3 }
+fn pool_tag_u24_u24() -> Word { 4 }
+
+// The parity byte for the entry at `at`: the exclusive-or of byte 0 and bytes
+// 2 through 7. Byte 1 is excluded by construction, not by masking.
+fn pool_parity_of(at: Word) -> Word {
+    ((((wire.bytes[at] as Word) bxor (wire.bytes[at + 2] as Word))
+        bxor ((wire.bytes[at + 3] as Word) bxor (wire.bytes[at + 4] as Word)))
+        bxor (((wire.bytes[at + 5] as Word) bxor (wire.bytes[at + 6] as Word))
+            bxor (wire.bytes[at + 7] as Word)))
+}
+
+fn pool_tag(at: Word) -> Word {
+    wire.bytes[at] as Word
+}
+
+fn pool_stored_parity(at: Word) -> Word {
+    wire.bytes[at + 1] as Word
+}
+
+fn pool_parity_ok(at: Word) -> Word {
+    if pool_stored_parity(at) == pool_parity_of(at) { 1 } else { 0 }
+}
+
+// Stamp the parity byte over an entry whose tag and payload are already
+// written. Separate from the constructors so each of them ends the same way
+// and none can forget it.
+fn pool_seal(at: Word) -> Word {
+    wire.bytes[at + 1] = (pool_parity_of(at) band 255) as Byte;
+    at + 8
+}
+
+fn pool_write_u16_u16(at: Word, a: Word, b: Word) -> Word {
+    wire.bytes[at] = pool_tag_u16_u16() as Byte;
+    wire.bytes[at + 1] = 0 as Byte;
+    put_u16(at + 2, a);
+    put_u16(at + 4, b);
+    wire.bytes[at + 6] = 0 as Byte;
+    wire.bytes[at + 7] = 0 as Byte;
+    pool_seal(at)
+}
+
+fn pool_write_u16_u16_u8(at: Word, a: Word, b: Word, c: Word) -> Word {
+    wire.bytes[at] = pool_tag_u16_u16_u8() as Byte;
+    wire.bytes[at + 1] = 0 as Byte;
+    put_u16(at + 2, a);
+    put_u16(at + 4, b);
+    wire.bytes[at + 6] = (c band 255) as Byte;
+    wire.bytes[at + 7] = 0 as Byte;
+    pool_seal(at)
+}
+
+fn pool_write_u16_u16_u16(at: Word, a: Word, b: Word, c: Word) -> Word {
+    wire.bytes[at] = pool_tag_u16_u16_u16() as Byte;
+    wire.bytes[at + 1] = 0 as Byte;
+    put_u16(at + 2, a);
+    put_u16(at + 4, b);
+    put_u16(at + 6, c);
+    pool_seal(at)
+}
+
+// Two twenty-four-bit values, packed three bytes each with no padding, which is
+// why this tag exists at all: a pair of u32 would not fit in six bytes.
+fn pool_write_u24_u24(at: Word, a: Word, b: Word) -> Word {
+    wire.bytes[at] = pool_tag_u24_u24() as Byte;
+    wire.bytes[at + 1] = 0 as Byte;
+    wire.bytes[at + 2] = (a band 255) as Byte;
+    wire.bytes[at + 3] = ((a lsr 8) band 255) as Byte;
+    wire.bytes[at + 4] = ((a lsr 16) band 255) as Byte;
+    wire.bytes[at + 5] = (b band 255) as Byte;
+    wire.bytes[at + 6] = ((b lsr 8) band 255) as Byte;
+    wire.bytes[at + 7] = ((b lsr 16) band 255) as Byte;
+    pool_seal(at)
+}
+
+// Payload readers. `k` selects the field: 0, 1, 2 for the u16 forms, 0 or 1 for
+// the u24 pair. Reading with the wrong tag yields the bytes that are there,
+// which is why a caller checks `pool_tag` first.
+fn pool_u16(at: Word, k: Word) -> Word {
+    get_u16(at + 2 + (k lsl 1))
+}
+
+fn pool_u8_field(at: Word) -> Word {
+    wire.bytes[at + 6] as Word
+}
+
+fn pool_u24(at: Word, k: Word) -> Word {
+    (wire.bytes[at + 2 + (k * 3)] as Word)
+        + ((wire.bytes[at + 3 + (k * 3)] as Word) lsl 8)
+        + ((wire.bytes[at + 4 + (k * 3)] as Word) lsl 16)
+}
+
+// --- SLICE 7: the framing header and the CRC trailer ---------------------
+//
+// The outermost layer, and the last of step 6. Sixty-four fixed bytes name the
+// artifact and locate its three sections, and a four-byte CRC closes the file.
+//
+//   0  4  magic, "KELE"          32  4  opcode stream offset
+//   4  2  version                36  4  opcode stream length
+//   6  2  header length          40  4  operand pool offset
+//   8  4  total length           44  4  operand pool length
+//  12  1  word bits log2         48  4  auxiliary body offset
+//  13  1  addr bits log2         52  4  auxiliary body length
+//  14  1  float bits log2        56  4  auxiliary arena bytes
+//  15  1  flags                  60  4  persistent composite bytes
+//  16  4  declared WCET cycles
+//  20  4  declared WCMU bytes
+//  24  4  shared data bytes
+//  28  4  private data bytes
+//
+// THE TRAILER IS VALIDATED BY A RESIDUE, NOT BY RECOMPUTATION. A reader does
+// not checksum the body and compare against the stored trailer. It runs CRC-32
+// over the WHOLE artifact, trailer included, and checks the result against a
+// fixed constant. That works because appending a message's own CRC makes the
+// checksum of the extended message a constant — 0x2144DF1C for this
+// polynomial and this convention. One pass, no special-casing of the last four
+// bytes, and nothing to get wrong about where the checksummed region ends.
+
+fn header_bytes_len() -> Word { 64 }
+fn bytecode_version() -> Word { 2 }
+fn crc32_residue() -> Word { 0x2144DF1C }
+
+fn flag_ephemeral() -> Word { 1 }
+fn flag_requires_signature() -> Word { 2 }
+fn flag_encrypted() -> Word { 4 }
+
+fn fh_off_magic() -> Word { 0 }
+fn fh_off_version() -> Word { 4 }
+fn fh_off_header_length() -> Word { 6 }
+fn fh_off_total_length() -> Word { 8 }
+fn fh_off_word_bits_log2() -> Word { 12 }
+fn fh_off_addr_bits_log2() -> Word { 13 }
+fn fh_off_float_bits_log2() -> Word { 14 }
+fn fh_off_flags() -> Word { 15 }
+fn fh_off_wcet_cycles() -> Word { 16 }
+fn fh_off_wcmu_bytes() -> Word { 20 }
+fn fh_off_shared_data_bytes() -> Word { 24 }
+fn fh_off_private_data_bytes() -> Word { 28 }
+fn fh_off_opcode_offset() -> Word { 32 }
+fn fh_off_opcode_length() -> Word { 36 }
+fn fh_off_pool_offset() -> Word { 40 }
+fn fh_off_pool_length() -> Word { 44 }
+fn fh_off_aux_offset() -> Word { 48 }
+fn fh_off_aux_length() -> Word { 52 }
+fn fh_off_aux_arena_bytes() -> Word { 56 }
+fn fh_off_persistent_composite_bytes() -> Word { 60 }
+
+// "KELE" as a little-endian u32: bytes K, E, L, E.
+fn magic_word() -> Word { 0x454C454B }
+
+fn fh_u32(off: Word) -> Word { get_u32(off) }
+fn fh_u16(off: Word) -> Word { get_u16(off) }
+fn fh_u8(off: Word) -> Word { wire.bytes[off] as Word }
+
+// 1 when the artifact's magic and version are the ones this reader knows.
+// The VERSION IS CHECKED BEFORE ANYTHING ELSE that depends on layout, which is
+// what makes an older artifact reject cleanly rather than be misread: every
+// field position below is a version-2 fact.
+fn fh_magic_ok() -> Word {
+    if fh_u32(fh_off_magic()) == magic_word() { 1 } else { 0 }
+}
+
+fn fh_version_ok() -> Word {
+    if fh_u16(fh_off_version()) == bytecode_version() { 1 } else { 0 }
+}
+
+fn fh_flag_set(mask: Word) -> Word {
+    if (fh_u8(fh_off_flags()) band mask) == 0 { 0 } else { 1 }
+}
+
+// Write the sixty-four fixed bytes. Section offsets and lengths are supplied by
+// the caller, because they are only known once the sections have been laid out.
+fn emit_framing_header(total_len: Word, wlog2: Word, alog2: Word, flog2: Word) -> Word {
+    put_u32(fh_off_magic(), magic_word());
+    put_u16(fh_off_version(), bytecode_version());
+    put_u16(fh_off_header_length(), header_bytes_len());
+    put_u32(fh_off_total_length(), total_len);
+    wire.bytes[fh_off_word_bits_log2()] = (wlog2 band 255) as Byte;
+    wire.bytes[fh_off_addr_bits_log2()] = (alog2 band 255) as Byte;
+    wire.bytes[fh_off_float_bits_log2()] = (flog2 band 255) as Byte;
+    wire.bytes[fh_off_flags()] = 0 as Byte;
+    for i in 0..48 limit 48 {
+        wire.bytes[16 + i] = 0 as Byte;
+    }
+    header_bytes_len()
+}
+
+// Set one section's offset and length. Separate from the header emitter
+// because the two are known at different times, and folding them together
+// would force the caller to compute a layout before it has one.
+fn set_section(off_field: Word, len_field: Word, offset: Word, length: Word) -> Word {
+    put_u32(off_field, offset);
+    put_u32(len_field, length);
+    offset + length
+}
+
+// Append the four-byte CRC trailer over `[0, len)` and return the new total.
+fn seal_artifact(len: Word) -> Word {
+    put_u32(len, crc_range(0, len));
+    len + 4
+}
+
+// 1 when the whole artifact, trailer included, checksums to the residue.
+fn artifact_intact(total_len: Word) -> Word {
+    if crc_range(0, total_len) == crc32_residue() { 1 } else { 0 }
+}
+
 // THE DISPATCH IS SPLIT INTO CHAINS, AND THE REASON IS A HARD LANGUAGE LIMIT.
 //
 // The parser rejects an expression nested more than 24 deep, with
@@ -1023,11 +1580,96 @@ fn dispatch_runs(cmd: Word) -> Word {
     if cmd == 52 { elay_variant_in_range(wire.warg, wire.warg2) } else {
     if cmd == 53 { elay_variant_name(wire.warg, wire.warg2) } else {
     if cmd == 54 { elay_variant_disc(wire.warg, wire.warg2) } else {
-    0 - 99 }}}}}}}}}}}}}}}}}
+    0 - 95 }}}}}}}}}}}}}}}}}
+}
+
+fn dispatch_data(cmd: Word) -> Word {
+    if cmd == 55 { data_layout_present() } else {
+    if cmd == 56 { data_slot_count() } else {
+    if cmd == 57 { data_slot_name(wire.warg) } else {
+    if cmd == 58 { data_slot_visibility(wire.warg) } else {
+    if cmd == 59 { shared_slot_count() } else {
+    if cmd == 60 { shared_slot_offset(wire.warg) } else {
+    if cmd == 61 { shared_slot_kind(wire.warg) } else {
+    if cmd == 62 { shared_slot_len(wire.warg) } else {
+    if cmd == 63 { privcomp_count() } else {
+    if cmd == 64 { privcomp_slot(wire.warg) } else {
+    if cmd == 65 { privcomp_offset(wire.warg) } else {
+    if cmd == 66 { datainit_count() } else {
+    if cmd == 67 { datainit_first(wire.warg) } else {
+    if cmd == 68 { datainit_range_count(wire.warg) } else {
+    0 - 94 }}}}}}}}}}}}}}
+}
+
+fn dispatch_module(cmd: Word) -> Word {
+    if cmd == 69 { chunk_count() } else {
+    if cmd == 70 { chunk_u32(wire.warg, wire.warg2) } else {
+    if cmd == 71 { chunk_local_count(wire.warg) } else {
+    if cmd == 72 { chunk_param_count(wire.warg) } else {
+    if cmd == 73 { chunk_block_type(wire.warg) } else {
+    if cmd == 74 { chunk_has_debug(wire.warg) } else {
+    if cmd == 75 { native_count() } else {
+    if cmd == 76 { native_name(wire.warg) } else {
+    if cmd == 77 { native_return_count() } else {
+    if cmd == 78 { native_return_shape(wire.warg) } else {
+    if cmd == 79 { header_present() } else {
+    if cmd == 80 { header_u32(wire.warg) } else {
+    if cmd == 81 { header_u8(wire.warg) } else {
+    if cmd == 82 { entry_point_absent() } else {
+    if cmd == 83 { absent_index() } else {
+    0 - 93 }}}}}}}}}}}}}}}
+}
+
+fn dispatch_ops(cmd: Word) -> Word {
+    if cmd == 84 { byte_parity(wire.warg) } else {
+    if cmd == 85 { oprec_parity(wire.warg, wire.warg2, wire.warg3, wire.warg4) } else {
+    if cmd == 86 { oprec_write(wire.warg, wire.warg2, wire.warg3, wire.warg4, wire.warg5) } else {
+    if cmd == 87 { oprec_id(wire.warg) } else {
+    if cmd == 88 { oprec_operand_byte(wire.warg, wire.warg2) } else {
+    if cmd == 89 { oprec_operand_u24(wire.warg) } else {
+    if cmd == 90 { oprec_stored_parity(wire.warg) } else {
+    if cmd == 91 { oprec_parity_ok(wire.warg) } else {
+    0 - 92 }}}}}}}}
+}
+
+fn dispatch_pool(cmd: Word) -> Word {
+    if cmd == 92 { pool_tag(wire.warg) } else {
+    if cmd == 93 { pool_stored_parity(wire.warg) } else {
+    if cmd == 94 { pool_parity_of(wire.warg) } else {
+    if cmd == 95 { pool_parity_ok(wire.warg) } else {
+    if cmd == 96 { pool_write_u16_u16(wire.warg, wire.warg2, wire.warg3) } else {
+    if cmd == 97 { pool_write_u16_u16_u8(wire.warg, wire.warg2, wire.warg3, wire.warg4) } else {
+    if cmd == 98 { pool_write_u16_u16_u16(wire.warg, wire.warg2, wire.warg3, wire.warg4) } else {
+    if cmd == 99 { pool_write_u24_u24(wire.warg, wire.warg2, wire.warg3) } else {
+    if cmd == 100 { pool_u16(wire.warg, wire.warg2) } else {
+    if cmd == 101 { pool_u8_field(wire.warg) } else {
+    if cmd == 102 { pool_u24(wire.warg, wire.warg2) } else {
+    0 - 91 }}}}}}}}}}}
+}
+
+fn dispatch_frame(cmd: Word) -> Word {
+    if cmd == 103 { fh_u32(wire.warg) } else {
+    if cmd == 104 { fh_u16(wire.warg) } else {
+    if cmd == 105 { fh_u8(wire.warg) } else {
+    if cmd == 106 { fh_magic_ok() } else {
+    if cmd == 107 { fh_version_ok() } else {
+    if cmd == 108 { fh_flag_set(wire.warg) } else {
+    if cmd == 109 { emit_framing_header(wire.warg, wire.warg2, wire.warg3, wire.warg4) } else {
+    if cmd == 110 { set_section(wire.warg, wire.warg2, wire.warg3, wire.warg4) } else {
+    if cmd == 111 { seal_artifact(wire.warg) } else {
+    if cmd == 112 { artifact_intact(wire.warg) } else {
+    if cmd == 113 { magic_word() } else {
+    if cmd == 114 { crc32_residue() } else {
+    0 - 99 }}}}}}}}}}}}
 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {
     if cmd < 26 { dispatch_schema(cmd) } else {
-    if cmd < 38 { dispatch_consts(cmd) } else { dispatch_runs(cmd) } } }
+    if cmd < 38 { dispatch_consts(cmd) } else {
+    if cmd < 55 { dispatch_runs(cmd) } else {
+    if cmd < 69 { dispatch_data(cmd) } else {
+    if cmd < 84 { dispatch_module(cmd) } else {
+    if cmd < 92 { dispatch_ops(cmd) } else {
+    if cmd < 103 { dispatch_pool(cmd) } else { dispatch_frame(cmd) } } } } } } } }
 }

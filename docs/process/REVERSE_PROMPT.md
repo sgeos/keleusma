@@ -15,120 +15,81 @@ entry before this overwrite.
 
 ## Last Updated
 
-**Date**: 2026-08-09 (session 40)
+**Date**: 2026-08-09 (session 40, continued)
 
-## Completed this session — step 6, slices 1 and 2
+## STEP 6 IS COMPLETE — the wire format is expressible in Keleusma end to end
 
-**The six-step wire-format programme stands at 1 to 5 done and merged; step 6 slices 1 and 2
-done, slices 3 to 7 open.** Both are on `feat/selfhost-wire-crc32`, two commits, unmerged.
+All seven slices. `src/selfhost/kel/wire.kel` plus `tests/selfhost_wire.rs`, **80 tests**.
 
-Two new files:
+| Slice | Content |
+|---|---|
+| 1 | CRC-32/ISO-HDLC, oracle the published check value |
+| 2 | Container primitives, prologue, majority-of-three vote |
+| 3 | Region directory, with the prologue-to-directory bootstrap |
+| 4 | Record tables and byte pools |
+| 5a–5e | The schema layer: 20 region kinds, 17 record shapes |
+| 6a–6b | Opcode records and the operand pool |
+| 7 | Framing header and CRC trailer |
 
-- **`src/selfhost/kel/wire.kel`** — CRC-32/ISO-HDLC written in Keleusma. It is deliberately
-  **not** in `read_stage`'s table, because the self-hosted compile driver does not run it: it
-  does not yet emit an artifact. It joins the table when it produces bytes rather than a
-  checksum. The module doc in `src/selfhost/mod.rs` says so, since the directory's contract
-  was previously "the ten stage sources".
-- **`tests/selfhost_wire.rs`** — the differential. Twenty-three tests, 0.97 s.
+**What remains is wiring, not invention.** `wire.kel` is deliberately absent from `read_stage`
+and is not yet driven by the pipeline; it emits and reads the format, but nothing calls it to
+produce a real artifact yet. That is the next increment.
 
-**Slice 1** is CRC-32/ISO-HDLC. **Slice 2** is the little-endian place-value primitives, the
-16-byte prologue, and the majority-of-three vote, and its oracle is stronger: **byte identity**
-against what `keleusma-wire` emits, at 0, 1, 2, 7, 255, 256, 1023 and 1024 regions.
+## Order-1 has moved a long way, and the roadmap now understates it
 
-**Tier 1 green**: `fmt`, `clippy --workspace --all-targets` and `--all-features` at
-`-D warnings`, `cargo test -p keleusma --no-default-features`, and the `-D warnings` doc build.
-**The full gate has NOT been run for this branch.** Per the tiered-verification policy it runs
-once per merge, batching three or four increments, so it is owed before this merges.
+The roadmap names three blockers. Two were measured and shrank; the third is now done.
 
-### The oracle is a published constant, not our own code
+- **Monomorphizer: EMPTY for the first pass.** Identity on all ten stage sources, pinned by
+  `tests/selfhost_monomorphize_identity.rs` with a must-fire control.
+- **Type checker: reduces to REJECTION alone.** Clearing `program.fn_expr_types` leaves every
+  stage module byte-identical, so the structural fallback covers the subset. Three controls, in
+  [`../decisions/TYPECHECK_SELFHOST_PLAN.md`](../decisions/TYPECHECK_SELFHOST_PLAN.md).
+- **Wire-format serialization: step 6 complete.**
 
-`crc32("123456789") == 0xCBF43926` is the standard CRC-32/ISO-HDLC check value, and both Rust
-implementations are already independently pinned to it. The test compares against
-`keleusma_wire::crc32` rather than the `crate::bytecode::crc32` the plan named, only because
-the latter is `pub(crate)` and unreachable from an integration test. Same algorithm and
-polynomial.
+**The roadmap's Order-1 row should be restated once this merges.** It currently implies three
+comparable blockers; the accurate statement is that the remaining work is integration.
 
-### Three recorded claims were falsified by probing, one of them mine
+## Git state — READ THIS BEFORE RESUMING
 
-1. **No masking is required.** The handoff expected `band 0xFFFFFFFF` after each step because
-   `Word` is signed. The accumulator is always in `[0, 2^32)` by construction, so a mask would
-   be dead work. That design note is now corrected in the plan document.
-2. **`require word >= 32` would have been a silent defect.** Every pipeline stage declares it,
-   so the reflex is to match, but a 32-bit signed `Word` holds neither the initial value nor the
-   polynomial — and, verified against the reference, **a source carrying those literals compiles
-   for a 32-bit target with no complaint when no `require` is present.** `wire.kel` declares
-   `>= 64`, which the reference confirms rejects both narrow targets.
-3. **The two constraints the `v0.3.0` session reported are both real**, and now confirmed here
-   rather than taken on trust. Locals are immutable, rejected at **parse**; a runtime-range
-   `for` needs `limit`, rejected at **verify**. Also settled: `Byte as Word` zero-extends, `lsr`
-   is logical over the full word, and a bounded `for` works inside a `fn` and across a call.
+Two branches stack, and one gate is in flight.
 
-### The must-fire control earned its keep by failing on its first run
+| Ref | Commits | State |
+|---|---|---|
+| `v0.2.3` | — | 1 unpushed (the gate banner) |
+| `feat/selfhost-wire-directory` | 10 over `v0.2.3` | **IN THE GATE**, tip `06dabf0` |
+| `feat/selfhost-wire-data` | 8 over that | slices 5d–7, Tier-1 green, **not gated** |
 
-A mutated polynomial does **not** change the answer for the single byte `0xFF`:
-`0xFFFFFFFF xor 0xFF` is `0xFFFFFF00`, whose low eight bits are clear, so all eight iterations
-take the else branch and the polynomial is never consulted. Enumerating all 256 single-byte
-inputs shows `0xFF` is the only such case.
+The gate is `scripts/gate-in-worktree.sh 06dabf0`. When it reports green: merge that branch,
+then rebase `feat/selfhost-wire-data` onto `v0.2.3` and gate it before merging. **Do not merge
+the second branch on the first branch's gate** — it contains eight increments the gate never saw.
 
-The response was **not** to relax the assertion to a count. The suite asserts the blind set
-**exactly**, so a case that joins it later fails loudly and has to be explained.
+## Method rules this stretch paid for
 
-A corollary that is itself a coverage gap, so it is pinned rather than left implicit: because
-the accumulator is never negative, **`asr` and `lsr` compute identical values here**, and
-swapping them is invisible to the differential. That equivalence has its own test.
-
-### The probe apparatus failed before the code did
-
-The first probe run reported six constructs rejected at `Vm::new`. All six were my arena
-carrying zero persistent capacity, so every module with a `private data` block failed for a
-reason unrelated to the language. Taken at face value it would have been recorded as a language
-restriction and would have redesigned the slice. The trivial must-not-fire case in the probe is
-what exposed it. **A probe needs its own control, exactly as a test does.**
-
-### Slice 2 — two details of the reference a transliteration would get wrong
-
-Both were found by reading the reference before writing, and neither is something a passing test
-would have surfaced afterwards.
-
-1. **`maj3` is a per-BIT majority**, `(a & b) | (a & c) | (b & c)`, not "pick the value that
-   appears at least twice". Where all three copies differ it synthesises a byte no copy contains,
-   which repairs three independent single-bit faults in three different copies. The distinction
-   is invisible unless a case with three distinct bytes is exercised, so the suite builds one.
-2. **The prologue checksum is taken over the VOTED record, not the raw first copy**, so a vote
-   that repaired a byte is confirmed rather than trusted. Checksumming the raw copy would reject
-   an artifact the vote had already fixed — a failure that appears only on damaged input, so it
-   would have shipped clean and failed exactly when the fault tolerance was needed.
-
-Also: **`as Byte` truncates silently** (`300 as Byte` is 44). The type checker does demand the
-cast, so the narrowing is visible at the site, and the writers keep an arithmetically redundant
-`band 255` to state it. This hazard recurs as records widen.
-
-**Byte identity alone would be vacuous in two ways**, so both are closed: `WireView::parse` must
-accept what Keleusma emitted, the two readers must agree on a damaged artifact, and the emitted
-record must not be all zeroes. Every one of the 48 single-bit positions across the three copies
-is injected and required both to be outvoted and to be reported as needing a scrub.
-
-## The next increment — step 6, slice 3
-
-**The region directory**: emission and lookup, triplicated and voted, word-indexed offsets. The
-vote machinery from slice 2 generalises to it, but the directory's stride depends on the voted
-region count, so the two-stage bootstrap is the thing to get right.
-
-**The buffer has to grow.** It is 4096 bytes, ample for the 48-byte prologue; the directory
-reaches 49200 bytes at the format's 1024-region ceiling. Growing it raises the `limit` on
-`crc_range` too, so the worst-case bound moves with it.
+- **Transcribe, then pin.** Where a value must be copied from another language, assert it
+  against the generating source rather than restating it in the test.
+- **The sentinel technique fails silently** when the value domain has no spare value. Split the
+  bound from the value instead: three separate cases hit this.
+- **Check `$?`; never read success off the output.** A `| tail` hid a red gate earlier today.
+- **An implausibly fast pass is the signal.** A five-minute "green" on a 2.5-hour gate.
+- **A set difference is not a finding until the scope is established.** Two false alarms in the
+  documentation audit, both rejected by reading the document's stated scope first.
 
 ## Open, and held by the operator
 
-- **Publication remains HELD.** Nothing is published. Irreversible and outward-facing.
-- **Trimming the gate's feature matrix**, worth roughly 34 minutes, measured. Not done
-  unilaterally because it weakens verification.
+- **Publication remains HELD.** Nothing is published.
+- **Trimming the gate's feature matrix.** Now argued against by evidence: the
+  non-`--all-features` clippy caught lints in five separate increments today, and
+  `--no-default-features` caught a stray `examples/` file. The matrix is finding defects at a
+  steady rate.
 - **MSRV 1.85 declared, never verified.**
-- **Fifteen `self.aux()` sites remain, audited, none hot.** A real follow-up, not a blocker.
+- **Two audit findings are recorded but NOT applied**, both in the session scratchpad: naming
+  `CheckedArithNoArm` in `RUNTIME_FAULTS.md`, which needs an execution check first; and the
+  stage-directory corpus guard, where `tests/wire_corpus.rs` enumerates ten `.kel` files by name
+  while the directory holds twelve and nothing reads the directory.
 
 ## Parallel development
 
-`v0.3.0` carries native code generation in a separate session and worktree. Its mailbox is
-`git show origin/v0.3.0:docs/process/handoffs/v0.3.0.md`; this branch's is
-[`handoffs/v0.2.3.md`](./handoffs/v0.2.3.md). Slice 1 touched no file on their read surface —
-`src/wire_schema.rs` and `src/bytecode.rs` are unmodified — and added no gate step.
+`v0.3.0` carries native code generation. Their gate went green; mine is running. The mailbox is
+[`handoffs/v0.2.3.md`](./handoffs/v0.2.3.md), theirs is
+`git show origin/v0.3.0:docs/process/handoffs/v0.3.0.md`. **A gate no longer makes the main tree
+look busy** — it runs in a detached worktree, so check `pgrep -f release-gate.sh` or the banner.

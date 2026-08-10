@@ -333,3 +333,76 @@ fn every_self_hosted_stage_round_trips_through_the_new_schema() {
          drop the coverage caveat in this test and in REVERSE_PROMPT.md"
     );
 }
+
+/// Stage sources deliberately excluded from the round-trip corpus, with the
+/// reason each is out.
+///
+/// An entry here is a decision, not an oversight, and the test below requires
+/// every file in the directory to be in one list or the other.
+const EXCLUDED: &[(&str, &str)] = &[(
+    "wire.kel",
+    "the wire format written in Keleusma (step 6). Not a pipeline stage, not \
+     driven by `read_stage`, and not compiled by the self-hosted driver, so it \
+     has nothing to round-trip through the auxiliary-body codec. Covered by \
+     tests/selfhost_wire.rs instead.",
+)];
+
+#[test]
+fn every_kel_source_is_either_in_the_corpus_or_explicitly_excluded() {
+    // The corpus names its members. A by-name list is correct the day it is
+    // written and silently wrong the moment the set grows, and this repository
+    // has recorded three separate failures of exactly that shape. Nothing read
+    // the directory, so nothing could notice a divergence -- and one had
+    // already occurred: `wire.kel` was added and the corpus did not change.
+    //
+    // That omission is correct, which is not the point. The point is that its
+    // correctness rested on someone remembering. This converts the question
+    // into one the suite asks.
+    let dir = std::path::Path::new("src/selfhost/kel");
+    let mut unaccounted = Vec::new();
+    let mut seen = 0usize;
+    for entry in std::fs::read_dir(dir).expect("stage source directory") {
+        let name = entry
+            .expect("dir entry")
+            .file_name()
+            .into_string()
+            .expect("utf8 name");
+        if !name.ends_with(".kel") {
+            continue;
+        }
+        seen += 1;
+        let stem = name.trim_end_matches(".kel");
+        let in_corpus = CORPUS.iter().any(|(s, _)| *s == stem);
+        let excluded = EXCLUDED.iter().any(|(f, _)| *f == name);
+        if !in_corpus && !excluded {
+            unaccounted.push(name);
+        }
+    }
+    assert!(
+        unaccounted.is_empty(),
+        "these files are in {} but are neither in CORPUS nor in EXCLUDED: {unaccounted:?}. \
+         Add each to one, with a reason.",
+        dir.display()
+    );
+    // Vacuity guard: if the directory could not be read, or the extension
+    // filter matched nothing, the loop above would pass having checked nothing.
+    assert!(
+        seen >= CORPUS.len(),
+        "found only {seen} .kel files but the corpus names {}; the directory scan is not working",
+        CORPUS.len()
+    );
+}
+
+#[test]
+fn every_excluded_file_actually_exists() {
+    // The complement. An exclusion for a file that has been renamed or deleted
+    // is dead weight that would silently keep a real successor out of the
+    // corpus under the old name.
+    for (file, _reason) in EXCLUDED {
+        let path = std::path::Path::new("src/selfhost/kel").join(file);
+        assert!(
+            path.exists(),
+            "EXCLUDED names `{file}`, which does not exist; remove the entry"
+        );
+    }
+}
