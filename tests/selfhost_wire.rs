@@ -232,6 +232,7 @@ fn run_cmd_fields(
     nregions: i64,
     regions: &Regions,
     fields: &[i64],
+    args: [i64; 5],
     read_len: usize,
 ) -> Result<(i64, Vec<u8>), VmError> {
     assert!(
@@ -242,6 +243,11 @@ fn run_cmd_fields(
     let mut shared = vec![0u8; vm.shared_data_bytes()];
     vm.set_shared(&mut shared, 0, Value::Int(0))?;
     vm.set_shared(&mut shared, NREGIONS_SLOT, Value::Int(nregions))?;
+    vm.set_shared(&mut shared, WARG_SLOT, Value::Int(args[0]))?;
+    vm.set_shared(&mut shared, WARG2_SLOT, Value::Int(args[1]))?;
+    vm.set_shared(&mut shared, WARG3_SLOT, Value::Int(args[2]))?;
+    vm.set_shared(&mut shared, WARG4_SLOT, Value::Int(args[3]))?;
+    vm.set_shared(&mut shared, WARG5_SLOT, Value::Int(args[4]))?;
     for (i, v) in fields.iter().enumerate() {
         vm.set_shared(&mut shared, FIN_SLOT + i, Value::Int(*v))?;
     }
@@ -839,7 +845,10 @@ fn no_command_below_the_dispatch_ceiling_falls_through() {
     // read `0..103` and so stopped exactly where `dispatch_frame` begins,
     // leaving the whole framing chain — the one nearest the depth ceiling and
     // therefore likeliest to need splitting — entirely unswept.
-    for cmd in 0..116i64 {
+    // EXCLUSIVE, so this must be one past the highest live command. Slice 3
+    // added 116 and this read `0..116`, which is exactly the off-by-one the
+    // sweep exists to catch, committed inside the sweep itself.
+    for cmd in 0..117i64 {
         let (got, _) =
             run_cmd_args(&mut vm, cmd, 0, &[], &[], [0, 0, 0, 0, 0], 0).unwrap_or((0, Vec::new()));
         if (-99..=-92).contains(&got) {
@@ -4262,8 +4271,16 @@ fn real_header_case(src: &str) -> (Vec<i64>, Vec<u8>) {
 fn emit_header_record(vm: &mut Vm<'static, 'static>, fields: &[i64]) -> Vec<u8> {
     let specs: Vec<RegionSpec> = vec![(keleusma::wire_schema::kind::HEADER, 0, HEADER_STRIDE, 0)];
     let read_len = header_len(1) + HEADER_STRIDE;
-    let (written, got) =
-        run_cmd_fields(vm, CMD_EMIT_HEADER_RECORD, 1, &specs, fields, read_len).expect("run");
+    let (written, got) = run_cmd_fields(
+        vm,
+        CMD_EMIT_HEADER_RECORD,
+        1,
+        &specs,
+        fields,
+        [0, 0, 0, 0, 0],
+        read_len,
+    )
+    .expect("run");
     assert_eq!(
         written, HEADER_STRIDE as i64,
         "the emitter did not report a whole record"
@@ -4331,6 +4348,7 @@ fn the_reference_reader_recovers_the_fields_keleusma_emitted() {
         1,
         &specs,
         &fields,
+        [0, 0, 0, 0, 0],
         read_len,
     )
     .expect("run");
@@ -4364,4 +4382,222 @@ fn the_reference_reader_recovers_the_fields_keleusma_emitted() {
     );
     assert_eq!(i64::from(rec.schema_hash), fields[9], "schema_hash");
     assert_eq!(i64::from(rec.reserved), fields[10], "reserved");
+}
+
+// --- WIRING SLICE 3: a multi-record region, and the batching mechanism -------
+//
+// `CHUNKS` is the smallest region that cannot be emitted in one batch, at two,
+// so the mechanism is built where a failure is legible rather than inside
+// `DATA_SLOTS`, which needs 1547 of them. `ChunkRecord` is also the widest
+// record in the format at fourteen fields.
+//
+// WHERE THE INPUTS COME FROM, AND WHY IT DIFFERS FROM SLICE 2. Slice 2 derived
+// its field values from the module, because a header's fields ARE module
+// properties. A chunk record's fields are not: `consts_first`,
+// `param_types_first`, `op_byte_offset` and the rest are allocation results
+// produced by `SchemaBuilder` while it lays the artifact out. Reproducing them
+// here would mean reimplementing the encoder, which is the driver's job in a
+// later slice, not this one. They are therefore DECODED from the reference and
+// re-emitted, which tests the emitter's field placement, widths and batching
+// against the reference's — and the must-fire control below is what keeps that
+// from being a test of nothing.
+
+const CMD_EMIT_CHUNK_RECORDS: i64 = 116;
+const CHUNK_STRIDE: usize = 48;
+const CHUNK_FIELDS: usize = 14;
+/// Records per batch, set by `wire.fin` rather than by the output buffer.
+const CHUNKS_PER_BATCH: usize = FIN_CAPACITY / CHUNK_FIELDS;
+
+/// The fourteen fields of each of a stage's chunk records, and the reference
+/// bytes for the whole `CHUNKS` region.
+fn real_chunk_case(src: &str) -> (Vec<[i64; CHUNK_FIELDS]>, Vec<u8>) {
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let bytes =
+        keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode aux body");
+    let view = keleusma_wire::WireView::parse(&bytes).expect("reference artifact parses");
+    let region = view
+        .find_region(keleusma::wire_schema::kind::CHUNKS)
+        .expect("every module emits a CHUNKS region");
+    let want = view
+        .region_bytes(&region)
+        .expect("CHUNKS payload in range")
+        .to_vec();
+    let table = view
+        .records(&region, CHUNK_STRIDE)
+        .expect("CHUNKS reads as a record table");
+
+    let mut recs = Vec::with_capacity(table.len());
+    for i in 0..table.len() {
+        let c: keleusma::wire_schema::ChunkRecord = table.get_as(i).expect("record in range");
+        recs.push([
+            i64::from(c.name),
+            i64::from(c.consts_first),
+            i64::from(c.consts_count),
+            i64::from(c.templates_first),
+            i64::from(c.templates_count),
+            i64::from(c.param_types_first),
+            i64::from(c.param_types_count),
+            i64::from(c.debug_first),
+            i64::from(c.debug_len),
+            i64::from(c.op_byte_offset),
+            i64::from(c.op_record_count),
+            i64::from(c.local_count),
+            i64::from(c.param_count),
+            i64::from(c.block_type),
+        ]);
+    }
+    (recs, want)
+}
+
+/// Emit every record through the window, one batch at a time, and concatenate.
+///
+/// This is the staged shape in miniature: the Keleusma side never holds the
+/// whole region, only one batch's worth, and the caller appends. `window` is
+/// deliberately non-zero so an emitter that ignored its address would write at
+/// zero and be caught rather than pass.
+fn emit_chunks_batched(
+    vm: &mut Vm<'static, 'static>,
+    recs: &[[i64; CHUNK_FIELDS]],
+    window: usize,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(recs.len() * CHUNK_STRIDE);
+    for batch in recs.chunks(CHUNKS_PER_BATCH) {
+        let fields: Vec<i64> = batch.iter().flat_map(|r| r.iter().copied()).collect();
+        let produced = batch.len() * CHUNK_STRIDE;
+        let (written, buf) = run_cmd_fields(
+            vm,
+            CMD_EMIT_CHUNK_RECORDS,
+            0,
+            &[],
+            &fields,
+            [window as i64, batch.len() as i64, 0, 0, 0],
+            window + produced,
+        )
+        .expect("run");
+        assert_eq!(
+            written, produced as i64,
+            "the emitter did not report the batch's byte count"
+        );
+        out.extend_from_slice(&buf[window..window + produced]);
+    }
+    out
+}
+
+#[test]
+fn the_emitted_chunk_records_match_the_reference_on_real_compiler_output() {
+    let mut vm = vm_for(WIRE_KEL);
+    let mut batched_at_least_one_stage = false;
+    for (name, src) in CORPUS_STAGES {
+        let (recs, want) = real_chunk_case(src);
+        assert!(!recs.is_empty(), "{name}: no chunk records");
+        assert_eq!(
+            want.len(),
+            recs.len() * CHUNK_STRIDE,
+            "{name}: payload is not a whole number of records"
+        );
+        if recs.len() > CHUNKS_PER_BATCH {
+            batched_at_least_one_stage = true;
+        }
+        let got = emit_chunks_batched(&mut vm, &recs, 64);
+        assert_eq!(got, want, "{name}: emitted CHUNKS region differs");
+    }
+    // The corpus must actually cross a batch boundary, or this suite would be
+    // testing the single-batch path and reporting the batching path as covered.
+    assert!(
+        batched_at_least_one_stage,
+        "no stage exceeded {CHUNKS_PER_BATCH} records, so batching was never exercised"
+    );
+}
+
+/// Must-fire control: every one of the fourteen fields must be observable.
+///
+/// Fourteen fields at fourteen offsets, three different widths. A writer that
+/// put two in the same place, truncated a u32 to u16, or dropped one, would
+/// still agree with the reference on every field it happened to get right.
+#[test]
+fn every_chunk_field_is_independently_observable() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (base, want) = real_chunk_case(CORPUS_STAGES[9].1);
+    assert_eq!(
+        emit_chunks_batched(&mut vm, &base, 64),
+        want,
+        "control: the clean case must agree"
+    );
+    for f in 0..CHUNK_FIELDS {
+        let mut recs = base.clone();
+        // Flip a low bit rather than adding, so a narrow field cannot overflow
+        // into its neighbour and report a difference for the wrong reason.
+        recs[0][f] ^= 1;
+        assert_ne!(
+            emit_chunks_batched(&mut vm, &recs, 64),
+            want,
+            "control did not fire: chunk field {f} is not observable"
+        );
+    }
+}
+
+/// The window address must be honoured, not assumed.
+///
+/// This is the property slice 2 could not have: its emitter derived its
+/// position from `region_base`, so there was no address to get wrong. A staged
+/// emitter is handed a window, and the same records at a different window must
+/// produce the same bytes.
+#[test]
+fn the_emitted_records_do_not_depend_on_the_window_address() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (recs, want) = real_chunk_case(CORPUS_STAGES[9].1);
+    for window in [0usize, 8, 64, 4096] {
+        let got = emit_chunks_batched(&mut vm, &recs, window);
+        assert_eq!(got, want, "window {window}: output moved with the address");
+    }
+}
+
+/// Splitting a run across batches must not change the bytes.
+///
+/// The batch size is an implementation detail of the input channel, so a record
+/// must encode identically whether it is first in a batch, last, or alone. A
+/// boundary-off-by-one in the field indexing shows up here and nowhere else.
+#[test]
+fn the_batch_boundary_does_not_change_the_output() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (recs, want) = real_chunk_case(CORPUS_STAGES[1].1);
+    assert!(
+        recs.len() > CHUNKS_PER_BATCH,
+        "this stage must exceed one batch for the test to mean anything"
+    );
+    // The natural batching is already exercised above. Here every record is
+    // emitted alone, which is the maximal number of boundaries.
+    let mut one_at_a_time = Vec::new();
+    for r in &recs {
+        one_at_a_time.extend_from_slice(&emit_chunks_batched(
+            &mut vm,
+            core::slice::from_ref(r),
+            64,
+        ));
+    }
+    assert_eq!(
+        one_at_a_time, want,
+        "emitting one record per batch differs from the reference"
+    );
+}
+
+/// A batch larger than the input array is rejected, not silently truncated.
+#[test]
+fn an_oversized_batch_is_reported_rather_than_truncated() {
+    let mut vm = vm_for(WIRE_KEL);
+    let over = (FIN_CAPACITY / CHUNK_FIELDS) + 1;
+    let (got, _) = run_cmd_fields(
+        &mut vm,
+        CMD_EMIT_CHUNK_RECORDS,
+        0,
+        &[],
+        &[],
+        [64, over as i64, 0, 0, 0],
+        0,
+    )
+    .expect("run");
+    assert_eq!(
+        got, -200,
+        "an oversized batch was not reported with its own code"
+    );
 }

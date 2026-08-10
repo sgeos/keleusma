@@ -527,10 +527,6 @@ fn rec_u32(i: Word, stride: Word, rec: Word, off: Word) -> Word {
     get_u32(rec_at(i, stride, rec, off))
 }
 
-fn put_rec_u8(i: Word, stride: Word, rec: Word, off: Word, v: Word) -> Word {
-    put_u8(rec_at(i, stride, rec, off), v)
-}
-
 fn put_rec_u16(i: Word, stride: Word, rec: Word, off: Word, v: Word) -> Word {
     put_u16(rec_at(i, stride, rec, off), v)
 }
@@ -1211,7 +1207,7 @@ fn header_u8(off: Word) -> Word {
     rec_u8(dir_find(kind_header()), header_stride(), 0, off)
 }
 
-// Write the module's HEADER record into region `ri` from `wire.fin`.
+// Write the module's HEADER record at byte address `at`, from `wire.fin`.
 //
 // THE FIRST SCHEMA EMITTER. Everything before this either emitted the container
 // (prologue, directory) or emitted a synthetic pattern for a fixture; this
@@ -1219,23 +1215,90 @@ fn header_u8(off: Word) -> Word {
 // the self-hosted path needs in order to produce an artifact rather than merely
 // read one.
 //
+// IT TAKES A BYTE ADDRESS, NOT A REGION INDEX, AND THAT IS THE WHOLE POINT.
+// The first version took a region index and located itself through
+// `region_base`, an ABSOLUTE artifact offset. That works only for a region that
+// happens to lie inside this 65536-byte buffer, which a one-region test
+// artifact does and a real one does not: in a real layout `CHUNKS` sits after
+// `STRING_POOL` and its base is in the millions. A staged emitter is handed a
+// low WINDOW and the host appends the result at the true offset, so the address
+// has to come from the caller.
+//
 // The inputs arrive in `wire.fin` in DECLARATION ORDER, which is the same order
 // the offsets appear below. Reserved is written explicitly rather than left to
 // a zeroed buffer, because an emitter that relies on its output starting zeroed
 // is one that silently breaks the day it writes into reused space.
-fn emit_header_record(ri: Word) -> Word {
-    put_rec_u32(ri, header_stride(), 0, header_off_entry_point(), wire.fin[0]);
-    put_rec_u8(ri, header_stride(), 0, header_off_word_bits_log2(), wire.fin[1]);
-    put_rec_u8(ri, header_stride(), 0, header_off_addr_bits_log2(), wire.fin[2]);
-    put_rec_u8(ri, header_stride(), 0, header_off_float_bits_log2(), wire.fin[3]);
-    put_rec_u8(ri, header_stride(), 0, header_off_flags(), wire.fin[4]);
-    put_rec_u32(ri, header_stride(), 0, header_off_wcet_cycles(), wire.fin[5]);
-    put_rec_u32(ri, header_stride(), 0, header_off_wcmu_bytes(), wire.fin[6]);
-    put_rec_u32(ri, header_stride(), 0, header_off_shared_data_bytes(), wire.fin[7]);
-    put_rec_u32(ri, header_stride(), 0, header_off_private_data_bytes(), wire.fin[8]);
-    put_rec_u32(ri, header_stride(), 0, header_off_schema_hash(), wire.fin[9]);
-    put_rec_u32(ri, header_stride(), 0, header_off_reserved(), wire.fin[10]);
+fn emit_header_record_at(at: Word) -> Word {
+    put_u32(at + header_off_entry_point(), wire.fin[0]);
+    put_u8(at + header_off_word_bits_log2(), wire.fin[1]);
+    put_u8(at + header_off_addr_bits_log2(), wire.fin[2]);
+    put_u8(at + header_off_float_bits_log2(), wire.fin[3]);
+    put_u8(at + header_off_flags(), wire.fin[4]);
+    put_u32(at + header_off_wcet_cycles(), wire.fin[5]);
+    put_u32(at + header_off_wcmu_bytes(), wire.fin[6]);
+    put_u32(at + header_off_shared_data_bytes(), wire.fin[7]);
+    put_u32(at + header_off_private_data_bytes(), wire.fin[8]);
+    put_u32(at + header_off_schema_hash(), wire.fin[9]);
+    put_u32(at + header_off_reserved(), wire.fin[10]);
     header_stride()
+}
+
+// --- SLICE 3 OF THE WIRING INCREMENT: a multi-record region ----------------
+//
+// `CHUNKS` is the smallest region that cannot be emitted in one batch, at two,
+// so the batching mechanism is built where a failure is legible rather than
+// inside `DATA_SLOTS`, which needs 1547. `ChunkRecord` is also the WIDEST record
+// in the format at fourteen fields, so it stresses the field marshalling at the
+// same time.
+//
+// ONLY THE INPUT NEEDS BATCHING. `wire.fin` holds 1024 words and a field costs a
+// whole word there while costing at most four bytes in the packed record, so one
+// batch's OUTPUT is at most 5456 bytes across every record kind in the format,
+// against a 65536-byte buffer. The emitter therefore never has to chunk what it
+// writes, only what it is given.
+
+fn chunk_fields() -> Word { 14 }
+fn fin_capacity() -> Word { 1024 }
+
+// One chunk record at byte address `at`, reading fourteen fields from `wire.fin`
+// starting at `k`.
+fn emit_chunk_record_at(at: Word, k: Word) -> Word {
+    put_u32(at + chunk_off_name(), wire.fin[k]);
+    put_u32(at + chunk_off_consts_first(), wire.fin[k + 1]);
+    put_u32(at + chunk_off_consts_count(), wire.fin[k + 2]);
+    put_u32(at + chunk_off_templates_first(), wire.fin[k + 3]);
+    put_u32(at + chunk_off_templates_count(), wire.fin[k + 4]);
+    put_u32(at + chunk_off_param_types_first(), wire.fin[k + 5]);
+    put_u32(at + chunk_off_param_types_count(), wire.fin[k + 6]);
+    put_u32(at + chunk_off_debug_first(), wire.fin[k + 7]);
+    put_u32(at + chunk_off_debug_len(), wire.fin[k + 8]);
+    put_u32(at + chunk_off_op_byte_offset(), wire.fin[k + 9]);
+    put_u32(at + chunk_off_op_record_count(), wire.fin[k + 10]);
+    put_u16(at + chunk_off_local_count(), wire.fin[k + 11]);
+    put_u8(at + chunk_off_param_count(), wire.fin[k + 12]);
+    put_u8(at + chunk_off_block_type(), wire.fin[k + 13]);
+    chunk_stride()
+}
+
+// `n` consecutive chunk records into the window starting at `at`.
+//
+// The guard is not decoration. `n` comes from the host, and a batch larger than
+// `wire.fin` would read past the array's end — where the language would fault,
+// but on a value the host chose rather than on a stated contract. Rejecting it
+// with a distinct code says which contract was broken.
+//
+// The loop bound is `fin_capacity()` rather than the true maximum of 73. A
+// tighter static bound would silently TRUNCATE if the field count or the array
+// size ever changed, and a silent truncation here produces a short region that
+// still parses. 1024 cannot be exceeded by any record kind, since a record costs
+// at least one word of input.
+fn emit_chunk_records(at: Word, n: Word) -> Word {
+    if (n * chunk_fields()) > fin_capacity() { 0 - 200 } else {
+        for j in 0..n limit 1024 {
+            emit_chunk_record_at(at + (j * chunk_stride()), j * chunk_fields());
+        }
+        n * chunk_stride()
+    }
 }
 
 // 1 when the module declares no entry point.
@@ -1712,8 +1775,9 @@ fn dispatch_frame(cmd: Word) -> Word {
     if cmd == 112 { artifact_intact(wire.warg) } else {
     if cmd == 113 { magic_word() } else {
     if cmd == 114 { crc32_residue() } else {
-    if cmd == 115 { emit_header(); emit_header_record(dir_find(kind_header())) } else {
-    0 - 99 }}}}}}}}}}}}}
+    if cmd == 115 { emit_header(); emit_header_record_at(region_base(dir_find(kind_header()))) } else {
+    if cmd == 116 { emit_chunk_records(wire.warg, wire.warg2) } else {
+    0 - 99 }}}}}}}}}}}}}}
 }
 
 fn main(cmd: Word) -> Word {

@@ -63,7 +63,31 @@ session's tree lives there too.
 my exact tip `78a5bc1`. So I cannot start a gate, and no timing measurement is trustworthy until
 it finishes. Development is unaffected, which is the whole point of the detached-worktree gate.
 
-## Wiring slices 1 and 2 are done; slice 3 is a multi-record region
+## Wiring slices 1, 2 and 3 are done; slice 4 is a byte pool
+
+**On `feat/selfhost-wire-real-corpus`, Tier 1 green, NOT gated. 91 tests, up from 80.**
+
+**Slice 3 emitted `CHUNKS` for all ten stages, byte-identical, in batches through a
+caller-supplied window.** The batching mechanism now exists and is exercised: the corpus crosses a
+batch boundary, and that is asserted rather than assumed. Four controls — every one of the fourteen
+fields independently observable, the window address honoured at four bases, the batch boundary
+changing nothing when every record is emitted alone, and an oversized batch rejected with its own
+code rather than truncated.
+
+**`emit_header_record` was refactored to `emit_header_record_at`**, taking a byte address instead of
+a region index. Slice 2's positioning did not generalise, and fixing it at slice 3 cost one call
+site where leaving it would have cost every emitter after it.
+
+**Slice 4 should be a BYTE POOL, not another record table.** `PARAM_TYPES` is the smallest, at 104
+bytes worst case. Pools have no stride and no field marshalling, so they exercise a genuinely
+different path — `wire.fin` is the wrong channel for them and the bytes need to arrive another way.
+That question is unanswered and is the first thing to probe.
+
+**Then the six record shapes with no corpus coverage**, which need hand-built emitter cases:
+`STRUCT_AUX`, `ENUM_AUX`, `STRUCT_TEMPLATES`, `PRIVATE_COMPOSITE`, `NATIVES`, `NATIVE_RETURNS`, plus
+`DEBUG_POOL` whose region is never emitted at all.
+
+## Slices 1 and 2, for context
 
 **On `feat/selfhost-wire-real-corpus`, Tier 1 green, NOT gated. 86 tests, up from 80.**
 

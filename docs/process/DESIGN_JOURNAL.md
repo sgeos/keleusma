@@ -13,6 +13,59 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**WIRING SLICE 3: A MULTI-RECORD REGION, AND THE BATCHING MECHANISM (2026-08-09).** `CHUNKS` for all
+ten stages, byte-identical, emitted in batches through a caller-supplied window. 91 tests, up from
+86. `CHUNKS` was chosen by measurement rather than by feel: it is the **smallest region that cannot
+be emitted in one batch**, at two, so the mechanism was built where a failure is legible instead of
+inside `DATA_SLOTS`, which needs 1547. `ChunkRecord` is also the widest record in the format at
+fourteen fields and three widths, so it stressed the field marshalling at the same time.
+
+**The prep's two results both held, and one of them shrank the work.** Only the INPUT needs
+batching: a field costs a whole word in `wire.fin` and at most four bytes in the packed record, so a
+batch's output is at most 5,456 bytes against a 65,536-byte buffer. The emitter never chunks what it
+writes, only what it is given. That is a much smaller mechanism than the staged design implied, and
+it was known before any code was written rather than discovered inside it.
+
+**The other prep result was the one that mattered: slice 2's positioning did not generalise.**
+`emit_header_record` located itself through `region_base`, an absolute artifact offset, which works
+only in a one-region test artifact. It is now `emit_header_record_at`, taking a byte address, and
+the command computes the address for the one-region case so the existing tests are unchanged.
+**Refactoring it at slice 3 cost one call site; leaving it would have cost every emitter written
+after it.** `put_rec_u8`, added in slice 2, became unused in the refactor and was removed rather
+than left as dead code.
+
+**Where slice 3's inputs come from, which differs from slice 2 and is worth being explicit about.**
+Slice 2 derived its field values from the module, because a header's fields ARE module properties. A
+chunk record's are not: `consts_first`, `param_types_first`, `op_byte_offset` and the rest are
+allocation results produced by `SchemaBuilder` while it lays the artifact out. Reproducing them
+would mean reimplementing the encoder, which is the driver's job in a later slice. They are
+therefore decoded from the reference and re-emitted. That tests placement, widths and batching, and
+**it does not test the values**, which is stated in the test rather than left for a reader to
+notice.
+
+**Four controls, because byte identity across ten stages is weaker than it looks.**
+
+- **Every one of the fourteen fields is independently observable**, by flipping one low bit of each
+  in turn. A writer that put two fields at one offset, or truncated a `u32` to `u16`, agrees with
+  the reference on everything it happened to get right.
+- **The window address is honoured**, checked at four different bases. This is a property slice 2
+  could not have had, since its emitter derived its own position and there was no address to get
+  wrong.
+- **The batch boundary changes nothing**, checked by emitting every record alone, which is the
+  maximal number of boundaries. An off-by-one in the field indexing appears here and nowhere else.
+- **The corpus actually crosses a batch boundary**, asserted rather than assumed. Without it the
+  suite could exercise only the single-batch path while reporting batching as covered.
+
+**An oversized batch is rejected with its own code rather than truncated**, and the loop bound is
+`fin_capacity()` rather than the true maximum of 73 records. A tighter static bound would silently
+truncate if the field count or the array size ever changed, and a short region still parses — a
+silent truncation here produces a valid-looking artifact with records missing.
+
+**And the sweep caught me committing its own defect.** The fall-through sweep, which I had extended
+one slice earlier precisely because its bound had drifted, is exclusive: adding command 116 and
+leaving `0..116` left the new command unswept. The off-by-one the test exists to catch, committed
+inside the test, one increment after fixing the same class of bug there.
+
 **WIRING SLICE 2: THE FIRST SCHEMA EMITTER, AND THE SIZING CONSTRAINT SHOWED UP IMMEDIATELY
 (2026-08-09).** `emit_header_record` writes a real record's real fields at the transcribed offsets.
 Everything before it either emitted the container or emitted a synthetic pattern for a fixture, so
