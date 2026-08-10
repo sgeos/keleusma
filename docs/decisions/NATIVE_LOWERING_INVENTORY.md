@@ -1748,3 +1748,72 @@ order already reported and the `Op::CheckedAdd` doc comment already fixed: the
 code is right and its description is not. It is worth fixing rather than
 ignoring, because this comment cost a reader on another branch an hour and a
 wrong conclusion about whether private data survives.
+
+## Falling off the end of a chunk: a VM asymmetry, and two more queued fixes
+
+The last of the three "what does the VM do that the lowering never thought
+about" candidates was `Op::Return`. `Return` itself is clean, but reading it
+surfaced the case next to it.
+
+### `Op::Return` is clean
+
+It pops the result, pops the frame, **truncates the stack to `old_frame.base`**,
+and pushes the result — so from the caller's view the arguments are replaced by
+one value. The lowering's `Call` pops `arg_count` and pushes one result, with
+callee locals as its own allocas. The behaviours agree.
+
+### Falling off the end does NOT truncate, and that asymmetry is the interesting part
+
+`src/vm.rs:4801` handles `ip >= op_count` — "End of chunk without explicit
+return: return Unit". It pops one value (or `Unit` if empty), pops the frame, and
+pushes the result. **It does not truncate to `frame.base`.** So the callee's
+locals and any leftover operands stay on the shared stack, and the result is
+pushed on top of them.
+
+Compared with `Op::Return`, each such call leaks `local_count` slots. If a chunk
+like that were called in a loop, the operand stack would grow without bound,
+which is the thing the worst-case-memory-usage analysis exists to preclude.
+
+**Reachability, stated carefully because I have not established it.** The
+reference compiler emits a trailing `Op::Return` (`src/compiler.rs:5342`,
+`5414`), so this is not reachable from reference output, and no corpus chunk
+exercises it. Whether `verify()` ADMITS a chunk without a trailing `Return` — and
+therefore whether this is a live hole at the trust boundary that governs hot swap
+and precompiled bytecode — **I did not determine.** The typed pass enforces
+loop back-edge neutrality and exact height joins at merges, and I did not trace
+whether it constrains a chunk's terminal depth. This is a question for the
+`v0.2.3` session with the evidence attached, not a defect report.
+
+### QUEUED FIX 2: the lowering emits invalid IR for the same input
+
+The lowering has no fallback terminator. `Op::Return` builds the LLVM `ret`
+(`lib.rs:1477`), and when the op loop ends without one the final block has **no
+terminator at all**, which is malformed IR rather than a wrong answer. The VM
+defines this case as returning `Unit`; the lowering should emit the matching
+`ret` when the final block is unterminated.
+
+### QUEUED FIX 3: `lower_module` never verifies the IR it produces
+
+`lm.verify()` appears in `tests/differential.rs`, `tests/shared_data.rs` and
+`tests/aot_linkage.rs`. **It appears nowhere in `src/lib.rs`.** The self-check
+lives in the harness rather than in the API, so a consumer calling `lower_module`
+directly receives IR that nothing verified, and Queued Fix 2's malformed output
+would reach them silently while every test stayed green.
+
+This is the more valuable of the two, because it is general rather than specific:
+it closes the whole class instead of one member, and it is the project's own
+stated principle — validate contracts at function boundaries — applied to a
+boundary that was missed. It also explains why Fix 2 went unnoticed: the only
+place that would have caught it is the place that is never run in production.
+
+### The queue, all `native_codegen`-only, all awaiting the gate
+
+| # | Fix | Class |
+|---|---|---|
+| 1 | Zero-init non-parameter locals | Latent UB (`undef` load) |
+| 2 | Implicit `ret` when the final block is unterminated | Latent malformed IR |
+| 3 | `lower_module` verifies its own module | Missing API postcondition |
+
+None needs an opcode, a `BYTECODE_VERSION` bump, or a file outside
+`native_codegen/`. All three need compilation, which is why they are queued
+behind the running gate and its wall-clock perf canary.
