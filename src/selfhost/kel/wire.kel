@@ -1272,6 +1272,119 @@ fn oprec_parity_ok(at: Word) -> Word {
     { 1 } else { 0 }
 }
 
+// --- SLICE 6b: the operand pool ------------------------------------------
+//
+// An operand that does not fit in the record's twenty-four inline bits spills
+// to an eight-byte pool entry, and the record then carries the pool index
+// instead. An entry is:
+//
+//   byte 0    type tag
+//   byte 1    parity byte
+//   bytes 2-7 payload, laid out by the tag
+//
+// THE TWO PARITY SCHEMES IN THIS FORMAT ARE DIFFERENT, and conflating them is
+// the easy mistake. An opcode record carries a single BIT, the even parity of
+// the popcount of its four bytes. A pool entry carries a whole BYTE, the
+// exclusive-or of the tag byte and the six payload bytes — byte one is skipped,
+// because that is where the answer goes. A byte-wide check localises damage to
+// a bit position as well as detecting it, which is worth more in an
+// eight-byte entry than in a four-byte record.
+
+fn pool_stride() -> Word { 8 }
+fn pool_tag_u16_u16() -> Word { 1 }
+fn pool_tag_u16_u16_u8() -> Word { 2 }
+fn pool_tag_u16_u16_u16() -> Word { 3 }
+fn pool_tag_u24_u24() -> Word { 4 }
+
+// The parity byte for the entry at `at`: the exclusive-or of byte 0 and bytes
+// 2 through 7. Byte 1 is excluded by construction, not by masking.
+fn pool_parity_of(at: Word) -> Word {
+    ((((wire.bytes[at] as Word) bxor (wire.bytes[at + 2] as Word))
+        bxor ((wire.bytes[at + 3] as Word) bxor (wire.bytes[at + 4] as Word)))
+        bxor (((wire.bytes[at + 5] as Word) bxor (wire.bytes[at + 6] as Word))
+            bxor (wire.bytes[at + 7] as Word)))
+}
+
+fn pool_tag(at: Word) -> Word {
+    wire.bytes[at] as Word
+}
+
+fn pool_stored_parity(at: Word) -> Word {
+    wire.bytes[at + 1] as Word
+}
+
+fn pool_parity_ok(at: Word) -> Word {
+    if pool_stored_parity(at) == pool_parity_of(at) { 1 } else { 0 }
+}
+
+// Stamp the parity byte over an entry whose tag and payload are already
+// written. Separate from the constructors so each of them ends the same way
+// and none can forget it.
+fn pool_seal(at: Word) -> Word {
+    wire.bytes[at + 1] = (pool_parity_of(at) band 255) as Byte;
+    at + 8
+}
+
+fn pool_write_u16_u16(at: Word, a: Word, b: Word) -> Word {
+    wire.bytes[at] = pool_tag_u16_u16() as Byte;
+    wire.bytes[at + 1] = 0 as Byte;
+    put_u16(at + 2, a);
+    put_u16(at + 4, b);
+    wire.bytes[at + 6] = 0 as Byte;
+    wire.bytes[at + 7] = 0 as Byte;
+    pool_seal(at)
+}
+
+fn pool_write_u16_u16_u8(at: Word, a: Word, b: Word, c: Word) -> Word {
+    wire.bytes[at] = pool_tag_u16_u16_u8() as Byte;
+    wire.bytes[at + 1] = 0 as Byte;
+    put_u16(at + 2, a);
+    put_u16(at + 4, b);
+    wire.bytes[at + 6] = (c band 255) as Byte;
+    wire.bytes[at + 7] = 0 as Byte;
+    pool_seal(at)
+}
+
+fn pool_write_u16_u16_u16(at: Word, a: Word, b: Word, c: Word) -> Word {
+    wire.bytes[at] = pool_tag_u16_u16_u16() as Byte;
+    wire.bytes[at + 1] = 0 as Byte;
+    put_u16(at + 2, a);
+    put_u16(at + 4, b);
+    put_u16(at + 6, c);
+    pool_seal(at)
+}
+
+// Two twenty-four-bit values, packed three bytes each with no padding, which is
+// why this tag exists at all: a pair of u32 would not fit in six bytes.
+fn pool_write_u24_u24(at: Word, a: Word, b: Word) -> Word {
+    wire.bytes[at] = pool_tag_u24_u24() as Byte;
+    wire.bytes[at + 1] = 0 as Byte;
+    wire.bytes[at + 2] = (a band 255) as Byte;
+    wire.bytes[at + 3] = ((a lsr 8) band 255) as Byte;
+    wire.bytes[at + 4] = ((a lsr 16) band 255) as Byte;
+    wire.bytes[at + 5] = (b band 255) as Byte;
+    wire.bytes[at + 6] = ((b lsr 8) band 255) as Byte;
+    wire.bytes[at + 7] = ((b lsr 16) band 255) as Byte;
+    pool_seal(at)
+}
+
+// Payload readers. `k` selects the field: 0, 1, 2 for the u16 forms, 0 or 1 for
+// the u24 pair. Reading with the wrong tag yields the bytes that are there,
+// which is why a caller checks `pool_tag` first.
+fn pool_u16(at: Word, k: Word) -> Word {
+    get_u16(at + 2 + (k lsl 1))
+}
+
+fn pool_u8_field(at: Word) -> Word {
+    wire.bytes[at + 6] as Word
+}
+
+fn pool_u24(at: Word, k: Word) -> Word {
+    (wire.bytes[at + 2 + (k * 3)] as Word)
+        + ((wire.bytes[at + 3 + (k * 3)] as Word) lsl 8)
+        + ((wire.bytes[at + 4 + (k * 3)] as Word) lsl 16)
+}
+
 // THE DISPATCH IS SPLIT INTO CHAINS, AND THE REASON IS A HARD LANGUAGE LIMIT.
 //
 // The parser rejects an expression nested more than 24 deep, with
@@ -1401,7 +1514,22 @@ fn dispatch_ops(cmd: Word) -> Word {
     if cmd == 89 { oprec_operand_u24(wire.warg) } else {
     if cmd == 90 { oprec_stored_parity(wire.warg) } else {
     if cmd == 91 { oprec_parity_ok(wire.warg) } else {
-    0 - 99 }}}}}}}}
+    0 - 92 }}}}}}}}
+}
+
+fn dispatch_pool(cmd: Word) -> Word {
+    if cmd == 92 { pool_tag(wire.warg) } else {
+    if cmd == 93 { pool_stored_parity(wire.warg) } else {
+    if cmd == 94 { pool_parity_of(wire.warg) } else {
+    if cmd == 95 { pool_parity_ok(wire.warg) } else {
+    if cmd == 96 { pool_write_u16_u16(wire.warg, wire.warg2, wire.warg3) } else {
+    if cmd == 97 { pool_write_u16_u16_u8(wire.warg, wire.warg2, wire.warg3, wire.warg4) } else {
+    if cmd == 98 { pool_write_u16_u16_u16(wire.warg, wire.warg2, wire.warg3, wire.warg4) } else {
+    if cmd == 99 { pool_write_u24_u24(wire.warg, wire.warg2, wire.warg3) } else {
+    if cmd == 100 { pool_u16(wire.warg, wire.warg2) } else {
+    if cmd == 101 { pool_u8_field(wire.warg) } else {
+    if cmd == 102 { pool_u24(wire.warg, wire.warg2) } else {
+    0 - 99 }}}}}}}}}}}
 }
 
 fn main(cmd: Word) -> Word {
@@ -1410,5 +1538,6 @@ fn main(cmd: Word) -> Word {
     if cmd < 38 { dispatch_consts(cmd) } else {
     if cmd < 55 { dispatch_runs(cmd) } else {
     if cmd < 69 { dispatch_data(cmd) } else {
-    if cmd < 84 { dispatch_module(cmd) } else { dispatch_ops(cmd) } } } } } }
+    if cmd < 84 { dispatch_module(cmd) } else {
+    if cmd < 92 { dispatch_ops(cmd) } else { dispatch_pool(cmd) } } } } } } }
 }

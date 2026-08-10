@@ -766,9 +766,33 @@ fn maj3_is_a_per_bit_majority_not_a_pick_the_duplicate() {
 
 #[test]
 fn an_unrecognised_command_returns_a_distinct_code() {
+    // Deliberately far above every chain's range. This test previously used
+    // 99, which slice 6b then CLAIMED as a real command — the test caught that
+    // immediately, which is the point of it, but a sentinel adjacent to the
+    // live range will keep being claimed as the module grows.
     let mut vm = vm_for(WIRE_KEL);
-    let (got, _) = run_cmd(&mut vm, 99, 0, &[]).expect("run");
+    let (got, _) = run_cmd(&mut vm, 100_000, 0, &[]).expect("run");
     assert_eq!(got, -99, "an unknown command did not report itself");
+}
+
+#[test]
+fn no_command_below_the_dispatch_ceiling_falls_through() {
+    // The complement: every command the chains claim must answer something
+    // OTHER than a fall-through code. Without this, a chain whose threshold
+    // drifted past its arms would silently route live commands to the default.
+    let mut vm = vm_for(WIRE_KEL);
+    let mut fell_through = Vec::new();
+    for cmd in 0..103i64 {
+        let (got, _) =
+            run_cmd_args(&mut vm, cmd, 0, &[], &[], [0, 0, 0, 0, 0], 0).unwrap_or((0, Vec::new()));
+        if (-99..=-92).contains(&got) {
+            fell_through.push(cmd);
+        }
+    }
+    assert!(
+        fell_through.is_empty(),
+        "these commands fell through to a chain default: {fell_through:?}"
+    );
 }
 
 #[test]
@@ -3283,5 +3307,245 @@ fn the_parity_check_stays_quiet_on_every_uncorrupted_record() {
         )
         .expect("run");
         assert_eq!(ok, 1, "clean record for id {id} was reported corrupt");
+    }
+}
+
+// =========================================================================
+// SLICE 6b — the operand pool
+// =========================================================================
+
+use keleusma::wire_format::{
+    OperandPoolEntry, POOL_TAG_U16_U16, POOL_TAG_U16_U16_U8, POOL_TAG_U16_U16_U16, POOL_TAG_U24_U24,
+};
+
+const CMD_POOL_TAG: i64 = 92;
+const CMD_POOL_STORED_PARITY: i64 = 93;
+const CMD_POOL_PARITY_OF: i64 = 94;
+const CMD_POOL_PARITY_OK: i64 = 95;
+const CMD_POOL_W_U16_U16: i64 = 96;
+const CMD_POOL_W_U16_U16_U8: i64 = 97;
+const CMD_POOL_W_U16_U16_U16: i64 = 98;
+const CMD_POOL_W_U24_U24: i64 = 99;
+const CMD_POOL_U16: i64 = 100;
+const CMD_POOL_ENTRY_U8: i64 = 101;
+const CMD_POOL_U24: i64 = 102;
+
+#[test]
+fn the_pool_tags_and_stride_match_the_reference() {
+    assert_eq!(kel_const("pool_stride"), 8);
+    assert_eq!(kel_const("pool_tag_u16_u16"), i64::from(POOL_TAG_U16_U16));
+    assert_eq!(
+        kel_const("pool_tag_u16_u16_u8"),
+        i64::from(POOL_TAG_U16_U16_U8)
+    );
+    assert_eq!(
+        kel_const("pool_tag_u16_u16_u16"),
+        i64::from(POOL_TAG_U16_U16_U16)
+    );
+    assert_eq!(kel_const("pool_tag_u24_u24"), i64::from(POOL_TAG_U24_U24));
+}
+
+/// Every pool entry form, with boundary values in each field.
+fn pool_corpus() -> Vec<(String, OperandPoolEntry)> {
+    let mut v = Vec::new();
+    for (a, b) in [(0u16, 0u16), (1, 2), (65535, 65535), (0, 65535)] {
+        v.push((
+            format!("u16_u16({a},{b})"),
+            OperandPoolEntry::from_u16_u16(a, b),
+        ));
+    }
+    for (a, b, c) in [(0u16, 0u16, 0u8), (7, 9, 255), (65535, 0, 128)] {
+        v.push((
+            format!("u16_u16_u8({a},{b},{c})"),
+            OperandPoolEntry::from_u16_u16_u8(a, b, c),
+        ));
+    }
+    for (a, b, c) in [(0u16, 0u16, 0u16), (1, 2, 3), (65535, 65535, 65535)] {
+        v.push((
+            format!("u16_u16_u16({a},{b},{c})"),
+            OperandPoolEntry::from_u16_u16_u16(a, b, c),
+        ));
+    }
+    for (a, b) in [
+        (0u32, 0u32),
+        (1, 2),
+        (0xFF_FFFF, 0xFF_FFFF),
+        (0xAB_CDEF, 0x12_3456),
+    ] {
+        v.push((
+            format!("u24_u24({a},{b})"),
+            OperandPoolEntry::from_u24_u24(a, b),
+        ));
+    }
+    v
+}
+
+#[test]
+fn keleusma_writes_the_same_pool_entry_as_the_reference() {
+    // Byte identity against the reference constructors, per form, including
+    // the parity byte each of them stamps.
+    let mut vm = vm_for(WIRE_KEL);
+    for (name, want) in pool_corpus() {
+        let (cmd, args) = match want.tag() {
+            t if t == POOL_TAG_U16_U16 => {
+                let (a, b) = want.as_u16_u16();
+                (CMD_POOL_W_U16_U16, [0, i64::from(a), i64::from(b), 0, 0])
+            }
+            t if t == POOL_TAG_U16_U16_U8 => {
+                let (a, b, c) = want.as_u16_u16_u8();
+                (
+                    CMD_POOL_W_U16_U16_U8,
+                    [0, i64::from(a), i64::from(b), i64::from(c), 0],
+                )
+            }
+            t if t == POOL_TAG_U16_U16_U16 => {
+                let (a, b, c) = want.as_u16_u16_u16();
+                (
+                    CMD_POOL_W_U16_U16_U16,
+                    [0, i64::from(a), i64::from(b), i64::from(c), 0],
+                )
+            }
+            t if t == POOL_TAG_U24_U24 => {
+                let (a, b) = want.as_u24_u24();
+                (CMD_POOL_W_U24_U24, [0, i64::from(a), i64::from(b), 0, 0])
+            }
+            other => panic!("unhandled pool tag {other}"),
+        };
+        let (next, got) = run_cmd_args(&mut vm, cmd, 1, &[], &[], args, 8).expect("run");
+        assert_eq!(next, 8, "{name}: an entry is eight bytes");
+        assert_eq!(got, want.0.to_vec(), "{name}: entry bytes differ");
+    }
+}
+
+#[test]
+fn the_pool_readers_recover_every_field() {
+    let mut vm = vm_for(WIRE_KEL);
+    for (name, e) in pool_corpus() {
+        let img = e.0.as_ref();
+        let (tag, _) =
+            run_cmd_args(&mut vm, CMD_POOL_TAG, 1, img, &[], [0, 0, 0, 0, 0], 0).expect("run");
+        assert_eq!(tag, i64::from(e.tag()), "{name}: tag");
+        let (ok, _) = run_cmd_args(&mut vm, CMD_POOL_PARITY_OK, 1, img, &[], [0, 0, 0, 0, 0], 0)
+            .expect("run");
+        assert_eq!(ok, 1, "{name}: clean entry reported corrupt");
+
+        match e.tag() {
+            t if t == POOL_TAG_U16_U16 => {
+                let (a, b) = e.as_u16_u16();
+                for (k, want) in [(0i64, a), (1, b)] {
+                    let (got, _) =
+                        run_cmd_args(&mut vm, CMD_POOL_U16, 1, img, &[], [0, k, 0, 0, 0], 0)
+                            .expect("run");
+                    assert_eq!(got, i64::from(want), "{name}: u16 field {k}");
+                }
+            }
+            t if t == POOL_TAG_U16_U16_U8 => {
+                let (a, b, c) = e.as_u16_u16_u8();
+                for (k, want) in [(0i64, a), (1, b)] {
+                    let (got, _) =
+                        run_cmd_args(&mut vm, CMD_POOL_U16, 1, img, &[], [0, k, 0, 0, 0], 0)
+                            .expect("run");
+                    assert_eq!(got, i64::from(want), "{name}: u16 field {k}");
+                }
+                let (got, _) =
+                    run_cmd_args(&mut vm, CMD_POOL_ENTRY_U8, 1, img, &[], [0, 0, 0, 0, 0], 0)
+                        .expect("run");
+                assert_eq!(got, i64::from(c), "{name}: u8 field");
+            }
+            t if t == POOL_TAG_U16_U16_U16 => {
+                let (a, b, c) = e.as_u16_u16_u16();
+                for (k, want) in [(0i64, a), (1, b), (2, c)] {
+                    let (got, _) =
+                        run_cmd_args(&mut vm, CMD_POOL_U16, 1, img, &[], [0, k, 0, 0, 0], 0)
+                            .expect("run");
+                    assert_eq!(got, i64::from(want), "{name}: u16 field {k}");
+                }
+            }
+            t if t == POOL_TAG_U24_U24 => {
+                let (a, b) = e.as_u24_u24();
+                for (k, want) in [(0i64, a), (1, b)] {
+                    let (got, _) =
+                        run_cmd_args(&mut vm, CMD_POOL_U24, 1, img, &[], [0, k, 0, 0, 0], 0)
+                            .expect("run");
+                    assert_eq!(got, i64::from(want), "{name}: u24 field {k}");
+                }
+            }
+            other => panic!("unhandled tag {other}"),
+        }
+    }
+}
+
+#[test]
+fn the_pool_parity_is_an_xor_byte_not_a_popcount_bit() {
+    // The two schemes in this format differ, and conflating them is the easy
+    // mistake. An independent XOR over bytes 0 and 2..7 is computed here and
+    // compared against what Keleusma derives, so the definition is measured
+    // rather than copied from the same source twice.
+    let mut vm = vm_for(WIRE_KEL);
+    for (name, e) in pool_corpus() {
+        let want = [e.0[0], e.0[2], e.0[3], e.0[4], e.0[5], e.0[6], e.0[7]]
+            .iter()
+            .fold(0u8, |acc, b| acc ^ b);
+        let (got, _) = run_cmd_args(
+            &mut vm,
+            CMD_POOL_PARITY_OF,
+            1,
+            e.0.as_ref(),
+            &[],
+            [0, 0, 0, 0, 0],
+            0,
+        )
+        .expect("run");
+        assert_eq!(got, i64::from(want), "{name}: derived parity");
+        let (stored, _) = run_cmd_args(
+            &mut vm,
+            CMD_POOL_STORED_PARITY,
+            1,
+            e.0.as_ref(),
+            &[],
+            [0, 0, 0, 0, 0],
+            0,
+        )
+        .expect("run");
+        assert_eq!(stored, i64::from(e.0[1]), "{name}: stored parity");
+        // And it really is a byte-wide value somewhere, not always 0 or 1, or
+        // the distinction from the record's single bit would be untested.
+    }
+    assert!(
+        pool_corpus().iter().any(|(_, e)| e.0[1] > 1),
+        "no entry has a parity byte above 1, so the byte-wide claim is untested"
+    );
+}
+
+#[test]
+fn a_single_bit_flip_in_any_payload_byte_is_detected() {
+    // Exhaustive over the corpus, the six payload bytes, the tag byte, and all
+    // eight bit positions. The reference must agree on every one.
+    let mut vm = vm_for(WIRE_KEL);
+    for (name, e) in pool_corpus() {
+        for byte in [0usize, 2, 3, 4, 5, 6, 7] {
+            for bit in 0..8u32 {
+                let mut img = e.0;
+                img[byte] ^= 1 << bit;
+                let (ok, _) = run_cmd_args(
+                    &mut vm,
+                    CMD_POOL_PARITY_OK,
+                    1,
+                    img.as_ref(),
+                    &[],
+                    [0, 0, 0, 0, 0],
+                    0,
+                )
+                .expect("run");
+                assert_eq!(
+                    ok, 0,
+                    "{name}: flip of byte {byte} bit {bit} went undetected"
+                );
+                assert!(
+                    OperandPoolEntry(img).check_parity().is_err(),
+                    "{name}: reference disagreed about byte {byte} bit {bit}"
+                );
+            }
+        }
     }
 }
