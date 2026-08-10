@@ -2220,3 +2220,294 @@ fn a_variant_discriminant_of_minus_one_is_a_value_not_an_error() {
         "fixture lost its -1 discriminant"
     );
 }
+
+// =========================================================================
+// SLICE 5d — the data segment, where PRESENCE is semantic
+// =========================================================================
+
+use keleusma::wire_schema::{
+    DataInitRecord, DataSlotRecord, PrivateCompositeRecord, SharedSlotRecord,
+};
+
+const CMD_DATA_PRESENT: i64 = 55;
+const CMD_DSLOT_COUNT: i64 = 56;
+const CMD_DSLOT_NAME: i64 = 57;
+const CMD_DSLOT_VIS: i64 = 58;
+const CMD_SSLOT_COUNT: i64 = 59;
+const CMD_SSLOT_OFFSET: i64 = 60;
+const CMD_SSLOT_KIND: i64 = 61;
+const CMD_SSLOT_LEN: i64 = 62;
+const CMD_PCOMP_COUNT: i64 = 63;
+const CMD_PCOMP_SLOT: i64 = 64;
+const CMD_PCOMP_OFFSET: i64 = 65;
+const CMD_DINIT_COUNT: i64 = 66;
+const CMD_DINIT_FIRST: i64 = 67;
+const CMD_DINIT_RANGE_COUNT: i64 = 68;
+
+#[test]
+fn the_slice_5d_offsets_and_kinds_match_the_schema() {
+    assert_eq!(kel_const("dslot_stride"), DataSlotRecord::STRIDE as i64);
+    assert_eq!(
+        kel_const("dslot_off_name"),
+        DataSlotRecord::OFFSET_NAME as i64
+    );
+    assert_eq!(
+        kel_const("dslot_off_visibility"),
+        DataSlotRecord::OFFSET_VISIBILITY as i64
+    );
+
+    assert_eq!(kel_const("sslot_stride"), SharedSlotRecord::STRIDE as i64);
+    assert_eq!(
+        kel_const("sslot_off_offset"),
+        SharedSlotRecord::OFFSET_OFFSET as i64
+    );
+    assert_eq!(
+        kel_const("sslot_off_kind"),
+        SharedSlotRecord::OFFSET_KIND as i64
+    );
+    assert_eq!(
+        kel_const("sslot_off_len"),
+        SharedSlotRecord::OFFSET_LEN as i64
+    );
+
+    assert_eq!(
+        kel_const("pcomp_stride"),
+        PrivateCompositeRecord::STRIDE as i64
+    );
+    assert_eq!(
+        kel_const("pcomp_off_slot"),
+        PrivateCompositeRecord::OFFSET_SLOT as i64
+    );
+    assert_eq!(
+        kel_const("pcomp_off_offset"),
+        PrivateCompositeRecord::OFFSET_OFFSET as i64
+    );
+
+    assert_eq!(kel_const("dinit_stride"), DataInitRecord::STRIDE as i64);
+    assert_eq!(
+        kel_const("dinit_off_first"),
+        DataInitRecord::OFFSET_FIRST as i64
+    );
+    assert_eq!(
+        kel_const("dinit_off_count"),
+        DataInitRecord::OFFSET_COUNT as i64
+    );
+
+    assert_eq!(kel_const("kind_data_slots"), i64::from(kind::DATA_SLOTS));
+    assert_eq!(
+        kel_const("kind_shared_layout"),
+        i64::from(kind::SHARED_LAYOUT)
+    );
+    assert_eq!(
+        kel_const("kind_private_composite"),
+        i64::from(kind::PRIVATE_COMPOSITE)
+    );
+    assert_eq!(kel_const("kind_data_init"), i64::from(kind::DATA_INIT));
+}
+
+#[test]
+fn an_absent_data_layout_is_distinguishable_from_an_empty_one() {
+    // THE POINT OF THIS SLICE. A module with no `data` block and one whose data
+    // block is empty are DIFFERENT PROGRAMS. Absence is carried by the region
+    // not existing, emptiness by it existing with no records. Every other count
+    // in this file returns 0 for absence, which would collapse the two here.
+    let mut vm = vm_for(WIRE_KEL);
+
+    // (a) No DATA_SLOTS region at all.
+    let mut b = keleusma_wire::WireBuilder::new();
+    let p = b.region(kind::STRING_POOL, 0).expect("pool");
+    b.push(p, b"x");
+    let absent = b.finish().expect("finish");
+    let (present, _) =
+        run_cmd_args(&mut vm, CMD_DATA_PRESENT, 1, &absent, &[], [0, 0, 0, 0], 0).expect("run");
+    let (count, _) =
+        run_cmd_args(&mut vm, CMD_DSLOT_COUNT, 1, &absent, &[], [0, 0, 0, 0], 0).expect("run");
+    assert_eq!(present, 0, "no DATA_SLOTS region means no data layout");
+    assert_eq!(count, -1, "an absent table must not report zero slots");
+
+    // (b) A DATA_SLOTS region that exists and is empty.
+    let mut b = keleusma_wire::WireBuilder::new();
+    let p = b.region(kind::STRING_POOL, 0).expect("pool");
+    b.push(p, b"x");
+    b.region(kind::DATA_SLOTS, 0).expect("empty slots");
+    let empty = b.finish().expect("finish");
+    let (present, _) =
+        run_cmd_args(&mut vm, CMD_DATA_PRESENT, 2, &empty, &[], [0, 0, 0, 0], 0).expect("run");
+    let (count, _) =
+        run_cmd_args(&mut vm, CMD_DSLOT_COUNT, 2, &empty, &[], [0, 0, 0, 0], 0).expect("run");
+    assert_eq!(
+        present, 1,
+        "an empty DATA_SLOTS region still means a layout exists"
+    );
+    assert_eq!(count, 0, "an empty table has zero slots");
+
+    // The two must not be confusable, which is the whole assertion.
+    assert_ne!(
+        (0, -1),
+        (1, 0),
+        "absent and empty must produce different answers"
+    );
+}
+
+#[allow(clippy::type_complexity)]
+fn data_artifact() -> (
+    Vec<u8>,
+    Vec<DataSlotRecord>,
+    Vec<SharedSlotRecord>,
+    Vec<PrivateCompositeRecord>,
+    Vec<DataInitRecord>,
+) {
+    let dslots = vec![
+        DataSlotRecord {
+            name: 1,
+            visibility: 1,
+            reserved: 0,
+            reserved2: 0,
+        },
+        DataSlotRecord {
+            name: 2,
+            visibility: 2,
+            reserved: 0,
+            reserved2: 0,
+        },
+    ];
+    let sslots = vec![
+        SharedSlotRecord {
+            offset: 0,
+            kind: 3,
+            reserved: 0,
+            len: 8,
+        },
+        SharedSlotRecord {
+            offset: 8,
+            kind: 4,
+            reserved: 0,
+            len: 65535,
+        },
+    ];
+    let pcomps = vec![
+        PrivateCompositeRecord {
+            slot: 0,
+            reserved: 0,
+            offset: 0,
+        },
+        PrivateCompositeRecord {
+            slot: 65535,
+            reserved: 0,
+            offset: 4_000_000_000,
+        },
+    ];
+    let dinits = vec![DataInitRecord { first: 3, count: 2 }];
+
+    let mut b = keleusma_wire::WireBuilder::new();
+    let push_all = |b: &mut keleusma_wire::WireBuilder, k: u16, bufs: &[[u8; 8]]| {
+        let id = b.region(k, 0).expect("region");
+        for x in bufs {
+            b.push(id, x);
+        }
+    };
+    let enc8 = |f: &dyn Fn(&mut [u8; 8])| {
+        let mut buf = [0u8; 8];
+        f(&mut buf);
+        buf
+    };
+    let d: Vec<[u8; 8]> = dslots
+        .iter()
+        .map(|r| {
+            enc8(&|b: &mut [u8; 8]| {
+                r.write_record(b).expect("e");
+            })
+        })
+        .collect();
+    let s: Vec<[u8; 8]> = sslots
+        .iter()
+        .map(|r| {
+            enc8(&|b: &mut [u8; 8]| {
+                r.write_record(b).expect("e");
+            })
+        })
+        .collect();
+    let c: Vec<[u8; 8]> = pcomps
+        .iter()
+        .map(|r| {
+            enc8(&|b: &mut [u8; 8]| {
+                r.write_record(b).expect("e");
+            })
+        })
+        .collect();
+    let i: Vec<[u8; 8]> = dinits
+        .iter()
+        .map(|r| {
+            enc8(&|b: &mut [u8; 8]| {
+                r.write_record(b).expect("e");
+            })
+        })
+        .collect();
+    push_all(&mut b, kind::DATA_SLOTS, &d);
+    push_all(&mut b, kind::SHARED_LAYOUT, &s);
+    push_all(&mut b, kind::PRIVATE_COMPOSITE, &c);
+    push_all(&mut b, kind::DATA_INIT, &i);
+    (b.finish().expect("finish"), dslots, sslots, pcomps, dinits)
+}
+
+#[test]
+fn the_data_segment_tables_read_back_field_for_field() {
+    // The fixture uses boundary values deliberately: a `len` of 65535 and a
+    // `slot` of 65535 are the largest a u16 holds, and an `offset` of four
+    // billion exceeds i32, so a narrow or signed read of any of them shows up.
+    let (art, dslots, sslots, pcomps, dinits) = data_artifact();
+    let mut vm = vm_for(WIRE_KEL);
+    let n = 4i64;
+
+    for (cmd, want, what) in [
+        (CMD_DSLOT_COUNT, dslots.len() as i64, "data slots"),
+        (CMD_SSLOT_COUNT, sslots.len() as i64, "shared slots"),
+        (CMD_PCOMP_COUNT, pcomps.len() as i64, "private composites"),
+        (CMD_DINIT_COUNT, dinits.len() as i64, "data inits"),
+    ] {
+        let (got, _) = run_cmd_args(&mut vm, cmd, n, &art, &[], [0, 0, 0, 0], 0).expect("run");
+        assert_eq!(got, want, "{what} count");
+    }
+
+    for (i, r) in dslots.iter().enumerate() {
+        for (cmd, want, what) in [
+            (CMD_DSLOT_NAME, i64::from(r.name), "name"),
+            (CMD_DSLOT_VIS, i64::from(r.visibility), "visibility"),
+        ] {
+            let (got, _) =
+                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0], 0).expect("run");
+            assert_eq!(got, want, "data slot {i} {what}");
+        }
+    }
+    for (i, r) in sslots.iter().enumerate() {
+        for (cmd, want, what) in [
+            (CMD_SSLOT_OFFSET, i64::from(r.offset), "offset"),
+            (CMD_SSLOT_KIND, i64::from(r.kind), "kind"),
+            (CMD_SSLOT_LEN, i64::from(r.len), "len"),
+        ] {
+            let (got, _) =
+                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0], 0).expect("run");
+            assert_eq!(got, want, "shared slot {i} {what}");
+        }
+    }
+    for (i, r) in pcomps.iter().enumerate() {
+        for (cmd, want, what) in [
+            (CMD_PCOMP_SLOT, i64::from(r.slot), "slot"),
+            (CMD_PCOMP_OFFSET, i64::from(r.offset), "offset"),
+        ] {
+            let (got, _) =
+                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0], 0).expect("run");
+            assert_eq!(got, want, "private composite {i} {what}");
+        }
+    }
+    for (i, r) in dinits.iter().enumerate() {
+        for (cmd, want, what) in [
+            (CMD_DINIT_FIRST, i64::from(r.first), "first"),
+            (CMD_DINIT_RANGE_COUNT, i64::from(r.count), "count"),
+        ] {
+            let (got, _) =
+                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0], 0).expect("run");
+            assert_eq!(got, want, "data init {i} {what}");
+        }
+    }
+}

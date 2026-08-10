@@ -943,6 +943,114 @@ fn elay_variant_disc(i: Word, k: Word) -> Word {
     )
 }
 
+// --- SLICE 5d: the data segment ------------------------------------------
+//
+// PRESENCE IS SEMANTIC HERE, WHICH IT IS NOWHERE ELSE IN THIS FILE.
+//
+// An absent `DATA_SLOTS` region means the module has NO data layout; an empty
+// one means it has a layout with no slots. Those are different programs, and
+// collapsing them is a silent wrong answer rather than a fault. Every other
+// count accessor in this file returns 0 for an absent region, which is right
+// for them and would be WRONG here — so the data segment splits the question in
+// two, exactly as slice 5c split a variant's bound from its value:
+// `data_layout_present` first, then the counts.
+
+fn kind_data_slots() -> Word { 0x001A }
+fn kind_shared_layout() -> Word { 0x001B }
+fn kind_private_composite() -> Word { 0x001C }
+fn kind_data_init() -> Word { 0x001D }
+
+// DataSlotRecord: name u32 @0, visibility u8 @4, reserved u8 @5. Packed to six
+// bytes, so the stride is the word it rounds up to, not the packed size.
+fn dslot_stride() -> Word { 8 }
+fn dslot_off_name() -> Word { 0 }
+fn dslot_off_visibility() -> Word { 4 }
+
+// SharedSlotRecord: offset u32 @0, kind u8 @4, reserved u8 @5, len u16 @6.
+fn sslot_stride() -> Word { 8 }
+fn sslot_off_offset() -> Word { 0 }
+fn sslot_off_kind() -> Word { 4 }
+fn sslot_off_len() -> Word { 6 }
+
+// PrivateCompositeRecord: slot u16 @0, reserved u16 @2, offset u32 @4.
+fn pcomp_stride() -> Word { 8 }
+fn pcomp_off_slot() -> Word { 0 }
+fn pcomp_off_offset() -> Word { 4 }
+
+// DataInitRecord: first u32 @0, count u32 @4. A range into the constant table.
+fn dinit_stride() -> Word { 8 }
+fn dinit_off_first() -> Word { 0 }
+fn dinit_off_count() -> Word { 4 }
+
+// 1 when the module has a data layout at all. Ask this BEFORE any count below;
+// a zero from `data_slot_count` means "a layout with no slots", not "no layout".
+fn data_layout_present() -> Word {
+    if dir_find(kind_data_slots()) == 0 - 1 { 0 } else { 1 }
+}
+
+// The counts. Each returns 0 - 1 when its region is absent rather than 0, so an
+// absent table is never mistaken for an empty one at any level, not just at the
+// top. A caller that wants the lenient reading can compare against 0 - 1 itself.
+fn data_slot_count() -> Word {
+    if dir_find(kind_data_slots()) == 0 - 1 { 0 - 1 } else {
+        rec_count(dir_find(kind_data_slots()), dslot_stride())
+    }
+}
+
+fn shared_slot_count() -> Word {
+    if dir_find(kind_shared_layout()) == 0 - 1 { 0 - 1 } else {
+        rec_count(dir_find(kind_shared_layout()), sslot_stride())
+    }
+}
+
+fn privcomp_count() -> Word {
+    if dir_find(kind_private_composite()) == 0 - 1 { 0 - 1 } else {
+        rec_count(dir_find(kind_private_composite()), pcomp_stride())
+    }
+}
+
+fn datainit_count() -> Word {
+    if dir_find(kind_data_init()) == 0 - 1 { 0 - 1 } else {
+        rec_count(dir_find(kind_data_init()), dinit_stride())
+    }
+}
+
+fn data_slot_name(i: Word) -> Word {
+    rec_u32(dir_find(kind_data_slots()), dslot_stride(), i, dslot_off_name())
+}
+
+fn data_slot_visibility(i: Word) -> Word {
+    rec_u8(dir_find(kind_data_slots()), dslot_stride(), i, dslot_off_visibility())
+}
+
+fn shared_slot_offset(i: Word) -> Word {
+    rec_u32(dir_find(kind_shared_layout()), sslot_stride(), i, sslot_off_offset())
+}
+
+fn shared_slot_kind(i: Word) -> Word {
+    rec_u8(dir_find(kind_shared_layout()), sslot_stride(), i, sslot_off_kind())
+}
+
+fn shared_slot_len(i: Word) -> Word {
+    rec_u16(dir_find(kind_shared_layout()), sslot_stride(), i, sslot_off_len())
+}
+
+fn privcomp_slot(i: Word) -> Word {
+    rec_u16(dir_find(kind_private_composite()), pcomp_stride(), i, pcomp_off_slot())
+}
+
+fn privcomp_offset(i: Word) -> Word {
+    rec_u32(dir_find(kind_private_composite()), pcomp_stride(), i, pcomp_off_offset())
+}
+
+fn datainit_first(i: Word) -> Word {
+    rec_u32(dir_find(kind_data_init()), dinit_stride(), i, dinit_off_first())
+}
+
+fn datainit_range_count(i: Word) -> Word {
+    rec_u32(dir_find(kind_data_init()), dinit_stride(), i, dinit_off_count())
+}
+
 // THE DISPATCH IS SPLIT INTO CHAINS, AND THE REASON IS A HARD LANGUAGE LIMIT.
 //
 // The parser rejects an expression nested more than 24 deep, with
@@ -1023,11 +1131,30 @@ fn dispatch_runs(cmd: Word) -> Word {
     if cmd == 52 { elay_variant_in_range(wire.warg, wire.warg2) } else {
     if cmd == 53 { elay_variant_name(wire.warg, wire.warg2) } else {
     if cmd == 54 { elay_variant_disc(wire.warg, wire.warg2) } else {
-    0 - 99 }}}}}}}}}}}}}}}}}
+    0 - 95 }}}}}}}}}}}}}}}}}
+}
+
+fn dispatch_data(cmd: Word) -> Word {
+    if cmd == 55 { data_layout_present() } else {
+    if cmd == 56 { data_slot_count() } else {
+    if cmd == 57 { data_slot_name(wire.warg) } else {
+    if cmd == 58 { data_slot_visibility(wire.warg) } else {
+    if cmd == 59 { shared_slot_count() } else {
+    if cmd == 60 { shared_slot_offset(wire.warg) } else {
+    if cmd == 61 { shared_slot_kind(wire.warg) } else {
+    if cmd == 62 { shared_slot_len(wire.warg) } else {
+    if cmd == 63 { privcomp_count() } else {
+    if cmd == 64 { privcomp_slot(wire.warg) } else {
+    if cmd == 65 { privcomp_offset(wire.warg) } else {
+    if cmd == 66 { datainit_count() } else {
+    if cmd == 67 { datainit_first(wire.warg) } else {
+    if cmd == 68 { datainit_range_count(wire.warg) } else {
+    0 - 99 }}}}}}}}}}}}}}
 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {
     if cmd < 26 { dispatch_schema(cmd) } else {
-    if cmd < 38 { dispatch_consts(cmd) } else { dispatch_runs(cmd) } } }
+    if cmd < 38 { dispatch_consts(cmd) } else {
+    if cmd < 55 { dispatch_runs(cmd) } else { dispatch_data(cmd) } } } }
 }
