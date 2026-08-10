@@ -105,18 +105,38 @@ an identity, the roadmap's Order-1 row should say so, because it currently impli
 **Method.** Force `program.fn_expr_types` empty between the recording pass and emission — one line
 — and re-run the existing byte-identity corpus over the ten stages.
 
-**Decides.**
+**RESULT (2026-08-09): UNCHANGED. The emitter does not need the table for the subset.**
 
-- **Unchanged output** means the structural fallback covers everything the subset exercises, and
-  the Order-1 type checker reduces to obligation 1, rejection, alone. That is a large reduction.
-- **Changed output** localises the dependency exactly: the diff names the constructs where the
-  recorded type is load-bearing, and that list is the specification for what must be inferred in
-  Keleusma.
+Clearing `program.fn_expr_types` between the recording pass and emission leaves **all ten stage
+modules byte-identical**, and leaves ten deliberately composite-heavy probe programs byte-identical
+too: nested structs, arrays of structs, a struct in a tuple, an enum struct payload, a function
+returning a struct, and a match binding its payload.
 
-Either result is useful, which is the property a good experiment has.
+**The scoping overstated the cost, which is worth correcting.** This does NOT need the self-host
+corpus. The question is whether the *reference emitter's* output changes, which is ten reference
+compiles taking seconds rather than the Keleusma-written pipeline. The "needs a quiet machine"
+caution applied to a larger experiment than the one actually required.
 
-**Cost.** A one-line change plus an existing corpus run. **It needs a quiet machine**, because the
-self-host corpus is the expensive suite; it should not run concurrently with a gate.
+**Three controls, because "no change" is also what a broken intervention looks like:**
+
+1. **The table is populated.** Replaying the pipeline by hand and counting gives **27,290 recorded
+   entries** across the ten stages, so clearing it is a real intervention rather than a no-op.
+2. **The table is consulted.** Instrumenting the single consumption site counted **322 hits and
+   zero misses** while compiling `lexer.kel`, and 2 and 3 hits on the small cases. Every call to
+   `infer_expr_type` found an entry, so the branch is live and the clear certainly reaches it.
+3. **The digest discriminates.** The first attempt hashed each artifact with `crc32` and produced
+   the SAME value for all ten modules despite wildly different lengths — because a CRC over a
+   message with its own CRC trailer appended is a fixed residue. That is a real property of the
+   format and a degenerate digest. Replaced with FNV-1a, which yields ten distinct values. Left
+   unnoticed, the spike would have "passed" while measuring nothing at all.
+
+**Conclusion.** The recorded table is consulted constantly, and its answers **agree with the
+structural fallback everywhere the subset reaches**. For Order 1, obligation 2 is therefore empty
+and **the self-hosted type checker reduces to obligation 1, rejection, alone.**
+
+**What this does not show.** No program was found where the two paths differ, which is not proof
+that none exists. The search was ten hand-picked candidates plus the ten stages, not an exhaustive
+one, and the full language of Order 6 may well contain such a case.
 
 **A caveat to state up front.** Byte identity on the stages shows the two paths *agree there*, not
 that they agree in general. Spike B measures the subset, which is precisely what Order 1 is scoped
@@ -126,7 +146,7 @@ to, and says nothing about the full language of Order 6.
 
 1. **Finish wire-format serialization**, slices 5 to 7. In progress, sliced, harness built.
 2. **Spike A**, cheap, and it may retire a blocker.
-3. **Spike B**, on a quiet machine.
+3. ~~**Spike B.**~~ **Done. Obligation 2 is empty for the subset.**
 4. **Then write the implementation plan**, sliced the way the wire-format plan is, with rejection
    and inference as separate tracks and their real sizes known rather than guessed.
 
