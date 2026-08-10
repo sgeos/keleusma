@@ -1345,3 +1345,48 @@ The general rule this keeps re-teaching, now stated where the next reader will
 hit it: **a chunk-level count is not an increment.** Before calling any
 population "unblocked", check whether a whole module clears, and check what the
 inputs of the freed code are reachable from.
+
+## The shape stack's seeding precondition HOLDS, measured
+
+The restated plan is a per-value width stack inside `native_codegen`, seeded
+from `module.signatures`. That plan carried an unexamined precondition worth
+naming before building on it: **the signature table must actually be present and
+carry real shapes.** An absent or uniformly-`Top` table seeds nothing and reduces
+the plan to recovering everything from the op stream alone.
+
+This mattered more than it sounds, because it would have failed silently. The
+typed verifier is explicitly sound under an absent table — it DEFERS rather than
+rejects — so an all-`Top` corpus is perfectly consistent with a green suite.
+Nothing else measures it.
+
+Measured by `spike_report_signature_seeding_quality` over 58 modules and 496
+chunks:
+
+| Quantity | Count |
+|---|---|
+| Chunks with a signature entry | **496 of 496** |
+| Parameter shapes: `Scalar` (known width) | 613 |
+| Parameter shapes: `Flat` (known body size) | 13 |
+| Parameter shapes: `Top` (unknown) | **7** |
+| Return shapes known / `Top` | 495 / 1 |
+| Chunks needing width recovery whose every parameter is seeded | **22 of 22** |
+
+The table is real, essentially complete at 1.1 percent `Top` parameters, and
+**fully seeded across the entire population the plan has to serve.** The
+precondition holds.
+
+Two honest limits on that conclusion:
+
+- **Seeding is necessary, not sufficient.** This establishes that the stack
+  starts from solid ground. It does not establish that every INTERMEDIATE value
+  is recoverable — that a width is known for each of the `count` operands at
+  every `NewComposite` site. Settling that needs the full abstract
+  interpretation, which is the increment itself rather than a probe of it.
+- Two of 58 modules carry no table while every chunk has an entry, which means
+  those two declare no chunks. Benign, and noted so the arithmetic is not read
+  as an inconsistency.
+
+The enabling primitives are all already `pub`: `verify::op_depth_effect`,
+`ScalarKind::size_in_bytes`, `ChunkSignature`, `WireShape`, `AbsVal`, `ChunkSig`.
+**The increment needs no change to any file outside `native_codegen/`**, no
+opcode, and no `BYTECODE_VERSION` bump.

@@ -428,6 +428,102 @@ fn spike_report_reads_only_conjunction() {
     println!("================\n");
 }
 
+/// SEEDING PRECONDITION for the proposed shape stack.
+///
+/// The restated plan is a per-value width stack living inside `native_codegen`,
+/// seeded from `module.signatures` — the typed verifier's `ChunkSignature`
+/// table, which the reference compiler already populates and which is `pub`
+/// along with `WireShape`. That plan has an unexamined precondition: the table
+/// must actually be present and carry real shapes. A table that is absent, or
+/// present and uniformly `WireShape::Top`, seeds nothing and the plan collapses
+/// to "recover everything from the op stream alone".
+///
+/// The typed verifier is explicitly sound under an absent table — it defers
+/// rather than rejects — so an all-`Top` corpus would be silently consistent
+/// with a green test suite. Nothing else measures this, which is exactly the
+/// shape of assumption this branch keeps getting caught by.
+///
+/// Reports the census. The one assertion guards against measuring nothing.
+#[test]
+fn spike_report_signature_seeding_quality() {
+    let (mut modules, mut with_table, mut chunks_seen, mut chunks_with_entry) = (0, 0, 0, 0);
+    let (mut p_top, mut p_scalar, mut p_flat) = (0usize, 0usize, 0usize);
+    let (mut ret_top, mut ret_known) = (0usize, 0usize);
+    // Restricted to the population the plan actually has to serve.
+    let (mut needs_recovery_chunks, mut needs_recovery_seeded) = (0usize, 0usize);
+
+    for path in &corpus_sources() {
+        let Ok(src) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Ok(toks) = tokenize(&src) else { continue };
+        let Ok(ast) = parse(&toks) else { continue };
+        let Ok(m) = compile(&ast) else { continue };
+        modules += 1;
+        if !m.signatures.is_empty() {
+            with_table += 1;
+        }
+        let wb = word_bytes_of(&m);
+
+        for (i, chunk) in m.chunks.iter().enumerate() {
+            chunks_seen += 1;
+            let sig = m.signatures.get(i);
+            if sig.is_some() {
+                chunks_with_entry += 1;
+            }
+            if let Some(s) = sig {
+                for p in &s.params {
+                    match p {
+                        keleusma::bytecode::WireShape::Top => p_top += 1,
+                        keleusma::bytecode::WireShape::Scalar { .. } => p_scalar += 1,
+                        keleusma::bytecode::WireShape::Flat { .. } => p_flat += 1,
+                    }
+                }
+                match s.ret {
+                    keleusma::bytecode::WireShape::Top => ret_top += 1,
+                    _ => ret_known += 1,
+                }
+            }
+
+            if classify_ops(&chunk.ops, wb).0 == Verdict::NeedsWidthRecovery {
+                needs_recovery_chunks += 1;
+                // "Seeded" here means every declared parameter has a known
+                // shape, which is the condition for the stack to start from
+                // solid ground rather than from Top.
+                let seeded = sig.is_some_and(|s| {
+                    s.params.len() >= chunk.param_count as usize
+                        && s.params
+                            .iter()
+                            .all(|p| !matches!(p, keleusma::bytecode::WireShape::Top))
+                });
+                if seeded {
+                    needs_recovery_seeded += 1;
+                }
+            }
+        }
+    }
+
+    println!("\n================ SEEDING: is the signature table real?");
+    println!("  modules                        : {modules}");
+    println!("  ... carrying a signature table : {with_table}");
+    println!("  chunks                         : {chunks_seen}");
+    println!("  ... with a table entry         : {chunks_with_entry}");
+    println!("\n  parameter shapes across all entries:");
+    println!("   {p_scalar:5}  Scalar (known width)");
+    println!("   {p_flat:5}  Flat   (known composite body size)");
+    println!("   {p_top:5}  Top    (UNKNOWN — seeds nothing)");
+    println!("\n  return shapes: {ret_known} known, {ret_top} Top");
+    println!("\n  the population the plan must serve:");
+    println!("   {needs_recovery_chunks:5}  chunks needing width recovery");
+    println!("   {needs_recovery_seeded:5}  ... whose every parameter is seeded");
+    println!("================\n");
+
+    assert!(
+        chunks_seen > 50,
+        "measured almost nothing; corpus paths are probably wrong"
+    );
+}
+
 /// MUST-NOT-FIRE control for the classifier.
 ///
 /// A classifier that answered `ReadsOnly` unconditionally would produce the
