@@ -1390,3 +1390,102 @@ The enabling primitives are all already `pub`: `verify::op_depth_effect`,
 `ScalarKind::size_in_bytes`, `ChunkSignature`, `WireShape`, `AbsVal`, `ChunkSig`.
 **The increment needs no change to any file outside `native_codegen/`**, no
 opcode, and no `BYTECODE_VERSION` bump.
+
+## DESIGN for the next increment: the per-value width stack
+
+Specified by reading, while the first full gate runs on `9ac2be3`. Deliberately
+no code and no compilation: a build now would contend with the gate for cores,
+and I had just declined to push for exactly that reason. Everything below is
+established from source, with the file and mechanism named so it can be checked.
+
+### What the VM actually does, which is what the lowering must match
+
+`Op::NewComposite` → `pack_flat_in_arena(&values, min_bytes, wb, fb, arena)`:
+
+1. **Operand order.** `values` is `self.stack.drain(self.stack.len() - count..)`,
+   and the packer walks it with `off` starting at zero. So **field 0 is the
+   DEEPEST popped value and the last field is the top of stack.** Getting this
+   backwards produces a body that is the right SIZE and wrong throughout, which
+   no size check catches — it needs the differential oracle.
+2. **No inter-field padding.** `off += field` exactly, per value. Alignment is
+   not respected between fields; only trailing slack is zeroed, and only when
+   `min_bytes` pads an enum to its widest variant.
+3. **Size is the SUM of per-value widths**, never `count * word_bytes`. For a
+   `Tuple` or `Array` the VM passes `min_bytes = 0` and ignores the baked
+   `byte_size` entirely; for a `Struct` or `Enum` that value is a floor.
+4. **Scalars are little-endian**, via `write_scalar_le`.
+
+### The width table (`ScalarKind::size_in_bytes`, `src/value_layout.rs:109`)
+
+| Kind | Bytes | Note |
+|---|---|---|
+| `Unit` | **0** | Occupies nothing. A `Unit` field shifts no offset. |
+| `Bool` | 1 | |
+| `Byte` | 1 | |
+| `Int`, `Fixed`, `Opaque` | `word_bytes` | |
+| `Float` | `float_bytes` | Behind the `floats` feature |
+| `Text` | **`2 * word_bytes`** | A `(ptr, len)` `KStr` pair, not one word |
+
+The two that will bite are `Unit` at zero and `Text` at two words. Both are
+plausible to assume wrong, and both are silent when assumed wrong.
+
+### Result shape per lowered op
+
+Arities come from `verify::op_depth_effect`, which is `pub` and authoritative;
+this table supplies only the KINDS. Two entries there are easy to get wrong from
+the opcode name, and both are load-bearing:
+
+- **The checked family is `(2, 1)`** — pops two and pushes **three**,
+  `(low, high, flag)` with `low` deepest, so the following `PopN(2)` discards
+  `high` and `flag`. `CheckedNeg` is `(1, 2)`. `GRAMMAR.md` states the triple in
+  the wrong order; the arm bindings are right.
+- **`SetLocal` is `(1, -1)`** — it POPS. It does not merely copy the top.
+
+| Op | Result shape |
+|---|---|
+| `Const(i)` | Kind of `chunk.constants[i]`; a composite constant is a composite shape |
+| `PushImmediate` | `Int` |
+| `GetLocal(i)` / `SetLocal(i)` | The local's tracked shape; `SetLocal` writes it and pops |
+| `Dup` | Duplicate of top |
+| `CheckedAdd`/`Sub`/`Mul`/`Div`/`Mod`/`Neg` | `(Int, Int, flag)`, `low` deepest |
+| `Div`, `Mod`, `CheckedDiv`, `CheckedMod` | `Int` |
+| `CmpEq`…`CmpGe`, `Not`, `IsEnum`, `IsStruct` | `Bool` |
+| `BitAnd`/`BitOr`/`BitXor`/`Shl`/`Shr` | **Propagated from the operands** — `Byte` in, `Byte` out |
+| `WordToByte` / `ByteToWord` | `Byte` / `Int` |
+| `GetData(slot)` | `SharedSlotLayout` kind for the slot |
+| `Call(idx, _)` | `module.signatures[idx].ret` |
+| `GetField`/`GetTupleField`/`GetEnumField`/`GetIndex` | The baked `kind`; the `FlatNested` forms give `size` and `variant` |
+| `Len` | `Int` |
+| `NewComposite` | `Flat { kind, size = Σ popped widths }` |
+
+The bitwise and shift row is the one that needs propagation rather than a
+constant: `Byte` is admitted through promote-operate-truncate masking, so the
+result width follows the operands and is not always a word.
+
+### The soundness rule
+
+**Unknown is refused, never guessed.** An operand whose width the stack cannot
+establish makes the enclosing `NewComposite` a `LowerError::UnsupportedOp`, not a
+packed body at an assumed width. Imprecision then costs coverage and cannot cost
+correctness, which is the same posture `check_word_width` and
+`resolve_shared_scalar` already take. This matters because the corpus makes
+guessing look safe: `count * word_bytes == byte_size` holds at 238 of 239 sites.
+
+### The oracle
+
+Not "the tests pass". The lowering's computed body size and field offsets must
+agree with what the VM actually packs, so the test builds the same composite both
+ways and compares **the body bytes**, not just the return value — the same shape
+as `tests/shared_data.rs`, which compares the host buffer byte for byte. A
+size-only check would pass on a correctly-sized body packed in reverse order,
+which is precisely the failure mode point 1 above makes reachable.
+
+Mutations that must fire, by construction: reverse the operand order; drop the
+`Unit`-is-zero case; treat `Text` as one word; assume uniform word packing.
+
+### Why this needs nothing outside `native_codegen/`
+
+`AbsVal`, `ChunkSig`, `ChunkSignature`, `WireShape`, `verify::op_depth_effect`
+and `ScalarKind::size_in_bytes` are all already `pub`. The seeding precondition is
+measured and holds at 22 of 22 chunks. No opcode, no `BYTECODE_VERSION` bump, and
+no file this branch does not own.
