@@ -2785,3 +2785,67 @@ trapping on both backends because a host failure has no safe default.
 Worth recording against the ordering: **Workstream F is implementation against a
 finished spec**, which makes it cheaper than its position in the workstream list
 suggests, and cheaper than anything still requiring design.
+
+## The architecture's ONE unaudited item is only half-closed, and my own test is why it looks closed
+
+R4.4 records the toolchain at **high** confidence and, notably, credits this
+branch: the inkwell 0.8 → 0.9 correction, the LLVM 22.1 pin, and the MacPorts
+`-L native=/opt/local/lib` link path were all fed back from here. The
+boundary-polling protocol worked in that direction and there is no conflict to
+report — my toolchain matches the resolved decision exactly.
+
+R4.4 leaves precisely one thing open, at **medium** confidence:
+
+> *"Whether inkwell exposes `coro.id.retcon` with a safe wrapper still requires a
+> source-tree audit when implementation begins."*
+
+### The audit, done
+
+**inkwell 0.9.0 has no coroutine wrapper at all.** Grepping its source for
+`coro` returns exactly one file, `passes.rs`, and that is a pass-pipeline name
+rather than an intrinsic surface. There is no `coro_id`, no `retcon`, no
+`coro_begin`, no `coro_suspend`.
+
+That is not fatal, and the reason is already recorded in
+`tests/coroutine_feasibility.rs`: the generic `Intrinsic::find` plus
+`get_declaration` route sidesteps the missing wrapper entirely, by asking LLVM
+for the intrinsic by name rather than needing inkwell to model its `token` type.
+
+### But my own test is weaker than it looks, in the way that matters
+
+Two tests cover this and they are **not equally strong**:
+
+| Family | `Intrinsic::find` | `get_declaration` |
+|---|---|---|
+| Switch-resume (`coro.id`, `begin`, `suspend`, …) | yes | **yes** |
+| Returned-continuation (`coro.id.retcon`, `.retcon.once`) | yes | **NO** |
+
+`find` proves LLVM knows the **name**. `get_declaration` proves inkwell can
+actually **emit a declaration**, which is the thing R4.4 is asking about and the
+thing Workstream B would fail on. `coro.id.retcon` takes allocator and
+deallocator function pointers, so it is a strong candidate for being overloaded —
+exactly the case where `find` succeeds and declaration does not, since
+`get_declaration` returns `None` for an overloaded intrinsic given no overload
+types.
+
+So the family the **architecture actually specifies** is validated only by a name
+lookup, while the family it does *not* specify is validated properly. That is the
+wrong way round, and it is my test that makes the item look closed when it is
+half open.
+
+**This is the must-fire problem again.** A test asserting `find(...).is_some()`
+cannot fail for the reason that would actually block the workstream. It is not
+vacuous — the name genuinely might have been absent — but it does not test
+declarability, and declarability is the question.
+
+### Queued, small, and it settles a medium-confidence item in the architecture
+
+Extend `the_returned_continuation_family_exists_as_well` to attempt
+`get_declaration` for both retcon intrinsics, supplying overload types where
+required, and to say plainly in its failure message that a `None` here forces
+either the `coro_intrinsics.rs` llvm-sys escape hatch R4.4 anticipates or the
+switched-resume form.
+
+Whichever way it goes is worth knowing before Workstream B starts, and it
+converts R4.4's confidence on that clause from medium to measured. Needs
+compilation, so it joins the queue.
