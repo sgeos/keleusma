@@ -1944,3 +1944,37 @@ constants decides it, and that needs a corpus count, which needs compilation.
 Queued with the rest. Recording the question rather than guessing the answer,
 since the last time this document guessed at a distribution it was wrong by the
 margin that mattered.
+
+## The queued fixes are WRITTEN, not merely decided
+
+All three are prepared as an anchored patch and the anchors are dry-verified
+against the live source — four replacements, each matching exactly once. The
+post-gate work is therefore apply, compile, test, rather than think, write,
+compile, test.
+
+The patch lives in the session scratchpad, which is **not durable**. It does not
+need to be: each change is specified below tightly enough to rewrite from this
+document alone, which is the form that survives.
+
+| Fix | Site | Change |
+|---|---|---|
+| 1 | after the parameter stores in `lower_chunk_body` | store `i64t.const_zero()` into `locals[param_count..]` |
+| 2 | after the op loop, before the `stack_overflow` check | if `!dead` and the insert block has no terminator, `build_return` of `st.pop()` when `st.depth > 0` else zero |
+| 3a | `LowerError` | new `InvalidIr(String)` variant plus its `Display` arm |
+| 3b | end of `lower_module` | `module.verify().map_err(LowerError::InvalidIr)?` before `Ok(declared)` |
+
+Two details that are easy to get wrong and are therefore pinned here:
+
+- **Fix 2 must guard `st.depth > 0`.** `Lower::pop` decrements a `usize`
+  unconditionally, so popping an empty stack underflows. The guard also matches
+  the VM, which does `stack.pop().unwrap_or(Unit)`.
+- **Fix 2 is deliberately not bug-compatible.** The VM additionally leaves the
+  callee's whole frame on the shared operand stack in this path. That leak is
+  the WCMU under-count reported to the runtime owner; the lowering returns the
+  right value without reproducing the leak.
+
+The two must-fire controls both still need writing, and neither is in the patch,
+because a control is worth more when written against the fixed code than
+alongside it: a chunk that reads a non-parameter local before writing it, and a
+chunk whose ops end without `Op::Return` — each compared differentially against
+the VM rather than asserted against my own expectation.
