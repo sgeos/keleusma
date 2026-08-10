@@ -2082,3 +2082,73 @@ a specification. The asymmetry stays recorded as a decision.
    return shape no longer matches what the chunk returns. The typed pass
    validates offsets rather than return-type agreement, so this should be
    accepted — an assumption, not a certainty.
+
+## SCOPED: the fixed-point family, and why it is cheaper than its opcode count
+
+Never examined until now. It is **core language, not float-gated** — `Fixed` is a
+Q-format value at the runtime's word width, and the `floats` feature does not
+guard it. The class is `WordToFixed`, `FixedToWord`, `FixedMul`, `FixedDiv`,
+plus `CheckedMul(fb)` and `CheckedDiv(fb)` for `fb > 0`, which are refused today
+because only the `fb == 0` integer forms lower.
+
+### The decisive structural fact: every fraction-bit check is STATIC
+
+`frac_bits` is an **opcode operand**, not a runtime value. Every range check the
+VM performs on it is therefore decidable at lowering time, and none needs an
+emitted branch. The VM's own handling splits two ways, and the split is
+deliberate and documented in place:
+
+| Op | Out-of-range `fb` | VM behaviour |
+|---|---|---|
+| `WordToFixed` | `fb >= 2 * word_bits` | **Saturates** by sign; zero stays zero |
+| `FixedToWord`, `FixedMul`, `FixedDiv` | `fb >= word_bits` | **Fails closed**, `InvalidBytecode` |
+
+The VM explains the asymmetry rather than leaving it to be guessed: `WordToFixed`
+converts an in-range integer whose *result* merely overflows the `Fixed` range,
+whereas an out-of-range fraction count is *corrupt input*, for which failing
+closed is the honest response.
+
+**The lowering should refuse at lower time wherever the VM fails closed.** That
+is the same relationship the rest of this backend already has with the VM — a
+load-time refusal in place of a runtime error is stricter, never looser.
+
+### The arithmetic, and it reuses machinery that already exists
+
+All four compute in 128 bits and **saturate**, never wrap:
+
+- `WordToFixed(fb)`: widen, `shl fb`, clamp to `[i64::MIN, i64::MAX]`, truncate.
+- `FixedToWord(fb)`: arithmetic `shr fb` on the word directly. No saturation —
+  the result can only shrink.
+- `FixedMul(fb)`: widen both, multiply, **arithmetic** `shr fb`, clamp, truncate.
+- `FixedDiv(fb)`: trap if the divisor is zero, widen both, `shl fb` the dividend,
+  `sdiv`, clamp, truncate.
+
+The lowering already has every piece: `Lower::widen` sign-extends into `i128`,
+the checked-arithmetic ops already compute in that domain, and `trap_bb` already
+exists. **No new infrastructure, and no new `LowerError` variant** beyond
+reusing `UnsupportedOp` for an out-of-range `fb`.
+
+One overflow question settled rather than assumed: `FixedDiv` cannot hit the
+`i128::MIN / -1` hazard that makes the *integer* division lowering delicate. The
+dividend is at most `i64::MIN << 63 = -2^126`, so the quotient is at most `2^126`,
+comfortably inside `i128`. The 128-bit domain removes the hazard rather than
+relocating it.
+
+### A semantic point worth stating loudly
+
+**Fixed-point arithmetic saturates silently; it does not trap and it produces no
+overflow flag.** That is the opposite of the checked integer family, which pushes
+`(low, high, flag)` so the program can observe overflow. A `FixedMul` that
+overflows returns `MAX` and says nothing. This is the VM's behaviour and the
+lowering must reproduce it, but it is a genuine difference in the language's
+error model between two arithmetic families, and it belongs in the record rather
+than only in the code.
+
+### Unmeasured, and deliberately not guessed
+
+**Whether the corpus uses fixed-point at all is unknown.** The coverage spike
+buckets these under "float / fixed-point" without separating them, so the payoff
+of this class is unquantified. It needs a corpus count — compilation — and joins
+the composite-constant count in the queue. Recording the question rather than
+assuming the class is worth implementing, on the same discipline that caught the
+chunk-versus-module error earlier in this document.
