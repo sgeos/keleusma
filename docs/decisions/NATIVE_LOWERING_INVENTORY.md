@@ -2031,3 +2031,54 @@ that the lowering had no reason to consider.
 That asymmetry is now twice-confirmed and is the most useful heuristic this
 document has produced for where to look next: **not "where is LLVM undefined",
 but "what does the VM do that the lowering never had a reason to think about".**
+
+## The two must-fire controls are written, and one of them is the missing proof
+
+Prepared alongside the fixes. **I had deferred these on a reason that was
+weaker than I stated**: that writing a control beside its fix risks encoding the
+same assumption twice. That holds for an ASSERTION-based test. These are
+DIFFERENTIAL — the expected value comes from the VM — so the objection barely
+applies, and the correct move was to write them.
+
+Both mutate real compiled bytecode rather than hand-building a `Module`, the
+technique the typed-verifier conformance corpus already uses. Hand construction
+would need every `Chunk` and `Module` field right, and a field I got wrong would
+make the test measure my construction rather than the lowering.
+
+### The second control is the proof of concept I said I had not built
+
+`Vm::new` runs `verify()`. So a mutated module that reaches execution has been
+**admitted by the verifier**, which is exactly the claim recorded above as
+read-derived from both depth passes discarding their terminal result. The control
+turns that into a demonstration.
+
+**And it is falsifiable in the useful direction.** If `Vm::new` REJECTS a chunk
+with no trailing `Return`, then `verify()` does not admit it, and the inventory
+section claiming otherwise — plus the item reported to the `v0.2.3` session — is
+wrong. That would be a result worth having, not a broken test, and the `expect`
+message is worded so the failure reads that way.
+
+### One decision the first control makes explicit
+
+**Zero is this backend's `Unit`.** The operand stack is uniformly `i64` and
+`Unit` occupies zero bytes, so it has no natural width — choosing zero is a
+decision, not a consequence. Until now it was implicit in Fix 1's store. The
+control is where it is stated, so a future change to the `Unit` encoding fails a
+test rather than silently altering what an unwritten local reads as.
+
+### What is deliberately NOT asserted
+
+The operand-stack leak. The VM does not truncate to `frame.base` when a chunk
+falls off the end, and the lowering does not reproduce that. Pinning the leak as
+expected behaviour would entrench a defect in a test, which is how a bug becomes
+a specification. The asymmetry stays recorded as a decision.
+
+### Known compile risks, written down rather than discovered
+
+1. The mutation closure is passed to both helpers, each taking `impl FnOnce` by
+   value. This compiles only because both closures capture nothing and
+   non-capturing closures are `Copy`.
+2. The mutated module keeps its pre-mutation `signatures[0]`, so the recorded
+   return shape no longer matches what the chunk returns. The typed pass
+   validates offsets rather than return-type agreement, so this should be
+   accepted — an assumption, not a certainty.
