@@ -232,6 +232,18 @@ and `grep` at the prompt, which produced **three defects in a single day**, all 
   length cap is the same defect in another dress. The verdict line matches the header pattern too,
   so it is excluded from the count; before that, gate summaries over-reported by one.
 
+**The bar is WEIGHTED by measured test time, not by step count.** Four of the twelve steps carry
+**91%** of the wall clock and eight carry about 9%, so a uniform bar would read ~50% within three
+minutes and then crawl for three hours — worse than no bar, because it invites exactly the wrong
+estimate of time remaining. Weights come from a completed run (12,594 s of test time). A finished
+gate is full; otherwise completed steps count in full and the current step counts a half, since
+intra-step progress is not observable from the log. If the step count ever exceeds the weight table
+the bar **degrades to uniform rather than mis-weighting**, which is this file's own rule applied to
+itself.
+
+The weights cover test time only, not compilation, so `Clippy` and `Docs` are under-weighted. That
+is a known and stated limitation rather than a hidden one.
+
 **The status line shows it automatically.** `~/.claude/statusline.sh` appends one line of stdout
 from an executable `scripts/statusline-segment.sh`, if the project has one. The contract is
 deliberately defensive, and every guard is tested: a hard timeout so a slow script degrades to

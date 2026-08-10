@@ -95,6 +95,49 @@ done < <(ls -t "$TREES_DIR"/*.log 2>/dev/null)
 
 [ ${#rows[@]} -eq 0 ] && { [ "$oneline" -eq 1 ] || echo "gate-status: no gate logs"; exit 0; }
 
+# Per-step weights, as PERCENTAGES OF MEASURED TEST TIME, taken from a completed
+# 12-step run (`wire-corpus-11c5d9d`, 12,594 s of test time).
+#
+# WHY WEIGHTED AND NOT UNIFORM. Four steps carry 91% of the wall clock and eight
+# carry about 9%. A uniform bar would read ~50% within three minutes and then
+# crawl for three hours, which is worse than no bar: it would invite exactly the
+# wrong estimate of time remaining.
+#
+# Ordinal, not name-keyed, because the names are long and change wording more
+# readily than the order changes. If the gate grows or loses a step the table no
+# longer matches, so `bar_for` falls back to uniform rather than silently
+# mis-weighting — the failure this file exists to avoid, applied to itself.
+WEIGHTS=(1 1 8 1 23 32 23 1 1 1 1 13)
+
+# Weighted completion bar. A finished gate is full; otherwise completed steps
+# count in full and the CURRENT step counts a half, since intra-step progress is
+# not observable from the log. Half is a midpoint estimator, deliberately never
+# reaching 100 before the verdict does.
+bar_for() {
+  local steps=$1 state=$2 cells=${3:-10} pct=0 i total=0 done_w=0
+  if [ "$state" = "GREEN" ] || [ "$state" = "RED" ]; then
+    pct=100
+  elif [ "$steps" -le 0 ]; then
+    pct=0
+  elif [ "$steps" -gt "${#WEIGHTS[@]}" ]; then
+    # Step table is stale; degrade to uniform rather than mis-weight.
+    pct=$(( 100 * steps / (steps + 1) ))
+  else
+    for ((i=0; i<${#WEIGHTS[@]}; i++)); do total=$(( total + WEIGHTS[i] )); done
+    for ((i=0; i<steps-1; i++)); do done_w=$(( done_w + WEIGHTS[i] )); done
+    # ×2 throughout so the current step's half-weight stays integral.
+    pct=$(( (2 * done_w + WEIGHTS[steps-1]) * 100 / (2 * total) ))
+  fi
+  local filled=$(( (pct * cells + 50) / 100 ))
+  [ "$filled" -gt "$cells" ] && filled=$cells
+  [ "$filled" -lt 0 ] && filled=0
+  local bar="" j
+  for ((j=0; j<cells; j++)); do
+    if [ "$j" -lt "$filled" ]; then bar="${bar}▰"; else bar="${bar}▱"; fi
+  done
+  printf '%s %d%%' "$bar" "$pct"
+}
+
 fmt_age() { local a=$1; if [ "$a" -lt 60 ]; then echo "${a}s"; elif [ "$a" -lt 3600 ]; then echo "$((a/60))m"; else echo "$((a/3600))h$(( (a%3600)/60 ))m"; fi; }
 
 if [ "$oneline" -eq 1 ]; then
@@ -107,7 +150,7 @@ if [ "$oneline" -eq 1 ]; then
     case "$state" in
       RUNNING) mark="▸";; GREEN) mark="✓";; RED) mark="✗";; STALLED) mark="⏸";;
     esac
-    seg="$mark $name@$commit s$steps"
+    seg="$mark $name@$commit $(bar_for "$steps" "$state" 6)"
     [ "$fails" -gt 0 ] && seg="$seg !$fails"
     [ "$state" = "RUNNING" ] && seg="$seg $(fmt_age "$age")"
     [ "$state" = "STALLED" ] && seg="$seg quiet $(fmt_age "$age")"
@@ -119,7 +162,7 @@ fi
 
 for r in "${rows[@]}"; do
   IFS='|' read -r name commit state steps fails age step <<<"$r"
-  printf '%-14s %-8s %-8s steps=%-3s failures=%-3s last write %s ago\n' \
-    "$name" "$commit" "$state" "$steps" "$fails" "$(fmt_age "$age")"
+  printf '%-14s %-8s %-8s %-16s steps=%-3s failures=%-3s last write %s ago\n' \
+    "$name" "$commit" "$state" "$(bar_for "$steps" "$state" 10)" "$steps" "$fails" "$(fmt_age "$age")"
   [ -n "$step" ] && printf '    step: %s\n' "$step"
 done
