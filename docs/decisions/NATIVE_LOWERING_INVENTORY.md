@@ -3099,3 +3099,69 @@ that was missing when "prep is complete" was declared twice.
 The general form, since this is the third instance today: *decided* is not
 *written*, and *written* is not *unapplied*. Each transition needs its own
 record, because none of them is visible from the artefact alone.
+
+## FALSE PREMISE, caught by the `v0.2.3` session: stream chunks do NOT end in `Return`
+
+They fixed the `verify()` finding reported from here, demonstrated it
+independently first, and in doing so **falsified a claim this document made
+twice**. Recording it in full because the reasoning error matters more than the
+fact.
+
+### What I claimed, and what is true
+
+I wrote that "the reference compiler always emits a trailing `Op::Return`
+(`src/compiler.rs:5342`, `5414`)", and concluded the end-of-chunk hazard was
+unreachable from reference output — exposure limited to hot swap and precompiled
+bytecode. **Both cited lines are inside the `else` branch.** Three lines above:
+
+```rust
+if block_type == BlockType::Stream {
+    fc.emit(Op::Stream);  compile_block(..)?;  fc.emit(Op::PopN(1));
+    fc.emit(Op::Reset);          // <- a stream chunk ends HERE
+} else {
+    compile_block(..)?;  fc.emit(Op::Return);
+}
+```
+
+**Every `loop fn` ends in `Op::Reset`, never `Return`.**
+
+### The reasoning error, which is the transferable part
+
+I grepped for `Op::Return` emission, found two sites, and concluded *always*. The
+contradicting branch was in the same `if`/`else`. **A grep confirms presence; it
+cannot establish universality**, and I used it for the latter. This is the same
+shape as the chunk-versus-module coverage error and the `count * word_bytes`
+coincidence: a measurement that supports the expected answer, accepted without
+asking what it excludes.
+
+Their evidence was better than mine and cost more: rejecting fall-through broke
+**37 library tests at once**, on real compiler output.
+
+### What survives, and what does not
+
+- **The conclusion survives, with corrected reasoning.** The runtime fall-off
+  path is still not reachable from reference output — not because every chunk
+  ends in `Return`, but because **every compiler-emitted chunk ends in a path
+  exit**: `Return` for `Func`/`Reentrant`, `Reset` for `Stream`. `Reset` rewinds
+  `ip` to just after `Stream` and returns `VmState::Reset`, so control never runs
+  past the final op.
+- **The scope statement does not survive.** "Exposure is hot swap and precompiled
+  bytecode only" was right by accident. The verifier's depth pass *did* walk past
+  `Reset` — it did not know `Reset` is a path exit — so it treated every stream
+  chunk as falling through. Real compiler output was affected all along, at the
+  verifier rather than at run time.
+
+Their fix is the correct one: teach the depth pass that `Reset` exits the path,
+and stop discarding the terminal depth both passes already compute.
+
+### The warning they attached, and whether it lands
+
+> *"if any lowering assumes a chunk ends in `Return`, the stream form does not."*
+
+**Checked. No current impact, and one future trap.** Queued Fix 2 emits an
+implicit `ret` when the final block has no terminator, which cannot misfire on a
+stream chunk today because `Stream`/`Reset` are refused outright — the chunk never
+reaches the lowering. **But when Workstream B lands the rotation, a rotated stream
+body must not receive an implicit `ret` on the strength of "no terminator seen".**
+`Reset` is the terminator, and it means *rewind and yield control*, not *return*.
+That is now written down before the code exists rather than after it misbehaves.
