@@ -1817,3 +1817,70 @@ place that would have caught it is the place that is never run in production.
 None needs an opcode, a `BYTECODE_VERSION` bump, or a file outside
 `native_codegen/`. All three need compilation, which is why they are queued
 behind the running gate and its wall-clock perf canary.
+
+## ANSWERED: `verify()` does admit a chunk with no trailing `Return`
+
+The previous section left this open and offered it to the `v0.2.3` session as a
+question. Handing over a question that can be answered by reading is worse than
+answering it, so it was traced. **`verify()` admits it.**
+
+### The trace
+
+`verify()` runs three things per chunk (`src/verify.rs:2182`):
+
+| Pass | Terminal state |
+|---|---|
+| `verify_chunk` | Structural; does not inspect the chunk's last op |
+| `verify_stack_depth` | `verify_depth_region(chunk, 0, ops.len(), 0, ..).map(\|_\| ())` — **result discarded** |
+| `typed_check_module` → `check_chunk_seeded` | `interp_region(..).map(\|_\| ())` — **result discarded** |
+
+Both depth passes compute exactly the quantity that would settle it — the
+region's terminal depth, `Ok(Some(d))` on fall-through versus `Ok(None)` when
+every path exits via `Return`, `Trap` or `Break` — and both throw it away. No
+check anywhere in `verify.rs` or `verify_typed.rs` reads a chunk's last op.
+
+### What that costs
+
+`Op::Return` truncates to `old_frame.base` and pushes one result, leaving depth
+`base + 1`. Falling off the end leaves `base + local_count + k`, where `k` is any
+leftover operands. **Each such call leaks `local_count + k - 1` slots**, and
+called in a loop the operand stack grows without bound.
+
+**This is not a memory-safety defect.** The operand stack is an arena-backed
+`ArenaVec` in the bottom region, so unbounded growth exhausts the reserved
+footprint and fails closed with an out-of-arena error rather than corrupting
+anything.
+
+**It is a worst-case-memory-usage under-count**, which is the more serious thing
+here given the ecosystem's stated value proposition. The bound is computed as
+`chunk.local_count + body_peak` per chunk (`verify.rs:1149`), which models
+`Return` semantics; a callee that falls off the end leaves residue the caller's
+peak never accounted for. A module can therefore be admitted by `verify()`,
+attested with a WCMU bound, and exceed it at run time.
+
+### Scope, stated precisely
+
+The reference compiler always emits a trailing `Op::Return`
+(`src/compiler.rs:5342`, `5414`), so **no program produced by the normal
+pipeline is affected**, and no corpus chunk exercises it. The exposure is exactly
+the surface `verify()` exists to protect: **hot-swapped modules and precompiled
+bytecode**, which reach the VM as bytes rather than as compiler output. That is
+the boundary at which "treat all external inputs as untrusted" applies.
+
+I have **not** built a proof of concept, so this is a read-derived finding rather
+than a demonstrated one. The recipe is small and stated so it can be checked
+rather than taken on trust: a chunk whose ops end without `Return` and whose
+`local_count` exceeds its `param_count`, called in a counted loop, with the
+operand depth observed across iterations.
+
+### For the lowering
+
+The native side does not inherit the bug — each chunk is an LLVM function with
+its own frame, so nothing leaks into the caller. It inherits the DIVERGENCE: on
+such a chunk the VM's subsequent depths differ from the native ones. Queued Fix 2
+(an implicit `ret` on an unterminated final block) matches the VM's *value*
+semantics — "End of chunk without explicit return: return `Unit`" — and
+deliberately does not reproduce the leak, since reproducing a defect for
+bug-compatibility would be the wrong call. That asymmetry is recorded here so it
+is a decision rather than an oversight, and it should be revisited if the VM side
+is fixed.
