@@ -18,49 +18,50 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 **Date**: 2026-08-09 (session 40, continued)
 
-## THE MERGE BOUNDARY — read before merging anything
+## Where things stand, 2026-08-10
 
-> **The gate that ran covers `3ad895e` ONLY.** I launched it on the slice-4 tip and then continued
-> developing in the free tree, which is exactly the trap `HANDOFF.md` records: **gate the tip you
-> intend to merge.**
->
-> **Merge only up to `3ad895e`.** Then rebase the remainder, gate it, and merge that separately.
->
-> This will keep recurring, because a free tree during a gate is the entire point of
-> `gate-in-worktree.sh`. The discipline therefore has to live at MERGE time, not at launch time.
-
-## Git state
+**The wire format is emittable end to end from Keleusma, and the driver has started.**
 
 | | |
 |---|---|
-| Version branch | `v0.2.3`, one unpushed mailbox commit `8fc802e` |
-| Feature branch | `feat/selfhost-wire-real-corpus`, pushed |
-| Gated commit | `3ad895e` (slice 4) — **everything after it is ungated** |
-| Suite | `tests/selfhost_wire.rs`, **108 tests**, Tier 1 green throughout |
+| `v0.2.3` | wiring slices 1–8 merged, **WCMU verifier fix merged** (local, unpushed) |
+| `feat/selfhost-wire-debugpool` | slices 9–10 plus five probe write-ups, **local only** |
+| Machine | held by the `v0.3.0` session, gating `3d36feb` |
 
-The mailbox commit on `v0.2.3` is deliberately unpushed: the pre-push hook runs the test suite and
-I preferred not to risk a false `perf_canary` trip on my own running gate. Push it when convenient.
+**Every one of the twenty region kinds now has an emitter**, the populated kinds driven by real
+compiler output, the six the corpus leaves empty oracled against the derive, and `DEBUG_POOL` from
+a real `emit_debug` compile. Slice 10 began the **driver**: region lengths are derived from record
+counts, so all seventeen strides live on the Keleusma side.
 
-**Do not remove anything under `keleusma-worktrees/`** without checking — the other session's tree
-and gate target live there.
+**A WCMU soundness hole is closed.** `verify()` used to admit a chunk that can run off the end of
+its instructions, which leaks `local_count + k - 1` operand slots per call and breaks the attested
+bound. Reported by the `v0.3.0` session, reproduced here first, fixed, gated GREEN over 13 steps.
 
-## What the wiring increment has built
+### Nothing is pushed, and that is deliberate
 
-`wire.kel` can now emit, from real compiler output and byte-identically to the Rust encoder:
+Six commits are local-only. The pre-push hook runs the routine test tier, `perf_canary` was
+executing inside the other session's gate, and EVE Online was at 133% CPU. Firing a test tier into
+their canary window is what I asked them to spare me, twice. **Push when their gate clears** — that
+also re-runs my own canary quiet, which is the "re-run alone" step it asked for when it tripped.
 
-| Slice | What | Note |
-|---|---|---|
-| 1 | Container header for real region sets | needed **no** Keleusma change |
-| 2 | `HEADER` record | first schema emitter; `wire.fin` input channel |
-| 3 | `CHUNKS`, batched, window-addressed | widest record, 14 fields; batching mechanism |
-| 4 | `PARAM_TYPES` byte pool | `wire.bin` channel; the pad is the whole risk |
-| 5 | `NAMES` + `STRING_POOL` | the two accumulators; first deep batching, 774/807 |
-| 6 | `DATA_SLOTS` + `SHARED_LAYOUT` | completes the four regions that are 99.96% of `lexer` |
-| 7 | `SHAPES`, `SIGNATURES`, `ENUM_VARIANTS`, `ENUM_LAYOUTS`, `DATA_INIT`, `CONSTS` | **every populated kind now has an emitter**; `put_u64` for the two 64-bit fields |
-| 8 | `STRUCT_AUX`, `ENUM_AUX`, `STRUCT_TEMPLATES`, `PRIVATE_COMPOSITE`, `NATIVES`, `NATIVE_RETURNS` | the kinds the corpus leaves empty; oracled against the **derive**, not the corpus |
+### The driver's next piece, already scoped by four probes
 
-**Both region shapes are covered** — record table and byte pool — and the batching mechanism is
-built and exercised. What remains is coverage breadth and the driver, not new mechanism.
+1. **A minimal artifact is 912 bytes, 1.4% of the buffer**, so the first slice emits a COMPLETE
+   artifact and compares byte for byte. The residency problem that governs `lexer` does not arise
+   at that size.
+2. **Region order is measured, not inferred**, and is not the schema's numeric order. Most regions
+   are present with length zero; only the data-layout group and `DEBUG_POOL` are conditional.
+3. **The interner needs BOTH modes.** `intern_fresh` exists for contiguity, not freshness, and a
+   dedup-only port is a defect that surfaces only on enum layouts or struct constants — neither of
+   which small test cases have.
+4. **The flattener's composite path is unreachable from the corpus**: 2,192 constant nodes, zero
+   composite, depth zero. It needs hand-built constant trees.
+
+### The standing lesson from all of it
+
+**Real compiler output is a strong oracle for VOLUME and a weak one for VARIETY.** The ten stages
+are large but semantically narrow, and this arc found three separate paths they cannot reach. A
+slice should say which of the two it is buying.
 
 ## Two things that are yours to decide, not mine
 
