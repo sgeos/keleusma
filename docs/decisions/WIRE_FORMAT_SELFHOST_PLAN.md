@@ -5,8 +5,15 @@
 Scoping for the Order-1 residual "self-host wire-format serialization". Probed 2026-08-03,
 **re-scoped 2026-08-08**.
 
-Status: **UNBLOCKED. The blocker below was removed by changing the wire format, which is what the
-six-step wire-format programme did.**
+Status: **STEP 6 COMPLETE (2026-08-09). All seven slices are done.** The wire format is
+expressible in Keleusma end to end: CRC-32, the container primitives and prologue vote, the region
+directory, record tables and byte pools, the twenty region kinds and seventeen record shapes, the
+opcode stream and operand pool, and the framing header with its CRC trailer.
+
+`src/selfhost/kel/wire.kel` is the implementation and `tests/selfhost_wire.rs` is the differential,
+80 tests. **What remains before the artifact is produced by the self-hosted path is wiring, not
+invention**: `wire.kel` is not yet driven by the pipeline, and it is deliberately absent from
+`read_stage`.
 
 ## 2026-08-08: the blocker is gone. Read this before the 2026-08-03 text.
 
@@ -41,12 +48,12 @@ establishes the byte-emission harness the rest depends on.
    access, located from the voted directory. `divides` uses real division rather than a mask,
    because a stride is only required to be a word multiple, not a power of two; and the
    zero-stride guard depends on `andalso` short-circuiting, since division by zero traps.
-5. **The schema layer.** The twenty region kinds and their record shapes. **The largest slice by
-   far — see [Slice 5, decomposed](#slice-5-decomposed) before starting it.**
-6. **The opcode stream and operand pool.** The meaty part. `codegen.kel` already carries an internal
-   op encoding whose tag values ARE the opcode ids, so the mapping to four-byte records is close to
-   what it already computes. Verify against `encode_op` over every op form, including pool spills.
-7. **The framing header.** 64 fixed bytes, needing the region lengths from the slices above.
+5. ~~**The schema layer.**~~ **DONE 2026-08-09**, as 5a to 5e. Twenty region kinds and seventeen
+   record shapes, every transcribed offset pinned against the derive's generated constant.
+6. ~~**The opcode stream and operand pool.**~~ **DONE 2026-08-09**, as 6a and 6b. Verified against
+   `encode_op` and the four `OperandPoolEntry` constructors by byte identity.
+7. ~~**The framing header.**~~ **DONE 2026-08-09.** Sixty-four fixed bytes plus the CRC trailer,
+   which is validated by a residue rather than by recomputation.
 
 ### Constraints to carry into the implementation
 
@@ -206,6 +213,42 @@ Two consequences shape the design:
   record on the reasoning that parallel vectors fall out of step — but they are already allowed to
   differ in length, and pairing silently DROPPED the surplus instead of preventing it. Independent
   regions carry both lengths.
+
+### Slices 5 to 7 as built (2026-08-09)
+
+**The offsets are transcribed and pinned, which is the design that made 5a to 5e safe.**
+`#[derive(WireRecord)]` packs with no implicit padding then rounds the stride to a word, so the
+numbers cannot be recomputed by eye. Every constant in `wire.kel` is asserted against the derive's
+generated `OFFSET_*` and `STRIDE` **by parsing them back out of the Keleusma source**; restating
+them in the test would only prove the test agrees with itself. That protection was exercised
+immediately: a field-extraction pattern of mine excluded digits and silently dropped
+`DataSlotRecord::reserved2`, and the pinning is what would have caught it had the offsets moved.
+
+**Three places where the value domain left no spare sentinel**, each resolved the same way — by
+splitting the bound from the value rather than inventing an unrepresentable marker.
+
+| Case | Why `0 - 1` will not serve | Resolution |
+|---|---|---|
+| An enum variant's discriminant | a discriminant of -1 is legal | `elay_variant_in_range` asked first |
+| `DATA_SLOTS` presence | absent and empty are different programs | `data_layout_present`, then counts |
+| A chunk's debug pool | absent differs from present-but-empty | the `ABSENT` sentinel, `u32::MAX` |
+
+**Two parity schemes, deliberately different, and easy to conflate.** An opcode record carries one
+BIT, the even parity of the popcount of its four bytes. A pool entry carries one BYTE, the
+exclusive-or of the tag and the six payload bytes. The record's parity is computed in `wire.kel` as
+a three-step fold rather than a bit count, and the equivalence is measured against an independently
+written popcount definition over all 128 identifiers rather than argued.
+
+**The CRC trailer is validated by a residue.** A reader checksums the whole artifact, trailer
+included, and compares against a fixed constant, because appending a message's own CRC makes the
+extended checksum invariant. The test derives that constant from four sealed messages rather than
+restating the runtime's private one.
+
+**A hard language limit surfaced and shaped the module.** The parser rejects an expression nested
+more than 24 deep, so an `if / else if / ...` chain caps at about two dozen arms. The command
+dispatch is nine chains, and a test sweeps every command below the ceiling to assert none falls
+through to a chain default — the inverse hazard, where a drifting threshold silently routes live
+commands to the default.
 
 ### On the prototype
 

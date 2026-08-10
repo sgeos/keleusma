@@ -13,6 +13,75 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**STEP 6 IS COMPLETE: THE WIRE FORMAT IS EXPRESSIBLE IN KELEUSMA END TO END (2026-08-09).** Seven
+slices, `src/selfhost/kel/wire.kel` plus `tests/selfhost_wire.rs`, 80 tests. CRC-32, the container
+primitives and prologue vote, the region directory, record tables and byte pools, the twenty region
+kinds and seventeen record shapes, the opcode stream and operand pool, and the framing header with
+its CRC trailer. **What remains before the self-hosted path produces an artifact is wiring, not
+invention.**
+
+**THE DESIGN THAT CARRIED SLICE 5: TRANSCRIBE, THEN PIN.** `#[derive(WireRecord)]` packs fields with
+no implicit padding and rounds the stride to a word, which is not a C layout, so the offsets cannot
+be recomputed by eye and Keleusma has no derive. The resolution is to hardcode them and assert every
+one against the derive's generated constant **by parsing the numbers back out of the Keleusma
+source**. Restating them in the test would only prove the test agrees with itself. It earned its
+keep within the hour: my field-extraction pattern was `pub [a-z_]+:`, which excludes digits, and it
+silently dropped `DataSlotRecord::reserved2`. Re-extracting showed no offset had actually moved --
+but the pinning is what would have caught it if one had, and the compiler caught the extraction
+itself. **A sloppy tool was made safe by a check that does not depend on the tool.**
+
+**THREE TIMES THE VALUE DOMAIN LEFT NO SPARE SENTINEL, AND THE FIX IS ALWAYS THE SAME SHAPE.** Every
+accessor had been returning `0 - 1` for absence, which is safe while the value is an index or a
+count. Then an enum variant's discriminant turned out to be a full signed Word, so -1 is a legal
+value; then `DATA_SLOTS` presence turned out to distinguish two different programs, so 0 could not
+mean both "no layout" and "empty layout"; then a chunk's debug pool needed absent to differ from
+present-but-empty. **Split the bound from the value rather than inventing an unrepresentable
+marker.** Ask `elay_variant_in_range` first, or `data_layout_present` first, or compare against the
+`ABSENT` sentinel that the format already defines. The general rule: the sentinel technique works
+only while the domain has a spare value, and it stops working SILENTLY.
+
+**TWO PARITY SCHEMES IN ONE FORMAT, AND CONFLATING THEM IS THE EASY MISTAKE.** An opcode record
+carries a single BIT, the even parity of the popcount of its four bytes. A pool entry carries a
+whole BYTE, the exclusive-or of the tag and six payload bytes, skipping the parity byte itself. I
+implemented the record's as a three-step fold rather than a bit count, because parity-of-popcount
+over four bytes equals the bit-parity of their exclusive-or -- bit i of the xor is the parity of bit
+i across the bytes. That is algebra, so it is **measured**: compared against an independently
+written popcount definition across all 128 identifiers, with `byte_parity` checked exhaustively over
+all 256 bytes.
+
+**A LOOP CLOSED FROM SPIKE B, AND I DID NOT RECOGNISE IT AT THE TIME.** Spike B's first digest
+hashed whole artifacts with `crc32` and returned the SAME value for all ten stage modules despite
+lengths from 107 KB to 16 MB. I diagnosed it as a degenerate digest, replaced it with FNV-1a, and
+moved on. The value was `0x2144DF1C`, and slice 7 shows it is `WIRE_FORMAT_CRC32_RESIDUE`: the
+format validates its trailer by checksumming the WHOLE artifact and comparing against that constant,
+because appending a message's own CRC makes the extended checksum invariant. **The broken
+measurement was the format's validation mechanism showing through.** Recording it because the
+lesson is not "I got lucky" -- the tell was ten identical hashes over obviously different inputs,
+and that tell is available whether or not one knows why.
+
+**A HARD LANGUAGE LIMIT FOUND BY HITTING IT.** The parser rejects an expression nested more than 24
+deep: "parser recursion depth 24 exceeded; deeply nested expressions are rejected to prevent stack
+overflow". An `if / else if / ...` chain is right-nested, so one command costs one level, capping a
+flat dispatch at about two dozen arms. The diagnostic is clean rather than a crash, which is the
+language behaving well. **My first hypothesis was that the compiler was overflowing, and it was
+wrong**; the failure presented in the test binary as a stack overflow rather than as the parse
+error, so I confirmed by compiling `wire.kel` directly and by a depth sweep showing 22 accepted and
+26 rejected. The dispatch is now nine chains, and a test sweeps every command below the ceiling to
+assert none falls through to a chain default -- the inverse hazard, where a drifting threshold
+silently routes live commands to the default.
+
+**AN EXISTING TEST CAUGHT A REGRESSION I CAUSED.** `an_unrecognised_command_returns_a_distinct_code`
+used 99 as its sentinel, and slice 6b claimed 99 as a live command. It failed immediately. The
+sentinel moved far above the range, and the sweep above was added, because a sentinel adjacent to a
+growing range will keep being claimed.
+
+**FIVE FOR FIVE ON THE FEATURE MATRIX.** The non-`--all-features` clippy run caught lints the
+all-features run passed in five separate increments today, and `--no-default-features` caught a
+throwaway `examples/` file I had left behind, which is not feature-gated and broke the runtime-only
+build. That is now real evidence for the open operator question about trimming the matrix: the
+non-default configurations are catching defects at a steady rate, not merely costing 34 minutes.
+
+
 **STEP 6 SLICE 2 DONE: CONTAINER PRIMITIVES, THE PROLOGUE, AND THE VOTE (2026-08-09).** The suite is
 now 23 tests in 0.97 s, and the oracle has strengthened from a single value to **byte identity**
 against what `keleusma-wire` emits.
