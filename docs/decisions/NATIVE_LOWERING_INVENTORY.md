@@ -3178,3 +3178,70 @@ reaches the lowering. **But when Workstream B lands the rotation, a rotated stre
 body must not receive an implicit `ret` on the strength of "no terminator seen".**
 `Reset` is the terminator, and it means *rewind and yield control*, not *return*.
 That is now written down before the code exists rather than after it misbehaves.
+
+## THE FOUR COUNTS CAME BACK, and they reorder the roadmap
+
+Run on a free machine immediately after the gate went green. 73 tests, fmt clean,
+clippy zero. Every one of these was deferred rather than guessed, and **three of
+the four removed work**.
+
+| # | Question | Answer |
+|---|---|---|
+| 1 | Composite constants in the corpus | **0** |
+| 2 | Self-hosted stages that lower | **1 of 11**, and the blocker is **`Stream`**, not composites |
+| 3 | `Chunk::name` uniqueness | 821 chunks, 725 names, **0 within-module collisions** |
+| 4 | Fixed-point opcodes in the corpus | **0** |
+
+### Count 2 falsifies my prior, and it moves Order 1
+
+I predicted the self-hosted stages were composite-heavy and that **Order 1 sat
+behind the width stack**, while flagging it as a prior rather than a measurement.
+**It is wrong.** All ten refusals read:
+
+```
+native lowering does not yet support opcode Stream
+```
+
+**Order 1 sits behind Workstream B — sub-coroutines — not behind composites.**
+The compiler's own stages are stream-driven, so `Stream` is hit before any
+composite op. That is the workstream whose three preconditions are already
+established here: P1 at 23 of 24, P2 verified from the `Op::Reset` mechanism, P3
+at 24 of 24, with only the rotation's boundary condition open.
+
+**One caveat, stated because the measurement cannot exclude it.** `lower_module`
+refuses on the FIRST unsupported opcode, so "blocked on `Stream`" means `Stream`
+is hit first, **not** that it is the only blocker. Composites may well block
+these modules too, behind it. What the count establishes is that `Stream` is
+*necessary*, not that it is *sufficient*.
+
+### Counts 1 and 4 delete work
+
+- **Composite constants: zero.** The coverage cost of refusing them under the
+  width stack's unknown-is-refused rule is **nil**. The `AbsVal::Top` limitation
+  recorded as a real cost costs nothing on this corpus.
+- **Fixed-point: zero occurrences.** The scoped design is correct and worth
+  **zero coverage today**. It was explicitly recorded as "unmeasured, and
+  deliberately not guessed"; the measurement says do not build it. That caution
+  paid for itself.
+
+### Count 3 clears the symbol fix, with a boundary
+
+**0 within-module collisions** across 821 chunks, so switching the symbol from
+chunk index to `Chunk::name` is safe for the single-module lowering that exists
+today, and it fixes the stability defect immediately.
+
+**96 names are shared ACROSS modules** (821 − 725). That is precisely the hazard
+R4.2's module-path component exists to prevent, and it becomes live the moment
+cross-module linkage does. So the interim scheme is sound now and has a known
+expiry, which is the honest way to hold it.
+
+### Net effect on ordering
+
+1. **Workstream B (the rotation) now outranks the width stack**, because it gates
+   Order 1 and the width stack does not.
+2. **The fixed-point family drops off** the list entirely.
+3. **The composite-constant caveat disappears** from the width stack's design.
+4. **The symbol fix is unblocked** and is the cheapest item remaining.
+
+Three of four counts subtracted work. That is the argument for measuring before
+building, made in numbers rather than in principle.
