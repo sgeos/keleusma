@@ -13,6 +13,46 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**A WCMU SOUNDNESS HOLE IN `verify()`, CLOSED — AND THE REPORTED PREMISE FOR IT WAS FALSE
+(2026-08-10).** The `v0.3.0` session found that `verify()` admits a chunk that can run off the end of
+its instructions without a terminating `Return`. `Op::Return` truncates the operand stack to the
+frame base; **falling off the end does not**, so each such call leaks `local_count + k - 1` slots and
+a loop grows the stack without bound. Not memory-unsafe, since the operand stack is arena-backed and
+fails closed — but the attested bound is `local_count + body_peak`, which models `Return` semantics,
+so **a module could be admitted, attested with a WCMU bound, and exceed it at run time.**
+
+**Verified independently before changing anything**, per the rule that a recorded claim is a lead:
+both `verify.rs` and `verify_typed.rs` discard the terminal depth they already compute with
+`.map(|_| ())`, and a real compile with one trailing `Return` removed was accepted and ran.
+
+**THE REPORTED SCOPE WAS WRONG, AND ONLY THE FULL SUITE CAUGHT IT.** The report said the reference
+compiler always emits a trailing `Return`, so nothing from the normal pipeline is affected.
+Rejecting every falling-through chunk **broke 37 library tests at once**, including
+`verify_compiled_programs` on real compiler output.
+
+**My first hypothesis for why was also wrong.** I guessed a divergent `loop` with no break edges was
+being walked past its exit, and changed the `Loop` arm accordingly. The same 37 tests failed
+identically. Dumping the ops settled it in one step: a `loop` chunk contains **no `Loop` op at all**
+and ends in **`Op::Reset`**, which rewinds the frame's `ip` to just after `Stream` and returns. **`Reset`
+is a path exit** and the depth pass did not know it. The speculative `Loop` change was reverted
+rather than kept, because an unneeded behaviour change to a safety-critical pass is risk without
+benefit.
+
+**Both directions are pinned in the same module**: a mutated chunk must be rejected *and for the
+right reason*, with the message asserted; and a `Reset`-terminated stream chunk must still be
+accepted, with a vacuity guard that `tick` really does end in `Reset`.
+
+**Also fixed**: `vm.rs`'s `Op::Reset` comment claimed it resets "both arena bump pointers". It resets
+the **top only**, and the distinction is exactly why private composite data survives `RESET`.
+
+**AND I REPEATED THE SILENT-NO-OP MISTAKE FROM THE PREVIOUS INCREMENT, ONE INCREMENT LATER.** The
+first attempt to write this entry used a `str.replace` anchored on a slice-8 heading that exists only
+on the other branch, so it matched nothing, changed nothing, and **printed a success message**. I had
+recorded that exact failure a day earlier and concluded "make the operation assert rather than hope"
+— then asserted the anchors in the code patch and not in the docs patch. The lesson does not transfer
+by being written down; it transfers by being applied to every instance of the operation. This script
+asserts.
+
 **WIRING SLICE 8: THE KINDS THE CORPUS CANNOT REACH, AND A BRANCH MISTAKE CAUGHT BY VERIFYING
 (2026-08-10).** `STRUCT_AUX`, `ENUM_AUX`, `STRUCT_TEMPLATES`, `PRIVATE_COMPOSITE`, `NATIVES` and
 `NATIVE_RETURNS`. 108 tests. **Every record shape in the format now has an emitter**, so the
