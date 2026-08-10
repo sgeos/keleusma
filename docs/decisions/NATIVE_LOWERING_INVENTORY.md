@@ -1034,3 +1034,52 @@ Composites, at 18, wait on operand shapes being exposed from the typed verifier.
 The distinction from the earlier private-data case is real and worth stating:
 that one LOOKED external and was not, and this one was checked against the same
 boundary and is.
+
+## CLOSED: a native stack bound, computed end to end
+
+Workstream E's stack question is answered. `native_codegen/tests/native_stack_bound.rs`
+computes a worst-case native stack bound from a Keleusma module, and two of the
+three constraints recorded earlier turned out to be wrong or milder than stated.
+
+**Function identity needs no relocation parsing.** An earlier note expected
+`.rela.stack_sizes` to require hand-decoding because addresses in an unlinked
+object read zero. `llvm-readobj --stack-sizes` resolves entries to symbol names
+directly, so the whole concern was unfounded.
+
+**`.stack_sizes` really is unreachable in process.** Confirmed from the other
+direction this time: `TargetMachine::write_to_file` emits an object whose
+`StackSizes` block is EMPTY, because inkwell cannot set `--stack-size-section`.
+Driving `llc` out of process is the only route, and that subprocess is therefore
+forced on any toolchain that must produce a stack bound.
+
+**The optimisation pipeline must be `mem2reg` and NOT `default<O2>`.** This is
+the finding worth carrying. The full pipeline inlines, and inlining dissolves the
+call graph the longest-path traversal walks: on a three-function program
+`default<O2>` reduced every reported frame to zero, because nothing survived as a
+call. A bound computed from the bytecode call graph over post-inlining weights is
+still conservative, since an inlined callee's needs fold into its caller's frame
+and adding the callee's standalone figure only over-counts. **It is conservative
+and useless: a bound of zero bounds nothing.** Promoting allocas without inlining
+keeps the two graphs in correspondence.
+
+Measured on `thumbv7em-none-eabihf`:
+
+| Program | Frames | Bound |
+|---|---|---|
+| `main` calls `mid` calls `leaf` | 24, 24, 0 | **48 bytes** |
+| single leaf function | 0 | 0 bytes |
+| four-level chain | — | 40 bytes |
+
+The traversal is bracketed by two envelopes rather than trusted: the bound must
+be at least the largest single frame and at most the sum of all frames, so a
+traversal that lost a level or double-counted a function escapes one of them. A
+depth-sensitivity test pins that a deeper chain bounds higher, which a
+depth-blind traversal would fail.
+
+Acyclicity is not assumed. The type checker rejects direct and mutual recursion,
+and the traversal still carries a visited set, so a cycle that slipped through
+terminates and shows as an implausibly small bound rather than a hang.
+
+**What remains open in Workstream E** is the execution-time half. Whether the
+worst-case execution time bound proven on bytecode transfers to native code is
+untouched, and it needs a quiet machine to measure, which has not been available.
