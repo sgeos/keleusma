@@ -499,7 +499,9 @@ Three further facts worth carrying:
 
 ### The driver: prep, measured 2026-08-10, BEFORE any code
 
-Every region kind now has an emitter driven by real compiler output. What remains is the driver,
+Every region kind now has an emitter. **Fourteen of the twenty are driven by real compiler
+output; six are oracled against the derive with constructed values**, because the corpus emits them
+empty. What remains is the driver,
 where values stop being decoded from the reference and start being computed. Probing it first
 changed its size, so this is recorded before anything is written.
 
