@@ -1489,3 +1489,76 @@ Mutations that must fire, by construction: reverse the operand order; drop the
 and `ScalarKind::size_in_bytes` are all already `pub`. The seeding precondition is
 measured and holds at 22 of 22 chunks. No opcode, no `BYTECODE_VERSION` bump, and
 no file this branch does not own.
+
+## Workstream B: precondition P2 is VERIFIED, and `Reset` does one thing this document missed
+
+The rotation hypothesis rested on a structural claim stated as an observation and
+never checked: **"`Reset` clears every local to `Unit`."** Everything else in that
+section is downstream of it, so it was worth reading `Op::Reset` rather than
+continuing to cite it. `src/vm.rs:5229` does five things:
+
+1. **Clears locals `0..local_count` to `Unit`.**
+2. **Truncates the operand stack** to `reset_base + local_count`, discarding
+   everything above the locals.
+3. **Resets both arena bump pointers** and advances the epoch, so every
+   outstanding handle goes `Stale`.
+4. **Clears the ephemeral opaque registry**, dropping host refcounts.
+5. **Sets the instruction pointer to just after the `Stream` instruction** — not
+   to the top of the chunk.
+
+### P2 is verified: the data segment really is the only survivor
+
+Points 1 through 4 are exhaustive over the places iteration state could hide.
+Locals die, the operand stack dies, arena allocations die with an epoch bump, and
+opaque handles die. What remains is the data segment — the host-owned shared
+buffer and the arena's persistent region — which is exactly what the hypothesis
+assumed and no more. **P2 is no longer an unchecked assumption.**
+
+A worry that arose and dissolved, recorded so it is not re-raised: `local_count`
+comes from the compiler's slot high-water mark and nothing obviously enforces
+`local_count >= param_count`, which would leave a parameter uncleared. It is
+moot, because local-slot operands are bounds-checked against `local_count`
+(`src/verify.rs:3343`), so a slot a `GetLocal` can reach is necessarily below it
+and is necessarily cleared. There is no gap here to report.
+
+### Point 5 is new, and it changes the shape of the transformation
+
+**The pre-`Stream` prologue runs exactly once.** `Reset` jumps to the instruction
+after `Stream`, so a stream chunk is already structurally
+
+```
+<prologue>          runs once, never re-entered
+Stream
+<body>              the loop: ... Yield ... Reset jumps back here
+```
+
+This document described the rotation as though the whole chunk were the loop. It
+is not, and the distinction is useful rather than pedantic: the prologue is a
+natural home for the rotation's entry special-case, and it is already outside the
+repeating region, so the transformation does not have to manufacture one.
+
+### Precondition status, restated
+
+| | Status | Basis |
+|---|---|---|
+| P1: a `Reset` separates consecutive `Yield`s | 23 of 24 | Statically checked, `spike_stream_rotation.rs` |
+| P2: the data segment is the only surviving state | **VERIFIED** | `Op::Reset` mechanism, above |
+| P3: no `Return`/`Trap` between `Yield` and `Reset` | 24 of 24 | Statically checked |
+
+### The one genuine obligation that remains, which reading cannot close
+
+The rotated function runs the post-`Yield` part against the **previous** resume
+value, then the pre-`Yield` part, and returns the newly yielded value. That is a
+loop rotation, and loop rotations have boundary conditions:
+
+- **The first call has no previous resume value** to feed the post-`Yield` part.
+- **The final yielded value is never consumed** by a post-`Yield` part, because
+  the sequence ends on a yield.
+
+This is the classic prologue/epilogue mismatch, it is a real proof obligation,
+and it is **not** closed by any amount of reading. It needs the differential
+oracle — `tests/yield_sequence.rs`, which compares whole yield sequences rather
+than single values, and which exists precisely because an order-blind oracle let
+a wrong lowering pass. Stating it plainly so the verified P2 above is not
+mistaken for the whole equivalence: **P1, P2 and P3 are the preconditions, not
+the proof.**
