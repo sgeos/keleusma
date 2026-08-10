@@ -2514,3 +2514,87 @@ and platform relevance and is sensible on those grounds. It is an argument that
 resolved for**, and that the answer for Tier 1 is materially weaker than the
 answer for Tier 2. Better surfaced now than discovered when someone asks what the
 guarantee means on the platform they actually shipped to.
+
+## Provisional ABI decisions audited against the architecture: two conflict, two are open
+
+Having found the R4.2 symbol conflict, the honest move was to check the other
+three rather than stop at the first hit.
+
+| # | Provisional decision | Architecture says | Verdict |
+|---|---|---|---|
+| 1 | `kel_chunk_<index>` symbols | R4.2 mangling scheme, high confidence | **CONFLICT** |
+| 2 | Trailing shared-buffer pointer | Not addressed | Genuinely open |
+| 3 | Flat private region, 8 bytes/slot | Not addressed | Genuinely open |
+| 4 | `i64 kel_yield(i64)` | `coro.id.retcon` continuation model | **CONFLICT** |
+
+Decisions 2 and 3 are a clean result rather than a lucky one: the Architecture
+section specifies the pipeline and the linkage story but says nothing about the
+data-segment boundary, so those two remain this branch's to settle and the
+provisional label is accurate.
+
+### CONFLICT 4: the yield ABI is a callback where the architecture specifies a coroutine
+
+The architecture lowers each sub-coroutine as an **LLVM coroutine in the
+returned-continuation kind**: `Yield` becomes `@llvm.coro.suspend` returning the
+yielded value *plus the next continuation pointer*, and `Resume` is an indirect
+call through the pointer held in an arena slot. Control sits with the host, which
+drives resumption.
+
+This branch emits `i64 kel_yield(i64)` — a **synchronous host callback**. Control
+sits with the script: the native function calls out, the host returns the resume
+value, and the chunk runs to completion inside a single host call.
+
+The difference is not stylistic, and the sharpest consequence is about memory:
+
+**The callback keeps the native frame live across the suspension, on the C
+stack.** The architecture puts coroutine frames in the arena precisely so that
+suspension state is arena-accounted — that is the entire purpose of Workstream C,
+"preserving the bounded-WCMU model in native code". My model puts that state
+somewhere the arena does not see.
+
+In mitigation, and stated so this is not read as worse than it is: the C-stack
+usage is **bounded and measured**, by the `.stack_sizes` derivation already
+closed for the WCMU half. So the state is accounted, just not where the
+architecture accounts it. On a host that is defensible; on an embedded target
+with a small C stack and a large managed arena it is the wrong side of the line.
+
+### Where the rotation finding lands, and a tension in my own position
+
+The Workstream B rotation makes this much less alarming — and exposes an
+inconsistency in what I have argued versus what I have built.
+
+`Op::Reset` clears every local, truncates the operand stack, and reclaims the
+ephemeral arena, so **no state crosses a suspension** in 23 of 24 stream chunks.
+For those, there is no frame to keep anywhere, and the architecture's coroutine
+machinery is not needed at all. That is what the rotation section argues, and it
+makes a simple ABI legitimate for the overwhelming majority.
+
+**But the rotated form yields by RETURNING, not by calling out.** A rotated chunk
+is a plain function that computes and returns the yielded value; the host calls
+it again for the next one. `kel_yield` is the opposite shape — a call made from
+the middle of a live frame. **I have implemented the mechanism the rotation would
+replace, while arguing for the rotation.** Both cannot be the destination.
+
+So the ABI question resolves into three cases rather than one, which is a better
+frame than "callback versus coroutine":
+
+1. **Rotation-eligible chunks (23 of 24)** — lower as plain functions returning
+   the yielded value. No `kel_yield`, no coroutine intrinsics, no frame.
+2. **The multi-yield chunk (1 of 24)** — genuinely needs the architecture's
+   `coro.id.retcon` model with arena-allocated frames.
+3. **`kel_yield` as it stands** — a development scaffold that is neither, and
+   should be retired into case 1 rather than promoted.
+
+Recording this as a debt against the provisional label, not as a defect: the
+callback was a deliberate placeholder that let `Yield` lower at all and let the
+order-blind oracle be closed. It did its job. It should not survive contact with
+Workstream D.
+
+### The meta-point
+
+Four decisions were labelled provisional and documented at their definitions,
+which was the right discipline. **What was missing was checking them against the
+architecture that already existed.** Two were already answered — one at high
+confidence, one in a full design section — and neither answer was hard to find. A
+provisional label records that a decision is unsettled; it does not establish
+that nobody else has settled it.
