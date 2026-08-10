@@ -2,7 +2,7 @@
 //!
 //! # Scope
 //!
-//! This is an early subset: 45 of the instruction set's 66 opcodes. Everything
+//! This is an early subset: 46 of the instruction set's 66 opcodes. Everything
 //! else is refused rather than lowered to something plausible and wrong.
 //! Widening the subset is the work of subsequent increments, tracked in
 //! `docs/decisions/NATIVE_LOWERING_INVENTORY.md`.
@@ -532,6 +532,28 @@ fn resolve_shared_array(
         }
     }
     Ok((first.offset, width, first.kind))
+}
+
+/// Declare the host yield hook, reusing an existing declaration.
+///
+/// **This is a provisional application binary interface decision**, the fourth
+/// on this branch after the symbol scheme, the shared-buffer pointer and the
+/// private-region layout, and like those it belongs to Workstream D.
+///
+/// `i64 kel_yield(i64)` takes the yielded value and returns the resume value.
+/// It inverts control relative to the runtime, where `call` returns
+/// `Yielded(v)` and the host calls `resume(r)`, but the OBSERVABLE SEQUENCE of
+/// yielded and resumed values is identical, which is what the differential
+/// oracle compares. The inversion is why this suits a reentrant `yield fn`,
+/// which suspends a bounded number of times and returns, and does NOT suit a
+/// divergent `loop fn`, which would spin inside native code with no way for the
+/// host to stop it. `Op::Stream` and `Op::Reset` stay refused for that reason
+/// rather than by omission.
+fn yield_hook<'ctx>(ctx: &'ctx Context, module: &LlvmModule<'ctx>) -> FunctionValue<'ctx> {
+    module.get_function("kel_yield").unwrap_or_else(|| {
+        let i64t = ctx.i64_type();
+        module.add_function("kel_yield", i64t.fn_type(&[i64t.into()], false), None)
+    })
 }
 
 /// Declare `llvm.trap`, reusing the existing declaration if the module already
@@ -1431,6 +1453,26 @@ fn lower_chunk_body<'ctx>(
                             .expect("PRIVATE_SLOT_BYTES is a power of two");
                     }
                 }
+            }
+            // Suspension. **`Yield` is pop-one, push-one**: it pops the value
+            // to yield and pushes the value the host resumes with. Treating it
+            // as pop-only underflows the very next instruction, which is how the
+            // opcode's shape was originally established.
+            Op::Yield => {
+                let v = st.pop();
+                let hook = yield_hook(ctx, module);
+                let resumed = match st
+                    .b
+                    .build_call(hook, &[v.into()], "yield")
+                    .unwrap()
+                    .try_as_basic_value()
+                {
+                    ValueKind::Basic(b) => b.into_int_value(),
+                    ValueKind::Instruction(_) => {
+                        unreachable!("kel_yield returns an i64, never void")
+                    }
+                };
+                st.push(resumed);
             }
             Op::Return => {
                 let v = st.pop();
