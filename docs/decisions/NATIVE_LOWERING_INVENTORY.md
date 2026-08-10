@@ -3498,3 +3498,85 @@ rather than being rediscovered when a stage gains a second head.
 
 All five `verify_*.kel` modules were read individually rather than sampled, and
 all five are byte-identical in this respect.
+
+## PREDICTED REBASE BREAK: one control, for a reason its own falsification clause did not anticipate
+
+The line is nineteen commits behind `v0.2.3`, and one of them is the `verify()`
+fix this branch reported. Reading the rebase target before rebasing identifies
+**exactly one test that will fail**, and it is better to know which than to
+discover it as a surprise inside a three-and-a-half-hour gate.
+
+### The break
+
+`control_chunk_without_trailing_return_falls_off_the_end` in
+`native_codegen/tests/differential.rs` mutates a chunk to remove its trailing
+`Op::Return`, then runs it through `vm_result_mutated`, whose first line is
+`Vm::new(m, &arena).expect("verify() ADMITTED the mutated module")`. **`Vm::new`
+runs `verify()`, and `verify()` now rejects exactly that chunk.** The `expect`
+panics.
+
+The other control, `control_unwritten_local_reads_as_unit_not_undef`, uses the
+same helper but its mutation ends the chunk in `Op::Return`. **It is unaffected.**
+One test, not two.
+
+### The interesting part, which is about how the falsification clause was written
+
+That test carries an explicit falsification clause: *"if `Vm::new` REJECTS either
+mutated module, then `verify()` does not admit these chunks and the inventory
+section claiming it does is WRONG."*
+
+**The clause will fire, and its stated conclusion will be false.** `verify()` did
+admit the chunk when it was measured; the measurement was correct. The other
+session then *changed* `verify()` because of that report. The clause assumed the
+verifier was a fixed thing being probed, so it could only express "my reading was
+wrong" and had no way to express "the subject moved". A test that pins a
+defect is measuring something somebody may be actively removing, and **the
+message it fails with should say which of those two happened.**
+
+### The resolution, and the real problem inside it
+
+The native half is still load-bearing and must survive. Fix 2, the implicit
+`ret` for a chunk with no trailing `Return`, remains necessary because **the
+backend never calls `verify()`** — it consumes a `Module` straight from
+`compile()`, so a chunk the verifier would now reject can still reach the
+lowering, and this test's own mutation is a demonstration that the path exists.
+
+So the test splits:
+
+- **Invert the VM half.** Assert `Vm::new` REJECTS it, with the error text
+  containing "run off the end". That turns a proof-of-concept for a hole into a
+  cross-session regression guard that the hole stays closed, checked from the
+  consumer side rather than from within the verifier's own suite.
+- **Keep the native half**, unchanged in intent.
+
+**The problem this creates, stated rather than glossed.** The file's own rule is
+*"the expected values come from the VM, not from me"*, because an assertion
+written at the same moment as the code encodes the same mistake twice. If the VM
+will no longer run the mutated module, the expected `7` stops being an oracle and
+becomes my expectation, which is the thing that rule exists to forbid.
+
+The only way to keep the oracle is `Vm::new_unchecked`, and reaching for it here
+is uncomfortable in a way worth writing down rather than resolving quietly.
+`CLAUDE.md` calls it "intentional misuse if used to admit programs that would fail
+verification", and this program would fail verification. The defence is that the
+purpose is not admission but observation: the VM's fall-off-the-end behaviour is
+still *defined*, and the test reads that definition rather than relying on it. I
+believe that is within the intent and outside the letter. **It is a judgment call
+and it belongs to the operator, not to me**, so the rebase should carry both the
+inverted rejection assertion and a flagged question rather than a silent
+`new_unchecked`.
+
+### On their surface: the rejection message omits `Reset`
+
+`verify_depth_region` accepts `Op::Trap`, `Op::Return` **and `Op::Reset`** as
+terminators, with a comment directly above saying so and naming this branch's
+false premise as the reason. The error message five lines later says **"Every path
+must exit via Return or Trap."**
+
+The code is right and the message is incomplete. I cannot show the message is
+reachable from a `Stream` chunk, since such a chunk terminates at its `Reset` and
+returns before the message is built, so this may be unreachable in practice and I
+am not claiming otherwise. It is still a message that disagrees with the code
+beside it, which is the third instance of that class this branch has reported to
+`v0.2.3` after the `GRAMMAR.md` push order and the `Op::Reset` comment. Reported
+rather than fixed, because `src/verify.rs` is theirs.
