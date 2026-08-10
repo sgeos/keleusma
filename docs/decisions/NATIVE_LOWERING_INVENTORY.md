@@ -2230,3 +2230,85 @@ their running gate. Editing the same table while that is outstanding manufacture
 a conflict in a shared planning document for no benefit. The proposals are
 recorded here and raised in the mailbox instead; whoever edits it should carry
 both.
+
+## SCOPED: Workstream E's WCET half, and why it is NOT symmetric with the WCMU half
+
+The WCMU half is closed — a native stack bound derived end to end from LLVM's
+own `.stack_sizes`. The natural assumption is that the WCET half closes the same
+way. **It does not, and the reason is worth stating before anyone spends a week
+on it.**
+
+### What already exists is attestation, not derivation
+
+`NativeIterationBound::per_call_wcet_cycles` (`src/verify.rs:1688`) carries a
+**host-attested** per-call cost, supplied through `Vm::set_native_bounds` with a
+`DEFAULT_NATIVE_WCET` fallback. The WCET pass adds it for a native's body,
+summed over static call sites for a verified native and multiplied by
+`max_invocations` for an external one.
+
+So the runtime's existing answer for native code is *"the host asserts a number
+and the verifier trusts it."* That is a trust boundary, not a proof, and it is
+strictly weaker than what the bytecode enjoys.
+
+### Why the WCMU half was derivable
+
+A stack frame size is a **static** property that LLVM computes exactly and can be
+made to emit. Nothing about the microarchitecture changes it. That is why
+`llc --stack-size-section` plus `llvm-readobj --stack-sizes` produced a real
+bound rather than an estimate.
+
+### Why WCET is not the same problem
+
+A cycle count is **not** a static property of the code. It depends on cache
+state, branch prediction, and pipeline occupancy — none of which the emitted
+object records.
+
+`llvm-mca` is present in the same toolchain (verified: LLVM 22.1.8 at
+`/opt/local/libexec/llvm-22/bin/llvm-mca`), and it is the obvious thing to reach
+for. **It must not be used as a WCET tool.** It is a *throughput* analyzer: it
+models steady-state execution with no cache misses and no mispredictions. Its
+output is therefore closer to a **lower** bound on cost than an upper one, and a
+WCET bound built from it would be unsound in the direction that matters. Naming
+it here specifically so the next person does not discover this after wiring it in.
+
+### Where the derivation IS sound, and it falls the right way again
+
+On an **in-order embedded core with no cache** — `thumbv7em-none-eabihf` and its
+relatives — a per-instruction cycle table *is* sound, because the dynamic
+behaviour the host CPU has is absent by construction. The route is then:
+
+1. Emit the object out of process, as the WCMU half already does.
+2. Recover the instruction sequence per basic block (`llvm-objdump`).
+3. Apply a per-target worst-case cycle table.
+4. **Take the maximum over the same worst-case path the bytecode pass already
+   proved**, rather than re-deriving the path.
+
+Step 4 is the load-bearing simplification: the lowering builds its basic blocks
+directly from the bytecode's branch targets, so the control-flow structure is
+preserved and the *path* argument does not have to be redone — only the cost
+table is substituted.
+
+**This mirrors the `.stack_sizes` finding exactly, including the caveat.** That
+one is ELF-only, absent on Mach-O, present on `thumbv7em`, and was recorded as
+falling the right way because the embedded targets are where a stack overflow is
+unrecoverable. The same is true here: WCET is derivable precisely where it is
+needed and undecidable-in-practice precisely where it is not.
+
+### The constraint this places on optimisation, which is already familiar
+
+Step 4 holds only while the lowering's control flow survives to the object. At
+`-O2` LLVM inlines, unrolls, if-converts and merges blocks, and the proven path
+no longer corresponds to anything. **This is the same tension the WCMU half
+already hit**, where `default<O2>` inlined everything and zeroed all frames, so
+`mem2reg` alone was used.
+
+Two ways out, and the choice is a real decision rather than a detail: constrain
+the optimisation level so the CFG is preserved, or derive the bound
+post-codegen from the emitted machine code where whatever LLVM did is already
+reflected. The second is better and is what the WCMU half effectively does.
+
+### Status
+
+Design only. Nothing measured, and the measurement wants a quiet machine, which a
+running gate is not. Recorded so the WCET half is not started on the false
+premise that it is the WCMU half again.
