@@ -82,9 +82,25 @@ in the interface, not only in a document.
 outside the 65,536-byte `wire.bytes`, so the record is emitted into a one-region artifact and
 compared against the payload extracted from the real one. Every later slice inherits this.
 
-**Slice 3 is the first region with MANY records** — `CHUNKS` is the natural target, since it is
-small in every stage and its record is already fully transcribed. That is where batching stops being
-a design note and has to work.
+**Slice 3 is `CHUNKS`, and the prep has scoped it fully.** It is the **smallest region that forces
+batching**, at two batches, so the mechanism gets built where a failure is legible rather than
+inside the 1547-batch regions. `ChunkRecord` is the widest record in the format at **14 fields**,
+and **all 14 offsets are already transcribed and pinned** in `wire.kel`, so the emitter itself is
+mechanical: eleven `u32`, one `u16`, two `u8`.
+
+Three prep results shape it, all measured:
+
+- **`fin` is always the binding constraint; the output window never is.** The largest batch any
+  record kind can produce is 5,456 bytes, 8.3% of `wire.bytes`, a 12-fold margin — structural, since
+  a field is a whole word in `fin` and at most four bytes in the record. **So a slice needs input
+  batching only**, which is a materially smaller mechanism than the staged design implied.
+- **Slice 2's positioning does not generalise.** `emit_header_record` locates its record through
+  `region_base`, an absolute artifact offset, which works only in a one-region artifact. A real
+  `CHUNKS` region sits millions of bytes in. The signature must grow a **window base** and a
+  first-record index, and slice 3 is the moment to do it, while there is exactly one caller.
+- **Seven of twenty region kinds get no emitter coverage from the corpus**, not one: `DEBUG_POOL` is
+  never emitted, and six more are emitted with zero records. Six of seventeen record shapes will
+  need hand-built emitter cases.
 
 ## Slice 1, for context
 

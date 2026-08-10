@@ -428,6 +428,43 @@ The earlier statement that `DEBUG_POOL` is "the one region kind the corpus never
 written and misleading as read. It is the only kind whose REGION is absent; it is one of seven whose
 RECORDS never exist.
 
+### `fin` is always the binding constraint, and the output window never is
+
+There are two capacities in play and it was not obvious which binds. The input side is
+`wire.fin`, 1024 words. The output side is `wire.bytes`, 65,536 bytes. Worst case per batch, over
+every record kind:
+
+| | records per batch | bytes of output |
+|---|---|---|
+| `ENUM_AUX` and `ENUM_VARIANTS` (the worst) | 341 | **5,456** |
+| `NAMES`, `CONSTS`, `SIGNATURES`, others | 256–512 | 4,096 |
+| `CHUNKS` | 73 | 3,504 |
+| `DATA_SLOTS`, `SHARED_LAYOUT` | 256 | 2,048 |
+
+**The largest batch any record kind can produce is 5,456 bytes, 8.3% of the output buffer, a
+12-fold margin.** The reason is structural rather than lucky: a field occupies a whole word in
+`fin` and at most four bytes in the record, so input is always at least twice the output and
+usually four times.
+
+**This collapses the batching design to one loop.** A slice needs input batching only. It does not
+need to chunk its output within a batch, and it cannot overflow `wire.bytes` by emitting one
+batch's worth. That is a materially smaller mechanism than the staged design implied.
+
+### Slice 2's positioning does NOT generalise, and slice 3 must fix it
+
+`emit_header_record` locates its record through `rec_at`, which is
+`region_base(i) + rec * stride + off`, an **absolute artifact offset**. That works only because the
+test emits a one-region artifact where HEADER sits at byte 96. In a real layout `CHUNKS` sits after
+`STRING_POOL` and the others, so `region_base` is in the millions and lands far outside the
+65,536-byte buffer.
+
+**The staged emitter must therefore take a WINDOW BASE rather than derive position from the
+directory.** The host emits a region's payload into a low window, appends it at the true offset, and
+patches the directory afterwards, which the residency section already established it can do. Slice 2
+is a correct special case, not a template, and the record-emitter signature should grow a window
+base and a first-record index at slice 3 rather than later, while there is exactly one caller to
+change.
+
 Three further facts worth carrying:
 
 - **The largest region is `STRING_POOL` for ALL TEN stages**, without exception. It is dominated by
