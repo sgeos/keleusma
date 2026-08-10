@@ -2966,3 +2966,48 @@ structurally impossible to make elsewhere in the suite.
 Both found by reading the file the new code sits beside, which is the same
 one-command check that separated today's caught bugs from last night's
 uncaught one.
+
+## The retcon declarability probe is written; prep is now complete
+
+The last identified-but-unwritten item. It closes R4.4's one medium-confidence
+clause by measuring, rather than by reading further.
+
+**Reporting rather than asserting, and that is a deliberate shape.** Whether LLVM
+22.1 lets inkwell declare `coro.id.retcon` is a fact about the toolchain, not
+about our code. A red test would block the suite over something no change of ours
+could fix. The probe therefore prints the answer and asserts only what a defect
+on our side could break — that the intrinsic NAMES are still present, whose
+absence would contradict the existing test and mean the toolchain moved under us.
+
+The printed outcome decides Workstream B's shape three ways: declarable means the
+architecture's design is reachable through inkwell alone; overloaded means supply
+the types, extra work rather than a blocker; neither means the `coro_intrinsics.rs`
+`llvm-sys` escape hatch R4.4 anticipates, or the switched-resume form instead.
+
+It also prints the switch-resume family beside it, so a reader sees both rather
+than correlating two tests — the asymmetry between them being the finding that
+prompted this.
+
+One more compile error caught by reading first: `get_declaration(&m, &[])` does
+not infer `BasicTypeEnum` from a bare empty slice. The existing test in the same
+file types it explicitly, and copying that was the difference between compiling
+and not. **That is the fourth API error this session found by reading the
+neighbouring code instead of trusting recall**, against one — last night's
+waiter — that was not checked and cost two sessions a night.
+
+### Prep is complete
+
+Everything identified is now written and dry-checked:
+
+| Artefact | State |
+|---|---|
+| Three lowering fixes | **Applied and committed**, 68 tests green |
+| Two must-fire controls | **Applied**, both verified to fire against unfixed code |
+| Four corpus counts | Written, `ConstValue::Enum` undercount caught |
+| O2 differential arm | Written, two API errors caught |
+| Retcon declarability probe | Written, one API error caught |
+
+Nothing further can be prepared without the machine. The remaining work is to
+gate, run the three prepared spikes, and act on what they report — and the
+measurements are deliberately front-loaded, because three of the six queued items
+are "do X only if the count says X is worth doing".
