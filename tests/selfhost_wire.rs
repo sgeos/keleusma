@@ -1313,3 +1313,221 @@ fn a_mutated_record_stride_is_reported() {
     }
     assert_ne!(got, want, "a mutated stride produced identical bytes");
 }
+
+// =========================================================================
+// SLICE 5a — the schema layer: region kinds, NameRef, ShapeRecord
+// =========================================================================
+
+use keleusma::wire_schema::{NameRef, ShapeRecord, kind};
+use keleusma_wire::WireRecord;
+
+const CMD_NAME_COUNT: i64 = 18;
+const CMD_NAME_OFFSET: i64 = 19;
+const CMD_NAME_LENGTH: i64 = 20;
+const CMD_NAME_BYTE: i64 = 21;
+const CMD_SHAPE_COUNT: i64 = 22;
+const CMD_SHAPE_TAG: i64 = 23;
+const CMD_SHAPE_KIND: i64 = 24;
+const CMD_SHAPE_SIZE: i64 = 25;
+
+/// Extract a constant that `wire.kel` transcribes, by name.
+///
+/// Parsing the Keleusma source is deliberate. The alternative is to restate the
+/// number in this file, which would only prove the test agrees with itself.
+fn kel_const(fn_name: &str) -> i64 {
+    let needle = format!("fn {fn_name}() -> Word {{");
+    let at = WIRE_KEL
+        .find(&needle)
+        .unwrap_or_else(|| panic!("wire.kel has no `{fn_name}`"));
+    let rest = &WIRE_KEL[at + needle.len()..];
+    let end = rest.find('}').expect("unterminated body");
+    let body = rest[..end].trim();
+    body.strip_prefix("0x").map_or_else(
+        || body.parse::<i64>().expect("decimal literal"),
+        |hex| i64::from_str_radix(hex, 16).expect("hex literal"),
+    )
+}
+
+#[test]
+fn the_transcribed_offsets_match_the_derive() {
+    // THE POINT OF THIS TEST. wire.kel hardcodes offsets that
+    // `#[derive(WireRecord)]` generates by packing with no implicit padding and
+    // rounding the stride to a word. They cannot be recomputed by eye, so each
+    // one is checked against the generated constant. A mistranscription fails
+    // here; a record that later gains a field also fails here, rather than
+    // silently reading the wrong bytes in a corner no test exercises.
+    assert_eq!(
+        kel_const("nameref_stride"),
+        NameRef::STRIDE as i64,
+        "NameRef stride"
+    );
+    assert_eq!(
+        kel_const("nameref_off_offset"),
+        NameRef::OFFSET_OFFSET as i64
+    );
+    assert_eq!(
+        kel_const("nameref_off_length"),
+        NameRef::OFFSET_LENGTH as i64
+    );
+
+    assert_eq!(
+        kel_const("shape_stride"),
+        ShapeRecord::STRIDE as i64,
+        "ShapeRecord stride"
+    );
+    assert_eq!(kel_const("shape_off_tag"), ShapeRecord::OFFSET_TAG as i64);
+    assert_eq!(kel_const("shape_off_kind"), ShapeRecord::OFFSET_KIND as i64);
+    assert_eq!(
+        kel_const("shape_off_reserved"),
+        ShapeRecord::OFFSET_RESERVED as i64
+    );
+    assert_eq!(kel_const("shape_off_size"), ShapeRecord::OFFSET_SIZE as i64);
+}
+
+#[test]
+fn the_transcribed_region_kinds_match_the_schema() {
+    assert_eq!(kel_const("kind_string_pool"), i64::from(kind::STRING_POOL));
+    assert_eq!(kel_const("kind_names"), i64::from(kind::NAMES));
+    assert_eq!(kel_const("kind_shapes"), i64::from(kind::SHAPES));
+}
+
+#[test]
+fn the_constant_extractor_actually_reads_wire_kel() {
+    // must-fire for the harness above: if `kel_const` silently returned a
+    // constant, every assertion in the two tests would pass vacuously.
+    assert_eq!(kel_const("nameref_off_offset"), 0);
+    assert_eq!(kel_const("nameref_off_length"), 4);
+    assert_ne!(
+        kel_const("kind_names"),
+        kel_const("kind_shapes"),
+        "the extractor returns the same value for different constants"
+    );
+}
+
+/// `(pool_offset, length)` for each name in the fixture.
+type NameFixture = Vec<(u32, u32)>;
+/// `(tag, kind, size)` for each shape in the fixture.
+type ShapeFixture = Vec<(u16, u8, u32)>;
+
+/// An artifact carrying a string pool, a name table, and a shape table.
+fn schema_artifact() -> (Vec<u8>, NameFixture, ShapeFixture) {
+    let names = vec![(0u32, 5u32), (5, 4), (9, 7)];
+    let shapes = vec![(0u16, 0u8, 0u32), (1, 2, 8), (2, 3, 64)];
+    let mut b = keleusma_wire::WireBuilder::new();
+    let sp = b.region(kind::STRING_POOL, 0).expect("pool");
+    b.push(sp, b"alphabetaepsilon");
+    let nm = b.region(kind::NAMES, 0).expect("names");
+    for (offset, length) in &names {
+        let mut buf = [0u8; 8];
+        NameRef {
+            offset: *offset,
+            length: *length,
+        }
+        .write_record(&mut buf)
+        .expect("encode");
+        b.push(nm, &buf);
+    }
+    let sh = b.region(kind::SHAPES, 0).expect("shapes");
+    for (tag, k, size) in &shapes {
+        let mut buf = [0u8; 8];
+        ShapeRecord {
+            tag: *tag,
+            kind: *k,
+            reserved: 0,
+            size: *size,
+        }
+        .write_record(&mut buf)
+        .expect("encode");
+        b.push(sh, &buf);
+    }
+    (b.finish().expect("finish"), names, shapes)
+}
+
+#[test]
+fn the_schema_accessors_resolve_names_and_shapes_by_kind() {
+    let (art, names, shapes) = schema_artifact();
+    let mut vm = vm_for(WIRE_KEL);
+    let n_regions = 3i64;
+    let pool = b"alphabetaepsilon";
+
+    let (count, _) = run_cmd_args(
+        &mut vm,
+        CMD_NAME_COUNT,
+        n_regions,
+        &art,
+        &[],
+        [0, 0, 0, 0],
+        0,
+    )
+    .expect("run");
+    assert_eq!(count, names.len() as i64, "name count");
+
+    for (i, (offset, length)) in names.iter().enumerate() {
+        for (cmd, want, what) in [
+            (CMD_NAME_OFFSET, i64::from(*offset), "offset"),
+            (CMD_NAME_LENGTH, i64::from(*length), "length"),
+        ] {
+            let (got, _) = run_cmd_args(&mut vm, cmd, n_regions, &art, &[], [i as i64, 0, 0, 0], 0)
+                .expect("run");
+            assert_eq!(got, want, "name {i} {what}");
+        }
+        // And the bytes themselves, which cross from the name table into the
+        // string pool — the step that makes this a schema rather than a table.
+        for j in 0..*length as usize {
+            let (got, _) = run_cmd_args(
+                &mut vm,
+                CMD_NAME_BYTE,
+                n_regions,
+                &art,
+                &[],
+                [i as i64, j as i64, 0, 0],
+                0,
+            )
+            .expect("run");
+            assert_eq!(
+                got,
+                i64::from(pool[*offset as usize + j]),
+                "name {i} byte {j}"
+            );
+        }
+    }
+
+    let (scount, _) = run_cmd_args(
+        &mut vm,
+        CMD_SHAPE_COUNT,
+        n_regions,
+        &art,
+        &[],
+        [0, 0, 0, 0],
+        0,
+    )
+    .expect("run");
+    assert_eq!(scount, shapes.len() as i64, "shape count");
+    for (i, (tag, k, size)) in shapes.iter().enumerate() {
+        for (cmd, want, what) in [
+            (CMD_SHAPE_TAG, i64::from(*tag), "tag"),
+            (CMD_SHAPE_KIND, i64::from(*k), "kind"),
+            (CMD_SHAPE_SIZE, i64::from(*size), "size"),
+        ] {
+            let (got, _) = run_cmd_args(&mut vm, cmd, n_regions, &art, &[], [i as i64, 0, 0, 0], 0)
+                .expect("run");
+            assert_eq!(got, want, "shape {i} {what}");
+        }
+    }
+}
+
+#[test]
+fn an_absent_region_reports_zero_rather_than_reading_from_a_negative_base() {
+    // Resolution by kind must fail closed. An artifact with a string pool but
+    // no name or shape table must report zero counts, not index from `-1`.
+    let mut b = keleusma_wire::WireBuilder::new();
+    let sp = b.region(kind::STRING_POOL, 0).expect("pool");
+    b.push(sp, b"only-a-pool");
+    let art = b.finish().expect("finish");
+    let mut vm = vm_for(WIRE_KEL);
+    for (cmd, what) in [(CMD_NAME_COUNT, "names"), (CMD_SHAPE_COUNT, "shapes")] {
+        let (got, _) =
+            run_cmd_args(&mut vm, cmd, 1, &art, &[], [0, 0, 0, 0], 0).expect("must not trap");
+        assert_eq!(got, 0, "absent {what} region must report zero");
+    }
+}

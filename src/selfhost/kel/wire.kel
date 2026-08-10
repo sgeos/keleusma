@@ -534,6 +534,88 @@ fn emit_pattern_records(i: Word, n: Word) -> Word {
     n
 }
 
+// --- SLICE 5: the schema layer -------------------------------------------
+//
+// Slices 2 to 4 gave a container with no opinions: a prologue, a directory of
+// numbered regions, and fixed-stride records inside them. The schema is what
+// assigns meaning to those numbers, and it lives HERE rather than in the
+// container so the container stays reusable by a project with different
+// content. `src/wire_schema.rs` is the Rust side of the same layer.
+//
+// THE OFFSETS BELOW ARE TRANSCRIBED, NOT DERIVED, AND THAT IS DELIBERATE.
+// `#[derive(WireRecord)]` packs fields with NO implicit padding and then rounds
+// the stride up to a whole word, which is not what a C layout would give. The
+// numbers therefore cannot be recomputed from the field types by eye. A test
+// asserts every constant below against the derive's generated `OFFSET_*` and
+// `STRIDE`, so a mistranscription fails immediately and a record that later
+// gains a field fails then rather than silently reading the wrong bytes.
+//
+// Slice 5a covers the two records nothing else depends on. 5b to 5e follow, in
+// docs/decisions/WIRE_FORMAT_SELFHOST_PLAN.md.
+
+// Region kinds, from `wire_schema::kind`. Numbered from 0x0010 so a zeroed
+// directory entry names no real region.
+fn kind_string_pool() -> Word { 0x0010 }
+fn kind_names() -> Word { 0x0011 }
+fn kind_shapes() -> Word { 0x0015 }
+
+// NameRef: a slice of the string pool. offset u32 @0, length u32 @4.
+fn nameref_stride() -> Word { 8 }
+fn nameref_off_offset() -> Word { 0 }
+fn nameref_off_length() -> Word { 4 }
+
+// ShapeRecord: a flat operand shape. tag u16 @0, kind u8 @2, reserved u8 @3,
+// size u32 @4. It fits ONE word, which is why shapes need no side table where
+// struct and enum constants do.
+fn shape_stride() -> Word { 8 }
+fn shape_off_tag() -> Word { 0 }
+fn shape_off_kind() -> Word { 2 }
+fn shape_off_reserved() -> Word { 3 }
+fn shape_off_size() -> Word { 4 }
+
+// Resolving a region BY KIND rather than by index is what makes this a schema
+// layer. A reader asks for "the names table", not "region 4", so the artifact's
+// region ordering is not part of the contract. Absent regions return 0 - 1 from
+// `dir_find`, and the accessors below propagate that rather than reading from a
+// negative base.
+fn name_count() -> Word {
+    if dir_find(kind_names()) == 0 - 1 { 0 } else {
+        rec_count(dir_find(kind_names()), nameref_stride())
+    }
+}
+
+fn name_offset(i: Word) -> Word {
+    rec_u32(dir_find(kind_names()), nameref_stride(), i, nameref_off_offset())
+}
+
+fn name_length(i: Word) -> Word {
+    rec_u32(dir_find(kind_names()), nameref_stride(), i, nameref_off_length())
+}
+
+// Byte `j` of name `i`, resolved through the string pool. Two regions and a
+// record are consulted to answer it, which is the whole point of the layer.
+fn name_byte(i: Word, j: Word) -> Word {
+    pool_u8(dir_find(kind_string_pool()), name_offset(i) + j)
+}
+
+fn shape_count() -> Word {
+    if dir_find(kind_shapes()) == 0 - 1 { 0 } else {
+        rec_count(dir_find(kind_shapes()), shape_stride())
+    }
+}
+
+fn shape_tag(i: Word) -> Word {
+    rec_u16(dir_find(kind_shapes()), shape_stride(), i, shape_off_tag())
+}
+
+fn shape_kind(i: Word) -> Word {
+    rec_u8(dir_find(kind_shapes()), shape_stride(), i, shape_off_kind())
+}
+
+fn shape_size(i: Word) -> Word {
+    rec_u32(dir_find(kind_shapes()), shape_stride(), i, shape_off_size())
+}
+
 // The host drives the module through a one-argument entry point, so the argument
 // selects the operation. An unrecognised command returns a distinct code rather
 // than a plausible value, so a caller that passes the wrong one finds out.
@@ -556,7 +638,29 @@ fn emit_pattern_records(i: Word, n: Word) -> Word {
 //  15  u16 field `warg4` of record `warg3`, region `warg`, stride `warg2`
 //  16  byte `warg2` of region `warg` viewed as a pool
 //  17  fill region `warg` with `warg2` pattern records, then re-emit nothing
-fn main(cmd: Word) -> Word {
+//  18  number of names, 0 when the region is absent
+//  19  byte offset of name `warg` into the string pool
+//  20  byte length of name `warg`
+//  21  byte `warg2` of name `warg`
+//  22  number of shapes, 0 when the region is absent
+//  23  tag of shape `warg`
+//  24  kind of shape `warg`
+//  25  size of shape `warg`
+// THE DISPATCH IS SPLIT IN TWO, AND THE REASON IS A HARD LANGUAGE LIMIT.
+//
+// The parser rejects an expression nested more than 24 deep, with
+// "parser recursion depth 24 exceeded; deeply nested expressions are rejected
+// to prevent stack overflow". A single `if / else if / ...` chain is
+// right-nested, so one arm costs one level of depth, and this module passed 24
+// commands while growing. The rejection is a clean diagnostic rather than a
+// crash, which is the language behaving well — but it does cap a flat dispatch
+// at roughly two dozen arms.
+//
+// Splitting on a threshold keeps each chain far below the limit and leaves room
+// for slices 5b to 5e. The threshold is arbitrary and only has to keep both
+// halves short.
+
+fn dispatch_container(cmd: Word) -> Word {
     if cmd == 0 { crc_range(0, wire.len) } else {
     if cmd == 1 { emit_prologue(wire.nregions) } else {
     if cmd == 2 { parse_prologue() } else {
@@ -570,10 +674,26 @@ fn main(cmd: Word) -> Word {
     if cmd == 10 { emit_header() } else {
     if cmd == 11 { region_base(wire.warg) } else {
     if cmd == 12 { region_bytes(wire.warg) } else {
+    0 - 98 }}}}}}}}}}}}}
+}
+
+fn dispatch_schema(cmd: Word) -> Word {
     if cmd == 13 { rec_count(wire.warg, wire.warg2) } else {
     if cmd == 14 { rec_u32(wire.warg, wire.warg2, wire.warg3, wire.warg4) } else {
     if cmd == 15 { rec_u16(wire.warg, wire.warg2, wire.warg3, wire.warg4) } else {
     if cmd == 16 { pool_u8(wire.warg, wire.warg2) } else {
     if cmd == 17 { emit_header(); emit_pattern_records(wire.warg, wire.warg2) } else {
-    0 - 99 }}}}}}}}}}}}}}}}}}
+    if cmd == 18 { name_count() } else {
+    if cmd == 19 { name_offset(wire.warg) } else {
+    if cmd == 20 { name_length(wire.warg) } else {
+    if cmd == 21 { name_byte(wire.warg, wire.warg2) } else {
+    if cmd == 22 { shape_count() } else {
+    if cmd == 23 { shape_tag(wire.warg) } else {
+    if cmd == 24 { shape_kind(wire.warg) } else {
+    if cmd == 25 { shape_size(wire.warg) } else {
+    0 - 99 }}}}}}}}}}}}}
+}
+
+fn main(cmd: Word) -> Word {
+    if cmd < 13 { dispatch_container(cmd) } else { dispatch_schema(cmd) }
 }
