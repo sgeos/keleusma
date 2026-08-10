@@ -2511,3 +2511,456 @@ fn the_data_segment_tables_read_back_field_for_field() {
         }
     }
 }
+
+// =========================================================================
+// SLICE 5e — the module level: chunks, natives, header
+// =========================================================================
+
+use keleusma::wire_schema::{ChunkRecord, HeaderRecord, NativeRecord, NativeReturnRecord};
+
+const CMD_CHUNK_COUNT: i64 = 69;
+const CMD_CHUNK_U32: i64 = 70;
+const CMD_CHUNK_LOCALS: i64 = 71;
+const CMD_CHUNK_PARAMS: i64 = 72;
+const CMD_CHUNK_BLOCK_TYPE: i64 = 73;
+const CMD_CHUNK_HAS_DEBUG: i64 = 74;
+const CMD_NATIVE_COUNT: i64 = 75;
+const CMD_NATIVE_NAME: i64 = 76;
+const CMD_NATRET_COUNT: i64 = 77;
+const CMD_NATRET_SHAPE: i64 = 78;
+const CMD_HEADER_PRESENT: i64 = 79;
+const CMD_HEADER_U32: i64 = 80;
+const CMD_HEADER_U8: i64 = 81;
+const CMD_ENTRY_ABSENT: i64 = 82;
+const CMD_ABSENT_INDEX: i64 = 83;
+
+#[test]
+fn the_slice_5e_offsets_and_kinds_match_the_schema() {
+    assert_eq!(kel_const("chunk_stride"), ChunkRecord::STRIDE as i64);
+    for (kel, want) in [
+        ("chunk_off_name", ChunkRecord::OFFSET_NAME),
+        ("chunk_off_consts_first", ChunkRecord::OFFSET_CONSTS_FIRST),
+        ("chunk_off_consts_count", ChunkRecord::OFFSET_CONSTS_COUNT),
+        (
+            "chunk_off_templates_first",
+            ChunkRecord::OFFSET_TEMPLATES_FIRST,
+        ),
+        (
+            "chunk_off_templates_count",
+            ChunkRecord::OFFSET_TEMPLATES_COUNT,
+        ),
+        (
+            "chunk_off_param_types_first",
+            ChunkRecord::OFFSET_PARAM_TYPES_FIRST,
+        ),
+        (
+            "chunk_off_param_types_count",
+            ChunkRecord::OFFSET_PARAM_TYPES_COUNT,
+        ),
+        ("chunk_off_debug_first", ChunkRecord::OFFSET_DEBUG_FIRST),
+        ("chunk_off_debug_len", ChunkRecord::OFFSET_DEBUG_LEN),
+        (
+            "chunk_off_op_byte_offset",
+            ChunkRecord::OFFSET_OP_BYTE_OFFSET,
+        ),
+        (
+            "chunk_off_op_record_count",
+            ChunkRecord::OFFSET_OP_RECORD_COUNT,
+        ),
+        ("chunk_off_local_count", ChunkRecord::OFFSET_LOCAL_COUNT),
+        ("chunk_off_param_count", ChunkRecord::OFFSET_PARAM_COUNT),
+        ("chunk_off_block_type", ChunkRecord::OFFSET_BLOCK_TYPE),
+    ] {
+        assert_eq!(kel_const(kel), want as i64, "{kel}");
+    }
+
+    assert_eq!(kel_const("native_stride"), NativeRecord::STRIDE as i64);
+    assert_eq!(
+        kel_const("native_off_name"),
+        NativeRecord::OFFSET_NAME as i64
+    );
+    assert_eq!(
+        kel_const("natret_stride"),
+        NativeReturnRecord::STRIDE as i64
+    );
+    assert_eq!(
+        kel_const("natret_off_shape"),
+        NativeReturnRecord::OFFSET_SHAPE as i64
+    );
+
+    assert_eq!(kel_const("header_stride"), HeaderRecord::STRIDE as i64);
+    for (kel, want) in [
+        ("header_off_entry_point", HeaderRecord::OFFSET_ENTRY_POINT),
+        (
+            "header_off_word_bits_log2",
+            HeaderRecord::OFFSET_WORD_BITS_LOG2,
+        ),
+        (
+            "header_off_addr_bits_log2",
+            HeaderRecord::OFFSET_ADDR_BITS_LOG2,
+        ),
+        (
+            "header_off_float_bits_log2",
+            HeaderRecord::OFFSET_FLOAT_BITS_LOG2,
+        ),
+        ("header_off_flags", HeaderRecord::OFFSET_FLAGS),
+        ("header_off_wcet_cycles", HeaderRecord::OFFSET_WCET_CYCLES),
+        ("header_off_wcmu_bytes", HeaderRecord::OFFSET_WCMU_BYTES),
+        (
+            "header_off_shared_data_bytes",
+            HeaderRecord::OFFSET_SHARED_DATA_BYTES,
+        ),
+        (
+            "header_off_private_data_bytes",
+            HeaderRecord::OFFSET_PRIVATE_DATA_BYTES,
+        ),
+        ("header_off_schema_hash", HeaderRecord::OFFSET_SCHEMA_HASH),
+    ] {
+        assert_eq!(kel_const(kel), want as i64, "{kel}");
+    }
+
+    for (kel, want) in [
+        ("kind_param_types", kind::PARAM_TYPES),
+        ("kind_chunks", kind::CHUNKS),
+        ("kind_natives", kind::NATIVES),
+        ("kind_header", kind::HEADER),
+        ("kind_debug_pool", kind::DEBUG_POOL),
+        ("kind_native_returns", kind::NATIVE_RETURNS),
+    ] {
+        assert_eq!(kel_const(kel), i64::from(want), "{kel}");
+    }
+    assert_eq!(
+        kel_const("absent_index"),
+        i64::from(u32::MAX),
+        "ABSENT sentinel"
+    );
+}
+
+#[allow(clippy::type_complexity)]
+fn module_artifact() -> (Vec<u8>, Vec<ChunkRecord>, Vec<u32>, Vec<u32>, HeaderRecord) {
+    let chunks = vec![
+        ChunkRecord {
+            name: 1,
+            consts_first: 0,
+            consts_count: 2,
+            templates_first: 0,
+            templates_count: 1,
+            param_types_first: 0,
+            param_types_count: 2,
+            debug_first: u32::MAX,
+            debug_len: 0,
+            op_byte_offset: 64,
+            op_record_count: 30,
+            local_count: 9,
+            param_count: 2,
+            block_type: 1,
+        },
+        ChunkRecord {
+            name: 2,
+            consts_first: 2,
+            consts_count: 0,
+            templates_first: 1,
+            templates_count: 0,
+            param_types_first: 2,
+            param_types_count: 0,
+            debug_first: 0,
+            debug_len: 12,
+            op_byte_offset: 184,
+            op_record_count: 7,
+            local_count: 65535,
+            param_count: 255,
+            block_type: 3,
+        },
+    ];
+    // DIFFERENT LENGTHS on purpose: three names, two return shapes. Pairing
+    // them in one record silently dropped the surplus, which is why they are
+    // separate regions.
+    let native_names = vec![10u32, 11, 12];
+    let native_returns = vec![5u32, u32::MAX];
+    let header = HeaderRecord {
+        entry_point: u32::MAX,
+        word_bits_log2: 6,
+        addr_bits_log2: 6,
+        float_bits_log2: 6,
+        flags: 0,
+        wcet_cycles: 123_456,
+        wcmu_bytes: 4_000_000_000,
+        shared_data_bytes: 65_536,
+        private_data_bytes: 32,
+        schema_hash: 0xDEAD_BEEF,
+        reserved: 0,
+    };
+
+    let mut b = keleusma_wire::WireBuilder::new();
+    let c = b.region(kind::CHUNKS, 0).expect("chunks");
+    for r in &chunks {
+        let mut buf = [0u8; 48];
+        r.write_record(&mut buf).expect("enc");
+        b.push(c, &buf);
+    }
+    let n = b.region(kind::NATIVES, 0).expect("natives");
+    for name in &native_names {
+        let mut buf = [0u8; 8];
+        NativeRecord {
+            name: *name,
+            reserved: 0,
+        }
+        .write_record(&mut buf)
+        .expect("enc");
+        b.push(n, &buf);
+    }
+    let nr = b.region(kind::NATIVE_RETURNS, 0).expect("native returns");
+    for shape in &native_returns {
+        let mut buf = [0u8; 8];
+        NativeReturnRecord {
+            shape: *shape,
+            reserved: 0,
+        }
+        .write_record(&mut buf)
+        .expect("enc");
+        b.push(nr, &buf);
+    }
+    let h = b.region(kind::HEADER, 0).expect("header");
+    let mut buf = [0u8; 32];
+    header.write_record(&mut buf).expect("enc");
+    b.push(h, &buf);
+    (
+        b.finish().expect("finish"),
+        chunks,
+        native_names,
+        native_returns,
+        header,
+    )
+}
+
+#[test]
+fn the_chunk_table_reads_back_every_field() {
+    let (art, chunks, _, _, _) = module_artifact();
+    let mut vm = vm_for(WIRE_KEL);
+    let n = 4i64;
+    let (count, _) =
+        run_cmd_args(&mut vm, CMD_CHUNK_COUNT, n, &art, &[], [0, 0, 0, 0], 0).expect("run");
+    assert_eq!(count, chunks.len() as i64);
+
+    for (i, c) in chunks.iter().enumerate() {
+        for (off, want, what) in [
+            (ChunkRecord::OFFSET_NAME, c.name, "name"),
+            (
+                ChunkRecord::OFFSET_CONSTS_FIRST,
+                c.consts_first,
+                "consts_first",
+            ),
+            (
+                ChunkRecord::OFFSET_CONSTS_COUNT,
+                c.consts_count,
+                "consts_count",
+            ),
+            (
+                ChunkRecord::OFFSET_TEMPLATES_FIRST,
+                c.templates_first,
+                "templates_first",
+            ),
+            (
+                ChunkRecord::OFFSET_TEMPLATES_COUNT,
+                c.templates_count,
+                "templates_count",
+            ),
+            (
+                ChunkRecord::OFFSET_PARAM_TYPES_FIRST,
+                c.param_types_first,
+                "param_types_first",
+            ),
+            (
+                ChunkRecord::OFFSET_PARAM_TYPES_COUNT,
+                c.param_types_count,
+                "param_types_count",
+            ),
+            (
+                ChunkRecord::OFFSET_DEBUG_FIRST,
+                c.debug_first,
+                "debug_first",
+            ),
+            (ChunkRecord::OFFSET_DEBUG_LEN, c.debug_len, "debug_len"),
+            (
+                ChunkRecord::OFFSET_OP_BYTE_OFFSET,
+                c.op_byte_offset,
+                "op_byte_offset",
+            ),
+            (
+                ChunkRecord::OFFSET_OP_RECORD_COUNT,
+                c.op_record_count,
+                "op_record_count",
+            ),
+        ] {
+            let (got, _) = run_cmd_args(
+                &mut vm,
+                CMD_CHUNK_U32,
+                n,
+                &art,
+                &[],
+                [i as i64, off as i64, 0, 0],
+                0,
+            )
+            .expect("run");
+            assert_eq!(got, i64::from(want), "chunk {i} {what}");
+        }
+        for (cmd, want, what) in [
+            (CMD_CHUNK_LOCALS, i64::from(c.local_count), "local_count"),
+            (CMD_CHUNK_PARAMS, i64::from(c.param_count), "param_count"),
+            (CMD_CHUNK_BLOCK_TYPE, i64::from(c.block_type), "block_type"),
+            (
+                CMD_CHUNK_HAS_DEBUG,
+                i64::from(c.debug_first != u32::MAX),
+                "has_debug",
+            ),
+        ] {
+            let (got, _) =
+                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0], 0).expect("run");
+            assert_eq!(got, want, "chunk {i} {what}");
+        }
+    }
+}
+
+#[test]
+fn natives_and_their_return_shapes_carry_independent_lengths() {
+    // THE DEFECT THIS LAYOUT EXISTS TO PREVENT. The two vectors are allowed to
+    // differ in length; pairing them in one record silently dropped the
+    // surplus. The fixture has three names and two return shapes, so a reader
+    // that derived one count from the other would lose a name here.
+    let (art, _, names, returns, _) = module_artifact();
+    assert_ne!(
+        names.len(),
+        returns.len(),
+        "fixture must have unequal lengths"
+    );
+    let mut vm = vm_for(WIRE_KEL);
+    let n = 4i64;
+
+    let (nc, _) =
+        run_cmd_args(&mut vm, CMD_NATIVE_COUNT, n, &art, &[], [0, 0, 0, 0], 0).expect("run");
+    let (rc, _) =
+        run_cmd_args(&mut vm, CMD_NATRET_COUNT, n, &art, &[], [0, 0, 0, 0], 0).expect("run");
+    assert_eq!(nc, names.len() as i64, "native name count");
+    assert_eq!(rc, returns.len() as i64, "native return count");
+    assert_ne!(nc, rc, "the two counts must be reported independently");
+
+    for (i, want) in names.iter().enumerate() {
+        let (got, _) = run_cmd_args(
+            &mut vm,
+            CMD_NATIVE_NAME,
+            n,
+            &art,
+            &[],
+            [i as i64, 0, 0, 0],
+            0,
+        )
+        .expect("run");
+        assert_eq!(got, i64::from(*want), "native {i} name");
+    }
+    for (i, want) in returns.iter().enumerate() {
+        let (got, _) = run_cmd_args(
+            &mut vm,
+            CMD_NATRET_SHAPE,
+            n,
+            &art,
+            &[],
+            [i as i64, 0, 0, 0],
+            0,
+        )
+        .expect("run");
+        assert_eq!(got, i64::from(*want), "native return {i} shape");
+    }
+}
+
+#[test]
+fn the_header_reads_back_and_the_absent_sentinel_is_recognised() {
+    let (art, _, _, _, h) = module_artifact();
+    let mut vm = vm_for(WIRE_KEL);
+    let n = 4i64;
+
+    let (present, _) =
+        run_cmd_args(&mut vm, CMD_HEADER_PRESENT, n, &art, &[], [0, 0, 0, 0], 0).expect("run");
+    assert_eq!(present, 1);
+
+    for (off, want, what) in [
+        (
+            HeaderRecord::OFFSET_ENTRY_POINT,
+            h.entry_point,
+            "entry_point",
+        ),
+        (
+            HeaderRecord::OFFSET_WCET_CYCLES,
+            h.wcet_cycles,
+            "wcet_cycles",
+        ),
+        (HeaderRecord::OFFSET_WCMU_BYTES, h.wcmu_bytes, "wcmu_bytes"),
+        (
+            HeaderRecord::OFFSET_SHARED_DATA_BYTES,
+            h.shared_data_bytes,
+            "shared_data_bytes",
+        ),
+        (
+            HeaderRecord::OFFSET_PRIVATE_DATA_BYTES,
+            h.private_data_bytes,
+            "private_data_bytes",
+        ),
+        (
+            HeaderRecord::OFFSET_SCHEMA_HASH,
+            h.schema_hash,
+            "schema_hash",
+        ),
+    ] {
+        let (got, _) = run_cmd_args(
+            &mut vm,
+            CMD_HEADER_U32,
+            n,
+            &art,
+            &[],
+            [off as i64, 0, 0, 0],
+            0,
+        )
+        .expect("run");
+        assert_eq!(got, i64::from(want), "header {what}");
+    }
+    for (off, want, what) in [
+        (
+            HeaderRecord::OFFSET_WORD_BITS_LOG2,
+            h.word_bits_log2,
+            "word_bits_log2",
+        ),
+        (
+            HeaderRecord::OFFSET_ADDR_BITS_LOG2,
+            h.addr_bits_log2,
+            "addr_bits_log2",
+        ),
+        (
+            HeaderRecord::OFFSET_FLOAT_BITS_LOG2,
+            h.float_bits_log2,
+            "float_bits_log2",
+        ),
+        (HeaderRecord::OFFSET_FLAGS, h.flags, "flags"),
+    ] {
+        let (got, _) = run_cmd_args(
+            &mut vm,
+            CMD_HEADER_U8,
+            n,
+            &art,
+            &[],
+            [off as i64, 0, 0, 0],
+            0,
+        )
+        .expect("run");
+        assert_eq!(got, i64::from(want), "header {what}");
+    }
+
+    // `u32::MAX` means "no entry point", and must not be read as 4294967295
+    // being a real chunk index.
+    let (sentinel, _) =
+        run_cmd_args(&mut vm, CMD_ABSENT_INDEX, n, &art, &[], [0, 0, 0, 0], 0).expect("run");
+    assert_eq!(sentinel, i64::from(u32::MAX));
+    let (absent, _) =
+        run_cmd_args(&mut vm, CMD_ENTRY_ABSENT, n, &art, &[], [0, 0, 0, 0], 0).expect("run");
+    assert_eq!(absent, 1, "entry_point of u32::MAX means absent");
+    // wcmu_bytes is four billion, above i32, so a signed narrow read shows up.
+    assert!(h.wcmu_bytes > i32::MAX as u32, "fixture must exceed i32");
+}

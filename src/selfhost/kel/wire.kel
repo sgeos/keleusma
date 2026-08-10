@@ -1051,6 +1051,145 @@ fn datainit_range_count(i: Word) -> Word {
     rec_u32(dir_find(kind_data_init()), dinit_stride(), i, dinit_off_count())
 }
 
+// --- SLICE 5e: the module level ------------------------------------------
+//
+// The chunk table, the natives, and the scalar header. These reference
+// everything the earlier slices built, which is why they come last.
+//
+// TWO THINGS THE REFERENCE LEARNED THE HARD WAY, both preserved here.
+//
+// `ABSENT` is `u32::MAX`, the optional-index sentinel for an entry point, a
+// native's return shape, and a chunk's debug pool. A sentinel rather than a
+// parallel presence flag, because these index tables the container already
+// bounds far below four billion entries, and a flag would have to be kept in
+// step with the field it describes.
+//
+// NATIVES AND NATIVE_RETURNS ARE SEPARATE REGIONS. They were first encoded
+// paired in one record, on the reasoning that two parallel vectors are exactly
+// the arrangement that falls out of step. That reasoning was right about the
+// risk and wrong about the fix: the two are ALREADY allowed to differ in
+// length, and pairing them silently DROPPED the surplus instead of preventing
+// it. Independent regions carry both lengths, so the counts are asked for
+// separately here and a test gives them different lengths on purpose.
+
+fn kind_param_types() -> Word { 0x001E }
+fn kind_chunks() -> Word { 0x001F }
+fn kind_natives() -> Word { 0x0020 }
+fn kind_header() -> Word { 0x0021 }
+fn kind_debug_pool() -> Word { 0x0022 }
+fn kind_native_returns() -> Word { 0x0023 }
+
+// The optional-index sentinel, `u32::MAX`.
+fn absent_index() -> Word { 4294967295 }
+
+// ChunkRecord, six words. Eleven u32 fields, then local_count u16,
+// param_count u8, block_type u8.
+fn chunk_stride() -> Word { 48 }
+fn chunk_off_name() -> Word { 0 }
+fn chunk_off_consts_first() -> Word { 4 }
+fn chunk_off_consts_count() -> Word { 8 }
+fn chunk_off_templates_first() -> Word { 12 }
+fn chunk_off_templates_count() -> Word { 16 }
+fn chunk_off_param_types_first() -> Word { 20 }
+fn chunk_off_param_types_count() -> Word { 24 }
+fn chunk_off_debug_first() -> Word { 28 }
+fn chunk_off_debug_len() -> Word { 32 }
+fn chunk_off_op_byte_offset() -> Word { 36 }
+fn chunk_off_op_record_count() -> Word { 40 }
+fn chunk_off_local_count() -> Word { 44 }
+fn chunk_off_param_count() -> Word { 46 }
+fn chunk_off_block_type() -> Word { 47 }
+
+// NativeRecord and NativeReturnRecord: one index plus reserved, one word each.
+fn native_stride() -> Word { 8 }
+fn native_off_name() -> Word { 0 }
+fn natret_stride() -> Word { 8 }
+fn natret_off_shape() -> Word { 0 }
+
+// HeaderRecord, four words.
+fn header_stride() -> Word { 32 }
+fn header_off_entry_point() -> Word { 0 }
+fn header_off_word_bits_log2() -> Word { 4 }
+fn header_off_addr_bits_log2() -> Word { 5 }
+fn header_off_float_bits_log2() -> Word { 6 }
+fn header_off_flags() -> Word { 7 }
+fn header_off_wcet_cycles() -> Word { 8 }
+fn header_off_wcmu_bytes() -> Word { 12 }
+fn header_off_shared_data_bytes() -> Word { 16 }
+fn header_off_private_data_bytes() -> Word { 20 }
+fn header_off_schema_hash() -> Word { 24 }
+
+fn chunk_count() -> Word {
+    if dir_find(kind_chunks()) == 0 - 1 { 0 - 1 } else {
+        rec_count(dir_find(kind_chunks()), chunk_stride())
+    }
+}
+
+// A chunk's u32 field at `off`. Generic rather than fourteen named accessors,
+// because the OFFSETS are what must be right and they are named and pinned
+// above; a per-field command would multiply the dispatch without adding a
+// checkable fact.
+fn chunk_u32(i: Word, off: Word) -> Word {
+    rec_u32(dir_find(kind_chunks()), chunk_stride(), i, off)
+}
+
+fn chunk_local_count(i: Word) -> Word {
+    rec_u16(dir_find(kind_chunks()), chunk_stride(), i, chunk_off_local_count())
+}
+
+fn chunk_param_count(i: Word) -> Word {
+    rec_u8(dir_find(kind_chunks()), chunk_stride(), i, chunk_off_param_count())
+}
+
+fn chunk_block_type(i: Word) -> Word {
+    rec_u8(dir_find(kind_chunks()), chunk_stride(), i, chunk_off_block_type())
+}
+
+// 1 when chunk `i` carries a debug pool. `ABSENT` distinguishes "no debug
+// metadata" from "an empty debug pool", which is a release build versus a
+// debug build that emitted nothing.
+fn chunk_has_debug(i: Word) -> Word {
+    if chunk_u32(i, chunk_off_debug_first()) == absent_index() { 0 } else { 1 }
+}
+
+fn native_count() -> Word {
+    if dir_find(kind_natives()) == 0 - 1 { 0 - 1 } else {
+        rec_count(dir_find(kind_natives()), native_stride())
+    }
+}
+
+fn native_name(i: Word) -> Word {
+    rec_u32(dir_find(kind_natives()), native_stride(), i, native_off_name())
+}
+
+// Asked SEPARATELY from `native_count`, and deliberately not derived from it.
+fn native_return_count() -> Word {
+    if dir_find(kind_native_returns()) == 0 - 1 { 0 - 1 } else {
+        rec_count(dir_find(kind_native_returns()), natret_stride())
+    }
+}
+
+fn native_return_shape(i: Word) -> Word {
+    rec_u32(dir_find(kind_native_returns()), natret_stride(), i, natret_off_shape())
+}
+
+fn header_present() -> Word {
+    if dir_find(kind_header()) == 0 - 1 { 0 } else { 1 }
+}
+
+fn header_u32(off: Word) -> Word {
+    rec_u32(dir_find(kind_header()), header_stride(), 0, off)
+}
+
+fn header_u8(off: Word) -> Word {
+    rec_u8(dir_find(kind_header()), header_stride(), 0, off)
+}
+
+// 1 when the module declares no entry point.
+fn entry_point_absent() -> Word {
+    if header_u32(header_off_entry_point()) == absent_index() { 1 } else { 0 }
+}
+
 // THE DISPATCH IS SPLIT INTO CHAINS, AND THE REASON IS A HARD LANGUAGE LIMIT.
 //
 // The parser rejects an expression nested more than 24 deep, with
@@ -1149,12 +1288,32 @@ fn dispatch_data(cmd: Word) -> Word {
     if cmd == 66 { datainit_count() } else {
     if cmd == 67 { datainit_first(wire.warg) } else {
     if cmd == 68 { datainit_range_count(wire.warg) } else {
-    0 - 99 }}}}}}}}}}}}}}
+    0 - 94 }}}}}}}}}}}}}}
+}
+
+fn dispatch_module(cmd: Word) -> Word {
+    if cmd == 69 { chunk_count() } else {
+    if cmd == 70 { chunk_u32(wire.warg, wire.warg2) } else {
+    if cmd == 71 { chunk_local_count(wire.warg) } else {
+    if cmd == 72 { chunk_param_count(wire.warg) } else {
+    if cmd == 73 { chunk_block_type(wire.warg) } else {
+    if cmd == 74 { chunk_has_debug(wire.warg) } else {
+    if cmd == 75 { native_count() } else {
+    if cmd == 76 { native_name(wire.warg) } else {
+    if cmd == 77 { native_return_count() } else {
+    if cmd == 78 { native_return_shape(wire.warg) } else {
+    if cmd == 79 { header_present() } else {
+    if cmd == 80 { header_u32(wire.warg) } else {
+    if cmd == 81 { header_u8(wire.warg) } else {
+    if cmd == 82 { entry_point_absent() } else {
+    if cmd == 83 { absent_index() } else {
+    0 - 99 }}}}}}}}}}}}}}}
 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {
     if cmd < 26 { dispatch_schema(cmd) } else {
     if cmd < 38 { dispatch_consts(cmd) } else {
-    if cmd < 55 { dispatch_runs(cmd) } else { dispatch_data(cmd) } } } }
+    if cmd < 55 { dispatch_runs(cmd) } else {
+    if cmd < 69 { dispatch_data(cmd) } else { dispatch_module(cmd) } } } } }
 }
