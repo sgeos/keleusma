@@ -209,6 +209,38 @@ files survive a branch switch, so `git add -A` after switching sweeps whatever t
 new branch does not know to ignore. A rule at the repository root exists on every
 branch that has the root file and cannot go missing that way.
 
+### Gate visibility: `scripts/gate-status.sh`, and the status-line hook
+
+A gate runs two to three and a half hours in a detached worktree, and with two sessions on one
+machine there may be several. "Is it still going, and where" was being answered by ad-hoc `pgrep`
+and `grep` at the prompt, which produced **three defects in a single day**, all of the same family
+— a convenience that quietly answers a different question:
+
+| Ad-hoc form | What it actually did |
+|---|---|
+| `pgrep -f "release-gate.sh"` | **matched its own shell**, so a waiter loop never exited and gating deadlocked for both sessions |
+| a header regex capped at 70 characters | silently skipped the 71-character last step; progress read "11 of 12" forever |
+| `cargo test … \| tail` in a background job | reported **tail's** exit status, not cargo's |
+
+`scripts/gate-status.sh` replaces all of it. Two properties are load-bearing:
+
+- **Liveness comes from the log's modification time and its verdict line, never from a process
+  lookup.** That makes the self-matching `pgrep` failure *unreachable by construction* rather than
+  by remembering, and it distinguishes RUNNING from STALLED, which a process check cannot.
+- **The header pattern is unanchored and unbounded.** Anchoring missed the ANSI escape that wraps
+  each header — this script reported `steps=0` for a twelve-step gate on its first run — and a
+  length cap is the same defect in another dress. The verdict line matches the header pattern too,
+  so it is excluded from the count; before that, gate summaries over-reported by one.
+
+**The status line shows it automatically.** `~/.claude/statusline.sh` appends one line of stdout
+from an executable `scripts/statusline-segment.sh`, if the project has one. The contract is
+deliberately defensive, and every guard is tested: a hard timeout so a slow script degrades to
+silence, stderr discarded, a non-zero exit ignored, newlines stripped, and the output truncated.
+A project without the file contributes nothing.
+
+`scripts/` rather than `.claude/`, because `.claude/` is gitignored here and an integration point
+that is not version-controlled silently differs between machines.
+
 ### Reap orphans before timing anything
 
 An interrupted gate leaves its test binary reparented to PID 1, still at full CPU. One was found
