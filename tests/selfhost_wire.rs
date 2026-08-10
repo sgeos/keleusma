@@ -5870,3 +5870,143 @@ fn the_uncovered_kinds_reject_an_oversized_batch() {
         assert_eq!(got, code, "command {cmd}: wrong or missing rejection code");
     }
 }
+
+// --- WIRING SLICE 9: DEBUG_POOL, the twentieth region kind -------------------
+//
+// `DEBUG_POOL` was the last kind with no emitter coverage, and the plan document
+// recorded it as needing "a hand-built case or a compile with `emit_debug` on".
+// The second turns out to be reachable directly: `compile_with_options` is
+// public and `CompileOptions { emit_debug: true }` produces real strippable
+// debug metadata, so this is driven by real compiler output like every other
+// populated kind rather than by a fixture I invented.
+//
+// NO NEW KELEUSMA CODE. `DEBUG_POOL` is a byte pool, so slice 4's
+// `emit_pool_bytes` and `emit_pool_pad` already emit it; what was missing was a
+// case, not an emitter. That is worth stating because it is the second time a
+// "missing coverage" item turned out to need only a driver.
+//
+// This is the twentieth region kind, and with it **every region kind the format
+// defines is emitted from real compiler output.**
+
+/// A stage's auxiliary body WITH strippable debug metadata.
+///
+/// `corpus_aux_of` sets `debug_pool_bytes: None`, matching `wire_corpus.rs` and
+/// the default compile. This takes the path the reference takes at
+/// `wire_format.rs:1616` instead.
+fn corpus_aux_with_debug(
+    module: &keleusma::bytecode::Module,
+) -> keleusma::wire_format::WireAuxBody {
+    let mut aux = corpus_aux_of(module);
+    for (wc, c) in aux.chunks.iter_mut().zip(&module.chunks) {
+        wc.debug_pool_bytes = c
+            .debug_pool
+            .as_ref()
+            .map(keleusma::debug_meta::DebugPool::encode);
+    }
+    aux
+}
+
+/// A stage's `DEBUG_POOL`: the logical bytes and the stored region with its pad.
+fn real_debug_pool_case(src: &str) -> (Vec<u8>, Vec<u8>, usize) {
+    let program = parse(&tokenize(src).expect("lex")).expect("parse");
+    let (module, _) = keleusma::compiler::compile_with_options(
+        &program,
+        &keleusma::target::Target::default(),
+        &keleusma::compiler::CompileOptions { emit_debug: true },
+    )
+    .expect("compile with debug");
+
+    // The logical input, concatenated in chunk order exactly as the encoder
+    // receives it from `add_chunk`.
+    let logical: Vec<u8> = module
+        .chunks
+        .iter()
+        .filter_map(|c| {
+            c.debug_pool
+                .as_ref()
+                .map(keleusma::debug_meta::DebugPool::encode)
+        })
+        .flatten()
+        .collect();
+
+    let bytes =
+        keleusma::wire_schema::encode_aux_body(&corpus_aux_with_debug(&module)).expect("encode");
+    let view = keleusma_wire::WireView::parse(&bytes).expect("reference artifact parses");
+    let region = view
+        .find_region(keleusma::wire_schema::kind::DEBUG_POOL)
+        .expect("a debug compile must emit DEBUG_POOL");
+    let stored = view.region_bytes(&region).expect("payload").to_vec();
+    (logical, stored, view.region_count() as usize)
+}
+
+#[test]
+fn the_emitted_debug_pool_matches_the_reference_on_real_compiler_output() {
+    let mut vm = vm_for(WIRE_KEL);
+    let mut pads = Vec::new();
+    for (name, src) in CORPUS_STAGES {
+        let (logical, stored, regions) = real_debug_pool_case(src);
+        assert!(
+            !logical.is_empty(),
+            "{name}: a debug compile produced no metadata"
+        );
+        // The twentieth kind. Every other compile in this suite emits 19.
+        assert_eq!(
+            regions, 20,
+            "{name}: a debug compile must emit all twenty region kinds"
+        );
+        pads.push(stored.len() - logical.len());
+        let got = emit_pool_batched(&mut vm, &logical, 64, BIN_CAPACITY);
+        assert_eq!(got, stored, "{name}: emitted DEBUG_POOL differs");
+    }
+    // The pad path is shared with PARAM_TYPES, but a corpus that happened to be
+    // all word-aligned here would exercise none of it, so what was reached is
+    // asserted rather than assumed.
+    pads.sort_unstable();
+    pads.dedup();
+    assert!(
+        pads.iter().any(|p| *p != 0) || pads.len() > 1,
+        "every DEBUG_POOL was already word-aligned; the pad path went unexercised: {pads:?}"
+    );
+}
+
+/// Must-fire control, and a guard that the debug compile really differs.
+#[test]
+fn the_debug_pool_differential_reports_a_perturbed_byte() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (logical, stored, _) = real_debug_pool_case(CORPUS_STAGES[9].1);
+    assert_eq!(
+        emit_pool_batched(&mut vm, &logical, 64, BIN_CAPACITY),
+        stored,
+        "control: the clean case must agree"
+    );
+    for i in [0usize, logical.len() / 2, logical.len() - 1] {
+        let mut perturbed = logical.clone();
+        perturbed[i] ^= 1;
+        assert_ne!(
+            emit_pool_batched(&mut vm, &perturbed, 64, BIN_CAPACITY),
+            stored,
+            "control did not fire: debug byte {i} is not observable"
+        );
+    }
+}
+
+/// The default compile must still emit NO debug pool.
+///
+/// This is the must-not-fire half of the pair, and it also pins the reason the
+/// gap existed: `emit_debug` defaults false, so the ten-stage corpus everything
+/// else in this suite uses emits nineteen regions, not twenty.
+#[test]
+fn the_default_compile_still_emits_no_debug_pool() {
+    let (specs, _) = real_stage_regions(CORPUS_STAGES[9].1);
+    assert_eq!(
+        specs.len(),
+        19,
+        "a default compile must emit nineteen regions"
+    );
+    assert!(
+        !specs
+            .iter()
+            .any(|(k, _, _, _)| *k == keleusma::wire_schema::kind::DEBUG_POOL),
+        "a default compile emitted DEBUG_POOL; the twentieth kind is no longer debug-only"
+    );
+}

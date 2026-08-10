@@ -13,6 +13,32 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**WIRING SLICE 9: `DEBUG_POOL`, AND EVERY REGION KIND IS NOW EMITTED FROM REAL OUTPUT
+(2026-08-10).** The last kind with no emitter coverage. 111 tests.
+
+**The plan document said this needed "a hand-built case or a compile with `emit_debug` on", and
+the second turned out to be reachable directly.** `compile_with_options` is public and
+`CompileOptions { emit_debug: true }` produces real strippable debug metadata: 7,368 bytes for
+`verify_datalayout`, 25,104 for `verify_yield`, 64,232 for `analyze`. So this is driven by real
+compiler output like every other populated kind, rather than by a fixture I invented — which is a
+materially stronger oracle than the slice-8 kinds got, and it was available all along.
+
+**No new Keleusma code.** `DEBUG_POOL` is a byte pool, so slice 4's `emit_pool_bytes` and
+`emit_pool_pad` already emit it; what was missing was a case, not an emitter. **That is the second
+time in this arc a "missing coverage" item needed only a driver** — slice 1 was the first, where the
+container header already worked and only the Rust side was absent. Worth generalising: when the
+mechanism is generic over its input, a coverage gap is usually a missing caller, and probing costs
+minutes where assuming costs a slice.
+
+**Twenty regions, not nineteen.** A debug compile emits the twentieth kind, and the test asserts
+that; the complementary test asserts a DEFAULT compile still emits nineteen and no `DEBUG_POOL`,
+which pins the reason the gap existed rather than just closing it. The pad residues reached are
+asserted too, so a corpus that happened to be word-aligned throughout would report that the shared
+pad path went unexercised instead of passing quietly.
+
+**Every region kind the format defines is now emitted from real compiler output.** What remains
+before the self-hosted path produces an artifact is the driver alone.
+
 **A WCMU SOUNDNESS HOLE IN `verify()`, CLOSED — AND THE REPORTED PREMISE FOR IT WAS FALSE
 (2026-08-10).** The `v0.3.0` session found that `verify()` admits a chunk that can run off the end of
 its instructions without a terminating `Return`. `Op::Return` truncates the operand stack to the
