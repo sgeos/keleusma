@@ -1139,3 +1139,42 @@ needs the coroutine path regardless.
 Recorded because it changes what Workstream B should investigate first, and
 because the cheap measurement that produced it took minutes against an
 implementation that would have taken days and started from the wrong assumption.
+
+### Two of the three rotation preconditions now checked
+
+`native_codegen/tests/spike_stream_rotation.rs` checks the two preconditions
+that are statically decidable. Both hold broadly.
+
+| Precondition | Holds | Violated |
+|---|---|---|
+| P1: a `Reset` separates every pair of consecutive `Yield`s | 23 | 1 |
+| P3: no `Return` or `Trap` between a `Yield` and its `Reset` | 24 | 0 |
+| Both, and therefore a rotation candidate | **23** | — |
+
+The single P1 violation is the nineteen-yield chunk already identified, which
+needs a real coroutine frame regardless. P3 holds universally, so no path leaves
+a stream body between suspending and resetting.
+
+**The approximation is stated rather than buried.** The checks walk the linear
+instruction stream and not the control-flow graph. For P1 that is conservative
+in the useful direction: a `Reset` appearing textually between two yields might
+be branched around, so a chunk reported safe COULD be unsafe, while a chunk
+reported unsafe is unsafe. The figures are triage, and any implementation must
+redo them over the graph.
+
+**P2 was established by reading rather than measuring.** The runtime's `Reset`
+handler clears every local to `Unit`, truncates the operand stack to the frame
+base, and resets both arena bump pointers, so the data segment is the only
+surviving state. That is a fact about the implementation, not a corpus
+statistic.
+
+**What remains unproven is the equivalence itself.** Rotating a loop body around
+its suspension point is a program transformation, and the claim that it
+preserves the observable yield sequence has been argued from the state analysis
+above and not demonstrated. The natural demonstration is a differential test
+over a MULTI-ITERATION sequence, comparing the yielded values from the virtual
+machine against the native ones across many resumes. **No such test exists**, and
+this package's oracle currently compares single returned values, so it would not
+catch a rotation that produced the right values in the wrong order. Building that
+harness is the precondition for attempting the transformation, and it is the next
+thing Workstream B needs rather than any lowering work.
