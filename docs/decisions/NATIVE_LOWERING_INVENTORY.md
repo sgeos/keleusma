@@ -1884,3 +1884,63 @@ deliberately does not reproduce the leak, since reproducing a defect for
 bug-compatibility would be the wrong call. That asymmetry is recorded here so it
 is a decision rather than an oversight, and it should be revisited if the VM side
 is fixed.
+
+## DESIGN REFINEMENT: `NewComposite::Flat` does not mean the body is flat
+
+Checking how a composite CONSTANT materialises, because the width stack's table
+lists `Const(i)` as yielding a composite shape, turned up a constraint that would
+have produced a silent divergence had the stack been built to the design as
+written.
+
+### The operand names a kind, not a representation
+
+In the `Flat` arm the VM calls `pack_flat_in_arena` and then branches on whether
+packing SUCCEEDED (`src/vm.rs:5478`):
+
+| Kind | Packing fails | Meaning |
+|---|---|---|
+| `Tuple`, `Array` | **Silently falls back to a BOXED body** | Representation is value-driven at run time |
+| `Struct`, `Enum` | `VmError::InvalidBytecode` | Statically flat by the compiler's decision |
+
+So for two of the four kinds, **the same opcode with the same operand yields
+either a flat or a boxed body depending on the values on the stack.** A lowering
+that always packs flat would diverge exactly when the VM boxes, and the
+divergence is invisible to any test whose tuples happen to be small and scalar —
+which is every obvious test case.
+
+Packing fails on either of two conditions, both decidable by the width stack:
+
+1. **An element is not flat-eligible** — `flat_field_size` returns `None`. A
+   boxed composite constant is one such element, which is how this was found.
+2. **The body exceeds `u16::MAX` bytes** — `pack_flat_in_arena` returns
+   `Ok(None)` when `size > 65535`, because the access offset is sixteen bits.
+
+### The rule this imposes on the width stack
+
+- **`Struct` / `Enum`**: if every operand shape is known, pack flat. The compiler
+  has already decided flatness and a failure is malformed bytecode, so the
+  lowering may rely on it.
+- **`Tuple` / `Array`**: pack flat only if every operand shape is known **and**
+  every element is flat-eligible **and** the summed size is `<= u16::MAX`.
+  Otherwise **refuse**. Do not attempt to emulate the boxed representation; that
+  is a second representation with its own access path, and it is scheduled for
+  removal at B28 P3 anyway.
+
+Note that the size condition is a genuine third refusal reason, independent of
+whether shapes are known: a fully-known tuple of 70,000 bytes is boxed by the VM
+and must be refused rather than packed.
+
+### And a coverage limit worth knowing before implementing
+
+A composite constant is materialised through `value_from_archived` as a **boxed**
+body, and `AbsVal::Top`'s own documentation lists "composite constant" among the
+shapes it cannot reconstruct. So a `NewComposite` that packs a composite constant
+is refused under the design's unknown-is-refused rule — correctly, but it is a
+coverage cost rather than a free win.
+
+**How much it costs is unmeasured.** Whether the reference compiler folds a
+literal aggregate into a composite constant or emits `NewComposite` over scalar
+constants decides it, and that needs a corpus count, which needs compilation.
+Queued with the rest. Recording the question rather than guessing the answer,
+since the last time this document guessed at a distribution it was wrong by the
+margin that mattered.
