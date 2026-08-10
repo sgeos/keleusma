@@ -10,169 +10,143 @@ misleading a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`, or a feature branch cut from it.
-- **Parent commit**: `cdee459`
-- **Written**: 2026-08-09
+- **Parent commit**: `bb95ce4`
+- **Written**: 2026-08-10
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
 **Check both.** `git rev-parse --abbrev-ref HEAD` is `v0.2.3` or a branch off it, and
-`git rev-parse HEAD~1` equals the parent above.
+`git rev-parse HEAD~1` equals the parent above. The branch half is not redundant: `v0.3.0` carries
+parallel native-codegen work and can satisfy the commit check while describing a different
+workstream. If you are on `v0.3.0`, read `docs/process/handoffs/v0.3.0.md` and **do not overwrite
+this file**.
 
-The branch half is not redundant: `v0.3.0` carries parallel native-codegen work and can satisfy the
-commit check while describing a different workstream. If you are on `v0.3.0` or a branch off it,
-read `docs/process/handoffs/v0.3.0.md` instead — **and do not overwrite this file**, which that
-session has explicitly asked.
-
-- **Both match → VALID.** **Commit mismatch → INVALID and STALE**; say so and orient from the live
-  channels. **Branch mismatch → NOT YOURS.**
+- **Both match → VALID.** **Commit mismatch → INVALID and STALE.** **Branch mismatch → NOT YOURS.**
 
 ## On resume, before doing anything
 
-1. **Read `secret/notes/APPENDIX_B.md`** before writing any tracked file, commit message, or comment.
+1. **Read `secret/notes/APPENDIX_B.md`.**
 2. **Read the other session's mailbox**: `git show origin/v0.3.0:docs/process/handoffs/v0.3.0.md`.
-   Protocol, not courtesy.
+   **I failed to do this for most of one session** and it held a demonstrated defect on my surface.
+   Poll it at increment boundaries; it has no wake.
 3. **Read this branch's mailbox** [`handoffs/v0.2.3.md`](./handoffs/v0.2.3.md) and the three
-   channels: [`REVERSE_PROMPT.md`](./REVERSE_PROMPT.md),
-   [`DESIGN_JOURNAL.md`](./DESIGN_JOURNAL.md) (newest first), [`TASKLOG.md`](./TASKLOG.md).
-4. **Read [`AUTONOMOUS_IMPLEMENTATION_LOOP.md`](./AUTONOMOUS_IMPLEMENTATION_LOOP.md).** Its
-   probe-before-planning step has falsified a recorded claim in nearly every increment of this arc,
-   including two of mine on 2026-08-09 — one of which would have put a false statement into a
-   normative specification.
+   channels: [`REVERSE_PROMPT.md`](./REVERSE_PROMPT.md), [`DESIGN_JOURNAL.md`](./DESIGN_JOURNAL.md)
+   (newest first), [`TASKLOG.md`](./TASKLOG.md).
+4. **Read [`AUTONOMOUS_IMPLEMENTATION_LOOP.md`](./AUTONOMOUS_IMPLEMENTATION_LOOP.md).**
 
-## THE STATE: clean. Nothing is in flight.
+## THE STATE: six commits are LOCAL ONLY. Push them first.
 
-`v0.2.3` = `cdee459`, **in sync with origin, tree clean, no gate running, no unmerged work.**
-This is a genuinely quiet resume point; the previous two were not.
+**Nothing below is on origin.** `origin/v0.2.3` is at `cbf00c6`; local `v0.2.3` is `bb95ce4`.
 
-Local branches `feat/selfhost-wire-directory`, `docs/spec-currency` and `feat/selfhost-wire-crc32`
-are fully merged and safe to delete. `feat/selfhost-wire-data` shows one commit ahead, which is the
-pre-cherry-pick original of a docs change already on `v0.2.3`; also safe. **Do not delete
-`v0.2.3-prerebase-backup` or anything under `keleusma-worktrees/`** — the latter includes the other
-session's tree.
+| Ref | Local | Contains |
+|---|---|---|
+| `v0.2.3` | `bb95ce4` | the WCMU verifier fix merged at `fefd761`, plus mailbox and channels |
+| `feat/selfhost-wire-debugpool` | 7 commits over `v0.2.3` | slices 9–10 and five probe write-ups |
+| `fix/verify-terminal-depth` | `11c5d9d` | pushed, gated GREEN, now merged |
 
-## WHAT WAS FINISHED: wire-format step 6, complete
+**Why nothing is pushed.** The pre-push hook runs the routine test tier. `perf_canary` was
+executing inside the `v0.3.0` session's gate with EVE Online at 133% CPU, and my own canary had
+already tripped once under that load (38.6 s against a 30 s tripwire) on a branch that changes **no
+`src/` file at all**. Pushing into their canary window is what I asked them to spare me, twice.
 
-The wire format is expressible in Keleusma **end to end**. `src/selfhost/kel/wire.kel` is the
-implementation, `tests/selfhost_wire.rs` the differential, **80 tests**.
+**Push as soon as their gate clears.** That also re-runs my canary on a quiet machine, which is the
+"re-run alone" step its own failure message asks for. **Do not raise the ceiling and do not
+`--no-verify`.**
 
-| Slice | Content |
+## WHAT WAS FINISHED: the wire format is emittable end to end
+
+**All twenty region kinds have emitters**, and `tests/selfhost_wire.rs` is **114 tests**.
+
+| Slices | Content |
 |---|---|
-| 1 | CRC-32/ISO-HDLC, oracle the published check value |
-| 2 | Container primitives, prologue, majority-of-three vote |
-| 3 | Region directory, with the prologue-to-directory bootstrap |
-| 4 | Record tables and byte pools |
-| 5a–5e | The schema layer: 20 region kinds, 17 record shapes |
-| 6a–6b | Opcode records and the operand pool |
-| 7 | Framing header and CRC trailer |
+| 1–4 | container header, `HEADER`, `CHUNKS` with batching, `PARAM_TYPES` pool |
+| 5–8 | the accumulators, the per-slot tables, the remaining populated kinds, the six empty kinds |
+| 9 | `DEBUG_POOL` from a real `emit_debug` compile — the twentieth kind |
+| 10 | **the driver begins**: region lengths derived from record counts |
 
-`wire.kel` is **deliberately absent from `read_stage`**. Nothing drives it; it can emit and read the
-format, but no artifact is produced by the self-hosted path yet.
+**A WCMU soundness hole is closed** (`fefd761`, gated GREEN over 13 steps). `verify()` admitted a
+chunk that can run off the end of its instructions; `Return` truncates the operand stack and
+falling off the end does not, so each call leaked `local_count + k - 1` slots and the attested
+bound was wrong. Reported by `v0.3.0`, reproduced here first, then fixed.
 
-## THE NEXT INCREMENT: wiring, and its shape is already measured
+## THE NEXT INCREMENT: the driver, scoped by four probes
 
-Read the "wiring increment" section of
+Read the driver sections of
 [`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md) **before
-planning**. Probing reshaped it before any code existed, and the numbers are recorded there:
+planning**. Each probe changed the plan before code existed:
 
-- **A whole-artifact-in-one-buffer emitter cannot work.** The shared ceiling is `MAX_DATA_ADDR`,
-  16,777,216 bytes; `lexer.kel`'s artifact is 16,124,636 — 96.1% of it, leaving 652,580 bytes for
-  the emitter's own inputs, which also live in shared data.
-- **Emission must be staged**: compute region lengths, write the leading directory, emit region by
-  region with the host appending. That matches the operator's chosen encoder strategy.
-- **Size the working buffer from the largest single REGION**, 6,609,960 bytes (`lexer`'s
-  `STRING_POOL`, 39.4% of the ceiling). About 8 MB covers every stage. `STRING_POOL` is the largest
-  region for **all ten** stages, and being a byte pool it is also the easiest to chunk further.
-- **`DEBUG_POOL` is the one region kind the corpus never emits**, because
-  `CompileOptions::emit_debug` defaults to false. The reader side is covered; the **emitter** needs
-  a hand-built case or a compile with `emit_debug` on.
+- **A minimal artifact is 912 bytes, 1.4% of the buffer.** The first slice emits a COMPLETE artifact
+  and compares byte for byte. Its full input surface is enumerated and the arithmetic closes to the
+  byte.
+- **Region order is measured, not inferred**, and is not the schema's numeric order. Most regions
+  are present with length zero; only the data-layout group and `DEBUG_POOL` are conditional.
+- **The interner needs BOTH modes.** `intern_fresh` is for contiguity, not freshness. A dedup-only
+  port fails only on enum layouts or struct constants, which small cases lack. It also **cannot be
+  unit-tested against the corpus**, because its input is (name, mode) pairs owned by the caller.
+- **The flattener's composite path is unreachable from the corpus**: 2,192 constant nodes, zero
+  composite, depth zero. It needs hand-built constant trees.
 
-Why the artifacts are so large, which is worth knowing before optimising anything: **every array
-element becomes its own data slot with its own interned name.** `lexer.kel` declares a 393,216-byte
-array and reports 395,784 data slots, so its auxiliary body is 99.94% of the artifact. Whether an
-array should instead occupy one slot with a length is a **format and data-layout design question for
-the operator**, with WCMU implications, and is outside a wiring increment.
+## Order-1: all three blockers closed or sized
 
-## Order-1: integration, not invention
+- **Monomorphizer: EMPTY**, identity on all ten stages, pinned with a must-fire control.
+- **Wire format: emittable end to end**, driver started.
+- **Type checker: ~15 rejection shapes**, measured by execution rather than counted from 163
+  `TypeError` sites. Every subset rejection lands in one pass; all but one carry the `type error:`
+  prefix, the exception being the V0.2.0 restriction on calling a local. **The oracle is verdict
+  agreement, not message agreement.**
 
-The roadmap's gate row was restated on 2026-08-09 and now says this; it previously implied three
-comparable blockers.
+## Facts that cost real effort
 
-- **Monomorphizer: EMPTY** for the first pass. Identity on all ten stage sources, pinned by
-  `tests/selfhost_monomorphize_identity.rs` with a must-fire control.
-- **Type checker: REJECTION ALONE.** Clearing `program.fn_expr_types` leaves every stage module
-  byte-identical, so the emitter's structural fallback covers the subset. Three controls; see
-  [`../decisions/TYPECHECK_SELFHOST_PLAN.md`](../decisions/TYPECHECK_SELFHOST_PLAN.md).
-- **Wire-format serialization: expressible end to end.**
-
-## Design facts that cost real effort to learn
-
-- **Transcribe, then pin.** `#[derive(WireRecord)]` packs with no implicit padding then rounds the
-  stride to a word, so offsets cannot be recomputed by eye. Every constant in `wire.kel` is asserted
-  against the derive's generated value **by parsing it back out of the Keleusma source**; restating
-  it in the test would only prove the test agrees with itself.
-- **The sentinel technique fails silently** where the value domain has no spare value. Three cases
-  hit this — a discriminant of -1 is legal, `DATA_SLOTS` absence differs from emptiness, a debug
-  pool absent differs from present-but-empty. Split the bound from the value.
-- **Two parity schemes.** An opcode record carries one BIT of popcount parity; a pool entry carries
-  one BYTE of exclusive-or. Conflating them is the easy mistake.
-- **The CRC trailer is validated by a residue**, `0x2144DF1C`, not by recomputation.
-- **The parser rejects expressions nested deeper than 24**, so a flat `if/else if` dispatch caps at
-  about two dozen arms. `wire.kel`'s dispatch is nine chains, with a test that no command falls
-  through to a chain default.
-- **Language facts, all executed**: locals are immutable, rejected at parse; a runtime-range `for`
-  needs `limit`, rejected at verify; `Byte as Word` zero-extends and `as Byte` truncates silently;
-  `lsr` is logical over the full word; division by zero traps and `andalso` short-circuits.
-
-## Gating
-
-`scripts/gate-in-worktree.sh <commit>` runs the gate in a detached worktree pinned to that commit,
-so the main tree stays free and the result is pinned by construction. `--setup-only` verifies the
-setup without a 2.5-hour run. The script refuses to start while another gate runs, machine-wide.
-
-**Two traps, both of which caught me on 2026-08-09:**
-
-- **Gate the tip you intend to merge.** I committed after launching a gate and nearly merged a
-  commit the gate never saw. Merge the *gated* commit; land anything later separately.
-- **Stopping a gate is PATH-SCOPED, always.** A bare `pkill -f "release-gate.sh"` killed the other
-  session's gate and orphaned its test binary at 98% CPU. Use `pkill -f "<gate dir>"` then
-  `pkill -f "<gate target>/debug/deps"`; the second is not optional, because killing the driver
-  leaves the children reparented to PID 1. **Both sessions made this identical mistake within one
-  hour, each after reading the warning.**
-
-**A gate no longer makes the main tree look busy.** Check `pgrep -f release-gate.sh` or the mailbox
-banner, never the tree's cleanliness.
+- **The parser depth ceiling is NINETEEN arms for a dispatch chain**, not the 24 I had recorded.
+  Exceeding it presents as a **stack overflow with SIGABRT in the test binary**, not a parse error.
+  Three occurrences in `wire.kel`.
+- **A faulted VM is unusable for later calls.** The fall-through sweep deliberately faults commands,
+  so any test reusing that VM afterwards needs a fresh one.
+- **`Op::Reset` is a path exit**; a `loop` chunk contains no `Loop` op and ends in `Reset`. "The
+  reference compiler always emits a trailing `Return`" is FALSE, and asserting it broke 37 tests.
+- **Real compiler output is a strong oracle for VOLUME and a weak one for VARIETY.** The ten stages
+  are large but semantically narrow; three separate paths are unreachable from them.
 
 ## Method rules this arc paid for
 
-- **Check `$?` explicitly; never read success off output.** A `| tail` hid a red gate; appending
-  `; echo` or `nohup … &` to a background command reports the wrapper's status. Three occurrences in
-  one session.
-- **An implausibly fast pass is the signal.** A five-minute "green" on a 2.5-hour gate was the only
-  honest indication; the reported status was wrong.
-- **A probe needs its own control.** Six constructs looked language-rejected when the cause was an
-  arena with zero persistent capacity.
-- **A set difference is not a finding until the scope is established.** Two false alarms in the
-  documentation audit, both rejected by reading the document's stated scope first.
-- **Hold an unverified claim out of a specification.** The `CheckedArithNoArm` finding was not
-  merely unverified, it was false, and execution refuted it.
-- **Prefer a mechanism to a longer list.** The stage-directory corpus guard is the fourth instance
-  of the by-name-enumeration family and the first closed mechanically.
+- **Check `$?` explicitly.** I masked an exit code by piping a background command to `tail`; the 0
+  was `tail`'s. Propagate with `rc=$?; …; exit $rc`.
+- **Make a textual patch ASSERT its anchor.** A `replace` that matches nothing changes nothing and
+  reports success. I hit this twice, the second time one increment after recording the first.
+- **A bound in your own tooling is a by-name enumeration.** My gate-progress regex capped headers at
+  70 characters and silently never saw the 71-character twelfth step.
+- **Measure the failure instead of reasoning about it.** Three hypotheses about the `verify()`
+  regression were each disproved by checking; dumping the ops settled it in one step.
+- **Controls catch errors in the CORPUS, not just the subject.** A case I mislabelled as ill-typed
+  was caught only because well-typed controls sat beside it.
+
+## Gating
+
+`scripts/gate-in-worktree.sh <commit>` with **`KEL_GATE_NAME` and `KEL_GATE_TARGET` set** — mine is
+`wire-corpus` / `.gate-target-wire`, theirs is `native` / `.gate-target-native`. Neither session owns
+the unnamed default any more.
+
+- **Gate the tip you intend to merge**, and **merge the gated commit by name, without rebasing** —
+  a rebase rewrites the hash the result rests on. That correction is now in the loop document.
+- **Stopping a gate is PATH-SCOPED, always.**
+- **A `pgrep -f "release-gate.sh"` matches any shell whose command line contains that string**,
+  including a waiter loop. That deadlocked the other session for hours.
 
 ## Open, held by the operator
 
-- **Publication remains HELD.** Nothing is published.
-- **Trimming the gate's feature matrix**, worth roughly 34 minutes. **Now argued against by
-  evidence**: the non-`--all-features` clippy caught lints in five separate increments on
-  2026-08-09, and `--no-default-features` caught a stray `examples/` file. The matrix is finding
-  defects at a steady rate.
-- **Per-element data slots.** One slot and one interned name per array element is why a 21 KB source
-  produces a 16 MB artifact. A format and data-layout question, not a loop decision.
+- **Publication remains HELD.**
+- **Gate cost.** Slice 5 adds ~9 minutes across the feature matrix; slice 10 may add more, but the
+  clean figure is **unmeasured** — the suite read 600 s under contention against ~237 s before.
+  Measure it quiet before quoting it.
+- **The (72,64) SECDED plane is entirely unexercised by the shipping encoder.** `SchemaBuilder`
+  declares every region with flags 0 and builds no parity plane. Deliberate cost choice or unwired
+  capability is not mine to settle.
+- **Per-element data slots**, why a 21 KB source makes a 16 MB artifact, paid three times over in
+  parallel tables.
 - **MSRV 1.85 declared, never verified.**
 
 ## Parallel development
 
-`v0.3.0` carries native code generation in a separate session and worktree. Its gate went green;
-mine has finished and **the machine is free**, which the mailbox says. Poll their mailbox at
-increment boundaries — it has no wake.
-
-**Guardrails**: no new opcode or `BYTECODE_VERSION` bump without authorization; full gate before any
-merge; confirm before anything irreversible or outward-facing; never bypass the pre-push gate.
+`v0.3.0` is gating `3d36feb` in `keleusma-worktrees/native`. **The next gate slot after theirs is
+mine**, but they have yielded to the release line twice and had none since `9ac2be3`, so do not
+queue on top of them. Their mailbox carries two findings they raised on this surface, both now
+fixed, and a warning that `verify()` is stricter for anything their backend emits.
