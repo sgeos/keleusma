@@ -300,8 +300,30 @@ implications, well outside a wiring increment. Recorded here because the measure
 because it blocks anything: the format works as specified, it is merely much larger than the source
 suggests.
 
-**To probe before writing the driver:** the largest single REGION across the ten stages, which is the
-number that actually sizes the working buffer.
+**The largest single REGION, measured 2026-08-09.** This is the number that sizes a per-region
+working buffer, and it is far kinder than the whole-artifact number.
+
+| | bytes | share of the ceiling |
+|---|---|---|
+| Largest artifact (`lexer`) | 16,124,636 | 96.1% |
+| **Largest single region** (`lexer`, `STRING_POOL`) | **6,609,960** | **39.4%** |
+| Next largest region (`parse`, `STRING_POOL`) | 1,071,928 | 6.4% |
+
+So a per-region working buffer of about 8 MB covers every stage with roughly 10 MB left for the
+emitter's inputs. **The staged design is viable, and the whole-artifact design is not** — which is
+the whole point of having measured before writing.
+
+Three further facts worth carrying:
+
+- **The largest region is `STRING_POOL` for ALL TEN stages**, without exception. It is dominated by
+  the interned per-element slot names, which is the same root cause as the artifact size.
+- **`STRING_POOL` is a byte pool, not a record table**, so it is the region that streams most
+  naturally: bytes are appended as names are interned, with no stride to respect. If even 6.6 MB
+  proves awkward, this particular region is the easiest one to chunk further.
+- **Every stage emits 19 regions**, out of the twenty kinds the schema defines. One kind is never
+  exercised by the corpus. That matches the recorded coverage caveat that the corpus emits zero
+  struct templates, and it means a Keleusma emitter validated only against these ten stages would
+  leave one region kind untested. Worth an explicit hand-built case, exactly as the Rust side needed.
 
 ### On the prototype
 
