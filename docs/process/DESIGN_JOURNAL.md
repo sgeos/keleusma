@@ -13,6 +13,45 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**WIRING SLICE 5: THE TWO ACCUMULATOR REGIONS, AND A GATE-SCOPE COST I WILL NOT DECIDE ALONE
+(2026-08-09).** `NAMES` and `STRING_POOL` for all ten stages, byte-identical. 100 tests, up from 98.
+These are the pair the residency measurement singled out, together 9,776,392 bytes for `lexer` and
+58.3% of the shared ceiling, and they are one of each shape — a record table and the byte pool it
+indexes. **`STRING_POOL` needed no new Keleusma code**: slice 4's pool emitter already did it, and
+this is the first time it met something large enough to batch hundreds of times.
+
+**First deep-batch coverage in the arc.** Everything before this batched at most twice. `lexer` is
+774 name batches and 807 pool batches, and the depth is ASSERTED, so a corpus change that shrank
+these tables would report the loss rather than leave a green test measuring a shallow path.
+
+**A recorded ordering claim of mine was wrong, and I caught it before acting on it.** One increment
+earlier I wrote that the next work was the six record shapes with no corpus coverage, ahead of the
+populated regions. That is backwards. **A region with zero records needs no record emitter at all**
+— it is declared in the directory with length zero, which `emit_directory` already does. So the six
+do not block the driver; they are a generality concern for programs that use natives or struct
+templates. The populated regions are what block it. Ordering corrected before any code was written.
+
+**The gate boundary, which I set up wrong and am reporting rather than papering over.** I launched
+the full gate on the slice-4 tip `3ad895e` and then wrote slice 5 in the free tree. That is exactly
+the trap `HANDOFF.md` records — *gate the tip you intend to merge* — and it is the second time this
+arc that a gate has ended up describing something other than the branch tip. The tree being free
+during a gate is the whole point of the worktree runner, so this will recur; the discipline has to
+be at MERGE time, which is why it is now a banner in `REVERSE_PROMPT.md` rather than a note. Merge
+only up to `3ad895e` on that result.
+
+**A cost I am escalating rather than absorbing.** The accumulator test is **201 seconds** measured,
+taking the suite from about 23 s to 152 s, and the gate runs the suite once per feature
+configuration — roughly nine minutes added to a 2h33m gate. The time is not inefficiency to optimise
+away: it is about 7.4 million `set_shared` and `get_shared` calls in a debug build, which is simply
+what driving 6.6 MB through the public shared-data API costs. Hoisting the buffer would not help,
+and batching depth is the property under test.
+
+Restricting the test to `parse` would still give 226 and 131 batches, also fairly deep, for about a
+third of the time. **That is a gate-scope trade in the same class as trimming the feature matrix,
+which this project holds as an operator decision**, and the recorded reason is that "probably safe"
+narrowing is how two coverage holes were made. So it is kept at full coverage and the number is
+stated in the test, in the journal and in `REVERSE_PROMPT.md`, rather than quietly taken.
+
 **WIRING SLICE 4: A BYTE POOL, WHERE LOGICAL LENGTH IS NOT STORED LENGTH (2026-08-09).**
 `PARAM_TYPES` for all ten stages, byte-identical, emitted in batches through a window and then
 padded. 98 tests, up from 91. A pool is the other half of the format — no stride, no fields, no

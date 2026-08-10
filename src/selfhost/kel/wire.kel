@@ -1349,6 +1349,38 @@ fn emit_pool_bytes(at: Word, n: Word) -> Word {
 // emit zero pad, so relying on the buffer's initial state would pass every test
 // here and break the day the emitter writes into space it has already used —
 // which a staged emitter reusing one window across batches does by design.
+// --- SLICE 5 OF THE WIRING INCREMENT: the two accumulator regions ----------
+//
+// `NAMES` and `STRING_POOL` are the pair the residency measurement singled out:
+// `SchemaBuilder` writes them LAST, after every other contributor has interned
+// into them, so they are the emission's resident set rather than transient
+// buffers. Together they are 9,776,392 bytes for `lexer`, 58.3% of the shared
+// ceiling.
+//
+// They are also one of each shape, which is why they go together: `NAMES` is a
+// record table and `STRING_POOL` is the byte pool it indexes. The pool needs no
+// new code at all — slice 4's `emit_pool_bytes` and `emit_pool_pad` already do
+// it — so what is added here is the record side only.
+
+fn nameref_fields() -> Word { 2 }
+
+// `n` consecutive NameRef records into the window at `at`.
+fn emit_name_records(at: Word, n: Word) -> Word {
+    if (n * nameref_fields()) > fin_capacity() { 0 - 202 } else {
+        for j in 0..n limit 1024 {
+            put_u32(
+                at + (j * nameref_stride()) + nameref_off_offset(),
+                wire.fin[j * nameref_fields()],
+            );
+            put_u32(
+                at + (j * nameref_stride()) + nameref_off_length(),
+                wire.fin[(j * nameref_fields()) + 1],
+            );
+        }
+        n * nameref_stride()
+    }
+}
+
 fn emit_pool_pad(at: Word, total: Word) -> Word {
     st.pad = (words_for(total) lsl 3) - total;
     for j in 0..st.pad limit 8 {
@@ -1835,7 +1867,8 @@ fn dispatch_frame(cmd: Word) -> Word {
     if cmd == 116 { emit_chunk_records(wire.warg, wire.warg2) } else {
     if cmd == 117 { emit_pool_bytes(wire.warg, wire.warg2) } else {
     if cmd == 118 { emit_pool_pad(wire.warg, wire.warg2) } else {
-    0 - 99 }}}}}}}}}}}}}}}}
+    if cmd == 119 { emit_name_records(wire.warg, wire.warg2) } else {
+    0 - 99 }}}}}}}}}}}}}}}}}
 }
 
 fn main(cmd: Word) -> Word {

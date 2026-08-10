@@ -891,7 +891,7 @@ fn no_command_below_the_dispatch_ceiling_falls_through() {
     // EXCLUSIVE, so this must be one past the highest live command. Slice 3
     // added 116 and this read `0..116`, which is exactly the off-by-one the
     // sweep exists to catch, committed inside the sweep itself.
-    for cmd in 0..119i64 {
+    for cmd in 0..120i64 {
         let (got, _) =
             run_cmd_args(&mut vm, cmd, 0, &[], &[], [0, 0, 0, 0, 0], 0).unwrap_or((0, Vec::new()));
         if (-99..=-92).contains(&got) {
@@ -4891,5 +4891,195 @@ fn an_oversized_pool_batch_is_reported_rather_than_truncated() {
     assert_eq!(
         got, -201,
         "an oversized pool batch was not reported with its own code"
+    );
+}
+
+// --- WIRING SLICE 5: the two accumulator regions -----------------------------
+//
+// `NAMES` and `STRING_POOL` are the pair the residency measurement singled out.
+// `SchemaBuilder` writes them LAST, after every other contributor has interned
+// into them, so they are the emission's resident set rather than transient
+// buffers — 9,776,392 bytes for `lexer`, 58.3% of the shared ceiling.
+//
+// They are one of each shape, which is why they are done together: `NAMES` is a
+// record table and `STRING_POOL` is the byte pool it indexes. The pool needed no
+// new Keleusma code at all; slice 4's emitter already does it, and this is the
+// first time that emitter meets something large enough to batch hundreds of
+// times.
+//
+// THESE ARE THE LARGEST TABLES IN THE FORMAT, AND THEY COST REAL GATE TIME.
+// `lexer` alone is 395,804 name records, 774 input batches and 807 pool batches.
+// Measured 2026-08-09: this one test is **201 s**, taking the suite from about
+// 23 s to 152 s, and the gate runs the suite once per feature configuration, so
+// it adds roughly nine minutes to a 2h33m gate.
+//
+// KEPT AT FULL COVERAGE DELIBERATELY, and the cost is stated rather than hidden.
+// The time is not waste to be optimised away: it is ~7.4 million `set_shared`
+// and `get_shared` calls in a debug build, which is what driving 6.6 MB through
+// the public shared-data API costs. Hoisting the buffer would not help, and the
+// batching depth is the property under test.
+//
+// `parse` alone would give 226 and 131 batches for about a third of the time,
+// which is also "deep". Whether that trade is worth taking is a GATE-SCOPE
+// decision and therefore the operator's, in the same class as trimming the
+// feature matrix — not the loop's to take quietly. Recorded in REVERSE_PROMPT.
+
+const CMD_EMIT_NAME_RECORDS: i64 = 119;
+const NAMEREF_STRIDE: usize = 8;
+const NAMEREF_FIELDS: usize = 2;
+const NAMES_PER_BATCH: usize = FIN_CAPACITY / NAMEREF_FIELDS;
+
+/// A stage's `NAMES` records and `STRING_POOL`, with the pool's LOGICAL length.
+///
+/// The logical length is not stored anywhere: the container keeps whole words,
+/// so a pool of 6,609,957 bytes reports 6,609,960. It is recovered as the
+/// furthest extent any name reaches, which is exact because names are appended
+/// in interning order and the last one ends at the pool's true end.
+struct AccumCase {
+    names: Vec<(u32, u32)>,
+    names_stored: Vec<u8>,
+    pool_logical: Vec<u8>,
+    pool_stored: Vec<u8>,
+}
+
+fn real_accum_case(src: &str) -> AccumCase {
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let bytes =
+        keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode aux body");
+    let view = keleusma_wire::WireView::parse(&bytes).expect("reference artifact parses");
+
+    let nregion = view
+        .find_region(keleusma::wire_schema::kind::NAMES)
+        .expect("NAMES region");
+    let names_stored = view.region_bytes(&nregion).expect("NAMES payload").to_vec();
+    let table = view
+        .records(&nregion, NAMEREF_STRIDE)
+        .expect("NAMES reads as a record table");
+    let mut names = Vec::with_capacity(table.len());
+    for i in 0..table.len() {
+        let r: keleusma::wire_schema::NameRef = table.get_as(i).expect("record in range");
+        names.push((r.offset, r.length));
+    }
+
+    let pregion = view
+        .find_region(keleusma::wire_schema::kind::STRING_POOL)
+        .expect("STRING_POOL region");
+    let pool_stored = view
+        .region_bytes(&pregion)
+        .expect("STRING_POOL payload")
+        .to_vec();
+    let logical_len = names
+        .iter()
+        .map(|(o, l)| (*o as usize) + (*l as usize))
+        .max()
+        .unwrap_or(0);
+    assert!(
+        logical_len <= pool_stored.len(),
+        "a name reaches past the pool, so the extent calculation is wrong"
+    );
+    assert!(
+        pool_stored.len() - logical_len < 8,
+        "the recovered logical length is more than a word short, so it is not the true extent"
+    );
+    let pool_logical = pool_stored[..logical_len].to_vec();
+
+    AccumCase {
+        names,
+        names_stored,
+        pool_logical,
+        pool_stored,
+    }
+}
+
+fn emit_names_batched(
+    vm: &mut Vm<'static, 'static>,
+    names: &[(u32, u32)],
+    window: usize,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(names.len() * NAMEREF_STRIDE);
+    for batch in names.chunks(NAMES_PER_BATCH) {
+        let fields: Vec<i64> = batch
+            .iter()
+            .flat_map(|(o, l)| [i64::from(*o), i64::from(*l)])
+            .collect();
+        let produced = batch.len() * NAMEREF_STRIDE;
+        let (written, buf) = run_cmd_fields(
+            vm,
+            CMD_EMIT_NAME_RECORDS,
+            0,
+            &[],
+            &fields,
+            [window as i64, batch.len() as i64, 0, 0, 0],
+            window + produced,
+        )
+        .expect("run");
+        assert_eq!(written, produced as i64, "wrong batch byte count");
+        out.extend_from_slice(&buf[window..window + produced]);
+    }
+    out
+}
+
+#[test]
+fn the_emitted_accumulator_regions_match_the_reference_on_real_compiler_output() {
+    let mut vm = vm_for(WIRE_KEL);
+    let mut most_name_batches = 0usize;
+    let mut most_pool_batches = 0usize;
+    for (name, src) in CORPUS_STAGES {
+        let case = real_accum_case(src);
+        most_name_batches = most_name_batches.max(case.names.len().div_ceil(NAMES_PER_BATCH));
+        most_pool_batches = most_pool_batches.max(case.pool_logical.len().div_ceil(BIN_CAPACITY));
+
+        let got_names = emit_names_batched(&mut vm, &case.names, 64);
+        assert_eq!(got_names, case.names_stored, "{name}: NAMES differs");
+
+        let got_pool = emit_pool_batched(&mut vm, &case.pool_logical, 64, BIN_CAPACITY);
+        assert_eq!(got_pool, case.pool_stored, "{name}: STRING_POOL differs");
+    }
+    // Everything before this slice batched at most twice. Asserted so a corpus
+    // change that shrank these tables would report the loss of deep-batch
+    // coverage rather than silently keeping the test green.
+    assert!(
+        most_name_batches > 100,
+        "deepest NAMES run was only {most_name_batches} batches"
+    );
+    assert!(
+        most_pool_batches > 100,
+        "deepest STRING_POOL run was only {most_pool_batches} batches"
+    );
+}
+
+/// Must-fire control for both accumulators.
+#[test]
+fn the_accumulator_differentials_report_a_perturbation() {
+    let mut vm = vm_for(WIRE_KEL);
+    let case = real_accum_case(CORPUS_STAGES[9].1);
+    assert_eq!(
+        emit_names_batched(&mut vm, &case.names, 64),
+        case.names_stored,
+        "control: clean NAMES must agree"
+    );
+    // Both fields of a NameRef, since they are the same width at adjacent
+    // offsets and a swapped pair is the natural mistranscription.
+    for field in 0..2 {
+        let mut names = case.names.clone();
+        if field == 0 {
+            names[1].0 ^= 1;
+        } else {
+            names[1].1 ^= 1;
+        }
+        assert_ne!(
+            emit_names_batched(&mut vm, &names, 64),
+            case.names_stored,
+            "control did not fire: NameRef field {field} is not observable"
+        );
+    }
+    // A transposed pair of records, which a per-record loop off-by-one produces
+    // and which perturbing a single field would not catch.
+    let mut swapped = case.names.clone();
+    swapped.swap(0, 1);
+    assert_ne!(
+        emit_names_batched(&mut vm, &swapped, 64),
+        case.names_stored,
+        "control did not fire: record order is not observable"
     );
 }

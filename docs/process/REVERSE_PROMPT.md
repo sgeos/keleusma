@@ -63,7 +63,38 @@ session's tree lives there too.
 my exact tip `78a5bc1`. So I cannot start a gate, and no timing measurement is trustworthy until
 it finishes. Development is unaffected, which is the whole point of the detached-worktree gate.
 
-## Wiring slices 1 to 4 are done; both region shapes are now emittable
+## Wiring slices 1 to 5 are done. READ THE GATE BOUNDARY BELOW BEFORE MERGING.
+
+**100 tests, up from 80.** Tier 1 green throughout.
+
+> ### THE RUNNING GATE COVERS `3ad895e` ONLY — slice 5 is NOT in it
+>
+> I launched the gate on the slice-4 tip and then wrote slice 5, which is exactly the trap
+> recorded in `HANDOFF.md`: gate the tip you intend to merge. **Merge only up to `3ad895e`** on
+> that result, then rebase and gate slice 5 separately. Do not merge the branch tip on this gate.
+
+**Slice 5 emitted the two accumulator regions**, `NAMES` and `STRING_POOL` — the pair the residency
+measurement singled out, 9,776,392 bytes for `lexer` and 58.3% of the shared ceiling. `NAMES` is a
+record table and `STRING_POOL` is the byte pool it indexes, so they are one of each shape. **The
+pool needed no new Keleusma code**: slice 4's emitter already did it, and this is the first time it
+met something large enough to batch hundreds of times.
+
+**First deep-batch coverage.** Everything before this batched at most twice; `lexer` is 774 name
+batches and 807 pool batches, and the depth is asserted so a corpus change that shrank it would
+report the loss rather than stay quietly green.
+
+> ### AN OPERATOR DECISION, NOT MINE: this slice costs about nine minutes of gate time
+>
+> The accumulator test is **201 s** measured, taking the suite from ~23 s to 152 s, and the gate
+> runs the suite once per feature configuration. The time is not waste to be optimised away — it is
+> roughly 7.4 million `set_shared`/`get_shared` calls in a debug build, which is what driving 6.6 MB
+> through the public API costs.
+>
+> **Kept at full coverage.** Restricting it to `parse` would still give 226 and 131 batches, also
+> "deep", for about a third of the time. That is a gate-scope trade in the same class as trimming
+> the feature matrix, so it is recorded for you rather than taken quietly.
+
+## Wiring slices 1 to 4, for context
 
 **On `feat/selfhost-wire-real-corpus`, Tier 1 green, NOT gated. 98 tests, up from 80.**
 
