@@ -3266,6 +3266,13 @@ been a hypothesis with preconditions since yesterday; this specifies it.
    block-nesting depth and **bails to `None` if any `Yield` is nested** inside an
    `If` or `Loop`. So the analysable case is exactly the flat one.
 
+> **FACT 4 IS FALSE, AND SO IS THE SECTION BELOW THAT RESTS ON IT.** See
+> "FALSIFIED: `wcet_stream_iteration` computes no segments" at the end of this
+> document. `wcet_stream_iteration` performs a single whole-body computation with
+> no depth tracking and no yield scan of any kind. The depth-tracking bail exists,
+> but in a different private function serving a different block type, and it has
+> never run on a `Stream` chunk.
+
 ### The insight fact 4 supplies
 
 **The rotation is a permutation of the segments the WCET pass already computes.**
@@ -3318,3 +3325,121 @@ and the data segment is meant to survive.
 - **Whether `Stream` alone unblocks the ten stage modules is unknown.**
   `lower_module` refuses on the first unsupported opcode, so composites may sit
   behind it. The rotation is necessary for Order 1; sufficiency is unmeasured.
+
+## FALSIFIED: `wcet_stream_iteration` computes no segments, and the corpus does not need them
+
+Yesterday's rotation design rested on fact 4, that the segmentation it needed
+already existed and only had to be permuted. **Fact 4 is false.** I recorded it
+from the shape of the surrounding documentation rather than from the function
+body, which is the same failure that produced "the reference compiler always
+emits a trailing `Return`", falsified by the `v0.2.3` session two increments ago.
+
+### What the function actually does
+
+`wcet_stream_iteration_with_cost_model` locates `Stream` and `Reset`, calls
+`wcet_region` **once** over the half-open range between them, adds the two
+overhead costs and the once-per-chunk external-native term, and returns. There is
+no depth counter, no scan for `Yield`, and no partition. It is one number over
+one region.
+
+The depth-tracking bail I attributed to it is real, but it lives in
+`reentrant_segmented_wcet`, and every property of that placement works against
+the reuse I assumed.
+
+| Property | What I assumed | What is true |
+|---|---|---|
+| Function | `wcet_stream_iteration` | `reentrant_segmented_wcet` |
+| Reached from | the `Stream` WCET path | `wcet_whole_chunk`, which **errors on a `Stream` chunk** |
+| Block type served | `Stream` | `Reentrant` only |
+| Visibility | usable | private `fn`, no caller outside the module |
+| Return value | the segment partition | `Option<u32>`, a single **maximum** |
+
+The last row is the one that survives even if the others are worked around. The
+boundaries live in two local variables that are dropped on return, so the
+partition is not exposed for `Reentrant` chunks either. **Nothing in the codebase
+today computes a reusable yield-delimited partition of anything.**
+
+The favourable half is that the algorithm is thirty lines and its precondition is
+exactly the rotation's own, namely that every `Yield` sits at nesting depth zero.
+Its decline path already carries must-fire coverage at two call sites in the
+verifier test module. So the correct statement is **port a small private
+function**, not **call an existing computation**. That is a larger increment than
+I recorded and a much smaller one than inventing the analysis.
+
+### One soundness check on the port, which passes
+
+A depth counter is only sound if it counts every block-opening opcode. The
+block-structured set is `If`, `Else`, `EndIf`, `Loop`, `EndLoop`, `Break` and
+`BreakIf`. `reentrant_segmented_wcet` increments on `If` and `Loop`, decrements on
+`EndIf` and `EndLoop`, and ignores the other three. That is correct rather than
+merely adequate. `Else` is a jump inside an already-open `If` and opens nothing,
+while `Break` and `BreakIf` transfer control without nesting. **No block-opening
+opcode is missed**, so a nested `Yield` cannot be misread as top level.
+
+### THE MEASUREMENT THAT CHANGES THE INCREMENT, taken without compiling
+
+The ten stage modules were read at source level for the shape of their `loop`
+block. The result is far more lopsided than the design assumed.
+
+| Class | Stages | Shape |
+|---|---|---|
+| **Trivial** | **8** | one top-level `yield`, and it is the **final statement** |
+| Delegated | 1 | `codegen.kel`, body is `emit_next(resume)` with **no `Yield` at all** |
+| Nested | 1 | `lexer.kel`, yields inside `if` and `else` |
+
+The trivial class is `parse.kel`, `analyze.kel`, `reconstruct.kel`, and the five
+`verify_*.kel` modules. Seven of the eight are literally `loop main(resume) {
+yield run() }` or its equivalent over an ordinary `fn`, confirmed by checking each
+callee's declared category rather than assuming it. `reconstruct.kel` runs
+straight-line field assignments and then yields once at the end.
+
+**For a body whose single top-level `Yield` is the last statement, the rotation is
+the identity.** The partition has one segment, the trailing segment is empty, and
+a permutation of one element reorders nothing. The transformation collapses to
+something that needs no partition, no permutation, no `kel_yield` callback and no
+coroutine intrinsic:
+
+```
+kel_chunk_N_step(resume) -> i64     // the body, with the trailing Yield as the return
+```
+
+That is the rotation hypothesis in its strongest form, stream chunks as plain
+functions, holding by measurement for eight of the ten stages rather than by
+argument.
+
+`codegen.kel` is a genuinely different case and I had it in neither class. Its
+stream body contains **no `Op::Yield`**, because the yield is delegated to a
+multiheaded `yield emit_next`, and the verifier counts a call to an
+always-yielding chunk as a yield. A yield-position scan over that chunk finds
+nothing, so any segment-based treatment sees one segment covering the whole body
+and is silently wrong about where suspension happens.
+
+### Consequences for the plan
+
+- **The general rotation is not the next increment.** The degenerate case is, and
+  it is a much smaller piece of work that unblocks eight of the ten stages.
+- **`Op::Yield` already lowers.** Only `Op::Stream` and `Op::Reset` are refused,
+  and the refusal comment states the reason, which is that a divergent `loop fn`
+  driven through the `kel_yield` callback would spin inside native code with no
+  way for the host to stop it. The degenerate form returns to the host every
+  iteration, so it **dissolves that reason** rather than working around it.
+- **`Reset` still has to be reproduced.** By the earlier finding it rewinds the
+  top arena region only, not both, and the data segment is meant to survive. For
+  `reconstruct.kel`, which writes data-block fields before yielding, the data
+  segment **is** the state carried across iterations. This is the interaction this
+  branch is named for and it is not yet verified.
+- **`lexer.kel` and `codegen.kel` are deferred**, not solved, and neither is
+  covered by the degenerate case.
+
+### What is NOT established, stated so a later reader does not inherit it as fact
+
+- **This is a source-level reading, not a bytecode count.** That the eight trivial
+  stages compile to exactly one top-level `Op::Yield` with only `PopN(1)` between
+  it and `Reset` is a strong expectation and an unmeasured one. It needs a corpus
+  count, which needs the machine, which currently belongs to the other session.
+- **Sufficiency remains unmeasured.** `lower_module` refuses on the first
+  unsupported opcode, so composites may sit behind `Stream` in these same modules.
+  Handling `Stream` is necessary for Order 1. Nothing here shows it is enough.
+- **Observational equivalence is still unproven even in the degenerate case.**
+  It is far more plausible when the permutation is the identity, but plausible is
+  not proven, and `tests/yield_sequence.rs` remains the only thing that settles it.
