@@ -1083,3 +1083,59 @@ terminates and shows as an implausibly small bound rather than a hang.
 **What remains open in Workstream E** is the execution-time half. Whether the
 worst-case execution time bound proven on bytecode transfers to native code is
 untouched, and it needs a quiet machine to measure, which has not been available.
+
+## Workstream B may not need coroutine intrinsics for the common case
+
+The roadmap calls sub-coroutine lowering "the load-bearing primitive" and "where
+the risk concentrates", and the mechanism probe above confirmed LLVM coroutines
+work and are reachable. Measuring the SHAPE of real stream chunks suggests most
+of them do not need that machinery.
+
+### The structural observation
+
+**`Reset` clears every local to `Unit`.** Nothing carries across a reset in a
+local slot, so the only state surviving an iteration lives in the data segment,
+which now lowers. A suspension point that is immediately followed by a reset
+therefore captures no live state, which is precisely the thing a coroutine frame
+exists to hold.
+
+### Measured over the corpus
+
+| | Count |
+|---|---|
+| `Stream` chunks | 24 |
+| ... with exactly **one** `Yield` | 22 |
+| ... with nineteen yields | 1 |
+| ... with none | 1 |
+| Every `Yield` followed only by `PopN` then `Reset` | 8 |
+
+The eight are directly a plain function: yield a value, discard the resume
+value, reset. No frame is needed at all.
+
+The remaining single-yield chunks have three to nine instructions between the
+`Yield` and the `Reset`, which is the shape `let x = yield v; ...` produces:
+compute `v`, suspend, bind the resume value, use it, reset. State still does not
+cross the reset, so such a chunk is a **rotation** of a plain function. Running
+the after-yield part with the previous resume value, then the before-yield part,
+and returning the new yielded value is observationally the same sequence.
+
+### What this would mean, and what it does not establish
+
+If the rotation is sound, Workstream B splits into a large easy majority lowered
+as ordinary functions driven by the host, and a small hard minority needing real
+coroutine frames, of which this corpus contains one chunk with nineteen yields.
+That would move the workstream the roadmap identifies as concentrating risk out
+of the critical path for most programs.
+
+**This is a hypothesis with a measurement behind it, not a result.** The
+rotation is a program transformation and its equivalence has not been proven,
+only argued from the fact that `Reset` clears locals. Three things would have to
+hold and none has been checked: that no yielded value depends on a local written
+after the previous yield, that the data segment is the only surviving state, and
+that the trap and break edges out of the body preserve the rotation. The
+nineteen-yield chunk is a counterexample to the single-yield precondition and
+needs the coroutine path regardless.
+
+Recorded because it changes what Workstream B should investigate first, and
+because the cheap measurement that produced it took minutes against an
+implementation that would have taken days and started from the wrong assumption.
