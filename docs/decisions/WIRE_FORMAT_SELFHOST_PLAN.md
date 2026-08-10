@@ -666,6 +666,42 @@ caught the quadratic interner and what deep batching needs; variety needs constr
 should say which of the two it is buying, because "validated against the corpus" reads like both and
 is only ever one.
 
+### Emitter coverage matrix: which oracle backs which region kind
+
+Written after correcting an over-claim of my own, and kept because a roll-up sentence dropped a
+qualifier that every individual slice had recorded correctly. **A table cannot drop a qualifier.**
+
+**REAL** means driven by real compiler output — a strong oracle for volume, a weak one for variety.
+**DERIVE** means constructed values checked against `#[derive(WireRecord)]`'s `write_record` — the
+reverse. Both are legitimate; conflating them is not.
+
+| Region kind | Slice | Oracle | Note |
+|---|---|---|---|
+| `HEADER` | 2 | REAL | first schema emitter |
+| `CHUNKS` | 3 | REAL | widest record, 14 fields; forces batching |
+| `PARAM_TYPES` | 4 | REAL | byte pool; pad residues 0, 3, 4, 5, 7 |
+| `STRING_POOL` | 5 | REAL | 807 batches on `lexer` |
+| `NAMES` | 5 | REAL | 774 batches on `lexer` |
+| `DATA_SLOTS` | 6 | REAL | **capped at 2048 records**, stated in the test |
+| `SHARED_LAYOUT` | 6 | REAL | capped likewise |
+| `SHAPES` | 7 | REAL | |
+| `SIGNATURES` | 7 | REAL | |
+| `ENUM_VARIANTS` | 7 | REAL | only `parse` populates it |
+| `ENUM_LAYOUTS` | 7 | REAL | only `parse` populates it |
+| `DATA_INIT` | 7 | REAL | |
+| `CONSTS` | 7 | REAL | **scalars only** — no composite constant exists in the corpus |
+| `DEBUG_POOL` | 9 | REAL | needs `emit_debug`; the twentieth kind |
+| `STRUCT_AUX` | 8 | DERIVE | corpus emits it empty |
+| `ENUM_AUX` | 8 | DERIVE | corpus emits it empty |
+| `STRUCT_TEMPLATES` | 8 | DERIVE | corpus emits it empty |
+| `PRIVATE_COMPOSITE` | 8 | DERIVE | corpus emits it empty |
+| `NATIVES` | 8 | DERIVE | corpus emits it empty |
+| `NATIVE_RETURNS` | 8 | DERIVE | corpus emits it empty |
+
+**Fourteen REAL, six DERIVE.** Two REAL entries carry stated limits worth remembering: the per-slot
+tables are compared over their first 2048 records, and `CONSTS` sees scalars only, so the
+flattener's composite path is untested by any of this.
+
 ### On the prototype
 
 `secret/kel-format-probe/wirefmt.kel` proves the encoder and decoder are expressible in Keleusma, but
