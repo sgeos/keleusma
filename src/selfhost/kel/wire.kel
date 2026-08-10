@@ -646,19 +646,157 @@ fn shape_size(i: Word) -> Word {
 //  23  tag of shape `warg`
 //  24  kind of shape `warg`
 //  25  size of shape `warg`
-// THE DISPATCH IS SPLIT IN TWO, AND THE REASON IS A HARD LANGUAGE LIMIT.
+// --- SLICE 5b: the constant table and its two side tables ----------------
+//
+// A constant is two words. Struct and enum constants reference small SIDE
+// TABLES rather than widening every record to their worst case, which would
+// cost 32 bytes for an `Int` that needs 8.
+
+// Constant tags, from `wire_schema::tag`.
+fn tag_unit() -> Word { 1 }
+fn tag_bool() -> Word { 2 }
+fn tag_int() -> Word { 3 }
+fn tag_byte() -> Word { 4 }
+fn tag_fixed() -> Word { 5 }
+fn tag_float() -> Word { 6 }
+fn tag_static_str() -> Word { 7 }
+fn tag_tuple() -> Word { 8 }
+fn tag_array() -> Word { 9 }
+fn tag_struct() -> Word { 10 }
+fn tag_enum() -> Word { 11 }
+fn tag_none() -> Word { 12 }
+
+fn kind_consts() -> Word { 0x0012 }
+fn kind_struct_aux() -> Word { 0x0013 }
+fn kind_enum_aux() -> Word { 0x0014 }
+
+// ConstRecord: tag u16 @0, flags u16 @2, aux u32 @4, payload u64 @8.
+fn const_stride() -> Word { 16 }
+fn const_off_tag() -> Word { 0 }
+fn const_off_flags() -> Word { 2 }
+fn const_off_aux() -> Word { 4 }
+fn const_off_payload() -> Word { 8 }
+
+// StructAux: type_name u32 @0, field_names_first u32 @4.
+fn structaux_stride() -> Word { 8 }
+fn structaux_off_type_name() -> Word { 0 }
+fn structaux_off_field_names_first() -> Word { 4 }
+
+// EnumAux: type_name u32 @0, variant u32 @4, discriminant i64 @8.
+fn enumaux_stride() -> Word { 16 }
+fn enumaux_off_type_name() -> Word { 0 }
+fn enumaux_off_variant() -> Word { 4 }
+fn enumaux_off_discriminant() -> Word { 8 }
+
+// A SIGNED 64-bit read. `get_u32` and friends zero-extend, which is right for
+// every other field, and wrong for a discriminant: they are declared with an
+// optional unary minus and negative values are legal.
+//
+// No sign-extension step is needed because the top byte's shift lands on bit
+// 63 and `lsl` is total and wrapping, so the two's-complement bit pattern comes
+// out as the correct negative `Word` directly. A test pins a negative
+// discriminant rather than leaving that to inspection.
+fn get_i64(at: Word) -> Word {
+    (wire.bytes[at] as Word)
+        + ((wire.bytes[at + 1] as Word) lsl 8)
+        + ((wire.bytes[at + 2] as Word) lsl 16)
+        + ((wire.bytes[at + 3] as Word) lsl 24)
+        + ((wire.bytes[at + 4] as Word) lsl 32)
+        + ((wire.bytes[at + 5] as Word) lsl 40)
+        + ((wire.bytes[at + 6] as Word) lsl 48)
+        + ((wire.bytes[at + 7] as Word) lsl 56)
+}
+
+fn const_count() -> Word {
+    if dir_find(kind_consts()) == 0 - 1 { 0 } else {
+        rec_count(dir_find(kind_consts()), const_stride())
+    }
+}
+
+fn const_tag(i: Word) -> Word {
+    rec_u16(dir_find(kind_consts()), const_stride(), i, const_off_tag())
+}
+
+fn const_flags(i: Word) -> Word {
+    rec_u16(dir_find(kind_consts()), const_stride(), i, const_off_flags())
+}
+
+fn const_aux(i: Word) -> Word {
+    rec_u32(dir_find(kind_consts()), const_stride(), i, const_off_aux())
+}
+
+// ONLY A COMPOSITE CARRIES A RANGE. A scalar overlays its VALUE on the same
+// bytes, so asking a scalar for its range reads an integer's value as a child
+// count. That has already happened once in the Rust implementation, where
+// `Int(i64::MIN)` read as a child count of 0x80000000. The tag is the question,
+// never the payload bytes.
+fn const_is_composite(i: Word) -> Word {
+    if const_tag(i) == tag_tuple() { 1 } else {
+    if const_tag(i) == tag_array() { 1 } else {
+    if const_tag(i) == tag_struct() { 1 } else {
+    if const_tag(i) == tag_enum() { 1 } else { 0 } } } }
+}
+
+// The payload packs a composite's children as `first | (count << 32)`.
+// Both accessors return 0 - 1 for a non-composite rather than a plausible
+// number, so a caller that forgot the tag check finds out.
+fn const_range_first(i: Word) -> Word {
+    if const_is_composite(i) == 0 { 0 - 1 } else {
+        rec_u32(dir_find(kind_consts()), const_stride(), i, const_off_payload())
+    }
+}
+
+fn const_range_count(i: Word) -> Word {
+    if const_is_composite(i) == 0 { 0 - 1 } else {
+        rec_u32(dir_find(kind_consts()), const_stride(), i, const_off_payload() + 4)
+    }
+}
+
+fn structaux_type_name(i: Word) -> Word {
+    rec_u32(dir_find(kind_struct_aux()), structaux_stride(), i, structaux_off_type_name())
+}
+
+fn structaux_field_names_first(i: Word) -> Word {
+    rec_u32(
+        dir_find(kind_struct_aux()),
+        structaux_stride(),
+        i,
+        structaux_off_field_names_first(),
+    )
+}
+
+fn enumaux_type_name(i: Word) -> Word {
+    rec_u32(dir_find(kind_enum_aux()), enumaux_stride(), i, enumaux_off_type_name())
+}
+
+fn enumaux_variant(i: Word) -> Word {
+    rec_u32(dir_find(kind_enum_aux()), enumaux_stride(), i, enumaux_off_variant())
+}
+
+fn enumaux_discriminant(i: Word) -> Word {
+    get_i64(
+        rec_at(
+            dir_find(kind_enum_aux()),
+            enumaux_stride(),
+            i,
+            enumaux_off_discriminant(),
+        ),
+    )
+}
+
+// THE DISPATCH IS SPLIT, AND THE REASON IS A HARD LANGUAGE LIMIT.
 //
 // The parser rejects an expression nested more than 24 deep, with
 // "parser recursion depth 24 exceeded; deeply nested expressions are rejected
-// to prevent stack overflow". A single `if / else if / ...` chain is
-// right-nested, so one arm costs one level of depth, and this module passed 24
-// commands while growing. The rejection is a clean diagnostic rather than a
-// crash, which is the language behaving well — but it does cap a flat dispatch
-// at roughly two dozen arms.
+// to prevent stack overflow". An `if / else if / ...` chain is right-nested, so
+// one arm costs one level of depth, and this module passed 24 commands while
+// growing. The rejection is a clean diagnostic rather than a crash, which is
+// the language behaving well, but it does cap a flat dispatch at roughly two
+// dozen arms.
 //
-// Splitting on a threshold keeps each chain far below the limit and leaves room
-// for slices 5b to 5e. The threshold is arbitrary and only has to keep both
-// halves short.
+// Three chains keep every one of them far below the limit and leave room for
+// slices 5c to 5e. The thresholds are arbitrary; they only have to keep each
+// chain short.
 
 fn dispatch_container(cmd: Word) -> Word {
     if cmd == 0 { crc_range(0, wire.len) } else {
@@ -691,9 +829,26 @@ fn dispatch_schema(cmd: Word) -> Word {
     if cmd == 23 { shape_tag(wire.warg) } else {
     if cmd == 24 { shape_kind(wire.warg) } else {
     if cmd == 25 { shape_size(wire.warg) } else {
-    0 - 99 }}}}}}}}}}}}}
+    0 - 97 }}}}}}}}}}}}}
+}
+
+fn dispatch_consts(cmd: Word) -> Word {
+    if cmd == 26 { const_count() } else {
+    if cmd == 27 { const_tag(wire.warg) } else {
+    if cmd == 28 { const_flags(wire.warg) } else {
+    if cmd == 29 { const_aux(wire.warg) } else {
+    if cmd == 30 { const_is_composite(wire.warg) } else {
+    if cmd == 31 { const_range_first(wire.warg) } else {
+    if cmd == 32 { const_range_count(wire.warg) } else {
+    if cmd == 33 { structaux_type_name(wire.warg) } else {
+    if cmd == 34 { structaux_field_names_first(wire.warg) } else {
+    if cmd == 35 { enumaux_type_name(wire.warg) } else {
+    if cmd == 36 { enumaux_variant(wire.warg) } else {
+    if cmd == 37 { enumaux_discriminant(wire.warg) } else {
+    0 - 99 }}}}}}}}}}}}
 }
 
 fn main(cmd: Word) -> Word {
-    if cmd < 13 { dispatch_container(cmd) } else { dispatch_schema(cmd) }
+    if cmd < 13 { dispatch_container(cmd) } else {
+    if cmd < 26 { dispatch_schema(cmd) } else { dispatch_consts(cmd) } }
 }

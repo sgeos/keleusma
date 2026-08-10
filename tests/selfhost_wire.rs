@@ -1531,3 +1531,273 @@ fn an_absent_region_reports_zero_rather_than_reading_from_a_negative_base() {
         assert_eq!(got, 0, "absent {what} region must report zero");
     }
 }
+
+// =========================================================================
+// SLICE 5b — the constant table and its two side tables
+// =========================================================================
+
+use keleusma::wire_schema::{ConstRecord, EnumAux, StructAux, tag};
+
+const CMD_CONST_COUNT: i64 = 26;
+const CMD_CONST_TAG: i64 = 27;
+const CMD_CONST_FLAGS: i64 = 28;
+const CMD_CONST_AUX: i64 = 29;
+const CMD_CONST_IS_COMPOSITE: i64 = 30;
+const CMD_CONST_RANGE_FIRST: i64 = 31;
+const CMD_CONST_RANGE_COUNT: i64 = 32;
+const CMD_SA_TYPE_NAME: i64 = 33;
+const CMD_SA_FIELD_FIRST: i64 = 34;
+const CMD_EA_TYPE_NAME: i64 = 35;
+const CMD_EA_VARIANT: i64 = 36;
+const CMD_EA_DISCRIMINANT: i64 = 37;
+
+#[test]
+fn the_slice_5b_offsets_and_tags_match_the_schema() {
+    assert_eq!(kel_const("const_stride"), ConstRecord::STRIDE as i64);
+    assert_eq!(kel_const("const_off_tag"), ConstRecord::OFFSET_TAG as i64);
+    assert_eq!(
+        kel_const("const_off_flags"),
+        ConstRecord::OFFSET_FLAGS as i64
+    );
+    assert_eq!(kel_const("const_off_aux"), ConstRecord::OFFSET_AUX as i64);
+    assert_eq!(
+        kel_const("const_off_payload"),
+        ConstRecord::OFFSET_PAYLOAD as i64
+    );
+
+    assert_eq!(kel_const("structaux_stride"), StructAux::STRIDE as i64);
+    assert_eq!(
+        kel_const("structaux_off_type_name"),
+        StructAux::OFFSET_TYPE_NAME as i64
+    );
+    assert_eq!(
+        kel_const("structaux_off_field_names_first"),
+        StructAux::OFFSET_FIELD_NAMES_FIRST as i64
+    );
+
+    assert_eq!(kel_const("enumaux_stride"), EnumAux::STRIDE as i64);
+    assert_eq!(
+        kel_const("enumaux_off_type_name"),
+        EnumAux::OFFSET_TYPE_NAME as i64
+    );
+    assert_eq!(
+        kel_const("enumaux_off_variant"),
+        EnumAux::OFFSET_VARIANT as i64
+    );
+    assert_eq!(
+        kel_const("enumaux_off_discriminant"),
+        EnumAux::OFFSET_DISCRIMINANT as i64
+    );
+
+    for (name, want) in [
+        ("tag_unit", tag::UNIT),
+        ("tag_bool", tag::BOOL),
+        ("tag_int", tag::INT),
+        ("tag_byte", tag::BYTE),
+        ("tag_fixed", tag::FIXED),
+        ("tag_float", tag::FLOAT),
+        ("tag_static_str", tag::STATIC_STR),
+        ("tag_tuple", tag::TUPLE),
+        ("tag_array", tag::ARRAY),
+        ("tag_struct", tag::STRUCT),
+        ("tag_enum", tag::ENUM),
+        ("tag_none", tag::NONE),
+    ] {
+        assert_eq!(kel_const(name), i64::from(want), "{name}");
+    }
+    assert_eq!(kel_const("kind_consts"), i64::from(kind::CONSTS));
+    assert_eq!(kel_const("kind_struct_aux"), i64::from(kind::STRUCT_AUX));
+    assert_eq!(kel_const("kind_enum_aux"), i64::from(kind::ENUM_AUX));
+}
+
+/// An artifact with a constant table, a struct side table, and an enum side
+/// table. The enum discriminants include NEGATIVE values, which is the case a
+/// zero-extending read gets wrong.
+#[allow(clippy::type_complexity)]
+fn const_artifact() -> (Vec<u8>, Vec<ConstRecord>, Vec<StructAux>, Vec<EnumAux>) {
+    let consts = vec![
+        ConstRecord {
+            tag: tag::INT,
+            flags: 0,
+            aux: 0,
+            payload: 42,
+        },
+        // An Int whose value has bit 31 set. Read as a range this would look
+        // like a child count of 0x80000000 -- the defect that already occurred
+        // once in the Rust implementation.
+        ConstRecord {
+            tag: tag::INT,
+            flags: 0,
+            aux: 0,
+            payload: 0x8000_0000,
+        },
+        ConstRecord {
+            tag: tag::TUPLE,
+            flags: 0,
+            aux: 0,
+            payload: 3 | (2u64 << 32),
+        },
+        ConstRecord {
+            tag: tag::STRUCT,
+            flags: 0,
+            aux: 7,
+            payload: 5 | (4u64 << 32),
+        },
+        ConstRecord {
+            tag: tag::STATIC_STR,
+            flags: 0,
+            aux: 1,
+            payload: 9,
+        },
+    ];
+    let saux = vec![StructAux {
+        type_name: 3,
+        field_names_first: 11,
+    }];
+    let eaux = vec![
+        EnumAux {
+            type_name: 1,
+            variant: 2,
+            discriminant: 7,
+        },
+        EnumAux {
+            type_name: 4,
+            variant: 5,
+            discriminant: -9,
+        },
+        EnumAux {
+            type_name: 6,
+            variant: 7,
+            discriminant: i64::MIN,
+        },
+        EnumAux {
+            type_name: 8,
+            variant: 9,
+            discriminant: i64::MAX,
+        },
+    ];
+
+    let mut b = keleusma_wire::WireBuilder::new();
+    let c = b.region(kind::CONSTS, 0).expect("consts");
+    for r in &consts {
+        let mut buf = [0u8; 16];
+        r.write_record(&mut buf).expect("encode");
+        b.push(c, &buf);
+    }
+    let sa = b.region(kind::STRUCT_AUX, 0).expect("saux");
+    for r in &saux {
+        let mut buf = [0u8; 8];
+        r.write_record(&mut buf).expect("encode");
+        b.push(sa, &buf);
+    }
+    let ea = b.region(kind::ENUM_AUX, 0).expect("eaux");
+    for r in &eaux {
+        let mut buf = [0u8; 16];
+        r.write_record(&mut buf).expect("encode");
+        b.push(ea, &buf);
+    }
+    (b.finish().expect("finish"), consts, saux, eaux)
+}
+
+#[test]
+fn the_constant_table_reads_back_field_for_field() {
+    let (art, consts, _, _) = const_artifact();
+    let mut vm = vm_for(WIRE_KEL);
+    let n = 3i64;
+    let (count, _) =
+        run_cmd_args(&mut vm, CMD_CONST_COUNT, n, &art, &[], [0, 0, 0, 0], 0).expect("run");
+    assert_eq!(count, consts.len() as i64);
+
+    for (i, r) in consts.iter().enumerate() {
+        for (cmd, want, what) in [
+            (CMD_CONST_TAG, i64::from(r.tag), "tag"),
+            (CMD_CONST_FLAGS, i64::from(r.flags), "flags"),
+            (CMD_CONST_AUX, i64::from(r.aux), "aux"),
+            (
+                CMD_CONST_IS_COMPOSITE,
+                i64::from(r.is_composite()),
+                "is_composite",
+            ),
+        ] {
+            let (got, _) =
+                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0], 0).expect("run");
+            assert_eq!(got, want, "constant {i} {what}");
+        }
+    }
+}
+
+#[test]
+fn only_a_composite_reports_a_range_and_a_scalar_reports_absence() {
+    // THE TRAP THIS SLICE EXISTS AROUND. A scalar overlays its value on the
+    // range bytes, so `Int(0x80000000)` would read as a child count of
+    // 0x80000000 if the tag were not consulted. The Keleusma accessors must
+    // return the absence sentinel instead, and must agree with the reference's
+    // own `is_composite`.
+    let (art, consts, _, _) = const_artifact();
+    let mut vm = vm_for(WIRE_KEL);
+    for (i, r) in consts.iter().enumerate() {
+        let (first, _) = run_cmd_args(
+            &mut vm,
+            CMD_CONST_RANGE_FIRST,
+            3,
+            &art,
+            &[],
+            [i as i64, 0, 0, 0],
+            0,
+        )
+        .expect("run");
+        let (count, _) = run_cmd_args(
+            &mut vm,
+            CMD_CONST_RANGE_COUNT,
+            3,
+            &art,
+            &[],
+            [i as i64, 0, 0, 0],
+            0,
+        )
+        .expect("run");
+        if r.is_composite() {
+            let (want_first, want_count) = r.as_range();
+            assert_eq!(first, i64::from(want_first), "constant {i} range first");
+            assert_eq!(count, i64::from(want_count), "constant {i} range count");
+        } else {
+            assert_eq!(first, -1, "scalar {i} must report no range");
+            assert_eq!(count, -1, "scalar {i} must report no range");
+        }
+    }
+}
+
+#[test]
+fn the_side_tables_read_back_including_negative_discriminants() {
+    // The discriminant is a SIGNED i64. Every other field zero-extends, and a
+    // reader that treated this one the same way would turn -9 into a huge
+    // positive number. `i64::MIN` and `i64::MAX` are included because they are
+    // where a sign-handling mistake is largest.
+    let (art, _, saux, eaux) = const_artifact();
+    let mut vm = vm_for(WIRE_KEL);
+    for (i, r) in saux.iter().enumerate() {
+        for (cmd, want, what) in [
+            (CMD_SA_TYPE_NAME, i64::from(r.type_name), "type_name"),
+            (
+                CMD_SA_FIELD_FIRST,
+                i64::from(r.field_names_first),
+                "field_names_first",
+            ),
+        ] {
+            let (got, _) =
+                run_cmd_args(&mut vm, cmd, 3, &art, &[], [i as i64, 0, 0, 0], 0).expect("run");
+            assert_eq!(got, want, "struct aux {i} {what}");
+        }
+    }
+    for (i, r) in eaux.iter().enumerate() {
+        for (cmd, want, what) in [
+            (CMD_EA_TYPE_NAME, i64::from(r.type_name), "type_name"),
+            (CMD_EA_VARIANT, i64::from(r.variant), "variant"),
+            (CMD_EA_DISCRIMINANT, r.discriminant, "discriminant"),
+        ] {
+            let (got, _) =
+                run_cmd_args(&mut vm, cmd, 3, &art, &[], [i as i64, 0, 0, 0], 0).expect("run");
+            assert_eq!(got, want, "enum aux {i} {what}");
+        }
+    }
+}
