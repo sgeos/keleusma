@@ -250,6 +250,59 @@ dispatch is nine chains, and a test sweeps every command below the ceiling to as
 through to a chain default — the inverse hazard, where a drifting threshold silently routes live
 commands to the default.
 
+### The wiring increment: prep, 2026-08-09, BEFORE any code
+
+Step 6 made the format expressible. Making the self-hosted path actually EMIT an artifact is the
+next increment, and probing it first changed its shape — so this is recorded before anything is
+written.
+
+**A whole-artifact-in-one-buffer emitter cannot work for the real corpus.** The shared segment's
+ceiling is `MAX_DATA_ADDR`, `1 << 24` = 16,777,216 bytes. Measured artifact sizes:
+
+| Stage | Artifact | Share of the ceiling |
+|---|---|---|
+| `lexer` | **16,124,636** | **96.1%** |
+| `parse` | 2,696,820 | 16.1% |
+| `verify_typed` | 2,300,060 | 13.7% |
+| the other seven | 107 KB to 784 KB | under 5% each |
+
+`lexer.kel` alone leaves **652,580 bytes** of headroom, and the emitter's own input tables must live
+in shared data too. So the largest stage does not fit its artifact and its inputs simultaneously,
+and a stage slightly larger would not fit at all.
+
+**Where the bytes go, measured rather than assumed.** For `lexer.kel` the opcode stream is 8,948
+bytes and the operand pool 48, while the **auxiliary body is 16,115,568 — 99.94% of the artifact.**
+The cause is the data segment: `lexer.kel` declares `bytes: [Byte; 393216]` plus two 1280-element
+arrays, and the module reports **395,784 data slots**. **Every array element becomes its own data
+slot with its own interned name**, so the aux body carries a `DataSlotRecord`, a `SharedSlotRecord`,
+a `NameRef` and a pool string per element. The artifact therefore scales with DECLARED ARRAY SIZE,
+not with program complexity — which is also why the `Names::intern` linear scan was catastrophic
+rather than merely slow when it was found.
+
+**Consequences for the increment, in order of how much they change it:**
+
+1. **Emission must be staged, not buffered whole.** The natural shape is two passes: compute every
+   region's length, write the leading directory from those lengths, then emit region by region with
+   the host appending. That is compatible with the operator's chosen encoder strategy — buffer per
+   region, leading directory — and it is what the `secret/` prototype's streaming stage did across
+   yields.
+2. **The emitter's buffer is a per-region working area, not the artifact.** Sizing it is then a
+   question about the largest single region rather than the largest artifact, which is a far smaller
+   number for every stage except possibly `lexer`.
+3. **`lexer.kel` may need measuring per region before it is treated as in scope.** If one region
+   exceeds a workable buffer, that stage needs the region itself chunked, and it would be better to
+   know that now than to discover it after the driver exists.
+
+**A separate question this raises, for the operator and not for the loop.** One slot and one interned
+name per array ELEMENT is what makes a 21 KB source produce a 16 MB artifact. Whether an array should
+instead occupy one slot with a length is a wire-format and data-layout design question with WCMU
+implications, well outside a wiring increment. Recorded here because the measurement surfaced it, not
+because it blocks anything: the format works as specified, it is merely much larger than the source
+suggests.
+
+**To probe before writing the driver:** the largest single REGION across the ten stages, which is the
+number that actually sizes the working buffer.
+
 ### On the prototype
 
 `secret/kel-format-probe/wirefmt.kel` proves the encoder and decoder are expressible in Keleusma, but
