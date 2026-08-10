@@ -2436,3 +2436,81 @@ ships.
 
 Flat-machine ISA timing. No evidence produced today bears on it, and saying so is
 worth more than manufacturing a position.
+
+## READING THE AUTHORITATIVE ARCHITECTURE: a symbol-scheme conflict, and a correction to my last entry
+
+`V0_4_0_NATIVE_CODEGEN.md` is named by `V0_3_X_ROADMAP.md` as the authoritative
+architecture for the milestone this line targets. **I had never read it**, which
+was a mistake worth naming: four provisional application-binary-interface
+decisions were made on this branch without checking whether the architecture
+already settled them. One of them was already settled, and differently.
+
+### CONFLICT: the symbol scheme is a RESOLVED design question, and mine contradicts it
+
+R4.2, recorded at **high confidence**, specifies:
+
+```
+_K<v>_<purity><category>_<module_path>_<function_name>[_<typeargs>]
+```
+
+Versioned at `v=1`; purity `P`/`I`/`T`; category `F`/`Y`/`L` for fn, yield and
+loop; module path separated by `__`; type arguments as a 16-hex-digit SHA-256
+truncation; demangleable through a `keleusma demangle` tool.
+
+This branch emits **`kel_chunk_<index>`**, and it fails the scheme's own stated
+constraints in two ways that are not stylistic:
+
+- **It is not stable across compiler versions.** The name is a chunk INDEX, so
+  adding, removing or reordering a chunk silently renames every symbol after it.
+  R4.2 lists stability as a constraint precisely because cross-module references
+  and hot replacement resolve by name.
+- **It is not demangleable to anything.** No module path, no function name, no
+  purity, no category. `keleusma demangle` would have nothing to return.
+
+**Not yet harmful, and the reason matters.** The lowering is single-module today;
+every test resolves within one object, by JIT symbol lookup or intra-object
+linkage. The index scheme works exactly as long as that holds and breaks the
+moment there are two modules or a hot swap — which are Workstream D and
+Workstream H respectively.
+
+**There is no design work to do here, only adoption.** The answer exists at high
+confidence and predates this branch. Recording it as a debt against the
+provisional label rather than a question: `kel_chunk_<index>` must not survive
+into any artefact another object or tool consumes. Note also that category
+`Y`/`L` encodes whether a symbol is a coroutine, which touches the Workstream B
+rotation directly — a rotated stream chunk lowered as a plain function has a
+category question attached to it.
+
+### CORRECTION to the open-decisions entry immediately above
+
+That entry claimed "**the same split governs the WCMU half**", presenting the
+embedded-versus-host boundary as common to both halves of Workstream E. **That is
+too strong, and reading the target tiers shows why.**
+
+The tiers (R4.5): **Tier 1** is x86-64 Linux, AArch64 Linux, and macOS on both
+architectures. **Tier 2** includes Cortex-M55 and Cortex-M4.
+
+| Half | Derivable where | Against the tiers |
+|---|---|---|
+| WCMU (`.stack_sizes`) | **Any ELF target** | Both Tier 1 Linux targets, plus Tier 2 embedded. Fails on macOS only. |
+| WCET (cycle table) | **In-order, no cache** | **No Tier 1 target at all.** Tier 2 embedded only. |
+
+So the two halves do **not** split along the same line. They agree only at the
+extremes — both work on Cortex-M, both fail on macOS — and diverge on Tier 1
+Linux, where the memory bound is derivable and the timing bound is not. The
+earlier claim conflated a file-format constraint with a microarchitecture
+constraint because both happened to favour embedded.
+
+### The uncomfortable consequence, stated plainly
+
+**Every Tier 1 ship target for V0.4.0 is one where a hard WCET bound is not
+derivable.** The ecosystem's stated value proposition is definitive WCET and
+WCMU. On the targets V0.4.0 ships first, the WCMU half survives on Linux and the
+WCET half degrades to attestation or best-effort everywhere.
+
+That is not an argument against the tier order, which follows back-end maturity
+and platform relevance and is sensible on those grounds. It is an argument that
+**open decision 1 cannot be resolved without saying which tier it is being
+resolved for**, and that the answer for Tier 1 is materially weaker than the
+answer for Tier 2. Better surfaced now than discovered when someone asks what the
+guarantee means on the platform they actually shipped to.
