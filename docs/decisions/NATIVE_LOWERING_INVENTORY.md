@@ -1625,3 +1625,60 @@ one already lowered. `Op::Call(u16, u8)` uses `arg_count as usize` directly with
 no masking (`src/vm.rs:5273`). **The existing `Call` lowering is unaffected.**
 Recorded because a check that comes back clean is still a result, and the next
 reader should not have to redo it to find that out.
+
+## Self-audit of the shipped lowering against VM semantics: 6 clean, 1 defect
+
+The uninitialised-locals defect above was found by accident while reading the
+call boundary for an unrelated reason. That is a poor way to find defects, so the
+same comparison was run deliberately against the ops most likely to diverge —
+chosen by risk, not alphabetically. **This is a sample of about seven of the
+forty-six lowered opcodes, not an exhaustive audit**, and it should not be read
+as one.
+
+The selection criterion was: where does LLVM have undefined or poison behaviour
+where the VM has defined behaviour, and where does the VM normalise a value in a
+way a naive load would not?
+
+| Check | Result | Basis |
+|---|---|---|
+| Shift count ≥ word width | **CLEAN** | Both mask |
+| `Op::Not` truthiness | **CLEAN** | Both canonical |
+| `Op::If` truthiness | **CLEAN** | Both nonzero-is-true |
+| `Bool` read from a host slot | **CLEAN** | Both normalise |
+| `Byte` widening sign | **CLEAN** | Both zero-extend |
+| `Op::Call` count operand | **CLEAN** | No hidden flag |
+| Non-parameter local init | **DEFECT** | VM defines, lowering leaves `undef` |
+
+### The two that could have been live, and were not
+
+**Shift counts.** `shl i64 x, 64` is *poison* in LLVM, and a shift count is a
+runtime `Word`, so an unmasked lowering would be undefined on ordinary input
+rather than on malformed input. The VM masks with `(c as u32) & (word_bits - 1)`,
+so a shift by 64 is a shift by 0 and a shift by −1 is a shift by 63. The lowering
+masks too, under a comment reading "THE MASK IS NOT OPTIONAL"
+(`native_codegen/src/lib.rs:1042`). The two masks agree exactly: `& 63` reads
+only the low six bits, so the VM's intermediate `as u32` truncation is invisible.
+
+**`Bool` normalisation.** A `Bool` shared slot is one host-written byte and the
+host may write any value. `read_scalar_le` normalises with `!= 0`, so `0xFF` is
+`true`. A lowering that merely loaded and extended the byte would agree with the
+VM under `If`, which only tests nonzero — and disagree under `CmpEq`, where the
+VM compares canonical `true` and the native side would hold `255`. The lowering
+normalises at `lib.rs:1375` with `NE 0` then `zext`, so the two agree everywhere,
+not just on the branch path. Worth recording because the failure mode was
+**conditional on which operator consumed the value**, which is the kind of
+divergence a small differential corpus misses.
+
+### What this says about where to look next
+
+The clean results share a shape: each is a place where someone previously
+noticed that LLVM and the VM disagree on undefined-versus-defined and wrote the
+reconciliation down at the site. The one defect is a place where the VM does
+something *positive* that is easy not to notice at all — filling a frame with
+`Unit` — rather than a place where it constrains an operation.
+
+**So the productive question is not "where is LLVM undefined" but "what does the
+VM do that the lowering never had a reason to think about".** Frame
+initialisation was one. Candidates not yet audited under that lens: what `Reset`
+does to the operand stack, what `Return` truncates, and what the arena epoch
+bump invalidates.
