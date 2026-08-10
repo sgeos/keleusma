@@ -13,6 +13,43 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**WIRING SLICE 7: THE REMAINING POPULATED TABLES, AND THE SWEEP DEBT PAID AS A MECHANISM
+(2026-08-09).** `SHAPES`, `SIGNATURES`, `ENUM_VARIANTS`, `ENUM_LAYOUTS`, `DATA_INIT` and `CONSTS`,
+all byte-identical against real output. 106 tests. **Every populated region kind in the corpus now
+has an emitter.** The six were mechanical, since every offset had already been transcribed for the
+readers and the batching, window addressing and oversize guard were unchanged since slice 3.
+
+**The genuinely new thing was 64-bit fields.** `ConstRecord` carries a `payload` and
+`EnumVariantRecord` a SIGNED `disc`, so `put_u64` writes two little-endian limbs. It is correct for
+a negative value only because `lsr` is logical over the whole word — a signed shift would
+sign-extend the high limb and corrupt every negative discriminant. The corpus may contain none, so
+that is constructed rather than hoped for: a dedicated test walks -1, -2, -128, -129, both 32-bit
+boundaries, `i64::MIN`, `i64::MAX` and zero.
+
+**THE SWEEP DEBT IS PAID, AND AS A MECHANISM RATHER THAN A LONGER LIST.** For four consecutive
+slices a test-side constant had to be bumped to match the highest command, and once I got it wrong
+and left a new command unswept — the exact off-by-one the sweep exists to catch, committed inside
+the sweep. `wire.kel` now declares `highest_command()`, **`main` refuses anything above it**, and the
+test reads that value out of the source. The refusal is what makes it load-bearing rather than
+documentation: a command added past the number becomes unreachable and fails its own test at once.
+A control calls `highest + 1` and requires the unknown code, so the bound cannot drift BELOW the
+real top and silently narrow the sweep either. Fifth instance of the by-name-enumeration family in
+this repository, second closed mechanically.
+
+**`dispatch_frame` had to split, and the reason is the old limit reached from the other end.** Six
+more commands would have taken it to twenty-five arms, past the parser's depth-24 ceiling — the same
+limit that shaped the original nine chains. The emitters now have their own `dispatch_emit`.
+
+**A harness property found by tripping over it, and worth knowing.** The new control failed with an
+`IndexOutOfBounds` from a completely different command. The sweep deliberately runs every command
+with zero arguments, and some legitimately fault there — command 115 resolves a HEADER region a
+zero-region artifact does not have. The loop tolerates that with `unwrap_or`, but **a faulted VM is
+unusable for any later call**, so the control was failing on the previous command's fault rather
+than answering its own question. It takes a fresh VM now. I diagnosed it by measuring instead of
+reasoning: my first three hypotheses — a mis-parsed constant, an unbalanced brace, a wrong guard
+placement — were all disproved by checking, and the brace count I had "eyeballed" as wrong was in
+fact balanced.
+
 **WIRING SLICE 6: THE TWO PER-SLOT TABLES, AND THE FIRST COVERAGE CAP I HAVE TAKEN (2026-08-09).**
 `DATA_SLOTS` and `SHARED_LAYOUT` for all ten stages, byte-identical. 103 tests, up from 100. With
 slice 5's pair these complete **the four regions that are 99.96% of `lexer`'s auxiliary body**, and

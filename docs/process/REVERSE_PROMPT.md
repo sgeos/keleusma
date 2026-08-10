@@ -36,7 +36,7 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | Version branch | `v0.2.3`, one unpushed mailbox commit `8fc802e` |
 | Feature branch | `feat/selfhost-wire-real-corpus`, pushed |
 | Gated commit | `3ad895e` (slice 4) — **everything after it is ungated** |
-| Suite | `tests/selfhost_wire.rs`, **103 tests**, Tier 1 green throughout |
+| Suite | `tests/selfhost_wire.rs`, **106 tests**, Tier 1 green throughout |
 
 The mailbox commit on `v0.2.3` is deliberately unpushed: the pre-push hook runs the test suite and
 I preferred not to risk a false `perf_canary` trip on my own running gate. Push it when convenient.
@@ -56,6 +56,7 @@ and gate target live there.
 | 4 | `PARAM_TYPES` byte pool | `wire.bin` channel; the pad is the whole risk |
 | 5 | `NAMES` + `STRING_POOL` | the two accumulators; first deep batching, 774/807 |
 | 6 | `DATA_SLOTS` + `SHARED_LAYOUT` | completes the four regions that are 99.96% of `lexer` |
+| 7 | `SHAPES`, `SIGNATURES`, `ENUM_VARIANTS`, `ENUM_LAYOUTS`, `DATA_INIT`, `CONSTS` | **every populated kind now has an emitter**; `put_u64` for the two 64-bit fields |
 
 **Both region shapes are covered** — record table and byte pool — and the batching mechanism is
 built and exercised. What remains is coverage breadth and the driver, not new mechanism.
@@ -79,8 +80,7 @@ is needed for byte identity with the encoder as it stands.
 
 ## Next, in order
 
-1. **The remaining populated record tables**, now mechanical: `CONSTS`, `SHAPES`, `SIGNATURES`,
-   `ENUM_VARIANTS`, `ENUM_LAYOUTS`, `DATA_INIT`.
+1. ~~The remaining populated record tables.~~ **DONE in slice 7.**
 2. **The six record shapes with no corpus coverage**, needing hand-built emitter cases: `STRUCT_AUX`,
    `ENUM_AUX`, `STRUCT_TEMPLATES`, `PRIVATE_COMPOSITE`, `NATIVES`, `NATIVE_RETURNS`, plus
    `DEBUG_POOL` whose region is never emitted at all. **These do not block the driver** — a region
@@ -89,9 +89,10 @@ is needed for byte identity with the encoder as it stands.
 3. **The driver**, where values stop being decoded from the reference and start being computed. That
    is the real remaining work, and the residency measurement governs it.
 
-**A debt worth paying early in the next slice.** The fall-through sweep's exclusive bound has had to
-move in four consecutive slices and I got it wrong once. It is a by-name enumeration in disguise;
-`wire.kel` should report its own highest command instead of a test remembering.
+~~A debt worth paying early in the next slice.~~ **PAID in slice 7, as a mechanism.** `wire.kel`
+declares `highest_command()`, `main` refuses anything above it, and the sweep reads the value from
+the source. A command added past the number is unreachable and fails its own test; a control on
+`highest + 1` stops the bound drifting below the real top.
 
 ## Order-1: integration, not invention
 
@@ -100,8 +101,9 @@ move in four consecutive slices and I got it wrong once. It is a by-name enumera
 - **Type checker: REJECTION ALONE.** Clearing `program.fn_expr_types` leaves every stage module
   byte-identical. Three controls, in
   [`../decisions/TYPECHECK_SELFHOST_PLAN.md`](../decisions/TYPECHECK_SELFHOST_PLAN.md).
-- **Wire-format serialization: expressible end to end**, and now driven by real data for six of the
-  format's region kinds.
+- **Wire-format serialization: expressible end to end**, and **every region kind the corpus
+  populates now has an emitter driven by real data**. What is left is the six kinds the corpus
+  leaves empty, and the driver.
 
 ## Open, held by the operator
 
@@ -133,3 +135,7 @@ theirs. Their mailbox is `git show origin/v0.3.0:docs/process/handoffs/v0.3.0.md
   nothing, because every call starts from a fresh buffer.
 - **State a coverage cap; never take one silently.** Slice 6 caps at 2048 records and says so, with
   the reason and the residual batch depth asserted.
+- **Measure the failure instead of reasoning about it.** Slice 7's control failed and my first three
+  hypotheses — a mis-parsed constant, an unbalanced brace, a misplaced guard — were each disproved
+  by checking. The brace count I had eyeballed as wrong was balanced. The real cause was that a
+  faulted VM is unusable for any later call, which no amount of reading would have suggested.

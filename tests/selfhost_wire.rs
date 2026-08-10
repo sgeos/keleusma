@@ -888,10 +888,19 @@ fn no_command_below_the_dispatch_ceiling_falls_through() {
     // read `0..103` and so stopped exactly where `dispatch_frame` begins,
     // leaving the whole framing chain — the one nearest the depth ceiling and
     // therefore likeliest to need splitting — entirely unswept.
-    // EXCLUSIVE, so this must be one past the highest live command. Slice 3
-    // added 116 and this read `0..116`, which is exactly the off-by-one the
-    // sweep exists to catch, committed inside the sweep itself.
-    for cmd in 0..122i64 {
+    // THE BOUND IS READ OUT OF THE SOURCE, NOT RESTATED HERE.
+    //
+    // It was restated for four consecutive slices and I got it wrong once,
+    // leaving a newly added command unswept — the exact off-by-one this test
+    // exists to catch, committed inside the test. That was a by-name
+    // enumeration wearing a different hat.
+    //
+    // `highest_command()` is load-bearing rather than documentation: `main`
+    // refuses anything above it, so a command added past that number is
+    // unreachable and fails its own test at once. The control below proves the
+    // refusal is real.
+    let highest = kel_const("highest_command");
+    for cmd in 0..=highest {
         let (got, _) =
             run_cmd_args(&mut vm, cmd, 0, &[], &[], [0, 0, 0, 0, 0], 0).unwrap_or((0, Vec::new()));
         if (-99..=-92).contains(&got) {
@@ -901,6 +910,24 @@ fn no_command_below_the_dispatch_ceiling_falls_through() {
     assert!(
         fell_through.is_empty(),
         "these commands fell through to a chain default: {fell_through:?}"
+    );
+    // The bound is only load-bearing if `main` actually refuses past it.
+    // Without this, `highest_command` could drift BELOW the real top and the
+    // sweep would silently narrow rather than fail.
+    //
+    // A FRESH VM, and that is not tidiness. The sweep runs every command with
+    // zero arguments, and some of them legitimately fault there — command 115
+    // resolves a HEADER region that a zero-region artifact does not have, and
+    // indexes far outside the buffer. The loop tolerates that with
+    // `unwrap_or`, but the fault leaves this VM unusable for any later call, so
+    // reusing it here fails with the PREVIOUS command's fault rather than
+    // answering the question asked.
+    let mut fresh = vm_for(WIRE_KEL);
+    let (past, _) =
+        run_cmd_args(&mut fresh, highest + 1, 0, &[], &[], [0, 0, 0, 0, 0], 0).expect("run");
+    assert_eq!(
+        past, -99,
+        "main does not refuse past highest_command, so the bound is not load-bearing"
     );
 }
 
@@ -2022,6 +2049,11 @@ fn the_slice_5c_offsets_and_kinds_match_the_schema() {
     assert_eq!(
         kel_const("evar_off_name"),
         EnumVariantRecord::OFFSET_NAME as i64
+    );
+    // Transcribed for the emitter; no reader consults it.
+    assert_eq!(
+        kel_const("evar_off_reserved"),
+        EnumVariantRecord::OFFSET_RESERVED as i64
     );
     assert_eq!(
         kel_const("evar_off_disc"),
@@ -5283,5 +5315,272 @@ fn an_oversized_per_slot_batch_is_reported_rather_than_truncated() {
         let (got, _) =
             run_cmd_fields(&mut vm, cmd, 0, &[], &[], [64, over as i64, 0, 0, 0], 0).expect("run");
         assert_eq!(got, code, "command {cmd}: wrong or missing rejection code");
+    }
+}
+
+// --- WIRING SLICE 7: the remaining populated record tables -------------------
+//
+// Six kinds, all mechanical: every offset was already transcribed for the
+// readers, and batching, window addressing and the oversize guard are unchanged
+// since slice 3. One kind, `ENUM_VARIANTS`, needed a reserved field transcribed
+// for the emitter, as the per-slot tables did.
+//
+// TWO CARRY 64-BIT FIELDS, which is the one genuinely new thing. `ConstRecord`
+// has a `payload` and `EnumVariantRecord` a SIGNED `disc`, so `put_u64` writes
+// two little-endian limbs. The signed case is not hypothetical — the reader
+// suite already pins negative discriminants — and it is correct only because
+// `lsr` is logical over the whole word, which is asserted by the corpus rather
+// than assumed.
+
+struct RecordKind {
+    label: &'static str,
+    cmd: i64,
+    kind: u16,
+    stride: usize,
+    fields: usize,
+}
+
+const SLICE7_KINDS: &[RecordKind] = &[
+    RecordKind {
+        label: "SHAPES",
+        cmd: 122,
+        kind: keleusma::wire_schema::kind::SHAPES,
+        stride: 8,
+        fields: 4,
+    },
+    RecordKind {
+        label: "SIGNATURES",
+        cmd: 123,
+        kind: keleusma::wire_schema::kind::SIGNATURES,
+        stride: 16,
+        fields: 4,
+    },
+    RecordKind {
+        label: "ENUM_VARIANTS",
+        cmd: 124,
+        kind: keleusma::wire_schema::kind::ENUM_VARIANTS,
+        stride: 16,
+        fields: 3,
+    },
+    RecordKind {
+        label: "ENUM_LAYOUTS",
+        cmd: 125,
+        kind: keleusma::wire_schema::kind::ENUM_LAYOUTS,
+        stride: 16,
+        fields: 4,
+    },
+    RecordKind {
+        label: "DATA_INIT",
+        cmd: 126,
+        kind: keleusma::wire_schema::kind::DATA_INIT,
+        stride: 8,
+        fields: 2,
+    },
+    RecordKind {
+        label: "CONSTS",
+        cmd: 127,
+        kind: keleusma::wire_schema::kind::CONSTS,
+        stride: 16,
+        fields: 4,
+    },
+];
+
+/// Decode one region's records into field rows, per kind.
+///
+/// Explicit per kind rather than generic over a layout table: the widths and
+/// signedness differ, and a generic decoder would need the very offset
+/// knowledge this suite exists to check independently.
+fn decode_slice7(kind: u16, table: &keleusma_wire::RecordTable<'_>) -> Vec<Vec<i64>> {
+    use keleusma::wire_schema as w;
+    let mut out = Vec::with_capacity(table.len());
+    for i in 0..table.len() {
+        let row: Vec<i64> = match kind {
+            k if k == w::kind::SHAPES => {
+                let r: w::ShapeRecord = table.get_as(i).expect("record");
+                vec![
+                    i64::from(r.tag),
+                    i64::from(r.kind),
+                    i64::from(r.reserved),
+                    i64::from(r.size),
+                ]
+            }
+            k if k == w::kind::SIGNATURES => {
+                let r: w::SignatureRecord = table.get_as(i).expect("record");
+                vec![
+                    i64::from(r.params_first),
+                    i64::from(r.params_count),
+                    i64::from(r.ret),
+                    i64::from(r.resume),
+                ]
+            }
+            k if k == w::kind::ENUM_VARIANTS => {
+                let r: w::EnumVariantRecord = table.get_as(i).expect("record");
+                vec![i64::from(r.name), i64::from(r.reserved), r.disc]
+            }
+            k if k == w::kind::ENUM_LAYOUTS => {
+                let r: w::EnumLayoutRecord = table.get_as(i).expect("record");
+                vec![
+                    i64::from(r.type_name),
+                    i64::from(r.variants_first),
+                    i64::from(r.variants_count),
+                    i64::from(r.min_payload),
+                ]
+            }
+            k if k == w::kind::DATA_INIT => {
+                let r: w::DataInitRecord = table.get_as(i).expect("record");
+                vec![i64::from(r.first), i64::from(r.count)]
+            }
+            k if k == w::kind::CONSTS => {
+                let r: w::ConstRecord = table.get_as(i).expect("record");
+                vec![
+                    i64::from(r.tag),
+                    i64::from(r.flags),
+                    i64::from(r.aux),
+                    r.payload as i64,
+                ]
+            }
+            other => panic!("no decoder for kind {other:#06x}"),
+        };
+        out.push(row);
+    }
+    out
+}
+
+fn emit_rows_batched(
+    vm: &mut Vm<'static, 'static>,
+    rk: &RecordKind,
+    rows: &[Vec<i64>],
+    window: usize,
+) -> Vec<u8> {
+    let per_batch = FIN_CAPACITY / rk.fields;
+    let mut out = Vec::with_capacity(rows.len() * rk.stride);
+    for batch in rows.chunks(per_batch) {
+        let fields: Vec<i64> = batch.iter().flatten().copied().collect();
+        let produced = batch.len() * rk.stride;
+        let (written, buf) = run_cmd_fields(
+            vm,
+            rk.cmd,
+            0,
+            &[],
+            &fields,
+            [window as i64, batch.len() as i64, 0, 0, 0],
+            window + produced,
+        )
+        .expect("run");
+        assert_eq!(
+            written, produced as i64,
+            "{}: wrong batch byte count",
+            rk.label
+        );
+        out.extend_from_slice(&buf[window..window + produced]);
+    }
+    out
+}
+
+/// A stage's rows and reference bytes for one record kind.
+fn slice7_case(src: &str, rk: &RecordKind) -> (Vec<Vec<i64>>, Vec<u8>) {
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let bytes =
+        keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode aux body");
+    let view = keleusma_wire::WireView::parse(&bytes).expect("reference artifact parses");
+    let region = view.find_region(rk.kind).expect("region present");
+    let want = view.region_bytes(&region).expect("payload").to_vec();
+    let table = view.records(&region, rk.stride).expect("record table");
+    (decode_slice7(rk.kind, &table), want)
+}
+
+#[test]
+fn the_remaining_populated_tables_match_the_reference_on_real_compiler_output() {
+    let mut vm = vm_for(WIRE_KEL);
+    // Which kinds the corpus actually populates, asserted rather than assumed:
+    // three of these six are empty in every stage, and a differential over an
+    // empty table passes without emitting a single record.
+    let mut populated: Vec<&str> = Vec::new();
+    for (name, src) in CORPUS_STAGES {
+        for rk in SLICE7_KINDS {
+            let (rows, want) = slice7_case(src, rk);
+            if !rows.is_empty() && !populated.contains(&rk.label) {
+                populated.push(rk.label);
+            }
+            let got = emit_rows_batched(&mut vm, rk, &rows, 64);
+            assert_eq!(got, want, "{name}: {} differs", rk.label);
+        }
+    }
+    populated.sort_unstable();
+    assert_eq!(
+        populated,
+        vec![
+            "CONSTS",
+            "DATA_INIT",
+            "ENUM_LAYOUTS",
+            "ENUM_VARIANTS",
+            "SHAPES",
+            "SIGNATURES"
+        ],
+        "the set of corpus-populated kinds changed; coverage moved"
+    );
+}
+
+/// Must-fire control: every field of every kind must be observable.
+#[test]
+fn every_field_of_the_remaining_tables_is_independently_observable() {
+    let mut vm = vm_for(WIRE_KEL);
+    for rk in SLICE7_KINDS {
+        // Pick a stage that actually populates this kind, or the control would
+        // be perturbing an empty table and passing for the wrong reason.
+        let Some((_, rows, want)) = CORPUS_STAGES.iter().find_map(|(n, src)| {
+            let (rows, want) = slice7_case(src, rk);
+            (!rows.is_empty()).then_some((n, rows, want))
+        }) else {
+            panic!("{}: no stage populates this kind", rk.label);
+        };
+        assert_eq!(
+            emit_rows_batched(&mut vm, rk, &rows, 64),
+            want,
+            "{}: the clean case must agree",
+            rk.label
+        );
+        for f in 0..rk.fields {
+            let mut perturbed = rows.clone();
+            perturbed[0][f] ^= 1;
+            assert_ne!(
+                emit_rows_batched(&mut vm, rk, &perturbed, 64),
+                want,
+                "{}: control did not fire, field {f} is not observable",
+                rk.label
+            );
+        }
+    }
+}
+
+/// A negative enum discriminant survives the two-limb write.
+///
+/// `put_u64` splits a `Word` into low and high halves with `lsr`, which is
+/// logical over the whole word. A signed shift there would sign-extend the high
+/// limb and corrupt every negative discriminant, and the corpus may not contain
+/// one, so this is constructed rather than hoped for.
+#[test]
+fn a_negative_discriminant_round_trips_through_the_two_limb_write() {
+    let mut vm = vm_for(WIRE_KEL);
+    let rk = &SLICE7_KINDS[2];
+    assert_eq!(rk.label, "ENUM_VARIANTS");
+    for disc in [
+        -1i64,
+        -2,
+        -128,
+        -129,
+        -2147483648,
+        -2147483649,
+        i64::MIN,
+        0,
+        1,
+        i64::MAX,
+    ] {
+        let rows = vec![vec![7i64, 0, disc]];
+        let got = emit_rows_batched(&mut vm, rk, &rows, 64);
+        let mut want = vec![0u8; 16];
+        want[0..4].copy_from_slice(&7u32.to_le_bytes());
+        want[8..16].copy_from_slice(&disc.to_le_bytes());
+        assert_eq!(got, want, "discriminant {disc} emitted wrongly");
     }
 }

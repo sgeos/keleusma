@@ -201,6 +201,16 @@ fn put_u8(at: Word, v: Word) -> Word {
     at + 1
 }
 
+// Two limbs, low first, because the format is little-endian and `Word` is the
+// only integer the language has. `lsr` is logical over the full word, so this is
+// correct for a NEGATIVE value too — which matters, since an enum discriminant
+// is a signed 64-bit field and negative discriminants are legal.
+fn put_u64(at: Word, v: Word) -> Word {
+    put_u32(at, v band 0xFFFFFFFF);
+    put_u32(at + 4, v lsr 32);
+    at + 8
+}
+
 fn put_u16(at: Word, v: Word) -> Word {
     wire.bytes[at] = (v band 255) as Byte;
     wire.bytes[at + 1] = ((v lsr 8) band 255) as Byte;
@@ -856,6 +866,7 @@ fn tpl_off_field_count() -> Word { 8 }
 // EnumVariantRecord: name u32 @0, reserved u32 @4, disc i64 @8.
 fn evar_stride() -> Word { 16 }
 fn evar_off_name() -> Word { 0 }
+fn evar_off_reserved() -> Word { 4 }
 fn evar_off_disc() -> Word { 8 }
 
 // EnumLayoutRecord: type_name u32 @0, variants_first u32 @4,
@@ -1445,6 +1456,125 @@ fn emit_shared_slot_records(at: Word, n: Word) -> Word {
     }
 }
 
+// --- SLICE 7 OF THE WIRING INCREMENT: the remaining populated tables -------
+//
+// Six record kinds, all mechanical now that the mechanism exists: every offset
+// was already transcribed for the readers, and the batching, window addressing
+// and oversize guard are unchanged from slice 3.
+//
+// TWO CARRY 64-BIT FIELDS, which is the one new thing here. `ConstRecord` has a
+// `payload` and `EnumVariantRecord` a signed `disc`, both eight bytes, so
+// `put_u64` writes them as two little-endian limbs. It is correct for a negative
+// discriminant because `lsr` is logical over the whole word.
+
+fn shape_fields() -> Word { 4 }
+
+fn emit_shape_records(at: Word, n: Word) -> Word {
+    if (n * shape_fields()) > fin_capacity() { 0 - 205 } else {
+        for j in 0..n limit 1024 {
+            put_u16(at + (j * shape_stride()) + shape_off_tag(), wire.fin[j * shape_fields()]);
+            put_u8(at + (j * shape_stride()) + shape_off_kind(), wire.fin[(j * shape_fields()) + 1]);
+            put_u8(
+                at + (j * shape_stride()) + shape_off_reserved(),
+                wire.fin[(j * shape_fields()) + 2],
+            );
+            put_u32(at + (j * shape_stride()) + shape_off_size(), wire.fin[(j * shape_fields()) + 3]);
+        }
+        n * shape_stride()
+    }
+}
+
+fn sig_fields() -> Word { 4 }
+
+fn emit_signature_records(at: Word, n: Word) -> Word {
+    if (n * sig_fields()) > fin_capacity() { 0 - 206 } else {
+        for j in 0..n limit 1024 {
+            put_u32(at + (j * sig_stride()) + sig_off_params_first(), wire.fin[j * sig_fields()]);
+            put_u32(
+                at + (j * sig_stride()) + sig_off_params_count(),
+                wire.fin[(j * sig_fields()) + 1],
+            );
+            put_u32(at + (j * sig_stride()) + sig_off_ret(), wire.fin[(j * sig_fields()) + 2]);
+            put_u32(at + (j * sig_stride()) + sig_off_resume(), wire.fin[(j * sig_fields()) + 3]);
+        }
+        n * sig_stride()
+    }
+}
+
+fn evar_fields() -> Word { 3 }
+
+fn emit_enum_variant_records(at: Word, n: Word) -> Word {
+    if (n * evar_fields()) > fin_capacity() { 0 - 207 } else {
+        for j in 0..n limit 1024 {
+            put_u32(at + (j * evar_stride()) + evar_off_name(), wire.fin[j * evar_fields()]);
+            put_u32(
+                at + (j * evar_stride()) + evar_off_reserved(),
+                wire.fin[(j * evar_fields()) + 1],
+            );
+            put_u64(at + (j * evar_stride()) + evar_off_disc(), wire.fin[(j * evar_fields()) + 2]);
+        }
+        n * evar_stride()
+    }
+}
+
+fn elay_fields() -> Word { 4 }
+
+fn emit_enum_layout_records(at: Word, n: Word) -> Word {
+    if (n * elay_fields()) > fin_capacity() { 0 - 208 } else {
+        for j in 0..n limit 1024 {
+            put_u32(at + (j * elay_stride()) + elay_off_type_name(), wire.fin[j * elay_fields()]);
+            put_u32(
+                at + (j * elay_stride()) + elay_off_variants_first(),
+                wire.fin[(j * elay_fields()) + 1],
+            );
+            put_u32(
+                at + (j * elay_stride()) + elay_off_variants_count(),
+                wire.fin[(j * elay_fields()) + 2],
+            );
+            put_u32(
+                at + (j * elay_stride()) + elay_off_min_payload(),
+                wire.fin[(j * elay_fields()) + 3],
+            );
+        }
+        n * elay_stride()
+    }
+}
+
+fn dinit_fields() -> Word { 2 }
+
+fn emit_data_init_records(at: Word, n: Word) -> Word {
+    if (n * dinit_fields()) > fin_capacity() { 0 - 209 } else {
+        for j in 0..n limit 1024 {
+            put_u32(at + (j * dinit_stride()) + dinit_off_first(), wire.fin[j * dinit_fields()]);
+            put_u32(
+                at + (j * dinit_stride()) + dinit_off_count(),
+                wire.fin[(j * dinit_fields()) + 1],
+            );
+        }
+        n * dinit_stride()
+    }
+}
+
+fn const_fields() -> Word { 4 }
+
+fn emit_const_records(at: Word, n: Word) -> Word {
+    if (n * const_fields()) > fin_capacity() { 0 - 210 } else {
+        for j in 0..n limit 1024 {
+            put_u16(at + (j * const_stride()) + const_off_tag(), wire.fin[j * const_fields()]);
+            put_u16(
+                at + (j * const_stride()) + const_off_flags(),
+                wire.fin[(j * const_fields()) + 1],
+            );
+            put_u32(at + (j * const_stride()) + const_off_aux(), wire.fin[(j * const_fields()) + 2]);
+            put_u64(
+                at + (j * const_stride()) + const_off_payload(),
+                wire.fin[(j * const_fields()) + 3],
+            );
+        }
+        n * const_stride()
+    }
+}
+
 fn emit_pool_pad(at: Word, total: Word) -> Word {
     st.pad = (words_for(total) lsl 3) - total;
     for j in 0..st.pad limit 8 {
@@ -1927,6 +2057,14 @@ fn dispatch_frame(cmd: Word) -> Word {
     if cmd == 112 { artifact_intact(wire.warg) } else {
     if cmd == 113 { magic_word() } else {
     if cmd == 114 { crc32_residue() } else {
+    0 - 99 }}}}}}}}}}}}
+}
+
+// The schema emitters get their own chain. Folding them into `dispatch_frame`
+// would have taken it to twenty-five arms, and the parser rejects an expression
+// nested more than twenty-four deep — the same limit that shaped the original
+// nine chains, reached again from the other end.
+fn dispatch_emit(cmd: Word) -> Word {
     if cmd == 115 { emit_header(); emit_header_record_at(region_base(dir_find(kind_header()))) } else {
     if cmd == 116 { emit_chunk_records(wire.warg, wire.warg2) } else {
     if cmd == 117 { emit_pool_bytes(wire.warg, wire.warg2) } else {
@@ -1934,8 +2072,21 @@ fn dispatch_frame(cmd: Word) -> Word {
     if cmd == 119 { emit_name_records(wire.warg, wire.warg2) } else {
     if cmd == 120 { emit_data_slot_records(wire.warg, wire.warg2) } else {
     if cmd == 121 { emit_shared_slot_records(wire.warg, wire.warg2) } else {
-    0 - 99 }}}}}}}}}}}}}}}}}}}
+    if cmd == 122 { emit_shape_records(wire.warg, wire.warg2) } else {
+    if cmd == 123 { emit_signature_records(wire.warg, wire.warg2) } else {
+    if cmd == 124 { emit_enum_variant_records(wire.warg, wire.warg2) } else {
+    if cmd == 125 { emit_enum_layout_records(wire.warg, wire.warg2) } else {
+    if cmd == 126 { emit_data_init_records(wire.warg, wire.warg2) } else {
+    if cmd == 127 { emit_const_records(wire.warg, wire.warg2) } else {
+    0 - 98 }}}}}}}}}}}}}
 }
+
+// THE HIGHEST LIVE COMMAND, AND IT IS LOAD-BEARING RATHER THAN DOCUMENTATION.
+// `main` refuses anything above it, so a command added past this number is
+// UNREACHABLE and its own test fails immediately. The fall-through sweep reads
+// this value out of the source instead of restating a bound, which is what it
+// did for four consecutive slices — and got wrong once.
+fn highest_command() -> Word { 127 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {
@@ -1945,5 +2096,7 @@ fn main(cmd: Word) -> Word {
     if cmd < 69 { dispatch_data(cmd) } else {
     if cmd < 84 { dispatch_module(cmd) } else {
     if cmd < 92 { dispatch_ops(cmd) } else {
-    if cmd < 103 { dispatch_pool(cmd) } else { dispatch_frame(cmd) } } } } } } } }
+    if cmd < 103 { dispatch_pool(cmd) } else {
+    if cmd > highest_command() { 0 - 99 } else {
+    if cmd < 115 { dispatch_frame(cmd) } else { dispatch_emit(cmd) } } } } } } } } } }
 }
