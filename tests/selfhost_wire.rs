@@ -88,6 +88,10 @@ const WARG5_SLOT: usize = WARG4_SLOT + 1;
 /// slots, matching the declaration order in `wire.kel`.
 const FIN_SLOT: usize = WARG5_SLOT + 1;
 const FIN_CAPACITY: usize = 1024;
+/// Byte-pool input. A pool has no stride and no fields, so `fin` is the wrong
+/// channel: a word per byte would cost eight times the space.
+const BIN_SLOT: usize = FIN_SLOT + FIN_CAPACITY;
+const BIN_CAPACITY: usize = 8192;
 
 /// Build a `Vm` over `src` with a persistent region sized for its private data.
 ///
@@ -260,6 +264,45 @@ fn run_cmd_fields(
             RCOVERS_SLOT + i,
             Value::Int(i64::from(*covers)),
         )?;
+    }
+    let ret = match vm.call_with_shared(&mut shared, &[Value::Int(cmd)])? {
+        VmState::Finished(Value::Int(n)) => n,
+        other => panic!("unexpected VM state: {other:?}"),
+    };
+    let n = read_len.min(CAPACITY);
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        match vm.get_shared(&shared, 1 + i)? {
+            Value::Byte(b) => out.push(b),
+            other => panic!("slot {i} is not a Byte: {other:?}"),
+        }
+    }
+    Ok((ret, out))
+}
+
+/// Run `cmd` with the byte-pool input array seeded, and read back `read_len`.
+fn run_cmd_pool(
+    vm: &mut Vm<'static, 'static>,
+    cmd: i64,
+    bin: &[u8],
+    args: [i64; 5],
+    read_len: usize,
+) -> Result<(i64, Vec<u8>), VmError> {
+    assert!(
+        bin.len() <= BIN_CAPACITY,
+        "{} pool bytes exceeds the {BIN_CAPACITY}-byte batch buffer",
+        bin.len()
+    );
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.set_shared(&mut shared, 0, Value::Int(0))?;
+    vm.set_shared(&mut shared, NREGIONS_SLOT, Value::Int(0))?;
+    vm.set_shared(&mut shared, WARG_SLOT, Value::Int(args[0]))?;
+    vm.set_shared(&mut shared, WARG2_SLOT, Value::Int(args[1]))?;
+    vm.set_shared(&mut shared, WARG3_SLOT, Value::Int(args[2]))?;
+    vm.set_shared(&mut shared, WARG4_SLOT, Value::Int(args[3]))?;
+    vm.set_shared(&mut shared, WARG5_SLOT, Value::Int(args[4]))?;
+    for (i, b) in bin.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(*b))?;
     }
     let ret = match vm.call_with_shared(&mut shared, &[Value::Int(cmd)])? {
         VmState::Finished(Value::Int(n)) => n,
@@ -848,7 +891,7 @@ fn no_command_below_the_dispatch_ceiling_falls_through() {
     // EXCLUSIVE, so this must be one past the highest live command. Slice 3
     // added 116 and this read `0..116`, which is exactly the off-by-one the
     // sweep exists to catch, committed inside the sweep itself.
-    for cmd in 0..117i64 {
+    for cmd in 0..119i64 {
         let (got, _) =
             run_cmd_args(&mut vm, cmd, 0, &[], &[], [0, 0, 0, 0, 0], 0).unwrap_or((0, Vec::new()));
         if (-99..=-92).contains(&got) {
@@ -4599,5 +4642,254 @@ fn an_oversized_batch_is_reported_rather_than_truncated() {
     assert_eq!(
         got, -200,
         "an oversized batch was not reported with its own code"
+    );
+}
+
+// --- WIRING SLICE 4: a byte pool, where logical length is not stored length --
+//
+// A pool is the other half of the format: no stride, no fields, no records.
+// None of the record machinery applies, and the one thing it has that a record
+// table does not is a LOGICAL length distinct from its STORED length. The
+// container stores a region's length in whole words, so a pool of 101 bytes
+// occupies 104 and the last three are pad.
+//
+// THE PAD IS THE ONLY PLACE A BUG CAN LIVE, since copying bytes is otherwise a
+// no-op transformation. The corpus is unusually good for it — across the ten
+// stages `PARAM_TYPES` produces pads of 0, 3, 4, 5 and 7, including the extreme
+// of one logical byte in an eight-byte region. Residues 1, 2 and 6 never occur,
+// so a hand-built sweep covers all eight rather than leaving three untested.
+
+const CMD_EMIT_POOL_BYTES: i64 = 117;
+const CMD_EMIT_POOL_PAD: i64 = 118;
+
+/// A stage's `PARAM_TYPES`: the logical bytes the encoder was given, and the
+/// stored region including its pad.
+fn real_pool_case(src: &str) -> (Vec<u8>, Vec<u8>) {
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    // The logical input, reconstructed the way the encoder receives it: every
+    // chunk's parameter type tags, concatenated in chunk order.
+    let logical: Vec<u8> = module
+        .chunks
+        .iter()
+        // Through the encoder's own tag-to-byte mapping, not a cast: the pool
+        // stores one byte per tag and the mapping is the schema's, not ours.
+        .flat_map(|c| {
+            c.param_types
+                .iter()
+                .map(|t| keleusma::wire_schema::type_tag_byte(*t))
+        })
+        .collect();
+    let bytes =
+        keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode aux body");
+    let view = keleusma_wire::WireView::parse(&bytes).expect("reference artifact parses");
+    let region = view
+        .find_region(keleusma::wire_schema::kind::PARAM_TYPES)
+        .expect("every module emits a PARAM_TYPES region");
+    let stored = view
+        .region_bytes(&region)
+        .expect("PARAM_TYPES payload in range")
+        .to_vec();
+    (logical, stored)
+}
+
+/// Emit a pool through the window in batches, then its pad, and concatenate.
+///
+/// This is the staged shape for a pool: the Keleusma side holds one batch, the
+/// caller appends, and the pad is written once at the end from the TOTAL length
+/// rather than the batch's, which is the part a per-batch implementation would
+/// get wrong.
+fn emit_pool_batched(
+    vm: &mut Vm<'static, 'static>,
+    logical: &[u8],
+    window: usize,
+    batch: usize,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(logical.len());
+    for part in logical.chunks(batch) {
+        let (written, buf) = run_cmd_pool(
+            vm,
+            CMD_EMIT_POOL_BYTES,
+            part,
+            [window as i64, part.len() as i64, 0, 0, 0],
+            window + part.len(),
+        )
+        .expect("run");
+        assert_eq!(written, part.len() as i64, "wrong batch byte count");
+        out.extend_from_slice(&buf[window..window + part.len()]);
+    }
+    let (pad, buf) = run_cmd_pool(
+        vm,
+        CMD_EMIT_POOL_PAD,
+        &[],
+        [window as i64, logical.len() as i64, 0, 0, 0],
+        window + 8,
+    )
+    .expect("run");
+    assert!((0..8).contains(&pad), "pad {pad} is not a byte residue");
+    out.extend_from_slice(&buf[window..window + pad as usize]);
+    out
+}
+
+#[test]
+fn the_emitted_pool_matches_the_reference_on_real_compiler_output() {
+    let mut vm = vm_for(WIRE_KEL);
+    let mut residues: Vec<usize> = Vec::new();
+    for (name, src) in CORPUS_STAGES {
+        let (logical, stored) = real_pool_case(src);
+        assert!(!logical.is_empty(), "{name}: no parameter type tags");
+        residues.push(stored.len() - logical.len());
+        let got = emit_pool_batched(&mut vm, &logical, 64, BIN_CAPACITY);
+        assert_eq!(got, stored, "{name}: emitted PARAM_TYPES differs");
+    }
+    // What the corpus actually reached, asserted rather than assumed. If this
+    // ever narrows to {0}, the padding path is untested by real data and the
+    // hand-built sweep below is carrying the whole property.
+    residues.sort_unstable();
+    residues.dedup();
+    assert!(
+        residues.len() >= 4,
+        "the corpus reached only pad residues {residues:?}, too few to exercise padding"
+    );
+}
+
+/// Every pad residue, including the three the corpus never reaches.
+///
+/// A pool's length modulo eight is the whole of what the pad depends on, so
+/// leaving 1, 2 and 6 untested would leave three of eight cases to chance.
+#[test]
+fn every_pad_residue_is_correct_including_those_the_corpus_never_reaches() {
+    let mut vm = vm_for(WIRE_KEL);
+    for len in 1usize..=32 {
+        // A recognisable, non-zero body so a pad byte cannot be mistaken for a
+        // payload byte, and vice versa.
+        let logical: Vec<u8> = (0..len).map(|i| (i as u8) | 0x80).collect();
+        let want_pad = (8 - (len % 8)) % 8;
+
+        let mut want = logical.clone();
+        want.extend(core::iter::repeat_n(0u8, want_pad));
+        assert_eq!(want.len() % 8, 0, "the expectation is not word-aligned");
+
+        let got = emit_pool_batched(&mut vm, &logical, 64, BIN_CAPACITY);
+        assert_eq!(
+            got,
+            want,
+            "length {len} (residue {}, pad {want_pad}) emitted wrongly",
+            len % 8
+        );
+    }
+}
+
+/// The pad must be WRITTEN, not inherited from a zeroed buffer.
+///
+/// This is the assertion the emitter's comment claims and nothing else checks.
+/// A staged emitter reuses one window across batches, so the day the window
+/// holds a previous batch's bytes, a pad that relies on initial zeroes emits
+/// stale payload instead.
+///
+/// `wire.bytes` starts zeroed on every call, so the ONLY way to see this is to
+/// seed the buffer dirty first. `run_cmd_args` seeds it and `emit_pool_pad`
+/// needs no pool input, so the two compose.
+#[test]
+fn the_pad_is_written_rather_than_inherited_from_a_zeroed_buffer() {
+    let mut vm = vm_for(WIRE_KEL);
+    let window = 64usize;
+    let dirty = vec![0xEEu8; 128];
+    for total in 1usize..=8 {
+        let want_pad = (8 - (total % 8)) % 8;
+        let (pad, buf) = run_cmd_args(
+            &mut vm,
+            CMD_EMIT_POOL_PAD,
+            0,
+            &dirty,
+            &[],
+            [window as i64, total as i64, 0, 0, 0],
+            window + 8,
+        )
+        .expect("run");
+        assert_eq!(pad, want_pad as i64, "total {total}: wrong pad length");
+        // The control: the seed really did dirty this window, so zeroes here
+        // can only have been written.
+        assert_eq!(
+            buf[window + want_pad],
+            0xEE,
+            "total {total}: the buffer was not dirty past the pad, so this proves nothing"
+        );
+        assert!(
+            buf[window..window + want_pad].iter().all(|b| *b == 0),
+            "total {total}: the pad kept stale bytes instead of writing zeroes"
+        );
+    }
+}
+
+/// The window address must be honoured for pools too.
+#[test]
+fn the_emitted_pool_does_not_depend_on_the_window_address() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (logical, stored) = real_pool_case(CORPUS_STAGES[1].1);
+    for window in [0usize, 8, 64, 4096] {
+        let got = emit_pool_batched(&mut vm, &logical, window, BIN_CAPACITY);
+        assert_eq!(
+            got, stored,
+            "window {window}: output moved with the address"
+        );
+    }
+}
+
+/// Splitting a pool across batches must not change the bytes, and the pad must
+/// come from the TOTAL length rather than the last batch's.
+///
+/// A per-batch pad is the natural wrong implementation: it pads every batch to
+/// a word boundary and produces a longer region with zeroes sprinkled through
+/// it. Batch sizes that do not divide the length are what expose it.
+#[test]
+fn the_pool_batch_size_does_not_change_the_output() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (logical, stored) = real_pool_case(CORPUS_STAGES[1].1);
+    assert!(
+        logical.len() > 8,
+        "the pool must exceed one batch to matter"
+    );
+    for batch in [1usize, 3, 7, 8, 13, 64, BIN_CAPACITY] {
+        let got = emit_pool_batched(&mut vm, &logical, 64, batch);
+        assert_eq!(got, stored, "batch size {batch} changed the output");
+    }
+}
+
+/// Must-fire control: a perturbed input byte must reach the output.
+#[test]
+fn the_pool_differential_reports_a_perturbed_byte() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (logical, stored) = real_pool_case(CORPUS_STAGES[1].1);
+    assert_eq!(
+        emit_pool_batched(&mut vm, &logical, 64, BIN_CAPACITY),
+        stored,
+        "control: the clean case must agree"
+    );
+    for i in [0usize, 1, logical.len() / 2, logical.len() - 1] {
+        let mut perturbed = logical.clone();
+        perturbed[i] ^= 1;
+        assert_ne!(
+            emit_pool_batched(&mut vm, &perturbed, 64, BIN_CAPACITY),
+            stored,
+            "control did not fire: input byte {i} is not observable"
+        );
+    }
+}
+
+/// A batch larger than the input array is rejected, not silently truncated.
+#[test]
+fn an_oversized_pool_batch_is_reported_rather_than_truncated() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (got, _) = run_cmd_pool(
+        &mut vm,
+        CMD_EMIT_POOL_BYTES,
+        &[],
+        [64, BIN_CAPACITY as i64 + 1, 0, 0, 0],
+        0,
+    )
+    .expect("run");
+    assert_eq!(
+        got, -201,
+        "an oversized pool batch was not reported with its own code"
     );
 }

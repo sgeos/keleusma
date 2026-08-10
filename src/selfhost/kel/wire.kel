@@ -77,6 +77,13 @@ shared data wire {
     //
     // Appended last so no existing slot index moves.
     fin: [Word; 1024],
+    // Byte-pool input. A pool has no stride and no fields, so `fin` is the wrong
+    // channel for it: a word per byte would cost eight times the space and cap a
+    // batch at 1024 bytes, and `STRING_POOL` runs to 6,609,960.
+    //
+    // Also a BATCH buffer. 8192 bytes covers `PARAM_TYPES` whole, and the host
+    // feeds the large pools in successive batches while appending the output.
+    bin: [Byte; 8192],
 }
 
 // The running checksum. It lives in a data block because locals are immutable:
@@ -95,6 +102,10 @@ private data st {
     // The running word cursor while emitting the directory. A local cannot carry
     // it across iterations, for the same reason the checksum accumulator cannot.
     cur: Word,
+    // A pool's pad length. Its own field rather than a borrowed one: `dis` is the
+    // vote-disagreement accumulator, and reusing it here would read as a bug to
+    // anyone tracing a vote.
+    pad: Word,
 }
 
 // THE RANGE INVARIANT, which is why no masking appears below.
@@ -1301,6 +1312,51 @@ fn emit_chunk_records(at: Word, n: Word) -> Word {
     }
 }
 
+// --- SLICE 4 OF THE WIRING INCREMENT: a byte pool --------------------------
+//
+// A pool is the other half of the format. It has no stride, no fields and no
+// records, so none of the record machinery applies, and the one thing it has
+// that a record table does not is a LOGICAL LENGTH DISTINCT FROM ITS STORED
+// LENGTH. The container stores a region's length in whole words, so a pool of
+// 101 bytes occupies 104 and the last three are pad.
+//
+// THE PAD IS THE ONLY PLACE A BUG CAN LIVE HERE, since copying bytes is
+// otherwise a no-op transformation. The corpus is unusually good for it: across
+// the ten stages `PARAM_TYPES` produces pads of 0, 3, 4, 5 and 7, including the
+// extreme case of one logical byte in an eight-byte region. Residues 1, 2 and 6
+// do not occur and are covered by a hand-built sweep instead.
+
+fn bin_capacity() -> Word { 8192 }
+
+// Copy `n` input bytes into the window at `at`.
+//
+// The guard matters for the same reason the record one does: `n` comes from the
+// host, and a batch larger than `wire.bin` would read past the array's end. A
+// distinct code says which contract was broken rather than faulting on a value
+// the host chose.
+fn emit_pool_bytes(at: Word, n: Word) -> Word {
+    if n > bin_capacity() { 0 - 201 } else {
+        for j in 0..n limit 8192 {
+            wire.bytes[at + j] = wire.bin[j];
+        }
+        n
+    }
+}
+
+// Zero-fill from `at` to the word boundary implied by a pool of `total` bytes.
+//
+// Written EXPLICITLY rather than left to a zeroed buffer. The reference does
+// emit zero pad, so relying on the buffer's initial state would pass every test
+// here and break the day the emitter writes into space it has already used —
+// which a staged emitter reusing one window across batches does by design.
+fn emit_pool_pad(at: Word, total: Word) -> Word {
+    st.pad = (words_for(total) lsl 3) - total;
+    for j in 0..st.pad limit 8 {
+        wire.bytes[at + j] = 0 as Byte;
+    }
+    st.pad
+}
+
 // 1 when the module declares no entry point.
 fn entry_point_absent() -> Word {
     if header_u32(header_off_entry_point()) == absent_index() { 1 } else { 0 }
@@ -1777,7 +1833,9 @@ fn dispatch_frame(cmd: Word) -> Word {
     if cmd == 114 { crc32_residue() } else {
     if cmd == 115 { emit_header(); emit_header_record_at(region_base(dir_find(kind_header()))) } else {
     if cmd == 116 { emit_chunk_records(wire.warg, wire.warg2) } else {
-    0 - 99 }}}}}}}}}}}}}}
+    if cmd == 117 { emit_pool_bytes(wire.warg, wire.warg2) } else {
+    if cmd == 118 { emit_pool_pad(wire.warg, wire.warg2) } else {
+    0 - 99 }}}}}}}}}}}}}}}}
 }
 
 fn main(cmd: Word) -> Word {

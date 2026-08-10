@@ -63,7 +63,38 @@ session's tree lives there too.
 my exact tip `78a5bc1`. So I cannot start a gate, and no timing measurement is trustworthy until
 it finishes. Development is unaffected, which is the whole point of the detached-worktree gate.
 
-## Wiring slices 1, 2 and 3 are done; slice 4 is a byte pool
+## Wiring slices 1 to 4 are done; both region shapes are now emittable
+
+**On `feat/selfhost-wire-real-corpus`, Tier 1 green, NOT gated. 98 tests, up from 80.**
+
+**Slice 4 emitted `PARAM_TYPES` for all ten stages**, byte-identical, batched through a window and
+padded. A pool needed its own input channel — `wire.bin: [Byte; 8192]`, because a word per byte in
+`fin` would cost eight times the space against a `STRING_POOL` of 6,609,960.
+
+**The pad is the whole of the risk**, since copying bytes is otherwise a no-op. The corpus reaches
+pads of 0, 3, 4, 5 and 7 including a one-byte pool, and a hand-built sweep covers all eight
+residues. A dirty-buffer test proves the pad is written rather than inherited, and carries its own
+control so it cannot pass vacuously.
+
+**Both region shapes — record table and byte pool — are now emittable from real data.** What
+remains is coverage and the driver, not new mechanism.
+
+### The next things, in order
+
+1. **The six record shapes with no corpus coverage**, needing hand-built emitter cases:
+   `STRUCT_AUX`, `ENUM_AUX`, `STRUCT_TEMPLATES`, `PRIVATE_COMPOSITE`, `NATIVES`, `NATIVE_RETURNS`,
+   plus `DEBUG_POOL`, whose region is never emitted at all.
+2. **The remaining populated regions**, which are now mechanical: `NAMES`, `CONSTS`, `SHAPES`,
+   `SIGNATURES`, `ENUM_VARIANTS`, `ENUM_LAYOUTS`, `DATA_SLOTS`, `SHARED_LAYOUT`, `DATA_INIT`,
+   `STRING_POOL`.
+3. **The driver**, which is where the values stop being decoded from the reference and start being
+   computed. That is the real remaining work, and the residency measurement governs it.
+
+**A debt worth paying soon.** The fall-through sweep's exclusive bound has had to move in three
+consecutive slices, and I got it wrong once. It is a by-name enumeration in disguise; `wire.kel`
+should report its own highest command instead.
+
+## Slices 1 to 3, for context
 
 **On `feat/selfhost-wire-real-corpus`, Tier 1 green, NOT gated. 91 tests, up from 80.**
 

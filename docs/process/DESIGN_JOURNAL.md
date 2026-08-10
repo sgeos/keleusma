@@ -13,6 +13,43 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**WIRING SLICE 4: A BYTE POOL, WHERE LOGICAL LENGTH IS NOT STORED LENGTH (2026-08-09).**
+`PARAM_TYPES` for all ten stages, byte-identical, emitted in batches through a window and then
+padded. 98 tests, up from 91. A pool is the other half of the format — no stride, no fields, no
+records — so none of the record machinery applies.
+
+**The input needed its own channel.** `wire.fin` is a word array, and a word per byte would cost
+eight times the space and cap a batch at 1024 bytes against a `STRING_POOL` of 6,609,960. So
+`wire.bin: [Byte; 8192]`, a batch buffer like `fin` and for the same reason.
+
+**The pad is the only place a bug can live here**, since copying bytes is otherwise a no-op. The
+container stores a region's length in whole words, so a 101-byte pool occupies 104 and the last
+three bytes are pad. Probing the corpus first was worth it: across the ten stages `PARAM_TYPES`
+produces pads of **0, 3, 4, 5 and 7**, including `verify_datalayout`'s extreme of ONE logical byte in
+an eight-byte region, and the pad is always zero. Residues 1, 2 and 6 never occur, so a hand-built
+sweep covers all eight rather than leaving three to chance. What the corpus reaches is asserted, so
+if it ever narrows the suite says so instead of quietly resting on the sweep.
+
+**A test I wrote first could not prove what it claimed, and I caught it before running it.** The
+emitter's comment says the pad is WRITTEN rather than inherited from a zeroed buffer, which matters
+because a staged emitter reuses one window across batches. My first version dirtied the window in
+one call and padded in another — but every call builds a fresh shared buffer, so the second call saw
+zeroes and the test would have passed against an emitter that wrote nothing at all. The working
+version seeds `wire.bytes` dirty through `run_cmd_args`, which `emit_pool_pad` composes with because
+it needs no pool input, and it carries its own control: it asserts the byte just past the pad is
+still `0xEE`, so zeroes inside the pad can only have been written.
+
+**The wrong implementation this slice is really guarding against** is a per-batch pad, which pads
+every batch to a word boundary and sprinkles zeroes through the region. Batch sizes that do not
+divide the length are what expose it, so the batch-size test sweeps 1, 3, 7, 8, 13, 64 and the full
+buffer, and the pad is taken from the TOTAL length rather than the last batch's.
+
+**And the fall-through sweep needed its bound moved AGAIN**, from 117 to 119 for two new commands.
+That is three consecutive slices in which this exclusive bound has had to move, and I have now got
+it wrong once and right twice. It is a by-name enumeration wearing a different hat: the honest fix is
+for the module to report its own highest command rather than for a test to remember. Recorded rather
+than done, because it changes `wire.kel`'s surface and this slice is already large.
+
 **WIRING SLICE 3: A MULTI-RECORD REGION, AND THE BATCHING MECHANISM (2026-08-09).** `CHUNKS` for all
 ten stages, byte-identical, emitted in batches through a caller-supplied window. 91 tests, up from
 86. `CHUNKS` was chosen by measurement rather than by feel: it is the **smallest region that cannot
