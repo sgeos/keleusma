@@ -2598,3 +2598,72 @@ architecture that already existed.** Two were already answered — one at high
 confidence, one in a full design section — and neither answer was hard to find. A
 provisional label records that a decision is unsettled; it does not establish
 that nobody else has settled it.
+
+## R4.2 is not currently CONSTRUCTIBLE, but its worst defect is fixable today
+
+Having found that `kel_chunk_<index>` contradicts resolved design question R4.2,
+the next question is what adopting R4.2 would take. Checked against the fields
+the lowering actually receives. The answer splits three ways.
+
+### One component maps exactly, which is a good sign about R4.2
+
+R4.2's category `F`/`Y`/`L` (fn, yield, loop) corresponds **one to one** with
+`Chunk::block_type`:
+
+| `BlockType` | Source form | R4.2 category |
+|---|---|---|
+| `Func` | `fn` — atomic total function | **F** |
+| `Reentrant` | `yield fn` — non-atomic total function | **Y** |
+| `Stream` | `loop fn` — productive divergent function | **L** |
+
+An exact correspondence, available in the bytecode today. R4.2 was evidently
+written against this language rather than adapted from another, which raises
+confidence in the rest of it.
+
+### Two components DO NOT EXIST, and not merely in the bytecode
+
+- **Purity `P`/`I`/`T`.** Not in `bytecode.rs`, and not in `ast.rs` or
+  `typecheck.rs` either. **Purity is not a language feature yet.** The
+  architecture refers to "possibly Keleusma `impure fn`" as a prospect, so R4.2
+  anticipates an annotation nobody has built.
+- **Module path.** No `module_path` concept anywhere in the compile pipeline, and
+  `Module` carries no name field at all.
+
+So R4.2 is a **resolved design for a future state of the language**, not an
+implementable specification today. That is not a defect in R4.2 and this entry
+should not be read as one. It does mean the conflict recorded above cannot be
+closed by simply adopting the scheme: two of its five components have nothing to
+compute from.
+
+### But the WORST property of the current scheme is fixable now, cheaply
+
+The serious defect in `kel_chunk_<index>` is not that it lacks purity or a module
+path. It is that **the name is an index**, so adding, removing or reordering a
+chunk silently renames every symbol after it — which breaks cross-module linkage
+and hot replacement, the two things a stable name exists for.
+
+`Chunk::name` is carried in the bytecode and is not positional. **Switching the
+symbol from the index to the name fixes the stability defect immediately**,
+independently of R4.2 compliance, and a forward-compatible shape costs nothing
+extra:
+
+```
+_K1_<category>_<chunk_name>        // purity and module path omitted, not faked
+```
+
+Adopting the `_K1_` prefix and the real category now means the eventual purity
+and module-path components are an **extension** rather than a rename, so the
+symbols do not churn twice.
+
+### The one thing to verify before doing it, and it is a real risk
+
+**`Chunk::name` uniqueness is unverified.** Two functions in different scopes
+could share a name, and monomorphisation may or may not encode type arguments
+into the name it emits. If names collide, swapping index for name trades an
+unstable-but-unique symbol for a stable-but-ambiguous one, which is worse: a
+duplicate symbol is a link error at best and a silently wrong call at worst.
+
+Queued as a corpus measurement with the others: count distinct `chunk.name`
+values against chunk count across the corpus. **Do not make this change before
+that count comes back**, which is exactly the discipline this document failed at
+when it quoted a chunk-level coverage figure without checking the module level.
