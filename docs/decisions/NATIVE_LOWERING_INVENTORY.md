@@ -28,13 +28,13 @@ deserves the same scepticism as any other.**
 
 ## Status
 
-**Lowered (45).** `GetLocal`, `SetLocal`, `PopN`, `Dup`, `Const` (scalars),
+**Lowered (46).** `GetLocal`, `SetLocal`, `PopN`, `Dup`, `Const` (scalars),
 `PushImmediate`, `CheckedAdd`, `CheckedSub`, `CheckedNeg`, `CheckedMul(0)`,
 `Div`, `Mod`, `CheckedDiv(0)`, `CheckedMod`, `CmpEq`, `CmpNe`, `CmpLt`, `CmpGt`,
 `CmpLe`, `CmpGe`, `Not`, `BitAnd`, `BitOr`, `BitXor`, `Shl`, `Shr`, `If`, `Else`,
-`EndIf`, `Loop`, `EndLoop`, `Break`, `BreakIf`, `Return`, `Trap`, `Call`, `WordToByte`, `ByteToWord`, `BoundsCheck`, `GetData`, `SetData`, `GetDataIndexed` and `SetDataIndexed` (shared scalar slots, and private slots on a flat native layout).
+`EndIf`, `Loop`, `EndLoop`, `Break`, `BreakIf`, `Return`, `Trap`, `Call`, `WordToByte`, `ByteToWord`, `BoundsCheck`, `GetData`, `SetData`, `GetDataIndexed` and `SetDataIndexed` (shared scalar slots, and private slots on a flat native layout), `Yield` (reentrant chunks, callback ABI).
 
-**Remaining (21),** grouped below by what they actually cost.
+**Remaining (20),** grouped below by what they actually cost.
 
 Three entries in that list are **partial**, and the count treats them as lowered
 because the unsupported case is refused rather than mislowered: `Const` handles
@@ -1178,3 +1178,41 @@ this package's oracle currently compares single returned values, so it would not
 catch a rotation that produced the right values in the wrong order. Building that
 harness is the precondition for attempting the transformation, and it is the next
 thing Workstream B needs rather than any lowering work.
+
+## The order-blind oracle is closed, and `Yield` lowers for reentrant chunks
+
+The previous section named a multi-iteration differential harness as the
+precondition for attempting the stream rotation, on the ground that a rotation is
+a reordering and this package's oracle compared single returned values. That
+harness now exists, in `native_codegen/tests/yield_sequence.rs`, and it collects
+**every value a program yields, in order, together with the value it finally
+returns**, comparing the sequences.
+
+To give it something to drive, `Op::Yield` now lowers for reentrant chunks under
+a **fourth provisional application binary interface decision**: `i64
+kel_yield(i64)` takes the yielded value and returns the resume value. It inverts
+control relative to the runtime, where `call` returns `Yielded(v)` and the host
+calls `resume(r)`, and the observable SEQUENCE is identical, which is what the
+oracle compares. `Op::Stream` and `Op::Reset` remain refused deliberately rather
+than by omission: under an inverted ABI a divergent `loop fn` would spin inside
+native code with no way for the host to stop it, and supporting it needs the
+host-driven coroutine shape.
+
+Two mutations confirm the harness sees what it was built to see. Pushing the
+yielded value back instead of the reply, and eliding the suspension entirely,
+each fail three of the four tests.
+
+### The harness had a defect of its own, and it is the interesting part
+
+The yield ABI is a plain `extern "C"` function with **no context parameter**, so
+the callback has nowhere to record what it observed except process-global state.
+`cargo test` runs tests in parallel, so one test's yields landed in another's
+collection: the first version passed every test **in isolation** and failed two
+of four when run together.
+
+That failure mode is worth naming because it inverts the usual one. A test that
+fails alone and passes in a suite is a flake. A test that passes alone and fails
+in a suite is shared state, and the harness is at fault rather than the code
+under test. The runs are now serialised by a lock, and **the absence of a context
+pointer in the ABI is the underlying cause**, which is one concrete reason the
+callback shape should not outlive the provisional label.
