@@ -1562,3 +1562,66 @@ than single values, and which exists precisely because an order-blind oracle let
 a wrong lowering pass. Stating it plainly so the verified P2 above is not
 mistaken for the whole equivalence: **P1, P2 and P3 are the preconditions, not
 the proof.**
+
+## Two findings from reading the call boundary, one of them a latent defect in shipped code
+
+### QUEUED FIX: non-parameter locals are uninitialised in the lowering
+
+`Op::Call` fills the callee's frame: `extra = local_count - arg_count` slots are
+pushed as `GenericValue::Unit` before the frame is entered (`src/vm.rs:5290`), so
+**every non-parameter local starts defined** in the VM.
+
+The lowering does not do this. `native_codegen/src/lib.rs:721` allocates
+`local_count` allocas and stores into only the first `param_count` of them. The
+rest are never initialised, and a load from an uninitialised `alloca` is `undef`
+in LLVM. So a `GetLocal` of an unwritten slot is **`Unit` in the VM and `undef`
+natively** — a divergence, and with `undef` feeding a branch or an offset, worse
+than a wrong answer.
+
+**Reachability, assessed rather than assumed: LATENT, not live.** Keleusma locals
+are immutable and bound at declaration, so the reference compiler always emits
+the write before any read, and no corpus module exercises the path. It is
+nevertheless a defect by this project's own standard, which hardened
+`FlatComposite::nested_view` from a `debug_assert` to a real fault precisely so a
+release build could not perform undefined operations on input the verifier
+admits. The verifier admits reading an unwritten local: `verify_typed` seeds it
+`Top` and defers rather than rejecting.
+
+The fix is to store zero into every non-parameter alloca at entry. `mem2reg`
+folds the stores away where the slot is later overwritten, so the cost is nil.
+
+**Deliberately not applied yet.** `tests/perf_canary.rs:131` asserts
+`elapsed < CEILING_SECS` against a wall clock, so a competing build during the
+running gate could inflate it into a **spurious red** and cost a 2.5-hour re-run.
+That is a specific hazard rather than general caution, and it is the reason this
+is queued rather than fixed in place. The must-fire control is a chunk that reads
+a non-parameter local before writing it, differentially compared against the VM.
+
+### The native call boundary needs a host trampoline, and its operand lies
+
+`Op::CallVerifiedNative(idx, arg_count)` and `Op::CallExternalNative` share one
+arm (`src/vm.rs:7072`). Three things a lowering has to know:
+
+1. **The argument-count byte is not an argument count.** Its high bit is the
+   B35 error-reify flag: `reify = arg_count & 0x80`, `n = arg_count & 0x7F`. A
+   lowering that reads the byte whole would treat a three-argument reifying call
+   as a request for 131 arguments. This is the same defect class as
+   `CheckedMul`'s `u8` being a fraction-bit count rather than a multiplier —
+   an operand whose name does not describe its bits.
+2. **Arguments cross as `GenericValue`, not as machine words.** Each is decoded
+   through `from_value_ctx` with a `RefContext`, and opaque arguments are
+   materialised from the operand stack's POD `OpaqueRef` back to an `Arc`,
+   touching a host refcount. None of that is expressible in lowered code; it
+   needs a host-side trampoline, which is what makes this Workstream D rather
+   than a lowering exercise.
+3. **A reifying call pushes `(code, flag)`** on a soft host failure instead of
+   propagating, and the surrounding construct dispatches `ok`/`error`. So the
+   stack effect is operand-dependent, not fixed.
+
+### Checked and CLEAN: `Op::Call`'s count carries no flag
+
+Having found a hidden flag in one count byte, the same question was put to the
+one already lowered. `Op::Call(u16, u8)` uses `arg_count as usize` directly with
+no masking (`src/vm.rs:5273`). **The existing `Call` lowering is unaffected.**
+Recorded because a check that comes back clean is still a result, and the next
+reader should not have to redo it to find that out.
