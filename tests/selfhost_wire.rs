@@ -3860,3 +3860,268 @@ fn the_narrow_header_readers_and_the_magic_word_agree_with_the_bytes() {
         "magic word"
     );
 }
+
+// --- WIRING SLICE 1: the emitter meets real compiler output ------------------
+//
+// Every emission test above builds its region sets by hand, so each one
+// exercises the shapes I thought of. `tests/wire_corpus.rs` made exactly this
+// argument about the Rust codec and was vindicated within minutes, surfacing a
+// quadratic interner that no hand-built case could reach. This is the same
+// argument applied to the Keleusma emitter: the ten stage sources are the
+// largest real Keleusma programs that exist, and their auxiliary bodies are
+// real compiler output rather than my imagination of what a module looks like.
+//
+// WHAT THIS COVERS. The container header — three prologue copies and three
+// directory copies — emitted by `wire.kel` for a real stage's region set, byte
+// for byte against what the Rust encoder produced for the same module. This is
+// the first time `wire.kel` is driven by anything the compiler actually emitted.
+//
+// WHAT IT DOES NOT COVER, stated so it is not mistaken for a superset of the
+// hand-built corpus. A region's length survives the container only as a WORD
+// count, so every length read back here is a multiple of eight. The awkward
+// non-multiple-of-eight lengths, which is where a dropped round-up in
+// `words_for` would hide, are reachable ONLY from the hand-built sets. Those
+// tests stay load-bearing and must not be deleted in favour of this one.
+//
+// It also covers only the header. The region PAYLOADS are the wiring increment
+// proper; nothing here emits a single schema record from real values.
+
+/// The ten stage sources, matching `tests/wire_corpus.rs`.
+const CORPUS_STAGES: &[(&str, &str)] = &[
+    ("lexer", include_str!("../src/selfhost/kel/lexer.kel")),
+    ("parse", include_str!("../src/selfhost/kel/parse.kel")),
+    ("codegen", include_str!("../src/selfhost/kel/codegen.kel")),
+    (
+        "reconstruct",
+        include_str!("../src/selfhost/kel/reconstruct.kel"),
+    ),
+    ("analyze", include_str!("../src/selfhost/kel/analyze.kel")),
+    (
+        "verify_structural",
+        include_str!("../src/selfhost/kel/verify_structural.kel"),
+    ),
+    (
+        "verify_typed",
+        include_str!("../src/selfhost/kel/verify_typed.kel"),
+    ),
+    (
+        "verify_yield",
+        include_str!("../src/selfhost/kel/verify_yield.kel"),
+    ),
+    (
+        "verify_depth",
+        include_str!("../src/selfhost/kel/verify_depth.kel"),
+    ),
+    (
+        "verify_datalayout",
+        include_str!("../src/selfhost/kel/verify_datalayout.kel"),
+    ),
+];
+
+/// The auxiliary body a module would be serialised from.
+///
+/// `op_byte_offset` and `op_record_count` are left zero for the same reason
+/// `tests/wire_corpus.rs` leaves them zero: they are assigned by the opcode
+/// stream layout, which is not what this exercises. Everything else is the
+/// compiler's real output.
+fn corpus_aux_of(module: &keleusma::bytecode::Module) -> keleusma::wire_format::WireAuxBody {
+    use keleusma::wire_format::{WireAuxBody, WireChunk};
+    WireAuxBody {
+        chunks: module
+            .chunks
+            .iter()
+            .map(|c| WireChunk {
+                name: c.name.clone(),
+                constants: c.constants.clone(),
+                struct_templates: c.struct_templates.clone(),
+                local_count: c.local_count,
+                param_count: c.param_count,
+                block_type: c.block_type,
+                param_types: c.param_types.clone(),
+                op_byte_offset: 0,
+                op_record_count: 0,
+                debug_pool_bytes: None,
+            })
+            .collect(),
+        signatures: module.signatures.clone(),
+        enum_layouts: module.enum_layouts.clone(),
+        native_names: module.native_names.clone(),
+        native_return_shapes: module.native_return_shapes.clone(),
+        data_layout: module.data_layout.clone(),
+        entry_point: module.entry_point,
+        word_bits_log2: module.word_bits_log2,
+        addr_bits_log2: module.addr_bits_log2,
+        float_bits_log2: module.float_bits_log2,
+        flags: 0,
+        wcet_cycles: 0,
+        wcmu_bytes: 0,
+        shared_data_bytes: 0,
+        private_data_bytes: 0,
+        schema_hash: 0,
+    }
+}
+
+/// A real stage's region set, in directory order, with the artifact it came from.
+///
+/// The length is recovered as `word_length * 8` because that is the only length
+/// the container stores. `emit_directory` re-rounds it through `words_for`,
+/// which is the identity on a multiple of eight, so this feeds the emitter the
+/// same quantity the reference wrote.
+fn real_stage_regions(src: &str) -> (Vec<RegionSpec>, Vec<u8>) {
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let bytes =
+        keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode aux body");
+    let view = keleusma_wire::WireView::parse(&bytes).expect("reference artifact parses");
+    let mut specs: Vec<RegionSpec> = Vec::new();
+    for i in 0..view.region_count() {
+        let r = view.region_at(i).expect("region in range");
+        specs.push((r.kind, r.flags, (r.word_length as usize) * 8, r.covers));
+    }
+    (specs, bytes)
+}
+
+#[test]
+fn the_emitted_container_header_matches_the_reference_on_real_compiler_output() {
+    let mut vm = vm_for(WIRE_KEL);
+    for (name, src) in CORPUS_STAGES {
+        let (specs, want) = real_stage_regions(src);
+        let hl = header_len(specs.len());
+        let (written, got) = run_cmd_full(
+            &mut vm,
+            CMD_EMIT_HEADER,
+            specs.len() as i64,
+            &[],
+            &specs,
+            0,
+            hl,
+        )
+        .expect("run");
+        assert_eq!(written, hl as i64, "{name}: wrong header length reported");
+        assert_eq!(
+            got,
+            want[..hl],
+            "{name}: emitted header differs from the reference"
+        );
+    }
+}
+
+/// The corpus is real, so its shape is asserted rather than assumed.
+///
+/// Without this, a change that made `real_stage_regions` return an empty set
+/// would leave the differential above comparing a 48-byte prologue and passing.
+#[test]
+fn the_real_region_sets_are_the_shape_the_measurement_recorded() {
+    for (name, src) in CORPUS_STAGES {
+        let (specs, _) = real_stage_regions(src);
+        assert_eq!(
+            specs.len(),
+            19,
+            "{name}: expected 19 regions, the measured count for every stage"
+        );
+        // DEBUG_POOL is the twentieth kind and no stage emits it, because
+        // `CompileOptions::emit_debug` defaults to false. Pinned here so the day
+        // a stage does emit it, this says so rather than the count drifting
+        // silently.
+        assert!(
+            !specs
+                .iter()
+                .any(|(k, _, _, _)| *k == keleusma::wire_schema::kind::DEBUG_POOL),
+            "{name}: a stage emitted DEBUG_POOL; the emitter now has a case it never had"
+        );
+        assert!(
+            specs.iter().any(|(_, _, l, _)| *l > 0),
+            "{name}: every region is empty, which cannot be real output"
+        );
+        // WHAT REAL OUTPUT DOES NOT EXERCISE, asserted rather than assumed.
+        //
+        // `SchemaBuilder` declares every region as `region(kind, 0)` and never
+        // builds a parity plane, so real artifacts carry flags 0 and covers 0
+        // throughout. The differential above therefore says nothing about a
+        // non-zero flags or covers field, and the hand-built sets remain the
+        // only coverage of those directory fields.
+        //
+        // Pinned in this direction deliberately: the (72,64) SECDED plane
+        // exists in `keleusma-wire` and is currently UNEXERCISED by the
+        // shipping encoder. The day that changes, this fires and says so,
+        // rather than the emitter quietly gaining an untested case.
+        assert!(
+            specs.iter().all(|(_, f, _, c)| *f == 0 && *c == 0),
+            "{name}: real output now carries non-zero flags or covers; the emitter \
+             differential no longer covers what it did, and an ECC plane may now \
+             need emitting"
+        );
+    }
+}
+
+/// A named mutation of a region set, applied at a given index.
+type Perturbation = (&'static str, fn(&mut Vec<RegionSpec>, usize));
+
+/// Must-fire control for the differential above.
+///
+/// "The emitted header equals the reference" is only meaningful if the
+/// comparison can report inequality. Each perturbation below is one a real
+/// mistranscription could produce, and each must be caught.
+#[test]
+fn the_real_output_comparison_reports_a_perturbed_region_set() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (base, want) = real_stage_regions(CORPUS_STAGES[9].1);
+    let hl = header_len(base.len());
+
+    // The unperturbed case must be quiet, or the perturbations below prove
+    // nothing. This is the must-NOT-fire half, in the same test so neither can
+    // be deleted without the other.
+    let (_, clean) = run_cmd_full(
+        &mut vm,
+        CMD_EMIT_HEADER,
+        base.len() as i64,
+        &[],
+        &base,
+        0,
+        hl,
+    )
+    .expect("run");
+    assert_eq!(clean, want[..hl], "control: the clean case must agree");
+
+    // Perturb the LARGEST region rather than a fixed index. The first draft
+    // used index 3, which is empty in this stage, so shrinking it underflowed
+    // and the control failed on its own arithmetic rather than on the property.
+    // A non-empty target is required for the shrink case to mean anything.
+    let big = base
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, (_, _, l, _))| *l)
+        .map(|(i, _)| i)
+        .expect("the corpus has at least one region");
+    assert!(
+        base[big].2 >= 8,
+        "the perturbation target must hold at least one word"
+    );
+
+    let perturbations: &[Perturbation] = &[
+        ("one region's kind changed", |s, i| s[i].0 += 1),
+        ("one region's length grown by a word", |s, i| s[i].2 += 8),
+        ("one region's length shrunk by a word", |s, i| s[i].2 -= 8),
+        ("one region's flags set", |s, i| s[i].1 |= 1),
+        ("the covers field changed", |s, i| s[i].3 += 1),
+        ("two regions transposed", |s, i| s.swap(i, i + 1)),
+        ("the last region dropped", |s, _| {
+            s.pop();
+        }),
+    ];
+
+    for (what, perturb) in perturbations {
+        let mut specs = base.clone();
+        // `swap(i, i + 1)` needs a successor; the largest region is never last
+        // here, but the assertion states it rather than relying on it.
+        assert!(big + 1 < base.len(), "the target needs a successor to swap");
+        perturb(&mut specs, big);
+        let n = specs.len();
+        let (_, got) =
+            run_cmd_full(&mut vm, CMD_EMIT_HEADER, n as i64, &[], &specs, 0, hl).expect("run");
+        assert_ne!(
+            got,
+            want[..hl],
+            "control did not fire: {what} produced an identical header"
+        );
+    }
+}
