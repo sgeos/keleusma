@@ -155,6 +155,52 @@ one, and the full language of Order 6 may well contain such a case.
 that they agree in general. Spike B measures the subset, which is precisely what Order 1 is scoped
 to, and says nothing about the full language of Order 6.
 
+## Obligation 1 sized by execution, 2026-08-10
+
+Reading gives 163 `TypeError::new` sites in `src/typecheck.rs`, of which about twenty mention
+traits, bounds or impls and are therefore **outside Order-1 scope**, since the subset uses none of
+them. But the number that matters is how many an ill-typed program in the SUBSET can actually reach,
+and that needs execution rather than counting.
+
+**Eighteen ill-typed subset programs, plus five well-typed controls.** Seventeen were rejected and
+all five controls accepted.
+
+| Rejected construct | Diagnostic |
+|---|---|
+| `1 + true` | cannot add Word and bool |
+| body type versus declared return | function `main` returns Word but body produces bool |
+| wrong argument type | argument to `f` expects Word, got bool |
+| too few / too many arguments | function `f` expects N arguments, got M |
+| undefined function / identifier | undefined function `nope` / undefined identifier `nope` |
+| `if` branches differ | if branches have differing types Word and bool |
+| non-bool condition | if condition must be bool, got Word |
+| unknown field | type P has no field `b` |
+| wrong field count | struct `P` expects 2 fields, got 1 |
+| index a scalar | array index on non-array type Word |
+| field access on a scalar | field access on non-struct type Word |
+| `Byte` against `Word` argument | argument to `f` expects Byte, got Word |
+| array elements differ | array elements have differing types Word and bool |
+| calling a local | not a callable; V0.2.0 admits only direct calls |
+
+**Three things this settles.**
+
+1. **The obligation is an enumerable list of about fifteen shapes, not 163 sites.** That is a
+   tractable target for a `.kel` checker and a corpus, and it is much smaller than the roadmap's
+   framing implies.
+2. **Every subset rejection is delivered at one place** — the type-check pass inside `compile` —
+   and all but one carry the `type error:` prefix. The exception is "calling a local", which is a
+   V0.2.0 surface restriction rather than a type error, so a self-hosted checker must reject it
+   without being able to find it among the type diagnostics.
+3. **The oracle is verdict agreement, not message agreement.** Accept-versus-reject is what the
+   `verify_*.kel` family already uses, and it avoids committing the self-hosted checker to
+   reproducing English.
+
+**A mistake in my own corpus, recorded because it is the kind that inflates a result.** One case I
+labelled ill-typed — a `Word` field read from a shared data block — is perfectly well-typed, and it
+was reported as "accepted but should not be". It is a badly-constructed test, not a compiler defect.
+The reason it did not mislead is that the corpus carried explicit well-typed controls, so an
+unexpected acceptance had somewhere to be checked against.
+
 ## Suggested ordering
 
 1. **Finish wire-format serialization**, slices 5 to 7. In progress, sliced, harness built.
