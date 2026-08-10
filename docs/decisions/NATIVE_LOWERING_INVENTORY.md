@@ -1978,3 +1978,56 @@ because a control is worth more when written against the fixed code than
 alongside it: a chunk that reads a non-parameter local before writing it, and a
 chunk whose ops end without `Op::Return` — each compared differentially against
 the VM rather than asserted against my own expectation.
+
+## Audit, second batch: the indexing surface is clean
+
+The first audit batch deliberately skipped the array-indexing path, which is the
+remaining shipped surface where an error would be **live rather than latent**.
+Checked now. Running total: **nine opcodes audited, one defect**.
+
+| Check | Result | Why it could have failed |
+|---|---|---|
+| `BoundsCheck` predicate | **CLEAN** | Off-by-one, or a signed/unsigned mismatch |
+| `BoundsCheck` peek-not-pop | **CLEAN** | The VM does not modify the stack |
+| Indexed data bounds | **CLEAN** | Same predicate, separately written |
+| `SetDataIndexed` pop order | **CLEAN** | Index and value could be swapped |
+
+### The predicate is right, and by a non-obvious route
+
+The VM traps unless `0 <= value < bound`, written as two signed tests: `< 0` and
+`>= bound`. The lowering emits **one unsigned compare**, `UGE v, bound`. These
+are equivalent, not merely similar: `-1` becomes `0xFFFF_FFFF_FFFF_FFFF` under
+unsigned interpretation and therefore exceeds any non-negative `bound`, so the
+single test catches the negative case the VM tests separately. `bound` arrives
+through `u64::from`, so it is non-negative by construction and the equivalence
+cannot be broken by a wide bound.
+
+Worth recording because "one unsigned compare replaces two signed ones" reads
+like a shortcut and is in fact exact. A reviewer who did not know the identity
+might "fix" it into something slower and no more correct.
+
+### The pop order is right, and it is the class that has bitten twice
+
+`Op::SetDataIndexed` pops the **index first** (`src/vm.rs:4922`) and the value
+second (`4940`), so the index is on top and the value beneath it. The lowering
+pops in that order and says so in a comment, and the comment is now verified
+rather than asserted.
+
+This is the third time this arc has turned on operand ORDER: the checked triple
+is `(low, high, flag)` and `GRAMMAR.md` says otherwise; `Op::Call` arguments sit
+in declaration order so popping yields them reversed; and now the indexed write.
+**Order errors are invisible whenever the operands happen to be equal**, which
+describes most hand-written test cases, so they are not caught by the obvious
+test — only by a differential oracle over asymmetric values.
+
+### What the two audit batches say together
+
+Nine checks, one defect, and the defect is the only one that is not about
+LLVM-versus-VM disagreement on an operation. Every clean result sits where
+somebody previously noticed a discrepancy and wrote the reconciliation at the
+site. The defect sits where the VM does something positive — filling a frame —
+that the lowering had no reason to consider.
+
+That asymmetry is now twice-confirmed and is the most useful heuristic this
+document has produced for where to look next: **not "where is LLVM undefined",
+but "what does the VM do that the lowering never had a reason to think about".**
