@@ -19,17 +19,37 @@
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
 use keleusma::bytecode::Value;
-use keleusma::vm::{Vm, auto_arena_capacity_for, shared_data_bytes_for};
+use keleusma::vm::{
+    Vm, auto_arena_capacity_for, required_persistent_capacity_for, shared_data_bytes_for,
+};
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use keleusma_native::{LowerOptions, lower_module};
+
+/// Build an arena sized for BOTH the operand stack and the persistent region.
+///
+/// `auto_arena_capacity_for` covers the stack and call frames and **not** the
+/// persistent region, so a module with private data slots gets an arena whose
+/// persistent capacity is zero. The runtime then computes a private slot
+/// address from a zero-length region and the process dies with SIGBUS, which
+/// looks like a code-generation fault and is not one. The `v0.2.3` session
+/// recorded exactly this trap after six constructs appeared to be rejected by
+/// the language when the arena was the cause.
+fn arena_for(m: &keleusma::bytecode::Module) -> keleusma_arena::Arena {
+    let need = required_persistent_capacity_for(m);
+    let cap = auto_arena_capacity_for(m, &[]).expect("arena capacity") + need;
+    let mut arena = keleusma_arena::Arena::with_capacity(cap);
+    arena
+        .resize_persistent(need)
+        .expect("persistent region fits the capacity just reserved for it");
+    arena
+}
 
 /// Run `src` on the VM with an exactly-sized shared buffer, returning the
 /// result and the buffer's final contents.
 fn vm_shared(src: &str, args: &[i64]) -> (i64, Vec<u8>) {
     let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     let n = shared_data_bytes_for(&m);
-    let cap = auto_arena_capacity_for(&m, &[]).expect("arena capacity");
-    let arena = keleusma_arena::Arena::with_capacity(cap);
+    let arena = arena_for(&m);
     let mut vm = Vm::new(m, &arena).expect("vm");
     let mut buf = vec![0u8; n];
     let vals: Vec<Value> = args.iter().map(|&x| Value::Int(x)).collect();
@@ -59,16 +79,53 @@ fn native_shared(src: &str, args: &[i64]) -> (i64, Vec<u8>) {
         .expect("jit");
 
     let mut buf = vec![0u8; n];
+    // The private region is the caller's to provide, exactly as the shared
+    // buffer is, and its layout is the backend's own. **Allocated as words, not
+    // bytes**: the region must be aligned to `PRIVATE_SLOT_BYTES`, which is part
+    // of the ABI, and a `Vec<u8>` carries an alignment contract of one byte.
+    let n_priv = m
+        .data_layout
+        .as_ref()
+        .map(|dl| {
+            dl.slots
+                .iter()
+                .filter(|s| s.visibility == keleusma::bytecode::SlotVisibility::Private)
+                .count()
+        })
+        .unwrap_or(0);
+    // Exactly `n_priv` words, plus ONE CANARY word the lowering must never
+    // touch. A uniform offset error in private addressing is value-invariant --
+    // reads and writes shift together, so every round-trip returns the same
+    // answer -- and is therefore invisible to a differential comparison. It is
+    // observable only as a write outside the region, which the canary detects
+    // deterministically. Found by a mutation that deleted the shared-boundary
+    // subtraction and left every value test passing.
+    const CANARY: u64 = 0xDEAD_BEEF_FEED_FACE;
+    let mut priv_region = vec![0u64; n_priv + 1];
+    priv_region[n_priv] = CANARY;
     let sym = format!("kel_chunk_{idx}");
     let out = match args.len() {
         2 => {
-            let f =
-                unsafe { ee.get_function::<unsafe extern "C" fn(i64, i64, *mut u8) -> i64>(&sym) }
-                    .expect("symbol");
-            unsafe { f.call(args[0], args[1], buf.as_mut_ptr()) }
+            let f = unsafe {
+                ee.get_function::<unsafe extern "C" fn(i64, i64, *mut u8, *mut u8) -> i64>(&sym)
+            }
+            .expect("symbol");
+            unsafe {
+                f.call(
+                    args[0],
+                    args[1],
+                    buf.as_mut_ptr(),
+                    priv_region.as_mut_ptr() as *mut u8,
+                )
+            }
         }
         k => panic!("harness does not drive {k}-argument entry points"),
     };
+    assert_eq!(
+        priv_region[n_priv], CANARY,
+        "the lowering wrote past the private region: a private slot index \
+         exceeded the {n_priv} slots the module declares"
+    );
     (out, buf)
 }
 
@@ -133,18 +190,85 @@ fn a_narrow_slot_reads_back_zero_extended() {
 }
 
 #[test]
-fn a_private_slot_is_refused_rather_than_lowered() {
-    // Private storage is a later increment whose native layout is this
-    // backend's own choice. Until it exists, a private access must refuse
-    // rather than read the arena at a guessed offset.
-    let src = "private data hidden { n: Word }
-               fn main(a: Word, b: Word) -> Word { hidden.n = a; hidden.n }";
+fn private_slots_agree_with_the_vm() {
+    // Private storage uses a flat word array of this backend's own choosing,
+    // which is legitimate because nothing outside a running program can observe
+    // it. The VM keeps its own tagged representation and the two never meet;
+    // the oracle compares RESULTS, which is exactly the boundary the argument
+    // relies on.
+    for src in [
+        "private data h { n: Word }
+         fn main(a: Word, b: Word) -> Word { h.n = a + b; h.n }",
+        // Two slots, so an offset error moves a value between them.
+        "private data h { p: Word, q: Word }
+         fn main(a: Word, b: Word) -> Word { h.p = a; h.q = b; h.p - h.q }",
+    ] {
+        for args in [[7, 5], [0, 0], [-3, 9], [i64::MAX, 1], [i64::MIN, -1]] {
+            assert_shared_agrees(src, &args);
+        }
+    }
+}
+
+#[test]
+fn a_module_with_both_kinds_keeps_them_apart() {
+    // **ADDED BECAUSE A MUTATION FOUND THE GAP.** Deleting the shared-boundary
+    // subtraction from the private index left every test passing, because every
+    // other private test uses a module with NO shared slots, where the boundary
+    // is zero and `slot - 0 == slot`. The subtraction was untested.
+    //
+    // Here the private slot is index 1 in the unified space and index 0 in the
+    // private region, so an unsubtracted index addresses one word past the
+    // intended slot. The shared buffer is compared as well, so a private write
+    // that strayed into shared territory would also be caught.
+    let src = "shared data s { visible: Word }
+               private data h { hidden: Word }
+               fn main(a: Word, b: Word) -> Word {
+                   s.visible = a; h.hidden = b; s.visible + h.hidden
+               }";
+    for args in [[7, 5], [0, 0], [-1, 1], [i64::MAX, 0], [3, -9]] {
+        assert_shared_agrees(src, &args);
+    }
+}
+
+#[test]
+fn a_private_array_indexes_by_consecutive_slots() {
+    // A private array is NOT a composite. The compiler expands `[Word; 4]` into
+    // four consecutive scalar slots, so an indexed access is `base + index` in
+    // slot space. Reading back a different element than was written is what an
+    // index or stride error looks like, so the test writes one element and
+    // reads another.
+    let src = "private data h { a: [Word; 4] }
+               fn main(i: Word, v: Word) -> Word { h.a[i] = v; h.a[0] + h.a[3] }";
+    for args in [[0, 11], [3, 22], [1, 33], [2, 44]] {
+        assert_shared_agrees(src, &args);
+    }
+}
+
+#[test]
+fn an_out_of_range_private_index_faults_in_the_vm() {
+    // The differential oracle cannot cover the failing case, since the VM
+    // raises and native traps, so what is checkable is that the VM really does
+    // fault and therefore that trapping is the right lowering.
+    let src = "private data h { a: [Word; 4] }
+               fn main(i: Word, v: Word) -> Word { h.a[i] = v; h.a[0] }";
     let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
-    let ctx = Context::create();
-    let lm = ctx.create_module("kel");
-    let err = lower_module(&ctx, &lm, &m, LowerOptions::default());
+    let n = shared_data_bytes_for(&m);
+    let arena = arena_for(&m);
+    let mut vm = Vm::new(m, &arena).expect("vm");
+    let mut buf = vec![0u8; n];
+    let err = vm
+        .call_with_shared(&mut buf, &[Value::Int(4), Value::Int(1)])
+        .err();
+    assert!(err.is_some(), "index 4 into a 4-element array must fault");
+
+    // MUST-NOT-FIRE: an in-range index must not fault.
+    let m2 = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let arena2 = arena_for(&m2);
+    let mut vm2 = Vm::new(m2, &arena2).expect("vm");
+    let mut buf2 = vec![0u8; n];
     assert!(
-        err.is_err(),
-        "a private data slot must be refused until its native layout is settled"
+        vm2.call_with_shared(&mut buf2, &[Value::Int(3), Value::Int(1)])
+            .is_ok(),
+        "index 3 into a 4-element array must not fault"
     );
 }

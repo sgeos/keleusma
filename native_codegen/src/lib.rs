@@ -2,7 +2,7 @@
 //!
 //! # Scope
 //!
-//! This is an early subset: 41 of the instruction set's 66 opcodes. Everything
+//! This is an early subset: 45 of the instruction set's 66 opcodes. Everything
 //! else is refused rather than lowered to something plausible and wrong.
 //! Widening the subset is the work of subsequent increments, tracked in
 //! `docs/decisions/NATIVE_LOWERING_INVENTORY.md`.
@@ -392,6 +392,29 @@ impl<'ctx> Lower<'ctx> {
 const SCALAR_BOOL: u8 = 1;
 const SCALAR_BYTE: u8 = 2;
 const SCALAR_INT: u8 = 3;
+/// Bytes this backend gives a private data slot.
+///
+/// The layout of private storage is **this backend's own choice**, because
+/// private slots are unreachable from outside a running program: the host API
+/// exposes `get_shared`/`set_shared` and no private equivalent. Native code
+/// therefore need not agree with the runtime's `GenericValue` representation,
+/// which is just as well, since that type carries no `#[repr]` and its layout
+/// is unspecified.
+///
+/// A flat word per slot is chosen. The only quantity crossing the boundary is
+/// the SIZE of the region, which the runtime reserves as
+/// `private_count * size_of::<GenericValue>()`, so a native layout fits exactly
+/// when it is no wider per slot. That is asserted rather than argued, because
+/// "8 is less than 32" is a fact about two current choices and not an
+/// invariant.
+pub const PRIVATE_SLOT_BYTES: u32 = 8;
+
+const _: () = assert!(
+    PRIVATE_SLOT_BYTES as usize <= 32,
+    "a private slot wider than the runtime's reserved Value slot would overrun \
+     a region sized by the runtime's arithmetic"
+);
+
 /// High bit of a shared slot's kind byte marks a composite body.
 const SHARED_COMPOSITE_FLAG: u8 = 0x80;
 
@@ -518,6 +541,15 @@ pub fn lower_module<'ctx>(
     let data = DataCtx {
         shared_count,
         shared_layout,
+        has_data: program
+            .data_layout
+            .as_ref()
+            .is_some_and(|dl| !dl.slots.is_empty()),
+        slot_count: program
+            .data_layout
+            .as_ref()
+            .map(|dl| dl.slots.len() as u32)
+            .unwrap_or(0),
     };
 
     // **The shared buffer arrives as a trailing pointer parameter**, and only
@@ -527,8 +559,18 @@ pub fn lower_module<'ctx>(
     // keeps the lowering reentrant: a module-level global would be shared by
     // every concurrent invocation. Like the symbol scheme, it is provisional and
     // belongs to Workstream D's application binary interface.
-    let has_shared = shared_count > 0;
-    if has_shared {
+    // **Uniform data ABI.** A module that declares any data slot takes TWO
+    // trailing pointers, the shared buffer and the private region, in that
+    // order. Making the signature depend on which KINDS of slot a module
+    // declares would vary the calling convention along two independent
+    // dimensions, and a caller would have to reproduce that reasoning to get
+    // the arity right. One rule is cheaper than two, and an unused pointer
+    // costs a register.
+    let has_data = program
+        .data_layout
+        .as_ref()
+        .is_some_and(|dl| !dl.slots.is_empty());
+    if shared_count > 0 {
         check_target_endianness()?;
     }
     let declared: Vec<FunctionValue<'ctx>> = program
@@ -537,8 +579,9 @@ pub fn lower_module<'ctx>(
         .enumerate()
         .map(|(i, c)| {
             let mut params: Vec<_> = (0..c.param_count).map(|_| i64t.into()).collect();
-            if has_shared {
-                params.push(ptrt.into());
+            if has_data {
+                params.push(ptrt.into()); // shared buffer
+                params.push(ptrt.into()); // private region
             }
             module.add_function(
                 &format!("kel_chunk_{i}"),
@@ -566,6 +609,11 @@ struct DataCtx<'a> {
     shared_count: u32,
     /// Layout entries for the shared slots, indexed by slot.
     shared_layout: &'a [SharedSlotLayout],
+    /// Whether the module declares any data slot at all, which decides whether
+    /// the two trailing pointers are present.
+    has_data: bool,
+    /// Total declared slots, shared plus private.
+    slot_count: u32,
 }
 
 fn lower_chunk_body<'ctx>(
@@ -602,15 +650,24 @@ fn lower_chunk_body<'ctx>(
 
     // The trailing pointer parameter, present only when the module declares
     // shared slots. Read once at entry; every access is an offset from it.
-    let shared_base: Option<PointerValue<'ctx>> = if data.shared_count > 0 {
-        Some(
-            func.get_nth_param(chunk.param_count as u32)
-                .expect("a module with shared slots declares the trailing buffer pointer")
-                .into_pointer_value(),
-        )
-    } else {
-        None
-    };
+    let (shared_base, private_base): (Option<PointerValue<'ctx>>, Option<PointerValue<'ctx>>) =
+        if data.has_data {
+            let n = chunk.param_count as u32;
+            (
+                Some(
+                    func.get_nth_param(n)
+                        .expect("data module declares the shared pointer")
+                        .into_pointer_value(),
+                ),
+                Some(
+                    func.get_nth_param(n + 1)
+                        .expect("data module declares the private pointer")
+                        .into_pointer_value(),
+                ),
+            )
+        } else {
+            (None, None)
+        };
 
     let trapfn = trap_declaration(ctx, module);
     b.position_at_end(trap_bb);
@@ -1036,7 +1093,7 @@ fn lower_chunk_body<'ctx>(
                 // calling convention from a plain native call, so it is refused
                 // rather than approximated: an arity mismatch here would produce
                 // a call LLVM accepts and the VM does not agree with.
-                let declared = callee.count_params() - u32::from(shared_base.is_some());
+                let declared = callee.count_params() - if data.has_data { 2 } else { 0 };
                 if u32::from(*arg_count) != declared {
                     return Err(LowerError::UnsupportedOp(format!(
                         "Call({idx}, {arg_count}) passes {arg_count} arguments to a chunk \
@@ -1053,8 +1110,9 @@ fn lower_chunk_body<'ctx>(
                 // shared slots takes the trailing pointer, so a call that
                 // omitted it would pass garbage where the callee expects the
                 // host's buffer.
-                if let Some(base) = shared_base {
-                    args.push(base.into());
+                if let (Some(sb), Some(pb)) = (shared_base, private_base) {
+                    args.push(sb.into());
+                    args.push(pb.into());
                 }
 
                 let ret = match st
@@ -1120,69 +1178,181 @@ fn lower_chunk_body<'ctx>(
                 st.b.build_conditional_branch(bad, trap_bb, cont).unwrap();
                 st.b.position_at_end(cont);
             }
-            // Shared data-segment slots. The encoding is part of the wire
-            // format: a layout table gives each slot a byte offset and a kind
-            // tag, and scalars are stored LITTLE-ENDIAN at that offset. Private
-            // slots are refused here and belong to a later increment.
+            // Data-segment access, shared and private.
             //
-            // **Endianness is an assumption, and it is checked.** The runtime
-            // decodes with an explicit little-endian reader; an LLVM `load`
-            // uses target endianness. The two agree only on a little-endian
-            // target, which every target on the committed list is, so
-            // `check_target_endianness` refuses anything else rather than
-            // silently byte-swapping the host's buffer.
-            Op::GetData(slot) | Op::SetData(slot) => {
-                let base = shared_base.ok_or_else(|| LowerError::UnsupportedDataSlot {
-                    slot: *slot,
-                    why: String::from(
-                        "the module declares no shared slots, or lower_chunk was used, which \
-                         cannot see the module's data layout",
-                    ),
-                })?;
-                let (byte_off, width, kind) = resolve_shared_scalar(&data, *slot, i8t, i64t)?;
-                let addr = unsafe {
-                    st.b.build_in_bounds_gep(
-                        i8t,
-                        base,
-                        &[i64t.const_int(u64::from(byte_off), false)],
-                        "dataptr",
-                    )
-                    .unwrap()
+            // SHARED slots decode a host-owned byte buffer whose encoding is
+            // part of the wire format: a layout table gives each slot an offset
+            // and a kind tag, and scalars are stored little-endian there.
+            //
+            // PRIVATE slots use a flat word array of this backend's own
+            // choosing, at `PRIVATE_SLOT_BYTES` per slot indexed from the
+            // private boundary. That is legitimate because private storage is
+            // unreachable from outside a running program, so no external
+            // consumer can observe the layout, and the only quantity crossing
+            // the boundary is the region size.
+            //
+            // A private ARRAY is not a composite here. The compiler expands
+            // `h.a: [Word; 4]` into four consecutive scalar slots named
+            // `h.a[0]` through `h.a[3]`, so an indexed access is `base + index`
+            // in slot space and needs no stride table.
+            Op::GetData(_)
+            | Op::SetData(_)
+            | Op::GetDataIndexed(_, _)
+            | Op::SetDataIndexed(_, _) => {
+                let (slot, indexed, bound) = match op {
+                    Op::GetData(s) | Op::SetData(s) => (*s, false, 0u32),
+                    Op::GetDataIndexed(b, n) | Op::SetDataIndexed(b, n) => (*b, true, *n),
+                    _ => unreachable!("the outer match restricts this set"),
                 };
-                if matches!(op, Op::GetData(_)) {
-                    let raw =
-                        st.b.build_load(width, addr, "dataload")
-                            .unwrap()
-                            .into_int_value();
-                    // Bool and Byte are both stored in one byte and both widen
-                    // ZERO-extended, which is the representation the byte
-                    // conversion increment settled and which `Byte as Word`
-                    // measurably does.
-                    let v = if width == i64t {
-                        raw
-                    } else {
-                        st.b.build_int_z_extend(raw, i64t, "datazext").unwrap()
+                let is_read = matches!(op, Op::GetData(_) | Op::GetDataIndexed(_, _));
+                if !data.has_data {
+                    return Err(LowerError::UnsupportedDataSlot {
+                        slot,
+                        why: String::from(
+                            "no data layout is visible; lower_chunk receives one chunk and cannot \
+                             see the module's layout table",
+                        ),
+                    });
+                }
+
+                // An indexed access pops its index first, and for a write the
+                // VM pops the index BEFORE the value, so the value is beneath
+                // it on the stack.
+                let index = if indexed { Some(st.pop()) } else { None };
+
+                if let Some(ix) = index {
+                    // Bounds check against the declared element count, with one
+                    // unsigned compare covering the negative case, exactly as
+                    // Op::BoundsCheck does.
+                    let cont = ctx.append_basic_block(func, "inbounds_data");
+                    let bad =
+                        st.b.build_int_compare(
+                            IntPredicate::UGE,
+                            ix,
+                            i64t.const_int(u64::from(bound), false),
+                            "dataoob",
+                        )
+                        .unwrap();
+                    st.b.build_conditional_branch(bad, trap_bb, cont).unwrap();
+                    st.b.position_at_end(cont);
+                }
+
+                if slot < data.shared_count {
+                    // Shared. An indexed shared access would need the layout
+                    // entries for the whole range proven contiguous, which the
+                    // table does not state, so it is refused rather than
+                    // assumed.
+                    if indexed {
+                        return Err(LowerError::UnsupportedDataSlot {
+                            slot,
+                            why: String::from(
+                                "indexed access to a SHARED array; the layout table does not state \
+                                 that a slot range is contiguous in the buffer, and assuming it \
+                                 would read the host's memory at a fabricated stride",
+                            ),
+                        });
+                    }
+                    let base = shared_base.expect("has_data implies the shared pointer");
+                    let (byte_off, width, kind) = resolve_shared_scalar(&data, slot, i8t, i64t)?;
+                    let addr = unsafe {
+                        st.b.build_in_bounds_gep(
+                            i8t,
+                            base,
+                            &[i64t.const_int(u64::from(byte_off), false)],
+                            "sdataptr",
+                        )
+                        .unwrap()
                     };
-                    // A Bool slot holds any non-zero byte for true, so it is
-                    // normalised to 0 or 1 rather than trusted to be canonical.
-                    let v = if kind == SCALAR_BOOL {
-                        let nz = st
-                            .b
-                            .build_int_compare(IntPredicate::NE, v, i64t.const_zero(), "boolnz")
-                            .unwrap();
-                        st.b.build_int_z_extend(nz, i64t, "boolz").unwrap()
+                    if is_read {
+                        let raw =
+                            st.b.build_load(width, addr, "sdataload")
+                                .unwrap()
+                                .into_int_value();
+                        let v = if width == i64t {
+                            raw
+                        } else {
+                            st.b.build_int_z_extend(raw, i64t, "sdatazext").unwrap()
+                        };
+                        let v = if kind == SCALAR_BOOL {
+                            let nz =
+                                st.b.build_int_compare(
+                                    IntPredicate::NE,
+                                    v,
+                                    i64t.const_zero(),
+                                    "sboolnz",
+                                )
+                                .unwrap();
+                            st.b.build_int_z_extend(nz, i64t, "sboolz").unwrap()
+                        } else {
+                            v
+                        };
+                        st.push(v);
                     } else {
-                        v
-                    };
-                    st.push(v);
+                        let v = st.pop();
+                        let narrowed = if width == i64t {
+                            v
+                        } else {
+                            st.b.build_int_truncate(v, width, "sdatatrunc").unwrap()
+                        };
+                        st.b.build_store(addr, narrowed).unwrap();
+                    }
                 } else {
-                    let v = st.pop();
-                    let narrowed = if width == i64t {
-                        v
-                    } else {
-                        st.b.build_int_truncate(v, width, "datatrunc").unwrap()
+                    // Private. Flat word array indexed from the boundary.
+                    if slot >= data.slot_count {
+                        return Err(LowerError::UnsupportedDataSlot {
+                            slot,
+                            why: String::from("slot index outside the declared slot table"),
+                        });
+                    }
+                    let base = private_base.expect("has_data implies the private pointer");
+                    let rel = slot - data.shared_count;
+                    let byte_index =
+                        st.b.build_int_mul(
+                            match index {
+                                Some(ix) => {
+                                    st.b.build_int_add(
+                                        ix,
+                                        i64t.const_int(u64::from(rel), false),
+                                        "pidx",
+                                    )
+                                    .unwrap()
+                                }
+                                None => i64t.const_int(u64::from(rel), false),
+                            },
+                            i64t.const_int(u64::from(PRIVATE_SLOT_BYTES), false),
+                            "pbyte",
+                        )
+                        .unwrap();
+                    let addr = unsafe {
+                        st.b.build_in_bounds_gep(i8t, base, &[byte_index], "pdataptr")
+                            .unwrap()
                     };
-                    st.b.build_store(addr, narrowed).unwrap();
+                    // **Alignment is part of this ABI, not an accident.** A
+                    // slot is a whole word, so the region must be aligned to
+                    // `PRIVATE_SLOT_BYTES` and every access is naturally
+                    // aligned within it. The alignment is set explicitly
+                    // because the default inkwell emits is narrower than the
+                    // access, and a store whose declared alignment exceeds the
+                    // pointer's true alignment is undefined behaviour that
+                    // presents as a bus fault rather than a wrong answer. A
+                    // caller passing a `Vec<u8>` base, whose alignment contract
+                    // is one byte, violates this; the harness allocates a word
+                    // slice for exactly that reason.
+                    if is_read {
+                        let load = st.b.build_load(i64t, addr, "pdataload").unwrap();
+                        load.into_int_value()
+                            .as_instruction()
+                            .expect("a load is an instruction")
+                            .set_alignment(PRIVATE_SLOT_BYTES)
+                            .expect("PRIVATE_SLOT_BYTES is a power of two");
+                        st.push(load.into_int_value());
+                    } else {
+                        let v = st.pop();
+                        let store = st.b.build_store(addr, v).unwrap();
+                        store
+                            .set_alignment(PRIVATE_SLOT_BYTES)
+                            .expect("PRIVATE_SLOT_BYTES is a power of two");
+                    }
                 }
             }
             Op::Return => {
