@@ -1017,6 +1017,12 @@ per-instruction operand shapes and then discards them, returning only a verdict.
 Exposing that state is the enabling change, and it is in `src/verify_typed.rs`,
 which this branch does not own.
 
+> **BOTH HALVES FALSIFIED LATER — see "Composites are TWO blockers".**
+> `src/verify_typed.rs` is uncontested (zero changes on `v0.2.3` since the merge
+> base), and the change is not needed anyway: the width stack can live entirely
+> inside `native_codegen`. The ownership claim was inherited by inference from a
+> read-only commitment that named two other files.
+
 ### Composites also do not escape the way the raw numbers suggest
 
 Twenty-three of the twenty-seven chunks containing `NewComposite` declare a flat
@@ -1859,6 +1865,13 @@ peak never accounted for. A module can therefore be admitted by `verify()`,
 attested with a WCMU bound, and exceed it at run time.
 
 ### Scope, stated precisely
+
+> **FALSIFIED — see "FALSE PREMISE, caught by the `v0.2.3` session" near the end
+> of this document.** The paragraph below is wrong: a `Stream` chunk ends in
+> `Op::Reset`, not `Return`. The conclusion survives with different reasoning
+> (every compiler-emitted chunk ends in a *path exit*), but the scope statement
+> does not. Left in place rather than edited, because the reasoning error —
+> grepping for the expected answer and stopping — is the part worth seeing.
 
 The reference compiler always emits a trailing `Op::Return`
 (`src/compiler.rs:5342`, `5414`), so **no program produced by the normal
