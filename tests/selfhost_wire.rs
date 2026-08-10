@@ -888,10 +888,19 @@ fn no_command_below_the_dispatch_ceiling_falls_through() {
     // read `0..103` and so stopped exactly where `dispatch_frame` begins,
     // leaving the whole framing chain — the one nearest the depth ceiling and
     // therefore likeliest to need splitting — entirely unswept.
-    // EXCLUSIVE, so this must be one past the highest live command. Slice 3
-    // added 116 and this read `0..116`, which is exactly the off-by-one the
-    // sweep exists to catch, committed inside the sweep itself.
-    for cmd in 0..119i64 {
+    // THE BOUND IS READ OUT OF THE SOURCE, NOT RESTATED HERE.
+    //
+    // It was restated for four consecutive slices and I got it wrong once,
+    // leaving a newly added command unswept — the exact off-by-one this test
+    // exists to catch, committed inside the test. That was a by-name
+    // enumeration wearing a different hat.
+    //
+    // `highest_command()` is load-bearing rather than documentation: `main`
+    // refuses anything above it, so a command added past that number is
+    // unreachable and fails its own test at once. The control below proves the
+    // refusal is real.
+    let highest = kel_const("highest_command");
+    for cmd in 0..=highest {
         let (got, _) =
             run_cmd_args(&mut vm, cmd, 0, &[], &[], [0, 0, 0, 0, 0], 0).unwrap_or((0, Vec::new()));
         if (-99..=-92).contains(&got) {
@@ -901,6 +910,24 @@ fn no_command_below_the_dispatch_ceiling_falls_through() {
     assert!(
         fell_through.is_empty(),
         "these commands fell through to a chain default: {fell_through:?}"
+    );
+    // The bound is only load-bearing if `main` actually refuses past it.
+    // Without this, `highest_command` could drift BELOW the real top and the
+    // sweep would silently narrow rather than fail.
+    //
+    // A FRESH VM, and that is not tidiness. The sweep runs every command with
+    // zero arguments, and some of them legitimately fault there — command 115
+    // resolves a HEADER region that a zero-region artifact does not have, and
+    // indexes far outside the buffer. The loop tolerates that with
+    // `unwrap_or`, but the fault leaves this VM unusable for any later call, so
+    // reusing it here fails with the PREVIOUS command's fault rather than
+    // answering the question asked.
+    let mut fresh = vm_for(WIRE_KEL);
+    let (past, _) =
+        run_cmd_args(&mut fresh, highest + 1, 0, &[], &[], [0, 0, 0, 0, 0], 0).expect("run");
+    assert_eq!(
+        past, -99,
+        "main does not refuse past highest_command, so the bound is not load-bearing"
     );
 }
 
@@ -2014,6 +2041,10 @@ fn the_slice_5c_offsets_and_kinds_match_the_schema() {
         StructTemplateRecord::OFFSET_FIELD_NAMES_FIRST as i64
     );
     assert_eq!(
+        kel_const("tpl_off_reserved"),
+        StructTemplateRecord::OFFSET_RESERVED as i64
+    );
+    assert_eq!(
         kel_const("tpl_off_field_count"),
         StructTemplateRecord::OFFSET_FIELD_COUNT as i64
     );
@@ -2022,6 +2053,11 @@ fn the_slice_5c_offsets_and_kinds_match_the_schema() {
     assert_eq!(
         kel_const("evar_off_name"),
         EnumVariantRecord::OFFSET_NAME as i64
+    );
+    // Transcribed for the emitter; no reader consults it.
+    assert_eq!(
+        kel_const("evar_off_reserved"),
+        EnumVariantRecord::OFFSET_RESERVED as i64
     );
     assert_eq!(
         kel_const("evar_off_disc"),
@@ -2414,6 +2450,15 @@ fn the_slice_5d_offsets_and_kinds_match_the_schema() {
         kel_const("dslot_off_visibility"),
         DataSlotRecord::OFFSET_VISIBILITY as i64
     );
+    // Reserved fields, transcribed for the emitter rather than the reader.
+    assert_eq!(
+        kel_const("dslot_off_reserved"),
+        DataSlotRecord::OFFSET_RESERVED as i64
+    );
+    assert_eq!(
+        kel_const("dslot_off_reserved2"),
+        DataSlotRecord::OFFSET_RESERVED2 as i64
+    );
 
     assert_eq!(kel_const("sslot_stride"), SharedSlotRecord::STRIDE as i64);
     assert_eq!(
@@ -2428,6 +2473,10 @@ fn the_slice_5d_offsets_and_kinds_match_the_schema() {
         kel_const("sslot_off_len"),
         SharedSlotRecord::OFFSET_LEN as i64
     );
+    assert_eq!(
+        kel_const("sslot_off_reserved"),
+        SharedSlotRecord::OFFSET_RESERVED as i64
+    );
 
     assert_eq!(
         kel_const("pcomp_stride"),
@@ -2436,6 +2485,10 @@ fn the_slice_5d_offsets_and_kinds_match_the_schema() {
     assert_eq!(
         kel_const("pcomp_off_slot"),
         PrivateCompositeRecord::OFFSET_SLOT as i64
+    );
+    assert_eq!(
+        kel_const("pcomp_off_reserved"),
+        PrivateCompositeRecord::OFFSET_RESERVED as i64
     );
     assert_eq!(
         kel_const("pcomp_off_offset"),
@@ -2763,12 +2816,20 @@ fn the_slice_5e_offsets_and_kinds_match_the_schema() {
         NativeRecord::OFFSET_NAME as i64
     );
     assert_eq!(
+        kel_const("native_off_reserved"),
+        NativeRecord::OFFSET_RESERVED as i64
+    );
+    assert_eq!(
         kel_const("natret_stride"),
         NativeReturnRecord::STRIDE as i64
     );
     assert_eq!(
         kel_const("natret_off_shape"),
         NativeReturnRecord::OFFSET_SHAPE as i64
+    );
+    assert_eq!(
+        kel_const("natret_off_reserved"),
+        NativeReturnRecord::OFFSET_RESERVED as i64
     );
 
     assert_eq!(kel_const("header_stride"), HeaderRecord::STRIDE as i64);
@@ -4892,4 +4953,920 @@ fn an_oversized_pool_batch_is_reported_rather_than_truncated() {
         got, -201,
         "an oversized pool batch was not reported with its own code"
     );
+}
+
+// --- WIRING SLICE 5: the two accumulator regions -----------------------------
+//
+// `NAMES` and `STRING_POOL` are the pair the residency measurement singled out.
+// `SchemaBuilder` writes them LAST, after every other contributor has interned
+// into them, so they are the emission's resident set rather than transient
+// buffers — 9,776,392 bytes for `lexer`, 58.3% of the shared ceiling.
+//
+// They are one of each shape, which is why they are done together: `NAMES` is a
+// record table and `STRING_POOL` is the byte pool it indexes. The pool needed no
+// new Keleusma code at all; slice 4's emitter already does it, and this is the
+// first time that emitter meets something large enough to batch hundreds of
+// times.
+//
+// THESE ARE THE LARGEST TABLES IN THE FORMAT, AND THEY COST REAL GATE TIME.
+// `lexer` alone is 395,804 name records, 774 input batches and 807 pool batches.
+// Measured 2026-08-09: this one test is **201 s**, taking the suite from about
+// 23 s to 152 s, and the gate runs the suite once per feature configuration, so
+// it adds roughly nine minutes to a 2h33m gate.
+//
+// KEPT AT FULL COVERAGE DELIBERATELY, and the cost is stated rather than hidden.
+// The time is not waste to be optimised away: it is ~7.4 million `set_shared`
+// and `get_shared` calls in a debug build, which is what driving 6.6 MB through
+// the public shared-data API costs. Hoisting the buffer would not help, and the
+// batching depth is the property under test.
+//
+// `parse` alone would give 226 and 131 batches for about a third of the time,
+// which is also "deep". Whether that trade is worth taking is a GATE-SCOPE
+// decision and therefore the operator's, in the same class as trimming the
+// feature matrix — not the loop's to take quietly. Recorded in REVERSE_PROMPT.
+
+const CMD_EMIT_NAME_RECORDS: i64 = 119;
+const NAMEREF_STRIDE: usize = 8;
+const NAMEREF_FIELDS: usize = 2;
+const NAMES_PER_BATCH: usize = FIN_CAPACITY / NAMEREF_FIELDS;
+
+/// A stage's `NAMES` records and `STRING_POOL`, with the pool's LOGICAL length.
+///
+/// The logical length is not stored anywhere: the container keeps whole words,
+/// so a pool of 6,609,957 bytes reports 6,609,960. It is recovered as the
+/// furthest extent any name reaches, which is exact because names are appended
+/// in interning order and the last one ends at the pool's true end.
+struct AccumCase {
+    names: Vec<(u32, u32)>,
+    names_stored: Vec<u8>,
+    pool_logical: Vec<u8>,
+    pool_stored: Vec<u8>,
+}
+
+fn real_accum_case(src: &str) -> AccumCase {
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let bytes =
+        keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode aux body");
+    let view = keleusma_wire::WireView::parse(&bytes).expect("reference artifact parses");
+
+    let nregion = view
+        .find_region(keleusma::wire_schema::kind::NAMES)
+        .expect("NAMES region");
+    let names_stored = view.region_bytes(&nregion).expect("NAMES payload").to_vec();
+    let table = view
+        .records(&nregion, NAMEREF_STRIDE)
+        .expect("NAMES reads as a record table");
+    let mut names = Vec::with_capacity(table.len());
+    for i in 0..table.len() {
+        let r: keleusma::wire_schema::NameRef = table.get_as(i).expect("record in range");
+        names.push((r.offset, r.length));
+    }
+
+    let pregion = view
+        .find_region(keleusma::wire_schema::kind::STRING_POOL)
+        .expect("STRING_POOL region");
+    let pool_stored = view
+        .region_bytes(&pregion)
+        .expect("STRING_POOL payload")
+        .to_vec();
+    let logical_len = names
+        .iter()
+        .map(|(o, l)| (*o as usize) + (*l as usize))
+        .max()
+        .unwrap_or(0);
+    assert!(
+        logical_len <= pool_stored.len(),
+        "a name reaches past the pool, so the extent calculation is wrong"
+    );
+    assert!(
+        pool_stored.len() - logical_len < 8,
+        "the recovered logical length is more than a word short, so it is not the true extent"
+    );
+    let pool_logical = pool_stored[..logical_len].to_vec();
+
+    AccumCase {
+        names,
+        names_stored,
+        pool_logical,
+        pool_stored,
+    }
+}
+
+fn emit_names_batched(
+    vm: &mut Vm<'static, 'static>,
+    names: &[(u32, u32)],
+    window: usize,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(names.len() * NAMEREF_STRIDE);
+    for batch in names.chunks(NAMES_PER_BATCH) {
+        let fields: Vec<i64> = batch
+            .iter()
+            .flat_map(|(o, l)| [i64::from(*o), i64::from(*l)])
+            .collect();
+        let produced = batch.len() * NAMEREF_STRIDE;
+        let (written, buf) = run_cmd_fields(
+            vm,
+            CMD_EMIT_NAME_RECORDS,
+            0,
+            &[],
+            &fields,
+            [window as i64, batch.len() as i64, 0, 0, 0],
+            window + produced,
+        )
+        .expect("run");
+        assert_eq!(written, produced as i64, "wrong batch byte count");
+        out.extend_from_slice(&buf[window..window + produced]);
+    }
+    out
+}
+
+#[test]
+fn the_emitted_accumulator_regions_match_the_reference_on_real_compiler_output() {
+    let mut vm = vm_for(WIRE_KEL);
+    let mut most_name_batches = 0usize;
+    let mut most_pool_batches = 0usize;
+    for (name, src) in CORPUS_STAGES {
+        let case = real_accum_case(src);
+        most_name_batches = most_name_batches.max(case.names.len().div_ceil(NAMES_PER_BATCH));
+        most_pool_batches = most_pool_batches.max(case.pool_logical.len().div_ceil(BIN_CAPACITY));
+
+        let got_names = emit_names_batched(&mut vm, &case.names, 64);
+        assert_eq!(got_names, case.names_stored, "{name}: NAMES differs");
+
+        let got_pool = emit_pool_batched(&mut vm, &case.pool_logical, 64, BIN_CAPACITY);
+        assert_eq!(got_pool, case.pool_stored, "{name}: STRING_POOL differs");
+    }
+    // Everything before this slice batched at most twice. Asserted so a corpus
+    // change that shrank these tables would report the loss of deep-batch
+    // coverage rather than silently keeping the test green.
+    assert!(
+        most_name_batches > 100,
+        "deepest NAMES run was only {most_name_batches} batches"
+    );
+    assert!(
+        most_pool_batches > 100,
+        "deepest STRING_POOL run was only {most_pool_batches} batches"
+    );
+}
+
+/// Must-fire control for both accumulators.
+#[test]
+fn the_accumulator_differentials_report_a_perturbation() {
+    let mut vm = vm_for(WIRE_KEL);
+    let case = real_accum_case(CORPUS_STAGES[9].1);
+    assert_eq!(
+        emit_names_batched(&mut vm, &case.names, 64),
+        case.names_stored,
+        "control: clean NAMES must agree"
+    );
+    // Both fields of a NameRef, since they are the same width at adjacent
+    // offsets and a swapped pair is the natural mistranscription.
+    for field in 0..2 {
+        let mut names = case.names.clone();
+        if field == 0 {
+            names[1].0 ^= 1;
+        } else {
+            names[1].1 ^= 1;
+        }
+        assert_ne!(
+            emit_names_batched(&mut vm, &names, 64),
+            case.names_stored,
+            "control did not fire: NameRef field {field} is not observable"
+        );
+    }
+    // A transposed pair of records, which a per-record loop off-by-one produces
+    // and which perturbing a single field would not catch.
+    let mut swapped = case.names.clone();
+    swapped.swap(0, 1);
+    assert_ne!(
+        emit_names_batched(&mut vm, &swapped, 64),
+        case.names_stored,
+        "control did not fire: record order is not observable"
+    );
+}
+
+// --- WIRING SLICE 6: the two per-slot tables ---------------------------------
+//
+// `DATA_SLOTS` and `SHARED_LAYOUT` complete the four regions that are 99.96% of
+// `lexer`'s auxiliary body, alongside `NAMES` and `STRING_POOL` from slice 5.
+// All three record tables carry the same count, one entry per data slot,
+// because every array element becomes its own slot.
+//
+// A DELIBERATE, STATED COVERAGE CAP, WHICH IS THE POINT OF THIS COMMENT.
+// `lexer` has 395,784 records in each of these tables. Emitting them all would
+// cost roughly 130 s per table, on top of slice 5's measured 201 s, and would
+// add close to half an hour to a gate across the feature matrix.
+//
+// It would also buy almost nothing. What is NEW here is FIELD PLACEMENT for two
+// more record shapes, which needs a handful of records. DEEP BATCHING is the
+// property slice 5 established, at 774 and 807 batches, and re-establishing it
+// per record kind is repetition rather than coverage.
+//
+// So each stage is compared over its first `SLOT_RECORD_CAP` records. The cap is
+// named, asserted to actually cross several batch boundaries, and reported here
+// rather than left for a reader to infer from a magic number.
+const SLOT_RECORD_CAP: usize = 2048;
+
+const CMD_EMIT_DATA_SLOT_RECORDS: i64 = 120;
+const CMD_EMIT_SHARED_SLOT_RECORDS: i64 = 121;
+const SLOT_STRIDE: usize = 8;
+const SLOT_FIELDS: usize = 4;
+const SLOTS_PER_BATCH: usize = FIN_CAPACITY / SLOT_FIELDS;
+
+/// Both per-slot tables of a stage, as field rows and as reference bytes.
+struct SlotCase {
+    data: Vec<[i64; SLOT_FIELDS]>,
+    data_want: Vec<u8>,
+    shared: Vec<[i64; SLOT_FIELDS]>,
+    shared_want: Vec<u8>,
+}
+
+fn real_slot_case(src: &str) -> SlotCase {
+    use keleusma::wire_schema::{DataSlotRecord, SharedSlotRecord, kind};
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let bytes =
+        keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode aux body");
+    let view = keleusma_wire::WireView::parse(&bytes).expect("reference artifact parses");
+
+    let dregion = view
+        .find_region(kind::DATA_SLOTS)
+        .expect("DATA_SLOTS region");
+    let dbytes = view.region_bytes(&dregion).expect("payload").to_vec();
+    let dtable = view.records(&dregion, SLOT_STRIDE).expect("record table");
+    let dn = dtable.len().min(SLOT_RECORD_CAP);
+    let mut dslots = Vec::with_capacity(dn);
+    for i in 0..dn {
+        let r: DataSlotRecord = dtable.get_as(i).expect("record in range");
+        dslots.push([
+            i64::from(r.name),
+            i64::from(r.visibility),
+            i64::from(r.reserved),
+            i64::from(r.reserved2),
+        ]);
+    }
+
+    let sregion = view
+        .find_region(kind::SHARED_LAYOUT)
+        .expect("SHARED_LAYOUT region");
+    let sbytes = view.region_bytes(&sregion).expect("payload").to_vec();
+    let stable = view.records(&sregion, SLOT_STRIDE).expect("record table");
+    let sn = stable.len().min(SLOT_RECORD_CAP);
+    let mut sslots = Vec::with_capacity(sn);
+    for i in 0..sn {
+        let r: SharedSlotRecord = stable.get_as(i).expect("record in range");
+        sslots.push([
+            i64::from(r.offset),
+            i64::from(r.kind),
+            i64::from(r.reserved),
+            i64::from(r.len),
+        ]);
+    }
+
+    SlotCase {
+        data: dslots,
+        data_want: dbytes[..dn * SLOT_STRIDE].to_vec(),
+        shared: sslots,
+        shared_want: sbytes[..sn * SLOT_STRIDE].to_vec(),
+    }
+}
+
+fn emit_slots_batched(
+    vm: &mut Vm<'static, 'static>,
+    cmd: i64,
+    recs: &[[i64; SLOT_FIELDS]],
+    window: usize,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(recs.len() * SLOT_STRIDE);
+    for batch in recs.chunks(SLOTS_PER_BATCH) {
+        let fields: Vec<i64> = batch.iter().flat_map(|r| r.iter().copied()).collect();
+        let produced = batch.len() * SLOT_STRIDE;
+        let (written, buf) = run_cmd_fields(
+            vm,
+            cmd,
+            0,
+            &[],
+            &fields,
+            [window as i64, batch.len() as i64, 0, 0, 0],
+            window + produced,
+        )
+        .expect("run");
+        assert_eq!(written, produced as i64, "wrong batch byte count");
+        out.extend_from_slice(&buf[window..window + produced]);
+    }
+    out
+}
+
+#[test]
+fn the_emitted_per_slot_tables_match_the_reference_on_real_compiler_output() {
+    let mut vm = vm_for(WIRE_KEL);
+    let mut deepest = 0usize;
+    for (name, src) in CORPUS_STAGES {
+        let case = real_slot_case(src);
+        assert!(!case.data.is_empty(), "{name}: no data slots");
+        deepest = deepest.max(case.data.len().div_ceil(SLOTS_PER_BATCH));
+
+        let dgot = emit_slots_batched(&mut vm, CMD_EMIT_DATA_SLOT_RECORDS, &case.data, 64);
+        assert_eq!(dgot, case.data_want, "{name}: DATA_SLOTS differs");
+
+        let sgot = emit_slots_batched(&mut vm, CMD_EMIT_SHARED_SLOT_RECORDS, &case.shared, 64);
+        assert_eq!(sgot, case.shared_want, "{name}: SHARED_LAYOUT differs");
+    }
+    // The cap must still cross several batch boundaries, or it would have
+    // quietly reduced this to a single-batch test.
+    assert!(
+        deepest >= 8,
+        "the record cap left only {deepest} batches, too few to exercise batching at all"
+    );
+}
+
+/// Must-fire control for both per-slot tables, including the reserved fields.
+///
+/// The reserved fields are the interesting ones: no reader consults them, so
+/// nothing else in the suite would notice an emitter that skipped them, and an
+/// emitter that skipped them would still pass against a zeroed buffer.
+#[test]
+fn every_per_slot_field_is_independently_observable_including_reserved() {
+    let mut vm = vm_for(WIRE_KEL);
+    let case = real_slot_case(CORPUS_STAGES[9].1);
+    for (label, cmd, base, want) in [
+        (
+            "DATA_SLOTS",
+            CMD_EMIT_DATA_SLOT_RECORDS,
+            &case.data,
+            &case.data_want,
+        ),
+        (
+            "SHARED_LAYOUT",
+            CMD_EMIT_SHARED_SLOT_RECORDS,
+            &case.shared,
+            &case.shared_want,
+        ),
+    ] {
+        assert_eq!(
+            &emit_slots_batched(&mut vm, cmd, base, 64),
+            want,
+            "{label}: the clean case must agree"
+        );
+        for f in 0..SLOT_FIELDS {
+            let mut recs = base.clone();
+            recs[0][f] ^= 1;
+            assert_ne!(
+                &emit_slots_batched(&mut vm, cmd, &recs, 64),
+                want,
+                "{label}: control did not fire, field {f} is not observable"
+            );
+        }
+    }
+}
+
+/// An oversized batch is rejected with its own code, per table.
+#[test]
+fn an_oversized_per_slot_batch_is_reported_rather_than_truncated() {
+    let mut vm = vm_for(WIRE_KEL);
+    let over = (FIN_CAPACITY / SLOT_FIELDS) + 1;
+    for (cmd, code) in [
+        (CMD_EMIT_DATA_SLOT_RECORDS, -203),
+        (CMD_EMIT_SHARED_SLOT_RECORDS, -204),
+    ] {
+        let (got, _) =
+            run_cmd_fields(&mut vm, cmd, 0, &[], &[], [64, over as i64, 0, 0, 0], 0).expect("run");
+        assert_eq!(got, code, "command {cmd}: wrong or missing rejection code");
+    }
+}
+
+// --- WIRING SLICE 7: the remaining populated record tables -------------------
+//
+// Six kinds, all mechanical: every offset was already transcribed for the
+// readers, and batching, window addressing and the oversize guard are unchanged
+// since slice 3. One kind, `ENUM_VARIANTS`, needed a reserved field transcribed
+// for the emitter, as the per-slot tables did.
+//
+// TWO CARRY 64-BIT FIELDS, which is the one genuinely new thing. `ConstRecord`
+// has a `payload` and `EnumVariantRecord` a SIGNED `disc`, so `put_u64` writes
+// two little-endian limbs. The signed case is not hypothetical — the reader
+// suite already pins negative discriminants — and it is correct only because
+// `lsr` is logical over the whole word, which is asserted by the corpus rather
+// than assumed.
+
+struct RecordKind {
+    label: &'static str,
+    cmd: i64,
+    kind: u16,
+    stride: usize,
+    fields: usize,
+}
+
+const SLICE7_KINDS: &[RecordKind] = &[
+    RecordKind {
+        label: "SHAPES",
+        cmd: 122,
+        kind: keleusma::wire_schema::kind::SHAPES,
+        stride: 8,
+        fields: 4,
+    },
+    RecordKind {
+        label: "SIGNATURES",
+        cmd: 123,
+        kind: keleusma::wire_schema::kind::SIGNATURES,
+        stride: 16,
+        fields: 4,
+    },
+    RecordKind {
+        label: "ENUM_VARIANTS",
+        cmd: 124,
+        kind: keleusma::wire_schema::kind::ENUM_VARIANTS,
+        stride: 16,
+        fields: 3,
+    },
+    RecordKind {
+        label: "ENUM_LAYOUTS",
+        cmd: 125,
+        kind: keleusma::wire_schema::kind::ENUM_LAYOUTS,
+        stride: 16,
+        fields: 4,
+    },
+    RecordKind {
+        label: "DATA_INIT",
+        cmd: 126,
+        kind: keleusma::wire_schema::kind::DATA_INIT,
+        stride: 8,
+        fields: 2,
+    },
+    RecordKind {
+        label: "CONSTS",
+        cmd: 127,
+        kind: keleusma::wire_schema::kind::CONSTS,
+        stride: 16,
+        fields: 4,
+    },
+];
+
+/// Decode one region's records into field rows, per kind.
+///
+/// Explicit per kind rather than generic over a layout table: the widths and
+/// signedness differ, and a generic decoder would need the very offset
+/// knowledge this suite exists to check independently.
+fn decode_slice7(kind: u16, table: &keleusma_wire::RecordTable<'_>) -> Vec<Vec<i64>> {
+    use keleusma::wire_schema as w;
+    let mut out = Vec::with_capacity(table.len());
+    for i in 0..table.len() {
+        let row: Vec<i64> = match kind {
+            k if k == w::kind::SHAPES => {
+                let r: w::ShapeRecord = table.get_as(i).expect("record");
+                vec![
+                    i64::from(r.tag),
+                    i64::from(r.kind),
+                    i64::from(r.reserved),
+                    i64::from(r.size),
+                ]
+            }
+            k if k == w::kind::SIGNATURES => {
+                let r: w::SignatureRecord = table.get_as(i).expect("record");
+                vec![
+                    i64::from(r.params_first),
+                    i64::from(r.params_count),
+                    i64::from(r.ret),
+                    i64::from(r.resume),
+                ]
+            }
+            k if k == w::kind::ENUM_VARIANTS => {
+                let r: w::EnumVariantRecord = table.get_as(i).expect("record");
+                vec![i64::from(r.name), i64::from(r.reserved), r.disc]
+            }
+            k if k == w::kind::ENUM_LAYOUTS => {
+                let r: w::EnumLayoutRecord = table.get_as(i).expect("record");
+                vec![
+                    i64::from(r.type_name),
+                    i64::from(r.variants_first),
+                    i64::from(r.variants_count),
+                    i64::from(r.min_payload),
+                ]
+            }
+            k if k == w::kind::DATA_INIT => {
+                let r: w::DataInitRecord = table.get_as(i).expect("record");
+                vec![i64::from(r.first), i64::from(r.count)]
+            }
+            k if k == w::kind::CONSTS => {
+                let r: w::ConstRecord = table.get_as(i).expect("record");
+                vec![
+                    i64::from(r.tag),
+                    i64::from(r.flags),
+                    i64::from(r.aux),
+                    r.payload as i64,
+                ]
+            }
+            other => panic!("no decoder for kind {other:#06x}"),
+        };
+        out.push(row);
+    }
+    out
+}
+
+fn emit_rows_batched(
+    vm: &mut Vm<'static, 'static>,
+    rk: &RecordKind,
+    rows: &[Vec<i64>],
+    window: usize,
+) -> Vec<u8> {
+    let per_batch = FIN_CAPACITY / rk.fields;
+    let mut out = Vec::with_capacity(rows.len() * rk.stride);
+    for batch in rows.chunks(per_batch) {
+        let fields: Vec<i64> = batch.iter().flatten().copied().collect();
+        let produced = batch.len() * rk.stride;
+        let (written, buf) = run_cmd_fields(
+            vm,
+            rk.cmd,
+            0,
+            &[],
+            &fields,
+            [window as i64, batch.len() as i64, 0, 0, 0],
+            window + produced,
+        )
+        .expect("run");
+        assert_eq!(
+            written, produced as i64,
+            "{}: wrong batch byte count",
+            rk.label
+        );
+        out.extend_from_slice(&buf[window..window + produced]);
+    }
+    out
+}
+
+/// A stage's rows and reference bytes for one record kind.
+fn slice7_case(src: &str, rk: &RecordKind) -> (Vec<Vec<i64>>, Vec<u8>) {
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let bytes =
+        keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode aux body");
+    let view = keleusma_wire::WireView::parse(&bytes).expect("reference artifact parses");
+    let region = view.find_region(rk.kind).expect("region present");
+    let want = view.region_bytes(&region).expect("payload").to_vec();
+    let table = view.records(&region, rk.stride).expect("record table");
+    (decode_slice7(rk.kind, &table), want)
+}
+
+#[test]
+fn the_remaining_populated_tables_match_the_reference_on_real_compiler_output() {
+    let mut vm = vm_for(WIRE_KEL);
+    // Which kinds the corpus actually populates, asserted rather than assumed:
+    // three of these six are empty in every stage, and a differential over an
+    // empty table passes without emitting a single record.
+    let mut populated: Vec<&str> = Vec::new();
+    for (name, src) in CORPUS_STAGES {
+        for rk in SLICE7_KINDS {
+            let (rows, want) = slice7_case(src, rk);
+            if !rows.is_empty() && !populated.contains(&rk.label) {
+                populated.push(rk.label);
+            }
+            let got = emit_rows_batched(&mut vm, rk, &rows, 64);
+            assert_eq!(got, want, "{name}: {} differs", rk.label);
+        }
+    }
+    populated.sort_unstable();
+    assert_eq!(
+        populated,
+        vec![
+            "CONSTS",
+            "DATA_INIT",
+            "ENUM_LAYOUTS",
+            "ENUM_VARIANTS",
+            "SHAPES",
+            "SIGNATURES"
+        ],
+        "the set of corpus-populated kinds changed; coverage moved"
+    );
+}
+
+/// Must-fire control: every field of every kind must be observable.
+#[test]
+fn every_field_of_the_remaining_tables_is_independently_observable() {
+    let mut vm = vm_for(WIRE_KEL);
+    for rk in SLICE7_KINDS {
+        // Pick a stage that actually populates this kind, or the control would
+        // be perturbing an empty table and passing for the wrong reason.
+        let Some((_, rows, want)) = CORPUS_STAGES.iter().find_map(|(n, src)| {
+            let (rows, want) = slice7_case(src, rk);
+            (!rows.is_empty()).then_some((n, rows, want))
+        }) else {
+            panic!("{}: no stage populates this kind", rk.label);
+        };
+        assert_eq!(
+            emit_rows_batched(&mut vm, rk, &rows, 64),
+            want,
+            "{}: the clean case must agree",
+            rk.label
+        );
+        for f in 0..rk.fields {
+            let mut perturbed = rows.clone();
+            perturbed[0][f] ^= 1;
+            assert_ne!(
+                emit_rows_batched(&mut vm, rk, &perturbed, 64),
+                want,
+                "{}: control did not fire, field {f} is not observable",
+                rk.label
+            );
+        }
+    }
+}
+
+/// A negative enum discriminant survives the two-limb write.
+///
+/// `put_u64` splits a `Word` into low and high halves with `lsr`, which is
+/// logical over the whole word. A signed shift there would sign-extend the high
+/// limb and corrupt every negative discriminant, and the corpus may not contain
+/// one, so this is constructed rather than hoped for.
+#[test]
+fn a_negative_discriminant_round_trips_through_the_two_limb_write() {
+    let mut vm = vm_for(WIRE_KEL);
+    let rk = &SLICE7_KINDS[2];
+    assert_eq!(rk.label, "ENUM_VARIANTS");
+    for disc in [
+        -1i64,
+        -2,
+        -128,
+        -129,
+        -2147483648,
+        -2147483649,
+        i64::MIN,
+        0,
+        1,
+        i64::MAX,
+    ] {
+        let rows = vec![vec![7i64, 0, disc]];
+        let got = emit_rows_batched(&mut vm, rk, &rows, 64);
+        let mut want = vec![0u8; 16];
+        want[0..4].copy_from_slice(&7u32.to_le_bytes());
+        want[8..16].copy_from_slice(&disc.to_le_bytes());
+        assert_eq!(got, want, "discriminant {disc} emitted wrongly");
+    }
+}
+
+// --- WIRING SLICE 8: the kinds the corpus never populates --------------------
+//
+// Six record shapes are emitted as EMPTY regions by every one of the ten stage
+// sources, so no differential against real output can reach them. For a READER
+// an empty region and a populated one are different cases and both were already
+// covered. For an EMITTER they are the same problem: no record of that kind is
+// ever written, so a mistranscribed offset would go unseen indefinitely.
+//
+// THE ORACLE IS INDEPENDENT CONSTRUCTION, NOT THE CORPUS. `#[derive(WireRecord)]`
+// generates `write_record`, which is the authority on the packed layout, and the
+// expected bytes come from it. That is stronger than comparing against my own
+// idea of the layout and is the same oracle the hand-built record tests use.
+//
+// These do NOT block the driver: a zero-record region is declared in the
+// directory with length zero and needs no emitter. They are what a general
+// compiler needs the day a program declares a struct template or a native, which
+// the toolchain's own sources happen never to do.
+
+/// Distinct, non-zero, and different in every field position.
+///
+/// A field that is zero, or equal to its neighbour, cannot expose a swap or a
+/// dropped write. The generator is deterministic so a failure is reproducible.
+fn distinct(seed: u32, field: usize) -> u32 {
+    // Spread across all four bytes so a truncation to u16 or u8 also shows.
+    0x0100_0001u32
+        .wrapping_mul(seed + 1)
+        .wrapping_add((field as u32 + 1) * 0x0011_0101)
+        | 0x0080_0080
+}
+
+#[test]
+fn the_uncovered_record_kinds_emit_what_the_derive_constructs() {
+    use keleusma::wire_schema::{
+        EnumAux, NativeRecord, NativeReturnRecord, PrivateCompositeRecord, StructAux,
+        StructTemplateRecord,
+    };
+    let mut vm = vm_for(WIRE_KEL);
+    const N: usize = 5;
+    let window = 64usize;
+
+    // StructAux: two u32.
+    {
+        let recs: Vec<StructAux> = (0..N as u32)
+            .map(|i| StructAux {
+                type_name: distinct(i, 0),
+                field_names_first: distinct(i, 1),
+            })
+            .collect();
+        let rows: Vec<Vec<i64>> = recs
+            .iter()
+            .map(|r| vec![i64::from(r.type_name), i64::from(r.field_names_first)])
+            .collect();
+        check_uncovered(
+            &mut vm,
+            128,
+            StructAux::STRIDE,
+            &rows,
+            &pack(&recs),
+            window,
+            "STRUCT_AUX",
+        );
+    }
+
+    // EnumAux: two u32 and a SIGNED 64-bit discriminant.
+    {
+        let discs = [-1i64, i64::MIN, 0, 1, i64::MAX];
+        let recs: Vec<EnumAux> = (0..N)
+            .map(|i| EnumAux {
+                type_name: distinct(i as u32, 0),
+                variant: distinct(i as u32, 1),
+                discriminant: discs[i],
+            })
+            .collect();
+        let rows: Vec<Vec<i64>> = recs
+            .iter()
+            .map(|r| vec![i64::from(r.type_name), i64::from(r.variant), r.discriminant])
+            .collect();
+        check_uncovered(
+            &mut vm,
+            129,
+            EnumAux::STRIDE,
+            &rows,
+            &pack(&recs),
+            window,
+            "ENUM_AUX",
+        );
+    }
+
+    // StructTemplateRecord: four u32, including a reserved field.
+    {
+        let recs: Vec<StructTemplateRecord> = (0..N as u32)
+            .map(|i| StructTemplateRecord {
+                type_name: distinct(i, 0),
+                field_names_first: distinct(i, 1),
+                field_count: distinct(i, 2),
+                reserved: distinct(i, 3),
+            })
+            .collect();
+        let rows: Vec<Vec<i64>> = recs
+            .iter()
+            .map(|r| {
+                vec![
+                    i64::from(r.type_name),
+                    i64::from(r.field_names_first),
+                    i64::from(r.field_count),
+                    i64::from(r.reserved),
+                ]
+            })
+            .collect();
+        check_uncovered(
+            &mut vm,
+            130,
+            StructTemplateRecord::STRIDE,
+            &rows,
+            &pack(&recs),
+            window,
+            "STRUCT_TEMPLATES",
+        );
+    }
+
+    // PrivateCompositeRecord: two u16 then a u32, the only mixed-width case here.
+    {
+        let recs: Vec<PrivateCompositeRecord> = (0..N as u32)
+            .map(|i| PrivateCompositeRecord {
+                slot: distinct(i, 0) as u16,
+                reserved: distinct(i, 1) as u16,
+                offset: distinct(i, 2),
+            })
+            .collect();
+        let rows: Vec<Vec<i64>> = recs
+            .iter()
+            .map(|r| {
+                vec![
+                    i64::from(r.slot),
+                    i64::from(r.reserved),
+                    i64::from(r.offset),
+                ]
+            })
+            .collect();
+        check_uncovered(
+            &mut vm,
+            131,
+            PrivateCompositeRecord::STRIDE,
+            &rows,
+            &pack(&recs),
+            window,
+            "PRIVATE_COMPOSITE",
+        );
+    }
+
+    // NativeRecord and NativeReturnRecord: two u32 each, distinct kinds sharing
+    // a shape. Emitting one with the other's command must still be caught, which
+    // the differing values below ensure.
+    {
+        let recs: Vec<NativeRecord> = (0..N as u32)
+            .map(|i| NativeRecord {
+                name: distinct(i, 0),
+                reserved: distinct(i, 1),
+            })
+            .collect();
+        let rows: Vec<Vec<i64>> = recs
+            .iter()
+            .map(|r| vec![i64::from(r.name), i64::from(r.reserved)])
+            .collect();
+        check_uncovered(
+            &mut vm,
+            132,
+            NativeRecord::STRIDE,
+            &rows,
+            &pack(&recs),
+            window,
+            "NATIVES",
+        );
+    }
+    {
+        let recs: Vec<NativeReturnRecord> = (0..N as u32)
+            .map(|i| NativeReturnRecord {
+                shape: distinct(i, 2),
+                reserved: distinct(i, 3),
+            })
+            .collect();
+        let rows: Vec<Vec<i64>> = recs
+            .iter()
+            .map(|r| vec![i64::from(r.shape), i64::from(r.reserved)])
+            .collect();
+        check_uncovered(
+            &mut vm,
+            133,
+            NativeReturnRecord::STRIDE,
+            &rows,
+            &pack(&recs),
+            window,
+            "NATIVE_RETURNS",
+        );
+    }
+}
+
+/// Expected bytes, built by the derive rather than by hand.
+fn pack<T: keleusma_wire::WireRecord>(recs: &[T]) -> Vec<u8> {
+    let mut out = vec![0u8; recs.len() * T::STRIDE];
+    for (i, r) in recs.iter().enumerate() {
+        r.write_record(&mut out[i * T::STRIDE..(i + 1) * T::STRIDE])
+            .expect("write_record");
+    }
+    out
+}
+
+/// Emit `rows` through `cmd` and require both byte identity and that every
+/// field is independently observable.
+fn check_uncovered(
+    vm: &mut Vm<'static, 'static>,
+    cmd: i64,
+    stride: usize,
+    rows: &[Vec<i64>],
+    want: &[u8],
+    window: usize,
+    label: &str,
+) {
+    let fields = rows[0].len();
+    let emit = |vm: &mut Vm<'static, 'static>, rows: &[Vec<i64>]| -> Vec<u8> {
+        let flat: Vec<i64> = rows.iter().flatten().copied().collect();
+        let produced = rows.len() * stride;
+        let (written, buf) = run_cmd_fields(
+            vm,
+            cmd,
+            0,
+            &[],
+            &flat,
+            [window as i64, rows.len() as i64, 0, 0, 0],
+            window + produced,
+        )
+        .expect("run");
+        assert_eq!(written, produced as i64, "{label}: wrong byte count");
+        buf[window..window + produced].to_vec()
+    };
+
+    assert_eq!(emit(vm, rows), want, "{label}: differs from the derive");
+
+    // Must-fire, per field. Without this the agreement above could come from two
+    // implementations wrong in the same way, or from a field never written.
+    for f in 0..fields {
+        let mut perturbed = rows.to_vec();
+        perturbed[0][f] ^= 1;
+        assert_ne!(
+            emit(vm, &perturbed),
+            want,
+            "{label}: control did not fire, field {f} is not observable"
+        );
+    }
+}
+
+/// Every uncovered kind rejects an oversized batch with its own code.
+#[test]
+fn the_uncovered_kinds_reject_an_oversized_batch() {
+    let mut vm = vm_for(WIRE_KEL);
+    for (cmd, fields, code) in [
+        (128i64, 2usize, -211i64),
+        (129, 3, -212),
+        (130, 4, -213),
+        (131, 3, -214),
+        (132, 2, -215),
+        (133, 2, -216),
+    ] {
+        let over = (FIN_CAPACITY / fields) + 1;
+        let (got, _) =
+            run_cmd_fields(&mut vm, cmd, 0, &[], &[], [64, over as i64, 0, 0, 0], 0).expect("run");
+        assert_eq!(got, code, "command {cmd}: wrong or missing rejection code");
+    }
 }

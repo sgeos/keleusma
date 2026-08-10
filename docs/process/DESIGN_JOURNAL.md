@@ -13,6 +13,143 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**WIRING SLICE 8: THE KINDS THE CORPUS CANNOT REACH, AND A BRANCH MISTAKE CAUGHT BY VERIFYING
+(2026-08-10).** `STRUCT_AUX`, `ENUM_AUX`, `STRUCT_TEMPLATES`, `PRIVATE_COMPOSITE`, `NATIVES` and
+`NATIVE_RETURNS`. 108 tests. **Every record shape in the format now has an emitter**, so the
+seventeen-shape schema is complete on the emit side.
+
+**The oracle had to change, and that is the substance of the slice.** These six are emitted as EMPTY
+regions by all ten stages, so no differential against real output can reach them — for a reader an
+empty region and a populated one are different cases and both were covered, but for an EMITTER they
+are the same problem: no record is ever written, so a mistranscribed offset would go unseen
+indefinitely. The expected bytes therefore come from **`#[derive(WireRecord)]`'s own
+`write_record`**, which is the authority on the packed layout, rather than from my idea of it. Four
+more reserved offsets had to be transcribed and are pinned against the derive like every other.
+
+**Field values are generated distinct, non-zero and different in every position**, spread across all
+four bytes so a truncation to `u16` or `u8` shows as well as a swap. `ENUM_AUX` carries a signed
+discriminant, so its cases are `-1`, `i64::MIN`, `0`, `1` and `i64::MAX`, exercising `put_u64`'s
+two-limb write again on a kind the corpus never populates.
+
+**I patched the wrong branch, and only a verification grep caught it.** After committing the process
+correction on `v0.2.3` I stayed there and applied the whole slice to `v0.2.3`'s `wire.kel`, which
+does not contain slices 5 to 7. Two of the three edits silently no-oped because their anchors do not
+exist there, and the file was left half-patched. What surfaced it was a `grep -c` on the new dispatch
+arms returning **1 where it should have returned five** — a count I ran only because I have been
+checking every patch this session rather than trusting `replace` to have matched. Discarded with
+`git checkout --`, rebased, reapplied with `assert` on every anchor so a silent no-op is impossible
+next time.
+
+**The lesson is narrower than "check your branch".** A textual patch that finds no anchor does
+nothing and reports success, which is the same silent-failure shape as a by-name enumeration going
+stale. The fix is the same: make the operation assert rather than hope.
+
+**WIRING SLICE 7: THE REMAINING POPULATED TABLES, AND THE SWEEP DEBT PAID AS A MECHANISM
+(2026-08-09).** `SHAPES`, `SIGNATURES`, `ENUM_VARIANTS`, `ENUM_LAYOUTS`, `DATA_INIT` and `CONSTS`,
+all byte-identical against real output. 106 tests. **Every populated region kind in the corpus now
+has an emitter.** The six were mechanical, since every offset had already been transcribed for the
+readers and the batching, window addressing and oversize guard were unchanged since slice 3.
+
+**The genuinely new thing was 64-bit fields.** `ConstRecord` carries a `payload` and
+`EnumVariantRecord` a SIGNED `disc`, so `put_u64` writes two little-endian limbs. It is correct for
+a negative value only because `lsr` is logical over the whole word — a signed shift would
+sign-extend the high limb and corrupt every negative discriminant. The corpus may contain none, so
+that is constructed rather than hoped for: a dedicated test walks -1, -2, -128, -129, both 32-bit
+boundaries, `i64::MIN`, `i64::MAX` and zero.
+
+**THE SWEEP DEBT IS PAID, AND AS A MECHANISM RATHER THAN A LONGER LIST.** For four consecutive
+slices a test-side constant had to be bumped to match the highest command, and once I got it wrong
+and left a new command unswept — the exact off-by-one the sweep exists to catch, committed inside
+the sweep. `wire.kel` now declares `highest_command()`, **`main` refuses anything above it**, and the
+test reads that value out of the source. The refusal is what makes it load-bearing rather than
+documentation: a command added past the number becomes unreachable and fails its own test at once.
+A control calls `highest + 1` and requires the unknown code, so the bound cannot drift BELOW the
+real top and silently narrow the sweep either. Fifth instance of the by-name-enumeration family in
+this repository, second closed mechanically.
+
+**`dispatch_frame` had to split, and the reason is the old limit reached from the other end.** Six
+more commands would have taken it to twenty-five arms, past the parser's depth-24 ceiling — the same
+limit that shaped the original nine chains. The emitters now have their own `dispatch_emit`.
+
+**A harness property found by tripping over it, and worth knowing.** The new control failed with an
+`IndexOutOfBounds` from a completely different command. The sweep deliberately runs every command
+with zero arguments, and some legitimately fault there — command 115 resolves a HEADER region a
+zero-region artifact does not have. The loop tolerates that with `unwrap_or`, but **a faulted VM is
+unusable for any later call**, so the control was failing on the previous command's fault rather
+than answering its own question. It takes a fresh VM now. I diagnosed it by measuring instead of
+reasoning: my first three hypotheses — a mis-parsed constant, an unbalanced brace, a wrong guard
+placement — were all disproved by checking, and the brace count I had "eyeballed" as wrong was in
+fact balanced.
+
+**WIRING SLICE 6: THE TWO PER-SLOT TABLES, AND THE FIRST COVERAGE CAP I HAVE TAKEN (2026-08-09).**
+`DATA_SLOTS` and `SHARED_LAYOUT` for all ten stages, byte-identical. 103 tests, up from 100. With
+slice 5's pair these complete **the four regions that are 99.96% of `lexer`'s auxiliary body**, and
+all three record tables carry the same count because every array element becomes its own slot.
+
+**Both records needed reserved fields transcribed for the first time.** `wire.kel` had `dslot_name`,
+`dslot_visibility`, `sslot_offset`, `sslot_kind` and `sslot_len` — everything a READER consults —
+and nothing for the three reserved fields. An emitter needs them all. They are written explicitly
+for the reason slice 4 established, and the must-fire control covers them, which matters more here
+than anywhere: **no reader consults a reserved field, so nothing else in the suite would notice an
+emitter that skipped one, and a skipping emitter still passes against a zeroed buffer.**
+
+**The first stated coverage cap of this arc, and the reasoning is the part to keep.** `lexer` has
+395,784 records in each table. Emitting them all would cost roughly 130 s per table on top of slice
+5's 201 s, adding close to half an hour to a gate across the feature matrix. Each stage is instead
+compared over its first 2048 records, and slice 6 costs 12 s.
+
+The justification is not "it is too slow", which would be the bad version of this argument. It is
+that **a slice should test what is NEW in it.** What is new here is FIELD PLACEMENT for two more
+record shapes, which needs a handful of records. DEEP BATCHING is the property slice 5 established
+at 774 and 807 batches, and re-establishing it per record kind is repetition rather than coverage.
+The cap is named, its residual depth is asserted at eight or more batches so it cannot quietly
+collapse to a single-batch test, and it is stated in the test rather than left as a magic number.
+Contrast slice 5, where the deep run WAS the new property and the 201 s was therefore kept and
+escalated instead of trimmed.
+
+**Clippy caught a four-tuple return for the second time in this arc**, and the fix was the one I
+should have written first: a named struct. Both occurrences were in test scaffolding I wrote
+quickly, and both were invisible to the tests themselves.
+
+**WIRING SLICE 5: THE TWO ACCUMULATOR REGIONS, AND A GATE-SCOPE COST I WILL NOT DECIDE ALONE
+(2026-08-09).** `NAMES` and `STRING_POOL` for all ten stages, byte-identical. 100 tests, up from 98.
+These are the pair the residency measurement singled out, together 9,776,392 bytes for `lexer` and
+58.3% of the shared ceiling, and they are one of each shape — a record table and the byte pool it
+indexes. **`STRING_POOL` needed no new Keleusma code**: slice 4's pool emitter already did it, and
+this is the first time it met something large enough to batch hundreds of times.
+
+**First deep-batch coverage in the arc.** Everything before this batched at most twice. `lexer` is
+774 name batches and 807 pool batches, and the depth is ASSERTED, so a corpus change that shrank
+these tables would report the loss rather than leave a green test measuring a shallow path.
+
+**A recorded ordering claim of mine was wrong, and I caught it before acting on it.** One increment
+earlier I wrote that the next work was the six record shapes with no corpus coverage, ahead of the
+populated regions. That is backwards. **A region with zero records needs no record emitter at all**
+— it is declared in the directory with length zero, which `emit_directory` already does. So the six
+do not block the driver; they are a generality concern for programs that use natives or struct
+templates. The populated regions are what block it. Ordering corrected before any code was written.
+
+**The gate boundary, which I set up wrong and am reporting rather than papering over.** I launched
+the full gate on the slice-4 tip `3ad895e` and then wrote slice 5 in the free tree. That is exactly
+the trap `HANDOFF.md` records — *gate the tip you intend to merge* — and it is the second time this
+arc that a gate has ended up describing something other than the branch tip. The tree being free
+during a gate is the whole point of the worktree runner, so this will recur; the discipline has to
+be at MERGE time, which is why it is now a banner in `REVERSE_PROMPT.md` rather than a note. Merge
+only up to `3ad895e` on that result.
+
+**A cost I am escalating rather than absorbing.** The accumulator test is **201 seconds** measured,
+taking the suite from about 23 s to 152 s, and the gate runs the suite once per feature
+configuration — roughly nine minutes added to a 2h33m gate. The time is not inefficiency to optimise
+away: it is about 7.4 million `set_shared` and `get_shared` calls in a debug build, which is simply
+what driving 6.6 MB through the public shared-data API costs. Hoisting the buffer would not help,
+and batching depth is the property under test.
+
+Restricting the test to `parse` would still give 226 and 131 batches, also fairly deep, for about a
+third of the time. **That is a gate-scope trade in the same class as trimming the feature matrix,
+which this project holds as an operator decision**, and the recorded reason is that "probably safe"
+narrowing is how two coverage holes were made. So it is kept at full coverage and the number is
+stated in the test, in the journal and in `REVERSE_PROMPT.md`, rather than quietly taken.
+
 **WIRING SLICE 4: A BYTE POOL, WHERE LOGICAL LENGTH IS NOT STORED LENGTH (2026-08-09).**
 `PARAM_TYPES` for all ten stages, byte-identical, emitted in batches through a window and then
 padded. 98 tests, up from 91. A pool is the other half of the format — no stride, no fields, no
