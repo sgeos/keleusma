@@ -2667,3 +2667,50 @@ Queued as a corpus measurement with the others: count distinct `chunk.name`
 values against chunk count across the corpus. **Do not make this change before
 that count comes back**, which is exactly the discipline this document failed at
 when it quoted a chunk-level coverage figure without checking the module level.
+
+## The four queued corpus counts are WRITTEN, and one bug was caught before running
+
+All four questions this document deferred rather than guessed are now a single
+spike, prepared while another session's gate held the machine. One `cargo test`
+answers all four, so the machine is occupied once instead of four times.
+
+| # | Question | Decides |
+|---|---|---|
+| 1 | How many composite constants exist, and do they co-occur with construction? | Whether refusing them costs real coverage |
+| 2 | Coverage restricted to `src/selfhost/kel/` | Whether roadmap Order 1 sits behind the width stack |
+| 3 | Is `Chunk::name` unique, within and across modules? | Whether the symbol stability fix is safe to make |
+| 4 | Does the corpus use fixed-point at all? | Whether the scoped fixed-point design is worth building |
+
+Each carries its own guard against the failure it is most likely to hide:
+
+- **Count 1 is labelled a PROXY in the test itself.** It counts chunks holding
+  both a composite constant and a construction, which over-approximates.
+  Establishing that a *specific* constant reaches a *specific* `NewComposite`
+  needs the shape stack — the very thing the measurement exists to scope. Saying
+  so in the test rather than in a commit message keeps the caveat attached to the
+  number.
+- **Count 3 separates within-module from cross-module collisions**, because they
+  have different consequences: a within-module collision is an immediate
+  duplicate symbol, while a cross-module one is the hazard R4.2's module-path
+  component exists to prevent.
+- A shared **must-fire guard** asserts the corpus is actually being read, since
+  every conclusion above is of the form "if this is zero, the work is
+  unnecessary" — and a zero from a broken path reader looks identical to a real
+  one.
+
+### The bug caught before it ran
+
+`is_composite_const` omitted **`ConstValue::Enum`**. Flat enums are composites and
+the reference compiler emits enum constants, so the predicate would have
+undercounted — **and the undercount ran in the direction that licenses skipping
+work**, toward "composite constants cost nothing". A false zero on count 1 would
+have removed a real coverage cost from consideration.
+
+Found by verifying the variant list against `bytecode.rs` rather than trusting
+recall. That verification step is exactly what was missing last night, when a
+waiter was written, relied upon, and never checked for its ability to fire. The
+difference between the two outcomes is one read of the source.
+
+An unused `NewCompositeOperand` import was removed in the same pass; it would
+have failed `clippy -D warnings` and cost a compile cycle on a machine that is
+currently contended.
