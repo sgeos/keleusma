@@ -186,7 +186,7 @@ change that recorded this.
 
 ### Prefer a pattern to an enumeration; a by-name list is a latent hole
 
-The same defect has now produced three separate failures in this repository, and
+The same defect has now produced **five** separate failures in this repository, and
 in each case the fix is a rule that matches rather than a list that remembers.
 
 | Enumeration | What it missed | Cost |
@@ -194,13 +194,26 @@ in each case the fix is a rule that matches rather than a list that remembers.
 | `release-gate.sh` lists crates by name | `keleusma-wire` | four days of gate coverage with no CI coverage |
 | CI Doc job lists crates by name | `src/selfhost/`, then both new crates | broken intra-doc links survived four releases |
 | Root `.gitignore` listed nested `target/` dirs by name | `native_codegen/target/` | 571 build artifacts swept into a commit |
+| A gate-progress regex bounded to 70 characters | the 71-character twelfth step | every "step N of 12" report was wrong for a day |
+| A gate-progress regex anchored to line start | the same header wrapped in ANSI escapes | reported `steps=0` for a gate that had run thirteen |
+
+**A HAND-WRITTEN BOUND IS A BY-NAME ENUMERATION.** The last two rows are the same
+defect wearing different clothing, and recognising that took embarrassingly long:
+`{5,70}` enumerates the acceptable lengths and `^` enumerates the acceptable
+prefixes, both over a set that was free to grow. A list enumerates members; a
+bound enumerates a range. Neither is a rule that matches.
 
 **A by-name list is correct on the day it is written and silently wrong the moment
 the set grows.** Nobody is at fault when it fails, which is exactly why it keeps
 happening. Where a pattern can express the intent — `**/target/` rather than one
-line per package — use the pattern. Where enumeration is unavoidable, put a
-comment at the point of failure saying what must be added, and expect that to work
-only sometimes.
+line per package, `[^=]+` rather than `[^=]{5,70}` — use the pattern. Where
+enumeration is unavoidable, put a comment at the point of failure saying what must
+be added, and expect that to work only sometimes.
+
+**Every one of the five failed silently and read as success**, which is the
+property that makes the class worth naming rather than just fixing case by case.
+A gate with no coverage passes; a doc job with no crate reports green; a regex
+that matches nothing reports zero.
 
 The `.gitignore` case carries an extra lesson for parallel work: **a guard that
 lives on one branch does not protect another.** A package's ignore rule in its own
