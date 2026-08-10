@@ -120,7 +120,9 @@ The runtime workflow for an encrypted artefact:
 6. Decrypt the body with AES-256-GCM. The crate verifies the authentication tag; a failure indicates either tampering or wrong key.
 7. Run structural verification on the decrypted plaintext, then construct the VM.
 
-The `BYTECODE_VERSION` field remains 1. V0.2.0 runtimes reject V0.2.1 encrypted artefacts cleanly because the `header_length` check fails (V0.2.0 expects either 64 or 136; encrypted artefacts carry 224). The combination of `FLAG_ENCRYPTED` and the extended header length unambiguously identifies encrypted artefacts.
+Adding encryption required no version bump: the combination of `FLAG_ENCRYPTED` and the extended header length identifies an encrypted artefact unambiguously, and at the time a V0.2.0 runtime meeting a V0.2.1 encrypted artefact rejected it on the `header_length` check (V0.2.0 expects either 64 or 136; encrypted artefacts carry 224).
+
+**That was the situation between V0.2.0 and V0.2.1, and it is no longer the operative mechanism.** The field is now **2**, per the version story at the top of this document, and the load path checks the version *before* it reads `header_length`. An older runtime meeting a current artefact therefore rejects it on the version check, whatever its header length. The `FLAG_ENCRYPTED` disambiguation still distinguishes encrypted from cleartext artefacts *within* a version; it is no longer what protects an older runtime.
 
 The encryption work is feature-gated on the `encryption` Cargo feature, off by default. Hosts that do not need encrypted delivery pay no binary-size cost from the encryption crypto stack. Encrypted artefacts produced on a host with the feature on do not load on a host with the feature off; the loader returns a clear diagnostic.
 
@@ -139,7 +141,7 @@ Each opcode is a four-byte record. The record carries the opcode identifier in t
 
 The parity bit is the XOR of the other thirty-one bits in the record. A consumer reads byte zero, computes the parity over the seven low bits of byte zero and all bits of bytes one through three, compares against the high bit of byte zero, and rejects the record on mismatch. The parity covers the entire record so single bit flips anywhere are detected at the consumer site.
 
-The opcode identifier is the index of the `Op` variant in the canonical wire listing. The table is fixed at version 1 of the wire format. The mapping is stable across the V0.2.x series. The B28 consolidation retired the four V0.2.0 construct opcodes (`NewStruct`, `NewEnum`, `NewArray`, `NewTuple`, ids 34-37) and introduced `NewComposite` at id 69, so the live ISA has sixty-six variants with a maximum identifier of 69 and four reserved-and-unused ids. The identifier fits in seven bits; future ISA additions that exceed one hundred and twenty-eight variants would require a version bump.
+The opcode identifier is the index of the `Op` variant in the canonical wire listing. The table was fixed as of version 1 of the wire format and is unchanged in version 2. The mapping is stable across the V0.2.x series. The B28 consolidation retired the four V0.2.0 construct opcodes (`NewStruct`, `NewEnum`, `NewArray`, `NewTuple`, ids 34-37) and introduced `NewComposite` at id 69, so the live ISA has sixty-six variants with a maximum identifier of 69 and four reserved-and-unused ids. The identifier fits in seven bits; future ISA additions that exceed one hundred and twenty-eight variants would require a version bump.
 
 The operand semantics depend on the opcode variant. Inline operands cover these shapes:
 

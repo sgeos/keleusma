@@ -467,8 +467,12 @@ pub const DEFAULT_NATIVE_WCET: u32 = 10;
 /// `Vm::set_native_bounds`.
 pub const DEFAULT_NATIVE_WCMU_BYTES: u32 = 0;
 
-/// Default arena capacity in bytes when constructed via `Vm::new`. The host
-/// can override this by calling `Vm::new_with_arena_capacity`.
+/// Default arena capacity in bytes, for hosts that want a starting point.
+///
+/// `Vm::new` takes an already-constructed [`keleusma_arena::Arena`], so a host
+/// chooses the capacity by building the arena it wants and passing it in;
+/// there is no capacity-taking constructor. See
+/// [`auto_arena_capacity_for`] to size one from a module's own bounds.
 pub const DEFAULT_ARENA_CAPACITY: usize = 64 * 1024;
 
 /// Minimum operand-stack capacity pre-reserved at `Vm::new`, in slots.

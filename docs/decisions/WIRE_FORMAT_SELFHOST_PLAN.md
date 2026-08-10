@@ -36,10 +36,13 @@ establishes the byte-emission harness the rest depends on.
    `tests/selfhost_wire.rs`. See [Slice 1 as built](#slice-1-as-built-2026-08-09) below.
 2. ~~**Container primitives and the prologue.**~~ **DONE 2026-08-09.** See
    [Slice 2 as built](#slice-2-as-built-2026-08-09) below.
-3. **The region directory.** Emission and lookup, triplicated and voted, word-indexed offsets.
-4. **Record tables and byte pools.** Fixed-stride addressing, which is the shift-not-multiply case
-   the format was shaped around.
-5. **The schema layer.** The twenty region kinds and their record shapes.
+3. ~~**The region directory.**~~ **DONE 2026-08-09.** Emission, lookup, and the triplicated vote, with the prologue-to-directory bootstrap tested by damaging the region count in each prologue copy in turn.
+4. ~~**Record tables and byte pools.**~~ **DONE 2026-08-09.** Fixed-stride addressing and pool
+   access, located from the voted directory. `divides` uses real division rather than a mask,
+   because a stride is only required to be a word multiple, not a power of two; and the
+   zero-stride guard depends on `andalso` short-circuiting, since division by zero traps.
+5. **The schema layer.** The twenty region kinds and their record shapes. **The largest slice by
+   far — see [Slice 5, decomposed](#slice-5-decomposed) before starting it.**
 6. **The opcode stream and operand pool.** The meaty part. `codegen.kel` already carries an internal
    op encoding whose tag values ARE the opcode ids, so the mapping to four-byte records is close to
    what it already computes. Verify against `encode_op` over every op form, including pool spills.
@@ -163,6 +166,46 @@ shift every seeding site.
 
 **Still at a 4096-byte buffer.** Ample for the 48-byte prologue. The directory reaches 49200 bytes
 at the 1024-region ceiling, so slice 3 has to grow it.
+
+### Slice 5, decomposed
+
+Designed 2026-08-09, **not started**. Slice 5 is not one increment: `src/wire_schema.rs` defines
+**twenty region kinds** and **seventeen record types**, and doing them in one pass would be a large
+unreviewable change with a single all-or-nothing oracle.
+
+**The offsets must be pinned, not transliterated.** `#[derive(WireRecord)]` generates each field's
+offset by packing with **no implicit padding**, then rounds the stride up to a word multiple
+(`STRIDE = PACKED_BYTES.next_multiple_of(8)`). That is deliberately not what `repr(C)` produces, so
+the offsets cannot be derived by eye from the field types and must not be guessed.
+
+Two consequences shape the design:
+
+- **Keleusma hardcodes the offsets**, because it has no derive and no reflection.
+- **A test asserts each hardcoded number equals the generated constant.** Rust can read
+  `OFF_<field>` and `STRIDE` at compile time, so the comparison is exact and free. This is the
+  slice's real oracle: it catches a mistranscribed offset immediately, and it catches DRIFT later
+  if a record gains a field — which the byte-identity corpus would only catch if some test
+  happened to exercise that record.
+
+**Order, smallest first and by dependency**, mirroring how the Rust side was built:
+
+| Sub-slice | Records | Why here |
+|---|---|---|
+| 5a | `NameRef`, `ShapeRecord` | Two words or fewer, no side tables, nothing depends on them |
+| 5b | `ConstRecord`, `StructAux`, `EnumAux` | The constant table and its two side tables |
+| 5c | `SignatureRecord`, `StructTemplateRecord`, `EnumVariantRecord`, `EnumLayoutRecord` | Range-addressed runs; reuse 5a's name machinery |
+| 5d | `DataSlotRecord`, `SharedSlotRecord`, `PrivateCompositeRecord`, `DataInitRecord` | The data segment; absence versus emptiness is semantic here |
+| 5e | `ChunkRecord`, `NativeRecord`, `NativeReturnRecord`, `HeaderRecord` | The module level, which references everything above |
+
+**Two traps already paid for on the Rust side**, recorded so they are not rediscovered:
+
+- **`DATA_SLOTS` presence is semantic.** An absent region means `None`; an empty one means `Some`
+  with no slots. A module with no `data` block and one whose data block is empty are different
+  programs, and collapsing them is a silent wrong answer.
+- **`NATIVES` and `NATIVE_RETURNS` are separate regions on purpose.** They were first paired in one
+  record on the reasoning that parallel vectors fall out of step — but they are already allowed to
+  differ in length, and pairing silently DROPPED the surplus instead of preventing it. Independent
+  regions carry both lengths.
 
 ### On the prototype
 

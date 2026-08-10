@@ -93,9 +93,9 @@ Memory bounds are statically analyzable per stream phase. The verifier computes 
 
 #### Arena Implementation
 
-The arena is implemented as the `Arena` type in `src/arena.rs`. It owns a fixed-size `Box<[u8]>` backing buffer and tracks two bump pointers using `Cell<usize>`. Two handle types `StackHandle` and `HeapHandle` borrow the arena and implement the `allocator_api2::Allocator` trait, allowing arena-backed collections through `allocator_api2::vec::Vec::new_in(handle)` and similar constructors.
+The arena is implemented as the `Arena` type in the standalone `keleusma-arena` crate (`keleusma-arena/src/lib.rs`), which the runtime depends on rather than defining itself. It owns a fixed-size `Box<[u8]>` backing buffer and tracks two bump pointers using `Cell<usize>`. Two handle types `StackHandle` and `HeapHandle` borrow the arena and implement the `allocator_api2::Allocator` trait, allowing arena-backed collections through `allocator_api2::vec::Vec::new_in(handle)` and similar constructors.
 
-The `Vm` holds an `Arena` instance configured with a default capacity of 65536 bytes. The capacity is configurable through `Vm::new_with_arena_capacity`. The arena is exposed through `Vm::arena()` and `Vm::arena_mut()` accessors for host-supplied native functions that wish to allocate arena-resident scratch buffers. The arena is reset at every `Op::Reset` boundary and at every `replace_module` call.
+The `Vm` borrows an `Arena` the host constructs and passes to `Vm::new`, so the host chooses the capacity by building the arena it wants; `DEFAULT_ARENA_CAPACITY` (65536 bytes) is the suggested starting point and `auto_arena_capacity_for` sizes one from a module's own bounds. The arena is exposed through the `Vm::arena()` accessor for host-supplied native functions that wish to allocate arena-resident scratch buffers. The arena is reset at every `Op::Reset` boundary and at every `replace_module` call.
 
 The deeper integration of the operand stack and dynamic-string storage with the arena is iterative work tracked as P7 follow-on. Stable Rust does not currently expose a `String` type with a custom allocator, so a custom `DynStr` storage type backed by `allocator_api2::vec::Vec<u8, HeapHandle>` is required for full integration. See R34 for the implementation status.
 
@@ -232,24 +232,23 @@ The CRC-32 uses the standard IEEE 802.3 reflected polynomial with init `0xFFFFFF
 
 #### Cross-process module serialization
 
-The execution wire format above is the canonical encoding for bytecode that runs on the VM. A secondary serialization (rkyv-archived) survives as an internal mechanism for hosts that transport the in-memory `Module` between processes (e.g., a host process compiling a module and shipping it to a worker process before the worker emits the execution wire format). The execution loop does not consume the rkyv form directly.
+The execution wire format above is the canonical encoding for bytecode that runs on the VM, and it is the only one. The rkyv-archived secondary serialization described here previously is **gone**: `Module` carries no rkyv derives, there is no `ArchivedModule` type, and the auxiliary body is the wire format v2 container. The `rkyv` dependency remains only for `AlignedVec` buffer alignment in unrelated places.
 
 ### Loading API
 
 | Method | Use |
 |---|---|
-| `Module::to_bytes()` | Serialize a module to a `Vec<u8>` carrying the magic-and-version header followed by the rkyv-encoded body and the CRC trailer. |
-| `Module::from_bytes(bytes)` | Validate the header and deserialize. Copies the body into an `AlignedVec` for alignment regardless of the host slice's alignment. Returns `bytecode::LoadError` on header mismatch or codec failure. Does not run structural or resource verification. |
-| `Module::access_bytes(bytes)` | Validate the framing and return a borrowed `&'a ArchivedModule` through `rkyv::access`. Requires the body to be 8-byte aligned within the slice. |
-| `Module::view_bytes(bytes)` | Validate through `access_bytes` and deserialize to owned `Module`. Skips the body copy that `from_bytes` performs. Requires alignment. |
+| `Module::to_bytes()` | Serialize a module to a `Vec<u8>` carrying the magic-and-version header, the opcode stream, the operand pool, the wire format v2 auxiliary body, and the CRC trailer. |
+| `Module::from_bytes(bytes)` | Validate the header and decode. **No alignment requirement**: the v2 container is byte-addressed, so the decode reads the slice where it lies and the aligned scratch copy the rkyv path needed is gone. Returns `bytecode::LoadError` on header mismatch or codec failure. |
+| `Module::view_bytes(bytes)` | Validate the framing and decode to an owned `Module`, skipping the body copy `from_bytes` performs. No alignment requirement. |
 | `Vm::new(module)` | Construct the VM. Runs structural verification and resource bounds verification. |
 | `Vm::load_bytes(bytes)` | Convenience for `Vm::new(Module::from_bytes(bytes)?)`. Runs full verification. |
 | `Vm::load_signed_bytes(bytes, arena, &keys)` | Verify the Ed25519 signature, then load. Requires the `signatures` feature. |
 | `Vm::load_encrypted_signed_bytes(bytes, arena, &verifying_keys, &decryption_key)` | Verify the signature, decrypt the body with the supplied X25519 private key, then load. Requires both the `signatures` and `encryption` features. |
-| `Vm::view_bytes(bytes)` | Convenience for `Vm::new(Module::view_bytes(bytes)?)`. Skips the body copy. Requires alignment. |
+| `Vm::view_bytes(bytes)` | Convenience for `Vm::new(Module::view_bytes(bytes)?)`. Skips the body copy. |
 | `unsafe Vm::new_unchecked(module)` | Skip the resource bounds check. Structural verification still runs because the VM execution loop relies on its invariants for memory safety. |
 | `unsafe Vm::load_bytes_unchecked(bytes)` | Convenience for `unsafe Vm::new_unchecked(Module::from_bytes(bytes)?)`. |
-| `unsafe Vm::view_bytes_unchecked(bytes)` | Convenience for `unsafe Vm::new_unchecked(Module::view_bytes(bytes)?)`. Skips the body copy. Requires alignment. |
+| `unsafe Vm::view_bytes_unchecked(bytes)` | Convenience for `unsafe Vm::new_unchecked(Module::view_bytes(bytes)?)`. Skips the body copy. |
 
 The unchecked path is for hosts that load precompiled bytecode whose resource bounds were validated during the build pipeline. The unsafe marker captures the trust contract. The host attests that bytecode was previously verified or originates from a trusted compiler. The bounded-memory and bounded-step guarantees are weakened to host attestation under this path. Exceeding the bound at runtime produces an arena allocation failure rather than memory unsafety. See R39 for the full design rationale.
 

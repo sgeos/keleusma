@@ -4,8 +4,14 @@
 
 Scoping for the two Order-1 blockers that had no plan document. Written 2026-08-09.
 
-Status: **SCOPED, NOT STARTED.** Two decisive experiments are specified below and neither has
-been run. Nothing here should be treated as settled until they have.
+Status: **SCOPED. Spikes A and B are both RUN and RESOLVED, and both Order-1 obligations shrank.**
+
+**Spike A's result: monomorphization is an identity transform on all ten stage sources**, so the
+first-pass monomorphizer obligation is effectively empty. Pinned permanently by
+`tests/selfhost_monomorphize_identity.rs`, with a must-fire control proving the comparison
+detects a change when one occurs. **One of the roadmap's three Order-1 blockers is therefore
+retired for the first pass**, and the roadmap's implication that the three are comparable in
+size is wrong.
 
 ## Why this exists
 
@@ -100,6 +106,13 @@ an identity, the roadmap's Order-1 row should say so, because it currently impli
 
 **Cost.** One test, minutes.
 
+**RESULT (2026-08-09): identity on all ten stages.** Compared with `Program`'s own `PartialEq`
+after the same pre-monomorphization type check the pipeline performs. The must-fire control — a
+generic program, which the same comparison does report as changed — is what makes the result
+meaningful rather than a comparison that always returns equal. Promoted from a spike to a
+standing test, because the property belongs to the stage sources and ends the day one of them
+declares a generic.
+
 ### Spike B — does the emitter need the recorded type table for the subset?
 
 **Method.** Force `program.fn_expr_types` empty between the recording pass and emission — one line
@@ -145,8 +158,8 @@ to, and says nothing about the full language of Order 6.
 ## Suggested ordering
 
 1. **Finish wire-format serialization**, slices 5 to 7. In progress, sliced, harness built.
-2. **Spike A**, cheap, and it may retire a blocker.
-3. ~~**Spike B.**~~ **Done. Obligation 2 is empty for the subset.**
+2. ~~**Spike A.**~~ **Done. The monomorphizer obligation is empty.**
+3. ~~**Spike B.**~~ **Done. The inference obligation is empty too.**
 4. **Then write the implementation plan**, sliced the way the wire-format plan is, with rejection
    and inference as separate tracks and their real sizes known rather than guessed.
 
