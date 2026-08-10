@@ -1385,6 +1385,121 @@ fn pool_u24(at: Word, k: Word) -> Word {
         + ((wire.bytes[at + 4 + (k * 3)] as Word) lsl 16)
 }
 
+// --- SLICE 7: the framing header and the CRC trailer ---------------------
+//
+// The outermost layer, and the last of step 6. Sixty-four fixed bytes name the
+// artifact and locate its three sections, and a four-byte CRC closes the file.
+//
+//   0  4  magic, "KELE"          32  4  opcode stream offset
+//   4  2  version                36  4  opcode stream length
+//   6  2  header length          40  4  operand pool offset
+//   8  4  total length           44  4  operand pool length
+//  12  1  word bits log2         48  4  auxiliary body offset
+//  13  1  addr bits log2         52  4  auxiliary body length
+//  14  1  float bits log2        56  4  auxiliary arena bytes
+//  15  1  flags                  60  4  persistent composite bytes
+//  16  4  declared WCET cycles
+//  20  4  declared WCMU bytes
+//  24  4  shared data bytes
+//  28  4  private data bytes
+//
+// THE TRAILER IS VALIDATED BY A RESIDUE, NOT BY RECOMPUTATION. A reader does
+// not checksum the body and compare against the stored trailer. It runs CRC-32
+// over the WHOLE artifact, trailer included, and checks the result against a
+// fixed constant. That works because appending a message's own CRC makes the
+// checksum of the extended message a constant — 0x2144DF1C for this
+// polynomial and this convention. One pass, no special-casing of the last four
+// bytes, and nothing to get wrong about where the checksummed region ends.
+
+fn header_bytes_len() -> Word { 64 }
+fn bytecode_version() -> Word { 2 }
+fn crc32_residue() -> Word { 0x2144DF1C }
+
+fn flag_ephemeral() -> Word { 1 }
+fn flag_requires_signature() -> Word { 2 }
+fn flag_encrypted() -> Word { 4 }
+
+fn fh_off_magic() -> Word { 0 }
+fn fh_off_version() -> Word { 4 }
+fn fh_off_header_length() -> Word { 6 }
+fn fh_off_total_length() -> Word { 8 }
+fn fh_off_word_bits_log2() -> Word { 12 }
+fn fh_off_addr_bits_log2() -> Word { 13 }
+fn fh_off_float_bits_log2() -> Word { 14 }
+fn fh_off_flags() -> Word { 15 }
+fn fh_off_wcet_cycles() -> Word { 16 }
+fn fh_off_wcmu_bytes() -> Word { 20 }
+fn fh_off_shared_data_bytes() -> Word { 24 }
+fn fh_off_private_data_bytes() -> Word { 28 }
+fn fh_off_opcode_offset() -> Word { 32 }
+fn fh_off_opcode_length() -> Word { 36 }
+fn fh_off_pool_offset() -> Word { 40 }
+fn fh_off_pool_length() -> Word { 44 }
+fn fh_off_aux_offset() -> Word { 48 }
+fn fh_off_aux_length() -> Word { 52 }
+fn fh_off_aux_arena_bytes() -> Word { 56 }
+fn fh_off_persistent_composite_bytes() -> Word { 60 }
+
+// "KELE" as a little-endian u32: bytes K, E, L, E.
+fn magic_word() -> Word { 0x454C454B }
+
+fn fh_u32(off: Word) -> Word { get_u32(off) }
+fn fh_u16(off: Word) -> Word { get_u16(off) }
+fn fh_u8(off: Word) -> Word { wire.bytes[off] as Word }
+
+// 1 when the artifact's magic and version are the ones this reader knows.
+// The VERSION IS CHECKED BEFORE ANYTHING ELSE that depends on layout, which is
+// what makes an older artifact reject cleanly rather than be misread: every
+// field position below is a version-2 fact.
+fn fh_magic_ok() -> Word {
+    if fh_u32(fh_off_magic()) == magic_word() { 1 } else { 0 }
+}
+
+fn fh_version_ok() -> Word {
+    if fh_u16(fh_off_version()) == bytecode_version() { 1 } else { 0 }
+}
+
+fn fh_flag_set(mask: Word) -> Word {
+    if (fh_u8(fh_off_flags()) band mask) == 0 { 0 } else { 1 }
+}
+
+// Write the sixty-four fixed bytes. Section offsets and lengths are supplied by
+// the caller, because they are only known once the sections have been laid out.
+fn emit_framing_header(total_len: Word, wlog2: Word, alog2: Word, flog2: Word) -> Word {
+    put_u32(fh_off_magic(), magic_word());
+    put_u16(fh_off_version(), bytecode_version());
+    put_u16(fh_off_header_length(), header_bytes_len());
+    put_u32(fh_off_total_length(), total_len);
+    wire.bytes[fh_off_word_bits_log2()] = (wlog2 band 255) as Byte;
+    wire.bytes[fh_off_addr_bits_log2()] = (alog2 band 255) as Byte;
+    wire.bytes[fh_off_float_bits_log2()] = (flog2 band 255) as Byte;
+    wire.bytes[fh_off_flags()] = 0 as Byte;
+    for i in 0..48 limit 48 {
+        wire.bytes[16 + i] = 0 as Byte;
+    }
+    header_bytes_len()
+}
+
+// Set one section's offset and length. Separate from the header emitter
+// because the two are known at different times, and folding them together
+// would force the caller to compute a layout before it has one.
+fn set_section(off_field: Word, len_field: Word, offset: Word, length: Word) -> Word {
+    put_u32(off_field, offset);
+    put_u32(len_field, length);
+    offset + length
+}
+
+// Append the four-byte CRC trailer over `[0, len)` and return the new total.
+fn seal_artifact(len: Word) -> Word {
+    put_u32(len, crc_range(0, len));
+    len + 4
+}
+
+// 1 when the whole artifact, trailer included, checksums to the residue.
+fn artifact_intact(total_len: Word) -> Word {
+    if crc_range(0, total_len) == crc32_residue() { 1 } else { 0 }
+}
+
 // THE DISPATCH IS SPLIT INTO CHAINS, AND THE REASON IS A HARD LANGUAGE LIMIT.
 //
 // The parser rejects an expression nested more than 24 deep, with
@@ -1529,7 +1644,23 @@ fn dispatch_pool(cmd: Word) -> Word {
     if cmd == 100 { pool_u16(wire.warg, wire.warg2) } else {
     if cmd == 101 { pool_u8_field(wire.warg) } else {
     if cmd == 102 { pool_u24(wire.warg, wire.warg2) } else {
-    0 - 99 }}}}}}}}}}}
+    0 - 91 }}}}}}}}}}}
+}
+
+fn dispatch_frame(cmd: Word) -> Word {
+    if cmd == 103 { fh_u32(wire.warg) } else {
+    if cmd == 104 { fh_u16(wire.warg) } else {
+    if cmd == 105 { fh_u8(wire.warg) } else {
+    if cmd == 106 { fh_magic_ok() } else {
+    if cmd == 107 { fh_version_ok() } else {
+    if cmd == 108 { fh_flag_set(wire.warg) } else {
+    if cmd == 109 { emit_framing_header(wire.warg, wire.warg2, wire.warg3, wire.warg4) } else {
+    if cmd == 110 { set_section(wire.warg, wire.warg2, wire.warg3, wire.warg4) } else {
+    if cmd == 111 { seal_artifact(wire.warg) } else {
+    if cmd == 112 { artifact_intact(wire.warg) } else {
+    if cmd == 113 { magic_word() } else {
+    if cmd == 114 { crc32_residue() } else {
+    0 - 99 }}}}}}}}}}}}
 }
 
 fn main(cmd: Word) -> Word {
@@ -1539,5 +1670,6 @@ fn main(cmd: Word) -> Word {
     if cmd < 55 { dispatch_runs(cmd) } else {
     if cmd < 69 { dispatch_data(cmd) } else {
     if cmd < 84 { dispatch_module(cmd) } else {
-    if cmd < 92 { dispatch_ops(cmd) } else { dispatch_pool(cmd) } } } } } } }
+    if cmd < 92 { dispatch_ops(cmd) } else {
+    if cmd < 103 { dispatch_pool(cmd) } else { dispatch_frame(cmd) } } } } } } } }
 }

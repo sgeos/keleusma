@@ -3549,3 +3549,314 @@ fn a_single_bit_flip_in_any_payload_byte_is_detected() {
         }
     }
 }
+
+// =========================================================================
+// SLICE 7 — the framing header and the CRC trailer
+// =========================================================================
+
+use keleusma::bytecode::{BYTECODE_MAGIC, BYTECODE_VERSION};
+
+const CMD_FH_U32: i64 = 103;
+const CMD_FH_U16: i64 = 104;
+const CMD_FH_U8: i64 = 105;
+const CMD_FH_MAGIC_OK: i64 = 106;
+const CMD_FH_VERSION_OK: i64 = 107;
+const CMD_FH_FLAG_SET: i64 = 108;
+const CMD_EMIT_FRAMING: i64 = 109;
+const CMD_SET_SECTION: i64 = 110;
+const CMD_SEAL: i64 = 111;
+const CMD_INTACT: i64 = 112;
+const CMD_MAGIC_WORD: i64 = 113;
+const CMD_CRC_RESIDUE: i64 = 114;
+
+#[test]
+fn the_framing_constants_match_the_runtime() {
+    assert_eq!(kel_const("header_bytes_len"), 64);
+    assert_eq!(kel_const("bytecode_version"), i64::from(BYTECODE_VERSION));
+    // The magic as a little-endian u32 must equal the bytes the runtime writes.
+    assert_eq!(
+        kel_const("magic_word"),
+        i64::from(u32::from_le_bytes(BYTECODE_MAGIC)),
+        "magic word"
+    );
+}
+
+#[test]
+fn the_crc_residue_is_derived_not_asserted() {
+    // `WIRE_FORMAT_CRC32_RESIDUE` is private, so restating it here would only
+    // prove the test agrees with itself. Derive it instead: appending a
+    // message's own CRC makes the checksum of the extended message a constant,
+    // and that constant must be what wire.kel uses.
+    let mut derived = None;
+    for msg in [&b""[..], b"a", b"hello world", &[0xFFu8; 37][..]] {
+        let mut buf = msg.to_vec();
+        buf.extend_from_slice(&keleusma_wire::crc32(msg).to_le_bytes());
+        let residue = keleusma_wire::crc32(&buf);
+        match derived {
+            None => derived = Some(residue),
+            Some(prev) => assert_eq!(prev, residue, "the residue is not constant across messages"),
+        }
+    }
+    let derived = derived.expect("at least one message");
+    assert_eq!(
+        kel_const("crc32_residue"),
+        i64::from(derived),
+        "wire.kel's residue disagrees with the derived one"
+    );
+
+    // And Keleusma reports the same constant.
+    let mut vm = vm_for(WIRE_KEL);
+    let (got, _) =
+        run_cmd_args(&mut vm, CMD_CRC_RESIDUE, 1, &[], &[], [0, 0, 0, 0, 0], 0).expect("run");
+    assert_eq!(got, i64::from(derived));
+}
+
+#[test]
+fn the_emitted_framing_header_matches_the_runtimes_field_layout() {
+    // Compare against a header this test lays out independently from the
+    // documented offsets, rather than against wire.kel's own constants.
+    let mut vm = vm_for(WIRE_KEL);
+    let (written, got) = run_cmd_args(
+        &mut vm,
+        CMD_EMIT_FRAMING,
+        1,
+        &[],
+        &[],
+        [4096, 6, 6, 6, 0],
+        64,
+    )
+    .expect("run");
+    assert_eq!(written, 64, "the framing header is sixty-four bytes");
+
+    let mut want = vec![0u8; 64];
+    want[0..4].copy_from_slice(&BYTECODE_MAGIC);
+    want[4..6].copy_from_slice(&BYTECODE_VERSION.to_le_bytes());
+    want[6..8].copy_from_slice(&64u16.to_le_bytes());
+    want[8..12].copy_from_slice(&4096u32.to_le_bytes());
+    want[12] = 6;
+    want[13] = 6;
+    want[14] = 6;
+    want[15] = 0;
+    assert_eq!(got, want, "framing header bytes differ");
+}
+
+#[test]
+fn the_header_reader_recognises_magic_version_and_flags() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (_, img) = run_cmd_args(
+        &mut vm,
+        CMD_EMIT_FRAMING,
+        1,
+        &[],
+        &[],
+        [4096, 6, 6, 6, 0],
+        64,
+    )
+    .expect("run");
+
+    for (cmd, want, what) in [
+        (CMD_FH_MAGIC_OK, 1, "magic"),
+        (CMD_FH_VERSION_OK, 1, "version"),
+    ] {
+        let (got, _) = run_cmd_args(&mut vm, cmd, 1, &img, &[], [0, 0, 0, 0, 0], 0).expect("run");
+        assert_eq!(got, want, "{what} should be accepted");
+    }
+
+    // must-fire: a wrong magic and a wrong version are both rejected, and the
+    // version check is what makes a version-1 artifact reject cleanly rather
+    // than be misread under version-2 field positions.
+    let mut bad_magic = img.clone();
+    bad_magic[0] ^= 0xFF;
+    let (got, _) = run_cmd_args(
+        &mut vm,
+        CMD_FH_MAGIC_OK,
+        1,
+        &bad_magic,
+        &[],
+        [0, 0, 0, 0, 0],
+        0,
+    )
+    .expect("run");
+    assert_eq!(got, 0, "a corrupted magic must be rejected");
+
+    let mut v1 = img.clone();
+    v1[4..6].copy_from_slice(&1u16.to_le_bytes());
+    let (got, _) =
+        run_cmd_args(&mut vm, CMD_FH_VERSION_OK, 1, &v1, &[], [0, 0, 0, 0, 0], 0).expect("run");
+    assert_eq!(
+        got, 0,
+        "a version-1 artifact must be rejected on the version check"
+    );
+
+    // Flags read individually.
+    for (bit, mask) in [(0u8, 1i64), (1, 2), (2, 4)] {
+        let mut f = img.clone();
+        f[15] = 1 << bit;
+        let (got, _) =
+            run_cmd_args(&mut vm, CMD_FH_FLAG_SET, 1, &f, &[], [mask, 0, 0, 0, 0], 0).expect("run");
+        assert_eq!(got, 1, "flag bit {bit} should read as set");
+        let (got, _) = run_cmd_args(
+            &mut vm,
+            CMD_FH_FLAG_SET,
+            1,
+            &img,
+            &[],
+            [mask, 0, 0, 0, 0],
+            0,
+        )
+        .expect("run");
+        assert_eq!(
+            got, 0,
+            "flag bit {bit} should read as clear on a zero-flags header"
+        );
+    }
+}
+
+#[test]
+fn section_offsets_and_lengths_round_trip_through_the_header() {
+    let mut vm = vm_for(WIRE_KEL);
+    // Emit the header, then place three sections, reading the image back in
+    // between because each call gets a fresh shared buffer.
+    let (_, img) = run_cmd_args(
+        &mut vm,
+        CMD_EMIT_FRAMING,
+        1,
+        &[],
+        &[],
+        [4096, 6, 6, 6, 0],
+        64,
+    )
+    .expect("run");
+    let (end, img2) = run_cmd_args(
+        &mut vm,
+        CMD_SET_SECTION,
+        1,
+        &img,
+        &[],
+        [32, 36, 64, 120, 0],
+        64,
+    )
+    .expect("run");
+    assert_eq!(end, 184, "the section ends where offset plus length says");
+
+    for (off, want) in [(32usize, 64u32), (36, 120)] {
+        let (got, _) = run_cmd_args(
+            &mut vm,
+            CMD_FH_U32,
+            1,
+            &img2,
+            &[],
+            [off as i64, 0, 0, 0, 0],
+            0,
+        )
+        .expect("run");
+        assert_eq!(got, i64::from(want), "section field at {off}");
+    }
+}
+
+#[test]
+fn a_sealed_artifact_checksums_to_the_residue_and_damage_breaks_it() {
+    // The trailer is validated by running CRC over the WHOLE artifact and
+    // comparing to a fixed residue, rather than by recomputing the body's
+    // checksum. Both directions are checked.
+    let mut vm = vm_for(WIRE_KEL);
+    let body: Vec<u8> = (0..60u8).collect();
+
+    let (total, sealed) = run_cmd_args(
+        &mut vm,
+        CMD_SEAL,
+        1,
+        &body,
+        &[],
+        [body.len() as i64, 0, 0, 0, 0],
+        64,
+    )
+    .expect("seal");
+    assert_eq!(total, body.len() as i64 + 4, "sealing appends four bytes");
+
+    // The reference agrees the trailer is right.
+    assert_eq!(
+        keleusma_wire::crc32(&sealed[..body.len()]).to_le_bytes(),
+        sealed[body.len()..body.len() + 4],
+        "the appended trailer is not the body's CRC"
+    );
+
+    // must-not-fire: intact.
+    let (ok, _) =
+        run_cmd_args(&mut vm, CMD_INTACT, 1, &sealed, &[], [total, 0, 0, 0, 0], 0).expect("run");
+    assert_eq!(ok, 1, "a freshly sealed artifact must verify");
+
+    // must-fire: every single-bit flip in the body AND in the trailer breaks it.
+    for byte in 0..(body.len() + 4) {
+        for bit in [0u32, 3, 7] {
+            let mut bad = sealed.clone();
+            bad[byte] ^= 1 << bit;
+            let (ok, _) = run_cmd_args(&mut vm, CMD_INTACT, 1, &bad, &[], [total, 0, 0, 0, 0], 0)
+                .expect("run");
+            assert_eq!(ok, 0, "flip of byte {byte} bit {bit} went undetected");
+        }
+    }
+}
+
+#[test]
+fn the_narrow_header_readers_and_the_magic_word_agree_with_the_bytes() {
+    // Covers the u16 and u8 header readers and the magic accessor. Added
+    // because they were otherwise dead: the framing tests reached every field
+    // through `fh_u32`, so the narrow readers had no coverage at all and the
+    // compiler said so.
+    let mut vm = vm_for(WIRE_KEL);
+    let (_, img) = run_cmd_args(
+        &mut vm,
+        CMD_EMIT_FRAMING,
+        1,
+        &[],
+        &[],
+        [4096, 6, 5, 4, 0],
+        64,
+    )
+    .expect("run");
+
+    for (off, want, what) in [
+        (4usize, u32::from(BYTECODE_VERSION), "version"),
+        (6, 64u32, "header length"),
+    ] {
+        let (got, _) = run_cmd_args(
+            &mut vm,
+            CMD_FH_U16,
+            1,
+            &img,
+            &[],
+            [off as i64, 0, 0, 0, 0],
+            0,
+        )
+        .expect("run");
+        assert_eq!(got, i64::from(want), "u16 {what}");
+    }
+    for (off, want, what) in [
+        (12usize, 6u8, "word bits log2"),
+        (13, 5, "addr bits log2"),
+        (14, 4, "float bits log2"),
+        (15, 0, "flags"),
+    ] {
+        let (got, _) = run_cmd_args(
+            &mut vm,
+            CMD_FH_U8,
+            1,
+            &img,
+            &[],
+            [off as i64, 0, 0, 0, 0],
+            0,
+        )
+        .expect("run");
+        assert_eq!(got, i64::from(want), "u8 {what}");
+    }
+    // The three width fields were given DIFFERENT values above, so a reader
+    // that confused their offsets shows up rather than passing on equal ones.
+    let (magic, _) =
+        run_cmd_args(&mut vm, CMD_MAGIC_WORD, 1, &[], &[], [0, 0, 0, 0, 0], 0).expect("run");
+    assert_eq!(
+        magic,
+        i64::from(u32::from_le_bytes(BYTECODE_MAGIC)),
+        "magic word"
+    );
+}
