@@ -1500,8 +1500,11 @@ continuing to cite it. `src/vm.rs:5229` does five things:
 1. **Clears locals `0..local_count` to `Unit`.**
 2. **Truncates the operand stack** to `reset_base + local_count`, discarding
    everything above the locals.
-3. **Resets both arena bump pointers** and advances the epoch, so every
-   outstanding handle goes `Stale`.
+3. **Resets the TOP arena region only** and advances the epoch, so an
+   outstanding handle into the ephemeral region goes `Stale`. (This bullet said
+   "both bump pointers" for about an hour, copied verbatim from an inaccurate
+   comment in the VM. See the correction below — the difference decides whether
+   private data survives, so it is not cosmetic.)
 4. **Clears the ephemeral opaque registry**, dropping host refcounts.
 5. **Sets the instruction pointer to just after the `Stream` instruction** — not
    to the top of the chunk.
@@ -1682,3 +1685,66 @@ VM do that the lowering never had a reason to think about".** Frame
 initialisation was one. Candidates not yet audited under that lens: what `Reset`
 does to the operand stack, what `Return` truncates, and what the arena epoch
 bump invalidates.
+
+## `Op::Reset` resets ONE arena region, not two — and I propagated the error
+
+Auditing under the "what does the VM do that the lowering never thought about"
+lens, the next candidate was the arena epoch bump. It produced a correction to
+this document, a clean result that looks alarming, and one defect on the other
+branch's surface.
+
+### The correction, which is mine
+
+`Op::Reset` carries the comment *"Reset both arena bump pointers (R32)"*
+(`src/vm.rs:5244`). It calls `reset_arena_internal`, which calls
+**`reset_top_unchecked()`** — the top region only. That function's own SAFETY
+note says so in terms: *"The bottom-region operand stack and frames are
+unaffected."* Resetting both ends is `full_reset_arena_internal`, used by error
+recovery and hot swap, and `Op::Reset` does not call it.
+
+**I copied the wrong comment into the P2 section above and it stood for about an
+hour.** The mechanism verification was still sound, because P2 asks what
+SURVIVES and resetting fewer regions can only preserve more — but the reasoning
+was wrong in a way that mattered, since "both bump pointers" would have implied
+the persistent region is reclaimed, and **private composite data lives there and
+must survive `RESET`**. Had the lowering been built to that belief it would have
+re-initialised private data every iteration, and the differential oracle would
+have caught it only on a test that resets and then reads private data back.
+
+The lesson is narrower than "read the code": I *did* read the code. I read the
+comment attached to the call rather than the function the call reaches. **A
+comment is not a citation.**
+
+### Confirmed for the lowering
+
+Private data survives `Op::Reset`, which is what `native_codegen` already
+assumes: the private region is a host-supplied pointer that native code writes
+through directly and nothing in the lowering clears between iterations. The
+behaviours agree. This was assumed rather than verified until now.
+
+### Clean, though it looks alarming
+
+`Op::Reset` discards the reset's result with `let _ =`. That is safe, and the
+reason is worth recording so the next reader does not re-open it:
+
+- `reset_top_unchecked` is **fail-closed and atomic**. It computes
+  `epoch.checked_add(1)` and returns `Err(EpochSaturated)` **before** it touches
+  `top_top`. A saturated epoch therefore leaves the arena entirely unchanged. It
+  cannot reclaim storage while stale handles still believe they are live, which
+  is the failure that would actually matter.
+- The epoch is `u64`. Saturation requires 2^64 resets and is not physically
+  reachable; the arena also exposes `epoch_remaining()` for hosts that want to
+  schedule a graceful restart.
+
+So the discarded error is unreachable, and if it were reachable it would degrade
+to "the top region is never reclaimed", surfacing as an out-of-arena error rather
+than as memory corruption. **No finding.**
+
+### FOR THE `v0.2.3` SESSION: a stale comment on your surface
+
+`src/vm.rs:5244` says `Op::Reset` resets "both arena bump pointers". It resets
+the top only. This is the same defect class as the `GRAMMAR.md` line 747 push
+order already reported and the `Op::CheckedAdd` doc comment already fixed: the
+code is right and its description is not. It is worth fixing rather than
+ignoring, because this comment cost a reader on another branch an hour and a
+wrong conclusion about whether private data survives.
