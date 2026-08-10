@@ -13,6 +13,49 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE WIRING PREP SIZED THE EMITTER FROM THE WRONG QUANTITY, AND READING THE ENCODER IS WHAT SHOWED
+IT (2026-08-09).** The prep measured the largest single region, 6,609,960 bytes, and concluded that
+an 8 MB working buffer covers every stage "with roughly 10 MB left for the emitter's inputs". That
+reasoning treats the largest region as **transient** — allocate it, fill it, hand it to the host,
+reuse it. Two regions are not transient.
+
+`SchemaBuilder::finish` writes `STRING_POOL` and `NAMES` **last**, after every other region
+(`src/wire_schema.rs:833-837`). Interning runs throughout: chunks intern names, struct templates
+intern a type name and every field name (`:787-791`), and `flatten` interns while walking the
+constant forest. So neither region's content is final until every other contributor has run, which
+makes them **accumulators held across the whole emission**. Measured, they are 9,776,392 bytes for
+`lexer`, **58.3% of the ceiling**, and the real remainder is about 7.0 MB rather than 10 MB.
+
+**Two things the same measurement surfaced, neither anticipated.** Four regions carry **99.96%** of
+`lexer`'s auxiliary body, so nothing outside them is worth optimising. And three of those four —
+`NAMES` at 395,804 records, `DATA_SLOTS` at 395,784, `SHARED_LAYOUT` at 395,778 — are per-slot
+tables of the same count at an 8-byte stride. The per-array-element slot explosion already recorded
+is therefore paid **three times over in parallel tables**, plus the pool of names they index. That
+sharpens the operator-held question about per-element slots considerably: it is not one table's
+worth of waste, it is three plus a pool.
+
+**One prep constraint turned out softer than stated, and saying so matters as much as the
+correction.** "Compute every region's length, write the leading directory" assumed the directory
+must precede the regions it describes. The host owns the output buffer and can patch the directory
+afterwards, so lengths need not be known in advance. The accumulator finding is independent of the
+directory strategy and stands either way. Two adjacent claims, one wrong in the strict direction and
+one wrong in the lax one, from the same unexamined mental model of how the encoder runs.
+
+**What I did NOT establish, stated because the number is quotable and would travel.** Peak residency
+of about 12.9 MB, 77% of the ceiling, is a projection of the Rust encoder's structure onto a
+Keleusma emitter that does not exist. No emitter has been run against a real stage. It is recorded
+in the plan document as an estimate to be confirmed by the first driver, not as a measurement. The
+dedup index is a further unquantified cost: `Names::intern` is backed by a `BTreeMap`, and a linear
+scan is known to be catastrophic here rather than merely slow — the corpus took **782 seconds**
+before that interner was repaired, against about two and a half seconds after.
+
+**The method note.** This cost one throwaway test and about ten minutes, and it moved the design
+target before any emitter code existed. The prep it corrects was itself a probe-before-planning
+step, done carefully, by me, one session earlier. **A probe establishes what it measured and not
+the question it was aimed at**: measuring region sizes answers "how big is a region", and the
+design needed "what must be resident at once". Both prep and correction were measurements; only the
+second asked the binding question.
+
 **AN AUDIT FINDING REJECTED BY EXECUTION, AND IT WOULD HAVE PUT A FALSE STATEMENT INTO A NORMATIVE
 SPEC (2026-08-09).** The finding: `docs/spec/RUNTIME_FAULTS.md` names the `VmError` variant for
 eight of the faults it specifies but never names `CheckedArithNoArm`, whose doc comment reads "No

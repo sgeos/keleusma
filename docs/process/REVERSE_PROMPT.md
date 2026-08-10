@@ -51,17 +51,35 @@ comparable blockers; the accurate statement is that the remaining work is integr
 
 ## Git state — READ THIS BEFORE RESUMING
 
-Two branches stack, and one gate is in flight.
+**Everything is merged. Nothing of mine is in flight.** Both wire-format branches landed; the
+stacked-branch table that stood here described a state that ended when they merged.
 
-| Ref | Commits | State |
-|---|---|---|
-| `v0.2.3` | — | 1 unpushed (the gate banner) |
-| `feat/selfhost-wire-directory` | 10 over `v0.2.3` | **IN THE GATE**, tip `06dabf0` |
-| `feat/selfhost-wire-data` | 8 over that | slices 5d–7, Tier-1 green, **not gated** |
+`v0.2.3` is the working line, in sync with origin, tree clean. The stale worktree
+`keleusma-worktrees/wire-directory` still sits on the merged `feat/selfhost-wire-data`; harmless,
+and **nothing under `keleusma-worktrees/` should be removed without checking**, because the other
+session's tree lives there too.
 
-The gate is `scripts/gate-in-worktree.sh 06dabf0`. When it reports green: merge that branch,
-then rebase `feat/selfhost-wire-data` onto `v0.2.3` and gate it before merging. **Do not merge
-the second branch on the first branch's gate** — it contains eight increments the gate never saw.
+**A gate is running, and it is not mine.** The `v0.3.0` session is gating `9ac2be3`, rebased onto
+my exact tip `78a5bc1`. So I cannot start a gate, and no timing measurement is trustworthy until
+it finishes. Development is unaffected, which is the whole point of the detached-worktree gate.
+
+## The wiring increment: the prep's sizing was wrong, and is corrected
+
+Probing before planning caught it, as it has in nearly every increment of this arc.
+
+The prep sized the emitter's buffer from **the largest single region**, 6,609,960 bytes. That is
+the wrong quantity. `SchemaBuilder::finish` writes `STRING_POOL` and `NAMES` **last**, after every
+other contributor has interned into them, so those two are **accumulators resident across the whole
+emission**, not buffers reused per region. For `lexer` they total **9,776,392 bytes, 58.3% of the
+ceiling**, leaving about **7.0 MB** rather than the 10 MB recorded.
+
+Also measured: four regions carry **99.96%** of `lexer`'s auxiliary body, and three of those four
+are per-slot tables of identical record count at an 8-byte stride. The per-array-element slot
+explosion therefore appears three times over, plus the pool of names they index.
+
+The prep's conclusion survives — staged emission is viable, whole-artifact is not — but the design
+target moved. Full numbers and the unverified-projection caveat are in
+[`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md).
 
 ## Method rules this stretch paid for
 
@@ -82,14 +100,20 @@ the second branch on the first branch's gate** — it contains eight increments 
   `--no-default-features` caught a stray `examples/` file. The matrix is finding defects at a
   steady rate.
 - **MSRV 1.85 declared, never verified.**
-- **Two audit findings are recorded but NOT applied**, both in the session scratchpad: naming
-  `CheckedArithNoArm` in `RUNTIME_FAULTS.md`, which needs an execution check first; and the
-  stage-directory corpus guard, where `tests/wire_corpus.rs` enumerates ten `.kel` files by name
-  while the directory holds twelve and nothing reads the directory.
+- **Per-element data slots.** One slot and one interned name per array element is why a 21 KB
+  source produces a 16 MB artifact, and the measurement above shows the cost is paid three times
+  over in parallel tables. A format and data-layout question with WCMU implications, not a loop
+  decision.
+
+~~Two audit findings recorded but not applied.~~ **Both closed.** The `CheckedArithNoArm` finding
+was **refuted by execution** — a checked construct with only an `ok` arm raises `DivisionByZero`,
+so the proposed wording would have put a false statement into a normative spec. The corpus
+enumeration hole is closed by a mechanism, and both directions of the guard were shown to fire.
 
 ## Parallel development
 
-`v0.3.0` carries native code generation. Their gate went green; mine is running. The mailbox is
+`v0.3.0` carries native code generation. **Their gate is running on `9ac2be3` and mine is not**;
+they rebased onto my exact tip, so their run validates my step-6 merge too. The mailbox is
 [`handoffs/v0.2.3.md`](./handoffs/v0.2.3.md), theirs is
 `git show origin/v0.3.0:docs/process/handoffs/v0.3.0.md`. **A gate no longer makes the main tree
 look busy** — it runs in a detached worktree, so check `pgrep -f release-gate.sh` or the banner.

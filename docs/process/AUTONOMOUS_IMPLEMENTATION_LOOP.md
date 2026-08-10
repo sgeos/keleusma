@@ -26,9 +26,15 @@ crossed without interruption.
 
 The frontier is the self-hosted-subset boundary, pinned by the
 `self_hosted_construct_support_boundary` characterization test in
-`tests/selfhost_codegen.rs` (**67 Ok / 2 Gap / 1 RefRejects** as of 2026-07-31 — recount with a
-grep rather than trusting this number; it was found stale by 2 on 2026-07-30). A successful
-increment moves a Gap to Ok or adds a new `SOk` case.
+`tests/selfhost_codegen.rs` (**79 Ok / 4 Gap / 1 RefRejects**, 84 cases, recounted 2026-08-09 —
+recount with a grep rather than trusting this number; it has now been found stale twice, by 2 on
+2026-07-30 and by 12 on 2026-08-09). A successful increment moves a Gap to Ok or adds a new `SOk`
+case.
+
+**Recount it with the case table's line range, not a whole-file grep.** The file contains the words
+`Gap` and `RefRejects` in prose, and one comment inside the table itself reads "This is a Gap by
+design", so a naive count over the file reports one Gap too many. The table runs from the
+`let cases:` binding to its closing `];`.
 
 **A boundary `Gap` entry is not the only source of work, and the count is a lagging indicator.**
 Most of the real queue is constructs that are simply absent from the case list. The measured
