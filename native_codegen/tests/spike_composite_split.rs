@@ -309,6 +309,125 @@ fn spike_report_composite_split() {
     );
 }
 
+/// PROVENANCE PROBE: where does a read-only chunk's composite body come from?
+///
+/// The split above says 5 chunks are blocked by reads alone and therefore need
+/// no shape recovery. That is a claim about the READ, and it is not yet a claim
+/// that the chunk lowers, because a read needs a body to read FROM. This probe
+/// names the chunks and dumps their op streams so the source of each body is
+/// established by inspection rather than assumed.
+///
+/// The candidate sources and what each would cost:
+///
+/// - a `GetData` shared composite slot — currently REFUSED by
+///   `resolve_shared_scalar` as "Workstream C", so it is not free;
+/// - a parameter or local — needs a calling convention for passing a composite,
+///   which is Workstream D and a provisional ABI decision;
+/// - a `Call` result — same;
+/// - a construction earlier in the same chunk — impossible here by definition,
+///   since these chunks contain no `NewComposite`.
+///
+/// If every read-only chunk draws its body from a refused or undecided source,
+/// then "reachable with no shape recovery" is true and USELESS, and the 5 is not
+/// an available increment. Printing rather than asserting, because the question
+/// is what the sources ARE.
+#[test]
+fn spike_report_read_only_chunk_provenance() {
+    println!("\n================ PROVENANCE of the reads-only chunks");
+    let mut found = 0usize;
+    for path in &corpus_sources() {
+        let Ok(src) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Ok(toks) = tokenize(&src) else { continue };
+        let Ok(ast) = parse(&toks) else { continue };
+        let Ok(m) = compile(&ast) else { continue };
+        let wb = word_bytes_of(&m);
+        for chunk in &m.chunks {
+            let (v, _) = classify_ops(&chunk.ops, wb);
+            if v != Verdict::ReadsOnly {
+                continue;
+            }
+            found += 1;
+            println!(
+                "\n  --- {} :: chunk `{}` ({} ops, {} params)",
+                path.display(),
+                chunk.name,
+                chunk.ops.len(),
+                chunk.param_count
+            );
+            for (i, op) in chunk.ops.iter().enumerate() {
+                let mark = if is_lowered(op) {
+                    " "
+                } else if is_composite(op) {
+                    "C"
+                } else {
+                    "?"
+                };
+                println!("   {mark} {i:3}  {op:?}");
+            }
+        }
+    }
+    println!("\n  reads-only chunks found: {found}");
+    println!("================\n");
+}
+
+/// THE CONJUNCTION CHECK: is a reads-only chunk worth anything on its own?
+///
+/// `lower_module` refuses a whole module on the first opcode it cannot handle,
+/// so a lowerable chunk inside an unlowerable module buys nothing a consumer can
+/// see. The provenance probe shows every reads-only chunk draws its body from a
+/// parameter or a `Call` result — never from thin air. Something therefore had
+/// to CONSTRUCT that body, and construction is the blocked half of the split.
+///
+/// This asks the question directly: of the modules containing a reads-only
+/// chunk, how many contain no `NewComposite` anywhere? Those, and only those,
+/// are modules the read half could free on its own.
+#[test]
+fn spike_report_reads_only_conjunction() {
+    let mut modules_with_reads_only = 0usize;
+    let mut also_construct = 0usize;
+    let mut free_standing: Vec<String> = Vec::new();
+
+    for path in &corpus_sources() {
+        let Ok(src) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Ok(toks) = tokenize(&src) else { continue };
+        let Ok(ast) = parse(&toks) else { continue };
+        let Ok(m) = compile(&ast) else { continue };
+        let wb = word_bytes_of(&m);
+
+        let has_reads_only = m
+            .chunks
+            .iter()
+            .any(|c| classify_ops(&c.ops, wb).0 == Verdict::ReadsOnly);
+        if !has_reads_only {
+            continue;
+        }
+        modules_with_reads_only += 1;
+
+        let constructs_somewhere = m.chunks.iter().any(|c| c.ops.iter().any(is_composite_ctor));
+        if constructs_somewhere {
+            also_construct += 1;
+        } else {
+            free_standing.push(path.display().to_string());
+        }
+    }
+
+    println!("\n================ CONJUNCTION: do reads alone free a module?");
+    println!("  modules holding a reads-only chunk : {modules_with_reads_only}");
+    println!("  ... which ALSO construct somewhere : {also_construct}");
+    println!(
+        "  ... freed by the read half alone   : {}",
+        free_standing.len()
+    );
+    for p in &free_standing {
+        println!("     {p}");
+    }
+    println!("================\n");
+}
+
 /// MUST-NOT-FIRE control for the classifier.
 ///
 /// A classifier that answered `ReadsOnly` unconditionally would produce the
