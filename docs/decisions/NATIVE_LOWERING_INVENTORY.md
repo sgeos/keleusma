@@ -28,13 +28,13 @@ deserves the same scepticism as any other.**
 
 ## Status
 
-**Lowered (41).** `GetLocal`, `SetLocal`, `PopN`, `Dup`, `Const` (scalars),
+**Lowered (45).** `GetLocal`, `SetLocal`, `PopN`, `Dup`, `Const` (scalars),
 `PushImmediate`, `CheckedAdd`, `CheckedSub`, `CheckedNeg`, `CheckedMul(0)`,
 `Div`, `Mod`, `CheckedDiv(0)`, `CheckedMod`, `CmpEq`, `CmpNe`, `CmpLt`, `CmpGt`,
 `CmpLe`, `CmpGe`, `Not`, `BitAnd`, `BitOr`, `BitXor`, `Shl`, `Shr`, `If`, `Else`,
-`EndIf`, `Loop`, `EndLoop`, `Break`, `BreakIf`, `Return`, `Trap`, `Call`, `WordToByte`, `ByteToWord`, `BoundsCheck`, `GetData` and `SetData` (shared scalar slots only).
+`EndIf`, `Loop`, `EndLoop`, `Break`, `BreakIf`, `Return`, `Trap`, `Call`, `WordToByte`, `ByteToWord`, `BoundsCheck`, `GetData`, `SetData`, `GetDataIndexed` and `SetDataIndexed` (shared scalar slots, and private slots on a flat native layout).
 
-**Remaining (25),** grouped below by what they actually cost.
+**Remaining (21),** grouped below by what they actually cost.
 
 Three entries in that list are **partial**, and the count treats them as lowered
 because the unsupported case is refused rather than mislowered: `Const` handles
