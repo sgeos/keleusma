@@ -3011,3 +3011,42 @@ Nothing further can be prepared without the machine. The remaining work is to
 gate, run the three prepared spikes, and act on what they report — and the
 measurements are deliberately front-loaded, because three of the six queued items
 are "do X only if the count says X is worth doing".
+
+## CORRECTION to "prep is complete": the mislabel fix was queued and never written
+
+The entry above declared prep complete. **It was not.** The Workstream C
+mislabelling was recorded as "queued with the other fixes" and no patch existed
+for it — a queued item counted as prepared because it had been *decided*, which
+is precisely the distinction that entry was drawing.
+
+Now written and dry-verified: six sites, all six anchors unique.
+
+| Site | Kind |
+|---|---|
+| `src/lib.rs:463` shared composite body | **Shipped `LowerError` string** |
+| `src/lib.rs:481` Text slot | **Shipped `LowerError` string** |
+| `src/lib.rs:521` shared composite array | **Shipped `LowerError` string** |
+| `src/lib.rs:1099` composite constants | Comment |
+| `tests/spike_corpus_coverage.rs:79` | Bucket label in a report |
+| `tests/differential.rs:160` | Comment |
+
+Two choices in the replacement worth stating rather than leaving to be inferred:
+
+- It reads **"Workstream A (full pass)"**, not bare "A". A lone letter is exactly
+  what made the original error easy to commit and hard to spot; spelling out the
+  phase costs nothing and removes the ambiguity that caused this.
+- The two comment sites gain an explicit **"NOT Workstream C, which is
+  arena-resident coroutine frames"**. A correction that only removes the wrong
+  label invites the same mistake again, since the letter is adjacent and the
+  distinction is not obvious from the surrounding code.
+
+No behavioural change: three diagnostic strings, two comments, one report label.
+
+### Why this kept slipping
+
+It was recorded three times as queued and never converted into a patch, while
+smaller items were. The reason is that it looked like tidying, and tidying loses
+to anything that looks like a defect. **But four of the six sites are strings a
+consumer reads when the lowering refuses their program**, and they currently
+direct that consumer to the wrong workstream. Misrouting a user is a defect that
+happens to be spelled like a typo.
