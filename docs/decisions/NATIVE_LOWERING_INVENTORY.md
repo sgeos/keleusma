@@ -1298,9 +1298,50 @@ lowering already handles, and their widths are baked (`GetField`), fixed by the
 op (`CheckedAdd` yields `Int`), or seeded from the signature table. The
 `verify_typed.rs` change is one option, not the prerequisite.
 
-### Consequence for ordering
+### RETRACTED within the hour: the read half frees nothing on its own
 
-The 5 read-only chunks are the smallest genuinely-unblocked increment now
-available, and they need no new infrastructure. The 22 construction chunks need
-a local shape stack, which is a `native_codegen`-only change. Neither is gated on
-the other line, and neither needs an opcode or a `BYTECODE_VERSION` bump.
+The first version of this section closed by calling the 5 read-only chunks "the
+smallest genuinely-unblocked increment now available". **That is false at the
+granularity that matters, and it is the same error this document already records
+against itself** — quoting a chunk-level number when `lower_module` refuses a
+whole module on the first opcode it cannot handle. I repeated it one commit after
+writing the correction. Recording the repeat rather than quietly fixing it,
+because a mistake that recurs immediately after being documented is evidence
+about the documentation, not about the mistake.
+
+Two probes settled it.
+
+**Provenance** (`spike_report_read_only_chunk_provenance`). A read needs a body
+to read from, and no reads-only chunk conjures one. Measured sources:
+
+| Chunk | Body arrives via |
+|---|---|
+| `02_struct_field.kel :: manhattan_norm` | parameter (1 param) |
+| `03_enum_match.kel :: area_estimate` | parameter (1 param) |
+| `09_big_numbers.kel :: main` | `Call(2, 2)` result, then `GetTupleField` |
+
+Both sources are **intra-module**: the callee is another chunk in the same
+module, lowered by this backend, so the calling convention for a composite is
+this branch's own decision and not a host-boundary question. That part is better
+news than the resume prompt implies, which listed composites under a workstream
+gate.
+
+**The conjunction** (`spike_report_reads_only_conjunction`). Of the 5 modules
+containing a reads-only chunk, **5 also construct a composite somewhere, and 0
+are freed by the read half alone.** Which follows directly from provenance: a
+body that arrives by parameter or call result was built by something, and
+building is the blocked half.
+
+### Consequence for ordering, restated
+
+**Construction is the load-bearing half; reads are free but worthless alone.**
+The increment is therefore per-value width recovery, not the read ops, and the
+reads come along at nearly no additional cost once a shape stack exists. The
+shape stack is a `native_codegen`-only change seeded from the already-`pub`
+`module.signatures`, needs no opcode and no `BYTECODE_VERSION` bump, and is not
+gated on the other line.
+
+The general rule this keeps re-teaching, now stated where the next reader will
+hit it: **a chunk-level count is not an increment.** Before calling any
+population "unblocked", check whether a whole module clears, and check what the
+inputs of the freed code are reachable from.
