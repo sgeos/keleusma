@@ -5241,9 +5241,19 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     // Truncate stack to just the locals.
                     self.stack.truncate(reset_base + local_count);
 
-                    // Reset both arena bump pointers (R32). Host-allocated
-                    // dynamic strings and other arena values are reclaimed
-                    // here.
+                    // Reset the TOP arena region only. Host-allocated dynamic
+                    // strings and other short-lived scratch are reclaimed here.
+                    //
+                    // NOT both bump pointers, which this comment claimed until
+                    // 2026-08-10. `reset_arena_internal` calls
+                    // `reset_top_unchecked()`; resetting both ends is
+                    // `full_reset_arena_internal`, which `Op::Reset` does not
+                    // call. The distinction is load-bearing: the persistent
+                    // region is NOT reclaimed, which is exactly why private
+                    // composite data survives `RESET`. The `v0.3.0` session
+                    // reasoned from the wrong version of this for an hour, and
+                    // a lowering built on it would re-initialise private data
+                    // every iteration.
                     let _ = self.reset_arena_internal();
                     // Drop ephemeral opaque references reachable from the
                     // arena bodies just reclaimed (B28 P3); their `Drop`

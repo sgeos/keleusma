@@ -2322,7 +2322,50 @@ fn verify_stack_depth(chunk: &Chunk) -> Result<(), VerifyError> {
     // The chunk body is not inside any loop, so its break collector stays
     // empty (Pass-1 already rejects a Break outside a loop).
     let mut breaks: Vec<i32> = Vec::new();
-    verify_depth_region(chunk, 0, chunk.ops.len(), 0, &mut breaks).map(|_| ())
+    let terminal = verify_depth_region(chunk, 0, chunk.ops.len(), 0, &mut breaks)?;
+
+    // A CHUNK MUST NOT BE ABLE TO RUN OFF ITS OWN END, AND THIS RESULT USED TO
+    // BE DISCARDED WITH `.map(|_| ())`.
+    //
+    // `Op::Return` truncates the operand stack to the frame base and pushes one
+    // result, leaving depth `base + 1`. Falling off the end does NOT truncate:
+    // the VM pops one value, pops the frame, and pushes the result, leaving
+    // `base + local_count + k`. Every such call therefore leaks
+    // `local_count + k - 1` slots, and in a loop the operand stack grows without
+    // bound.
+    //
+    // **This is a WCMU soundness hole, not a memory-safety one.** The operand
+    // stack is arena-backed, so unbounded growth fails closed with an
+    // out-of-arena error rather than corrupting anything. But the bound this
+    // crate attests is `chunk.local_count + body_peak`, which models `Return`
+    // semantics, so a fall-through callee leaves residue the caller's peak never
+    // accounted for. A module could be admitted, attested with a bound, and
+    // exceed it at run time — and a definitive WCMU is the guarantee the
+    // verifier exists to provide.
+    //
+    // **Nothing the reference compiler emits is affected**: it always terminates
+    // a chunk with `Return`. The exposure is precisely the surface `verify()`
+    // protects — hot-swapped modules and precompiled bytecode, which arrive as
+    // bytes rather than as compiler output.
+    //
+    // Rejecting is in-stance rather than a new restriction: the conservative
+    // stance rejects a program whose bound cannot be proved, and the bound for a
+    // fall-through chunk is not merely unproved, it is wrong.
+    //
+    // Reported by the `v0.3.0` session, which demonstrated it rather than
+    // deriving it by reading. Verified here independently before the change.
+    match terminal {
+        None => Ok(()),
+        Some(depth) => Err(VerifyError {
+            chunk_name: chunk.name.clone(),
+            message: alloc::format!(
+                "chunk can run off the end of its instructions at operand depth {depth} \
+                 without a terminating Return; the fall-through path does not truncate the \
+                 frame's locals, so each call would leave residue the worst-case-memory bound \
+                 does not account for. Every path must exit via Return or Trap."
+            ),
+        }),
+    }
 }
 
 /// Walk ops `[start, end)` tracking absolute operand depth from `entry`.
@@ -2347,7 +2390,16 @@ fn verify_depth_region(
     while ip < end {
         let op = &ops[ip];
         match op {
-            Op::Trap(_) | Op::Return => return Ok(None),
+            // `Reset` is a PATH EXIT, not a normal instruction, and missing
+            // that is what made the first attempt at the terminal check reject
+            // every stream chunk the compiler emits.
+            //
+            // The VM rewinds the frame's `ip` to just after `Stream` and returns
+            // `VmState::Reset` (`vm.rs`, `Op::Reset`), so control never proceeds
+            // to the following instruction. A `loop` chunk therefore ends in
+            // `Reset` rather than `Return`, which is correct and is why "the
+            // reference compiler always emits a trailing Return" is false.
+            Op::Trap(_) | Op::Return | Op::Reset => return Ok(None),
             Op::Break(_) => {
                 // Unconditional exit to after the enclosing loop, carrying
                 // the current operand depth.
@@ -4126,6 +4178,81 @@ mod tests {
         );
         let module = make_module(vec![chunk]);
         assert!(verify(&module).is_err());
+    }
+
+    #[test]
+    fn a_chunk_that_can_run_off_its_end_is_rejected() {
+        // The WCMU soundness hole reported by the `v0.3.0` session on
+        // 2026-08-10, and verified here independently before it was closed.
+        //
+        // `Return` truncates the operand stack to the frame base; falling off
+        // the end does not, so each such call leaks `local_count + k - 1` slots
+        // and a loop grows the stack without bound. The attested bound models
+        // `Return` semantics, so such a module could be admitted, attested, and
+        // then exceed its bound. Not memory-unsafe — the arena fails closed —
+        // but the WCMU guarantee is the point of this crate.
+        use crate::compiler::compile;
+        use crate::lexer::tokenize;
+        use crate::parser::parse;
+
+        let src = "fn f(a: Word) -> Word { let b = a + 1; b }\nfn main() -> Word { f(2) }";
+        let mut module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+
+        // MUST-NOT-FIRE: the compiler's own output is accepted.
+        assert!(
+            verify(&module).is_ok(),
+            "unmutated compiler output must verify"
+        );
+
+        let idx = module
+            .chunks
+            .iter()
+            .position(|c| matches!(c.ops.last(), Some(Op::Return)) && c.local_count > 0)
+            .expect("a chunk ending in Return with locals");
+        module.chunks[idx].ops.pop();
+
+        // MUST-FIRE: dropping the terminator is rejected, and for this reason
+        // rather than incidentally.
+        let err = verify(&module).expect_err("a chunk that runs off its end must be rejected");
+        assert!(
+            err.message.contains("run off the end"),
+            "rejected for the wrong reason: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn a_stream_chunk_ending_in_reset_is_still_accepted() {
+        // The control that makes the check above safe rather than merely
+        // strict. `Op::Reset` rewinds the frame's ip to just after `Stream` and
+        // returns, so it is a PATH EXIT and a `loop` chunk legitimately ends in
+        // it rather than in `Return`.
+        //
+        // The first version of the terminal check missed that and rejected
+        // every stream chunk the compiler emits — 37 tests failed at once. This
+        // pins the shape so the check cannot regress into that form silently.
+        use crate::compiler::compile;
+        use crate::lexer::tokenize;
+        use crate::parser::parse;
+
+        let src = "loop tick(x: Word) -> Word { let x = yield x * 2; x }";
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let tick = module
+            .chunks
+            .iter()
+            .find(|c| c.name == "tick")
+            .expect("tick chunk");
+        assert!(
+            matches!(tick.ops.last(), Some(Op::Reset)),
+            "this test is vacuous unless `tick` really ends in Reset; it ends in {:?}",
+            tick.ops.last()
+        );
+        assert!(
+            verify(&module).is_ok(),
+            "a Reset-terminated chunk must verify"
+        );
     }
 
     #[test]
