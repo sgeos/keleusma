@@ -3075,10 +3075,20 @@ invites misreading.
 |---|---|---|
 | `apply_queued_fixes.py` | **SPENT** | Applied in `ce77aa1`. **Do not re-run.** |
 | `queued_controls.rs` | **SPENT** | Appended, then the first control was rewritten as structural |
-| `spike_queued_counts.rs` | PENDING | Four corpus counts |
+| `spike_queued_counts.rs` | **SPENT** | Installed and run in `ea69282`; produced the four counts |
 | `o2_differential_arm.rs` | PENDING | Optimisation-level arm |
 | `retcon_declarability.rs` | PENDING | R4.4's open clause |
 | `fix_workstream_label.py` | PENDING | Six sites, all anchors re-verified against current source |
+| `spike_stream_sufficiency.rs` | PENDING | Does `Stream` alone free the stages, and the bytecode yield shape |
+
+> **THE PENDING ARTEFACTS NOW LIVE IN THE REPOSITORY**, at
+> `native_codegen/pending/`, with a `README.md` that records install targets and
+> the two API mistakes this branch has already made writing code without
+> compiling it. They were held in a session scratchpad until 2026-08-10, which
+> **does not survive the session**, and four had accumulated there. Cargo does not
+> build that directory, so parking an uncompiled artefact there cannot make the
+> tree red. **This ledger remains the only authority on what is spent**; the
+> directory deliberately carries no state.
 
 ### The mixed-anchor trap, and why re-running is safe anyway
 
