@@ -83,6 +83,7 @@ const WARG_SLOT: usize = RCOVERS_SLOT + 1024;
 const WARG2_SLOT: usize = WARG_SLOT + 1;
 const WARG3_SLOT: usize = WARG2_SLOT + 1;
 const WARG4_SLOT: usize = WARG3_SLOT + 1;
+const WARG5_SLOT: usize = WARG4_SLOT + 1;
 
 /// Build a `Vm` over `src` with a persistent region sized for its private data.
 ///
@@ -159,7 +160,15 @@ fn run_cmd_full(
     warg: i64,
     read_len: usize,
 ) -> Result<(i64, Vec<u8>), VmError> {
-    run_cmd_args(vm, cmd, nregions, seed, regions, [warg, 0, 0, 0], read_len)
+    run_cmd_args(
+        vm,
+        cmd,
+        nregions,
+        seed,
+        regions,
+        [warg, 0, 0, 0, 0],
+        read_len,
+    )
 }
 
 /// As `run_cmd_full`, with all four command arguments.
@@ -169,7 +178,7 @@ fn run_cmd_args(
     nregions: i64,
     seed: &[u8],
     regions: &Regions,
-    args: [i64; 4],
+    args: [i64; 5],
     read_len: usize,
 ) -> Result<(i64, Vec<u8>), VmError> {
     let mut shared = vec![0u8; vm.shared_data_bytes()];
@@ -179,6 +188,7 @@ fn run_cmd_args(
     vm.set_shared(&mut shared, WARG2_SLOT, Value::Int(args[1]))?;
     vm.set_shared(&mut shared, WARG3_SLOT, Value::Int(args[2]))?;
     vm.set_shared(&mut shared, WARG4_SLOT, Value::Int(args[3]))?;
+    vm.set_shared(&mut shared, WARG5_SLOT, Value::Int(args[4]))?;
     for (i, byte) in seed.iter().enumerate() {
         vm.set_shared(&mut shared, 1 + i, Value::Byte(*byte))?;
     }
@@ -1129,7 +1139,7 @@ fn the_stride_guard_rejects_what_the_reference_rejects() {
             rs.len() as i64,
             &image,
             &[],
-            [0, stride as i64, 0, 0],
+            [0, stride as i64, 0, 0, 0],
             0,
         )
         .expect("rec_count must not trap");
@@ -1152,7 +1162,7 @@ fn a_zero_stride_is_reported_rather_than_trapping() {
     let hl = header_len(rs.len());
     let (_, image) =
         run_cmd_full(&mut vm, CMD_EMIT_HEADER, rs.len() as i64, &[], &rs, 0, hl).expect("emit");
-    let (got, _) = run_cmd_args(&mut vm, CMD_REC_COUNT, 1, &image, &[], [0, 0, 0, 0], 0)
+    let (got, _) = run_cmd_args(&mut vm, CMD_REC_COUNT, 1, &image, &[], [0, 0, 0, 0, 0], 0)
         .expect("must not trap");
     assert_eq!(got, -1, "a zero stride must report, not trap");
 }
@@ -1168,7 +1178,7 @@ fn a_stride_that_is_a_word_multiple_but_not_a_power_of_two_is_handled() {
     let (_, image) =
         run_cmd_full(&mut vm, CMD_EMIT_HEADER, rs.len() as i64, &[], &rs, 0, hl).expect("emit");
     let (got, _) =
-        run_cmd_args(&mut vm, CMD_REC_COUNT, 1, &image, &[], [0, 24, 0, 0], 0).expect("run");
+        run_cmd_args(&mut vm, CMD_REC_COUNT, 1, &image, &[], [0, 24, 0, 0, 0], 0).expect("run");
     assert_eq!(got, 2, "stride 24 over 48 bytes is two records");
 }
 
@@ -1187,7 +1197,7 @@ fn emitted_records_are_byte_identical_to_an_independent_construction() {
             1,
             &[],
             &rs,
-            [0, n as i64, 0, 0],
+            [0, n as i64, 0, 0, 0],
             art.len(),
         )
         .expect("emit records");
@@ -1215,7 +1225,7 @@ fn every_record_field_reads_back_through_the_keleusma_reader() {
         1,
         &[],
         &rs,
-        [0, n as i64, 0, 0],
+        [0, n as i64, 0, 0, 0],
         art.len(),
     )
     .expect("emit");
@@ -1238,7 +1248,7 @@ fn every_record_field_reads_back_through_the_keleusma_reader() {
                 u16::from_le_bytes(want[8..10].try_into().unwrap()) as i64,
             ),
         ] {
-            let (got, _) = run_cmd_args(&mut vm, cmd, 1, &image, &[], [0, 16, r as i64, off], 0)
+            let (got, _) = run_cmd_args(&mut vm, cmd, 1, &image, &[], [0, 16, r as i64, off, 0], 0)
                 .expect("read");
             assert_eq!(got, expect, "record {r} field at {off}");
         }
@@ -1260,7 +1270,7 @@ fn a_region_read_as_a_pool_sees_the_same_bytes() {
         1,
         &[],
         &rs,
-        [0, n as i64, 0, 0],
+        [0, n as i64, 0, 0, 0],
         art.len(),
     )
     .expect("emit");
@@ -1273,7 +1283,7 @@ fn a_region_read_as_a_pool_sees_the_same_bytes() {
                 1,
                 &image,
                 &[],
-                [0, (r * 16 + byte) as i64, 0, 0],
+                [0, (r * 16 + byte) as i64, 0, 0, 0],
                 0,
             )
             .expect("pool read");
@@ -1301,7 +1311,7 @@ fn a_mutated_record_stride_is_reported() {
         1,
         &[],
         &rs,
-        [0, n as i64, 0, 0],
+        [0, n as i64, 0, 0, 0],
         art.len(),
     )
     .expect("emit");
@@ -1456,7 +1466,7 @@ fn the_schema_accessors_resolve_names_and_shapes_by_kind() {
         n_regions,
         &art,
         &[],
-        [0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
         0,
     )
     .expect("run");
@@ -1467,8 +1477,16 @@ fn the_schema_accessors_resolve_names_and_shapes_by_kind() {
             (CMD_NAME_OFFSET, i64::from(*offset), "offset"),
             (CMD_NAME_LENGTH, i64::from(*length), "length"),
         ] {
-            let (got, _) = run_cmd_args(&mut vm, cmd, n_regions, &art, &[], [i as i64, 0, 0, 0], 0)
-                .expect("run");
+            let (got, _) = run_cmd_args(
+                &mut vm,
+                cmd,
+                n_regions,
+                &art,
+                &[],
+                [i as i64, 0, 0, 0, 0],
+                0,
+            )
+            .expect("run");
             assert_eq!(got, want, "name {i} {what}");
         }
         // And the bytes themselves, which cross from the name table into the
@@ -1480,7 +1498,7 @@ fn the_schema_accessors_resolve_names_and_shapes_by_kind() {
                 n_regions,
                 &art,
                 &[],
-                [i as i64, j as i64, 0, 0],
+                [i as i64, j as i64, 0, 0, 0],
                 0,
             )
             .expect("run");
@@ -1498,7 +1516,7 @@ fn the_schema_accessors_resolve_names_and_shapes_by_kind() {
         n_regions,
         &art,
         &[],
-        [0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
         0,
     )
     .expect("run");
@@ -1509,8 +1527,16 @@ fn the_schema_accessors_resolve_names_and_shapes_by_kind() {
             (CMD_SHAPE_KIND, i64::from(*k), "kind"),
             (CMD_SHAPE_SIZE, i64::from(*size), "size"),
         ] {
-            let (got, _) = run_cmd_args(&mut vm, cmd, n_regions, &art, &[], [i as i64, 0, 0, 0], 0)
-                .expect("run");
+            let (got, _) = run_cmd_args(
+                &mut vm,
+                cmd,
+                n_regions,
+                &art,
+                &[],
+                [i as i64, 0, 0, 0, 0],
+                0,
+            )
+            .expect("run");
             assert_eq!(got, want, "shape {i} {what}");
         }
     }
@@ -1527,7 +1553,7 @@ fn an_absent_region_reports_zero_rather_than_reading_from_a_negative_base() {
     let mut vm = vm_for(WIRE_KEL);
     for (cmd, what) in [(CMD_NAME_COUNT, "names"), (CMD_SHAPE_COUNT, "shapes")] {
         let (got, _) =
-            run_cmd_args(&mut vm, cmd, 1, &art, &[], [0, 0, 0, 0], 0).expect("must not trap");
+            run_cmd_args(&mut vm, cmd, 1, &art, &[], [0, 0, 0, 0, 0], 0).expect("must not trap");
         assert_eq!(got, 0, "absent {what} region must report zero");
     }
 }
@@ -1705,7 +1731,7 @@ fn the_constant_table_reads_back_field_for_field() {
     let mut vm = vm_for(WIRE_KEL);
     let n = 3i64;
     let (count, _) =
-        run_cmd_args(&mut vm, CMD_CONST_COUNT, n, &art, &[], [0, 0, 0, 0], 0).expect("run");
+        run_cmd_args(&mut vm, CMD_CONST_COUNT, n, &art, &[], [0, 0, 0, 0, 0], 0).expect("run");
     assert_eq!(count, consts.len() as i64);
 
     for (i, r) in consts.iter().enumerate() {
@@ -1720,7 +1746,7 @@ fn the_constant_table_reads_back_field_for_field() {
             ),
         ] {
             let (got, _) =
-                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0], 0).expect("run");
+                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0, 0], 0).expect("run");
             assert_eq!(got, want, "constant {i} {what}");
         }
     }
@@ -1742,7 +1768,7 @@ fn only_a_composite_reports_a_range_and_a_scalar_reports_absence() {
             3,
             &art,
             &[],
-            [i as i64, 0, 0, 0],
+            [i as i64, 0, 0, 0, 0],
             0,
         )
         .expect("run");
@@ -1752,7 +1778,7 @@ fn only_a_composite_reports_a_range_and_a_scalar_reports_absence() {
             3,
             &art,
             &[],
-            [i as i64, 0, 0, 0],
+            [i as i64, 0, 0, 0, 0],
             0,
         )
         .expect("run");
@@ -1785,7 +1811,7 @@ fn the_side_tables_read_back_including_negative_discriminants() {
             ),
         ] {
             let (got, _) =
-                run_cmd_args(&mut vm, cmd, 3, &art, &[], [i as i64, 0, 0, 0], 0).expect("run");
+                run_cmd_args(&mut vm, cmd, 3, &art, &[], [i as i64, 0, 0, 0, 0], 0).expect("run");
             assert_eq!(got, want, "struct aux {i} {what}");
         }
     }
@@ -1796,7 +1822,7 @@ fn the_side_tables_read_back_including_negative_discriminants() {
             (CMD_EA_DISCRIMINANT, r.discriminant, "discriminant"),
         ] {
             let (got, _) =
-                run_cmd_args(&mut vm, cmd, 3, &art, &[], [i as i64, 0, 0, 0], 0).expect("run");
+                run_cmd_args(&mut vm, cmd, 3, &art, &[], [i as i64, 0, 0, 0, 0], 0).expect("run");
             assert_eq!(got, want, "enum aux {i} {what}");
         }
     }
@@ -2039,7 +2065,7 @@ fn the_run_owning_records_read_back_field_for_field() {
         (CMD_TPL_COUNT, tpls.len() as i64, "templates"),
         (CMD_ELAY_COUNT, elays.len() as i64, "layouts"),
     ] {
-        let (got, _) = run_cmd_args(&mut vm, cmd, n, &art, &[], [0, 0, 0, 0], 0).expect("run");
+        let (got, _) = run_cmd_args(&mut vm, cmd, n, &art, &[], [0, 0, 0, 0, 0], 0).expect("run");
         assert_eq!(got, want, "{what} count");
     }
     for (i, s) in sigs.iter().enumerate() {
@@ -2058,7 +2084,7 @@ fn the_run_owning_records_read_back_field_for_field() {
             (CMD_SIG_RESUME, i64::from(s.resume), "resume"),
         ] {
             let (got, _) =
-                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0], 0).expect("run");
+                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0, 0], 0).expect("run");
             assert_eq!(got, want, "signature {i} {what}");
         }
     }
@@ -2068,7 +2094,7 @@ fn the_run_owning_records_read_back_field_for_field() {
             (CMD_TPL_FIELD_COUNT, i64::from(t.field_count), "field_count"),
         ] {
             let (got, _) =
-                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0], 0).expect("run");
+                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0, 0], 0).expect("run");
             assert_eq!(got, want, "template {i} {what}");
         }
     }
@@ -2087,7 +2113,7 @@ fn the_run_owning_records_read_back_field_for_field() {
             ),
         ] {
             let (got, _) =
-                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0], 0).expect("run");
+                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0, 0], 0).expect("run");
             assert_eq!(got, want, "layout {i} {what}");
         }
     }
@@ -2110,7 +2136,7 @@ fn a_run_index_past_its_count_is_refused_rather_than_reading_the_neighbour() {
                 n,
                 &art,
                 &[],
-                [i as i64, i64::from(k), 0, 0],
+                [i as i64, i64::from(k), 0, 0, 0],
                 0,
             )
             .expect("run");
@@ -2130,7 +2156,7 @@ fn a_run_index_past_its_count_is_refused_rather_than_reading_the_neighbour() {
                 n,
                 &art,
                 &[],
-                [i as i64, i64::from(k), 0, 0],
+                [i as i64, i64::from(k), 0, 0, 0],
                 0,
             )
             .expect("run");
@@ -2150,7 +2176,7 @@ fn a_run_index_past_its_count_is_refused_rather_than_reading_the_neighbour() {
                 n,
                 &art,
                 &[],
-                [i as i64, i64::from(k), 0, 0],
+                [i as i64, i64::from(k), 0, 0, 0],
                 0,
             )
             .expect("run");
@@ -2180,7 +2206,7 @@ fn a_variant_discriminant_of_minus_one_is_a_value_not_an_error() {
                 4,
                 &art,
                 &[],
-                [i as i64, i64::from(k), 0, 0],
+                [i as i64, i64::from(k), 0, 0, 0],
                 0,
             )
             .expect("run");
@@ -2191,7 +2217,7 @@ fn a_variant_discriminant_of_minus_one_is_a_value_not_an_error() {
                 4,
                 &art,
                 &[],
-                [i as i64, i64::from(k), 0, 0],
+                [i as i64, i64::from(k), 0, 0, 0],
                 0,
             )
             .expect("run");
@@ -2202,7 +2228,7 @@ fn a_variant_discriminant_of_minus_one_is_a_value_not_an_error() {
                 4,
                 &art,
                 &[],
-                [i as i64, i64::from(k), 0, 0],
+                [i as i64, i64::from(k), 0, 0, 0],
                 0,
             )
             .expect("run");
@@ -2318,10 +2344,26 @@ fn an_absent_data_layout_is_distinguishable_from_an_empty_one() {
     let p = b.region(kind::STRING_POOL, 0).expect("pool");
     b.push(p, b"x");
     let absent = b.finish().expect("finish");
-    let (present, _) =
-        run_cmd_args(&mut vm, CMD_DATA_PRESENT, 1, &absent, &[], [0, 0, 0, 0], 0).expect("run");
-    let (count, _) =
-        run_cmd_args(&mut vm, CMD_DSLOT_COUNT, 1, &absent, &[], [0, 0, 0, 0], 0).expect("run");
+    let (present, _) = run_cmd_args(
+        &mut vm,
+        CMD_DATA_PRESENT,
+        1,
+        &absent,
+        &[],
+        [0, 0, 0, 0, 0],
+        0,
+    )
+    .expect("run");
+    let (count, _) = run_cmd_args(
+        &mut vm,
+        CMD_DSLOT_COUNT,
+        1,
+        &absent,
+        &[],
+        [0, 0, 0, 0, 0],
+        0,
+    )
+    .expect("run");
     assert_eq!(present, 0, "no DATA_SLOTS region means no data layout");
     assert_eq!(count, -1, "an absent table must not report zero slots");
 
@@ -2331,10 +2373,18 @@ fn an_absent_data_layout_is_distinguishable_from_an_empty_one() {
     b.push(p, b"x");
     b.region(kind::DATA_SLOTS, 0).expect("empty slots");
     let empty = b.finish().expect("finish");
-    let (present, _) =
-        run_cmd_args(&mut vm, CMD_DATA_PRESENT, 2, &empty, &[], [0, 0, 0, 0], 0).expect("run");
+    let (present, _) = run_cmd_args(
+        &mut vm,
+        CMD_DATA_PRESENT,
+        2,
+        &empty,
+        &[],
+        [0, 0, 0, 0, 0],
+        0,
+    )
+    .expect("run");
     let (count, _) =
-        run_cmd_args(&mut vm, CMD_DSLOT_COUNT, 2, &empty, &[], [0, 0, 0, 0], 0).expect("run");
+        run_cmd_args(&mut vm, CMD_DSLOT_COUNT, 2, &empty, &[], [0, 0, 0, 0, 0], 0).expect("run");
     assert_eq!(
         present, 1,
         "an empty DATA_SLOTS region still means a layout exists"
@@ -2465,7 +2515,7 @@ fn the_data_segment_tables_read_back_field_for_field() {
         (CMD_PCOMP_COUNT, pcomps.len() as i64, "private composites"),
         (CMD_DINIT_COUNT, dinits.len() as i64, "data inits"),
     ] {
-        let (got, _) = run_cmd_args(&mut vm, cmd, n, &art, &[], [0, 0, 0, 0], 0).expect("run");
+        let (got, _) = run_cmd_args(&mut vm, cmd, n, &art, &[], [0, 0, 0, 0, 0], 0).expect("run");
         assert_eq!(got, want, "{what} count");
     }
 
@@ -2475,7 +2525,7 @@ fn the_data_segment_tables_read_back_field_for_field() {
             (CMD_DSLOT_VIS, i64::from(r.visibility), "visibility"),
         ] {
             let (got, _) =
-                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0], 0).expect("run");
+                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0, 0], 0).expect("run");
             assert_eq!(got, want, "data slot {i} {what}");
         }
     }
@@ -2486,7 +2536,7 @@ fn the_data_segment_tables_read_back_field_for_field() {
             (CMD_SSLOT_LEN, i64::from(r.len), "len"),
         ] {
             let (got, _) =
-                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0], 0).expect("run");
+                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0, 0], 0).expect("run");
             assert_eq!(got, want, "shared slot {i} {what}");
         }
     }
@@ -2496,7 +2546,7 @@ fn the_data_segment_tables_read_back_field_for_field() {
             (CMD_PCOMP_OFFSET, i64::from(r.offset), "offset"),
         ] {
             let (got, _) =
-                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0], 0).expect("run");
+                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0, 0], 0).expect("run");
             assert_eq!(got, want, "private composite {i} {what}");
         }
     }
@@ -2506,7 +2556,7 @@ fn the_data_segment_tables_read_back_field_for_field() {
             (CMD_DINIT_RANGE_COUNT, i64::from(r.count), "count"),
         ] {
             let (got, _) =
-                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0], 0).expect("run");
+                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0, 0], 0).expect("run");
             assert_eq!(got, want, "data init {i} {what}");
         }
     }
@@ -2739,7 +2789,7 @@ fn the_chunk_table_reads_back_every_field() {
     let mut vm = vm_for(WIRE_KEL);
     let n = 4i64;
     let (count, _) =
-        run_cmd_args(&mut vm, CMD_CHUNK_COUNT, n, &art, &[], [0, 0, 0, 0], 0).expect("run");
+        run_cmd_args(&mut vm, CMD_CHUNK_COUNT, n, &art, &[], [0, 0, 0, 0, 0], 0).expect("run");
     assert_eq!(count, chunks.len() as i64);
 
     for (i, c) in chunks.iter().enumerate() {
@@ -2798,7 +2848,7 @@ fn the_chunk_table_reads_back_every_field() {
                 n,
                 &art,
                 &[],
-                [i as i64, off as i64, 0, 0],
+                [i as i64, off as i64, 0, 0, 0],
                 0,
             )
             .expect("run");
@@ -2815,7 +2865,7 @@ fn the_chunk_table_reads_back_every_field() {
             ),
         ] {
             let (got, _) =
-                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0], 0).expect("run");
+                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0, 0], 0).expect("run");
             assert_eq!(got, want, "chunk {i} {what}");
         }
     }
@@ -2837,9 +2887,9 @@ fn natives_and_their_return_shapes_carry_independent_lengths() {
     let n = 4i64;
 
     let (nc, _) =
-        run_cmd_args(&mut vm, CMD_NATIVE_COUNT, n, &art, &[], [0, 0, 0, 0], 0).expect("run");
+        run_cmd_args(&mut vm, CMD_NATIVE_COUNT, n, &art, &[], [0, 0, 0, 0, 0], 0).expect("run");
     let (rc, _) =
-        run_cmd_args(&mut vm, CMD_NATRET_COUNT, n, &art, &[], [0, 0, 0, 0], 0).expect("run");
+        run_cmd_args(&mut vm, CMD_NATRET_COUNT, n, &art, &[], [0, 0, 0, 0, 0], 0).expect("run");
     assert_eq!(nc, names.len() as i64, "native name count");
     assert_eq!(rc, returns.len() as i64, "native return count");
     assert_ne!(nc, rc, "the two counts must be reported independently");
@@ -2851,7 +2901,7 @@ fn natives_and_their_return_shapes_carry_independent_lengths() {
             n,
             &art,
             &[],
-            [i as i64, 0, 0, 0],
+            [i as i64, 0, 0, 0, 0],
             0,
         )
         .expect("run");
@@ -2864,7 +2914,7 @@ fn natives_and_their_return_shapes_carry_independent_lengths() {
             n,
             &art,
             &[],
-            [i as i64, 0, 0, 0],
+            [i as i64, 0, 0, 0, 0],
             0,
         )
         .expect("run");
@@ -2878,8 +2928,16 @@ fn the_header_reads_back_and_the_absent_sentinel_is_recognised() {
     let mut vm = vm_for(WIRE_KEL);
     let n = 4i64;
 
-    let (present, _) =
-        run_cmd_args(&mut vm, CMD_HEADER_PRESENT, n, &art, &[], [0, 0, 0, 0], 0).expect("run");
+    let (present, _) = run_cmd_args(
+        &mut vm,
+        CMD_HEADER_PRESENT,
+        n,
+        &art,
+        &[],
+        [0, 0, 0, 0, 0],
+        0,
+    )
+    .expect("run");
     assert_eq!(present, 1);
 
     for (off, want, what) in [
@@ -2916,7 +2974,7 @@ fn the_header_reads_back_and_the_absent_sentinel_is_recognised() {
             n,
             &art,
             &[],
-            [off as i64, 0, 0, 0],
+            [off as i64, 0, 0, 0, 0],
             0,
         )
         .expect("run");
@@ -2946,7 +3004,7 @@ fn the_header_reads_back_and_the_absent_sentinel_is_recognised() {
             n,
             &art,
             &[],
-            [off as i64, 0, 0, 0],
+            [off as i64, 0, 0, 0, 0],
             0,
         )
         .expect("run");
@@ -2956,11 +3014,274 @@ fn the_header_reads_back_and_the_absent_sentinel_is_recognised() {
     // `u32::MAX` means "no entry point", and must not be read as 4294967295
     // being a real chunk index.
     let (sentinel, _) =
-        run_cmd_args(&mut vm, CMD_ABSENT_INDEX, n, &art, &[], [0, 0, 0, 0], 0).expect("run");
+        run_cmd_args(&mut vm, CMD_ABSENT_INDEX, n, &art, &[], [0, 0, 0, 0, 0], 0).expect("run");
     assert_eq!(sentinel, i64::from(u32::MAX));
     let (absent, _) =
-        run_cmd_args(&mut vm, CMD_ENTRY_ABSENT, n, &art, &[], [0, 0, 0, 0], 0).expect("run");
+        run_cmd_args(&mut vm, CMD_ENTRY_ABSENT, n, &art, &[], [0, 0, 0, 0, 0], 0).expect("run");
     assert_eq!(absent, 1, "entry_point of u32::MAX means absent");
     // wcmu_bytes is four billion, above i32, so a signed narrow read shows up.
     assert!(h.wcmu_bytes > i32::MAX as u32, "fixture must exceed i32");
+}
+
+// =========================================================================
+// SLICE 6a — the opcode record
+// =========================================================================
+
+use keleusma::bytecode::Op;
+use keleusma::wire_format::{OpcodeId, OpcodeRecord, encode_op, opcode_id_of};
+
+const CMD_BYTE_PARITY: i64 = 84;
+const CMD_OPREC_PARITY: i64 = 85;
+const CMD_OPREC_WRITE: i64 = 86;
+const CMD_OPREC_ID: i64 = 87;
+const CMD_OPREC_OPERAND_BYTE: i64 = 88;
+const CMD_OPREC_OPERAND_U24: i64 = 89;
+const CMD_OPREC_STORED_PARITY: i64 = 90;
+const CMD_OPREC_PARITY_OK: i64 = 91;
+
+/// The reference's parity definition, restated here: the low bit of the total
+/// popcount of the four bytes with the parity bit masked off.
+///
+/// wire.kel computes it as a THREE-STEP FOLD instead. This is the independent
+/// definition the fold is checked against, so the equivalence is measured
+/// rather than argued.
+fn reference_parity(id: u8, operand: [u8; 3]) -> u8 {
+    let raw = [id & 0x7F, operand[0], operand[1], operand[2]];
+    (raw.iter().map(|b| b.count_ones()).sum::<u32>() & 1) as u8
+}
+
+#[test]
+fn the_parity_fold_equals_the_popcount_definition() {
+    // Exhaustive over the whole opcode range and a spread of operand bytes
+    // chosen to exercise every bit position and both parities per byte.
+    let mut vm = vm_for(WIRE_KEL);
+    let operands: [[u8; 3]; 8] = [
+        [0, 0, 0],
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 0, 1],
+        [0xFF, 0xFF, 0xFF],
+        [0x80, 0x40, 0x20],
+        [0x55, 0xAA, 0x0F],
+        [0x7F, 0x01, 0xFE],
+    ];
+    for id in 0u8..128 {
+        for op in &operands {
+            let (got, _) = run_cmd_args(
+                &mut vm,
+                CMD_OPREC_PARITY,
+                1,
+                &[],
+                &[],
+                [
+                    i64::from(id),
+                    i64::from(op[0]),
+                    i64::from(op[1]),
+                    i64::from(op[2]),
+                    0,
+                ],
+                0,
+            )
+            .expect("run");
+            assert_eq!(
+                got,
+                i64::from(reference_parity(id, *op)),
+                "parity for id {id} operand {op:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn byte_parity_is_exhaustively_correct() {
+    // All 256 bytes, against `count_ones`. Cheap and total, so there is no
+    // reason to sample.
+    let mut vm = vm_for(WIRE_KEL);
+    for v in 0u16..256 {
+        let (got, _) = run_cmd_args(
+            &mut vm,
+            CMD_BYTE_PARITY,
+            1,
+            &[],
+            &[],
+            [i64::from(v), 0, 0, 0, 0],
+            0,
+        )
+        .expect("run");
+        assert_eq!(
+            got,
+            i64::from(u8::try_from(v).unwrap().count_ones() & 1),
+            "byte_parity({v})"
+        );
+    }
+}
+
+/// Every distinct `Op` form the reference can encode without a pool entry,
+/// paired with the record it produces.
+fn inline_op_corpus() -> Vec<(String, Op, OpcodeRecord)> {
+    let candidates: Vec<(String, Op)> = vec![
+        ("Add".into(), Op::Add),
+        ("Sub".into(), Op::Sub),
+        ("Return".into(), Op::Return),
+        ("Yield".into(), Op::Yield),
+        ("Dup".into(), Op::Dup),
+        ("Not".into(), Op::Not),
+        ("CheckedAdd".into(), Op::CheckedAdd),
+        ("BitXor".into(), Op::BitXor),
+        ("Const(0)".into(), Op::Const(0)),
+        ("Const(1)".into(), Op::Const(1)),
+        ("Const(65535)".into(), Op::Const(65535)),
+        ("GetLocal(0)".into(), Op::GetLocal(0)),
+        ("GetLocal(255)".into(), Op::GetLocal(255)),
+        ("SetLocal(7)".into(), Op::SetLocal(7)),
+        ("Trap(3)".into(), Op::Trap(3)),
+    ];
+    let mut out = Vec::new();
+    for (name, op) in candidates {
+        let mut pool = Vec::new();
+        if let Ok(rec) = encode_op(&op, &mut pool) {
+            // Inline forms only in this slice; the pool is 6b.
+            if pool.is_empty() {
+                out.push((name, op, rec));
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn the_inline_corpus_is_not_vacuous() {
+    let c = inline_op_corpus();
+    assert!(c.len() >= 12, "only {} inline op forms collected", c.len());
+    // At least one with a non-zero operand, or the operand path is untested.
+    assert!(
+        c.iter().any(|(_, _, r)| r.operand_bytes() != [0, 0, 0]),
+        "no op with a non-zero operand"
+    );
+    // And at least one whose parity bit is set, or the parity path is untested.
+    assert!(
+        c.iter().any(|(_, _, r)| r.0[0] & 0x80 != 0),
+        "no op whose record has parity 1"
+    );
+}
+
+#[test]
+fn keleusma_writes_the_same_opcode_record_as_the_reference() {
+    let mut vm = vm_for(WIRE_KEL);
+    for (name, op, want) in inline_op_corpus() {
+        let id = opcode_id_of(&op).0;
+        let ob = want.operand_bytes();
+        let (next, got) = run_cmd_args(
+            &mut vm,
+            CMD_OPREC_WRITE,
+            1,
+            &[],
+            &[],
+            [
+                0,
+                i64::from(id),
+                i64::from(ob[0]),
+                i64::from(ob[1]),
+                i64::from(ob[2]),
+            ],
+            4,
+        )
+        .expect("run");
+        assert_eq!(next, 4, "{name}: a record is four bytes");
+        assert_eq!(got, want.0.to_vec(), "{name}: record bytes differ");
+    }
+}
+
+#[test]
+fn the_reader_recovers_the_id_operand_and_parity() {
+    let mut vm = vm_for(WIRE_KEL);
+    for (name, op, rec) in inline_op_corpus() {
+        let img = rec.0.to_vec();
+        let ob = rec.operand_bytes();
+        let u24 = u32::from(ob[0]) | (u32::from(ob[1]) << 8) | (u32::from(ob[2]) << 16);
+        for (cmd, arg2, want, what) in [
+            (CMD_OPREC_ID, 0i64, i64::from(opcode_id_of(&op).0), "id"),
+            (CMD_OPREC_OPERAND_U24, 0, i64::from(u24), "operand u24"),
+            (
+                CMD_OPREC_STORED_PARITY,
+                0,
+                i64::from((rec.0[0] >> 7) & 1),
+                "stored parity",
+            ),
+            (CMD_OPREC_PARITY_OK, 0, 1, "parity ok"),
+        ] {
+            let (got, _) =
+                run_cmd_args(&mut vm, cmd, 1, &img, &[], [0, arg2, 0, 0, 0], 0).expect("run");
+            assert_eq!(got, want, "{name}: {what}");
+        }
+        for (k, want_byte) in ob.iter().enumerate() {
+            let (got, _) = run_cmd_args(
+                &mut vm,
+                CMD_OPREC_OPERAND_BYTE,
+                1,
+                &img,
+                &[],
+                [0, k as i64, 0, 0, 0],
+                0,
+            )
+            .expect("run");
+            assert_eq!(got, i64::from(*want_byte), "{name}: operand byte {k}");
+        }
+    }
+}
+
+#[test]
+fn a_single_bit_flip_anywhere_in_the_record_is_detected() {
+    // The parity covers all thirty-two bits, so every single-bit corruption
+    // must be caught — including one in the opcode id, and including one in
+    // the parity bit itself. Exhaustive over both the corpus and the bits.
+    let mut vm = vm_for(WIRE_KEL);
+    for (name, _, rec) in inline_op_corpus() {
+        for byte in 0..4usize {
+            for bit in 0..8u32 {
+                let mut img = rec.0;
+                img[byte] ^= 1 << bit;
+                let (ok, _) = run_cmd_args(
+                    &mut vm,
+                    CMD_OPREC_PARITY_OK,
+                    1,
+                    img.as_ref(),
+                    &[],
+                    [0, 0, 0, 0, 0],
+                    0,
+                )
+                .expect("run");
+                assert_eq!(
+                    ok, 0,
+                    "{name}: flip of byte {byte} bit {bit} went undetected"
+                );
+                // And the reference agrees it is corrupt.
+                assert!(
+                    OpcodeRecord(img).check_parity().is_err(),
+                    "{name}: reference disagreed about byte {byte} bit {bit}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_parity_check_stays_quiet_on_every_uncorrupted_record() {
+    // must-not-fire, paired with the flip test above. A check that always
+    // reports corruption would pass that one and fail this one.
+    let mut vm = vm_for(WIRE_KEL);
+    for id in 0u8..128 {
+        let rec = OpcodeRecord::from_id_and_operand(OpcodeId(id), [0x12, 0x34, 0x56]);
+        let (ok, _) = run_cmd_args(
+            &mut vm,
+            CMD_OPREC_PARITY_OK,
+            1,
+            rec.0.as_ref(),
+            &[],
+            [0, 0, 0, 0, 0],
+            0,
+        )
+        .expect("run");
+        assert_eq!(ok, 1, "clean record for id {id} was reported corrupt");
+    }
 }

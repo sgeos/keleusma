@@ -64,6 +64,7 @@ shared data wire {
     warg2: Word,
     warg3: Word,
     warg4: Word,
+    warg5: Word,
 }
 
 // The running checksum. It lives in a data block because locals are immutable:
@@ -1190,6 +1191,87 @@ fn entry_point_absent() -> Word {
     if header_u32(header_off_entry_point()) == absent_index() { 1 } else { 0 }
 }
 
+// --- SLICE 6a: the opcode record -----------------------------------------
+//
+// Every instruction is four bytes:
+//
+//   byte 0   bit 7 parity, bits 0..6 the opcode identifier
+//   byte 1   operand byte 0, low
+//   byte 2   operand byte 1
+//   byte 3   operand byte 2, high
+//
+// The operand is inline when it fits in twenty-four bits and is a pool index
+// otherwise; the pool is slice 6b. This slice is the record itself.
+//
+// THE PARITY IS COMPUTED BY A FOLD, NOT BY COUNTING BITS, and the equivalence
+// is worth stating because it is not obvious. The reference defines the parity
+// as the low bit of the TOTAL POPCOUNT of the four bytes, with the parity bit
+// itself masked to zero. That equals the bit-parity of `b0 bxor b1 bxor b2 bxor
+// b3`: bit `i` of the exclusive-or is the parity of bit `i` across the four
+// bytes, so summing those bits modulo two sums every bit of every byte modulo
+// two. Folding is three shifts instead of thirty-two, and a test compares the
+// two definitions across the whole opcode range rather than trusting the
+// algebra.
+
+// Bit-parity of one byte: 1 when an odd number of its bits are set.
+fn byte_parity(v: Word) -> Word {
+    ((((v bxor (v lsr 4)) bxor ((v bxor (v lsr 4)) lsr 2))
+        bxor (((v bxor (v lsr 4)) bxor ((v bxor (v lsr 4)) lsr 2)) lsr 1))
+        band 1)
+}
+
+// The parity bit for a record with opcode `id` and three operand bytes. The
+// identifier is masked to seven bits first, because the eighth is where the
+// answer goes and must not be counted.
+fn oprec_parity(id: Word, b1: Word, b2: Word, b3: Word) -> Word {
+    byte_parity(((id band 127) bxor b1) bxor (b2 bxor b3))
+}
+
+// Write one opcode record at byte offset `at`, returning the next offset.
+fn oprec_write(at: Word, id: Word, b1: Word, b2: Word, b3: Word) -> Word {
+    wire.bytes[at] = ((id band 127) bor (oprec_parity(id, b1, b2, b3) lsl 7)) as Byte;
+    wire.bytes[at + 1] = (b1 band 255) as Byte;
+    wire.bytes[at + 2] = (b2 band 255) as Byte;
+    wire.bytes[at + 3] = (b3 band 255) as Byte;
+    at + 4
+}
+
+// The opcode identifier, with the parity bit removed.
+fn oprec_id(at: Word) -> Word {
+    (wire.bytes[at] as Word) band 127
+}
+
+// Operand byte `k`, for k in 0..3.
+fn oprec_operand_byte(at: Word, k: Word) -> Word {
+    wire.bytes[at + 1 + k] as Word
+}
+
+// The inline operand as a little-endian twenty-four-bit value.
+fn oprec_operand_u24(at: Word) -> Word {
+    (wire.bytes[at + 1] as Word)
+        + ((wire.bytes[at + 2] as Word) lsl 8)
+        + ((wire.bytes[at + 3] as Word) lsl 16)
+}
+
+// The parity bit as stored.
+fn oprec_stored_parity(at: Word) -> Word {
+    ((wire.bytes[at] as Word) lsr 7) band 1
+}
+
+// 1 when the record's stored parity matches its contents. The parity covers
+// the whole record, so a single bit flip anywhere in the four bytes is
+// detected at the consumer.
+fn oprec_parity_ok(at: Word) -> Word {
+    if oprec_stored_parity(at)
+        == oprec_parity(
+            oprec_id(at),
+            oprec_operand_byte(at, 0),
+            oprec_operand_byte(at, 1),
+            oprec_operand_byte(at, 2),
+        )
+    { 1 } else { 0 }
+}
+
 // THE DISPATCH IS SPLIT INTO CHAINS, AND THE REASON IS A HARD LANGUAGE LIMIT.
 //
 // The parser rejects an expression nested more than 24 deep, with
@@ -1307,7 +1389,19 @@ fn dispatch_module(cmd: Word) -> Word {
     if cmd == 81 { header_u8(wire.warg) } else {
     if cmd == 82 { entry_point_absent() } else {
     if cmd == 83 { absent_index() } else {
-    0 - 99 }}}}}}}}}}}}}}}
+    0 - 93 }}}}}}}}}}}}}}}
+}
+
+fn dispatch_ops(cmd: Word) -> Word {
+    if cmd == 84 { byte_parity(wire.warg) } else {
+    if cmd == 85 { oprec_parity(wire.warg, wire.warg2, wire.warg3, wire.warg4) } else {
+    if cmd == 86 { oprec_write(wire.warg, wire.warg2, wire.warg3, wire.warg4, wire.warg5) } else {
+    if cmd == 87 { oprec_id(wire.warg) } else {
+    if cmd == 88 { oprec_operand_byte(wire.warg, wire.warg2) } else {
+    if cmd == 89 { oprec_operand_u24(wire.warg) } else {
+    if cmd == 90 { oprec_stored_parity(wire.warg) } else {
+    if cmd == 91 { oprec_parity_ok(wire.warg) } else {
+    0 - 99 }}}}}}}}
 }
 
 fn main(cmd: Word) -> Word {
@@ -1315,5 +1409,6 @@ fn main(cmd: Word) -> Word {
     if cmd < 26 { dispatch_schema(cmd) } else {
     if cmd < 38 { dispatch_consts(cmd) } else {
     if cmd < 55 { dispatch_runs(cmd) } else {
-    if cmd < 69 { dispatch_data(cmd) } else { dispatch_module(cmd) } } } } }
+    if cmd < 69 { dispatch_data(cmd) } else {
+    if cmd < 84 { dispatch_module(cmd) } else { dispatch_ops(cmd) } } } } } }
 }
