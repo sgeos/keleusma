@@ -580,6 +580,50 @@ measured artifact size to the byte. Nothing is unaccounted for.
 records, for `ret` and `resume`. Shapes are interned and shared between signatures and native
 returns, so the driver's shape table is its own small interner rather than a per-signature array.
 
+#### The interner has TWO modes, and a deduping-only port would be wrong (measured 2026-08-10)
+
+I was about to build the driver's interner slice on an oracle that does not work, and probing killed
+it before any code existed.
+
+**The intended oracle**: recover the interner's input from a real artifact — `NAMES` gives the
+distinct names in order, `STRING_POOL` is measured to be a **pure concatenation** in that order
+(`non_append = 0` for every stage checked) — then feed that list to a Keleusma interner and require
+byte identity.
+
+**It fails, and the failure is informative.** Duplicate entries in `NAMES`, by stage:
+
+| stage | names | distinct | duplicate entries |
+|---|---|---|---|
+| `lexer` | 395,804 | 395,804 | 0 |
+| `analyze` | 20,147 | 20,147 | 0 |
+| `verify_yield` | 7,954 | 7,954 | 0 |
+| `verify_datalayout` | 3,086 | 3,086 | 0 |
+| **`parse`** | **58,053** | 58,033 | **20** |
+
+`parse` carries twenty `NAMES` entries whose bytes duplicate an earlier entry. Feeding the recovered
+distinct list through a deduping interner would produce 58,033 records where the reference produced
+58,053, so the artifacts could not match.
+
+**The cause is `intern_fresh`, and it exists for CONTIGUITY rather than freshness.** Two sites
+deliberately append even when the bytes already exist:
+
+- struct-constant field names (`wire_schema.rs:417`), so field `i` is at `field_names_first + i`
+- enum-variant names (`:730`), so a layout's variants are one contiguous run
+
+Deduping either would collapse a run and break `first + i` addressing. `parse` is the only corpus
+stage with enum layouts populated, which is exactly why it is the only one with duplicates.
+
+**Two consequences for the driver:**
+
+1. **The Keleusma interner needs both modes**, `intern` and `intern_fresh`, and the caller chooses.
+   A port that only dedups is not a simplification, it is a defect that would surface only on a
+   program with enum layouts or struct constants — neither of which the smallest test cases have.
+2. **The interner cannot be validated in isolation against the corpus.** Its input is not a list of
+   names but a list of (name, mode) pairs, and that sequence is a property of the caller, not
+   recoverable from the output. The interner therefore has to be tested as part of a whole-artifact
+   differential rather than as a standalone unit — which is another argument for the minimal
+   end-to-end first slice recorded above.
+
 ### On the prototype
 
 `secret/kel-format-probe/wirefmt.kel` proves the encoder and decoder are expressible in Keleusma, but
