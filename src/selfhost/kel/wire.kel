@@ -997,12 +997,18 @@ fn kind_data_init() -> Word { 0x001D }
 fn dslot_stride() -> Word { 8 }
 fn dslot_off_name() -> Word { 0 }
 fn dslot_off_visibility() -> Word { 4 }
+// The two reserved fields exist for the EMITTER, not the reader. A reader can
+// ignore them; an emitter that leaves them to a zeroed buffer is the defect
+// slice 4 argued against, and would diverge the moment a window is reused.
+fn dslot_off_reserved() -> Word { 5 }
+fn dslot_off_reserved2() -> Word { 6 }
 
 // SharedSlotRecord: offset u32 @0, kind u8 @4, reserved u8 @5, len u16 @6.
 fn sslot_stride() -> Word { 8 }
 fn sslot_off_offset() -> Word { 0 }
 fn sslot_off_kind() -> Word { 4 }
 fn sslot_off_len() -> Word { 6 }
+fn sslot_off_reserved() -> Word { 5 }
 
 // PrivateCompositeRecord: slot u16 @0, reserved u16 @2, offset u32 @4.
 fn pcomp_stride() -> Word { 8 }
@@ -1378,6 +1384,64 @@ fn emit_name_records(at: Word, n: Word) -> Word {
             );
         }
         n * nameref_stride()
+    }
+}
+
+// --- SLICE 6 OF THE WIRING INCREMENT: the two per-slot tables --------------
+//
+// `DATA_SLOTS` and `SHARED_LAYOUT` complete the four regions that together are
+// 99.96% of `lexer`'s auxiliary body, alongside `NAMES` and `STRING_POOL`. All
+// three record tables carry the SAME count, one entry per data slot, because
+// every array element becomes its own slot.
+//
+// Both records are four fields in one word, and both include a reserved field
+// that no reader consults. They are written anyway, for the reason slice 4
+// established: an emitter that relies on its output starting zeroed breaks the
+// day it writes into a reused window, which is what a staged emitter does.
+
+fn dslot_fields() -> Word { 4 }
+
+fn emit_data_slot_records(at: Word, n: Word) -> Word {
+    if (n * dslot_fields()) > fin_capacity() { 0 - 203 } else {
+        for j in 0..n limit 1024 {
+            put_u32(at + (j * dslot_stride()) + dslot_off_name(), wire.fin[j * dslot_fields()]);
+            put_u8(
+                at + (j * dslot_stride()) + dslot_off_visibility(),
+                wire.fin[(j * dslot_fields()) + 1],
+            );
+            put_u8(
+                at + (j * dslot_stride()) + dslot_off_reserved(),
+                wire.fin[(j * dslot_fields()) + 2],
+            );
+            put_u16(
+                at + (j * dslot_stride()) + dslot_off_reserved2(),
+                wire.fin[(j * dslot_fields()) + 3],
+            );
+        }
+        n * dslot_stride()
+    }
+}
+
+fn sslot_fields() -> Word { 4 }
+
+fn emit_shared_slot_records(at: Word, n: Word) -> Word {
+    if (n * sslot_fields()) > fin_capacity() { 0 - 204 } else {
+        for j in 0..n limit 1024 {
+            put_u32(at + (j * sslot_stride()) + sslot_off_offset(), wire.fin[j * sslot_fields()]);
+            put_u8(
+                at + (j * sslot_stride()) + sslot_off_kind(),
+                wire.fin[(j * sslot_fields()) + 1],
+            );
+            put_u8(
+                at + (j * sslot_stride()) + sslot_off_reserved(),
+                wire.fin[(j * sslot_fields()) + 2],
+            );
+            put_u16(
+                at + (j * sslot_stride()) + sslot_off_len(),
+                wire.fin[(j * sslot_fields()) + 3],
+            );
+        }
+        n * sslot_stride()
     }
 }
 
@@ -1868,7 +1932,9 @@ fn dispatch_frame(cmd: Word) -> Word {
     if cmd == 117 { emit_pool_bytes(wire.warg, wire.warg2) } else {
     if cmd == 118 { emit_pool_pad(wire.warg, wire.warg2) } else {
     if cmd == 119 { emit_name_records(wire.warg, wire.warg2) } else {
-    0 - 99 }}}}}}}}}}}}}}}}}
+    if cmd == 120 { emit_data_slot_records(wire.warg, wire.warg2) } else {
+    if cmd == 121 { emit_shared_slot_records(wire.warg, wire.warg2) } else {
+    0 - 99 }}}}}}}}}}}}}}}}}}}
 }
 
 fn main(cmd: Word) -> Word {

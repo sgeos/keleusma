@@ -13,6 +13,36 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**WIRING SLICE 6: THE TWO PER-SLOT TABLES, AND THE FIRST COVERAGE CAP I HAVE TAKEN (2026-08-09).**
+`DATA_SLOTS` and `SHARED_LAYOUT` for all ten stages, byte-identical. 103 tests, up from 100. With
+slice 5's pair these complete **the four regions that are 99.96% of `lexer`'s auxiliary body**, and
+all three record tables carry the same count because every array element becomes its own slot.
+
+**Both records needed reserved fields transcribed for the first time.** `wire.kel` had `dslot_name`,
+`dslot_visibility`, `sslot_offset`, `sslot_kind` and `sslot_len` — everything a READER consults —
+and nothing for the three reserved fields. An emitter needs them all. They are written explicitly
+for the reason slice 4 established, and the must-fire control covers them, which matters more here
+than anywhere: **no reader consults a reserved field, so nothing else in the suite would notice an
+emitter that skipped one, and a skipping emitter still passes against a zeroed buffer.**
+
+**The first stated coverage cap of this arc, and the reasoning is the part to keep.** `lexer` has
+395,784 records in each table. Emitting them all would cost roughly 130 s per table on top of slice
+5's 201 s, adding close to half an hour to a gate across the feature matrix. Each stage is instead
+compared over its first 2048 records, and slice 6 costs 12 s.
+
+The justification is not "it is too slow", which would be the bad version of this argument. It is
+that **a slice should test what is NEW in it.** What is new here is FIELD PLACEMENT for two more
+record shapes, which needs a handful of records. DEEP BATCHING is the property slice 5 established
+at 774 and 807 batches, and re-establishing it per record kind is repetition rather than coverage.
+The cap is named, its residual depth is asserted at eight or more batches so it cannot quietly
+collapse to a single-batch test, and it is stated in the test rather than left as a magic number.
+Contrast slice 5, where the deep run WAS the new property and the 201 s was therefore kept and
+escalated instead of trimmed.
+
+**Clippy caught a four-tuple return for the second time in this arc**, and the fix was the one I
+should have written first: a named struct. Both occurrences were in test scaffolding I wrote
+quickly, and both were invisible to the tests themselves.
+
 **WIRING SLICE 5: THE TWO ACCUMULATOR REGIONS, AND A GATE-SCOPE COST I WILL NOT DECIDE ALONE
 (2026-08-09).** `NAMES` and `STRING_POOL` for all ten stages, byte-identical. 100 tests, up from 98.
 These are the pair the residency measurement singled out, together 9,776,392 bytes for `lexer` and

@@ -891,7 +891,7 @@ fn no_command_below_the_dispatch_ceiling_falls_through() {
     // EXCLUSIVE, so this must be one past the highest live command. Slice 3
     // added 116 and this read `0..116`, which is exactly the off-by-one the
     // sweep exists to catch, committed inside the sweep itself.
-    for cmd in 0..120i64 {
+    for cmd in 0..122i64 {
         let (got, _) =
             run_cmd_args(&mut vm, cmd, 0, &[], &[], [0, 0, 0, 0, 0], 0).unwrap_or((0, Vec::new()));
         if (-99..=-92).contains(&got) {
@@ -2414,6 +2414,15 @@ fn the_slice_5d_offsets_and_kinds_match_the_schema() {
         kel_const("dslot_off_visibility"),
         DataSlotRecord::OFFSET_VISIBILITY as i64
     );
+    // Reserved fields, transcribed for the emitter rather than the reader.
+    assert_eq!(
+        kel_const("dslot_off_reserved"),
+        DataSlotRecord::OFFSET_RESERVED as i64
+    );
+    assert_eq!(
+        kel_const("dslot_off_reserved2"),
+        DataSlotRecord::OFFSET_RESERVED2 as i64
+    );
 
     assert_eq!(kel_const("sslot_stride"), SharedSlotRecord::STRIDE as i64);
     assert_eq!(
@@ -2427,6 +2436,10 @@ fn the_slice_5d_offsets_and_kinds_match_the_schema() {
     assert_eq!(
         kel_const("sslot_off_len"),
         SharedSlotRecord::OFFSET_LEN as i64
+    );
+    assert_eq!(
+        kel_const("sslot_off_reserved"),
+        SharedSlotRecord::OFFSET_RESERVED as i64
     );
 
     assert_eq!(
@@ -5082,4 +5095,193 @@ fn the_accumulator_differentials_report_a_perturbation() {
         case.names_stored,
         "control did not fire: record order is not observable"
     );
+}
+
+// --- WIRING SLICE 6: the two per-slot tables ---------------------------------
+//
+// `DATA_SLOTS` and `SHARED_LAYOUT` complete the four regions that are 99.96% of
+// `lexer`'s auxiliary body, alongside `NAMES` and `STRING_POOL` from slice 5.
+// All three record tables carry the same count, one entry per data slot,
+// because every array element becomes its own slot.
+//
+// A DELIBERATE, STATED COVERAGE CAP, WHICH IS THE POINT OF THIS COMMENT.
+// `lexer` has 395,784 records in each of these tables. Emitting them all would
+// cost roughly 130 s per table, on top of slice 5's measured 201 s, and would
+// add close to half an hour to a gate across the feature matrix.
+//
+// It would also buy almost nothing. What is NEW here is FIELD PLACEMENT for two
+// more record shapes, which needs a handful of records. DEEP BATCHING is the
+// property slice 5 established, at 774 and 807 batches, and re-establishing it
+// per record kind is repetition rather than coverage.
+//
+// So each stage is compared over its first `SLOT_RECORD_CAP` records. The cap is
+// named, asserted to actually cross several batch boundaries, and reported here
+// rather than left for a reader to infer from a magic number.
+const SLOT_RECORD_CAP: usize = 2048;
+
+const CMD_EMIT_DATA_SLOT_RECORDS: i64 = 120;
+const CMD_EMIT_SHARED_SLOT_RECORDS: i64 = 121;
+const SLOT_STRIDE: usize = 8;
+const SLOT_FIELDS: usize = 4;
+const SLOTS_PER_BATCH: usize = FIN_CAPACITY / SLOT_FIELDS;
+
+/// Both per-slot tables of a stage, as field rows and as reference bytes.
+struct SlotCase {
+    data: Vec<[i64; SLOT_FIELDS]>,
+    data_want: Vec<u8>,
+    shared: Vec<[i64; SLOT_FIELDS]>,
+    shared_want: Vec<u8>,
+}
+
+fn real_slot_case(src: &str) -> SlotCase {
+    use keleusma::wire_schema::{DataSlotRecord, SharedSlotRecord, kind};
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let bytes =
+        keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode aux body");
+    let view = keleusma_wire::WireView::parse(&bytes).expect("reference artifact parses");
+
+    let dregion = view
+        .find_region(kind::DATA_SLOTS)
+        .expect("DATA_SLOTS region");
+    let dbytes = view.region_bytes(&dregion).expect("payload").to_vec();
+    let dtable = view.records(&dregion, SLOT_STRIDE).expect("record table");
+    let dn = dtable.len().min(SLOT_RECORD_CAP);
+    let mut dslots = Vec::with_capacity(dn);
+    for i in 0..dn {
+        let r: DataSlotRecord = dtable.get_as(i).expect("record in range");
+        dslots.push([
+            i64::from(r.name),
+            i64::from(r.visibility),
+            i64::from(r.reserved),
+            i64::from(r.reserved2),
+        ]);
+    }
+
+    let sregion = view
+        .find_region(kind::SHARED_LAYOUT)
+        .expect("SHARED_LAYOUT region");
+    let sbytes = view.region_bytes(&sregion).expect("payload").to_vec();
+    let stable = view.records(&sregion, SLOT_STRIDE).expect("record table");
+    let sn = stable.len().min(SLOT_RECORD_CAP);
+    let mut sslots = Vec::with_capacity(sn);
+    for i in 0..sn {
+        let r: SharedSlotRecord = stable.get_as(i).expect("record in range");
+        sslots.push([
+            i64::from(r.offset),
+            i64::from(r.kind),
+            i64::from(r.reserved),
+            i64::from(r.len),
+        ]);
+    }
+
+    SlotCase {
+        data: dslots,
+        data_want: dbytes[..dn * SLOT_STRIDE].to_vec(),
+        shared: sslots,
+        shared_want: sbytes[..sn * SLOT_STRIDE].to_vec(),
+    }
+}
+
+fn emit_slots_batched(
+    vm: &mut Vm<'static, 'static>,
+    cmd: i64,
+    recs: &[[i64; SLOT_FIELDS]],
+    window: usize,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(recs.len() * SLOT_STRIDE);
+    for batch in recs.chunks(SLOTS_PER_BATCH) {
+        let fields: Vec<i64> = batch.iter().flat_map(|r| r.iter().copied()).collect();
+        let produced = batch.len() * SLOT_STRIDE;
+        let (written, buf) = run_cmd_fields(
+            vm,
+            cmd,
+            0,
+            &[],
+            &fields,
+            [window as i64, batch.len() as i64, 0, 0, 0],
+            window + produced,
+        )
+        .expect("run");
+        assert_eq!(written, produced as i64, "wrong batch byte count");
+        out.extend_from_slice(&buf[window..window + produced]);
+    }
+    out
+}
+
+#[test]
+fn the_emitted_per_slot_tables_match_the_reference_on_real_compiler_output() {
+    let mut vm = vm_for(WIRE_KEL);
+    let mut deepest = 0usize;
+    for (name, src) in CORPUS_STAGES {
+        let case = real_slot_case(src);
+        assert!(!case.data.is_empty(), "{name}: no data slots");
+        deepest = deepest.max(case.data.len().div_ceil(SLOTS_PER_BATCH));
+
+        let dgot = emit_slots_batched(&mut vm, CMD_EMIT_DATA_SLOT_RECORDS, &case.data, 64);
+        assert_eq!(dgot, case.data_want, "{name}: DATA_SLOTS differs");
+
+        let sgot = emit_slots_batched(&mut vm, CMD_EMIT_SHARED_SLOT_RECORDS, &case.shared, 64);
+        assert_eq!(sgot, case.shared_want, "{name}: SHARED_LAYOUT differs");
+    }
+    // The cap must still cross several batch boundaries, or it would have
+    // quietly reduced this to a single-batch test.
+    assert!(
+        deepest >= 8,
+        "the record cap left only {deepest} batches, too few to exercise batching at all"
+    );
+}
+
+/// Must-fire control for both per-slot tables, including the reserved fields.
+///
+/// The reserved fields are the interesting ones: no reader consults them, so
+/// nothing else in the suite would notice an emitter that skipped them, and an
+/// emitter that skipped them would still pass against a zeroed buffer.
+#[test]
+fn every_per_slot_field_is_independently_observable_including_reserved() {
+    let mut vm = vm_for(WIRE_KEL);
+    let case = real_slot_case(CORPUS_STAGES[9].1);
+    for (label, cmd, base, want) in [
+        (
+            "DATA_SLOTS",
+            CMD_EMIT_DATA_SLOT_RECORDS,
+            &case.data,
+            &case.data_want,
+        ),
+        (
+            "SHARED_LAYOUT",
+            CMD_EMIT_SHARED_SLOT_RECORDS,
+            &case.shared,
+            &case.shared_want,
+        ),
+    ] {
+        assert_eq!(
+            &emit_slots_batched(&mut vm, cmd, base, 64),
+            want,
+            "{label}: the clean case must agree"
+        );
+        for f in 0..SLOT_FIELDS {
+            let mut recs = base.clone();
+            recs[0][f] ^= 1;
+            assert_ne!(
+                &emit_slots_batched(&mut vm, cmd, &recs, 64),
+                want,
+                "{label}: control did not fire, field {f} is not observable"
+            );
+        }
+    }
+}
+
+/// An oversized batch is rejected with its own code, per table.
+#[test]
+fn an_oversized_per_slot_batch_is_reported_rather_than_truncated() {
+    let mut vm = vm_for(WIRE_KEL);
+    let over = (FIN_CAPACITY / SLOT_FIELDS) + 1;
+    for (cmd, code) in [
+        (CMD_EMIT_DATA_SLOT_RECORDS, -203),
+        (CMD_EMIT_SHARED_SLOT_RECORDS, -204),
+    ] {
+        let (got, _) =
+            run_cmd_fields(&mut vm, cmd, 0, &[], &[], [64, over as i64, 0, 0, 0], 0).expect("run");
+        assert_eq!(got, code, "command {cmd}: wrong or missing rejection code");
+    }
 }
