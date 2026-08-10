@@ -624,6 +624,46 @@ stage with enum layouts populated, which is exactly why it is the only one with 
    differential rather than as a standalone unit — which is another argument for the minimal
    end-to-end first slice recorded above.
 
+#### The flattener's composite path is unreachable from the corpus (measured 2026-08-10)
+
+Every constant in every stage is a **scalar**. Measured over all ten sources:
+
+| | |
+|---|---|
+| constant nodes | **2,192** |
+| composite nodes | **0** |
+| maximum tree depth | **0** |
+
+So the breadth-first walk never enqueues a child, and **the corpus cannot distinguish a correct
+flattener from one that appends the roots and stops.** The forward-ordering invariant, the child
+numbering after the roots, and the `STRUCT_AUX` and `ENUM_AUX` side tables are all unexercised —
+which also explains why those two regions measured empty in every stage.
+
+The flattener therefore needs hand-built constant trees, oracled against `encode_aux_body` on a
+constructed module, exactly as the slice-8 record kinds were oracled against the derive.
+
+#### `Shapes` is a second interner with the SAME two modes, and opposite performance needs
+
+`Shapes::append` keeps a contiguous run and `Shapes::intern` reuses an identical entry — the same
+pair as `Names`. Two things follow, and they differ:
+
+- **`Shapes::intern` is a LINEAR SCAN** over the existing records. That is the shape of the defect
+  that made `Names::intern` take 782 seconds on this corpus before it became a `BTreeMap`.
+- **It is fine here, and the measurement says why**: shape counts peak at **102**, against 395,804
+  names. A Keleusma port should copy the linear scan for shapes and must not for names.
+
+#### THE PATTERN, WHICH IS NOW THREE FOR THREE
+
+The ten stage sources are the largest real Keleusma programs that exist, and this arc has now found
+three separate paths they cannot reach: six record kinds emitted empty, every composite constant,
+and the second interning mode. They are **large but semantically narrow** — no generics, no struct
+or enum constants, no natives, no struct templates, almost no composites of any kind.
+
+**Real compiler output is a strong oracle for VOLUME and a weak one for VARIETY.** Volume is what
+caught the quadratic interner and what deep batching needs; variety needs constructed cases. A slice
+should say which of the two it is buying, because "validated against the corpus" reads like both and
+is only ever one.
+
 ### On the prototype
 
 `secret/kel-format-probe/wirefmt.kel` proves the encoder and decoder are expressible in Keleusma, but
