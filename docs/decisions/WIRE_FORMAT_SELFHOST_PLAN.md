@@ -555,6 +555,31 @@ groups are conditional:
 A minimal module needs one interned name, one constant root, and no templates, so **items 1 to 3 are
 nearly trivial at that size** while still being the real code paths. That is the first slice.
 
+#### The minimal module's complete input surface (measured 2026-08-10)
+
+Everything the encoder consumes for `fn main() -> Word { 42 }`, so the first slice knows exactly
+what the driver must marshal and nothing is discovered mid-implementation:
+
+| Input | Value |
+|---|---|
+| chunks | **1** — name `"main"`, `local_count` 0, `param_count` 0, `block_type` `Func` |
+| param types | none |
+| constants | **one root**, `Int(42)` |
+| struct templates | none |
+| signatures | **1** — no params, `ret` `Scalar{kind:3}`, `resume` `Top` |
+| enum layouts, natives, native returns, data layout | all absent |
+| entry point | `Some(0)` |
+| widths | `word`/`addr`/`float` all log2 = 6 |
+
+**The arithmetic closes exactly, which is the check that the list is complete.** Those inputs produce
+`STRING_POOL` 8, `NAMES` 8, `CONSTS` 16, `SHAPES` 16, `SIGNATURES` 16, `CHUNKS` 48, `HEADER` 32 —
+**144 bytes of payload** — and 48 + 48x15 = 768 of header area, totalling **912**, which is the
+measured artifact size to the byte. Nothing is unaccounted for.
+
+**One detail worth carrying**: a single signature with no parameters still produces **two** `SHAPES`
+records, for `ret` and `resume`. Shapes are interned and shared between signatures and native
+returns, so the driver's shape table is its own small interner rather than a per-signature array.
+
 ### On the prototype
 
 `secret/kel-format-probe/wirefmt.kel` proves the encoder and decoder are expressible in Keleusma, but
