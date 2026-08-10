@@ -142,6 +142,13 @@ pub enum LowerError {
     /// to lower such a chunk can raise the provisioning deliberately instead of
     /// discovering the ceiling through a crash.
     OperandStackTooDeep { needed: usize, provisioned: usize },
+    /// The lowering produced a module LLVM's own verifier rejects.
+    ///
+    /// A postcondition on [`lower_module`], not a diagnostic for the caller's
+    /// input. Reaching it always means a defect in this crate. It exists because
+    /// `verify` was previously called only in the test harness, so malformed IR
+    /// would reach a consumer while every test stayed green.
+    InvalidIr(String),
 }
 
 impl core::fmt::Display for LowerError {
@@ -163,6 +170,11 @@ impl core::fmt::Display for LowerError {
                 f,
                 "chunk needs {needed} operand-stack slots, more than the {provisioned} \
                  this backend provisions"
+            ),
+            LowerError::InvalidIr(why) => write!(
+                f,
+                "the lowering produced a module LLVM's own verifier rejects, \
+                 which is always a defect in this crate rather than in the input: {why}"
             ),
         }
     }
@@ -678,6 +690,16 @@ pub fn lower_module<'ctx>(
     for (chunk, func) in program.chunks.iter().zip(declared.iter()) {
         lower_chunk_body(ctx, module, chunk, *func, &declared, data, opts)?;
     }
+
+    // Ask LLVM to verify what we just produced. This was previously done only in
+    // the test harness (`lm.verify()` in three test files, nowhere in `src/`),
+    // which meant the one check that would catch malformed IR was the one never
+    // run in production. A postcondition belongs at the boundary that promises
+    // it, not in the tests that happen to exercise it.
+    module
+        .verify()
+        .map_err(|e| LowerError::InvalidIr(e.to_string()))?;
+
     Ok(declared)
 }
 
@@ -727,6 +749,18 @@ fn lower_chunk_body<'ctx>(
             func.get_nth_param(i as u32).unwrap().into_int_value(),
         )
         .unwrap();
+    }
+    // Non-parameter locals start DEFINED in the VM: `Op::Call` pushes
+    // `local_count - arg_count` copies of `GenericValue::Unit` into the callee's
+    // frame before entering it. An uninitialised `alloca` loads as `undef`, so
+    // without this a `GetLocal` of an unwritten slot is `Unit` in the VM and
+    // `undef` here -- and `undef` feeding a branch or an offset is worse than a
+    // wrong answer. Zero is this backend's `Unit`.
+    //
+    // `mem2reg` folds these stores away wherever the slot is later overwritten,
+    // so the cost is nil on every chunk the compiler actually emits.
+    for local in locals.iter().skip(chunk.param_count as usize) {
+        b.build_store(*local, i64t.const_zero()).unwrap();
     }
     let slots: Vec<_> = (0..MAX_STACK)
         .map(|i| b.build_alloca(i64t, &format!("s{i}")).unwrap())
@@ -1480,6 +1514,32 @@ fn lower_chunk_body<'ctx>(
             }
             other => return Err(LowerError::UnsupportedOp(format!("{other:?}"))),
         }
+    }
+
+    // A chunk whose ops end without `Op::Return`. `verify()` ADMITS this: both
+    // `verify_stack_depth` and `check_chunk_seeded` compute the region's
+    // terminal depth and then discard it with `.map(|_| ())`. The VM defines the
+    // case as returning `Unit` (`src/vm.rs:4801`), and without a terminator here
+    // the function is malformed IR rather than merely wrong -- which nothing
+    // caught, because `lower_module` never verified its own output either (see
+    // the `verify` call added below).
+    //
+    // Zero is this backend's `Unit`. `st.depth > 0` is guarded because `pop`
+    // decrements a `usize` unconditionally and would underflow on an empty
+    // stack, matching the VM's `stack.pop().unwrap_or(Unit)`.
+    //
+    // DELIBERATELY NOT bug-compatible: the VM additionally leaves the callee's
+    // whole frame on the shared operand stack in this path, unlike `Op::Return`
+    // which truncates to `old_frame.base`. That leak is a worst-case-memory
+    // under-count reported to the runtime owner. Reproducing a defect for
+    // fidelity would be the wrong call; revisit if the VM side is fixed.
+    if !dead && st.b.get_insert_block().unwrap().get_terminator().is_none() {
+        let v = if st.depth > 0 {
+            st.pop()
+        } else {
+            i64t.const_zero()
+        };
+        st.b.build_return(Some(&v)).unwrap();
     }
 
     // Checked once at the end rather than at each push, because the slot array

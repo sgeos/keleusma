@@ -2312,3 +2312,60 @@ reflected. The second is better and is what the WCMU half effectively does.
 Design only. Nothing measured, and the measurement wants a quiet machine, which a
 running gate is not. Recorded so the WCET half is not started on the false
 premise that it is the WCMU half again.
+
+## APPLIED: the three fixes, and one of my own controls was vacuous
+
+All three queued fixes are in, with both controls. 68 tests green, `fmt` clean,
+`clippy` zero at `-D warnings`.
+
+### The must-fire check I nearly skipped, and what it caught
+
+Both controls passed immediately after the fixes. **That proves nothing**, so the
+lowering was reverted and the controls re-run against the unfixed code. Results:
+
+| Control | Against unfixed code | Verdict |
+|---|---|---|
+| Missing trailing `Return` | **FAILED** — `"Basic Block in function 'kel_chunk_0' does not have terminator!"` | A real control |
+| Unwritten local | **PASSED** | **VACUOUS** |
+
+The second control did not fire. An uninitialised `alloca` loaded immediately
+reads whatever occupies the slot, and a fresh frame slot is usually zero, so
+`undef` materialised as `0` and matched the expected value **by accident**. It
+would have sat in the suite looking like protection while testing nothing.
+
+This is the same class as the null mutation recorded earlier in this document —
+where changing an arithmetic shift to a logical one fired nothing because the
+following truncate discarded the difference. The difference is that the null
+mutation was a property that *could not* be observed, whereas this was a real
+defect the test simply failed to detect.
+
+### The rewrite, and why structural was the right form
+
+The control is now a **structural assertion on the emitted IR**: the store of
+zero into the non-parameter local either appears or it does not, and no
+accidental stack contents can fake it. `differential.rs` already had
+`lowered_ir` for exactly this purpose — "assertions about structure that runtime
+behaviour cannot demonstrate" — so the tool existed and I had reached for the
+wrong one.
+
+Re-verified after the rewrite: **both controls now fail against the unfixed
+lowering**, the second with its own message rather than an incidental mismatch.
+The behavioural comparison is retained beside it, explicitly labelled a
+regression check and not a control, since it agrees with the VM but cannot fail
+when the fix is absent.
+
+### The `verify()` finding is now DEMONSTRATED, not read-derived
+
+`control_chunk_without_trailing_return_falls_off_the_end` builds a module whose
+chunk has no trailing `Return` and hands it to `Vm::new`, **which runs
+`verify()`**. It is accepted and executes, returning the top of stack. The
+inventory recorded this as derived from both depth passes discarding their
+terminal result; it is now shown. The item reported to the `v0.2.3` session
+stands, and its "no proof of concept built" caveat can be dropped.
+
+### Fix 3 justified itself immediately
+
+The missing-terminator control fails through `lm.verify()`. Before Fix 3, that
+call existed **only in the test harness** — so a consumer calling `lower_module`
+would have received the malformed module with no error at all. The fix that
+found this defect is the same fix that would have surfaced it in production.
