@@ -497,6 +497,64 @@ Three further facts worth carrying:
   > correction, the first replacing a true statement with a false one, and both times the missing
   > step was counting records rather than looking for the region.
 
+### The driver: prep, measured 2026-08-10, BEFORE any code
+
+Every region kind now has an emitter driven by real compiler output. What remains is the driver,
+where values stop being decoded from the reference and start being computed. Probing it first
+changed its size, so this is recorded before anything is written.
+
+**A WHOLE small artifact fits in the buffer, so the first slice is end-to-end rather than
+per-region.** Measured auxiliary bodies:
+
+| Program | aux body | share of the 65,536-byte buffer | regions |
+|---|---|---|---|
+| `fn main() -> Word { 42 }` | **912** | **1.4%** | 15 |
+| two chunks | 1,008 | 1.5% | 15 |
+| one local constant | 928 | 1.4% | 15 |
+| a two-field shared data block | 1,152 | 1.8% | 19 |
+
+The residency problem that governs `lexer` does not arise at this size at all. **The first driver
+slice can therefore emit a COMPLETE artifact and compare it byte for byte**, which is a far smaller
+and more decisive step than "reimplement `SchemaBuilder`".
+
+For the minimal module the header area is 48 + 48x15 = 768 bytes and the payloads total 144, which
+sums exactly to the measured 912. The driver's arithmetic is checkable by hand at this scale.
+
+**THE REGION ORDER, MEASURED FROM THE DIRECTORY RATHER THAN INFERRED FROM THE CODE.** Byte identity
+depends on it entirely, and it is not the schema's numeric order:
+
+```
+SIGNATURES, ENUM_VARIANTS, ENUM_LAYOUTS, NATIVES, NATIVE_RETURNS,
+[DATA_SLOTS, SHARED_LAYOUT, PRIVATE_COMPOSITE, DATA_INIT],
+HEADER,
+CONSTS, STRUCT_AUX, ENUM_AUX, STRUCT_TEMPLATES, PARAM_TYPES, SHAPES, CHUNKS,
+[DEBUG_POOL],
+STRING_POOL, NAMES
+```
+
+It is the order the `add_*` calls run in, followed by everything `finish` defers. **Most regions are
+present with length ZERO rather than absent**, which is why the count is 15 and not 7. Only two
+groups are conditional:
+
+- the four data-layout regions, present only when the module has a data layout (15 -> 19)
+- `DEBUG_POOL`, present only under `emit_debug` (19 -> 20)
+
+**What the driver must COMPUTE rather than copy**, which is the whole of the remaining work:
+
+1. **Name interning with dedup**, feeding `STRING_POOL` and `NAMES`. `Names::intern` is a
+   `BTreeMap`; a linear scan is known to be catastrophic here rather than merely slow, so the
+   Keleusma side needs an index structure of its own.
+2. **Constant flattening**, breadth-first with roots pinned to `0..n`, feeding `CONSTS` plus the
+   `STRUCT_AUX` and `ENUM_AUX` side tables, and preserving the forward-ordering invariant that lets
+   a reader walk the table by one reverse sweep with no stack.
+3. **Per-chunk ranges** — `consts_first/count`, `templates_first/count`, `param_types_first/count` —
+   which are allocation results of the order the contributors ran in.
+4. **Region lengths and the directory**, which the host may patch afterwards rather than the emitter
+   computing up front.
+
+A minimal module needs one interned name, one constant root, and no templates, so **items 1 to 3 are
+nearly trivial at that size** while still being the real code paths. That is the first slice.
+
 ### On the prototype
 
 `secret/kel-format-probe/wirefmt.kel` proves the encoder and decoder are expressible in Keleusma, but
