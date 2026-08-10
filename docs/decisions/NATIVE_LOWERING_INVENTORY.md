@@ -797,3 +797,67 @@ data-segment use, and under-represents the signal-processing and embedded
 workloads the roadmap names. The zeroes are absence of evidence within THIS
 corpus. Re-measure when the target population changes. The instrument is
 `native_codegen/tests/spike_corpus_coverage.rs` and re-runs in two seconds.
+
+## The data segment splits on a soundness boundary, and two thirds of it is blocked
+
+The coverage spike identified the data segment as 81 percent of blocked chunks
+and therefore the next increment. Probing it before writing any code found that
+it is two workstreams wearing one name.
+
+**Shared slots live in a host-owned byte buffer with a specified encoding.**
+`read_shared_from_buffer` resolves a slot through a layout table to
+`(offset, kind, len)` and decodes little-endian scalars of declared kind and
+width. That encoding is part of the wire format, so native code may depend on
+it.
+
+**Private slots live in the arena as `GenericValue` records, and their layout is
+not specified.** `GenericValue` is declared `#[derive(Debug, Clone)]` with **no
+`#[repr]`**. Rust does not guarantee field order, discriminant size, or the
+absence of niche optimisation for such a type. Native code that computed
+`persistent_ptr + index * size_of::<GenericValue>()` and decoded a tag at a
+fixed offset would be depending on an unspecified layout. **That is unsound
+rather than merely fragile**, and no amount of differential testing would
+establish otherwise, because a passing test only shows the layout happened to
+match for one compiler invocation.
+
+### Measured split, 2026-08-09
+
+| | Instances | Share |
+|---|---|---|
+| Shared | 2561 | 32.7% |
+| Private | 5271 | 67.3% |
+| Total | 7832 | cross-checks against the coverage spike exactly |
+
+But instance counts mislead, which is this document's own finding, so the unit
+question was asked separately:
+
+| | Chunks | Share of the 328 blocked |
+|---|---|---|
+| Unblocked by **shared-only** support | **53** | 16% |
+| Data-only but need **private** slots too | 211 | 64% |
+| Blocked by something other than data | 64 | 20% |
+
+Shared is 33 percent of data instances and 16 percent of blocked chunks. **The
+instance count overstates it by a factor of two**, inside a workstream that was
+itself identified by correcting an instance-count error. The lesson recurs one
+level down.
+
+### What this means for sequencing
+
+**Shared-only support is sound today and worth `+53` chunks**, taking unit
+coverage from 33.9 percent to 44.6 percent. It needs one small decision, which
+is how native code obtains the buffer base pointer, and that is a Workstream D
+application-binary-interface question of the same size as the symbol-naming one
+already settled provisionally.
+
+**Private support is worth a further `+211` chunks**, which would take coverage
+to roughly 87 percent, and it is **blocked on a representation decision that is
+not mine to take**. `src/bytecode.rs` is a file this branch holds read-only. The
+options are to give `GenericValue` a stable `#[repr]`, or to define a separate
+flat encoding for the persistent region as B28 did for composite bodies. The
+second is more in keeping with the flat-representation direction the runtime has
+been moving in, and it is the larger change.
+
+**This is the single highest-value decision available to the native workstream**,
+at roughly forty percentage points of unit coverage, and it requires the
+operator and the runtime owner rather than this branch.
