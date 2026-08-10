@@ -2922,3 +2922,47 @@ Also noted from the same list, against future work: **LTO is permitted within a
 hot-replacement boundary and suppressed across boundaries**, and per-target WCET
 analysis is confirmed V0.5+ — the posture-3 design recorded above is out of scope
 for this milestone, not merely deferred within it.
+
+## The O2 arm is written, and the earlier recommendation was over-specified
+
+The entry above recommended "an AOT-and-`O2` arm" for the differential oracle.
+Reading `aot_linkage.rs`'s harness before writing it showed that phrase conflates
+**two independent dimensions with very different cost and risk**:
+
+| Dimension | What it catches | Cost per case |
+|---|---|---|
+| **Optimisation level** (O0 → `default<O2>`) | `undef`/poison exploitation, pass miscompilation | One `run_passes` call |
+| **Delivery shape** (JIT → object + linker) | Calling convention, symbol emission, real linkage | Object write, link, subprocess |
+
+**The soundness risk lives entirely in the first**, and it is nearly free. The
+second carries integration risk and is already sampled by `aot_linkage.rs`.
+Closing dimension 1 across the corpus and sampling dimension 2 is the right
+split; routing every differential case through a linker would buy little for a
+large cost.
+
+So the prepared arm runs the real `default<O2>` pipeline and then JITs, rather
+than emitting objects. Recording the correction because the earlier phrasing
+would have produced a slower, more fragile test for no additional soundness.
+
+### One property is genuinely O2-only, and the arm pins it
+
+An arm that re-runs passing cases at a second optimisation level can look like
+coverage while being unable to fail differently from the O0 arm. The arm
+therefore **re-verifies the module after `run_passes`**, which no O0 test can do
+because no O0 test runs a pass. That is the one assertion here that is
+structurally impossible to make elsewhere in the suite.
+
+### Two API errors caught before compiling, both by reading the existing harness
+
+- I drafted `TargetMachine::get_host_cpu_name()` / `get_host_cpu_features()`.
+  Those return `LLVMString`, not `&str`, and would not have compiled.
+  `aot_linkage.rs` uses `"generic"` and `""` — and matching the shipped emitter's
+  settings is the *point* of this arm, so copying it was right on both counts.
+- I assumed `a + b` at `i64::MAX` might trap and invalidate a case. Checked:
+  `wrapping_addition_agrees_with_the_vm` already uses `[i64::MAX, 1]` and
+  `[i64::MIN, -1]`, so addition **wraps** here and the case tests the triple's low
+  word rather than failing for an unrelated reason.
+
+Both found by reading the file the new code sits beside, which is the same
+one-command check that separated today's caught bugs from last night's
+uncaught one.
