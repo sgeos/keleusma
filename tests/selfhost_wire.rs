@@ -1801,3 +1801,422 @@ fn the_side_tables_read_back_including_negative_discriminants() {
         }
     }
 }
+
+// =========================================================================
+// SLICE 5c — range-addressed runs
+// =========================================================================
+
+use keleusma::wire_schema::{
+    EnumLayoutRecord, EnumVariantRecord, SignatureRecord, StructTemplateRecord,
+};
+
+const CMD_SIG_COUNT: i64 = 38;
+const CMD_SIG_PARAMS_FIRST: i64 = 39;
+const CMD_SIG_PARAMS_COUNT: i64 = 40;
+const CMD_SIG_RET: i64 = 41;
+const CMD_SIG_RESUME: i64 = 42;
+const CMD_SIG_PARAM_SHAPE: i64 = 43;
+const CMD_TPL_COUNT: i64 = 44;
+const CMD_TPL_TYPE_NAME: i64 = 45;
+const CMD_TPL_FIELD_COUNT: i64 = 46;
+const CMD_TPL_FIELD_NAME: i64 = 47;
+const CMD_ELAY_COUNT: i64 = 48;
+const CMD_ELAY_TYPE_NAME: i64 = 49;
+const CMD_ELAY_VARIANTS_COUNT: i64 = 50;
+const CMD_ELAY_MIN_PAYLOAD: i64 = 51;
+const CMD_ELAY_VARIANT_IN_RANGE: i64 = 52;
+const CMD_ELAY_VARIANT_NAME: i64 = 53;
+const CMD_ELAY_VARIANT_DISC: i64 = 54;
+
+#[test]
+fn the_slice_5c_offsets_and_kinds_match_the_schema() {
+    assert_eq!(kel_const("sig_stride"), SignatureRecord::STRIDE as i64);
+    assert_eq!(
+        kel_const("sig_off_params_first"),
+        SignatureRecord::OFFSET_PARAMS_FIRST as i64
+    );
+    assert_eq!(
+        kel_const("sig_off_params_count"),
+        SignatureRecord::OFFSET_PARAMS_COUNT as i64
+    );
+    assert_eq!(kel_const("sig_off_ret"), SignatureRecord::OFFSET_RET as i64);
+    assert_eq!(
+        kel_const("sig_off_resume"),
+        SignatureRecord::OFFSET_RESUME as i64
+    );
+
+    assert_eq!(kel_const("tpl_stride"), StructTemplateRecord::STRIDE as i64);
+    assert_eq!(
+        kel_const("tpl_off_type_name"),
+        StructTemplateRecord::OFFSET_TYPE_NAME as i64
+    );
+    assert_eq!(
+        kel_const("tpl_off_field_names_first"),
+        StructTemplateRecord::OFFSET_FIELD_NAMES_FIRST as i64
+    );
+    assert_eq!(
+        kel_const("tpl_off_field_count"),
+        StructTemplateRecord::OFFSET_FIELD_COUNT as i64
+    );
+
+    assert_eq!(kel_const("evar_stride"), EnumVariantRecord::STRIDE as i64);
+    assert_eq!(
+        kel_const("evar_off_name"),
+        EnumVariantRecord::OFFSET_NAME as i64
+    );
+    assert_eq!(
+        kel_const("evar_off_disc"),
+        EnumVariantRecord::OFFSET_DISC as i64
+    );
+
+    assert_eq!(kel_const("elay_stride"), EnumLayoutRecord::STRIDE as i64);
+    assert_eq!(
+        kel_const("elay_off_type_name"),
+        EnumLayoutRecord::OFFSET_TYPE_NAME as i64
+    );
+    assert_eq!(
+        kel_const("elay_off_variants_first"),
+        EnumLayoutRecord::OFFSET_VARIANTS_FIRST as i64
+    );
+    assert_eq!(
+        kel_const("elay_off_variants_count"),
+        EnumLayoutRecord::OFFSET_VARIANTS_COUNT as i64
+    );
+    assert_eq!(
+        kel_const("elay_off_min_payload"),
+        EnumLayoutRecord::OFFSET_MIN_PAYLOAD as i64
+    );
+
+    assert_eq!(kel_const("kind_signatures"), i64::from(kind::SIGNATURES));
+    assert_eq!(
+        kel_const("kind_struct_templates"),
+        i64::from(kind::STRUCT_TEMPLATES)
+    );
+    assert_eq!(
+        kel_const("kind_enum_variants"),
+        i64::from(kind::ENUM_VARIANTS)
+    );
+    assert_eq!(
+        kel_const("kind_enum_layouts"),
+        i64::from(kind::ENUM_LAYOUTS)
+    );
+}
+
+#[allow(clippy::type_complexity)]
+fn runs_artifact() -> (
+    Vec<u8>,
+    Vec<SignatureRecord>,
+    Vec<StructTemplateRecord>,
+    Vec<EnumLayoutRecord>,
+    Vec<EnumVariantRecord>,
+) {
+    // Two ADJACENT runs in each table, so an unguarded `first + k` reads the
+    // neighbour's record — in bounds, and silently wrong. That is the failure
+    // the range guards exist for, and a single-run fixture could not see it.
+    let sigs = vec![
+        SignatureRecord {
+            params_first: 0,
+            params_count: 2,
+            ret: 9,
+            resume: 1,
+        },
+        SignatureRecord {
+            params_first: 2,
+            params_count: 3,
+            ret: 4,
+            resume: 0,
+        },
+    ];
+    let tpls = vec![
+        StructTemplateRecord {
+            type_name: 1,
+            field_names_first: 0,
+            field_count: 2,
+            reserved: 0,
+        },
+        StructTemplateRecord {
+            type_name: 2,
+            field_names_first: 2,
+            field_count: 3,
+            reserved: 0,
+        },
+    ];
+    let evars = vec![
+        EnumVariantRecord {
+            name: 10,
+            reserved: 0,
+            disc: 0,
+        },
+        EnumVariantRecord {
+            name: 11,
+            reserved: 0,
+            disc: -1,
+        },
+        EnumVariantRecord {
+            name: 12,
+            reserved: 0,
+            disc: i64::MIN,
+        },
+        EnumVariantRecord {
+            name: 13,
+            reserved: 0,
+            disc: 5,
+        },
+    ];
+    let elays = vec![
+        EnumLayoutRecord {
+            type_name: 20,
+            variants_first: 0,
+            variants_count: 2,
+            min_payload: 8,
+        },
+        EnumLayoutRecord {
+            type_name: 21,
+            variants_first: 2,
+            variants_count: 2,
+            min_payload: 16,
+        },
+    ];
+
+    let mut b = keleusma_wire::WireBuilder::new();
+    let put = |b: &mut keleusma_wire::WireBuilder, k: u16, recs: &[[u8; 16]]| {
+        let id = b.region(k, 0).expect("region");
+        for r in recs {
+            b.push(id, r);
+        }
+    };
+    let enc = |r: &dyn Fn(&mut [u8; 16])| -> [u8; 16] {
+        let mut buf = [0u8; 16];
+        r(&mut buf);
+        buf
+    };
+    let sig_bytes: Vec<[u8; 16]> = sigs
+        .iter()
+        .map(|s| {
+            enc(&|b: &mut [u8; 16]| {
+                s.write_record(b).expect("enc");
+            })
+        })
+        .collect();
+    let tpl_bytes: Vec<[u8; 16]> = tpls
+        .iter()
+        .map(|s| {
+            enc(&|b: &mut [u8; 16]| {
+                s.write_record(b).expect("enc");
+            })
+        })
+        .collect();
+    let evar_bytes: Vec<[u8; 16]> = evars
+        .iter()
+        .map(|s| {
+            enc(&|b: &mut [u8; 16]| {
+                s.write_record(b).expect("enc");
+            })
+        })
+        .collect();
+    let elay_bytes: Vec<[u8; 16]> = elays
+        .iter()
+        .map(|s| {
+            enc(&|b: &mut [u8; 16]| {
+                s.write_record(b).expect("enc");
+            })
+        })
+        .collect();
+    put(&mut b, kind::SIGNATURES, &sig_bytes);
+    put(&mut b, kind::STRUCT_TEMPLATES, &tpl_bytes);
+    put(&mut b, kind::ENUM_VARIANTS, &evar_bytes);
+    put(&mut b, kind::ENUM_LAYOUTS, &elay_bytes);
+    (b.finish().expect("finish"), sigs, tpls, elays, evars)
+}
+
+#[test]
+fn the_run_owning_records_read_back_field_for_field() {
+    let (art, sigs, tpls, elays, _) = runs_artifact();
+    let mut vm = vm_for(WIRE_KEL);
+    let n = 4i64;
+    for (cmd, want, what) in [
+        (CMD_SIG_COUNT, sigs.len() as i64, "signatures"),
+        (CMD_TPL_COUNT, tpls.len() as i64, "templates"),
+        (CMD_ELAY_COUNT, elays.len() as i64, "layouts"),
+    ] {
+        let (got, _) = run_cmd_args(&mut vm, cmd, n, &art, &[], [0, 0, 0, 0], 0).expect("run");
+        assert_eq!(got, want, "{what} count");
+    }
+    for (i, s) in sigs.iter().enumerate() {
+        for (cmd, want, what) in [
+            (
+                CMD_SIG_PARAMS_FIRST,
+                i64::from(s.params_first),
+                "params_first",
+            ),
+            (
+                CMD_SIG_PARAMS_COUNT,
+                i64::from(s.params_count),
+                "params_count",
+            ),
+            (CMD_SIG_RET, i64::from(s.ret), "ret"),
+            (CMD_SIG_RESUME, i64::from(s.resume), "resume"),
+        ] {
+            let (got, _) =
+                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0], 0).expect("run");
+            assert_eq!(got, want, "signature {i} {what}");
+        }
+    }
+    for (i, t) in tpls.iter().enumerate() {
+        for (cmd, want, what) in [
+            (CMD_TPL_TYPE_NAME, i64::from(t.type_name), "type_name"),
+            (CMD_TPL_FIELD_COUNT, i64::from(t.field_count), "field_count"),
+        ] {
+            let (got, _) =
+                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0], 0).expect("run");
+            assert_eq!(got, want, "template {i} {what}");
+        }
+    }
+    for (i, l) in elays.iter().enumerate() {
+        for (cmd, want, what) in [
+            (CMD_ELAY_TYPE_NAME, i64::from(l.type_name), "type_name"),
+            (
+                CMD_ELAY_VARIANTS_COUNT,
+                i64::from(l.variants_count),
+                "variants_count",
+            ),
+            (
+                CMD_ELAY_MIN_PAYLOAD,
+                i64::from(l.min_payload),
+                "min_payload",
+            ),
+        ] {
+            let (got, _) =
+                run_cmd_args(&mut vm, cmd, n, &art, &[], [i as i64, 0, 0, 0], 0).expect("run");
+            assert_eq!(got, want, "layout {i} {what}");
+        }
+    }
+}
+
+#[test]
+fn a_run_index_past_its_count_is_refused_rather_than_reading_the_neighbour() {
+    // The fixture puts two adjacent runs in every table, so `first + k` for a
+    // `k` past the count lands on the NEXT run's data: in bounds, plausible,
+    // and wrong. Each guard must refuse instead.
+    let (art, sigs, tpls, elays, _) = runs_artifact();
+    let mut vm = vm_for(WIRE_KEL);
+    let n = 4i64;
+
+    for (i, s) in sigs.iter().enumerate() {
+        for k in 0..s.params_count + 2 {
+            let (got, _) = run_cmd_args(
+                &mut vm,
+                CMD_SIG_PARAM_SHAPE,
+                n,
+                &art,
+                &[],
+                [i as i64, i64::from(k), 0, 0],
+                0,
+            )
+            .expect("run");
+            let want = if k < s.params_count {
+                i64::from(s.params_first + k)
+            } else {
+                -1
+            };
+            assert_eq!(got, want, "signature {i} param {k}");
+        }
+    }
+    for (i, t) in tpls.iter().enumerate() {
+        for k in 0..t.field_count + 2 {
+            let (got, _) = run_cmd_args(
+                &mut vm,
+                CMD_TPL_FIELD_NAME,
+                n,
+                &art,
+                &[],
+                [i as i64, i64::from(k), 0, 0],
+                0,
+            )
+            .expect("run");
+            let want = if k < t.field_count {
+                i64::from(t.field_names_first + k)
+            } else {
+                -1
+            };
+            assert_eq!(got, want, "template {i} field {k}");
+        }
+    }
+    for (i, l) in elays.iter().enumerate() {
+        for k in 0..l.variants_count + 2 {
+            let (got, _) = run_cmd_args(
+                &mut vm,
+                CMD_ELAY_VARIANT_IN_RANGE,
+                n,
+                &art,
+                &[],
+                [i as i64, i64::from(k), 0, 0],
+                0,
+            )
+            .expect("run");
+            assert_eq!(
+                got,
+                i64::from(k < l.variants_count),
+                "layout {i} variant {k} in-range"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_variant_discriminant_of_minus_one_is_a_value_not_an_error() {
+    // Why the bound is a SEPARATE query. The fixture's second variant has
+    // discriminant -1, which is exactly the sentinel every other accessor uses
+    // for absence. Reading it must yield -1 as a VALUE, while the in-range
+    // query independently reports presence.
+    let (art, _, _, elays, evars) = runs_artifact();
+    let mut vm = vm_for(WIRE_KEL);
+    for (i, l) in elays.iter().enumerate() {
+        for k in 0..l.variants_count {
+            let idx = (l.variants_first + k) as usize;
+            let (in_range, _) = run_cmd_args(
+                &mut vm,
+                CMD_ELAY_VARIANT_IN_RANGE,
+                4,
+                &art,
+                &[],
+                [i as i64, i64::from(k), 0, 0],
+                0,
+            )
+            .expect("run");
+            assert_eq!(in_range, 1, "layout {i} variant {k} should be present");
+            let (disc, _) = run_cmd_args(
+                &mut vm,
+                CMD_ELAY_VARIANT_DISC,
+                4,
+                &art,
+                &[],
+                [i as i64, i64::from(k), 0, 0],
+                0,
+            )
+            .expect("run");
+            assert_eq!(disc, evars[idx].disc, "layout {i} variant {k} discriminant");
+            let (name, _) = run_cmd_args(
+                &mut vm,
+                CMD_ELAY_VARIANT_NAME,
+                4,
+                &art,
+                &[],
+                [i as i64, i64::from(k), 0, 0],
+                0,
+            )
+            .expect("run");
+            assert_eq!(
+                name,
+                i64::from(evars[idx].name),
+                "layout {i} variant {k} name"
+            );
+        }
+    }
+    // And the discriminant -1 really is in the fixture, or the point above is
+    // untested.
+    assert!(
+        evars.iter().any(|v| v.disc == -1),
+        "fixture lost its -1 discriminant"
+    );
+}

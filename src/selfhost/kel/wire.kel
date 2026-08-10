@@ -784,19 +784,176 @@ fn enumaux_discriminant(i: Word) -> Word {
     )
 }
 
-// THE DISPATCH IS SPLIT, AND THE REASON IS A HARD LANGUAGE LIMIT.
+// --- SLICE 5c: range-addressed runs --------------------------------------
+//
+// Each of these four records owns a RUN in another region: a signature's
+// parameters run through `SHAPES`, a struct template's field names through
+// `NAMES`, an enum layout's variants through `ENUM_VARIANTS`. Resolving
+// `first + k` against `count` is the whole content of the slice, and the guard
+// on `k` is the part worth testing, because an unguarded index reads a
+// neighbouring run's record and returns a plausible wrong answer.
+//
+// A NOTE ON SENTINELS, which forced a design choice here. Every accessor so far
+// returns 0 - 1 for absence, which is safe while the value is an index or a
+// count. A variant's DISCRIMINANT is a full signed Word, so -1 is a legal
+// value and cannot also mean "out of range". Rather than invent an
+// unrepresentable sentinel, the bound is a SEPARATE query: ask
+// `layout_variant_in_range` first, and read the discriminant only when it
+// answers 1.
+
+fn kind_signatures() -> Word { 0x0016 }
+fn kind_struct_templates() -> Word { 0x0017 }
+fn kind_enum_variants() -> Word { 0x0018 }
+fn kind_enum_layouts() -> Word { 0x0019 }
+
+// SignatureRecord: params_first u32 @0, params_count u32 @4, ret u32 @8,
+// resume u32 @12.
+fn sig_stride() -> Word { 16 }
+fn sig_off_params_first() -> Word { 0 }
+fn sig_off_params_count() -> Word { 4 }
+fn sig_off_ret() -> Word { 8 }
+fn sig_off_resume() -> Word { 12 }
+
+// StructTemplateRecord: type_name u32 @0, field_names_first u32 @4,
+// field_count u32 @8, reserved u32 @12.
+fn tpl_stride() -> Word { 16 }
+fn tpl_off_type_name() -> Word { 0 }
+fn tpl_off_field_names_first() -> Word { 4 }
+fn tpl_off_field_count() -> Word { 8 }
+
+// EnumVariantRecord: name u32 @0, reserved u32 @4, disc i64 @8.
+fn evar_stride() -> Word { 16 }
+fn evar_off_name() -> Word { 0 }
+fn evar_off_disc() -> Word { 8 }
+
+// EnumLayoutRecord: type_name u32 @0, variants_first u32 @4,
+// variants_count u32 @8, min_payload u32 @12.
+fn elay_stride() -> Word { 16 }
+fn elay_off_type_name() -> Word { 0 }
+fn elay_off_variants_first() -> Word { 4 }
+fn elay_off_variants_count() -> Word { 8 }
+fn elay_off_min_payload() -> Word { 12 }
+
+fn sig_count() -> Word {
+    if dir_find(kind_signatures()) == 0 - 1 { 0 } else {
+        rec_count(dir_find(kind_signatures()), sig_stride())
+    }
+}
+
+fn sig_params_first(i: Word) -> Word {
+    rec_u32(dir_find(kind_signatures()), sig_stride(), i, sig_off_params_first())
+}
+
+fn sig_params_count(i: Word) -> Word {
+    rec_u32(dir_find(kind_signatures()), sig_stride(), i, sig_off_params_count())
+}
+
+fn sig_ret(i: Word) -> Word {
+    rec_u32(dir_find(kind_signatures()), sig_stride(), i, sig_off_ret())
+}
+
+fn sig_resume(i: Word) -> Word {
+    rec_u32(dir_find(kind_signatures()), sig_stride(), i, sig_off_resume())
+}
+
+// Parameter `k` of signature `i`, resolved to its shape index, or 0 - 1 when
+// `k` is past the run. Without the guard this reads the next signature's
+// parameters, which are in bounds and therefore silently wrong.
+fn sig_param_shape(i: Word, k: Word) -> Word {
+    if k >= sig_params_count(i) { 0 - 1 } else { sig_params_first(i) + k }
+}
+
+fn tpl_count() -> Word {
+    if dir_find(kind_struct_templates()) == 0 - 1 { 0 } else {
+        rec_count(dir_find(kind_struct_templates()), tpl_stride())
+    }
+}
+
+fn tpl_type_name(i: Word) -> Word {
+    rec_u32(dir_find(kind_struct_templates()), tpl_stride(), i, tpl_off_type_name())
+}
+
+fn tpl_field_count(i: Word) -> Word {
+    rec_u32(dir_find(kind_struct_templates()), tpl_stride(), i, tpl_off_field_count())
+}
+
+// Field `k`'s NAME INDEX. A template's names are interned consecutively and
+// without sharing precisely so that `first + k` addresses them; a repeated name
+// collapsing onto an earlier index would break the run.
+fn tpl_field_name(i: Word, k: Word) -> Word {
+    if k >= tpl_field_count(i) { 0 - 1 } else {
+        rec_u32(
+            dir_find(kind_struct_templates()),
+            tpl_stride(),
+            i,
+            tpl_off_field_names_first(),
+        ) + k
+    }
+}
+
+fn elay_count() -> Word {
+    if dir_find(kind_enum_layouts()) == 0 - 1 { 0 } else {
+        rec_count(dir_find(kind_enum_layouts()), elay_stride())
+    }
+}
+
+fn elay_type_name(i: Word) -> Word {
+    rec_u32(dir_find(kind_enum_layouts()), elay_stride(), i, elay_off_type_name())
+}
+
+fn elay_variants_count(i: Word) -> Word {
+    rec_u32(dir_find(kind_enum_layouts()), elay_stride(), i, elay_off_variants_count())
+}
+
+fn elay_min_payload(i: Word) -> Word {
+    rec_u32(dir_find(kind_enum_layouts()), elay_stride(), i, elay_off_min_payload())
+}
+
+// 1 when variant `k` of layout `i` exists. Ask this BEFORE reading the
+// discriminant, which has no spare value to signal absence with.
+fn elay_variant_in_range(i: Word, k: Word) -> Word {
+    if k >= elay_variants_count(i) { 0 } else { 1 }
+}
+
+fn elay_variant_index(i: Word, k: Word) -> Word {
+    rec_u32(dir_find(kind_enum_layouts()), elay_stride(), i, elay_off_variants_first()) + k
+}
+
+fn elay_variant_name(i: Word, k: Word) -> Word {
+    if elay_variant_in_range(i, k) == 0 { 0 - 1 } else {
+        rec_u32(
+            dir_find(kind_enum_variants()),
+            evar_stride(),
+            elay_variant_index(i, k),
+            evar_off_name(),
+        )
+    }
+}
+
+// Signed, like the constant table's discriminant, and meaningful only when
+// `elay_variant_in_range` answers 1.
+fn elay_variant_disc(i: Word, k: Word) -> Word {
+    get_i64(
+        rec_at(
+            dir_find(kind_enum_variants()),
+            evar_stride(),
+            elay_variant_index(i, k),
+            evar_off_disc(),
+        ),
+    )
+}
+
+// THE DISPATCH IS SPLIT INTO CHAINS, AND THE REASON IS A HARD LANGUAGE LIMIT.
 //
 // The parser rejects an expression nested more than 24 deep, with
 // "parser recursion depth 24 exceeded; deeply nested expressions are rejected
 // to prevent stack overflow". An `if / else if / ...` chain is right-nested, so
-// one arm costs one level of depth, and this module passed 24 commands while
-// growing. The rejection is a clean diagnostic rather than a crash, which is
-// the language behaving well, but it does cap a flat dispatch at roughly two
-// dozen arms.
+// one arm costs one level, which caps a flat dispatch at roughly two dozen
+// commands. The diagnostic is clean rather than a crash, which is the language
+// behaving well.
 //
-// Three chains keep every one of them far below the limit and leave room for
-// slices 5c to 5e. The thresholds are arbitrary; they only have to keep each
-// chain short.
+// Each chain below stays far under the limit. The thresholds are arbitrary and
+// only have to keep the chains short; add a chain rather than lengthening one.
 
 fn dispatch_container(cmd: Word) -> Word {
     if cmd == 0 { crc_range(0, wire.len) } else {
@@ -845,10 +1002,32 @@ fn dispatch_consts(cmd: Word) -> Word {
     if cmd == 35 { enumaux_type_name(wire.warg) } else {
     if cmd == 36 { enumaux_variant(wire.warg) } else {
     if cmd == 37 { enumaux_discriminant(wire.warg) } else {
-    0 - 99 }}}}}}}}}}}}
+    0 - 96 }}}}}}}}}}}}
+}
+
+fn dispatch_runs(cmd: Word) -> Word {
+    if cmd == 38 { sig_count() } else {
+    if cmd == 39 { sig_params_first(wire.warg) } else {
+    if cmd == 40 { sig_params_count(wire.warg) } else {
+    if cmd == 41 { sig_ret(wire.warg) } else {
+    if cmd == 42 { sig_resume(wire.warg) } else {
+    if cmd == 43 { sig_param_shape(wire.warg, wire.warg2) } else {
+    if cmd == 44 { tpl_count() } else {
+    if cmd == 45 { tpl_type_name(wire.warg) } else {
+    if cmd == 46 { tpl_field_count(wire.warg) } else {
+    if cmd == 47 { tpl_field_name(wire.warg, wire.warg2) } else {
+    if cmd == 48 { elay_count() } else {
+    if cmd == 49 { elay_type_name(wire.warg) } else {
+    if cmd == 50 { elay_variants_count(wire.warg) } else {
+    if cmd == 51 { elay_min_payload(wire.warg) } else {
+    if cmd == 52 { elay_variant_in_range(wire.warg, wire.warg2) } else {
+    if cmd == 53 { elay_variant_name(wire.warg, wire.warg2) } else {
+    if cmd == 54 { elay_variant_disc(wire.warg, wire.warg2) } else {
+    0 - 99 }}}}}}}}}}}}}}}}}
 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {
-    if cmd < 26 { dispatch_schema(cmd) } else { dispatch_consts(cmd) } }
+    if cmd < 26 { dispatch_schema(cmd) } else {
+    if cmd < 38 { dispatch_consts(cmd) } else { dispatch_runs(cmd) } } }
 }
