@@ -3443,3 +3443,48 @@ and is silently wrong about where suspension happens.
 - **Observational equivalence is still unproven even in the degenerate case.**
   It is far more plausible when the permutation is the identity, but plausible is
   not proven, and `tests/yield_sequence.rs` remains the only thing that settles it.
+
+## The degenerate case's op shape is now DERIVED, and a hazard beside it does not bite
+
+Two of the three items left unestablished above were addressed by reading the
+emission path rather than by counting, which is worth separating from the
+measurement because a derivation and a count fail in different ways.
+
+### Derived, not expected
+
+`Expr::Yield` emits exactly `compile_expr(value)` followed by `Op::Yield`, with
+nothing after it. A single-headed stream chunk emits `Op::Stream`, the body,
+`Op::PopN(1)`, `Op::Reset`. A block's tail expression is its value, and `Yield` is
+pop-one push-one, so for `loop main(resume) { yield run() }` the whole chunk is
+
+```
+Stream ; Call(run) ; Yield ; PopN(1) ; Reset
+```
+
+and the `PopN(1)` discards the resumed value that `Yield` pushed. **The claim that
+only `PopN(1)` separates `Yield` from `Reset` is therefore structural**, holding
+for any single-headed stream body whose tail expression is a `yield`, rather than
+an accident of these particular modules. A corpus count would still be worth
+having, since it would also catch anything a later pass appends, but the shape no
+longer rests on expectation.
+
+### A hazard that would have voided the trivial class, checked and clear
+
+A **multiheaded** stream chunk takes a different emission path entirely. The
+dispatch is wrapped in `Op::Loop` and `Op::EndLoop`, so **every `Yield` in a
+multiheaded stream chunk sits at nesting depth one or greater and is nested by
+construction.** No such chunk can ever be in the degenerate class, whatever its
+source looks like.
+
+All ten stage modules declare `loop main(resume: Word) -> Word` with no `when`
+clause, so none takes that path. Had even one been multiheaded, the trivial class
+would have been smaller than measured and the measurement above would have been
+wrong in the optimistic direction.
+
+This is the more durable half of the finding. The eight-of-ten split is a fact
+about today's corpus and will drift. **Single-headed is a precondition of the
+degenerate lowering in the language**, and it belongs in the admissibility check
+rather than being rediscovered when a stage gains a second head.
+
+All five `verify_*.kel` modules were read individually rather than sampled, and
+all five are byte-identical in this respect.
