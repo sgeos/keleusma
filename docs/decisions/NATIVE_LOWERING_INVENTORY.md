@@ -3245,3 +3245,76 @@ expiry, which is the honest way to hold it.
 
 Three of four counts subtracted work. That is the argument for measuring before
 building, made in numbers rather than in principle.
+
+## DESIGN: the rotation, now that the counts make it the top item
+
+Count 2 put Workstream B ahead of the width stack — ten of eleven self-hosted
+stage modules refuse on `Stream`, so **Order 1 is gated here**. The rotation has
+been a hypothesis with preconditions since yesterday; this specifies it.
+
+### The structural facts it rests on, each established rather than assumed
+
+1. **A stream chunk's shape is fixed by the compiler** (`compiler.rs:5334`):
+   `[prologue] Stream [body] PopN(1) Reset`. The `else` branch emits `Return`
+   instead; only `Stream` chunks get this form.
+2. **`Reset` rewinds to just after `Stream`**, so the prologue runs exactly once
+   and is *outside* the repeating region.
+3. **`Reset` clears everything but the data segment** — locals to `Unit`, operand
+   stack truncated, ephemeral arena reclaimed with an epoch bump, opaque registry
+   cleared. Verified from the `Op::Reset` mechanism, not inferred.
+4. **A top-level `Yield` delimits a segment.** `wcet_stream_iteration` tracks
+   block-nesting depth and **bails to `None` if any `Yield` is nested** inside an
+   `If` or `Loop`. So the analysable case is exactly the flat one.
+
+### The insight fact 4 supplies
+
+**The rotation is a permutation of the segments the WCET pass already computes.**
+That pass splits a stream body at its top-level yields to bound each resumption
+separately; the rotation reorders those same segments. It is not a new program
+analysis — it reuses one that exists, and it inherits that pass's own
+admissibility condition, which is a better place to draw the line than any I
+would have invented.
+
+### The transformation
+
+For a single top-level yield — 23 of 24 stream chunks — the body is
+`A ; Yield ; B`, and the VM's cycle is:
+
+```
+prologue ; [ A ; Yield ; B ; PopN(1) ; Reset ]*
+```
+
+The rotated native form runs `B` for the PREVIOUS resume value, then `A`:
+
+```
+kel_chunk_N_init()            -> prologue ; A ; return yielded
+kel_chunk_N_step(prev_resume) -> B(prev_resume) ; clear locals ; A ; return yielded
+```
+
+**Two entry points rather than a flag**, because that is what makes the boundary
+condition disappear instead of being handled: `init` has no previous resume value
+*by construction*, so there is no first-call branch to get wrong. The host calls
+`init` once and `step` thereafter — which is exactly the shape the existing
+`Vm::call` / `Vm::resume` pair already has, so the ABI mirrors the runtime's own
+rather than inventing a convention.
+
+`clear locals` is the emulated `Reset`, and by fact 3 it is the *whole* of what
+`Reset` does that the rotated form must reproduce: the operand stack is
+function-local in native code, the ephemeral arena has no native analogue yet,
+and the data segment is meant to survive.
+
+### What this does NOT resolve, stated plainly
+
+- **Equivalence is still unproven.** The preconditions are necessary; this
+  specifies the transformation but does not prove `B;A` observationally equals
+  the suspended form. The oracle for that exists — `tests/yield_sequence.rs`
+  compares whole yield sequences — and it is the only thing that can settle it.
+- **The nineteen-yield chunk is out of scope** and needs real coroutine frames,
+  which is where the architecture's `coro.id.retcon` design applies.
+- **`kel_yield` is superseded by this**, not extended. The callback keeps a frame
+  live across the suspension on the unaccounted C stack; the rotated form returns
+  instead, so no frame persists and the WCMU gap closes with it. That is the
+  three-case resolution recorded earlier, now with the middle case specified.
+- **Whether `Stream` alone unblocks the ten stage modules is unknown.**
+  `lower_module` refuses on the first unsupported opcode, so composites may sit
+  behind it. The rotation is necessary for Order 1; sufficiency is unmeasured.
