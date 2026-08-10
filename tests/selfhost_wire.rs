@@ -84,6 +84,14 @@ const WARG2_SLOT: usize = WARG_SLOT + 1;
 const WARG3_SLOT: usize = WARG2_SLOT + 1;
 const WARG4_SLOT: usize = WARG3_SLOT + 1;
 const WARG5_SLOT: usize = WARG4_SLOT + 1;
+/// Record-field inputs for the schema emitters. Appended after the `warg`
+/// slots, matching the declaration order in `wire.kel`.
+const FIN_SLOT: usize = WARG5_SLOT + 1;
+const FIN_CAPACITY: usize = 1024;
+/// Byte-pool input. A pool has no stride and no fields, so `fin` is the wrong
+/// channel: a word per byte would cost eight times the space.
+const BIN_SLOT: usize = FIN_SLOT + FIN_CAPACITY;
+const BIN_CAPACITY: usize = 8192;
 
 /// Build a `Vm` over `src` with a persistent region sized for its private data.
 ///
@@ -201,6 +209,100 @@ fn run_cmd_args(
             RCOVERS_SLOT + i,
             Value::Int(i64::from(*covers)),
         )?;
+    }
+    let ret = match vm.call_with_shared(&mut shared, &[Value::Int(cmd)])? {
+        VmState::Finished(Value::Int(n)) => n,
+        other => panic!("unexpected VM state: {other:?}"),
+    };
+    let n = read_len.min(CAPACITY);
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        match vm.get_shared(&shared, 1 + i)? {
+            Value::Byte(b) => out.push(b),
+            other => panic!("slot {i} is not a Byte: {other:?}"),
+        }
+    }
+    Ok((ret, out))
+}
+
+/// As `run_cmd_args`, additionally seeding the record-field input array.
+///
+/// `wire.fin` is how a schema emitter receives a record's fields: a record has
+/// more fields than there are `warg` slots, and one slot per field does not
+/// scale past the first record kind.
+fn run_cmd_fields(
+    vm: &mut Vm<'static, 'static>,
+    cmd: i64,
+    nregions: i64,
+    regions: &Regions,
+    fields: &[i64],
+    args: [i64; 5],
+    read_len: usize,
+) -> Result<(i64, Vec<u8>), VmError> {
+    assert!(
+        fields.len() <= FIN_CAPACITY,
+        "{} field inputs exceeds the {FIN_CAPACITY}-word batch buffer",
+        fields.len()
+    );
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.set_shared(&mut shared, 0, Value::Int(0))?;
+    vm.set_shared(&mut shared, NREGIONS_SLOT, Value::Int(nregions))?;
+    vm.set_shared(&mut shared, WARG_SLOT, Value::Int(args[0]))?;
+    vm.set_shared(&mut shared, WARG2_SLOT, Value::Int(args[1]))?;
+    vm.set_shared(&mut shared, WARG3_SLOT, Value::Int(args[2]))?;
+    vm.set_shared(&mut shared, WARG4_SLOT, Value::Int(args[3]))?;
+    vm.set_shared(&mut shared, WARG5_SLOT, Value::Int(args[4]))?;
+    for (i, v) in fields.iter().enumerate() {
+        vm.set_shared(&mut shared, FIN_SLOT + i, Value::Int(*v))?;
+    }
+    for (i, (kind, flags, len, covers)) in regions.iter().enumerate() {
+        vm.set_shared(&mut shared, RKIND_SLOT + i, Value::Int(i64::from(*kind)))?;
+        vm.set_shared(&mut shared, RFLAGS_SLOT + i, Value::Int(i64::from(*flags)))?;
+        vm.set_shared(&mut shared, RLEN_SLOT + i, Value::Int(*len as i64))?;
+        vm.set_shared(
+            &mut shared,
+            RCOVERS_SLOT + i,
+            Value::Int(i64::from(*covers)),
+        )?;
+    }
+    let ret = match vm.call_with_shared(&mut shared, &[Value::Int(cmd)])? {
+        VmState::Finished(Value::Int(n)) => n,
+        other => panic!("unexpected VM state: {other:?}"),
+    };
+    let n = read_len.min(CAPACITY);
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        match vm.get_shared(&shared, 1 + i)? {
+            Value::Byte(b) => out.push(b),
+            other => panic!("slot {i} is not a Byte: {other:?}"),
+        }
+    }
+    Ok((ret, out))
+}
+
+/// Run `cmd` with the byte-pool input array seeded, and read back `read_len`.
+fn run_cmd_pool(
+    vm: &mut Vm<'static, 'static>,
+    cmd: i64,
+    bin: &[u8],
+    args: [i64; 5],
+    read_len: usize,
+) -> Result<(i64, Vec<u8>), VmError> {
+    assert!(
+        bin.len() <= BIN_CAPACITY,
+        "{} pool bytes exceeds the {BIN_CAPACITY}-byte batch buffer",
+        bin.len()
+    );
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.set_shared(&mut shared, 0, Value::Int(0))?;
+    vm.set_shared(&mut shared, NREGIONS_SLOT, Value::Int(0))?;
+    vm.set_shared(&mut shared, WARG_SLOT, Value::Int(args[0]))?;
+    vm.set_shared(&mut shared, WARG2_SLOT, Value::Int(args[1]))?;
+    vm.set_shared(&mut shared, WARG3_SLOT, Value::Int(args[2]))?;
+    vm.set_shared(&mut shared, WARG4_SLOT, Value::Int(args[3]))?;
+    vm.set_shared(&mut shared, WARG5_SLOT, Value::Int(args[4]))?;
+    for (i, b) in bin.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(*b))?;
     }
     let ret = match vm.call_with_shared(&mut shared, &[Value::Int(cmd)])? {
         VmState::Finished(Value::Int(n)) => n,
@@ -782,7 +884,14 @@ fn no_command_below_the_dispatch_ceiling_falls_through() {
     // drifted past its arms would silently route live commands to the default.
     let mut vm = vm_for(WIRE_KEL);
     let mut fell_through = Vec::new();
-    for cmd in 0..103i64 {
+    // Swept to the top of the LAST chain, not the top of the last-but-one. This
+    // read `0..103` and so stopped exactly where `dispatch_frame` begins,
+    // leaving the whole framing chain — the one nearest the depth ceiling and
+    // therefore likeliest to need splitting — entirely unswept.
+    // EXCLUSIVE, so this must be one past the highest live command. Slice 3
+    // added 116 and this read `0..116`, which is exactly the off-by-one the
+    // sweep exists to catch, committed inside the sweep itself.
+    for cmd in 0..119i64 {
         let (got, _) =
             run_cmd_args(&mut vm, cmd, 0, &[], &[], [0, 0, 0, 0, 0], 0).unwrap_or((0, Vec::new()));
         if (-99..=-92).contains(&got) {
@@ -2689,6 +2798,7 @@ fn the_slice_5e_offsets_and_kinds_match_the_schema() {
             HeaderRecord::OFFSET_PRIVATE_DATA_BYTES,
         ),
         ("header_off_schema_hash", HeaderRecord::OFFSET_SCHEMA_HASH),
+        ("header_off_reserved", HeaderRecord::OFFSET_RESERVED),
     ] {
         assert_eq!(kel_const(kel), want as i64, "{kel}");
     }
@@ -3858,5 +3968,928 @@ fn the_narrow_header_readers_and_the_magic_word_agree_with_the_bytes() {
         magic,
         i64::from(u32::from_le_bytes(BYTECODE_MAGIC)),
         "magic word"
+    );
+}
+
+// --- WIRING SLICE 1: the emitter meets real compiler output ------------------
+//
+// Every emission test above builds its region sets by hand, so each one
+// exercises the shapes I thought of. `tests/wire_corpus.rs` made exactly this
+// argument about the Rust codec and was vindicated within minutes, surfacing a
+// quadratic interner that no hand-built case could reach. This is the same
+// argument applied to the Keleusma emitter: the ten stage sources are the
+// largest real Keleusma programs that exist, and their auxiliary bodies are
+// real compiler output rather than my imagination of what a module looks like.
+//
+// WHAT THIS COVERS. The container header — three prologue copies and three
+// directory copies — emitted by `wire.kel` for a real stage's region set, byte
+// for byte against what the Rust encoder produced for the same module. This is
+// the first time `wire.kel` is driven by anything the compiler actually emitted.
+//
+// WHAT IT DOES NOT COVER, stated so it is not mistaken for a superset of the
+// hand-built corpus. A region's length survives the container only as a WORD
+// count, so every length read back here is a multiple of eight. The awkward
+// non-multiple-of-eight lengths, which is where a dropped round-up in
+// `words_for` would hide, are reachable ONLY from the hand-built sets. Those
+// tests stay load-bearing and must not be deleted in favour of this one.
+//
+// It also covers only the header. The region PAYLOADS are the wiring increment
+// proper; nothing here emits a single schema record from real values.
+
+/// The ten stage sources, matching `tests/wire_corpus.rs`.
+const CORPUS_STAGES: &[(&str, &str)] = &[
+    ("lexer", include_str!("../src/selfhost/kel/lexer.kel")),
+    ("parse", include_str!("../src/selfhost/kel/parse.kel")),
+    ("codegen", include_str!("../src/selfhost/kel/codegen.kel")),
+    (
+        "reconstruct",
+        include_str!("../src/selfhost/kel/reconstruct.kel"),
+    ),
+    ("analyze", include_str!("../src/selfhost/kel/analyze.kel")),
+    (
+        "verify_structural",
+        include_str!("../src/selfhost/kel/verify_structural.kel"),
+    ),
+    (
+        "verify_typed",
+        include_str!("../src/selfhost/kel/verify_typed.kel"),
+    ),
+    (
+        "verify_yield",
+        include_str!("../src/selfhost/kel/verify_yield.kel"),
+    ),
+    (
+        "verify_depth",
+        include_str!("../src/selfhost/kel/verify_depth.kel"),
+    ),
+    (
+        "verify_datalayout",
+        include_str!("../src/selfhost/kel/verify_datalayout.kel"),
+    ),
+];
+
+/// The auxiliary body a module would be serialised from.
+///
+/// `op_byte_offset` and `op_record_count` are left zero for the same reason
+/// `tests/wire_corpus.rs` leaves them zero: they are assigned by the opcode
+/// stream layout, which is not what this exercises. Everything else is the
+/// compiler's real output.
+fn corpus_aux_of(module: &keleusma::bytecode::Module) -> keleusma::wire_format::WireAuxBody {
+    use keleusma::wire_format::{WireAuxBody, WireChunk};
+    WireAuxBody {
+        chunks: module
+            .chunks
+            .iter()
+            .map(|c| WireChunk {
+                name: c.name.clone(),
+                constants: c.constants.clone(),
+                struct_templates: c.struct_templates.clone(),
+                local_count: c.local_count,
+                param_count: c.param_count,
+                block_type: c.block_type,
+                param_types: c.param_types.clone(),
+                op_byte_offset: 0,
+                op_record_count: 0,
+                debug_pool_bytes: None,
+            })
+            .collect(),
+        signatures: module.signatures.clone(),
+        enum_layouts: module.enum_layouts.clone(),
+        native_names: module.native_names.clone(),
+        native_return_shapes: module.native_return_shapes.clone(),
+        data_layout: module.data_layout.clone(),
+        entry_point: module.entry_point,
+        word_bits_log2: module.word_bits_log2,
+        addr_bits_log2: module.addr_bits_log2,
+        float_bits_log2: module.float_bits_log2,
+        flags: 0,
+        wcet_cycles: 0,
+        wcmu_bytes: 0,
+        shared_data_bytes: 0,
+        private_data_bytes: 0,
+        schema_hash: 0,
+    }
+}
+
+/// A real stage's region set, in directory order, with the artifact it came from.
+///
+/// The length is recovered as `word_length * 8` because that is the only length
+/// the container stores. `emit_directory` re-rounds it through `words_for`,
+/// which is the identity on a multiple of eight, so this feeds the emitter the
+/// same quantity the reference wrote.
+fn real_stage_regions(src: &str) -> (Vec<RegionSpec>, Vec<u8>) {
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let bytes =
+        keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode aux body");
+    let view = keleusma_wire::WireView::parse(&bytes).expect("reference artifact parses");
+    let mut specs: Vec<RegionSpec> = Vec::new();
+    for i in 0..view.region_count() {
+        let r = view.region_at(i).expect("region in range");
+        specs.push((r.kind, r.flags, (r.word_length as usize) * 8, r.covers));
+    }
+    (specs, bytes)
+}
+
+#[test]
+fn the_emitted_container_header_matches_the_reference_on_real_compiler_output() {
+    let mut vm = vm_for(WIRE_KEL);
+    for (name, src) in CORPUS_STAGES {
+        let (specs, want) = real_stage_regions(src);
+        let hl = header_len(specs.len());
+        let (written, got) = run_cmd_full(
+            &mut vm,
+            CMD_EMIT_HEADER,
+            specs.len() as i64,
+            &[],
+            &specs,
+            0,
+            hl,
+        )
+        .expect("run");
+        assert_eq!(written, hl as i64, "{name}: wrong header length reported");
+        assert_eq!(
+            got,
+            want[..hl],
+            "{name}: emitted header differs from the reference"
+        );
+    }
+}
+
+/// The corpus is real, so its shape is asserted rather than assumed.
+///
+/// Without this, a change that made `real_stage_regions` return an empty set
+/// would leave the differential above comparing a 48-byte prologue and passing.
+#[test]
+fn the_real_region_sets_are_the_shape_the_measurement_recorded() {
+    for (name, src) in CORPUS_STAGES {
+        let (specs, _) = real_stage_regions(src);
+        assert_eq!(
+            specs.len(),
+            19,
+            "{name}: expected 19 regions, the measured count for every stage"
+        );
+        // DEBUG_POOL is the twentieth kind and no stage emits it, because
+        // `CompileOptions::emit_debug` defaults to false. Pinned here so the day
+        // a stage does emit it, this says so rather than the count drifting
+        // silently.
+        assert!(
+            !specs
+                .iter()
+                .any(|(k, _, _, _)| *k == keleusma::wire_schema::kind::DEBUG_POOL),
+            "{name}: a stage emitted DEBUG_POOL; the emitter now has a case it never had"
+        );
+        assert!(
+            specs.iter().any(|(_, _, l, _)| *l > 0),
+            "{name}: every region is empty, which cannot be real output"
+        );
+        // WHAT REAL OUTPUT DOES NOT EXERCISE, asserted rather than assumed.
+        //
+        // `SchemaBuilder` declares every region as `region(kind, 0)` and never
+        // builds a parity plane, so real artifacts carry flags 0 and covers 0
+        // throughout. The differential above therefore says nothing about a
+        // non-zero flags or covers field, and the hand-built sets remain the
+        // only coverage of those directory fields.
+        //
+        // Pinned in this direction deliberately: the (72,64) SECDED plane
+        // exists in `keleusma-wire` and is currently UNEXERCISED by the
+        // shipping encoder. The day that changes, this fires and says so,
+        // rather than the emitter quietly gaining an untested case.
+        assert!(
+            specs.iter().all(|(_, f, _, c)| *f == 0 && *c == 0),
+            "{name}: real output now carries non-zero flags or covers; the emitter \
+             differential no longer covers what it did, and an ECC plane may now \
+             need emitting"
+        );
+    }
+}
+
+/// A named mutation of a region set, applied at a given index.
+type Perturbation = (&'static str, fn(&mut Vec<RegionSpec>, usize));
+
+/// Must-fire control for the differential above.
+///
+/// "The emitted header equals the reference" is only meaningful if the
+/// comparison can report inequality. Each perturbation below is one a real
+/// mistranscription could produce, and each must be caught.
+#[test]
+fn the_real_output_comparison_reports_a_perturbed_region_set() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (base, want) = real_stage_regions(CORPUS_STAGES[9].1);
+    let hl = header_len(base.len());
+
+    // The unperturbed case must be quiet, or the perturbations below prove
+    // nothing. This is the must-NOT-fire half, in the same test so neither can
+    // be deleted without the other.
+    let (_, clean) = run_cmd_full(
+        &mut vm,
+        CMD_EMIT_HEADER,
+        base.len() as i64,
+        &[],
+        &base,
+        0,
+        hl,
+    )
+    .expect("run");
+    assert_eq!(clean, want[..hl], "control: the clean case must agree");
+
+    // Perturb the LARGEST region rather than a fixed index. The first draft
+    // used index 3, which is empty in this stage, so shrinking it underflowed
+    // and the control failed on its own arithmetic rather than on the property.
+    // A non-empty target is required for the shrink case to mean anything.
+    let big = base
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, (_, _, l, _))| *l)
+        .map(|(i, _)| i)
+        .expect("the corpus has at least one region");
+    assert!(
+        base[big].2 >= 8,
+        "the perturbation target must hold at least one word"
+    );
+
+    let perturbations: &[Perturbation] = &[
+        ("one region's kind changed", |s, i| s[i].0 += 1),
+        ("one region's length grown by a word", |s, i| s[i].2 += 8),
+        ("one region's length shrunk by a word", |s, i| s[i].2 -= 8),
+        ("one region's flags set", |s, i| s[i].1 |= 1),
+        ("the covers field changed", |s, i| s[i].3 += 1),
+        ("two regions transposed", |s, i| s.swap(i, i + 1)),
+        ("the last region dropped", |s, _| {
+            s.pop();
+        }),
+    ];
+
+    for (what, perturb) in perturbations {
+        let mut specs = base.clone();
+        // `swap(i, i + 1)` needs a successor; the largest region is never last
+        // here, but the assertion states it rather than relying on it.
+        assert!(big + 1 < base.len(), "the target needs a successor to swap");
+        perturb(&mut specs, big);
+        let n = specs.len();
+        let (_, got) =
+            run_cmd_full(&mut vm, CMD_EMIT_HEADER, n as i64, &[], &specs, 0, hl).expect("run");
+        assert_ne!(
+            got,
+            want[..hl],
+            "control did not fire: {what} produced an identical header"
+        );
+    }
+}
+
+// --- WIRING SLICE 2: the first schema emitter, driven by real values ---------
+//
+// Slice 1 needed no Keleusma change: the container header was already emittable
+// and real data was simply another region set. This is where the emitter side
+// genuinely grows. `emit_header_record` writes a real record's real fields at
+// the transcribed offsets, which is the thing the self-hosted path needs in
+// order to PRODUCE an artifact rather than only read one.
+//
+// WHY A ONE-REGION ARTIFACT. The obvious test would emit into the real
+// artifact's layout and compare in place. It cannot: `wire.bytes` is 65,536
+// bytes and `lexer`'s auxiliary body is 16,114,608, so `region_base` for a real
+// HEADER region lands far outside the buffer. That is the same constraint the
+// sizing measurement recorded, showing up in the first place it could. The
+// record is therefore emitted into a one-region artifact and compared against
+// the HEADER payload extracted from the real one.
+
+/// Header scalars, chosen DISTINCT and non-zero.
+///
+/// `corpus_aux_of` leaves six header fields zero, matching `wire_corpus.rs`,
+/// because a stage compile does not compute them. Emitting six zeroes would
+/// make an offset confusion among them invisible: the differential would pass
+/// whether or not each field landed in the right place, which is the same trap
+/// the hand-built header test avoids by giving the three width fields different
+/// values. Every value below is distinct, non-zero, and distinguishable in
+/// either byte order.
+const HDR_FLAGS: u8 = 0x5A;
+const HDR_WCET: u32 = 0x1112_2324;
+const HDR_WCMU: u32 = 0x3134_3538;
+const HDR_SHARED: u32 = 0x4142_4344;
+const HDR_PRIVATE: u32 = 0x5152_5354;
+const HDR_SCHEMA_HASH: u32 = 0x6162_6364;
+
+/// A stage's real HEADER record: the eleven field inputs, and the reference
+/// bytes the Rust encoder produced for them.
+fn real_header_case(src: &str) -> (Vec<i64>, Vec<u8>) {
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let mut aux = corpus_aux_of(&module);
+    aux.flags = HDR_FLAGS;
+    aux.wcet_cycles = HDR_WCET;
+    aux.wcmu_bytes = HDR_WCMU;
+    aux.shared_data_bytes = HDR_SHARED;
+    aux.private_data_bytes = HDR_PRIVATE;
+    aux.schema_hash = HDR_SCHEMA_HASH;
+
+    let bytes = keleusma::wire_schema::encode_aux_body(&aux).expect("encode aux body");
+    let view = keleusma_wire::WireView::parse(&bytes).expect("reference artifact parses");
+    let region = view
+        .find_region(keleusma::wire_schema::kind::HEADER)
+        .expect("every module emits a HEADER region");
+    let want = view
+        .region_bytes(&region)
+        .expect("HEADER payload in range")
+        .to_vec();
+
+    // The host driver's job, and deliberately NOT read back out of `want`:
+    // feeding the reference's own bytes back in would test only that the
+    // emitter can echo them.
+    let fields = vec![
+        aux.entry_point
+            .map_or(i64::from(keleusma::wire_schema::ABSENT), |e| e as i64),
+        i64::from(aux.word_bits_log2),
+        i64::from(aux.addr_bits_log2),
+        i64::from(aux.float_bits_log2),
+        i64::from(HDR_FLAGS),
+        i64::from(HDR_WCET),
+        i64::from(HDR_WCMU),
+        i64::from(HDR_SHARED),
+        i64::from(HDR_PRIVATE),
+        i64::from(HDR_SCHEMA_HASH),
+        0,
+    ];
+    (fields, want)
+}
+
+/// Emit a HEADER record into a one-region artifact and return its payload.
+fn emit_header_record(vm: &mut Vm<'static, 'static>, fields: &[i64]) -> Vec<u8> {
+    let specs: Vec<RegionSpec> = vec![(keleusma::wire_schema::kind::HEADER, 0, HEADER_STRIDE, 0)];
+    let read_len = header_len(1) + HEADER_STRIDE;
+    let (written, got) = run_cmd_fields(
+        vm,
+        CMD_EMIT_HEADER_RECORD,
+        1,
+        &specs,
+        fields,
+        [0, 0, 0, 0, 0],
+        read_len,
+    )
+    .expect("run");
+    assert_eq!(
+        written, HEADER_STRIDE as i64,
+        "the emitter did not report a whole record"
+    );
+    got[header_len(1)..].to_vec()
+}
+
+const CMD_EMIT_HEADER_RECORD: i64 = 115;
+const HEADER_STRIDE: usize = 32;
+
+#[test]
+fn the_emitted_header_record_matches_the_reference_on_real_compiler_output() {
+    let mut vm = vm_for(WIRE_KEL);
+    for (name, src) in CORPUS_STAGES {
+        let (fields, want) = real_header_case(src);
+        assert_eq!(want.len(), HEADER_STRIDE, "{name}: HEADER is one record");
+        let got = emit_header_record(&mut vm, &fields);
+        assert_eq!(got, want, "{name}: emitted HEADER record differs");
+    }
+}
+
+/// Must-fire control: perturbing any single field must change the bytes.
+///
+/// This is the assertion that makes the differential mean something. Eleven
+/// fields at eleven offsets, and a writer that put two of them in the same
+/// place, or dropped one, would still agree with the reference on every field
+/// it happened to get right. Perturbing each in turn requires every offset to
+/// be independently observable.
+#[test]
+fn every_header_field_is_independently_observable() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (base, want) = real_header_case(CORPUS_STAGES[9].1);
+    assert_eq!(
+        emit_header_record(&mut vm, &base),
+        want,
+        "control: the clean case must agree"
+    );
+    for i in 0..base.len() {
+        let mut fields = base.clone();
+        // Flip a low bit rather than adding, so a u8 field cannot overflow into
+        // its neighbour and report a difference for the wrong reason.
+        fields[i] ^= 1;
+        let got = emit_header_record(&mut vm, &fields);
+        assert_ne!(
+            got, want,
+            "control did not fire: field {i} is not observable in the output"
+        );
+    }
+}
+
+/// The reference reader must accept what Keleusma wrote, and read back the
+/// values that went in.
+///
+/// Byte identity alone would be satisfied by two implementations that are
+/// wrong in the same way. This is the independent direction.
+#[test]
+fn the_reference_reader_recovers_the_fields_keleusma_emitted() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (fields, _) = real_header_case(CORPUS_STAGES[9].1);
+    let specs: Vec<RegionSpec> = vec![(keleusma::wire_schema::kind::HEADER, 0, HEADER_STRIDE, 0)];
+    let read_len = header_len(1) + HEADER_STRIDE;
+    let (_, artifact) = run_cmd_fields(
+        &mut vm,
+        CMD_EMIT_HEADER_RECORD,
+        1,
+        &specs,
+        &fields,
+        [0, 0, 0, 0, 0],
+        read_len,
+    )
+    .expect("run");
+
+    let view = keleusma_wire::WireView::parse(&artifact).expect("reference accepts the artifact");
+    let region = view
+        .find_region(keleusma::wire_schema::kind::HEADER)
+        .expect("HEADER region present");
+    let table = view
+        .records(&region, HEADER_STRIDE)
+        .expect("HEADER reads as a record table");
+    let rec: keleusma::wire_schema::HeaderRecord =
+        table.get_as(0).expect("one HeaderRecord reads back");
+
+    assert_eq!(i64::from(rec.entry_point), fields[0], "entry_point");
+    assert_eq!(i64::from(rec.word_bits_log2), fields[1], "word_bits_log2");
+    assert_eq!(i64::from(rec.addr_bits_log2), fields[2], "addr_bits_log2");
+    assert_eq!(i64::from(rec.float_bits_log2), fields[3], "float_bits_log2");
+    assert_eq!(i64::from(rec.flags), fields[4], "flags");
+    assert_eq!(i64::from(rec.wcet_cycles), fields[5], "wcet_cycles");
+    assert_eq!(i64::from(rec.wcmu_bytes), fields[6], "wcmu_bytes");
+    assert_eq!(
+        i64::from(rec.shared_data_bytes),
+        fields[7],
+        "shared_data_bytes"
+    );
+    assert_eq!(
+        i64::from(rec.private_data_bytes),
+        fields[8],
+        "private_data_bytes"
+    );
+    assert_eq!(i64::from(rec.schema_hash), fields[9], "schema_hash");
+    assert_eq!(i64::from(rec.reserved), fields[10], "reserved");
+}
+
+// --- WIRING SLICE 3: a multi-record region, and the batching mechanism -------
+//
+// `CHUNKS` is the smallest region that cannot be emitted in one batch, at two,
+// so the mechanism is built where a failure is legible rather than inside
+// `DATA_SLOTS`, which needs 1547 of them. `ChunkRecord` is also the widest
+// record in the format at fourteen fields.
+//
+// WHERE THE INPUTS COME FROM, AND WHY IT DIFFERS FROM SLICE 2. Slice 2 derived
+// its field values from the module, because a header's fields ARE module
+// properties. A chunk record's fields are not: `consts_first`,
+// `param_types_first`, `op_byte_offset` and the rest are allocation results
+// produced by `SchemaBuilder` while it lays the artifact out. Reproducing them
+// here would mean reimplementing the encoder, which is the driver's job in a
+// later slice, not this one. They are therefore DECODED from the reference and
+// re-emitted, which tests the emitter's field placement, widths and batching
+// against the reference's — and the must-fire control below is what keeps that
+// from being a test of nothing.
+
+const CMD_EMIT_CHUNK_RECORDS: i64 = 116;
+const CHUNK_STRIDE: usize = 48;
+const CHUNK_FIELDS: usize = 14;
+/// Records per batch, set by `wire.fin` rather than by the output buffer.
+const CHUNKS_PER_BATCH: usize = FIN_CAPACITY / CHUNK_FIELDS;
+
+/// The fourteen fields of each of a stage's chunk records, and the reference
+/// bytes for the whole `CHUNKS` region.
+fn real_chunk_case(src: &str) -> (Vec<[i64; CHUNK_FIELDS]>, Vec<u8>) {
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let bytes =
+        keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode aux body");
+    let view = keleusma_wire::WireView::parse(&bytes).expect("reference artifact parses");
+    let region = view
+        .find_region(keleusma::wire_schema::kind::CHUNKS)
+        .expect("every module emits a CHUNKS region");
+    let want = view
+        .region_bytes(&region)
+        .expect("CHUNKS payload in range")
+        .to_vec();
+    let table = view
+        .records(&region, CHUNK_STRIDE)
+        .expect("CHUNKS reads as a record table");
+
+    let mut recs = Vec::with_capacity(table.len());
+    for i in 0..table.len() {
+        let c: keleusma::wire_schema::ChunkRecord = table.get_as(i).expect("record in range");
+        recs.push([
+            i64::from(c.name),
+            i64::from(c.consts_first),
+            i64::from(c.consts_count),
+            i64::from(c.templates_first),
+            i64::from(c.templates_count),
+            i64::from(c.param_types_first),
+            i64::from(c.param_types_count),
+            i64::from(c.debug_first),
+            i64::from(c.debug_len),
+            i64::from(c.op_byte_offset),
+            i64::from(c.op_record_count),
+            i64::from(c.local_count),
+            i64::from(c.param_count),
+            i64::from(c.block_type),
+        ]);
+    }
+    (recs, want)
+}
+
+/// Emit every record through the window, one batch at a time, and concatenate.
+///
+/// This is the staged shape in miniature: the Keleusma side never holds the
+/// whole region, only one batch's worth, and the caller appends. `window` is
+/// deliberately non-zero so an emitter that ignored its address would write at
+/// zero and be caught rather than pass.
+fn emit_chunks_batched(
+    vm: &mut Vm<'static, 'static>,
+    recs: &[[i64; CHUNK_FIELDS]],
+    window: usize,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(recs.len() * CHUNK_STRIDE);
+    for batch in recs.chunks(CHUNKS_PER_BATCH) {
+        let fields: Vec<i64> = batch.iter().flat_map(|r| r.iter().copied()).collect();
+        let produced = batch.len() * CHUNK_STRIDE;
+        let (written, buf) = run_cmd_fields(
+            vm,
+            CMD_EMIT_CHUNK_RECORDS,
+            0,
+            &[],
+            &fields,
+            [window as i64, batch.len() as i64, 0, 0, 0],
+            window + produced,
+        )
+        .expect("run");
+        assert_eq!(
+            written, produced as i64,
+            "the emitter did not report the batch's byte count"
+        );
+        out.extend_from_slice(&buf[window..window + produced]);
+    }
+    out
+}
+
+#[test]
+fn the_emitted_chunk_records_match_the_reference_on_real_compiler_output() {
+    let mut vm = vm_for(WIRE_KEL);
+    let mut batched_at_least_one_stage = false;
+    for (name, src) in CORPUS_STAGES {
+        let (recs, want) = real_chunk_case(src);
+        assert!(!recs.is_empty(), "{name}: no chunk records");
+        assert_eq!(
+            want.len(),
+            recs.len() * CHUNK_STRIDE,
+            "{name}: payload is not a whole number of records"
+        );
+        if recs.len() > CHUNKS_PER_BATCH {
+            batched_at_least_one_stage = true;
+        }
+        let got = emit_chunks_batched(&mut vm, &recs, 64);
+        assert_eq!(got, want, "{name}: emitted CHUNKS region differs");
+    }
+    // The corpus must actually cross a batch boundary, or this suite would be
+    // testing the single-batch path and reporting the batching path as covered.
+    assert!(
+        batched_at_least_one_stage,
+        "no stage exceeded {CHUNKS_PER_BATCH} records, so batching was never exercised"
+    );
+}
+
+/// Must-fire control: every one of the fourteen fields must be observable.
+///
+/// Fourteen fields at fourteen offsets, three different widths. A writer that
+/// put two in the same place, truncated a u32 to u16, or dropped one, would
+/// still agree with the reference on every field it happened to get right.
+#[test]
+fn every_chunk_field_is_independently_observable() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (base, want) = real_chunk_case(CORPUS_STAGES[9].1);
+    assert_eq!(
+        emit_chunks_batched(&mut vm, &base, 64),
+        want,
+        "control: the clean case must agree"
+    );
+    for f in 0..CHUNK_FIELDS {
+        let mut recs = base.clone();
+        // Flip a low bit rather than adding, so a narrow field cannot overflow
+        // into its neighbour and report a difference for the wrong reason.
+        recs[0][f] ^= 1;
+        assert_ne!(
+            emit_chunks_batched(&mut vm, &recs, 64),
+            want,
+            "control did not fire: chunk field {f} is not observable"
+        );
+    }
+}
+
+/// The window address must be honoured, not assumed.
+///
+/// This is the property slice 2 could not have: its emitter derived its
+/// position from `region_base`, so there was no address to get wrong. A staged
+/// emitter is handed a window, and the same records at a different window must
+/// produce the same bytes.
+#[test]
+fn the_emitted_records_do_not_depend_on_the_window_address() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (recs, want) = real_chunk_case(CORPUS_STAGES[9].1);
+    for window in [0usize, 8, 64, 4096] {
+        let got = emit_chunks_batched(&mut vm, &recs, window);
+        assert_eq!(got, want, "window {window}: output moved with the address");
+    }
+}
+
+/// Splitting a run across batches must not change the bytes.
+///
+/// The batch size is an implementation detail of the input channel, so a record
+/// must encode identically whether it is first in a batch, last, or alone. A
+/// boundary-off-by-one in the field indexing shows up here and nowhere else.
+#[test]
+fn the_batch_boundary_does_not_change_the_output() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (recs, want) = real_chunk_case(CORPUS_STAGES[1].1);
+    assert!(
+        recs.len() > CHUNKS_PER_BATCH,
+        "this stage must exceed one batch for the test to mean anything"
+    );
+    // The natural batching is already exercised above. Here every record is
+    // emitted alone, which is the maximal number of boundaries.
+    let mut one_at_a_time = Vec::new();
+    for r in &recs {
+        one_at_a_time.extend_from_slice(&emit_chunks_batched(
+            &mut vm,
+            core::slice::from_ref(r),
+            64,
+        ));
+    }
+    assert_eq!(
+        one_at_a_time, want,
+        "emitting one record per batch differs from the reference"
+    );
+}
+
+/// A batch larger than the input array is rejected, not silently truncated.
+#[test]
+fn an_oversized_batch_is_reported_rather_than_truncated() {
+    let mut vm = vm_for(WIRE_KEL);
+    let over = (FIN_CAPACITY / CHUNK_FIELDS) + 1;
+    let (got, _) = run_cmd_fields(
+        &mut vm,
+        CMD_EMIT_CHUNK_RECORDS,
+        0,
+        &[],
+        &[],
+        [64, over as i64, 0, 0, 0],
+        0,
+    )
+    .expect("run");
+    assert_eq!(
+        got, -200,
+        "an oversized batch was not reported with its own code"
+    );
+}
+
+// --- WIRING SLICE 4: a byte pool, where logical length is not stored length --
+//
+// A pool is the other half of the format: no stride, no fields, no records.
+// None of the record machinery applies, and the one thing it has that a record
+// table does not is a LOGICAL length distinct from its STORED length. The
+// container stores a region's length in whole words, so a pool of 101 bytes
+// occupies 104 and the last three are pad.
+//
+// THE PAD IS THE ONLY PLACE A BUG CAN LIVE, since copying bytes is otherwise a
+// no-op transformation. The corpus is unusually good for it — across the ten
+// stages `PARAM_TYPES` produces pads of 0, 3, 4, 5 and 7, including the extreme
+// of one logical byte in an eight-byte region. Residues 1, 2 and 6 never occur,
+// so a hand-built sweep covers all eight rather than leaving three untested.
+
+const CMD_EMIT_POOL_BYTES: i64 = 117;
+const CMD_EMIT_POOL_PAD: i64 = 118;
+
+/// A stage's `PARAM_TYPES`: the logical bytes the encoder was given, and the
+/// stored region including its pad.
+fn real_pool_case(src: &str) -> (Vec<u8>, Vec<u8>) {
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    // The logical input, reconstructed the way the encoder receives it: every
+    // chunk's parameter type tags, concatenated in chunk order.
+    let logical: Vec<u8> = module
+        .chunks
+        .iter()
+        // Through the encoder's own tag-to-byte mapping, not a cast: the pool
+        // stores one byte per tag and the mapping is the schema's, not ours.
+        .flat_map(|c| {
+            c.param_types
+                .iter()
+                .map(|t| keleusma::wire_schema::type_tag_byte(*t))
+        })
+        .collect();
+    let bytes =
+        keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode aux body");
+    let view = keleusma_wire::WireView::parse(&bytes).expect("reference artifact parses");
+    let region = view
+        .find_region(keleusma::wire_schema::kind::PARAM_TYPES)
+        .expect("every module emits a PARAM_TYPES region");
+    let stored = view
+        .region_bytes(&region)
+        .expect("PARAM_TYPES payload in range")
+        .to_vec();
+    (logical, stored)
+}
+
+/// Emit a pool through the window in batches, then its pad, and concatenate.
+///
+/// This is the staged shape for a pool: the Keleusma side holds one batch, the
+/// caller appends, and the pad is written once at the end from the TOTAL length
+/// rather than the batch's, which is the part a per-batch implementation would
+/// get wrong.
+fn emit_pool_batched(
+    vm: &mut Vm<'static, 'static>,
+    logical: &[u8],
+    window: usize,
+    batch: usize,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(logical.len());
+    for part in logical.chunks(batch) {
+        let (written, buf) = run_cmd_pool(
+            vm,
+            CMD_EMIT_POOL_BYTES,
+            part,
+            [window as i64, part.len() as i64, 0, 0, 0],
+            window + part.len(),
+        )
+        .expect("run");
+        assert_eq!(written, part.len() as i64, "wrong batch byte count");
+        out.extend_from_slice(&buf[window..window + part.len()]);
+    }
+    let (pad, buf) = run_cmd_pool(
+        vm,
+        CMD_EMIT_POOL_PAD,
+        &[],
+        [window as i64, logical.len() as i64, 0, 0, 0],
+        window + 8,
+    )
+    .expect("run");
+    assert!((0..8).contains(&pad), "pad {pad} is not a byte residue");
+    out.extend_from_slice(&buf[window..window + pad as usize]);
+    out
+}
+
+#[test]
+fn the_emitted_pool_matches_the_reference_on_real_compiler_output() {
+    let mut vm = vm_for(WIRE_KEL);
+    let mut residues: Vec<usize> = Vec::new();
+    for (name, src) in CORPUS_STAGES {
+        let (logical, stored) = real_pool_case(src);
+        assert!(!logical.is_empty(), "{name}: no parameter type tags");
+        residues.push(stored.len() - logical.len());
+        let got = emit_pool_batched(&mut vm, &logical, 64, BIN_CAPACITY);
+        assert_eq!(got, stored, "{name}: emitted PARAM_TYPES differs");
+    }
+    // What the corpus actually reached, asserted rather than assumed. If this
+    // ever narrows to {0}, the padding path is untested by real data and the
+    // hand-built sweep below is carrying the whole property.
+    residues.sort_unstable();
+    residues.dedup();
+    assert!(
+        residues.len() >= 4,
+        "the corpus reached only pad residues {residues:?}, too few to exercise padding"
+    );
+}
+
+/// Every pad residue, including the three the corpus never reaches.
+///
+/// A pool's length modulo eight is the whole of what the pad depends on, so
+/// leaving 1, 2 and 6 untested would leave three of eight cases to chance.
+#[test]
+fn every_pad_residue_is_correct_including_those_the_corpus_never_reaches() {
+    let mut vm = vm_for(WIRE_KEL);
+    for len in 1usize..=32 {
+        // A recognisable, non-zero body so a pad byte cannot be mistaken for a
+        // payload byte, and vice versa.
+        let logical: Vec<u8> = (0..len).map(|i| (i as u8) | 0x80).collect();
+        let want_pad = (8 - (len % 8)) % 8;
+
+        let mut want = logical.clone();
+        want.extend(core::iter::repeat_n(0u8, want_pad));
+        assert_eq!(want.len() % 8, 0, "the expectation is not word-aligned");
+
+        let got = emit_pool_batched(&mut vm, &logical, 64, BIN_CAPACITY);
+        assert_eq!(
+            got,
+            want,
+            "length {len} (residue {}, pad {want_pad}) emitted wrongly",
+            len % 8
+        );
+    }
+}
+
+/// The pad must be WRITTEN, not inherited from a zeroed buffer.
+///
+/// This is the assertion the emitter's comment claims and nothing else checks.
+/// A staged emitter reuses one window across batches, so the day the window
+/// holds a previous batch's bytes, a pad that relies on initial zeroes emits
+/// stale payload instead.
+///
+/// `wire.bytes` starts zeroed on every call, so the ONLY way to see this is to
+/// seed the buffer dirty first. `run_cmd_args` seeds it and `emit_pool_pad`
+/// needs no pool input, so the two compose.
+#[test]
+fn the_pad_is_written_rather_than_inherited_from_a_zeroed_buffer() {
+    let mut vm = vm_for(WIRE_KEL);
+    let window = 64usize;
+    let dirty = vec![0xEEu8; 128];
+    for total in 1usize..=8 {
+        let want_pad = (8 - (total % 8)) % 8;
+        let (pad, buf) = run_cmd_args(
+            &mut vm,
+            CMD_EMIT_POOL_PAD,
+            0,
+            &dirty,
+            &[],
+            [window as i64, total as i64, 0, 0, 0],
+            window + 8,
+        )
+        .expect("run");
+        assert_eq!(pad, want_pad as i64, "total {total}: wrong pad length");
+        // The control: the seed really did dirty this window, so zeroes here
+        // can only have been written.
+        assert_eq!(
+            buf[window + want_pad],
+            0xEE,
+            "total {total}: the buffer was not dirty past the pad, so this proves nothing"
+        );
+        assert!(
+            buf[window..window + want_pad].iter().all(|b| *b == 0),
+            "total {total}: the pad kept stale bytes instead of writing zeroes"
+        );
+    }
+}
+
+/// The window address must be honoured for pools too.
+#[test]
+fn the_emitted_pool_does_not_depend_on_the_window_address() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (logical, stored) = real_pool_case(CORPUS_STAGES[1].1);
+    for window in [0usize, 8, 64, 4096] {
+        let got = emit_pool_batched(&mut vm, &logical, window, BIN_CAPACITY);
+        assert_eq!(
+            got, stored,
+            "window {window}: output moved with the address"
+        );
+    }
+}
+
+/// Splitting a pool across batches must not change the bytes, and the pad must
+/// come from the TOTAL length rather than the last batch's.
+///
+/// A per-batch pad is the natural wrong implementation: it pads every batch to
+/// a word boundary and produces a longer region with zeroes sprinkled through
+/// it. Batch sizes that do not divide the length are what expose it.
+#[test]
+fn the_pool_batch_size_does_not_change_the_output() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (logical, stored) = real_pool_case(CORPUS_STAGES[1].1);
+    assert!(
+        logical.len() > 8,
+        "the pool must exceed one batch to matter"
+    );
+    for batch in [1usize, 3, 7, 8, 13, 64, BIN_CAPACITY] {
+        let got = emit_pool_batched(&mut vm, &logical, 64, batch);
+        assert_eq!(got, stored, "batch size {batch} changed the output");
+    }
+}
+
+/// Must-fire control: a perturbed input byte must reach the output.
+#[test]
+fn the_pool_differential_reports_a_perturbed_byte() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (logical, stored) = real_pool_case(CORPUS_STAGES[1].1);
+    assert_eq!(
+        emit_pool_batched(&mut vm, &logical, 64, BIN_CAPACITY),
+        stored,
+        "control: the clean case must agree"
+    );
+    for i in [0usize, 1, logical.len() / 2, logical.len() - 1] {
+        let mut perturbed = logical.clone();
+        perturbed[i] ^= 1;
+        assert_ne!(
+            emit_pool_batched(&mut vm, &perturbed, 64, BIN_CAPACITY),
+            stored,
+            "control did not fire: input byte {i} is not observable"
+        );
+    }
+}
+
+/// A batch larger than the input array is rejected, not silently truncated.
+#[test]
+fn an_oversized_pool_batch_is_reported_rather_than_truncated() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (got, _) = run_cmd_pool(
+        &mut vm,
+        CMD_EMIT_POOL_BYTES,
+        &[],
+        [64, BIN_CAPACITY as i64 + 1, 0, 0, 0],
+        0,
+    )
+    .expect("run");
+    assert_eq!(
+        got, -201,
+        "an oversized pool batch was not reported with its own code"
     );
 }

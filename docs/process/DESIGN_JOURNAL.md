@@ -13,6 +13,185 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**WIRING SLICE 4: A BYTE POOL, WHERE LOGICAL LENGTH IS NOT STORED LENGTH (2026-08-09).**
+`PARAM_TYPES` for all ten stages, byte-identical, emitted in batches through a window and then
+padded. 98 tests, up from 91. A pool is the other half of the format — no stride, no fields, no
+records — so none of the record machinery applies.
+
+**The input needed its own channel.** `wire.fin` is a word array, and a word per byte would cost
+eight times the space and cap a batch at 1024 bytes against a `STRING_POOL` of 6,609,960. So
+`wire.bin: [Byte; 8192]`, a batch buffer like `fin` and for the same reason.
+
+**The pad is the only place a bug can live here**, since copying bytes is otherwise a no-op. The
+container stores a region's length in whole words, so a 101-byte pool occupies 104 and the last
+three bytes are pad. Probing the corpus first was worth it: across the ten stages `PARAM_TYPES`
+produces pads of **0, 3, 4, 5 and 7**, including `verify_datalayout`'s extreme of ONE logical byte in
+an eight-byte region, and the pad is always zero. Residues 1, 2 and 6 never occur, so a hand-built
+sweep covers all eight rather than leaving three to chance. What the corpus reaches is asserted, so
+if it ever narrows the suite says so instead of quietly resting on the sweep.
+
+**A test I wrote first could not prove what it claimed, and I caught it before running it.** The
+emitter's comment says the pad is WRITTEN rather than inherited from a zeroed buffer, which matters
+because a staged emitter reuses one window across batches. My first version dirtied the window in
+one call and padded in another — but every call builds a fresh shared buffer, so the second call saw
+zeroes and the test would have passed against an emitter that wrote nothing at all. The working
+version seeds `wire.bytes` dirty through `run_cmd_args`, which `emit_pool_pad` composes with because
+it needs no pool input, and it carries its own control: it asserts the byte just past the pad is
+still `0xEE`, so zeroes inside the pad can only have been written.
+
+**The wrong implementation this slice is really guarding against** is a per-batch pad, which pads
+every batch to a word boundary and sprinkles zeroes through the region. Batch sizes that do not
+divide the length are what expose it, so the batch-size test sweeps 1, 3, 7, 8, 13, 64 and the full
+buffer, and the pad is taken from the TOTAL length rather than the last batch's.
+
+**And the fall-through sweep needed its bound moved AGAIN**, from 117 to 119 for two new commands.
+That is three consecutive slices in which this exclusive bound has had to move, and I have now got
+it wrong once and right twice. It is a by-name enumeration wearing a different hat: the honest fix is
+for the module to report its own highest command rather than for a test to remember. Recorded rather
+than done, because it changes `wire.kel`'s surface and this slice is already large.
+
+**WIRING SLICE 3: A MULTI-RECORD REGION, AND THE BATCHING MECHANISM (2026-08-09).** `CHUNKS` for all
+ten stages, byte-identical, emitted in batches through a caller-supplied window. 91 tests, up from
+86. `CHUNKS` was chosen by measurement rather than by feel: it is the **smallest region that cannot
+be emitted in one batch**, at two, so the mechanism was built where a failure is legible instead of
+inside `DATA_SLOTS`, which needs 1547. `ChunkRecord` is also the widest record in the format at
+fourteen fields and three widths, so it stressed the field marshalling at the same time.
+
+**The prep's two results both held, and one of them shrank the work.** Only the INPUT needs
+batching: a field costs a whole word in `wire.fin` and at most four bytes in the packed record, so a
+batch's output is at most 5,456 bytes against a 65,536-byte buffer. The emitter never chunks what it
+writes, only what it is given. That is a much smaller mechanism than the staged design implied, and
+it was known before any code was written rather than discovered inside it.
+
+**The other prep result was the one that mattered: slice 2's positioning did not generalise.**
+`emit_header_record` located itself through `region_base`, an absolute artifact offset, which works
+only in a one-region test artifact. It is now `emit_header_record_at`, taking a byte address, and
+the command computes the address for the one-region case so the existing tests are unchanged.
+**Refactoring it at slice 3 cost one call site; leaving it would have cost every emitter written
+after it.** `put_rec_u8`, added in slice 2, became unused in the refactor and was removed rather
+than left as dead code.
+
+**Where slice 3's inputs come from, which differs from slice 2 and is worth being explicit about.**
+Slice 2 derived its field values from the module, because a header's fields ARE module properties. A
+chunk record's are not: `consts_first`, `param_types_first`, `op_byte_offset` and the rest are
+allocation results produced by `SchemaBuilder` while it lays the artifact out. Reproducing them
+would mean reimplementing the encoder, which is the driver's job in a later slice. They are
+therefore decoded from the reference and re-emitted. That tests placement, widths and batching, and
+**it does not test the values**, which is stated in the test rather than left for a reader to
+notice.
+
+**Four controls, because byte identity across ten stages is weaker than it looks.**
+
+- **Every one of the fourteen fields is independently observable**, by flipping one low bit of each
+  in turn. A writer that put two fields at one offset, or truncated a `u32` to `u16`, agrees with
+  the reference on everything it happened to get right.
+- **The window address is honoured**, checked at four different bases. This is a property slice 2
+  could not have had, since its emitter derived its own position and there was no address to get
+  wrong.
+- **The batch boundary changes nothing**, checked by emitting every record alone, which is the
+  maximal number of boundaries. An off-by-one in the field indexing appears here and nowhere else.
+- **The corpus actually crosses a batch boundary**, asserted rather than assumed. Without it the
+  suite could exercise only the single-batch path while reporting batching as covered.
+
+**An oversized batch is rejected with its own code rather than truncated**, and the loop bound is
+`fin_capacity()` rather than the true maximum of 73 records. A tighter static bound would silently
+truncate if the field count or the array size ever changed, and a short region still parses — a
+silent truncation here produces a valid-looking artifact with records missing.
+
+**And the sweep caught me committing its own defect.** The fall-through sweep, which I had extended
+one slice earlier precisely because its bound had drifted, is exclusive: adding command 116 and
+leaving `0..116` left the new command unswept. The off-by-one the test exists to catch, committed
+inside the test, one increment after fixing the same class of bug there.
+
+**WIRING SLICE 2: THE FIRST SCHEMA EMITTER, AND THE SIZING CONSTRAINT SHOWED UP IMMEDIATELY
+(2026-08-09).** `emit_header_record` writes a real record's real fields at the transcribed offsets.
+Everything before it either emitted the container or emitted a synthetic pattern for a fixture, so
+this is where the emitter side genuinely grows rather than being re-pointed at new data.
+
+**The buffer constraint bound on the very first record, which is the useful part.** The obvious test
+emits into the real artifact's layout and compares in place. It cannot: `wire.bytes` is 65,536 bytes
+and `lexer`'s auxiliary body is 16,114,608, so `region_base` for a real HEADER region lands far
+outside the buffer. The record is emitted into a **one-region artifact** and compared against the
+HEADER payload extracted from the real one. The residency finding recorded below stopped being an
+abstract projection at the first opportunity it had.
+
+**The input-marshalling design, which generalises past this record.** `HeaderRecord` has eleven
+fields and only five `warg` slots exist. One slot per field does not scale past the first record
+kind, so `wire.fin: [Word; 1024]` carries a record's fields in declaration order. It is deliberately
+a **batch** buffer rather than a region's worth: the largest real region holds about 395,784
+records, so a region's fields cannot be resident at once and the host must feed them in batches
+while appending output. That is the staged shape the sizing measurement forced, now expressed in the
+interface rather than only in a document.
+
+**A vacuity trap avoided, and it is the same one the hand-built header test already avoided.**
+`corpus_aux_of` leaves six header fields zero, because a stage compile does not compute them.
+Emitting six zeroes would make an offset confusion among those six invisible — the differential
+would pass whether or not each field landed in the right place. The six are given distinct non-zero
+values. The must-fire control then flips one bit of each of the eleven fields in turn and requires
+every one to change the output, which is what makes "the offsets are right" an assertion rather than
+a hope. A bit flip rather than an increment, so a `u8` field cannot overflow into its neighbour and
+report a difference for the wrong reason.
+
+**Byte identity is not checked alone.** Two implementations can be wrong in the same way, so the
+reference reader also parses what Keleusma emitted and reads back all eleven fields. The inputs are
+derived from the module rather than decoded out of the reference bytes: feeding the reference's own
+output back in would test only that the emitter can echo it.
+
+**An unrelated hole found by touching the dispatch.** The fall-through sweep ran `0..103` and so
+stopped exactly where `dispatch_frame` begins, leaving the entire framing chain unswept — the chain
+nearest the depth ceiling and therefore likeliest to need splitting. Extended to the top of the last
+chain. The test that exists to catch a drifting threshold had a threshold of its own that had
+drifted.
+
+**WIRING SLICE 1: THE KELEUSMA EMITTER MEETS REAL COMPILER OUTPUT, AND MY SCOPING WAS WRONG TWICE
+BEFORE IT WAS RIGHT (2026-08-09).** I scoped this increment three times and probing corrected it
+twice.
+
+**First scoping, wrong.** "Marshal one region's inputs from a real stage and emit it." That assumed
+`wire.kel` had schema-record emitters. Reading the dispatch shows commands 18 to 83 are **readers**.
+The only emitters are the prologue, the directory, opcode records, pool entries, the framing header,
+and `emit_pattern_records` — which writes a **synthetic** pattern, `(r * 7) + 1`, at a hardcoded
+stride. It is a fixture generator, not a schema emitter.
+
+**Second scoping, also wrong.** "Then emit the HEADER region, one record." But `put_rec_u32` and
+`put_rec_u16` are generic primitives, and the thing that did not exist was any emitter for a
+*specific* schema record from real values. That is real new Keleusma code, not wiring, and it needs
+an input-marshalling design first.
+
+**What the increment actually is, and it was already reachable.** `CMD_EMIT_HEADER` emits the
+container header, three prologue copies and three directory copies, and was validated only against
+**hand-built** region sets. Driving it from the ten stages' real region sets needed no Keleusma
+change at all — only the Rust side that extracts a real region set and compares. **It passes on all
+ten stages**, so the first time `wire.kel` sees real compiler output it agrees byte for byte.
+
+**A first-try pass is a signal to check for vacuity, not to celebrate.** The must-fire control
+carries seven perturbations — a changed kind, a length grown and shrunk by a word, a flags bit, a
+covers field, two regions transposed, a dropped region — and all seven are caught, with the
+must-not-fire clean case in the same test so neither can be deleted alone. **The control failed on
+its first run**, and on its own arithmetic rather than on the property: it perturbed a fixed index
+that is an empty region in the smallest stage, so the shrink underflowed. It now targets the largest
+region and asserts that target holds at least one word.
+
+**Two coverage limits asserted rather than left implicit**, because this test looks like a superset
+of the hand-built corpus and is not one. A region's length survives the container only as a WORD
+count, so every length reachable here is a multiple of eight, and the awkward lengths where a
+dropped round-up in `words_for` would hide stay reachable only from the hand-built sets. Those tests
+remain load-bearing.
+
+**And an observation that is not mine to resolve.** `SchemaBuilder` declares every region as
+`region(kind, 0)` and builds **no parity plane anywhere**, so real artifacts carry flags 0 and
+covers 0 throughout. The **(72,64) SECDED plane exists in `keleusma-wire` and is entirely
+unexercised by the shipping encoder.** Whether that is a deliberate cost choice or an unwired
+capability is a question for the operator, not a defect I should assert. It is pinned in the firing
+direction so the day real output gains a non-zero flags or covers field, the test says so rather
+than the emitter quietly acquiring an untested case. It also **reduces the increment's scope**: the
+Keleusma emitter needs no ECC support to reach byte identity with the encoder as it stands.
+
+**The pattern across three scopings.** Each wrong scoping was a plausible reading of a recorded
+status, and each was corrected by reading the actual source rather than by reasoning further. That
+is the same lesson the prep correction below records, one increment earlier, and I still needed it
+twice more.
+
 **THE WIRING PREP SIZED THE EMITTER FROM THE WRONG QUANTITY, AND READING THE ENCODER IS WHAT SHOWED
 IT (2026-08-09).** The prep measured the largest single region, 6,609,960 bytes, and concluded that
 an 8 MB working buffer covers every stage "with roughly 10 MB left for the emitter's inputs". That

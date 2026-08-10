@@ -378,6 +378,93 @@ ordering read out of `SchemaBuilder`. No Keleusma emitter has been run against a
 peak figure is a projection of the Rust encoder's structure onto a design that does not exist yet.
 Treat 77% as an estimate to be confirmed by the first driver, not as a measurement.
 
+### Records per region, which sizes every remaining slice (measured 2026-08-09)
+
+The emitter receives a record's fields through `wire.fin`, a 1024-word batch buffer. Whether a slice
+must implement batching is therefore `records * fields_per_record` against 1024, per region. Worst
+case across all ten stages:
+
+| Region | stride | fields | max records | worst stage | one batch? |
+|---|---|---|---|---|---|
+| `NAMES` | 8 | 2 | 395,804 | `lexer` | no, 774 batches |
+| `DATA_SLOTS` | 8 | 4 | 395,784 | `lexer` | no, 1547 batches |
+| `SHARED_LAYOUT` | 8 | 4 | 395,778 | `lexer` | no, 1547 batches |
+| `CONSTS` | 16 | 4 | 17,391 | `parse` | no, 68 batches |
+| `CHUNKS` | 48 | 14 | 94 | `parse` | **no, 2 batches** |
+| `ENUM_VARIANTS` | 16 | 3 | 155 | `parse` | yes |
+| `SHAPES` | 8 | 4 | 102 | `parse` | yes |
+| `SIGNATURES` | 16 | 4 | 94 | `parse` | yes |
+| `ENUM_LAYOUTS` | 16 | 4 | 3 | `parse` | yes |
+| `DATA_INIT` | 8 | 2 | 1 | `lexer` | yes |
+| `HEADER` | 32 | 11 | 1 | any | yes, done |
+
+**`CHUNKS` is the right next slice for a reason the measurement supplies.** It is the **smallest
+region that forces batching**, at two batches, so the mechanism gets built and exercised where the
+failure is legible rather than inside a 1547-batch region. `ChunkRecord` also has **14 fields**,
+more than `HeaderRecord`'s 11, so it is the widest record in the format and stresses the field
+marshalling as well.
+
+### Seven of twenty region kinds get NO emitter coverage from the corpus
+
+This is the more consequential half of the measurement, and it enlarges a gap this document
+previously recorded as a single region.
+
+| Kind | State in the corpus |
+|---|---|
+| `DEBUG_POOL` | region never emitted at all (`emit_debug` defaults false) |
+| `STRUCT_AUX` | emitted, **zero records** |
+| `ENUM_AUX` | emitted, **zero records** |
+| `STRUCT_TEMPLATES` | emitted, **zero records** |
+| `PRIVATE_COMPOSITE` | emitted, **zero records** |
+| `NATIVES` | emitted, **zero records** |
+| `NATIVE_RETURNS` | emitted, **zero records** |
+
+For a reader, an empty region and an absent one are different cases and both are covered. **For an
+emitter they are the same problem**: no record of that kind is ever written, so a differential
+validated only against these ten stages cannot see a mistranscribed offset in six of the seventeen
+record shapes. Each needs a hand-built emitter case, exactly as `DEBUG_POOL` does.
+
+The earlier statement that `DEBUG_POOL` is "the one region kind the corpus never emits" is true as
+written and misleading as read. It is the only kind whose REGION is absent; it is one of seven whose
+RECORDS never exist.
+
+### `fin` is always the binding constraint, and the output window never is
+
+There are two capacities in play and it was not obvious which binds. The input side is
+`wire.fin`, 1024 words. The output side is `wire.bytes`, 65,536 bytes. Worst case per batch, over
+every record kind:
+
+| | records per batch | bytes of output |
+|---|---|---|
+| `ENUM_AUX` and `ENUM_VARIANTS` (the worst) | 341 | **5,456** |
+| `NAMES`, `CONSTS`, `SIGNATURES`, others | 256–512 | 4,096 |
+| `CHUNKS` | 73 | 3,504 |
+| `DATA_SLOTS`, `SHARED_LAYOUT` | 256 | 2,048 |
+
+**The largest batch any record kind can produce is 5,456 bytes, 8.3% of the output buffer, a
+12-fold margin.** The reason is structural rather than lucky: a field occupies a whole word in
+`fin` and at most four bytes in the record, so input is always at least twice the output and
+usually four times.
+
+**This collapses the batching design to one loop.** A slice needs input batching only. It does not
+need to chunk its output within a batch, and it cannot overflow `wire.bytes` by emitting one
+batch's worth. That is a materially smaller mechanism than the staged design implied.
+
+### Slice 2's positioning does NOT generalise, and slice 3 must fix it
+
+`emit_header_record` locates its record through `rec_at`, which is
+`region_base(i) + rec * stride + off`, an **absolute artifact offset**. That works only because the
+test emits a one-region artifact where HEADER sits at byte 96. In a real layout `CHUNKS` sits after
+`STRING_POOL` and the others, so `region_base` is in the millions and lands far outside the
+65,536-byte buffer.
+
+**The staged emitter must therefore take a WINDOW BASE rather than derive position from the
+directory.** The host emits a region's payload into a low window, appends it at the true offset, and
+patches the directory afterwards, which the residency section already established it can do. Slice 2
+is a correct special case, not a template, and the record-emitter signature should grow a window
+base and a first-record index at slice 3 rather than later, while there is exactly one caller to
+change.
+
 Three further facts worth carrying:
 
 - **The largest region is `STRING_POOL` for ALL TEN stages**, without exception. It is dominated by
@@ -401,6 +488,14 @@ Three further facts worth carrying:
   `STRUCT_TEMPLATES` is emitted by **all ten** stages. The struct-template caveat belongs to a
   different and much smaller hand-built round-trip corpus, and connecting the two was inference by
   plausibility rather than measurement.
+
+  > **AND THAT CORRECTION IS ITSELF WRONG, measured 2026-08-09.** `STRUCT_TEMPLATES` is emitted by
+  > all ten stages **and contains zero records in every one of them.** I conflated the region being
+  > PRESENT with the region being POPULATED, and on that basis "corrected" a caveat in
+  > `tests/wire_corpus.rs` that was substantively right. The original wording, "the corpus emits
+  > zero struct templates", is accurate about the thing that matters for coverage. Two rounds of
+  > correction, the first replacing a true statement with a false one, and both times the missing
+  > step was counting records rather than looking for the region.
 
 ### On the prototype
 

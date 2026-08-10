@@ -63,6 +63,123 @@ session's tree lives there too.
 my exact tip `78a5bc1`. So I cannot start a gate, and no timing measurement is trustworthy until
 it finishes. Development is unaffected, which is the whole point of the detached-worktree gate.
 
+## Wiring slices 1 to 4 are done; both region shapes are now emittable
+
+**On `feat/selfhost-wire-real-corpus`, Tier 1 green, NOT gated. 98 tests, up from 80.**
+
+**Slice 4 emitted `PARAM_TYPES` for all ten stages**, byte-identical, batched through a window and
+padded. A pool needed its own input channel — `wire.bin: [Byte; 8192]`, because a word per byte in
+`fin` would cost eight times the space against a `STRING_POOL` of 6,609,960.
+
+**The pad is the whole of the risk**, since copying bytes is otherwise a no-op. The corpus reaches
+pads of 0, 3, 4, 5 and 7 including a one-byte pool, and a hand-built sweep covers all eight
+residues. A dirty-buffer test proves the pad is written rather than inherited, and carries its own
+control so it cannot pass vacuously.
+
+**Both region shapes — record table and byte pool — are now emittable from real data.** What
+remains is coverage and the driver, not new mechanism.
+
+### The next things, in order
+
+1. **The six record shapes with no corpus coverage**, needing hand-built emitter cases:
+   `STRUCT_AUX`, `ENUM_AUX`, `STRUCT_TEMPLATES`, `PRIVATE_COMPOSITE`, `NATIVES`, `NATIVE_RETURNS`,
+   plus `DEBUG_POOL`, whose region is never emitted at all.
+2. **The remaining populated regions**, which are now mechanical: `NAMES`, `CONSTS`, `SHAPES`,
+   `SIGNATURES`, `ENUM_VARIANTS`, `ENUM_LAYOUTS`, `DATA_SLOTS`, `SHARED_LAYOUT`, `DATA_INIT`,
+   `STRING_POOL`.
+3. **The driver**, which is where the values stop being decoded from the reference and start being
+   computed. That is the real remaining work, and the residency measurement governs it.
+
+**A debt worth paying soon.** The fall-through sweep's exclusive bound has had to move in three
+consecutive slices, and I got it wrong once. It is a by-name enumeration in disguise; `wire.kel`
+should report its own highest command instead.
+
+## Slices 1 to 3, for context
+
+**On `feat/selfhost-wire-real-corpus`, Tier 1 green, NOT gated. 91 tests, up from 80.**
+
+**Slice 3 emitted `CHUNKS` for all ten stages, byte-identical, in batches through a
+caller-supplied window.** The batching mechanism now exists and is exercised: the corpus crosses a
+batch boundary, and that is asserted rather than assumed. Four controls — every one of the fourteen
+fields independently observable, the window address honoured at four bases, the batch boundary
+changing nothing when every record is emitted alone, and an oversized batch rejected with its own
+code rather than truncated.
+
+**`emit_header_record` was refactored to `emit_header_record_at`**, taking a byte address instead of
+a region index. Slice 2's positioning did not generalise, and fixing it at slice 3 cost one call
+site where leaving it would have cost every emitter after it.
+
+**Slice 4 should be a BYTE POOL, not another record table.** `PARAM_TYPES` is the smallest, at 104
+bytes worst case. Pools have no stride and no field marshalling, so they exercise a genuinely
+different path — `wire.fin` is the wrong channel for them and the bytes need to arrive another way.
+That question is unanswered and is the first thing to probe.
+
+**Then the six record shapes with no corpus coverage**, which need hand-built emitter cases:
+`STRUCT_AUX`, `ENUM_AUX`, `STRUCT_TEMPLATES`, `PRIVATE_COMPOSITE`, `NATIVES`, `NATIVE_RETURNS`, plus
+`DEBUG_POOL` whose region is never emitted at all.
+
+## Slices 1 and 2, for context
+
+**On `feat/selfhost-wire-real-corpus`, Tier 1 green, NOT gated. 86 tests, up from 80.**
+
+**Slice 2 added the first schema emitter.** `emit_header_record` writes a real record's real fields
+at the transcribed offsets, byte-identical to the Rust encoder for all ten stages, with the
+reference reader recovering all eleven fields from what Keleusma wrote. The must-fire control flips
+one bit of each field in turn and requires every one to change the output, so "the offsets are
+right" is asserted rather than hoped.
+
+**The input channel is `wire.fin: [Word; 1024]`**, a record's fields in declaration order. It is a
+**batch** buffer by design, not a region's worth: the largest real region holds about 395,784
+records, so the host must feed fields in batches while appending output. The staged shape now lives
+in the interface, not only in a document.
+
+**The buffer constraint bound on the first record.** A real HEADER region's `region_base` lands far
+outside the 65,536-byte `wire.bytes`, so the record is emitted into a one-region artifact and
+compared against the payload extracted from the real one. Every later slice inherits this.
+
+**Slice 3 is `CHUNKS`, and the prep has scoped it fully.** It is the **smallest region that forces
+batching**, at two batches, so the mechanism gets built where a failure is legible rather than
+inside the 1547-batch regions. `ChunkRecord` is the widest record in the format at **14 fields**,
+and **all 14 offsets are already transcribed and pinned** in `wire.kel`, so the emitter itself is
+mechanical: eleven `u32`, one `u16`, two `u8`.
+
+Three prep results shape it, all measured:
+
+- **`fin` is always the binding constraint; the output window never is.** The largest batch any
+  record kind can produce is 5,456 bytes, 8.3% of `wire.bytes`, a 12-fold margin — structural, since
+  a field is a whole word in `fin` and at most four bytes in the record. **So a slice needs input
+  batching only**, which is a materially smaller mechanism than the staged design implied.
+- **Slice 2's positioning does not generalise.** `emit_header_record` locates its record through
+  `region_base`, an absolute artifact offset, which works only in a one-region artifact. A real
+  `CHUNKS` region sits millions of bytes in. The signature must grow a **window base** and a
+  first-record index, and slice 3 is the moment to do it, while there is exactly one caller.
+- **Seven of twenty region kinds get no emitter coverage from the corpus**, not one: `DEBUG_POOL` is
+  never emitted, and six more are emitted with zero records. Six of seventeen record shapes will
+  need hand-built emitter cases.
+
+## Slice 1, for context
+
+**On `feat/selfhost-wire-real-corpus`, one commit, Tier 1 green, NOT gated.** The container header
+is emitted by `wire.kel` for all ten stages' **real** region sets and matches the Rust encoder byte
+for byte. 83 tests, up from 80. Seven-perturbation must-fire control plus the clean case.
+
+**It needed no Keleusma change**, which is the finding. Commands 18-83 in `wire.kel` are readers,
+and `emit_pattern_records` writes a synthetic pattern rather than a schema record, so the emit side
+already covered everything the container header needs.
+
+**Slice 2 is where new Keleusma code starts**: emit a real schema region's PAYLOAD. `HEADER` is the
+smallest target, one record. The design question to settle first is **input marshalling** —
+`HeaderRecord` has eleven fields and only five `warg` slots exist, so the host needs a word-array
+input channel in shared data, the way `rkind`/`rflags`/`rlen`/`rcovers` already are for the
+directory. That array generalises to every record kind and is the staged emitter's real interface,
+so it is worth designing once rather than per region.
+
+**An observation held for the operator.** `SchemaBuilder` declares every region as
+`region(kind, 0)` and builds no parity plane, so the **(72,64) SECDED plane in `keleusma-wire` is
+entirely unexercised by the shipping encoder**. Whether that is a deliberate cost choice or an
+unwired capability is not mine to decide. It is pinned in the firing direction, and it reduces the
+emitter's scope: no ECC support is needed for byte identity with the encoder as it stands.
+
 ## The wiring increment: the prep's sizing was wrong, and is corrected
 
 Probing before planning caught it, as it has in nearly every increment of this arc.
