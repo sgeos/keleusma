@@ -1788,14 +1788,62 @@ fn lowered_ir_mutated(src: &str, mutate: impl FnOnce(&mut keleusma::bytecode::Mo
     lm.print_to_string().to_string()
 }
 
-/// MUST-FIRE for Fix 2, and the PROOF OF CONCEPT for the `verify()` finding.
+/// Does `Vm::new` REJECT this mutated module, and with what message?
 ///
-/// A chunk whose ops end without `Op::Return`. Two claims are demonstrated:
+/// `vm_result_mutated` cannot express a rejection: it `expect`s admission and
+/// panics otherwise. This returns the verifier's verdict instead of asserting it.
+fn vm_new_rejection(src: &str, mutate: impl FnOnce(&mut keleusma::bytecode::Module)) -> Option<String> {
+    let mut m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    mutate(&mut m);
+    let cap = auto_arena_capacity_for(&m, &[]).expect("arena capacity");
+    let arena = keleusma_arena::Arena::with_capacity(cap);
+    Vm::new(m, &arena).err().map(|e| format!("{e:?}"))
+}
+
+/// MUST-FIRE for Fix 2, and a CROSS-SESSION REGRESSION GUARD.
 ///
-/// 1. **`verify()` admits it.** `Vm::new` runs the verifier, so reaching
-///    execution proves admission. The inventory recorded this as read-derived
-///    from both depth passes discarding their terminal result; this makes it
-///    demonstrated.
+/// A chunk whose ops end without `Op::Return`. This test used to demonstrate
+/// that `verify()` ADMITTED such a chunk, which was the proof of concept for the
+/// worst-case-memory hole this branch reported to the `v0.2.3` session. **They
+/// fixed it**, so the demonstration is now a guard that the fix holds, checked
+/// from the consumer side rather than from inside the verifier's own suite.
+///
+/// # The falsification clause that fired with a false conclusion
+///
+/// The previous version of this comment said: *if `Vm::new` rejects, then
+/// `verify()` does not admit these chunks and the inventory claiming it does is
+/// WRONG.* That clause fired, and its conclusion is false. The reading was
+/// correct when it was taken; the verifier changed afterwards **because of it**.
+/// A clause that assumes its subject is fixed cannot express "the subject moved",
+/// and any test either session writes to pin a defect the other may remove has
+/// this shape. The assertions below say which of the two happened.
+///
+/// # Why Fix 2 is still load-bearing after the verifier tightened
+///
+/// **The backend never calls `verify()`.** It consumes a `Module` straight from
+/// `compile()`, so a chunk the verifier now rejects can still reach the lowering,
+/// and this test's own mutation is the demonstration that the path exists. A
+/// chunk with no terminator would emit a final basic block with no terminator,
+/// which is malformed IR rather than a wrong answer.
+///
+/// # Where the expected value comes from, since the VM will no longer produce it
+///
+/// This file's rule is that expected values come from the VM rather than from the
+/// author, because an assertion written at the same moment as the code encodes
+/// the same mistake twice. Inverting the VM half appears to break that rule.
+///
+/// It is preserved by taking the oracle from the **unmutated** program, which the
+/// VM still runs, plus one documented semantic step: the mutation removes only
+/// the trailing `Return`, leaving the same value on the stack, and falling off
+/// the end returns the top of stack. **`Vm::new_unchecked` is deliberately NOT
+/// used.** It would give a direct oracle, but `CLAUDE.md` calls it intentional
+/// misuse for admitting programs that would fail verification, and this program
+/// would fail verification. The structural assertion below carries the weight
+/// that the behavioural one no longer can, which is the same resolution the
+/// sibling control above reached when its behavioural check proved vacuous.
+///
+/// The original text follows, for the claim that is still true:
+///
 /// 2. The VM defines the case as returning the top of stack (or `Unit` when
 ///    empty), and after Fix 2 the lowering agrees.
 ///
@@ -1821,13 +1869,47 @@ fn control_chunk_without_trailing_return_falls_off_the_end() {
         // stack when the chunk runs out of ops.
     };
 
-    let vm = vm_result_mutated(src, mutate);
-    assert_eq!(
-        vm,
-        Value::Int(7),
-        "falling off the end returns the top of stack"
+    // REGRESSION GUARD for the `v0.2.3` fix, from the consumer side.
+    let rejection = vm_new_rejection(src, mutate);
+    let message = rejection.expect(
+        "verify() ADMITTED a chunk that can run off its own end. That hole was \
+         closed on v0.2.3; if this passes again the fix has regressed, and the \
+         worst-case-memory bound is unsound for every such chunk.",
+    );
+    assert!(
+        message.contains("run off the end"),
+        "the module was rejected, but not for running off the end, so this test \
+         is no longer guarding what it claims.\nverdict: {message}"
     );
 
+    // ORACLE, taken from the UNMUTATED program because the VM will no longer run
+    // the mutated one. The mutation removes only the trailing `Return`, so the
+    // same value is on the stack when the chunk runs out of ops.
+    assert_eq!(
+        vm_result(src, &[]),
+        7,
+        "fixture assumption: the unmutated program returns 7"
+    );
+
+    // STRUCTURAL MUST-FIRE for Fix 2, and the part that is actually a control.
+    //
+    // Without Fix 2 the final block carries no terminator, and `lower_module`
+    // now verifies internally (Fix 3), so the failure would surface as a refusal
+    // rather than a wrong answer. Asserting the `ret` is present states the
+    // property directly instead of inferring it from a value that happens to
+    // agree. This mirrors the sibling control above, whose behavioural check was
+    // shown to pass against unfixed code.
+    let ir = lowered_ir_mutated(src, mutate);
+    assert!(
+        ir.contains("ret i64"),
+        "Fix 2 must emit an implicit `ret` for a chunk with no trailing Return; \
+         without it the final block has no terminator and the IR is malformed.\nIR:\n{ir}"
+    );
+
+    // Retained as a regression check on the VALUE, not as the oracle for it.
     let native = native_result_mutated(src, mutate);
-    assert_eq!(native, 7, "Fix 2 emits the implicit ret the VM defines");
+    assert_eq!(
+        native, 7,
+        "Fix 2 returns the top of stack, matching the unmutated program's value"
+    );
 }

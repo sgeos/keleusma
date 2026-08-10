@@ -3580,3 +3580,64 @@ am not claiming otherwise. It is still a message that disagrees with the code
 beside it, which is the third instance of that class this branch has reported to
 `v0.2.3` after the `GRAMMAR.md` push order and the `Op::Reset` comment. Reported
 rather than fixed, because `src/verify.rs` is theirs.
+
+## REBASED onto `v0.2.3`, rehearsed first, and the predicted break is repaired
+
+The nineteen-commit debt is cleared. `git rev-list --count origin/v0.2.3 --not
+HEAD` is now zero, `v0.3.0` is an ancestor of the feature branch again, and both
+refs sit on the rebased spine.
+
+### The rehearsal earned its keep by proving a negative
+
+This line's own method rule is to rehearse a history rewrite on throwaway refs
+before touching a real one. Both rebases were replayed on `rehearse/*` copies in a
+disposable worktree, 41 commits then 50, **zero conflicts**.
+
+The conflict surface was computed before starting rather than discovered during:
+the fourteen files the incoming commits touch and the twenty-five this line
+touches have an **empty intersection**. That includes `scripts/release-gate.sh`,
+which both sessions edit by convention in different halves and which they did not
+touch in this range at all.
+
+**The empty result was checked for vacuity**, because an empty intersection is
+also what a broken comparison produces. Both sides were counted first, fourteen
+and twenty-five, so the emptiness is a finding rather than a failed command. This
+is the same discipline the vacuous-control episodes taught, applied to a shell
+pipeline instead of a test.
+
+One post-rebase check was **not** empty and had to be explained rather than
+waved through. `docs/process/handoffs/v0.3.0.md` differed. The cause is benign,
+namely that the feature branch never carried this line's three mailbox commits
+while the rebased result does, and it was confirmed by checking that all five new
+mailbox sections are present on the result and that the incoming range contains no
+commit touching that file at all.
+
+### The predicted break, repaired
+
+`control_chunk_without_trailing_return_falls_off_the_end` is rewritten as
+specified in the previous section, with one improvement on the plan.
+
+**The `Vm::new_unchecked` question is dissolved rather than escalated.** The plan
+said the oracle could only be preserved through a deliberate trust skip and that
+the judgment belonged to the operator. It does not, because there is a third
+option the plan missed: take the oracle from the **unmutated** program, which the
+VM still runs, and add one documented semantic step, since the mutation removes
+only the trailing `Return` and leaves the same value on the stack. The rule that
+expected values come from the VM is kept, and nothing is admitted that the
+verifier rejects.
+
+The weight moves to a **structural** assertion that the emitted IR contains a
+`ret`, which is the same resolution the sibling control reached when its
+behavioural check was shown to pass against unfixed code. The behavioural check is
+retained as a regression check on the value and is explicitly not the oracle for
+it.
+
+### Unverified, and stated as such
+
+**None of this has been compiled.** The other session's gate holds the machine.
+The rebase is mechanically verified, the test edit is not: it adds a helper,
+`vm_new_rejection`, and the file's own recorded compile risk applies to it, since
+`mutate` is now passed to three helpers by value and that compiles only while the
+closure captures nothing. It captures nothing today. The tip is **knowingly red
+until gated**, which the branch model permits for a feature branch and which the
+merge gate exists to catch.
