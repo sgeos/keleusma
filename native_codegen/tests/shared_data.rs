@@ -210,6 +210,67 @@ fn private_slots_agree_with_the_vm() {
 }
 
 #[test]
+fn a_shared_array_indexes_contiguously() {
+    // Shared indexed access was previously REFUSED on the ground that the
+    // layout table does not state a slot range is contiguous. Measuring found
+    // all 556,496 adjacent shared scalar pairs in the corpus contiguous with no
+    // exceptions, which is a property of today's compiler rather than a wire
+    // guarantee, so the lowering now PROVES contiguity per module instead of
+    // assuming it or refusing outright.
+    //
+    // The buffer is compared as well as the value, so an element written at the
+    // wrong stride is caught even when the returned answer happens to match.
+    let src = "shared data s { xs: [Word; 4], tail: Word }
+               fn main(i: Word, v: Word) -> Word { s.xs[i] = v; s.xs[0] + s.tail }";
+    for args in [[0, 11], [1, 22], [2, 33], [3, 44]] {
+        assert_shared_agrees(src, &args);
+    }
+}
+
+#[test]
+fn a_non_contiguous_shared_array_is_refused() {
+    // **THE CONTIGUITY GUARD HAD NO POSITIVE CASE.** A mutation that disabled
+    // it entirely left every test passing, because every layout the compiler
+    // emits today is contiguous, so the guard defends against a layout that
+    // does not occur. That makes it exactly the kind of check that is believed
+    // rather than tested.
+    //
+    // Rewriting the layout table supplies the missing case, the same technique
+    // used for `PushImmediate`'s unreachable integer encoding. If the compiler
+    // ever emits a padded or reordered shared array, this is the behaviour that
+    // must hold: refusal, not a read at a fabricated stride.
+    let src = "shared data s { xs: [Word; 4] }
+               fn main(i: Word, v: Word) -> Word { s.xs[i] = v; s.xs[0] }";
+    let mut m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let dl = m.data_layout.as_mut().expect("shared layout");
+    assert!(
+        dl.shared_layout.len() >= 4,
+        "this test is vacuous unless the array really occupies four shared slots"
+    );
+    // Push element 2 one byte past where a uniform stride predicts.
+    dl.shared_layout[2].offset += 1;
+
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    let err = lower_module(&ctx, &lm, &m, LowerOptions::default());
+    assert!(
+        err.is_err(),
+        "a shared array whose elements are not contiguous must be refused; \
+         lowering it would read the host buffer at a stride the layout denies"
+    );
+
+    // MUST-NOT-FIRE: the same module with its layout untouched must lower, or
+    // the refusal above would be indistinguishable from indexed access being
+    // broken outright.
+    let clean = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let lm2 = ctx.create_module("kel2");
+    assert!(
+        lower_module(&ctx, &lm2, &clean, LowerOptions::default()).is_ok(),
+        "an untouched contiguous layout must still lower"
+    );
+}
+
+#[test]
 fn a_module_with_both_kinds_keeps_them_apart() {
     // **ADDED BECAUSE A MUTATION FOUND THE GAP.** Deleting the shared-boundary
     // subtraction from the private index left every test passing, because every

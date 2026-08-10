@@ -57,6 +57,10 @@ fn is_lowered(op: &Op) -> bool {
             | Op::WordToByte
             | Op::ByteToWord
             | Op::BoundsCheck(_)
+            | Op::GetData(_)
+            | Op::SetData(_)
+            | Op::GetDataIndexed(..)
+            | Op::SetDataIndexed(..)
     )
 }
 
@@ -90,6 +94,106 @@ fn workstream(op: &Op) -> &'static str {
 fn opcode_name(op: &Op) -> String {
     let d = format!("{op:?}");
     d.split(['(', ' ']).next().unwrap_or(&d).to_string()
+}
+
+/// GROUND TRUTH: how many corpus programs lower end to end through the real
+/// entry point?
+///
+/// The classification above mirrors the lowering BY HAND, and a hand mirror
+/// rots. This spike was written when 39 opcodes lowered; the set has since moved
+/// twice, and each move required editing a list in a file the lowering never
+/// reads. This test asks the lowering itself and therefore cannot drift. Where
+/// the two disagree, this one is right.
+///
+/// Module granularity rather than chunk, because `lower_module` is the entry
+/// point a consumer calls and it refuses a whole module on the first opcode it
+/// cannot handle. It is also the number that matters to a consumer, who deploys
+/// programs rather than compilation units.
+#[test]
+fn spike_report_modules_that_actually_lower() {
+    let sources = corpus_sources();
+    let (mut ok, mut refused, mut rejected) = (0usize, 0usize, 0usize);
+    let mut reasons: BTreeMap<String, usize> = BTreeMap::new();
+    for path in &sources {
+        let Ok(src) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Ok(toks) = tokenize(&src) else {
+            rejected += 1;
+            continue;
+        };
+        let Ok(ast) = parse(&toks) else {
+            rejected += 1;
+            continue;
+        };
+        let Ok(m) = compile(&ast) else {
+            rejected += 1;
+            continue;
+        };
+        let ctx = inkwell::context::Context::create();
+        let lm = ctx.create_module("probe");
+        match keleusma_native::lower_module(&ctx, &lm, &m, keleusma_native::LowerOptions::default())
+        {
+            Ok(_) => ok += 1,
+            Err(e) => {
+                refused += 1;
+                let msg = format!("{e}");
+                let key: String = msg.split_whitespace().take(9).collect::<Vec<_>>().join(" ");
+                *reasons.entry(key).or_default() += 1;
+            }
+        }
+    }
+    println!("\n================ GROUND TRUTH: whole modules through lower_module");
+    println!("  compiled by the front end : {}", ok + refused);
+    println!("  LOWER END TO END          : {ok}");
+    println!("  refused by the backend    : {refused}");
+    println!("  rejected by the front end : {rejected}");
+    if ok + refused > 0 {
+        println!(
+            "  module-level coverage     : {:.1}%",
+            100.0 * ok as f64 / (ok + refused) as f64
+        );
+    }
+    println!("\n  refusal reasons:");
+    let mut rs: Vec<_> = reasons.iter().collect();
+    rs.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
+    for (why, n) in rs.iter().take(10) {
+        println!("   {n:4}  {why}");
+    }
+    println!("================\n");
+    assert!(
+        ok + refused > 10,
+        "measured almost nothing; corpus paths are probably wrong"
+    );
+}
+
+/// Corpus discovery, shared by the spikes in this file.
+fn corpus_sources() -> Vec<std::path::PathBuf> {
+    let root = std::path::Path::new("..");
+    let mut sources: Vec<std::path::PathBuf> = Vec::new();
+    for dir in [
+        "examples/scripts",
+        "src/selfhost/kel",
+        "examples/rtos/scripts",
+        "compiler/kel",
+    ] {
+        let d = root.join(dir);
+        if let Ok(rd) = std::fs::read_dir(&d) {
+            let mut stack: Vec<std::path::PathBuf> =
+                rd.filter_map(|e| e.ok()).map(|e| e.path()).collect();
+            while let Some(p) = stack.pop() {
+                if p.is_dir() {
+                    if let Ok(rd2) = std::fs::read_dir(&p) {
+                        stack.extend(rd2.filter_map(|e| e.ok()).map(|e| e.path()));
+                    }
+                } else if p.extension().is_some_and(|x| x == "kel") {
+                    sources.push(p);
+                }
+            }
+        }
+    }
+    sources.sort();
+    sources
 }
 
 #[test]

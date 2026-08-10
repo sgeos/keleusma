@@ -910,3 +910,64 @@ owner. The general lesson is the one this document keeps re-learning from a new
 angle: a constraint that looks external is worth testing against the actual
 boundary before it is escalated, because escalating it costs someone else's
 attention and can be wrong.
+
+## GROUND TRUTH, and a third level of the same conjunction
+
+The coverage figures in this document were computed by a hand-written mirror of
+the lowering. That mirror rots: it was written when 39 opcodes lowered and the
+set has moved three times since, each move requiring an edit to a list the
+lowering never reads.
+
+`spike_report_modules_that_actually_lower` replaces the mirror with the real
+entry point. It calls `lower_module` on every corpus program and counts what
+succeeds, so it cannot drift. **Where it and the static classification disagree,
+it is right.**
+
+| Measure | Value |
+|---|---|
+| Opcode instances lowered | ~93% |
+| Chunks fully lowerable | ~87% (projected) |
+| **Whole modules that lower end to end** | **20.7%, 12 of 58** |
+
+**The conjunction applies at three levels, not two.** An instruction is lowered
+or not; a chunk lowers only if every instruction in it does; a module lowers only
+if every chunk in it does. Each conjunction collapses the figure further, and
+this document had been quoting the middle one while a consumer deploys the
+outer one. Reporting 87 percent would have been the same category of error the
+document already records for 87-against-34, one level up, in a section written
+to warn against it.
+
+### Remaining blockers, measured rather than assumed
+
+| Blocker | Modules |
+|---|---|
+| `Stream` (Workstream B, sub-coroutines) | 21 |
+| `NewComposite` (Workstream C, composites) | 18 |
+| `CallVerifiedNative` (Workstream D, native ABI) | 3 |
+| miscellaneous composite and enum access | 4 |
+
+Coroutines lead by count and are blocked on the host application binary
+interface decision recorded above. **Composites are the largest ADDRESSABLE
+blocker** and are the next increment.
+
+## Shared arrays: contiguity proven per module rather than assumed or refused
+
+Indexed access to a shared array was previously refused, on the correct ground
+that the layout table does not state a slot range is contiguous. Measuring
+found **all 556,496 adjacent shared scalar pairs in the corpus contiguous, with
+no exceptions**.
+
+That is a property of today's compiler and not a wire guarantee, so three
+responses were available: assume it and be silently wrong if the layout ever
+changes, keep refusing and lose seven modules, or **prove it per module**. The
+third is implemented. `resolve_shared_array` walks the range and requires
+uniform kind and an exact stride, at a cost of one pass over `count` table
+entries, converting an assumption into a checked precondition.
+
+The guard then had no positive case, which a mutation exposed: disabling it
+entirely left every test passing, because no layout the compiler emits violates
+it. A test now rewrites the layout table to push one element off-stride and
+requires refusal. This is the same technique used for `PushImmediate`'s
+unreachable integer encoding, and the same lesson: **a defensive check with no
+naturally occurring positive case is believed rather than tested until one is
+manufactured.**
