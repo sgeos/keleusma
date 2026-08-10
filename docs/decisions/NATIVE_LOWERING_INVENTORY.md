@@ -2849,3 +2849,76 @@ switched-resume form.
 Whichever way it goes is worth knowing before Workstream B starts, and it
 converts R4.4's confidence on that clause from medium to measured. Needs
 compilation, so it joins the queue.
+
+## OUT OF SCOPE settles decision 2, and my oracle runs on the excluded path
+
+`V0_4_0_NATIVE_CODEGEN.md`'s **Out of scope** list is unambiguous:
+
+> **"JIT compilation. V0.4.0 is AOT only."**
+
+### Roadmap open decision 2 is not open
+
+The roadmap asks "whether V0.3.x pursues ahead-of-time only or admits a JIT
+path". The architecture it names as authoritative answers it: **AOT only, JIT
+explicitly excluded** — permitted later "if a use case demanded it", not
+delivered.
+
+That is now the **third** of three roadmap "open decisions" found already settled
+in the source document. Decision 1 is resolved to posture 1; decision 2 is
+resolved here; and the section header itself claims these were "carried from
+`V0_4_0_NATIVE_CODEGEN.md`'s open questions". **They were carried and then
+resolved upstream, and the roadmap was not updated.** The `v0.2.3` session
+independently reached the same conclusion about the Order-1 gate row. The
+open-decisions section is stale as a class, not in one entry.
+
+My earlier contribution to decision 2 — that both shapes work so it is a
+support-and-maintain question — was arguing a case that had already been decided.
+The AOT/JIT feasibility evidence stands; the framing was uninformed.
+
+### The consequence for testing is real, and it is uncomfortable
+
+Measured across the test files:
+
+| Path | Files | Optimisation |
+|---|---|---|
+| **JIT** — `create_jit_execution_engine` | 3 (`differential`, `shared_data`, `yield_sequence`) | `OptimizationLevel::None` |
+| **AOT** — object emission and linker | 4, but only `aot_linkage` links a real program | `default<O2>` |
+
+**The differential oracle — the correctness signal for this whole workstream —
+runs almost entirely on the JIT at `OptimizationLevel::None`, which is the
+configuration the architecture excludes from the deliverable.** The shipped shape
+is AOT at `O2`, and it is covered by a single end-to-end test.
+
+### And the vacuous control proves the gap MATTERS
+
+This is not a theoretical concern about fidelity. Earlier today the must-fire
+check found that the unwritten-local control **passed against the unfixed
+lowering**, because an uninitialised `alloca` loaded immediately read zero and
+matched by accident.
+
+**That accident is a property of the O0 JIT path.** At `O2` LLVM does not merely
+leave `undef` alone — it *exploits* it, propagating and deleting branches on the
+assumption it can take any convenient value. The same defect that was invisible
+at O0 could produce actively wrong control flow at O2.
+
+So the coverage gap already hid one real defect from its own control, and the
+place it hid it is exactly the place the product ships. That converts this from a
+tidiness observation into a soundness one.
+
+### Queued, and it changes priority
+
+Add an AOT-and-`O2` arm to the differential oracle rather than leaving
+`aot_linkage` as the sole representative of the shipped configuration. The
+harness for it already exists — `aot_linkage.rs` writes an object, links against
+a C `main`, and runs it as a separate process — so this is extension rather than
+invention.
+
+**This outranks the width stack.** More coverage of a configuration that is not
+shipped is worth less than any coverage of the one that is, and the argument for
+that is no longer abstract: the O0 path demonstrably concealed a defect from the
+control written to catch it.
+
+Also noted from the same list, against future work: **LTO is permitted within a
+hot-replacement boundary and suppressed across boundaries**, and per-target WCET
+analysis is confirmed V0.5+ — the posture-3 design recorded above is out of scope
+for this milestone, not merely deferred within it.
