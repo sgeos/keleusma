@@ -1641,3 +1641,193 @@ fn a_fixed_point_multiply_is_refused_rather_than_lowered_as_an_integer_one() {
          be refused, not lowered as if the operand were absent"
     );
 }
+// ---------------------------------------------------------------------------
+// PREPARED WHILE THE GATE RAN — append to native_codegen/tests/differential.rs
+// after applying apply_queued_fixes.py. Not yet compiled.
+//
+// Both controls MUST-FIRE against the unfixed lowering:
+//   - without Fix 1, `undef` reaches the return and the value is arbitrary;
+//   - without Fix 2, the final block has no terminator and `lm.verify()` fails.
+//
+// Both mutate REAL compiled bytecode rather than hand-building a Module, which
+// is the technique the typed-verifier conformance corpus already uses. Hand
+// construction would need every Chunk and Module field right, and a field I got
+// wrong would make the test measure my construction rather than the lowering.
+//
+// The expected values come from the VM, not from me. That is deliberate: these
+// were written alongside the fixes rather than after them, and an assertion of
+// my own expectation written at the same moment as the code would encode the
+// same mistake twice. A differential oracle cannot.
+//
+// KNOWN COMPILE RISKS, written down rather than discovered:
+//
+//  1. `mutate` is passed to BOTH helpers, but each takes `impl FnOnce` by
+//     value. This compiles only because both closures capture nothing and
+//     non-capturing closures are `Copy`. If either ever captures, change the
+//     bound to `impl Fn(..) + Copy` or pass it twice explicitly.
+//  2. `differential.rs` imports `keleusma::bytecode::{Op, Value}` but not
+//     `Module`; the full path is used below to avoid touching the import list.
+//  3. The mutated module keeps `signatures[0]` from BEFORE the mutation, so the
+//     recorded return shape no longer matches what the chunk returns. The typed
+//     pass validates offsets rather than return-type agreement, so this should
+//     be accepted — but it is an assumption, not a certainty.
+//
+// AND THE POINT ON WHICH THIS IS FALSIFIABLE: if `Vm::new` REJECTS either
+// mutated module, then `verify()` does not admit these chunks and the inventory
+// section claiming it does is WRONG. That would be a useful result, not a broken
+// test. The `expect` message says so so the failure reads correctly.
+// ---------------------------------------------------------------------------
+
+/// Compile `src`, hand the module to `mutate`, then run the mutated module on
+/// the VM. Returns the finished value.
+///
+/// `Vm::new` runs `verify()`, so a module that reaches execution here has been
+/// ADMITTED by the verifier. Both controls below depend on that.
+fn vm_result_mutated(src: &str, mutate: impl FnOnce(&mut keleusma::bytecode::Module)) -> Value {
+    let mut m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    mutate(&mut m);
+    let cap = auto_arena_capacity_for(&m, &[]).expect("arena capacity");
+    let arena = keleusma_arena::Arena::with_capacity(cap);
+    let mut vm = Vm::new(m, &arena).expect("verify() ADMITTED the mutated module");
+    match vm.call(&[]).expect("vm run") {
+        keleusma::vm::VmState::Finished(v) => v,
+        other => panic!("unexpected VM outcome: {other:?}"),
+    }
+}
+
+/// Same mutation, lowered and JITed. Returns the native result.
+fn native_result_mutated(src: &str, mutate: impl FnOnce(&mut keleusma::bytecode::Module)) -> i64 {
+    let mut m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    mutate(&mut m);
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    lower_module(&ctx, &lm, &m, LowerOptions::default()).expect("lower");
+    // Fix 3 makes `lower_module` verify internally; this stays as the explicit
+    // statement of what the control is about.
+    lm.verify().expect("LLVM module verification");
+    let ee = lm
+        .create_jit_execution_engine(OptimizationLevel::None)
+        .expect("jit");
+    let f =
+        unsafe { ee.get_function::<unsafe extern "C" fn() -> i64>("kel_chunk_0") }.expect("symbol");
+    unsafe { f.call() }
+}
+
+/// MUST-FIRE for Fix 1: a `GetLocal` of a slot nothing ever wrote.
+///
+/// `Op::Call` fills a callee frame's non-parameter slots with `Unit`, so the VM
+/// has a DEFINED value here. An uninitialised `alloca` loads as `undef`, so
+/// before Fix 1 the native side returned an arbitrary value.
+///
+/// The encoding claim this pins is explicit rather than incidental: **zero is
+/// this backend's `Unit`.** The operand stack is uniformly `i64` and `Unit`
+/// occupies zero bytes, so it has no natural width; choosing zero is a decision
+/// and the control is where that decision is stated.
+#[test]
+fn control_unwritten_local_reads_as_unit_not_undef() {
+    // A program with no locals at all, then given a local slot nothing writes.
+    let src = "fn main() -> Word { 7 }";
+    let mutate = |m: &mut keleusma::bytecode::Module| {
+        let c = &mut m.chunks[0];
+        assert_eq!(c.param_count, 0, "fixture assumption: main takes no params");
+        // Give the chunk a local slot, and read it instead of the constant.
+        c.local_count = 1;
+        let ret = c.ops.pop().expect("non-empty chunk");
+        assert!(
+            matches!(ret, Op::Return),
+            "fixture assumption: main ends in Return, found {ret:?}"
+        );
+        c.ops.clear();
+        c.ops.push(Op::GetLocal(0));
+        c.ops.push(Op::Return);
+    };
+
+    let vm = vm_result_mutated(src, mutate);
+    assert_eq!(
+        vm,
+        Value::Unit,
+        "the VM fills non-parameter locals with Unit"
+    );
+
+    // STRUCTURAL, and this is the part that is actually a control.
+    //
+    // The behavioural comparison below does NOT fire without the fix, and that
+    // was verified rather than assumed: with the initialising store removed, the
+    // test still passed. An uninitialised `alloca` loaded immediately reads
+    // whatever occupies the slot, and a fresh frame slot is usually zero, so
+    // `undef` materialised as 0 and matched the expected value BY ACCIDENT.
+    //
+    // That is a vacuous test, the exact class this project keeps catching, and
+    // it would have sat here looking like protection. `lowered_ir` exists for
+    // "assertions about structure that runtime behaviour cannot demonstrate",
+    // which is precisely this. The store either appears in the IR or it does
+    // not, and no amount of lucky stack contents can fake it.
+    let ir = lowered_ir_mutated(src, mutate);
+    assert!(
+        ir.contains("store i64 0, ptr %l0"),
+        "the non-parameter local must be initialised to this backend's Unit; \
+         without that store a GetLocal of an unwritten slot loads undef.\nIR:\n{ir}"
+    );
+
+    // Retained as a regression check, NOT as a control: it agrees with the VM
+    // but cannot fail when the fix is absent.
+    let native = native_result_mutated(src, mutate);
+    assert_eq!(
+        native, 0,
+        "zero is this backend's Unit; agrees with the VM's Unit"
+    );
+}
+
+/// Lower a mutated module and return its IR text.
+fn lowered_ir_mutated(src: &str, mutate: impl FnOnce(&mut keleusma::bytecode::Module)) -> String {
+    let mut m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    mutate(&mut m);
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    lower_module(&ctx, &lm, &m, LowerOptions::default()).expect("lower");
+    lm.print_to_string().to_string()
+}
+
+/// MUST-FIRE for Fix 2, and the PROOF OF CONCEPT for the `verify()` finding.
+///
+/// A chunk whose ops end without `Op::Return`. Two claims are demonstrated:
+///
+/// 1. **`verify()` admits it.** `Vm::new` runs the verifier, so reaching
+///    execution proves admission. The inventory recorded this as read-derived
+///    from both depth passes discarding their terminal result; this makes it
+///    demonstrated.
+/// 2. The VM defines the case as returning the top of stack (or `Unit` when
+///    empty), and after Fix 2 the lowering agrees.
+///
+/// Before Fix 2 the lowering emitted a final block with no terminator, so
+/// `lm.verify()` failed — malformed IR rather than a wrong answer, which is why
+/// Fix 3 matters as much as this one.
+///
+/// NOT asserted here: the operand-stack leak. The VM does not truncate to
+/// `frame.base` on this path and the lowering deliberately does not reproduce
+/// that. The asymmetry is recorded in the inventory as a decision, and pinning
+/// it as expected behaviour would entrench a defect.
+#[test]
+fn control_chunk_without_trailing_return_falls_off_the_end() {
+    let src = "fn main() -> Word { 7 }";
+    let mutate = |m: &mut keleusma::bytecode::Module| {
+        let c = &mut m.chunks[0];
+        let ret = c.ops.pop().expect("non-empty chunk");
+        assert!(
+            matches!(ret, Op::Return),
+            "fixture assumption: main ends in Return, found {ret:?}"
+        );
+        // Everything before the Return is left intact, so the value 7 is on the
+        // stack when the chunk runs out of ops.
+    };
+
+    let vm = vm_result_mutated(src, mutate);
+    assert_eq!(
+        vm,
+        Value::Int(7),
+        "falling off the end returns the top of stack"
+    );
+
+    let native = native_result_mutated(src, mutate);
+    assert_eq!(native, 7, "Fix 2 emits the implicit ret the VM defines");
+}
