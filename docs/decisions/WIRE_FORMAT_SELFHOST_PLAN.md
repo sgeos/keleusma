@@ -378,6 +378,56 @@ ordering read out of `SchemaBuilder`. No Keleusma emitter has been run against a
 peak figure is a projection of the Rust encoder's structure onto a design that does not exist yet.
 Treat 77% as an estimate to be confirmed by the first driver, not as a measurement.
 
+### Records per region, which sizes every remaining slice (measured 2026-08-09)
+
+The emitter receives a record's fields through `wire.fin`, a 1024-word batch buffer. Whether a slice
+must implement batching is therefore `records * fields_per_record` against 1024, per region. Worst
+case across all ten stages:
+
+| Region | stride | fields | max records | worst stage | one batch? |
+|---|---|---|---|---|---|
+| `NAMES` | 8 | 2 | 395,804 | `lexer` | no, 774 batches |
+| `DATA_SLOTS` | 8 | 4 | 395,784 | `lexer` | no, 1547 batches |
+| `SHARED_LAYOUT` | 8 | 4 | 395,778 | `lexer` | no, 1547 batches |
+| `CONSTS` | 16 | 4 | 17,391 | `parse` | no, 68 batches |
+| `CHUNKS` | 48 | 14 | 94 | `parse` | **no, 2 batches** |
+| `ENUM_VARIANTS` | 16 | 3 | 155 | `parse` | yes |
+| `SHAPES` | 8 | 4 | 102 | `parse` | yes |
+| `SIGNATURES` | 16 | 4 | 94 | `parse` | yes |
+| `ENUM_LAYOUTS` | 16 | 4 | 3 | `parse` | yes |
+| `DATA_INIT` | 8 | 2 | 1 | `lexer` | yes |
+| `HEADER` | 32 | 11 | 1 | any | yes, done |
+
+**`CHUNKS` is the right next slice for a reason the measurement supplies.** It is the **smallest
+region that forces batching**, at two batches, so the mechanism gets built and exercised where the
+failure is legible rather than inside a 1547-batch region. `ChunkRecord` also has **14 fields**,
+more than `HeaderRecord`'s 11, so it is the widest record in the format and stresses the field
+marshalling as well.
+
+### Seven of twenty region kinds get NO emitter coverage from the corpus
+
+This is the more consequential half of the measurement, and it enlarges a gap this document
+previously recorded as a single region.
+
+| Kind | State in the corpus |
+|---|---|
+| `DEBUG_POOL` | region never emitted at all (`emit_debug` defaults false) |
+| `STRUCT_AUX` | emitted, **zero records** |
+| `ENUM_AUX` | emitted, **zero records** |
+| `STRUCT_TEMPLATES` | emitted, **zero records** |
+| `PRIVATE_COMPOSITE` | emitted, **zero records** |
+| `NATIVES` | emitted, **zero records** |
+| `NATIVE_RETURNS` | emitted, **zero records** |
+
+For a reader, an empty region and an absent one are different cases and both are covered. **For an
+emitter they are the same problem**: no record of that kind is ever written, so a differential
+validated only against these ten stages cannot see a mistranscribed offset in six of the seventeen
+record shapes. Each needs a hand-built emitter case, exactly as `DEBUG_POOL` does.
+
+The earlier statement that `DEBUG_POOL` is "the one region kind the corpus never emits" is true as
+written and misleading as read. It is the only kind whose REGION is absent; it is one of seven whose
+RECORDS never exist.
+
 Three further facts worth carrying:
 
 - **The largest region is `STRING_POOL` for ALL TEN stages**, without exception. It is dominated by
@@ -401,6 +451,14 @@ Three further facts worth carrying:
   `STRUCT_TEMPLATES` is emitted by **all ten** stages. The struct-template caveat belongs to a
   different and much smaller hand-built round-trip corpus, and connecting the two was inference by
   plausibility rather than measurement.
+
+  > **AND THAT CORRECTION IS ITSELF WRONG, measured 2026-08-09.** `STRUCT_TEMPLATES` is emitted by
+  > all ten stages **and contains zero records in every one of them.** I conflated the region being
+  > PRESENT with the region being POPULATED, and on that basis "corrected" a caveat in
+  > `tests/wire_corpus.rs` that was substantively right. The original wording, "the corpus emits
+  > zero struct templates", is accurate about the thing that matters for coverage. Two rounds of
+  > correction, the first replacing a true statement with a false one, and both times the missing
+  > step was counting records rather than looking for the region.
 
 ### On the prototype
 
