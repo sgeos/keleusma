@@ -3050,3 +3050,52 @@ to anything that looks like a defect. **But four of the six sites are strings a
 consumer reads when the lowering refuses their program**, and they currently
 direct that consumer to the wrong workstream. Misrouting a user is a defect that
 happens to be spelled like a typo.
+
+## ARTEFACT LEDGER: which prepared patches are SPENT and which are PENDING
+
+Auditing the queue rather than asserting completeness a third time turned up a
+hazard that was not recorded anywhere: **two of the six prepared artefacts have
+already been applied**, and one of them presents a *mixed* anchor state that
+invites misreading.
+
+| Artefact | State | Notes |
+|---|---|---|
+| `apply_queued_fixes.py` | **SPENT** | Applied in `ce77aa1`. **Do not re-run.** |
+| `queued_controls.rs` | **SPENT** | Appended, then the first control was rewritten as structural |
+| `spike_queued_counts.rs` | PENDING | Four corpus counts |
+| `o2_differential_arm.rs` | PENDING | Optimisation-level arm |
+| `retcon_declarability.rs` | PENDING | R4.4's open clause |
+| `fix_workstream_label.py` | PENDING | Six sites, all anchors re-verified against current source |
+
+### The mixed-anchor trap, and why re-running is safe anyway
+
+`apply_queued_fixes.py` has four anchors. Against the current source, **two still
+match and two do not**:
+
+- Anchors 1 and 2 survive because those fixes *inserted* text **after** the
+  anchor. The anchor text is still there; the change sits beside it.
+- Anchors 3 and 4 are gone because those fixes *replaced* their anchor text.
+
+So a reader checking "do the anchors still match?" gets `2 of 4` and no clean
+signal either way. **Re-running would double-apply the first two fixes** — a
+second zero-initialisation loop and a second implicit-`ret` block.
+
+It does not, and the reason is structural rather than lucky in the way that
+matters: the script performs every replacement in memory and writes **once at the
+end**, so the failing assertion on anchor 3 aborts before any write occurs. The
+`assert old in s` discipline, adopted after an edit script silently matched
+nothing and cost five diagnostic rounds, turns out to also prevent partial
+re-application. **A guard written for one failure mode covered a second one it
+was not designed for**, which is an argument for guards that fail loudly rather
+than guards that are narrowly targeted.
+
+### Why this belongs in the record
+
+A resuming session — or this one after a compaction — would find six scripts in a
+scratchpad with no indication that two are spent. The scratchpad is not durable
+and carries no state. **This table is the durable part**, and it is the piece
+that was missing when "prep is complete" was declared twice.
+
+The general form, since this is the third instance today: *decided* is not
+*written*, and *written* is not *unapplied*. Each transition needs its own
+record, because none of them is visible from the artefact alone.
