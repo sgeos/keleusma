@@ -2,7 +2,7 @@
 //!
 //! # Scope
 //!
-//! This is an early subset: 39 of the instruction set's 66 opcodes. Everything
+//! This is an early subset: 41 of the instruction set's 66 opcodes. Everything
 //! else is refused rather than lowered to something plausible and wrong.
 //! Widening the subset is the work of subsequent increments, tracked in
 //! `docs/decisions/NATIVE_LOWERING_INVENTORY.md`.
@@ -64,6 +64,7 @@
 //! the typed operand-stack verifier already guarantees, so a disagreement here
 //! is a lowering bug and is asserted rather than tolerated.
 
+use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
@@ -71,7 +72,7 @@ use inkwell::context::Context;
 use inkwell::module::Module as LlvmModule;
 use inkwell::types::IntType;
 use inkwell::values::{FunctionValue, IntValue, PointerValue, ValueKind};
-use keleusma::bytecode::{Chunk, ConstValue, Module, Op};
+use keleusma::bytecode::{Chunk, ConstValue, Module, Op, SharedSlotLayout, SlotVisibility};
 use std::collections::BTreeMap;
 
 /// Maximum operand-stack depth the lowering provisions slots for.
@@ -127,6 +128,13 @@ pub enum LowerError {
     UnsupportedOp(String),
     /// The module declares a word width this backend does not lower.
     UnsupportedWordWidth(u8),
+    /// A data-segment slot this backend cannot lower.
+    ///
+    /// Carries the slot index and the reason. Private slots and shared
+    /// composite or non-integer scalar slots are refused rather than guessed
+    /// at, since a wrong decode reads the host's buffer at the wrong width and
+    /// yields a plausible number.
+    UnsupportedDataSlot { slot: u32, why: String },
     /// The chunk's operand stack is deeper than [`MAX_STACK`] provisions for.
     ///
     /// A refusal rather than a panic. The verifier already computes the exact
@@ -144,6 +152,9 @@ impl core::fmt::Display for LowerError {
             }
             LowerError::UnsupportedWordWidth(w) => {
                 write!(f, "native lowering does not support word_bits_log2 = {w}")
+            }
+            LowerError::UnsupportedDataSlot { slot, why } => {
+                write!(f, "data slot {slot} is not lowerable: {why}")
             }
             LowerError::OperandStackTooDeep {
                 needed,
@@ -375,6 +386,69 @@ impl<'ctx> Lower<'ctx> {
     }
 }
 
+/// `ScalarKind::to_tag` values this backend understands. The tag space is the
+/// wire format's, not this crate's, so the constants mirror
+/// `src/value_layout.rs` rather than redefining it.
+const SCALAR_BOOL: u8 = 1;
+const SCALAR_BYTE: u8 = 2;
+const SCALAR_INT: u8 = 3;
+/// High bit of a shared slot's kind byte marks a composite body.
+const SHARED_COMPOSITE_FLAG: u8 = 0x80;
+
+/// Resolve a shared scalar slot to `(byte offset, load width, kind tag)`.
+///
+/// Refuses rather than guesses in four cases, each of which would otherwise
+/// decode the host's buffer at the wrong width and return a plausible number:
+/// a private slot, a slot outside the declared layout, a composite body, and a
+/// scalar kind whose representation this backend has not settled.
+fn resolve_shared_scalar<'ctx>(
+    data: &DataCtx<'_>,
+    slot: u32,
+    i8t: IntType<'ctx>,
+    i64t: IntType<'ctx>,
+) -> Result<(u32, IntType<'ctx>, u8), LowerError> {
+    if slot >= data.shared_count {
+        return Err(LowerError::UnsupportedDataSlot {
+            slot,
+            why: String::from(
+                "private slot; private storage is a later increment and its native layout is                  this backend's own choice rather than the runtime's",
+            ),
+        });
+    }
+    let e =
+        data.shared_layout
+            .get(slot as usize)
+            .ok_or_else(|| LowerError::UnsupportedDataSlot {
+                slot,
+                why: String::from("shared slot index outside the declared layout table"),
+            })?;
+    if e.kind & SHARED_COMPOSITE_FLAG != 0 {
+        return Err(LowerError::UnsupportedDataSlot {
+            slot,
+            why: String::from("shared composite body; Workstream C"),
+        });
+    }
+    match e.kind {
+        SCALAR_INT => Ok((e.offset, i64t, e.kind)),
+        SCALAR_BYTE | SCALAR_BOOL => Ok((e.offset, i8t, e.kind)),
+        other => Err(LowerError::UnsupportedDataSlot {
+            slot,
+            why: alloc_format_kind(other),
+        }),
+    }
+}
+
+fn alloc_format_kind(tag: u8) -> String {
+    match tag {
+        0 => String::from("Unit slot; the flat representation of Unit is unsettled"),
+        4 => String::from("Fixed slot; fixed-point representation is unsettled"),
+        5 => String::from("Float slot; float support is a later workstream"),
+        6 => String::from("Text slot; string representation is Workstream C"),
+        7 => String::from("Opaque slot; host handles are Workstream D"),
+        n => format!("unknown scalar kind tag {n}"),
+    }
+}
+
 /// Declare `llvm.trap`, reusing the existing declaration if the module already
 /// carries one. Lowering a second chunk into the same module must not redeclare
 /// it.
@@ -402,7 +476,7 @@ pub fn lower_chunk<'ctx>(
     // No callees are visible, so any `Op::Call` is refused. A single chunk
     // cannot resolve one: the target is an index into the module's chunk table,
     // which this entry point does not receive.
-    lower_chunk_body(ctx, module, chunk, func, &[], opts)
+    lower_chunk_body(ctx, module, chunk, func, &[], DataCtx::default(), opts)
 }
 
 /// Lower every chunk in a module, so that `Op::Call` resolves.
@@ -427,13 +501,45 @@ pub fn lower_module<'ctx>(
 ) -> Result<Vec<FunctionValue<'ctx>>, LowerError> {
     check_word_width(program.word_bits_log2)?;
     let i64t = ctx.i64_type();
+    let ptrt = ctx.ptr_type(AddressSpace::default());
 
+    // Shared slots occupy the low indices of the unified slot space, so their
+    // count is also the private boundary.
+    let (shared_count, shared_layout): (u32, &[SharedSlotLayout]) = match &program.data_layout {
+        Some(dl) => (
+            dl.slots
+                .iter()
+                .filter(|s| s.visibility == SlotVisibility::Shared)
+                .count() as u32,
+            dl.shared_layout.as_slice(),
+        ),
+        None => (0, &[]),
+    };
+    let data = DataCtx {
+        shared_count,
+        shared_layout,
+    };
+
+    // **The shared buffer arrives as a trailing pointer parameter**, and only
+    // when the module declares shared slots, so a module without them keeps the
+    // signature it had. This mirrors the runtime, where the buffer is supplied
+    // per call through `call_with_shared` rather than installed globally, and it
+    // keeps the lowering reentrant: a module-level global would be shared by
+    // every concurrent invocation. Like the symbol scheme, it is provisional and
+    // belongs to Workstream D's application binary interface.
+    let has_shared = shared_count > 0;
+    if has_shared {
+        check_target_endianness()?;
+    }
     let declared: Vec<FunctionValue<'ctx>> = program
         .chunks
         .iter()
         .enumerate()
         .map(|(i, c)| {
-            let params: Vec<_> = (0..c.param_count).map(|_| i64t.into()).collect();
+            let mut params: Vec<_> = (0..c.param_count).map(|_| i64t.into()).collect();
+            if has_shared {
+                params.push(ptrt.into());
+            }
             module.add_function(
                 &format!("kel_chunk_{i}"),
                 i64t.fn_type(&params, false),
@@ -443,9 +549,23 @@ pub fn lower_module<'ctx>(
         .collect();
 
     for (chunk, func) in program.chunks.iter().zip(declared.iter()) {
-        lower_chunk_body(ctx, module, chunk, *func, &declared, opts)?;
+        lower_chunk_body(ctx, module, chunk, *func, &declared, data, opts)?;
     }
     Ok(declared)
+}
+
+/// What the lowering knows about the module's data segment.
+///
+/// Empty for [`lower_chunk`], which receives one chunk and therefore cannot see
+/// the module's layout table. Data-segment access is refused there for the same
+/// reason a call is: the information required to resolve it was never supplied.
+#[derive(Default, Clone, Copy)]
+struct DataCtx<'a> {
+    /// Number of shared slots. Shared slots occupy the low indices, so this is
+    /// also the boundary above which a slot is private.
+    shared_count: u32,
+    /// Layout entries for the shared slots, indexed by slot.
+    shared_layout: &'a [SharedSlotLayout],
 }
 
 fn lower_chunk_body<'ctx>(
@@ -454,10 +574,12 @@ fn lower_chunk_body<'ctx>(
     chunk: &Chunk,
     func: FunctionValue<'ctx>,
     callees: &[FunctionValue<'ctx>],
+    data: DataCtx<'_>,
     opts: LowerOptions,
 ) -> Result<FunctionValue<'ctx>, LowerError> {
     let i64t = ctx.i64_type();
     let i128t = ctx.i128_type();
+    let i8t = ctx.i8_type();
 
     let b = ctx.create_builder();
     let entry = ctx.append_basic_block(func, "entry");
@@ -477,6 +599,18 @@ fn lower_chunk_body<'ctx>(
     let slots: Vec<_> = (0..MAX_STACK)
         .map(|i| b.build_alloca(i64t, &format!("s{i}")).unwrap())
         .collect();
+
+    // The trailing pointer parameter, present only when the module declares
+    // shared slots. Read once at entry; every access is an offset from it.
+    let shared_base: Option<PointerValue<'ctx>> = if data.shared_count > 0 {
+        Some(
+            func.get_nth_param(chunk.param_count as u32)
+                .expect("a module with shared slots declares the trailing buffer pointer")
+                .into_pointer_value(),
+        )
+    } else {
+        None
+    };
 
     let trapfn = trap_declaration(ctx, module);
     b.position_at_end(trap_bb);
@@ -902,7 +1036,7 @@ fn lower_chunk_body<'ctx>(
                 // calling convention from a plain native call, so it is refused
                 // rather than approximated: an arity mismatch here would produce
                 // a call LLVM accepts and the VM does not agree with.
-                let declared = callee.count_params();
+                let declared = callee.count_params() - u32::from(shared_base.is_some());
                 if u32::from(*arg_count) != declared {
                     return Err(LowerError::UnsupportedOp(format!(
                         "Call({idx}, {arg_count}) passes {arg_count} arguments to a chunk \
@@ -913,7 +1047,15 @@ fn lower_chunk_body<'ctx>(
 
                 let mut args: Vec<_> = (0..*arg_count).map(|_| st.pop()).collect();
                 args.reverse();
-                let args: Vec<_> = args.into_iter().map(|a| a.into()).collect();
+                let mut args: Vec<inkwell::values::BasicMetadataValueEnum> =
+                    args.into_iter().map(|a| a.into()).collect();
+                // Forward the shared buffer. Every function in a module with
+                // shared slots takes the trailing pointer, so a call that
+                // omitted it would pass garbage where the callee expects the
+                // host's buffer.
+                if let Some(base) = shared_base {
+                    args.push(base.into());
+                }
 
                 let ret = match st
                     .b
@@ -978,6 +1120,71 @@ fn lower_chunk_body<'ctx>(
                 st.b.build_conditional_branch(bad, trap_bb, cont).unwrap();
                 st.b.position_at_end(cont);
             }
+            // Shared data-segment slots. The encoding is part of the wire
+            // format: a layout table gives each slot a byte offset and a kind
+            // tag, and scalars are stored LITTLE-ENDIAN at that offset. Private
+            // slots are refused here and belong to a later increment.
+            //
+            // **Endianness is an assumption, and it is checked.** The runtime
+            // decodes with an explicit little-endian reader; an LLVM `load`
+            // uses target endianness. The two agree only on a little-endian
+            // target, which every target on the committed list is, so
+            // `check_target_endianness` refuses anything else rather than
+            // silently byte-swapping the host's buffer.
+            Op::GetData(slot) | Op::SetData(slot) => {
+                let base = shared_base.ok_or_else(|| LowerError::UnsupportedDataSlot {
+                    slot: *slot,
+                    why: String::from(
+                        "the module declares no shared slots, or lower_chunk was used, which \
+                         cannot see the module's data layout",
+                    ),
+                })?;
+                let (byte_off, width, kind) = resolve_shared_scalar(&data, *slot, i8t, i64t)?;
+                let addr = unsafe {
+                    st.b.build_in_bounds_gep(
+                        i8t,
+                        base,
+                        &[i64t.const_int(u64::from(byte_off), false)],
+                        "dataptr",
+                    )
+                    .unwrap()
+                };
+                if matches!(op, Op::GetData(_)) {
+                    let raw =
+                        st.b.build_load(width, addr, "dataload")
+                            .unwrap()
+                            .into_int_value();
+                    // Bool and Byte are both stored in one byte and both widen
+                    // ZERO-extended, which is the representation the byte
+                    // conversion increment settled and which `Byte as Word`
+                    // measurably does.
+                    let v = if width == i64t {
+                        raw
+                    } else {
+                        st.b.build_int_z_extend(raw, i64t, "datazext").unwrap()
+                    };
+                    // A Bool slot holds any non-zero byte for true, so it is
+                    // normalised to 0 or 1 rather than trusted to be canonical.
+                    let v = if kind == SCALAR_BOOL {
+                        let nz = st
+                            .b
+                            .build_int_compare(IntPredicate::NE, v, i64t.const_zero(), "boolnz")
+                            .unwrap();
+                        st.b.build_int_z_extend(nz, i64t, "boolz").unwrap()
+                    } else {
+                        v
+                    };
+                    st.push(v);
+                } else {
+                    let v = st.pop();
+                    let narrowed = if width == i64t {
+                        v
+                    } else {
+                        st.b.build_int_truncate(v, width, "datatrunc").unwrap()
+                    };
+                    st.b.build_store(addr, narrowed).unwrap();
+                }
+            }
             Op::Return => {
                 let v = st.pop();
                 st.b.build_return(Some(&v)).unwrap();
@@ -997,6 +1204,34 @@ fn lower_chunk_body<'ctx>(
     }
 
     Ok(func)
+}
+
+/// Check that the build host is little-endian, which shared-slot access
+/// requires.
+///
+/// The runtime decodes a shared slot with an explicit little-endian reader. An
+/// LLVM `load` uses TARGET endianness. The two agree only on a little-endian
+/// target, and every target on the committed list is one, so this refuses
+/// rather than silently byte-swapping the host's buffer.
+///
+/// **The check is on the build host, not on the emitted target**, because the
+/// lowering is not given a target triple. That is sufficient for the just-in-time
+/// path and for ahead-of-time emission to the host, and it is NOT sufficient for
+/// cross-compilation to a big-endian target. Making it sufficient means moving
+/// the check onto the `TargetMachine`, which is a change to the entry points
+/// rather than to this function.
+pub fn check_target_endianness() -> Result<(), LowerError> {
+    if cfg!(target_endian = "little") {
+        Ok(())
+    } else {
+        Err(LowerError::UnsupportedDataSlot {
+            slot: 0,
+            why: String::from(
+                "shared slots are stored little-endian and this host is big-endian; an LLVM load \
+                 would byte-swap them",
+            ),
+        })
+    }
 }
 
 /// Check that a module's declared word width is one this backend lowers.
