@@ -1216,3 +1216,91 @@ in a suite is shared state, and the harness is at fault rather than the code
 under test. The runs are now serialised by a lock, and **the absence of a context
 pointer in the ABI is the underlying cause**, which is one concrete reason the
 callback shape should not outlive the provisional label.
+
+## Composites are TWO blockers, not one, and the ownership claim was untested
+
+Measured 2026-08-09 by `native_codegen/tests/spike_composite_split.rs`, over 58
+compiled corpus modules and 496 chunks. Three findings, one of which is a
+correction to this document and one of which is a correction to the spike.
+
+### The split, measured
+
+Of the 27 chunks blocked **only** by the composite class:
+
+| Population | Chunks | What it needs |
+|---|---|---|
+| Reads only | **5** | Nothing. No shape recovery of any kind. |
+| A construction is present | **22** | Per-value widths |
+
+The read half is genuinely free. `StructField::Flat { offset, kind }`,
+`EnumField::Flat { offset, kind }`, `GetTupleField`, and `ArrayElem::Flat { kind }`
+bake the displacement and the width; the nested forms bake `offset`, `size` and
+`variant`. A read lowers to a load at a known offset of a known width, and needs
+no abstract interpretation to get there. This document previously treated
+composites as one 18-module item gated behind type recovery. **Five chunks were
+never behind that gate.**
+
+### The spike's first revision was wrong, and this document was right
+
+The first revision classified a construction by whether
+`count * word_bytes == byte_size` and reported **zero** chunks needing recovery,
+with 22 "reachable by arithmetic". That contradicts the section above, which had
+already rejected exactly that inference with exactly the right counterexample
+family. **The recorded finding was correct and the new measurement was wrong**,
+which is the reverse of this arc's usual direction and worth logging as such:
+probing does not automatically beat a document, and a fresh number is not
+evidence of a fresh truth.
+
+Reading `Vm`'s handler supplies a second, sharper reason the inference fails,
+beyond the counterexample already recorded:
+
+- `pack_flat_in_arena` sizes a body as the **sum of per-value `flat_field_size`**,
+  read from each runtime value's own kind. Widths are per value and never
+  assumed uniform.
+- For a `Tuple` or `Array` the VM passes `min_bytes = 0`, and its own comment
+  calls the operand's `byte_size` **"the verifier annotation only"**. So for two
+  of the four composite kinds the equality is compared against a number that
+  does not describe the body at all.
+- For a `Struct` or `Enum`, `byte_size` is only a **floor** that pads an enum to
+  its widest variant, so equality does not pin the field breakdown either.
+
+The equality is therefore neither necessary nor sufficient. It holds at 238 of
+239 construction sites in the corpus, which is precisely what makes it dangerous:
+it looks like a law and is a coincidence. `control_size_consistent_construction_still_needs_recovery`
+encodes the rejection so the shortcut cannot be reintroduced silently.
+
+### The ownership claim was an assumption, never tested
+
+The resume prompt records the enabling change as living in `src/verify_typed.rs`,
+"which this branch does not own". Measured:
+
+```
+git log <merge-base>..origin/v0.2.3 -- src/verify_typed.rs   -> empty
+```
+
+**Zero changes on the other line since the fork point**; the file was last
+touched 2026-07-12. The read-only commitment this branch actually made names
+`src/wire_schema.rs` and `src/bytecode.rs`, and never named this one. The
+constraint was inherited by inference from a neighbouring commitment.
+
+This is the third time on this branch that a blocker treated as external
+dissolved on contact with the actual boundary — after the private-data
+representation and after the `Add`/`Sub`/`Mul`/`Neg` generalisation. The pattern
+is specific enough to state as a rule: **an escalation should carry the command
+that establishes the constraint, not the reasoning that infers it.**
+
+It also matters less than it first appears, which is the more useful conclusion.
+`AbsVal`, `ChunkSig`, `TypedError` and `ChunkSignature` are all already `pub`,
+and `WireShape` with them. A shape stack tracking per-value widths can therefore
+be built **inside `native_codegen`**, seeded from `module.signatures`, without
+touching the shared crate at all — the ops whose results need widths are ops this
+lowering already handles, and their widths are baked (`GetField`), fixed by the
+op (`CheckedAdd` yields `Int`), or seeded from the signature table. The
+`verify_typed.rs` change is one option, not the prerequisite.
+
+### Consequence for ordering
+
+The 5 read-only chunks are the smallest genuinely-unblocked increment now
+available, and they need no new infrastructure. The 22 construction chunks need
+a local shape stack, which is a `native_codegen`-only change. Neither is gated on
+the other line, and neither needs an opcode or a `BYTECODE_VERSION` bump.
