@@ -2041,6 +2041,10 @@ fn the_slice_5c_offsets_and_kinds_match_the_schema() {
         StructTemplateRecord::OFFSET_FIELD_NAMES_FIRST as i64
     );
     assert_eq!(
+        kel_const("tpl_off_reserved"),
+        StructTemplateRecord::OFFSET_RESERVED as i64
+    );
+    assert_eq!(
         kel_const("tpl_off_field_count"),
         StructTemplateRecord::OFFSET_FIELD_COUNT as i64
     );
@@ -2483,6 +2487,10 @@ fn the_slice_5d_offsets_and_kinds_match_the_schema() {
         PrivateCompositeRecord::OFFSET_SLOT as i64
     );
     assert_eq!(
+        kel_const("pcomp_off_reserved"),
+        PrivateCompositeRecord::OFFSET_RESERVED as i64
+    );
+    assert_eq!(
         kel_const("pcomp_off_offset"),
         PrivateCompositeRecord::OFFSET_OFFSET as i64
     );
@@ -2808,12 +2816,20 @@ fn the_slice_5e_offsets_and_kinds_match_the_schema() {
         NativeRecord::OFFSET_NAME as i64
     );
     assert_eq!(
+        kel_const("native_off_reserved"),
+        NativeRecord::OFFSET_RESERVED as i64
+    );
+    assert_eq!(
         kel_const("natret_stride"),
         NativeReturnRecord::STRIDE as i64
     );
     assert_eq!(
         kel_const("natret_off_shape"),
         NativeReturnRecord::OFFSET_SHAPE as i64
+    );
+    assert_eq!(
+        kel_const("natret_off_reserved"),
+        NativeReturnRecord::OFFSET_RESERVED as i64
     );
 
     assert_eq!(kel_const("header_stride"), HeaderRecord::STRIDE as i64);
@@ -5582,5 +5598,275 @@ fn a_negative_discriminant_round_trips_through_the_two_limb_write() {
         want[0..4].copy_from_slice(&7u32.to_le_bytes());
         want[8..16].copy_from_slice(&disc.to_le_bytes());
         assert_eq!(got, want, "discriminant {disc} emitted wrongly");
+    }
+}
+
+// --- WIRING SLICE 8: the kinds the corpus never populates --------------------
+//
+// Six record shapes are emitted as EMPTY regions by every one of the ten stage
+// sources, so no differential against real output can reach them. For a READER
+// an empty region and a populated one are different cases and both were already
+// covered. For an EMITTER they are the same problem: no record of that kind is
+// ever written, so a mistranscribed offset would go unseen indefinitely.
+//
+// THE ORACLE IS INDEPENDENT CONSTRUCTION, NOT THE CORPUS. `#[derive(WireRecord)]`
+// generates `write_record`, which is the authority on the packed layout, and the
+// expected bytes come from it. That is stronger than comparing against my own
+// idea of the layout and is the same oracle the hand-built record tests use.
+//
+// These do NOT block the driver: a zero-record region is declared in the
+// directory with length zero and needs no emitter. They are what a general
+// compiler needs the day a program declares a struct template or a native, which
+// the toolchain's own sources happen never to do.
+
+/// Distinct, non-zero, and different in every field position.
+///
+/// A field that is zero, or equal to its neighbour, cannot expose a swap or a
+/// dropped write. The generator is deterministic so a failure is reproducible.
+fn distinct(seed: u32, field: usize) -> u32 {
+    // Spread across all four bytes so a truncation to u16 or u8 also shows.
+    0x0100_0001u32
+        .wrapping_mul(seed + 1)
+        .wrapping_add((field as u32 + 1) * 0x0011_0101)
+        | 0x0080_0080
+}
+
+#[test]
+fn the_uncovered_record_kinds_emit_what_the_derive_constructs() {
+    use keleusma::wire_schema::{
+        EnumAux, NativeRecord, NativeReturnRecord, PrivateCompositeRecord, StructAux,
+        StructTemplateRecord,
+    };
+    let mut vm = vm_for(WIRE_KEL);
+    const N: usize = 5;
+    let window = 64usize;
+
+    // StructAux: two u32.
+    {
+        let recs: Vec<StructAux> = (0..N as u32)
+            .map(|i| StructAux {
+                type_name: distinct(i, 0),
+                field_names_first: distinct(i, 1),
+            })
+            .collect();
+        let rows: Vec<Vec<i64>> = recs
+            .iter()
+            .map(|r| vec![i64::from(r.type_name), i64::from(r.field_names_first)])
+            .collect();
+        check_uncovered(
+            &mut vm,
+            128,
+            StructAux::STRIDE,
+            &rows,
+            &pack(&recs),
+            window,
+            "STRUCT_AUX",
+        );
+    }
+
+    // EnumAux: two u32 and a SIGNED 64-bit discriminant.
+    {
+        let discs = [-1i64, i64::MIN, 0, 1, i64::MAX];
+        let recs: Vec<EnumAux> = (0..N)
+            .map(|i| EnumAux {
+                type_name: distinct(i as u32, 0),
+                variant: distinct(i as u32, 1),
+                discriminant: discs[i],
+            })
+            .collect();
+        let rows: Vec<Vec<i64>> = recs
+            .iter()
+            .map(|r| vec![i64::from(r.type_name), i64::from(r.variant), r.discriminant])
+            .collect();
+        check_uncovered(
+            &mut vm,
+            129,
+            EnumAux::STRIDE,
+            &rows,
+            &pack(&recs),
+            window,
+            "ENUM_AUX",
+        );
+    }
+
+    // StructTemplateRecord: four u32, including a reserved field.
+    {
+        let recs: Vec<StructTemplateRecord> = (0..N as u32)
+            .map(|i| StructTemplateRecord {
+                type_name: distinct(i, 0),
+                field_names_first: distinct(i, 1),
+                field_count: distinct(i, 2),
+                reserved: distinct(i, 3),
+            })
+            .collect();
+        let rows: Vec<Vec<i64>> = recs
+            .iter()
+            .map(|r| {
+                vec![
+                    i64::from(r.type_name),
+                    i64::from(r.field_names_first),
+                    i64::from(r.field_count),
+                    i64::from(r.reserved),
+                ]
+            })
+            .collect();
+        check_uncovered(
+            &mut vm,
+            130,
+            StructTemplateRecord::STRIDE,
+            &rows,
+            &pack(&recs),
+            window,
+            "STRUCT_TEMPLATES",
+        );
+    }
+
+    // PrivateCompositeRecord: two u16 then a u32, the only mixed-width case here.
+    {
+        let recs: Vec<PrivateCompositeRecord> = (0..N as u32)
+            .map(|i| PrivateCompositeRecord {
+                slot: distinct(i, 0) as u16,
+                reserved: distinct(i, 1) as u16,
+                offset: distinct(i, 2),
+            })
+            .collect();
+        let rows: Vec<Vec<i64>> = recs
+            .iter()
+            .map(|r| {
+                vec![
+                    i64::from(r.slot),
+                    i64::from(r.reserved),
+                    i64::from(r.offset),
+                ]
+            })
+            .collect();
+        check_uncovered(
+            &mut vm,
+            131,
+            PrivateCompositeRecord::STRIDE,
+            &rows,
+            &pack(&recs),
+            window,
+            "PRIVATE_COMPOSITE",
+        );
+    }
+
+    // NativeRecord and NativeReturnRecord: two u32 each, distinct kinds sharing
+    // a shape. Emitting one with the other's command must still be caught, which
+    // the differing values below ensure.
+    {
+        let recs: Vec<NativeRecord> = (0..N as u32)
+            .map(|i| NativeRecord {
+                name: distinct(i, 0),
+                reserved: distinct(i, 1),
+            })
+            .collect();
+        let rows: Vec<Vec<i64>> = recs
+            .iter()
+            .map(|r| vec![i64::from(r.name), i64::from(r.reserved)])
+            .collect();
+        check_uncovered(
+            &mut vm,
+            132,
+            NativeRecord::STRIDE,
+            &rows,
+            &pack(&recs),
+            window,
+            "NATIVES",
+        );
+    }
+    {
+        let recs: Vec<NativeReturnRecord> = (0..N as u32)
+            .map(|i| NativeReturnRecord {
+                shape: distinct(i, 2),
+                reserved: distinct(i, 3),
+            })
+            .collect();
+        let rows: Vec<Vec<i64>> = recs
+            .iter()
+            .map(|r| vec![i64::from(r.shape), i64::from(r.reserved)])
+            .collect();
+        check_uncovered(
+            &mut vm,
+            133,
+            NativeReturnRecord::STRIDE,
+            &rows,
+            &pack(&recs),
+            window,
+            "NATIVE_RETURNS",
+        );
+    }
+}
+
+/// Expected bytes, built by the derive rather than by hand.
+fn pack<T: keleusma_wire::WireRecord>(recs: &[T]) -> Vec<u8> {
+    let mut out = vec![0u8; recs.len() * T::STRIDE];
+    for (i, r) in recs.iter().enumerate() {
+        r.write_record(&mut out[i * T::STRIDE..(i + 1) * T::STRIDE])
+            .expect("write_record");
+    }
+    out
+}
+
+/// Emit `rows` through `cmd` and require both byte identity and that every
+/// field is independently observable.
+fn check_uncovered(
+    vm: &mut Vm<'static, 'static>,
+    cmd: i64,
+    stride: usize,
+    rows: &[Vec<i64>],
+    want: &[u8],
+    window: usize,
+    label: &str,
+) {
+    let fields = rows[0].len();
+    let emit = |vm: &mut Vm<'static, 'static>, rows: &[Vec<i64>]| -> Vec<u8> {
+        let flat: Vec<i64> = rows.iter().flatten().copied().collect();
+        let produced = rows.len() * stride;
+        let (written, buf) = run_cmd_fields(
+            vm,
+            cmd,
+            0,
+            &[],
+            &flat,
+            [window as i64, rows.len() as i64, 0, 0, 0],
+            window + produced,
+        )
+        .expect("run");
+        assert_eq!(written, produced as i64, "{label}: wrong byte count");
+        buf[window..window + produced].to_vec()
+    };
+
+    assert_eq!(emit(vm, rows), want, "{label}: differs from the derive");
+
+    // Must-fire, per field. Without this the agreement above could come from two
+    // implementations wrong in the same way, or from a field never written.
+    for f in 0..fields {
+        let mut perturbed = rows.to_vec();
+        perturbed[0][f] ^= 1;
+        assert_ne!(
+            emit(vm, &perturbed),
+            want,
+            "{label}: control did not fire, field {f} is not observable"
+        );
+    }
+}
+
+/// Every uncovered kind rejects an oversized batch with its own code.
+#[test]
+fn the_uncovered_kinds_reject_an_oversized_batch() {
+    let mut vm = vm_for(WIRE_KEL);
+    for (cmd, fields, code) in [
+        (128i64, 2usize, -211i64),
+        (129, 3, -212),
+        (130, 4, -213),
+        (131, 3, -214),
+        (132, 2, -215),
+        (133, 2, -216),
+    ] {
+        let over = (FIN_CAPACITY / fields) + 1;
+        let (got, _) =
+            run_cmd_fields(&mut vm, cmd, 0, &[], &[], [64, over as i64, 0, 0, 0], 0).expect("run");
+        assert_eq!(got, code, "command {cmd}: wrong or missing rejection code");
     }
 }

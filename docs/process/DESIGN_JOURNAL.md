@@ -13,6 +13,37 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**WIRING SLICE 8: THE KINDS THE CORPUS CANNOT REACH, AND A BRANCH MISTAKE CAUGHT BY VERIFYING
+(2026-08-10).** `STRUCT_AUX`, `ENUM_AUX`, `STRUCT_TEMPLATES`, `PRIVATE_COMPOSITE`, `NATIVES` and
+`NATIVE_RETURNS`. 108 tests. **Every record shape in the format now has an emitter**, so the
+seventeen-shape schema is complete on the emit side.
+
+**The oracle had to change, and that is the substance of the slice.** These six are emitted as EMPTY
+regions by all ten stages, so no differential against real output can reach them — for a reader an
+empty region and a populated one are different cases and both were covered, but for an EMITTER they
+are the same problem: no record is ever written, so a mistranscribed offset would go unseen
+indefinitely. The expected bytes therefore come from **`#[derive(WireRecord)]`'s own
+`write_record`**, which is the authority on the packed layout, rather than from my idea of it. Four
+more reserved offsets had to be transcribed and are pinned against the derive like every other.
+
+**Field values are generated distinct, non-zero and different in every position**, spread across all
+four bytes so a truncation to `u16` or `u8` shows as well as a swap. `ENUM_AUX` carries a signed
+discriminant, so its cases are `-1`, `i64::MIN`, `0`, `1` and `i64::MAX`, exercising `put_u64`'s
+two-limb write again on a kind the corpus never populates.
+
+**I patched the wrong branch, and only a verification grep caught it.** After committing the process
+correction on `v0.2.3` I stayed there and applied the whole slice to `v0.2.3`'s `wire.kel`, which
+does not contain slices 5 to 7. Two of the three edits silently no-oped because their anchors do not
+exist there, and the file was left half-patched. What surfaced it was a `grep -c` on the new dispatch
+arms returning **1 where it should have returned five** — a count I ran only because I have been
+checking every patch this session rather than trusting `replace` to have matched. Discarded with
+`git checkout --`, rebased, reapplied with `assert` on every anchor so a silent no-op is impossible
+next time.
+
+**The lesson is narrower than "check your branch".** A textual patch that finds no anchor does
+nothing and reports success, which is the same silent-failure shape as a by-name enumeration going
+stale. The fix is the same: make the operation assert rather than hope.
+
 **WIRING SLICE 7: THE REMAINING POPULATED TABLES, AND THE SWEEP DEBT PAID AS A MECHANISM
 (2026-08-09).** `SHAPES`, `SIGNATURES`, `ENUM_VARIANTS`, `ENUM_LAYOUTS`, `DATA_INIT` and `CONSTS`,
 all byte-identical against real output. 106 tests. **Every populated region kind in the corpus now

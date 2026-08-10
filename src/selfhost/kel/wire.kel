@@ -862,6 +862,7 @@ fn tpl_stride() -> Word { 16 }
 fn tpl_off_type_name() -> Word { 0 }
 fn tpl_off_field_names_first() -> Word { 4 }
 fn tpl_off_field_count() -> Word { 8 }
+fn tpl_off_reserved() -> Word { 12 }
 
 // EnumVariantRecord: name u32 @0, reserved u32 @4, disc i64 @8.
 fn evar_stride() -> Word { 16 }
@@ -1024,6 +1025,7 @@ fn sslot_off_reserved() -> Word { 5 }
 // PrivateCompositeRecord: slot u16 @0, reserved u16 @2, offset u32 @4.
 fn pcomp_stride() -> Word { 8 }
 fn pcomp_off_slot() -> Word { 0 }
+fn pcomp_off_reserved() -> Word { 2 }
 fn pcomp_off_offset() -> Word { 4 }
 
 // DataInitRecord: first u32 @0, count u32 @4. A range into the constant table.
@@ -1152,8 +1154,10 @@ fn chunk_off_block_type() -> Word { 47 }
 // NativeRecord and NativeReturnRecord: one index plus reserved, one word each.
 fn native_stride() -> Word { 8 }
 fn native_off_name() -> Word { 0 }
+fn native_off_reserved() -> Word { 4 }
 fn natret_stride() -> Word { 8 }
 fn natret_off_shape() -> Word { 0 }
+fn natret_off_reserved() -> Word { 4 }
 
 // HeaderRecord, four words.
 fn header_stride() -> Word { 32 }
@@ -1572,6 +1576,135 @@ fn emit_const_records(at: Word, n: Word) -> Word {
             );
         }
         n * const_stride()
+    }
+}
+
+// --- SLICE 8 OF THE WIRING INCREMENT: the kinds the corpus never populates --
+//
+// Six record shapes are emitted as EMPTY regions by every one of the ten stages,
+// so no differential against real output can reach them. For a reader an empty
+// region and a populated one are different cases and both were covered; for an
+// EMITTER they are the same problem, because no record of that kind is ever
+// written and a mistranscribed offset would go unseen.
+//
+// These do NOT block the driver — a zero-record region is declared in the
+// directory with length zero and needs no emitter at all. They are what a
+// general compiler needs the day a program declares a struct template or a
+// native, which the toolchain's own sources happen never to do.
+//
+// The oracle is therefore not the corpus but INDEPENDENT CONSTRUCTION: the
+// derive's own `write_record` builds the expected bytes, and every field is
+// given a distinct value so a swapped pair cannot hide.
+
+fn saux_fields() -> Word { 2 }
+
+fn emit_struct_aux_records(at: Word, n: Word) -> Word {
+    if (n * saux_fields()) > fin_capacity() { 0 - 211 } else {
+        for j in 0..n limit 1024 {
+            put_u32(
+                at + (j * structaux_stride()) + structaux_off_type_name(),
+                wire.fin[j * saux_fields()],
+            );
+            put_u32(
+                at + (j * structaux_stride()) + structaux_off_field_names_first(),
+                wire.fin[(j * saux_fields()) + 1],
+            );
+        }
+        n * structaux_stride()
+    }
+}
+
+fn eaux_fields() -> Word { 3 }
+
+fn emit_enum_aux_records(at: Word, n: Word) -> Word {
+    if (n * eaux_fields()) > fin_capacity() { 0 - 212 } else {
+        for j in 0..n limit 1024 {
+            put_u32(
+                at + (j * enumaux_stride()) + enumaux_off_type_name(),
+                wire.fin[j * eaux_fields()],
+            );
+            put_u32(
+                at + (j * enumaux_stride()) + enumaux_off_variant(),
+                wire.fin[(j * eaux_fields()) + 1],
+            );
+            put_u64(
+                at + (j * enumaux_stride()) + enumaux_off_discriminant(),
+                wire.fin[(j * eaux_fields()) + 2],
+            );
+        }
+        n * enumaux_stride()
+    }
+}
+
+fn tpl_fields() -> Word { 4 }
+
+fn emit_struct_template_records(at: Word, n: Word) -> Word {
+    if (n * tpl_fields()) > fin_capacity() { 0 - 213 } else {
+        for j in 0..n limit 1024 {
+            put_u32(at + (j * tpl_stride()) + tpl_off_type_name(), wire.fin[j * tpl_fields()]);
+            put_u32(
+                at + (j * tpl_stride()) + tpl_off_field_names_first(),
+                wire.fin[(j * tpl_fields()) + 1],
+            );
+            put_u32(
+                at + (j * tpl_stride()) + tpl_off_field_count(),
+                wire.fin[(j * tpl_fields()) + 2],
+            );
+            put_u32(
+                at + (j * tpl_stride()) + tpl_off_reserved(),
+                wire.fin[(j * tpl_fields()) + 3],
+            );
+        }
+        n * tpl_stride()
+    }
+}
+
+fn pcomp_fields() -> Word { 3 }
+
+fn emit_private_composite_records(at: Word, n: Word) -> Word {
+    if (n * pcomp_fields()) > fin_capacity() { 0 - 214 } else {
+        for j in 0..n limit 1024 {
+            put_u16(at + (j * pcomp_stride()) + pcomp_off_slot(), wire.fin[j * pcomp_fields()]);
+            put_u16(
+                at + (j * pcomp_stride()) + pcomp_off_reserved(),
+                wire.fin[(j * pcomp_fields()) + 1],
+            );
+            put_u32(
+                at + (j * pcomp_stride()) + pcomp_off_offset(),
+                wire.fin[(j * pcomp_fields()) + 2],
+            );
+        }
+        n * pcomp_stride()
+    }
+}
+
+fn native_fields() -> Word { 2 }
+
+fn emit_native_records(at: Word, n: Word) -> Word {
+    if (n * native_fields()) > fin_capacity() { 0 - 215 } else {
+        for j in 0..n limit 1024 {
+            put_u32(at + (j * native_stride()) + native_off_name(), wire.fin[j * native_fields()]);
+            put_u32(
+                at + (j * native_stride()) + native_off_reserved(),
+                wire.fin[(j * native_fields()) + 1],
+            );
+        }
+        n * native_stride()
+    }
+}
+
+fn natret_fields() -> Word { 2 }
+
+fn emit_native_return_records(at: Word, n: Word) -> Word {
+    if (n * natret_fields()) > fin_capacity() { 0 - 216 } else {
+        for j in 0..n limit 1024 {
+            put_u32(at + (j * natret_stride()) + natret_off_shape(), wire.fin[j * natret_fields()]);
+            put_u32(
+                at + (j * natret_stride()) + natret_off_reserved(),
+                wire.fin[(j * natret_fields()) + 1],
+            );
+        }
+        n * natret_stride()
     }
 }
 
@@ -2078,7 +2211,13 @@ fn dispatch_emit(cmd: Word) -> Word {
     if cmd == 125 { emit_enum_layout_records(wire.warg, wire.warg2) } else {
     if cmd == 126 { emit_data_init_records(wire.warg, wire.warg2) } else {
     if cmd == 127 { emit_const_records(wire.warg, wire.warg2) } else {
-    0 - 98 }}}}}}}}}}}}}
+    if cmd == 128 { emit_struct_aux_records(wire.warg, wire.warg2) } else {
+    if cmd == 129 { emit_enum_aux_records(wire.warg, wire.warg2) } else {
+    if cmd == 130 { emit_struct_template_records(wire.warg, wire.warg2) } else {
+    if cmd == 131 { emit_private_composite_records(wire.warg, wire.warg2) } else {
+    if cmd == 132 { emit_native_records(wire.warg, wire.warg2) } else {
+    if cmd == 133 { emit_native_return_records(wire.warg, wire.warg2) } else {
+    0 - 98 }}}}}}}}}}}}}}}}}}}
 }
 
 // THE HIGHEST LIVE COMMAND, AND IT IS LOAD-BEARING RATHER THAN DOCUMENTATION.
@@ -2086,7 +2225,7 @@ fn dispatch_emit(cmd: Word) -> Word {
 // UNREACHABLE and its own test fails immediately. The fall-through sweep reads
 // this value out of the source instead of restating a bound, which is what it
 // did for four consecutive slices — and got wrong once.
-fn highest_command() -> Word { 127 }
+fn highest_command() -> Word { 133 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {
