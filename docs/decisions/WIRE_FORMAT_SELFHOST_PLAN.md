@@ -313,6 +313,71 @@ So a per-region working buffer of about 8 MB covers every stage with roughly 10 
 emitter's inputs. **The staged design is viable, and the whole-artifact design is not** — which is
 the whole point of having measured before writing.
 
+> **CORRECTED 2026-08-09 by the measurement in the next subsection.** The sentence above is wrong
+> about the headroom, and wrong in the direction that matters. It treats the largest region as a
+> **transient** working buffer, so it subtracts one region from the ceiling and calls the rest free.
+> Two of the regions are **accumulators** that stay resident until the end, and for `lexer` they
+> total 9,776,392 bytes rather than 6,609,960. The real remainder is about 7.0 MB, not 10 MB. The
+> conclusion that the staged design is viable and the whole-artifact design is not still holds.
+
+### The resident set, not the largest region, is the binding constraint (measured 2026-08-09)
+
+The prep above asked how big the largest region is. That is the wrong question, and reading
+`SchemaBuilder` is what shows why.
+
+**`STRING_POOL` and `NAMES` are written LAST**, at the end of `SchemaBuilder::finish`
+(`src/wire_schema.rs:833-837`), after every other region. Interning happens throughout: chunks
+intern their names, struct templates intern a type name and every field name at
+`src/wire_schema.rs:787-791`, and `flatten` interns while walking the constant forest. So the
+content of those two regions is not final until every other contributor has run, which makes them
+**accumulators held across the whole emission**, not buffers reused per region.
+
+Per-region sizes across all ten stages, measured by encoding each stage's auxiliary body and
+enumerating the container's region directory. The six largest regions per stage, `lexer` in full:
+
+| Region | `lexer` | `parse` | `verify_typed` |
+|---|---|---|---|
+| `STRING_POOL` | 6,609,960 | 1,071,928 | 861,800 |
+| `NAMES` | 3,166,432 | 464,424 | 468,808 |
+| `DATA_SLOTS` | 3,166,272 | 462,408 | 468,632 |
+| `SHARED_LAYOUT` | 3,166,224 | 329,800 | 449,072 |
+| `CONSTS` | 4,176 | 278,256 | 40,352 |
+| `CHUNKS` | 960 | 4,512 | 1,056 |
+| **auxiliary body** | **16,114,608** | 2,616,320 | 2,290,408 |
+
+Three things follow, and only the first was anticipated.
+
+1. **The resident floor for `lexer` is 9,776,392 bytes**, `STRING_POOL` plus `NAMES`, which is
+   **58.3% of the 16,777,216-byte ceiling**. Every other stage is under 10%, the next highest being
+   `parse` at 9.2%. `lexer` is the only stage where this is tight, and it is tight by a wide margin.
+2. **Four regions carry essentially the whole artifact.** For `lexer` the top four sum to 16,108,888
+   of 16,114,608, so 99.96%. Optimising anything else is wasted effort.
+3. **Three of those four are per-slot tables of identical length.** `NAMES` is 395,804 records,
+   `DATA_SLOTS` 395,784, and `SHARED_LAYOUT` 395,778, each at an 8-byte stride. They scale one for
+   one with data slots, which is the same per-array-element root cause recorded above. The artifact
+   has three parallel copies of that count plus the pool of names they point into.
+
+**What this changes about the increment.** Peak residency is the accumulator plus whichever region
+is being built, so for `lexer` roughly 9.78 MB plus 3.17 MB, about 12.9 MB or 77% of the ceiling,
+before the emitter's own inputs and before any dedup structure. That is feasible and it is not
+comfortable, and it is a different design target from the one the prep set.
+
+**A dedup index is required and is not free.** `Names::intern` is backed by a `BTreeMap` at
+`src/wire_schema.rs:305`. A Keleusma emitter needs an equivalent, and a linear scan is known to be
+catastrophic here rather than merely slow: `tests/wire_corpus.rs` records the corpus taking 782
+seconds against about two and a half seconds once the quadratic interner was repaired. Whatever
+structure replaces it consumes part of the remaining 7.0 MB.
+
+**One constraint from the prep is softer than stated.** "Compute every region's length, write the
+leading directory" assumed the directory must be written before the regions it describes. The host
+owns the output buffer and can patch the directory after the fact, so lengths need not be known in
+advance. The accumulator finding is independent of that and stands either way.
+
+**Unverified.** The residency arithmetic above is derived from measured region sizes plus the
+ordering read out of `SchemaBuilder`. No Keleusma emitter has been run against a real stage, so the
+peak figure is a projection of the Rust encoder's structure onto a design that does not exist yet.
+Treat 77% as an estimate to be confirmed by the first driver, not as a measurement.
+
 Three further facts worth carrying:
 
 - **The largest region is `STRING_POOL` for ALL TEN stages**, without exception. It is dominated by
