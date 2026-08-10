@@ -125,13 +125,35 @@ One pass over one gap:
    only before a planned compaction, and it is stamped with the current commit (see Guardrails).
 6. **Commit** with a scoped conventional message ending in the
    `Co-Authored-By: Claude ...` line.
-7. **Merge at a natural point**: when the full gate (`scripts/release-gate.sh`) is green, first
-   **rebase the branch onto the current `v0.2.3` tip** (if `v0.2.3` advanced meanwhile — for example
-   a docs commit) so it stays fast-forwardable, then merge it into `v0.2.3` with a **no-fast-forward
-   merge commit** (`git merge --no-ff`), push, and confirm CI is green. The green local gate authorizes the merge; CI is the binding
-   authority afterward, so a red CI result is remedied immediately (see
+7. **Merge at a natural point**: when the full gate (`scripts/release-gate.sh`) is green, merge the
+   **GATED COMMIT** into `v0.2.3` with a **no-fast-forward merge commit** (`git merge --no-ff
+   <gated-commit>`), push, and confirm CI is green. The green local gate authorizes the merge; CI is
+   the binding authority afterward, so a red CI result is remedied immediately (see
    [GIT_STRATEGY.md](./GIT_STRATEGY.md#definition-of-green)). The no-ff merge keeps the `v0.2.3`
    first-parent history green while preserving the per-increment commits on the merged bubble.
+
+   **DO NOT REBASE BEFORE MERGING.** This step used to say to rebase onto the current `v0.2.3` tip
+   first, "so it stays fast-forwardable". That instruction is **wrong and was acted on once before
+   the conflict was noticed** (2026-08-10):
+
+   - **A rebase rewrites every commit hash on the branch, including the gated one.** The commit the
+     gate ran against then no longer exists, so the green result describes nothing that is being
+     merged. That directly contradicts the rule this document and `HANDOFF.md` both insist on —
+     *gate the tip you intend to merge*.
+   - **The conflict is not rare, it is the normal case.** A gate takes about 2h33m and the version
+     branch routinely gains a docs or mailbox commit in that window, which is exactly when the old
+     instruction said to rebase.
+   - **Fast-forwardability is not required.** `--no-ff` creates a merge commit regardless, so the
+     stated reason for rebasing did not hold even on its own terms.
+
+   **The branch tip is usually NOT the gated commit**, because the worktree gate deliberately leaves
+   the main tree free and work continues during the run. Merge the gated commit by name, then rebase
+   whatever remains onto the new `v0.2.3` and gate that separately. Note this makes the gate result
+   valid for a commit whose *merge* still adds any commits `v0.2.3` gained meanwhile; that residual
+   is what CI covers, and it is why CI is the binding authority rather than the local gate.
+
+   **A rebased line is the exception**, and it is already covered: `v0.3.0` lands feature branches
+   as one green squashed commit. See [GIT_STRATEGY.md](./GIT_STRATEGY.md).
 8. **Continue** to step 1 for the next gap. This is the keep-going default; no operator
    prompt is required to start the next increment.
 
