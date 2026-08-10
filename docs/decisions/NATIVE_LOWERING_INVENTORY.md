@@ -2714,3 +2714,74 @@ difference between the two outcomes is one read of the source.
 An unused `NewCompositeOperand` import was removed in the same pass; it would
 have failed `clippy -D warnings` and cost a compile cycle on a machine that is
 currently contended.
+
+## The architecture already answers WCET, my design is its DEFERRED posture, and it leaves a real gap
+
+Having been caught once by scoping a symbol scheme without reading the resolved
+design question, the same check was applied to Workstream E. **The architecture
+has a full section on WCET and WCMU preservation and I had not read it.** Same
+mistake, caught one step earlier this time.
+
+### The roadmap's open decision is an impoverished version of a settled answer
+
+`V0_3_X_ROADMAP.md` open decision 1 asks whether native WCET is "hard or
+best-effort". I called that a false dichotomy. **It is worse than that: the
+architecture offers THREE postures and has already chosen one.**
+
+| Posture | Content | Status |
+|---|---|---|
+| 1 | Best-effort. Bytecode WCET is a soft upper bound; operators needing hard real time use the **bytecode shape**. | **Ships with V0.4.0** |
+| 2 | Measurement-based. Benchmark the native artefact on target under worst-case input. | V0.4.x, "the rigorous path" |
+| 3 | Per-target cycle analysis of the native output. | **V0.5+ research, explicitly not V0.4.0** |
+
+**What I designed is posture 3** — recover per-block instruction sequences, apply
+a target cycle table, maximise over the proven path. Technically sound as far as
+it goes, and scoped to the posture the architecture defers *past* the milestone
+this line targets. It is not the near-term path and I presented it as though it
+were.
+
+What survives from that work is genuinely useful **to posture 3 whenever it is
+picked up**, and neither point is in the architecture: that `llvm-mca` must not
+be used for it, being a throughput analyser whose output is nearer a lower bound
+than an upper one; and that posture 3 is only *sound* on in-order cores with no
+cache, so it is a Tier 2 technique and no Tier 1 target admits it.
+
+### The gap: "WCMU is preserved" covers the arena, not the C stack
+
+The architecture states WCMU is the easier half and is preserved across native
+compilation, on the grounds that "the master arena layout is fixed at compile
+time and does not change under LLVM optimisation. Native code accesses the same
+arena structure the bytecode would."
+
+**That argument is sound for the arena and does not cover the C stack.** The VM's
+operand stack and call frames live *in the arena*; native code instead consumes a
+**machine stack the bytecode model never accounts for**. LLVM decides frame sizes,
+and spills, inlining and register pressure change them — precisely the
+optimisation-driven variability the section invokes to explain why WCET is hard.
+
+So native compilation introduces a bounded resource the architecture's WCMU
+argument does not reason about. **The `.stack_sizes` derivation already closed on
+this branch is exactly the missing piece**, and it is not redundant with the
+architecture's claim — it covers a different resource.
+
+This also sharpens the `kel_yield` conflict recorded above. A synchronous
+callback keeps the native frame live across a suspension **on that same
+unaccounted C stack**, whereas the `coro.id.retcon` model the architecture
+specifies puts the frame in the arena, where the preserved-WCMU argument applies.
+The two findings are one finding seen twice.
+
+### Also noted: Workstream F has a complete specification already
+
+Partial-operation lowering (B35 P8) is not a design problem. The normative
+contract — including per-target hardware basis and the canonical-zero and
+lowest-valid resolutions the guards consult — is in
+[`../spec/RUNTIME_FAULTS.md`](../spec/RUNTIME_FAULTS.md), described as "complete
+and reviewable now; only the lowering is deferred". The defaults are specified
+concretely: zero for integer division by zero, the numerator for modulo by zero,
+the canonical zero or lowest-valid value for an out-of-bounds index, and the
+zero-discriminant variant for an invalid discriminant, with a native-call failure
+trapping on both backends because a host failure has no safe default.
+
+Worth recording against the ordering: **Workstream F is implementation against a
+finished spec**, which makes it cheaper than its position in the workstream list
+suggests, and cheaper than anything still requiring design.
