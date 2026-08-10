@@ -13,6 +13,37 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**SLICE 10: THE DRIVER COMPUTES REGION LENGTHS, AND THE DEPTH LIMIT BIT A THIRD TIME
+(2026-08-10).** The first piece of the DRIVER rather than of the emitters. Every slice before it
+took its region lengths from the host; this derives them from record counts, which moves the stride
+of all seventeen record kinds onto the Keleusma side.
+
+**The oracle is a real module's own header area.** The reference's first `48 + 48n` bytes encode
+every region's offset and length, so if Keleusma derives the same lengths from COUNTS alone the two
+agree byte for byte across all ten stages. A wrong stride for any kind shifts every later offset.
+
+**The control perturbs a COUNT, not a length, and that distinction is the test.** Byte identity
+would also hold if the emitter ignored the counts and used the lengths it was handed, so perturbing
+a length would prove nothing about the stride table. Every non-empty region's count must be
+independently observable, and the test asserts at least five regions were non-empty so it cannot
+quietly degenerate. An unknown kind is rejected with its own code rather than sized zero, because a
+zero-length region parses fine and the mistake would surface as a wrong offset much later.
+
+**THE DEPTH LIMIT AGAIN, AND IT STILL DOES NOT LOOK LIKE A DEPTH ERROR.** Adding the twentieth arm
+to `dispatch_emit` made `wire.kel` stop compiling, and it presents as a **stack overflow in the test
+binary with SIGABRT**, not as a parse error — the third appearance of that symptom in this file. I
+recognised it from the record rather than debugging it and confirmed it in one run.
+
+**My recorded figure for the ceiling was wrong, and is now corrected at the site.** I had carried
+"24" from the documented expression-nesting limit and split `dispatch_frame` at 25 arms on that
+basis. The real practical ceiling for this chain shape is **nineteen arms**, because each arm nests
+more than one expression level. The driver now has its own `dispatch_driver` chain rather than
+borrowing the last slot of a full one.
+
+**Brace balance was verified programmatically, not by eye.** Earlier today I eyeballed a brace count
+as wrong when it was balanced, and wasted a hypothesis on it.
+
+
 **WIRING SLICE 9: `DEBUG_POOL`, AND EVERY REGION KIND IS NOW EMITTED FROM REAL OUTPUT
 (2026-08-10).** The last kind with no emitter coverage. 111 tests.
 

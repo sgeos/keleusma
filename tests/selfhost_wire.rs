@@ -6010,3 +6010,149 @@ fn the_default_compile_still_emits_no_debug_pool() {
         "a default compile emitted DEBUG_POOL; the twentieth kind is no longer debug-only"
     );
 }
+
+// --- SLICE 10: the driver's region table -------------------------------------
+//
+// The first piece of the DRIVER rather than of the emitters. Every slice so far
+// took its region lengths from the host; this computes them, which moves the
+// stride of all seventeen record kinds onto the Keleusma side.
+//
+// The oracle is a real module's own header area: the reference's first
+// `48 + 48n` bytes encode every region's offset and length, so if Keleusma
+// derives the same lengths from record COUNTS alone, the two agree byte for
+// byte. A wrong stride for any kind shifts every later offset and is caught.
+
+const CMD_BUILD_REGION_TABLE: i64 = 134;
+
+/// Region kinds paired with what the driver would know: a record COUNT for a
+/// record table, a BYTE LENGTH for a pool.
+fn region_counts_for(bytes: &[u8]) -> Vec<RegionSpec> {
+    use keleusma::wire_schema::kind;
+    let view = keleusma_wire::WireView::parse(bytes).expect("artifact parses");
+    let mut out: Vec<RegionSpec> = Vec::new();
+    for i in 0..view.region_count() {
+        let r = view.region_at(i).expect("region");
+        let len = (r.word_length as usize) * 8;
+        let is_pool = matches!(
+            r.kind,
+            kind::STRING_POOL | kind::PARAM_TYPES | kind::DEBUG_POOL
+        );
+        // A pool passes bytes; a record table passes its record count, which is
+        // what a driver holds before it knows any byte length.
+        let stride = match r.kind {
+            kind::NAMES
+            | kind::STRUCT_AUX
+            | kind::SHAPES
+            | kind::DATA_SLOTS
+            | kind::SHARED_LAYOUT
+            | kind::PRIVATE_COMPOSITE
+            | kind::DATA_INIT
+            | kind::NATIVES
+            | kind::NATIVE_RETURNS => 8,
+            kind::CHUNKS => 48,
+            kind::HEADER => 32,
+            _ => 16,
+        };
+        let passed = if is_pool { len } else { len / stride };
+        out.push((r.kind, r.flags, passed, r.covers));
+    }
+    out
+}
+
+#[test]
+fn the_driver_derives_every_region_length_from_record_counts() {
+    let mut vm = vm_for(WIRE_KEL);
+    for (name, src) in CORPUS_STAGES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module))
+            .expect("encode aux body");
+        let specs = region_counts_for(&want);
+        let hl = header_len(specs.len());
+        let (written, got) = run_cmd_full(
+            &mut vm,
+            CMD_BUILD_REGION_TABLE,
+            specs.len() as i64,
+            &[],
+            &specs,
+            0,
+            hl,
+        )
+        .expect("run");
+        assert_eq!(written, hl as i64, "{name}: wrong header length reported");
+        assert_eq!(
+            got,
+            want[..hl],
+            "{name}: a region length derived from counts differs"
+        );
+    }
+}
+
+/// Must-fire: a wrong stride for any kind must move the header.
+///
+/// Byte identity above would also hold if the emitter ignored the counts and
+/// used the lengths directly, so perturbing a COUNT — not a length — is what
+/// makes this test about the stride table.
+#[test]
+fn a_perturbed_record_count_moves_the_derived_header() {
+    let mut vm = vm_for(WIRE_KEL);
+    let module = compile(&parse(&tokenize(CORPUS_STAGES[9].1).expect("lex")).expect("parse"))
+        .expect("compile");
+    let want =
+        keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode aux body");
+    let base = region_counts_for(&want);
+    let hl = header_len(base.len());
+
+    let emit = |vm: &mut Vm<'static, 'static>, specs: &Regions| {
+        run_cmd_full(
+            vm,
+            CMD_BUILD_REGION_TABLE,
+            specs.len() as i64,
+            &[],
+            specs,
+            0,
+            hl,
+        )
+        .expect("run")
+        .1
+    };
+    assert_eq!(
+        emit(&mut vm, &base),
+        want[..hl],
+        "control: clean must agree"
+    );
+
+    // Every non-empty region in turn: one more record must change the header.
+    let mut fired = 0;
+    for i in 0..base.len() {
+        if base[i].2 == 0 {
+            continue;
+        }
+        let mut specs = base.clone();
+        specs[i].2 += 1;
+        assert_ne!(
+            emit(&mut vm, &specs),
+            want[..hl],
+            "control did not fire: region {i} kind {:#06x} count is not observable",
+            base[i].0
+        );
+        fired += 1;
+    }
+    assert!(
+        fired >= 5,
+        "only {fired} regions were non-empty; too few to test"
+    );
+}
+
+/// An unknown region kind is rejected, not silently sized zero.
+#[test]
+fn an_unknown_region_kind_is_reported_rather_than_sized_zero() {
+    let mut vm = vm_for(WIRE_KEL);
+    let specs: Vec<RegionSpec> = vec![(0x00FF, 0, 1, 0)];
+    let (got, _) =
+        run_cmd_full(&mut vm, CMD_BUILD_REGION_TABLE, 1, &[], &specs, 0, 0).expect("run");
+    assert_eq!(
+        got, -220,
+        "an unknown region kind was not reported with its own code"
+    );
+}

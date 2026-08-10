@@ -1708,6 +1708,71 @@ fn emit_native_return_records(at: Word, n: Word) -> Word {
     }
 }
 
+// --- SLICE 10: the driver's region table ------------------------------------
+//
+// The first piece of the DRIVER rather than of the emitters. Everything so far
+// took its region lengths from the host; this computes them, which means the
+// stride of every record kind now lives on the Keleusma side.
+//
+// SPLIT INTO TWO CHAINS ON PURPOSE. Twenty arms in one `if/else` chain would sit
+// four below the parser's depth-24 ceiling, which is close enough that the next
+// region kind would break it — the same limit that has already forced two splits
+// in this file. Two chains of ten leave real headroom.
+//
+// A POOL RETURNS ZERO, and that is a sentinel with a real meaning rather than an
+// absence: a byte pool has no stride, so its length is its byte count and the
+// caller passes bytes rather than a record count. Splitting the two would need a
+// second array; zero is unambiguous here because no record kind has stride zero.
+
+fn stride_of_kind_a(k: Word) -> Word {
+    if k == kind_string_pool() { 0 } else {
+    if k == kind_names() { nameref_stride() } else {
+    if k == kind_consts() { const_stride() } else {
+    if k == kind_struct_aux() { structaux_stride() } else {
+    if k == kind_enum_aux() { enumaux_stride() } else {
+    if k == kind_shapes() { shape_stride() } else {
+    if k == kind_signatures() { sig_stride() } else {
+    if k == kind_struct_templates() { tpl_stride() } else {
+    if k == kind_enum_variants() { evar_stride() } else {
+    if k == kind_enum_layouts() { elay_stride() } else {
+    0 - 1 }}}}}}}}}}
+}
+
+fn stride_of_kind_b(k: Word) -> Word {
+    if k == kind_data_slots() { dslot_stride() } else {
+    if k == kind_shared_layout() { sslot_stride() } else {
+    if k == kind_private_composite() { pcomp_stride() } else {
+    if k == kind_data_init() { dinit_stride() } else {
+    if k == kind_param_types() { 0 } else {
+    if k == kind_chunks() { chunk_stride() } else {
+    if k == kind_natives() { native_stride() } else {
+    if k == kind_native_returns() { natret_stride() } else {
+    if k == kind_header() { header_stride() } else {
+    if k == kind_debug_pool() { 0 } else {
+    0 - 1 }}}}}}}}}}
+}
+
+// Stride in bytes for a record kind, 0 for a byte pool, -1 for an unknown kind.
+fn stride_of_kind(k: Word) -> Word {
+    if k < kind_data_slots() { stride_of_kind_a(k) } else { stride_of_kind_b(k) }
+}
+
+// Rewrite `wire.rlen[0..n]` from COUNTS into BYTES, then emit the header area.
+//
+// `rlen[i]` arrives as a record count for a record kind and as a byte length for
+// a pool, and leaves as a byte length in both cases. An unknown kind is rejected
+// rather than silently sized zero, because a zero-length region parses fine and
+// the mistake would surface as a wrong offset much later.
+fn build_region_table(n: Word) -> Word {
+    st.cur = 0;
+    for i in 0..n limit 1024 {
+        st.pad = stride_of_kind(wire.rkind[i]);
+        st.cur = if st.pad < 0 { 0 - 1 } else { st.cur };
+        wire.rlen[i] = if st.pad > 0 { st.pad * wire.rlen[i] } else { wire.rlen[i] };
+    }
+    if st.cur < 0 { 0 - 220 } else { emit_header() }
+}
+
 fn emit_pool_pad(at: Word, total: Word) -> Word {
     st.pad = (words_for(total) lsl 3) - total;
     for j in 0..st.pad limit 8 {
@@ -2220,12 +2285,24 @@ fn dispatch_emit(cmd: Word) -> Word {
     0 - 98 }}}}}}}}}}}}}}}}}}}
 }
 
+// The DRIVER's own chain. `dispatch_emit` reached twenty arms with the region
+// table added and `wire.kel` stopped compiling — the parser's depth limit again,
+// and it presents as a STACK OVERFLOW in the test binary rather than as a parse
+// error, which is the third time that symptom has appeared in this file.
+//
+// Nineteen arms is evidently near the practical ceiling for this chain shape, so
+// the driver starts a fresh one rather than borrowing the last slot.
+fn dispatch_driver(cmd: Word) -> Word {
+    if cmd == 134 { build_region_table(wire.nregions) } else {
+    0 - 97 }
+}
+
 // THE HIGHEST LIVE COMMAND, AND IT IS LOAD-BEARING RATHER THAN DOCUMENTATION.
 // `main` refuses anything above it, so a command added past this number is
 // UNREACHABLE and its own test fails immediately. The fall-through sweep reads
 // this value out of the source instead of restating a bound, which is what it
 // did for four consecutive slices — and got wrong once.
-fn highest_command() -> Word { 133 }
+fn highest_command() -> Word { 134 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {
@@ -2237,5 +2314,6 @@ fn main(cmd: Word) -> Word {
     if cmd < 92 { dispatch_ops(cmd) } else {
     if cmd < 103 { dispatch_pool(cmd) } else {
     if cmd > highest_command() { 0 - 99 } else {
-    if cmd < 115 { dispatch_frame(cmd) } else { dispatch_emit(cmd) } } } } } } } } } }
+    if cmd < 115 { dispatch_frame(cmd) } else {
+    if cmd < 134 { dispatch_emit(cmd) } else { dispatch_driver(cmd) } } } } } } } } } } }
 }
