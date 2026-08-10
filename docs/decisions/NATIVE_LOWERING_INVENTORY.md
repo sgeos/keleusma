@@ -971,3 +971,66 @@ requires refusal. This is the same technique used for `PushImmediate`'s
 unreachable integer encoding, and the same lesson: **a defensive check with no
 naturally occurring positive case is believed rather than tested until one is
 manufactured.**
+
+## CORRECTED AGAIN: composites need operand type recovery, which I called worthless
+
+The previous section named composites the largest ADDRESSABLE blocker, at 18
+modules, on the ground that coroutines were blocked on the host application
+binary interface and composites were not. Probing the composite opcodes before
+implementing found that conclusion too generous.
+
+### What is baked, and what is not
+
+`TupleField::Flat { offset, kind }` and its siblings bake **the byte offset and
+the scalar kind**, so a field READ needs no type information beyond the
+instruction. That half is straightforward.
+
+`Op::NewComposite(Flat { kind, count, byte_size })` carries the COMPOSITE kind,
+the number of values to pop, and the total allocation. It does **not** carry the
+per-field widths. Packing is tight, in declaration order, at each field's
+natural width, with nested composite bodies copied inline, so writing a body
+requires knowing every field's width and the opcode does not say.
+
+The tempting inference is that `byte_size == count * 8` implies uniform words.
+**It is not sound.** A two-field tuple of a fifteen-byte nested composite plus a
+`Byte` also totals sixteen bytes at a count of two. Any inference from the
+aggregate to the parts admits that family of counterexamples.
+
+### The correction
+
+Operand type recovery was assessed earlier in this document and dismissed,
+correctly, on the evidence that `Add`, `Sub`, `Mul` and `Neg` occur zero times
+in the corpus. **The conclusion drawn was too broad.** The measurement showed
+that type recovery is worthless FOR THAT INSTRUCTION CLASS. It does not show
+that type recovery is worthless, and composites need it for a different reason:
+not to choose between two lowerings of one instruction, but to compute a packing
+offset that no instruction records.
+
+So the correct statement is that operand type recovery is a prerequisite of
+Workstream C, worth 18 modules, and was worth nothing for the four instructions
+it was originally proposed for. Both halves of that are measurements, and the
+error was in generalising the first into a dismissal.
+
+`verify_typed::AbsVal` already distinguishes `Byte`, `Int`, `Fixed` and `Float`
+at exactly the granularity packing needs, and `typed_check_chunk` computes the
+per-instruction operand shapes and then discards them, returning only a verdict.
+Exposing that state is the enabling change, and it is in `src/verify_typed.rs`,
+which this branch does not own.
+
+### Composites also do not escape the way the raw numbers suggest
+
+Twenty-three of the twenty-seven chunks containing `NewComposite` declare a flat
+composite return. That looks like a boundary problem and mostly is not: those are
+HELPER chunks called by other chunks in the same module, and a native module
+controls both sides of an internal call, so a composite may cross it as an offset
+into a native-owned region. Only the module ENTRY returning a composite is a real
+boundary, and that case can be refused from the signature table.
+
+### Sequencing consequence
+
+Neither of the two largest blockers is addressable by this branch alone.
+Coroutines, at 21 modules, wait on the host application binary interface.
+Composites, at 18, wait on operand shapes being exposed from the typed verifier.
+The distinction from the earlier private-data case is real and worth stating:
+that one LOOKED external and was not, and this one was checked against the same
+boundary and is.
