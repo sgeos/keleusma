@@ -3641,3 +3641,87 @@ The rebase is mechanically verified, the test edit is not: it adds a helper,
 closure captures nothing. It captures nothing today. The tip is **knowingly red
 until gated**, which the branch model permits for a feature branch and which the
 merge gate exists to catch.
+
+## THE DEGENERATE FORM NEEDS ONE ENTRY POINT, NOT TWO — derived from the resume path
+
+The rotation design's most-repeated claim was **two entry points, `init` and
+`step(prev_resume)`, so the boundary condition disappears rather than being
+handled.** Reading `Vm::resume_after_enter` shows the boundary condition does not
+exist in the degenerate case at all, so there is nothing for a second entry point
+to dissolve.
+
+### What the VM actually does on resume
+
+For a `Stream` chunk with at least one parameter, the resume value is delivered
+**twice, by two different mechanisms in the same function**:
+
+1. It is written into **local slot 0**, the `resume` parameter, so the next
+   iteration's body reads it as a parameter.
+2. It is then **pushed onto the operand stack**, becoming the value the suspended
+   `Op::Yield` produces.
+
+Path 1 is what a `step(resume)` parameter reproduces exactly. Path 2 is discarded
+in the degenerate case by the `PopN(1)` that the shape derivation already
+established sits between `Yield` and `Reset`, because the `yield` is the body's
+tail expression and its value is the block value.
+
+**The double delivery is therefore harmless here and only here.** A body writing
+`let x = yield v; ...` would consume the pushed value, and a `step` that only
+took a parameter would lose it. That the degenerate class puts `Yield` last is
+what makes one parameter sufficient, and it is the reason rather than a
+coincidence.
+
+### Why the boundary condition is absent
+
+Unrolling the VM gives iteration zero its value from the `call` argument and
+iteration k from the k-th `resume`:
+
+```
+call(a)    -> body with slot0 = a  -> yields v0
+resume(r1) -> slot0 = r1           -> yields v1
+resume(r2) -> slot0 = r2           -> yields v2
+```
+
+A single native `step(resume)` reproduces that sequence exactly as `step(a)`,
+`step(r1)`, `step(r2)`. **There is no distinguished first call.** The design
+assumed one existed and then congratulated itself for designing it away with a
+second entry point; the second entry point was solving a problem the degenerate
+case does not have.
+
+This holds only because the prologue is empty. Ops before `Op::Stream` would run
+once in the VM, since `Reset` rewinds to just *after* `Stream`, but every call in
+the native form. **The admissibility check must require `Op::Stream` at index
+zero**, and this is why that requirement is load-bearing rather than tidy. The
+compiler emits `Op::Stream` as the first op of a single-headed stream chunk today,
+so the check should pass, and it must still be a check rather than a comment.
+
+### The design, restated at its current size
+
+```
+kel_chunk_N_step(resume: i64) -> i64
+```
+
+Admissible when every one of the following holds. Each is cheap, each is
+structural, and each has a stated failure consequence rather than being listed for
+completeness.
+
+| Condition | Why it is required |
+|---|---|
+| `block_type == Stream` | otherwise this is not the transformation at all |
+| `ops[0] == Stream` | a non-empty prologue would re-run every call |
+| exactly one `Op::Yield`, at nesting depth 0 | more than one needs a real partition; nested needs the general case |
+| ops between `Yield` and `Reset` are exactly `[PopN(1)]` | anything else consumes the resumed value, which `step` does not supply |
+| `Reset` is the last op | a trailing tail would be unreachable in the VM and reachable natively |
+| `param_count <= 1` | slot 0 is the resume parameter; a second parameter has no native source |
+
+`Op::Stream` becomes a no-op, `Op::Yield` becomes the return, and `Op::PopN(1)`
+and `Op::Reset` after it are unreachable. **`Reset` needs no native work in this
+form**: it clears locals, and native locals are fresh `alloca`s on every call; it
+truncates the operand stack, which is function-local; it rewinds the top arena
+region, which has no native analogue yet; and it preserves the data segment, which
+is host-owned and must survive, which it does by not being touched.
+
+That last row is the one to keep honest. **`Reset` being a no-op is a consequence
+of four separate facts and not an observation**, and if the native form ever grows
+an arena, the ephemeral region's reclamation becomes real work at exactly this
+point.
