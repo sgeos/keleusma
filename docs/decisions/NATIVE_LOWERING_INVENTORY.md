@@ -2369,3 +2369,70 @@ The missing-terminator control fails through `lm.verify()`. Before Fix 3, that
 call existed **only in the test harness** — so a consumer calling `lower_module`
 would have received the malformed module with no error at all. The fix that
 found this defect is the same fix that would have surfaced it in production.
+
+## Input to the roadmap's OPEN DECISIONS, from today's evidence
+
+`V0_3_X_ROADMAP.md` carries three open decisions. Today's work bears on two.
+Recorded here rather than edited into the roadmap, for the coordination reason
+given above: the `v0.2.3` session has an unfinished restatement of that same
+table.
+
+### Decision 1, "WCET on native is hard or best-effort", is posed as a false dichotomy
+
+The decision offers two answers. The evidence says the right answer is
+**neither, because it is target-dependent** — and the split falls along a line
+this branch has now hit twice, independently.
+
+| Target class | WCET derivable? | Why |
+|---|---|---|
+| In-order embedded, no cache (`thumbv7em-none-eabihf`) | **Hard bound achievable** | A per-instruction cycle table is sound; the dynamic behaviour that defeats it is absent by construction |
+| Out-of-order superscalar host | **Best-effort at most** | Cycle counts depend on cache state, branch prediction and pipeline occupancy, none of which the emitted object records |
+
+**The same split governs the WCMU half**, which is the part that makes this
+structural rather than coincidental. `.stack_sizes` is ELF-only: absent on
+Mach-O, present on `thumbv7em`. That was recorded as "falling the right way,
+since the embedded targets are where a stack overflow is unrecoverable". The
+WCET half falls the same way for an unrelated reason — one is a file-format
+question, the other a microarchitecture question — and they agree.
+
+**So the guarantees are derivable precisely on the targets that need them, and
+best-effort precisely on the targets that do not.** That is a better answer than
+either option the decision offers, and it means the decision can be resolved
+without picking a side: hard where it is provable, best-effort where it is not,
+with the boundary stated per target rather than per release.
+
+The V0.5.0 host strategy already treating native WCET as best-effort is
+consistent with this and does not settle it, because that strategy is about a
+host, which is exactly the class where best-effort is the only honest answer.
+
+### Decision 2 gains an argument from an unexpected direction
+
+The AOT-versus-JIT question was already answered on feasibility — both shapes
+work, so it is a support-and-maintain decision. Today adds two asymmetries that
+were not visible before.
+
+**Verification asymmetry.** Fix 3 made `lower_module` verify its own module,
+closing a hole where malformed IR reached a consumer. That hole is **materially
+worse on the JIT path**: malformed IR handed to an execution engine is executed
+in-process, whereas the same IR on the AOT path fails at object emission with a
+diagnostic. The missing check was therefore a JIT-path safety issue specifically,
+and a JIT path carries a standing obligation to verify that the AOT path gets
+partly for free from the toolchain.
+
+**WCET-derivation asymmetry.** The route sketched for Workstream E's WCET half
+works on the emitted machine code — recover per-block instruction sequences,
+apply a target cycle table. That is naturally an **ahead-of-time** activity. It
+is not impossible under a JIT, since the object can be emitted to a memory
+buffer, but the analysis wants a fixed artefact and a known target, and a JIT has
+neither by design.
+
+**Net:** if hard WCET on embedded targets is wanted, that argues for AOT as the
+primary shape, with JIT retained as a development and testing convenience — which
+is how this package already uses it, since every differential test JITs at
+`OptimizationLevel::None` and only the linkage test exercises the pipeline that
+ships.
+
+### Decision 3 gets nothing from me
+
+Flat-machine ISA timing. No evidence produced today bears on it, and saying so is
+worth more than manufacturing a position.
