@@ -63,7 +63,30 @@ session's tree lives there too.
 my exact tip `78a5bc1`. So I cannot start a gate, and no timing measurement is trustworthy until
 it finishes. Development is unaffected, which is the whole point of the detached-worktree gate.
 
-## Wiring slice 1 is done; slice 2 is the first genuinely new Keleusma code
+## Wiring slices 1 and 2 are done; slice 3 is a multi-record region
+
+**On `feat/selfhost-wire-real-corpus`, Tier 1 green, NOT gated. 86 tests, up from 80.**
+
+**Slice 2 added the first schema emitter.** `emit_header_record` writes a real record's real fields
+at the transcribed offsets, byte-identical to the Rust encoder for all ten stages, with the
+reference reader recovering all eleven fields from what Keleusma wrote. The must-fire control flips
+one bit of each field in turn and requires every one to change the output, so "the offsets are
+right" is asserted rather than hoped.
+
+**The input channel is `wire.fin: [Word; 1024]`**, a record's fields in declaration order. It is a
+**batch** buffer by design, not a region's worth: the largest real region holds about 395,784
+records, so the host must feed fields in batches while appending output. The staged shape now lives
+in the interface, not only in a document.
+
+**The buffer constraint bound on the first record.** A real HEADER region's `region_base` lands far
+outside the 65,536-byte `wire.bytes`, so the record is emitted into a one-region artifact and
+compared against the payload extracted from the real one. Every later slice inherits this.
+
+**Slice 3 is the first region with MANY records** — `CHUNKS` is the natural target, since it is
+small in every stage and its record is already fully transcribed. That is where batching stops being
+a design note and has to work.
+
+## Slice 1, for context
 
 **On `feat/selfhost-wire-real-corpus`, one commit, Tier 1 green, NOT gated.** The container header
 is emitted by `wire.kel` for all ten stages' **real** region sets and matches the Rust encoder byte

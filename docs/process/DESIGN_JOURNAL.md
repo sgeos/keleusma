@@ -13,6 +13,46 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**WIRING SLICE 2: THE FIRST SCHEMA EMITTER, AND THE SIZING CONSTRAINT SHOWED UP IMMEDIATELY
+(2026-08-09).** `emit_header_record` writes a real record's real fields at the transcribed offsets.
+Everything before it either emitted the container or emitted a synthetic pattern for a fixture, so
+this is where the emitter side genuinely grows rather than being re-pointed at new data.
+
+**The buffer constraint bound on the very first record, which is the useful part.** The obvious test
+emits into the real artifact's layout and compares in place. It cannot: `wire.bytes` is 65,536 bytes
+and `lexer`'s auxiliary body is 16,114,608, so `region_base` for a real HEADER region lands far
+outside the buffer. The record is emitted into a **one-region artifact** and compared against the
+HEADER payload extracted from the real one. The residency finding recorded below stopped being an
+abstract projection at the first opportunity it had.
+
+**The input-marshalling design, which generalises past this record.** `HeaderRecord` has eleven
+fields and only five `warg` slots exist. One slot per field does not scale past the first record
+kind, so `wire.fin: [Word; 1024]` carries a record's fields in declaration order. It is deliberately
+a **batch** buffer rather than a region's worth: the largest real region holds about 395,784
+records, so a region's fields cannot be resident at once and the host must feed them in batches
+while appending output. That is the staged shape the sizing measurement forced, now expressed in the
+interface rather than only in a document.
+
+**A vacuity trap avoided, and it is the same one the hand-built header test already avoided.**
+`corpus_aux_of` leaves six header fields zero, because a stage compile does not compute them.
+Emitting six zeroes would make an offset confusion among those six invisible — the differential
+would pass whether or not each field landed in the right place. The six are given distinct non-zero
+values. The must-fire control then flips one bit of each of the eleven fields in turn and requires
+every one to change the output, which is what makes "the offsets are right" an assertion rather than
+a hope. A bit flip rather than an increment, so a `u8` field cannot overflow into its neighbour and
+report a difference for the wrong reason.
+
+**Byte identity is not checked alone.** Two implementations can be wrong in the same way, so the
+reference reader also parses what Keleusma emitted and reads back all eleven fields. The inputs are
+derived from the module rather than decoded out of the reference bytes: feeding the reference's own
+output back in would test only that the emitter can echo it.
+
+**An unrelated hole found by touching the dispatch.** The fall-through sweep ran `0..103` and so
+stopped exactly where `dispatch_frame` begins, leaving the entire framing chain unswept — the chain
+nearest the depth ceiling and therefore likeliest to need splitting. Extended to the top of the last
+chain. The test that exists to catch a drifting threshold had a threshold of its own that had
+drifted.
+
 **WIRING SLICE 1: THE KELEUSMA EMITTER MEETS REAL COMPILER OUTPUT, AND MY SCOPING WAS WRONG TWICE
 BEFORE IT WAS RIGHT (2026-08-09).** I scoped this increment three times and probing corrected it
 twice.

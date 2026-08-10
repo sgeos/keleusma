@@ -84,6 +84,10 @@ const WARG2_SLOT: usize = WARG_SLOT + 1;
 const WARG3_SLOT: usize = WARG2_SLOT + 1;
 const WARG4_SLOT: usize = WARG3_SLOT + 1;
 const WARG5_SLOT: usize = WARG4_SLOT + 1;
+/// Record-field inputs for the schema emitters. Appended after the `warg`
+/// slots, matching the declaration order in `wire.kel`.
+const FIN_SLOT: usize = WARG5_SLOT + 1;
+const FIN_CAPACITY: usize = 1024;
 
 /// Build a `Vm` over `src` with a persistent region sized for its private data.
 ///
@@ -191,6 +195,55 @@ fn run_cmd_args(
     vm.set_shared(&mut shared, WARG5_SLOT, Value::Int(args[4]))?;
     for (i, byte) in seed.iter().enumerate() {
         vm.set_shared(&mut shared, 1 + i, Value::Byte(*byte))?;
+    }
+    for (i, (kind, flags, len, covers)) in regions.iter().enumerate() {
+        vm.set_shared(&mut shared, RKIND_SLOT + i, Value::Int(i64::from(*kind)))?;
+        vm.set_shared(&mut shared, RFLAGS_SLOT + i, Value::Int(i64::from(*flags)))?;
+        vm.set_shared(&mut shared, RLEN_SLOT + i, Value::Int(*len as i64))?;
+        vm.set_shared(
+            &mut shared,
+            RCOVERS_SLOT + i,
+            Value::Int(i64::from(*covers)),
+        )?;
+    }
+    let ret = match vm.call_with_shared(&mut shared, &[Value::Int(cmd)])? {
+        VmState::Finished(Value::Int(n)) => n,
+        other => panic!("unexpected VM state: {other:?}"),
+    };
+    let n = read_len.min(CAPACITY);
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        match vm.get_shared(&shared, 1 + i)? {
+            Value::Byte(b) => out.push(b),
+            other => panic!("slot {i} is not a Byte: {other:?}"),
+        }
+    }
+    Ok((ret, out))
+}
+
+/// As `run_cmd_args`, additionally seeding the record-field input array.
+///
+/// `wire.fin` is how a schema emitter receives a record's fields: a record has
+/// more fields than there are `warg` slots, and one slot per field does not
+/// scale past the first record kind.
+fn run_cmd_fields(
+    vm: &mut Vm<'static, 'static>,
+    cmd: i64,
+    nregions: i64,
+    regions: &Regions,
+    fields: &[i64],
+    read_len: usize,
+) -> Result<(i64, Vec<u8>), VmError> {
+    assert!(
+        fields.len() <= FIN_CAPACITY,
+        "{} field inputs exceeds the {FIN_CAPACITY}-word batch buffer",
+        fields.len()
+    );
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.set_shared(&mut shared, 0, Value::Int(0))?;
+    vm.set_shared(&mut shared, NREGIONS_SLOT, Value::Int(nregions))?;
+    for (i, v) in fields.iter().enumerate() {
+        vm.set_shared(&mut shared, FIN_SLOT + i, Value::Int(*v))?;
     }
     for (i, (kind, flags, len, covers)) in regions.iter().enumerate() {
         vm.set_shared(&mut shared, RKIND_SLOT + i, Value::Int(i64::from(*kind)))?;
@@ -782,7 +835,11 @@ fn no_command_below_the_dispatch_ceiling_falls_through() {
     // drifted past its arms would silently route live commands to the default.
     let mut vm = vm_for(WIRE_KEL);
     let mut fell_through = Vec::new();
-    for cmd in 0..103i64 {
+    // Swept to the top of the LAST chain, not the top of the last-but-one. This
+    // read `0..103` and so stopped exactly where `dispatch_frame` begins,
+    // leaving the whole framing chain — the one nearest the depth ceiling and
+    // therefore likeliest to need splitting — entirely unswept.
+    for cmd in 0..116i64 {
         let (got, _) =
             run_cmd_args(&mut vm, cmd, 0, &[], &[], [0, 0, 0, 0, 0], 0).unwrap_or((0, Vec::new()));
         if (-99..=-92).contains(&got) {
@@ -2689,6 +2746,7 @@ fn the_slice_5e_offsets_and_kinds_match_the_schema() {
             HeaderRecord::OFFSET_PRIVATE_DATA_BYTES,
         ),
         ("header_off_schema_hash", HeaderRecord::OFFSET_SCHEMA_HASH),
+        ("header_off_reserved", HeaderRecord::OFFSET_RESERVED),
     ] {
         assert_eq!(kel_const(kel), want as i64, "{kel}");
     }
@@ -4124,4 +4182,186 @@ fn the_real_output_comparison_reports_a_perturbed_region_set() {
             "control did not fire: {what} produced an identical header"
         );
     }
+}
+
+// --- WIRING SLICE 2: the first schema emitter, driven by real values ---------
+//
+// Slice 1 needed no Keleusma change: the container header was already emittable
+// and real data was simply another region set. This is where the emitter side
+// genuinely grows. `emit_header_record` writes a real record's real fields at
+// the transcribed offsets, which is the thing the self-hosted path needs in
+// order to PRODUCE an artifact rather than only read one.
+//
+// WHY A ONE-REGION ARTIFACT. The obvious test would emit into the real
+// artifact's layout and compare in place. It cannot: `wire.bytes` is 65,536
+// bytes and `lexer`'s auxiliary body is 16,114,608, so `region_base` for a real
+// HEADER region lands far outside the buffer. That is the same constraint the
+// sizing measurement recorded, showing up in the first place it could. The
+// record is therefore emitted into a one-region artifact and compared against
+// the HEADER payload extracted from the real one.
+
+/// Header scalars, chosen DISTINCT and non-zero.
+///
+/// `corpus_aux_of` leaves six header fields zero, matching `wire_corpus.rs`,
+/// because a stage compile does not compute them. Emitting six zeroes would
+/// make an offset confusion among them invisible: the differential would pass
+/// whether or not each field landed in the right place, which is the same trap
+/// the hand-built header test avoids by giving the three width fields different
+/// values. Every value below is distinct, non-zero, and distinguishable in
+/// either byte order.
+const HDR_FLAGS: u8 = 0x5A;
+const HDR_WCET: u32 = 0x1112_2324;
+const HDR_WCMU: u32 = 0x3134_3538;
+const HDR_SHARED: u32 = 0x4142_4344;
+const HDR_PRIVATE: u32 = 0x5152_5354;
+const HDR_SCHEMA_HASH: u32 = 0x6162_6364;
+
+/// A stage's real HEADER record: the eleven field inputs, and the reference
+/// bytes the Rust encoder produced for them.
+fn real_header_case(src: &str) -> (Vec<i64>, Vec<u8>) {
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let mut aux = corpus_aux_of(&module);
+    aux.flags = HDR_FLAGS;
+    aux.wcet_cycles = HDR_WCET;
+    aux.wcmu_bytes = HDR_WCMU;
+    aux.shared_data_bytes = HDR_SHARED;
+    aux.private_data_bytes = HDR_PRIVATE;
+    aux.schema_hash = HDR_SCHEMA_HASH;
+
+    let bytes = keleusma::wire_schema::encode_aux_body(&aux).expect("encode aux body");
+    let view = keleusma_wire::WireView::parse(&bytes).expect("reference artifact parses");
+    let region = view
+        .find_region(keleusma::wire_schema::kind::HEADER)
+        .expect("every module emits a HEADER region");
+    let want = view
+        .region_bytes(&region)
+        .expect("HEADER payload in range")
+        .to_vec();
+
+    // The host driver's job, and deliberately NOT read back out of `want`:
+    // feeding the reference's own bytes back in would test only that the
+    // emitter can echo them.
+    let fields = vec![
+        aux.entry_point
+            .map_or(i64::from(keleusma::wire_schema::ABSENT), |e| e as i64),
+        i64::from(aux.word_bits_log2),
+        i64::from(aux.addr_bits_log2),
+        i64::from(aux.float_bits_log2),
+        i64::from(HDR_FLAGS),
+        i64::from(HDR_WCET),
+        i64::from(HDR_WCMU),
+        i64::from(HDR_SHARED),
+        i64::from(HDR_PRIVATE),
+        i64::from(HDR_SCHEMA_HASH),
+        0,
+    ];
+    (fields, want)
+}
+
+/// Emit a HEADER record into a one-region artifact and return its payload.
+fn emit_header_record(vm: &mut Vm<'static, 'static>, fields: &[i64]) -> Vec<u8> {
+    let specs: Vec<RegionSpec> = vec![(keleusma::wire_schema::kind::HEADER, 0, HEADER_STRIDE, 0)];
+    let read_len = header_len(1) + HEADER_STRIDE;
+    let (written, got) =
+        run_cmd_fields(vm, CMD_EMIT_HEADER_RECORD, 1, &specs, fields, read_len).expect("run");
+    assert_eq!(
+        written, HEADER_STRIDE as i64,
+        "the emitter did not report a whole record"
+    );
+    got[header_len(1)..].to_vec()
+}
+
+const CMD_EMIT_HEADER_RECORD: i64 = 115;
+const HEADER_STRIDE: usize = 32;
+
+#[test]
+fn the_emitted_header_record_matches_the_reference_on_real_compiler_output() {
+    let mut vm = vm_for(WIRE_KEL);
+    for (name, src) in CORPUS_STAGES {
+        let (fields, want) = real_header_case(src);
+        assert_eq!(want.len(), HEADER_STRIDE, "{name}: HEADER is one record");
+        let got = emit_header_record(&mut vm, &fields);
+        assert_eq!(got, want, "{name}: emitted HEADER record differs");
+    }
+}
+
+/// Must-fire control: perturbing any single field must change the bytes.
+///
+/// This is the assertion that makes the differential mean something. Eleven
+/// fields at eleven offsets, and a writer that put two of them in the same
+/// place, or dropped one, would still agree with the reference on every field
+/// it happened to get right. Perturbing each in turn requires every offset to
+/// be independently observable.
+#[test]
+fn every_header_field_is_independently_observable() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (base, want) = real_header_case(CORPUS_STAGES[9].1);
+    assert_eq!(
+        emit_header_record(&mut vm, &base),
+        want,
+        "control: the clean case must agree"
+    );
+    for i in 0..base.len() {
+        let mut fields = base.clone();
+        // Flip a low bit rather than adding, so a u8 field cannot overflow into
+        // its neighbour and report a difference for the wrong reason.
+        fields[i] ^= 1;
+        let got = emit_header_record(&mut vm, &fields);
+        assert_ne!(
+            got, want,
+            "control did not fire: field {i} is not observable in the output"
+        );
+    }
+}
+
+/// The reference reader must accept what Keleusma wrote, and read back the
+/// values that went in.
+///
+/// Byte identity alone would be satisfied by two implementations that are
+/// wrong in the same way. This is the independent direction.
+#[test]
+fn the_reference_reader_recovers_the_fields_keleusma_emitted() {
+    let mut vm = vm_for(WIRE_KEL);
+    let (fields, _) = real_header_case(CORPUS_STAGES[9].1);
+    let specs: Vec<RegionSpec> = vec![(keleusma::wire_schema::kind::HEADER, 0, HEADER_STRIDE, 0)];
+    let read_len = header_len(1) + HEADER_STRIDE;
+    let (_, artifact) = run_cmd_fields(
+        &mut vm,
+        CMD_EMIT_HEADER_RECORD,
+        1,
+        &specs,
+        &fields,
+        read_len,
+    )
+    .expect("run");
+
+    let view = keleusma_wire::WireView::parse(&artifact).expect("reference accepts the artifact");
+    let region = view
+        .find_region(keleusma::wire_schema::kind::HEADER)
+        .expect("HEADER region present");
+    let table = view
+        .records(&region, HEADER_STRIDE)
+        .expect("HEADER reads as a record table");
+    let rec: keleusma::wire_schema::HeaderRecord =
+        table.get_as(0).expect("one HeaderRecord reads back");
+
+    assert_eq!(i64::from(rec.entry_point), fields[0], "entry_point");
+    assert_eq!(i64::from(rec.word_bits_log2), fields[1], "word_bits_log2");
+    assert_eq!(i64::from(rec.addr_bits_log2), fields[2], "addr_bits_log2");
+    assert_eq!(i64::from(rec.float_bits_log2), fields[3], "float_bits_log2");
+    assert_eq!(i64::from(rec.flags), fields[4], "flags");
+    assert_eq!(i64::from(rec.wcet_cycles), fields[5], "wcet_cycles");
+    assert_eq!(i64::from(rec.wcmu_bytes), fields[6], "wcmu_bytes");
+    assert_eq!(
+        i64::from(rec.shared_data_bytes),
+        fields[7],
+        "shared_data_bytes"
+    );
+    assert_eq!(
+        i64::from(rec.private_data_bytes),
+        fields[8],
+        "private_data_bytes"
+    );
+    assert_eq!(i64::from(rec.schema_hash), fields[9], "schema_hash");
+    assert_eq!(i64::from(rec.reserved), fields[10], "reserved");
 }

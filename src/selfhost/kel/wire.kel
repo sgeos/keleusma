@@ -65,6 +65,18 @@ shared data wire {
     warg3: Word,
     warg4: Word,
     warg5: Word,
+    // Record-field inputs for the schema emitters, in declaration order for the
+    // record being written. A record has more fields than there are `warg`
+    // slots, and adding a slot per field does not scale past the first record
+    // kind, so the emitters read from here instead.
+    //
+    // It is a BATCH buffer, not a whole region. The largest real region holds
+    // roughly 395,784 records, so a region's fields cannot be resident at once
+    // and the host feeds them in batches while appending the output. That is
+    // the staged shape the sizing measurement forced.
+    //
+    // Appended last so no existing slot index moves.
+    fin: [Word; 1024],
 }
 
 // The running checksum. It lives in a data block because locals are immutable:
@@ -169,6 +181,14 @@ fn crc_range(at: Word, n: Word) -> Word {
 // explicit `band 255` is therefore not redundant with the cast. It states the
 // intent at the point the byte is formed, so a value that does not fit is
 // narrowed where a reader can see it rather than at an implicit conversion.
+
+// The masking is arithmetically redundant, since `as Byte` truncates anyway,
+// but `300 as Byte` being 44 with no fault is exactly the kind of narrowing a
+// reader should see stated rather than inferred.
+fn put_u8(at: Word, v: Word) -> Word {
+    wire.bytes[at] = (v band 255) as Byte;
+    at + 1
+}
 
 fn put_u16(at: Word, v: Word) -> Word {
     wire.bytes[at] = (v band 255) as Byte;
@@ -505,6 +525,10 @@ fn rec_u16(i: Word, stride: Word, rec: Word, off: Word) -> Word {
 
 fn rec_u32(i: Word, stride: Word, rec: Word, off: Word) -> Word {
     get_u32(rec_at(i, stride, rec, off))
+}
+
+fn put_rec_u8(i: Word, stride: Word, rec: Word, off: Word, v: Word) -> Word {
+    put_u8(rec_at(i, stride, rec, off), v)
 }
 
 fn put_rec_u16(i: Word, stride: Word, rec: Word, off: Word, v: Word) -> Word {
@@ -1119,6 +1143,7 @@ fn header_off_wcmu_bytes() -> Word { 12 }
 fn header_off_shared_data_bytes() -> Word { 16 }
 fn header_off_private_data_bytes() -> Word { 20 }
 fn header_off_schema_hash() -> Word { 24 }
+fn header_off_reserved() -> Word { 28 }
 
 fn chunk_count() -> Word {
     if dir_find(kind_chunks()) == 0 - 1 { 0 - 1 } else {
@@ -1184,6 +1209,33 @@ fn header_u32(off: Word) -> Word {
 
 fn header_u8(off: Word) -> Word {
     rec_u8(dir_find(kind_header()), header_stride(), 0, off)
+}
+
+// Write the module's HEADER record into region `ri` from `wire.fin`.
+//
+// THE FIRST SCHEMA EMITTER. Everything before this either emitted the container
+// (prologue, directory) or emitted a synthetic pattern for a fixture; this
+// writes a real record's real fields at the transcribed offsets, which is what
+// the self-hosted path needs in order to produce an artifact rather than merely
+// read one.
+//
+// The inputs arrive in `wire.fin` in DECLARATION ORDER, which is the same order
+// the offsets appear below. Reserved is written explicitly rather than left to
+// a zeroed buffer, because an emitter that relies on its output starting zeroed
+// is one that silently breaks the day it writes into reused space.
+fn emit_header_record(ri: Word) -> Word {
+    put_rec_u32(ri, header_stride(), 0, header_off_entry_point(), wire.fin[0]);
+    put_rec_u8(ri, header_stride(), 0, header_off_word_bits_log2(), wire.fin[1]);
+    put_rec_u8(ri, header_stride(), 0, header_off_addr_bits_log2(), wire.fin[2]);
+    put_rec_u8(ri, header_stride(), 0, header_off_float_bits_log2(), wire.fin[3]);
+    put_rec_u8(ri, header_stride(), 0, header_off_flags(), wire.fin[4]);
+    put_rec_u32(ri, header_stride(), 0, header_off_wcet_cycles(), wire.fin[5]);
+    put_rec_u32(ri, header_stride(), 0, header_off_wcmu_bytes(), wire.fin[6]);
+    put_rec_u32(ri, header_stride(), 0, header_off_shared_data_bytes(), wire.fin[7]);
+    put_rec_u32(ri, header_stride(), 0, header_off_private_data_bytes(), wire.fin[8]);
+    put_rec_u32(ri, header_stride(), 0, header_off_schema_hash(), wire.fin[9]);
+    put_rec_u32(ri, header_stride(), 0, header_off_reserved(), wire.fin[10]);
+    header_stride()
 }
 
 // 1 when the module declares no entry point.
@@ -1660,7 +1712,8 @@ fn dispatch_frame(cmd: Word) -> Word {
     if cmd == 112 { artifact_intact(wire.warg) } else {
     if cmd == 113 { magic_word() } else {
     if cmd == 114 { crc32_residue() } else {
-    0 - 99 }}}}}}}}}}}}
+    if cmd == 115 { emit_header(); emit_header_record(dir_find(kind_header())) } else {
+    0 - 99 }}}}}}}}}}}}}
 }
 
 fn main(cmd: Word) -> Word {
