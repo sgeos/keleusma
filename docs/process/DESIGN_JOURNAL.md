@@ -13,6 +13,42 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**AN AUDIT FINDING REJECTED BY EXECUTION, AND IT WOULD HAVE PUT A FALSE STATEMENT INTO A NORMATIVE
+SPEC (2026-08-09).** The finding: `docs/spec/RUNTIME_FAULTS.md` names the `VmError` variant for
+eight of the faults it specifies but never names `CheckedArithNoArm`, whose doc comment reads "No
+arm of a checked-arithmetic construct matched the outcome" -- apparently the one fault most central
+to the document. The proposed fix was to name it where the unhandled-outcome trap is described.
+
+**The execution check refutes it.** A checked construct with only an `ok` arm, divided by zero,
+raises `DivisionByZero` -- exactly what a bare `10 / b` raises. The VM says so at the site: "An
+unhandled zero divisor in a checked construct surfaces as the same error a plain division by zero
+produces." So the document already names the correct variant, and the "fix" would have told readers
+to expect an error the runtime does not produce for that case.
+
+**A better observation replaces it.** `TrapKind::CheckedArithNoArm` has a code mapping, a VM decode
+arm, and two tests, but **no compiler emit site anywhere**. No compiled program can raise it; it is
+reachable only from hand-written bytecode with `Op::Trap(3)`. That is very likely deliberate rather
+than vestigial -- guards on outcome arms are documented as not yet implemented, and an
+arm-mismatch cannot arise until they are -- so it is recorded as an observation, not a defect.
+
+**The rule this pays for**, which I had stated and then nearly violated: I held this finding back
+from the batch specifically because it needed an execution check, on the grounds that adding an
+unverified claim to a spec about to be gated was the wrong trade. That judgement was right for a
+reason I could not have known at the time -- the claim was not merely unverified, it was FALSE.
+Reading the doc comment on the variant was enough to make it plausible and not enough to make it
+true.
+
+**THE CORPUS ENUMERATION HOLE IS NOW CLOSED, AND THE GUARD WAS SHOWN TO FIRE.**
+`tests/wire_corpus.rs` named ten stage sources while the directory held eleven, and nothing read the
+directory, so nothing could notice. The eleventh is `wire.kel`, which I added; its exclusion is
+correct, and that is precisely not the point -- the correctness rested on someone remembering. A
+test now requires every `.kel` file to be in `CORPUS` or in `EXCLUDED` with a written reason, and a
+complement test requires every `EXCLUDED` entry to name a file that exists, so a stale exclusion
+cannot silently keep a renamed successor out. Both were verified by making them fail: a stray file
+trips the first, a ghost exclusion trips the second, and both restore clean. Fourth instance of the
+by-name-enumeration family, and the first to be closed with a mechanism rather than a longer list.
+
+
 **STEP 6 IS COMPLETE: THE WIRE FORMAT IS EXPRESSIBLE IN KELEUSMA END TO END (2026-08-09).** Seven
 slices, `src/selfhost/kel/wire.kel` plus `tests/selfhost_wire.rs`, 80 tests. CRC-32, the container
 primitives and prologue vote, the region directory, record tables and byte pools, the twenty region
