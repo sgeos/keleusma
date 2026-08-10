@@ -320,10 +320,22 @@ Three further facts worth carrying:
 - **`STRING_POOL` is a byte pool, not a record table**, so it is the region that streams most
   naturally: bytes are appended as names are interned, with no stride to respect. If even 6.6 MB
   proves awkward, this particular region is the easiest one to chunk further.
-- **Every stage emits 19 regions**, out of the twenty kinds the schema defines. One kind is never
-  exercised by the corpus. That matches the recorded coverage caveat that the corpus emits zero
-  struct templates, and it means a Keleusma emitter validated only against these ten stages would
-  leave one region kind untested. Worth an explicit hand-built case, exactly as the Rust side needed.
+- **Every stage emits 19 regions**, out of the twenty kinds the schema defines, and the missing one
+  is **`DEBUG_POOL`** — identified rather than left as "one of them". It is absent because
+  `CompileOptions::emit_debug` defaults to false, so a release-style compile records no strippable
+  debug annotations and the region is never created. Nothing is wrong; the corpus simply cannot
+  reach that path.
+
+  **A Keleusma emitter validated only against these ten stages would therefore never emit a
+  `DEBUG_POOL` region.** The reader side is already covered — slice 5e's fixture includes a chunk
+  with a real `debug_first`/`debug_len` and one with the `ABSENT` sentinel — but the emitter needs
+  an explicit case, either a hand-built module or one compiled with `emit_debug` on.
+
+  **Correcting an earlier claim in this document.** A previous revision said the gap "matches the
+  recorded coverage caveat that the corpus emits zero struct templates". That is wrong:
+  `STRUCT_TEMPLATES` is emitted by **all ten** stages. The struct-template caveat belongs to a
+  different and much smaller hand-built round-trip corpus, and connecting the two was inference by
+  plausibility rather than measurement.
 
 ### On the prototype
 
