@@ -63,6 +63,29 @@ session's tree lives there too.
 my exact tip `78a5bc1`. So I cannot start a gate, and no timing measurement is trustworthy until
 it finishes. Development is unaffected, which is the whole point of the detached-worktree gate.
 
+## Wiring slice 1 is done; slice 2 is the first genuinely new Keleusma code
+
+**On `feat/selfhost-wire-real-corpus`, one commit, Tier 1 green, NOT gated.** The container header
+is emitted by `wire.kel` for all ten stages' **real** region sets and matches the Rust encoder byte
+for byte. 83 tests, up from 80. Seven-perturbation must-fire control plus the clean case.
+
+**It needed no Keleusma change**, which is the finding. Commands 18-83 in `wire.kel` are readers,
+and `emit_pattern_records` writes a synthetic pattern rather than a schema record, so the emit side
+already covered everything the container header needs.
+
+**Slice 2 is where new Keleusma code starts**: emit a real schema region's PAYLOAD. `HEADER` is the
+smallest target, one record. The design question to settle first is **input marshalling** —
+`HeaderRecord` has eleven fields and only five `warg` slots exist, so the host needs a word-array
+input channel in shared data, the way `rkind`/`rflags`/`rlen`/`rcovers` already are for the
+directory. That array generalises to every record kind and is the staged emitter's real interface,
+so it is worth designing once rather than per region.
+
+**An observation held for the operator.** `SchemaBuilder` declares every region as
+`region(kind, 0)` and builds no parity plane, so the **(72,64) SECDED plane in `keleusma-wire` is
+entirely unexercised by the shipping encoder**. Whether that is a deliberate cost choice or an
+unwired capability is not mine to decide. It is pinned in the firing direction, and it reduces the
+emitter's scope: no ECC support is needed for byte identity with the encoder as it stands.
+
 ## The wiring increment: the prep's sizing was wrong, and is corrected
 
 Probing before planning caught it, as it has in nearly every increment of this arc.

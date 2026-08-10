@@ -13,6 +13,55 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**WIRING SLICE 1: THE KELEUSMA EMITTER MEETS REAL COMPILER OUTPUT, AND MY SCOPING WAS WRONG TWICE
+BEFORE IT WAS RIGHT (2026-08-09).** I scoped this increment three times and probing corrected it
+twice.
+
+**First scoping, wrong.** "Marshal one region's inputs from a real stage and emit it." That assumed
+`wire.kel` had schema-record emitters. Reading the dispatch shows commands 18 to 83 are **readers**.
+The only emitters are the prologue, the directory, opcode records, pool entries, the framing header,
+and `emit_pattern_records` — which writes a **synthetic** pattern, `(r * 7) + 1`, at a hardcoded
+stride. It is a fixture generator, not a schema emitter.
+
+**Second scoping, also wrong.** "Then emit the HEADER region, one record." But `put_rec_u32` and
+`put_rec_u16` are generic primitives, and the thing that did not exist was any emitter for a
+*specific* schema record from real values. That is real new Keleusma code, not wiring, and it needs
+an input-marshalling design first.
+
+**What the increment actually is, and it was already reachable.** `CMD_EMIT_HEADER` emits the
+container header, three prologue copies and three directory copies, and was validated only against
+**hand-built** region sets. Driving it from the ten stages' real region sets needed no Keleusma
+change at all — only the Rust side that extracts a real region set and compares. **It passes on all
+ten stages**, so the first time `wire.kel` sees real compiler output it agrees byte for byte.
+
+**A first-try pass is a signal to check for vacuity, not to celebrate.** The must-fire control
+carries seven perturbations — a changed kind, a length grown and shrunk by a word, a flags bit, a
+covers field, two regions transposed, a dropped region — and all seven are caught, with the
+must-not-fire clean case in the same test so neither can be deleted alone. **The control failed on
+its first run**, and on its own arithmetic rather than on the property: it perturbed a fixed index
+that is an empty region in the smallest stage, so the shrink underflowed. It now targets the largest
+region and asserts that target holds at least one word.
+
+**Two coverage limits asserted rather than left implicit**, because this test looks like a superset
+of the hand-built corpus and is not one. A region's length survives the container only as a WORD
+count, so every length reachable here is a multiple of eight, and the awkward lengths where a
+dropped round-up in `words_for` would hide stay reachable only from the hand-built sets. Those tests
+remain load-bearing.
+
+**And an observation that is not mine to resolve.** `SchemaBuilder` declares every region as
+`region(kind, 0)` and builds **no parity plane anywhere**, so real artifacts carry flags 0 and
+covers 0 throughout. The **(72,64) SECDED plane exists in `keleusma-wire` and is entirely
+unexercised by the shipping encoder.** Whether that is a deliberate cost choice or an unwired
+capability is a question for the operator, not a defect I should assert. It is pinned in the firing
+direction so the day real output gains a non-zero flags or covers field, the test says so rather
+than the emitter quietly acquiring an untested case. It also **reduces the increment's scope**: the
+Keleusma emitter needs no ECC support to reach byte identity with the encoder as it stands.
+
+**The pattern across three scopings.** Each wrong scoping was a plausible reading of a recorded
+status, and each was corrected by reading the actual source rather than by reasoning further. That
+is the same lesson the prep correction below records, one increment earlier, and I still needed it
+twice more.
+
 **THE WIRING PREP SIZED THE EMITTER FROM THE WRONG QUANTITY, AND READING THE ENCODER IS WHAT SHOWED
 IT (2026-08-09).** The prep measured the largest single region, 6,609,960 bytes, and concluded that
 an 8 MB working buffer covers every stage "with roughly 10 MB left for the emitter's inputs". That
