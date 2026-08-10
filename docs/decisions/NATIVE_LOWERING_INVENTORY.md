@@ -850,14 +850,63 @@ is how native code obtains the buffer base pointer, and that is a Workstream D
 application-binary-interface question of the same size as the symbol-naming one
 already settled provisionally.
 
-**Private support is worth a further `+211` chunks**, which would take coverage
-to roughly 87 percent, and it is **blocked on a representation decision that is
-not mine to take**. `src/bytecode.rs` is a file this branch holds read-only. The
-options are to give `GenericValue` a stable `#[repr]`, or to define a separate
-flat encoding for the persistent region as B28 did for composite bodies. The
-second is more in keeping with the flat-representation direction the runtime has
-been moving in, and it is the larger change.
+**Private support is worth a further `+211` chunks**, reaching roughly 87
+percent unit coverage.
 
-**This is the single highest-value decision available to the native workstream**,
-at roughly forty percentage points of unit coverage, and it requires the
-operator and the runtime owner rather than this branch.
+### CORRECTED: private support is NOT blocked, and the error was mine
+
+An earlier version of this section concluded that private slots were blocked on
+giving `GenericValue` a stable `#[repr]`, called that "the single highest-value
+decision available to the native workstream", and assigned it to the operator
+and the runtime owner. **That was wrong.** The operator supplied the correct
+model: private data is private to the code that relies on it, so it is a black
+box from outside, and the only thing the outside needs to know is the size of
+the box.
+
+The reasoning error was treating the representation as an interface when it is
+an implementation detail on both sides of a boundary neither crosses. Native
+code has no obligation to read the Rust runtime's private storage, because
+nothing observes that storage from outside. Verified rather than assumed:
+
+- **The host API exposes `get_shared` and `set_shared` and no private
+  equivalent.** Private slots are unreachable from outside the running program,
+  so no external consumer can observe a layout choice.
+- **The only quantity crossing the boundary is the size.**
+  `required_persistent_capacity_for` computes
+  `private_count * size_of::<GenericValue<W, F>>()` plus the composite pool.
+- **That size over-approximates a flat native layout.** A `Value` slot is 32
+  bytes; a flat native scalar slot is 8. Native code choosing its own layout
+  fits inside the region the existing arithmetic already reserves, so neither
+  the sizing function nor `src/bytecode.rs` nor the wire format needs to change.
+
+The differential oracle is unaffected, because it compares returned values
+rather than memory, and each side maintains its own private layout consistently
+within its own run.
+
+The worst-case-memory bound falls the right way for the same reason. The bound
+proven over 32-byte tagged slots over-approximates the usage of a flat native
+layout, so it stays conservative rather than becoming invalid.
+
+### Three residual constraints on that model
+
+1. **Mixed execution would break it.** If interpreted and native chunks ever
+   touch the same persistent region within one run, the layouts must agree. The
+   model requires native and bytecode to be alternative deployment shapes for a
+   WHOLE PROGRAM rather than interleaved within one. The roadmap's phrasing
+   supports that reading; nothing has been verified to enforce it.
+2. **Hot swap inherits live data.** A swapped-in native artefact that must
+   inherit a live private region requires the two versions to agree on layout.
+   That is a versioning constraint within native, and the same one bytecode hot
+   swap already carries.
+3. **The size relationship needs a checked assertion, not an argument.** Native
+   fits today because 8 is less than 32. That is a fact about two current
+   choices rather than an invariant, and the lowering should assert it so a
+   future wider native representation fails loudly instead of silently
+   overrunning a region sized by someone else's arithmetic.
+
+**The path to roughly 87 percent unit coverage therefore runs entirely through
+`native_codegen/`** and requires no decision from the operator or the runtime
+owner. The general lesson is the one this document keeps re-learning from a new
+angle: a constraint that looks external is worth testing against the actual
+boundary before it is escalated, because escalating it costs someone else's
+attention and can be wrong.
