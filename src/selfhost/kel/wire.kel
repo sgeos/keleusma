@@ -2318,13 +2318,245 @@ fn emit_in_region(k: Word, n: Word) -> Word {
     if k == kind_header() { emit_header_record_at(region_base(dir_find(k))) } else {
     if k == kind_string_pool() { emit_pool_bytes(region_base(dir_find(k)), n) } else {
     if k == kind_param_types() { emit_pool_bytes(region_base(dir_find(k)), n) } else {
-    0 - 222 }}}}}}}}}
+    // Added in slice 12. The original eight were exactly the minimal module's
+    // regions, and the interner's constructed sources declare enums, so they
+    // reach two more. The refusal is what surfaced it rather than a wrong
+    // artifact — the guard slice 11 added, doing its job on its first real test.
+    if k == kind_enum_variants() { emit_enum_variant_records(region_base(dir_find(k)), n) } else {
+    if k == kind_enum_layouts() { emit_enum_layout_records(region_base(dir_find(k)), n) } else {
+    0 - 222 }}}}}}}}}}}
+}
+
+// --- SLICE 12: THE INTERNER, THE DRIVER'S FIRST COMPUTED VALUE ------------
+//
+// Everything before this slice RE-EMITTED values the host had decoded out of the
+// reference artifact. This computes one instead: given the sequence of names the
+// encoder interns, in order, with the mode each call site uses, it produces the
+// `STRING_POOL` bytes and the `NAMES` records itself. The host supplies only the
+// input sequence, which is genuine input rather than an answer.
+//
+// THE INTERNER HAS TWO MODES AND BOTH ARE LOAD-BEARING.
+//
+//   mode 0, `intern`       reuse an existing entry with the same bytes
+//   mode 1, `intern_fresh` append unconditionally, even if the bytes exist
+//
+// A dedup-only port is not a simplification, it is a defect. `intern_fresh`
+// exists for CONTIGUITY, not freshness: struct-constant field names and
+// enum-variant names must form an unbroken run so that `first + i` addressing
+// reaches field or variant `i`. Sharing a repeated name would collapse the run
+// and silently misaddress every later element.
+//
+// The corpus cannot catch that. Four of the five stages measured have no
+// duplicate names at all, and only `parse` has any — twenty, out of 58,053 —
+// so a deduping-only interner would agree with the reference on four stages
+// out of five and then be wrong on the one that matters. The differential
+// therefore uses CONSTRUCTED sources, the smallest being two enums that share a
+// variant name.
+//
+// A LAST MATCH WINS, AND THIS IS NOT A FREE CHOICE. The reference keeps a
+// bytes-to-index map and `intern_fresh` INSERTS INTO IT, overwriting any
+// existing mapping. So when the same bytes have been appended twice, a later
+// `intern` yields the SECOND index, not the first. Measured, not inferred: for
+// `enum A { X, P } enum B { X, Q } enum X { R }` the reference's third layout
+// cites name index 5, the later `X`, while indices 2 and 5 both hold those
+// bytes. A forward first-match scan produces an artifact whose `NAMES` and
+// `STRING_POOL` are byte-identical and whose `ENUM_LAYOUTS` is wrong — which is
+// exactly the silent-divergence class this differential exists to catch, and it
+// would have slipped through had the scan been written the obvious way.
+//
+// THE SCAN IS LINEAR, AND THAT IS A KNOWN DEBT RATHER THAN AN OVERSIGHT.
+// The reference used a linear scan once and encoding a mid-sized stage took 782
+// seconds; it is a `BTreeMap` now. At the sizes this slice drives — ten names —
+// a scan is right, and the structure that replaces it is a separate increment
+// with its own measurement. **It must be replaced before the interner is driven
+// by a real stage**, where the count reaches 395,804. Recorded here rather than
+// only in the plan document, because this is where someone will read it.
+//
+// COMPACTION IS IN PLACE, AND THE ARGUMENT IS SHORT ENOUGH TO CHECK.
+// Input and output share `wire.bin` and `wire.fin`. The output cursor is the sum
+// of the emitted names' lengths and the input cursor is the sum of ALL names'
+// lengths, over the same prefix; emitted is a subset of all, so the output
+// cursor never exceeds the input cursor. Byte ranges therefore never overlap in
+// the wrong direction, and the record pairs coincide only when nothing has been
+// deduped yet, where the input pair is read before the output pair is written.
+private data nm {
+    // Byte cursor into the INPUT concatenation in `wire.bin`.
+    icur: Word,
+    // Byte cursor into the OUTPUT pool, compacted in place over the input.
+    ocur: Word,
+    // Names emitted so far, which is also the index the next one would take.
+    cnt: Word,
+    // Start of the name being considered. Needed because the input cursor has
+    // already advanced past it by the time the scan runs, and a local cannot
+    // carry it: this file uses no locals, for the reason `crc.acc` records.
+    ioff: Word,
+    // Scan result: the index of a matching emitted name, or -1.
+    found: Word,
+    // Byte-comparison accumulator.
+    eq: Word,
+    // Sticky rejection code, 0 while the input is admissible. Sticky rather than
+    // an early return because the language is total and the loop bound is
+    // static, so there is nothing to break out of.
+    err: Word,
+    // Discards a call's result where the interesting output is in the fields.
+    // A separate field rather than a borrowed one, for the reason `st.pad` is
+    // separate from `st.dis`: reusing an accumulator here would read as a bug.
+    sink: Word,
+}
+
+// The longest name this slice admits, and it is a STATED CAP rather than a
+// silent one. It bounds the byte-comparison loop, which is the innermost of
+// three nested loops and therefore the whole thing's worst case. Identifiers and
+// the generated per-element slot names are far shorter; a longer one is rejected
+// with a code instead of being truncated or scanned past its buffer.
+fn nm_max_name() -> Word { 256 }
+
+// The most names one call admits.
+//
+// 256 rather than the 512 that two words per name would allow, because the
+// upper half of `wire.fin` carries the input-to-index MAP. That map is the piece
+// downstream records actually consume — a chunk cites a name index, not a name —
+// and it is also the only way the last-match rule above is observable at all:
+// first-match and last-match produce identical `NAMES` and `STRING_POOL`
+// regions, so without the map the rule would be logic with no test that could
+// fail. Halving the cap to make a rule testable is the right trade.
+fn nm_max_names() -> Word { 256 }
+
+// Where the input-to-index map starts in `wire.fin`. Output record pairs occupy
+// `[0, 2 * cnt)` and `cnt <= n <= 256`, so they never reach here.
+fn nm_map_base() -> Word { 512 }
+
+// Whether two names in `wire.bin` hold the same bytes.
+//
+// No early exit, which is not a limitation here: the loop bound must be static
+// anyway, so a full compare costs what a bailing one would have to reserve.
+fn nm_bytes_equal(a: Word, b: Word, len: Word) -> Word {
+    nm.eq = 1;
+    for i in 0..len limit 256 {
+        nm.eq = if wire.bin[a + i] != wire.bin[b + i] { 0 } else { nm.eq };
+    }
+    nm.eq
+}
+
+// The index of the LAST emitted name whose bytes match, or -1.
+//
+// Last, not first — see the note above. The idiom differs from `dir_find`, which
+// keeps its FIRST hit by guarding the assignment; here the unguarded assignment
+// is the correct one, and the difference is deliberate.
+fn nm_find(coff: Word, clen: Word, upto: Word) -> Word {
+    nm.found = 0 - 1;
+    for i in 0..upto limit 512 {
+        nm.found = if wire.fin[(i * 2) + 1] == clen
+            andalso nm_bytes_equal(wire.fin[i * 2], coff, clen) == 1 { i } else { nm.found };
+    }
+    nm.found
+}
+
+// Append one name to the pool and record its reference. Returns the new count;
+// the caller owns the counter, so the increment is not hidden in here.
+fn nm_append(ioff: Word, ilen: Word) -> Word {
+    for b in 0..ilen limit 256 {
+        wire.bin[nm.ocur + b] = wire.bin[ioff + b];
+    }
+    wire.fin[nm.cnt * 2] = nm.ocur;
+    wire.fin[(nm.cnt * 2) + 1] = ilen;
+    nm.ocur = nm.ocur + ilen;
+    nm.cnt + 1
+}
+
+// Run the interner over `n` input names.
+//
+// Input: `wire.fin[2j]` is name `j`'s length and `wire.fin[2j+1]` its mode;
+// `wire.bin` holds the names concatenated in order.
+// Output, in place: `wire.fin[2i]` and `wire.fin[2i+1]` are emitted name `i`'s
+// pool offset and length, and `wire.bin[0..nm.ocur]` is the pool.
+fn intern_run(n: Word) -> Word {
+    nm.icur = 0;
+    nm.ocur = 0;
+    nm.cnt = 0;
+    nm.err = 0;
+    for j in 0..n limit 512 {
+        nm.ioff = nm.icur;
+        nm.icur = nm.icur + wire.fin[j * 2];
+        nm.err = if wire.fin[j * 2] > nm_max_name() { 0 - 231 } else {
+                 if nm.icur > bin_capacity() { 0 - 232 } else { nm.err } };
+        nm.found = if nm.err < 0 { 0 } else {
+                   if wire.fin[(j * 2) + 1] == 0 {
+                       nm_find(nm.ioff, wire.fin[j * 2], nm.cnt)
+                   } else { 0 - 1 } };
+        // Written BEFORE the count moves: a name that is about to be appended
+        // takes the index `nm.cnt` currently holds.
+        wire.fin[nm_map_base() + j] = if nm.found < 0 { nm.cnt } else { nm.found };
+        nm.cnt = if nm.err < 0 { nm.cnt } else {
+                 if nm.found < 0 { nm_append(nm.ioff, wire.fin[j * 2]) } else { nm.cnt } };
+    }
+    if nm.err < 0 { nm.err } else { nm.cnt }
+}
+
+// The `NAMES` index that input name `j` resolved to.
+//
+// The interner is a pure function of its input, so re-running it to answer this
+// is not a second answer to the same question — it is the same answer, which is
+// what makes the host relaying figures between re-seeded calls sound.
+fn intern_index_of(n: Word, j: Word) -> Word {
+    nm.sink = intern_names(n);
+    if nm.err < 0 { nm.err } else {
+    if j >= n { 0 - 235 } else { wire.fin[nm_map_base() + j] } }
+}
+
+// The count guard is SEPARATE from the loop rather than a condition inside it.
+//
+// `for j in 0..n limit 512` TRAPS with `LoopLimitExceeded` when the runtime
+// range exceeds the static cap, so a sticky error flag would not help: the trap
+// happens on entry, before any flag could be read. The oversize case must
+// therefore never reach the loop at all.
+fn intern_names(n: Word) -> Word {
+    if n > nm_max_names() { nm.err = 0 - 230; nm.cnt = 0; nm.ocur = 0; nm.err }
+    else { intern_run(n) }
+}
+
+// The pool's byte length after interning the same input.
+//
+// A separate command because a call returns one word and the host must relay
+// both figures back: shared data is re-seeded on every call, so the interner's
+// output cannot persist into the next one. Re-running is not a second answer to
+// the same question — the interner is a pure function of its input.
+fn intern_pool_len(n: Word) -> Word {
+    nm.sink = intern_names(n);
+    if nm.err < 0 { nm.err } else { nm.ocur }
+}
+
+// Intern, then write the `NAMES` records into their region. One call, because
+// the interner's output lives in shared data that the next call would clear.
+fn intern_emit_names(n: Word) -> Word {
+    nm.sink = intern_names(n);
+    if nm.err < 0 { nm.err } else {
+    if dir_find(kind_names()) < 0 { 0 - 233 } else {
+        emit_name_records(region_base(dir_find(kind_names())), nm.cnt) } }
+}
+
+// Intern, then write the `STRING_POOL` bytes and their pad.
+//
+// The pad is emitted explicitly. Slice 11 got it free because the host passed
+// the region's STORED bytes, which are already padded; a computed pool is the
+// unpadded length, so the rounding is this function's job.
+fn intern_emit_pool(n: Word) -> Word {
+    nm.sink = intern_names(n);
+    if nm.err < 0 { nm.err } else {
+    if dir_find(kind_string_pool()) < 0 { 0 - 234 } else {
+        emit_pool_bytes(region_base(dir_find(kind_string_pool())), nm.ocur)
+            + emit_pool_pad(region_base(dir_find(kind_string_pool())) + nm.ocur, nm.ocur) } }
 }
 
 fn dispatch_driver(cmd: Word) -> Word {
     if cmd == 134 { build_region_table(wire.nregions) } else {
     if cmd == 135 { emit_in_region(wire.warg, wire.warg2) } else {
-    0 - 97 }}
+    if cmd == 136 { intern_names(wire.warg) } else {
+    if cmd == 137 { intern_pool_len(wire.warg) } else {
+    if cmd == 138 { intern_emit_names(wire.warg) } else {
+    if cmd == 139 { intern_emit_pool(wire.warg) } else {
+    if cmd == 140 { intern_index_of(wire.warg, wire.warg2) } else {
+    0 - 97 }}}}}}}
 }
 
 // THE HIGHEST LIVE COMMAND, AND IT IS LOAD-BEARING RATHER THAN DOCUMENTATION.
@@ -2332,7 +2564,7 @@ fn dispatch_driver(cmd: Word) -> Word {
 // UNREACHABLE and its own test fails immediately. The fall-through sweep reads
 // this value out of the source instead of restating a bound, which is what it
 // did for four consecutive slices — and got wrong once.
-fn highest_command() -> Word { 135 }
+fn highest_command() -> Word { 140 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {

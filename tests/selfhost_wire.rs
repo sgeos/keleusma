@@ -6423,3 +6423,530 @@ fn the_complete_artifact_comparison_reports_a_perturbation() {
         "control did not fire: a perturbed count left the directory unchanged"
     );
 }
+
+// --- SLICE 12: THE INTERNER, THE DRIVER'S FIRST COMPUTED VALUE ---------------
+//
+// Every slice up to here handed Keleusma values that had been DECODED out of the
+// reference artifact and checked that it re-emitted them. This is the first that
+// makes Keleusma compute one. The host supplies the sequence of names the
+// encoder interns, with the mode each call site uses; Keleusma produces the
+// `STRING_POOL` bytes, the `NAMES` records, and the input-to-index map.
+//
+// WHY THE CASES ARE CONSTRUCTED RATHER THAN DRAWN FROM THE CORPUS. The corpus
+// cannot reach the behaviour under test. Four of the five stages measured carry
+// no duplicate names at all, and only `parse` has any — twenty out of 58,053 —
+// whose artifact is roughly 16 MB and cannot be driven through a 65,536-byte
+// buffer. A deduping-only interner would therefore agree with the corpus on four
+// stages out of five and be wrong on the one that matters. These sources are
+// about a kilobyte each and reach the duplicate path directly.
+//
+// The oracle stays REAL: every expectation below comes from `encode_aux_body`
+// on a genuinely compiled module, not from a model of the interner.
+//
+// WHAT IS STILL MODELLED, AND IT IS WORTH BEING PRECISE ABOUT. The interner's
+// input is a sequence of (name, mode) PAIRS, and that sequence is a property of
+// the encoder's call order, not something recoverable from its output. So
+// `interner_input` below is a Rust model of that call order. It is not the
+// oracle — the oracle is byte identity of the resulting regions — but if the
+// model of the order were wrong, these tests would fail rather than pass
+// vacuously. Generating that sequence from the AST is the self-hosted driver's
+// job and is NOT done here.
+
+const CMD_INTERN_NAMES: i64 = 136;
+const CMD_INTERN_POOL_LEN: i64 = 137;
+const CMD_INTERN_EMIT_NAMES: i64 = 138;
+const CMD_INTERN_EMIT_POOL: i64 = 139;
+const CMD_INTERN_INDEX_OF: i64 = 140;
+
+/// `Names::intern` — reuse an entry with the same bytes.
+const MODE_INTERN: i64 = 0;
+/// `Names::intern_fresh` — append unconditionally, keeping a run contiguous.
+const MODE_FRESH: i64 = 1;
+
+/// Sources chosen so that between them they reach every branch of the interner.
+///
+/// Each is annotated with what it buys, because "a list of test inputs" with no
+/// stated purpose is how a suite acquires cases nobody can later remove.
+const INTERNER_CASES: &[(&str, &str)] = &[
+    // No duplicates at all: the control. If this failed, nothing below would
+    // mean anything.
+    ("minimal", "fn main() -> Word { 42 }"),
+    ("one-enum", "enum A { X, Y }\nfn main() -> Word { 42 }"),
+    // The smallest duplicate: a variant whose name equals its own type name.
+    // Both are upper_ident, so the collision is legal.
+    (
+        "variant-equals-own-type",
+        "enum A { A, B }\nfn main() -> Word { 42 }",
+    ),
+    // Two enums sharing a variant name. `intern_fresh` must append both.
+    (
+        "two-enums-shared-variant",
+        "enum A { X, Y }\nenum B { X, Z }\nfn main() -> Word { 42 }",
+    ),
+    // Three copies, which distinguishes "dedups once" from "dedups".
+    (
+        "three-way-duplicate",
+        "enum A { X, P }\nenum B { X, Q }\nenum C { X, R }\nfn main() -> Word { 42 }",
+    ),
+    // THE SHARING DIRECTION. `intern_fresh` records its entry so a later
+    // `intern` can reuse it: fresh("B") for the variant runs before intern("B")
+    // for the second enum's type name. A port whose fresh mode skips the index
+    // emits seven names where the reference emits six.
+    (
+        "fresh-then-intern-shares",
+        "enum A { B, X }\nenum B { Y, Z }\nfn main() -> Word { 42 }",
+    ),
+];
+
+/// A model of the encoder's interning call order, for sources limited to
+/// function definitions and enum declarations.
+///
+/// Mirrors `SchemaBuilder::add_chunk` (`names.intern`) and `add_enum_layouts`
+/// (`names.intern` for the type name, `names.intern_fresh` per variant), in that
+/// order. Restricted deliberately: a source with data slots, natives, struct
+/// templates or composite constants has more contributors, and silently
+/// producing a short sequence for one would make a test pass for the wrong
+/// reason. `assert_no_other_contributors` refuses those inputs instead.
+fn interner_input(module: &keleusma::bytecode::Module) -> Vec<(String, i64)> {
+    let mut seq = Vec::new();
+    for c in &module.chunks {
+        seq.push((c.name.clone(), MODE_INTERN));
+    }
+    for l in &module.enum_layouts {
+        seq.push((l.type_name.clone(), MODE_INTERN));
+        for v in &l.variants {
+            seq.push((v.name.clone(), MODE_FRESH));
+        }
+    }
+    seq
+}
+
+/// Refuses a module whose names come from a contributor `interner_input` does
+/// not model. Without this the model could silently under-generate.
+fn assert_no_other_contributors(label: &str, module: &keleusma::bytecode::Module) {
+    assert!(
+        module.native_names.is_empty(),
+        "{label}: natives intern names and the model does not cover them"
+    );
+    assert!(
+        module.data_layout.is_none(),
+        "{label}: a data layout interns per-slot names and the model does not cover them"
+    );
+    for c in &module.chunks {
+        assert!(
+            c.struct_templates.is_empty(),
+            "{label}: struct templates intern names and the model does not cover them"
+        );
+    }
+}
+
+/// The interner input, flattened into the two shared-data channels: `fin` takes
+/// (length, mode) pairs and `bin` takes the names concatenated in order.
+fn interner_channels(seq: &[(String, i64)]) -> (Vec<i64>, Vec<u8>) {
+    let mut fields = Vec::with_capacity(seq.len() * 2);
+    let mut pool = Vec::new();
+    for (name, mode) in seq {
+        fields.push(name.len() as i64);
+        fields.push(*mode);
+        pool.extend_from_slice(name.as_bytes());
+    }
+    (fields, pool)
+}
+
+/// The reference's `NAMES` entries as byte strings, and the UNPADDED pool
+/// length, which is what the interner reports.
+fn reference_names(bytes: &[u8]) -> (Vec<Vec<u8>>, usize) {
+    use keleusma::wire_schema::kind;
+    let view = keleusma_wire::WireView::parse(bytes).expect("artifact parses");
+    let pool = view
+        .find_region(kind::STRING_POOL)
+        .and_then(|r| view.region_bytes(&r).ok())
+        .unwrap_or(&[])
+        .to_vec();
+    let mut names = Vec::new();
+    let mut used = 0usize;
+    if let Some(r) = view.find_region(kind::NAMES) {
+        let t = view.records(&r, 8).expect("names table");
+        for i in 0..t.len() {
+            let n: keleusma::wire_schema::NameRef = t.get_as(i).expect("rec");
+            let (o, l) = (n.offset as usize, n.length as usize);
+            names.push(pool[o..o + l].to_vec());
+            used = used.max(o + l);
+        }
+    }
+    (names, used)
+}
+
+/// One interner call: seeds the (name, mode) channels and nothing else.
+fn run_intern(
+    vm: &mut Vm<'static, 'static>,
+    cmd: i64,
+    fields: &[i64],
+    pool: &[u8],
+    args: [i64; 5],
+) -> i64 {
+    run_call(
+        vm,
+        &Call {
+            cmd,
+            nregions: 0,
+            seed: &[],
+            regions: &[],
+            fields,
+            pool,
+            args,
+            read_len: 0,
+        },
+    )
+    .expect("run")
+    .0
+}
+
+#[test]
+fn keleusma_computes_the_name_table_the_reference_interned() {
+    let mut vm = vm_for(WIRE_KEL);
+    let mut saw_a_duplicate = false;
+
+    for (label, src) in INTERNER_CASES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        assert_no_other_contributors(label, &module);
+        let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+        let (ref_names, ref_pool_len) = reference_names(&want);
+
+        let seq = interner_input(&module);
+        let (fields, pool) = interner_channels(&seq);
+        let n = seq.len() as i64;
+
+        // A duplicate is what separates the two modes. Recording it per case
+        // means the suite reports if the property it relies on ever stops
+        // holding, rather than quietly testing nothing.
+        let mut distinct = ref_names.clone();
+        distinct.sort();
+        distinct.dedup();
+        if distinct.len() < ref_names.len() {
+            saw_a_duplicate = true;
+        }
+
+        let cnt = run_intern(&mut vm, CMD_INTERN_NAMES, &fields, &pool, [n, 0, 0, 0, 0]);
+        assert_eq!(
+            cnt,
+            ref_names.len() as i64,
+            "{label}: Keleusma emitted {cnt} names, the reference {}",
+            ref_names.len()
+        );
+
+        let plen = run_intern(
+            &mut vm,
+            CMD_INTERN_POOL_LEN,
+            &fields,
+            &pool,
+            [n, 0, 0, 0, 0],
+        );
+        assert_eq!(
+            plen, ref_pool_len as i64,
+            "{label}: Keleusma's pool is {plen} bytes, the reference's {ref_pool_len}"
+        );
+    }
+
+    assert!(
+        saw_a_duplicate,
+        "no case produced a duplicate name, so neither mode was distinguished"
+    );
+}
+
+#[test]
+fn the_computed_name_regions_are_byte_identical_in_a_complete_artifact() {
+    use keleusma::wire_schema::kind;
+    let mut vm = vm_for(WIRE_KEL);
+
+    for (label, src) in INTERNER_CASES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        assert_no_other_contributors(label, &module);
+        let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+        let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+        let total = want.len();
+        assert!(total < CAPACITY, "{label}: artifact is {total} bytes");
+
+        let seq = interner_input(&module);
+        let (nfields, npool) = interner_channels(&seq);
+        let n = seq.len() as i64;
+
+        // The two regions are sized from KELEUSMA's own figures, not the
+        // reference's, so a wrong count moves every later region and the byte
+        // comparison at the end fails loudly.
+        let cnt = run_intern(&mut vm, CMD_INTERN_NAMES, &nfields, &npool, [n, 0, 0, 0, 0]);
+        let plen = run_intern(
+            &mut vm,
+            CMD_INTERN_POOL_LEN,
+            &nfields,
+            &npool,
+            [n, 0, 0, 0, 0],
+        );
+        assert!(cnt >= 0 && plen >= 0, "{label}: interner refused");
+
+        let mut specs = region_counts_for(&want);
+        for s in &mut specs {
+            if s.0 == kind::NAMES {
+                s.2 = cnt as usize;
+            }
+            if s.0 == kind::STRING_POOL {
+                s.2 = plen as usize;
+            }
+        }
+
+        let (_, mut art) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_BUILD_REGION_TABLE,
+                nregions: specs.len() as i64,
+                seed: &[],
+                regions: &specs,
+                fields: &[],
+                pool: &[],
+                args: [0, 0, 0, 0, 0],
+                read_len: total,
+            },
+        )
+        .expect("run");
+
+        for (k, _, _, _) in &specs {
+            let region = view.find_region(*k).expect("region");
+            let stored = view.region_bytes(&region).expect("payload");
+            if stored.is_empty() {
+                continue;
+            }
+            // The two computed regions take the interner's input; every other
+            // region is still re-emitted from decoded values, which is the part
+            // later slices replace.
+            let (cmd, fields, pl, args) = if *k == kind::NAMES {
+                (
+                    CMD_INTERN_EMIT_NAMES,
+                    nfields.clone(),
+                    npool.clone(),
+                    [n, 0, 0, 0, 0],
+                )
+            } else if *k == kind::STRING_POOL {
+                (
+                    CMD_INTERN_EMIT_POOL,
+                    nfields.clone(),
+                    npool.clone(),
+                    [n, 0, 0, 0, 0],
+                )
+            } else {
+                let is_pool = matches!(*k, kind::PARAM_TYPES | kind::DEBUG_POOL);
+                let rows = if is_pool {
+                    Vec::new()
+                } else {
+                    rows_for_kind(&view, *k)
+                };
+                let flat: Vec<i64> = rows.iter().flatten().copied().collect();
+                let cnt = if is_pool { stored.len() } else { rows.len() };
+                (
+                    CMD_EMIT_IN_REGION,
+                    flat,
+                    stored.to_vec(),
+                    [i64::from(*k), cnt as i64, 0, 0, 0],
+                )
+            };
+
+            let (ret, next) = run_call(
+                &mut vm,
+                &Call {
+                    cmd,
+                    nregions: specs.len() as i64,
+                    seed: &art,
+                    regions: &specs,
+                    fields: &fields,
+                    pool: &pl,
+                    args,
+                    read_len: total,
+                },
+            )
+            .expect("run");
+            assert!(ret >= 0, "{label}: region {k:#06x} refused with code {ret}");
+            art = next;
+        }
+
+        assert_eq!(art, want, "{label}: the artifact Keleusma built differs");
+    }
+}
+
+/// The LAST-MATCH rule, which is invisible in `NAMES` and `STRING_POOL`.
+///
+/// `intern_fresh` inserts into the reference's bytes-to-index map, overwriting,
+/// so a later `intern` of duplicated bytes yields the SECOND index. First-match
+/// and last-match produce identical name and pool regions, so this is checked
+/// through the input-to-index map — the only place the difference shows — and
+/// against the reference's own `ENUM_LAYOUTS.type_name`, not against a belief.
+#[test]
+fn a_later_intern_resolves_to_the_last_matching_index() {
+    use keleusma::wire_schema::kind;
+    let src = "enum A { X, P }\nenum B { X, Q }\nenum X { R }\nfn main() -> Word { 42 }";
+    let mut vm = vm_for(WIRE_KEL);
+
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let view = keleusma_wire::WireView::parse(&want).expect("parses");
+    let (ref_names, _) = reference_names(&want);
+
+    // The reference's own answer: which index does `enum X`'s type name cite?
+    let lt = view
+        .records(&view.find_region(kind::ENUM_LAYOUTS).expect("layouts"), 16)
+        .expect("table");
+    let last: keleusma::wire_schema::EnumLayoutRecord =
+        lt.get_as(lt.len() - 1).expect("last layout");
+    let cited = last.type_name as usize;
+
+    // The property must be non-vacuous: those bytes must occur more than once,
+    // otherwise first-match and last-match agree and this proves nothing.
+    let occurrences: Vec<usize> = ref_names
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| *s == &ref_names[cited])
+        .map(|(j, _)| j)
+        .collect();
+    assert!(
+        occurrences.len() > 1,
+        "vacuous: {:?} occurs once, so the two rules agree",
+        String::from_utf8_lossy(&ref_names[cited])
+    );
+    assert_eq!(
+        cited,
+        *occurrences.last().expect("occurrence"),
+        "the reference did not choose the last match; this test's premise is wrong"
+    );
+    assert_ne!(
+        cited, occurrences[0],
+        "vacuous: the last match IS the first match"
+    );
+
+    // Keleusma's answer for the same input position.
+    let seq = interner_input(&module);
+    let (fields, pool) = interner_channels(&seq);
+    let n = seq.len() as i64;
+    let j = seq
+        .iter()
+        .rposition(|(name, mode)| *mode == MODE_INTERN && name.as_bytes() == ref_names[cited])
+        .expect("the late intern") as i64;
+
+    let got = run_intern(
+        &mut vm,
+        CMD_INTERN_INDEX_OF,
+        &fields,
+        &pool,
+        [n, j, 0, 0, 0],
+    );
+    assert_eq!(
+        got, cited as i64,
+        "Keleusma resolved input {j} to index {got}; the reference cites {cited} \
+         (those bytes occur at {occurrences:?}) — a first-match scan would give {}",
+        occurrences[0]
+    );
+}
+
+/// Must-fire: a deduping-only interner disagrees with the reference.
+///
+/// Forcing every mode to `intern` is exactly the port the plan document warns
+/// about. On a source with duplicate names it must produce fewer records than
+/// the reference — if it did not, the two modes would be indistinguishable and
+/// every test above would be measuring nothing.
+#[test]
+fn a_dedup_only_interner_produces_the_wrong_count() {
+    let mut vm = vm_for(WIRE_KEL);
+    let src = "enum A { X, Y }\nenum B { X, Z }\nfn main() -> Word { 42 }";
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let (ref_names, _) = reference_names(&want);
+
+    let seq = interner_input(&module);
+    let (mut fields, pool) = interner_channels(&seq);
+    for i in 0..seq.len() {
+        fields[i * 2 + 1] = MODE_INTERN;
+    }
+    let cnt = run_intern(
+        &mut vm,
+        CMD_INTERN_NAMES,
+        &fields,
+        &pool,
+        [seq.len() as i64, 0, 0, 0, 0],
+    );
+    assert!(
+        cnt < ref_names.len() as i64,
+        "control did not fire: dedup-only emitted {cnt}, the reference {}",
+        ref_names.len()
+    );
+}
+
+/// Must-fire: an append-only interner disagrees too, in the other direction.
+///
+/// The complementary error — treating every call as `intern_fresh` — must
+/// over-produce on a source where a later `intern` should share.
+#[test]
+fn an_append_only_interner_produces_the_wrong_count() {
+    let mut vm = vm_for(WIRE_KEL);
+    let src = "enum A { B, X }\nenum B { Y, Z }\nfn main() -> Word { 42 }";
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let (ref_names, _) = reference_names(&want);
+
+    let seq = interner_input(&module);
+    let (mut fields, pool) = interner_channels(&seq);
+    for i in 0..seq.len() {
+        fields[i * 2 + 1] = MODE_FRESH;
+    }
+    let cnt = run_intern(
+        &mut vm,
+        CMD_INTERN_NAMES,
+        &fields,
+        &pool,
+        [seq.len() as i64, 0, 0, 0, 0],
+    );
+    assert!(
+        cnt > ref_names.len() as i64,
+        "control did not fire: append-only emitted {cnt}, the reference {}",
+        ref_names.len()
+    );
+}
+
+/// The stated caps are enforced with a code rather than by truncating.
+#[test]
+fn the_interner_reports_an_input_it_cannot_hold() {
+    let mut vm = vm_for(WIRE_KEL);
+
+    // Too many names. 257 exceeds the 256 the map's placement allows.
+    let over: Vec<(String, i64)> = (0..257).map(|i| (format!("n{i}"), MODE_INTERN)).collect();
+    let (fields, pool) = interner_channels(&over);
+    assert_eq!(
+        run_intern(&mut vm, CMD_INTERN_NAMES, &fields, &pool, [257, 0, 0, 0, 0]),
+        -230,
+        "an oversized name count was not reported"
+    );
+
+    // A name longer than the comparison loop's static bound.
+    let mut vm = vm_for(WIRE_KEL);
+    let long = vec![("x".repeat(257), MODE_INTERN)];
+    let (fields, pool) = interner_channels(&long);
+    assert_eq!(
+        run_intern(&mut vm, CMD_INTERN_NAMES, &fields, &pool, [1, 0, 0, 0, 0]),
+        -231,
+        "an oversized name was not reported"
+    );
+
+    // Asking for an index past the input.
+    let mut vm = vm_for(WIRE_KEL);
+    let one = vec![("main".to_string(), MODE_INTERN)];
+    let (fields, pool) = interner_channels(&one);
+    assert_eq!(
+        run_intern(
+            &mut vm,
+            CMD_INTERN_INDEX_OF,
+            &fields,
+            &pool,
+            [1, 1, 0, 0, 0]
+        ),
+        -235,
+        "an out-of-range map query was not reported"
+    );
+}
