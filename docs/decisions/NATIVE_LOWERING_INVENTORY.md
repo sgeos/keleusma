@@ -4276,3 +4276,61 @@ since it is pinned to `bc1bee3a`; the next gate is the first to exercise it.
 The hole was the same one, one directory over, from the one the step above it
 closed. A detached package escapes `--workspace` in *every* dimension, not only
 the one that motivated detaching it, and each escape has to be closed by hand.
+
+## MEASURED: there is exactly ONE `Reentrant` chunk in the corpus, and its shape is uniform
+
+```
+Reentrant chunks                      : 1
+ANY nested Yield (the If-chain shape) : 1
+every Yield immediately before Return : 1
+   codegen.kel::emit_next  top=1 nested=8  yield->return 9/9
+```
+
+Three results, and each changes something.
+
+**The `If`-chain precondition is confirmed.** Eight of `emit_next`'s nine yields
+sit at depth one or more, exactly as predicted from the multiheaded emission path.
+The whole-chunk depth rule that admits a degenerate stream would reject this
+chunk, so the reduction genuinely needs a per-head rule.
+
+**`Yield` is immediately followed by `Return` in NINE of nine cases.** That is the
+structural property the traced hypothesis needed and could not check from source:
+every head suspends and then returns the resume value. Not a majority, not a
+common case — uniform.
+
+**The whole `Reentrant` population of the corpus is one chunk.** So Workstream B's
+"general case", which the roadmap describes as where the risk concentrates, is
+currently *two chunks*: `lexer.kel::main`, a nested stream, and
+`codegen.kel::emit_next`, this one.
+
+### A correction to my own framing of the delegated case
+
+`emit_next` is **not blocked**. The `kel_yield` callback already lowers
+`Reentrant` chunks, and the existing suspension tests pass. What refuses
+`codegen.kel` is `Op::Stream` in `main`, and `main` is refused by my predicate for
+having **no `Op::Yield` at all**, so `found?` returns `None`.
+
+That reframes the work. The delegated case may need no new coroutine machinery,
+only an additional admissibility clause: a stream chunk with no `Op::Yield` whose
+body calls a `Reentrant` chunk could lower as `step(resume)` with suspensions
+going through the existing callback. The refusal comment's objection — that a
+divergent `loop` on a callback ABI would spin with no way for the host to stop it
+— does not apply, because `step` returns after one `emit_next` call and the host
+regains control every iteration.
+
+The resume-slot hazard also does not bite here, and for a reason specific to the
+shape rather than a general one: `main` uses its `resume` parameter only to pass
+to `emit_next` at call time, which happens **before** any suspension, so the
+value the virtual machine would write into slot 0 mid-iteration is never read
+again in that iteration.
+
+### The caveat that matters more than the result
+
+**This is a corpus of one.** A user may write many `Reentrant` chunks in any
+shape, and `yield fn` is a language feature rather than a codegen artefact.
+Designing to `9/9 Yield;Return` would be fitting the corpus, not the language.
+
+The honest use of this measurement is the reverse: it says the *general* coroutine
+lowering can be **deferred** with a known and small cost today, not that it can be
+skipped. Two chunks are behind it, and the moment a user writes a third the
+deferral stops being free. That is a scheduling fact, not a design one.

@@ -382,3 +382,80 @@ fn the_corpus_is_actually_being_read() {
         "no Stream chunks found; the shape report is vacuous"
     );
 }
+
+/// THE DELEGATED CASE: what shape are `Reentrant` chunks actually in?
+///
+/// `codegen.kel` is the one stage that delegates its whole body to a multiheaded
+/// `yield` callee. The inventory records a traced hypothesis that such a callee
+/// could lower to a function returning the YIELDED value, which would make the
+/// delegated stage degenerate over it.
+///
+/// The hypothesis has one structural precondition it was NOT able to check from
+/// source: a multiheaded `Reentrant` chunk compiles its heads to an `If` chain,
+/// so its yields sit at nesting depth one or more. The degenerate stream rule
+/// requires depth zero, so if the reduction is to work it needs a PER-HEAD rule
+/// rather than the whole-chunk one.
+///
+/// This measures the shape instead of arguing about it. Reports, does not assert:
+/// the distribution is a fact about the corpus, not about our code.
+#[test]
+fn spike_report_reentrant_shapes() {
+    println!("\n================ DELEGATED: `Reentrant` chunk shapes");
+    let (mut total, mut flat_single, mut nested_any) = (0usize, 0usize, 0usize);
+    let mut yield_then_return = 0usize;
+    let mut examples: Vec<String> = Vec::new();
+
+    for (path, m) in compiled_corpus() {
+        for chunk in &m.chunks {
+            if chunk.block_type != BlockType::Reentrant {
+                continue;
+            }
+            total += 1;
+            let s = yield_shape(&chunk.ops);
+
+            // How many `Yield`s are immediately followed by `Return`? That is
+            // the shape the hypothesis needs: a head that suspends and then
+            // returns the resume value, which the caller discards.
+            let n_yr = chunk
+                .ops
+                .windows(2)
+                .filter(|w| matches!(w[0], Op::Yield) && matches!(w[1], Op::Return))
+                .count();
+            let n_y = chunk.ops.iter().filter(|o| matches!(o, Op::Yield)).count();
+            if n_y > 0 && n_yr == n_y {
+                yield_then_return += 1;
+            }
+
+            if s.nested > 0 {
+                nested_any += 1;
+                if examples.len() < 6 {
+                    examples.push(format!(
+                        "{}::{}  top={} nested={} yield->return {}/{}",
+                        path.file_name().unwrap_or_default().to_string_lossy(),
+                        chunk.name,
+                        s.top_level,
+                        s.nested,
+                        n_yr,
+                        n_y
+                    ));
+                }
+            } else if s.top_level == 1 {
+                flat_single += 1;
+            }
+        }
+    }
+
+    println!("  Reentrant chunks                      : {total}");
+    println!("  one top-level Yield, none nested      : {flat_single}");
+    println!("  ANY nested Yield (the If-chain shape) : {nested_any}");
+    println!("  every Yield immediately before Return : {yield_then_return}");
+    if !examples.is_empty() {
+        println!("\n  nested examples:");
+        for e in &examples {
+            println!("     {e}");
+        }
+    }
+    println!("\n  -> if `nested_any` dominates, the reduction needs a PER-HEAD rule,");
+    println!("     not the whole-chunk depth rule the degenerate stream uses.");
+    println!("================\n");
+}
