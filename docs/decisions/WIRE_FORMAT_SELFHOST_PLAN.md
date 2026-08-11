@@ -714,6 +714,70 @@ they walk, coupling the flattener to the interner and the two side tables — th
 341 nodes (`-240`), an impossible child count (`-241`), a cursor out of range (`-242`), a queue
 overrun (`-244`), an out-of-scope tag (`-245`), `nroots > nnodes` (`-246`). Each has a negative test.
 
+#### SLICE 13b — DESIGNED, NOT BUILT: the flattener drives the interner
+
+Scoped while the machine was held by the other session, so implementation is mechanical rather than
+exploratory. **Everything here marked (measured) was checked against the reference; everything else
+is a design choice and may not survive contact.**
+
+**THE COUPLING IS THE WHOLE POINT.** `STATIC_STR`, `STRUCT` and `ENUM` intern names *as `flatten`
+walks*, so the name sequence is a function of the BREADTH-FIRST order, not of the input order. The
+interner therefore cannot run as a separate pass over a host-supplied list the way slice 12 does —
+the flattener has to drive it. That is also what makes the slice worth doing: it is the first place
+two computed values interact.
+
+**It is genuinely testable, which was not obvious** (measured). A string can sit *inside* a
+composite: `const_value_from_literal_for_field` maps `(Literal::String, PrimType::Text)` to
+`StaticStr` and recurses through tuple, array and struct initialisers, so
+`const data k { t: (Text, Word) = ("hi", 1) }` puts a `StaticStr` at a child position. A child is
+interned at its breadth-first index, not its preorder one, so depth-first and breadth-first produce
+different `STRING_POOL` bytes — the reordering and the interning are observably coupled rather than
+merely adjacent.
+
+**Per-node interning order** (measured, `wire_schema.rs:412-442`), and the middle line is the one
+that is easy to get wrong:
+
+| tag | sequence |
+|---|---|
+| `STATIC_STR` | `intern(s)` -> `aux` |
+| `STRUCT` | `intern(type_name)`, **then** capture `field_names_first` **after** it, then `intern_fresh(field)` per field |
+| `ENUM` | `intern(type_name)`, `intern(variant)` |
+
+`field_names_first` is read *after* the type name is interned, so a port that captures it first is
+off by one on every struct — and only on structs whose type name is not already present.
+
+**Channels.** The preorder grows to six words per node — tag, payload, child count, `names_first`,
+flags, discriminant — because an enum needs `FLAG_HAS_DISCRIMINANT` and a signed discriminant that
+`payload` cannot carry (a composite's payload is its child range). 1024 words is then a **170-node
+cap**, to be stated and enforced with a code. Per-node name groups arrive in PREORDER in a new
+`wire.nin`, with bytes in `wire.bin`; `names_first` indexes that group.
+
+**Outputs go straight into the regions, not into scratch.** `NAMES`, `STRING_POOL`, `CONSTS`,
+`STRUCT_AUX` and `ENUM_AUX` are written where the directory says they go, and the dedup scan reads
+the `NAMES` and `STRING_POOL` regions back out of `wire.bytes`. **The interner's state IS the
+artifact**, so "what I think I emitted" and "what is in the artifact" cannot drift apart — which is
+the failure a separate scratch buffer would make possible.
+
+**Two walks, because the region lengths are RESULTS.** The name count, pool length and both aux
+counts are outcomes of the walk, but the directory has to be laid before anything can be written
+into a region. So a counting walk runs first into a scratch window high in `wire.bytes` (artifacts
+are about a kilobyte against 65,536, so the space is free), the host relays the figures back, and the
+emitting walk runs again. Deterministic, so the second walk is the same answer rather than a second
+answer — the same argument slice 12 already rests on.
+
+**Suggested decomposition**, smallest first, since the whole thing is larger than any slice so far:
+
+1. `STATIC_STR` alone — one intern per node, no side table, no contiguous run. Establishes the
+   drive-the-interner mechanism.
+2. `STRUCT` — adds `STRUCT_AUX` and the contiguous field-name run, which is where `intern_fresh`'s
+   contiguity requirement finally has a consumer.
+3. `ENUM` — adds `ENUM_AUX`, the discriminant, and the flag.
+
+**The linear dedup scan becomes a real problem here and should be measured, not assumed.** Slice 12
+scans a list of at most 256 names. This scans the `NAMES` region through `rec_u32`, once per
+interned name, inside the walk. It is still correct and still small at these sizes, but it is now
+nested inside another walk, and the reference's 782-second lesson was about exactly this shape.
+
 #### The flattener's composite path is unreachable from the corpus (measured 2026-08-10)
 
 Every constant in every stage is a **scalar**. Measured over all ten sources:
