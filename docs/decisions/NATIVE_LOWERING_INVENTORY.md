@@ -4171,3 +4171,61 @@ existing code emits.
 cost, not a lint to silence, so `opts` and `degenerate_yield` are bundled into a
 `BodyCfg` — they travel together, both decided by the caller, both constant for
 the body.
+
+## A gap in MY gate step, and a first look at the delegated case
+
+### `native_codegen` is covered by no documentation build at all
+
+I raised a worry that the doc comments added with the degenerate lowering might
+break `cargo doc -D warnings`. **The worry was misplaced, and what replaced it is
+worse.**
+
+`native_codegen/Cargo.toml` declares its own `[workspace]` and the parent's
+`members` list omits it, so `cargo doc --workspace --no-deps` never sees the
+package. The gate's step 13 runs `cargo fmt`, `cargo clippy` and `cargo test` —
+**and no `cargo doc`.** So a broken intra-doc link in this package is caught
+nowhere, by anything.
+
+That is the same shape of hole `CLAUDE.md` records as how V0.2.1 shipped with a
+red CI Doc job, and the comment immediately above the step in `release-gate.sh`
+even cites that history. The step is mine to edit by the mailbox convention, so
+the fix is mine. **Not applied while a gate is running against this branch**,
+because changing the gate step mid-run would make the result correspond to a
+script that no longer exists.
+
+### The delegated case may reduce to the degenerate one
+
+`codegen.kel` is the delegated stage: `loop main(resume) { emit_next(resume) }`
+with **no `Op::Yield`** of its own. Reading `emit_next` shows nine heads and
+**every one of them is a single `yield <call>`**:
+
+```
+yield emit_next(resume: Word) -> Word when st.started == 0 { yield seed_step() }
+yield emit_next(resume: Word) -> Word when st.sp > 0        { yield walk_step() }
+...
+```
+
+Tracing the values rather than assuming them. `Op::Yield` is pop-one push-one, so
+a head compiles to roughly `Call(f); Yield; Return`: it suspends with `f`'s
+result and, on resume, **returns the resume value**. `main` then discards that
+via its `PopN(1)` before `Reset`. So:
+
+- the sequence `main` yields **is** the sequence `emit_next` yields;
+- the resume value reaches `emit_next` as its parameter on the next iteration,
+  which is exactly what `emit_next(resume)` passes;
+- `emit_next`'s return value is discarded by the caller in this program.
+
+If a `Reentrant` chunk whose every head ends in a single top-level `yield` lowers
+to a function returning the **yielded** value, then `step(resume) =
+emit_next(resume)` and the delegated stage becomes degenerate over it.
+
+**This is a sketch from source, not a design.** Three things are unchecked and
+each could kill it. The heads compile to an `If` chain, so those yields are
+**nested at the op level** and the depth rule that admits the degenerate stream
+would reject them; the reduction needs a per-head rule instead. `emit_next`'s
+return value being discarded is true **in this program** and is not a property of
+the chunk, so a second caller that used it would break. And nothing here has been
+run.
+
+Recorded so the next increment starts from a traced hypothesis rather than from
+"delegated is hard", which is what the classification said and all it said.
