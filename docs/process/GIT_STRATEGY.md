@@ -87,7 +87,8 @@ Supported `<scope>` values (branch names and commit subjects alike): `feat` (new
   the no-ff merge rule: the branch stays linear *toward* its base and is merged *into* the base with a
   bubble. Rebasing rewrites the branch's own (possibly red) work-in-progress commits, which is fine
   because a nested branch is private until it merges.
-- A merge **proceeds once the local full gate (`scripts/release-gate.sh`) is green** — see
+- A merge **proceeds once CI is green on a draft pull request** from the feature branch to the
+  version branch (changed 2026-08-11; the local gate no longer gates a merge) — see
   [Definition of Green](#definition-of-green). The merging agent does not wait for CI to start the
   merge, but CI is binding afterward.
 - **Direct commits** to the version branch or `main` are limited to small green documentation or
@@ -158,11 +159,39 @@ Two authorities, with a defined relationship:
   self-host suite, the detached `compiler/` subproject, docs under `-D warnings`, clippy, fmt).
 - **Remote** — the continuous integration run passes.
 
-**A merge may proceed on a green local gate.** Continuous integration is the **binding authority**
-after the push: a red CI result on the version branch or `main` is remedied **immediately**, as the
-top priority for that branch, before further increments land. The local gate is the recommended
-mirror of CI so a break is caught locally in one pass rather than across several red CI jobs; CI is
-the final word.
+**CI GATES FEATURE BRANCHES. The local gate is for releases and offline work.** Changed
+2026-08-11, because **gate time is the project's bottleneck** and two sessions were serialising on
+one machine.
+
+Open a **draft pull request** from the feature branch to the version branch. `pull_request:
+branches: [main, 'v*']` triggers the full matrix, so the branch is verified on hosted runners.
+**Merge on CI green**, at the commit CI ran, without rebasing.
+
+| | local `release-gate.sh` | CI |
+|---|---|---|
+| wall clock | ~2h30m | **~48 min** (23 parallel jobs) |
+| contends for the shared machine | **yes, exclusively** | no |
+| two sessions at once | impossible | **yes** |
+| coverage | 12 steps | **all 12, plus 10 more** |
+
+**CI IS A VERIFIED STRICT SUPERSET, checked step by step rather than asserted.** Every local step has
+a CI job — including `keleusma-wire` in *both* configurations, which one job covers in two `run`
+lines. CI additionally runs Miri, two MSRV checks, `no_std`, the RTOS `thumbv8m` cross-build,
+`keleusma-bench`, the SDL3 examples, the LSP, the VS Code extension and the WASM playground, none of
+which the local gate touches. The local gate was always the weaker instrument; it was merely the
+nearer one.
+
+**The obvious objection inverts.** `perf_canary` on a shared runner is noisier than on a quiet
+desktop — but a CI false trip costs a 48-minute re-run that consumes **no local time at all**, while
+a local false trip burns 2h30m of the contended resource. The expensive failure is the local one.
+
+**What the local gate is still for**: a pre-publication run (with `--miri`), and working without a
+network. It remains the recommended mirror when you want one pass locally rather than several red CI
+jobs — but it is no longer what a merge waits on.
+
+**A red CI result on the version branch or `main` is still remedied immediately**, as the top
+priority for that branch, before further increments land. CI was always the final word; it is now
+also the first.
 
 ## Lifespan
 

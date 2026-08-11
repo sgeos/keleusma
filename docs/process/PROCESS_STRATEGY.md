@@ -121,6 +121,14 @@ commit**, with its own `CARGO_TARGET_DIR`. Two things improve at once:
   mechanism — the same mechanism-over-procedure argument made below about CI. The script
   re-checks that the tree is at the requested commit and refuses if it is dirty.
 
+**A WAITER MUST WATCH A CONDITION, NOT A FILE.** Twice now a gate has been abandoned mid-run and
+replaced by one on another commit. `gate-status.sh` reports that; a background waiter that resolved
+the newest log ONCE and pinned the path did not — it watched a dead file until its timeout killed
+it, reporting nothing. The display was fixed for this failure in the morning and the same bug
+survived in the instrument beside it, which is the more useful half of the lesson: **fixing a
+failure mode in one tool does not fix it in the tool that shares the assumption.** Wait on "no gate
+is running", re-evaluated each iteration, rather than "this log has a verdict".
+
 **THE SAME `pgrep` CALL IS RIGHT HERE AND FATAL IN `gate-status.sh`, AND THE DIFFERENCE IS WORTH
 STATING** so nobody "fixes" the working one. `gate-in-worktree.sh` refuses to start a second gate
 with `pgrep -f "release-gate.sh"`, which is the literal pattern `gate-status.sh` warns against in
