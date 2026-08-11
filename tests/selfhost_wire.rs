@@ -7398,3 +7398,374 @@ fn the_flattener_reports_input_it_will_not_flatten() {
         "an out-of-scope tag was not reported"
     );
 }
+
+// --- SLICE 13b-i: THE WALK DRIVES THE INTERNER -------------------------------
+//
+// The first place two computed values interact. `flatten` interns as it walks,
+// so the name sequence is a function of the BREADTH-FIRST order rather than of
+// the input order.
+//
+// THE VACUITY TRAP HERE IS THE SAME ONE SLICE 13 FELL INTO, and it is checked
+// rather than assumed. A single string inside a tuple is visited first under
+// BOTH walks, so it says nothing about interning order; two strings at different
+// depths are the smallest case that discriminates:
+//
+//   ((Text, Word), Text) = (("aaa", 1), "bbb")
+//     breadth-first  outer, inner, "bbb", "aaa", 1  ->  pool "bbbaaa"
+//     depth-first    outer, inner, "aaa", 1, "bbb"  ->  pool "aaabbb"
+//
+// `the_interning_order_genuinely_differs_between_walks` asserts the corpus can
+// tell those apart, so a flattener that interned in input order would fail here
+// rather than pass quietly.
+
+const CMD_FX_NAMES: i64 = 142;
+const CMD_FX_POOLLEN: i64 = 143;
+const CMD_FX_EMIT_CONSTS: i64 = 144;
+const CMD_FX_EMIT_NAMES: i64 = 145;
+const CMD_FX_EMIT_POOL: i64 = 146;
+
+/// Sources whose constant forests contain strings. Every one is a real compiled
+/// module, so the oracle stays `encode_aux_body`.
+const FX_CASES: &[(&str, &str)] = &[
+    // Control: no string at all, so the walk interns nothing and the result must
+    // match slice 13's.
+    ("no-strings", "fn main() -> Word { 42 }"),
+    // A string at ROOT position. Both walks agree here; it is a control, not a
+    // discriminator.
+    ("str-at-root", "fn main() -> Word { let s = \"hi\"; 42 }"),
+    // A string at a CHILD position, which is what makes the coupling reachable
+    // at all.
+    (
+        "str-in-tuple",
+        "const data k { t: (Text, Word) = (\"hi\", 1) }\nfn main() -> Word { k.t.1 }",
+    ),
+    // THE DISCRIMINATING CASE. Two strings at different depths.
+    (
+        "two-strings-depth-2",
+        "const data k { t: ((Text, Word), Text) = ((\"aaa\", 1), \"bbb\") }\n\
+         fn take(v: ((Text, Word), Text)) -> Word { 1 }\nfn main() -> Word { take(k.t) }",
+    ),
+];
+
+/// The preorder, six words per node, plus the per-node names in PREORDER order.
+///
+/// `names_first` is an ABSOLUTE index into `nin`, so it counts past the prefix
+/// the interner is seeded with. The names arrive in preorder while the walk
+/// consumes them breadth-first — which is the whole point, and why a
+/// `names_first` column exists rather than the walk taking the next name.
+fn preorder_13b(
+    roots: &[keleusma::bytecode::ConstValue],
+    prefix_len: usize,
+) -> (Vec<i64>, Vec<(String, i64)>) {
+    use keleusma::bytecode::ConstValue as K;
+    fn go(c: &K, fin: &mut Vec<i64>, names: &mut Vec<(String, i64)>, prefix_len: usize) {
+        let (tag, payload, children, names_first): (i64, i64, &[K], i64) = match c {
+            K::Unit => (1, 0, &[], 0),
+            K::Bool(b) => (2, i64::from(*b), &[], 0),
+            K::Int(v) => (3, *v, &[], 0),
+            K::Byte(v) => (4, i64::from(*v), &[], 0),
+            K::Fixed(v) => (5, *v, &[], 0),
+            K::None => (12, 0, &[], 0),
+            K::StaticStr(s) => {
+                let idx = (prefix_len + names.len()) as i64;
+                names.push((s.clone(), MODE_INTERN));
+                (7, 0, &[], idx)
+            }
+            K::Tuple(v) => (8, 0, v.as_slice(), 0),
+            K::Array(v) => (9, 0, v.as_slice(), 0),
+            other => panic!("outside slice 13b-i's scope: {other:?}"),
+        };
+        fin.push(tag);
+        fin.push(payload);
+        fin.push(children.len() as i64);
+        fin.push(names_first);
+        fin.push(0);
+        fin.push(0);
+        for ch in children {
+            go(ch, fin, names, prefix_len);
+        }
+    }
+    let (mut fin, mut names) = (Vec::new(), Vec::new());
+    for r in roots {
+        go(r, &mut fin, &mut names, prefix_len);
+    }
+    (fin, names)
+}
+
+/// The strings a walk would intern, in that walk's order.
+fn string_orders(roots: &[keleusma::bytecode::ConstValue]) -> (Vec<String>, Vec<String>) {
+    use keleusma::bytecode::ConstValue as K;
+    fn kids(c: &K) -> &[K] {
+        match c {
+            K::Tuple(v) | K::Array(v) => v.as_slice(),
+            _ => &[],
+        }
+    }
+    fn dfs(c: &K, out: &mut Vec<String>) {
+        if let K::StaticStr(s) = c {
+            out.push(s.clone());
+        }
+        for k in kids(c) {
+            dfs(k, out);
+        }
+    }
+    let mut depth_first = Vec::new();
+    for r in roots {
+        dfs(r, &mut depth_first);
+    }
+    let mut breadth_first = Vec::new();
+    let mut queue: Vec<&K> = roots.iter().collect();
+    let mut head = 0;
+    while head < queue.len() {
+        let n = queue[head];
+        head += 1;
+        if let K::StaticStr(s) = n {
+            breadth_first.push(s.clone());
+        }
+        queue.extend(kids(n).iter());
+    }
+    (breadth_first, depth_first)
+}
+
+/// One 13b call. Seeds both channels: the preorder rides `fin`, the interner's
+/// (length, mode) pairs ride `names`, the name bytes ride `pool`.
+struct FxInput {
+    fin: Vec<i64>,
+    nin: Vec<i64>,
+    bin: Vec<u8>,
+    args: [i64; 5],
+}
+
+fn fx_input(module: &keleusma::bytecode::Module) -> FxInput {
+    let prefix = interner_input(module);
+    let roots = const_roots_of(module);
+    let (fin, extra) = preorder_13b(&roots, prefix.len());
+    let mut all = prefix.clone();
+    all.extend(extra);
+    let (nin, bin) = interner_channels(&all);
+    let nnodes = fin.len() / 6;
+    FxInput {
+        fin,
+        nin,
+        bin,
+        args: [
+            all.len() as i64,
+            prefix.len() as i64,
+            roots.len() as i64,
+            nnodes as i64,
+            0,
+        ],
+    }
+}
+
+fn run_fx(vm: &mut Vm<'static, 'static>, cmd: i64, i: &FxInput) -> i64 {
+    run_call(
+        vm,
+        &Call {
+            cmd,
+            nregions: 0,
+            seed: &[],
+            regions: &[],
+            fields: &i.fin,
+            names: &i.nin,
+            pool: &i.bin,
+            args: i.args,
+            read_len: 0,
+        },
+    )
+    .expect("run")
+    .0
+}
+
+/// Must-fire, about the CORPUS: unless some case orders its strings differently
+/// under the two walks, a flattener that interned in input order would pass
+/// every test below.
+#[test]
+fn the_interning_order_genuinely_differs_between_walks() {
+    let mut disagreements = 0;
+    for (label, src) in FX_CASES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let roots = const_roots_of(&module);
+        let (bf, df) = string_orders(&roots);
+        assert_eq!(bf.len(), df.len(), "{label}: walks saw different string counts");
+        if bf != df {
+            disagreements += 1;
+        }
+    }
+    assert!(
+        disagreements >= 1,
+        "no case orders its strings differently under the two walks, so the \
+         coupling between the walk and the interner is not tested at all"
+    );
+}
+
+#[test]
+fn the_walk_interns_in_breadth_first_order() {
+    use keleusma::wire_schema::kind;
+    let mut vm = vm_for(WIRE_KEL);
+
+    for (label, src) in FX_CASES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        assert_no_other_contributors(label, &module);
+        let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+        let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+        let total = want.len();
+        assert!(total < CAPACITY, "{label}: artifact is {total} bytes");
+
+        let inp = fx_input(&module);
+        let (ref_names, ref_pool_len) = reference_names(&want);
+
+        let cnt = run_fx(&mut vm, CMD_FX_NAMES, &inp);
+        assert_eq!(
+            cnt,
+            ref_names.len() as i64,
+            "{label}: Keleusma emitted {cnt} names, the reference {}",
+            ref_names.len()
+        );
+        let plen = run_fx(&mut vm, CMD_FX_POOLLEN, &inp);
+        assert_eq!(
+            plen, ref_pool_len as i64,
+            "{label}: pool is {plen} bytes, the reference's {ref_pool_len}"
+        );
+
+        // Size the three computed regions from KELEUSMA's figures, so a wrong
+        // count moves every later region and the byte comparison fails loudly.
+        let mut specs = region_counts_for(&want);
+        let nconsts = view
+            .find_region(kind::CONSTS)
+            .and_then(|r| view.records(&r, 16).ok())
+            .map_or(0, |t| t.len());
+        for s in &mut specs {
+            if s.0 == kind::NAMES {
+                s.2 = cnt as usize;
+            }
+            if s.0 == kind::STRING_POOL {
+                s.2 = plen as usize;
+            }
+        }
+
+        let (_, mut art) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_BUILD_REGION_TABLE,
+                nregions: specs.len() as i64,
+                seed: &[],
+                regions: &specs,
+                fields: &[],
+                names: &[],
+                pool: &[],
+                args: [0, 0, 0, 0, 0],
+                read_len: total,
+            },
+        )
+        .expect("run");
+
+        for (k, _, _, _) in &specs {
+            let region = view.find_region(*k).expect("region");
+            let stored = view.region_bytes(&region).expect("payload");
+            if stored.is_empty() {
+                continue;
+            }
+            let (cmd, fields, names, pl, args) = if *k == kind::CONSTS {
+                assert_eq!(
+                    nconsts,
+                    inp.args[3] as usize,
+                    "{label}: model counts {} nodes, the reference emitted {nconsts}",
+                    inp.args[3]
+                );
+                (CMD_FX_EMIT_CONSTS, inp.fin.clone(), inp.nin.clone(), inp.bin.clone(), inp.args)
+            } else if *k == kind::NAMES {
+                (CMD_FX_EMIT_NAMES, inp.fin.clone(), inp.nin.clone(), inp.bin.clone(), inp.args)
+            } else if *k == kind::STRING_POOL {
+                (CMD_FX_EMIT_POOL, inp.fin.clone(), inp.nin.clone(), inp.bin.clone(), inp.args)
+            } else {
+                let is_pool = matches!(*k, kind::PARAM_TYPES | kind::DEBUG_POOL);
+                let rows = if is_pool { Vec::new() } else { rows_for_kind(&view, *k) };
+                let flat: Vec<i64> = rows.iter().flatten().copied().collect();
+                let n = if is_pool { stored.len() } else { rows.len() };
+                (
+                    CMD_EMIT_IN_REGION,
+                    flat,
+                    Vec::new(),
+                    stored.to_vec(),
+                    [i64::from(*k), n as i64, 0, 0, 0],
+                )
+            };
+            let (ret, next) = run_call(
+                &mut vm,
+                &Call {
+                    cmd,
+                    nregions: specs.len() as i64,
+                    seed: &art,
+                    regions: &specs,
+                    fields: &fields,
+                    names: &names,
+                    pool: &pl,
+                    args,
+                    read_len: total,
+                },
+            )
+            .expect("run");
+            assert!(ret >= 0, "{label}: region {k:#06x} refused with code {ret}");
+            art = next;
+        }
+
+        assert_eq!(art, want, "{label}: the artifact Keleusma built differs");
+    }
+}
+
+/// Command 141 must still REFUSE a `STATIC_STR`, because it never seeds the
+/// interner. Admitting it there would intern against an empty table and emit a
+/// record citing index 0 — a plausible wrong answer rather than a refusal.
+#[test]
+fn the_uninterning_flatten_command_still_refuses_a_string() {
+    let mut vm = vm_for(WIRE_KEL);
+    assert_eq!(
+        run_flatten(
+            &mut vm,
+            CMD_FLATTEN_EMIT_CONSTS,
+            &[7, 0, 0, 0, 0, 0],
+            [1, 1, 0, 0, 0]
+        ),
+        -245,
+        "command 141 accepted a STATIC_STR, which it cannot intern"
+    );
+}
+
+/// The 13b caps are reported rather than truncated.
+#[test]
+fn the_walk_reports_input_it_will_not_intern() {
+    // More names than `nin` can hold.
+    let mut vm = vm_for(WIRE_KEL);
+    let over: Vec<(String, i64)> = (0..257).map(|i| (format!("n{i}"), MODE_INTERN)).collect();
+    let (nin, bin) = interner_channels(&over);
+    let inp = FxInput {
+        fin: vec![3, 7, 0, 0, 0, 0],
+        nin,
+        bin,
+        args: [257, 257, 1, 1, 0],
+    };
+    assert_eq!(
+        run_fx(&mut vm, CMD_FX_NAMES, &inp),
+        -250,
+        "an oversized name count was not reported"
+    );
+
+    // A prefix longer than the name list.
+    let mut vm = vm_for(WIRE_KEL);
+    let one = vec![("main".to_string(), MODE_INTERN)];
+    let (nin, bin) = interner_channels(&one);
+    let inp = FxInput {
+        fin: vec![3, 7, 0, 0, 0, 0],
+        nin,
+        bin,
+        args: [1, 2, 1, 1, 0],
+    };
+    assert_eq!(
+        run_fx(&mut vm, CMD_FX_NAMES, &inp),
+        -251,
+        "a prefix longer than the name list was not reported"
+    );
+}
