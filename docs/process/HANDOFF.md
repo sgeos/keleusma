@@ -10,8 +10,8 @@ misleading a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`, or a feature branch cut from it.
-- **Parent commit**: `7fab0d3`
-- **Written**: 2026-08-10
+- **Parent commit**: `3166109c`
+- **Written**: 2026-08-11
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
 **Check both.** `git rev-parse --abbrev-ref HEAD` is `v0.2.3` or a branch off it, and
@@ -35,27 +35,52 @@ this file**.
 5. **Run `scripts/gate-status.sh`.** It answers "is a gate running, and where" in 0.23 s. Do not
    hand-roll a `pgrep` for it; see Gating.
 
-## FIRST ACTION: check the gate, then merge if it is green
+## FIRST ACTION: the machine is NOT yours — check before assuming it is
 
-**A gate was running on `9eb623d` when this was written** — `feat/selfhost-wire-debugpool`, one
-commit over `v0.2.3`, carrying slice 11.
+**Slice 11 is merged and pushed.** `9eb623d` gated GREEN (12 steps), was merged at that exact commit
+without rebasing, and `v0.2.3` is at **`3166109c`** with CI green on the previous merge.
 
-- **GREEN** → merge `9eb623d` into `v0.2.3` with `--no-ff`, **at the gated commit and without
-  rebasing**. Push, then confirm CI.
-- **RED or STALLED** → read the log the tool names before doing anything else.
+**The `v0.3.0` session then took the machine** for `native@37c95a19`, seconds after mine finished.
+Run `scripts/gate-status.sh` first. If their gate is still running:
 
-**CI was in progress on the merge `7fab0d3`.** Confirm it went green; a red CI is remedied at once.
+- **Do not start one.** `gate-in-worktree.sh` refuses a second gate machine-wide anyway, which is how
+  I found out — but knowing beforehand is cheaper.
+- **Do not run heavy builds either.** They spared my canary window twice and asked me to reciprocate.
+  Documentation, design and probe work that needs no `cargo` is fine; a full suite run is not.
+
+**When the machine frees**, gate `feat/selfhost-wire-driver` with `KEL_GATE_NAME=wire-corpus` and
+`KEL_GATE_TARGET=.gate-target-wire`, then merge it into `v0.2.3` with `--no-ff` **at the gated
+commit**. That branch already carries a sync merge of `v0.2.3`, so the gated tree is the real merged
+tree rather than an approximation of it.
 
 ## THE STATE
 
 | Ref | Commit | Status |
 |---|---|---|
-| `v0.2.3` | `7fab0d3` | pushed; slices 1–10 and the gate tooling merged |
-| `feat/selfhost-wire-debugpool` | `9eb623d` | pushed; slice 11; **gating when written** |
+| `v0.2.3` | `3166109c` | **pushed**; slices 1–11 and the gate tooling merged; CI green |
+| `feat/selfhost-wire-driver` | `05c7ec4d` | **local only**; slices 12–13, two plan corrections, a gate-tool fix; **gate owed** |
+| `v0.3.0` | — | holds the machine, gating `native@37c95a19` |
 
-Everything is on origin. Nothing is local-only.
+The driver branch is six commits over `v0.2.3` and includes a sync merge of it, so gating its tip
+gates the tree that will actually land.
 
-## WHAT IS DONE: the wire format is emittable end to end
+## WHAT CHANGED SINCE: the driver COMPUTES two of the three values it owed
+
+`tests/selfhost_wire.rs` is **125 tests**. Slice 12 computes `STRING_POOL`, `NAMES` and an
+input-to-index map from a (name, mode) sequence; slice 13 reorders a depth-first constant forest into
+the breadth-first `CONSTS` table. Both are byte-identical to `encode_aux_body` on real compiled
+modules. **Still not computed**: the (name, mode) sequence itself, which is a Rust model of the
+encoder's call order; `STATIC_STR`/`STRUCT`/`ENUM` constants, which intern as they walk; per-chunk
+ranges. **The dedup scan is linear**, the shape that cost the reference 782 seconds before it became
+a `BTreeMap` — it must be replaced before a real stage drives it.
+
+**The one idea to carry forward.** "The corpus cannot reach X" is a fact about the corpus; whether a
+source can reach X is a separate question. Asking it properly overturned two conclusions this
+project had committed to — the flattener does not need hand-built constant trees, and five of the six
+`DERIVE` rows in the coverage matrix are reachable. **The matrix still reads 14 REAL / 6 DERIVE**
+because upgrading a row means rewriting its emitter test; the achievable split is 19 / 1.
+
+## WHAT WAS DONE EARLIER: the wire format is emittable end to end
 
 `tests/selfhost_wire.rs` is **116 tests**. **All twenty region kinds have emitters**, and Keleusma
 builds a **complete 912-byte auxiliary body byte-identical to `encode_aux_body`**.
