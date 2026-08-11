@@ -857,6 +857,22 @@ path is already measured (`STRUCT_AUX` is 1 at depth 1 and 2 at depth 2).
 `n > bin_capacity()`. The bound is numerically right, since both buffers are 8192, but it names the
 wrong buffer — the kind of coincidence that stops being true the day one of them is resized.
 
+**A LATENT DEFECT IN 13b-i, FOUND BY READING IT BACK (2026-08-11).** The counting pass writes
+throwaway `CONSTS` records at `fx_scratch()` = 32768, and `fx_emit_names`/`fx_emit_pool` run it
+**while an artifact is already seeded in `wire.bytes`**. Nothing stopped those records landing inside
+a live artifact once one reached 32768 bytes.
+
+**It cannot fire on the current corpus**, whose artifacts run to about a kilobyte — which is the
+reason it needed a guard rather than a note. A hazard that the present tests cannot reach is one
+that ships. `wire.len` carries the seeded length, so the check costs one comparison and returns
+`-252`.
+
+That is the third defect this arc that reading found and a green suite could not: the unvalidated
+node count, a guard placed where its own test could not reach it, and now this. **The common shape
+is that all three are about inputs the corpus does not produce** — which is the same lesson as
+"real compiler output is a strong oracle for volume and a weak one for variety", arriving from the
+other direction.
+
 **Suggested decomposition**, smallest first, since the whole thing is larger than any slice so far:
 
 1. `STATIC_STR` alone — one intern per node, no side table, no contiguous run. Establishes the

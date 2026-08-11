@@ -2995,8 +2995,20 @@ fn fx_prep() -> Word {
 }
 
 // Validate, seed, and walk, writing `CONSTS` at `at`.
+//
+// THE SCRATCH PASS MUST NOT LAND INSIDE THE ARTIFACT. `fx_emit_names` and
+// `fx_emit_pool` run a counting walk at `fx_scratch()` while an artifact is
+// already seeded in `wire.bytes`, so its throwaway `CONSTS` records would
+// overwrite live bytes the moment an artifact reached 32768. Today's are about a
+// kilobyte, which is exactly why this needs a guard rather than an assumption:
+// a hazard that cannot fire on the current corpus is one that ships. `wire.len`
+// is the seeded length, so the check is available and cheap.
+//
+// Found by reading the code back, not by a failing test — the third defect this
+// arc that a green suite could not have surfaced.
 fn fx_run(at: Word) -> Word {
-    fl.rc = fx_prep();
+    fl.rc = if at == fx_scratch() andalso wire.len > fx_scratch() { 0 - 252 }
+            else { fx_prep() };
     if fl.rc < 0 { fl.rc } else { fl_walk(at, wire.warg3, wire.warg4) }
 }
 
