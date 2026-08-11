@@ -3314,6 +3314,202 @@ fn ck_emit() -> Word {
         emit_chunks_computed(region_base(dir_find(kind_chunks())), wire.warg) }
 }
 
+// ---------------------------------------------------------------------------
+// SLICE 15: the interning SEQUENCE, derived from a module description.
+// ---------------------------------------------------------------------------
+//
+// The fifth and last value the driver owed. Every slice before this consumed a
+// (name, mode) sequence that a Rust helper had already put into the encoder's
+// order; here Keleusma is handed the module's names GROUPED BY KIND and works
+// that order out itself.
+//
+// THE INPUT IS IN DECLARATION ORDER AND THE OUTPUT IS IN INTERNING ORDER, which
+// is the whole of the derivation and the reason a name's sequence position and
+// its pool offset come apart. `bin` holds every layout's names first -- type
+// name then its variants, per layout -- and the chunk names last. The encoder
+// interns the other way round: chunk names first, then each layout's type name
+// and variants. `nm_intern_at` reads a name's offset from `nout`, so this slice
+// writes those offsets directly rather than letting `nm_offsets` recompute them
+// as a prefix sum over `nin`, which assumes the two orders agree.
+//
+// IT IS A ROTATION, NOT A GENERAL PERMUTATION, and saying so is more useful than
+// letting the surrounding prose imply otherwise: interning position `m` is chunk
+// `m` while `m < nc`, and layout name `m - nc` after that. What it is not is the
+// IDENTITY, which is what a same-order input encoding would have reduced it to,
+// and that is the reason the input is grouped this way rather than pre-ordered.
+//
+// The MODE column is the other half and is the part with teeth. A layout's type
+// name dedups and its variants do not, so a port that used one mode throughout
+// produces a name count the reference does not -- pinned already by the
+// dedup-only and append-only must-fire tests, which this slice reuses.
+
+fn sq_max_layouts() -> Word { 64 }
+
+fn sq_max_chunks() -> Word { 128 }
+
+// Bounds the INNER loop of the build pass. A count above this would trap on
+// `for v in 0..count limit 64` rather than report, so it is validated in the
+// scan pass before any of it is used as a bound.
+fn sq_max_variants() -> Word { 64 }
+
+// `wire.fin` is 1024 words and a layout record is VARIABLE LENGTH, so the caps
+// above do not bound the input on their own: 64 layouts of 64 variants each
+// would want 4,224 words. The scan pass therefore checks the cursor against this
+// on every step rather than deriving safety from the caps.
+fn sq_fin_capacity() -> Word { 1024 }
+
+private data sq {
+    nl: Word,
+    nc: Word,
+    err: Word,
+    cur: Word,
+    lnames: Word,
+    boff: Word,
+    k: Word,
+    sink: Word,
+}
+
+// Validate the description and count the names the layouts contribute.
+//
+// A separate pass from the build because every bound the build uses is checked
+// here first. `for v in 0..n limit 64` TRAPS when the runtime range exceeds the
+// cap, so a malformed variant count has to be refused before it reaches a loop
+// header; a sticky flag set inside the build would be set too late to help.
+fn sq_scan() -> Word {
+    sq.cur = 2;
+    sq.lnames = 0;
+    sq.err = 0;
+    for j in 0..sq.nl limit 64 {
+        // Bounds-check the cursor BEFORE dereferencing it. The read below sits
+        // in the `else` arm so it is not evaluated when the guard has fired.
+        sq.err = if sq.cur + 1 >= sq_fin_capacity() { 0 - 272 } else { sq.err };
+        sq.err = if sq.err < 0 { sq.err } else {
+                 if wire.fin[sq.cur + 1] > sq_max_variants() { 0 - 273 } else { sq.err } };
+        sq.lnames = if sq.err < 0 { sq.lnames } else { sq.lnames + 1 + wire.fin[sq.cur + 1] };
+        sq.cur = if sq.err < 0 { sq.cur } else { sq.cur + 2 + wire.fin[sq.cur + 1] };
+    }
+    // The chunk-length block follows the layouts, so the cursor must still be
+    // addressable after every layout has been walked.
+    sq.err = if sq.cur + sq.nc > sq_fin_capacity() { 0 - 272 } else { sq.err };
+    if sq.err < 0 { sq.err } else { sq.lnames }
+}
+
+// Write one name's length, mode and pool offset at interning position `m`.
+//
+// The offset is the DECLARATION-order running total, which is why it is passed
+// rather than derived: the caller advances it in input order while writing to
+// output-order slots, and folding the two together is exactly the confusion this
+// slice exists to keep straight.
+fn sq_put(m: Word, len: Word, mode: Word) -> Word {
+    wire.nin[m * 2] = len;
+    wire.nin[(m * 2) + 1] = mode;
+    wire.nout[nm_off_base() + m] = sq.boff;
+    sq.boff = sq.boff + len;
+    sq.err = if len > nm_max_name() { 0 - 231 } else { sq.err };
+    m + 1
+}
+
+// Emit the sequence: layouts into the slots ABOVE the chunks, chunks below.
+//
+// The loops run in DECLARATION order so `sq.boff` accumulates correctly, while
+// each write lands at its INTERNING-order index. Writing the chunk block second
+// is therefore not a stylistic choice: its pool offsets start after every layout
+// name, and running it first would give every name the wrong offset while
+// leaving the lengths and modes right -- a failure that reads as corrupt pool
+// bytes rather than as a wrong count.
+fn sq_build() -> Word {
+    sq.boff = 0;
+    sq.cur = 2;
+    sq.k = 0;
+    for j in 0..sq.nl limit 64 {
+        sq.sink = sq_put(sq.nc + sq.k, wire.fin[sq.cur], 0);
+        sq.k = sq.k + 1;
+        for v in 0..wire.fin[sq.cur + 1] limit 64 {
+            sq.sink = sq_put(sq.nc + sq.k, wire.fin[sq.cur + 2 + v], 1);
+            sq.k = sq.k + 1;
+        }
+        sq.cur = sq.cur + 2 + wire.fin[sq.cur + 1];
+    }
+    for c in 0..sq.nc limit 128 {
+        sq.sink = sq_put(c, wire.fin[sq.cur + c], 0);
+    }
+    sq.nc + sq.k
+}
+
+// Intern the built sequence.
+//
+// A near-twin of `intern_run` with ONE difference that is the reason it is not
+// that function: it does not call `nm_offsets`. That helper recomputes every
+// offset as a prefix sum over `nin`, which is correct only while the input and
+// interning orders agree -- precisely the assumption this slice breaks. It also
+// carried the per-name length check, which `sq_put` now performs instead.
+fn sq_run(n: Word) -> Word {
+    nm.ocur = 0;
+    nm.cnt = 0;
+    nm.err = sq.err;
+    nm.err = if sq.boff > bin_capacity() { 0 - 232 } else { nm.err };
+    for j in 0..n limit 256 {
+        nm.sink = if nm.err < 0 { 0 } else { nm_intern_at(j) };
+    }
+    if nm.err < 0 { nm.err } else { nm.cnt }
+}
+
+// Read the counts, validate, build and intern. Every entry point runs the whole
+// thing because shared data is re-seeded on every call, so no state survives to
+// be reused.
+fn sq_names() -> Word {
+    if wire.fin[0] > sq_max_layouts() { 0 - 270 } else {
+    if wire.fin[1] > sq_max_chunks() { 0 - 271 } else {
+        sq.nl = wire.fin[0];
+        sq.nc = wire.fin[1];
+        sq.sink = sq_scan();
+        if sq.sink < 0 { sq.sink } else {
+        if sq.lnames + sq.nc > nm_max_names() { 0 - 274 } else {
+            sq.sink = sq_build();
+            sq_run(sq.sink) } } } }
+}
+
+fn sq_poollen() -> Word {
+    sq.sink = sq_names();
+    if sq.sink < 0 { sq.sink } else { nm.ocur }
+}
+
+fn sq_emit_names() -> Word {
+    sq.sink = sq_names();
+    if sq.sink < 0 { sq.sink } else {
+    if dir_find(kind_names()) < 0 { 0 - 275 } else {
+        emit_name_records_from_nout(region_base(dir_find(kind_names())), nm.cnt) } }
+}
+
+fn sq_emit_pool() -> Word {
+    sq.sink = sq_names();
+    if sq.sink < 0 { sq.sink } else {
+    if dir_find(kind_string_pool()) < 0 { 0 - 276 } else {
+        emit_pool_bytes_from_bout(region_base(dir_find(kind_string_pool())), nm.ocur) } }
+}
+
+// A SECOND driver chain rather than four more arms on the first, and the reason
+// is measured rather than stylistic.
+//
+// `MAX_PARSE_DEPTH` is 24 and it is a budget SHARED between a chain's position
+// and the nesting of whatever its arms call -- it is not an arm count. Measured
+// against this chain in the test harness, which is the binding context because
+// that is where this file is compiled: 20 arms with a no-argument body, 19 with
+// one like `emit_in_region(wire.warg, wire.warg2)`, 18 with a nested call.
+// `dispatch_driver` stands at 18, so four more arms would overrun it.
+//
+// Exceeding it in the harness is a STACK OVERFLOW and SIGABRT, not a parse
+// error: a 2 MB test thread blows before the depth guard can report. Through the
+// CLI the same source is rejected cleanly at 23 arms, so a chain sized from a CLI
+// reading runs two to three arms too generous.
+fn dispatch_driver2(cmd: Word) -> Word {
+    if cmd == 152 { sq_names() } else {
+    if cmd == 153 { sq_poollen() } else {
+    if cmd == 154 { sq_emit_names() } else {
+    if cmd == 155 { sq_emit_pool() } else {
+    0 - 98 }}}}
+}
+
 fn dispatch_driver(cmd: Word) -> Word {
     if cmd == 134 { build_region_table(wire.nregions) } else {
     if cmd == 135 { emit_in_region(wire.warg, wire.warg2) } else {
@@ -3341,7 +3537,7 @@ fn dispatch_driver(cmd: Word) -> Word {
 // UNREACHABLE and its own test fails immediately. The fall-through sweep reads
 // this value out of the source instead of restating a bound, which is what it
 // did for four consecutive slices — and got wrong once.
-fn highest_command() -> Word { 151 }
+fn highest_command() -> Word { 155 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {
@@ -3354,5 +3550,6 @@ fn main(cmd: Word) -> Word {
     if cmd < 103 { dispatch_pool(cmd) } else {
     if cmd > highest_command() { 0 - 99 } else {
     if cmd < 115 { dispatch_frame(cmd) } else {
-    if cmd < 134 { dispatch_emit(cmd) } else { dispatch_driver(cmd) } } } } } } } } } } }
+    if cmd < 134 { dispatch_emit(cmd) } else {
+    if cmd < 152 { dispatch_driver(cmd) } else { dispatch_driver2(cmd) } } } } } } } } } } } }
 }
