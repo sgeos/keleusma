@@ -378,6 +378,51 @@ ordering read out of `SchemaBuilder`. No Keleusma emitter has been run against a
 peak figure is a projection of the Rust encoder's structure onto a design that does not exist yet.
 Treat 77% as an estimate to be confirmed by the first driver, not as a measurement.
 
+#### THE 77% PROJECTION IS REFUTED, AND BY A FACTOR OF ABOUT FORTY (measured 2026-08-11)
+
+The caveat above asked for the projection to be confirmed. It does not survive, and the reason is
+not in the arithmetic: **it is that the arithmetic counted the accumulator's DATA BYTES and ignored
+what declaring those bytes in Keleusma costs.**
+
+Measured by growing `wire.kel`'s own `bout` array and re-encoding its auxiliary body:
+
+| `bout` | data slots | artifact | bytes of artifact per slot |
+|---|---|---|---|
+| 8,192 (today) | 91,181 | 3,712,800 | 40.7 |
+| 65,536 | 148,525 | 6,004,752 | 40.4 |
+| 262,144 | 345,133 | **14,031,216** | 40.7 |
+
+Two facts, both measured rather than reasoned:
+
+1. **A data slot per ARRAY ELEMENT.** The slot deltas are exact: `65,536 - 8,192 = 57,344` slots
+   added, and `1,000,000 - 8,192 = 991,808`. This is the per-element data-slot cost already held by
+   the operator, now with a number against it.
+2. **Roughly 40.7 bytes of artifact per slot**, stable to within 1% across a fourfold range. Each
+   element costs a slot record, a `SHARED_LAYOUT` record, an interned name and that name's pool
+   bytes — the three parallel tables plus their pool, exactly as the section above describes.
+
+**So a declared byte costs about forty bytes of artifact**, and the residency design fails by that
+factor rather than marginally. A 262,144-byte array already puts `wire.kel`'s own artifact at **84%
+of the 16,777,216-byte ceiling**. Extrapolating linearly — 28x beyond the measured range, so an
+estimate rather than a measurement — the `lexer` accumulator of 9,776,392 bytes would want on the
+order of **400 MB**, about 24x over the ceiling.
+
+**The practical budget, which is the actionable form.** At 40.7 bytes per slot the ceiling affords
+about **412,000 slots** in total, and `wire.kel` already spends 91,181. That leaves roughly
+**321,000 further array elements**, some 313 KB, across every buffer it might add. Batching buffers
+fit inside that comfortably; an accumulator does not fit inside it at all.
+
+**What this changes about the increment.** The accumulator cannot be a Keleusma-declared array, so
+"residency staging" is not a matter of sizing the arrays carefully — the mechanism has to keep the
+accumulator on the HOST side, where the shared-data buffer already lives as a borrowed `&mut [u8]`
+and costs no slots. Sizing it in the source is what costs. **Confirm this before building either
+half**, because the batching design and the staging design were recorded as one increment on the
+strength of the projection this refutes.
+
+**A second cost worth knowing before anyone waits on a build.** Compile time grows with the
+declaration at roughly **2.4 seconds per megabyte**: 1.30 s at 64 KB, 3.54 s at 1 MB, 17.24 s at
+6.6 MB. That is paid on every build and every test run, not once.
+
 ### Records per region, which sizes every remaining slice (measured 2026-08-09)
 
 The emitter receives a record's fields through `wire.fin`, a 1024-word batch buffer. Whether a slice
