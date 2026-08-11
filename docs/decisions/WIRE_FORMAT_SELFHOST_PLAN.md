@@ -776,6 +776,46 @@ qualifier that every individual slice had recorded correctly. **A table cannot d
 **DERIVE** means constructed values checked against `#[derive(WireRecord)]`'s `write_record` — the
 reverse. Both are legitimate; conflating them is not.
 
+> **REACHABILITY SWEEP, 2026-08-10: FIVE OF THE SIX DERIVE ROWS ARE UPGRADABLE.**
+>
+> Every DERIVE row was justified by "emitted empty by every stage". That is a fact about the corpus
+> and says nothing about whether a source can reach the kind. Having been wrong about exactly that
+> twice in one day, I asked it of all six rather than of the one in front of me.
+>
+> | Region kind | Reachable from source? | Smallest trigger found | Artifact |
+> |---|---|---|---|
+> | `STRUCT_AUX` | **YES** | `const data k { p: P = P { .. } }`, referenced | 1,072 B |
+> | `ENUM_AUX` | **YES** | `const data k { e: E = E::A(7) }`, referenced | 1,128 B |
+> | `NATIVES` | **YES** | `use beep` | 936 B |
+> | `NATIVE_RETURNS` | **YES** | `use beep` | 936 B |
+> | `PRIVATE_COMPOSITE` | **YES** | `private data d { p: P }`, written | 1,168 B |
+> | `STRUCT_TEMPLATES` | **NO, structurally, in this configuration** | — | — |
+>
+> **`STRUCT_TEMPLATES` is settled by construction rather than by sampling, which is why it is a
+> stronger statement than the other five.** The template is added only on the BOXED
+> struct-construction path (`compiler.rs:9479`), taken when `flat_alloc_bytes` returns `None`. That
+> has two routes and both are closed here:
+>
+> - **A non-flat type.** `flat_byte_size` (`value_layout.rs:493`) returns `None` in exactly one
+>   case: a `Text` field where `word_bytes` is below the host pointer width — a **narrow-word
+>   build**. `tests/selfhost_wire.rs` is gated out of every narrow-word configuration and `wire.kel`
+>   declares `require word >= 64`, so this cannot occur where the wire tests run. Unknown names are
+>   rejected by the type checker and generics are monomorphized away before codegen.
+> - **A flat size above the sixteen-bit operand**, i.e. a struct over 65,535 bytes. Constructed and
+>   **rejected by the typed operand-stack verifier**, so no module results.
+>
+> So `STRUCT_TEMPLATES` stays DERIVE for a stated structural reason, not for want of a corpus case.
+> That is a better justification than the one it had.
+>
+> **The matrix below still reads 14 REAL / 6 DERIVE, and that is deliberate.** Upgrading a row means
+> rewriting its emitter test to use these sources; none of that is done. The achievable split is
+> **19 REAL / 1 DERIVE**. Recording the opportunity and its size — not the upgrade.
+>
+> **Two incidental rejections worth not rediscovering.** A path-qualified `use audio::beep(Word) ->
+> Word` interns the name as `audio::beep`, so a bare `beep(1)` call fails with "undefined function".
+> And `private data d { xs: [Word; 3] }` produces **no** `PRIVATE_COMPOSITE` record: the table holds
+> composite slots, and an array of scalars is not one. An array of structs produces one per element.
+
 | Region kind | Slice | Oracle | Note |
 |---|---|---|---|
 | `HEADER` | 2 | REAL | first schema emitter |

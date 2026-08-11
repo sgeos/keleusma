@@ -13,6 +13,37 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**I ASKED THE REACHABILITY QUESTION OF ALL SIX ROWS INSTEAD OF THE ONE IN FRONT OF ME, AND MY OWN
+PROBE LIED TO ME FIRST (2026-08-10).** Having been wrong twice in one day about "the corpus cannot
+reach X" implying "no source can reach X", I swept every DERIVE row in the coverage matrix rather
+than waiting to trip over them one at a time. **Five of the six are reachable.** `STRUCT_AUX` and
+`ENUM_AUX` through `const data`, `NATIVES` and `NATIVE_RETURNS` through a bare `use beep`, and
+`PRIVATE_COMPOSITE` through a written private composite field — every trigger under 1.2 KB.
+
+**The probe's first run said NATIVES was unreachable, and it was my bug.** I read that region with
+stride 16; it is 8. A wrong stride makes `records()` fail, and my `map_or(0)` turned the failure
+into a count of zero — indistinguishable from a genuinely empty region. The all-zero baseline made
+it look consistent. **A probe that reports absence must distinguish "not there" from "I could not
+read it"**, so the rewrite reports region presence separately from record count and prints
+`STRIDE-ERR` rather than `0`. Same family as the gate-progress regexes: a convenience that quietly
+answers a different question. I had the correct stride table twenty lines away in the test file and
+assumed instead of reading it.
+
+**The sixth row is a stronger result than the other five, and it came from reading rather than
+probing.** `STRUCT_TEMPLATES` needs the boxed struct-construction path, which needs
+`flat_alloc_bytes` to return `None`. Two routes, both closed here: `flat_byte_size` returns `None`
+in exactly one case — a `Text` field under a narrow word — and this suite is gated out of every
+narrow-word configuration while `wire.kel` declares `require word >= 64`; the other route, a struct
+over 65,535 bytes, is **rejected by the typed operand-stack verifier**. So it stays DERIVE for a
+structural reason instead of for want of a corpus case, which is a better justification than the one
+it had. Nine source probes could not have established that; two greps did.
+
+**The matrix still reads 14 REAL / 6 DERIVE**, because upgrading a row means rewriting its emitter
+test and none of that is done. The achievable split is 19 / 1. Writing 19/1 now would be the same
+roll-up over-claim I corrected this morning, one day later.
+
+---
+
 **I OVERTURNED ONE OF MY OWN CONCLUSIONS BY ASKING THE QUESTION THE PREVIOUS SLICE TAUGHT ME
 (2026-08-10).** The plan document said the flattener "needs hand-built constant trees", on the
 strength of a real measurement: 2,192 constant nodes across the ten stages, zero composite, depth
