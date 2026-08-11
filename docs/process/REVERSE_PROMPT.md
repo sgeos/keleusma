@@ -10,92 +10,120 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-10 (session 40, continued)
+**Date**: 2026-08-11 (session 41)
 
 ## Where things stand
 
-**The driver has stopped copying and started computing.** Two of the three values it owed are done.
-
 | | |
 |---|---|
-| `v0.2.3` | slices 1–11 merged; two docs commits local |
-| `feat/selfhost-wire-driver` | slices 12–13 plus two plan corrections, **gate owed** |
-| Machine | free — `wire-corpus@9eb623d` went **GREEN**, 12 steps, 0 failures |
+| `v0.2.3` | `6d0a5339`, pushed, CI confirming |
+| PR #9 | **MERGED** at `ae01441f`, 22/22 green, merged at the commit CI ran |
+| PR #10 | `feat/selfhost-contributor-guard`, test-only, in flight |
+| Machine | idle throughout; every gate ran on hosted runners |
 
-`tests/selfhost_wire.rs` is **125 tests**. Keleusma now computes `STRING_POOL`, `NAMES` and an
-input-to-index map from a (name, mode) sequence, and reorders a depth-first constant forest into
-the breadth-first `CONSTS` table. Both are byte-identical to `encode_aux_body` on real compiled
-modules.
+`tests/selfhost_wire.rs` is **131 tests** on `v0.2.3` and **133** once PR #10 lands. The driver still
+computes four of the five values it owed; no `.kel` behaviour changed this session.
 
-### What is still NOT computed
+## A guard that documented a check it did not make
 
-- **The (name, mode) sequence** is a Rust model of the encoder's call order, restricted to chunk
-  names and enum layouts and guarded by `assert_no_other_contributors`. Generating it from the AST
-  is the driver's job and is not done.
-- **`STATIC_STR`, `STRUCT` and `ENUM` constants**, which intern as they walk and so couple the
-  flattener to the interner and the two side tables. That coupling is the next slice.
-- **Per-chunk ranges** — `consts_first/count`, `templates_first/count`, `param_types_first/count`.
-- **The dedup scan is LINEAR**, the shape that cost the reference 782 seconds on a mid-sized stage
-  before it became a `BTreeMap`. Correct at ten names; **it must be replaced before a real stage
-  drives it**, where the count reaches 395,804.
+`assert_no_other_contributors` claimed to refuse modules whose names come from "data slots, natives,
+struct templates or composite constants" and checked only the first three. Nothing hid it: no source
+in `INTERNER_CASES` reaches a named constant, so the missing clause had nothing to refuse. **That is
+a fact about the corpus, not about the guard** — the same distinction that overturned two plan
+conclusions yesterday, arriving from the opposite direction.
 
-## The thing I would most want a reader to take from this stretch
+The first fix was wrong and the failing test explained why. **Two models share that guard and only
+one needs the clause**: `fx_input` appends the constant walk's names to the `interner_input` prefix
+and so covers the class by construction. The comment described the union of what both models need
+while the code implemented the intersection. The clause now lives in its own
+`assert_constants_are_modelled` at the two `interner_input`-only sites.
 
-**"The corpus cannot reach X" is a fact about the corpus. Whether a source can reach X is a
-separate question, and it has to be asked separately.** I had written the second as though it
-followed from the first, in a plan document, on the strength of a sound measurement. Asking it
-properly overturned two conclusions in one day:
+**I overclaimed the consequence and a probe caught it.** From reading `encode_aux_body` I concluded
+constants intern BEFORE chunk names and therefore that an unmodelled constant shifts every index the
+model produces — a correctness hole. Dumping the reference's actual `NAMES` order refuted it:
+`["main", "hi"]`, `["main", "take", "P", "x", "y"]`. Chunk names come first, an unmodelled constant
+costs a **suffix**, and the failure is loud rather than silent. The clause buys a named diagnostic
+plus insurance if that ordering changes, which is a smaller claim than the one I began writing.
 
-- The flattener does **not** need hand-built constant trees. `const data`, referenced from a
-  function, emits real composite constants to depth 2 in about a kilobyte.
-- **Five of the six DERIVE rows** in the emitter coverage matrix are reachable from ordinary source.
-  The sixth, `STRUCT_TEMPLATES`, is settled by construction rather than sampling: its only non-flat
-  type is `Text` under a narrow word, and this suite is gated out of narrow-word builds.
+## A recorded fact was wrong in both of its particulars
 
-**The matrix still reads 14 REAL / 6 DERIVE**, because upgrading a row means rewriting its emitter
-test and none of that is done. The achievable split is 19 / 1.
+"A dispatch chain caps at NINETEEN arms, and exceeding it is a stack overflow, not a parse error."
 
-## Three defects I caught in my own work, since they generalise
+The cap is **not an arm count**. It is a **depth budget of 24 shared between chain position and
+arm-body nesting**, so each level an arm body nests costs one arm off the chain. Two earlier sessions
+recorded 19 and 23 for the same parser; both were right for their arm shape and neither generalises.
 
-- **A vacuity control caught that a passing test was four-fifths empty.** The flattener differential
-  went green while the assertion that its cases distinguish breadth-first from depth-first failed:
-  a composite in LAST position makes the two walks coincide, and four of five cases had that shape.
-  **A corpus-level control is a different instrument from a must-fire mutation** — the mutation asks
-  whether the check can report a defect, this asks whether the inputs can tell two answers apart.
-- **A rule can be correct and untestable.** I implemented the interner's last-match semantics with a
-  comment explaining it, then noticed it was invisible in both regions the slice emits. The fix cost
-  half the name cap. **Prefer a lower cap to an untestable rule.**
-- **A probe that reports absence must distinguish "not there" from "I could not read it."** Mine
-  read a region at stride 16 where the stride is 8; `records()` failed and `map_or(0)` reported an
-  empty region. The all-zero baseline made it look consistent.
+**The failure mode depends on execution context, and my first measurement used the wrong one:**
+
+| context | no-arg call body | nested-call body | failure |
+|---|---|---|---|
+| **test harness** (2 MB threads) | **20 arms** | **18 arms** | stack overflow, SIGABRT |
+| CLI (larger main stack) | 23 | 20 or fewer | clean `ParseError` naming the limit |
+
+The harness binds, because that is where `wire.kel` is compiled. `dispatch_driver` is at 18 arms, so
+headroom is **two arms or none** depending on what the arm calls — not the four the CLI figure
+suggests. **Do not size a chain from a CLI measurement.**
+
+## Concern raised, not acted on
+
+**`MAX_PARSE_DEPTH` does not do its stated job on a small stack, and this is a runtime concern rather
+than a workflow one.** The constant is 24 (`src/parser.rs:98`) and its message says deeply nested
+expressions are "rejected to prevent stack overflow". On a 2 MB thread the stack blows before the
+guard fires, so the process aborts with SIGABRT instead of returning a `ParseError`. The limit is
+evidently calibrated for a main thread's larger stack.
+
+An embedder that parses untrusted source on a small-stack thread therefore gets an **abort rather
+than a rejection**, which is an availability failure at the trust boundary the guard exists to hold.
+**Not changed unilaterally**: lowering the constant narrows the admitted language surface and one
+measurement is not grounds for that. Operator's call.
+
+## Two of my own errors this session, since both generalise
+
+- **An f-string collapsed `}}` into `}`**, silently dropping nine closing braces from a probe. I
+  caught it only because the probe's **unmodified baseline** also failed. A probe whose no-op case is
+  not asserted to be a no-op cannot distinguish a real finding from a broken harness.
+- **I made the exact naive-grep error the loop document warns about**, counting `Gap` inside a
+  comment that reads "This is a Gap by design" and nearly recording a false staleness. Excluding
+  comment lines gives **79 Ok / 4 Gap / 1 RefRejects, 84 cases** — the recorded figure is current.
+
+## Next intended step
+
+**Settle PR #10, then wire the driver to a MODULE rather than a Rust model** — the fifth and last
+owed value. The design is already in
+[`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md), including
+the minimal module's complete measured input surface and the arithmetic that closes at 912 bytes. It
+is gated on PR #10 only because that pull request owns `tests/selfhost_wire.rs`.
+
+The two traps recorded yesterday still stand: **do not** replace the linear dedup scan (batching
+first, index second), and **do not** compute the chunk record's name index (`map[j] == j` always, so
+it is untestable rather than easy).
 
 ## Open, held by the operator
 
 - **Publication remains HELD.** Nothing is published.
+- **`MAX_PARSE_DEPTH` on small stacks**, above.
 - **Per-element data slots.** One slot and one interned name per array element is why a 21 KB source
-  produces a 16 MB artifact, paid three times over in parallel tables plus the pool they index.
+  makes a 16 MB artifact, paid three times over in parallel tables plus the pool they index.
 - **The (72,64) SECDED plane is entirely unexercised** by the shipping encoder.
-- **Gate cost.** The clean figure is still unmeasured; earlier readings were taken under contention.
-- **MSRV 1.85 declared, never verified.**
+- **MSRV**: CI checks 1.85 for `keleusma-arena` and 1.88 for `keleusma`.
 
 ## Parallel development
 
-`v0.3.0` carries native code generation, gated `3d36feb` GREEN, and has adopted
-`scripts/gate-status.sh`. Their measurement that matters here: **ten of eleven stage modules refuse
-native lowering on `Stream`, not on composites**, so Order 1's native path is gated on
-sub-coroutines. Their caveat stands — `lower_module` refuses on the first unsupported opcode, so
-`Stream` is necessary, not provably sole. Their mailbox is
+`v0.3.0` carries native code generation on the same CI-gated workflow. Their measurement that matters
+here: **ten of eleven stage modules refuse native lowering on `Stream`, not on composites**, so Order
+1's native path is gated on sub-coroutines. Their caveat stands — `lower_module` refuses on the first
+unsupported opcode, so `Stream` is necessary, not provably sole. Their mailbox is
 `git show origin/v0.3.0:docs/process/handoffs/v0.3.0.md`; mine is
 [`handoffs/v0.2.3.md`](./handoffs/v0.2.3.md). Poll at increment boundaries — there is no wake.
 
-## Method rules this stretch paid for
+## Method rules this session paid for
 
-- **Ask the reachability question separately from the corpus question.**
-- **A green differential against a real oracle can still be weak evidence**, if the corpus cannot
-  distinguish the answers. Assert that it can.
-- **Order guards by what would otherwise TRAP.** `for k in 0..n limit 341` aborts the VM when the
-  range exceeds the cap, so a malformed count must be rejected before it is used as a bound; a
-  sticky flag would be set too late.
-- **Read the call graph before sampling more inputs.** Thirteen probes said composite constants were
-  unreachable; two greps found the path.
-- **Check `$?` explicitly; never read success off output.**
+- **Read a guard's implementation against its own doc comment.** One such reading found a claimed
+  check that did not exist.
+- **Measure before writing down a conclusion that upgrades a defect's severity.** The inference was
+  cheap and wrong; the probe was cheap and right.
+- **Assert that a probe's no-op case is a no-op**, or a broken harness reads as a finding.
+- **Measure in the context that binds.** A CLI figure and a test-harness figure differed by two to
+  three arms and by failure mode.
+- **Check `$?` explicitly; never read success off output.** Held this session, including on the
+  merge.
