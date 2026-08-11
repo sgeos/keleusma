@@ -6612,8 +6612,12 @@ fn interner_input(module: &keleusma::bytecode::Module) -> Vec<(String, i64)> {
     seq
 }
 
-/// Refuses a module whose names come from a contributor `interner_input` does
-/// not model. Without this the model could silently under-generate.
+/// Refuses a module whose names come from a contributor NEITHER model covers.
+///
+/// Shared by the `interner_input` and `fx_input` paths, so it carries only the
+/// classes both omit. Composite constants are NOT among them despite an earlier
+/// version of this comment saying so: `fx_input` models those, and the clause for
+/// the path that does not lives in `assert_constants_are_modelled`.
 fn assert_no_other_contributors(label: &str, module: &keleusma::bytecode::Module) {
     assert!(
         module.native_names.is_empty(),
@@ -6629,6 +6633,69 @@ fn assert_no_other_contributors(label: &str, module: &keleusma::bytecode::Module
             "{label}: struct templates intern names and the model does not cover them"
         );
     }
+}
+
+/// Refuses a module whose CONSTANTS intern names, which `interner_input` alone
+/// does not model.
+///
+/// SEPARATE FROM `assert_no_other_contributors` BECAUSE TWO MODELS SHARE THAT
+/// GUARD AND ONLY ONE NEEDS THIS. `fx_input` appends the constant walk's names to
+/// the `interner_input` prefix, so it covers this class by construction; applying
+/// the clause there rejects `FX_CASES`, whose whole purpose is to reach named
+/// constants. `interner_input` used on its own does not cover it.
+///
+/// The comment on `assert_no_other_contributors` listed composite constants among
+/// the classes it refuses while checking only natives, data layout and struct
+/// templates. That was invisible because no source in `INTERNER_CASES` reaches a
+/// named constant — a fact about the corpus, not about the guard.
+///
+/// **The failure this prevents is a confusing one rather than a silent one, and
+/// the distinction is worth stating precisely.** Measured, not inferred: the
+/// reference interns chunk names before constant names (`fn main` with a string
+/// literal yields `["main", "hi"]`), so an unmodelled constant costs the sequence
+/// a SUFFIX, not a prefix. No modelled name's index shifts. An unguarded source
+/// would therefore fail the count and pool-length assertions loudly rather than
+/// pass wrongly. The clause buys a named diagnostic at the point of the unmodelled
+/// input, and insurance should that ordering ever change.
+///
+/// The walk is a WORKLIST, not recursion, and it mirrors the encoder's own
+/// breadth-first queue (`wire_schema.rs:396-399`). A `Tuple` or `Array` interns
+/// nothing itself but may carry a `Struct` beneath it, so a check that inspected
+/// only the roots would pass on exactly the shape `const data` produces.
+fn assert_constants_are_modelled(label: &str, module: &keleusma::bytecode::Module) {
+    for c in &module.chunks {
+        assert!(
+            !constants_intern_names(&c.constants),
+            "{label}: a constant interns names and interner_input does not cover them"
+        );
+    }
+}
+
+/// Whether any constant in `roots` reaches a name-contributing node.
+fn constants_intern_names(roots: &[keleusma::bytecode::ConstValue]) -> bool {
+    use keleusma::bytecode::ConstValue;
+    let mut queue: Vec<&ConstValue> = roots.iter().collect();
+    while let Some(node) = queue.pop() {
+        match node {
+            // The three interning sites, at `wire_schema.rs` 388, 412 and 441.
+            ConstValue::StaticStr(_) | ConstValue::Struct { .. } | ConstValue::Enum { .. } => {
+                return true;
+            }
+            ConstValue::Tuple(items) | ConstValue::Array(items) => queue.extend(items.iter()),
+            // Scalars are named nowhere. Enumerated rather than defaulted, so a
+            // new name-bearing variant fails to compile here instead of silently
+            // reading as harmless.
+            ConstValue::Unit
+            | ConstValue::None
+            | ConstValue::Bool(_)
+            | ConstValue::Int(_)
+            | ConstValue::Byte(_)
+            | ConstValue::Fixed(_) => {}
+            #[cfg(feature = "floats")]
+            ConstValue::Float(_) => {}
+        }
+    }
+    false
 }
 
 /// The interner input, flattened into the two shared-data channels: `fin` takes
@@ -6726,6 +6793,7 @@ fn keleusma_computes_the_name_table_the_reference_interned() {
         let module =
             compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
         assert_no_other_contributors(label, &module);
+        assert_constants_are_modelled(label, &module);
         let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
         let (ref_names, ref_pool_len) = reference_names(&want);
 
@@ -6779,6 +6847,7 @@ fn the_computed_name_regions_are_byte_identical_in_a_complete_artifact() {
         let module =
             compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
         assert_no_other_contributors(label, &module);
+        assert_constants_are_modelled(label, &module);
         let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
         let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
         let total = want.len();
@@ -7805,6 +7874,87 @@ fn some_chunk_range_genuinely_starts_past_zero() {
         nonzero >= 1,
         "every chunk range starts at 0 across the whole corpus, so a driver \
          emitting a constant zero would satisfy the differential"
+    );
+}
+
+/// Must-fire: the contributor guard's constant clause rejects something real.
+///
+/// A guard whose triggering input no source can produce is untested by
+/// construction — it reads as coverage while asserting nothing. This clause was
+/// added after the doc comment on `assert_no_other_contributors` was found to
+/// claim a check it did not implement, so the first question owed is whether the
+/// implementation can fire at all.
+///
+/// The two corpora answer it in opposite directions, which is the point:
+/// `FX_CASES` exists precisely to reach named constants, and `INTERNER_CASES` is
+/// the corpus the Rust model actually serves. If the second ever trips the guard,
+/// the model has been under-generating for that source and its differential was
+/// comparing a short sequence against a full one.
+#[test]
+fn the_contributor_guard_fires_on_real_constants_and_spares_the_model_corpus() {
+    let mut fired = 0;
+    for (label, src) in FX_CASES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        if module
+            .chunks
+            .iter()
+            .any(|c| constants_intern_names(&c.constants))
+        {
+            fired += 1;
+        }
+        let _ = label;
+    }
+    assert!(
+        fired >= 1,
+        "no source in FX_CASES reaches a name-contributing constant, so the \
+         guard's constant clause cannot fire and asserts nothing"
+    );
+
+    for (label, src) in INTERNER_CASES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        for c in &module.chunks {
+            assert!(
+                !constants_intern_names(&c.constants),
+                "{label}: the model corpus reaches a named constant, so \
+                 interner_input has been under-generating for this source"
+            );
+        }
+    }
+}
+
+/// Must-fire: the guard's walk has to DESCEND, and a root-only check would miss.
+///
+/// `Tuple` and `Array` intern nothing themselves. A check that inspected only the
+/// root of each constant would therefore pass on `const data k { t: (Text, Word) }`
+/// — which is the shape `const data` actually produces — while the encoder
+/// interned a name from underneath it. This asserts the corpus contains at least
+/// one such case, so the worklist is load-bearing rather than defensive dressing.
+#[test]
+fn the_contributor_guard_needs_its_nested_walk() {
+    use keleusma::bytecode::ConstValue;
+    let mut nested_only = 0;
+    for (label, src) in FX_CASES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        for c in &module.chunks {
+            let root_only = c.constants.iter().any(|v| {
+                matches!(
+                    v,
+                    ConstValue::StaticStr(_) | ConstValue::Struct { .. } | ConstValue::Enum { .. }
+                )
+            });
+            if constants_intern_names(&c.constants) && !root_only {
+                nested_only += 1;
+            }
+        }
+        let _ = label;
+    }
+    assert!(
+        nested_only >= 1,
+        "every name-contributing constant in the corpus sits at a ROOT, so a \
+         root-only check would satisfy this guard and the nested walk is untested"
     );
 }
 
