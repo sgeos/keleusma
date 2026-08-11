@@ -853,9 +853,18 @@ settle and none has been:
 where `STRUCT_AUX` and the contiguous field-name run make the coupling observable regardless — that
 path is already measured (`STRUCT_AUX` is 1 at depth 1 and 2 at depth 2).
 
-**A smaller thing to fix on the next touch**: `emit_pool_bytes_from_bout` guards with
-`n > bin_capacity()`. The bound is numerically right, since both buffers are 8192, but it names the
-wrong buffer — the kind of coincidence that stops being true the day one of them is resized.
+~~**A smaller thing to fix on the next touch**: `emit_pool_bytes_from_bout` guards with
+`n > bin_capacity()`.~~ **DONE 2026-08-11.** `bout` has its own `bout_capacity()`, and the guard
+returns its own code `-255` rather than sharing slice 4's `-201` — two guards behind one code leave a
+caller unable to say which buffer overflowed, and these are reached from different directions.
+
+**Both guards are UNREACHABLE BY CONSTRUCTION and were kept anyway**, which is worth stating because
+it looks like dead code. `nm.ocur` is the sum of the EMITTED names' lengths, bounded by the sum of
+all input lengths, which `intern_run` already refuses above `bin_capacity()`. The guard exists so the
+emitter does not depend on a caller's invariant. It correspondingly has **no negative test**: nothing
+this corpus can build reaches it, and a test asserting an unreachable code would be theatre rather
+than evidence. That is the honest counterpart to the vacuity rule — a control that cannot fire is
+worthless, and so is a test written to make an unfirable control look covered.
 
 **A LATENT DEFECT IN 13b-i, FOUND BY READING IT BACK (2026-08-11).** The counting pass writes
 throwaway `CONSTS` records at `fx_scratch()` = 32768, and `fx_emit_names`/`fx_emit_pool` run it
