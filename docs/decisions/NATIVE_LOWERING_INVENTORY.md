@@ -4394,3 +4394,62 @@ path has its own tests in the same file.
 script. Both Rust artefacts are installed, run, and deleted from the directory.
 The count of prepared-but-unverified work is falling rather than rising, which was
 the concern recorded when the queue reached five.
+
+## THE NESTED CASE LOWERS: the depth rule was too narrow, not wrong
+
+`lexer.kel` now lowers. **Ten of eleven stages**, module-level coverage **34.5% →
+36.2%**, and only the delegated `codegen.kel` remains.
+
+### What the measurement showed
+
+```
+lexer.kel::main   Yields 19   under a Loop 0   inside If only 19
+                  nesting depths [2,3,4,4,3,3,4,4,4,6,7,7,6,7,8,9,10,11,11]
+```
+
+**Not one yield sits under a `Loop`.** That distinction is the whole result, and
+the word "nested" had been hiding it: a yield inside an `If` is a control-flow
+**join**, where every path still yields once and ends, while a yield under a
+`Loop` is a suspension across a **back edge** and needs a real frame. My
+classification collapsed both into "the general case".
+
+### The rule that replaced it
+
+The old condition was *exactly one `Yield` at nesting depth zero*. That was **too
+narrow rather than wrong**: it described the shape eight stages happen to have,
+not the property that makes the transformation sound. The property is
+
+> every `Yield` is in **tail position** — nothing but block delimiters and one
+> `PopN(1)` runs between it and `Reset` on any path.
+
+Each qualifying `Yield` becomes its own `ret`.
+
+**The walk follows jumps rather than scanning linearly**, and that is not a
+refinement. A linear scan is unusable here: the ops textually between a
+depth-eleven `Yield` and `Reset` include other branches' bodies, which are on
+different paths entirely. Following `Else` and `EndLoop` targets asks the question
+that matters. A backward or self-referential target refuses rather than looping.
+
+### A must-not-fire case that stopped firing, on purpose
+
+`if a > 0 { yield a } else { yield 0 }` was a **refusal** case under the depth
+rule. The new rule admits it, correctly, and its equivalence is now asserted
+instead by a test that drives both arms.
+
+The case was **moved, not deleted**. A must-not-fire case that stops firing
+because the rule changed is a decision, and deleting it silently would leave no
+record that the boundary moved deliberately rather than eroding.
+
+Two refusals were added in its place, both doing work *after* the suspension:
+the resumed value consumed, and an arithmetic operation on the yield's result.
+Without them the rule could be relaxed to "any nested yield" with nothing to
+catch it.
+
+### Equivalence, not just admission
+
+Lowering `lexer.kel` is not evidence that lowering it is correct. The
+transformation turns nineteen yields into nineteen separate returns, so the claim
+is that every path yields once and ends — and only a whole-sequence comparison
+checks that. Three nested cases now assert it, with **replies chosen to cross
+branches on successive iterations**, because a case that took one path every time
+would exercise one `ret` and prove nothing about the join.
