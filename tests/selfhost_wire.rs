@@ -6254,8 +6254,20 @@ fn rows_for_kind(view: &keleusma_wire::WireView<'_>, kind: u16) -> Vec<Vec<i64>>
     let Some(region) = view.find_region(kind) else {
         return Vec::new();
     };
+    // The eight-byte kinds were listed by name and three were missing, so
+    // `records()` errored on a stride of 16 and the caller silently emitted a
+    // region with ZERO rows — a wrong artifact rather than a refusal. Found by
+    // driving NATIVES from a real source for the first time.
     let stride = match kind {
-        w::kind::NAMES | w::kind::SHAPES => 8,
+        w::kind::NAMES
+        | w::kind::SHAPES
+        | w::kind::NATIVES
+        | w::kind::NATIVE_RETURNS
+        | w::kind::PRIVATE_COMPOSITE
+        | w::kind::DATA_SLOTS
+        | w::kind::SHARED_LAYOUT
+        | w::kind::DATA_INIT
+        | w::kind::STRUCT_AUX => 8,
         w::kind::CHUNKS => 48,
         w::kind::HEADER => 32,
         _ => 16,
@@ -6263,6 +6275,43 @@ fn rows_for_kind(view: &keleusma_wire::WireView<'_>, kind: u16) -> Vec<Vec<i64>>
     let Ok(t) = view.records(&region, stride) else {
         return Vec::new();
     };
+    // THREE KINDS ARE DECODED FROM RAW BYTES, mirroring their emitters' field
+    // order exactly rather than going through the derive. `DataSlotRecord` and
+    // friends carry trailing reserved bytes that the emitter writes as separate
+    // inputs, so a struct-shaped decode would return fewer fields than the
+    // emitter consumes and the region would come out short. Offsets are the
+    // ones the emitters use.
+    if matches!(
+        kind,
+        w::kind::DATA_SLOTS | w::kind::SHARED_LAYOUT | w::kind::STRUCT_AUX
+    ) {
+        let raw = view.region_bytes(&region).expect("payload");
+        let u32le = |b: &[u8], o: usize| -> i64 {
+            i64::from(u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]))
+        };
+        let mut out = Vec::new();
+        for c in raw.chunks_exact(8) {
+            out.push(match kind {
+                k if k == w::kind::DATA_SLOTS => {
+                    vec![
+                        u32le(c, 0),
+                        i64::from(c[4]),
+                        i64::from(c[5]),
+                        i64::from(c[6]),
+                    ]
+                }
+                k if k == w::kind::SHARED_LAYOUT => vec![
+                    u32le(c, 0),
+                    i64::from(c[4]),
+                    i64::from(c[5]),
+                    i64::from(u16::from_le_bytes([c[6], c[7]])),
+                ],
+                _ => vec![u32le(c, 0), u32le(c, 4)],
+            });
+        }
+        return out;
+    }
+
     // The kinds slice 7 already decodes, handled whole rather than per index.
     // The first version looped over them too and then discarded the result,
     // which clippy caught as dead code — correctly, since the loop body could
@@ -6318,6 +6367,22 @@ fn rows_for_kind(view: &keleusma_wire::WireView<'_>, kind: u16) -> Vec<Vec<i64>>
                     i64::from(h.private_data_bytes),
                     i64::from(h.schema_hash),
                     i64::from(h.reserved),
+                ]
+            }
+            k if k == w::kind::NATIVES => {
+                let r: w::NativeRecord = t.get_as(i).expect("rec");
+                vec![i64::from(r.name), i64::from(r.reserved)]
+            }
+            k if k == w::kind::NATIVE_RETURNS => {
+                let r: w::NativeReturnRecord = t.get_as(i).expect("rec");
+                vec![i64::from(r.shape), i64::from(r.reserved)]
+            }
+            k if k == w::kind::PRIVATE_COMPOSITE => {
+                let r: w::PrivateCompositeRecord = t.get_as(i).expect("rec");
+                vec![
+                    i64::from(r.slot),
+                    i64::from(r.reserved),
+                    i64::from(r.offset),
                 ]
             }
             other => panic!("rows_for_kind has no decoder for {other:#06x}"),
@@ -8006,5 +8071,154 @@ fn the_walk_reports_input_it_will_not_intern() {
         run_fx(&mut vm, CMD_FX_NAMES, &inp),
         -251,
         "a prefix longer than the name list was not reported"
+    );
+}
+
+// --- COVERAGE UPGRADE: three DERIVE rows driven by real compiler output ------
+//
+// `NATIVES`, `NATIVE_RETURNS` and `PRIVATE_COMPOSITE` were oracled against
+// `#[derive(WireRecord)]` with constructed values, on the stated grounds that
+// "the corpus emits them empty". That is a fact about the CORPUS and was taken
+// for a fact about the language — the same substitution that produced the
+// flattener error. All three are reachable from ordinary source, measured:
+//
+//   NATIVES, NATIVE_RETURNS   a bare `use beep`
+//   PRIVATE_COMPOSITE         `private data d { p: P }`, written
+//
+// This drives the existing slice-8 emitters from real modules instead. The
+// emitters are unchanged; only the oracle is stronger.
+
+/// Sources reaching a region the corpus never populates, with the region each
+/// one is here for. Every one is a real compiled module.
+const UPGRADE_CASES: &[(&str, u16, &str)] = &[
+    (
+        "native-bare-use",
+        keleusma::wire_schema::kind::NATIVES,
+        "use beep\nfn main() -> Word { 42 }",
+    ),
+    (
+        "native-with-signature",
+        keleusma::wire_schema::kind::NATIVE_RETURNS,
+        "use beep(Word) -> Word\nfn main() -> Word { beep(1) }",
+    ),
+    (
+        "private-struct-field",
+        keleusma::wire_schema::kind::PRIVATE_COMPOSITE,
+        "struct P { x: Word, y: Word }\nprivate data d { p: P }\n\
+         fn main() -> Word { d.p = P { x: 1, y: 2 }; d.p.x }",
+    ),
+    (
+        "private-array-of-struct",
+        keleusma::wire_schema::kind::PRIVATE_COMPOSITE,
+        "struct P { x: Word }\nprivate data d { ps: [P; 2] }\n\
+         fn main() -> Word { d.ps[0] = P { x: 1 }; d.ps[0].x }",
+    ),
+];
+
+#[test]
+fn three_derive_only_regions_are_driven_by_real_compiler_output() {
+    let mut vm = vm_for(WIRE_KEL);
+    let mut populated = 0;
+
+    for (label, want_kind, src) in UPGRADE_CASES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+        let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+
+        // The region this case exists for must actually carry records, or the
+        // case is decoration. The corpus-emits-it-empty claim is precisely what
+        // is being retired, so it is checked rather than trusted.
+        let region = view
+            .find_region(*want_kind)
+            .unwrap_or_else(|| panic!("{label}: region {want_kind:#06x} absent"));
+        let stored = view.region_bytes(&region).expect("payload");
+        assert!(
+            !stored.is_empty(),
+            "{label}: region {want_kind:#06x} is empty, so this case drives nothing"
+        );
+        populated += 1;
+
+        // Drive the whole artifact through the existing emitters. Nothing here
+        // is new Keleusma; the point is that these regions now carry real
+        // records while doing it.
+        let specs = region_counts_for(&want);
+        let total = want.len();
+        let (_, mut art) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_BUILD_REGION_TABLE,
+                nregions: specs.len() as i64,
+                seed: &[],
+                regions: &specs,
+                fields: &[],
+                names: &[],
+                pool: &[],
+                args: [0, 0, 0, 0, 0],
+                read_len: total,
+            },
+        )
+        .expect("run");
+
+        for (k, _, _, _) in &specs {
+            let r = view.find_region(*k).expect("region");
+            let bytes = view.region_bytes(&r).expect("payload");
+            if bytes.is_empty() {
+                continue;
+            }
+            let is_pool = matches!(
+                *k,
+                keleusma::wire_schema::kind::STRING_POOL
+                    | keleusma::wire_schema::kind::PARAM_TYPES
+                    | keleusma::wire_schema::kind::DEBUG_POOL
+            );
+            let rows = if is_pool {
+                Vec::new()
+            } else {
+                rows_for_kind(&view, *k)
+            };
+            let flat: Vec<i64> = rows.iter().flatten().copied().collect();
+            let n = if is_pool { bytes.len() } else { rows.len() };
+            let (ret, next) = run_call(
+                &mut vm,
+                &Call {
+                    cmd: CMD_EMIT_IN_REGION,
+                    nregions: specs.len() as i64,
+                    seed: &art,
+                    regions: &specs,
+                    fields: &flat,
+                    names: &[],
+                    pool: bytes,
+                    args: [i64::from(*k), n as i64, 0, 0, 0],
+                    read_len: total,
+                },
+            )
+            .expect("run");
+            assert!(ret >= 0, "{label}: region {k:#06x} refused with code {ret}");
+            art = next;
+        }
+
+        // Names the differing REGION rather than dumping two kilobyte arrays.
+        // Three separate stride and decoder defects were located this way in
+        // one sitting; a byte-array diff would have identified none of them.
+        if art != want {
+            for (k, _, _, _) in &specs {
+                let r = view.find_region(*k).expect("region");
+                let off = (r.word_offset as usize) * 8;
+                let len = (r.word_length as usize) * 8;
+                assert_eq!(
+                    art[off..off + len],
+                    want[off..off + len],
+                    "{label}: region {k:#06x} differs (offset {off}, len {len})"
+                );
+            }
+        }
+        assert_eq!(art, want, "{label}: the artifact Keleusma built differs");
+    }
+
+    assert_eq!(
+        populated,
+        UPGRADE_CASES.len(),
+        "some case failed to populate the region it exists for"
     );
 }
