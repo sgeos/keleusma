@@ -508,6 +508,22 @@ test emits a one-region artifact where HEADER sits at byte 96. In a real layout 
 `STRING_POOL` and the others, so `region_base` is in the millions and lands far outside the
 65,536-byte buffer.
 
+**MEASURED 2026-08-11, and the threshold is sharper than "a real layout": EVERY stage fails, the
+smallest one included.** Region byte offsets against `wire.bytes`, which is 65,536:
+
+| Stage | artifact | `CHUNKS` at | `STRING_POOL` at | `NAMES` at |
+|---|---|---|---|---|
+| `verify_datalayout` | 105,848 | 50,464 | 50,560 | **81,160** |
+| `verify_yield` | 303,464 | **143,096** | **143,480** | **239,832** |
+| `codegen` | 480,416 | **236,216** | **239,864** | **391,160** |
+
+`verify_datalayout` is the smallest of the ten and its `NAMES` region already starts 15,624 bytes
+past the end of the buffer. **Absolute positioning therefore works only for artifacts under 65,536
+bytes, which is no stage at all** — it holds for the constructed corpus and for nothing else. This is
+a hard prerequisite for driving any real stage, not an optimisation, and it is independent of
+batching: batching fixes how many records reach the emitter per call, and the window base fixes where
+they land.
+
 **The staged emitter must therefore take a WINDOW BASE rather than derive position from the
 directory.** The host emits a region's payload into a low window, appends it at the true offset, and
 patches the directory afterwards, which the residency section already established it can do. Slice 2
