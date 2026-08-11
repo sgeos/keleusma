@@ -56,22 +56,33 @@
 /// reads a stale value. The chunk's own op vector shows no sign of this, which is
 /// why a chunk-local predicate cannot see it.
 ///
-/// `always_yielding` is `keleusma::verify::compute_always_yielding(module)`, the
-/// same inter-procedural fixpoint the verifier uses to decide productivity.
-/// Reusing it rather than inventing a call-graph walk means the two agree by
-/// construction. It is a *sufficient* condition and not a necessary one: a callee
-/// that only sometimes yields is also unsafe here, so the check below refuses any
-/// `Call` whose target can yield at all, which is the conservative direction.
+/// # Why NO call-graph walk is needed, and no `compute_always_yielding`
+///
+/// The type checker's `category_can_call` enforces `Fn => matches!(callee, Fn)`:
+/// **an atomic total may call only atomic totals.** Its own comment gives the
+/// reason — it keeps a `fn` from transitively yielding through a `yield` callee,
+/// which the virtual machine would propagate as a suspension.
+///
+/// So the transitive closure of a `Func` chunk contains only `Func` chunks, and a
+/// stream chunk can delegate a suspension **if and only if it directly calls a
+/// non-`Func` chunk**. One direct check over the call sites is not a conservative
+/// approximation of the walk; it is exact.
+///
+/// That also removes a dependency that does not work. `compute_always_yielding`
+/// lives behind `#[cfg(feature = "verify")]`, and `native_codegen` depends on
+/// `keleusma` with `features = ["compile"]` only, so it is **not reachable** as
+/// the package is configured. It is additionally `#[doc(hidden)]` and documented
+/// as outside the stable API. An earlier draft of this predicate called it.
+///
+/// The condition is stated positively — every callee must be `Func` — because
+/// that is the property actually required, namely that no callee can suspend. A
+/// `Stream` callee is refused by the same clause without needing its own case.
 ///
 /// # Returns
 ///
 /// The index of the `Op::Yield` that becomes the return, or `None` with the
 /// chunk left for the general Workstream B case.
-fn degenerate_stream_yield(
-    chunk: &Chunk,
-    module: &Module,
-    always_yielding: &BTreeSet<usize>,
-) -> Option<usize> {
+fn degenerate_stream_yield(chunk: &Chunk, module: &Module) -> Option<usize> {
     if chunk.block_type != BlockType::Stream {
         return None;
     }
@@ -80,17 +91,15 @@ fn degenerate_stream_yield(
     // No delegated suspension. See the section above; this is the condition that
     // is invisible in the chunk and wrong in a way no local reading reveals.
     //
-    // Refuses a call to an always-yielding chunk AND to any `Reentrant` chunk,
-    // because a `yield fn` that suspends on only some paths is equally unsafe and
-    // is absent from the always-yielding set by that set's own definition.
+    // EVERY callee must be `Func`, which by `category_can_call` means it cannot
+    // suspend, directly or transitively. An unresolvable index is refused rather
+    // than skipped: a `None` from `chunks.get` means the module disagrees with
+    // the op stream, and admitting on missing evidence is the wrong default.
     for op in ops {
-        if let Op::Call(idx, _) = op {
-            let i = *idx as usize;
-            if always_yielding.contains(&i)
-                || module.chunks.get(i).map(|c| c.block_type) == Some(BlockType::Reentrant)
-            {
-                return None;
-            }
+        if let Op::Call(idx, _) = op
+            && module.chunks.get(*idx as usize).map(|c| c.block_type) != Some(BlockType::Func)
+        {
+            return None;
         }
     }
 
@@ -278,16 +287,16 @@ fn assert_refused(src: &str) {
 //  4. The emission is NOT in this file. Nothing here lowers anything, so
 //     installing the predicate alone changes no behaviour and the tests above
 //     will fail until the emitter consults it. Install both or neither.
-//  5. `keleusma::verify::compute_always_yielding` is `pub fn` in a public
-//     module and is expected to be reachable from the detached package. NOT
-//     confirmed by compiling. If it is not exported, the fallback is to refuse
-//     any `Op::Call` whose target is a `Reentrant` chunk plus any chunk
-//     transitively calling one, which is a strictly more conservative walk this
-//     file can compute itself.
-//  6. `Op::Call(idx, _)`'s first field is assumed to be the chunk index. It is
-//     matched that way in the shipped lowering's own `Op::Call` arm, so this
-//     should hold, but the arity of the tuple was read rather than the meaning
-//     of the field.
+//  5. RESOLVED, and the earlier draft was BROKEN. It called
+//     `keleusma::verify::compute_always_yielding`, which sits behind
+//     `#[cfg(feature = "verify")]` while this package depends on `keleusma` with
+//     `features = ["compile"]` only. It would not have compiled. The replacement
+//     needs no feature and no walk: `category_can_call` enforces that an atomic
+//     total may call only atomic totals, so requiring every callee to be `Func`
+//     is exact rather than conservative.
+//  6. RESOLVED by reading the declaration. `Op::Call(u16, u8)` is documented as
+//     "Call compiled function by chunk index with N arguments", and the shipped
+//     lowering resolves it as `callees.get(*idx as usize)`.
 //  7. The degenerate emission must keep `Op::Yield`'s TWO lowerings apart. In a
 //     `Reentrant` chunk it stays the `kel_yield` callback; in a degenerate
 //     `Stream` chunk it becomes `ret`. The op loop therefore needs the mode in

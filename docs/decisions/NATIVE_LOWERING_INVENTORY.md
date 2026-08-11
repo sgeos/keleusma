@@ -3852,3 +3852,60 @@ performance issue.
 This is now the second time the ephemeral region has been named as the thing that
 turns a no-op into work. It should be a precondition on composite lowering, not a
 note here.
+
+## `category_can_call` makes the delegation check EXACT, and kills a dependency that would not have compiled
+
+Two things came out of verifying the prepared artefact's recorded risks by
+reading, and neither was the outcome the risk list expected.
+
+### The dependency was broken, not merely unconfirmed
+
+The predicate called `keleusma::verify::compute_always_yielding`. That function
+sits behind `#[cfg(feature = "verify")]`, and `native_codegen/Cargo.toml` declares
+`keleusma = { path = "..", features = ["compile"] }` — **`verify` is not among
+them**. It would not have compiled. It is additionally `#[doc(hidden)]` and
+documented as outside the stable public interface, so even with the feature added
+it was the wrong thing to depend on.
+
+The risk list called this "expected to be reachable, NOT confirmed by compiling".
+The expectation was wrong, and it was wrong in a way that reading settles in about
+a minute. **A recorded risk is only worth what checking it costs**, and this one
+cost far less than the gate cycle that would otherwise have found it.
+
+### The replacement is exact rather than conservative
+
+`typecheck.rs`'s `category_can_call` enforces:
+
+```rust
+Loop  => true,
+Yield => !matches!(callee, Loop),
+Fn    => matches!(callee, Fn),
+```
+
+Its own comment states the purpose: keeping a `fn` from transitively yielding
+through a `yield` callee, which the virtual machine would propagate as a
+suspension. **So the transitive closure of a `Func` chunk contains only `Func`
+chunks.**
+
+A stream chunk therefore delegates a suspension **if and only if it directly calls
+a non-`Func` chunk**. Checking the direct call sites is not an approximation of a
+call-graph walk; it *is* the walk, collapsed by a language rule that already
+holds. The condition is stated positively — every callee must be `Func` — because
+the property required is that no callee can suspend, and a `Stream` callee falls
+out of the same clause without needing a case of its own.
+
+An unresolvable callee index refuses rather than skips. A `None` from
+`chunks.get` means the module disagrees with the op stream, and admitting on
+missing evidence is the wrong default in a soundness check.
+
+### What this pattern is
+
+The earlier version of this predicate was **unsound**, then **uncompilable**, and
+is now **exact and dependency-free**, across three increments, none of which ran
+anything. Each step came from reading a different file: the virtual machine's
+resume path, the crate's feature gates, the type checker's call discipline.
+
+The general lesson is narrower than "reading is good". It is that **a soundness
+condition expressed as an analysis is often a language rule in disguise**, and
+looking for the rule first is cheaper than importing the analysis. Here the rule
+was three lines and already enforced on every program that compiles.
