@@ -13,6 +13,56 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**A GUARD THAT DOCUMENTED A CHECK IT DID NOT MAKE, AND A PROBE THAT REFUTED MY OWN INFERENCE
+(2026-08-11).** Test-only; 131 to 133 tests. No `.kel` change, so it ran in parallel with an
+unmerged pull request that owns `wire.kel`.
+
+**Found by reading a doc comment against its implementation, which is a method worth keeping.**
+`assert_no_other_contributors` said it refused modules whose names come from "data slots, natives,
+struct templates or composite constants" and checked only the first three. Nothing hid it: no source
+in `INTERNER_CASES` reaches a named constant, so the missing clause had nothing to refuse. **That is
+a fact about the corpus, not about the guard** — the same distinction that overturned two plan
+conclusions the day before, arriving this time from the opposite direction. Previously the corpus
+understated what a *source* could reach; here it understated what a *guard* had to withstand.
+
+**Then the first fix was wrong, and the failing test explained why.** Adding the clause to the shared
+guard broke `the_walk_interns_in_breadth_first_order` on `str-at-root`. **Two models share that
+guard and only one needs the clause.** `fx_input` appends the constant walk's names to the
+`interner_input` prefix, so it covers the class by construction, and `FX_CASES` exists precisely to
+reach named constants. The comment had described the *union* of what the two models need while the
+code implemented the *intersection*. The clause moved to its own `assert_constants_are_modelled` at
+the two `interner_input`-only sites.
+
+**The part worth recording is that I overclaimed the consequence and a probe caught it.** Reading
+`encode_aux_body` alone, I concluded constants intern BEFORE chunk names — `add_constant_pool` runs
+for every chunk in a loop that precedes every `add_chunk` — and therefore that an unmodelled
+constant *prepends* to the sequence and shifts every index the model produces. That would have made
+the gap a correctness hole. **It is not.** Dumping the reference's actual `NAMES` order took one
+scratch test and four sources: `fn main` with a string literal yields `["main", "hi"]`, and the
+one-struct case yields `["main", "take", "P", "x", "y"]`. Chunk names come first. An unmodelled
+constant costs a **suffix**, no modelled index moves, and an unguarded source fails the count and
+pool-length assertions **loudly** rather than passing wrongly.
+
+So the clause buys a named diagnostic at the point of the unmodelled input, plus insurance if that
+ordering ever changes. **That is a smaller claim than the one I started writing**, and the comment
+now records the measured order rather than the inferred one. Reading the call site was not enough;
+`add_constant_pool` does not intern where a straight reading says it does. **When a conclusion
+upgrades a defect's severity, measure it before writing it down** — the inference was cheap and
+wrong, the probe was cheap and right.
+
+**The controls follow the standing rule that a guard whose triggering input the corpus cannot
+generate is untested by construction.** Two must-fire tests: one asserts the predicate fires on real
+compiled sources while sparing the model corpus, so it is not vacuous in either direction; the other
+asserts the corpus contains a case where a **root-only** check would not fire. That second one is
+what makes the nested walk load-bearing — `Tuple` and `Array` intern nothing themselves but carry a
+`Struct` beneath, which is exactly the shape `const data` produces, so a root-only check would have
+passed every test while missing the reachable case.
+
+**Enumerating the scalar variants rather than defaulting caught `ConstValue::None` at compile time**,
+a variant I had not seen. A wildcard arm would have read it as harmless and compiled.
+
+---
+
 **SLICE 13: THE FLATTENER'S BREADTH-FIRST REORDERING, AND A VACUITY CONTROL THAT EARNED ITS KEEP
 (2026-08-10).** The driver's second computed value. Command 141; 122 to 125 tests. The input is a
 DEPTH-FIRST preorder — three words per node, tag, payload, child count — because handing Keleusma a
