@@ -16,7 +16,7 @@ misleading a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`, or a feature branch cut from it.
-- **Parent commit**: `ef5a20b1`
+- **Parent commit**: `69c98b9d`
 - **Written**: 2026-08-11
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
@@ -38,18 +38,14 @@ this file**.
    (newest first), [`TASKLOG.md`](./TASKLOG.md).
 4. **Read [`AUTONOMOUS_IMPLEMENTATION_LOOP.md`](./AUTONOMOUS_IMPLEMENTATION_LOOP.md).**
 
-## FIRST ACTION: settle PR #10
+## FIRST ACTION: start the module-input increment
 
-**`gh pr checks 10`.** Pull request #10 — `feat/selfhost-contributor-guard`, head `3b93e351` — is
-test-and-docs only and was in flight when this was written. Local suite 133 passed, clippy clean.
+**Nothing is in flight.** PR #9 (`ae01441f`) and PR #10 (`3b93e351`) both merged on 22/22 CI green,
+each at the commit CI ran, and `v0.2.3` carries both. Confirm with `gh pr list --state open` and
+`gh run list --branch v0.2.3 --limit 1`; if that run is red, read its log before anything else.
 
-- **All pass** → merge `3b93e351` into `v0.2.3` with `--no-ff`, **at the commit CI ran and without
-  rebasing**. Push, then confirm CI on the merge.
-- **Any fail** → read that job's log first.
-
-**PR #9 is DONE** — merged 2026-08-11 at `ae01441f` on 22/22 green, and `v0.2.3` is at the merge
-commit `ef5a20b1`. Do not re-merge it; the previous version of this file named it as the first
-action and that instruction is spent.
+Then go to **THE NEXT INCREMENT** below. Do not re-merge either pull request; earlier versions of
+this file named each as the first action and both instructions are spent.
 
 ## THE WORKFLOW CHANGED TODAY. CI GATES FEATURE BRANCHES.
 
@@ -82,17 +78,16 @@ three PRs (#2, #3, #6).
 
 | Ref | Commit | Status |
 |---|---|---|
-| `v0.2.3` | `ef5a20b1` | PR #9 merged in, pushed, CI confirming |
-| PR #9 | `ae01441f` | **MERGED** 2026-08-11, 22/22 green, merged at the commit CI ran |
-| PR #10 | `3b93e351` | contributor-guard split, test-only, in flight |
+| `v0.2.3` | `69c98b9d` | both PRs merged in, pushed |
+| PR #9 | `ae01441f` | **MERGED** 2026-08-11, 22/22 green, at the commit CI ran |
+| PR #10 | `3b93e351` | **MERGED** 2026-08-11, 22/22 green, at the commit CI ran |
 | `v0.3.0` | — | same workflow; their last local gate is STALLED and irrelevant |
 
-Six PRs merged on this line today, every one CI-gated, **with the local machine idle throughout**.
+Eight PRs merged on this line today, every one CI-gated, **with the local machine idle throughout**.
 
 ## WHERE THE DRIVER IS
 
-`tests/selfhost_wire.rs` is **131 tests** on `v0.2.3`, **133** once PR #10 lands. Keleusma computes
-**four of the five** values the driver
+`tests/selfhost_wire.rs` is **133 tests**. Keleusma computes **four of the five** values the driver
 owed: the name table with both interning modes, the breadth-first constant ordering, the names
 interned **during** the walk for all three interning tags with `STRUCT_AUX` and `ENUM_AUX` alongside,
 and the per-chunk ranges.
@@ -107,7 +102,9 @@ narrow-word builds.
 **Do this: wire the driver to a MODULE rather than to a Rust model.** The interning SEQUENCE — chunk
 names, then enum-layout names, then the constant tree's — is still produced by Rust functions in the
 test file (`interner_input`, `preorder_13b`, `chunk_inputs`), guarded by
-`assert_no_other_contributors` so it cannot silently under-generate. The order is measured and
+`assert_no_other_contributors` **and** `assert_constants_are_modelled` so it cannot silently
+under-generate. Those are two guards, not one, and the split is load-bearing: `fx_input` covers named
+constants by construction and the second guard must not be applied to it. The order is measured and
 recorded; what is absent is a Keleusma-side producer.
 
 It is a **different kind of work** from every slice so far: the module itself must reach Keleusma,
@@ -165,7 +162,9 @@ guards are unreachable and deliberately untested; that is recorded at the code.
   sessions recorded 19 and 23 and both were right for their shape. In the TEST HARNESS, which is the
   binding context because that is where `wire.kel` is compiled, `dispatch_driver` holds **20 arms**
   with a no-argument call body and **18** with a nested-call body. It is at 18 today: two arms of
-  headroom, or none, depending on what the arm calls.
+  headroom, or none, depending on what the arm calls. All three figures measured against the real
+  chain, not a synthetic one: 20 / 19 / 18 arms for a no-argument body, `emit_in_region(a, b)`, and a
+  nested-call body respectively.
 - **The failure mode differs by context, and the test harness gets the worse one.** A 2 MB test
   thread overflows its stack and SIGABRTs before `MAX_PARSE_DEPTH` (`src/parser.rs:98`) can report;
   the CLI, on the main thread's larger stack, rejects the same source cleanly at 23 arms with a

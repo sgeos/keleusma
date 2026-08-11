@@ -13,6 +13,56 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE DISPATCH-CHAIN CAP IS A SHARED DEPTH BUDGET, AND THE FAILURE MODE DEPENDS ON WHICH STACK YOU
+ARE ON (2026-08-11).** No code change; a measurement that corrects a fact this file records three
+times and that would otherwise have mis-shaped the next increment.
+
+**The recorded claim was "a dispatch chain caps at NINETEEN arms, and exceeding it is a stack
+overflow, not a parse error."** An earlier entry had recorded 24, been contradicted at nineteen, and
+concluded the ceiling was nineteen "because each arm nests more than one expression level". That
+sentence contains the right explanation and the wrong conclusion.
+
+**There is no arm count.** `MAX_PARSE_DEPTH` is 24 (`src/parser.rs:98`) and it is a budget shared
+between the chain's position and the nesting of whatever the arm calls. Measured against the real
+`dispatch_driver` rather than a synthetic chain, in the test harness:
+
+| arm body | arms `dispatch_driver` holds |
+|---|---|
+| `ck_emit()` — no argument | 20 |
+| `emit_in_region(wire.warg, wire.warg2)` | 19 |
+| `emit_chunks_computed(region_base(dir_find(kind_chunks())), wire.warg)` | 18 |
+
+So the earlier figures of 19 and 23 were both right for their arm shape and neither generalised.
+`dispatch_driver` stands at 18: **two arms of headroom, or none, depending on what the arm calls.**
+
+**The failure mode is context-dependent, and I measured the wrong context first.** Through the CLI
+every overflow is a clean `ParseError` naming the limit, at 23 arms for the shallow body. Through the
+test harness the same source aborts with SIGABRT. The difference is stack size — a 2 MB test thread
+blows before the depth guard can fire, a main thread does not. **The harness is the binding context**
+because that is where `wire.kel` is compiled, so a chain sized from a CLI reading runs two to three
+arms too generous. My first report of this session said four arms of headroom on exactly that error.
+
+**That difference is also a finding about the runtime rather than about my workflow, and it is
+flagged for the operator rather than fixed.** The guard's own message says deep nesting is "rejected
+to prevent stack overflow". On a small-stack thread it is not — the stack goes first and the process
+aborts instead of returning an error. An embedder parsing untrusted source on such a thread gets an
+availability failure at precisely the trust boundary the guard exists to hold. Lowering the constant
+narrows the admitted language surface, so it is not a change to make on one measurement.
+
+**Two errors of my own on the way here, both of which generalise.**
+
+- **A Python f-string collapsed `}}` into `}`**, silently dropping nine closing braces from the probe
+  source. The only reason I caught it is that the probe's `extra = 0` case — which must be
+  byte-identical to the tracked file — failed too. **A probe whose no-op case is not asserted to be a
+  no-op cannot tell a real finding from a broken harness**, and the first run of this one produced
+  six confident, entirely fictitious rows.
+- **I made the exact naive-grep error `AUTONOMOUS_IMPLEMENTATION_LOOP.md` warns about**, counting a
+  `Gap` inside the comment that reads "This is a Gap by design" and nearly recording a fourth
+  staleness of the construct-support boundary. Excluding comment lines gives **79 Ok / 4 Gap / 1
+  RefRejects, 84 cases**, matching the record exactly. The document's warning caught its reader.
+
+---
+
 **A GUARD THAT DOCUMENTED A CHECK IT DID NOT MAKE, AND A PROBE THAT REFUTED MY OWN INFERENCE
 (2026-08-11).** Test-only; 131 to 133 tests. No `.kel` change, so it ran in parallel with an
 unmerged pull request that owns `wire.kel`.
