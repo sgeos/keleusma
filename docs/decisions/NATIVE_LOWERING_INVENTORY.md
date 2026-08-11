@@ -4453,3 +4453,60 @@ is that every path yields once and ends — and only a whole-sequence comparison
 checks that. Three nested cases now assert it, with **replies chosen to cross
 branches on successive iterations**, because a case that took one path every time
 would exercise one `ret` and prove nothing about the join.
+
+## THE TWO ABIs ARE SEMANTIC, NOT A WART — and that kills the tidy unification
+
+I proposed resolving an apparent design wart: degenerate stream chunks yield by
+**returning**, while `Reentrant` chunks yield through the **`kel_yield`
+callback**, and two ABIs for one language construct looked like something to fix.
+The plan was to make a `Reentrant` chunk whose every `Yield` is immediately
+followed by `Return` return-based too. The corpus measurement encouraged it:
+`emit_next` is **9 of 9** in exactly that shape.
+
+**The unification is wrong, and the reason is not subtle once traced.**
+
+`yield main(a: Word) -> Word { yield a }` compiles to `GetLocal(0); Yield;
+Return`. On the virtual machine it produces **two distinct observable events**:
+
+1. `Yielded(a)` — the suspension, carrying the yielded value;
+2. `Finished(r)` — the completion, carrying the **resume** value, because `yield a`
+   is the tail expression and `Return` returns what `Yield` pushed.
+
+A return-based lowering has **one** return slot and must choose. Returning the
+yielded value loses the completion; returning the completion loses the yield.
+Neither is equivalent, and no per-chunk shape rule rescues it, because the loss is
+in the calling convention rather than the chunk.
+
+### Why the stream case is genuinely different
+
+A `Stream` chunk **never returns**. `Reset` rewinds and hands control back, so
+there is no completion event to collide with the suspension, and one slot carries
+the only observable there is. That is what makes the degenerate form sound — and
+it is a property of productive divergence, not a trick.
+
+**So the split is not an accident to be cleaned up. It tracks the difference
+between a construct that terminates and one that does not.** Recorded because the
+"wart" reading is the natural one and would have produced a confident, wrong
+increment; I was one step from implementing it.
+
+### What this leaves for `codegen.kel`
+
+The delegated stage must therefore keep the callback for `emit_next`, and its
+`main` cannot use the return-based form either, since its yielded values arrive
+through the callback rather than through any return it makes.
+
+That is implementable — `Stream` and `Reset` become no-ops, the body calls
+`emit_next`, suspensions go through `kel_yield`, and the host regains control each
+iteration, so the divergent-spin objection in the refusal comment does not apply.
+But it means **the host sees two different stream protocols**: values by return
+for a degenerate chunk, values by callback for a delegated one.
+
+**That is a genuine ABI decision and it belongs to Workstream D, not to me
+unilaterally.** The options are to expose both and have the artefact declare which
+per entry point, or to make every stream chunk callback-based for uniformity at
+the cost of the degenerate form's no-callback property. I have not chosen, and
+the last stage is not worth buying with an ABI decided by accident.
+
+**Ten of eleven stages lower.** The eleventh is blocked on a decision rather than
+on an implementation, which is a materially different kind of blocked and worth
+saying plainly.
