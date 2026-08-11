@@ -4334,3 +4334,63 @@ The honest use of this measurement is the reverse: it says the *general* corouti
 lowering can be **deferred** with a known and small cost today, not that it can be
 skipped. Two chunks are behind it, and the moment a user writes a third the
 deferral stops being free. That is a scheduling fact, not a design one.
+
+## BOTH REMAINING ARTEFACTS ARE SPENT: R4.4 closed, and the lowering survives O2
+
+### R4.4 is closed, and the answer is the good one
+
+```
+llvm.coro.id.retcon        found: yes  overloaded: false  declarable: TRUE
+llvm.coro.id.retcon.once   found: yes  overloaded: false  declarable: TRUE
+```
+
+The architecture's one item left at medium confidence — whether inkwell exposes
+the returned-continuation family with a usable wrapper — is settled. **Both are
+declarable through inkwell alone**, so the `llvm-sys` escape hatch R4.4
+anticipates is not needed and the `coro_intrinsics.rs` contingency can be dropped
+from the plan. It compiled and ran first try, which is worth noting against the
+`pending/README.md` warning to expect otherwise.
+
+### The lowering survives `default<O2>`, the shipped configuration
+
+Every other case in `differential.rs` runs the JIT at `OptimizationLevel::None`,
+which the architecture explicitly excludes from scope. The O2 arm closes that: it
+runs the real middle end, re-verifies the module afterwards, and compares against
+the virtual machine. **All 38 pass**, including the branch, the checked triple,
+wrapping corners, the unrepresentable-quotient guard, and two cross-function
+cases that O2 inlines.
+
+That matters beyond tidiness. The vacuous control this branch already paid for was
+vacuous *because* of the O0 path: an uninitialised `alloca` read zero by accident.
+At O2, LLVM propagates `undef` and deletes branches on it, so the same defect
+produces wrong control flow rather than a lucky right answer.
+
+### BOTH FAILURES ON FIRST RUN WERE THE TEST, NOT THE LOWERING
+
+The O2 arm failed twice, and neither failure was a miscompilation. Both were the
+same mistake in different places, and both **looked exactly like the defect the
+test was written to find.**
+
+`native_result` and `native_result_o2` as first written lower `m.chunks[0]`. That
+is valid only for a single-chunk program — and two of the six O2 cases are
+deliberately cross-function, so that O2 has something to inline. With a helper
+present, **chunk 0 is the helper.** The harness lowered `helper`, called it with
+`main`'s arguments, and compared against `main`'s result:
+
+- `40` against `10`, which is `helper(9)` against `helper(9) * 4`;
+- `43` against `42`, which is `helper(41)` against `helper(41) + 1`.
+
+Read cold, both are exactly what an O2 miscompilation would look like.
+
+The fix was `lower_module` plus resolving the entry by name. The O0 **pre-check**
+was then removed rather than repaired: it called the single-chunk-only harness on
+multi-chunk cases, and **a pre-check that cannot express the cases it guards is
+worse than none, because its failure points away from the real cause.** The O0
+path has its own tests in the same file.
+
+### What the ledger says now
+
+`native_codegen/pending/` is down to **one** artefact, the workstream relabelling
+script. Both Rust artefacts are installed, run, and deleted from the directory.
+The count of prepared-but-unverified work is falling rather than rising, which was
+the concern recorded when the queue reached five.
