@@ -423,6 +423,46 @@ strength of the projection this refutes.
 declaration at roughly **2.4 seconds per megabyte**: 1.30 s at 64 KB, 3.54 s at 1 MB, 17.24 s at
 6.6 MB. That is paid on every build and every test run, not once.
 
+#### THE CONSEQUENCE IS FAR MILDER THAN THE REFUTATION SUGGESTS: SEVEN OF TEN STAGES FIT
+
+The paragraphs above are about `lexer`, which is the outlier the earlier measurement already flagged
+as "the only stage where this is tight, and it is tight by a wide margin". Reasoning from `lexer` to
+the programme was about to produce a much more pessimistic conclusion than the evidence supports, so
+the accumulator was measured for every stage rather than inferred from the largest one.
+
+`STRING_POOL` plus `NAMES` per stage, against the ~321,000-slot budget. Two columns because the slot
+cost depends on how the accumulator is DECLARED: a pool of bytes costs one slot per byte, while the
+name table declared as `[Word; N]` costs one slot per word and carries eight bytes in it. The truth
+for a real emitter is the word model for `NAMES` and the byte model for the pool, which is the
+second column.
+
+| Stage | pool | names | byte model | word model | fits |
+|---|---|---|---|---|---|
+| `verify_datalayout` | 30,600 | 24,688 | 0.17x | 0.11x | yes |
+| `verify_yield` | 96,352 | 63,632 | 0.50x | 0.35x | yes |
+| `verify_depth` | 121,616 | 75,920 | 0.62x | 0.44x | yes |
+| `reconstruct` | 129,560 | 75,568 | 0.64x | 0.46x | yes |
+| `codegen` | 151,296 | 89,256 | 0.75x | 0.54x | yes |
+| `verify_structural` | 201,616 | 135,416 | 1.05x | 0.73x | yes |
+| `analyze` | 274,088 | 161,176 | 1.36x | **0.98x** | marginal |
+| `verify_typed` | 861,800 | 468,808 | 4.14x | 3.05x | **no** |
+| `parse` | 1,071,928 | 464,424 | 4.79x | 3.70x | **no** |
+| `lexer` | 6,609,960 | 3,166,432 | ~30x | ~22x | **no** |
+
+**So the emitter is viable for most of the pipeline today and blocked on three stages.** Six fit
+with room, `analyze` fits with 2% to spare and should be treated as not fitting, and `verify_typed`,
+`parse` and `lexer` need either the per-element slot representation fixed or a host-side accumulator.
+
+**What this does and does not change.** The refutation above stands: a declared byte costs about
+forty bytes of artifact, and the 77% projection was wrong. What it does not support is the stronger
+claim that the self-hosted emitter is unreachable — that reads across from `lexer` to everything,
+and seven of ten stages say otherwise. **`lexer` is 4.3x the next largest stage**, so it is the
+wrong stage to generalise from in either direction.
+
+**Both figures are budgets against `wire.kel`'s OWN artifact ceiling**, not against runtime memory.
+They say how much array `wire.kel` may declare before its own auxiliary body exceeds 16 MB. Runtime
+residency is a separate question and is not what the 40.7 bytes per slot measures.
+
 ### Records per region, which sizes every remaining slice (measured 2026-08-09)
 
 The emitter receives a record's fields through `wire.fin`, a 1024-word batch buffer. Whether a slice
