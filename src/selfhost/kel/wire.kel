@@ -2461,9 +2461,22 @@ fn nm_max_name() -> Word { 256 }
 // fail. Halving the cap to make a rule testable is the right trade.
 fn nm_max_names() -> Word { 256 }
 
-// Where the input-to-index map starts in `wire.fin`. Output record pairs occupy
+// Where the input-to-index map starts in `wire.nout`. Output record pairs occupy
 // `[0, 2 * cnt)` and `cnt <= n <= 256`, so they never reach here.
 fn nm_map_base() -> Word { 512 }
+
+// Where each INPUT name's byte offset into `bin` lives, one word per name.
+//
+// Slice 12 never materialised these: it walked `nin` in order with a running
+// cursor, so an offset was always the cursor's current value. Slice 13b interns
+// during a breadth-first walk, in an order that is not the input order, so an
+// arbitrary name's offset has to be recoverable on demand. A prefix sum over
+// `nin` computed once is cheaper than widening `nin` to (offset, length, mode)
+// triples, which would change every test that feeds the interner.
+//
+// `[768, 1024)` is exactly the 256-name cap, and the three regions of `nout`
+// — pairs, map, offsets — tile it without overlap.
+fn nm_off_base() -> Word { 768 }
 
 // Whether two names in `wire.bin` hold the same bytes.
 //
@@ -2516,25 +2529,49 @@ fn nm_append(ioff: Word, ilen: Word) -> Word {
 // `wire.bin` holds the names concatenated in order.
 // Output, in place: `wire.fin[2i]` and `wire.fin[2i+1]` are emitted name `i`'s
 // pool offset and length, and `wire.bin[0..nm.ocur]` is the pool.
-fn intern_run(n: Word) -> Word {
+// Byte offsets for every input name, plus the per-name length check.
+//
+// The length check rides along because both want one pass and because a length
+// too large to compare must be rejected BEFORE it is used as a loop bound.
+fn nm_offsets(n: Word) -> Word {
     nm.icur = 0;
+    for m in 0..n limit 256 {
+        wire.nout[nm_off_base() + m] = nm.icur;
+        nm.icur = nm.icur + wire.nin[m * 2];
+        nm.err = if wire.nin[m * 2] > nm_max_name() { 0 - 231 } else { nm.err };
+    }
+    nm.icur
+}
+
+// Intern the single input name `m`, appending to whatever state already exists.
+//
+// THE ONE INTERNING PRIMITIVE, and that is the point of this shape. `intern_run`
+// calls it for `0..n` in order; slice 13b's walk calls it for whichever name the
+// breadth-first order reaches next. One implementation means the sequential path
+// and the out-of-order path cannot drift, and it is why the pool needed its own
+// output buffer: the two orders would otherwise alias.
+//
+// Returns the `NAMES` index this input resolved to.
+fn nm_intern_at(m: Word) -> Word {
+    nm.ioff = wire.nout[nm_off_base() + m];
+    nm.found = if wire.nin[(m * 2) + 1] == 0 {
+                   nm_find(nm.ioff, wire.nin[m * 2], nm.cnt)
+               } else { 0 - 1 };
+    // Written BEFORE the count moves: a name about to be appended takes the
+    // index `nm.cnt` currently holds.
+    wire.nout[nm_map_base() + m] = if nm.found < 0 { nm.cnt } else { nm.found };
+    nm.cnt = if nm.found < 0 { nm_append(nm.ioff, wire.nin[m * 2]) } else { nm.cnt };
+    wire.nout[nm_map_base() + m]
+}
+
+fn intern_run(n: Word) -> Word {
     nm.ocur = 0;
     nm.cnt = 0;
     nm.err = 0;
-    for j in 0..n limit 512 {
-        nm.ioff = nm.icur;
-        nm.icur = nm.icur + wire.nin[j * 2];
-        nm.err = if wire.nin[j * 2] > nm_max_name() { 0 - 231 } else {
-                 if nm.icur > bin_capacity() { 0 - 232 } else { nm.err } };
-        nm.found = if nm.err < 0 { 0 } else {
-                   if wire.nin[(j * 2) + 1] == 0 {
-                       nm_find(nm.ioff, wire.nin[j * 2], nm.cnt)
-                   } else { 0 - 1 } };
-        // Written BEFORE the count moves: a name that is about to be appended
-        // takes the index `nm.cnt` currently holds.
-        wire.nout[nm_map_base() + j] = if nm.found < 0 { nm.cnt } else { nm.found };
-        nm.cnt = if nm.err < 0 { nm.cnt } else {
-                 if nm.found < 0 { nm_append(nm.ioff, wire.nin[j * 2]) } else { nm.cnt } };
+    nm.sink = nm_offsets(n);
+    nm.err = if nm.icur > bin_capacity() { 0 - 232 } else { nm.err };
+    for j in 0..n limit 256 {
+        nm.sink = if nm.err < 0 { 0 } else { nm_intern_at(j) };
     }
     if nm.err < 0 { nm.err } else { nm.cnt }
 }
