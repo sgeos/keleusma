@@ -55,6 +55,17 @@ declare -a seen_names=()
 # has no history. Parallel indexed arrays rather than one associative array,
 # because macOS ships bash 3.2 and `declare -A` is a bash 4 feature.
 declare -a prev_steps=()
+# Parallel again: the predecessor's commit, and whether it reached a verdict.
+# A run with no verdict line was ABANDONED — replaced by a newer run on another
+# commit rather than finished — and the newest-per-name rule below would
+# otherwise erase every trace of it.
+declare -a prev_commit=()
+declare -a prev_done=()
+# Whether the IMMEDIATE predecessor has been captured yet. Separate from
+# `prev_steps`, which deliberately skips incomplete runs — see below.
+declare -a prev_seen=()
+# Where the immediate predecessor stopped, when it was abandoned.
+declare -a prev_abandoned_at=()
 rows=()
 
 while IFS= read -r log; do
@@ -82,13 +93,33 @@ while IFS= read -r log; do
   idx=-1 i=0
   for n in ${seen_names[@]+"${seen_names[@]}"}; do [ "$n" = "$name" ] && idx=$i; i=$((i+1)); done
   if [ "$idx" -ge 0 ]; then
-    if [ "${prev_steps[$idx]}" -eq 0 ] 2>/dev/null; then
+    finished=0
+    grep -aqE 'release gate: (GREEN|RED)' "$log" 2>/dev/null && finished=1
+    # THE EXPECTED STEP COUNT MUST COME FROM A COMPLETED RUN. An abandoned one
+    # stopped wherever it stopped, so taking its count would scale every later
+    # bar to that number — a gate killed during step 3 would peg the bar at 3.
+    # Keep looking down the list until a finished run turns up. Caught the
+    # moment the abandoned-run report below was added: it printed "ABANDONED at
+    # step 13" and the same 13 was silently feeding `bar_for`.
+    if [ "${prev_steps[$idx]}" -eq 0 ] 2>/dev/null && [ "$finished" -eq 1 ]; then
       prev_steps[$idx]=$(grep -aoE '=== [^=]+ ===' "$log" 2>/dev/null | grep -avc 'release gate:')
+    fi
+    # The abandoned report is about the IMMEDIATE predecessor only, so it is
+    # captured once and not overwritten by older runs.
+    if [ "${prev_seen[$idx]}" -eq 0 ] 2>/dev/null; then
+      prev_seen[$idx]=1
+      prev_commit[$idx]=$commit
+      prev_done[$idx]=$finished
+      [ "$finished" -eq 0 ] && prev_abandoned_at[$idx]=$(grep -aoE '=== [^=]+ ===' "$log" 2>/dev/null | grep -avc 'release gate:')
     fi
     continue
   fi
   seen_names+=("$name")
   prev_steps+=(0)
+  prev_commit+=("")
+  prev_done+=(1)
+  prev_seen+=(0)
+  prev_abandoned_at+=(0)
 
   mtime=$(stat -f %m "$log" 2>/dev/null || stat -c %Y "$log" 2>/dev/null) || continue
   age=$(( now - mtime ))
@@ -242,4 +273,16 @@ for r in "${rows[@]}"; do
   printf '%-14s %-8s %-8s %-16s steps=%-3s failures=%-3s last write %s ago\n' \
     "$name" "$commit" "$state" "$(bar_for "$steps" "$state" 10 "$expected")" "$steps" "$fails" "$(fmt_age "$age")"
   [ -n "$step" ] && printf '    step: %s\n' "$step"
+  # AN ABANDONED PREDECESSOR IS NEWS, and without this line it is invisible.
+  # The newest-per-name rule exists so a gate shows one row, but it also erases
+  # a run that was replaced mid-flight. That cost real time: a run stopped at
+  # step 12 with no verdict, vanished from this display the moment its
+  # replacement started, and I read "not running" as "finished" — armed a waiter
+  # on a verdict that could never arrive, and ran a test suite into the new
+  # run's reopened canary window. Neither mistake was possible to notice from
+  # the output above.
+  if [ "${prev_done[$idx]:-1}" -eq 0 ]; then
+    printf '    previous: %s ABANDONED at step %s (no verdict) — a wait on it will never end\n' \
+      "${prev_commit[$idx]}" "${prev_abandoned_at[$idx]}"
+  fi
 done
