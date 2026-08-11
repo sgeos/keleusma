@@ -3793,3 +3793,62 @@ the `kel_yield` callback in a `Reentrant` chunk, and a `ret` in a degenerate
 `Stream` chunk. A single shared match arm would silently pick one of them. The op
 loop needs the mode in scope, and this is noted in the artefact's risk list rather
 than left for the emitter to discover.
+
+## VERIFIED: the data segment already survives across `step`, and the ABI mirrors `resume_with_shared`
+
+The degenerate design carried one interaction as explicitly unverified: whether
+the data segment persists across native iterations the way it persists across the
+virtual machine's `Reset`. It does, and the reason is structural rather than
+lucky.
+
+### Both regions are trailing FUNCTION PARAMETERS
+
+When the module declares data, `lower_chunk` appends two pointer parameters after
+the chunk's declared ones, and reads them at entry as
+`func.get_nth_param(param_count)` and `param_count + 1`. The regions are
+**host-owned**; the lowered function receives pointers to them on every call and
+allocates nothing.
+
+So the degenerate stream form's signature falls out of existing code with no
+change at all:
+
+```
+kel_chunk_N_step(resume: i64, shared: ptr, private: ptr) -> i64
+```
+
+Persistence is therefore **automatic**. The host holds the allocation across
+calls, and nothing in the native form resets it, because there is nothing to
+reset. `reconstruct.kel`, which writes data-block fields before its single yield,
+works for this reason: the writes land in the host's private buffer and the next
+`step` reads them back.
+
+### The correspondence with the runtime is exact, which is the real result
+
+| Virtual machine | Native degenerate form |
+|---|---|
+| `resume_with_shared(shared, input)` | `step(resume, shared, private)` |
+| host lends the shared buffer per resume, VM retains no reference across the yield | host passes the pointer per call, function returns |
+| private composite data lives in the arena's PERSISTENT region and survives `Reset` | private region is a host-owned buffer, untouched by the call |
+| `Reset` reclaims the EPHEMERAL region only | no native analogue exists yet |
+
+**The ABI was not designed to match; it already matched.** The shared-pointer
+parameter was added for ordinary `fn` chunks long before the stream work, and it
+happens to give a per-call lending discipline identical to the one
+`resume_with_shared` documents. That is the strongest evidence so far that the
+degenerate form is the right shape rather than a convenient one, because it was
+not arranged.
+
+### The one row that is a gap rather than a match
+
+The ephemeral region has no native analogue. That is currently harmless and the
+reason is worth stating so it is not mistaken for a resolved question: a body
+allocating ephemeral composites would need composite lowering, which **does not
+exist**, so such a chunk is refused before the question arises. The moment
+composites land, `Reset`'s reclamation of the ephemeral region becomes real work
+at exactly this boundary, and a degenerate `step` that allocates without
+reclaiming leaks once per iteration — a worst-case-memory unsoundness, not a
+performance issue.
+
+This is now the second time the ephemeral region has been named as the thing that
+turns a no-op into work. It should be a precondition on composite lowering, not a
+note here.
