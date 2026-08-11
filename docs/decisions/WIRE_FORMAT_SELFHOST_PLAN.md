@@ -694,8 +694,56 @@ flattener from one that appends the roots and stops.** The forward-ordering inva
 numbering after the roots, and the `STRUCT_AUX` and `ENUM_AUX` side tables are all unexercised —
 which also explains why those two regions measured empty in every stage.
 
-The flattener therefore needs hand-built constant trees, oracled against `encode_aux_body` on a
-constructed module, exactly as the slice-8 record kinds were oracled against the derive.
+~~The flattener therefore needs hand-built constant trees, oracled against `encode_aux_body` on a
+constructed module, exactly as the slice-8 record kinds were oracled against the derive.~~
+
+**THAT CONCLUSION WAS WRONG, AND IT WAS MY OWN. Corrected 2026-08-10.** The measurement above is
+sound — the corpus really does contain 2,192 scalar nodes and no composite. The inference from it
+was not: "the corpus cannot reach this" does not establish "no source can reach this", and I wrote
+the second as though it followed from the first.
+
+**Ordinary source reaches the composite path through `const data`.** There are three data
+visibilities, not two. `shared` fields admit no initializer at all and `private` fields admit only
+scalar ones (`compiler.rs:3199-3211`), which is what thirteen probes of tuple, array, struct,
+nested-struct and enum-payload literals all ran into. **`const data` is the third**, and it is the
+only caller of `const_value_from_literal_for_field` with no scalar guard. Referenced from a function
+so the value reaches a chunk's pool rather than the compiler's `const_fields` map, it produces real
+composite constants:
+
+| source | artifact | `CONSTS` | `STRUCT_AUX` | `ENUM_AUX` | depth |
+|---|---|---|---|---|---|
+| `(Word, Word)` | 944 | 3 | 0 | 0 | 1 |
+| `[Word; 3]` | 976 | 5 | 0 | 0 | 1 |
+| `struct P { x, y }` | 1,072 | 3 | **1** | 0 | 1 |
+| `struct P { q: Q, y }` | 1,112 | 4 | **2** | 0 | **2** |
+| `[(Word, Word); 2]` | 1,112 | 8 | 0 | 0 | **2** |
+| `enum E { A(Word) }` | 1,128 | 3 | 0 | **1** | 1 |
+
+**So the flattener slice keeps the REAL oracle** — `encode_aux_body` on a genuinely compiled module —
+rather than dropping to hand-built trees, and every artifact is about a kilobyte against a
+65,536-byte buffer. The breadth-first walk, the child numbering after the roots, and the
+forward-ordering invariant are all exercised by depth-2 cases.
+
+**Two of the six DERIVE rows in the coverage matrix below are now upgradable.** `STRUCT_AUX` and
+`ENUM_AUX` are reachable from real compiler output, so their emitter tests can be re-oracled from
+constructed values to real ones — taking the split from 14 REAL / 6 DERIVE to 16 / 4. **That work is
+NOT done**, and the matrix still reads 14/6 because that is what the tests currently do. Recording
+the opportunity, not claiming the upgrade.
+
+**The method lesson, which is the same one twice in one day.** The interner slice found that a
+constructed SOURCE beats a hand-built input, because it keeps the reference encoder as the oracle.
+Applying that same question here overturned a conclusion this document had already committed to.
+**A "the corpus cannot reach X" measurement is a fact about the corpus; the reachability of X is a
+separate question that has to be asked separately.** Three earlier findings in this arc are phrased
+the same way and are worth re-asking rather than trusting:
+
+- the six record kinds emitted empty by every stage (asked and partly answered here — two of them
+  are reachable);
+- the second interning mode (asked in slice 12 — reachable, via two enums sharing a variant name);
+- generics and floats, recorded as "the deferred tail".
+
+**Incidental:** the repeat-array form `[7; 64]` is not admitted (`expected RBracket`), so a wide
+constant array has to be written out elementwise.
 
 #### `Shapes` is a second interner with the SAME two modes, and opposite performance needs
 

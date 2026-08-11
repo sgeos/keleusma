@@ -13,6 +13,42 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**I OVERTURNED ONE OF MY OWN CONCLUSIONS BY ASKING THE QUESTION THE PREVIOUS SLICE TAUGHT ME
+(2026-08-10).** The plan document said the flattener "needs hand-built constant trees", on the
+strength of a real measurement: 2,192 constant nodes across the ten stages, zero composite, depth
+zero. The measurement is sound. **The inference was not.** "The corpus cannot reach this" does not
+establish "no source can reach this", and I had written the second as though it followed from the
+first.
+
+Slice 12 had just shown that a constructed SOURCE beats a hand-built input, because it keeps
+`encode_aux_body` as the oracle instead of dropping to a model. Asking the same question here took
+about twenty minutes and produced the opposite answer: **`const data`, referenced from a function,
+emits real composite constants** — `Tuple`, `Array`, `Struct` and `Enum`, to depth 2, in artifacts of
+roughly a kilobyte. It also populates `STRUCT_AUX` (1 at depth 1, 2 at depth 2) and `ENUM_AUX`, both
+of which this document had recorded as unexercised by anything.
+
+**Finding it needed reading the compiler rather than more probing.** Thirteen source probes — tuple,
+array, nested tuple, struct, nested struct, enum payload, all as ordinary locals — returned scalars
+every time, and I was one step from writing "unreachable, confirmed". What settled it was grepping
+for the CONSTRUCTION sites of `ConstValue::Tuple` and following their callers: two entry points, both
+scalar-guarded, and a third visibility I did not know existed. **There are three data visibilities,
+not two.** `shared` admits no initializer, `private` admits only scalar ones, and `const data` is the
+only caller of `const_value_from_literal_for_field` with no guard at all. Sampling said unreachable;
+reading the call graph said otherwise, and reading was both faster and conclusive.
+
+**The generalisation, which I have now paid for twice in one day.** A "the corpus cannot reach X"
+measurement is a fact about the corpus. **The reachability of X is a separate question and has to be
+asked separately.** Three other findings in this arc are phrased the same way — the six empty record
+kinds, the second interning mode, and the deferred generics-and-floats tail — and two of the three
+have now turned out to be reachable when actually asked.
+
+**What I did NOT do:** the coverage matrix still reads 14 REAL / 6 DERIVE, because that is what the
+tests currently do. `STRUCT_AUX` and `ENUM_AUX` are now *upgradable* to real oracles; upgrading them
+means rewriting those emitter tests, and claiming 16/4 before doing so would be precisely the
+roll-up over-claim recorded two entries below.
+
+---
+
 **SLICE 12: THE DRIVER COMPUTES ITS FIRST VALUE, AND THE RULE THAT MATTERED WAS INVISIBLE
 (2026-08-10).** Every slice before this handed Keleusma values decoded out of the reference and
 checked that it re-emitted them. This one makes it compute `STRING_POOL` and `NAMES` from a sequence
