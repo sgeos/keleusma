@@ -121,6 +121,29 @@ commit**, with its own `CARGO_TARGET_DIR`. Two things improve at once:
   mechanism — the same mechanism-over-procedure argument made below about CI. The script
   re-checks that the tree is at the requested commit and refuses if it is dirty.
 
+**THE SAME `pgrep` CALL IS RIGHT HERE AND FATAL IN `gate-status.sh`, AND THE DIFFERENCE IS WORTH
+STATING** so nobody "fixes" the working one. `gate-in-worktree.sh` refuses to start a second gate
+with `pgrep -f "release-gate.sh"`, which is the literal pattern `gate-status.sh` warns against in
+capitals. Both are correct:
+
+- **In a WAITER LOOP it is fatal.** `until ! pgrep -f "release-gate.sh"` matches the shell running
+  the loop, so it never exits. That deadlocked a session for hours.
+- **In a ONE-SHOT REFUSAL it is fine.** `gate-in-worktree.sh` does not have that string in its own
+  command line, and the worst failure mode is a false positive that declines to start a gate —
+  which is the safe direction for a guard whose job is to decline.
+
+The rule is therefore about the *shape of the use*, not the call: **never let a `pgrep` for a script
+name gate a loop's exit; a one-shot refusal may use one.**
+
+**THE REFUSAL IS OVER-BROAD FOR `--setup-only`, noted and NOT fixed.** The running-gate check sits
+above the `--setup-only` early exit, so a queued session cannot even prepare its worktree while
+another session's gate runs — although setup touches only that session's own named directory and
+runs no cargo at all. Preparing ahead is exactly what a queued session should be able to do. Left
+alone deliberately: this is shared gate infrastructure, and changing it while a gate runs and
+another is imminent puts risk into the mechanism both sessions are about to depend on. The narrow
+fix, when someone does it, is to scope the check to `$GATE_DIR` for the setup-only path rather than
+to move it.
+
 **On the canary, which is the obvious objection.** This deliberately introduces concurrent
 load, and `tests/perf_canary.rs` wants a quiet machine. Accept it, because the error is
 directional: **load can only make the canary slower.** It can therefore produce a false
