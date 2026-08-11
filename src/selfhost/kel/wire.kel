@@ -2363,7 +2363,17 @@ fn emit_in_region(k: Word, n: Word) -> Word {
     // artifact — the guard slice 11 added, doing its job on its first real test.
     if k == kind_enum_variants() { emit_enum_variant_records(region_base(dir_find(k)), n) } else {
     if k == kind_enum_layouts() { emit_enum_layout_records(region_base(dir_find(k)), n) } else {
-    0 - 222 }}}}}}}}}}}
+    // Added when the coverage upgrade drove these from real sources. The
+    // refusal is what surfaced each one — a `-222` rather than a silently
+    // mis-sized region — which is now the third time this guard has earned its
+    // place on a kind nobody had exercised.
+    if k == kind_natives() { emit_native_records(region_base(dir_find(k)), n) } else {
+    if k == kind_native_returns() { emit_native_return_records(region_base(dir_find(k)), n) } else {
+    if k == kind_private_composite() { emit_private_composite_records(region_base(dir_find(k)), n) } else {
+    if k == kind_data_slots() { emit_data_slot_records(region_base(dir_find(k)), n) } else {
+    if k == kind_shared_layout() { emit_shared_slot_records(region_base(dir_find(k)), n) } else {
+    if k == kind_data_init() { emit_data_init_records(region_base(dir_find(k)), n) } else {
+    0 - 222 }}}}}}}}}}}}}}}}}
 }
 
 // --- SLICE 12: THE INTERNER, THE DRIVER'S FIRST COMPUTED VALUE ------------

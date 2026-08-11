@@ -1039,12 +1039,47 @@ reverse. Both are legitimate; conflating them is not.
 | `DATA_INIT` | 7 | REAL | |
 | `CONSTS` | 7 | REAL | **scalars only** — no composite constant exists in the corpus |
 | `DEBUG_POOL` | 9 | REAL | needs `emit_debug`; the twentieth kind |
-| `STRUCT_AUX` | 8 | DERIVE | corpus emits it empty |
-| `ENUM_AUX` | 8 | DERIVE | corpus emits it empty |
-| `STRUCT_TEMPLATES` | 8 | DERIVE | corpus emits it empty |
-| `PRIVATE_COMPOSITE` | 8 | DERIVE | corpus emits it empty |
-| `NATIVES` | 8 | DERIVE | corpus emits it empty |
-| `NATIVE_RETURNS` | 8 | DERIVE | corpus emits it empty |
+| `STRUCT_AUX` | 8, **13b-ii** | **REAL** | driven by a real `const data` struct constant |
+| `ENUM_AUX` | 8, **13b-iii** | **REAL** | driven by a real `const data` enum constant |
+| `STRUCT_TEMPLATES` | 8 | DERIVE | **structurally unreachable here**, see below |
+| `PRIVATE_COMPOSITE` | 8, **upgrade** | **REAL** | driven by a written private composite field |
+| `NATIVES` | 8, **upgrade** | **REAL** | driven by a bare `use beep` |
+| `NATIVE_RETURNS` | 8, **upgrade** | **REAL** | driven by a `use` with a signature |
+
+**19 REAL / 1 DERIVE as of 2026-08-11**, up from 14 / 6, which is the split the
+reachability sweep predicted was achievable. The two upgrades are
+bookkeeping on work already done rather than new tests: slice 13b's differential
+compiles real modules whose constant trees contain a struct and an enum, and
+compares the whole artifact byte for byte — so `STRUCT_AUX` and `ENUM_AUX` are
+now driven by real compiler output, not by constructed values checked against
+the derive.
+
+**THE UPGRADE COST FOUR DEFECTS IN THE TEST HARNESS, none of them in the emitters.** Driving these
+regions from real sources for the first time found: `emit_in_region` missing arms for six kinds
+(refused with `-222`, correctly); `rows_for_kind`'s eight-byte stride list missing four kinds, so
+`records()` errored and the caller emitted a region with ZERO rows — a wrong artifact rather than a
+refusal; no decoders for `NATIVES`, `NATIVE_RETURNS` or `PRIVATE_COMPOSITE`; and `DATA_SLOTS`,
+`SHARED_LAYOUT` and `STRUCT_AUX` needing raw decoding, because they carry trailing reserved bytes the
+emitters take as separate inputs and a struct-shaped decode returns fewer fields than the emitter
+consumes.
+
+**Every one of those was a BY-NAME ENUMERATION in the test harness** — a `match` listing the kinds
+someone had needed so far. That is the sixth through ninth instance of the defect this project has
+now catalogued, and the first time the enumerations were in test code rather than in a build script
+or an ignore file. The failure mode is identical: silent, and reading as success.
+
+**A region-level diff located all four in one sitting.** Comparing whole artifacts reports "2,182
+bytes differ"; comparing region by region names the kind. That diagnostic is now permanent in the
+test rather than scaffolding, because the next person will need it for the same reason.
+
+**Recording it late is itself the point.** The upgrade was earned when 13b-ii and
+13b-iii landed, and the matrix went on saying DERIVE because nobody revisited it.
+A coverage table is exactly the kind of document that decays silently: it is read
+to decide what needs work, so a stale row misdirects effort rather than merely
+being wrong. The remaining three DERIVE rows are **measured reachable** and
+awaiting a test that drives them; `STRUCT_TEMPLATES` is the one that is not, for
+the structural reason recorded above — its only non-flat type is `Text` under a
+narrow word, and this suite is gated out of narrow-word builds.
 
 **Fourteen REAL, six DERIVE.** Two REAL entries carry stated limits worth remembering: the per-slot
 tables are compared over their first 2048 records, and `CONSTS` sees scalars only, so the
