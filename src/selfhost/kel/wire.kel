@@ -2474,8 +2474,20 @@ fn nm_map_base() -> Word { 512 }
 // `nin` computed once is cheaper than widening `nin` to (offset, length, mode)
 // triples, which would change every test that feeds the interner.
 //
-// `[768, 1024)` is exactly the 256-name cap, and the three regions of `nout`
-// — pairs, map, offsets — tile it without overlap.
+// THE THREE REGIONS OF `nout` TILE IT EXACTLY, WITH NO SLACK, and that is a
+// fragility worth spelling out because nothing checks it:
+//
+//   record pairs   [0, 2 * cnt)      cnt <= 256   ->  [0, 512)
+//   input->index   [512, 512 + n)    n   <= 256   ->  [512, 768)
+//   byte offsets   [768, 768 + n)    n   <= 256   ->  [768, 1024)
+//
+// `nout` is 1024 words, so a 256-name run fills it to the last slot. **Raising
+// `nm_max_names` breaks all three layouts at once and silently**: the pairs
+// would run into the map, the map into the offsets, and the offsets off the end,
+// with no bound violated that the language could catch. Raising the cap means
+// resizing `nout` and moving both bases, together, or giving each region its own
+// array. The `-230` rejection is what keeps the cap honest at runtime; this
+// comment is what keeps it honest at edit time.
 fn nm_off_base() -> Word { 768 }
 
 // Whether two names in `wire.bin` hold the same bytes.
