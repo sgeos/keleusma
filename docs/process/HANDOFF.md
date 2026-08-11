@@ -10,7 +10,7 @@ misleading a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`, or a feature branch cut from it.
-- **Parent commit**: `2310ccea`
+- **Parent commit**: `82b67f58`
 - **Written**: 2026-08-11
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
@@ -66,30 +66,32 @@ Do not start a second; `gate-in-worktree.sh` refuses machine-wide.
 
 | Ref | Commit | Status |
 |---|---|---|
-| `v0.2.3` | `2310ccea` | pushed; slices 1–13b merged, CI green |
-| `v0.3.0` | `1c1ffb1e` | their local gate STALLED at step 5, third abandonment |
+| `v0.2.3` | `82b67f58` | pushed, CI green; slices 1–14 plus the coverage upgrade |
+| `v0.3.0` | `1c1ffb1e` | their local gate STALLED, third abandonment |
 
-**Nothing is in flight and nothing is blocked.** Three PRs merged today (#1, #4, #5), each 22 of 22
-green, with the local machine idle throughout.
+**Nothing in flight, nothing blocked.** FIVE PRs merged today (#1, #4, #5, #7, #8), each 22 of 22
+green, **with the local machine idle throughout every one**.
 
-## WHERE THE DRIVER IS: it computes three of the five values it owed
+## WHERE THE DRIVER IS: four of five values computed
 
-`tests/selfhost_wire.rs` is **129 tests**. Keleusma computes the name table (both interning modes),
-the breadth-first constant ordering, and — as of slice 13b — the names interned DURING the walk, for
-all three interning tags, with `STRUCT_AUX` and `ENUM_AUX` alongside.
+`tests/selfhost_wire.rs` is **131 tests**. Keleusma computes the name table (both interning modes),
+the breadth-first constant ordering, the names interned DURING the walk for all three interning tags
+with `STRUCT_AUX` and `ENUM_AUX` alongside, and the per-chunk ranges.
 
-**What the driver still does not compute**, in the order the plan recommends:
+**The emitter coverage matrix is 19 REAL / 1 DERIVE.** The single remaining DERIVE row is
+`STRUCT_TEMPLATES`, and it is structural rather than pending: the boxed construction path needs a
+non-flat type, the only one is `Text` under a narrow word, and this suite is gated out of narrow-word
+builds.
 
-1. **Per-chunk ranges** — `consts_first/count`, `templates_first/count`, `param_types_first/count`.
-   Allocation results of the order contributors ran in; a running total per chunk. The smaller item.
-2. **The interning SEQUENCE itself.** It is still a Rust model of the encoder's call order
-   (`interner_input` and `preorder_13b` in the test file), restricted to chunk names, enum layouts
-   and the constant tree, and guarded by `assert_no_other_contributors` so it cannot silently
-   under-generate. **Producing that sequence from the AST is the last thing between here and a
-   driver that computes everything it emits.**
-3. **The dedup scan is LINEAR.** Correct at these sizes and measured catastrophic at corpus scale —
-   the reference took 782 seconds on a mid-sized stage before it became a `BTreeMap`. It must be
-   replaced before a real stage drives the interner.
+**What is left, and it is one thing plus one debt:**
+
+1. **The interning SEQUENCE is still a Rust model** of the encoder's call order (`interner_input`,
+   `preorder_13b`, `chunk_inputs` in the test file), guarded by `assert_no_other_contributors` so it
+   cannot silently under-generate. **Producing it from the module is the last thing between here and
+   a driver that computes everything it emits.**
+2. **The dedup scan is LINEAR.** Correct at these sizes, measured catastrophic at corpus scale — the
+   reference took 782 seconds on a mid-sized stage before it became a `BTreeMap`. It must be replaced
+   before a real stage drives the interner.
 
 ## THREE METHOD RULES THIS ARC PAID FOR, ALL ABOUT SEEING WHAT TESTS CANNOT
 
