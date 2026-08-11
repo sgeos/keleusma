@@ -1792,7 +1792,10 @@ fn lowered_ir_mutated(src: &str, mutate: impl FnOnce(&mut keleusma::bytecode::Mo
 ///
 /// `vm_result_mutated` cannot express a rejection: it `expect`s admission and
 /// panics otherwise. This returns the verifier's verdict instead of asserting it.
-fn vm_new_rejection(src: &str, mutate: impl FnOnce(&mut keleusma::bytecode::Module)) -> Option<String> {
+fn vm_new_rejection(
+    src: &str,
+    mutate: impl FnOnce(&mut keleusma::bytecode::Module),
+) -> Option<String> {
     let mut m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     mutate(&mut m);
     let cap = auto_arena_capacity_for(&m, &[]).expect("arena capacity");
