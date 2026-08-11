@@ -10,19 +10,18 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-11 (session 41)
+**Date**: 2026-08-11 (session 41, continued)
 
 ## Where things stand
 
 | | |
 |---|---|
-| `v0.2.3` | `6d0a5339`, pushed, CI confirming |
-| PR #9 | **MERGED** at `ae01441f`, 22/22 green, merged at the commit CI ran |
-| PR #10 | `feat/selfhost-contributor-guard`, test-only, in flight |
+| `v0.2.3` | `8e9d5433`, pushed, CI confirming |
+| PR #9, #10, #11 | all **MERGED** on 22/22 green, each at the commit CI ran |
 | Machine | idle throughout; every gate ran on hosted runners |
 
-`tests/selfhost_wire.rs` is **131 tests** on `v0.2.3` and **133** once PR #10 lands. The driver still
-computes four of the five values it owed; no `.kel` behaviour changed this session.
+`tests/selfhost_wire.rs` is **137 tests**. **All five** of the values the driver owed are now
+computed on the Keleusma side; the last, the interning sequence, landed in PR #11.
 
 ## A guard that documented a check it did not make
 
@@ -86,24 +85,49 @@ measurement is not grounds for that. Operator's call.
   comment that reads "This is a Gap by design" and nearly recording a false staleness. Excluding
   comment lines gives **79 Ok / 4 Gap / 1 RefRejects, 84 cases** — the recorded figure is current.
 
+## The thing I would most want a reader to take from this session
+
+**I published a confident, derived number and had to retract it the same day.** Probing the plan's
+residency section — which carried an explicit "confirm this" caveat — I measured that a declared byte
+costs about 40.7 bytes of artifact and concluded the 77% projection was "refuted by a factor of
+forty", with a ~321,000-slot budget to go with it. Both are withdrawn by `69a32862`.
+
+**The budget divided a byte-addressing ceiling by a figure in bytes of ARTIFACT per slot.** Different
+quantities. The factor of forty was the units error itself. `MAX_DATA_ADDR` bounds a byte offset and
+a slot index, not the artifact, which the container addresses with u32 words and so may reach ~34 GB.
+Against the real ceilings `lexer` needs 59.2% — the 58.3% the plan already recorded. **The projection
+was right.**
+
+**Why it survived the checking I did do.** `2^24` is a byte offset, AND a slot index, AND
+coincidentally close to `lexer`'s own artifact size. The wrong reading was self-consistent from three
+directions, so every sanity check agreed with it. **A constant that appears in several places for
+several reasons is where this goes wrong**, and the only thing that catches it is asking what a
+number BOUNDS rather than reusing one of the right order of magnitude.
+
+**What survives is real** and is what the plan omitted rather than got wrong: one data slot per array
+element with exact deltas, ~40.7 bytes of artifact per slot, and ~2.4 s of compile time per megabyte
+declared. Declaring `lexer`'s accumulator costs a ~400 MB body and a 25-second compile — a serious
+practical cost, not a limit violation.
+
 ## Next intended step
 
-**Settle PR #10, then wire the driver to a MODULE rather than a Rust model** — the fifth and last
-owed value. The design is already in
-[`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md), including
-the minimal module's complete measured input surface and the arithmetic that closes at 912 bytes. It
-is gated on PR #10 only because that pull request owns `tests/selfhost_wire.rs`.
+**Batching**, which now stands alone. The handoff recorded batching and residency staging as one
+increment; that pairing rested on the retracted reading. `CHUNKS` is the smallest region that forces
+it, at two batches, so the mechanism gets built where the failure is legible.
 
-The two traps recorded yesterday still stand: **do not** replace the linear dedup scan (batching
-first, index second), and **do not** compute the chunk record's name index (`map[j] == j` always, so
-it is untestable rather than easy).
+The two traps still stand: **do not** replace the linear dedup scan (batching first, index second —
+and batching being live makes this answerable rather than merely deferred), and **do not** compute
+the chunk record's name index (`map[j] == j` always).
 
 ## Open, held by the operator
 
 - **Publication remains HELD.** Nothing is published.
 - **`MAX_PARSE_DEPTH` on small stacks**, above.
-- **Per-element data slots.** One slot and one interned name per array element is why a 21 KB source
-  makes a 16 MB artifact, paid three times over in parallel tables plus the pool they index.
+- **Per-element data slots, now with a measured price.** One slot and one interned name per array
+  element, paid three times over in parallel tables plus the pool they index. Measured this session:
+  **about 40.7 bytes of artifact per slot**, stable to within 1% across a fourfold range, and compile
+  time of roughly **2.4 seconds per megabyte declared**. This is what makes a large declared buffer
+  expensive; fixing the representation is what makes those numbers go away.
 - **The (72,64) SECDED plane is entirely unexercised** by the shipping encoder.
 - **MSRV**: CI checks 1.85 for `keleusma-arena` and 1.88 for `keleusma`.
 

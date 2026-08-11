@@ -13,6 +13,52 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE FIFTH VALUE, AND A CONFIDENT NUMBER I HAD TO RETRACT THE SAME DAY (2026-08-11).** Commands
+152-155; 133 to 137 tests. The driver now derives the interning SEQUENCE from a module description
+instead of consuming one a Rust helper ordered for it.
+
+**The input is grouped by kind and the output is in interning order, and that gap is the slice.**
+`module_description` marshals every layout's names first and the chunk names last; the encoder
+interns the other way round. Marshalling in the encoder's own order would have made the derivation
+the IDENTITY, and every test would have passed against a transcription. It is a rotation rather than
+a general permutation and the comment says so rather than letting the prose imply more.
+
+**Two of the three assertions I wrote cannot fail, and noticing that was the useful part.** A name
+count and a pool length are both invariant under permutation: get the order wrong, or every pool
+offset wrong, and both still match the reference exactly. All four tests passed on the first run,
+which is precisely when this programme's own rule says to stop trusting them. Mutating the
+implementation to assign offsets in interning order left count and pool length matching and made the
+pool read `AXYmain` where the reference reads `mainAXY`. **The byte test fires; the count test
+provably would not have.**
+
+**Then I published a refutation and had to withdraw it.** Probing the plan's residency section --
+which carried an explicit "confirm this" caveat -- I measured that a declared byte costs about 40.7
+bytes of artifact, and concluded the 77% projection was "refuted by a factor of forty" with a
+~321,000-slot budget to go with it. **The budget divided a byte-addressing ceiling by a figure in
+bytes of artifact per slot.** Different quantities; the factor of forty WAS the units error.
+`MAX_DATA_ADDR` bounds a byte offset and a slot index, not the artifact, which the container
+addresses with u32 words and so may reach ~34 GB. Against the real ceilings `lexer` needs 59.2%,
+which is the 58.3% the plan already recorded. The projection was right all along.
+
+**Why it survived the check I thought I had done.** 2^24 is a byte offset, AND a slot index, AND
+coincidentally close to `lexer`'s own artifact size. The wrong reading was self-consistent from three
+directions at once, so every sanity check I ran agreed with it. **A constant that appears in several
+places for several reasons is where this goes wrong**, and the only thing that catches it is asking
+what a number BOUNDS rather than reusing one of the right order of magnitude.
+
+**What survived, and it is genuinely useful**: one data slot per array element with exact deltas,
+about 40.7 bytes of artifact per slot, and compile time of roughly 2.4 seconds per megabyte
+declared. So declaring `lexer`'s accumulator costs a ~400 MB auxiliary body and a 25-second compile
+-- a real cost the residency analysis never priced, and not a limit violation.
+
+**Three inferences of mine were corrected by measurement today and the middle one is the warning.**
+The first made me less confident, the second more, the third was a retraction of something already
+pushed. The pattern is not that measuring is good; it is that I published on the strength of a
+derived number before asking what it bounded, and a derived number is exactly the kind that carries
+unearned authority.
+
+---
+
 **THE DISPATCH-CHAIN CAP IS A SHARED DEPTH BUDGET, AND THE FAILURE MODE DEPENDS ON WHICH STACK YOU
 ARE ON (2026-08-11).** No code change; a measurement that corrects a fact this file records three
 times and that would otherwise have mis-shaped the next increment.

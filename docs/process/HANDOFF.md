@@ -16,7 +16,7 @@ misleading a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`, or a feature branch cut from it.
-- **Parent commit**: `69c98b9d`
+- **Parent commit**: `8e9d5433`
 - **Written**: 2026-08-11
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
@@ -38,14 +38,17 @@ this file**.
    (newest first), [`TASKLOG.md`](./TASKLOG.md).
 4. **Read [`AUTONOMOUS_IMPLEMENTATION_LOOP.md`](./AUTONOMOUS_IMPLEMENTATION_LOOP.md).**
 
-## FIRST ACTION: start the module-input increment
+## FIRST ACTION: read the retraction before trusting the plan's residency numbers
 
-**Nothing is in flight.** PR #9 (`ae01441f`) and PR #10 (`3b93e351`) both merged on 22/22 CI green,
-each at the commit CI ran, and `v0.2.3` carries both. Confirm with `gh pr list --state open` and
-`gh run list --branch v0.2.3 --limit 1`; if that run is red, read its log before anything else.
+**Nothing is in flight.** PRs #9, #10 and #11 all merged on 22/22 CI green, each at the commit CI
+ran. Confirm with `gh pr list --state open`; if `gh run list --branch v0.2.3 --limit 1` is red, read
+its log first.
 
-Then go to **THE NEXT INCREMENT** below. Do not re-merge either pull request; earlier versions of
-this file named each as the first action and both instructions are spent.
+**Then read the CORRECTION section in
+[`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md).** Two
+commits on this branch, `db700212` and `5bec2df8`, published a residency "refutation" and a
+~321,000-slot budget that are **withdrawn** by `69a32862`. If you have those numbers in context from
+a summary rather than from the file, they are wrong. The plan's original 77% projection stands.
 
 ## THE WORKFLOW CHANGED TODAY. CI GATES FEATURE BRANCHES.
 
@@ -78,51 +81,61 @@ three PRs (#2, #3, #6).
 
 | Ref | Commit | Status |
 |---|---|---|
-| `v0.2.3` | `69c98b9d` | both PRs merged in, pushed |
-| PR #9 | `ae01441f` | **MERGED** 2026-08-11, 22/22 green, at the commit CI ran |
-| PR #10 | `3b93e351` | **MERGED** 2026-08-11, 22/22 green, at the commit CI ran |
+| `v0.2.3` | `8e9d5433` | three PRs merged in, pushed |
+| PR #9 | `ae01441f` | **MERGED**, 22/22 green, at the commit CI ran |
+| PR #10 | `3b93e351` | **MERGED**, 22/22 green, at the commit CI ran |
+| PR #11 | `eaf95524` | **MERGED**, 22/22 green, at the commit CI ran |
 | `v0.3.0` | — | same workflow; their last local gate is STALLED and irrelevant |
 
 Eight PRs merged on this line today, every one CI-gated, **with the local machine idle throughout**.
 
 ## WHERE THE DRIVER IS
 
-`tests/selfhost_wire.rs` is **133 tests**. Keleusma computes **four of the five** values the driver
+`tests/selfhost_wire.rs` is **137 tests**. Keleusma computes **all five** of the values the driver
 owed: the name table with both interning modes, the breadth-first constant ordering, the names
 interned **during** the walk for all three interning tags with `STRUCT_AUX` and `ENUM_AUX` alongside,
-and the per-chunk ranges.
+the per-chunk ranges, and now the interning SEQUENCE itself, derived from a module description that
+is grouped by kind rather than pre-ordered.
 
 **The emitter coverage matrix is 19 REAL / 1 DERIVE**, up from 14 / 6. The one remaining DERIVE row
 is `STRUCT_TEMPLATES`, and it is **structural rather than pending**: the boxed construction path
 needs a non-flat type, the only one is `Text` under a narrow word, and this suite is gated out of
 narrow-word builds.
 
-## THE NEXT INCREMENT IS ONE THING, AND TWO OBVIOUS ONES ARE TRAPS
+## THE NEXT INCREMENT: BATCHING, WHICH NOW STANDS ALONE
 
-**Do this: wire the driver to a MODULE rather than to a Rust model.** The interning SEQUENCE — chunk
-names, then enum-layout names, then the constant tree's — is still produced by Rust functions in the
-test file (`interner_input`, `preorder_13b`, `chunk_inputs`), guarded by
-`assert_no_other_contributors` **and** `assert_constants_are_modelled` so it cannot silently
-under-generate. Those are two guards, not one, and the split is load-bearing: `fx_input` covers named
-constants by construction and the second guard must not be applied to it. The order is measured and
-recorded; what is absent is a Keleusma-side producer.
+**The five owed values are done.** The interning sequence landed in PR #11: `module_description`
+hands Keleusma the module's names grouped by kind and the driver produces the encoder's order, each
+name's mode, and each name's pool offset. `interner_input` survives for the older intern and walk
+tests, which exercise the primitive rather than the derivation.
 
-It is a **different kind of work** from every slice so far: the module itself must reach Keleusma,
-which means a module-input encoding and eventually `codegen.kel` producing it. `wire.kel` is still
-deliberately absent from `read_stage`; this is the increment that changes that. **It shares the
-residency staging with the batching problem below, so the two are one increment** — doing either
-alone is wasted.
+**Do this next: batching.** `wire.fin` is 1024 words and a real stage needs far more records than
+that per region; the plan's table sizes it. `CHUNKS` is the smallest region that forces batching, at
+two batches, so the mechanism gets built where the failure is legible rather than inside a
+1547-batch region.
 
-**Do NOT do these two.** Both were on the list and both fail on inspection; the reasoning is in
+**Batching and residency staging are NO LONGER one increment**, and the handoff said they were. That
+pairing rested on a residency reading that has since been retracted — see the FIRST ACTION above.
+Batching is bounded and buildable now. Residency is a separate question about where the accumulator
+lives, and it is dominated by a cost the plan never priced: about **40.7 bytes of artifact per data
+slot**, with one slot per array ELEMENT, so declaring `lexer`'s accumulator would mean a ~400 MB
+auxiliary body and a ~25-second compile. Real, measured, and not a limit violation.
+
+**Do NOT do these two.** Both fail on inspection; the reasoning is in
 [`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md):
 
 - **Replacing the linear dedup scan is premature and makes things worse now.** A total language has
   no early exit, so a 1024-slot table runs all 1024 probes per lookup against ~256 comparisons for
-  the scan. The table only wins past ~1000 names, and inputs are capped at **256** because `nin`,
-  `nout` and `bin` are sized for a batch. **Batching first, index second.**
+  the scan. The table only wins past ~1000 names, and inputs are capped at **256**. **Batching
+  first, index second** — and batching is now the live increment, so this becomes answerable rather
+  than merely deferred.
 - **Computing the chunk record's name index would be vacuous.** Chunk names are the first prefix
-  entries, interned in order, and function names are distinct — so `map[j] == j` always. A driver
-  writing the loop counter would produce a byte-identical artifact on every constructible source.
+  entries, interned in order, and function names are distinct — so `map[j] == j` always.
+
+**A constraint to carry into any new command.** `dispatch_driver` holds 18 arms and `dispatch_driver2`
+now holds 4; the cap is a depth budget of 24 shared between chain position and arm-body nesting, so a
+chain takes 20 arms with a no-argument body and 18 with a nested call. Exceeding it in the test
+harness is a stack overflow and SIGABRT, not a parse error.
 
 ## THE ONE RULE THAT MATTERED MOST TODAY
 
