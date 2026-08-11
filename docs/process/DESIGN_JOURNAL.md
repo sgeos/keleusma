@@ -13,6 +13,168 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**SLICE 13: THE FLATTENER'S BREADTH-FIRST REORDERING, AND A VACUITY CONTROL THAT EARNED ITS KEEP
+(2026-08-10).** The driver's second computed value. Command 141; 122 to 125 tests. The input is a
+DEPTH-FIRST preorder — three words per node, tag, payload, child count — because handing Keleusma a
+breadth-first input would make the whole thing vacuous. The reordering is the work.
+
+**The main test passed on the first run and the vacuity check failed, which is the right way round
+and the reason to write both.** I had asserted that at least two cases distinguish breadth-first
+from depth-first. Only one did, and finding out why corrected two mistakes at once:
+
+- **When every composite sits LAST among its siblings, the two walks coincide.** `(1, (2, 3))` is
+  identical under both. Four of my five cases had that shape, so the test I had just watched pass
+  was, for four fifths of its corpus, comparing a reordering against itself. The fix is a case whose
+  composite is *not* last: `((1, 2), 3)`.
+- **Comparing tags alone is too coarse.** For `((1, 2), 3)` both walks give 8, 8, 3, 3, 3 while
+  visiting the scalars in different orders. The check now compares (tag, payload) pairs. Had I only
+  added the new case and not noticed this, the vacuity check would have gone on passing while still
+  measuring the wrong thing.
+
+**Neither error was visible from the passing test.** A green differential against a real oracle
+looked like strong evidence and was weak evidence, and the only thing that said so was a separate
+assertion about the CORPUS rather than about the code. That is a different kind of control from a
+must-fire mutation: it asks whether the inputs can tell the two answers apart at all.
+
+**A total language cost nothing here, which is worth recording because it usually costs something.**
+The reference loops until its queue drains. There is no `while`, but the queue provably ends at
+exactly `nnodes` entries — every node is enqueued once — so `for head in 0..nnodes` walks it exactly.
+The bound the language demanded was already known. Likewise `next_index`: the reference carries it
+alongside the queue, and the two are provably equal at every step, so the Keleusma side keeps one
+field and removes the chance of them disagreeing.
+
+**Guards are ordered by what would otherwise TRAP rather than report.** `for k in 0..n limit 341`
+aborts the VM when the runtime range exceeds the cap, so child counts are validated in a separate
+pass BEFORE any of them is used as a bound — a sticky error flag would be set too late to help. The
+sibling cursor is clamped as well as flagged, so a malformed input is refused from a memory-safe
+state rather than indexing off the end while the code is raising the error.
+
+**Scope stops at scalars, tuples and arrays.** `STATIC_STR`, `STRUCT` and `ENUM` intern names as
+they walk, coupling the flattener to the interner and to the two side tables. An out-of-scope tag is
+refused with `-245` rather than emitted with `aux` 0, which would be a plausible-looking wrong
+record.
+
+**Tier 1 caught a complex-type lint** after `cargo fmt` reflowed the signature I had wrapped by hand.
+Second time today the pre-commit tier caught something the targeted tests could not.
+
+---
+
+**I ASKED THE REACHABILITY QUESTION OF ALL SIX ROWS INSTEAD OF THE ONE IN FRONT OF ME, AND MY OWN
+PROBE LIED TO ME FIRST (2026-08-10).** Having been wrong twice in one day about "the corpus cannot
+reach X" implying "no source can reach X", I swept every DERIVE row in the coverage matrix rather
+than waiting to trip over them one at a time. **Five of the six are reachable.** `STRUCT_AUX` and
+`ENUM_AUX` through `const data`, `NATIVES` and `NATIVE_RETURNS` through a bare `use beep`, and
+`PRIVATE_COMPOSITE` through a written private composite field — every trigger under 1.2 KB.
+
+**The probe's first run said NATIVES was unreachable, and it was my bug.** I read that region with
+stride 16; it is 8. A wrong stride makes `records()` fail, and my `map_or(0)` turned the failure
+into a count of zero — indistinguishable from a genuinely empty region. The all-zero baseline made
+it look consistent. **A probe that reports absence must distinguish "not there" from "I could not
+read it"**, so the rewrite reports region presence separately from record count and prints
+`STRIDE-ERR` rather than `0`. Same family as the gate-progress regexes: a convenience that quietly
+answers a different question. I had the correct stride table twenty lines away in the test file and
+assumed instead of reading it.
+
+**The sixth row is a stronger result than the other five, and it came from reading rather than
+probing.** `STRUCT_TEMPLATES` needs the boxed struct-construction path, which needs
+`flat_alloc_bytes` to return `None`. Two routes, both closed here: `flat_byte_size` returns `None`
+in exactly one case — a `Text` field under a narrow word — and this suite is gated out of every
+narrow-word configuration while `wire.kel` declares `require word >= 64`; the other route, a struct
+over 65,535 bytes, is **rejected by the typed operand-stack verifier**. So it stays DERIVE for a
+structural reason instead of for want of a corpus case, which is a better justification than the one
+it had. Nine source probes could not have established that; two greps did.
+
+**The matrix still reads 14 REAL / 6 DERIVE**, because upgrading a row means rewriting its emitter
+test and none of that is done. The achievable split is 19 / 1. Writing 19/1 now would be the same
+roll-up over-claim I corrected this morning, one day later.
+
+---
+
+**I OVERTURNED ONE OF MY OWN CONCLUSIONS BY ASKING THE QUESTION THE PREVIOUS SLICE TAUGHT ME
+(2026-08-10).** The plan document said the flattener "needs hand-built constant trees", on the
+strength of a real measurement: 2,192 constant nodes across the ten stages, zero composite, depth
+zero. The measurement is sound. **The inference was not.** "The corpus cannot reach this" does not
+establish "no source can reach this", and I had written the second as though it followed from the
+first.
+
+Slice 12 had just shown that a constructed SOURCE beats a hand-built input, because it keeps
+`encode_aux_body` as the oracle instead of dropping to a model. Asking the same question here took
+about twenty minutes and produced the opposite answer: **`const data`, referenced from a function,
+emits real composite constants** — `Tuple`, `Array`, `Struct` and `Enum`, to depth 2, in artifacts of
+roughly a kilobyte. It also populates `STRUCT_AUX` (1 at depth 1, 2 at depth 2) and `ENUM_AUX`, both
+of which this document had recorded as unexercised by anything.
+
+**Finding it needed reading the compiler rather than more probing.** Thirteen source probes — tuple,
+array, nested tuple, struct, nested struct, enum payload, all as ordinary locals — returned scalars
+every time, and I was one step from writing "unreachable, confirmed". What settled it was grepping
+for the CONSTRUCTION sites of `ConstValue::Tuple` and following their callers: two entry points, both
+scalar-guarded, and a third visibility I did not know existed. **There are three data visibilities,
+not two.** `shared` admits no initializer, `private` admits only scalar ones, and `const data` is the
+only caller of `const_value_from_literal_for_field` with no guard at all. Sampling said unreachable;
+reading the call graph said otherwise, and reading was both faster and conclusive.
+
+**The generalisation, which I have now paid for twice in one day.** A "the corpus cannot reach X"
+measurement is a fact about the corpus. **The reachability of X is a separate question and has to be
+asked separately.** Three other findings in this arc are phrased the same way — the six empty record
+kinds, the second interning mode, and the deferred generics-and-floats tail — and two of the three
+have now turned out to be reachable when actually asked.
+
+**What I did NOT do:** the coverage matrix still reads 14 REAL / 6 DERIVE, because that is what the
+tests currently do. `STRUCT_AUX` and `ENUM_AUX` are now *upgradable* to real oracles; upgrading them
+means rewriting those emitter tests, and claiming 16/4 before doing so would be precisely the
+roll-up over-claim recorded two entries below.
+
+---
+
+**SLICE 12: THE DRIVER COMPUTES ITS FIRST VALUE, AND THE RULE THAT MATTERED WAS INVISIBLE
+(2026-08-10).** Every slice before this handed Keleusma values decoded out of the reference and
+checked that it re-emitted them. This one makes it compute `STRING_POOL` and `NAMES` from a sequence
+of (name, mode) pairs. Commands 136 to 140; `tests/selfhost_wire.rs` goes 116 to 122 tests.
+
+**The finding is a semantic detail that no amount of reading the two output regions could reveal.**
+`Names::intern_fresh` does `index.insert`, which OVERWRITES, so a later `intern` of duplicated bytes
+resolves to the SECOND index. A forward first-match linear scan — the obvious way to write it —
+produces `NAMES` and `STRING_POOL` that are **byte-identical to the reference** and an
+`ENUM_LAYOUTS` that is wrong. Measured before writing the Keleusma rather than after: for
+`enum A { X, P } enum B { X, Q } enum X { R }` the third layout cites index 5, not 2.
+
+**That measurement then invalidated my own test plan, which is the part worth keeping.** I had
+implemented last-match and written a comment explaining it, and only then noticed the rule was **not
+observable through anything this slice emits**. A comment plus untestable logic is the
+"assertion that never fires" defect wearing a different hat. The fix was to have the interner also
+produce an input-to-index map, which costs half the admissible name count — 512 down to 256 — and
+buys a test that can fail. It also happens to be the artefact the next slice needs. **Prefer a lower
+cap to an untestable rule.**
+
+**The corpus could not have caught any of this, for the third time in this arc.** Four of the five
+stages measured have no duplicate names at all; only `parse` has any, twenty out of 58,053, and its
+artifact is roughly 16 MB against a 65,536-byte buffer. So the cases are constructed, and the
+smallest useful one is three lines: two enums sharing a variant name. **Real compiler output is a
+strong oracle for volume and a weak one for variety**, now demonstrated on record kinds, composite
+constants, and interning modes.
+
+**A guard from the previous slice paid for itself on its first real test.** `emit_in_region` covered
+exactly the minimal module's eight region kinds and refused `ENUM_VARIANTS` with `-222` as soon as a
+source declared an enum. A refusal, not a mis-sized region — which is the whole argument for
+rejecting an unknown kind rather than sizing it zero.
+
+**What I did NOT do, recorded so it is not mistaken for done.** The (name, mode) sequence is
+generated by a Rust model of the encoder's call order, restricted to chunk names and enum layouts.
+`assert_no_other_contributors` refuses a module with natives, a data layout, or struct templates
+rather than letting the model silently under-generate. Producing that sequence from the AST is the
+driver's remaining work. The dedup scan is also linear, the shape that cost the reference 782
+seconds on a mid-sized stage before it became a `BTreeMap`; correct at ten names, and it must be
+replaced before a real stage drives it. Both notes are in `wire.kel` itself, not only in the plan.
+
+**Two incidental measurements**, both narrowing later slices: a bare `enum` declaration populates
+`enum_layouts` with no use site required, and a plain struct literal does **not** populate
+`struct_templates`.
+
+**Tier 1 caught a dead helper** that the targeted tests could not see — the clippy step earning its
+place in the pre-commit tier rather than the gate.
+
+---
+
 **SLICE 11: KELEUSMA BUILDS A COMPLETE ARTIFACT, AND THE QUALIFIER MATTERS AS MUCH AS THE RESULT
 (2026-08-10).** 912 bytes, fifteen regions, directory and every payload, **byte-identical to
 `encode_aux_body`**. 116 tests. The first time the self-hosted path has produced a whole auxiliary

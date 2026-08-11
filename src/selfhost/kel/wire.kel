@@ -84,6 +84,45 @@ shared data wire {
     // Also a BATCH buffer. 8192 bytes covers `PARAM_TYPES` whole, and the host
     // feeds the large pools in successive batches while appending the output.
     bin: [Byte; 8192],
+    // Flattener scratch (slice 13). `fq` is the breadth-first queue, holding
+    // PREORDER indices in the order their records are emitted; `fsz` is each
+    // preorder node's subtree size, which is what locates a later sibling.
+    //
+    // Both are 1024 against a 341-node cap so that a malformed input cannot
+    // index out of range even before the guards report it: the sibling cursor
+    // is bounded by `nnodes + sum(sizes) <= 682`. Memory safety first, the
+    // error code second.
+    //
+    // Appended last so no existing slot index moves.
+    fq: [Word; 1024],
+    fsz: [Word; 1024],
+    // THE INTERNER'S OWN CHANNELS, split out from `fin` in slice 13b.
+    //
+    // Slice 12 ran the interner through `fin`, reading (length, mode) pairs and
+    // compacting (offset, length) pairs back over them. That worked while the
+    // interner was the only thing using `fin`. The flattener now needs `fin` for
+    // a six-word-per-node preorder, which fills all 1024 words at the 170-node
+    // cap, so the two cannot share it — and slice 13b has them running in ONE
+    // call, because `flatten` interns as it walks.
+    //
+    // `nin` is (length, mode) pairs in; `nout` is (offset, length) pairs out for
+    // `[0, 2*cnt)` and the input-to-index map from `nm_map_base()`. The pool is
+    // still compacted in place in `bin`, which is sound for the reason recorded
+    // at `intern_run`: the output cursor never overtakes the input cursor.
+    nin: [Word; 1024],
+    nout: [Word; 1024],
+    // THE POOL'S OUTPUT BUFFER, separate from its input.
+    //
+    // Slice 12 compacted the pool over its own input in `bin`, justified by the
+    // output cursor never overtaking the input cursor. That holds only while
+    // names are interned IN INPUT ORDER. Slice 13b interns during a
+    // breadth-first walk, and then it breaks: with two ten-byte names, reaching
+    // the second one first copies input 10..19 over output 0..9, destroying the
+    // first name's source bytes before it is read.
+    //
+    // A separate buffer makes the aliasing question disappear rather than
+    // answering it. `bin` is now read-only to the interner.
+    bout: [Byte; 8192],
 }
 
 // The running checksum. It lives in a data block because locals are immutable:
@@ -2318,13 +2357,504 @@ fn emit_in_region(k: Word, n: Word) -> Word {
     if k == kind_header() { emit_header_record_at(region_base(dir_find(k))) } else {
     if k == kind_string_pool() { emit_pool_bytes(region_base(dir_find(k)), n) } else {
     if k == kind_param_types() { emit_pool_bytes(region_base(dir_find(k)), n) } else {
-    0 - 222 }}}}}}}}}
+    // Added in slice 12. The original eight were exactly the minimal module's
+    // regions, and the interner's constructed sources declare enums, so they
+    // reach two more. The refusal is what surfaced it rather than a wrong
+    // artifact — the guard slice 11 added, doing its job on its first real test.
+    if k == kind_enum_variants() { emit_enum_variant_records(region_base(dir_find(k)), n) } else {
+    if k == kind_enum_layouts() { emit_enum_layout_records(region_base(dir_find(k)), n) } else {
+    0 - 222 }}}}}}}}}}}
+}
+
+// --- SLICE 12: THE INTERNER, THE DRIVER'S FIRST COMPUTED VALUE ------------
+//
+// Everything before this slice RE-EMITTED values the host had decoded out of the
+// reference artifact. This computes one instead: given the sequence of names the
+// encoder interns, in order, with the mode each call site uses, it produces the
+// `STRING_POOL` bytes and the `NAMES` records itself. The host supplies only the
+// input sequence, which is genuine input rather than an answer.
+//
+// THE INTERNER HAS TWO MODES AND BOTH ARE LOAD-BEARING.
+//
+//   mode 0, `intern`       reuse an existing entry with the same bytes
+//   mode 1, `intern_fresh` append unconditionally, even if the bytes exist
+//
+// A dedup-only port is not a simplification, it is a defect. `intern_fresh`
+// exists for CONTIGUITY, not freshness: struct-constant field names and
+// enum-variant names must form an unbroken run so that `first + i` addressing
+// reaches field or variant `i`. Sharing a repeated name would collapse the run
+// and silently misaddress every later element.
+//
+// The corpus cannot catch that. Four of the five stages measured have no
+// duplicate names at all, and only `parse` has any — twenty, out of 58,053 —
+// so a deduping-only interner would agree with the reference on four stages
+// out of five and then be wrong on the one that matters. The differential
+// therefore uses CONSTRUCTED sources, the smallest being two enums that share a
+// variant name.
+//
+// A LAST MATCH WINS, AND THIS IS NOT A FREE CHOICE. The reference keeps a
+// bytes-to-index map and `intern_fresh` INSERTS INTO IT, overwriting any
+// existing mapping. So when the same bytes have been appended twice, a later
+// `intern` yields the SECOND index, not the first. Measured, not inferred: for
+// `enum A { X, P } enum B { X, Q } enum X { R }` the reference's third layout
+// cites name index 5, the later `X`, while indices 2 and 5 both hold those
+// bytes. A forward first-match scan produces an artifact whose `NAMES` and
+// `STRING_POOL` are byte-identical and whose `ENUM_LAYOUTS` is wrong — which is
+// exactly the silent-divergence class this differential exists to catch, and it
+// would have slipped through had the scan been written the obvious way.
+//
+// THE SCAN IS LINEAR, AND THAT IS A KNOWN DEBT RATHER THAN AN OVERSIGHT.
+// The reference used a linear scan once and encoding a mid-sized stage took 782
+// seconds; it is a `BTreeMap` now. At the sizes this slice drives — ten names —
+// a scan is right, and the structure that replaces it is a separate increment
+// with its own measurement. **It must be replaced before the interner is driven
+// by a real stage**, where the count reaches 395,804. Recorded here rather than
+// only in the plan document, because this is where someone will read it.
+//
+// COMPACTION IS IN PLACE, AND THE ARGUMENT IS SHORT ENOUGH TO CHECK.
+// Input and output share `wire.bin` and `wire.fin`. The output cursor is the sum
+// of the emitted names' lengths and the input cursor is the sum of ALL names'
+// lengths, over the same prefix; emitted is a subset of all, so the output
+// cursor never exceeds the input cursor. Byte ranges therefore never overlap in
+// the wrong direction, and the record pairs coincide only when nothing has been
+// deduped yet, where the input pair is read before the output pair is written.
+private data nm {
+    // Byte cursor into the INPUT concatenation in `wire.bin`.
+    icur: Word,
+    // Byte cursor into the OUTPUT pool, compacted in place over the input.
+    ocur: Word,
+    // Names emitted so far, which is also the index the next one would take.
+    cnt: Word,
+    // Start of the name being considered. Needed because the input cursor has
+    // already advanced past it by the time the scan runs, and a local cannot
+    // carry it: this file uses no locals, for the reason `crc.acc` records.
+    ioff: Word,
+    // Scan result: the index of a matching emitted name, or -1.
+    found: Word,
+    // Byte-comparison accumulator.
+    eq: Word,
+    // Sticky rejection code, 0 while the input is admissible. Sticky rather than
+    // an early return because the language is total and the loop bound is
+    // static, so there is nothing to break out of.
+    err: Word,
+    // Discards a call's result where the interesting output is in the fields.
+    // A separate field rather than a borrowed one, for the reason `st.pad` is
+    // separate from `st.dis`: reusing an accumulator here would read as a bug.
+    sink: Word,
+}
+
+// The longest name this slice admits, and it is a STATED CAP rather than a
+// silent one. It bounds the byte-comparison loop, which is the innermost of
+// three nested loops and therefore the whole thing's worst case. Identifiers and
+// the generated per-element slot names are far shorter; a longer one is rejected
+// with a code instead of being truncated or scanned past its buffer.
+fn nm_max_name() -> Word { 256 }
+
+// The most names one call admits.
+//
+// 256 rather than the 512 that two words per name would allow, because the
+// upper half of `wire.fin` carries the input-to-index MAP. That map is the piece
+// downstream records actually consume — a chunk cites a name index, not a name —
+// and it is also the only way the last-match rule above is observable at all:
+// first-match and last-match produce identical `NAMES` and `STRING_POOL`
+// regions, so without the map the rule would be logic with no test that could
+// fail. Halving the cap to make a rule testable is the right trade.
+fn nm_max_names() -> Word { 256 }
+
+// Where the input-to-index map starts in `wire.fin`. Output record pairs occupy
+// `[0, 2 * cnt)` and `cnt <= n <= 256`, so they never reach here.
+fn nm_map_base() -> Word { 512 }
+
+// Whether two names in `wire.bin` hold the same bytes.
+//
+// No early exit, which is not a limitation here: the loop bound must be static
+// anyway, so a full compare costs what a bailing one would have to reserve.
+// Whether an ALREADY EMITTED name and a CANDIDATE hold the same bytes.
+//
+// The two arguments address different arrays, and that asymmetry is the point:
+// `pool_off` indexes the emitted pool in `bout`, `in_off` indexes the untouched
+// input in `bin`. Named rather than left as `a` and `b`, because a caller that
+// swapped them would compare a pool offset against the pool and silently find
+// the wrong thing.
+fn nm_bytes_equal(pool_off: Word, in_off: Word, len: Word) -> Word {
+    nm.eq = 1;
+    for i in 0..len limit 256 {
+        nm.eq = if wire.bout[pool_off + i] != wire.bin[in_off + i] { 0 } else { nm.eq };
+    }
+    nm.eq
+}
+
+// The index of the LAST emitted name whose bytes match, or -1.
+//
+// Last, not first — see the note above. The idiom differs from `dir_find`, which
+// keeps its FIRST hit by guarding the assignment; here the unguarded assignment
+// is the correct one, and the difference is deliberate.
+fn nm_find(coff: Word, clen: Word, upto: Word) -> Word {
+    nm.found = 0 - 1;
+    for i in 0..upto limit 512 {
+        nm.found = if wire.nout[(i * 2) + 1] == clen
+            andalso nm_bytes_equal(wire.nout[i * 2], coff, clen) == 1 { i } else { nm.found };
+    }
+    nm.found
+}
+
+// Append one name to the pool and record its reference. Returns the new count;
+// the caller owns the counter, so the increment is not hidden in here.
+fn nm_append(ioff: Word, ilen: Word) -> Word {
+    for b in 0..ilen limit 256 {
+        wire.bout[nm.ocur + b] = wire.bin[ioff + b];
+    }
+    wire.nout[nm.cnt * 2] = nm.ocur;
+    wire.nout[(nm.cnt * 2) + 1] = ilen;
+    nm.ocur = nm.ocur + ilen;
+    nm.cnt + 1
+}
+
+// Run the interner over `n` input names.
+//
+// Input: `wire.fin[2j]` is name `j`'s length and `wire.fin[2j+1]` its mode;
+// `wire.bin` holds the names concatenated in order.
+// Output, in place: `wire.fin[2i]` and `wire.fin[2i+1]` are emitted name `i`'s
+// pool offset and length, and `wire.bin[0..nm.ocur]` is the pool.
+fn intern_run(n: Word) -> Word {
+    nm.icur = 0;
+    nm.ocur = 0;
+    nm.cnt = 0;
+    nm.err = 0;
+    for j in 0..n limit 512 {
+        nm.ioff = nm.icur;
+        nm.icur = nm.icur + wire.nin[j * 2];
+        nm.err = if wire.nin[j * 2] > nm_max_name() { 0 - 231 } else {
+                 if nm.icur > bin_capacity() { 0 - 232 } else { nm.err } };
+        nm.found = if nm.err < 0 { 0 } else {
+                   if wire.nin[(j * 2) + 1] == 0 {
+                       nm_find(nm.ioff, wire.nin[j * 2], nm.cnt)
+                   } else { 0 - 1 } };
+        // Written BEFORE the count moves: a name that is about to be appended
+        // takes the index `nm.cnt` currently holds.
+        wire.nout[nm_map_base() + j] = if nm.found < 0 { nm.cnt } else { nm.found };
+        nm.cnt = if nm.err < 0 { nm.cnt } else {
+                 if nm.found < 0 { nm_append(nm.ioff, wire.nin[j * 2]) } else { nm.cnt } };
+    }
+    if nm.err < 0 { nm.err } else { nm.cnt }
+}
+
+// The `NAMES` index that input name `j` resolved to.
+//
+// The interner is a pure function of its input, so re-running it to answer this
+// is not a second answer to the same question — it is the same answer, which is
+// what makes the host relaying figures between re-seeded calls sound.
+fn intern_index_of(n: Word, j: Word) -> Word {
+    nm.sink = intern_names(n);
+    if nm.err < 0 { nm.err } else {
+    if j >= n { 0 - 235 } else { wire.nout[nm_map_base() + j] } }
+}
+
+// The count guard is SEPARATE from the loop rather than a condition inside it.
+//
+// `for j in 0..n limit 512` TRAPS with `LoopLimitExceeded` when the runtime
+// range exceeds the static cap, so a sticky error flag would not help: the trap
+// happens on entry, before any flag could be read. The oversize case must
+// therefore never reach the loop at all.
+fn intern_names(n: Word) -> Word {
+    if n > nm_max_names() { nm.err = 0 - 230; nm.cnt = 0; nm.ocur = 0; nm.err }
+    else { intern_run(n) }
+}
+
+// The pool's byte length after interning the same input.
+//
+// A separate command because a call returns one word and the host must relay
+// both figures back: shared data is re-seeded on every call, so the interner's
+// output cannot persist into the next one. Re-running is not a second answer to
+// the same question — the interner is a pure function of its input.
+fn intern_pool_len(n: Word) -> Word {
+    nm.sink = intern_names(n);
+    if nm.err < 0 { nm.err } else { nm.ocur }
+}
+
+// Intern, then write the `NAMES` records into their region. One call, because
+// the interner's output lives in shared data that the next call would clear.
+// The `NAMES` emitter for interner output.
+//
+// A near-twin of `emit_name_records`, which reads `fin`. Not folded into one
+// function taking a source, because `fin` and `nout` are different arrays rather
+// than a parameterisable base, and because slice 5's emitter is driven directly
+// by its own tests with `fin`-shaped input. Duplicating four lines is cheaper
+// than making the older emitter's tests depend on the newer channel.
+fn emit_name_records_from_nout(at: Word, n: Word) -> Word {
+    if (n * nameref_fields()) > fin_capacity() { 0 - 202 } else {
+        for j in 0..n limit 1024 {
+            put_u32(
+                at + (j * nameref_stride()) + nameref_off_offset(),
+                wire.nout[j * nameref_fields()],
+            );
+            put_u32(
+                at + (j * nameref_stride()) + nameref_off_length(),
+                wire.nout[(j * nameref_fields()) + 1],
+            );
+        }
+        n * nameref_stride()
+    }
+}
+
+fn intern_emit_names(n: Word) -> Word {
+    nm.sink = intern_names(n);
+    if nm.err < 0 { nm.err } else {
+    if dir_find(kind_names()) < 0 { 0 - 233 } else {
+        emit_name_records_from_nout(region_base(dir_find(kind_names())), nm.cnt) } }
+}
+
+// Intern, then write the `STRING_POOL` bytes and their pad.
+//
+// The pad is emitted explicitly. Slice 11 got it free because the host passed
+// the region's STORED bytes, which are already padded; a computed pool is the
+// unpadded length, so the rounding is this function's job.
+// The pool emitter for interner output, reading `bout`.
+//
+// A twin of `emit_pool_bytes`, which reads `bin`, for the same reason
+// `emit_name_records_from_nout` is a twin: two arrays, not one array from two
+// bases, and slice 4's emitter is driven directly by its own `bin`-shaped tests.
+fn emit_pool_bytes_from_bout(at: Word, n: Word) -> Word {
+    if n > bin_capacity() { 0 - 201 } else {
+        for j in 0..n limit 8192 {
+            wire.bytes[at + j] = wire.bout[j];
+        }
+        n
+    }
+}
+
+fn intern_emit_pool(n: Word) -> Word {
+    nm.sink = intern_names(n);
+    if nm.err < 0 { nm.err } else {
+    if dir_find(kind_string_pool()) < 0 { 0 - 234 } else {
+        emit_pool_bytes_from_bout(region_base(dir_find(kind_string_pool())), nm.ocur)
+            + emit_pool_pad(region_base(dir_find(kind_string_pool())) + nm.ocur, nm.ocur) } }
+}
+
+// --- SLICE 13: THE FLATTENER'S BREADTH-FIRST REORDERING -------------------
+//
+// The second value the driver computes. `flatten` turns a constant FOREST into
+// the flat `CONSTS` table, and the ordering it produces is the whole of the
+// difficulty: the roots occupy `0..nroots` in order, and children are numbered
+// BREADTH-FIRST after them. That is what guarantees every range points forward,
+// which is what lets a reader walk the table in one reverse sweep with no stack.
+//
+// THE INPUT IS DEPTH-FIRST, ON PURPOSE. A tree arrives as a preorder walk —
+// three words per node in `wire.fin`: tag, payload, child count — because that
+// is the natural flat serialization of a tree and because handing Keleusma a
+// breadth-first input would make the test vacuous. The reordering is the work.
+//
+// The two orders genuinely differ on the corpus of constructed sources. For
+// `const data k { a: [(Word, Word); 2] = [(1, 2), (3, 4)] }` the roots are the
+// array and a scalar index, and the orders are:
+//
+//   breadth-first  Array, Int, Tuple, Tuple, 1, 2, 3, 4     <- the reference
+//   depth-first    Array, Tuple, 1, 2, Tuple, 3, 4, Int
+//
+// so a flattener that emitted its input unchanged would fail on the first
+// depth-2 case rather than passing quietly.
+//
+// SCOPE. Scalars, tuples and arrays — the tags whose records need no name
+// interning. `STATIC_STR`, `STRUCT` and `ENUM` also intern as they walk, which
+// couples the flattener to the interner and to the two side tables; that is the
+// next slice, and it is why this one stops where it does.
+//
+// THERE IS NO `while`, AND NONE IS NEEDED. The reference loops until the queue
+// drains. Here the queue provably ends at exactly `nnodes` entries, since every
+// node is enqueued once, so a `for head in 0..nnodes` walks it exactly. A total
+// language forces the bound to be stated and in this case the bound was already
+// known — the restriction cost nothing.
+private data fl {
+    // Sibling cursor: a preorder index being advanced past whole subtrees.
+    cur: Word,
+    // Subtree-size accumulator.
+    tot: Word,
+    // Queue length, which is ALSO the next breadth-first index to allocate.
+    // The reference carries a separate `next_index`; the two are provably equal
+    // at every step — both start at `nroots` and both grow by the child count —
+    // so keeping one field removes the chance of them disagreeing.
+    qn: Word,
+    // The breadth-first index of the current node's first child.
+    first: Word,
+    // Index actually used after clamping, so a malformed input cannot index out
+    // of range while the error code is being raised.
+    pick: Word,
+    // The clamped QUEUE index, separate from `pick`. One field served both roles
+    // at first and was correct only because each iteration reassigned before
+    // use — the kind of coupling this file keeps apart deliberately, as `st.pad`
+    // records. Found by reading the code back, not by a failing test.
+    qpick: Word,
+    // Sticky rejection code, 0 while the input is well formed.
+    err: Word,
+    // Discards a call whose result is in the fields.
+    sink: Word,
+}
+
+// `wire.fin` holds three words per node, so 1024 words is 341 nodes. A STATED
+// cap: an oversized forest is refused with a code, not truncated.
+fn fl_max_nodes() -> Word { 341 }
+
+fn fl_fields() -> Word { 3 }
+
+fn fl_tag_of(p: Word) -> Word { wire.fin[p * fl_fields()] }
+fn fl_payload_of(p: Word) -> Word { wire.fin[(p * fl_fields()) + 1] }
+fn fl_children_of(p: Word) -> Word { wire.fin[(p * fl_fields()) + 2] }
+
+// Only these two carry a range in this slice. Struct and enum also do, and are
+// deliberately absent: admitting them here would emit a record with `aux` 0,
+// which is a plausible-looking wrong answer rather than a refusal.
+fn fl_tag_has_range(t: Word) -> Word {
+    if t == tag_tuple() { 1 } else { if t == tag_array() { 1 } else { 0 } }
+}
+
+fn fl_tag_in_scope(t: Word) -> Word {
+    if t == tag_unit() { 1 } else {
+    if t == tag_none() { 1 } else {
+    if t == tag_bool() { 1 } else {
+    if t == tag_int() { 1 } else {
+    if t == tag_byte() { 1 } else {
+    if t == tag_fixed() { 1 } else {
+    if t == tag_float() { 1 } else {
+    fl_tag_has_range(t) }}}}}}}
+}
+
+// Advance `fl.cur` past the whole subtree rooted there, returning that
+// subtree's size. Clamped: an out-of-range cursor sets the error code AND reads
+// index 0 rather than off the end, so the refusal is reported from a
+// memory-safe state.
+fn fl_step(nnodes: Word) -> Word {
+    fl.err = if fl.cur >= nnodes { 0 - 242 } else { fl.err };
+    fl.pick = if fl.cur < nnodes { fl.cur } else { 0 };
+    fl.cur = fl.cur + wire.fsz[fl.pick];
+    wire.fsz[fl.pick]
+}
+
+// The subtree size at preorder index `p`, given every index above `p` is sized.
+fn fl_size_at(p: Word, nnodes: Word) -> Word {
+    fl.cur = p + 1;
+    fl.tot = 1;
+    for k in 0..fl_children_of(p) limit 341 {
+        fl.tot = fl.tot + fl_step(nnodes);
+    }
+    fl.tot
+}
+
+// Size every node, highest preorder index first. The reverse order is what
+// makes a single pass sufficient: a node's children all sit above it in
+// preorder, so they are already sized when it is reached.
+fn fl_size_all(nnodes: Word) -> Word {
+    for i in 0..nnodes limit 341 {
+        wire.fsz[nnodes - 1 - i] = fl_size_at(nnodes - 1 - i, nnodes);
+    }
+    fl.err
+}
+
+// Every child count must be admissible before any loop uses one as a BOUND.
+// `for k in 0..n limit 341` TRAPS when the runtime range exceeds the cap, so a
+// count of 9999 in a malformed input would abort the VM rather than be
+// reported. Validation therefore precedes sizing, not the other way round.
+fn fl_validate(nnodes: Word) -> Word {
+    fl.err = 0;
+    for p in 0..nnodes limit 341 {
+        fl.err = if fl_children_of(p) > nnodes { 0 - 241 } else {
+                 if fl_tag_in_scope(fl_tag_of(p)) == 0 { 0 - 245 } else { fl.err } };
+    }
+    fl.err
+}
+
+// Seed the queue with the roots. Root 0 is at preorder 0; each later root sits
+// one whole subtree past the previous one.
+fn fl_seed_roots(nroots: Word, nnodes: Word) -> Word {
+    fl.cur = 0;
+    for r in 0..nroots limit 341 {
+        wire.fq[r] = fl.cur;
+        fl.sink = fl_step(nnodes);
+    }
+    nroots
+}
+
+// THE ROOTS' SUBTREES MUST EXACTLY COVER THE FOREST.
+//
+// Walking the roots leaves `fl.cur` at the sum of their subtree sizes, which is
+// the true node count. If the caller's `nnodes` disagrees, the walk runs past
+// the filled part of the queue and re-emits whichever index was left in it —
+// silently, with no error. Caught by reading the walk back rather than by a
+// test: `nroots = 1`, `nnodes = 3` and one childless root emitted three copies
+// of node 0.
+//
+// It lives in the VALIDATION CHAIN rather than inside `fl_seed_roots`, where it
+// was first written. Seeding happens inside the walk, which runs only after the
+// region lookup, so a caller with no directory got `-247` and never reached this
+// at all — the guard was unreachable in exactly the case its test exercised.
+fn fl_cover(nroots: Word, nnodes: Word) -> Word {
+    fl.cur = 0;
+    for r in 0..nroots limit 341 {
+        fl.sink = fl_step(nnodes);
+    }
+    if fl.cur != nnodes { 0 - 248 } else { 0 }
+}
+
+// Write the record for the node at queue position `head`.
+fn fl_put_record(at: Word, head: Word) -> Word {
+    put_u16(at + (head * const_stride()) + const_off_tag(), fl_tag_of(wire.fq[head]));
+    put_u16(at + (head * const_stride()) + const_off_flags(), 0);
+    put_u32(at + (head * const_stride()) + const_off_aux(), 0);
+    put_u64(
+        at + (head * const_stride()) + const_off_payload(),
+        if fl_tag_has_range(fl_tag_of(wire.fq[head])) == 1 {
+            fl.first bor (fl_children_of(wire.fq[head]) lsl 32)
+        } else {
+            fl_payload_of(wire.fq[head])
+        },
+    )
+}
+
+// The breadth-first walk. `fl.qn` is both the queue length and the next index
+// to allocate, so a node's first child index is simply the queue length before
+// its children are appended.
+fn fl_walk(at: Word, nroots: Word, nnodes: Word) -> Word {
+    fl.qn = fl_seed_roots(nroots, nnodes);
+    for head in 0..nnodes limit 341 {
+        fl.first = fl.qn;
+        fl.err = if fl.qn + fl_children_of(wire.fq[head]) > nnodes { 0 - 244 } else { fl.err };
+        fl.cur = wire.fq[head] + 1;
+        for k in 0..fl_children_of(wire.fq[head]) limit 341 {
+            fl.qpick = if fl.first + k < nnodes { fl.first + k } else { 0 };
+            wire.fq[fl.qpick] = fl.cur;
+            fl.sink = fl_step(nnodes);
+        }
+        fl.qn = fl.qn + fl_children_of(wire.fq[head]);
+        // Written AFTER the children are enqueued, because the record's range
+        // needs `fl.first`, which is read before the queue grows.
+        fl.sink = fl_put_record(at, head);
+    }
+    if fl.err < 0 { fl.err } else { nnodes * const_stride() }
+}
+
+// Flatten the forest in `wire.fin` and write `CONSTS` into its region.
+//
+// `nnodes` is an input rather than something computed, so the directory can be
+// laid before this runs and there is no chicken-and-egg with the region length.
+fn flatten_emit_consts(nroots: Word, nnodes: Word) -> Word {
+    if nnodes > fl_max_nodes() { 0 - 240 } else {
+    if nroots > nnodes { 0 - 246 } else {
+    if fl_validate(nnodes) < 0 { fl.err } else {
+    if fl_size_all(nnodes) < 0 { fl.err } else {
+    if fl_cover(nroots, nnodes) < 0 { 0 - 248 } else {
+    if dir_find(kind_consts()) < 0 { 0 - 247 } else {
+        fl_walk(region_base(dir_find(kind_consts())), nroots, nnodes) } } } } } }
 }
 
 fn dispatch_driver(cmd: Word) -> Word {
     if cmd == 134 { build_region_table(wire.nregions) } else {
     if cmd == 135 { emit_in_region(wire.warg, wire.warg2) } else {
-    0 - 97 }}
+    if cmd == 136 { intern_names(wire.warg) } else {
+    if cmd == 137 { intern_pool_len(wire.warg) } else {
+    if cmd == 138 { intern_emit_names(wire.warg) } else {
+    if cmd == 139 { intern_emit_pool(wire.warg) } else {
+    if cmd == 140 { intern_index_of(wire.warg, wire.warg2) } else {
+    if cmd == 141 { flatten_emit_consts(wire.warg, wire.warg2) } else {
+    0 - 97 }}}}}}}}
 }
 
 // THE HIGHEST LIVE COMMAND, AND IT IS LOAD-BEARING RATHER THAN DOCUMENTATION.
@@ -2332,7 +2862,7 @@ fn dispatch_driver(cmd: Word) -> Word {
 // UNREACHABLE and its own test fails immediately. The fall-through sweep reads
 // this value out of the source instead of restating a bound, which is what it
 // did for four consecutive slices — and got wrong once.
-fn highest_command() -> Word { 135 }
+fn highest_command() -> Word { 141 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {

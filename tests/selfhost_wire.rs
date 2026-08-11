@@ -93,6 +93,18 @@ const FIN_CAPACITY: usize = 1024;
 const BIN_SLOT: usize = FIN_SLOT + FIN_CAPACITY;
 const BIN_CAPACITY: usize = 8192;
 
+/// The flattener's scratch, `fq` and `fsz`, sits between `bin` and the
+/// interner's channels. Nothing seeds it — it is written by the walk — but it
+/// occupies slots, so the constants below must step over it. Spelled as two
+/// named lengths rather than one number, because a bare `2048` here is the kind
+/// of unexplained offset that survives a later array being resized.
+const FQ_CAPACITY: usize = 1024;
+const FSZ_CAPACITY: usize = 1024;
+/// The interner's (length, mode) input, split off `fin` in slice 13b so the
+/// flattener can own `fin` for its six-word-per-node preorder.
+const NIN_SLOT: usize = BIN_SLOT + BIN_CAPACITY + FQ_CAPACITY + FSZ_CAPACITY;
+const NIN_CAPACITY: usize = 1024;
+
 /// Build a `Vm` over `src` with a persistent region sized for its private data.
 ///
 /// Omitting the persistent sizing makes every module with a `private data` block
@@ -6178,6 +6190,9 @@ struct Call<'a> {
     seed: &'a [u8],
     regions: &'a Regions,
     fields: &'a [i64],
+    /// The interner's (length, mode) pairs, seeded into `nin`. Separate from
+    /// `fields` because slice 13b gives the interner its own channel.
+    names: &'a [i64],
     pool: &'a [u8],
     args: [i64; 5],
     read_len: usize,
@@ -6205,6 +6220,14 @@ fn run_call(vm: &mut Vm<'static, 'static>, c: &Call<'_>) -> Result<(i64, Vec<u8>
     }
     for (i, v) in c.fields.iter().enumerate() {
         vm.set_shared(&mut shared, FIN_SLOT + i, Value::Int(*v))?;
+    }
+    assert!(
+        c.names.len() <= NIN_CAPACITY,
+        "interner input is {} words, capacity is {NIN_CAPACITY}",
+        c.names.len()
+    );
+    for (i, v) in c.names.iter().enumerate() {
+        vm.set_shared(&mut shared, NIN_SLOT + i, Value::Int(*v))?;
     }
     for (i, b) in c.pool.iter().enumerate() {
         vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(*b))?;
@@ -6332,6 +6355,7 @@ fn keleusma_builds_a_complete_minimal_artifact_byte_for_byte() {
             seed: &[],
             regions: &specs,
             fields: &[],
+            names: &[],
             pool: &[],
             args: [0, 0, 0, 0, 0],
             read_len: total,
@@ -6369,6 +6393,7 @@ fn keleusma_builds_a_complete_minimal_artifact_byte_for_byte() {
                 seed: &art,
                 regions: &specs,
                 fields: &flat,
+                names: &[],
                 pool: stored,
                 args: [i64::from(*k), n as i64, 0, 0, 0],
                 read_len: total,
@@ -6411,6 +6436,7 @@ fn the_complete_artifact_comparison_reports_a_perturbation() {
             seed: &[],
             regions: &specs,
             fields: &[],
+            names: &[],
             pool: &[],
             args: [0, 0, 0, 0, 0],
             read_len: want.len(),
@@ -6421,5 +6447,947 @@ fn the_complete_artifact_comparison_reports_a_perturbation() {
         got[..header_len(specs.len())],
         want[..header_len(specs.len())],
         "control did not fire: a perturbed count left the directory unchanged"
+    );
+}
+
+// --- SLICE 12: THE INTERNER, THE DRIVER'S FIRST COMPUTED VALUE ---------------
+//
+// Every slice up to here handed Keleusma values that had been DECODED out of the
+// reference artifact and checked that it re-emitted them. This is the first that
+// makes Keleusma compute one. The host supplies the sequence of names the
+// encoder interns, with the mode each call site uses; Keleusma produces the
+// `STRING_POOL` bytes, the `NAMES` records, and the input-to-index map.
+//
+// WHY THE CASES ARE CONSTRUCTED RATHER THAN DRAWN FROM THE CORPUS. The corpus
+// cannot reach the behaviour under test. Four of the five stages measured carry
+// no duplicate names at all, and only `parse` has any — twenty out of 58,053 —
+// whose artifact is roughly 16 MB and cannot be driven through a 65,536-byte
+// buffer. A deduping-only interner would therefore agree with the corpus on four
+// stages out of five and be wrong on the one that matters. These sources are
+// about a kilobyte each and reach the duplicate path directly.
+//
+// The oracle stays REAL: every expectation below comes from `encode_aux_body`
+// on a genuinely compiled module, not from a model of the interner.
+//
+// WHAT IS STILL MODELLED, AND IT IS WORTH BEING PRECISE ABOUT. The interner's
+// input is a sequence of (name, mode) PAIRS, and that sequence is a property of
+// the encoder's call order, not something recoverable from its output. So
+// `interner_input` below is a Rust model of that call order. It is not the
+// oracle — the oracle is byte identity of the resulting regions — but if the
+// model of the order were wrong, these tests would fail rather than pass
+// vacuously. Generating that sequence from the AST is the self-hosted driver's
+// job and is NOT done here.
+
+const CMD_INTERN_NAMES: i64 = 136;
+const CMD_INTERN_POOL_LEN: i64 = 137;
+const CMD_INTERN_EMIT_NAMES: i64 = 138;
+const CMD_INTERN_EMIT_POOL: i64 = 139;
+const CMD_INTERN_INDEX_OF: i64 = 140;
+
+/// `Names::intern` — reuse an entry with the same bytes.
+const MODE_INTERN: i64 = 0;
+/// `Names::intern_fresh` — append unconditionally, keeping a run contiguous.
+const MODE_FRESH: i64 = 1;
+
+/// Sources chosen so that between them they reach every branch of the interner.
+///
+/// Each is annotated with what it buys, because "a list of test inputs" with no
+/// stated purpose is how a suite acquires cases nobody can later remove.
+const INTERNER_CASES: &[(&str, &str)] = &[
+    // No duplicates at all: the control. If this failed, nothing below would
+    // mean anything.
+    ("minimal", "fn main() -> Word { 42 }"),
+    ("one-enum", "enum A { X, Y }\nfn main() -> Word { 42 }"),
+    // The smallest duplicate: a variant whose name equals its own type name.
+    // Both are upper_ident, so the collision is legal.
+    (
+        "variant-equals-own-type",
+        "enum A { A, B }\nfn main() -> Word { 42 }",
+    ),
+    // Two enums sharing a variant name. `intern_fresh` must append both.
+    (
+        "two-enums-shared-variant",
+        "enum A { X, Y }\nenum B { X, Z }\nfn main() -> Word { 42 }",
+    ),
+    // Three copies, which distinguishes "dedups once" from "dedups".
+    (
+        "three-way-duplicate",
+        "enum A { X, P }\nenum B { X, Q }\nenum C { X, R }\nfn main() -> Word { 42 }",
+    ),
+    // THE SHARING DIRECTION. `intern_fresh` records its entry so a later
+    // `intern` can reuse it: fresh("B") for the variant runs before intern("B")
+    // for the second enum's type name. A port whose fresh mode skips the index
+    // emits seven names where the reference emits six.
+    (
+        "fresh-then-intern-shares",
+        "enum A { B, X }\nenum B { Y, Z }\nfn main() -> Word { 42 }",
+    ),
+];
+
+/// A model of the encoder's interning call order, for sources limited to
+/// function definitions and enum declarations.
+///
+/// Mirrors `SchemaBuilder::add_chunk` (`names.intern`) and `add_enum_layouts`
+/// (`names.intern` for the type name, `names.intern_fresh` per variant), in that
+/// order. Restricted deliberately: a source with data slots, natives, struct
+/// templates or composite constants has more contributors, and silently
+/// producing a short sequence for one would make a test pass for the wrong
+/// reason. `assert_no_other_contributors` refuses those inputs instead.
+fn interner_input(module: &keleusma::bytecode::Module) -> Vec<(String, i64)> {
+    let mut seq = Vec::new();
+    for c in &module.chunks {
+        seq.push((c.name.clone(), MODE_INTERN));
+    }
+    for l in &module.enum_layouts {
+        seq.push((l.type_name.clone(), MODE_INTERN));
+        for v in &l.variants {
+            seq.push((v.name.clone(), MODE_FRESH));
+        }
+    }
+    seq
+}
+
+/// Refuses a module whose names come from a contributor `interner_input` does
+/// not model. Without this the model could silently under-generate.
+fn assert_no_other_contributors(label: &str, module: &keleusma::bytecode::Module) {
+    assert!(
+        module.native_names.is_empty(),
+        "{label}: natives intern names and the model does not cover them"
+    );
+    assert!(
+        module.data_layout.is_none(),
+        "{label}: a data layout interns per-slot names and the model does not cover them"
+    );
+    for c in &module.chunks {
+        assert!(
+            c.struct_templates.is_empty(),
+            "{label}: struct templates intern names and the model does not cover them"
+        );
+    }
+}
+
+/// The interner input, flattened into the two shared-data channels: `fin` takes
+/// (length, mode) pairs and `bin` takes the names concatenated in order.
+fn interner_channels(seq: &[(String, i64)]) -> (Vec<i64>, Vec<u8>) {
+    let mut fields = Vec::with_capacity(seq.len() * 2);
+    let mut pool = Vec::new();
+    for (name, mode) in seq {
+        fields.push(name.len() as i64);
+        fields.push(*mode);
+        pool.extend_from_slice(name.as_bytes());
+    }
+    (fields, pool)
+}
+
+/// The reference's `NAMES` entries as byte strings, and the UNPADDED pool
+/// length, which is what the interner reports.
+fn reference_names(bytes: &[u8]) -> (Vec<Vec<u8>>, usize) {
+    use keleusma::wire_schema::kind;
+    let view = keleusma_wire::WireView::parse(bytes).expect("artifact parses");
+    let pool = view
+        .find_region(kind::STRING_POOL)
+        .and_then(|r| view.region_bytes(&r).ok())
+        .unwrap_or(&[])
+        .to_vec();
+    let mut names = Vec::new();
+    let mut used = 0usize;
+    if let Some(r) = view.find_region(kind::NAMES) {
+        let t = view.records(&r, 8).expect("names table");
+        for i in 0..t.len() {
+            let n: keleusma::wire_schema::NameRef = t.get_as(i).expect("rec");
+            let (o, l) = (n.offset as usize, n.length as usize);
+            names.push(pool[o..o + l].to_vec());
+            used = used.max(o + l);
+        }
+    }
+    (names, used)
+}
+
+/// One interner call: seeds the (name, mode) channels and nothing else.
+fn run_intern(
+    vm: &mut Vm<'static, 'static>,
+    cmd: i64,
+    names: &[i64],
+    pool: &[u8],
+    args: [i64; 5],
+) -> i64 {
+    run_call(
+        vm,
+        &Call {
+            cmd,
+            nregions: 0,
+            seed: &[],
+            regions: &[],
+            fields: &[],
+            names,
+            pool,
+            args,
+            read_len: 0,
+        },
+    )
+    .expect("run")
+    .0
+}
+
+/// One flattener call. Its input is the PREORDER, which rides `fin`, not the
+/// interner's `nin` — a separate helper rather than a flag, because the two
+/// commands read different arrays and a boolean at the call site would hide
+/// which one.
+fn run_flatten(vm: &mut Vm<'static, 'static>, cmd: i64, fields: &[i64], args: [i64; 5]) -> i64 {
+    run_call(
+        vm,
+        &Call {
+            cmd,
+            nregions: 0,
+            seed: &[],
+            regions: &[],
+            fields,
+            names: &[],
+            pool: &[],
+            args,
+            read_len: 0,
+        },
+    )
+    .expect("run")
+    .0
+}
+
+#[test]
+fn keleusma_computes_the_name_table_the_reference_interned() {
+    let mut vm = vm_for(WIRE_KEL);
+    let mut saw_a_duplicate = false;
+
+    for (label, src) in INTERNER_CASES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        assert_no_other_contributors(label, &module);
+        let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+        let (ref_names, ref_pool_len) = reference_names(&want);
+
+        let seq = interner_input(&module);
+        let (fields, pool) = interner_channels(&seq);
+        let n = seq.len() as i64;
+
+        // A duplicate is what separates the two modes. Recording it per case
+        // means the suite reports if the property it relies on ever stops
+        // holding, rather than quietly testing nothing.
+        let mut distinct = ref_names.clone();
+        distinct.sort();
+        distinct.dedup();
+        if distinct.len() < ref_names.len() {
+            saw_a_duplicate = true;
+        }
+
+        let cnt = run_intern(&mut vm, CMD_INTERN_NAMES, &fields, &pool, [n, 0, 0, 0, 0]);
+        assert_eq!(
+            cnt,
+            ref_names.len() as i64,
+            "{label}: Keleusma emitted {cnt} names, the reference {}",
+            ref_names.len()
+        );
+
+        let plen = run_intern(
+            &mut vm,
+            CMD_INTERN_POOL_LEN,
+            &fields,
+            &pool,
+            [n, 0, 0, 0, 0],
+        );
+        assert_eq!(
+            plen, ref_pool_len as i64,
+            "{label}: Keleusma's pool is {plen} bytes, the reference's {ref_pool_len}"
+        );
+    }
+
+    assert!(
+        saw_a_duplicate,
+        "no case produced a duplicate name, so neither mode was distinguished"
+    );
+}
+
+#[test]
+fn the_computed_name_regions_are_byte_identical_in_a_complete_artifact() {
+    use keleusma::wire_schema::kind;
+    let mut vm = vm_for(WIRE_KEL);
+
+    for (label, src) in INTERNER_CASES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        assert_no_other_contributors(label, &module);
+        let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+        let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+        let total = want.len();
+        assert!(total < CAPACITY, "{label}: artifact is {total} bytes");
+
+        let seq = interner_input(&module);
+        let (nfields, npool) = interner_channels(&seq);
+        let n = seq.len() as i64;
+
+        // The two regions are sized from KELEUSMA's own figures, not the
+        // reference's, so a wrong count moves every later region and the byte
+        // comparison at the end fails loudly.
+        let cnt = run_intern(&mut vm, CMD_INTERN_NAMES, &nfields, &npool, [n, 0, 0, 0, 0]);
+        let plen = run_intern(
+            &mut vm,
+            CMD_INTERN_POOL_LEN,
+            &nfields,
+            &npool,
+            [n, 0, 0, 0, 0],
+        );
+        assert!(cnt >= 0 && plen >= 0, "{label}: interner refused");
+
+        let mut specs = region_counts_for(&want);
+        for s in &mut specs {
+            if s.0 == kind::NAMES {
+                s.2 = cnt as usize;
+            }
+            if s.0 == kind::STRING_POOL {
+                s.2 = plen as usize;
+            }
+        }
+
+        let (_, mut art) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_BUILD_REGION_TABLE,
+                nregions: specs.len() as i64,
+                seed: &[],
+                regions: &specs,
+                fields: &[],
+                names: &[],
+                pool: &[],
+                args: [0, 0, 0, 0, 0],
+                read_len: total,
+            },
+        )
+        .expect("run");
+
+        for (k, _, _, _) in &specs {
+            let region = view.find_region(*k).expect("region");
+            let stored = view.region_bytes(&region).expect("payload");
+            if stored.is_empty() {
+                continue;
+            }
+            // The two computed regions take the interner's input; every other
+            // region is still re-emitted from decoded values, which is the part
+            // later slices replace.
+            // The interner's (length, mode) pairs ride `names`; every other
+            // emitter's field rows ride `fields`. Keeping both in one tuple
+            // rather than reusing a single slot, because routing the interner
+            // input down the wrong channel is exactly the failure this split
+            // produced on its first run — silently empty NAMES and STRING_POOL
+            // regions rather than an error.
+            let (cmd, fields, names, pl, args) = if *k == kind::NAMES {
+                (
+                    CMD_INTERN_EMIT_NAMES,
+                    Vec::new(),
+                    nfields.clone(),
+                    npool.clone(),
+                    [n, 0, 0, 0, 0],
+                )
+            } else if *k == kind::STRING_POOL {
+                (
+                    CMD_INTERN_EMIT_POOL,
+                    Vec::new(),
+                    nfields.clone(),
+                    npool.clone(),
+                    [n, 0, 0, 0, 0],
+                )
+            } else {
+                let is_pool = matches!(*k, kind::PARAM_TYPES | kind::DEBUG_POOL);
+                let rows = if is_pool {
+                    Vec::new()
+                } else {
+                    rows_for_kind(&view, *k)
+                };
+                let flat: Vec<i64> = rows.iter().flatten().copied().collect();
+                let cnt = if is_pool { stored.len() } else { rows.len() };
+                (
+                    CMD_EMIT_IN_REGION,
+                    flat,
+                    Vec::new(),
+                    stored.to_vec(),
+                    [i64::from(*k), cnt as i64, 0, 0, 0],
+                )
+            };
+
+            let (ret, next) = run_call(
+                &mut vm,
+                &Call {
+                    cmd,
+                    nregions: specs.len() as i64,
+                    seed: &art,
+                    regions: &specs,
+                    fields: &fields,
+                    names: &names,
+                    pool: &pl,
+                    args,
+                    read_len: total,
+                },
+            )
+            .expect("run");
+            assert!(ret >= 0, "{label}: region {k:#06x} refused with code {ret}");
+            art = next;
+        }
+
+        assert_eq!(art, want, "{label}: the artifact Keleusma built differs");
+    }
+}
+
+/// The LAST-MATCH rule, which is invisible in `NAMES` and `STRING_POOL`.
+///
+/// `intern_fresh` inserts into the reference's bytes-to-index map, overwriting,
+/// so a later `intern` of duplicated bytes yields the SECOND index. First-match
+/// and last-match produce identical name and pool regions, so this is checked
+/// through the input-to-index map — the only place the difference shows — and
+/// against the reference's own `ENUM_LAYOUTS.type_name`, not against a belief.
+#[test]
+fn a_later_intern_resolves_to_the_last_matching_index() {
+    use keleusma::wire_schema::kind;
+    let src = "enum A { X, P }\nenum B { X, Q }\nenum X { R }\nfn main() -> Word { 42 }";
+    let mut vm = vm_for(WIRE_KEL);
+
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let view = keleusma_wire::WireView::parse(&want).expect("parses");
+    let (ref_names, _) = reference_names(&want);
+
+    // The reference's own answer: which index does `enum X`'s type name cite?
+    let lt = view
+        .records(&view.find_region(kind::ENUM_LAYOUTS).expect("layouts"), 16)
+        .expect("table");
+    let last: keleusma::wire_schema::EnumLayoutRecord =
+        lt.get_as(lt.len() - 1).expect("last layout");
+    let cited = last.type_name as usize;
+
+    // The property must be non-vacuous: those bytes must occur more than once,
+    // otherwise first-match and last-match agree and this proves nothing.
+    let occurrences: Vec<usize> = ref_names
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| *s == &ref_names[cited])
+        .map(|(j, _)| j)
+        .collect();
+    assert!(
+        occurrences.len() > 1,
+        "vacuous: {:?} occurs once, so the two rules agree",
+        String::from_utf8_lossy(&ref_names[cited])
+    );
+    assert_eq!(
+        cited,
+        *occurrences.last().expect("occurrence"),
+        "the reference did not choose the last match; this test's premise is wrong"
+    );
+    assert_ne!(
+        cited, occurrences[0],
+        "vacuous: the last match IS the first match"
+    );
+
+    // Keleusma's answer for the same input position.
+    let seq = interner_input(&module);
+    let (fields, pool) = interner_channels(&seq);
+    let n = seq.len() as i64;
+    let j = seq
+        .iter()
+        .rposition(|(name, mode)| *mode == MODE_INTERN && name.as_bytes() == ref_names[cited])
+        .expect("the late intern") as i64;
+
+    let got = run_intern(
+        &mut vm,
+        CMD_INTERN_INDEX_OF,
+        &fields,
+        &pool,
+        [n, j, 0, 0, 0],
+    );
+    assert_eq!(
+        got, cited as i64,
+        "Keleusma resolved input {j} to index {got}; the reference cites {cited} \
+         (those bytes occur at {occurrences:?}) — a first-match scan would give {}",
+        occurrences[0]
+    );
+}
+
+/// Must-fire: a deduping-only interner disagrees with the reference.
+///
+/// Forcing every mode to `intern` is exactly the port the plan document warns
+/// about. On a source with duplicate names it must produce fewer records than
+/// the reference — if it did not, the two modes would be indistinguishable and
+/// every test above would be measuring nothing.
+#[test]
+fn a_dedup_only_interner_produces_the_wrong_count() {
+    let mut vm = vm_for(WIRE_KEL);
+    let src = "enum A { X, Y }\nenum B { X, Z }\nfn main() -> Word { 42 }";
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let (ref_names, _) = reference_names(&want);
+
+    let seq = interner_input(&module);
+    let (mut fields, pool) = interner_channels(&seq);
+    for i in 0..seq.len() {
+        fields[i * 2 + 1] = MODE_INTERN;
+    }
+    let cnt = run_intern(
+        &mut vm,
+        CMD_INTERN_NAMES,
+        &fields,
+        &pool,
+        [seq.len() as i64, 0, 0, 0, 0],
+    );
+    assert!(
+        cnt < ref_names.len() as i64,
+        "control did not fire: dedup-only emitted {cnt}, the reference {}",
+        ref_names.len()
+    );
+}
+
+/// Must-fire: an append-only interner disagrees too, in the other direction.
+///
+/// The complementary error — treating every call as `intern_fresh` — must
+/// over-produce on a source where a later `intern` should share.
+#[test]
+fn an_append_only_interner_produces_the_wrong_count() {
+    let mut vm = vm_for(WIRE_KEL);
+    let src = "enum A { B, X }\nenum B { Y, Z }\nfn main() -> Word { 42 }";
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let (ref_names, _) = reference_names(&want);
+
+    let seq = interner_input(&module);
+    let (mut fields, pool) = interner_channels(&seq);
+    for i in 0..seq.len() {
+        fields[i * 2 + 1] = MODE_FRESH;
+    }
+    let cnt = run_intern(
+        &mut vm,
+        CMD_INTERN_NAMES,
+        &fields,
+        &pool,
+        [seq.len() as i64, 0, 0, 0, 0],
+    );
+    assert!(
+        cnt > ref_names.len() as i64,
+        "control did not fire: append-only emitted {cnt}, the reference {}",
+        ref_names.len()
+    );
+}
+
+/// The stated caps are enforced with a code rather than by truncating.
+#[test]
+fn the_interner_reports_an_input_it_cannot_hold() {
+    let mut vm = vm_for(WIRE_KEL);
+
+    // Too many names. 257 exceeds the 256 the map's placement allows.
+    let over: Vec<(String, i64)> = (0..257).map(|i| (format!("n{i}"), MODE_INTERN)).collect();
+    let (fields, pool) = interner_channels(&over);
+    assert_eq!(
+        run_intern(&mut vm, CMD_INTERN_NAMES, &fields, &pool, [257, 0, 0, 0, 0]),
+        -230,
+        "an oversized name count was not reported"
+    );
+
+    // A name longer than the comparison loop's static bound.
+    let mut vm = vm_for(WIRE_KEL);
+    let long = vec![("x".repeat(257), MODE_INTERN)];
+    let (fields, pool) = interner_channels(&long);
+    assert_eq!(
+        run_intern(&mut vm, CMD_INTERN_NAMES, &fields, &pool, [1, 0, 0, 0, 0]),
+        -231,
+        "an oversized name was not reported"
+    );
+
+    // Asking for an index past the input.
+    let mut vm = vm_for(WIRE_KEL);
+    let one = vec![("main".to_string(), MODE_INTERN)];
+    let (fields, pool) = interner_channels(&one);
+    assert_eq!(
+        run_intern(
+            &mut vm,
+            CMD_INTERN_INDEX_OF,
+            &fields,
+            &pool,
+            [1, 1, 0, 0, 0]
+        ),
+        -235,
+        "an out-of-range map query was not reported"
+    );
+}
+
+// --- SLICE 13: THE FLATTENER'S BREADTH-FIRST REORDERING ----------------------
+//
+// The driver's second computed value. `flatten` turns a constant FOREST into
+// the flat `CONSTS` table, and the ordering is the whole of the difficulty: the
+// roots occupy `0..nroots` in order and children are numbered BREADTH-FIRST
+// after them, which is what makes every range point forward.
+//
+// THE INPUT IS DEPTH-FIRST, ON PURPOSE. Keleusma receives a preorder walk —
+// three words per node: tag, payload, child count. Handing it a breadth-first
+// input would make the test vacuous, so `orders_differ_somewhere` below asserts
+// that the two orders actually disagree on this corpus rather than assuming it.
+//
+// THE ORACLE IS REAL, and that is a recent correction. This plan previously
+// recorded that the flattener would need hand-built constant trees, because all
+// 2,192 constant nodes in the ten stage sources are scalars. That measurement is
+// about the corpus; `const data`, referenced from a function, emits genuine
+// composite constants to depth 2 in about a kilobyte.
+
+const CMD_FLATTEN_EMIT_CONSTS: i64 = 141;
+
+/// Sources whose chunk constant pools contain composites. Every one is a real
+/// compiled module, so the oracle is `encode_aux_body`.
+const FLATTEN_CASES: &[(&str, &str)] = &[
+    // Control: no composite at all. If this failed, nothing below would mean
+    // anything.
+    ("scalars-only", "fn main() -> Word { 42 }"),
+    (
+        "tuple-d1",
+        "const data k { t: (Word, Word) = (1, 2) }\nfn main() -> Word { k.t.0 }",
+    ),
+    (
+        "array-d1",
+        "const data k { xs: [Word; 3] = [1, 2, 3] }\nfn main() -> Word { k.xs[0] }",
+    ),
+    // DEPTH 2, which is the case that separates breadth-first from depth-first.
+    (
+        "array-of-tuple-d2",
+        "const data k { a: [(Word, Word); 2] = [(1, 2), (3, 4)] }\n\
+         fn take(v: [(Word, Word); 2]) -> Word { v[0].0 }\nfn main() -> Word { take(k.a) }",
+    ),
+    (
+        "nested-tuple-d2",
+        "const data k { t: (Word, (Word, Word)) = (1, (2, 3)) }\nfn main() -> Word { k.t.0 }",
+    ),
+    // A COMPOSITE THAT IS NOT THE LAST CHILD. When every composite sits last,
+    // the two walks coincide — which is why `nested-tuple-d2` above does NOT
+    // distinguish them, and why the vacuity check below caught that four of the
+    // first five cases were proving nothing about the reordering.
+    (
+        "tuple-composite-first",
+        "const data k { t: ((Word, Word), Word) = ((1, 2), 3) }\n         fn main() -> Word { k.t.1 }",
+    ),
+];
+
+/// Every chunk's constants, concatenated in chunk order — which is exactly what
+/// `SchemaBuilder::const_roots` accumulates and hands to `flatten`.
+fn const_roots_of(module: &keleusma::bytecode::Module) -> Vec<keleusma::bytecode::ConstValue> {
+    let mut roots = Vec::new();
+    for c in &module.chunks {
+        roots.extend(c.constants.iter().cloned());
+    }
+    roots
+}
+
+/// Serialize one node depth-first: tag, payload, child count, then the children.
+///
+/// Panics on a tag outside this slice's scope rather than emitting a plausible
+/// record. `STATIC_STR`, `STRUCT` and `ENUM` intern names as they walk, which
+/// couples the flattener to the interner; that is the next slice.
+fn push_preorder(c: &keleusma::bytecode::ConstValue, out: &mut Vec<i64>) {
+    use keleusma::bytecode::ConstValue as K;
+    let (tag, payload, children): (i64, i64, &[K]) = match c {
+        K::Unit => (1, 0, &[]),
+        K::Bool(b) => (2, i64::from(*b), &[]),
+        K::Int(v) => (3, *v, &[]),
+        K::Byte(v) => (4, i64::from(*v), &[]),
+        K::Fixed(v) => (5, *v, &[]),
+        K::None => (12, 0, &[]),
+        K::Tuple(v) => (8, 0, v.as_slice()),
+        K::Array(v) => (9, 0, v.as_slice()),
+        other => panic!("constant is outside slice 13's scope: {other:?}"),
+    };
+    out.push(tag);
+    out.push(payload);
+    out.push(children.len() as i64);
+    for ch in children {
+        push_preorder(ch, out);
+    }
+}
+
+fn preorder_of(roots: &[keleusma::bytecode::ConstValue]) -> Vec<i64> {
+    let mut out = Vec::new();
+    for r in roots {
+        push_preorder(r, &mut out);
+    }
+    out
+}
+
+/// The (tag, payload) sequence in each order, for the vacuity check.
+///
+/// TAGS ALONE ARE TOO COARSE, and the first version of this compared only tags.
+/// For `((1, 2), 3)` both walks give 8, 8, 3, 3, 3 while visiting the scalars in
+/// different orders — so a tag-only check would have called that case
+/// indistinguishable when it is exactly the shape the reordering exists for.
+type NodeSeq = Vec<(i64, i64)>;
+
+fn node_orders(roots: &[keleusma::bytecode::ConstValue]) -> (NodeSeq, NodeSeq) {
+    use keleusma::bytecode::ConstValue as K;
+    fn kids(c: &K) -> &[K] {
+        match c {
+            K::Tuple(v) | K::Array(v) => v.as_slice(),
+            _ => &[],
+        }
+    }
+    fn node(c: &K) -> (i64, i64) {
+        match c {
+            K::Unit => (1, 0),
+            K::Bool(b) => (2, i64::from(*b)),
+            K::Int(v) => (3, *v),
+            K::Byte(v) => (4, i64::from(*v)),
+            K::Fixed(v) => (5, *v),
+            K::None => (12, 0),
+            K::Tuple(_) => (8, 0),
+            K::Array(_) => (9, 0),
+            other => panic!("out of scope: {other:?}"),
+        }
+    }
+    fn dfs(c: &K, out: &mut Vec<(i64, i64)>) {
+        out.push(node(c));
+        for k in kids(c) {
+            dfs(k, out);
+        }
+    }
+    let mut depth_first = Vec::new();
+    for r in roots {
+        dfs(r, &mut depth_first);
+    }
+    let mut breadth_first = Vec::new();
+    let mut queue: Vec<&K> = roots.iter().collect();
+    let mut head = 0;
+    while head < queue.len() {
+        let n = queue[head];
+        head += 1;
+        breadth_first.push(node(n));
+        queue.extend(kids(n).iter());
+    }
+    (breadth_first, depth_first)
+}
+
+fn node_count(roots: &[keleusma::bytecode::ConstValue]) -> usize {
+    node_orders(roots).0.len()
+}
+
+#[test]
+fn keleusma_flattens_a_constant_forest_breadth_first() {
+    use keleusma::wire_schema::kind;
+    let mut vm = vm_for(WIRE_KEL);
+    let mut saw_depth_two = false;
+
+    for (label, src) in FLATTEN_CASES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+        let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+        let total = want.len();
+        assert!(total < CAPACITY, "{label}: artifact is {total} bytes");
+
+        let roots = const_roots_of(&module);
+        let fields = preorder_of(&roots);
+        let nroots = roots.len() as i64;
+        let nnodes = node_count(&roots) as i64;
+
+        // The reference's own CONSTS count must agree, or the input model is
+        // wrong and everything below would be comparing the wrong thing.
+        let ref_consts = view
+            .find_region(kind::CONSTS)
+            .and_then(|r| view.records(&r, 16).ok())
+            .map_or(0, |t| t.len());
+        assert_eq!(
+            ref_consts, nnodes as usize,
+            "{label}: model counts {nnodes} nodes, the reference emitted {ref_consts}"
+        );
+
+        let (bf, df) = node_orders(&roots);
+        if bf != df {
+            saw_depth_two = true;
+        }
+
+        let specs = region_counts_for(&want);
+        let (_, mut art) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_BUILD_REGION_TABLE,
+                nregions: specs.len() as i64,
+                seed: &[],
+                regions: &specs,
+                fields: &[],
+                names: &[],
+                pool: &[],
+                args: [0, 0, 0, 0, 0],
+                read_len: total,
+            },
+        )
+        .expect("run");
+
+        for (k, _, _, _) in &specs {
+            let region = view.find_region(*k).expect("region");
+            let stored = view.region_bytes(&region).expect("payload");
+            if stored.is_empty() {
+                continue;
+            }
+            let (cmd, f, pl, args) = if *k == kind::CONSTS {
+                (
+                    CMD_FLATTEN_EMIT_CONSTS,
+                    fields.clone(),
+                    Vec::new(),
+                    [nroots, nnodes, 0, 0, 0],
+                )
+            } else {
+                let is_pool =
+                    matches!(*k, kind::STRING_POOL | kind::PARAM_TYPES | kind::DEBUG_POOL);
+                let rows = if is_pool {
+                    Vec::new()
+                } else {
+                    rows_for_kind(&view, *k)
+                };
+                let flat: Vec<i64> = rows.iter().flatten().copied().collect();
+                let n = if is_pool { stored.len() } else { rows.len() };
+                (
+                    CMD_EMIT_IN_REGION,
+                    flat,
+                    stored.to_vec(),
+                    [i64::from(*k), n as i64, 0, 0, 0],
+                )
+            };
+            let (ret, next) = run_call(
+                &mut vm,
+                &Call {
+                    cmd,
+                    nregions: specs.len() as i64,
+                    seed: &art,
+                    regions: &specs,
+                    fields: &f,
+                    names: &[],
+                    pool: &pl,
+                    args,
+                    read_len: total,
+                },
+            )
+            .expect("run");
+            assert!(ret >= 0, "{label}: region {k:#06x} refused with code {ret}");
+            art = next;
+        }
+
+        assert_eq!(art, want, "{label}: the artifact Keleusma built differs");
+    }
+
+    assert!(
+        saw_depth_two,
+        "no case distinguished breadth-first from depth-first, so the reordering was not tested"
+    );
+}
+
+/// Must-fire, and it is about the CORPUS rather than the code: unless some case
+/// orders differently under the two walks, a flattener that emitted its input
+/// unchanged would pass the test above.
+#[test]
+fn the_two_walk_orders_genuinely_disagree_on_this_corpus() {
+    let mut disagreements = 0;
+    for (label, src) in FLATTEN_CASES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let roots = const_roots_of(&module);
+        let (bf, df) = node_orders(&roots);
+        assert_eq!(
+            bf.len(),
+            df.len(),
+            "{label}: the two walks visited different counts"
+        );
+        if bf != df {
+            disagreements += 1;
+        }
+    }
+    assert!(
+        disagreements >= 2,
+        "only {disagreements} case(s) distinguish the two orders; the reordering is barely tested"
+    );
+}
+
+/// The stated caps and the scope boundary are reported, not silently accepted.
+#[test]
+fn the_flattener_reports_input_it_will_not_flatten() {
+    // A forest larger than `wire.fin` can describe.
+    let mut vm = vm_for(WIRE_KEL);
+    let big: Vec<i64> = (0..342).flat_map(|_| [3_i64, 0, 0]).collect();
+    assert_eq!(
+        run_flatten(&mut vm, CMD_FLATTEN_EMIT_CONSTS, &big, [342, 342, 0, 0, 0]),
+        -240,
+        "an oversized forest was not reported"
+    );
+
+    // More roots than nodes.
+    let mut vm = vm_for(WIRE_KEL);
+    assert_eq!(
+        run_flatten(
+            &mut vm,
+            CMD_FLATTEN_EMIT_CONSTS,
+            &[3, 7, 0],
+            [2, 1, 0, 0, 0]
+        ),
+        -246,
+        "nroots > nnodes was not reported"
+    );
+
+    // A child count that cannot be a bound.
+    let mut vm = vm_for(WIRE_KEL);
+    assert_eq!(
+        run_flatten(
+            &mut vm,
+            CMD_FLATTEN_EMIT_CONSTS,
+            &[8, 0, 99],
+            [1, 1, 0, 0, 0]
+        ),
+        -241,
+        "an impossible child count was not reported"
+    );
+
+    // A NODE COUNT THAT DOES NOT MATCH THE FOREST. Found by reading the walk
+    // back, not by a failing test: with one childless root and nnodes = 3, the
+    // walk ran past the queue and emitted three copies of node 0, silently. The
+    // roots' subtree sizes must cover the forest exactly.
+    //
+    // The forest must be WELL FORMED and merely miscounted, which the first
+    // version of this got wrong: passing one node's worth of fields while
+    // declaring three left nodes 1 and 2 reading tag 0 from unseeded slots, so
+    // the tag guard fired first with -245. Both codes are right; the test was
+    // not exercising the one it named. Three valid scalars, one declared root.
+    let mut vm = vm_for(WIRE_KEL);
+    assert_eq!(
+        run_flatten(
+            &mut vm,
+            CMD_FLATTEN_EMIT_CONSTS,
+            &[3, 7, 0, 3, 8, 0, 3, 9, 0],
+            [1, 3, 0, 0, 0]
+        ),
+        -248,
+        "a node count larger than the roots' subtrees was not reported"
+    );
+
+    // MUST-NOT-FIRE for the same guard: a well-formed forest must get PAST the
+    // cover check. It then fails at the region lookup, because this harness
+    // seeds no directory — `-247`, not `-248`, is the evidence the cover check
+    // stayed quiet.
+    let mut vm = vm_for(WIRE_KEL);
+    assert_eq!(
+        run_flatten(
+            &mut vm,
+            CMD_FLATTEN_EMIT_CONSTS,
+            &[3, 7, 0, 3, 8, 0],
+            [2, 2, 0, 0, 0]
+        ),
+        -247,
+        "a well-formed two-root forest was rejected before the region lookup"
+    );
+
+    // A tag this slice does not implement. STRUCT carries an `aux` index into a
+    // side table, so emitting it here would produce a plausible wrong record.
+    let mut vm = vm_for(WIRE_KEL);
+    assert_eq!(
+        run_flatten(
+            &mut vm,
+            CMD_FLATTEN_EMIT_CONSTS,
+            &[10, 0, 0],
+            [1, 1, 0, 0, 0]
+        ),
+        -245,
+        "an out-of-scope tag was not reported"
     );
 }
