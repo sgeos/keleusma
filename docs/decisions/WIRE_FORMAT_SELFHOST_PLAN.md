@@ -778,6 +778,34 @@ correct-looking `CONSTS` table citing indices that are wrong by the size of the 
 minimal module the prefix is one name, so the error would be a quiet off-by-one rather than an
 obvious break.
 
+**IN-PLACE POOL COMPACTION DIES HERE, AND THE ARGUMENT IS SHORT ENOUGH TO CHECK.** Slice 12
+compacts the pool over its own input in `bin`, justified by the output cursor never overtaking the
+input cursor. That holds only while names are interned **in input order**. The walk interns in
+BREADTH-FIRST order, and then it fails:
+
+```
+nin = [ A(10 bytes), B(10 bytes) ]      bin = AAAAAAAAAABBBBBBBBBB
+BFS reaches B first  ->  copy input 10..19 to output 0..9   bin = BBBBBBBBBBBBBBBBBBBB
+BFS reaches A next   ->  read input 0..9                    reads B, not A
+```
+
+So the pool needs its **own output buffer**, `wire.bout`. Input in `bin` is then never written, and
+the dedup scan compares an emitted name in `bout` against a candidate in `bin` — different arrays, so
+the aliasing question disappears rather than being argued. This is a change to slice 12's mechanics,
+not only an addition to them.
+
+**A second consequence: interning out of order needs each input name's BYTE OFFSET**, which slice 12
+never materialised because it walked `nin` sequentially with a running cursor. Two ways to get it,
+and the cheaper one is a prefix-sum prepass over `nin` into the spare upper quarter of `nout`
+(`[768, 1024)`, exactly the 256-name cap), rather than widening `nin` to (offset, length, mode)
+triples — which would change slice 12's input format and every test that feeds it.
+
+**This was recorded the other way round an hour earlier**, as "the pool is still compacted in place
+in `bin`, which is sound for the reason recorded at `intern_run`". That sentence is true of slice 12
+and false of slice 13b, and the difference is exactly the property the new slice changes. Worth
+noting as a pattern: **a justification carried forward with the code it justified is the easiest kind
+of stale documentation to produce**, because nothing about the move looks like an edit.
+
 **Suggested decomposition**, smallest first, since the whole thing is larger than any slice so far:
 
 1. `STATIC_STR` alone — one intern per node, no side table, no contiguous run. Establishes the
