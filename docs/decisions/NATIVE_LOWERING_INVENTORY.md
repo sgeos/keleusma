@@ -3725,3 +3725,71 @@ That last row is the one to keep honest. **`Reset` being a no-op is a consequenc
 of four separate facts and not an observation**, and if the native form ever grows
 an arena, the ephemeral region's reclamation becomes real work at exactly this
 point.
+
+## UNSOUND AS FIRST WRITTEN: the delegated suspension is invisible in the chunk
+
+The admissibility predicate committed one increment ago was wrong, and wrong in
+the direction that matters — it **admitted** a shape the transformation
+miscompiles. Found by re-reading `Vm::resume_after_enter` against my own
+predicate rather than by testing, which is fortunate, because the shape produces
+plausible values and would not obviously fail.
+
+### The hazard
+
+`resume_after_enter` writes the resume value into slot 0 of
+`self.frames.first()`, **the entry chunk**, whenever that entry is a `Stream`
+chunk. It does this *regardless of which frame actually suspended*. There is only
+one `frames.first()` call in the whole virtual machine and this is it.
+
+So when a stream chunk calls a `yield fn` and that callee suspends, a host
+`resume` does two things: it hands the value to the callee as the suspended
+`Yield`'s result, and it **also overwrites the stream chunk's `resume`
+parameter**.
+
+Natively, the callee's suspension goes through the `kel_yield` callback. Its
+return value reaches the callee's operand stack and nothing else. The stream
+chunk's `resume` parameter is never updated, so the next iteration reads a stale
+value.
+
+**The chunk's own ops show no sign of this.** A delegated suspension is a
+property of the callee, so a chunk-local predicate cannot see it, and the
+offending chunk's op vector satisfies every one of the six structural conditions:
+`Stream` first, `Reset` last, one top-level `Yield`, tail exactly `PopN(1)`.
+
+### The fix, and why it reuses rather than invents
+
+The predicate now takes the module and the always-yielding set, and refuses any
+`Op::Call` to an always-yielding chunk **or** to any `Reentrant` chunk.
+
+The set is `keleusma::verify::compute_always_yielding`, the verifier's own
+inter-procedural fixpoint. Reusing it means the two analyses agree by
+construction rather than by maintenance. But it is **sufficient, not necessary**:
+a `yield fn` that suspends on only some paths is equally unsafe here and is
+absent from that set by the set's own definition, so the check also refuses every
+`Reentrant` callee outright. Being conservative in the refusing direction is the
+correct asymmetry.
+
+### What this nearly cost, stated plainly
+
+`codegen.kel` delegates its **entire body** this way, which is why it was already
+classified separately as the delegated case. That classification is what makes
+the hazard concrete rather than theoretical: the corpus contains the shape.
+
+The reason it would not have been caught by the tests as first written is worth
+recording. `codegen.kel` itself has **zero `Op::Yield`**, so the predicate's
+`found?` rejects it for an unrelated reason — the right answer by luck. A chunk
+with its own top-level yield *and* a yielding callee is admitted, and no test I
+had written constructs one. **A must-not-fire suite is only as good as the shapes
+it thought to enumerate**, and the three original cases each removed one
+structural condition without ever varying what the body calls.
+
+The new case is marked in the test with why it must not be deleted, because next
+to the other three it reads as redundant.
+
+### A related implementation constraint, recorded before it bites
+
+`Op::Yield` now has **two lowerings that depend on the enclosing chunk's class**:
+the `kel_yield` callback in a `Reentrant` chunk, and a `ret` in a degenerate
+`Stream` chunk. A single shared match arm would silently pick one of them. The op
+loop needs the mode in scope, and this is noted in the artefact's risk list rather
+than left for the emitter to discover.

@@ -41,15 +41,58 @@
 /// argument and iteration k from the k-th `resume`, so `step(a)`, `step(r1)`,
 /// `step(r2)` reproduces the whole sequence with **no distinguished first call**.
 ///
+/// # Why this needs the module and not just the chunk
+///
+/// **A DELEGATED suspension is invisible in the chunk's own ops**, and admitting
+/// one silently produces a wrong resume value. `Vm::resume_after_enter` writes
+/// slot 0 of `self.frames.first()`, the ENTRY chunk, whenever that entry is a
+/// `Stream` — *regardless of which frame actually suspended*. So when a nested
+/// `yield fn` callee suspends and the host resumes, the VM updates the stream
+/// chunk's `resume` parameter as well as handing the value to the callee.
+///
+/// Natively the callee's suspension goes through the `kel_yield` callback, whose
+/// return value reaches the callee's operand stack and **nothing else**. The
+/// stream chunk's `resume` parameter is never updated, so the next iteration
+/// reads a stale value. The chunk's own op vector shows no sign of this, which is
+/// why a chunk-local predicate cannot see it.
+///
+/// `always_yielding` is `keleusma::verify::compute_always_yielding(module)`, the
+/// same inter-procedural fixpoint the verifier uses to decide productivity.
+/// Reusing it rather than inventing a call-graph walk means the two agree by
+/// construction. It is a *sufficient* condition and not a necessary one: a callee
+/// that only sometimes yields is also unsafe here, so the check below refuses any
+/// `Call` whose target can yield at all, which is the conservative direction.
+///
 /// # Returns
 ///
 /// The index of the `Op::Yield` that becomes the return, or `None` with the
 /// chunk left for the general Workstream B case.
-fn degenerate_stream_yield(chunk: &Chunk) -> Option<usize> {
+fn degenerate_stream_yield(
+    chunk: &Chunk,
+    module: &Module,
+    always_yielding: &BTreeSet<usize>,
+) -> Option<usize> {
     if chunk.block_type != BlockType::Stream {
         return None;
     }
     let ops = &chunk.ops;
+
+    // No delegated suspension. See the section above; this is the condition that
+    // is invisible in the chunk and wrong in a way no local reading reveals.
+    //
+    // Refuses a call to an always-yielding chunk AND to any `Reentrant` chunk,
+    // because a `yield fn` that suspends on only some paths is equally unsafe and
+    // is absent from the always-yielding set by that set's own definition.
+    for op in ops {
+        if let Op::Call(idx, _) = op {
+            let i = *idx as usize;
+            if always_yielding.contains(&i)
+                || module.chunks.get(i).map(|c| c.block_type) == Some(BlockType::Reentrant)
+            {
+                return None;
+            }
+        }
+    }
 
     // The prologue must be EMPTY. `Reset` rewinds to just after `Stream`, so any
     // op before `Stream` runs exactly once in the VM but on every call in the
@@ -185,6 +228,21 @@ fn shapes_outside_the_degenerate_class_are_still_refused() {
 
     // A NESTED yield. `lexer.kel` is this shape, and it is the general case.
     assert_refused("loop main(a: Word) -> Word { if a > 0 { yield a } else { yield 0 } }");
+
+    // A DELEGATED suspension, which is the case no chunk-local reading catches.
+    //
+    // The op vector of `main` here looks degenerate: one top-level `Yield`, tail
+    // exactly `PopN(1)`, `Stream` first and `Reset` last. It is NOT degenerate,
+    // because `helper` suspends too, and on that suspension the VM overwrites
+    // `main`'s resume parameter while native code does not.
+    //
+    // If this case is ever DROPPED because it looks redundant next to the others,
+    // the predicate silently starts miscompiling a shape the corpus contains:
+    // `codegen.kel` delegates its entire body this way.
+    assert_refused(
+        "yield helper(x: Word) -> Word { let r = yield x; r }\n\
+         loop main(a: Word) -> Word { yield helper(a) }",
+    );
 }
 
 /// Lower `src` and assert the module is REFUSED.
@@ -220,6 +278,20 @@ fn assert_refused(src: &str) {
 //  4. The emission is NOT in this file. Nothing here lowers anything, so
 //     installing the predicate alone changes no behaviour and the tests above
 //     will fail until the emitter consults it. Install both or neither.
+//  5. `keleusma::verify::compute_always_yielding` is `pub fn` in a public
+//     module and is expected to be reachable from the detached package. NOT
+//     confirmed by compiling. If it is not exported, the fallback is to refuse
+//     any `Op::Call` whose target is a `Reentrant` chunk plus any chunk
+//     transitively calling one, which is a strictly more conservative walk this
+//     file can compute itself.
+//  6. `Op::Call(idx, _)`'s first field is assumed to be the chunk index. It is
+//     matched that way in the shipped lowering's own `Op::Call` arm, so this
+//     should hold, but the arity of the tuple was read rather than the meaning
+//     of the field.
+//  7. The degenerate emission must keep `Op::Yield`'s TWO lowerings apart. In a
+//     `Reentrant` chunk it stays the `kel_yield` callback; in a degenerate
+//     `Stream` chunk it becomes `ret`. The op loop therefore needs the mode in
+//     scope, and a single shared `Op::Yield` arm would silently pick one.
 //
 // AND ONE EDIT THAT IS NOT OPTIONAL, easy to forget because it is in a passing
 // test. `a_divergent_loop_function_is_refused` carries a comment reading
