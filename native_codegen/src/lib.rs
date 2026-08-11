@@ -847,7 +847,9 @@ fn degenerate_stream_yield(chunk: &Chunk, module: &Module) -> Option<Vec<usize>>
             continue;
         }
         let mut j = ip + 1;
-        let mut popped = false;
+        // Net operand-stack effect of the tail, which must end at -1: the
+        // segment consumes exactly the resume value the `Yield` pushed.
+        let mut delta: i32 = 0;
         loop {
             match ops.get(j) {
                 // A branch delimiter carries no value and ends no path.
@@ -863,20 +865,56 @@ fn degenerate_stream_yield(chunk: &Chunk, module: &Module) -> Option<Vec<usize>>
                     }
                     j = t;
                 }
-                // The one value-carrying op allowed, and only once: it discards
-                // the resumed value the `Yield` pushed. That is what PROVES the
-                // resume value is unused, which is why `step` need not supply it.
-                Some(Op::PopN(1)) if !popped => {
-                    popped = true;
+                // Any op that touches ONLY the operand stack and this frame's
+                // locals, tracked by net depth rather than by name.
+                //
+                // This replaced a two-element allowlist on 2026-08-11. The old
+                // rule admitted exactly `PopN(1)` and refused ten corpus chunks
+                // whose tail is `PopN(1), Const(0), PopN(1)` — a body that
+                // suspends and then evaluates a discarded trailing constant.
+                // That sequence is effect-free and reaches the same depth, so
+                // it is exactly as safe as the one the rule admitted. The
+                // allowlist was drawn from the instructions its author had seen
+                // and coincided with the property only on that sample.
+                //
+                // Traps are EXCLUDED deliberately, so no checked arithmetic
+                // appears here: a trap is observable, and the virtual machine
+                // would take it after the suspension where native code, having
+                // already returned, would not.
+                Some(Op::Const(c))
+                    if matches!(
+                        chunk.constants.get(*c as usize),
+                        Some(
+                            ConstValue::Int(_)
+                                | ConstValue::Byte(_)
+                                | ConstValue::Bool(_)
+                                | ConstValue::Unit
+                        )
+                    ) =>
+                {
+                    delta += 1;
+                    j += 1;
+                }
+                Some(Op::PushImmediate(_)) | Some(Op::GetLocal(_)) | Some(Op::Dup) => {
+                    delta += 1;
+                    j += 1;
+                }
+                Some(Op::PopN(n)) => {
+                    delta -= i32::from(*n);
+                    j += 1;
+                }
+                Some(Op::SetLocal(_)) => {
+                    // Writes a local that `Reset` clears, so unobservable.
+                    delta -= 1;
                     j += 1;
                 }
                 Some(Op::Reset) => break,
-                // Anything else consumes the resumed value or does work after
-                // the suspension, and neither survives the transformation.
+                // Anything else may consume the resumed value, write the data
+                // segment, call out, or trap. None of those survives.
                 _ => return None,
             }
         }
-        if !popped {
+        if delta != -1 {
             return None;
         }
         tail_yields.push(ip);

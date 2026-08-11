@@ -4510,3 +4510,55 @@ the last stage is not worth buying with an ABI decided by accident.
 **Ten of eleven stages lower.** The eleventh is blocked on a decision rather than
 on an implementation, which is a materially different kind of blocked and worth
 saying plainly.
+
+## SPIKE OUTCOME: the allowlist is replaced by its property, and the ABI stays open
+
+The research spike (article A370, drafted at `tmp/2026-08-11-two_calling_conventions.markdown`) settled one
+thing and deliberately left another open. Both are acted on here, differently.
+
+### Settled and acted on: the tail rule now states the property
+
+The admissibility rule tested membership in a two-element allowlist, `{PopN(1)}` plus block delimiters. It
+now tracks the **net operand-stack effect**, admitting any tail that touches only the operand stack and this
+frame's locals and reaches $\Delta = -1$, which is the property the allowlist was standing in for.
+
+**A trap is excluded deliberately.** Checked arithmetic after a suspension is observable, and the virtual
+machine would take the trap where native code, having already returned, would not. That is the one case the
+generalisation must not swallow, and it is pinned.
+
+### The oracle overruled my reasoning twice, in opposite directions
+
+The generalisation admitted `let x = yield a; x`, which **three existing must-not-fire cases said had to be
+refused**. My reasoning said the admission was safe, because the block's value is discarded by the `PopN(1)`
+before `Reset` and the binding is therefore dead.
+
+**That reasoning is exactly what the previous rule's author would have offered**, so it was not trusted.
+The differential oracle was asked first, over multiple iterations with varied resume values, and it agreed.
+Only then were the three cases moved.
+
+The cases were **replaced, not deleted**. One now pins a tail that can trap. One pins a tail that writes the
+**data segment**, which survives `Reset` and is therefore observable in a way a local is not. That second
+case did not exist before and covers a real hole: the old allowlist excluded `SetData` by accident, and the
+new rule excludes it by construction.
+
+### Left open on purpose: the calling convention
+
+The spike's central result is that the two conventions are **semantic rather than accidental**, since a
+terminating coroutine emits two observable events and a one-word return carries one.
+
+Reading the governing application binary interface documents **falsified the strong form of that claim**.
+System V AMD64 returns a two-eightbyte aggregate in `RAX:RDX` and AAPCS64 uses `X0`/`X1`, so the channel
+count is a property of the chosen signature rather than of the machine. That opened a fourth option, a
+**discriminated pair return**, with prior art in Kotlin's suspension sentinel and Rust's `Poll`.
+
+**A complication found while writing the recommendation, and recorded before it is forgotten.** A widened
+return alone does not deliver reentrancy. A terminating coroutine with more than one suspension must resume
+*mid-body*, which needs saved state, which is a frame — precisely what `llvm.coro.id.retcon` returns
+alongside the value. So the honest form of the fourth option is a **triple**, value plus tag plus
+continuation, and its cost is therefore not the one-tag figure the article's cost sketch assumes.
+The corpus does not expose this, because its single terminating chunk suspends at most once per call.
+
+**No implementation follows from this.** The decision is a Workstream D ABI question, the option space is
+now four rather than two, and one of the four has an unresolved cost. `codegen.kel` stays refused.
+
+**Ten of eleven stages lower.** The eleventh remains blocked on a decision, not on work.
