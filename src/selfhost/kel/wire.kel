@@ -84,6 +84,18 @@ shared data wire {
     // Also a BATCH buffer. 8192 bytes covers `PARAM_TYPES` whole, and the host
     // feeds the large pools in successive batches while appending the output.
     bin: [Byte; 8192],
+    // Flattener scratch (slice 13). `fq` is the breadth-first queue, holding
+    // PREORDER indices in the order their records are emitted; `fsz` is each
+    // preorder node's subtree size, which is what locates a later sibling.
+    //
+    // Both are 1024 against a 341-node cap so that a malformed input cannot
+    // index out of range even before the guards report it: the sibling cursor
+    // is bounded by `nnodes + sum(sizes) <= 682`. Memory safety first, the
+    // error code second.
+    //
+    // Appended last so no existing slot index moves.
+    fq: [Word; 1024],
+    fsz: [Word; 1024],
 }
 
 // The running checksum. It lives in a data block because locals are immutable:
@@ -2548,6 +2560,193 @@ fn intern_emit_pool(n: Word) -> Word {
             + emit_pool_pad(region_base(dir_find(kind_string_pool())) + nm.ocur, nm.ocur) } }
 }
 
+// --- SLICE 13: THE FLATTENER'S BREADTH-FIRST REORDERING -------------------
+//
+// The second value the driver computes. `flatten` turns a constant FOREST into
+// the flat `CONSTS` table, and the ordering it produces is the whole of the
+// difficulty: the roots occupy `0..nroots` in order, and children are numbered
+// BREADTH-FIRST after them. That is what guarantees every range points forward,
+// which is what lets a reader walk the table in one reverse sweep with no stack.
+//
+// THE INPUT IS DEPTH-FIRST, ON PURPOSE. A tree arrives as a preorder walk —
+// three words per node in `wire.fin`: tag, payload, child count — because that
+// is the natural flat serialization of a tree and because handing Keleusma a
+// breadth-first input would make the test vacuous. The reordering is the work.
+//
+// The two orders genuinely differ on the corpus of constructed sources. For
+// `const data k { a: [(Word, Word); 2] = [(1, 2), (3, 4)] }` the roots are the
+// array and a scalar index, and the orders are:
+//
+//   breadth-first  Array, Int, Tuple, Tuple, 1, 2, 3, 4     <- the reference
+//   depth-first    Array, Tuple, 1, 2, Tuple, 3, 4, Int
+//
+// so a flattener that emitted its input unchanged would fail on the first
+// depth-2 case rather than passing quietly.
+//
+// SCOPE. Scalars, tuples and arrays — the tags whose records need no name
+// interning. `STATIC_STR`, `STRUCT` and `ENUM` also intern as they walk, which
+// couples the flattener to the interner and to the two side tables; that is the
+// next slice, and it is why this one stops where it does.
+//
+// THERE IS NO `while`, AND NONE IS NEEDED. The reference loops until the queue
+// drains. Here the queue provably ends at exactly `nnodes` entries, since every
+// node is enqueued once, so a `for head in 0..nnodes` walks it exactly. A total
+// language forces the bound to be stated and in this case the bound was already
+// known — the restriction cost nothing.
+private data fl {
+    // Sibling cursor: a preorder index being advanced past whole subtrees.
+    cur: Word,
+    // Subtree-size accumulator.
+    tot: Word,
+    // Queue length, which is ALSO the next breadth-first index to allocate.
+    // The reference carries a separate `next_index`; the two are provably equal
+    // at every step — both start at `nroots` and both grow by the child count —
+    // so keeping one field removes the chance of them disagreeing.
+    qn: Word,
+    // The breadth-first index of the current node's first child.
+    first: Word,
+    // Index actually used after clamping, so a malformed input cannot index out
+    // of range while the error code is being raised.
+    pick: Word,
+    // Sticky rejection code, 0 while the input is well formed.
+    err: Word,
+    // Discards a call whose result is in the fields.
+    sink: Word,
+}
+
+// `wire.fin` holds three words per node, so 1024 words is 341 nodes. A STATED
+// cap: an oversized forest is refused with a code, not truncated.
+fn fl_max_nodes() -> Word { 341 }
+
+fn fl_fields() -> Word { 3 }
+
+fn fl_tag_of(p: Word) -> Word { wire.fin[p * fl_fields()] }
+fn fl_payload_of(p: Word) -> Word { wire.fin[(p * fl_fields()) + 1] }
+fn fl_children_of(p: Word) -> Word { wire.fin[(p * fl_fields()) + 2] }
+
+// Only these two carry a range in this slice. Struct and enum also do, and are
+// deliberately absent: admitting them here would emit a record with `aux` 0,
+// which is a plausible-looking wrong answer rather than a refusal.
+fn fl_tag_has_range(t: Word) -> Word {
+    if t == tag_tuple() { 1 } else { if t == tag_array() { 1 } else { 0 } }
+}
+
+fn fl_tag_in_scope(t: Word) -> Word {
+    if t == tag_unit() { 1 } else {
+    if t == tag_none() { 1 } else {
+    if t == tag_bool() { 1 } else {
+    if t == tag_int() { 1 } else {
+    if t == tag_byte() { 1 } else {
+    if t == tag_fixed() { 1 } else {
+    if t == tag_float() { 1 } else {
+    fl_tag_has_range(t) }}}}}}}
+}
+
+// Advance `fl.cur` past the whole subtree rooted there, returning that
+// subtree's size. Clamped: an out-of-range cursor sets the error code AND reads
+// index 0 rather than off the end, so the refusal is reported from a
+// memory-safe state.
+fn fl_step(nnodes: Word) -> Word {
+    fl.err = if fl.cur >= nnodes { 0 - 242 } else { fl.err };
+    fl.pick = if fl.cur < nnodes { fl.cur } else { 0 };
+    fl.cur = fl.cur + wire.fsz[fl.pick];
+    wire.fsz[fl.pick]
+}
+
+// The subtree size at preorder index `p`, given every index above `p` is sized.
+fn fl_size_at(p: Word, nnodes: Word) -> Word {
+    fl.cur = p + 1;
+    fl.tot = 1;
+    for k in 0..fl_children_of(p) limit 341 {
+        fl.tot = fl.tot + fl_step(nnodes);
+    }
+    fl.tot
+}
+
+// Size every node, highest preorder index first. The reverse order is what
+// makes a single pass sufficient: a node's children all sit above it in
+// preorder, so they are already sized when it is reached.
+fn fl_size_all(nnodes: Word) -> Word {
+    for i in 0..nnodes limit 341 {
+        wire.fsz[nnodes - 1 - i] = fl_size_at(nnodes - 1 - i, nnodes);
+    }
+    fl.err
+}
+
+// Every child count must be admissible before any loop uses one as a BOUND.
+// `for k in 0..n limit 341` TRAPS when the runtime range exceeds the cap, so a
+// count of 9999 in a malformed input would abort the VM rather than be
+// reported. Validation therefore precedes sizing, not the other way round.
+fn fl_validate(nnodes: Word) -> Word {
+    fl.err = 0;
+    for p in 0..nnodes limit 341 {
+        fl.err = if fl_children_of(p) > nnodes { 0 - 241 } else {
+                 if fl_tag_in_scope(fl_tag_of(p)) == 0 { 0 - 245 } else { fl.err } };
+    }
+    fl.err
+}
+
+// Seed the queue with the roots. Root 0 is at preorder 0; each later root sits
+// one whole subtree past the previous one.
+fn fl_seed_roots(nroots: Word, nnodes: Word) -> Word {
+    fl.cur = 0;
+    for r in 0..nroots limit 341 {
+        wire.fq[r] = fl.cur;
+        fl.sink = fl_step(nnodes);
+    }
+    nroots
+}
+
+// Write the record for the node at queue position `head`.
+fn fl_put_record(at: Word, head: Word) -> Word {
+    put_u16(at + (head * const_stride()) + const_off_tag(), fl_tag_of(wire.fq[head]));
+    put_u16(at + (head * const_stride()) + const_off_flags(), 0);
+    put_u32(at + (head * const_stride()) + const_off_aux(), 0);
+    put_u64(
+        at + (head * const_stride()) + const_off_payload(),
+        if fl_tag_has_range(fl_tag_of(wire.fq[head])) == 1 {
+            fl.first bor (fl_children_of(wire.fq[head]) lsl 32)
+        } else {
+            fl_payload_of(wire.fq[head])
+        },
+    )
+}
+
+// The breadth-first walk. `fl.qn` is both the queue length and the next index
+// to allocate, so a node's first child index is simply the queue length before
+// its children are appended.
+fn fl_walk(at: Word, nroots: Word, nnodes: Word) -> Word {
+    fl.qn = fl_seed_roots(nroots, nnodes);
+    for head in 0..nnodes limit 341 {
+        fl.first = fl.qn;
+        fl.err = if fl.qn + fl_children_of(wire.fq[head]) > nnodes { 0 - 244 } else { fl.err };
+        fl.cur = wire.fq[head] + 1;
+        for k in 0..fl_children_of(wire.fq[head]) limit 341 {
+            fl.pick = if fl.first + k < nnodes { fl.first + k } else { 0 };
+            wire.fq[fl.pick] = fl.cur;
+            fl.sink = fl_step(nnodes);
+        }
+        fl.qn = fl.qn + fl_children_of(wire.fq[head]);
+        // Written AFTER the children are enqueued, because the record's range
+        // needs `fl.first`, which is read before the queue grows.
+        fl.sink = fl_put_record(at, head);
+    }
+    if fl.err < 0 { fl.err } else { nnodes * const_stride() }
+}
+
+// Flatten the forest in `wire.fin` and write `CONSTS` into its region.
+//
+// `nnodes` is an input rather than something computed, so the directory can be
+// laid before this runs and there is no chicken-and-egg with the region length.
+fn flatten_emit_consts(nroots: Word, nnodes: Word) -> Word {
+    if nnodes > fl_max_nodes() { 0 - 240 } else {
+    if nroots > nnodes { 0 - 246 } else {
+    if fl_validate(nnodes) < 0 { fl.err } else {
+    if fl_size_all(nnodes) < 0 { fl.err } else {
+    if dir_find(kind_consts()) < 0 { 0 - 247 } else {
+        fl_walk(region_base(dir_find(kind_consts())), nroots, nnodes) } } } } }
+}
+
 fn dispatch_driver(cmd: Word) -> Word {
     if cmd == 134 { build_region_table(wire.nregions) } else {
     if cmd == 135 { emit_in_region(wire.warg, wire.warg2) } else {
@@ -2556,7 +2755,8 @@ fn dispatch_driver(cmd: Word) -> Word {
     if cmd == 138 { intern_emit_names(wire.warg) } else {
     if cmd == 139 { intern_emit_pool(wire.warg) } else {
     if cmd == 140 { intern_index_of(wire.warg, wire.warg2) } else {
-    0 - 97 }}}}}}}
+    if cmd == 141 { flatten_emit_consts(wire.warg, wire.warg2) } else {
+    0 - 97 }}}}}}}}
 }
 
 // THE HIGHEST LIVE COMMAND, AND IT IS LOAD-BEARING RATHER THAN DOCUMENTATION.
@@ -2564,7 +2764,7 @@ fn dispatch_driver(cmd: Word) -> Word {
 // UNREACHABLE and its own test fails immediately. The fall-through sweep reads
 // this value out of the source instead of restating a bound, which is what it
 // did for four consecutive slices — and got wrong once.
-fn highest_command() -> Word { 140 }
+fn highest_command() -> Word { 141 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {

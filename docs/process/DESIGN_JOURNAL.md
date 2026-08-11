@@ -13,6 +13,52 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**SLICE 13: THE FLATTENER'S BREADTH-FIRST REORDERING, AND A VACUITY CONTROL THAT EARNED ITS KEEP
+(2026-08-10).** The driver's second computed value. Command 141; 122 to 125 tests. The input is a
+DEPTH-FIRST preorder — three words per node, tag, payload, child count — because handing Keleusma a
+breadth-first input would make the whole thing vacuous. The reordering is the work.
+
+**The main test passed on the first run and the vacuity check failed, which is the right way round
+and the reason to write both.** I had asserted that at least two cases distinguish breadth-first
+from depth-first. Only one did, and finding out why corrected two mistakes at once:
+
+- **When every composite sits LAST among its siblings, the two walks coincide.** `(1, (2, 3))` is
+  identical under both. Four of my five cases had that shape, so the test I had just watched pass
+  was, for four fifths of its corpus, comparing a reordering against itself. The fix is a case whose
+  composite is *not* last: `((1, 2), 3)`.
+- **Comparing tags alone is too coarse.** For `((1, 2), 3)` both walks give 8, 8, 3, 3, 3 while
+  visiting the scalars in different orders. The check now compares (tag, payload) pairs. Had I only
+  added the new case and not noticed this, the vacuity check would have gone on passing while still
+  measuring the wrong thing.
+
+**Neither error was visible from the passing test.** A green differential against a real oracle
+looked like strong evidence and was weak evidence, and the only thing that said so was a separate
+assertion about the CORPUS rather than about the code. That is a different kind of control from a
+must-fire mutation: it asks whether the inputs can tell the two answers apart at all.
+
+**A total language cost nothing here, which is worth recording because it usually costs something.**
+The reference loops until its queue drains. There is no `while`, but the queue provably ends at
+exactly `nnodes` entries — every node is enqueued once — so `for head in 0..nnodes` walks it exactly.
+The bound the language demanded was already known. Likewise `next_index`: the reference carries it
+alongside the queue, and the two are provably equal at every step, so the Keleusma side keeps one
+field and removes the chance of them disagreeing.
+
+**Guards are ordered by what would otherwise TRAP rather than report.** `for k in 0..n limit 341`
+aborts the VM when the runtime range exceeds the cap, so child counts are validated in a separate
+pass BEFORE any of them is used as a bound — a sticky error flag would be set too late to help. The
+sibling cursor is clamped as well as flagged, so a malformed input is refused from a memory-safe
+state rather than indexing off the end while the code is raising the error.
+
+**Scope stops at scalars, tuples and arrays.** `STATIC_STR`, `STRUCT` and `ENUM` intern names as
+they walk, coupling the flattener to the interner and to the two side tables. An out-of-scope tag is
+refused with `-245` rather than emitted with `aux` 0, which would be a plausible-looking wrong
+record.
+
+**Tier 1 caught a complex-type lint** after `cargo fmt` reflowed the signature I had wrapped by hand.
+Second time today the pre-commit tier caught something the targeted tests could not.
+
+---
+
 **I ASKED THE REACHABILITY QUESTION OF ALL SIX ROWS INSTEAD OF THE ONE IN FRONT OF ME, AND MY OWN
 PROBE LIED TO ME FIRST (2026-08-10).** Having been wrong twice in one day about "the corpus cannot
 reach X" implying "no source can reach X", I swept every DERIVE row in the coverage matrix rather

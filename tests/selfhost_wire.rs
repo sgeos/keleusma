@@ -6950,3 +6950,352 @@ fn the_interner_reports_an_input_it_cannot_hold() {
         "an out-of-range map query was not reported"
     );
 }
+
+// --- SLICE 13: THE FLATTENER'S BREADTH-FIRST REORDERING ----------------------
+//
+// The driver's second computed value. `flatten` turns a constant FOREST into
+// the flat `CONSTS` table, and the ordering is the whole of the difficulty: the
+// roots occupy `0..nroots` in order and children are numbered BREADTH-FIRST
+// after them, which is what makes every range point forward.
+//
+// THE INPUT IS DEPTH-FIRST, ON PURPOSE. Keleusma receives a preorder walk —
+// three words per node: tag, payload, child count. Handing it a breadth-first
+// input would make the test vacuous, so `orders_differ_somewhere` below asserts
+// that the two orders actually disagree on this corpus rather than assuming it.
+//
+// THE ORACLE IS REAL, and that is a recent correction. This plan previously
+// recorded that the flattener would need hand-built constant trees, because all
+// 2,192 constant nodes in the ten stage sources are scalars. That measurement is
+// about the corpus; `const data`, referenced from a function, emits genuine
+// composite constants to depth 2 in about a kilobyte.
+
+const CMD_FLATTEN_EMIT_CONSTS: i64 = 141;
+
+/// Sources whose chunk constant pools contain composites. Every one is a real
+/// compiled module, so the oracle is `encode_aux_body`.
+const FLATTEN_CASES: &[(&str, &str)] = &[
+    // Control: no composite at all. If this failed, nothing below would mean
+    // anything.
+    ("scalars-only", "fn main() -> Word { 42 }"),
+    (
+        "tuple-d1",
+        "const data k { t: (Word, Word) = (1, 2) }\nfn main() -> Word { k.t.0 }",
+    ),
+    (
+        "array-d1",
+        "const data k { xs: [Word; 3] = [1, 2, 3] }\nfn main() -> Word { k.xs[0] }",
+    ),
+    // DEPTH 2, which is the case that separates breadth-first from depth-first.
+    (
+        "array-of-tuple-d2",
+        "const data k { a: [(Word, Word); 2] = [(1, 2), (3, 4)] }\n\
+         fn take(v: [(Word, Word); 2]) -> Word { v[0].0 }\nfn main() -> Word { take(k.a) }",
+    ),
+    (
+        "nested-tuple-d2",
+        "const data k { t: (Word, (Word, Word)) = (1, (2, 3)) }\nfn main() -> Word { k.t.0 }",
+    ),
+    // A COMPOSITE THAT IS NOT THE LAST CHILD. When every composite sits last,
+    // the two walks coincide — which is why `nested-tuple-d2` above does NOT
+    // distinguish them, and why the vacuity check below caught that four of the
+    // first five cases were proving nothing about the reordering.
+    (
+        "tuple-composite-first",
+        "const data k { t: ((Word, Word), Word) = ((1, 2), 3) }\n         fn main() -> Word { k.t.1 }",
+    ),
+];
+
+/// Every chunk's constants, concatenated in chunk order — which is exactly what
+/// `SchemaBuilder::const_roots` accumulates and hands to `flatten`.
+fn const_roots_of(module: &keleusma::bytecode::Module) -> Vec<keleusma::bytecode::ConstValue> {
+    let mut roots = Vec::new();
+    for c in &module.chunks {
+        roots.extend(c.constants.iter().cloned());
+    }
+    roots
+}
+
+/// Serialize one node depth-first: tag, payload, child count, then the children.
+///
+/// Panics on a tag outside this slice's scope rather than emitting a plausible
+/// record. `STATIC_STR`, `STRUCT` and `ENUM` intern names as they walk, which
+/// couples the flattener to the interner; that is the next slice.
+fn push_preorder(c: &keleusma::bytecode::ConstValue, out: &mut Vec<i64>) {
+    use keleusma::bytecode::ConstValue as K;
+    let (tag, payload, children): (i64, i64, &[K]) = match c {
+        K::Unit => (1, 0, &[]),
+        K::Bool(b) => (2, i64::from(*b), &[]),
+        K::Int(v) => (3, *v, &[]),
+        K::Byte(v) => (4, i64::from(*v), &[]),
+        K::Fixed(v) => (5, *v, &[]),
+        K::None => (12, 0, &[]),
+        K::Tuple(v) => (8, 0, v.as_slice()),
+        K::Array(v) => (9, 0, v.as_slice()),
+        other => panic!("constant is outside slice 13's scope: {other:?}"),
+    };
+    out.push(tag);
+    out.push(payload);
+    out.push(children.len() as i64);
+    for ch in children {
+        push_preorder(ch, out);
+    }
+}
+
+fn preorder_of(roots: &[keleusma::bytecode::ConstValue]) -> Vec<i64> {
+    let mut out = Vec::new();
+    for r in roots {
+        push_preorder(r, &mut out);
+    }
+    out
+}
+
+/// The (tag, payload) sequence in each order, for the vacuity check.
+///
+/// TAGS ALONE ARE TOO COARSE, and the first version of this compared only tags.
+/// For `((1, 2), 3)` both walks give 8, 8, 3, 3, 3 while visiting the scalars in
+/// different orders — so a tag-only check would have called that case
+/// indistinguishable when it is exactly the shape the reordering exists for.
+type NodeSeq = Vec<(i64, i64)>;
+
+fn node_orders(roots: &[keleusma::bytecode::ConstValue]) -> (NodeSeq, NodeSeq) {
+    use keleusma::bytecode::ConstValue as K;
+    fn kids(c: &K) -> &[K] {
+        match c {
+            K::Tuple(v) | K::Array(v) => v.as_slice(),
+            _ => &[],
+        }
+    }
+    fn node(c: &K) -> (i64, i64) {
+        match c {
+            K::Unit => (1, 0),
+            K::Bool(b) => (2, i64::from(*b)),
+            K::Int(v) => (3, *v),
+            K::Byte(v) => (4, i64::from(*v)),
+            K::Fixed(v) => (5, *v),
+            K::None => (12, 0),
+            K::Tuple(_) => (8, 0),
+            K::Array(_) => (9, 0),
+            other => panic!("out of scope: {other:?}"),
+        }
+    }
+    fn dfs(c: &K, out: &mut Vec<(i64, i64)>) {
+        out.push(node(c));
+        for k in kids(c) {
+            dfs(k, out);
+        }
+    }
+    let mut depth_first = Vec::new();
+    for r in roots {
+        dfs(r, &mut depth_first);
+    }
+    let mut breadth_first = Vec::new();
+    let mut queue: Vec<&K> = roots.iter().collect();
+    let mut head = 0;
+    while head < queue.len() {
+        let n = queue[head];
+        head += 1;
+        breadth_first.push(node(n));
+        queue.extend(kids(n).iter());
+    }
+    (breadth_first, depth_first)
+}
+
+fn node_count(roots: &[keleusma::bytecode::ConstValue]) -> usize {
+    node_orders(roots).0.len()
+}
+
+#[test]
+fn keleusma_flattens_a_constant_forest_breadth_first() {
+    use keleusma::wire_schema::kind;
+    let mut vm = vm_for(WIRE_KEL);
+    let mut saw_depth_two = false;
+
+    for (label, src) in FLATTEN_CASES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+        let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+        let total = want.len();
+        assert!(total < CAPACITY, "{label}: artifact is {total} bytes");
+
+        let roots = const_roots_of(&module);
+        let fields = preorder_of(&roots);
+        let nroots = roots.len() as i64;
+        let nnodes = node_count(&roots) as i64;
+
+        // The reference's own CONSTS count must agree, or the input model is
+        // wrong and everything below would be comparing the wrong thing.
+        let ref_consts = view
+            .find_region(kind::CONSTS)
+            .and_then(|r| view.records(&r, 16).ok())
+            .map_or(0, |t| t.len());
+        assert_eq!(
+            ref_consts, nnodes as usize,
+            "{label}: model counts {nnodes} nodes, the reference emitted {ref_consts}"
+        );
+
+        let (bf, df) = node_orders(&roots);
+        if bf != df {
+            saw_depth_two = true;
+        }
+
+        let specs = region_counts_for(&want);
+        let (_, mut art) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_BUILD_REGION_TABLE,
+                nregions: specs.len() as i64,
+                seed: &[],
+                regions: &specs,
+                fields: &[],
+                pool: &[],
+                args: [0, 0, 0, 0, 0],
+                read_len: total,
+            },
+        )
+        .expect("run");
+
+        for (k, _, _, _) in &specs {
+            let region = view.find_region(*k).expect("region");
+            let stored = view.region_bytes(&region).expect("payload");
+            if stored.is_empty() {
+                continue;
+            }
+            let (cmd, f, pl, args) = if *k == kind::CONSTS {
+                (
+                    CMD_FLATTEN_EMIT_CONSTS,
+                    fields.clone(),
+                    Vec::new(),
+                    [nroots, nnodes, 0, 0, 0],
+                )
+            } else {
+                let is_pool =
+                    matches!(*k, kind::STRING_POOL | kind::PARAM_TYPES | kind::DEBUG_POOL);
+                let rows = if is_pool {
+                    Vec::new()
+                } else {
+                    rows_for_kind(&view, *k)
+                };
+                let flat: Vec<i64> = rows.iter().flatten().copied().collect();
+                let n = if is_pool { stored.len() } else { rows.len() };
+                (
+                    CMD_EMIT_IN_REGION,
+                    flat,
+                    stored.to_vec(),
+                    [i64::from(*k), n as i64, 0, 0, 0],
+                )
+            };
+            let (ret, next) = run_call(
+                &mut vm,
+                &Call {
+                    cmd,
+                    nregions: specs.len() as i64,
+                    seed: &art,
+                    regions: &specs,
+                    fields: &f,
+                    pool: &pl,
+                    args,
+                    read_len: total,
+                },
+            )
+            .expect("run");
+            assert!(ret >= 0, "{label}: region {k:#06x} refused with code {ret}");
+            art = next;
+        }
+
+        assert_eq!(art, want, "{label}: the artifact Keleusma built differs");
+    }
+
+    assert!(
+        saw_depth_two,
+        "no case distinguished breadth-first from depth-first, so the reordering was not tested"
+    );
+}
+
+/// Must-fire, and it is about the CORPUS rather than the code: unless some case
+/// orders differently under the two walks, a flattener that emitted its input
+/// unchanged would pass the test above.
+#[test]
+fn the_two_walk_orders_genuinely_disagree_on_this_corpus() {
+    let mut disagreements = 0;
+    for (label, src) in FLATTEN_CASES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let roots = const_roots_of(&module);
+        let (bf, df) = node_orders(&roots);
+        assert_eq!(
+            bf.len(),
+            df.len(),
+            "{label}: the two walks visited different counts"
+        );
+        if bf != df {
+            disagreements += 1;
+        }
+    }
+    assert!(
+        disagreements >= 2,
+        "only {disagreements} case(s) distinguish the two orders; the reordering is barely tested"
+    );
+}
+
+/// The stated caps and the scope boundary are reported, not silently accepted.
+#[test]
+fn the_flattener_reports_input_it_will_not_flatten() {
+    // A forest larger than `wire.fin` can describe.
+    let mut vm = vm_for(WIRE_KEL);
+    let big: Vec<i64> = (0..342).flat_map(|_| [3_i64, 0, 0]).collect();
+    assert_eq!(
+        run_intern(
+            &mut vm,
+            CMD_FLATTEN_EMIT_CONSTS,
+            &big,
+            &[],
+            [342, 342, 0, 0, 0]
+        ),
+        -240,
+        "an oversized forest was not reported"
+    );
+
+    // More roots than nodes.
+    let mut vm = vm_for(WIRE_KEL);
+    assert_eq!(
+        run_intern(
+            &mut vm,
+            CMD_FLATTEN_EMIT_CONSTS,
+            &[3, 7, 0],
+            &[],
+            [2, 1, 0, 0, 0]
+        ),
+        -246,
+        "nroots > nnodes was not reported"
+    );
+
+    // A child count that cannot be a bound.
+    let mut vm = vm_for(WIRE_KEL);
+    assert_eq!(
+        run_intern(
+            &mut vm,
+            CMD_FLATTEN_EMIT_CONSTS,
+            &[8, 0, 99],
+            &[],
+            [1, 1, 0, 0, 0]
+        ),
+        -241,
+        "an impossible child count was not reported"
+    );
+
+    // A tag this slice does not implement. STRUCT carries an `aux` index into a
+    // side table, so emitting it here would produce a plausible wrong record.
+    let mut vm = vm_for(WIRE_KEL);
+    assert_eq!(
+        run_intern(
+            &mut vm,
+            CMD_FLATTEN_EMIT_CONSTS,
+            &[10, 0, 0],
+            &[],
+            [1, 1, 0, 0, 0]
+        ),
+        -245,
+        "an out-of-scope tag was not reported"
+    );
+}
