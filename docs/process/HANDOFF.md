@@ -10,7 +10,7 @@ misleading a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`, or a feature branch cut from it.
-- **Parent commit**: `3166109c`
+- **Parent commit**: `01a19293`
 - **Written**: 2026-08-11
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
@@ -35,36 +35,70 @@ this file**.
 5. **Run `scripts/gate-status.sh`.** It answers "is a gate running, and where" in 0.23 s. Do not
    hand-roll a `pgrep` for it; see Gating.
 
-## FIRST ACTION: the machine is NOT yours — check before assuming it is
+## FIRST ACTION: a gate of MINE is running — read its verdict before anything else
 
-**Slice 11 is merged and pushed.** `9eb623d` gated GREEN (12 steps), was merged at that exact commit
-without rebasing, and `v0.2.3` is at **`3166109c`** with CI green on the previous merge.
+**`scripts/gate-status.sh` first.** A gate was running on **`79fc97d1`** when this was written, the
+tip of `feat/selfhost-wire-driver`, as `wire-corpus` in `.gate-target-wire`.
 
-**The `v0.3.0` session then took the machine** for `native@37c95a19`, seconds after mine finished.
-Run `scripts/gate-status.sh` first. If their gate is still running:
+- **GREEN** -> merge `79fc97d1` into `v0.2.3` with `--no-ff`, **at the gated commit and without
+  rebasing** — a rebase rewrites the hash the result rests on. Then push and confirm CI. `v0.2.3` is
+  already a strict ancestor of that tip, so the merge cannot conflict and the gated tree is exactly
+  the tree that lands.
+- **RED** -> read the log the tool names before doing anything else.
+- **ABANDONED** -> the tool now says so explicitly, on a `previous:` line. A run that stops without a
+  verdict is neither GREEN nor RED, and waiting on one never ends. This line exists because I made
+  that exact mistake.
 
-- **Do not start one.** `gate-in-worktree.sh` refuses a second gate machine-wide anyway, which is how
-  I found out — but knowing beforehand is cheaper.
-- **Do not run heavy builds either.** They spared my canary window twice and asked me to reciprocate.
-  Documentation, design and probe work that needs no `cargo` is fine; a full suite run is not.
+**`perf_canary` runs in gate steps 3 to 7 only** — it is in the `keleusma` package, so steps 8 onward
+(`keleusma-wire`, docs, links, the detached subprojects) cannot trip it. While a gate is inside that
+window, **do not run a full test suite and do not push**: the pre-push tier runs the canary too.
+Documentation, design and reading work is fine, and a brief targeted test is a judgement call rather
+than a prohibition.
 
-**When the machine frees**, gate `feat/selfhost-wire-driver` with `KEL_GATE_NAME=wire-corpus` and
-`KEL_GATE_TARGET=.gate-target-wire`, then merge it into `v0.2.3` with `--no-ff` **at the gated
-commit**. That branch already carries a sync merge of `v0.2.3`, so the gated tree is the real merged
-tree rather than an approximation of it.
+**THREE DOCUMENTATION COMMITS ON `v0.2.3` ARE UNPUSHED**, deliberately, for that reason. Push them
+once the gate clears step 7.
 
 ## THE STATE
 
 | Ref | Commit | Status |
 |---|---|---|
-| `v0.2.3` | `3166109c` | **pushed**; slices 1–11 and the gate tooling merged; CI green |
-| `feat/selfhost-wire-driver` | `05c7ec4d` | **local only**; slices 12–13, two plan corrections, a gate-tool fix; **gate owed** |
-| `v0.3.0` | — | holds the machine, gating `native@37c95a19` |
+| `v0.2.3` | `01a19293` | slices 1–11 merged; **3 docs commits unpushed** |
+| `feat/selfhost-wire-driver` | `79fc97d1` | **gating when written**; slices 12–13 + prerequisites |
+| `v0.3.0` | `357315b9` | gated GREEN, 13 steps; machine handed to me |
 
-The driver branch is six commits over `v0.2.3` and includes a sync merge of it, so gating its tip
-gates the tree that will actually land.
+`v0.2.3` is a strict ancestor of the driver tip, so the merge back is a clean `--no-ff` bubble.
 
 ## WHAT CHANGED SINCE: the driver COMPUTES two of the three values it owed
+
+**`tests/selfhost_wire.rs` is 125 tests.** Slice 12 computes `STRING_POOL`, `NAMES` and an
+input-to-index map; slice 13 reorders a depth-first constant forest into the breadth-first `CONSTS`
+table. Both byte-identical to `encode_aux_body` on real compiled modules.
+
+**SLICE 13b's PREREQUISITES ARE IN AND ARE NOT VALIDATED BY ANY TEST.** The interner moved off `fin`
+onto its own `nin`/`nout`, and the pool gained an output buffer `bout`. Both are changes to slice
+12's MECHANICS, and **neither is distinguishable from what it replaced by anything in the suite**,
+because the interner still walks its input sequentially. They rest on one argument: in-place
+compaction is unsound once interning order differs from input order, which a breadth-first walk
+guarantees. Two ten-byte names suffice to break it. **The test that separates them arrives with 13b**
+— treat that as an obligation, not a nicety.
+
+## THREE METHOD RULES THIS ARC PAID FOR, ALL ABOUT SEEING WHAT TESTS CANNOT
+
+- **"The corpus cannot reach X" is a fact about the corpus.** Whether a SOURCE can reach X is a
+  separate question that must be asked separately. Asking it overturned two committed conclusions:
+  the flattener needs no hand-built constant trees (`const data` emits real composites to depth 2),
+  and five of the six `DERIVE` coverage rows are reachable. **The matrix still reads 14 REAL / 6
+  DERIVE** because upgrading a row means rewriting its emitter test; the achievable split is 19 / 1.
+- **A green differential can be weak evidence.** The flattener's suite passed while four of its five
+  cases could not tell breadth-first from depth-first, because a composite in LAST position makes the
+  walks coincide. A corpus-level control is a different instrument from a must-fire mutation: the
+  mutation asks whether the check can report a defect, this asks whether the inputs can tell two
+  answers apart at all.
+- **Read back what you just wrote.** Three defects this arc were in code whose full targeted suite
+  was green: an unvalidated node count, a guard placed where its own test could not reach it, and a
+  scratch field serving two roles. Tests confirmed the behaviour I thought to test.
+
+
 
 `tests/selfhost_wire.rs` is **125 tests**. Slice 12 computes `STRING_POOL`, `NAMES` and an
 input-to-index map from a (name, mode) sequence; slice 13 reorders a depth-first constant forest into
