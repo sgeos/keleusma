@@ -24,6 +24,7 @@ exists to avoid.
 
 | File | Install as | What it settles |
 |---|---|---|
+| `degenerate_stream.rs` | predicate into `src/lib.rs`, tests into `tests/yield_sequence.rs` | The degenerate stream lowering: the admissibility predicate and the observational-equivalence cases that settle it. **Install with the emitter or not at all** |
 | `spike_stream_sufficiency.rs` | `tests/spike_stream_sufficiency.rs` | Whether `Stream` and `Reset` alone unblock the self-hosted stages, and the bytecode-level yield shape of every stream chunk |
 | `o2_differential_arm.rs` | append to `tests/differential.rs` | Whether the lowering survives the `default<O2>` pipeline, which is the shipped configuration; every existing case runs at O0 through the JIT, which the architecture excludes from scope |
 | `retcon_declarability.rs` | append to `tests/coroutine_feasibility.rs` | Whether inkwell can DECLARE the `coro.id.retcon` family, not merely find it by name; the one clause left at medium confidence in `V0_4_0_NATIVE_CODEGEN.md` R4.4 |
