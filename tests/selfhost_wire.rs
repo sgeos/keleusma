@@ -7588,7 +7588,11 @@ fn the_interning_order_genuinely_differs_between_walks() {
             compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
         let roots = const_roots_of(&module);
         let (bf, df) = string_orders(&roots);
-        assert_eq!(bf.len(), df.len(), "{label}: walks saw different string counts");
+        assert_eq!(
+            bf.len(),
+            df.len(),
+            "{label}: walks saw different string counts"
+        );
         if bf != df {
             disagreements += 1;
         }
@@ -7670,19 +7674,40 @@ fn the_walk_interns_in_breadth_first_order() {
             }
             let (cmd, fields, names, pl, args) = if *k == kind::CONSTS {
                 assert_eq!(
-                    nconsts,
-                    inp.args[3] as usize,
+                    nconsts, inp.args[3] as usize,
                     "{label}: model counts {} nodes, the reference emitted {nconsts}",
                     inp.args[3]
                 );
-                (CMD_FX_EMIT_CONSTS, inp.fin.clone(), inp.nin.clone(), inp.bin.clone(), inp.args)
+                (
+                    CMD_FX_EMIT_CONSTS,
+                    inp.fin.clone(),
+                    inp.nin.clone(),
+                    inp.bin.clone(),
+                    inp.args,
+                )
             } else if *k == kind::NAMES {
-                (CMD_FX_EMIT_NAMES, inp.fin.clone(), inp.nin.clone(), inp.bin.clone(), inp.args)
+                (
+                    CMD_FX_EMIT_NAMES,
+                    inp.fin.clone(),
+                    inp.nin.clone(),
+                    inp.bin.clone(),
+                    inp.args,
+                )
             } else if *k == kind::STRING_POOL {
-                (CMD_FX_EMIT_POOL, inp.fin.clone(), inp.nin.clone(), inp.bin.clone(), inp.args)
+                (
+                    CMD_FX_EMIT_POOL,
+                    inp.fin.clone(),
+                    inp.nin.clone(),
+                    inp.bin.clone(),
+                    inp.args,
+                )
             } else {
                 let is_pool = matches!(*k, kind::PARAM_TYPES | kind::DEBUG_POOL);
-                let rows = if is_pool { Vec::new() } else { rows_for_kind(&view, *k) };
+                let rows = if is_pool {
+                    Vec::new()
+                } else {
+                    rows_for_kind(&view, *k)
+                };
                 let flat: Vec<i64> = rows.iter().flatten().copied().collect();
                 let n = if is_pool { stored.len() } else { rows.len() };
                 (
