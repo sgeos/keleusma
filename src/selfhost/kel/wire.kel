@@ -2741,6 +2741,18 @@ private data fl {
     // the discard field for a value that is then TESTED is how a guard quietly
     // stops guarding.
     rc: Word,
+    // Running `STRUCT_AUX` index, assigned in breadth-first order like every
+    // other index the walk hands out.
+    saux: Word,
+    // Where `STRUCT_AUX` records go. A field rather than a parameter so
+    // `fl_walk` and `fl_put_record` keep the signatures command 141 already
+    // uses; 141 never emits a struct, because its scope predicate rejects the
+    // tag before the walk starts.
+    sauxat: Word,
+    // A struct's interned type-name index, held across the field run.
+    tn: Word,
+    // The name index the field run starts at.
+    ffirst: Word,
 }
 
 // `wire.fin` holds six words per node, so 1024 words is 170 nodes. A STATED cap:
@@ -2769,7 +2781,9 @@ fn fl_disc_of(p: Word) -> Word { wire.fin[(p * fl_fields()) + 5] }
 // deliberately absent: admitting them here would emit a record with `aux` 0,
 // which is a plausible-looking wrong answer rather than a refusal.
 fn fl_tag_has_range(t: Word) -> Word {
-    if t == tag_tuple() { 1 } else { if t == tag_array() { 1 } else { 0 } }
+    if t == tag_tuple() { 1 } else {
+    if t == tag_array() { 1 } else {
+    if t == tag_struct() { 1 } else { 0 } } }
 }
 
 // Slice 13b's scope: everything slice 13 admits, plus `STATIC_STR`, which
@@ -2780,7 +2794,44 @@ fn fl_tag_has_range(t: Word) -> Word {
 // admitting the tag there would intern against an empty table and produce a
 // record citing index 0, which is a plausible wrong answer rather than a refusal.
 fn fx_tag_in_scope(t: Word) -> Word {
-    if t == tag_static_str() { 1 } else { fl_tag_in_scope(t) }
+    if t == tag_static_str() { 1 } else {
+    if t == tag_struct() { 1 } else { fl_tag_in_scope(t) } }
+}
+
+// Intern a struct node's names and write its `STRUCT_AUX` record. Returns the
+// aux index the `CONSTS` record must cite.
+//
+// THE ORDER IS THE WHOLE OF IT, and it is measured rather than inferred
+// (`wire_schema.rs:412-442`, confirmed end to end against a real artifact where
+// `type_name` is 2 and `field_names_first` is 3):
+//
+//   1. intern the TYPE NAME, with dedup
+//   2. THEN read the name count — that is `field_names_first`
+//   3. then intern each field name FRESH, so the run stays contiguous
+//
+// Capturing `field_names_first` before step 1 is off by one on every struct
+// whose type name is new, and correct on every struct whose type name is
+// already present — which is why a corpus of familiar type names would hide it.
+//
+// Step 3 is where `intern_fresh` finally has a consumer. A field name repeated
+// across two structs MUST appear twice, or `field_names_first + i` stops
+// addressing field `i`.
+fn fx_struct_aux(p: Word) -> Word {
+    fl.tn = nm_intern_at(fl_names_first_of(p));
+    fl.ffirst = nm.cnt;
+    for k in 0..fl_children_of(p) limit 170 {
+        nm.sink = nm_intern_at(fl_names_first_of(p) + 1 + k);
+    }
+    put_u32(
+        fl.sauxat + (fl.saux * structaux_stride()) + structaux_off_type_name(),
+        fl.tn,
+    );
+    put_u32(
+        fl.sauxat + (fl.saux * structaux_stride()) + structaux_off_field_names_first(),
+        fl.ffirst,
+    );
+    fl.saux = fl.saux + 1;
+    fl.saux - 1
 }
 
 fn fx_validate(nnodes: Word) -> Word {
@@ -2891,7 +2942,10 @@ fn fl_put_record(at: Word, head: Word) -> Word {
         at + (head * const_stride()) + const_off_aux(),
         if fl_tag_of(wire.fq[head]) == tag_static_str() {
             nm_intern_at(fl_names_first_of(wire.fq[head]))
-        } else { 0 },
+        } else {
+        if fl_tag_of(wire.fq[head]) == tag_struct() {
+            fx_struct_aux(wire.fq[head])
+        } else { 0 } },
     );
     put_u64(
         at + (head * const_stride()) + const_off_payload(),
@@ -2936,6 +2990,10 @@ fn flatten_emit_consts(nroots: Word, nnodes: Word) -> Word {
     if fl_size_all(nnodes) < 0 { fl.err } else {
     if fl_cover(nroots, nnodes) < 0 { 0 - 248 } else {
     if dir_find(kind_consts()) < 0 { 0 - 247 } else {
+    // 141 never emits a struct — its scope predicate rejects the tag — but the
+    // aux base must still point somewhere harmless rather than at address 0.
+
+        fl.sauxat = fx_scratch_aux();
         fl_walk(region_base(dir_find(kind_consts())), nroots, nnodes) } } } } } }
 }
 
@@ -2970,8 +3028,14 @@ fn flatten_emit_consts(nroots: Word, nnodes: Word) -> Word {
 // writes.
 fn fx_scratch() -> Word { 32768 }
 
+// A second scratch window, for `STRUCT_AUX` records during a pass that is not
+// emitting them. Separate from `fx_scratch` so a counting run cannot have its
+// throwaway `CONSTS` records overwritten by its own throwaway aux records.
+fn fx_scratch_aux() -> Word { 40960 }
+
 // Seed the interner with the prefix, leaving it ready for the walk.
 fn fx_seed() -> Word {
+    fl.saux = 0;
     nm.ocur = 0;
     nm.cnt = 0;
     nm.err = 0;
@@ -3007,29 +3071,51 @@ fn fx_prep() -> Word {
 // Found by reading the code back, not by a failing test — the third defect this
 // arc that a green suite could not have surfaced.
 fn fx_run(at: Word) -> Word {
-    fl.rc = if at == fx_scratch() andalso wire.len > fx_scratch() { 0 - 252 }
-            else { fx_prep() };
+    // UNCONDITIONAL, not keyed on `at`. Every run writes SOMETHING to a scratch
+    // window — `CONSTS` when counting, `STRUCT_AUX` when not emitting it — so a
+    // guard that only fired for one of them would leave the other exposed. The
+    // first version keyed on `at == fx_scratch()` and did exactly that.
+    fl.rc = if wire.len > fx_scratch() { 0 - 252 } else { fx_prep() };
     if fl.rc < 0 { fl.rc } else { fl_walk(at, wire.warg3, wire.warg4) }
 }
 
 // The three figures the host must relay back before the directory can be laid.
 // Deterministic re-runs of one function, not three answers to one question.
 fn fx_names() -> Word {
+    fl.sauxat = fx_scratch_aux();
     fl.rc = fx_run(fx_scratch());
     if fl.rc < 0 { fl.rc } else { nm.cnt }
 }
 
+// How many `STRUCT_AUX` records the walk produces. A fourth figure the host
+// relays back before the directory can be laid.
+fn fx_saux_count() -> Word {
+    fl.sauxat = fx_scratch_aux();
+    fl.rc = fx_run(fx_scratch());
+    if fl.rc < 0 { fl.rc } else { fl.saux }
+}
+
+fn fx_emit_saux() -> Word {
+    if dir_find(kind_struct_aux()) < 0 { 0 - 253 } else {
+        fl.sauxat = region_base(dir_find(kind_struct_aux()));
+        fl.rc = fx_run(fx_scratch());
+        if fl.rc < 0 { fl.rc } else { fl.saux * structaux_stride() } }
+}
+
 fn fx_poollen() -> Word {
+    fl.sauxat = fx_scratch_aux();
     fl.rc = fx_run(fx_scratch());
     if fl.rc < 0 { fl.rc } else { nm.ocur }
 }
 
 fn fx_emit_consts() -> Word {
     if dir_find(kind_consts()) < 0 { 0 - 247 } else {
+        fl.sauxat = fx_scratch_aux();
         fx_run(region_base(dir_find(kind_consts()))) }
 }
 
 fn fx_emit_names() -> Word {
+    fl.sauxat = fx_scratch_aux();
     fl.rc = fx_run(fx_scratch());
     if fl.rc < 0 { fl.rc } else {
     if dir_find(kind_names()) < 0 { 0 - 233 } else {
@@ -3037,6 +3123,7 @@ fn fx_emit_names() -> Word {
 }
 
 fn fx_emit_pool() -> Word {
+    fl.sauxat = fx_scratch_aux();
     fl.rc = fx_run(fx_scratch());
     if fl.rc < 0 { fl.rc } else {
     if dir_find(kind_string_pool()) < 0 { 0 - 234 } else {
@@ -3058,7 +3145,9 @@ fn dispatch_driver(cmd: Word) -> Word {
     if cmd == 144 { fx_emit_consts() } else {
     if cmd == 145 { fx_emit_names() } else {
     if cmd == 146 { fx_emit_pool() } else {
-    0 - 97 }}}}}}}}}}}}}
+    if cmd == 147 { fx_saux_count() } else {
+    if cmd == 148 { fx_emit_saux() } else {
+    0 - 97 }}}}}}}}}}}}}}}
 }
 
 // THE HIGHEST LIVE COMMAND, AND IT IS LOAD-BEARING RATHER THAN DOCUMENTATION.
@@ -3066,7 +3155,7 @@ fn dispatch_driver(cmd: Word) -> Word {
 // UNREACHABLE and its own test fails immediately. The fall-through sweep reads
 // this value out of the source instead of restating a bound, which is what it
 // did for four consecutive slices — and got wrong once.
-fn highest_command() -> Word { 146 }
+fn highest_command() -> Word { 148 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {
