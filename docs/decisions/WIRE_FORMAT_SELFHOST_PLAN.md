@@ -378,90 +378,55 @@ ordering read out of `SchemaBuilder`. No Keleusma emitter has been run against a
 peak figure is a projection of the Rust encoder's structure onto a design that does not exist yet.
 Treat 77% as an estimate to be confirmed by the first driver, not as a measurement.
 
-#### THE 77% PROJECTION IS REFUTED, AND BY A FACTOR OF ABOUT FORTY (measured 2026-08-11)
+#### CORRECTION: THE PROJECTION STANDS. WHAT THE PLAN OMITTED IS ARTIFACT SIZE (2026-08-11)
 
-The caveat above asked for the projection to be confirmed. It does not survive, and the reason is
-not in the arithmetic: **it is that the arithmetic counted the accumulator's DATA BYTES and ignored
-what declaring those bytes in Keleusma costs.**
+**Two earlier commits on this branch claimed the 77% projection was "refuted by about a factor of
+forty" and derived a ~321,000-slot budget from it. That was wrong, and the error is worth naming
+precisely because the wrong number looked authoritative:** the budget divided a **byte-addressing
+ceiling** by a figure measured in **bytes of artifact per slot**. Those are different quantities, and
+the spurious factor of forty was the units mistake itself.
 
-Measured by growing `wire.kel`'s own `bout` array and re-encoding its auxiliary body:
+**`MAX_DATA_ADDR` does not bound the artifact.** It is 2^24 and bounds a data-segment byte offset, a
+unified data-slot index, and an indexed-array length (`src/bytecode.rs:3548-3556`). The wire
+container addresses regions with **u32 word offsets and lengths** (`keleusma-wire/src/layout.rs`,
+`WORD = 8`), so an artifact may reach roughly 34 GB. There is no 16 MB artifact ceiling to exhaust.
 
-| `bout` | data slots | artifact | bytes of artifact per slot |
-|---|---|---|---|
-| 8,192 (today) | 91,181 | 3,712,800 | 40.7 |
-| 65,536 | 148,525 | 6,004,752 | 40.4 |
-| 262,144 | 345,133 | **14,031,216** | 40.7 |
+Against the ceilings that do bind, `lexer`'s 9,776,392-byte accumulator needs:
 
-Two facts, both measured rather than reasoned:
+| Ceiling | Needed | Share |
+|---|---|---|
+| Shared segment, 16,777,216 bytes | 9,932,096 with today's declarations | **59.2%** |
+| Slot index, 2^24 | 9,867,573 with today's 91,181 slots | 58.8% |
 
-1. **A data slot per ARRAY ELEMENT.** The slot deltas are exact: `65,536 - 8,192 = 57,344` slots
-   added, and `1,000,000 - 8,192 = 991,808`. This is the per-element data-slot cost already held by
-   the operator, now with a number against it.
-2. **Roughly 40.7 bytes of artifact per slot**, stable to within 1% across a fourfold range. Each
-   element costs a slot record, a `SHARED_LAYOUT` record, an interned name and that name's pool
-   bytes — the three parallel tables plus their pool, exactly as the section above describes.
+**Which is the 58.3% the section above already recorded.** The original projection was right, and the
+peak figure of roughly 77% including the region under construction stands unchallenged. The
+per-stage accumulator table that followed the retracted claim is deleted with it: every stage clears
+the real ceilings, so a fits-or-not column measured against a phantom budget said nothing.
 
-**So a declared byte costs about forty bytes of artifact**, and the residency design fails by that
-factor rather than marginally. A 262,144-byte array already puts `wire.kel`'s own artifact at **84%
-of the 16,777,216-byte ceiling**. Extrapolating linearly — 28x beyond the measured range, so an
-estimate rather than a measurement — the `lexer` accumulator of 9,776,392 bytes would want on the
-order of **400 MB**, about 24x over the ceiling.
+**What the measurement DID establish, and what the plan genuinely omitted**, all still valid:
 
-**The practical budget, which is the actionable form.** At 40.7 bytes per slot the ceiling affords
-about **412,000 slots** in total, and `wire.kel` already spends 91,181. That leaves roughly
-**321,000 further array elements**, some 313 KB, across every buffer it might add. Batching buffers
-fit inside that comfortably; an accumulator does not fit inside it at all.
+1. **A data slot per ARRAY ELEMENT.** Exact deltas: `65,536 - 8,192 = 57,344` slots added, and
+   `1,000,000 - 8,192 = 991,808`. The per-element cost the operator holds, now with a number on it.
+2. **About 40.7 bytes of ARTIFACT per slot**, stable to within 1% across a fourfold range (91,181 to
+   345,133 slots), because each element carries a slot record, a `SHARED_LAYOUT` record, an interned
+   name and that name's pool bytes.
+3. **Compile time of roughly 2.4 seconds per megabyte declared**: 1.30 s at 64 KB, 3.54 s at 1 MB,
+   17.24 s at 6.6 MB, paid on every build rather than once.
 
-**What this changes about the increment.** The accumulator cannot be a Keleusma-declared array, so
-"residency staging" is not a matter of sizing the arrays carefully — the mechanism has to keep the
-accumulator on the HOST side, where the shared-data buffer already lives as a borrowed `&mut [u8]`
-and costs no slots. Sizing it in the source is what costs. **Confirm this before building either
-half**, because the batching design and the staging design were recorded as one increment on the
-strength of the projection this refutes.
+**So declaring `lexer`'s accumulator costs a `wire.kel` whose own auxiliary body runs to the order of
+400 MB and which takes roughly 25 seconds to compile.** That is a serious practical cost and it is
+what the residency analysis did not price. It is **not** a limit violation and the increment is not
+blocked on it. Those three figures are what the per-element representation costs; fixing that
+representation is what makes them go away.
 
-**A second cost worth knowing before anyone waits on a build.** Compile time grows with the
-declaration at roughly **2.4 seconds per megabyte**: 1.30 s at 64 KB, 3.54 s at 1 MB, 17.24 s at
-6.6 MB. That is paid on every build and every test run, not once.
+**Method note, since this section now carries two corrections in a row.** The first over-generalised
+from `lexer` to every stage. The second divided two incompatible units and produced a confident,
+authoritative-looking budget that was 40x too small. Both were caught by asking what a number
+actually BOUNDS rather than reusing one of the right order of magnitude. **A constant that appears in
+several places for several reasons is exactly where this goes wrong**: 2^24 is a byte offset, and a
+slot index, and coincidentally close to `lexer`'s artifact size, which is what made the mistake look
+self-consistent from three directions at once.
 
-#### THE CONSEQUENCE IS FAR MILDER THAN THE REFUTATION SUGGESTS: SEVEN OF TEN STAGES FIT
-
-The paragraphs above are about `lexer`, which is the outlier the earlier measurement already flagged
-as "the only stage where this is tight, and it is tight by a wide margin". Reasoning from `lexer` to
-the programme was about to produce a much more pessimistic conclusion than the evidence supports, so
-the accumulator was measured for every stage rather than inferred from the largest one.
-
-`STRING_POOL` plus `NAMES` per stage, against the ~321,000-slot budget. Two columns because the slot
-cost depends on how the accumulator is DECLARED: a pool of bytes costs one slot per byte, while the
-name table declared as `[Word; N]` costs one slot per word and carries eight bytes in it. The truth
-for a real emitter is the word model for `NAMES` and the byte model for the pool, which is the
-second column.
-
-| Stage | pool | names | byte model | word model | fits |
-|---|---|---|---|---|---|
-| `verify_datalayout` | 30,600 | 24,688 | 0.17x | 0.11x | yes |
-| `verify_yield` | 96,352 | 63,632 | 0.50x | 0.35x | yes |
-| `verify_depth` | 121,616 | 75,920 | 0.62x | 0.44x | yes |
-| `reconstruct` | 129,560 | 75,568 | 0.64x | 0.46x | yes |
-| `codegen` | 151,296 | 89,256 | 0.75x | 0.54x | yes |
-| `verify_structural` | 201,616 | 135,416 | 1.05x | 0.73x | yes |
-| `analyze` | 274,088 | 161,176 | 1.36x | **0.98x** | marginal |
-| `verify_typed` | 861,800 | 468,808 | 4.14x | 3.05x | **no** |
-| `parse` | 1,071,928 | 464,424 | 4.79x | 3.70x | **no** |
-| `lexer` | 6,609,960 | 3,166,432 | ~30x | ~22x | **no** |
-
-**So the emitter is viable for most of the pipeline today and blocked on three stages.** Six fit
-with room, `analyze` fits with 2% to spare and should be treated as not fitting, and `verify_typed`,
-`parse` and `lexer` need either the per-element slot representation fixed or a host-side accumulator.
-
-**What this does and does not change.** The refutation above stands: a declared byte costs about
-forty bytes of artifact, and the 77% projection was wrong. What it does not support is the stronger
-claim that the self-hosted emitter is unreachable — that reads across from `lexer` to everything,
-and seven of ten stages say otherwise. **`lexer` is 4.3x the next largest stage**, so it is the
-wrong stage to generalise from in either direction.
-
-**Both figures are budgets against `wire.kel`'s OWN artifact ceiling**, not against runtime memory.
-They say how much array `wire.kel` may declare before its own auxiliary body exceeds 16 MB. Runtime
-residency is a separate question and is not what the 40.7 bytes per slot measures.
 
 ### Records per region, which sizes every remaining slice (measured 2026-08-09)
 
