@@ -10,7 +10,7 @@ misleading a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`, or a feature branch cut from it.
-- **Parent commit**: `01a19293`
+- **Parent commit**: `2310ccea`
 - **Written**: 2026-08-11
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
@@ -35,52 +35,61 @@ this file**.
 5. **Run `scripts/gate-status.sh`.** It answers "is a gate running, and where" in 0.23 s. Do not
    hand-roll a `pgrep` for it; see Gating.
 
-## FIRST ACTION: a gate of MINE is running — read its verdict before anything else
+## FIRST ACTION: read the gate policy below — it changed, and it changes what you do
 
-**`scripts/gate-status.sh` first.** A gate was running on **`79fc97d1`** when this was written, the
-tip of `feat/selfhost-wire-driver`, as `wire-corpus` in `.gate-target-wire`.
+**CI GATES FEATURE BRANCHES. The local `release-gate.sh` no longer gates a merge.** Operator
+decision, 2026-08-11, because gate time was the bottleneck and two sessions were serialising on one
+machine.
 
-- **GREEN** -> merge `79fc97d1` into `v0.2.3` with `--no-ff`, **at the gated commit and without
-  rebasing** — a rebase rewrites the hash the result rests on. Then push and confirm CI. `v0.2.3` is
-  already a strict ancestor of that tip, so the merge cannot conflict and the gated tree is exactly
-  the tree that lands.
-- **RED** -> read the log the tool names before doing anything else.
-- **ABANDONED** -> the tool now says so explicitly, on a `previous:` line. A run that stops without a
-  verdict is neither GREEN nor RED, and waiting on one never ends. This line exists because I made
-  that exact mistake.
+The loop is now:
 
-**`perf_canary` runs in gate steps 3 to 7 only** — it is in the `keleusma` package, so steps 8 onward
-(`keleusma-wire`, docs, links, the detached subprojects) cannot trip it. While a gate is inside that
-window, **do not run a full test suite and do not push**: the pre-push tier runs the canary too.
-Documentation, design and reading work is fine, and a brief targeted test is a judgement call rather
-than a prohibition.
+1. Work on a feature branch cut from `v0.2.3`.
+2. Verify locally as you go — the suite and tier 1 are cheap and catch things before CI does.
+3. Push, and open a **draft PR to `v0.2.3`**. `pull_request: branches: [main, 'v*']` triggers the
+   full 23-job matrix on hosted runners.
+4. **Merge on CI green, at the commit CI ran, without rebasing.** Push. Confirm CI on the merge.
 
-**THREE DOCUMENTATION COMMITS ON `v0.2.3` ARE UNPUSHED**, deliberately, for that reason. Push them
-once the gate clears step 7.
+**CI is a verified strict superset of the local gate**, checked job by job rather than assumed. It
+also runs Miri, two MSRV checks, `no_std`, the RTOS `thumbv8m` cross-build, `keleusma-bench`, SDL3
+examples, the LSP, the extension and the WASM playground — none of which the local gate touches.
+~48 minutes, contending for nothing.
+
+**No gate is running and none is expected.** The `perf_canary` courtesy that dominated the previous
+handoff is retired: once neither session holds the machine, neither has a canary window to protect.
+Run builds freely. `scripts/gate-status.sh` still works and still reports abandoned runs, but it is
+now an occasional check rather than a scheduling instrument.
+
+**If you find a local gate running anyway**, the other session may not have read its mailbox yet.
+Do not start a second; `gate-in-worktree.sh` refuses machine-wide.
 
 ## THE STATE
 
 | Ref | Commit | Status |
 |---|---|---|
-| `v0.2.3` | `01a19293` | slices 1–11 merged; **3 docs commits unpushed** |
-| `feat/selfhost-wire-driver` | `79fc97d1` | **gating when written**; slices 12–13 + prerequisites |
-| `v0.3.0` | `357315b9` | gated GREEN, 13 steps; machine handed to me |
+| `v0.2.3` | `2310ccea` | pushed; slices 1–13b merged, CI green |
+| `v0.3.0` | `1c1ffb1e` | their local gate STALLED at step 5, third abandonment |
 
-`v0.2.3` is a strict ancestor of the driver tip, so the merge back is a clean `--no-ff` bubble.
+**Nothing is in flight and nothing is blocked.** Three PRs merged today (#1, #4, #5), each 22 of 22
+green, with the local machine idle throughout.
 
-## WHAT CHANGED SINCE: the driver COMPUTES two of the three values it owed
+## WHERE THE DRIVER IS: it computes three of the five values it owed
 
-**`tests/selfhost_wire.rs` is 125 tests.** Slice 12 computes `STRING_POOL`, `NAMES` and an
-input-to-index map; slice 13 reorders a depth-first constant forest into the breadth-first `CONSTS`
-table. Both byte-identical to `encode_aux_body` on real compiled modules.
+`tests/selfhost_wire.rs` is **129 tests**. Keleusma computes the name table (both interning modes),
+the breadth-first constant ordering, and — as of slice 13b — the names interned DURING the walk, for
+all three interning tags, with `STRUCT_AUX` and `ENUM_AUX` alongside.
 
-**SLICE 13b's PREREQUISITES ARE IN AND ARE NOT VALIDATED BY ANY TEST.** The interner moved off `fin`
-onto its own `nin`/`nout`, and the pool gained an output buffer `bout`. Both are changes to slice
-12's MECHANICS, and **neither is distinguishable from what it replaced by anything in the suite**,
-because the interner still walks its input sequentially. They rest on one argument: in-place
-compaction is unsound once interning order differs from input order, which a breadth-first walk
-guarantees. Two ten-byte names suffice to break it. **The test that separates them arrives with 13b**
-— treat that as an obligation, not a nicety.
+**What the driver still does not compute**, in the order the plan recommends:
+
+1. **Per-chunk ranges** — `consts_first/count`, `templates_first/count`, `param_types_first/count`.
+   Allocation results of the order contributors ran in; a running total per chunk. The smaller item.
+2. **The interning SEQUENCE itself.** It is still a Rust model of the encoder's call order
+   (`interner_input` and `preorder_13b` in the test file), restricted to chunk names, enum layouts
+   and the constant tree, and guarded by `assert_no_other_contributors` so it cannot silently
+   under-generate. **Producing that sequence from the AST is the last thing between here and a
+   driver that computes everything it emits.**
+3. **The dedup scan is LINEAR.** Correct at these sizes and measured catastrophic at corpus scale —
+   the reference took 782 seconds on a mid-sized stage before it became a `BTreeMap`. It must be
+   replaced before a real stage drives the interner.
 
 ## THREE METHOD RULES THIS ARC PAID FOR, ALL ABOUT SEEING WHAT TESTS CANNOT
 
