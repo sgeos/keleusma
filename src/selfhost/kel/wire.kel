@@ -2739,15 +2739,27 @@ private data fl {
     sink: Word,
 }
 
-// `wire.fin` holds three words per node, so 1024 words is 341 nodes. A STATED
-// cap: an oversized forest is refused with a code, not truncated.
-fn fl_max_nodes() -> Word { 341 }
+// `wire.fin` holds six words per node, so 1024 words is 170 nodes. A STATED cap:
+// an oversized forest is refused with a code, not truncated.
+//
+// SIX RATHER THAN THREE, widened for slice 13b. `STATIC_STR`, `STRUCT` and
+// `ENUM` each need a name-group start, and an enum additionally needs a flag and
+// a SIGNED discriminant — which `payload` cannot carry, because a composite's
+// payload is its child range. Widened once, in advance of the two slices that
+// consume the new columns, rather than migrating this record and its tests
+// twice.
+fn fl_max_nodes() -> Word { 170 }
 
-fn fl_fields() -> Word { 3 }
+fn fl_fields() -> Word { 6 }
 
 fn fl_tag_of(p: Word) -> Word { wire.fin[p * fl_fields()] }
 fn fl_payload_of(p: Word) -> Word { wire.fin[(p * fl_fields()) + 1] }
 fn fl_children_of(p: Word) -> Word { wire.fin[(p * fl_fields()) + 2] }
+// Index into `nin` of this node's first name. Meaningful only for the three
+// interning tags; zero elsewhere.
+fn fl_names_first_of(p: Word) -> Word { wire.fin[(p * fl_fields()) + 3] }
+fn fl_flags_of(p: Word) -> Word { wire.fin[(p * fl_fields()) + 4] }
+fn fl_disc_of(p: Word) -> Word { wire.fin[(p * fl_fields()) + 5] }
 
 // Only these two carry a range in this slice. Struct and enum also do, and are
 // deliberately absent: admitting them here would emit a record with `aux` 0,
@@ -2782,7 +2794,7 @@ fn fl_step(nnodes: Word) -> Word {
 fn fl_size_at(p: Word, nnodes: Word) -> Word {
     fl.cur = p + 1;
     fl.tot = 1;
-    for k in 0..fl_children_of(p) limit 341 {
+    for k in 0..fl_children_of(p) limit 170 {
         fl.tot = fl.tot + fl_step(nnodes);
     }
     fl.tot
@@ -2792,19 +2804,19 @@ fn fl_size_at(p: Word, nnodes: Word) -> Word {
 // makes a single pass sufficient: a node's children all sit above it in
 // preorder, so they are already sized when it is reached.
 fn fl_size_all(nnodes: Word) -> Word {
-    for i in 0..nnodes limit 341 {
+    for i in 0..nnodes limit 170 {
         wire.fsz[nnodes - 1 - i] = fl_size_at(nnodes - 1 - i, nnodes);
     }
     fl.err
 }
 
 // Every child count must be admissible before any loop uses one as a BOUND.
-// `for k in 0..n limit 341` TRAPS when the runtime range exceeds the cap, so a
+// `for k in 0..n limit 170` TRAPS when the runtime range exceeds the cap, so a
 // count of 9999 in a malformed input would abort the VM rather than be
 // reported. Validation therefore precedes sizing, not the other way round.
 fn fl_validate(nnodes: Word) -> Word {
     fl.err = 0;
-    for p in 0..nnodes limit 341 {
+    for p in 0..nnodes limit 170 {
         fl.err = if fl_children_of(p) > nnodes { 0 - 241 } else {
                  if fl_tag_in_scope(fl_tag_of(p)) == 0 { 0 - 245 } else { fl.err } };
     }
@@ -2815,7 +2827,7 @@ fn fl_validate(nnodes: Word) -> Word {
 // one whole subtree past the previous one.
 fn fl_seed_roots(nroots: Word, nnodes: Word) -> Word {
     fl.cur = 0;
-    for r in 0..nroots limit 341 {
+    for r in 0..nroots limit 170 {
         wire.fq[r] = fl.cur;
         fl.sink = fl_step(nnodes);
     }
@@ -2837,7 +2849,7 @@ fn fl_seed_roots(nroots: Word, nnodes: Word) -> Word {
 // at all — the guard was unreachable in exactly the case its test exercised.
 fn fl_cover(nroots: Word, nnodes: Word) -> Word {
     fl.cur = 0;
-    for r in 0..nroots limit 341 {
+    for r in 0..nroots limit 170 {
         fl.sink = fl_step(nnodes);
     }
     if fl.cur != nnodes { 0 - 248 } else { 0 }
@@ -2863,11 +2875,11 @@ fn fl_put_record(at: Word, head: Word) -> Word {
 // its children are appended.
 fn fl_walk(at: Word, nroots: Word, nnodes: Word) -> Word {
     fl.qn = fl_seed_roots(nroots, nnodes);
-    for head in 0..nnodes limit 341 {
+    for head in 0..nnodes limit 170 {
         fl.first = fl.qn;
         fl.err = if fl.qn + fl_children_of(wire.fq[head]) > nnodes { 0 - 244 } else { fl.err };
         fl.cur = wire.fq[head] + 1;
-        for k in 0..fl_children_of(wire.fq[head]) limit 341 {
+        for k in 0..fl_children_of(wire.fq[head]) limit 170 {
             fl.qpick = if fl.first + k < nnodes { fl.first + k } else { 0 };
             wire.fq[fl.qpick] = fl.cur;
             fl.sink = fl_step(nnodes);

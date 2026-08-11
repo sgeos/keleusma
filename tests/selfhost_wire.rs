@@ -7097,6 +7097,13 @@ fn push_preorder(c: &keleusma::bytecode::ConstValue, out: &mut Vec<i64>) {
     out.push(tag);
     out.push(payload);
     out.push(children.len() as i64);
+    // names_first, flags, discriminant — zero for every tag this slice admits.
+    // Written explicitly rather than left to a shorter record, because the
+    // stride is what locates the NEXT node and a short one silently shifts the
+    // whole forest.
+    out.push(0);
+    out.push(0);
+    out.push(0);
     for ch in children {
         push_preorder(ch, out);
     }
@@ -7306,9 +7313,9 @@ fn the_two_walk_orders_genuinely_disagree_on_this_corpus() {
 fn the_flattener_reports_input_it_will_not_flatten() {
     // A forest larger than `wire.fin` can describe.
     let mut vm = vm_for(WIRE_KEL);
-    let big: Vec<i64> = (0..342).flat_map(|_| [3_i64, 0, 0]).collect();
+    let big: Vec<i64> = (0..171).flat_map(|_| [3_i64, 0, 0, 0, 0, 0]).collect();
     assert_eq!(
-        run_flatten(&mut vm, CMD_FLATTEN_EMIT_CONSTS, &big, [342, 342, 0, 0, 0]),
+        run_flatten(&mut vm, CMD_FLATTEN_EMIT_CONSTS, &big, [171, 171, 0, 0, 0]),
         -240,
         "an oversized forest was not reported"
     );
@@ -7319,7 +7326,7 @@ fn the_flattener_reports_input_it_will_not_flatten() {
         run_flatten(
             &mut vm,
             CMD_FLATTEN_EMIT_CONSTS,
-            &[3, 7, 0],
+            &[3, 7, 0, 0, 0, 0],
             [2, 1, 0, 0, 0]
         ),
         -246,
@@ -7332,7 +7339,7 @@ fn the_flattener_reports_input_it_will_not_flatten() {
         run_flatten(
             &mut vm,
             CMD_FLATTEN_EMIT_CONSTS,
-            &[8, 0, 99],
+            &[8, 0, 99, 0, 0, 0],
             [1, 1, 0, 0, 0]
         ),
         -241,
@@ -7354,7 +7361,7 @@ fn the_flattener_reports_input_it_will_not_flatten() {
         run_flatten(
             &mut vm,
             CMD_FLATTEN_EMIT_CONSTS,
-            &[3, 7, 0, 3, 8, 0, 3, 9, 0],
+            &[3, 7, 0, 0, 0, 0, 3, 8, 0, 0, 0, 0, 3, 9, 0, 0, 0, 0],
             [1, 3, 0, 0, 0]
         ),
         -248,
@@ -7370,7 +7377,7 @@ fn the_flattener_reports_input_it_will_not_flatten() {
         run_flatten(
             &mut vm,
             CMD_FLATTEN_EMIT_CONSTS,
-            &[3, 7, 0, 3, 8, 0],
+            &[3, 7, 0, 0, 0, 0, 3, 8, 0, 0, 0, 0],
             [2, 2, 0, 0, 0]
         ),
         -247,
@@ -7384,7 +7391,7 @@ fn the_flattener_reports_input_it_will_not_flatten() {
         run_flatten(
             &mut vm,
             CMD_FLATTEN_EMIT_CONSTS,
-            &[10, 0, 0],
+            &[10, 0, 0, 0, 0, 0],
             [1, 1, 0, 0, 0]
         ),
         -245,
