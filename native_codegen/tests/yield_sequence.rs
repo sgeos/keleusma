@@ -84,6 +84,26 @@ fn vm_sequence(src: &str, args: &[i64], replies: &[i64]) -> (Vec<i64>, i64) {
                 st = vm.resume(Value::Int(r)).expect("vm resume");
             }
             VmState::Finished(Value::Int(v)) => return (yielded, v),
+            // A STREAM chunk costs TWO host round-trips per iteration: the body
+            // runs to its `Yield`, and the following `resume` walks the
+            // `PopN(1); Reset` tail and hands back `Reset` before the next
+            // iteration starts. The reply given here is discarded by that
+            // `PopN(1)`, so the SAME reply is offered again; it is the one that
+            // lands in slot 0 and drives the next iteration.
+            //
+            // Feeding the same value twice is what makes the two forms line up
+            // ONE-TO-ONE: `step(r)` natively equals the VM's
+            // `resume(r) -> Reset; resume(r) -> Yielded(v)` pair. A fresh reply
+            // on the Reset leg would be silently discarded and the sequences
+            // would diverge for a reason that has nothing to do with the
+            // lowering.
+            VmState::Reset => {
+                let r = replies
+                    .get(yielded.len().saturating_sub(1))
+                    .copied()
+                    .unwrap_or(0);
+                st = vm.resume(Value::Int(r)).expect("vm resume after reset");
+            }
             other => panic!("unexpected VM state {other:?}"),
         }
     }
@@ -195,5 +215,197 @@ fn a_divergent_loop_function_is_refused() {
     assert!(
         lower_module(&ctx, &lm, &m, LowerOptions::default()).is_err(),
         "a divergent loop function must be refused under a callback yield ABI"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// STREAM drivers. A `loop` chunk is DIVERGENT: it never returns `Finished`, so
+// `vm_sequence` and `native_sequence`, which both wait for a final result,
+// cannot drive one. They were written for `yield fn` chunks, which terminate.
+//
+// Equivalence for a stream is therefore over the YIELDED SEQUENCE ALONE, bounded
+// by the caller. There is no final result to compare because there is never a
+// final result — that is what productive divergence means, not a gap in the test.
+// ---------------------------------------------------------------------------
+
+/// Drive a STREAM chunk on the virtual machine for `replies.len()` iterations.
+///
+/// Two host round-trips per iteration: the body runs to its `Yield`, then the
+/// following `resume` walks the `PopN(1); Reset` tail and hands back `Reset`. The
+/// reply on the Reset leg is discarded by that `PopN(1)`, so the SAME value is
+/// offered twice. That is what makes the two forms line up one-to-one, since
+/// natively `step(r)` is the whole iteration.
+fn vm_stream_sequence(src: &str, args: &[i64], replies: &[i64]) -> Vec<i64> {
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let arena = arena_for(&m);
+    let mut vm = Vm::new(m, &arena).expect("vm");
+    let vals: Vec<Value> = args.iter().map(|&x| Value::Int(x)).collect();
+    let mut yielded: Vec<i64> = Vec::new();
+    let mut st = vm.call(&vals).expect("vm run");
+    // Bounded by construction: a divergent loop would otherwise spin forever, and
+    // a hang is a far worse failure than a wrong answer because it reports
+    // nothing. The bound is the reply count, so the caller sets it.
+    while yielded.len() < replies.len() {
+        match st {
+            VmState::Yielded(Value::Int(v)) => {
+                yielded.push(v);
+                let r = replies[yielded.len() - 1];
+                st = vm.resume(Value::Int(r)).expect("resume");
+            }
+            VmState::Reset => {
+                let r = replies[yielded.len().saturating_sub(1)];
+                st = vm.resume(Value::Int(r)).expect("resume after reset");
+            }
+            other => panic!("a stream chunk produced {other:?}"),
+        }
+    }
+    yielded
+}
+
+/// Drive the SAME chunk as native code: one call per iteration, no callback.
+///
+/// This is the whole claim in executable form. If the degenerate lowering is
+/// right, calling `kel_chunk_N(r)` repeatedly reproduces the virtual machine's
+/// yielded sequence, with the previous return value feeding nothing and the
+/// reply feeding slot 0.
+fn native_stream_sequence(src: &str, args: &[i64], replies: &[i64]) -> Vec<i64> {
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let idx = m
+        .chunks
+        .iter()
+        .position(|c| c.name == "main")
+        .expect("entry chunk named main");
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    lower_module(&ctx, &lm, &m, LowerOptions::default()).expect("lower module");
+    lm.verify().expect("LLVM module verification");
+    let ee = lm
+        .create_jit_execution_engine(OptimizationLevel::None)
+        .expect("jit");
+
+    let sym = format!("kel_chunk_{idx}");
+    let f = unsafe { ee.get_function::<unsafe extern "C" fn(i64) -> i64>(&sym) }.expect("symbol");
+
+    let mut out = Vec::new();
+    let mut input = args[0];
+    for &r in replies {
+        out.push(unsafe { f.call(input) });
+        input = r;
+    }
+    out
+}
+
+/// The degenerate form's observational equivalence, which is the ONE claim the
+/// whole design rests on and the only thing that can settle it.
+fn assert_stream_sequences_agree(src: &str, args: &[i64], replies: &[i64]) {
+    let vy = vm_stream_sequence(src, args, replies);
+    let ny = native_stream_sequence(src, args, replies);
+    assert_eq!(
+        ny, vy,
+        "YIELD SEQUENCE differs for {src:?} args {args:?} replies {replies:?}\n  \
+         native={ny:?}\n  vm    ={vy:?}"
+    );
+}
+
+/// Observational equivalence for the degenerate form, which is the ONLY thing
+/// that settles it.
+///
+/// `assert_sequences_agree` compares the whole yielded sequence and the final
+/// result between the VM and native code, so a transformation that produced the
+/// right values in the wrong order fails here and nowhere else. The inventory has
+/// carried "equivalence is unproven" as the load-bearing gap since the rotation
+/// was first written; these cases are what close it, or fail to.
+///
+/// The replies differ from each other and from the arguments on purpose. Equal
+/// values would let a form that returns the argument instead of the resumed value
+/// pass, which is exactly the confusion the two delivery paths invite.
+#[test]
+fn the_degenerate_stream_agrees_in_sequence_and_result() {
+    // The bare shape: the yield IS the body.
+    assert_stream_sequences_agree(
+        "loop main(a: Word) -> Word { yield a }",
+        &[10],
+        &[21, 32, 43],
+    );
+    // A body that computes before yielding, so the yielded value is not simply
+    // the parameter and a form that confuses the two is visible.
+    assert_stream_sequences_agree(
+        "loop main(a: Word) -> Word { yield a * 2 + 1 }",
+        &[10],
+        &[21, 32, 43],
+    );
+    // A branch before the yield, so the body is not straight-line and the
+    // depth-zero rule is exercised against a chunk that really has an `If`.
+    assert_stream_sequences_agree(
+        "loop main(a: Word) -> Word { yield if a > 20 { a - 20 } else { a } }",
+        &[10],
+        &[21, 32, 43],
+    );
+    // A call, since eight of the ten self-hosted stages are `yield run()` and a
+    // call is the shape that actually ships.
+    assert_stream_sequences_agree(
+        "fn double(x: Word) -> Word { x * 2 }\n\
+         loop main(a: Word) -> Word { yield double(a) }",
+        &[10],
+        &[21, 32, 43],
+    );
+}
+
+/// MUST-NOT-FIRE for the predicate: shapes it has to REFUSE.
+///
+/// A predicate verified only in the admitting direction is the vacuous-control
+/// failure this project keeps catching. Each case below is refused for a
+/// different one of the six conditions, so a predicate that lost any single
+/// condition still fails this test.
+///
+/// Refusal is observed through `lower_module`, not by calling the predicate
+/// directly, because that is the boundary a consumer meets. A predicate that
+/// returns `None` while the emitter lowers the chunk anyway would pass a direct
+/// test and ship a wrong module.
+#[test]
+fn shapes_outside_the_degenerate_class_are_still_refused() {
+    // The resumed value is CONSUMED, so the tail is not `[PopN(1)]`. This is the
+    // case `a_divergent_loop_function_is_refused` already pins; asserted here
+    // too because it is the condition most likely to be relaxed by someone who
+    // reads `PopN(1)` as bookkeeping.
+    assert_refused("loop main(a: Word) -> Word { let x = yield a; x }");
+
+    // TWO top-level yields: a real partition, which the degenerate form does not
+    // have. This is the multi-segment case that still needs the rotation.
+    assert_refused("loop main(a: Word) -> Word { yield a; yield a + 1 }");
+
+    // A NESTED yield. `lexer.kel` is this shape, and it is the general case.
+    assert_refused("loop main(a: Word) -> Word { if a > 0 { yield a } else { yield 0 } }");
+
+    // A DELEGATED suspension, which is the case no chunk-local reading catches.
+    //
+    // The op vector of `main` here looks degenerate: one top-level `Yield`, tail
+    // exactly `PopN(1)`, `Stream` first and `Reset` last. It is NOT degenerate,
+    // because `helper` suspends too, and on that suspension the VM overwrites
+    // `main`'s resume parameter while native code does not.
+    //
+    // If this case is ever DROPPED because it looks redundant next to the others,
+    // the predicate silently starts miscompiling a shape the corpus contains:
+    // `codegen.kel` delegates its entire body this way.
+    assert_refused(
+        "yield helper(x: Word) -> Word { let r = yield x; r }\n\
+         loop main(a: Word) -> Word { yield helper(a) }",
+    );
+}
+
+/// Lower `src` and assert the module is REFUSED.
+///
+/// Deliberately does not match on the refusal text. The reason a chunk is
+/// outside the degenerate class is not a stable interface, and asserting on it
+/// would make this test fail when a message improves rather than when behaviour
+/// regresses.
+fn assert_refused(src: &str) {
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    assert!(
+        lower_module(&ctx, &lm, &m, LowerOptions::default()).is_err(),
+        "this shape is outside the degenerate class and must be refused, not \
+         lowered as though the resumed value were discarded:\n{src}"
     );
 }

@@ -4102,3 +4102,67 @@ The overstatement is small — 111 instances and one chunk — and the module-le
 figure, the one a consumer actually sees, does not move. Recording it at its real
 size rather than dramatising it. The lasting point is that **the error was in the
 copy and not the original**, and a control in a different file is what found it.
+
+## LANDED: the degenerate stream lowering, and observational equivalence is SETTLED
+
+The claim this design rested on since the rotation was first written — that the
+transformation preserves observable behaviour — is no longer unproven. It is
+demonstrated by a differential oracle over four program shapes, comparing whole
+yielded sequences rather than final values.
+
+### The measured effect
+
+| Figure | Before | After |
+|---|---|---|
+| self-hosted stages lowering end to end | **1 of 11** | **9 of 11** |
+| module-level coverage, corpus-wide | 20.7% | **34.5%** |
+
+The two that remain are **exactly the two classes predicted**: `codegen.kel`
+(delegated, no `Op::Yield` in its stream body) and `lexer.kel` (nested yields).
+Both refuse on `Stream`, which is the correct refusal rather than a mislowering.
+
+The opcode-instance and chunk figures do **not** move, and that is now a
+known staleness in `is_lowered`: it is a static model that still counts `Stream`,
+`Reset` and `Yield` as unlowered. The drift is in the **pessimistic** direction,
+so the drift control still holds and no figure is overstated.
+
+### Two things the implementation found that reading had not
+
+**A stream costs TWO host round-trips per iteration.** `Op::Reset` returns
+`VmState::Reset` to the host after rewinding `ip`. So the virtual machine's
+protocol is `call -> Yielded(v0)`, `resume -> Reset`, `resume -> Yielded(v1)`,
+and the reply on the Reset leg is discarded by the `PopN(1)`. Natively one call
+is the whole iteration. Feeding the **same** reply on both legs is what makes the
+two line up one-to-one, and the harness says so, because a fresh reply on the
+Reset leg would be silently discarded and the sequences would diverge for a
+reason having nothing to do with the lowering.
+
+This does not weaken the equivalence claim, but it does **sharpen** it:
+equivalence is over the **yielded value sequence**, not over the host state
+sequence. A stream has no final result to compare, because it never finishes.
+That is productive divergence, not a gap in the test.
+
+**A divergent chunk hangs a harness written for terminating ones.** The existing
+`vm_sequence` loops until `Finished`, which a `loop` chunk never returns. The
+first run hung for ten minutes and had to be killed. The stream drivers are
+therefore **bounded by construction** by the caller's reply count. A hang is a
+worse failure than a wrong answer because it reports nothing, and this is the
+second time on this branch that a stream-shaped thing has produced one.
+
+### What the emitter actually does
+
+`Op::Stream` lowers to nothing, because with an empty prologue the point `Reset`
+rewinds to *is* the entry block. The degenerate `Op::Yield` becomes the return.
+The trailing `PopN(1)` and `Reset` are unreachable after it and are skipped by the
+loop's existing `dead` tracking rather than by a special case.
+
+The signature needed **no change at all**: the data pointers already trail the
+declared parameters, so `kel_chunk_N(resume, shared, private)` is what the
+existing code emits.
+
+### One clippy finding taken seriously rather than suppressed
+
+`lower_chunk_body` reached eight positional arguments. That is a real readability
+cost, not a lint to silence, so `opts` and `degenerate_yield` are bundled into a
+`BodyCfg` — they travel together, both decided by the caller, both constant for
+the body.
