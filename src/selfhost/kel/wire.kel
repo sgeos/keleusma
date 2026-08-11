@@ -3216,6 +3216,78 @@ fn fx_emit_eaux() -> Word {
         if fl.rc < 0 { fl.rc } else { fl.eaux * enumaux_stride() } }
 }
 
+// --- SLICE 14: PER-CHUNK RANGES, THE DRIVER'S THIRD COMPUTED VALUE --------
+//
+// A chunk record carries three `(first, count)` ranges — its constants, its
+// struct templates, its parameter types — and each `first` is an ALLOCATION
+// RESULT rather than a property of the chunk. The reference produces them by
+// calling `add_constant_pool`, `add_struct_template_pool` and `add_param_types`
+// once per chunk in chunk order, each returning the running length before it
+// appended (`wire_schema.rs:620`, `:2542-2544`). So each `first` is a running
+// total over the preceding chunks' counts, and the three accumulate
+// independently.
+//
+// The host therefore supplies COUNTS and the driver computes the OFFSETS. That
+// is the whole of the slice, and it is the smallest of the driver's remaining
+// obligations — but it is also the one that turns a chunk record from something
+// transcribed into something derived.
+//
+// Eleven input words per chunk rather than fourteen: the three `first` fields
+// are exactly what is no longer passed in.
+
+fn ck_fields() -> Word { 11 }
+
+// `wire.fin` is 1024 words, so eleven per chunk is 93. A STATED cap of 90,
+// refused with a code rather than truncated. Real stages have far more chunks
+// than this and will need the batching slice 3's emitter already uses; the
+// constructed cases here have one to three.
+fn ck_max() -> Word { 90 }
+
+fn ck_in(j: Word, f: Word) -> Word { wire.fin[(j * ck_fields()) + f] }
+
+// Running totals, one per range. Three fields rather than one reused, because
+// they advance independently and sharing would couple them silently.
+private data ck {
+    consts: Word,
+    templates: Word,
+    ptypes: Word,
+}
+
+fn emit_chunks_computed(at: Word, n: Word) -> Word {
+    if n > ck_max() { 0 - 260 } else {
+        ck.consts = 0;
+        ck.templates = 0;
+        ck.ptypes = 0;
+        for j in 0..n limit 90 {
+            put_u32(at + (j * chunk_stride()) + chunk_off_name(), ck_in(j, 0));
+            // Each `first` is written BEFORE its accumulator advances: a chunk's
+            // range starts where the previous chunk's ended.
+            put_u32(at + (j * chunk_stride()) + chunk_off_consts_first(), ck.consts);
+            put_u32(at + (j * chunk_stride()) + chunk_off_consts_count(), ck_in(j, 1));
+            ck.consts = ck.consts + ck_in(j, 1);
+            put_u32(at + (j * chunk_stride()) + chunk_off_templates_first(), ck.templates);
+            put_u32(at + (j * chunk_stride()) + chunk_off_templates_count(), ck_in(j, 2));
+            ck.templates = ck.templates + ck_in(j, 2);
+            put_u32(at + (j * chunk_stride()) + chunk_off_param_types_first(), ck.ptypes);
+            put_u32(at + (j * chunk_stride()) + chunk_off_param_types_count(), ck_in(j, 3));
+            ck.ptypes = ck.ptypes + ck_in(j, 3);
+            put_u32(at + (j * chunk_stride()) + chunk_off_debug_first(), ck_in(j, 4));
+            put_u32(at + (j * chunk_stride()) + chunk_off_debug_len(), ck_in(j, 5));
+            put_u32(at + (j * chunk_stride()) + chunk_off_op_byte_offset(), ck_in(j, 6));
+            put_u32(at + (j * chunk_stride()) + chunk_off_op_record_count(), ck_in(j, 7));
+            put_u16(at + (j * chunk_stride()) + chunk_off_local_count(), ck_in(j, 8));
+            put_u8(at + (j * chunk_stride()) + chunk_off_param_count(), ck_in(j, 9));
+            put_u8(at + (j * chunk_stride()) + chunk_off_block_type(), ck_in(j, 10));
+        }
+        n * chunk_stride()
+    }
+}
+
+fn ck_emit() -> Word {
+    if dir_find(kind_chunks()) < 0 { 0 - 261 } else {
+        emit_chunks_computed(region_base(dir_find(kind_chunks())), wire.warg) }
+}
+
 fn dispatch_driver(cmd: Word) -> Word {
     if cmd == 134 { build_region_table(wire.nregions) } else {
     if cmd == 135 { emit_in_region(wire.warg, wire.warg2) } else {
@@ -3234,7 +3306,8 @@ fn dispatch_driver(cmd: Word) -> Word {
     if cmd == 148 { fx_emit_saux() } else {
     if cmd == 149 { fx_eaux_count() } else {
     if cmd == 150 { fx_emit_eaux() } else {
-    0 - 97 }}}}}}}}}}}}}}}}}
+    if cmd == 151 { ck_emit() } else {
+    0 - 97 }}}}}}}}}}}}}}}}}}
 }
 
 // THE HIGHEST LIVE COMMAND, AND IT IS LOAD-BEARING RATHER THAN DOCUMENTATION.
@@ -3242,7 +3315,7 @@ fn dispatch_driver(cmd: Word) -> Word {
 // UNREACHABLE and its own test fails immediately. The fall-through sweep reads
 // this value out of the source instead of restating a bound, which is what it
 // did for four consecutive slices — and got wrong once.
-fn highest_command() -> Word { 150 }
+fn highest_command() -> Word { 151 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {

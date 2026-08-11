@@ -7427,6 +7427,25 @@ const CMD_FX_SAUX_COUNT: i64 = 147;
 const CMD_FX_EMIT_SAUX: i64 = 148;
 const CMD_FX_EAUX_COUNT: i64 = 149;
 const CMD_FX_EMIT_EAUX: i64 = 150;
+const CMD_CK_EMIT: i64 = 151;
+
+/// A chunk's eleven INPUT words: everything the record carries except the three
+/// `first` fields, which are exactly what the driver now computes.
+///
+/// The other eleven still come from the reference row. This slice claims the
+/// RANGES, not the whole record — the name index in particular is the
+/// interner's business and is scoped to a later increment.
+fn chunk_inputs(rows: &[Vec<i64>]) -> Vec<i64> {
+    let mut out = Vec::with_capacity(rows.len() * 11);
+    for r in rows {
+        // name, consts_count, templates_count, param_types_count, debug_first,
+        // debug_len, op_byte_offset, op_record_count, local, param, block_type
+        for i in [0usize, 2, 4, 6, 7, 8, 9, 10, 11, 12, 13] {
+            out.push(r[i]);
+        }
+    }
+    out
+}
 
 /// Sources whose constant forests contain strings. Every one is a real compiled
 /// module, so the oracle stays `encode_aux_body`.
@@ -7693,6 +7712,37 @@ fn run_fx(vm: &mut Vm<'static, 'static>, cmd: i64, i: &FxInput) -> i64 {
     .0
 }
 
+/// Must-fire, about the CORPUS: unless some chunk's range starts somewhere other
+/// than zero, a driver that wrote a constant 0 for every `first` would pass.
+///
+/// With a single chunk every range starts at 0, so this is exactly the vacuity
+/// the running total exists to defeat. Checked over the same sources the
+/// differential uses, not over invented ones.
+#[test]
+fn some_chunk_range_genuinely_starts_past_zero() {
+    use keleusma::wire_schema::kind;
+    let mut nonzero = 0;
+    for (label, src) in FX_CASES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+        let view = keleusma_wire::WireView::parse(&want).expect("parses");
+        let rows = rows_for_kind(&view, kind::CHUNKS);
+        assert!(!rows.is_empty(), "{label}: no chunk records at all");
+        // Field 1 is consts_first, 3 is templates_first, 5 is param_types_first.
+        for r in &rows {
+            if r[1] != 0 || r[3] != 0 || r[5] != 0 {
+                nonzero += 1;
+            }
+        }
+    }
+    assert!(
+        nonzero >= 1,
+        "every chunk range starts at 0 across the whole corpus, so a driver \
+         emitting a constant zero would satisfy the differential"
+    );
+}
+
 /// Must-fire, about the CORPUS: unless some case orders its strings differently
 /// under the two walks, a flattener that interned in input order would pass
 /// every test below.
@@ -7840,6 +7890,14 @@ fn the_walk_interns_in_breadth_first_order() {
                     inp.nin.clone(),
                     inp.bin.clone(),
                     inp.args,
+                )
+            } else if *k == kind::CHUNKS {
+                (
+                    CMD_CK_EMIT,
+                    chunk_inputs(&rows_for_kind(&view, *k)),
+                    Vec::new(),
+                    Vec::new(),
+                    [rows_for_kind(&view, *k).len() as i64, 0, 0, 0, 0],
                 )
             } else if *k == kind::ENUM_AUX {
                 (
