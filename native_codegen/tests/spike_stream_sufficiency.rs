@@ -459,3 +459,66 @@ fn spike_report_reentrant_shapes() {
     println!("     not the whole-chunk depth rule the degenerate stream uses.");
     println!("================\n");
 }
+
+/// THE NESTED CASE: what does `lexer.kel` actually look like at the op level?
+///
+/// It is the last unclassified class. The source shows yields inside `if`/`else`,
+/// but "nested" is a single word covering shapes with very different costs: a
+/// yield in each arm of one `If` is a join, while a yield inside a `Loop` is a
+/// genuine suspension across a back edge and needs a real frame.
+///
+/// Reports the per-`Yield` context so the difference is visible instead of
+/// collapsed. Reports rather than asserts: this is corpus shape, not our code.
+#[test]
+fn spike_report_nested_yield_context() {
+    println!("\n================ NESTED: per-Yield context in Stream chunks");
+    for (path, m) in compiled_corpus() {
+        for chunk in &m.chunks {
+            if chunk.block_type != BlockType::Stream {
+                continue;
+            }
+            let s = yield_shape(&chunk.ops);
+            if s.nested == 0 {
+                continue;
+            }
+            // Walk the block stack so each Yield reports what encloses it. A
+            // Yield under any `Loop` is the expensive case; one under `If` only
+            // is a control-flow join a phi can express.
+            let mut stack: Vec<&'static str> = Vec::new();
+            let (mut in_if_only, mut under_loop) = (0usize, 0usize);
+            let mut depths: Vec<usize> = Vec::new();
+            for op in &chunk.ops {
+                match op {
+                    Op::If(_) => stack.push("if"),
+                    Op::Loop(_) => stack.push("loop"),
+                    Op::EndIf | Op::EndLoop(_) => {
+                        stack.pop();
+                    }
+                    Op::Yield => {
+                        depths.push(stack.len());
+                        if stack.contains(&"loop") {
+                            under_loop += 1;
+                        } else if !stack.is_empty() {
+                            in_if_only += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            println!(
+                "  {}::{}",
+                path.file_name().unwrap_or_default().to_string_lossy(),
+                chunk.name
+            );
+            println!("     Yields total          : {}", depths.len());
+            println!("     under a Loop (costly) : {under_loop}");
+            println!("     inside If only (join) : {in_if_only}");
+            println!("     at top level          : {}", s.top_level);
+            println!("     nesting depths        : {depths:?}");
+            println!("     ops in chunk          : {}", chunk.ops.len());
+        }
+    }
+    println!("\n  -> If-only nesting is a control-flow join. Loop nesting is a");
+    println!("     suspension across a back edge and needs a real frame.");
+    println!("================\n");
+}

@@ -701,9 +701,10 @@ pub fn lower_module<'ctx>(
         .collect();
 
     for (chunk, func) in program.chunks.iter().zip(declared.iter()) {
+        let tail = degenerate_stream_yield(chunk, program);
         let cfg = BodyCfg {
             opts,
-            degenerate_yield: degenerate_stream_yield(chunk, program),
+            degenerate_yield: tail.as_deref(),
         };
         lower_chunk_body(ctx, module, chunk, *func, &declared, data, cfg)?;
     }
@@ -746,13 +747,13 @@ struct DataCtx<'a> {
 /// suppress. These two travel together: both are decided by the caller and both
 /// stay constant for the whole body.
 #[derive(Clone, Copy)]
-struct BodyCfg {
+struct BodyCfg<'a> {
     opts: LowerOptions,
     /// `Some(ip)` when this is a degenerate stream chunk and `ip` is the
     /// `Op::Yield` that becomes the return. Computed by the caller, which holds
     /// the bytecode module; `lower_chunk` passes `None` for the same reason it
     /// refuses `Op::Call`.
-    degenerate_yield: Option<usize>,
+    degenerate_yield: Option<&'a [usize]>,
 }
 
 /// Is this chunk a **degenerate stream**, lowerable as a plain function?
@@ -791,8 +792,8 @@ struct BodyCfg {
 /// `compute_always_yielding`, which is behind a feature this package does not
 /// enable.
 ///
-/// Returns the index of the `Op::Yield` that becomes the return.
-fn degenerate_stream_yield(chunk: &Chunk, module: &Module) -> Option<usize> {
+/// Returns the indices of every `Op::Yield` that becomes a return.
+fn degenerate_stream_yield(chunk: &Chunk, module: &Module) -> Option<Vec<usize>> {
     if chunk.block_type != BlockType::Stream {
         return None;
     }
@@ -824,37 +825,66 @@ fn degenerate_stream_yield(chunk: &Chunk, module: &Module) -> Option<usize> {
         }
     }
 
-    // Exactly one `Yield`, at nesting depth zero. The block-opening set is `If`
-    // and `Loop`; `Else` opens nothing and `Break`/`BreakIf` do not nest. A
-    // MULTIHEADED stream chunk wraps its dispatch in `Loop`/`EndLoop`, so its
-    // yields are nested by construction and it is excluded here rather than by a
-    // separate rule.
-    let mut depth: i32 = 0;
-    let mut found: Option<usize> = None;
+    // EVERY `Yield` must be in TAIL POSITION: nothing but block delimiters and
+    // the final `PopN(1)` executes between it and `Reset` on any path.
+    //
+    // This replaces an earlier rule requiring exactly one `Yield` at nesting
+    // depth zero. That rule was not wrong, it was **too narrow**: it described
+    // the shape eight stages happen to have rather than the property that makes
+    // the transformation sound. `lexer.kel` has nineteen yields nested up to
+    // depth eleven, every one of them inside an `If` and none under a `Loop`, so
+    // each path still yields exactly once and ends. It is a control-flow JOIN,
+    // not a suspension across a back edge, and the depth rule rejected it for a
+    // reason that has nothing to do with correctness.
+    //
+    // The walk FOLLOWS JUMPS rather than scanning linearly. A linear scan is
+    // unusable here: the ops textually between a nested `Yield` and `Reset`
+    // include other branches' bodies, which are on different paths. Following
+    // `Else`/`EndLoop` targets asks the question that actually matters.
+    let mut tail_yields: Vec<usize> = Vec::new();
     for (ip, op) in ops.iter().enumerate() {
-        match op {
-            Op::If(_) | Op::Loop(_) => depth += 1,
-            Op::EndIf | Op::EndLoop(_) => depth -= 1,
-            Op::Yield => {
-                if depth != 0 || found.is_some() {
-                    return None;
-                }
-                found = Some(ip);
-            }
-            _ => {}
+        if !matches!(op, Op::Yield) {
+            continue;
         }
+        let mut j = ip + 1;
+        let mut popped = false;
+        loop {
+            match ops.get(j) {
+                // A branch delimiter carries no value and ends no path.
+                Some(Op::EndIf) => j += 1,
+                // A forward jump past the sibling arm, or a loop back edge that
+                // cannot be taken from here; follow it rather than walking into
+                // code this path never runs.
+                Some(Op::Else(t)) | Some(Op::EndLoop(t)) => {
+                    let t = *t as usize;
+                    // Refuse rather than loop forever on malformed bytecode.
+                    if t <= j {
+                        return None;
+                    }
+                    j = t;
+                }
+                // The one value-carrying op allowed, and only once: it discards
+                // the resumed value the `Yield` pushed. That is what PROVES the
+                // resume value is unused, which is why `step` need not supply it.
+                Some(Op::PopN(1)) if !popped => {
+                    popped = true;
+                    j += 1;
+                }
+                Some(Op::Reset) => break,
+                // Anything else consumes the resumed value or does work after
+                // the suspension, and neither survives the transformation.
+                _ => return None,
+            }
+        }
+        if !popped {
+            return None;
+        }
+        tail_yields.push(ip);
     }
-    let y = found?;
-
-    // Exactly `PopN(1)` between the `Yield` and the `Reset`. This is what PROVES
-    // the resumed value is discarded; anything else consumes it, and the
-    // parameter carries the NEXT iteration's input rather than this `yield`'s
-    // result. `let x = yield v; ...` fails here, which is correct.
-    let tail = &ops[y + 1..ops.len() - 1];
-    if !matches!(tail, [Op::PopN(1)]) {
+    if tail_yields.is_empty() {
         return None;
     }
-    Some(y)
+    Some(tail_yields)
 }
 
 fn lower_chunk_body<'ctx>(
@@ -864,7 +894,7 @@ fn lower_chunk_body<'ctx>(
     func: FunctionValue<'ctx>,
     callees: &[FunctionValue<'ctx>],
     data: DataCtx<'_>,
-    cfg: BodyCfg,
+    cfg: BodyCfg<'_>,
 ) -> Result<FunctionValue<'ctx>, LowerError> {
     let BodyCfg {
         opts,
@@ -1636,7 +1666,7 @@ fn lower_chunk_body<'ctx>(
             // which the following `PopN(1)` discards, and the following `Reset`
             // clears state that a fresh native frame does not carry. Both become
             // unreachable and the loop's own `dead` tracking skips them.
-            Op::Yield if degenerate_yield == Some(i) => {
+            Op::Yield if degenerate_yield.is_some_and(|ys| ys.contains(&i)) => {
                 let v = st.pop();
                 st.b.build_return(Some(&v)).unwrap();
             }

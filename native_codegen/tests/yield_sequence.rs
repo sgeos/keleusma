@@ -374,8 +374,15 @@ fn shapes_outside_the_degenerate_class_are_still_refused() {
     // have. This is the multi-segment case that still needs the rotation.
     assert_refused("loop main(a: Word) -> Word { yield a; yield a + 1 }");
 
-    // A NESTED yield. `lexer.kel` is this shape, and it is the general case.
-    assert_refused("loop main(a: Word) -> Word { if a > 0 { yield a } else { yield 0 } }");
+    // A NESTED yield was refused here until 2026-08-11, on the depth-zero rule.
+    // **The rule deliberately widened** to tail position, and this shape is now
+    // ADMITTED — both yields end their path, so it is a control-flow join rather
+    // than a suspension. Its equivalence is asserted by
+    // `nested_yields_in_tail_position_agree_in_sequence`, which drives both arms.
+    //
+    // The case is moved rather than deleted. A must-not-fire case that stops
+    // firing because the rule changed is a decision, and deleting it silently
+    // would leave no record that the boundary moved on purpose.
 
     // A DELEGATED suspension, which is the case no chunk-local reading catches.
     //
@@ -408,4 +415,58 @@ fn assert_refused(src: &str) {
         "this shape is outside the degenerate class and must be refused, not \
          lowered as though the resumed value were discarded:\n{src}"
     );
+}
+
+/// Observational equivalence for the NESTED case, which the tail-position rule
+/// admits and the earlier depth-zero rule refused.
+///
+/// `lexer.kel` is this shape: nineteen yields, every one inside an `If` and none
+/// under a `Loop`, nested up to depth eleven. Lowering it is not evidence that
+/// lowering it is CORRECT — the transformation turns each of those yields into a
+/// separate `ret`, so the claim is that every path yields once and ends, and only
+/// a whole-sequence comparison can check that.
+///
+/// The replies deliberately drive DIFFERENT branches on successive iterations,
+/// because a case that takes one path every time would exercise one `ret` and
+/// prove nothing about the join.
+#[test]
+fn nested_yields_in_tail_position_agree_in_sequence() {
+    // Both arms yield. Alternating replies cross the branch each iteration.
+    assert_stream_sequences_agree(
+        "loop main(a: Word) -> Word { if a > 10 { yield a * 2 } else { yield a + 100 } }",
+        &[5],
+        &[20, 3, 40, 7],
+    );
+    // Deeper nesting, three levels, with a yield at each leaf — the shape
+    // `lexer.kel` actually has, in miniature.
+    assert_stream_sequences_agree(
+        "loop main(a: Word) -> Word { \
+           if a > 100 { yield 1 } else { \
+           if a > 50 { yield 2 } else { \
+           if a > 10 { yield 3 } else { yield 4 } } } }",
+        &[5],
+        &[200, 75, 25, 1, 200],
+    );
+    // A yield in one arm and a call in the other, so the two paths are not
+    // symmetric and a lowering that collapsed them would show up.
+    assert_stream_sequences_agree(
+        "fn triple(x: Word) -> Word { x * 3 }\n\
+         loop main(a: Word) -> Word { if a > 10 { yield triple(a) } else { yield a } }",
+        &[5],
+        &[20, 3, 40],
+    );
+}
+
+/// MUST-NOT-FIRE for the tail-position rule.
+///
+/// The rule admits a yield only when nothing but block delimiters and one
+/// `PopN(1)` runs between it and `Reset`. These do work after the suspension, so
+/// each must still be refused. Without them the rule could be relaxed to "any
+/// nested yield" and nothing would catch it.
+#[test]
+fn yields_not_in_tail_position_are_still_refused() {
+    // The resumed value is consumed, so the tail is not just `PopN(1)`.
+    assert_refused("loop main(a: Word) -> Word { let x = yield a; x }");
+    // Work after the yield inside the branch: the `+ 1` runs post-suspension.
+    assert_refused("loop main(a: Word) -> Word { if a > 0 { (yield a) + 1 } else { yield 0 } }");
 }
