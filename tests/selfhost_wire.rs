@@ -7284,6 +7284,46 @@ fn the_flattener_reports_input_it_will_not_flatten() {
         "an impossible child count was not reported"
     );
 
+    // A NODE COUNT THAT DOES NOT MATCH THE FOREST. Found by reading the walk
+    // back, not by a failing test: with one childless root and nnodes = 3, the
+    // walk ran past the queue and emitted three copies of node 0, silently. The
+    // roots' subtree sizes must cover the forest exactly.
+    //
+    // The forest must be WELL FORMED and merely miscounted, which the first
+    // version of this got wrong: passing one node's worth of fields while
+    // declaring three left nodes 1 and 2 reading tag 0 from unseeded slots, so
+    // the tag guard fired first with -245. Both codes are right; the test was
+    // not exercising the one it named. Three valid scalars, one declared root.
+    let mut vm = vm_for(WIRE_KEL);
+    assert_eq!(
+        run_intern(
+            &mut vm,
+            CMD_FLATTEN_EMIT_CONSTS,
+            &[3, 7, 0, 3, 8, 0, 3, 9, 0],
+            &[],
+            [1, 3, 0, 0, 0]
+        ),
+        -248,
+        "a node count larger than the roots' subtrees was not reported"
+    );
+
+    // MUST-NOT-FIRE for the same guard: a well-formed forest must get PAST the
+    // cover check. It then fails at the region lookup, because this harness
+    // seeds no directory — `-247`, not `-248`, is the evidence the cover check
+    // stayed quiet.
+    let mut vm = vm_for(WIRE_KEL);
+    assert_eq!(
+        run_intern(
+            &mut vm,
+            CMD_FLATTEN_EMIT_CONSTS,
+            &[3, 7, 0, 3, 8, 0],
+            &[],
+            [2, 2, 0, 0, 0]
+        ),
+        -247,
+        "a well-formed two-root forest was rejected before the region lookup"
+    );
+
     // A tag this slice does not implement. STRUCT carries an `aux` index into a
     // side table, so emitting it here would produce a plausible wrong record.
     let mut vm = vm_for(WIRE_KEL);

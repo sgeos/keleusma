@@ -2608,6 +2608,11 @@ private data fl {
     // Index actually used after clamping, so a malformed input cannot index out
     // of range while the error code is being raised.
     pick: Word,
+    // The clamped QUEUE index, separate from `pick`. One field served both roles
+    // at first and was correct only because each iteration reassigned before
+    // use — the kind of coupling this file keeps apart deliberately, as `st.pad`
+    // records. Found by reading the code back, not by a failing test.
+    qpick: Word,
     // Sticky rejection code, 0 while the input is well formed.
     err: Word,
     // Discards a call whose result is in the fields.
@@ -2697,6 +2702,27 @@ fn fl_seed_roots(nroots: Word, nnodes: Word) -> Word {
     nroots
 }
 
+// THE ROOTS' SUBTREES MUST EXACTLY COVER THE FOREST.
+//
+// Walking the roots leaves `fl.cur` at the sum of their subtree sizes, which is
+// the true node count. If the caller's `nnodes` disagrees, the walk runs past
+// the filled part of the queue and re-emits whichever index was left in it —
+// silently, with no error. Caught by reading the walk back rather than by a
+// test: `nroots = 1`, `nnodes = 3` and one childless root emitted three copies
+// of node 0.
+//
+// It lives in the VALIDATION CHAIN rather than inside `fl_seed_roots`, where it
+// was first written. Seeding happens inside the walk, which runs only after the
+// region lookup, so a caller with no directory got `-247` and never reached this
+// at all — the guard was unreachable in exactly the case its test exercised.
+fn fl_cover(nroots: Word, nnodes: Word) -> Word {
+    fl.cur = 0;
+    for r in 0..nroots limit 341 {
+        fl.sink = fl_step(nnodes);
+    }
+    if fl.cur != nnodes { 0 - 248 } else { 0 }
+}
+
 // Write the record for the node at queue position `head`.
 fn fl_put_record(at: Word, head: Word) -> Word {
     put_u16(at + (head * const_stride()) + const_off_tag(), fl_tag_of(wire.fq[head]));
@@ -2722,8 +2748,8 @@ fn fl_walk(at: Word, nroots: Word, nnodes: Word) -> Word {
         fl.err = if fl.qn + fl_children_of(wire.fq[head]) > nnodes { 0 - 244 } else { fl.err };
         fl.cur = wire.fq[head] + 1;
         for k in 0..fl_children_of(wire.fq[head]) limit 341 {
-            fl.pick = if fl.first + k < nnodes { fl.first + k } else { 0 };
-            wire.fq[fl.pick] = fl.cur;
+            fl.qpick = if fl.first + k < nnodes { fl.first + k } else { 0 };
+            wire.fq[fl.qpick] = fl.cur;
             fl.sink = fl_step(nnodes);
         }
         fl.qn = fl.qn + fl_children_of(wire.fq[head]);
@@ -2743,8 +2769,9 @@ fn flatten_emit_consts(nroots: Word, nnodes: Word) -> Word {
     if nroots > nnodes { 0 - 246 } else {
     if fl_validate(nnodes) < 0 { fl.err } else {
     if fl_size_all(nnodes) < 0 { fl.err } else {
+    if fl_cover(nroots, nnodes) < 0 { 0 - 248 } else {
     if dir_find(kind_consts()) < 0 { 0 - 247 } else {
-        fl_walk(region_base(dir_find(kind_consts())), nroots, nnodes) } } } } }
+        fl_walk(region_base(dir_find(kind_consts())), nroots, nnodes) } } } } } }
 }
 
 fn dispatch_driver(cmd: Word) -> Word {
