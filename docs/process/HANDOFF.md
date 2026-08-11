@@ -16,7 +16,7 @@ misleading a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`, or a feature branch cut from it.
-- **Parent commit**: `8e9d5433`
+- **Parent commit**: `cd064e6e`
 - **Written**: 2026-08-11
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
@@ -40,8 +40,7 @@ this file**.
 
 ## FIRST ACTION: read the retraction before trusting the plan's residency numbers
 
-**Nothing is in flight.** PRs #9, #10 and #11 all merged on 22/22 CI green, each at the commit CI
-ran. Confirm with `gh pr list --state open`; if `gh run list --branch v0.2.3 --limit 1` is red, read
+**Nothing is in flight.** PRs #9 through #12 all merged on 22/22 CI green, each at the commit CI ran. Confirm with `gh pr list --state open`; if `gh run list --branch v0.2.3 --limit 1` is red, read
 its log first.
 
 **Then read the CORRECTION section in
@@ -81,17 +80,18 @@ three PRs (#2, #3, #6).
 
 | Ref | Commit | Status |
 |---|---|---|
-| `v0.2.3` | `8e9d5433` | three PRs merged in, pushed |
+| `v0.2.3` | `cd064e6e` | four PRs merged in, pushed |
 | PR #9 | `ae01441f` | **MERGED**, 22/22 green, at the commit CI ran |
 | PR #10 | `3b93e351` | **MERGED**, 22/22 green, at the commit CI ran |
 | PR #11 | `eaf95524` | **MERGED**, 22/22 green, at the commit CI ran |
+| PR #12 | `ad0a1bff` | **MERGED**, 22/22 green, at the commit CI ran |
 | `v0.3.0` | — | same workflow; their last local gate is STALLED and irrelevant |
 
 Eight PRs merged on this line today, every one CI-gated, **with the local machine idle throughout**.
 
 ## WHERE THE DRIVER IS
 
-`tests/selfhost_wire.rs` is **137 tests**. Keleusma computes **all five** of the values the driver
+`tests/selfhost_wire.rs` is **139 tests**. Keleusma computes **all five** of the values the driver
 owed: the name table with both interning modes, the breadth-first constant ordering, the names
 interned **during** the walk for all three interning tags with `STRUCT_AUX` and `ENUM_AUX` alongside,
 the per-chunk ranges, and now the interning SEQUENCE itself, derived from a module description that
@@ -102,38 +102,42 @@ is `STRUCT_TEMPLATES`, and it is **structural rather than pending**: the boxed c
 needs a non-flat type, the only one is `Text` under a narrow word, and this suite is gated out of
 narrow-word builds.
 
-## THE NEXT INCREMENT: BATCHING, WHICH NOW STANDS ALONE
+## THE NEXT INCREMENT: THE WINDOW BASE
 
-**The five owed values are done.** The interning sequence landed in PR #11: `module_description`
-hands Keleusma the module's names grouped by kind and the driver produces the encoder's order, each
-name's mode, and each name's pool offset. `interner_input` survives for the older intern and walk
-tests, which exercise the primitive rather than the derivation.
+**Batching landed in PR #12.** `CHUNKS` emits in batches of 90 with the three running totals relayed
+in and out, commands 156-159, verified by mutation.
 
-**Do this next: batching.** `wire.fin` is 1024 words and a real stage needs far more records than
-that per region; the plan's table sizes it. `CHUNKS` is the smallest region that forces batching, at
-two batches, so the mechanism gets built where the failure is legible rather than inside a
-1547-batch region.
+**Do this next: give the record emitters a WINDOW BASE.** They position records at
+`region_base(i) + rec * stride + off`, an ABSOLUTE artifact offset, and `wire.bytes` is 65,536.
+Measured 2026-08-11, and the threshold is sharper than the plan had it — **every stage fails, the
+smallest included**:
 
-**Batching and residency staging are NO LONGER one increment**, and the handoff said they were. That
-pairing rested on a residency reading that has since been retracted — see the FIRST ACTION above.
-Batching is bounded and buildable now. Residency is a separate question about where the accumulator
-lives, and it is dominated by a cost the plan never priced: about **40.7 bytes of artifact per data
-slot**, with one slot per array ELEMENT, so declaring `lexer`'s accumulator would mean a ~400 MB
-auxiliary body and a ~25-second compile. Real, measured, and not a limit violation.
+| Stage | artifact | `CHUNKS` at | `STRING_POOL` at | `NAMES` at |
+|---|---|---|---|---|
+| `verify_datalayout` | 105,848 | 50,464 | 50,560 | **81,160** |
+| `verify_yield` | 303,464 | **143,096** | **143,480** | **239,832** |
+| `codegen` | 480,416 | **236,216** | **239,864** | **391,160** |
+
+`verify_datalayout` is the smallest of the ten and its `NAMES` region already starts 15,624 bytes
+past the buffer. Absolute positioning holds for artifacts under 65,536 bytes, which is the
+constructed corpus and no stage at all.
+
+**It is INDEPENDENT of batching and the two are easy to conflate now that batching is fresh**:
+batching fixes how many records reach the emitter per call, the window base fixes where they land.
+Neither substitutes for the other. The host emits a region's payload into a low window, appends it
+at the true offset, and patches the directory afterwards, which the residency section establishes it
+can do.
 
 **Do NOT do these two.** Both fail on inspection; the reasoning is in
 [`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md):
 
-- **Replacing the linear dedup scan is premature and makes things worse now.** A total language has
-  no early exit, so a 1024-slot table runs all 1024 probes per lookup against ~256 comparisons for
-  the scan. The table only wins past ~1000 names, and inputs are capped at **256**. **Batching
-  first, index second** — and batching is now the live increment, so this becomes answerable rather
-  than merely deferred.
-- **Computing the chunk record's name index would be vacuous.** Chunk names are the first prefix
-  entries, interned in order, and function names are distinct — so `map[j] == j` always.
+- **Replacing the linear dedup scan.** A total language has no early exit, so a 1024-slot table runs
+  all 1024 probes per lookup against ~256 comparisons for the scan, and inputs are capped at 256.
+- **Computing the chunk record's name index.** `map[j] == j` always, so it is untestable rather than
+  easy.
 
 **A constraint to carry into any new command.** `dispatch_driver` holds 18 arms and `dispatch_driver2`
-now holds 4; the cap is a depth budget of 24 shared between chain position and arm-body nesting, so a
+now holds 8; the cap is a depth budget of 24 shared between chain position and arm-body nesting, so a
 chain takes 20 arms with a no-argument body and 18 with a nested call. Exceeding it in the test
 harness is a stack overflow and SIGABRT, not a parse error.
 

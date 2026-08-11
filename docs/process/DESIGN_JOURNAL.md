@@ -13,6 +13,49 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**BATCHING, AND TWO WRONG TURNS THAT WERE BOTH ABOUT ADJACENT PRECEDENT (2026-08-11).** Commands
+156-159; 137 to 139 tests. `wire.fin` holds 1024 words and a chunk costs eleven, so a call caps at 90
+records while `parse` has 94. `CHUNKS` is the smallest region in the corpus that cannot be emitted in
+one call, which is the reason to build the mechanism here rather than inside `NAMES`, where it would
+first run across 774 batches with nothing legible to read when it broke.
+
+**The three running totals are the whole difficulty and the rest is bookkeeping.** A chunk's
+`consts_first` counts from the first chunk of the REGION, not of the batch, and shared data is
+re-seeded on every call, so nothing survives between batches. The carry goes in as an argument and
+comes back as an answer the host relays. **A batch that restarted its accumulators would emit a
+STRUCTURALLY VALID region** in which every range after the first batch points somewhere wrong, which
+is the failure class worth naming: not a crash, not a refusal, a well-formed wrong answer.
+
+**The harness must not sum the counts it passed in.** It has them, so computing the carry there is
+one line and entirely natural — and it would move the accumulation back to the host and leave the
+batched path testing nothing the single-batch path already covered. Verified by mutation instead:
+dropping the consts carry-in makes the 91st record read 0 where the reference has 90.
+
+**The corpus is generated rather than borrowed, and that was forced by the vacuity question.** With
+no constants every chunk's ranges are zero, a carry-dropping emitter produces the reference bytes
+exactly, and the test asserts nothing. 140 functions each with its OWN literal gives `consts_first`
+the sequence 0, 1, 2, ..., so the boundary record is wrong by exactly the first batch's length. A
+corpus control pins that the boundary lands where the total has already advanced.
+
+**Both wrong turns were the same mistake: copying the nearer of two adjacent precedents.**
+
+- **`STRING_POOL` routed down the record path emitted silent zeros.** The generic emitter classifies
+  it as a byte pool; the interner tests do not, because there it has its own command. Two `is_pool`
+  lines sit four hundred apart in the same file and I took the wrong one. The failure was not in the
+  batching at all.
+- **The first failure printed 85 KB and located nothing**, because the assertion compared two
+  13,664-byte vectors — which is what every neighbouring test does, and is fine when the artifact is
+  912 bytes. Replacing it with the first differing byte, its region and sixteen bytes of context
+  turned both diagnoses into one line each. **The diagnostic had to be fixed before the mutation
+  check was readable enough to trust**, so the tooling change was not a detour from the verification;
+  it was a precondition for it.
+
+**A precedent is scoped to the case that produced it.** Both errors came from reusing a pattern whose
+original justification no longer held — the same shape as the day's other corrections, where a number
+was reused past what it actually bounded.
+
+---
+
 **THE FIFTH VALUE, AND A CONFIDENT NUMBER I HAD TO RETRACT THE SAME DAY (2026-08-11).** Commands
 152-155; 133 to 137 tests. The driver now derives the interning SEQUENCE from a module description
 instead of consuming one a Rust helper ordered for it.

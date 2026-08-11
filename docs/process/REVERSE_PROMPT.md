@@ -16,12 +16,13 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 | | |
 |---|---|
-| `v0.2.3` | `8e9d5433`, pushed, CI confirming |
-| PR #9, #10, #11 | all **MERGED** on 22/22 green, each at the commit CI ran |
+| `v0.2.3` | `cd064e6e`, pushed, CI confirming |
+| PRs #9 - #12 | all **MERGED** on 22/22 green, each at the commit CI ran |
 | Machine | idle throughout; every gate ran on hosted runners |
 
-`tests/selfhost_wire.rs` is **137 tests**. **All five** of the values the driver owed are now
-computed on the Keleusma side; the last, the interning sequence, landed in PR #11.
+`tests/selfhost_wire.rs` is **139 tests**. **All five** of the values the driver owed are now
+computed on the Keleusma side, the last of them in PR #11, and `CHUNKS` emits in batches with its
+three running totals relayed across them (PR #12).
 
 ## A guard that documented a check it did not make
 
@@ -111,13 +112,30 @@ practical cost, not a limit violation.
 
 ## Next intended step
 
-**Batching**, which now stands alone. The handoff recorded batching and residency staging as one
-increment; that pairing rested on the retracted reading. `CHUNKS` is the smallest region that forces
-it, at two batches, so the mechanism gets built where the failure is legible.
+**The window base.** Record emitters position at `region_base(i) + rec * stride + off`, an absolute
+artifact offset, against a 65,536-byte buffer. Measured: **every stage fails, the smallest included**
+— `verify_datalayout`'s `NAMES` region starts at byte 81,160. Absolute positioning holds for
+artifacts under 65,536 bytes, which is the constructed corpus and no stage at all.
 
-The two traps still stand: **do not** replace the linear dedup scan (batching first, index second —
-and batching being live makes this answerable rather than merely deferred), and **do not** compute
-the chunk record's name index (`map[j] == j` always).
+**It is independent of batching**, and the two are easy to conflate now that batching is fresh:
+batching fixes how many records reach the emitter per call, the window base fixes where they land.
+
+The two traps still stand: **do not** replace the linear dedup scan, and **do not** compute the chunk
+record's name index (`map[j] == j` always).
+
+## A second lesson, from the batching slice
+
+**Both wrong turns in PR #12 were the same mistake: copying the nearer of two adjacent precedents.**
+`STRING_POOL` routed down the record path emitted silent zeros, because the generic emitter treats it
+as a byte pool while the interner tests do not — two `is_pool` lines four hundred apart, and I took
+the wrong one. And the failure assertion compared two 13,664-byte vectors, which is what every
+neighbouring test does and is fine when the artifact is 912 bytes; it printed 85 KB and located
+nothing.
+
+**A precedent is scoped to the case that produced it.** That is the same shape as the day's other
+corrections, where a number was reused past what it actually bounded. Worth noting too that the
+diagnostic had to be fixed *before* the mutation check was readable enough to trust, so improving the
+tooling was a precondition for the verification rather than a detour from it.
 
 ## Open, held by the operator
 
