@@ -2851,7 +2851,18 @@ fn fl_tag_in_scope(t: Word) -> Word {
     if t == tag_byte() { 1 } else {
     if t == tag_fixed() { 1 } else {
     if t == tag_float() { 1 } else {
-    fl_tag_has_range(t) }}}}}}}
+    // SPELLED OUT rather than delegating to `fl_tag_has_range`, which it used
+    // to do. That coupling was a defect: adding `STRUCT` to the range predicate
+    // for slice 13b-ii silently widened THIS predicate too, so command 141
+    // began accepting a struct it cannot intern — the precise failure the
+    // separate `fx_tag_in_scope` exists to prevent. Caught by the negative test
+    // that asserts 141 still refuses an out-of-scope tag.
+    //
+    // "Carries a child range" and "is in slice 13's scope" happened to coincide
+    // for two tags. Sharing one function for both made a change to either
+    // silently change the other.
+    if t == tag_tuple() { 1 } else {
+    if t == tag_array() { 1 } else { 0 } } }}}}}}}
 }
 
 // Advance `fl.cur` past the whole subtree rooted there, returning that

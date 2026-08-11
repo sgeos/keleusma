@@ -7423,6 +7423,8 @@ const CMD_FX_POOLLEN: i64 = 143;
 const CMD_FX_EMIT_CONSTS: i64 = 144;
 const CMD_FX_EMIT_NAMES: i64 = 145;
 const CMD_FX_EMIT_POOL: i64 = 146;
+const CMD_FX_SAUX_COUNT: i64 = 147;
+const CMD_FX_EMIT_SAUX: i64 = 148;
 
 /// Sources whose constant forests contain strings. Every one is a real compiled
 /// module, so the oracle stays `encode_aux_body`.
@@ -7445,6 +7447,35 @@ const FX_CASES: &[(&str, &str)] = &[
         "const data k { t: ((Text, Word), Text) = ((\"aaa\", 1), \"bbb\") }\n\
          fn take(v: ((Text, Word), Text)) -> Word { 1 }\nfn main() -> Word { take(k.t) }",
     ),
+    // --- slice 13b-ii: STRUCT -------------------------------------------
+    // One struct. Exercises the three-step order — intern the type name, THEN
+    // read the count as field_names_first, THEN intern each field fresh — but
+    // says nothing about ordering, since there is only one.
+    (
+        "one-struct",
+        "struct P { x: Word, y: Word }\nconst data k { p: P = P { x: 1, y: 2 } }\n\
+         fn take(v: P) -> Word { v.x }\nfn main() -> Word { take(k.p) }",
+    ),
+    // TWO STRUCTS SHARING A FIELD NAME. This is what intern_fresh exists for: a
+    // repeated field name MUST appear twice, or field_names_first + i stops
+    // addressing field i.
+    (
+        "two-structs-shared-field",
+        "struct P { x: Word, y: Word }\nstruct R { x: Word, z: Word }\n\
+         const data k { t: (P, R) = (P { x: 1, y: 2 }, R { x: 3, z: 4 }) }\n\
+         fn take(v: (P, R)) -> Word { 1 }\nfn main() -> Word { take(k.t) }",
+    ),
+    // THE STRUCT-ORDER DISCRIMINATOR. A nested struct in a NON-LAST sibling
+    // subtree, so the two walks visit the three structs in different orders:
+    //   breadth-first  P, R, Q
+    //   depth-first    P, Q, R
+    // which permutes both the NAMES table and the STRUCT_AUX indices.
+    (
+        "struct-order-depth-2",
+        "struct Q { a: Word }\nstruct P { q: Q, y: Word }\nstruct R { z: Word }\n\
+         const data k { t: (P, R) = (P { q: Q { a: 1 }, y: 2 }, R { z: 3 }) }\n\
+         fn take(v: (P, R)) -> Word { 1 }\nfn main() -> Word { take(k.t) }",
+    ),
 ];
 
 /// The preorder, six words per node, plus the per-node names in PREORDER order.
@@ -7459,21 +7490,40 @@ fn preorder_13b(
 ) -> (Vec<i64>, Vec<(String, i64)>) {
     use keleusma::bytecode::ConstValue as K;
     fn go(c: &K, fin: &mut Vec<i64>, names: &mut Vec<(String, i64)>, prefix_len: usize) {
-        let (tag, payload, children, names_first): (i64, i64, &[K], i64) = match c {
-            K::Unit => (1, 0, &[], 0),
-            K::Bool(b) => (2, i64::from(*b), &[], 0),
-            K::Int(v) => (3, *v, &[], 0),
-            K::Byte(v) => (4, i64::from(*v), &[], 0),
-            K::Fixed(v) => (5, *v, &[], 0),
-            K::None => (12, 0, &[], 0),
+        let mut children: Vec<&K> = Vec::new();
+        let (tag, payload, names_first): (i64, i64, i64) = match c {
+            K::Unit => (1, 0, 0),
+            K::Bool(b) => (2, i64::from(*b), 0),
+            K::Int(v) => (3, *v, 0),
+            K::Byte(v) => (4, i64::from(*v), 0),
+            K::Fixed(v) => (5, *v, 0),
+            K::None => (12, 0, 0),
             K::StaticStr(s) => {
                 let idx = (prefix_len + names.len()) as i64;
                 names.push((s.clone(), MODE_INTERN));
-                (7, 0, &[], idx)
+                (7, 0, idx)
             }
-            K::Tuple(v) => (8, 0, v.as_slice(), 0),
-            K::Array(v) => (9, 0, v.as_slice(), 0),
-            other => panic!("outside slice 13b-i's scope: {other:?}"),
+            K::Tuple(v) => {
+                children.extend(v.iter());
+                (8, 0, 0)
+            }
+            K::Array(v) => {
+                children.extend(v.iter());
+                (9, 0, 0)
+            }
+            // The type name is interned WITH DEDUP and each field name FRESH,
+            // in that order, and the names sit contiguously from `names_first`.
+            // Field VALUES are the children; field NAMES are not children.
+            K::Struct { type_name, fields } => {
+                let idx = (prefix_len + names.len()) as i64;
+                names.push((type_name.clone(), MODE_INTERN));
+                for (fname, _) in fields {
+                    names.push((fname.clone(), MODE_FRESH));
+                }
+                children.extend(fields.iter().map(|(_, v)| v));
+                (10, 0, idx)
+            }
+            other => panic!("outside slice 13b's scope: {other:?}"),
         };
         fin.push(tag);
         fin.push(payload);
@@ -7495,15 +7545,25 @@ fn preorder_13b(
 /// The strings a walk would intern, in that walk's order.
 fn string_orders(roots: &[keleusma::bytecode::ConstValue]) -> (Vec<String>, Vec<String>) {
     use keleusma::bytecode::ConstValue as K;
-    fn kids(c: &K) -> &[K] {
+    fn kids(c: &K) -> Vec<&K> {
         match c {
-            K::Tuple(v) | K::Array(v) => v.as_slice(),
-            _ => &[],
+            K::Tuple(v) | K::Array(v) => v.iter().collect(),
+            K::Struct { fields, .. } => fields.iter().map(|(_, v)| v).collect(),
+            _ => Vec::new(),
+        }
+    }
+    // Both tags intern, so both belong in the order under test. Counting only
+    // strings would have made every struct case look non-discriminating.
+    fn interned(c: &K) -> Option<String> {
+        match c {
+            K::StaticStr(s) => Some(s.clone()),
+            K::Struct { type_name, .. } => Some(type_name.clone()),
+            _ => None,
         }
     }
     fn dfs(c: &K, out: &mut Vec<String>) {
-        if let K::StaticStr(s) = c {
-            out.push(s.clone());
+        if let Some(n) = interned(c) {
+            out.push(n);
         }
         for k in kids(c) {
             dfs(k, out);
@@ -7519,10 +7579,10 @@ fn string_orders(roots: &[keleusma::bytecode::ConstValue]) -> (Vec<String>, Vec<
     while head < queue.len() {
         let n = queue[head];
         head += 1;
-        if let K::StaticStr(s) = n {
-            breadth_first.push(s.clone());
+        if let Some(nm) = interned(n) {
+            breadth_first.push(nm);
         }
-        queue.extend(kids(n).iter());
+        queue.extend(kids(n));
     }
     (breadth_first, depth_first)
 }
@@ -7633,6 +7693,15 @@ fn the_walk_interns_in_breadth_first_order() {
             plen, ref_pool_len as i64,
             "{label}: pool is {plen} bytes, the reference's {ref_pool_len}"
         );
+        let nsaux = run_fx(&mut vm, CMD_FX_SAUX_COUNT, &inp);
+        let ref_saux = view
+            .find_region(kind::STRUCT_AUX)
+            .and_then(|r| view.records(&r, 8).ok())
+            .map_or(0, |t| t.len());
+        assert_eq!(
+            nsaux, ref_saux as i64,
+            "{label}: Keleusma counted {nsaux} STRUCT_AUX records, the reference {ref_saux}"
+        );
 
         // Size the three computed regions from KELEUSMA's figures, so a wrong
         // count moves every later region and the byte comparison fails loudly.
@@ -7647,6 +7716,9 @@ fn the_walk_interns_in_breadth_first_order() {
             }
             if s.0 == kind::STRING_POOL {
                 s.2 = plen as usize;
+            }
+            if s.0 == kind::STRUCT_AUX {
+                s.2 = nsaux as usize;
             }
         }
 
@@ -7696,6 +7768,14 @@ fn the_walk_interns_in_breadth_first_order() {
             } else if *k == kind::STRING_POOL {
                 (
                     CMD_FX_EMIT_POOL,
+                    inp.fin.clone(),
+                    inp.nin.clone(),
+                    inp.bin.clone(),
+                    inp.args,
+                )
+            } else if *k == kind::STRUCT_AUX {
+                (
+                    CMD_FX_EMIT_SAUX,
                     inp.fin.clone(),
                     inp.nin.clone(),
                     inp.bin.clone(),
