@@ -806,6 +806,27 @@ and false of slice 13b, and the difference is exactly the property the new slice
 noting as a pattern: **a justification carried forward with the code it justified is the easiest kind
 of stale documentation to produce**, because nothing about the move looks like an edit.
 
+**THE UNMEASURED ASSUMPTIONS IN THIS DESIGN, listed so they are probed rather than built on.** The
+flattener's "needs hand-built constant trees" error came from treating a reading-derived inference as
+a measurement, and this design contains four more inferences of the same kind. Each is cheap to
+settle and none has been:
+
+| # | Assumption | Basis | Consequence if wrong |
+|---|---|---|---|
+| 1 | `const data k { t: (Text, Word) = ("hi", 1) }` compiles and yields `Tuple[StaticStr, Int]` | read from `const_value_from_literal_for_field`, which maps `(Literal::String, PrimType::Text)` and recurses through tuple initialisers | **the whole reason 13b's coupling is testable disappears** — a `StaticStr` only ever at root position means depth-first and breadth-first interning coincide, and the slice's central property becomes unobservable, exactly like the flattener's four vacuous cases |
+| 2 | `Text` is admissible in a `const data` field at all | `PrimType::Text` exists and `flat_byte_size` treats it as flat at a 64-bit word | as above; `Text` may be a retired surface even though the type survives (the V0.1.x `text` DSL is gone) |
+| 3 | A struct node interns `type_name`, THEN captures `field_names_first`, THEN each field fresh | read at `wire_schema.rs:412-442` | every struct whose type name is new is off by one, and only those — a corpus with familiar type names would hide it |
+| 4 | A `STATIC_STR` can appear at a child position often enough to matter | follows from 1 | if it is rare, the case list needs constructing rather than sampling |
+
+**Probe 1 first and let its answer size the slice.** If a string cannot sit inside a composite, the
+`STATIC_STR` step buys almost nothing on its own and the decomposition should start at `STRUCT`,
+where `STRUCT_AUX` and the contiguous field-name run make the coupling observable regardless — that
+path is already measured (`STRUCT_AUX` is 1 at depth 1 and 2 at depth 2).
+
+**A smaller thing to fix on the next touch**: `emit_pool_bytes_from_bout` guards with
+`n > bin_capacity()`. The bound is numerically right, since both buffers are 8192, but it names the
+wrong buffer — the kind of coincidence that stops being true the day one of them is resized.
+
 **Suggested decomposition**, smallest first, since the whole thing is larger than any slice so far:
 
 1. `STATIC_STR` alone — one intern per node, no side table, no contiguous run. Establishes the
