@@ -873,6 +873,62 @@ is that all three are about inputs the corpus does not produce** — which is th
 "real compiler output is a strong oracle for volume and a weak one for variety", arriving from the
 other direction.
 
+#### THE ACTUAL NEXT INCREMENT: wire the driver to a module, not to a model
+
+With four of five values computed and the coverage matrix at 19 REAL / 1 DERIVE, what remains is
+**not another emitter slice**. It is the step this document has called "wiring, not invention" since
+step 6 closed, and it is now the only thing left of any size.
+
+**What is still modelled.** The interning SEQUENCE — chunk names, then enum-layout names, then the
+constant tree's names — is produced by Rust functions in the test file (`interner_input`,
+`preorder_13b`, `chunk_inputs`), guarded by `assert_no_other_contributors` so it cannot silently
+under-generate. The ORDER is measured and recorded; what is absent is a Keleusma-side producer of it.
+
+**Why it is a different KIND of work.** Every slice so far took input the host had already decoded
+and made Keleusma compute a value from it. This one needs the MODULE itself to reach Keleusma —
+chunk names as bytes, enum layouts, the constant forest with its names inline — which means defining
+a module-input encoding in shared data and, eventually, having `codegen.kel` produce it directly.
+`wire.kel` is still deliberately absent from `read_stage`; this is the increment that changes that.
+
+**Sizing, honestly.** The order is known and the emitters are done, so there is no discovery left in
+the format. The work is an input encoding, a producer, and the residency staging that a real stage's
+395,804 names force — which is the same batching problem the scan note above defers to. **Those two
+are the same increment, and doing either alone is wasted.**
+
+#### TWO NEXT-INCREMENTS THAT DO NOT SURVIVE INSPECTION (2026-08-11)
+
+Both were on the list. Neither is worth doing, and the reasons are worth more than the increments
+would have been.
+
+**1. Replacing the linear dedup scan is PREMATURE, and would make things worse at current sizes.**
+The scan is recorded as "the shape that cost the reference 782 seconds", which is true — at 395,804
+names. The arithmetic at the sizes this driver actually handles goes the other way:
+
+| | linear scan | 1024-slot hash table |
+|---|---|---|
+| lookup at n = 256 | ~256 length comparisons | **1024 probes** |
+| lookup at n = 395,804 | ~395,804 comparisons | 1024 probes |
+
+**A total language has no early exit**, so `for p in 0..1024 limit 1024` runs all 1024 iterations
+whether or not the slot is found on the first probe. The table only wins once n exceeds roughly a
+thousand — and the driver's inputs are capped at **256 names**, because `nin`, `nout` and `bin` are
+sized for a batch, not for a stage. Raising that cap to 395,804 is not a tuning change; it is the
+staged-batching problem the residency measurement already governs.
+
+So the ordering is: **batching first, index second.** Replacing the scan before the structures can
+hold a real stage optimises a path nothing takes, and slows every path something does take.
+
+**2. Computing the chunk record's NAME INDEX would be vacuous.** Slice 14 left it coming from the
+reference row and flagged it for a later increment. Checking before writing: chunk names are the
+FIRST entries of the interner's prefix, they are interned in order, and function names within a
+module are distinct — so the interner's map satisfies `map[j] == j` for every chunk, always.
+
+A driver that simply wrote the loop counter would produce a byte-identical artifact on every source
+this corpus can construct. There is no case that separates the computed answer from the trivial one,
+which makes the increment untestable rather than merely easy. **Caught before writing it, by asking
+the question the last four vacuity controls trained me to ask** — the first time in this programme
+that check has run early enough to cancel work rather than repair it.
+
 **Suggested decomposition**, smallest first, since the whole thing is larger than any slice so far:
 
 1. `STATIC_STR` alone — one intern per node, no side table, no contiguous run. Establishes the
