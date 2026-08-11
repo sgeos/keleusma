@@ -96,6 +96,21 @@ shared data wire {
     // Appended last so no existing slot index moves.
     fq: [Word; 1024],
     fsz: [Word; 1024],
+    // THE INTERNER'S OWN CHANNELS, split out from `fin` in slice 13b.
+    //
+    // Slice 12 ran the interner through `fin`, reading (length, mode) pairs and
+    // compacting (offset, length) pairs back over them. That worked while the
+    // interner was the only thing using `fin`. The flattener now needs `fin` for
+    // a six-word-per-node preorder, which fills all 1024 words at the 170-node
+    // cap, so the two cannot share it — and slice 13b has them running in ONE
+    // call, because `flatten` interns as it walks.
+    //
+    // `nin` is (length, mode) pairs in; `nout` is (offset, length) pairs out for
+    // `[0, 2*cnt)` and the input-to-index map from `nm_map_base()`. The pool is
+    // still compacted in place in `bin`, which is sound for the reason recorded
+    // at `intern_run`: the output cursor never overtakes the input cursor.
+    nin: [Word; 1024],
+    nout: [Word; 1024],
 }
 
 // The running checksum. It lives in a data block because locals are immutable:
@@ -2458,8 +2473,8 @@ fn nm_bytes_equal(a: Word, b: Word, len: Word) -> Word {
 fn nm_find(coff: Word, clen: Word, upto: Word) -> Word {
     nm.found = 0 - 1;
     for i in 0..upto limit 512 {
-        nm.found = if wire.fin[(i * 2) + 1] == clen
-            andalso nm_bytes_equal(wire.fin[i * 2], coff, clen) == 1 { i } else { nm.found };
+        nm.found = if wire.nout[(i * 2) + 1] == clen
+            andalso nm_bytes_equal(wire.nout[i * 2], coff, clen) == 1 { i } else { nm.found };
     }
     nm.found
 }
@@ -2470,8 +2485,8 @@ fn nm_append(ioff: Word, ilen: Word) -> Word {
     for b in 0..ilen limit 256 {
         wire.bin[nm.ocur + b] = wire.bin[ioff + b];
     }
-    wire.fin[nm.cnt * 2] = nm.ocur;
-    wire.fin[(nm.cnt * 2) + 1] = ilen;
+    wire.nout[nm.cnt * 2] = nm.ocur;
+    wire.nout[(nm.cnt * 2) + 1] = ilen;
     nm.ocur = nm.ocur + ilen;
     nm.cnt + 1
 }
@@ -2489,18 +2504,18 @@ fn intern_run(n: Word) -> Word {
     nm.err = 0;
     for j in 0..n limit 512 {
         nm.ioff = nm.icur;
-        nm.icur = nm.icur + wire.fin[j * 2];
-        nm.err = if wire.fin[j * 2] > nm_max_name() { 0 - 231 } else {
+        nm.icur = nm.icur + wire.nin[j * 2];
+        nm.err = if wire.nin[j * 2] > nm_max_name() { 0 - 231 } else {
                  if nm.icur > bin_capacity() { 0 - 232 } else { nm.err } };
         nm.found = if nm.err < 0 { 0 } else {
-                   if wire.fin[(j * 2) + 1] == 0 {
-                       nm_find(nm.ioff, wire.fin[j * 2], nm.cnt)
+                   if wire.nin[(j * 2) + 1] == 0 {
+                       nm_find(nm.ioff, wire.nin[j * 2], nm.cnt)
                    } else { 0 - 1 } };
         // Written BEFORE the count moves: a name that is about to be appended
         // takes the index `nm.cnt` currently holds.
-        wire.fin[nm_map_base() + j] = if nm.found < 0 { nm.cnt } else { nm.found };
+        wire.nout[nm_map_base() + j] = if nm.found < 0 { nm.cnt } else { nm.found };
         nm.cnt = if nm.err < 0 { nm.cnt } else {
-                 if nm.found < 0 { nm_append(nm.ioff, wire.fin[j * 2]) } else { nm.cnt } };
+                 if nm.found < 0 { nm_append(nm.ioff, wire.nin[j * 2]) } else { nm.cnt } };
     }
     if nm.err < 0 { nm.err } else { nm.cnt }
 }
@@ -2513,7 +2528,7 @@ fn intern_run(n: Word) -> Word {
 fn intern_index_of(n: Word, j: Word) -> Word {
     nm.sink = intern_names(n);
     if nm.err < 0 { nm.err } else {
-    if j >= n { 0 - 235 } else { wire.fin[nm_map_base() + j] } }
+    if j >= n { 0 - 235 } else { wire.nout[nm_map_base() + j] } }
 }
 
 // The count guard is SEPARATE from the loop rather than a condition inside it.
@@ -2540,11 +2555,34 @@ fn intern_pool_len(n: Word) -> Word {
 
 // Intern, then write the `NAMES` records into their region. One call, because
 // the interner's output lives in shared data that the next call would clear.
+// The `NAMES` emitter for interner output.
+//
+// A near-twin of `emit_name_records`, which reads `fin`. Not folded into one
+// function taking a source, because `fin` and `nout` are different arrays rather
+// than a parameterisable base, and because slice 5's emitter is driven directly
+// by its own tests with `fin`-shaped input. Duplicating four lines is cheaper
+// than making the older emitter's tests depend on the newer channel.
+fn emit_name_records_from_nout(at: Word, n: Word) -> Word {
+    if (n * nameref_fields()) > fin_capacity() { 0 - 202 } else {
+        for j in 0..n limit 1024 {
+            put_u32(
+                at + (j * nameref_stride()) + nameref_off_offset(),
+                wire.nout[j * nameref_fields()],
+            );
+            put_u32(
+                at + (j * nameref_stride()) + nameref_off_length(),
+                wire.nout[(j * nameref_fields()) + 1],
+            );
+        }
+        n * nameref_stride()
+    }
+}
+
 fn intern_emit_names(n: Word) -> Word {
     nm.sink = intern_names(n);
     if nm.err < 0 { nm.err } else {
     if dir_find(kind_names()) < 0 { 0 - 233 } else {
-        emit_name_records(region_base(dir_find(kind_names())), nm.cnt) } }
+        emit_name_records_from_nout(region_base(dir_find(kind_names())), nm.cnt) } }
 }
 
 // Intern, then write the `STRING_POOL` bytes and their pad.
