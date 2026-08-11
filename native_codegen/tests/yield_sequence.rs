@@ -208,7 +208,17 @@ fn a_divergent_loop_function_is_refused() {
     // callback ABI inverts control, so a divergent `loop fn` would spin inside
     // native code with no way for the host to stop it. Supporting it needs a
     // host-driven shape, which is the coroutine path.
-    let src = "loop main(a: Word) -> Word { let x = yield a; x }";
+    // WAS `let x = yield a; x` until 2026-08-11. That shape is now ADMITTED, and
+    // its equivalence is asserted by `an_effect_free_tail_after_the_yield_...`:
+    // the block's value is discarded by the `PopN(1)` before `Reset`, so binding
+    // the resume value and returning it is dead code. The oracle was asked
+    // BEFORE the boundary was moved, not after, because "obviously equivalent"
+    // is what the previous rule's author thought too.
+    //
+    // This case still refuses, for a reason the comment above gives: the tail
+    // can TRAP, which is observable, and the virtual machine would take the trap
+    // after the suspension where native code has already returned.
+    let src = "loop main(a: Word) -> Word { yield a; a * a }";
     let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     let ctx = Context::create();
     let lm = ctx.create_module("kel");
@@ -368,7 +378,15 @@ fn shapes_outside_the_degenerate_class_are_still_refused() {
     // case `a_divergent_loop_function_is_refused` already pins; asserted here
     // too because it is the condition most likely to be relaxed by someone who
     // reads `PopN(1)` as bookkeeping.
-    assert_refused("loop main(a: Word) -> Word { let x = yield a; x }");
+    //
+    // A tail that writes the DATA SEGMENT. That write survives `Reset` and is
+    // therefore observable, unlike a local, so the yield is not in tail position
+    // however balanced the operand stack is. This replaced a case that the
+    // 2026-08-11 generalisation legitimately admits.
+    assert_refused(
+        "data st { n: Word }\n\
+         loop main(a: Word) -> Word { yield a; st.n = a; 0 }",
+    );
 
     // TWO top-level yields: a real partition, which the degenerate form does not
     // have. This is the multi-segment case that still needs the rotation.
@@ -465,8 +483,45 @@ fn nested_yields_in_tail_position_agree_in_sequence() {
 /// nested yield" and nothing would catch it.
 #[test]
 fn yields_not_in_tail_position_are_still_refused() {
-    // The resumed value is consumed, so the tail is not just `PopN(1)`.
-    assert_refused("loop main(a: Word) -> Word { let x = yield a; x }");
     // Work after the yield inside the branch: the `+ 1` runs post-suspension.
     assert_refused("loop main(a: Word) -> Word { if a > 0 { (yield a) + 1 } else { yield 0 } }");
+}
+
+/// The shape the tail-position rule refused until the allowlist was replaced by
+/// the property it stood for.
+///
+/// Ten corpus chunks end `yield x; 0`, giving a tail of
+/// `PopN(1), Const(0), PopN(1)`: the resume value is discarded, a constant is
+/// pushed as the block's value, and that is discarded too. The sequence is
+/// effect-free and reaches the same operand depth as the bare `PopN(1)` the old
+/// rule admitted, so it is exactly as safe. Equivalence is asserted rather than
+/// argued, because "obviously equivalent" is what the old rule's author thought
+/// about the allowlist.
+#[test]
+fn an_effect_free_tail_after_the_yield_agrees_in_sequence() {
+    assert_stream_sequences_agree(
+        "loop main(a: Word) -> Word { yield a; 0 }",
+        &[7],
+        &[11, 22, 33],
+    );
+    // The same, with the yield nested, so the generalisation composes with the
+    // tail-position walk rather than only working at the top level.
+    assert_stream_sequences_agree(
+        "loop main(a: Word) -> Word { if a > 10 { yield a * 2 } else { yield a }; 0 }",
+        &[7],
+        &[20, 3, 40],
+    );
+}
+
+/// MUST-NOT-FIRE for the generalisation.
+///
+/// The rule now admits any tail that only touches the operand stack and this
+/// frame's locals. It must still refuse a tail that TRAPS, because a trap is
+/// observable and the virtual machine would take it after the suspension where
+/// native code, having already returned, would not.
+#[test]
+fn a_tail_that_can_trap_is_still_refused() {
+    // Checked arithmetic after the suspension. Under the trap policy this can
+    // fault, so it is not effect-free and the yield is not in tail position.
+    assert_refused("loop main(a: Word) -> Word { yield a; a * a }");
 }
