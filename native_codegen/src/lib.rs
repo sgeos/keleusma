@@ -72,7 +72,9 @@ use inkwell::context::Context;
 use inkwell::module::Module as LlvmModule;
 use inkwell::types::IntType;
 use inkwell::values::{FunctionValue, IntValue, PointerValue, ValueKind};
-use keleusma::bytecode::{Chunk, ConstValue, Module, Op, SharedSlotLayout, SlotVisibility};
+use keleusma::bytecode::{
+    BlockType, Chunk, ConstValue, Module, Op, SharedSlotLayout, SlotVisibility,
+};
 use std::collections::BTreeMap;
 
 /// Maximum operand-stack depth the lowering provisions slots for.
@@ -595,7 +597,18 @@ pub fn lower_chunk<'ctx>(
     // No callees are visible, so any `Op::Call` is refused. A single chunk
     // cannot resolve one: the target is an index into the module's chunk table,
     // which this entry point does not receive.
-    lower_chunk_body(ctx, module, chunk, func, &[], DataCtx::default(), opts)
+    lower_chunk_body(
+        ctx,
+        module,
+        chunk,
+        func,
+        &[],
+        DataCtx::default(),
+        BodyCfg {
+            opts,
+            degenerate_yield: None,
+        },
+    )
 }
 
 /// Lower every chunk in a module, so that `Op::Call` resolves.
@@ -688,7 +701,11 @@ pub fn lower_module<'ctx>(
         .collect();
 
     for (chunk, func) in program.chunks.iter().zip(declared.iter()) {
-        lower_chunk_body(ctx, module, chunk, *func, &declared, data, opts)?;
+        let cfg = BodyCfg {
+            opts,
+            degenerate_yield: degenerate_stream_yield(chunk, program),
+        };
+        lower_chunk_body(ctx, module, chunk, *func, &declared, data, cfg)?;
     }
 
     // Ask LLVM to verify what we just produced. This was previously done only in
@@ -722,6 +739,124 @@ struct DataCtx<'a> {
     slot_count: u32,
 }
 
+/// Per-chunk lowering configuration.
+///
+/// Exists because `lower_chunk_body` reached eight positional arguments, which
+/// clippy flags and which is a real readability cost rather than a lint to
+/// suppress. These two travel together: both are decided by the caller and both
+/// stay constant for the whole body.
+#[derive(Clone, Copy)]
+struct BodyCfg {
+    opts: LowerOptions,
+    /// `Some(ip)` when this is a degenerate stream chunk and `ip` is the
+    /// `Op::Yield` that becomes the return. Computed by the caller, which holds
+    /// the bytecode module; `lower_chunk` passes `None` for the same reason it
+    /// refuses `Op::Call`.
+    degenerate_yield: Option<usize>,
+}
+
+/// Is this chunk a **degenerate stream**, lowerable as a plain function?
+///
+/// A degenerate stream is `Stream ; <body> ; Yield ; PopN(1) ; Reset` with the
+/// `Yield` at nesting depth zero and nothing able to observe a suspension. It
+/// lowers to a single entry point whose signature needs no special case, because
+/// the data pointers already trail the declared parameters:
+///
+/// ```text
+/// kel_chunk_N(resume, shared, private) -> i64
+/// ```
+///
+/// # Why ONE entry point, not an init/step pair
+///
+/// `Vm::resume_after_enter` writes the resume value into local slot 0 and then
+/// pushes it as the suspended `Yield`'s result. The parameter reproduces the
+/// first; the `PopN(1)` discards the second, because the `yield` is the body's
+/// tail expression. Iteration zero takes its value from the `call` argument and
+/// iteration k from the k-th `resume`, so `f(a)`, `f(r1)`, `f(r2)` reproduces the
+/// virtual machine's whole sequence with **no distinguished first call**.
+///
+/// # Why the module and not just the chunk
+///
+/// **A delegated suspension is invisible in the chunk's own ops.**
+/// `resume_after_enter` writes slot 0 of `frames.first()`, the ENTRY chunk,
+/// whenever that entry is a `Stream` — regardless of which frame suspended. So a
+/// nested `yield fn` callee's suspension updates this chunk's resume parameter in
+/// the virtual machine, while natively the `kel_yield` return reaches only the
+/// callee's operand stack. The next iteration would read a stale value.
+///
+/// The test is exact rather than conservative: `category_can_call` enforces
+/// `Fn => matches!(callee, Fn)`, so the transitive closure of a `Func` chunk
+/// contains only `Func` chunks, and requiring every callee to be `Func` settles
+/// it from the direct call sites alone. No call-graph walk and no
+/// `compute_always_yielding`, which is behind a feature this package does not
+/// enable.
+///
+/// Returns the index of the `Op::Yield` that becomes the return.
+fn degenerate_stream_yield(chunk: &Chunk, module: &Module) -> Option<usize> {
+    if chunk.block_type != BlockType::Stream {
+        return None;
+    }
+    let ops = &chunk.ops;
+
+    // The prologue must be EMPTY. `Reset` rewinds to just after `Stream`, so an
+    // op before `Stream` runs once in the virtual machine and on every call
+    // natively. This reads as tidiness and is the one that changes behaviour.
+    if !matches!(ops.first(), Some(Op::Stream)) {
+        return None;
+    }
+    // `Reset` last. A tail after it is unreachable in the virtual machine, which
+    // rewinds rather than falling through, and reachable natively.
+    if !matches!(ops.last(), Some(Op::Reset)) {
+        return None;
+    }
+    // Slot 0 is the resume parameter; a second has no native source.
+    if chunk.param_count > 1 {
+        return None;
+    }
+    // Every callee must be `Func`, so none can suspend. An unresolvable index
+    // refuses rather than skips: admitting on missing evidence is the wrong
+    // default in a soundness check.
+    for op in ops {
+        if let Op::Call(idx, _) = op
+            && module.chunks.get(*idx as usize).map(|c| c.block_type) != Some(BlockType::Func)
+        {
+            return None;
+        }
+    }
+
+    // Exactly one `Yield`, at nesting depth zero. The block-opening set is `If`
+    // and `Loop`; `Else` opens nothing and `Break`/`BreakIf` do not nest. A
+    // MULTIHEADED stream chunk wraps its dispatch in `Loop`/`EndLoop`, so its
+    // yields are nested by construction and it is excluded here rather than by a
+    // separate rule.
+    let mut depth: i32 = 0;
+    let mut found: Option<usize> = None;
+    for (ip, op) in ops.iter().enumerate() {
+        match op {
+            Op::If(_) | Op::Loop(_) => depth += 1,
+            Op::EndIf | Op::EndLoop(_) => depth -= 1,
+            Op::Yield => {
+                if depth != 0 || found.is_some() {
+                    return None;
+                }
+                found = Some(ip);
+            }
+            _ => {}
+        }
+    }
+    let y = found?;
+
+    // Exactly `PopN(1)` between the `Yield` and the `Reset`. This is what PROVES
+    // the resumed value is discarded; anything else consumes it, and the
+    // parameter carries the NEXT iteration's input rather than this `yield`'s
+    // result. `let x = yield v; ...` fails here, which is correct.
+    let tail = &ops[y + 1..ops.len() - 1];
+    if !matches!(tail, [Op::PopN(1)]) {
+        return None;
+    }
+    Some(y)
+}
+
 fn lower_chunk_body<'ctx>(
     ctx: &'ctx Context,
     module: &LlvmModule<'ctx>,
@@ -729,8 +864,12 @@ fn lower_chunk_body<'ctx>(
     func: FunctionValue<'ctx>,
     callees: &[FunctionValue<'ctx>],
     data: DataCtx<'_>,
-    opts: LowerOptions,
+    cfg: BodyCfg,
 ) -> Result<FunctionValue<'ctx>, LowerError> {
+    let BodyCfg {
+        opts,
+        degenerate_yield,
+    } = cfg;
     let i64t = ctx.i64_type();
     let i128t = ctx.i128_type();
     let i8t = ctx.i8_type();
@@ -1492,6 +1631,21 @@ fn lower_chunk_body<'ctx>(
             // to yield and pushes the value the host resumes with. Treating it
             // as pop-only underflows the very next instruction, which is how the
             // opcode's shape was originally established.
+            // In a DEGENERATE stream chunk this `Yield` is the return, not a
+            // suspension. The value it would have pushed is the resume value,
+            // which the following `PopN(1)` discards, and the following `Reset`
+            // clears state that a fresh native frame does not carry. Both become
+            // unreachable and the loop's own `dead` tracking skips them.
+            Op::Yield if degenerate_yield == Some(i) => {
+                let v = st.pop();
+                st.b.build_return(Some(&v)).unwrap();
+            }
+            // The envelope of a degenerate stream. `Stream` marks the point
+            // `Reset` rewinds to, and with an empty prologue that is the entry
+            // block, so it lowers to nothing. `Reset` is unreachable after the
+            // return above and is accepted rather than refused so that the
+            // `dead` path does not have to special-case it.
+            Op::Stream | Op::Reset if degenerate_yield.is_some() => {}
             Op::Yield => {
                 let v = st.pop();
                 let hook = yield_hook(ctx, module);

@@ -128,7 +128,14 @@ step "Detached compiler/ subproject (fmt, clippy, tests — gated nowhere else)"
 KEL_LLVM_PREFIX_DEFAULT=/opt/local/libexec/llvm-22
 if [ -n "${LLVM_SYS_221_PREFIX:-}" ] || [ -d "$KEL_LLVM_PREFIX_DEFAULT" ]; then
   step "Detached native_codegen/ subproject (fmt, clippy, tests — gated nowhere else)"
-  ( cd native_codegen && cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings && cargo test )
+  # `cargo doc` belongs here for the reason the comment above this step
+  # gives about the workspace Doc job: this package declares its own
+  # `[workspace]` and is absent from the parent's `members`, so
+  # `cargo doc --workspace` NEVER sees it. Without this line a broken
+  # intra-doc link in `native_codegen/` is caught nowhere, by anything —
+  # the same hole, one directory over, from the one the step above closed.
+  ( cd native_codegen && cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings && cargo test \
+    && RUSTDOCFLAGS="-D warnings" cargo doc --no-deps )
 else
   step "Detached native_codegen/ subproject — SKIPPED"
   printf '  \033[1;33mNO LLVM 22.1 DEVELOPMENT INSTALL FOUND. THIS STEP DID NOT RUN.\033[0m\n'

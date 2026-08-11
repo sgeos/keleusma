@@ -8,6 +8,65 @@ actually costs. Written 2026-08-08 at the point 22 of 66 opcodes lower.
 This is a scoping document, not a design. Where a group needs a real design it
 says so and stops, rather than sketching one that has not been probed.
 
+---
+
+## READ THIS FIRST: what is currently true
+
+**This document is append-only and CONTRADICTS ITSELF BY DESIGN.** Later sections
+correct earlier ones. That is deliberate — a superseded claim and the evidence
+that killed it are both worth keeping — but it has a failure mode that has now
+bitten twice: **a reader meets the stale version first**, because it is earlier in
+the file.
+
+Two individual claims carry inline forward pointers. That does not scale, and it
+only helps a reader who happens to land on the exact line. This section is the
+structural fix. **Where it disagrees with anything below, this section wins.**
+
+### Settled by measurement or derivation
+
+| Claim | How | Superseded |
+|---|---|---|
+| **`wcet_stream_iteration` computes NO segments** | read the function body | the rotation design's "fact 4" |
+| **The degenerate stream form needs ONE entry point** | derived from `Vm::resume_after_enter` | "two entry points, `init` and `step`" |
+| **22 stream chunks are degenerate corpus-wide, 0 multi-segment**, 1 delegated, 1 nested | bytecode count | the source reading, which undercounted |
+| **`Stream` alone frees ELEVEN of eleven stages** | corpus count | "sufficiency is unmeasured" |
+| **The degenerate lowering is LANDED and equivalence is SETTLED** | differential oracle over yielded sequences | "equivalence is unproven" |
+| **9 of 11 stages lower end to end; module coverage 34.5%** | `lower_module` over the corpus | 1 of 11, and 20.7% |
+| **A degenerate chunk is `Stream ; body ; Yield ; PopN(1) ; Reset`** | derived from the emission path | — |
+| **A multiheaded stream chunk can never be degenerate** | its dispatch is wrapped in `Loop`/`EndLoop` | — |
+| **The data segment already persists across `step`** | both regions are host-owned pointer parameters | "unverified interaction" |
+| **A stream chunk delegates a suspension iff it directly calls a non-`Func` chunk** | `category_can_call` enforces `Fn => Fn` | a call-graph walk, and `compute_always_yielding` |
+| **`compute_always_yielding` is NOT usable here** | behind `cfg(feature = "verify")`, which this package does not enable | "expected to be reachable" |
+| **Composite constants: 0. Fixed-point opcodes: 0.** | corpus counts | "composite constants may be common" |
+| **`verify()` now REJECTS a chunk that can run off its end** | the `v0.2.3` fix, landed | "`verify()` admits it" — true when measured |
+
+### Open, and what would settle each
+
+| Question | Settled by | Status |
+|---|---|---|
+| ~~Does `Stream` alone unblock the stages?~~ | ran | **YES, 11 of 11** |
+| ~~Is the degenerate form observationally equivalent?~~ | ran | **YES**, over yielded sequences |
+| Does the lowering survive `default<O2>`? | `pending/o2_differential_arm.rs` | written, never run |
+| Can inkwell DECLARE `coro.id.retcon`? | `pending/retcon_declarability.rs` | written, never run |
+| Do the remaining two classes lower? | not yet designed | `codegen.kel` delegated, `lexer.kel` nested |
+
+**The degenerate work is verified by its own tests but has NOT been through a
+full gate.** Two artefacts remain in `native_codegen/pending/` and neither has
+ever been compiled. The predicate that did land was wrong twice before it was
+right — once unsound, once uncompilable — both caught by reading rather than by
+running, so treat anything still in that directory as reasoned, not verified.
+
+### The standing hazard
+
+**The ephemeral arena region has no native analogue.** Harmless only because a
+body allocating ephemeral composites needs composite lowering, which does not
+exist, so such a chunk is refused before the question arises. When composites
+land, a degenerate `step` that allocates without reclaiming leaks once per
+iteration — a worst-case-memory unsoundness, not a performance issue. **This is a
+precondition on composite lowering, not a note.**
+
+---
+
 ## The target set is the whole instruction set
 
 Measured rather than assumed: **all 66 `Op` variants are emitted by the
@@ -3793,3 +3852,545 @@ the `kel_yield` callback in a `Reentrant` chunk, and a `ret` in a degenerate
 `Stream` chunk. A single shared match arm would silently pick one of them. The op
 loop needs the mode in scope, and this is noted in the artefact's risk list rather
 than left for the emitter to discover.
+
+## VERIFIED: the data segment already survives across `step`, and the ABI mirrors `resume_with_shared`
+
+The degenerate design carried one interaction as explicitly unverified: whether
+the data segment persists across native iterations the way it persists across the
+virtual machine's `Reset`. It does, and the reason is structural rather than
+lucky.
+
+### Both regions are trailing FUNCTION PARAMETERS
+
+When the module declares data, `lower_chunk` appends two pointer parameters after
+the chunk's declared ones, and reads them at entry as
+`func.get_nth_param(param_count)` and `param_count + 1`. The regions are
+**host-owned**; the lowered function receives pointers to them on every call and
+allocates nothing.
+
+So the degenerate stream form's signature falls out of existing code with no
+change at all:
+
+```
+kel_chunk_N_step(resume: i64, shared: ptr, private: ptr) -> i64
+```
+
+Persistence is therefore **automatic**. The host holds the allocation across
+calls, and nothing in the native form resets it, because there is nothing to
+reset. `reconstruct.kel`, which writes data-block fields before its single yield,
+works for this reason: the writes land in the host's private buffer and the next
+`step` reads them back.
+
+### The correspondence with the runtime is exact, which is the real result
+
+| Virtual machine | Native degenerate form |
+|---|---|
+| `resume_with_shared(shared, input)` | `step(resume, shared, private)` |
+| host lends the shared buffer per resume, VM retains no reference across the yield | host passes the pointer per call, function returns |
+| private composite data lives in the arena's PERSISTENT region and survives `Reset` | private region is a host-owned buffer, untouched by the call |
+| `Reset` reclaims the EPHEMERAL region only | no native analogue exists yet |
+
+**The ABI was not designed to match; it already matched.** The shared-pointer
+parameter was added for ordinary `fn` chunks long before the stream work, and it
+happens to give a per-call lending discipline identical to the one
+`resume_with_shared` documents. That is the strongest evidence so far that the
+degenerate form is the right shape rather than a convenient one, because it was
+not arranged.
+
+### The one row that is a gap rather than a match
+
+The ephemeral region has no native analogue. That is currently harmless and the
+reason is worth stating so it is not mistaken for a resolved question: a body
+allocating ephemeral composites would need composite lowering, which **does not
+exist**, so such a chunk is refused before the question arises. The moment
+composites land, `Reset`'s reclamation of the ephemeral region becomes real work
+at exactly this boundary, and a degenerate `step` that allocates without
+reclaiming leaks once per iteration — a worst-case-memory unsoundness, not a
+performance issue.
+
+This is now the second time the ephemeral region has been named as the thing that
+turns a no-op into work. It should be a precondition on composite lowering, not a
+note here.
+
+## `category_can_call` makes the delegation check EXACT, and kills a dependency that would not have compiled
+
+Two things came out of verifying the prepared artefact's recorded risks by
+reading, and neither was the outcome the risk list expected.
+
+### The dependency was broken, not merely unconfirmed
+
+The predicate called `keleusma::verify::compute_always_yielding`. That function
+sits behind `#[cfg(feature = "verify")]`, and `native_codegen/Cargo.toml` declares
+`keleusma = { path = "..", features = ["compile"] }` — **`verify` is not among
+them**. It would not have compiled. It is additionally `#[doc(hidden)]` and
+documented as outside the stable public interface, so even with the feature added
+it was the wrong thing to depend on.
+
+The risk list called this "expected to be reachable, NOT confirmed by compiling".
+The expectation was wrong, and it was wrong in a way that reading settles in about
+a minute. **A recorded risk is only worth what checking it costs**, and this one
+cost far less than the gate cycle that would otherwise have found it.
+
+### The replacement is exact rather than conservative
+
+`typecheck.rs`'s `category_can_call` enforces:
+
+```rust
+Loop  => true,
+Yield => !matches!(callee, Loop),
+Fn    => matches!(callee, Fn),
+```
+
+Its own comment states the purpose: keeping a `fn` from transitively yielding
+through a `yield` callee, which the virtual machine would propagate as a
+suspension. **So the transitive closure of a `Func` chunk contains only `Func`
+chunks.**
+
+A stream chunk therefore delegates a suspension **if and only if it directly calls
+a non-`Func` chunk**. Checking the direct call sites is not an approximation of a
+call-graph walk; it *is* the walk, collapsed by a language rule that already
+holds. The condition is stated positively — every callee must be `Func` — because
+the property required is that no callee can suspend, and a `Stream` callee falls
+out of the same clause without needing a case of its own.
+
+An unresolvable callee index refuses rather than skips. A `None` from
+`chunks.get` means the module disagrees with the op stream, and admitting on
+missing evidence is the wrong default in a soundness check.
+
+### What this pattern is
+
+The earlier version of this predicate was **unsound**, then **uncompilable**, and
+is now **exact and dependency-free**, across three increments, none of which ran
+anything. Each step came from reading a different file: the virtual machine's
+resume path, the crate's feature gates, the type checker's call discipline.
+
+The general lesson is narrower than "reading is good". It is that **a soundness
+condition expressed as an analysis is often a language rule in disguise**, and
+looking for the rule first is cheaper than importing the analysis. Here the rule
+was three lines and already enforced on every program that compiles.
+
+## A near-miss worth more than the defect it found
+
+I was one commit away from recording that the native workstream lettering A to F
+was **my own invention with no authoritative definition**, which would have
+invalidated the reconciliation section, the pending relabelling artefact, and 59
+references across this document.
+
+**It is false.** `V0_3_X_ROADMAP.md` defines all six as markdown headings, `### A.
+Bytecode-to-LLVM-IR lowering` through `### F. Partial-operation native lowering`.
+The reconciliation section had the right document and the right names the whole
+time.
+
+### How the wrong conclusion nearly got written
+
+Two greps, each individually reasonable, each blind in the same direction:
+
+1. `grep -c "Workstream" V0_4_0_NATIVE_CODEGEN.md` returned **0**. True, and
+   irrelevant — the architecture document is not where the lettering lives.
+2. `grep -E "^\s*[-*]?\s*[A-F]\.\s"` for lettered list items returned **nothing**,
+   because the definitions are `###` headings and the pattern had no place for the
+   heading prefix.
+
+Two negatives agreeing felt like corroboration. They were the same mistake made
+twice, since both patterns assumed a form the document does not use, and neither
+searched for the *content* — the workstream names — which is what finally settled
+it in one command.
+
+**This is the third time on this branch that a grep has produced a confident
+wrong answer**, after the `Op::[A-Z]` doc-comment matches and the `BinOp::`
+substring. The opening of this document already says "a grep is a measurement and
+deserves the same scepticism as any other". Knowing the rule did not prevent
+the third instance; **verifying before writing did.**
+
+### The actual defect, which is small
+
+`pending/fix_workstream_label.py` cited `V0_4_0_NATIVE_CODEGEN.md` as the
+defining document. The inventory cited `V0_3_X_ROADMAP.md`. **The inventory was
+right and the artefact was wrong** — a drift that happens when a prepared artefact
+carries its own restatement of a premise instead of pointing at it. Corrected in
+place.
+
+### A collision that is real and is not mine
+
+`V0_4_X_ROADMAP.md` defines its own `### A.` through `### F.` for a completely
+different taxonomy: its `A` is "Sub-coroutines (callable ephemeral `loop`)", its
+`B` is "Three-mode purity discipline". So **a bare letter is ambiguous across
+roadmaps even when it is correct within one.**
+
+That strengthens the relabelling artefact's existing choice to write "Workstream A
+(full pass)" rather than a bare "A", and it is worth stating that the reason has
+changed: the spelled-out form is not merely clearer, it is **disambiguating
+against a second live lettering scheme**. I am not proposing to renumber either
+roadmap; that is the operator's call and both are stable published documents.
+
+## THE SUFFICIENCY ANSWER: `Stream` alone frees ELEVEN OF ELEVEN stages
+
+The question this branch has carried unanswered all day is settled, and it is the
+favourable answer.
+
+```
+stages freed by the stream work alone : 11
+stages needing more                   : 0
+```
+
+Every self-hosted stage module, including `wire.kel`, contains **no unsupported
+opcode other than the stream three**. So the degenerate stream increment does not
+merely uncover the next blocker — it delivers Order 1's whole opcode surface.
+"Ten of eleven refuse on `Stream`" was a statement about ordering; this is the
+statement about blockers, and they agree.
+
+### The shape count, corpus-wide rather than the ten stages
+
+| Class | Count |
+|---|---|
+| degenerate: one top-level `Yield`, none nested | **22** |
+| multi-segment: more than one top-level `Yield` | **0** |
+| nested yields, the general case | **1** (`lexer.kel`) |
+| delegated: no `Op::Yield` in the chunk at all | **1** (`codegen.kel`) |
+
+**Zero multi-segment chunks in the entire corpus.** The rotation-as-permutation
+design was solving a case that does not occur. The source-level reading predicted
+the three classes correctly and undercounted the degenerate one, since it looked
+only at the ten stages.
+
+### My derivation was CORPUS-SPECIFIC, and the report says so
+
+The claim that the ops between `Yield` and `Reset` are exactly `[PopN(1)]` was
+derived from the emission path and holds for every stage. **It does not hold
+corpus-wide.** Ten `piano_roll_*.kel` chunks have
+
+```
+tail = [PopN(1), Const(0), PopN(1)]
+```
+
+The predicate refuses them, which is correct and conservative, so nothing is
+mislowered. But "derived" was too strong a word for a claim that a wider corpus
+falsifies, and the derivation covered the emission path for a body whose tail
+expression is the `yield` rather than every stream body.
+
+### THE CONTROL EARNED ITS PLACE TWICE, AND THE SECOND TIME WAS REAL
+
+It failed twice before passing, and only the second failure was a defect in the
+thing it guards.
+
+**First failure, not drift.** The control used `lower_chunk`, which refuses every
+`Op::Call` outright because resolving a callee index needs the whole module. It
+refused `01_arithmetic.kel::main` while `is_lowered` was perfectly correct. The
+control's own doc comment had already named this failure mode — "may refuse for a
+structural reason unrelated to any single opcode" — and the assertion was written
+so that it tripped on it anyway. **Naming a failure mode is not excluding it.**
+Rewritten against `lower_module`, which is both correct and the boundary a
+consumer actually meets.
+
+**Second failure, genuine drift.** `is_lowered` listed `Op::Const(_)`
+unconditionally. The lowering accepts only `Int`, `Byte`, `Bool` and `Unit`, and
+refuses a `StaticStr` or any composite. The status table at the top of this
+document has said "`Const` (scalars)" and listed it among three PARTIAL entries
+from the beginning; **the qualifier was dropped in the copy.**
+
+That is exactly the hazard recorded when the duplicate was written, arriving
+exactly as predicted, and it was caught by the control written for it rather than
+by review.
+
+### It also invalidated a figure quoted all session
+
+`spike_corpus_coverage.rs` carries the same list and had the same bug, so the
+published coverage figures were **overstated**. Corrected:
+
+| Figure | Was | Now |
+|---|---|---|
+| opcode instances | 78797 of 80283, 98.1% | **78686 of 80283, 98.0%** |
+| chunks fully lowerable | 762 of 826, 92.3% | **761 of 826, 92.1%** |
+| whole modules | 20.7% | **20.7%, unchanged** |
+
+The overstatement is small — 111 instances and one chunk — and the module-level
+figure, the one a consumer actually sees, does not move. Recording it at its real
+size rather than dramatising it. The lasting point is that **the error was in the
+copy and not the original**, and a control in a different file is what found it.
+
+## LANDED: the degenerate stream lowering, and observational equivalence is SETTLED
+
+The claim this design rested on since the rotation was first written — that the
+transformation preserves observable behaviour — is no longer unproven. It is
+demonstrated by a differential oracle over four program shapes, comparing whole
+yielded sequences rather than final values.
+
+### The measured effect
+
+| Figure | Before | After |
+|---|---|---|
+| self-hosted stages lowering end to end | **1 of 11** | **9 of 11** |
+| module-level coverage, corpus-wide | 20.7% | **34.5%** |
+
+The two that remain are **exactly the two classes predicted**: `codegen.kel`
+(delegated, no `Op::Yield` in its stream body) and `lexer.kel` (nested yields).
+Both refuse on `Stream`, which is the correct refusal rather than a mislowering.
+
+The opcode-instance and chunk figures do **not** move, and that is now a
+known staleness in `is_lowered`: it is a static model that still counts `Stream`,
+`Reset` and `Yield` as unlowered. The drift is in the **pessimistic** direction,
+so the drift control still holds and no figure is overstated.
+
+### Two things the implementation found that reading had not
+
+**A stream costs TWO host round-trips per iteration.** `Op::Reset` returns
+`VmState::Reset` to the host after rewinding `ip`. So the virtual machine's
+protocol is `call -> Yielded(v0)`, `resume -> Reset`, `resume -> Yielded(v1)`,
+and the reply on the Reset leg is discarded by the `PopN(1)`. Natively one call
+is the whole iteration. Feeding the **same** reply on both legs is what makes the
+two line up one-to-one, and the harness says so, because a fresh reply on the
+Reset leg would be silently discarded and the sequences would diverge for a
+reason having nothing to do with the lowering.
+
+This does not weaken the equivalence claim, but it does **sharpen** it:
+equivalence is over the **yielded value sequence**, not over the host state
+sequence. A stream has no final result to compare, because it never finishes.
+That is productive divergence, not a gap in the test.
+
+**A divergent chunk hangs a harness written for terminating ones.** The existing
+`vm_sequence` loops until `Finished`, which a `loop` chunk never returns. The
+first run hung for ten minutes and had to be killed. The stream drivers are
+therefore **bounded by construction** by the caller's reply count. A hang is a
+worse failure than a wrong answer because it reports nothing, and this is the
+second time on this branch that a stream-shaped thing has produced one.
+
+### What the emitter actually does
+
+`Op::Stream` lowers to nothing, because with an empty prologue the point `Reset`
+rewinds to *is* the entry block. The degenerate `Op::Yield` becomes the return.
+The trailing `PopN(1)` and `Reset` are unreachable after it and are skipped by the
+loop's existing `dead` tracking rather than by a special case.
+
+The signature needed **no change at all**: the data pointers already trail the
+declared parameters, so `kel_chunk_N(resume, shared, private)` is what the
+existing code emits.
+
+### One clippy finding taken seriously rather than suppressed
+
+`lower_chunk_body` reached eight positional arguments. That is a real readability
+cost, not a lint to silence, so `opts` and `degenerate_yield` are bundled into a
+`BodyCfg` — they travel together, both decided by the caller, both constant for
+the body.
+
+## A gap in MY gate step, and a first look at the delegated case
+
+### `native_codegen` is covered by no documentation build at all
+
+I raised a worry that the doc comments added with the degenerate lowering might
+break `cargo doc -D warnings`. **The worry was misplaced, and what replaced it is
+worse.**
+
+`native_codegen/Cargo.toml` declares its own `[workspace]` and the parent's
+`members` list omits it, so `cargo doc --workspace --no-deps` never sees the
+package. The gate's step 13 runs `cargo fmt`, `cargo clippy` and `cargo test` —
+**and no `cargo doc`.** So a broken intra-doc link in this package is caught
+nowhere, by anything.
+
+That is the same shape of hole `CLAUDE.md` records as how V0.2.1 shipped with a
+red CI Doc job, and the comment immediately above the step in `release-gate.sh`
+even cites that history. The step is mine to edit by the mailbox convention, so
+the fix is mine. **Not applied while a gate is running against this branch**,
+because changing the gate step mid-run would make the result correspond to a
+script that no longer exists.
+
+### The delegated case may reduce to the degenerate one
+
+`codegen.kel` is the delegated stage: `loop main(resume) { emit_next(resume) }`
+with **no `Op::Yield`** of its own. Reading `emit_next` shows nine heads and
+**every one of them is a single `yield <call>`**:
+
+```
+yield emit_next(resume: Word) -> Word when st.started == 0 { yield seed_step() }
+yield emit_next(resume: Word) -> Word when st.sp > 0        { yield walk_step() }
+...
+```
+
+Tracing the values rather than assuming them. `Op::Yield` is pop-one push-one, so
+a head compiles to roughly `Call(f); Yield; Return`: it suspends with `f`'s
+result and, on resume, **returns the resume value**. `main` then discards that
+via its `PopN(1)` before `Reset`. So:
+
+- the sequence `main` yields **is** the sequence `emit_next` yields;
+- the resume value reaches `emit_next` as its parameter on the next iteration,
+  which is exactly what `emit_next(resume)` passes;
+- `emit_next`'s return value is discarded by the caller in this program.
+
+If a `Reentrant` chunk whose every head ends in a single top-level `yield` lowers
+to a function returning the **yielded** value, then `step(resume) =
+emit_next(resume)` and the delegated stage becomes degenerate over it.
+
+**This is a sketch from source, not a design.** Three things are unchecked and
+each could kill it. The heads compile to an `If` chain, so those yields are
+**nested at the op level** and the depth rule that admits the degenerate stream
+would reject them; the reduction needs a per-head rule instead. `emit_next`'s
+return value being discarded is true **in this program** and is not a property of
+the chunk, so a second caller that used it would break. And nothing here has been
+run.
+
+Recorded so the next increment starts from a traced hypothesis rather than from
+"delegated is hard", which is what the classification said and all it said.
+
+## The documentation hole is CLOSED, and my reason for deferring it was wrong
+
+### The deferral was based on a misreading of my own tooling
+
+I wrote that the gate-step fix could not be applied "while a gate is running
+against this branch, because changing the gate step mid-run would make the result
+correspond to a script that no longer exists."
+
+**That is false, and it contradicts the tool's own banner.**
+`gate-in-worktree.sh` checks the commit out into a *detached worktree* and runs
+`release-gate.sh` **from that worktree**, pinned to the commit under test. Its
+banner prints "the main tree is free; develop there while this runs", and the
+header explains that pinning the result to an immutable commit is the entire
+reason the script exists. Editing the working tree cannot reach the running gate.
+
+I had read that header earlier in this session, when I needed the invocation. The
+mistake was applying a real rule — a gate result is valid only for the tip it ran
+against — to a mechanism specifically built so that rule holds without anyone
+remembering it.
+
+### Verified before adding, not after
+
+The load objection was also checked rather than assumed. `perf_canary` runs inside
+the default-features test step, which had already completed, so a one-second doc
+build could not reach it.
+
+`RUSTDOCFLAGS="-D warnings" cargo doc --no-deps` on `native_codegen` **passes
+clean today.** That ordering matters: adding an unverified step to the gate risks
+burning a whole run to discover a pre-existing failure at step 13, and the
+package had never had its documentation built at all, so a pre-existing failure
+was the likely case rather than the unlikely one.
+
+### The step now runs it
+
+```sh
+( cd native_codegen && cargo fmt --all -- --check \
+  && cargo clippy --all-targets -- -D warnings && cargo test \
+  && RUSTDOCFLAGS="-D warnings" cargo doc --no-deps )
+```
+
+Syntax-checked with `bash -n`. **The running gate does not cover this change**,
+since it is pinned to `bc1bee3a`; the next gate is the first to exercise it.
+
+The hole was the same one, one directory over, from the one the step above it
+closed. A detached package escapes `--workspace` in *every* dimension, not only
+the one that motivated detaching it, and each escape has to be closed by hand.
+
+## MEASURED: there is exactly ONE `Reentrant` chunk in the corpus, and its shape is uniform
+
+```
+Reentrant chunks                      : 1
+ANY nested Yield (the If-chain shape) : 1
+every Yield immediately before Return : 1
+   codegen.kel::emit_next  top=1 nested=8  yield->return 9/9
+```
+
+Three results, and each changes something.
+
+**The `If`-chain precondition is confirmed.** Eight of `emit_next`'s nine yields
+sit at depth one or more, exactly as predicted from the multiheaded emission path.
+The whole-chunk depth rule that admits a degenerate stream would reject this
+chunk, so the reduction genuinely needs a per-head rule.
+
+**`Yield` is immediately followed by `Return` in NINE of nine cases.** That is the
+structural property the traced hypothesis needed and could not check from source:
+every head suspends and then returns the resume value. Not a majority, not a
+common case — uniform.
+
+**The whole `Reentrant` population of the corpus is one chunk.** So Workstream B's
+"general case", which the roadmap describes as where the risk concentrates, is
+currently *two chunks*: `lexer.kel::main`, a nested stream, and
+`codegen.kel::emit_next`, this one.
+
+### A correction to my own framing of the delegated case
+
+`emit_next` is **not blocked**. The `kel_yield` callback already lowers
+`Reentrant` chunks, and the existing suspension tests pass. What refuses
+`codegen.kel` is `Op::Stream` in `main`, and `main` is refused by my predicate for
+having **no `Op::Yield` at all**, so `found?` returns `None`.
+
+That reframes the work. The delegated case may need no new coroutine machinery,
+only an additional admissibility clause: a stream chunk with no `Op::Yield` whose
+body calls a `Reentrant` chunk could lower as `step(resume)` with suspensions
+going through the existing callback. The refusal comment's objection — that a
+divergent `loop` on a callback ABI would spin with no way for the host to stop it
+— does not apply, because `step` returns after one `emit_next` call and the host
+regains control every iteration.
+
+The resume-slot hazard also does not bite here, and for a reason specific to the
+shape rather than a general one: `main` uses its `resume` parameter only to pass
+to `emit_next` at call time, which happens **before** any suspension, so the
+value the virtual machine would write into slot 0 mid-iteration is never read
+again in that iteration.
+
+### The caveat that matters more than the result
+
+**This is a corpus of one.** A user may write many `Reentrant` chunks in any
+shape, and `yield fn` is a language feature rather than a codegen artefact.
+Designing to `9/9 Yield;Return` would be fitting the corpus, not the language.
+
+The honest use of this measurement is the reverse: it says the *general* coroutine
+lowering can be **deferred** with a known and small cost today, not that it can be
+skipped. Two chunks are behind it, and the moment a user writes a third the
+deferral stops being free. That is a scheduling fact, not a design one.
+
+## BOTH REMAINING ARTEFACTS ARE SPENT: R4.4 closed, and the lowering survives O2
+
+### R4.4 is closed, and the answer is the good one
+
+```
+llvm.coro.id.retcon        found: yes  overloaded: false  declarable: TRUE
+llvm.coro.id.retcon.once   found: yes  overloaded: false  declarable: TRUE
+```
+
+The architecture's one item left at medium confidence — whether inkwell exposes
+the returned-continuation family with a usable wrapper — is settled. **Both are
+declarable through inkwell alone**, so the `llvm-sys` escape hatch R4.4
+anticipates is not needed and the `coro_intrinsics.rs` contingency can be dropped
+from the plan. It compiled and ran first try, which is worth noting against the
+`pending/README.md` warning to expect otherwise.
+
+### The lowering survives `default<O2>`, the shipped configuration
+
+Every other case in `differential.rs` runs the JIT at `OptimizationLevel::None`,
+which the architecture explicitly excludes from scope. The O2 arm closes that: it
+runs the real middle end, re-verifies the module afterwards, and compares against
+the virtual machine. **All 38 pass**, including the branch, the checked triple,
+wrapping corners, the unrepresentable-quotient guard, and two cross-function
+cases that O2 inlines.
+
+That matters beyond tidiness. The vacuous control this branch already paid for was
+vacuous *because* of the O0 path: an uninitialised `alloca` read zero by accident.
+At O2, LLVM propagates `undef` and deletes branches on it, so the same defect
+produces wrong control flow rather than a lucky right answer.
+
+### BOTH FAILURES ON FIRST RUN WERE THE TEST, NOT THE LOWERING
+
+The O2 arm failed twice, and neither failure was a miscompilation. Both were the
+same mistake in different places, and both **looked exactly like the defect the
+test was written to find.**
+
+`native_result` and `native_result_o2` as first written lower `m.chunks[0]`. That
+is valid only for a single-chunk program — and two of the six O2 cases are
+deliberately cross-function, so that O2 has something to inline. With a helper
+present, **chunk 0 is the helper.** The harness lowered `helper`, called it with
+`main`'s arguments, and compared against `main`'s result:
+
+- `40` against `10`, which is `helper(9)` against `helper(9) * 4`;
+- `43` against `42`, which is `helper(41)` against `helper(41) + 1`.
+
+Read cold, both are exactly what an O2 miscompilation would look like.
+
+The fix was `lower_module` plus resolving the entry by name. The O0 **pre-check**
+was then removed rather than repaired: it called the single-chunk-only harness on
+multi-chunk cases, and **a pre-check that cannot express the cases it guards is
+worse than none, because its failure points away from the real cause.** The O0
+path has its own tests in the same file.
+
+### What the ledger says now
+
+`native_codegen/pending/` is down to **one** artefact, the workstream relabelling
+script. Both Rust artefacts are installed, run, and deleted from the directory.
+The count of prepared-but-unverified work is falling rather than rising, which was
+the concern recorded when the queue reached five.

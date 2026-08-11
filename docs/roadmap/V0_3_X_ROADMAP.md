@@ -55,6 +55,50 @@ The load-bearing primitive. A Keleusma `loop`/`yield`/`resume` coroutine lowers 
 coroutine so a host can call coroutine-driven native functions whose state machines LLVM
 manages. This is the piece the V0.4.0 strategy identifies as where the risk concentrates.
 
+> **MEASURED QUALIFICATION (2026-08-10): most of the corpus routes AROUND this workstream.**
+>
+> The paragraph above remains correct for the general case and is not withdrawn. What the
+> measurement changes is how much of the near-term work actually depends on it.
+>
+> A `loop` chunk compiles to `Stream ; body ; PopN(1) ; Reset`, and `Reset` clears every local,
+> truncates the operand stack, and rewinds to just after `Stream`. When the body's **single**
+> `yield` is its tail expression, no state crosses the suspension, the inter-yield partition has
+> one element, and the chunk lowers to an ordinary function with **no coroutine intrinsic, no
+> frame, and no callback**:
+>
+> ```
+> kel_chunk_N_step(resume, shared, private) -> i64
+> ```
+>
+> One entry point suffices. `Vm::resume_after_enter` writes the resume value into the entry
+> chunk's slot 0 and iteration zero takes its value from the `call` argument, so `step(a)`,
+> `step(r1)`, `step(r2)` reproduces the virtual machine's sequence with no distinguished first
+> call.
+>
+> **Of the ten self-hosted stage modules, eight have exactly this shape** — `parse`, `analyze`,
+> `reconstruct` and the five `verify_*`. One (`codegen`) delegates its whole body to a
+> multiheaded `yield` callee, and one (`lexer`) nests its yields inside `if`. Only those two need
+> this workstream.
+>
+> **Epistemic status, stated because it changes what may be concluded.** The eight-of-ten split is
+> a **source-level reading** of the ten `loop` blocks, not a bytecode count; the op shape and the
+> single-entry-point result are *derived* from the emission path and the resume path respectively.
+> **Sufficiency is NOT measured**: `lower_module` refuses on the first unsupported opcode and
+> `Op::Stream` is the first op of every stream chunk, so nothing behind it has been examined and
+> composites may sit there. Handling the degenerate form is **necessary** for those eight stages.
+> Nothing here shows it is **sufficient**, and this note must not be read as saying Workstream B
+> can be deferred past Order 1.
+>
+> Two preconditions belong in the admissibility check rather than in prose. A **multiheaded**
+> stream chunk wraps its dispatch in `Loop`/`EndLoop`, so its yields are nested by construction and
+> it can never be degenerate. And a chunk that **calls a non-`Func` chunk** delegates a suspension
+> the virtual machine handles by writing the *entry* chunk's resume slot, which native code does
+> not reproduce; `category_can_call` makes the direct call sites an exact test rather than an
+> approximation.
+>
+> Detail and derivations: [`../decisions/NATIVE_LOWERING_INVENTORY.md`](../decisions/NATIVE_LOWERING_INVENTORY.md),
+> section "READ THIS FIRST".
+
 ### C. Arena-resident coroutine frames and the native arena model
 
 Coroutine frames live in the arena, not the C stack, preserving the bounded-WCMU model in
