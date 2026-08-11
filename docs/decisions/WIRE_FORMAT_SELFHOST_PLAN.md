@@ -765,6 +765,19 @@ are about a kilobyte against 65,536, so the space is free), the host relays the 
 emitting walk runs again. Deterministic, so the second walk is the same answer rather than a second
 answer — the same argument slice 12 already rests on.
 
+**THE FLATTENER'S INTERNER STARTS PART-WAY THROUGH, NOT EMPTY** (measured). `flatten` is called
+inside `SchemaBuilder::finish` (`wire_schema.rs:765`), after every `add_chunk` and after
+`add_enum_layouts`. So constant-interned names are appended to a table that already holds the chunk
+names and the enum-layout names, and the indices a `STATIC_STR` or `STRUCT` record cites depend on
+what came before.
+
+The consequence for the command shape is concrete: since shared data is re-seeded on every call, one
+call must both seed the prefix (the chunk and layout names, as slice 12 already handles) **and** run
+the walk that continues interning from there. A slice that interned from empty would produce a
+correct-looking `CONSTS` table citing indices that are wrong by the size of the prefix — and on the
+minimal module the prefix is one name, so the error would be a quiet off-by-one rather than an
+obvious break.
+
 **Suggested decomposition**, smallest first, since the whole thing is larger than any slice so far:
 
 1. `STATIC_STR` alone — one intern per node, no side table, no contiguous run. Establishes the
