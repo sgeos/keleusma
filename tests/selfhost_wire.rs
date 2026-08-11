@@ -8650,3 +8650,199 @@ fn the_derived_sequence_produces_byte_identical_name_regions() {
         assert_eq!(art, want, "{label}: artifact differs from the reference");
     }
 }
+
+const CMD_CK_EMIT_BATCH: i64 = 156;
+const CMD_CK_CARRY_CONSTS: i64 = 157;
+const CMD_CK_CARRY_TEMPLATES: i64 = 158;
+const CMD_CK_CARRY_PTYPES: i64 = 159;
+
+/// The most chunk records one call admits, mirroring `ck_max()` in the source.
+const CK_MAX: usize = 90;
+
+/// A source with `n` functions, each carrying its OWN constant.
+///
+/// The constant is what makes the carry observable. With no constants every
+/// chunk's `consts_first` is zero, an emitter that restarted its accumulators on
+/// each batch would produce byte-identical output, and the batching test would
+/// assert nothing. One distinct literal per function gives `consts_first` the
+/// sequence 0, 1, 2, ... so the second batch's records are wrong by exactly the
+/// first batch's length if the carry is dropped.
+fn many_functions(n: usize) -> String {
+    let mut s = String::new();
+    for i in 0..n {
+        // The literal differs per function so no two chunks share a pool entry.
+        s.push_str(&format!("fn f{i}() -> Word {{ {} }}\n", 1000 + i));
+    }
+    s.push_str("fn main() -> Word { f0() }\n");
+    s
+}
+
+/// `CHUNKS` emitted in BATCHES is byte-identical to the reference.
+///
+/// `wire.fin` holds 1024 words and a chunk costs eleven, so the emitter caps a
+/// call at 90 records. This drives a module past that cap and relays the three
+/// running totals from one batch to the next, which is the only part of batching
+/// that is not bookkeeping: a chunk's `consts_first` counts from the first chunk
+/// of the REGION, and shared data is re-seeded on every call.
+///
+/// The carries come back from the driver rather than being summed by the harness.
+/// Summing them here would move the accumulation back to the host and leave this
+/// testing nothing the single-batch path did not already cover.
+#[test]
+fn chunk_records_emitted_in_batches_match_the_reference() {
+    use keleusma::wire_schema::kind;
+    let mut vm = vm_for(WIRE_KEL);
+
+    let src = many_functions(140);
+    let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+    let total = want.len();
+    assert!(total < CAPACITY, "artifact is {total} bytes");
+
+    let rows = rows_for_kind(&view, kind::CHUNKS);
+    assert!(
+        rows.len() > CK_MAX,
+        "only {} chunks, so one call suffices and batching is untested",
+        rows.len()
+    );
+
+    let specs = region_counts_for(&want);
+    let (_, mut art) = run_call(
+        &mut vm,
+        &Call {
+            cmd: CMD_BUILD_REGION_TABLE,
+            nregions: specs.len() as i64,
+            seed: &[],
+            regions: &specs,
+            fields: &[],
+            names: &[],
+            pool: &[],
+            args: [0, 0, 0, 0, 0],
+            read_len: total,
+        },
+    )
+    .expect("run");
+
+    for (k, _, _, _) in &specs {
+        let region = view.find_region(*k).expect("region");
+        let stored = view.region_bytes(&region).expect("payload");
+        if stored.is_empty() {
+            continue;
+        }
+        if *k == kind::CHUNKS {
+            let (mut c, mut t, mut p) = (0i64, 0i64, 0i64);
+            let mut first = 0usize;
+            let mut batches = 0;
+            while first < rows.len() {
+                let n = (rows.len() - first).min(CK_MAX);
+                let fields = chunk_inputs(&rows[first..first + n]);
+                let args = [n as i64, first as i64, c, t, p];
+                let mk = |cmd: i64| Call {
+                    cmd,
+                    nregions: specs.len() as i64,
+                    seed: &art,
+                    regions: &specs,
+                    fields: &fields,
+                    names: &[],
+                    pool: &[],
+                    args,
+                    read_len: total,
+                };
+                let (ret, next) = run_call(&mut vm, &mk(CMD_CK_EMIT_BATCH)).expect("run");
+                assert!(ret >= 0, "batch at {first} refused with {ret}");
+                // The carries are the DRIVER's answer, re-run rather than retained,
+                // because shared data is re-seeded on every call.
+                let nc = run_call(&mut vm, &mk(CMD_CK_CARRY_CONSTS)).expect("run").0;
+                let nt = run_call(&mut vm, &mk(CMD_CK_CARRY_TEMPLATES))
+                    .expect("run")
+                    .0;
+                let np = run_call(&mut vm, &mk(CMD_CK_CARRY_PTYPES)).expect("run").0;
+                assert!(nc >= 0 && nt >= 0 && np >= 0, "carry refused at {first}");
+                art = next;
+                c = nc;
+                t = nt;
+                p = np;
+                first += n;
+                batches += 1;
+            }
+            assert!(
+                batches >= 2,
+                "only {batches} batch, so no carry was relayed"
+            );
+            continue;
+        }
+        let is_pool = matches!(*k, kind::STRING_POOL | kind::PARAM_TYPES | kind::DEBUG_POOL);
+        let r = if is_pool {
+            Vec::new()
+        } else {
+            rows_for_kind(&view, *k)
+        };
+        let flat: Vec<i64> = r.iter().flatten().copied().collect();
+        let n = if is_pool { stored.len() } else { r.len() };
+        let (ret, next) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_EMIT_IN_REGION,
+                nregions: specs.len() as i64,
+                seed: &art,
+                regions: &specs,
+                fields: &flat,
+                names: &[],
+                pool: stored,
+                args: [i64::from(*k), n as i64, 0, 0, 0],
+                read_len: total,
+            },
+        )
+        .expect("run");
+        assert!(ret >= 0, "emitter refused kind {k} with {ret}");
+        art = next;
+    }
+
+    if art != want {
+        let at = (0..art.len().min(want.len()))
+            .find(|&i| art[i] != want[i])
+            .unwrap_or(art.len().min(want.len()));
+        let region = specs
+            .iter()
+            .filter_map(|(k, _, _, _)| {
+                let r = view.find_region(*k)?;
+                let b = r.byte_offset()?;
+                let len = view.region_bytes(&r).ok()?.len();
+                (at >= b && at < b + len).then_some((*k, b, len))
+            })
+            .next();
+        panic!(
+            "first difference at byte {at} (len {} vs {}), region {:?}: got {:?} want {:?}",
+            art.len(),
+            want.len(),
+            region,
+            &art[at..(at + 16).min(art.len())],
+            &want[at..(at + 16).min(want.len())]
+        );
+    }
+}
+
+/// Must-fire, about the CORPUS: the carry is genuinely non-zero at the boundary.
+///
+/// The test above would pass on an emitter that restarted its accumulators every
+/// batch if every chunk's ranges were zero. This asserts the batch boundary lands
+/// where `consts_first` has already advanced, so dropping the carry is visible.
+#[test]
+fn the_batch_boundary_falls_where_a_running_total_is_already_non_zero() {
+    use keleusma::wire_schema::kind;
+    let src = many_functions(140);
+    let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let view = keleusma_wire::WireView::parse(&want).expect("parses");
+    let rows = rows_for_kind(&view, kind::CHUNKS);
+    assert!(rows.len() > CK_MAX, "corpus does not reach a second batch");
+    // Field 1 is consts_first. The first record of the second batch must already
+    // be past zero, or a carry-dropping emitter would agree with the reference.
+    assert!(
+        rows[CK_MAX][1] > 0,
+        "consts_first is {} at the batch boundary, so dropping the carry would \
+         still produce the reference bytes",
+        rows[CK_MAX][1]
+    );
+}
