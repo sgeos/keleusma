@@ -2737,6 +2737,10 @@ private data fl {
     err: Word,
     // Discards a call whose result is in the fields.
     sink: Word,
+    // A propagated return code. Separate from `sink`, which discards: reusing
+    // the discard field for a value that is then TESTED is how a guard quietly
+    // stops guarding.
+    rc: Word,
 }
 
 // `wire.fin` holds six words per node, so 1024 words is 170 nodes. A STATED cap:
@@ -2766,6 +2770,26 @@ fn fl_disc_of(p: Word) -> Word { wire.fin[(p * fl_fields()) + 5] }
 // which is a plausible-looking wrong answer rather than a refusal.
 fn fl_tag_has_range(t: Word) -> Word {
     if t == tag_tuple() { 1 } else { if t == tag_array() { 1 } else { 0 } }
+}
+
+// Slice 13b's scope: everything slice 13 admits, plus `STATIC_STR`, which
+// interns a name as the walk reaches it.
+//
+// A SEPARATE predicate rather than a mode flag on the old one. Command 141 must
+// keep rejecting `STATIC_STR` with `-245`, because it never seeds the interner —
+// admitting the tag there would intern against an empty table and produce a
+// record citing index 0, which is a plausible wrong answer rather than a refusal.
+fn fx_tag_in_scope(t: Word) -> Word {
+    if t == tag_static_str() { 1 } else { fl_tag_in_scope(t) }
+}
+
+fn fx_validate(nnodes: Word) -> Word {
+    fl.err = 0;
+    for p in 0..nnodes limit 170 {
+        fl.err = if fl_children_of(p) > nnodes { 0 - 241 } else {
+                 if fx_tag_in_scope(fl_tag_of(p)) == 0 { 0 - 245 } else { fl.err } };
+    }
+    fl.err
 }
 
 fn fl_tag_in_scope(t: Word) -> Word {
@@ -2859,7 +2883,16 @@ fn fl_cover(nroots: Word, nnodes: Word) -> Word {
 fn fl_put_record(at: Word, head: Word) -> Word {
     put_u16(at + (head * const_stride()) + const_off_tag(), fl_tag_of(wire.fq[head]));
     put_u16(at + (head * const_stride()) + const_off_flags(), 0);
-    put_u32(at + (head * const_stride()) + const_off_aux(), 0);
+    // A `STATIC_STR`'s `aux` is its NAME INDEX, and interning it HERE is what
+    // couples the two computed values: the walk reaches nodes breadth-first, so
+    // the name sequence is a function of that order rather than of the input
+    // order. Unreachable from command 141, whose validation rejects the tag.
+    put_u32(
+        at + (head * const_stride()) + const_off_aux(),
+        if fl_tag_of(wire.fq[head]) == tag_static_str() {
+            nm_intern_at(fl_names_first_of(wire.fq[head]))
+        } else { 0 },
+    );
     put_u64(
         at + (head * const_stride()) + const_off_payload(),
         if fl_tag_has_range(fl_tag_of(wire.fq[head])) == 1 {
@@ -2906,6 +2939,99 @@ fn flatten_emit_consts(nroots: Word, nnodes: Word) -> Word {
         fl_walk(region_base(dir_find(kind_consts())), nroots, nnodes) } } } } } }
 }
 
+// --- SLICE 13b-i: THE WALK DRIVES THE INTERNER --------------------------
+//
+// The first place two computed values interact. `flatten` interns as it walks,
+// so the name sequence is a function of the BREADTH-FIRST order — and that is
+// observable, measured rather than assumed:
+//
+//   const data k { t: ((Text, Word), Text) = (("aaa", 1), "bbb") }
+//     breadth-first  outer, inner, "bbb", "aaa", 1   ->  pool "bbbaaa"
+//     depth-first    outer, inner, "aaa", 1, "bbb"   ->  pool "aaabbb"
+//
+// A single string inside a tuple is visited first under BOTH walks and proves
+// nothing, which is the vacuity four of slice 13's five cases had. Two strings
+// at different depths are the smallest case that discriminates.
+//
+// THE INTERNER STARTS PART-WAY THROUGH, NOT EMPTY. `flatten` runs inside
+// `SchemaBuilder::finish`, after every `add_chunk` and `add_enum_layouts`, so
+// constant names append to a table that already holds the chunk and layout
+// names. One call therefore seeds that PREFIX and then walks, because shared
+// data is re-seeded between calls and nothing survives.
+//
+// Arguments ride the `warg` slots: `warg` is the total `nin` entry count,
+// `warg2` the prefix length, `warg3` the root count, `warg4` the node count.
+
+// Where a counting pass writes its throwaway `CONSTS` records. Artifacts run to
+// about a kilobyte against a 65,536-byte buffer, so the top half is free. A
+// counting pass must walk exactly as the emitting pass does — same code, same
+// interning — and the cheapest way to guarantee that is to run the SAME
+// function at a different address rather than a second function that skips the
+// writes.
+fn fx_scratch() -> Word { 32768 }
+
+// Seed the interner with the prefix, leaving it ready for the walk.
+fn fx_seed() -> Word {
+    nm.ocur = 0;
+    nm.cnt = 0;
+    nm.err = 0;
+    nm.sink = nm_offsets(wire.warg);
+    nm.err = if nm.icur > bin_capacity() { 0 - 232 } else { nm.err };
+    for j in 0..wire.warg2 limit 256 {
+        nm.sink = if nm.err < 0 { 0 } else { nm_intern_at(j) };
+    }
+    nm.err
+}
+
+fn fx_prep() -> Word {
+    if wire.warg > nm_max_names() { 0 - 250 } else {
+    if wire.warg2 > wire.warg { 0 - 251 } else {
+    if wire.warg4 > fl_max_nodes() { 0 - 240 } else {
+    if wire.warg3 > wire.warg4 { 0 - 246 } else {
+    if fx_validate(wire.warg4) < 0 { fl.err } else {
+    if fl_size_all(wire.warg4) < 0 { fl.err } else {
+    if fl_cover(wire.warg3, wire.warg4) < 0 { 0 - 248 } else {
+        fx_seed() } } } } } } }
+}
+
+// Validate, seed, and walk, writing `CONSTS` at `at`.
+fn fx_run(at: Word) -> Word {
+    fl.rc = fx_prep();
+    if fl.rc < 0 { fl.rc } else { fl_walk(at, wire.warg3, wire.warg4) }
+}
+
+// The three figures the host must relay back before the directory can be laid.
+// Deterministic re-runs of one function, not three answers to one question.
+fn fx_names() -> Word {
+    fl.rc = fx_run(fx_scratch());
+    if fl.rc < 0 { fl.rc } else { nm.cnt }
+}
+
+fn fx_poollen() -> Word {
+    fl.rc = fx_run(fx_scratch());
+    if fl.rc < 0 { fl.rc } else { nm.ocur }
+}
+
+fn fx_emit_consts() -> Word {
+    if dir_find(kind_consts()) < 0 { 0 - 247 } else {
+        fx_run(region_base(dir_find(kind_consts()))) }
+}
+
+fn fx_emit_names() -> Word {
+    fl.rc = fx_run(fx_scratch());
+    if fl.rc < 0 { fl.rc } else {
+    if dir_find(kind_names()) < 0 { 0 - 233 } else {
+        emit_name_records_from_nout(region_base(dir_find(kind_names())), nm.cnt) } }
+}
+
+fn fx_emit_pool() -> Word {
+    fl.rc = fx_run(fx_scratch());
+    if fl.rc < 0 { fl.rc } else {
+    if dir_find(kind_string_pool()) < 0 { 0 - 234 } else {
+        emit_pool_bytes_from_bout(region_base(dir_find(kind_string_pool())), nm.ocur)
+            + emit_pool_pad(region_base(dir_find(kind_string_pool())) + nm.ocur, nm.ocur) } }
+}
+
 fn dispatch_driver(cmd: Word) -> Word {
     if cmd == 134 { build_region_table(wire.nregions) } else {
     if cmd == 135 { emit_in_region(wire.warg, wire.warg2) } else {
@@ -2915,7 +3041,12 @@ fn dispatch_driver(cmd: Word) -> Word {
     if cmd == 139 { intern_emit_pool(wire.warg) } else {
     if cmd == 140 { intern_index_of(wire.warg, wire.warg2) } else {
     if cmd == 141 { flatten_emit_consts(wire.warg, wire.warg2) } else {
-    0 - 97 }}}}}}}}
+    if cmd == 142 { fx_names() } else {
+    if cmd == 143 { fx_poollen() } else {
+    if cmd == 144 { fx_emit_consts() } else {
+    if cmd == 145 { fx_emit_names() } else {
+    if cmd == 146 { fx_emit_pool() } else {
+    0 - 97 }}}}}}}}}}}}}
 }
 
 // THE HIGHEST LIVE COMMAND, AND IT IS LOAD-BEARING RATHER THAN DOCUMENTATION.
@@ -2923,7 +3054,7 @@ fn dispatch_driver(cmd: Word) -> Word {
 // UNREACHABLE and its own test fails immediately. The fall-through sweep reads
 // this value out of the source instead of restating a bound, which is what it
 // did for four consecutive slices — and got wrong once.
-fn highest_command() -> Word { 141 }
+fn highest_command() -> Word { 146 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {
