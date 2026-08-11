@@ -806,7 +806,37 @@ and false of slice 13b, and the difference is exactly the property the new slice
 noting as a pattern: **a justification carried forward with the code it justified is the easiest kind
 of stale documentation to produce**, because nothing about the move looks like an edit.
 
-**THE UNMEASURED ASSUMPTIONS IN THIS DESIGN, listed so they are probed rather than built on.** The
+**ALL FOUR ASSUMPTIONS ARE NOW MEASURED, AND ALL FOUR HOLD (2026-08-11).** Probed before writing
+any of the slice, which is the discipline the flattener error bought:
+
+| # | Assumption | Verdict |
+|---|---|---|
+| 1 | a string can sit at a CHILD position | **YES** — `const data k { t: (Text, Word) = ("hi", 1) }` gives `Tuple[Str("hi"), Int(1)]`, and `(Word, Text)` puts it second |
+| 2 | `Text` is admissible in `const data` | **YES**. The two cases that produced nothing were simply UNREFERENCED, so never reached a chunk pool — not a `Text` restriction |
+| 3 | a struct interns its type name before its fields | **YES** — `names = ["main","take","Zed","alpha","beta"]`, `type_name = 2`, `field_names_first = 3` |
+| 4 | child-position strings are constructible | **YES**, including `Struct P{s:Str,n:Int}` |
+
+**AND THE VACUITY CHECK, APPLIED BEFORE writing the case list rather than after.** `Tuple[Str, Int]`
+visits the string first under BOTH walks, so it proves nothing about interning ORDER — the same trap
+four of the flattener's five cases fell into. The discriminating case needs two strings at different
+depths:
+
+```
+const data k { t: ((Text, Word), Text) = (("aaa", 1), "bbb") }
+  ->  Tuple[Tuple[Str("aaa"), Int(1)], Str("bbb")]
+  breadth-first: outer, inner, "bbb", "aaa", 1   ->  pool "bbbaaa"
+  depth-first:   outer, inner, "aaa", 1, "bbb"   ->  pool "aaabbb"
+```
+
+**Different `STRING_POOL` bytes, so the coupling is observable** and the slice can start at
+`STATIC_STR` as planned rather than falling back to `STRUCT`.
+
+**Two incidental grammar findings.** Chained tuple indexing `k.t.0.1` is NOT admitted ("expected
+field name or tuple index after '.'"); reference a nested tuple by passing it to a function instead.
+And an unreferenced `const data` field never reaches a chunk's constant pool at all, which is why
+two probe cases looked like `Text` failures and were not.
+
+~~**THE UNMEASURED ASSUMPTIONS IN THIS DESIGN, listed so they are probed rather than built on.**~~ The
 flattener's "needs hand-built constant trees" error came from treating a reading-derived inference as
 a measurement, and this design contains four more inferences of the same kind. Each is cheap to
 settle and none has been:
