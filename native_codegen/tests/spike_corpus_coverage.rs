@@ -15,14 +15,28 @@ use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use std::collections::BTreeMap;
 
 /// Every opcode the lowering handles today, by discriminant name.
-fn is_lowered(op: &Op) -> bool {
+fn is_lowered(op: &Op, chunk: &keleusma::bytecode::Chunk) -> bool {
+    // `Const` is PARTIAL: the lowering accepts Int, Byte, Bool and Unit and
+    // refuses a StaticStr or any composite. This copy listed `Op::Const(_)`
+    // unconditionally until 2026-08-10, which OVERSTATED every figure below.
+    // Caught by the drift control in `spike_stream_sufficiency.rs`, not here.
+    if let Op::Const(idx) = op {
+        return matches!(
+            chunk.constants.get(*idx as usize),
+            Some(
+                keleusma::bytecode::ConstValue::Int(_)
+                    | keleusma::bytecode::ConstValue::Byte(_)
+                    | keleusma::bytecode::ConstValue::Bool(_)
+                    | keleusma::bytecode::ConstValue::Unit
+            )
+        );
+    }
     matches!(
         op,
         Op::GetLocal(_)
             | Op::SetLocal(_)
             | Op::PopN(_)
             | Op::Dup
-            | Op::Const(_)
             | Op::PushImmediate(_)
             | Op::CheckedAdd
             | Op::CheckedSub
@@ -276,7 +290,7 @@ fn spike_report_corpus_coverage() {
             let mut first: Option<&'static str> = None;
             for op in &c.ops {
                 total_ops += 1;
-                if is_lowered(op) {
+                if is_lowered(op, c) {
                     lowered_ops += 1;
                 } else {
                     *blocking.entry(opcode_name(op)).or_default() += 1;

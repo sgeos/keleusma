@@ -4017,3 +4017,88 @@ That strengthens the relabelling artefact's existing choice to write "Workstream
 changed: the spelled-out form is not merely clearer, it is **disambiguating
 against a second live lettering scheme**. I am not proposing to renumber either
 roadmap; that is the operator's call and both are stable published documents.
+
+## THE SUFFICIENCY ANSWER: `Stream` alone frees ELEVEN OF ELEVEN stages
+
+The question this branch has carried unanswered all day is settled, and it is the
+favourable answer.
+
+```
+stages freed by the stream work alone : 11
+stages needing more                   : 0
+```
+
+Every self-hosted stage module, including `wire.kel`, contains **no unsupported
+opcode other than the stream three**. So the degenerate stream increment does not
+merely uncover the next blocker — it delivers Order 1's whole opcode surface.
+"Ten of eleven refuse on `Stream`" was a statement about ordering; this is the
+statement about blockers, and they agree.
+
+### The shape count, corpus-wide rather than the ten stages
+
+| Class | Count |
+|---|---|
+| degenerate: one top-level `Yield`, none nested | **22** |
+| multi-segment: more than one top-level `Yield` | **0** |
+| nested yields, the general case | **1** (`lexer.kel`) |
+| delegated: no `Op::Yield` in the chunk at all | **1** (`codegen.kel`) |
+
+**Zero multi-segment chunks in the entire corpus.** The rotation-as-permutation
+design was solving a case that does not occur. The source-level reading predicted
+the three classes correctly and undercounted the degenerate one, since it looked
+only at the ten stages.
+
+### My derivation was CORPUS-SPECIFIC, and the report says so
+
+The claim that the ops between `Yield` and `Reset` are exactly `[PopN(1)]` was
+derived from the emission path and holds for every stage. **It does not hold
+corpus-wide.** Ten `piano_roll_*.kel` chunks have
+
+```
+tail = [PopN(1), Const(0), PopN(1)]
+```
+
+The predicate refuses them, which is correct and conservative, so nothing is
+mislowered. But "derived" was too strong a word for a claim that a wider corpus
+falsifies, and the derivation covered the emission path for a body whose tail
+expression is the `yield` rather than every stream body.
+
+### THE CONTROL EARNED ITS PLACE TWICE, AND THE SECOND TIME WAS REAL
+
+It failed twice before passing, and only the second failure was a defect in the
+thing it guards.
+
+**First failure, not drift.** The control used `lower_chunk`, which refuses every
+`Op::Call` outright because resolving a callee index needs the whole module. It
+refused `01_arithmetic.kel::main` while `is_lowered` was perfectly correct. The
+control's own doc comment had already named this failure mode — "may refuse for a
+structural reason unrelated to any single opcode" — and the assertion was written
+so that it tripped on it anyway. **Naming a failure mode is not excluding it.**
+Rewritten against `lower_module`, which is both correct and the boundary a
+consumer actually meets.
+
+**Second failure, genuine drift.** `is_lowered` listed `Op::Const(_)`
+unconditionally. The lowering accepts only `Int`, `Byte`, `Bool` and `Unit`, and
+refuses a `StaticStr` or any composite. The status table at the top of this
+document has said "`Const` (scalars)" and listed it among three PARTIAL entries
+from the beginning; **the qualifier was dropped in the copy.**
+
+That is exactly the hazard recorded when the duplicate was written, arriving
+exactly as predicted, and it was caught by the control written for it rather than
+by review.
+
+### It also invalidated a figure quoted all session
+
+`spike_corpus_coverage.rs` carries the same list and had the same bug, so the
+published coverage figures were **overstated**. Corrected:
+
+| Figure | Was | Now |
+|---|---|---|
+| opcode instances | 78797 of 80283, 98.1% | **78686 of 80283, 98.0%** |
+| chunks fully lowerable | 762 of 826, 92.3% | **761 of 826, 92.1%** |
+| whole modules | 20.7% | **20.7%, unchanged** |
+
+The overstatement is small — 111 instances and one chunk — and the module-level
+figure, the one a consumer actually sees, does not move. Recording it at its real
+size rather than dramatising it. The lasting point is that **the error was in the
+copy and not the original**, and a control in a different file is what found it.
