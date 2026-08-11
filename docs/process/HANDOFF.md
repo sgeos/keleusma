@@ -16,7 +16,7 @@ misleading a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`, or a feature branch cut from it.
-- **Parent commit**: `c73e5da2`
+- **Parent commit**: `ef5a20b1`
 - **Written**: 2026-08-11
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
@@ -38,15 +38,18 @@ this file**.
    (newest first), [`TASKLOG.md`](./TASKLOG.md).
 4. **Read [`AUTONOMOUS_IMPLEMENTATION_LOOP.md`](./AUTONOMOUS_IMPLEMENTATION_LOOP.md).**
 
-## FIRST ACTION: settle PR #9
+## FIRST ACTION: settle PR #10
 
-**`gh pr checks 9`.** Pull request #9 — `feat/selfhost-capacity-names`, head `ae01441f` — was
-mid-run when this was written: **16 of 22 passing, none failed**.
+**`gh pr checks 10`.** Pull request #10 — `feat/selfhost-contributor-guard`, head `3b93e351` — is
+test-and-docs only and was in flight when this was written. Local suite 133 passed, clippy clean.
 
-- **All pass** → merge `ae01441f` into `v0.2.3` with `--no-ff`, **at the commit CI ran and without
+- **All pass** → merge `3b93e351` into `v0.2.3` with `--no-ff`, **at the commit CI ran and without
   rebasing**. Push, then confirm CI on the merge.
-- **Any fail** → read that job's log first. It is a two-line change plus its rationale, so a failure
-  would be surprising and worth understanding rather than patching around.
+- **Any fail** → read that job's log first.
+
+**PR #9 is DONE** — merged 2026-08-11 at `ae01441f` on 22/22 green, and `v0.2.3` is at the merge
+commit `ef5a20b1`. Do not re-merge it; the previous version of this file named it as the first
+action and that instruction is spent.
 
 ## THE WORKFLOW CHANGED TODAY. CI GATES FEATURE BRANCHES.
 
@@ -79,15 +82,17 @@ three PRs (#2, #3, #6).
 
 | Ref | Commit | Status |
 |---|---|---|
-| `v0.2.3` | `c73e5da2` | pushed, CI green |
-| PR #9 | `ae01441f` | **in flight when written**, 16/22 passing |
+| `v0.2.3` | `ef5a20b1` | PR #9 merged in, pushed, CI confirming |
+| PR #9 | `ae01441f` | **MERGED** 2026-08-11, 22/22 green, merged at the commit CI ran |
+| PR #10 | `3b93e351` | contributor-guard split, test-only, in flight |
 | `v0.3.0` | — | same workflow; their last local gate is STALLED and irrelevant |
 
 Six PRs merged on this line today, every one CI-gated, **with the local machine idle throughout**.
 
 ## WHERE THE DRIVER IS
 
-`tests/selfhost_wire.rs` is **131 tests**. Keleusma computes **four of the five** values the driver
+`tests/selfhost_wire.rs` is **131 tests** on `v0.2.3`, **133** once PR #10 lands. Keleusma computes
+**four of the five** values the driver
 owed: the name table with both interning modes, the breadth-first constant ordering, the names
 interned **during** the walk for all three interning tags with `STRUCT_AUX` and `ENUM_AUX` alongside,
 and the per-chunk ranges.
@@ -154,7 +159,18 @@ guards are unreachable and deliberately untested; that is recorded at the code.
   `STRING_POOL` and a wrong `ENUM_LAYOUTS`.
 - **In-place pool compaction is unsound** once interning order differs from input order; two
   ten-byte names break it.
-- **A dispatch chain caps at NINETEEN arms**, and exceeding it is a stack overflow, not a parse error.
+- **A dispatch chain's cap is a DEPTH BUDGET OF 24 SHARED between chain position and arm-body
+  nesting, not an arm count** — measured 2026-08-11, superseding the "nineteen arms" figure that
+  stood here. Every level an arm body nests costs one arm off the chain, which is why earlier
+  sessions recorded 19 and 23 and both were right for their shape. In the TEST HARNESS, which is the
+  binding context because that is where `wire.kel` is compiled, `dispatch_driver` holds **20 arms**
+  with a no-argument call body and **18** with a nested-call body. It is at 18 today: two arms of
+  headroom, or none, depending on what the arm calls.
+- **The failure mode differs by context, and the test harness gets the worse one.** A 2 MB test
+  thread overflows its stack and SIGABRTs before `MAX_PARSE_DEPTH` (`src/parser.rs:98`) can report;
+  the CLI, on the main thread's larger stack, rejects the same source cleanly at 23 arms with a
+  `ParseError` naming the limit. **So do not size a chain from a CLI measurement** — that reads two
+  to three arms too generous. Flagged for the operator below.
 - **`Op::Reset` is a path exit.** A `loop` chunk has no `Loop` op and ends in `Reset`.
 - **Shared data is re-seeded on every VM call**, so a multi-call artifact is carried forward as bytes.
 - **A faulted VM is unusable for later calls.**
@@ -198,6 +214,15 @@ guards are unreachable and deliberately untested; that is recorded at the code.
 - **Per-element data slots.** One slot and one interned name per array element is why a 21 KB source
   makes a 16 MB artifact, paid three times over in parallel tables plus the pool they index.
 - **The (72,64) SECDED plane is entirely unexercised** by the shipping encoder.
+- **`MAX_PARSE_DEPTH` does not do its stated job on a small stack, and this is a runtime concern
+  rather than a workflow one.** The constant is 24 (`src/parser.rs:98`) and its message says deep
+  nesting is "rejected to prevent stack overflow". Measured 2026-08-11: on a 2 MB thread the stack
+  blows BEFORE the guard fires, so the process aborts with SIGABRT instead of returning a
+  `ParseError`. The limit is evidently calibrated for a main thread's larger stack. An embedder that
+  parses untrusted source on a small-stack thread therefore gets an abort, not a rejection, which is
+  an availability failure at a trust boundary the guard was written to hold. **Not changed
+  unilaterally**: lowering the constant narrows the admitted language surface and would need a
+  reason beyond one measurement, so this is the operator's call.
 - **MSRV**: CI checks 1.85 for `keleusma-arena` and 1.88 for `keleusma`.
 
 ## Parallel development
