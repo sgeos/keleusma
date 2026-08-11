@@ -14,7 +14,31 @@ use keleusma::bytecode::Op;
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use std::collections::BTreeMap;
 
-/// Every opcode the lowering handles today, by discriminant name.
+/// Every opcode the lowering handles today **as a static, per-opcode question**.
+///
+/// # This is now DELIBERATELY narrower than the real lowering
+///
+/// Since the degenerate stream lowering landed, `Op::Stream`, `Op::Reset` and
+/// `Op::Yield` DO lower in a chunk shaped `Stream ; body ; Yield ; PopN(1) ;
+/// Reset` whose callees are all `Func`. That is a per-CHUNK property, and this is
+/// a per-OPCODE predicate, so it cannot express it and does not try.
+///
+/// The consequence is that the two figures derived from this predicate —
+/// opcode instances and fully-lowerable chunks — now **UNDERSTATE** coverage.
+/// That is the safe direction, and it is why the drift control in
+/// `spike_stream_sufficiency.rs` still passes: the control fires when the
+/// predicate claims MORE than the lowering delivers, which is the direction that
+/// causes wasted work.
+///
+/// **The module-level figure is not affected**, because it calls `lower_module`
+/// and therefore measures the real lowering rather than this model. When the two
+/// disagree, the module-level figure is the true one.
+///
+/// Relabelled rather than restructured: making this chunk-aware means either
+/// duplicating the degeneracy predicate, which is the drift hazard that has
+/// already bitten once here, or widening the crate's public surface to export it.
+/// Neither is worth it for a spike whose headline number is already measured
+/// directly.
 fn is_lowered(op: &Op, chunk: &keleusma::bytecode::Chunk) -> bool {
     // `Const` is PARTIAL: the lowering accepts Int, Byte, Bool and Unit and
     // refuses a StaticStr or any composite. This copy listed `Op::Const(_)`

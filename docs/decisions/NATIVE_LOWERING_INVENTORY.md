@@ -28,7 +28,10 @@ structural fix. **Where it disagrees with anything below, this section wins.**
 |---|---|---|
 | **`wcet_stream_iteration` computes NO segments** | read the function body | the rotation design's "fact 4" |
 | **The degenerate stream form needs ONE entry point** | derived from `Vm::resume_after_enter` | "two entry points, `init` and `step`" |
-| **8 of 10 self-hosted stages are degenerate**, 1 delegated, 1 nested | read all ten `loop` blocks | "the stages are composite-heavy" |
+| **22 stream chunks are degenerate corpus-wide, 0 multi-segment**, 1 delegated, 1 nested | bytecode count | the source reading, which undercounted |
+| **`Stream` alone frees ELEVEN of eleven stages** | corpus count | "sufficiency is unmeasured" |
+| **The degenerate lowering is LANDED and equivalence is SETTLED** | differential oracle over yielded sequences | "equivalence is unproven" |
+| **9 of 11 stages lower end to end; module coverage 34.5%** | `lower_module` over the corpus | 1 of 11, and 20.7% |
 | **A degenerate chunk is `Stream ; body ; Yield ; PopN(1) ; Reset`** | derived from the emission path | — |
 | **A multiheaded stream chunk can never be degenerate** | its dispatch is wrapped in `Loop`/`EndLoop` | — |
 | **The data segment already persists across `step`** | both regions are host-owned pointer parameters | "unverified interaction" |
@@ -41,15 +44,17 @@ structural fix. **Where it disagrees with anything below, this section wins.**
 
 | Question | Settled by | Status |
 |---|---|---|
-| Does handling `Stream` alone unblock the stages? | `pending/spike_stream_sufficiency.rs` | **written, never run** |
-| Is the degenerate form observationally equivalent? | `tests/yield_sequence.rs` equivalence cases | written, never run |
+| ~~Does `Stream` alone unblock the stages?~~ | ran | **YES, 11 of 11** |
+| ~~Is the degenerate form observationally equivalent?~~ | ran | **YES**, over yielded sequences |
 | Does the lowering survive `default<O2>`? | `pending/o2_differential_arm.rs` | written, never run |
 | Can inkwell DECLARE `coro.id.retcon`? | `pending/retcon_declarability.rs` | written, never run |
+| Do the remaining two classes lower? | not yet designed | `codegen.kel` delegated, `lexer.kel` nested |
 
-**Nothing in `native_codegen/pending/` has ever been compiled.** Five artefacts,
-and the admissibility predicate among them has already been wrong twice — once
-unsound, once uncompilable — both caught by reading rather than by running. Treat
-the queue as reasoned, not verified.
+**The degenerate work is verified by its own tests but has NOT been through a
+full gate.** Two artefacts remain in `native_codegen/pending/` and neither has
+ever been compiled. The predicate that did land was wrong twice before it was
+right — once unsound, once uncompilable — both caught by reading rather than by
+running, so treat anything still in that directory as reasoned, not verified.
 
 ### The standing hazard
 
