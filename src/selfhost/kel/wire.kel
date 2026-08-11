@@ -3277,41 +3277,107 @@ private data ck {
     consts: Word,
     templates: Word,
     ptypes: Word,
+    // The REGION-relative record index, `first + i`. A separate field rather than
+    // recomputing the sum at each of the fourteen writes, so the batch offset is
+    // applied in exactly one place.
+    j: Word,
+    sink: Word,
 }
 
-fn emit_chunks_computed(at: Word, n: Word) -> Word {
+// SLICE 16: the same emitter, over a BATCH.
+//
+// `wire.fin` is 1024 words and a chunk costs eleven, so 93 records fill it and a
+// real stage has more -- `parse` has 94, which is the smallest count in the whole
+// corpus that cannot be emitted in one call. That is why batching is built here
+// rather than inside `NAMES`, where the same mechanism would first be exercised
+// across 774 batches with nothing legible to read when it went wrong.
+//
+// THE THREE RUNNING TOTALS ARE THE WHOLE DIFFICULTY, and they are the reason this
+// is not simply "call it twice". A chunk's `consts_first` is where the previous
+// chunk's range ended, counted from the FIRST chunk of the region rather than of
+// the batch. Shared data is re-seeded on every call, so nothing survives from one
+// batch to the next: the carry has to come in as an argument and go out as an
+// answer the host can relay. A batch that restarted its accumulators at zero
+// would emit a structurally valid region in which every range after the first
+// batch points at the wrong place.
+//
+// `first` is a RECORD index, not a byte offset, so the caller does not have to
+// know the stride. Record `j` of this batch is record `first + j` of the region.
+fn emit_chunks_batch(at: Word, n: Word, first: Word, c0: Word, t0: Word, p0: Word) -> Word {
     if n > ck_max() { 0 - 260 } else {
-        ck.consts = 0;
-        ck.templates = 0;
-        ck.ptypes = 0;
-        for j in 0..n limit 90 {
-            put_u32(at + (j * chunk_stride()) + chunk_off_name(), ck_in(j, 0));
+        ck.consts = c0;
+        ck.templates = t0;
+        ck.ptypes = p0;
+        for i in 0..n limit 90 {
+            ck.j = first + i;
+            put_u32(at + (ck.j * chunk_stride()) + chunk_off_name(), ck_in(i, 0));
             // Each `first` is written BEFORE its accumulator advances: a chunk's
             // range starts where the previous chunk's ended.
-            put_u32(at + (j * chunk_stride()) + chunk_off_consts_first(), ck.consts);
-            put_u32(at + (j * chunk_stride()) + chunk_off_consts_count(), ck_in(j, 1));
-            ck.consts = ck.consts + ck_in(j, 1);
-            put_u32(at + (j * chunk_stride()) + chunk_off_templates_first(), ck.templates);
-            put_u32(at + (j * chunk_stride()) + chunk_off_templates_count(), ck_in(j, 2));
-            ck.templates = ck.templates + ck_in(j, 2);
-            put_u32(at + (j * chunk_stride()) + chunk_off_param_types_first(), ck.ptypes);
-            put_u32(at + (j * chunk_stride()) + chunk_off_param_types_count(), ck_in(j, 3));
-            ck.ptypes = ck.ptypes + ck_in(j, 3);
-            put_u32(at + (j * chunk_stride()) + chunk_off_debug_first(), ck_in(j, 4));
-            put_u32(at + (j * chunk_stride()) + chunk_off_debug_len(), ck_in(j, 5));
-            put_u32(at + (j * chunk_stride()) + chunk_off_op_byte_offset(), ck_in(j, 6));
-            put_u32(at + (j * chunk_stride()) + chunk_off_op_record_count(), ck_in(j, 7));
-            put_u16(at + (j * chunk_stride()) + chunk_off_local_count(), ck_in(j, 8));
-            put_u8(at + (j * chunk_stride()) + chunk_off_param_count(), ck_in(j, 9));
-            put_u8(at + (j * chunk_stride()) + chunk_off_block_type(), ck_in(j, 10));
+            put_u32(at + (ck.j * chunk_stride()) + chunk_off_consts_first(), ck.consts);
+            put_u32(at + (ck.j * chunk_stride()) + chunk_off_consts_count(), ck_in(i, 1));
+            ck.consts = ck.consts + ck_in(i, 1);
+            put_u32(at + (ck.j * chunk_stride()) + chunk_off_templates_first(), ck.templates);
+            put_u32(at + (ck.j * chunk_stride()) + chunk_off_templates_count(), ck_in(i, 2));
+            ck.templates = ck.templates + ck_in(i, 2);
+            put_u32(at + (ck.j * chunk_stride()) + chunk_off_param_types_first(), ck.ptypes);
+            put_u32(at + (ck.j * chunk_stride()) + chunk_off_param_types_count(), ck_in(i, 3));
+            ck.ptypes = ck.ptypes + ck_in(i, 3);
+            put_u32(at + (ck.j * chunk_stride()) + chunk_off_debug_first(), ck_in(i, 4));
+            put_u32(at + (ck.j * chunk_stride()) + chunk_off_debug_len(), ck_in(i, 5));
+            put_u32(at + (ck.j * chunk_stride()) + chunk_off_op_byte_offset(), ck_in(i, 6));
+            put_u32(at + (ck.j * chunk_stride()) + chunk_off_op_record_count(), ck_in(i, 7));
+            put_u16(at + (ck.j * chunk_stride()) + chunk_off_local_count(), ck_in(i, 8));
+            put_u8(at + (ck.j * chunk_stride()) + chunk_off_param_count(), ck_in(i, 9));
+            put_u8(at + (ck.j * chunk_stride()) + chunk_off_block_type(), ck_in(i, 10));
         }
         n * chunk_stride()
     }
 }
 
+// The single-batch case, unchanged in meaning: start at record zero with every
+// accumulator at zero. Kept as its own name so slice 14's callers and tests are
+// untouched by the batching that wraps them.
+fn emit_chunks_computed(at: Word, n: Word) -> Word {
+    emit_chunks_batch(at, n, 0, 0, 0, 0)
+}
+
 fn ck_emit() -> Word {
     if dir_find(kind_chunks()) < 0 { 0 - 261 } else {
         emit_chunks_computed(region_base(dir_find(kind_chunks())), wire.warg) }
+}
+
+// One batch, positioned by `first` and seeded by the three carries.
+fn ck_emit_batch() -> Word {
+    if dir_find(kind_chunks()) < 0 { 0 - 261 } else {
+        emit_chunks_batch(region_base(dir_find(kind_chunks())), wire.warg, wire.warg2,
+                          wire.warg3, wire.warg4, wire.warg5) }
+}
+
+// The carry OUT of the same batch, one command per accumulator.
+//
+// Three commands rather than one returning a triple, and a re-run rather than
+// retained state, both for the reason `intern_pool_len` gives: a call returns one
+// word, and shared data is re-seeded on the next call, so the emitter's totals
+// cannot persist for the host to read. Re-running is not a second answer to the
+// same question -- the emitter is a pure function of its input and carries.
+//
+// The host must NOT compute these by summing the counts it passed in. That is the
+// accumulation this slice exists to move onto the Keleusma side, and a host that
+// did it would leave the batched path testing nothing the single-batch path did
+// not already cover.
+fn ck_carry_consts() -> Word {
+    ck.sink = ck_emit_batch();
+    if ck.sink < 0 { ck.sink } else { ck.consts }
+}
+
+fn ck_carry_templates() -> Word {
+    ck.sink = ck_emit_batch();
+    if ck.sink < 0 { ck.sink } else { ck.templates }
+}
+
+fn ck_carry_ptypes() -> Word {
+    ck.sink = ck_emit_batch();
+    if ck.sink < 0 { ck.sink } else { ck.ptypes }
 }
 
 // ---------------------------------------------------------------------------
@@ -3507,7 +3573,11 @@ fn dispatch_driver2(cmd: Word) -> Word {
     if cmd == 153 { sq_poollen() } else {
     if cmd == 154 { sq_emit_names() } else {
     if cmd == 155 { sq_emit_pool() } else {
-    0 - 98 }}}}
+    if cmd == 156 { ck_emit_batch() } else {
+    if cmd == 157 { ck_carry_consts() } else {
+    if cmd == 158 { ck_carry_templates() } else {
+    if cmd == 159 { ck_carry_ptypes() } else {
+    0 - 98 }}}}}}}}
 }
 
 fn dispatch_driver(cmd: Word) -> Word {
@@ -3537,7 +3607,7 @@ fn dispatch_driver(cmd: Word) -> Word {
 // UNREACHABLE and its own test fails immediately. The fall-through sweep reads
 // this value out of the source instead of restating a bound, which is what it
 // did for four consecutive slices — and got wrong once.
-fn highest_command() -> Word { 155 }
+fn highest_command() -> Word { 159 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {
