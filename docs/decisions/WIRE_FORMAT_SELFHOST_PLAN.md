@@ -806,6 +806,73 @@ and false of slice 13b, and the difference is exactly the property the new slice
 noting as a pattern: **a justification carried forward with the code it justified is the easiest kind
 of stale documentation to produce**, because nothing about the move looks like an edit.
 
+**ALL FOUR ASSUMPTIONS ARE NOW MEASURED, AND ALL FOUR HOLD (2026-08-11).** Probed before writing
+any of the slice, which is the discipline the flattener error bought:
+
+| # | Assumption | Verdict |
+|---|---|---|
+| 1 | a string can sit at a CHILD position | **YES** — `const data k { t: (Text, Word) = ("hi", 1) }` gives `Tuple[Str("hi"), Int(1)]`, and `(Word, Text)` puts it second |
+| 2 | `Text` is admissible in `const data` | **YES**. The two cases that produced nothing were simply UNREFERENCED, so never reached a chunk pool — not a `Text` restriction |
+| 3 | a struct interns its type name before its fields | **YES** — `names = ["main","take","Zed","alpha","beta"]`, `type_name = 2`, `field_names_first = 3` |
+| 4 | child-position strings are constructible | **YES**, including `Struct P{s:Str,n:Int}` |
+
+**AND THE VACUITY CHECK, APPLIED BEFORE writing the case list rather than after.** `Tuple[Str, Int]`
+visits the string first under BOTH walks, so it proves nothing about interning ORDER — the same trap
+four of the flattener's five cases fell into. The discriminating case needs two strings at different
+depths:
+
+```
+const data k { t: ((Text, Word), Text) = (("aaa", 1), "bbb") }
+  ->  Tuple[Tuple[Str("aaa"), Int(1)], Str("bbb")]
+  breadth-first: outer, inner, "bbb", "aaa", 1   ->  pool "bbbaaa"
+  depth-first:   outer, inner, "aaa", 1, "bbb"   ->  pool "aaabbb"
+```
+
+**Different `STRING_POOL` bytes, so the coupling is observable** and the slice can start at
+`STATIC_STR` as planned rather than falling back to `STRUCT`.
+
+**Two incidental grammar findings.** Chained tuple indexing `k.t.0.1` is NOT admitted ("expected
+field name or tuple index after '.'"); reference a nested tuple by passing it to a function instead.
+And an unreferenced `const data` field never reaches a chunk's constant pool at all, which is why
+two probe cases looked like `Text` failures and were not.
+
+~~**THE UNMEASURED ASSUMPTIONS IN THIS DESIGN, listed so they are probed rather than built on.**~~ The
+flattener's "needs hand-built constant trees" error came from treating a reading-derived inference as
+a measurement, and this design contains four more inferences of the same kind. Each is cheap to
+settle and none has been:
+
+| # | Assumption | Basis | Consequence if wrong |
+|---|---|---|---|
+| 1 | `const data k { t: (Text, Word) = ("hi", 1) }` compiles and yields `Tuple[StaticStr, Int]` | read from `const_value_from_literal_for_field`, which maps `(Literal::String, PrimType::Text)` and recurses through tuple initialisers | **the whole reason 13b's coupling is testable disappears** — a `StaticStr` only ever at root position means depth-first and breadth-first interning coincide, and the slice's central property becomes unobservable, exactly like the flattener's four vacuous cases |
+| 2 | `Text` is admissible in a `const data` field at all | `PrimType::Text` exists and `flat_byte_size` treats it as flat at a 64-bit word | as above; `Text` may be a retired surface even though the type survives (the V0.1.x `text` DSL is gone) |
+| 3 | A struct node interns `type_name`, THEN captures `field_names_first`, THEN each field fresh | read at `wire_schema.rs:412-442` | every struct whose type name is new is off by one, and only those — a corpus with familiar type names would hide it |
+| 4 | A `STATIC_STR` can appear at a child position often enough to matter | follows from 1 | if it is rare, the case list needs constructing rather than sampling |
+
+**Probe 1 first and let its answer size the slice.** If a string cannot sit inside a composite, the
+`STATIC_STR` step buys almost nothing on its own and the decomposition should start at `STRUCT`,
+where `STRUCT_AUX` and the contiguous field-name run make the coupling observable regardless — that
+path is already measured (`STRUCT_AUX` is 1 at depth 1 and 2 at depth 2).
+
+**A smaller thing to fix on the next touch**: `emit_pool_bytes_from_bout` guards with
+`n > bin_capacity()`. The bound is numerically right, since both buffers are 8192, but it names the
+wrong buffer — the kind of coincidence that stops being true the day one of them is resized.
+
+**A LATENT DEFECT IN 13b-i, FOUND BY READING IT BACK (2026-08-11).** The counting pass writes
+throwaway `CONSTS` records at `fx_scratch()` = 32768, and `fx_emit_names`/`fx_emit_pool` run it
+**while an artifact is already seeded in `wire.bytes`**. Nothing stopped those records landing inside
+a live artifact once one reached 32768 bytes.
+
+**It cannot fire on the current corpus**, whose artifacts run to about a kilobyte — which is the
+reason it needed a guard rather than a note. A hazard that the present tests cannot reach is one
+that ships. `wire.len` carries the seeded length, so the check costs one comparison and returns
+`-252`.
+
+That is the third defect this arc that reading found and a green suite could not: the unvalidated
+node count, a guard placed where its own test could not reach it, and now this. **The common shape
+is that all three are about inputs the corpus does not produce** — which is the same lesson as
+"real compiler output is a strong oracle for volume and a weak one for variety", arriving from the
+other direction.
+
 **Suggested decomposition**, smallest first, since the whole thing is larger than any slice so far:
 
 1. `STATIC_STR` alone — one intern per node, no side table, no contiguous run. Establishes the
