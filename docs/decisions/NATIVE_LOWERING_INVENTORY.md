@@ -8,6 +8,60 @@ actually costs. Written 2026-08-08 at the point 22 of 66 opcodes lower.
 This is a scoping document, not a design. Where a group needs a real design it
 says so and stops, rather than sketching one that has not been probed.
 
+---
+
+## READ THIS FIRST: what is currently true
+
+**This document is append-only and CONTRADICTS ITSELF BY DESIGN.** Later sections
+correct earlier ones. That is deliberate — a superseded claim and the evidence
+that killed it are both worth keeping — but it has a failure mode that has now
+bitten twice: **a reader meets the stale version first**, because it is earlier in
+the file.
+
+Two individual claims carry inline forward pointers. That does not scale, and it
+only helps a reader who happens to land on the exact line. This section is the
+structural fix. **Where it disagrees with anything below, this section wins.**
+
+### Settled by measurement or derivation
+
+| Claim | How | Superseded |
+|---|---|---|
+| **`wcet_stream_iteration` computes NO segments** | read the function body | the rotation design's "fact 4" |
+| **The degenerate stream form needs ONE entry point** | derived from `Vm::resume_after_enter` | "two entry points, `init` and `step`" |
+| **8 of 10 self-hosted stages are degenerate**, 1 delegated, 1 nested | read all ten `loop` blocks | "the stages are composite-heavy" |
+| **A degenerate chunk is `Stream ; body ; Yield ; PopN(1) ; Reset`** | derived from the emission path | — |
+| **A multiheaded stream chunk can never be degenerate** | its dispatch is wrapped in `Loop`/`EndLoop` | — |
+| **The data segment already persists across `step`** | both regions are host-owned pointer parameters | "unverified interaction" |
+| **A stream chunk delegates a suspension iff it directly calls a non-`Func` chunk** | `category_can_call` enforces `Fn => Fn` | a call-graph walk, and `compute_always_yielding` |
+| **`compute_always_yielding` is NOT usable here** | behind `cfg(feature = "verify")`, which this package does not enable | "expected to be reachable" |
+| **Composite constants: 0. Fixed-point opcodes: 0.** | corpus counts | "composite constants may be common" |
+| **`verify()` now REJECTS a chunk that can run off its end** | the `v0.2.3` fix, landed | "`verify()` admits it" — true when measured |
+
+### Open, and what would settle each
+
+| Question | Settled by | Status |
+|---|---|---|
+| Does handling `Stream` alone unblock the stages? | `pending/spike_stream_sufficiency.rs` | **written, never run** |
+| Is the degenerate form observationally equivalent? | `tests/yield_sequence.rs` equivalence cases | written, never run |
+| Does the lowering survive `default<O2>`? | `pending/o2_differential_arm.rs` | written, never run |
+| Can inkwell DECLARE `coro.id.retcon`? | `pending/retcon_declarability.rs` | written, never run |
+
+**Nothing in `native_codegen/pending/` has ever been compiled.** Five artefacts,
+and the admissibility predicate among them has already been wrong twice — once
+unsound, once uncompilable — both caught by reading rather than by running. Treat
+the queue as reasoned, not verified.
+
+### The standing hazard
+
+**The ephemeral arena region has no native analogue.** Harmless only because a
+body allocating ephemeral composites needs composite lowering, which does not
+exist, so such a chunk is refused before the question arises. When composites
+land, a degenerate `step` that allocates without reclaiming leaks once per
+iteration — a worst-case-memory unsoundness, not a performance issue. **This is a
+precondition on composite lowering, not a note.**
+
+---
+
 ## The target set is the whole instruction set
 
 Measured rather than assumed: **all 66 `Op` variants are emitted by the
