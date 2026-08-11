@@ -2753,6 +2753,10 @@ private data fl {
     tn: Word,
     // The name index the field run starts at.
     ffirst: Word,
+    // Running `ENUM_AUX` index, and where those records go. Same shape as the
+    // struct pair, and separate from it because the two tables are independent.
+    eaux: Word,
+    eauxat: Word,
 }
 
 // `wire.fin` holds six words per node, so 1024 words is 170 nodes. A STATED cap:
@@ -2783,7 +2787,8 @@ fn fl_disc_of(p: Word) -> Word { wire.fin[(p * fl_fields()) + 5] }
 fn fl_tag_has_range(t: Word) -> Word {
     if t == tag_tuple() { 1 } else {
     if t == tag_array() { 1 } else {
-    if t == tag_struct() { 1 } else { 0 } } }
+    if t == tag_struct() { 1 } else {
+    if t == tag_enum() { 1 } else { 0 } } } }
 }
 
 // Slice 13b's scope: everything slice 13 admits, plus `STATIC_STR`, which
@@ -2795,7 +2800,40 @@ fn fl_tag_has_range(t: Word) -> Word {
 // record citing index 0, which is a plausible wrong answer rather than a refusal.
 fn fx_tag_in_scope(t: Word) -> Word {
     if t == tag_static_str() { 1 } else {
-    if t == tag_struct() { 1 } else { fl_tag_in_scope(t) } }
+    if t == tag_struct() { 1 } else {
+    if t == tag_enum() { 1 } else { fl_tag_in_scope(t) } } }
+}
+
+// Intern an enum node's two names and write its `ENUM_AUX` record. Returns the
+// aux index the `CONSTS` record must cite.
+//
+// BOTH NAMES DEDUP, unlike a struct's field run. Nothing addresses a variant by
+// `first + i`, so there is no contiguity to protect and `intern` is correct for
+// both. Getting this backwards would append duplicates that the reference
+// shares — the mirror image of the struct case, and the reason the two are
+// separate functions rather than one parameterised by mode.
+//
+// The discriminant is written UNCONDITIONALLY, but it is meaningful only when
+// the record carries `FLAG_HAS_DISCRIMINANT`. A bare zero here is not the same
+// as `Some(0)`, which is why the flag rides the CONSTS record rather than being
+// inferred from the value.
+fn fx_enum_aux(p: Word) -> Word {
+    fl.tn = nm_intern_at(fl_names_first_of(p));
+    fl.ffirst = nm_intern_at(fl_names_first_of(p) + 1);
+    put_u32(
+        fl.eauxat + (fl.eaux * enumaux_stride()) + enumaux_off_type_name(),
+        fl.tn,
+    );
+    put_u32(
+        fl.eauxat + (fl.eaux * enumaux_stride()) + enumaux_off_variant(),
+        fl.ffirst,
+    );
+    put_u64(
+        fl.eauxat + (fl.eaux * enumaux_stride()) + enumaux_off_discriminant(),
+        fl_disc_of(p),
+    );
+    fl.eaux = fl.eaux + 1;
+    fl.eaux - 1
 }
 
 // Intern a struct node's names and write its `STRUCT_AUX` record. Returns the
@@ -2944,7 +2982,13 @@ fn fl_cover(nroots: Word, nnodes: Word) -> Word {
 // Write the record for the node at queue position `head`.
 fn fl_put_record(at: Word, head: Word) -> Word {
     put_u16(at + (head * const_stride()) + const_off_tag(), fl_tag_of(wire.fq[head]));
-    put_u16(at + (head * const_stride()) + const_off_flags(), 0);
+    // Only an enum sets a flag today, and it comes from the node record rather
+    // than being inferred from the discriminant VALUE: `Some(0)` and `None`
+    // both present as zero, and only the flag separates them.
+    put_u16(
+        at + (head * const_stride()) + const_off_flags(),
+        fl_flags_of(wire.fq[head]),
+    );
     // A `STATIC_STR`'s `aux` is its NAME INDEX, and interning it HERE is what
     // couples the two computed values: the walk reaches nodes breadth-first, so
     // the name sequence is a function of that order rather than of the input
@@ -2956,7 +3000,10 @@ fn fl_put_record(at: Word, head: Word) -> Word {
         } else {
         if fl_tag_of(wire.fq[head]) == tag_struct() {
             fx_struct_aux(wire.fq[head])
-        } else { 0 } },
+        } else {
+        if fl_tag_of(wire.fq[head]) == tag_enum() {
+            fx_enum_aux(wire.fq[head])
+        } else { 0 } } },
     );
     put_u64(
         at + (head * const_stride()) + const_off_payload(),
@@ -3005,6 +3052,7 @@ fn flatten_emit_consts(nroots: Word, nnodes: Word) -> Word {
     // aux base must still point somewhere harmless rather than at address 0.
 
         fl.sauxat = fx_scratch_aux();
+        fl.eauxat = fx_scratch_eaux();
         fl_walk(region_base(dir_find(kind_consts())), nroots, nnodes) } } } } } }
 }
 
@@ -3044,9 +3092,13 @@ fn fx_scratch() -> Word { 32768 }
 // throwaway `CONSTS` records overwritten by its own throwaway aux records.
 fn fx_scratch_aux() -> Word { 40960 }
 
+// A third scratch window, for `ENUM_AUX` when it is not being emitted.
+fn fx_scratch_eaux() -> Word { 49152 }
+
 // Seed the interner with the prefix, leaving it ready for the walk.
 fn fx_seed() -> Word {
     fl.saux = 0;
+    fl.eaux = 0;
     nm.ocur = 0;
     nm.cnt = 0;
     nm.err = 0;
@@ -3094,6 +3146,7 @@ fn fx_run(at: Word) -> Word {
 // Deterministic re-runs of one function, not three answers to one question.
 fn fx_names() -> Word {
     fl.sauxat = fx_scratch_aux();
+    fl.eauxat = fx_scratch_eaux();
     fl.rc = fx_run(fx_scratch());
     if fl.rc < 0 { fl.rc } else { nm.cnt }
 }
@@ -3102,6 +3155,7 @@ fn fx_names() -> Word {
 // relays back before the directory can be laid.
 fn fx_saux_count() -> Word {
     fl.sauxat = fx_scratch_aux();
+    fl.eauxat = fx_scratch_eaux();
     fl.rc = fx_run(fx_scratch());
     if fl.rc < 0 { fl.rc } else { fl.saux }
 }
@@ -3109,12 +3163,14 @@ fn fx_saux_count() -> Word {
 fn fx_emit_saux() -> Word {
     if dir_find(kind_struct_aux()) < 0 { 0 - 253 } else {
         fl.sauxat = region_base(dir_find(kind_struct_aux()));
+        fl.eauxat = fx_scratch_eaux();
         fl.rc = fx_run(fx_scratch());
         if fl.rc < 0 { fl.rc } else { fl.saux * structaux_stride() } }
 }
 
 fn fx_poollen() -> Word {
     fl.sauxat = fx_scratch_aux();
+    fl.eauxat = fx_scratch_eaux();
     fl.rc = fx_run(fx_scratch());
     if fl.rc < 0 { fl.rc } else { nm.ocur }
 }
@@ -3122,11 +3178,13 @@ fn fx_poollen() -> Word {
 fn fx_emit_consts() -> Word {
     if dir_find(kind_consts()) < 0 { 0 - 247 } else {
         fl.sauxat = fx_scratch_aux();
+        fl.eauxat = fx_scratch_eaux();
         fx_run(region_base(dir_find(kind_consts()))) }
 }
 
 fn fx_emit_names() -> Word {
     fl.sauxat = fx_scratch_aux();
+    fl.eauxat = fx_scratch_eaux();
     fl.rc = fx_run(fx_scratch());
     if fl.rc < 0 { fl.rc } else {
     if dir_find(kind_names()) < 0 { 0 - 233 } else {
@@ -3135,11 +3193,27 @@ fn fx_emit_names() -> Word {
 
 fn fx_emit_pool() -> Word {
     fl.sauxat = fx_scratch_aux();
+    fl.eauxat = fx_scratch_eaux();
     fl.rc = fx_run(fx_scratch());
     if fl.rc < 0 { fl.rc } else {
     if dir_find(kind_string_pool()) < 0 { 0 - 234 } else {
         emit_pool_bytes_from_bout(region_base(dir_find(kind_string_pool())), nm.ocur)
             + emit_pool_pad(region_base(dir_find(kind_string_pool())) + nm.ocur, nm.ocur) } }
+}
+
+fn fx_eaux_count() -> Word {
+    fl.sauxat = fx_scratch_aux();
+    fl.eauxat = fx_scratch_eaux();
+    fl.rc = fx_run(fx_scratch());
+    if fl.rc < 0 { fl.rc } else { fl.eaux }
+}
+
+fn fx_emit_eaux() -> Word {
+    if dir_find(kind_enum_aux()) < 0 { 0 - 254 } else {
+        fl.sauxat = fx_scratch_aux();
+        fl.eauxat = region_base(dir_find(kind_enum_aux()));
+        fl.rc = fx_run(fx_scratch());
+        if fl.rc < 0 { fl.rc } else { fl.eaux * enumaux_stride() } }
 }
 
 fn dispatch_driver(cmd: Word) -> Word {
@@ -3158,7 +3232,9 @@ fn dispatch_driver(cmd: Word) -> Word {
     if cmd == 146 { fx_emit_pool() } else {
     if cmd == 147 { fx_saux_count() } else {
     if cmd == 148 { fx_emit_saux() } else {
-    0 - 97 }}}}}}}}}}}}}}}
+    if cmd == 149 { fx_eaux_count() } else {
+    if cmd == 150 { fx_emit_eaux() } else {
+    0 - 97 }}}}}}}}}}}}}}}}}
 }
 
 // THE HIGHEST LIVE COMMAND, AND IT IS LOAD-BEARING RATHER THAN DOCUMENTATION.
@@ -3166,7 +3242,7 @@ fn dispatch_driver(cmd: Word) -> Word {
 // UNREACHABLE and its own test fails immediately. The fall-through sweep reads
 // this value out of the source instead of restating a bound, which is what it
 // did for four consecutive slices — and got wrong once.
-fn highest_command() -> Word { 148 }
+fn highest_command() -> Word { 150 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {

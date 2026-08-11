@@ -7425,6 +7425,8 @@ const CMD_FX_EMIT_NAMES: i64 = 145;
 const CMD_FX_EMIT_POOL: i64 = 146;
 const CMD_FX_SAUX_COUNT: i64 = 147;
 const CMD_FX_EMIT_SAUX: i64 = 148;
+const CMD_FX_EAUX_COUNT: i64 = 149;
+const CMD_FX_EMIT_EAUX: i64 = 150;
 
 /// Sources whose constant forests contain strings. Every one is a real compiled
 /// module, so the oracle stays `encode_aux_body`.
@@ -7464,6 +7466,34 @@ const FX_CASES: &[(&str, &str)] = &[
         "struct P { x: Word, y: Word }\nstruct R { x: Word, z: Word }\n\
          const data k { t: (P, R) = (P { x: 1, y: 2 }, R { x: 3, z: 4 }) }\n\
          fn take(v: (P, R)) -> Word { 1 }\nfn main() -> Word { take(k.t) }",
+    ),
+    // --- slice 13b-iii: ENUM -------------------------------------------
+    // A unit variant. Two names, both deduping, and a discriminant that IS
+    // present — so FLAG_HAS_DISCRIMINANT must be set even though the value is
+    // an ordinary small integer.
+    (
+        "enum-unit-variant",
+        "enum E { A, B }\nconst data k { e: E = E::B }\n\
+         fn take(v: E) -> Word { 1 }\nfn main() -> Word { take(k.e) }",
+    ),
+    // A payload variant, so the enum node also carries a child range.
+    (
+        "enum-payload",
+        "enum E { A(Word), B }\nconst data k { e: E = E::A(7) }\n\
+         fn take(v: E) -> Word { 1 }\nfn main() -> Word { take(k.e) }",
+    ),
+    // AN EXPLICIT NEGATIVE DISCRIMINANT, which is why ENUM_AUX stores a signed
+    // 64-bit field and why the node record needed a column `payload` could not
+    // supply — a composite's payload is its child range.
+    //
+    // Written `-5`, not `0 - 5`: the discriminant clause takes a literal with an
+    // optional unary minus, and arithmetic there is rejected at parse with
+    // "expected type name" — a message that points at the right column with the
+    // wrong explanation.
+    (
+        "enum-negative-discriminant",
+        "enum E { A = -5, B = 3 }\nconst data k { e: E = E::A }\n\
+         fn take(v: E) -> Word { 1 }\nfn main() -> Word { take(k.e) }",
     ),
     // THE STRUCT-ORDER DISCRIMINATOR. A nested struct in a NON-LAST sibling
     // subtree, so the two walks visit the three structs in different orders:
@@ -7523,14 +7553,38 @@ fn preorder_13b(
                 children.extend(fields.iter().map(|(_, v)| v));
                 (10, 0, idx)
             }
+            // BOTH names dedup, unlike a struct's field run: nothing addresses
+            // a variant by `first + i`, so there is no contiguity to protect.
+            K::Enum {
+                type_name, variant, ..
+            } => {
+                let idx = (prefix_len + names.len()) as i64;
+                names.push((type_name.clone(), MODE_INTERN));
+                names.push((variant.clone(), MODE_INTERN));
+                if let K::Enum { fields, .. } = c {
+                    children.extend(fields.iter());
+                }
+                (11, 0, idx)
+            }
             other => panic!("outside slice 13b's scope: {other:?}"),
+        };
+        // FLAG_HAS_DISCRIMINANT and the discriminant itself. `Some(0)` and
+        // `None` both present as a zero VALUE, so only the flag separates them
+        // — which is why the flag is a column rather than something the walk
+        // infers.
+        let (flags, disc) = match c {
+            K::Enum {
+                discriminant: Some(d),
+                ..
+            } => (1_i64, *d),
+            _ => (0, 0),
         };
         fin.push(tag);
         fin.push(payload);
         fin.push(children.len() as i64);
         fin.push(names_first);
-        fin.push(0);
-        fin.push(0);
+        fin.push(flags);
+        fin.push(disc);
         for ch in children {
             go(ch, fin, names, prefix_len);
         }
@@ -7549,6 +7603,7 @@ fn string_orders(roots: &[keleusma::bytecode::ConstValue]) -> (Vec<String>, Vec<
         match c {
             K::Tuple(v) | K::Array(v) => v.iter().collect(),
             K::Struct { fields, .. } => fields.iter().map(|(_, v)| v).collect(),
+            K::Enum { fields, .. } => fields.iter().collect(),
             _ => Vec::new(),
         }
     }
@@ -7558,6 +7613,7 @@ fn string_orders(roots: &[keleusma::bytecode::ConstValue]) -> (Vec<String>, Vec<
         match c {
             K::StaticStr(s) => Some(s.clone()),
             K::Struct { type_name, .. } => Some(type_name.clone()),
+            K::Enum { type_name, .. } => Some(type_name.clone()),
             _ => None,
         }
     }
@@ -7693,6 +7749,15 @@ fn the_walk_interns_in_breadth_first_order() {
             plen, ref_pool_len as i64,
             "{label}: pool is {plen} bytes, the reference's {ref_pool_len}"
         );
+        let neaux = run_fx(&mut vm, CMD_FX_EAUX_COUNT, &inp);
+        let ref_eaux = view
+            .find_region(kind::ENUM_AUX)
+            .and_then(|r| view.records(&r, 16).ok())
+            .map_or(0, |t| t.len());
+        assert_eq!(
+            neaux, ref_eaux as i64,
+            "{label}: Keleusma counted {neaux} ENUM_AUX records, the reference {ref_eaux}"
+        );
         let nsaux = run_fx(&mut vm, CMD_FX_SAUX_COUNT, &inp);
         let ref_saux = view
             .find_region(kind::STRUCT_AUX)
@@ -7719,6 +7784,9 @@ fn the_walk_interns_in_breadth_first_order() {
             }
             if s.0 == kind::STRUCT_AUX {
                 s.2 = nsaux as usize;
+            }
+            if s.0 == kind::ENUM_AUX {
+                s.2 = neaux as usize;
             }
         }
 
@@ -7768,6 +7836,14 @@ fn the_walk_interns_in_breadth_first_order() {
             } else if *k == kind::STRING_POOL {
                 (
                     CMD_FX_EMIT_POOL,
+                    inp.fin.clone(),
+                    inp.nin.clone(),
+                    inp.bin.clone(),
+                    inp.args,
+                )
+            } else if *k == kind::ENUM_AUX {
+                (
+                    CMD_FX_EMIT_EAUX,
                     inp.fin.clone(),
                     inp.nin.clone(),
                     inp.bin.clone(),
