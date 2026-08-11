@@ -2292,9 +2292,39 @@ fn dispatch_emit(cmd: Word) -> Word {
 //
 // Nineteen arms is evidently near the practical ceiling for this chain shape, so
 // the driver starts a fresh one rather than borrowing the last slot.
+// Emit one region's payload INTO ITS PLACE in a partially built artifact.
+//
+// THE DRIVER'S SECOND PIECE. `build_region_table` computes the lengths and lays
+// the directory; this puts a region's records where that directory says they
+// go, by looking the region up rather than being handed an address.
+//
+// It exists because a whole artifact cannot be built in one call: the host
+// re-seeds shared data on every invocation, so the artifact is carried forward
+// as bytes between calls and each call fills in one more region. That is the
+// same staged shape the residency measurement forced for the large stages,
+// exercised here at a size where the whole thing fits.
+//
+// `region_base(dir_find(k))` is recomputed per arm rather than hoisted into
+// `st`, because `dir_find` writes `st.cur` itself and borrowing that field
+// would read as a bug to anyone tracing a lookup — the same reason `st.pad`
+// exists separately.
+fn emit_in_region(k: Word, n: Word) -> Word {
+    if dir_find(k) < 0 { 0 - 221 } else {
+    if k == kind_names() { emit_name_records(region_base(dir_find(k)), n) } else {
+    if k == kind_consts() { emit_const_records(region_base(dir_find(k)), n) } else {
+    if k == kind_shapes() { emit_shape_records(region_base(dir_find(k)), n) } else {
+    if k == kind_signatures() { emit_signature_records(region_base(dir_find(k)), n) } else {
+    if k == kind_chunks() { emit_chunk_records(region_base(dir_find(k)), n) } else {
+    if k == kind_header() { emit_header_record_at(region_base(dir_find(k))) } else {
+    if k == kind_string_pool() { emit_pool_bytes(region_base(dir_find(k)), n) } else {
+    if k == kind_param_types() { emit_pool_bytes(region_base(dir_find(k)), n) } else {
+    0 - 222 }}}}}}}}}
+}
+
 fn dispatch_driver(cmd: Word) -> Word {
     if cmd == 134 { build_region_table(wire.nregions) } else {
-    0 - 97 }
+    if cmd == 135 { emit_in_region(wire.warg, wire.warg2) } else {
+    0 - 97 }}
 }
 
 // THE HIGHEST LIVE COMMAND, AND IT IS LOAD-BEARING RATHER THAN DOCUMENTATION.
@@ -2302,7 +2332,7 @@ fn dispatch_driver(cmd: Word) -> Word {
 // UNREACHABLE and its own test fails immediately. The fall-through sweep reads
 // this value out of the source instead of restating a bound, which is what it
 // did for four consecutive slices — and got wrong once.
-fn highest_command() -> Word { 134 }
+fn highest_command() -> Word { 135 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {

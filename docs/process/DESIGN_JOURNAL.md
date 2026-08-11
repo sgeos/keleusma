@@ -13,6 +13,41 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**SLICE 11: KELEUSMA BUILDS A COMPLETE ARTIFACT, AND THE QUALIFIER MATTERS AS MUCH AS THE RESULT
+(2026-08-10).** 912 bytes, fifteen regions, directory and every payload, **byte-identical to
+`encode_aux_body`**. 116 tests. The first time the self-hosted path has produced a whole auxiliary
+body rather than a region of one.
+
+**The mechanism is host-carried bytes, and it is the staged design in miniature.** Shared data is
+re-seeded on every VM call, so nothing survives between them. The artifact is carried forward AS
+BYTES: each call re-seeds what exists so far, fills in one more region at the place the directory
+says it goes, and returns the result. That is exactly the shape the residency measurement forced for
+`lexer` — where the artifact cannot fit at all — exercised here at 1.4% of the buffer where it can.
+
+**New Keleusma is one function**: `emit_in_region(kind, n)`, which looks a region up in the emitted
+directory rather than being handed an address. `region_base(dir_find(k))` is recomputed per arm
+rather than cached in `st`, because `dir_find` writes `st.cur` itself; borrowing that field would
+read as a bug to anyone tracing a lookup, which is the same reason `st.pad` exists separately.
+
+**WHAT THIS DOES NOT CLAIM, WRITTEN BEFORE ANYONE HAS TO ASK.** The driver **re-emits values decoded
+from the reference; it does not compute them.** Interning, constant flattening and per-chunk range
+allocation are all still ahead. The honest sentence is "Keleusma emits a complete artifact
+byte-identically GIVEN THE VALUES", and the qualifier is load-bearing.
+
+I am attaching it deliberately, because two hours earlier I caught myself dropping exactly this kind
+of qualifier when three summaries promoted six derive-oracled region kinds to "real compiler
+output". The lesson from that was that a roll-up sentence loses what the detail records. A result
+worth reporting is exactly when that happens, so the qualifier goes in the headline rather than the
+footnote.
+
+**Controls**: the directory is compared BEFORE any payload is written, at least seven regions must
+carry a payload, and a must-fire control perturbs a record count and requires the directory to move.
+
+**Clippy caught dead code, not a style nit.** `0.min(i)` had no effect because the arm it sat in
+looped over kinds that return early above it, so its output could never contribute. Restructured
+with an early return and an explicit `panic!` for an unhandled kind rather than silenced.
+
+
 **AN OVER-CLAIM OF MY OWN, CAUGHT BY THE DISTINCTION I HAD JUST WRITTEN DOWN (2026-08-10).** Three
 separate summaries said every region kind is "emitted from real compiler output". **Six of the
 twenty are not.**

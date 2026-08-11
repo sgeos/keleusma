@@ -6156,3 +6156,270 @@ fn an_unknown_region_kind_is_reported_rather_than_sized_zero() {
         "an unknown region kind was not reported with its own code"
     );
 }
+
+// --- SLICE 11: a COMPLETE artifact, built by Keleusma -------------------------
+//
+// The driver's first end-to-end result. Every earlier slice emitted one region
+// in isolation; this builds a whole auxiliary body — directory and all fifteen
+// regions — and compares it byte for byte against `encode_aux_body`.
+//
+// WHY IT IS STAGED. Shared data is re-seeded on every VM call, so nothing
+// survives between them. The artifact is therefore carried forward AS BYTES:
+// each call re-seeds what exists so far, fills in one more region at the place
+// the directory says it goes, and hands the result back. That is the same
+// staged shape the residency measurement forced for `lexer`, exercised here at
+// a size where the whole artifact fits in the buffer — 912 bytes, 1.4% of it.
+
+/// Everything one driver call needs. A struct rather than nine arguments,
+/// because clippy is right about that and it reads better besides.
+struct Call<'a> {
+    cmd: i64,
+    nregions: i64,
+    seed: &'a [u8],
+    regions: &'a Regions,
+    fields: &'a [i64],
+    pool: &'a [u8],
+    args: [i64; 5],
+    read_len: usize,
+}
+
+fn run_call(vm: &mut Vm<'static, 'static>, c: &Call<'_>) -> Result<(i64, Vec<u8>), VmError> {
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.set_shared(&mut shared, 0, Value::Int(c.seed.len() as i64))?;
+    vm.set_shared(&mut shared, NREGIONS_SLOT, Value::Int(c.nregions))?;
+    for (i, a) in c.args.iter().enumerate() {
+        vm.set_shared(&mut shared, WARG_SLOT + i, Value::Int(*a))?;
+    }
+    for (i, b) in c.seed.iter().enumerate() {
+        vm.set_shared(&mut shared, 1 + i, Value::Byte(*b))?;
+    }
+    for (i, (kind, flags, len, covers)) in c.regions.iter().enumerate() {
+        vm.set_shared(&mut shared, RKIND_SLOT + i, Value::Int(i64::from(*kind)))?;
+        vm.set_shared(&mut shared, RFLAGS_SLOT + i, Value::Int(i64::from(*flags)))?;
+        vm.set_shared(&mut shared, RLEN_SLOT + i, Value::Int(*len as i64))?;
+        vm.set_shared(
+            &mut shared,
+            RCOVERS_SLOT + i,
+            Value::Int(i64::from(*covers)),
+        )?;
+    }
+    for (i, v) in c.fields.iter().enumerate() {
+        vm.set_shared(&mut shared, FIN_SLOT + i, Value::Int(*v))?;
+    }
+    for (i, b) in c.pool.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(*b))?;
+    }
+    let ret = match vm.call_with_shared(&mut shared, &[Value::Int(c.cmd)])? {
+        VmState::Finished(Value::Int(n)) => n,
+        other => panic!("unexpected VM state: {other:?}"),
+    };
+    let n = c.read_len.min(CAPACITY);
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        match vm.get_shared(&shared, 1 + i)? {
+            Value::Byte(b) => out.push(b),
+            other => panic!("slot {i} is not a Byte: {other:?}"),
+        }
+    }
+    Ok((ret, out))
+}
+
+/// Decode one region of a reference artifact into the field rows the matching
+/// Keleusma emitter consumes, in declaration order.
+fn rows_for_kind(view: &keleusma_wire::WireView<'_>, kind: u16) -> Vec<Vec<i64>> {
+    use keleusma::wire_schema as w;
+    let Some(region) = view.find_region(kind) else {
+        return Vec::new();
+    };
+    let stride = match kind {
+        w::kind::NAMES | w::kind::SHAPES => 8,
+        w::kind::CHUNKS => 48,
+        w::kind::HEADER => 32,
+        _ => 16,
+    };
+    let Ok(t) = view.records(&region, stride) else {
+        return Vec::new();
+    };
+    // The kinds slice 7 already decodes, handled whole rather than per index.
+    // The first version looped over them too and then discarded the result,
+    // which clippy caught as dead code — correctly, since the loop body could
+    // never contribute.
+    if matches!(
+        kind,
+        w::kind::SHAPES
+            | w::kind::SIGNATURES
+            | w::kind::CONSTS
+            | w::kind::ENUM_VARIANTS
+            | w::kind::ENUM_LAYOUTS
+            | w::kind::DATA_INIT
+    ) {
+        return decode_slice7(kind, &t);
+    }
+    let mut out = Vec::with_capacity(t.len());
+    for i in 0..t.len() {
+        out.push(match kind {
+            k if k == w::kind::NAMES => {
+                let r: w::NameRef = t.get_as(i).expect("rec");
+                vec![i64::from(r.offset), i64::from(r.length)]
+            }
+            k if k == w::kind::CHUNKS => {
+                let c: w::ChunkRecord = t.get_as(i).expect("rec");
+                vec![
+                    i64::from(c.name),
+                    i64::from(c.consts_first),
+                    i64::from(c.consts_count),
+                    i64::from(c.templates_first),
+                    i64::from(c.templates_count),
+                    i64::from(c.param_types_first),
+                    i64::from(c.param_types_count),
+                    i64::from(c.debug_first),
+                    i64::from(c.debug_len),
+                    i64::from(c.op_byte_offset),
+                    i64::from(c.op_record_count),
+                    i64::from(c.local_count),
+                    i64::from(c.param_count),
+                    i64::from(c.block_type),
+                ]
+            }
+            k if k == w::kind::HEADER => {
+                let h: w::HeaderRecord = t.get_as(i).expect("rec");
+                vec![
+                    i64::from(h.entry_point),
+                    i64::from(h.word_bits_log2),
+                    i64::from(h.addr_bits_log2),
+                    i64::from(h.float_bits_log2),
+                    i64::from(h.flags),
+                    i64::from(h.wcet_cycles),
+                    i64::from(h.wcmu_bytes),
+                    i64::from(h.shared_data_bytes),
+                    i64::from(h.private_data_bytes),
+                    i64::from(h.schema_hash),
+                    i64::from(h.reserved),
+                ]
+            }
+            other => panic!("rows_for_kind has no decoder for {other:#06x}"),
+        });
+    }
+    out
+}
+
+const CMD_EMIT_IN_REGION: i64 = 135;
+
+#[test]
+fn keleusma_builds_a_complete_minimal_artifact_byte_for_byte() {
+    use keleusma::wire_schema::kind;
+    let mut vm = vm_for(WIRE_KEL);
+
+    let module =
+        compile(&parse(&tokenize("fn main() -> Word { 42 }").expect("lex")).expect("parse"))
+            .expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+
+    let specs = region_counts_for(&want);
+    let total = want.len();
+    assert!(
+        total < CAPACITY,
+        "this slice needs the whole artifact to fit; it is {total} bytes"
+    );
+
+    // Step 1: the directory, with lengths derived from counts by Keleusma.
+    let (_, mut art) = run_call(
+        &mut vm,
+        &Call {
+            cmd: CMD_BUILD_REGION_TABLE,
+            nregions: specs.len() as i64,
+            seed: &[],
+            regions: &specs,
+            fields: &[],
+            pool: &[],
+            args: [0, 0, 0, 0, 0],
+            read_len: total,
+        },
+    )
+    .expect("run");
+    assert_eq!(
+        art[..header_len(specs.len())],
+        want[..header_len(specs.len())],
+        "the directory differs before any payload was written"
+    );
+
+    // Steps 2..N: one region per call, carrying the artifact forward as bytes.
+    let mut filled = 0;
+    for (k, _, _, _) in &specs {
+        let region = view.find_region(*k).expect("region");
+        let stored = view.region_bytes(&region).expect("payload");
+        if stored.is_empty() {
+            continue;
+        }
+        let is_pool = matches!(*k, kind::STRING_POOL | kind::PARAM_TYPES | kind::DEBUG_POOL);
+        let rows = if is_pool {
+            Vec::new()
+        } else {
+            rows_for_kind(&view, *k)
+        };
+        let flat: Vec<i64> = rows.iter().flatten().copied().collect();
+        let n = if is_pool { stored.len() } else { rows.len() };
+
+        let (ret, next) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_EMIT_IN_REGION,
+                nregions: specs.len() as i64,
+                seed: &art,
+                regions: &specs,
+                fields: &flat,
+                pool: stored,
+                args: [i64::from(*k), n as i64, 0, 0, 0],
+                read_len: total,
+            },
+        )
+        .expect("run");
+        assert!(ret >= 0, "region {k:#06x} was refused with code {ret}");
+        art = next;
+        filled += 1;
+    }
+
+    assert!(filled >= 7, "only {filled} regions carried a payload");
+    assert_eq!(
+        art, want,
+        "the artifact Keleusma built differs from the reference"
+    );
+}
+
+/// Must-fire: the whole-artifact comparison must be able to report a difference.
+#[test]
+fn the_complete_artifact_comparison_reports_a_perturbation() {
+    let mut vm = vm_for(WIRE_KEL);
+    let module =
+        compile(&parse(&tokenize("fn main() -> Word { 42 }").expect("lex")).expect("parse"))
+            .expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let mut specs = region_counts_for(&want);
+
+    // One extra record in the first non-empty region shifts every later offset.
+    let idx = specs
+        .iter()
+        .position(|(_, _, n, _)| *n > 0)
+        .expect("a region");
+    specs[idx].2 += 1;
+    let (_, got) = run_call(
+        &mut vm,
+        &Call {
+            cmd: CMD_BUILD_REGION_TABLE,
+            nregions: specs.len() as i64,
+            seed: &[],
+            regions: &specs,
+            fields: &[],
+            pool: &[],
+            args: [0, 0, 0, 0, 0],
+            read_len: want.len(),
+        },
+    )
+    .expect("run");
+    assert_ne!(
+        got[..header_len(specs.len())],
+        want[..header_len(specs.len())],
+        "control did not fire: a perturbed count left the directory unchanged"
+    );
+}
