@@ -93,6 +93,18 @@ const FIN_CAPACITY: usize = 1024;
 const BIN_SLOT: usize = FIN_SLOT + FIN_CAPACITY;
 const BIN_CAPACITY: usize = 8192;
 
+/// The flattener's scratch, `fq` and `fsz`, sits between `bin` and the
+/// interner's channels. Nothing seeds it — it is written by the walk — but it
+/// occupies slots, so the constants below must step over it. Spelled as two
+/// named lengths rather than one number, because a bare `2048` here is the kind
+/// of unexplained offset that survives a later array being resized.
+const FQ_CAPACITY: usize = 1024;
+const FSZ_CAPACITY: usize = 1024;
+/// The interner's (length, mode) input, split off `fin` in slice 13b so the
+/// flattener can own `fin` for its six-word-per-node preorder.
+const NIN_SLOT: usize = BIN_SLOT + BIN_CAPACITY + FQ_CAPACITY + FSZ_CAPACITY;
+const NIN_CAPACITY: usize = 1024;
+
 /// Build a `Vm` over `src` with a persistent region sized for its private data.
 ///
 /// Omitting the persistent sizing makes every module with a `private data` block
@@ -6178,6 +6190,9 @@ struct Call<'a> {
     seed: &'a [u8],
     regions: &'a Regions,
     fields: &'a [i64],
+    /// The interner's (length, mode) pairs, seeded into `nin`. Separate from
+    /// `fields` because slice 13b gives the interner its own channel.
+    names: &'a [i64],
     pool: &'a [u8],
     args: [i64; 5],
     read_len: usize,
@@ -6205,6 +6220,14 @@ fn run_call(vm: &mut Vm<'static, 'static>, c: &Call<'_>) -> Result<(i64, Vec<u8>
     }
     for (i, v) in c.fields.iter().enumerate() {
         vm.set_shared(&mut shared, FIN_SLOT + i, Value::Int(*v))?;
+    }
+    assert!(
+        c.names.len() <= NIN_CAPACITY,
+        "interner input is {} words, capacity is {NIN_CAPACITY}",
+        c.names.len()
+    );
+    for (i, v) in c.names.iter().enumerate() {
+        vm.set_shared(&mut shared, NIN_SLOT + i, Value::Int(*v))?;
     }
     for (i, b) in c.pool.iter().enumerate() {
         vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(*b))?;
@@ -6332,6 +6355,7 @@ fn keleusma_builds_a_complete_minimal_artifact_byte_for_byte() {
             seed: &[],
             regions: &specs,
             fields: &[],
+            names: &[],
             pool: &[],
             args: [0, 0, 0, 0, 0],
             read_len: total,
@@ -6369,6 +6393,7 @@ fn keleusma_builds_a_complete_minimal_artifact_byte_for_byte() {
                 seed: &art,
                 regions: &specs,
                 fields: &flat,
+                names: &[],
                 pool: stored,
                 args: [i64::from(*k), n as i64, 0, 0, 0],
                 read_len: total,
@@ -6411,6 +6436,7 @@ fn the_complete_artifact_comparison_reports_a_perturbation() {
             seed: &[],
             regions: &specs,
             fields: &[],
+            names: &[],
             pool: &[],
             args: [0, 0, 0, 0, 0],
             read_len: want.len(),
@@ -6581,7 +6607,7 @@ fn reference_names(bytes: &[u8]) -> (Vec<Vec<u8>>, usize) {
 fn run_intern(
     vm: &mut Vm<'static, 'static>,
     cmd: i64,
-    fields: &[i64],
+    names: &[i64],
     pool: &[u8],
     args: [i64; 5],
 ) -> i64 {
@@ -6592,8 +6618,32 @@ fn run_intern(
             nregions: 0,
             seed: &[],
             regions: &[],
-            fields,
+            fields: &[],
+            names,
             pool,
+            args,
+            read_len: 0,
+        },
+    )
+    .expect("run")
+    .0
+}
+
+/// One flattener call. Its input is the PREORDER, which rides `fin`, not the
+/// interner's `nin` — a separate helper rather than a flag, because the two
+/// commands read different arrays and a boolean at the call site would hide
+/// which one.
+fn run_flatten(vm: &mut Vm<'static, 'static>, cmd: i64, fields: &[i64], args: [i64; 5]) -> i64 {
+    run_call(
+        vm,
+        &Call {
+            cmd,
+            nregions: 0,
+            seed: &[],
+            regions: &[],
+            fields,
+            names: &[],
+            pool: &[],
             args,
             read_len: 0,
         },
@@ -6704,6 +6754,7 @@ fn the_computed_name_regions_are_byte_identical_in_a_complete_artifact() {
                 seed: &[],
                 regions: &specs,
                 fields: &[],
+                names: &[],
                 pool: &[],
                 args: [0, 0, 0, 0, 0],
                 read_len: total,
@@ -6720,9 +6771,16 @@ fn the_computed_name_regions_are_byte_identical_in_a_complete_artifact() {
             // The two computed regions take the interner's input; every other
             // region is still re-emitted from decoded values, which is the part
             // later slices replace.
-            let (cmd, fields, pl, args) = if *k == kind::NAMES {
+            // The interner's (length, mode) pairs ride `names`; every other
+            // emitter's field rows ride `fields`. Keeping both in one tuple
+            // rather than reusing a single slot, because routing the interner
+            // input down the wrong channel is exactly the failure this split
+            // produced on its first run — silently empty NAMES and STRING_POOL
+            // regions rather than an error.
+            let (cmd, fields, names, pl, args) = if *k == kind::NAMES {
                 (
                     CMD_INTERN_EMIT_NAMES,
+                    Vec::new(),
                     nfields.clone(),
                     npool.clone(),
                     [n, 0, 0, 0, 0],
@@ -6730,6 +6788,7 @@ fn the_computed_name_regions_are_byte_identical_in_a_complete_artifact() {
             } else if *k == kind::STRING_POOL {
                 (
                     CMD_INTERN_EMIT_POOL,
+                    Vec::new(),
                     nfields.clone(),
                     npool.clone(),
                     [n, 0, 0, 0, 0],
@@ -6746,6 +6805,7 @@ fn the_computed_name_regions_are_byte_identical_in_a_complete_artifact() {
                 (
                     CMD_EMIT_IN_REGION,
                     flat,
+                    Vec::new(),
                     stored.to_vec(),
                     [i64::from(*k), cnt as i64, 0, 0, 0],
                 )
@@ -6759,6 +6819,7 @@ fn the_computed_name_regions_are_byte_identical_in_a_complete_artifact() {
                     seed: &art,
                     regions: &specs,
                     fields: &fields,
+                    names: &names,
                     pool: &pl,
                     args,
                     read_len: total,
@@ -7148,6 +7209,7 @@ fn keleusma_flattens_a_constant_forest_breadth_first() {
                 seed: &[],
                 regions: &specs,
                 fields: &[],
+                names: &[],
                 pool: &[],
                 args: [0, 0, 0, 0, 0],
                 read_len: total,
@@ -7193,6 +7255,7 @@ fn keleusma_flattens_a_constant_forest_breadth_first() {
                     seed: &art,
                     regions: &specs,
                     fields: &f,
+                    names: &[],
                     pool: &pl,
                     args,
                     read_len: total,
@@ -7245,13 +7308,7 @@ fn the_flattener_reports_input_it_will_not_flatten() {
     let mut vm = vm_for(WIRE_KEL);
     let big: Vec<i64> = (0..342).flat_map(|_| [3_i64, 0, 0]).collect();
     assert_eq!(
-        run_intern(
-            &mut vm,
-            CMD_FLATTEN_EMIT_CONSTS,
-            &big,
-            &[],
-            [342, 342, 0, 0, 0]
-        ),
+        run_flatten(&mut vm, CMD_FLATTEN_EMIT_CONSTS, &big, [342, 342, 0, 0, 0]),
         -240,
         "an oversized forest was not reported"
     );
@@ -7259,11 +7316,10 @@ fn the_flattener_reports_input_it_will_not_flatten() {
     // More roots than nodes.
     let mut vm = vm_for(WIRE_KEL);
     assert_eq!(
-        run_intern(
+        run_flatten(
             &mut vm,
             CMD_FLATTEN_EMIT_CONSTS,
             &[3, 7, 0],
-            &[],
             [2, 1, 0, 0, 0]
         ),
         -246,
@@ -7273,11 +7329,10 @@ fn the_flattener_reports_input_it_will_not_flatten() {
     // A child count that cannot be a bound.
     let mut vm = vm_for(WIRE_KEL);
     assert_eq!(
-        run_intern(
+        run_flatten(
             &mut vm,
             CMD_FLATTEN_EMIT_CONSTS,
             &[8, 0, 99],
-            &[],
             [1, 1, 0, 0, 0]
         ),
         -241,
@@ -7296,11 +7351,10 @@ fn the_flattener_reports_input_it_will_not_flatten() {
     // not exercising the one it named. Three valid scalars, one declared root.
     let mut vm = vm_for(WIRE_KEL);
     assert_eq!(
-        run_intern(
+        run_flatten(
             &mut vm,
             CMD_FLATTEN_EMIT_CONSTS,
             &[3, 7, 0, 3, 8, 0, 3, 9, 0],
-            &[],
             [1, 3, 0, 0, 0]
         ),
         -248,
@@ -7313,11 +7367,10 @@ fn the_flattener_reports_input_it_will_not_flatten() {
     // stayed quiet.
     let mut vm = vm_for(WIRE_KEL);
     assert_eq!(
-        run_intern(
+        run_flatten(
             &mut vm,
             CMD_FLATTEN_EMIT_CONSTS,
             &[3, 7, 0, 3, 8, 0],
-            &[],
             [2, 2, 0, 0, 0]
         ),
         -247,
@@ -7328,11 +7381,10 @@ fn the_flattener_reports_input_it_will_not_flatten() {
     // side table, so emitting it here would produce a plausible wrong record.
     let mut vm = vm_for(WIRE_KEL);
     assert_eq!(
-        run_intern(
+        run_flatten(
             &mut vm,
             CMD_FLATTEN_EMIT_CONSTS,
             &[10, 0, 0],
-            &[],
             [1, 1, 0, 0, 0]
         ),
         -245,
