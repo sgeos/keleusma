@@ -16,7 +16,7 @@ misleading a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`, or a feature branch cut from it.
-- **Parent commit**: `cd064e6e`
+- **Parent commit**: `dde20ecf`
 - **Written**: 2026-08-11
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
@@ -121,6 +121,14 @@ smallest included**:
 `verify_datalayout` is the smallest of the ten and its `NAMES` region already starts 15,624 bytes
 past the buffer. Absolute positioning holds for artifacts under 65,536 bytes, which is the
 constructed corpus and no stage at all.
+
+**IT NEEDS A SIXTH ARGUMENT, AND THAT IS THE FIRST DECISION RATHER THAN A DETAIL.** `ck_emit_batch`
+already consumes all five slots — `n`, `first`, and the three carries — so a window base does not
+fit. The argument vector is `[i64; 5]` in the harness with **22 call sites**, and `warg5` is the last
+slot in the shared block. Widening to six is mechanical but repo-wide, and appending `warg6` is the
+established pattern (append so no slot index moves). Decide that before writing any emitter code; the
+alternative of packing two values into one slot would be cheaper to type and worse to read, and this
+file has already recorded one case where a shared field that "obviously" meant one thing meant two.
 
 **It is INDEPENDENT of batching and the two are easy to conflate now that batching is fresh**:
 batching fixes how many records reach the emitter per call, the window base fixes where they land.
