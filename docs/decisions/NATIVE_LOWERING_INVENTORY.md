@@ -4229,3 +4229,50 @@ run.
 
 Recorded so the next increment starts from a traced hypothesis rather than from
 "delegated is hard", which is what the classification said and all it said.
+
+## The documentation hole is CLOSED, and my reason for deferring it was wrong
+
+### The deferral was based on a misreading of my own tooling
+
+I wrote that the gate-step fix could not be applied "while a gate is running
+against this branch, because changing the gate step mid-run would make the result
+correspond to a script that no longer exists."
+
+**That is false, and it contradicts the tool's own banner.**
+`gate-in-worktree.sh` checks the commit out into a *detached worktree* and runs
+`release-gate.sh` **from that worktree**, pinned to the commit under test. Its
+banner prints "the main tree is free; develop there while this runs", and the
+header explains that pinning the result to an immutable commit is the entire
+reason the script exists. Editing the working tree cannot reach the running gate.
+
+I had read that header earlier in this session, when I needed the invocation. The
+mistake was applying a real rule — a gate result is valid only for the tip it ran
+against — to a mechanism specifically built so that rule holds without anyone
+remembering it.
+
+### Verified before adding, not after
+
+The load objection was also checked rather than assumed. `perf_canary` runs inside
+the default-features test step, which had already completed, so a one-second doc
+build could not reach it.
+
+`RUSTDOCFLAGS="-D warnings" cargo doc --no-deps` on `native_codegen` **passes
+clean today.** That ordering matters: adding an unverified step to the gate risks
+burning a whole run to discover a pre-existing failure at step 13, and the
+package had never had its documentation built at all, so a pre-existing failure
+was the likely case rather than the unlikely one.
+
+### The step now runs it
+
+```sh
+( cd native_codegen && cargo fmt --all -- --check \
+  && cargo clippy --all-targets -- -D warnings && cargo test \
+  && RUSTDOCFLAGS="-D warnings" cargo doc --no-deps )
+```
+
+Syntax-checked with `bash -n`. **The running gate does not cover this change**,
+since it is pinned to `bc1bee3a`; the next gate is the first to exercise it.
+
+The hole was the same one, one directory over, from the one the step above it
+closed. A detached package escapes `--workspace` in *every* dimension, not only
+the one that motivated detaching it, and each escape has to be closed by hand.
