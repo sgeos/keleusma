@@ -3,10 +3,24 @@
 
 PREPARED WHILE ANOTHER SESSION'S GATE HELD THE MACHINE. Not yet applied.
 
-WHY THIS IS NOT COSMETIC. `V0_4_0_NATIVE_CODEGEN.md` defines Workstream C as
+WHY THIS IS NOT COSMETIC. `V0_3_X_ROADMAP.md` defines Workstream C as
 "Arena-resident coroutine frames and the native arena model". Composites are not
 a workstream at all -- they fall under A, "Bytecode-to-LLVM-IR lowering", whose
 full pass lowers every opcode of the full-language ISA.
+
+CORRECTED 2026-08-10: this docstring named `V0_4_0_NATIVE_CODEGEN.md` as the
+defining document. That is WRONG -- the architecture document uses the string
+"Workstream" zero times. The lettering is defined in `V0_3_X_ROADMAP.md` as
+markdown headings, `### A. Bytecode-to-LLVM-IR lowering` through `### F.`. The
+inventory had the right document all along; only this file was wrong, which is
+how an artefact prepared away from its source drifts from it.
+
+BEWARE A COLLISION THAT IS NOT MINE TO FIX. `V0_4_X_ROADMAP.md` defines its OWN
+`### A.` through `### F.` for a different taxonomy entirely -- its A is
+"Sub-coroutines (callable ephemeral `loop`)", its B is "Three-mode purity
+discipline". So a bare letter is ambiguous ACROSS roadmaps even when it is right
+within one. That is why the replacement text below spells out the workstream
+rather than using the letter alone.
 
 Four of these sites are strings inside a `LowerError`, so a CONSUMER who hits a
 refusal about composite bodies is currently told to consult a workstream about

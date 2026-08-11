@@ -3963,3 +3963,57 @@ The general lesson is narrower than "reading is good". It is that **a soundness
 condition expressed as an analysis is often a language rule in disguise**, and
 looking for the rule first is cheaper than importing the analysis. Here the rule
 was three lines and already enforced on every program that compiles.
+
+## A near-miss worth more than the defect it found
+
+I was one commit away from recording that the native workstream lettering A to F
+was **my own invention with no authoritative definition**, which would have
+invalidated the reconciliation section, the pending relabelling artefact, and 59
+references across this document.
+
+**It is false.** `V0_3_X_ROADMAP.md` defines all six as markdown headings, `### A.
+Bytecode-to-LLVM-IR lowering` through `### F. Partial-operation native lowering`.
+The reconciliation section had the right document and the right names the whole
+time.
+
+### How the wrong conclusion nearly got written
+
+Two greps, each individually reasonable, each blind in the same direction:
+
+1. `grep -c "Workstream" V0_4_0_NATIVE_CODEGEN.md` returned **0**. True, and
+   irrelevant — the architecture document is not where the lettering lives.
+2. `grep -E "^\s*[-*]?\s*[A-F]\.\s"` for lettered list items returned **nothing**,
+   because the definitions are `###` headings and the pattern had no place for the
+   heading prefix.
+
+Two negatives agreeing felt like corroboration. They were the same mistake made
+twice, since both patterns assumed a form the document does not use, and neither
+searched for the *content* — the workstream names — which is what finally settled
+it in one command.
+
+**This is the third time on this branch that a grep has produced a confident
+wrong answer**, after the `Op::[A-Z]` doc-comment matches and the `BinOp::`
+substring. The opening of this document already says "a grep is a measurement and
+deserves the same scepticism as any other". Knowing the rule did not prevent
+the third instance; **verifying before writing did.**
+
+### The actual defect, which is small
+
+`pending/fix_workstream_label.py` cited `V0_4_0_NATIVE_CODEGEN.md` as the
+defining document. The inventory cited `V0_3_X_ROADMAP.md`. **The inventory was
+right and the artefact was wrong** — a drift that happens when a prepared artefact
+carries its own restatement of a premise instead of pointing at it. Corrected in
+place.
+
+### A collision that is real and is not mine
+
+`V0_4_X_ROADMAP.md` defines its own `### A.` through `### F.` for a completely
+different taxonomy: its `A` is "Sub-coroutines (callable ephemeral `loop`)", its
+`B` is "Three-mode purity discipline". So **a bare letter is ambiguous across
+roadmaps even when it is correct within one.**
+
+That strengthens the relabelling artefact's existing choice to write "Workstream A
+(full pass)" rather than a bare "A", and it is worth stating that the reason has
+changed: the spelled-out form is not merely clearer, it is **disambiguating
+against a second live lettering scheme**. I am not proposing to renumber either
+roadmap; that is the operator's call and both are stable published documents.
