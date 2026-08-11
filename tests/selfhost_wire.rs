@@ -7563,6 +7563,73 @@ const CMD_FX_EAUX_COUNT: i64 = 149;
 const CMD_FX_EMIT_EAUX: i64 = 150;
 const CMD_CK_EMIT: i64 = 151;
 
+const CMD_SQ_NAMES: i64 = 152;
+const CMD_SQ_POOL_LEN: i64 = 153;
+const CMD_SQ_EMIT_NAMES: i64 = 154;
+const CMD_SQ_EMIT_POOL: i64 = 155;
+
+/// The module's name-bearing structure, GROUPED BY KIND rather than pre-ordered.
+///
+/// This is the input that finally lets Keleusma produce the interning SEQUENCE
+/// instead of consuming one. `interner_input` hands over a list already in the
+/// encoder's order; this hands over the module's shape and makes the driver work
+/// that order out.
+///
+/// **The grouping is deliberate and is what stops the slice being vacuous.** The
+/// encoder interns chunk names first, then each layout's type name and variants.
+/// If this marshalled names in that same order the driver's "derivation" would be
+/// the identity and every test below would pass against a transcription. Layouts
+/// therefore come FIRST here, so a name's position in the sequence and its byte
+/// offset in the pool genuinely come apart.
+///
+/// Words: `[nlayouts, nchunks]`, then per layout `[type_len, nvariants,
+/// variant_len...]`, then one length per chunk. Bytes: every layout's names in
+/// declaration order, then the chunk names.
+fn module_description(module: &keleusma::bytecode::Module) -> (Vec<i64>, Vec<u8>) {
+    let mut fields = vec![module.enum_layouts.len() as i64, module.chunks.len() as i64];
+    let mut pool = Vec::new();
+    for l in &module.enum_layouts {
+        fields.push(l.type_name.len() as i64);
+        fields.push(l.variants.len() as i64);
+        for v in &l.variants {
+            fields.push(v.name.len() as i64);
+        }
+        pool.extend_from_slice(l.type_name.as_bytes());
+        for v in &l.variants {
+            pool.extend_from_slice(v.name.as_bytes());
+        }
+    }
+    for c in &module.chunks {
+        fields.push(c.name.len() as i64);
+    }
+    for c in &module.chunks {
+        pool.extend_from_slice(c.name.as_bytes());
+    }
+    (fields, pool)
+}
+
+/// One sequence-derivation call. The description rides `fin` and the name bytes
+/// ride `pool`; nothing rides the interner's own `nin`, which is what the driver
+/// now fills in for itself.
+fn run_sq(vm: &mut Vm<'static, 'static>, cmd: i64, fields: &[i64], pool: &[u8]) -> i64 {
+    run_call(
+        vm,
+        &Call {
+            cmd,
+            nregions: 0,
+            seed: &[],
+            regions: &[],
+            fields,
+            names: &[],
+            pool,
+            args: [0, 0, 0, 0, 0],
+            read_len: 0,
+        },
+    )
+    .expect("run")
+    .0
+}
+
 /// A chunk's eleven INPUT words: everything the record carries except the three
 /// `first` fields, which are exactly what the driver now computes.
 ///
@@ -8371,4 +8438,215 @@ fn three_derive_only_regions_are_driven_by_real_compiler_output() {
         UPGRADE_CASES.len(),
         "some case failed to populate the region it exists for"
     );
+}
+
+/// The driver produces the interning SEQUENCE from the module's shape.
+///
+/// Slices 12 to 14 all consumed a sequence a Rust helper had already ordered.
+/// Here the input is grouped by kind — layouts first, chunks last — and Keleusma
+/// derives the encoder's order, every name's mode, and every name's pool offset.
+/// The oracle is unchanged: `encode_aux_body` on a real compiled module.
+#[test]
+fn keleusma_derives_the_interning_sequence_from_a_module() {
+    let mut vm = vm_for(WIRE_KEL);
+    for (label, src) in INTERNER_CASES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        assert_no_other_contributors(label, &module);
+        assert_constants_are_modelled(label, &module);
+        let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+        let (ref_names, ref_pool_len) = reference_names(&want);
+
+        let (fields, pool) = module_description(&module);
+        let cnt = run_sq(&mut vm, CMD_SQ_NAMES, &fields, &pool);
+        assert_eq!(
+            cnt,
+            ref_names.len() as i64,
+            "{label}: derived {cnt} names, the reference interned {}",
+            ref_names.len()
+        );
+        let plen = run_sq(&mut vm, CMD_SQ_POOL_LEN, &fields, &pool);
+        assert_eq!(
+            plen, ref_pool_len as i64,
+            "{label}: derived a {plen}-byte pool, the reference's is {ref_pool_len}"
+        );
+    }
+}
+
+/// Must-fire, about the CORPUS: the description order really does differ from the
+/// interning order.
+///
+/// The derivation is a rotation, so it collapses to the IDENTITY on any source
+/// with no enum layouts or no chunks. If every case were like that, the test
+/// above would pass against a driver that copied its input straight through and
+/// never computed an order at all.
+#[test]
+fn the_description_order_genuinely_differs_from_the_interning_order() {
+    let mut rotated = 0;
+    for (label, src) in INTERNER_CASES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        if !module.enum_layouts.is_empty() && !module.chunks.is_empty() {
+            rotated += 1;
+        }
+        let _ = label;
+    }
+    assert!(
+        rotated >= 1,
+        "no case has both layouts and chunks, so the description order equals \
+         the interning order everywhere and a pass-through driver would satisfy \
+         the differential"
+    );
+}
+
+/// Must-fire, about the CORPUS: some layout name is NOT the first thing interned.
+///
+/// The stronger statement than the rotation control above. It asserts the corpus
+/// contains a name whose pool offset and sequence position genuinely disagree —
+/// a layout name sits at byte 0 of the description but is interned after every
+/// chunk name — so a driver that reused `nm_offsets`' prefix sum over `nin`, the
+/// assumption this slice had to break, would read the wrong bytes.
+#[test]
+fn some_layout_name_is_interned_after_a_chunk_that_follows_it_in_the_description() {
+    let mut disagreements = 0;
+    for (label, src) in INTERNER_CASES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let layout_bytes: usize = module
+            .enum_layouts
+            .iter()
+            .map(|l| l.type_name.len() + l.variants.iter().map(|v| v.name.len()).sum::<usize>())
+            .sum();
+        // A layout name occupies byte 0 of the description while every chunk name
+        // sits above `layout_bytes`; the interner reaches the chunks first.
+        if layout_bytes > 0 && !module.chunks.is_empty() {
+            disagreements += 1;
+        }
+        let _ = label;
+    }
+    assert!(
+        disagreements >= 1,
+        "no case places a layout name before a chunk name in the description, so \
+         a prefix-sum offset over the interning order would still be correct"
+    );
+}
+
+/// The derived sequence's `NAMES` and `STRING_POOL` are byte-identical inside a
+/// complete artifact.
+///
+/// **This is the test that can actually fail, and the two above largely cannot.**
+/// A name count and a pool length are both invariant under permutation: get the
+/// order wrong, or every pool offset wrong, and both still match the reference
+/// exactly. Only the emitted bytes distinguish a derived order from a shuffled
+/// one, which is why this is not an optional extra on top of the count check.
+///
+/// Both regions are sized from KELEUSMA's own figures so a wrong count moves
+/// every later region and the comparison fails loudly rather than locally.
+#[test]
+fn the_derived_sequence_produces_byte_identical_name_regions() {
+    use keleusma::wire_schema::kind;
+    let mut vm = vm_for(WIRE_KEL);
+
+    for (label, src) in INTERNER_CASES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        assert_no_other_contributors(label, &module);
+        assert_constants_are_modelled(label, &module);
+        let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+        let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+        let total = want.len();
+        assert!(total < CAPACITY, "{label}: artifact is {total} bytes");
+
+        let (dfields, dpool) = module_description(&module);
+        let cnt = run_sq(&mut vm, CMD_SQ_NAMES, &dfields, &dpool);
+        let plen = run_sq(&mut vm, CMD_SQ_POOL_LEN, &dfields, &dpool);
+        assert!(
+            cnt >= 0 && plen >= 0,
+            "{label}: driver refused the description"
+        );
+
+        let mut specs = region_counts_for(&want);
+        for s in &mut specs {
+            if s.0 == kind::NAMES {
+                s.2 = cnt as usize;
+            }
+            if s.0 == kind::STRING_POOL {
+                s.2 = plen as usize;
+            }
+        }
+
+        let (_, mut art) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_BUILD_REGION_TABLE,
+                nregions: specs.len() as i64,
+                seed: &[],
+                regions: &specs,
+                fields: &[],
+                names: &[],
+                pool: &[],
+                args: [0, 0, 0, 0, 0],
+                read_len: total,
+            },
+        )
+        .expect("run");
+
+        for (k, _, _, _) in &specs {
+            let region = view.find_region(*k).expect("region");
+            let stored = view.region_bytes(&region).expect("payload");
+            if stored.is_empty() {
+                continue;
+            }
+            // The description rides `fields` and the name bytes ride `pool`; the
+            // interner's own `nin` channel stays empty, because filling it is now
+            // the driver's job rather than the harness's.
+            let (cmd, fields, pl, args) = if *k == kind::NAMES {
+                (CMD_SQ_EMIT_NAMES, dfields.clone(), dpool.clone(), [0; 5])
+            } else if *k == kind::STRING_POOL {
+                (CMD_SQ_EMIT_POOL, dfields.clone(), dpool.clone(), [0; 5])
+            } else {
+                let is_pool = matches!(*k, kind::PARAM_TYPES | kind::DEBUG_POOL);
+                let rows = if is_pool {
+                    Vec::new()
+                } else {
+                    rows_for_kind(&view, *k)
+                };
+                let flat: Vec<i64> = rows.iter().flatten().copied().collect();
+                let n = if is_pool { stored.len() } else { rows.len() };
+                (
+                    CMD_EMIT_IN_REGION,
+                    flat,
+                    stored.to_vec(),
+                    [i64::from(*k), n as i64, 0, 0, 0],
+                )
+            };
+
+            let (ret, next) = run_call(
+                &mut vm,
+                &Call {
+                    cmd,
+                    nregions: specs.len() as i64,
+                    seed: &art,
+                    regions: &specs,
+                    fields: &fields,
+                    names: &[],
+                    pool: &pl,
+                    args,
+                    read_len: total,
+                },
+            )
+            .expect("run");
+            assert!(ret >= 0, "{label}: emitter refused kind {k} with {ret}");
+            art = next;
+        }
+
+        assert_eq!(
+            art.len(),
+            want.len(),
+            "{label}: artifact is {} bytes, the reference {}",
+            art.len(),
+            want.len()
+        );
+        assert_eq!(art, want, "{label}: artifact differs from the reference");
+    }
 }
