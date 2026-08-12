@@ -3353,6 +3353,65 @@ fn ck_emit_batch() -> Word {
                           wire.warg3, wire.warg4, wire.warg5) }
 }
 
+// SLICE 17: the same batch, emitted into a LOW WINDOW.
+//
+// `ck_emit_batch` positions records at `region_base(i) + rec * stride`, an
+// ABSOLUTE artifact offset, and `wire.bytes` is 65,536. Measured 2026-08-11, that
+// works for no real stage: `verify_datalayout` is the smallest of the ten and its
+// `NAMES` region starts at byte 81,160, while `verify_yield` has `CHUNKS` at
+// 143,096. Absolute positioning holds for artifacts under 65,536 bytes, which is
+// the constructed corpus and nothing else.
+//
+// So the driver writes the batch at a caller-chosen offset and the host places
+// the result at the true one, patching the directory afterwards. The buffer stops
+// being a picture of the artifact and becomes a window onto one region of it.
+//
+// **THE WINDOW BASE MAKES THE FIRST-RECORD INDEX REDUNDANT**, which is worth
+// stating because the plan asked for both and this file's own handoff went as far
+// as recording that a sixth argument slot would be needed. It is not. `first`
+// existed only to position a record inside the region; once the host places the
+// window, the driver writes records `0..n` and the host adds
+// `region_base + first * stride` itself. The carries still come in explicitly,
+// because they are cross-batch STATE rather than position. Five arguments, and
+// the argument vector does not have to grow.
+fn ck_window_capacity() -> Word { 65536 }
+
+fn ck_emit_window() -> Word {
+    // THE RECORD-COUNT CHECK COMES FIRST, AND THE ORDER IS LOAD-BEARING. The
+    // window bound below multiplies `n` by the stride, so an absurd `n` would be
+    // multiplied before anything had rejected it. `emit_chunks_batch` does refuse
+    // `n > ck_max()`, but it does so AFTER this function has already computed that
+    // product. Checking the count here keeps the multiplication inside a range the
+    // cap has already bounded, rather than relying on how a Word behaves when the
+    // product leaves it.
+    if wire.warg > ck_max() { 0 - 260 } else {
+    if wire.warg5 < 0 { 0 - 262 } else {
+    // Checked before any write, not after: the emitter would otherwise index off
+    // the end of `wire.bytes` while computing the offset that proves it should
+    // not have.
+    if wire.warg5 + (wire.warg * chunk_stride()) > ck_window_capacity() { 0 - 263 } else {
+        emit_chunks_batch(wire.warg5, wire.warg, 0, wire.warg2, wire.warg3, wire.warg4) } } }
+}
+
+// The window form's carries. Separate from the region form's because the two read
+// their arguments in different positions -- `ck_emit_batch` takes `first` where
+// this takes the first carry -- and a shared body would silently read one as the
+// other.
+fn ck_window_consts() -> Word {
+    ck.sink = ck_emit_window();
+    if ck.sink < 0 { ck.sink } else { ck.consts }
+}
+
+fn ck_window_templates() -> Word {
+    ck.sink = ck_emit_window();
+    if ck.sink < 0 { ck.sink } else { ck.templates }
+}
+
+fn ck_window_ptypes() -> Word {
+    ck.sink = ck_emit_window();
+    if ck.sink < 0 { ck.sink } else { ck.ptypes }
+}
+
 // The carry OUT of the same batch, one command per accumulator.
 //
 // Three commands rather than one returning a triple, and a re-run rather than
@@ -3577,7 +3636,11 @@ fn dispatch_driver2(cmd: Word) -> Word {
     if cmd == 157 { ck_carry_consts() } else {
     if cmd == 158 { ck_carry_templates() } else {
     if cmd == 159 { ck_carry_ptypes() } else {
-    0 - 98 }}}}}}}}
+    if cmd == 160 { ck_emit_window() } else {
+    if cmd == 161 { ck_window_consts() } else {
+    if cmd == 162 { ck_window_templates() } else {
+    if cmd == 163 { ck_window_ptypes() } else {
+    0 - 98 }}}}}}}}}}}}
 }
 
 fn dispatch_driver(cmd: Word) -> Word {
@@ -3607,7 +3670,7 @@ fn dispatch_driver(cmd: Word) -> Word {
 // UNREACHABLE and its own test fails immediately. The fall-through sweep reads
 // this value out of the source instead of restating a bound, which is what it
 // did for four consecutive slices — and got wrong once.
-fn highest_command() -> Word { 159 }
+fn highest_command() -> Word { 163 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {

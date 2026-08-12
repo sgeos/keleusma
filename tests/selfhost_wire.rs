@@ -8846,3 +8846,177 @@ fn the_batch_boundary_falls_where_a_running_total_is_already_non_zero() {
         rows[CK_MAX][1]
     );
 }
+
+const CMD_CK_EMIT_WINDOW: i64 = 160;
+const CMD_CK_WINDOW_CONSTS: i64 = 161;
+const CMD_CK_WINDOW_TEMPLATES: i64 = 162;
+const CMD_CK_WINDOW_PTYPES: i64 = 163;
+
+/// A real stage source, chosen because it is the ONLY one that forces both
+/// mechanisms at once.
+///
+/// Measured chunk counts across the ten stages: `parse` 94, `codegen` 76,
+/// `reconstruct` 24, `verify_typed` 22, `lexer` 20, `analyze` 17,
+/// `verify_structural` 14, `verify_depth` 10, `verify_yield` 8,
+/// `verify_datalayout` 2. Only `parse` exceeds the 90-record call cap, so it is
+/// the single stage where batching and the window compose on real input rather
+/// than on a constructed corpus.
+///
+/// Note what `verify_yield` would have proved and what it would not: its `CHUNKS`
+/// region sits at byte 143,096, far past the buffer, yet it has eight chunks. A
+/// high region base comes from the SIZE OF THE EARLIER REGIONS -- the per-element
+/// data-slot tables -- and says nothing about how many records follow it.
+const WINDOW_STAGE: &str = include_str!("../src/selfhost/kel/parse.kel");
+
+/// `CHUNKS` assembled from LOW WINDOWS matches a real stage's region byte for byte.
+///
+/// Every emitter so far positioned records at `region_base + rec * stride`, an
+/// absolute artifact offset, against a 65,536-byte buffer. That holds only for
+/// artifacts smaller than the buffer, which is the constructed corpus and no real
+/// stage: `verify_yield`'s `CHUNKS` region starts at byte 143,096.
+///
+/// So the driver writes each batch at offset zero and the harness — standing in
+/// for the host — takes the window and appends it. The two mechanisms compose
+/// here for the first time: batching decides how many records reach the emitter,
+/// the window decides where they land, and the carries cross both.
+#[test]
+fn chunk_records_assembled_from_windows_match_a_real_stage() {
+    use keleusma::wire_schema::kind;
+    let mut vm = vm_for(WIRE_KEL);
+
+    let module =
+        compile(&parse(&tokenize(WINDOW_STAGE).expect("lex")).expect("parse")).expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+
+    let region = view.find_region(kind::CHUNKS).expect("CHUNKS region");
+    let base = region.byte_offset().expect("offset");
+    let stored = view.region_bytes(&region).expect("payload");
+    // The control that makes the slice necessary rather than decorative: with the
+    // region inside the buffer, absolute positioning would have worked and this
+    // would be testing the previous slice.
+    assert!(
+        base >= CAPACITY,
+        "CHUNKS starts at {base}, inside the {CAPACITY}-byte buffer, so absolute \
+         positioning would have sufficed and the window is untested"
+    );
+
+    let rows = rows_for_kind(&view, kind::CHUNKS);
+    assert!(
+        rows.len() > CK_MAX,
+        "only {} chunks, so no batching",
+        rows.len()
+    );
+
+    let mut got: Vec<u8> = Vec::with_capacity(stored.len());
+    let (mut c, mut t, mut p) = (0i64, 0i64, 0i64);
+    let mut first = 0usize;
+    while first < rows.len() {
+        let n = (rows.len() - first).min(CK_MAX);
+        let fields = chunk_inputs(&rows[first..first + n]);
+        let span = n * CHUNK_STRIDE;
+        // Window base zero, and the harness places the result. The driver is never
+        // told where the region really is.
+        let args = [n as i64, c, t, p, 0];
+        let mk = |cmd: i64| Call {
+            cmd,
+            nregions: 0,
+            seed: &[],
+            regions: &[],
+            fields: &fields,
+            names: &[],
+            pool: &[],
+            args,
+            read_len: span,
+        };
+        let (ret, win) = run_call(&mut vm, &mk(CMD_CK_EMIT_WINDOW)).expect("run");
+        assert!(ret >= 0, "window batch at {first} refused with {ret}");
+        assert_eq!(
+            ret as usize, span,
+            "batch wrote {ret} bytes, expected {span}"
+        );
+        let nc = run_call(&mut vm, &mk(CMD_CK_WINDOW_CONSTS)).expect("run").0;
+        let nt = run_call(&mut vm, &mk(CMD_CK_WINDOW_TEMPLATES))
+            .expect("run")
+            .0;
+        let np = run_call(&mut vm, &mk(CMD_CK_WINDOW_PTYPES)).expect("run").0;
+        assert!(nc >= 0 && nt >= 0 && np >= 0, "carry refused at {first}");
+        got.extend_from_slice(&win[..span]);
+        c = nc;
+        t = nt;
+        p = np;
+        first += n;
+    }
+
+    assert_eq!(got.len(), stored.len(), "assembled length differs");
+    if got != stored {
+        let at = (0..got.len()).find(|&i| got[i] != stored[i]).unwrap_or(0);
+        panic!(
+            "first difference at region byte {at} (record {}): got {:?} want {:?}",
+            at / CHUNK_STRIDE,
+            &got[at..(at + 16).min(got.len())],
+            &stored[at..(at + 16).min(stored.len())]
+        );
+    }
+}
+
+/// The window emitter refuses a batch that would run off the end of the buffer.
+///
+/// Reachable, unlike the two unreachable guards this file already documents: the
+/// caller chooses the window base, so a base near the ceiling is an ordinary
+/// input rather than something no corpus can construct.
+#[test]
+fn the_window_emitter_refuses_a_batch_that_would_overrun_the_buffer() {
+    let mut vm = vm_for(WIRE_KEL);
+    let fields = vec![0i64; CK_MAX * 11];
+    let over = (CAPACITY - CHUNK_STRIDE) as i64;
+    let ret = run_call(
+        &mut vm,
+        &Call {
+            cmd: CMD_CK_EMIT_WINDOW,
+            nregions: 0,
+            seed: &[],
+            regions: &[],
+            fields: &fields,
+            names: &[],
+            pool: &[],
+            args: [CK_MAX as i64, 0, 0, 0, over],
+            read_len: 0,
+        },
+    )
+    .expect("run")
+    .0;
+    assert_eq!(ret, -263, "expected the overrun code, got {ret}");
+}
+
+/// The window emitter refuses an oversized batch BEFORE it multiplies the count.
+///
+/// `emit_chunks_batch` also refuses `n > 90`, but only after `ck_emit_window` has
+/// already formed `n * stride` for its window bound. Rejecting the count first
+/// keeps that product inside a range the cap has bounded rather than depending on
+/// how a `Word` behaves when the product leaves it. Reachable input: the caller
+/// chooses `n`.
+#[test]
+fn the_window_emitter_refuses_an_oversized_count_before_scaling_it() {
+    let mut vm = vm_for(WIRE_KEL);
+    let fields = vec![0i64; 16];
+    for n in [CK_MAX as i64 + 1, 1 << 40] {
+        let ret = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_CK_EMIT_WINDOW,
+                nregions: 0,
+                seed: &[],
+                regions: &[],
+                fields: &fields,
+                names: &[],
+                pool: &[],
+                args: [n, 0, 0, 0, 0],
+                read_len: 0,
+            },
+        )
+        .expect("run")
+        .0;
+        assert_eq!(ret, -260, "n = {n} gave {ret}, expected the count refusal");
+    }
+}
