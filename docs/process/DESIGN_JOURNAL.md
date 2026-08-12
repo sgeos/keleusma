@@ -13,6 +13,35 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE INCREMENT THAT TURNED OUT TO BE A CALLER, BECAUSE I MEASURED FIRST (2026-08-11).** 145 to 146
+tests, and **no Keleusma change at all**. The handoff said to check what carries across a batch
+before building a carry mechanism. That instruction was the whole value of the slice.
+
+**Measured, per emitter: every generic emitter is stateless per record.** Only the computed chunk
+emitter holds accumulators, which is exactly why it needed bespoke carry commands. For the other
+sixteen kinds nothing crosses a batch boundary, so batching reduces to feeding the right rows at the
+right offset — and `emit_in_window` already takes both. **Without the check I would have built a
+carry mechanism for sixteen kinds with nothing to carry**, and it would have passed its own tests
+while being entirely unnecessary. A mechanism that works and is not needed is not a neutral outcome;
+it is permanent surface area.
+
+**Third time in this programme that a coverage gap needed a CALLER rather than an EMITTER.** Slice 9
+found it for `DEBUG_POOL`, slice 18 found it again for the same kind in a different dispatch, and
+here for batching. Three is enough to name, so the test names it rather than leaving a fourth
+rediscovery.
+
+**The smallest stage forces both mechanisms, which is a better case than the largest.**
+`verify_datalayout` has 3,086 `NAMES` records at two fields — 6,172 words against a 1,024-word input
+buffer — and the region starts at byte 81,160, past the 65,536-byte window. Seven batches, each
+landing at its own offset inside one window, assembled in place. Reaching for a big stage would have
+bought slower tests and no extra coverage.
+
+Mutation: ignoring the window offset fails at record 512, batch 1, and the diagnostic names the
+batch. Three controls guard the three properties independently, because any one of them failing
+quietly would leave a mechanism untested while the other two kept the test green.
+
+---
+
 **THE GENERIC DISPATCH TAKES AN OFFSET, AND TESTING EVERY KIND FOUND TWO GAPS A SAMPLE WOULD NOT
 (2026-08-11).** Command 164; 142 to 145 tests. Every arm of `emit_in_region` read
 `region_base(dir_find(k))`, so the window slice would have needed a second seventeen-arm chain.
