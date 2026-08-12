@@ -9278,3 +9278,99 @@ fn a_region_larger_than_the_input_buffer_batches_through_the_window() {
         );
     }
 }
+
+/// A region whose payload exceeds ONE window, assembled across two.
+///
+/// PR #17's test asserted its region fits a single 65,536-byte window,
+/// deliberately, leaving this case untested rather than handled. `verify_yield`'s
+/// `STRING_POOL` is 96,352 bytes and does not fit.
+///
+/// **Two levels of assembly, and they are bounded by different things.** A pool
+/// batch is limited to 8,192 bytes by `bin`, the input buffer `emit_pool_bytes`
+/// copies from; a window is limited to 65,536 by `wire.bytes`. So eight batches
+/// fill a window, the host flushes it, and the next batch restarts at offset
+/// zero. Neither bound is the other's, and conflating them would either overrun
+/// `bin` or waste seven eighths of the window.
+///
+/// Each call is SEEDED with the window built so far, because shared data is
+/// re-seeded on every call and the accumulated bytes would otherwise vanish
+/// between batches. That is the same property the interner's re-run pattern
+/// works around, met here from the output side.
+///
+/// Still no Keleusma change: the third gap in a row that needed a caller.
+#[test]
+fn a_region_larger_than_one_window_is_assembled_across_two() {
+    use keleusma::wire_schema::kind;
+    let mut vm = vm_for(WIRE_KEL);
+
+    let src = include_str!("../src/selfhost/kel/verify_yield.kel");
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+
+    let region = view.find_region(kind::STRING_POOL).expect("STRING_POOL");
+    let stored = view.region_bytes(&region).expect("payload");
+    assert!(
+        stored.len() > CAPACITY,
+        "payload is {} bytes and fits one window, so multi-window is untested",
+        stored.len()
+    );
+
+    let mut got: Vec<u8> = Vec::with_capacity(stored.len());
+    let mut window: Vec<u8> = Vec::new();
+    let mut windows = 0;
+    let mut batches = 0;
+    let mut fed = 0usize;
+    while fed < stored.len() {
+        let n = (stored.len() - fed).min(BIN_CAPACITY);
+        if window.len() + n > CAPACITY {
+            // The window is full: the host takes it and starts a fresh one.
+            got.extend_from_slice(&window);
+            window.clear();
+            windows += 1;
+        }
+        let at = window.len();
+        let (ret, buf) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_EMIT_IN_WINDOW,
+                nregions: 0,
+                seed: &window,
+                regions: &[],
+                fields: &[],
+                names: &[],
+                pool: &stored[fed..fed + n],
+                args: [i64::from(kind::STRING_POOL), n as i64, at as i64, 0, 0],
+                read_len: at + n,
+            },
+        )
+        .expect("run");
+        assert!(ret >= 0, "batch at byte {fed} refused with {ret}");
+        window = buf[..at + n].to_vec();
+        fed += n;
+        batches += 1;
+    }
+    got.extend_from_slice(&window);
+    windows += 1;
+
+    assert!(
+        windows >= 2,
+        "only {windows} window, so the boundary is untested"
+    );
+    assert!(
+        batches > windows,
+        "{batches} batches over {windows} windows, so the \
+         batch bound and the window bound were not distinguished"
+    );
+    assert_eq!(got.len(), stored.len(), "assembled length differs");
+    if got != stored {
+        let at = (0..got.len()).find(|&i| got[i] != stored[i]).unwrap_or(0);
+        panic!(
+            "first difference at byte {at} (window {}, batch {}): got {:?} want {:?}",
+            at / CAPACITY,
+            at / BIN_CAPACITY,
+            &got[at..(at + 16).min(got.len())],
+            &stored[at..(at + 16).min(stored.len())]
+        );
+    }
+}
