@@ -534,13 +534,19 @@ fn spike_report_blocker_co_occurrence() {
         for c in &m.chunks {
             for op in &c.ops {
                 let k = match op {
-                    Op::NewComposite(..) => Some("composite"),
-                    Op::GetField(..)
+                    // Construction and access are ONE workstream: nobody
+                    // implements `NewComposite` without field access, and
+                    // splitting them makes each look less impactful than the
+                    // work that would actually be done. The partition decides
+                    // the answer, so it is chosen to match the unit of work
+                    // rather than the opcode taxonomy.
+                    Op::NewComposite(..)
+                    | Op::GetField(..)
                     | Op::GetTupleField(..)
                     | Op::GetEnumField(..)
                     | Op::GetIndex(..)
                     | Op::IsEnum(..)
-                    | Op::IsStruct(..) => Some("composite-access"),
+                    | Op::IsStruct(..) => Some("composite"),
                     Op::CallVerifiedNative(..) | Op::CallExternalNative(..) => Some("native-call"),
                     Op::Const(i) => match c.constants.get(*i as usize) {
                         Some(keleusma::bytecode::ConstValue::StaticStr(_)) => Some("static-str"),
@@ -589,6 +595,42 @@ fn spike_report_blocker_co_occurrence() {
                 .or_default() += 1;
         }
     }
+
+    // Generalised: the same slack question for EVERY blocker class, not only
+    // static strings. The string figure collapsed from 15.5 percent to 1.7 under
+    // this check, so applying it to one class and trusting first-blocker counts
+    // for the others would repeat the error one column over.
+    let mut alone: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut present: BTreeMap<&'static str, usize> = BTreeMap::new();
+    for (_, m) in compiled_corpus_modules() {
+        let ctx = inkwell::context::Context::create();
+        let lm = ctx.create_module("slack");
+        if keleusma_native::lower_module(&ctx, &lm, &m, keleusma_native::LowerOptions::default())
+            .is_ok()
+        {
+            continue;
+        }
+        let cs = classes(&m);
+        for k in &cs {
+            *present.entry(k).or_default() += 1;
+            if cs.len() == 1 {
+                *alone.entry(k).or_default() += 1;
+            }
+        }
+    }
+    println!("\n================ SLACK BY BLOCKER CLASS");
+    println!("  class                 present   ALONE   slack");
+    let total_mods = compiled_corpus_modules().len();
+    for (k, n) in &present {
+        let a = alone.get(k).copied().unwrap_or(0);
+        println!(
+            "  {k:20} {n:6}  {a:6}  {:5.1}pp",
+            100.0 * (*n as f64 - a as f64) / total_mods as f64
+        );
+    }
+    println!("  (ALONE = the only unsupported class in that module, so the only");
+    println!("   count that removing it alone would actually free)");
+    println!("================");
 
     println!("\n================ CO-OCCURRENCE behind `static-str`");
     println!("  refused modules total          : {refused}");

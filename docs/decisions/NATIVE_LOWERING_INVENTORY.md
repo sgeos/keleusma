@@ -4664,3 +4664,47 @@ either plan.
 **Composites remain first and the second place is now vacant.** The same slack measurement has not been run
 for composites or native calls, so their marginal gains are also upper bounds and the honest state is that
 only one of the three is known.
+
+## COMPOSITES SURVIVE THE CHECK THAT DESTROYED THE STRING ITEM
+
+The slack measurement that collapsed non-scalar `Const` from 15.5 percent to 1.7 was applied to every
+blocker class, because trusting first-blocker counts for the others would repeat the error one column over.
+
+| Class | Modules containing it | Freed by removing it ALONE | Slack |
+|---|---|---|---|
+| **composite** | 24 | **20** | 6.9pp |
+| native call | 15 | 3 | 20.7pp |
+| static string | 11 | 1 | 17.2pp |
+
+**Composites are both the largest item and the most robust.** Twenty of twenty-four modules contain no other
+unsupported class, so composites alone free **20 of 58 modules, 34.5 percent of the corpus**. The other two
+are mostly slack: the native-call figure loses 80 percent under the check and the string figure 91 percent.
+
+**The ordering is confirmed and strengthened rather than overturned**, which is the first time this session a
+ranking has survived its own audit. That is worth stating plainly, because the previous two audits both
+inverted their subject and a reader could reasonably expect a third.
+
+### The partition decides the answer, by a factor of nearly two
+
+The first run of this measurement split composite **construction** from composite **access** as separate
+classes and reported composites freeing **12** modules. Merging them reports **20**.
+
+Nothing about the corpus changed. **Nobody implements `NewComposite` without field access**, so the split
+counted a module needing both as freed by neither, and produced a number describing a unit of work that does
+not exist. The classes are now grouped by **what would actually be built** rather than by the opcode
+taxonomy.
+
+**This is a larger effect than the first-blocker slack it was measuring**, and it is a quieter error: slack
+announces itself when the number moves, whereas a wrong partition produces a stable, plausible, and
+meaningless figure. The rule that falls out is that **a marginal-gain measurement is only as meaningful as
+the granularity of the thing whose margin is being measured**, and the granularity must come from the work
+plan rather than from the data's natural joints.
+
+### What this licenses
+
+Composite lowering as the next implementation increment, with a measured expectation of **34.5 percent of the
+corpus** rather than a first-blocker upper bound. That is the strongest-supported priority claim this branch
+has produced.
+
+**What it does not license** is a schedule. Nothing here measures what composite lowering costs, only what it
+delivers, and the B28 flat-byte representation is the largest single item in the remaining instruction set.
