@@ -9020,3 +9020,162 @@ fn the_window_emitter_refuses_an_oversized_count_before_scaling_it() {
         assert_eq!(ret, -260, "n = {n} gave {ret}, expected the count refusal");
     }
 }
+
+const CMD_EMIT_IN_WINDOW: i64 = 164;
+
+/// Every reachable region kind of a real stage, emitted into a LOW WINDOW.
+///
+/// Slice 17 gave `CHUNKS` a window through its own command. This drives the
+/// GENERIC dispatch, so one test covers every kind the stage reaches rather than
+/// one kind at a time.
+///
+/// Two filters, both stated because each excludes real work rather than noise:
+/// a region whose payload exceeds the 65,536-byte window needs batching, which
+/// the generic emitter does not have, and a region whose field rows exceed
+/// `wire.fin` cannot be fed in one call for the same reason. What remains is
+/// every kind that fits, which is most of them.
+#[test]
+fn every_fitting_region_of_a_real_stage_emits_into_a_window() {
+    use keleusma::wire_schema::kind;
+    let mut vm = vm_for(WIRE_KEL);
+
+    let src = include_str!("../src/selfhost/kel/verify_yield.kel");
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+
+    let mut checked = 0;
+    let mut past_the_buffer = 0;
+    for (k, _, _, _) in region_counts_for(&want) {
+        let Some(region) = view.find_region(k) else {
+            continue;
+        };
+        let (Some(base), Ok(stored)) = (region.byte_offset(), view.region_bytes(&region)) else {
+            continue;
+        };
+        if stored.is_empty() || stored.len() > CAPACITY {
+            continue;
+        }
+        let is_pool = matches!(k, kind::STRING_POOL | kind::PARAM_TYPES | kind::DEBUG_POOL);
+        let rows = if is_pool {
+            Vec::new()
+        } else {
+            rows_for_kind(&view, k)
+        };
+        let flat: Vec<i64> = rows.iter().flatten().copied().collect();
+        if flat.len() > FIN_CAPACITY {
+            continue;
+        }
+        let n = if is_pool { stored.len() } else { rows.len() };
+        if n == 0 {
+            continue;
+        }
+
+        let (ret, win) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_EMIT_IN_WINDOW,
+                nregions: 0,
+                seed: &[],
+                regions: &[],
+                fields: &flat,
+                names: &[],
+                pool: if is_pool { stored } else { &[] },
+                args: [i64::from(k), n as i64, 0, 0, 0],
+                read_len: stored.len(),
+            },
+        )
+        .expect("run");
+        assert!(ret >= 0, "kind {k} refused with {ret}");
+        assert_eq!(
+            &win[..stored.len()],
+            stored,
+            "kind {k} (base {base}) differs from the reference"
+        );
+        checked += 1;
+        if base >= CAPACITY {
+            past_the_buffer += 1;
+        }
+    }
+
+    assert!(checked >= 6, "only {checked} kinds exercised");
+    // The control that makes the window necessary: absolute positioning could not
+    // have reached these at all.
+    assert!(
+        past_the_buffer >= 1,
+        "every checked region starts inside the {CAPACITY}-byte buffer, so \
+         absolute positioning would have sufficed and the window is untested"
+    );
+}
+
+/// The generic window emitter validates the KIND before it scales the count.
+///
+/// An unknown kind has a zero stride, so a bound computed from it would pass any
+/// count and refuse nothing — waving through exactly the input `emit_at` is about
+/// to reject. Reachable: the caller chooses the kind.
+#[test]
+fn the_generic_window_emitter_rejects_an_unknown_kind_before_bounding_it() {
+    let mut vm = vm_for(WIRE_KEL);
+    let ret = run_call(
+        &mut vm,
+        &Call {
+            cmd: CMD_EMIT_IN_WINDOW,
+            nregions: 0,
+            seed: &[],
+            regions: &[],
+            fields: &[],
+            names: &[],
+            pool: &[],
+            // Kind 9999 has no stride; the count is absurd on purpose.
+            args: [9999, 1 << 40, 0, 0, 0],
+            read_len: 0,
+        },
+    )
+    .expect("run")
+    .0;
+    assert_eq!(ret, -222, "expected the unknown-kind refusal, got {ret}");
+}
+
+/// A BYTE POOL is not an unknown kind, and the window emitter must tell them apart.
+///
+/// `stride_of_kind` returns three things and only two are strides: a positive
+/// record stride, **0 for a byte pool**, and **-1 for an unknown kind**. The first
+/// version of the window guard tested `<= 0` and collapsed those two, refusing
+/// `STRING_POOL`, `PARAM_TYPES` and `DEBUG_POOL` outright.
+///
+/// The real-stage test caught it, but only because it drove every kind the stage
+/// reaches; a test that had picked one record kind would have passed. This pins
+/// the distinction directly so it cannot regress quietly.
+#[test]
+fn the_window_emitter_distinguishes_a_byte_pool_from_an_unknown_kind() {
+    use keleusma::wire_schema::kind;
+    let mut vm = vm_for(WIRE_KEL);
+    let bytes: Vec<u8> = (0..64u16).map(|i| i as u8).collect();
+    for k in [kind::STRING_POOL, kind::PARAM_TYPES, kind::DEBUG_POOL] {
+        let (ret, win) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_EMIT_IN_WINDOW,
+                nregions: 0,
+                seed: &[],
+                regions: &[],
+                fields: &[],
+                names: &[],
+                pool: &bytes,
+                args: [i64::from(k), bytes.len() as i64, 0, 0, 0],
+                read_len: bytes.len(),
+            },
+        )
+        .expect("run");
+        assert!(
+            ret >= 0,
+            "pool kind {k} was refused with {ret}; -222 means it was mistaken for \
+             an unknown kind"
+        );
+        assert_eq!(
+            &win[..bytes.len()],
+            &bytes[..],
+            "pool kind {k} wrote wrong bytes"
+        );
+    }
+}

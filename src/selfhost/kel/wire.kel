@@ -2349,37 +2349,92 @@ fn dispatch_emit(cmd: Word) -> Word {
 // same staged shape the residency measurement forced for the large stages,
 // exercised here at a size where the whole thing fits.
 //
-// `region_base(dir_find(k))` is recomputed per arm rather than hoisted into
+// `at` is recomputed per arm rather than hoisted into
 // `st`, because `dir_find` writes `st.cur` itself and borrowing that field
 // would read as a bug to anyone tracing a lookup — the same reason `st.pad`
 // exists separately.
-fn emit_in_region(k: Word, n: Word) -> Word {
-    if dir_find(k) < 0 { 0 - 221 } else {
-    if k == kind_names() { emit_name_records(region_base(dir_find(k)), n) } else {
-    if k == kind_consts() { emit_const_records(region_base(dir_find(k)), n) } else {
-    if k == kind_shapes() { emit_shape_records(region_base(dir_find(k)), n) } else {
-    if k == kind_signatures() { emit_signature_records(region_base(dir_find(k)), n) } else {
-    if k == kind_chunks() { emit_chunk_records(region_base(dir_find(k)), n) } else {
-    if k == kind_header() { emit_header_record_at(region_base(dir_find(k))) } else {
-    if k == kind_string_pool() { emit_pool_bytes(region_base(dir_find(k)), n) } else {
-    if k == kind_param_types() { emit_pool_bytes(region_base(dir_find(k)), n) } else {
+// SLICE 18: the generic dispatch, positioned by an EXPLICIT offset.
+//
+// Every arm used to read `at`, an absolute artifact offset,
+// which slice 17 established works for no real stage. Taking `at` as a parameter
+// lets the same seventeen arms serve both the absolute caller and a low window,
+// instead of a second chain that would drift from this one.
+//
+// It also BUYS DEPTH HEADROOM, which is not incidental. A dispatch chain's cap is
+// a budget of 24 shared between chain position and arm-body nesting, and a
+// nested-call body like `emit_x(at, n)` costs more of it
+// than `emit_x(at, n)`. At seventeen arms this chain was one short of the
+// eighteen a nested-call body allows; flattening the argument moves it well clear
+// rather than leaving the next kind to discover the ceiling as a SIGABRT.
+fn emit_at(k: Word, n: Word, at: Word) -> Word {
+    if k == kind_names() { emit_name_records(at, n) } else {
+    if k == kind_consts() { emit_const_records(at, n) } else {
+    if k == kind_shapes() { emit_shape_records(at, n) } else {
+    if k == kind_signatures() { emit_signature_records(at, n) } else {
+    if k == kind_chunks() { emit_chunk_records(at, n) } else {
+    if k == kind_header() { emit_header_record_at(at) } else {
+    if k == kind_string_pool() { emit_pool_bytes(at, n) } else {
+    if k == kind_param_types() { emit_pool_bytes(at, n) } else {
     // Added in slice 12. The original eight were exactly the minimal module's
     // regions, and the interner's constructed sources declare enums, so they
     // reach two more. The refusal is what surfaced it rather than a wrong
     // artifact — the guard slice 11 added, doing its job on its first real test.
-    if k == kind_enum_variants() { emit_enum_variant_records(region_base(dir_find(k)), n) } else {
-    if k == kind_enum_layouts() { emit_enum_layout_records(region_base(dir_find(k)), n) } else {
+    if k == kind_enum_variants() { emit_enum_variant_records(at, n) } else {
+    if k == kind_enum_layouts() { emit_enum_layout_records(at, n) } else {
     // Added when the coverage upgrade drove these from real sources. The
     // refusal is what surfaced each one — a `-222` rather than a silently
     // mis-sized region — which is now the third time this guard has earned its
     // place on a kind nobody had exercised.
-    if k == kind_natives() { emit_native_records(region_base(dir_find(k)), n) } else {
-    if k == kind_native_returns() { emit_native_return_records(region_base(dir_find(k)), n) } else {
-    if k == kind_private_composite() { emit_private_composite_records(region_base(dir_find(k)), n) } else {
-    if k == kind_data_slots() { emit_data_slot_records(region_base(dir_find(k)), n) } else {
-    if k == kind_shared_layout() { emit_shared_slot_records(region_base(dir_find(k)), n) } else {
-    if k == kind_data_init() { emit_data_init_records(region_base(dir_find(k)), n) } else {
+    if k == kind_natives() { emit_native_records(at, n) } else {
+    if k == kind_native_returns() { emit_native_return_records(at, n) } else {
+    if k == kind_private_composite() { emit_private_composite_records(at, n) } else {
+    if k == kind_data_slots() { emit_data_slot_records(at, n) } else {
+    if k == kind_shared_layout() { emit_shared_slot_records(at, n) } else {
+    if k == kind_data_init() { emit_data_init_records(at, n) } else {
+    // DEBUG_POOL reaches this dispatch for the first time here. Slice 9 drove it
+    // through a different caller, so the generic path never needed an arm and the
+    // stride table has known the kind all along -- `stride_of_kind` returns 0 for
+    // it, the byte-pool answer. Only a caller that chooses the kind directly, as
+    // the window emitter does, can reach it, which is why a corpus that never sets
+    // `emit_debug` left the gap invisible.
+    if k == kind_debug_pool() { emit_pool_bytes(at, n) } else {
     0 - 222 }}}}}}}}}}}}}}}}}
+}
+
+// The absolute caller, unchanged in meaning. The directory guard lives here
+// rather than in `emit_at`, because the window form has no directory to consult.
+fn emit_in_region(k: Word, n: Word) -> Word {
+    if dir_find(k) < 0 { 0 - 221 } else { emit_at(k, n, region_base(dir_find(k))) }
+}
+
+// Bytes a window write of `n` units of kind `k` will span.
+//
+// `stride_of_kind` RETURNS THREE THINGS AND ONLY TWO OF THEM ARE STRIDES: a
+// positive record stride, 0 for a byte pool, and -1 for an unknown kind. Its own
+// comment says so. A pool's `n` is already a byte count, so multiplying it by the
+// zero would bound every pool write at zero bytes; the caller wants `n` itself.
+//
+// This function exists because the first version of the guard below wrote
+// `stride_of_kind(k) <= 0` and collapsed the pool case into the unknown case,
+// refusing `STRING_POOL`, `PARAM_TYPES` and `DEBUG_POOL` outright. A real stage
+// caught it immediately -- `PARAM_TYPES` is kind 30 -- but only because the test
+// drove every kind the stage reaches rather than a chosen one.
+fn window_span(k: Word, n: Word) -> Word {
+    if stride_of_kind(k) == 0 { n } else { n * stride_of_kind(k) }
+}
+
+// The same dispatch, into a low window the caller positions.
+//
+// The kind is validated FIRST, and against `< 0` rather than `<= 0`. An unknown
+// kind has no stride at all, so a span computed from it is meaningless; checking
+// it up front also keeps the multiplication in `window_span` inside a range the
+// count guard has already bounded.
+fn emit_in_window() -> Word {
+    if stride_of_kind(wire.warg) < 0 { 0 - 222 } else {
+    if wire.warg3 < 0 { 0 - 264 } else {
+    if wire.warg2 > ck_window_capacity() { 0 - 265 } else {
+    if wire.warg3 + window_span(wire.warg, wire.warg2) > ck_window_capacity() { 0 - 265 } else {
+        emit_at(wire.warg, wire.warg2, wire.warg3) } } } }
 }
 
 // --- SLICE 12: THE INTERNER, THE DRIVER'S FIRST COMPUTED VALUE ------------
@@ -3640,7 +3695,8 @@ fn dispatch_driver2(cmd: Word) -> Word {
     if cmd == 161 { ck_window_consts() } else {
     if cmd == 162 { ck_window_templates() } else {
     if cmd == 163 { ck_window_ptypes() } else {
-    0 - 98 }}}}}}}}}}}}
+    if cmd == 164 { emit_in_window() } else {
+    0 - 98 }}}}}}}}}}}}}
 }
 
 fn dispatch_driver(cmd: Word) -> Word {
@@ -3670,7 +3726,7 @@ fn dispatch_driver(cmd: Word) -> Word {
 // UNREACHABLE and its own test fails immediately. The fall-through sweep reads
 // this value out of the source instead of restating a bound, which is what it
 // did for four consecutive slices — and got wrong once.
-fn highest_command() -> Word { 163 }
+fn highest_command() -> Word { 164 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {
