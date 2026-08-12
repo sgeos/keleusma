@@ -9541,7 +9541,18 @@ fn assemble_whole_artifact(label: &str, src: &str) -> (usize, usize, usize) {
 /// PR #21 proved composition on `verify_datalayout`. One stage is one shape: it
 /// happens to have no region larger than a window, its chunk count is two, and
 /// its kind set is whatever that source reaches. This runs the same assembly over
-/// four stages spanning 105,848 to 480,416 bytes and 2 to 76 chunks.
+/// **six** stages spanning 105,848 to 2,616,320 bytes and 2 to 94 chunks — every
+/// stage the pipeline has except `lexer`, `reconstruct`, `analyze` and the two
+/// smallest verifiers.
+///
+/// **The two largest were nearly excluded on a botched cost comparison, and the
+/// correction is the lesson.** Adding them takes this test from 25s to about
+/// 160s under load, which looked prohibitive against its own former runtime. It
+/// is not: the suite's wall clock is set by its LONGEST test, and
+/// `the_emitted_accumulator_regions_...` measures 687s under the same load. The
+/// right denominator is the test that governs the suite, not the one being
+/// changed. Measured back to back at identical load, since absolute times on this
+/// machine swing four- to five-fold with what else is running.
 ///
 /// **A correction to the rationale I first recorded for this.** The handoff said
 /// a larger stage would exercise multi-window assembly inside whole-artifact
@@ -9567,6 +9578,11 @@ fn the_whole_artifact_assembly_holds_across_several_stages() {
             include_str!("../src/selfhost/kel/verify_yield.kel"),
         ),
         ("codegen", include_str!("../src/selfhost/kel/codegen.kel")),
+        (
+            "verify_typed",
+            include_str!("../src/selfhost/kel/verify_typed.kel"),
+        ),
+        ("parse", include_str!("../src/selfhost/kel/parse.kel")),
     ];
 
     let mut smallest = usize::MAX;
