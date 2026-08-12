@@ -187,6 +187,12 @@ impl std::error::Error for LowerError {}
 struct Lower<'ctx> {
     b: Builder<'ctx>,
     i64t: IntType<'ctx>,
+    /// The entry block, so operand slots can be allocated lazily at its top.
+    ///
+    /// Allocas must sit in the entry block for the memory-to-register pass to
+    /// promote them, and at its TOP so that inserting one is valid however far
+    /// the current block has progressed.
+    entry: BasicBlock<'ctx>,
     locals: Vec<PointerValue<'ctx>>,
     slots: Vec<PointerValue<'ctx>>,
     depth: usize,
@@ -206,12 +212,42 @@ impl<'ctx> Lower<'ctx> {
     /// keeps building valid-but-discarded IR instead of panicking. The clamp is
     /// only ever reached once `stack_overflow` is set, and the caller turns that
     /// into an error before the function is handed back.
-    fn slot(&self, depth: usize) -> PointerValue<'ctx> {
+    /// Allocate operand slots on demand, up to the refusal ceiling.
+    ///
+    /// **`MAX_STACK` is a ceiling, not a provisioning quantity.** Emitting all
+    /// 64 slots unconditionally was measured to cost real frame bytes: the
+    /// promotion pass turns them into virtual registers, a machine with roughly
+    /// fourteen usable general-purpose registers cannot hold them, and the
+    /// allocator spills the excess straight back. So the fixed provisioning
+    /// survived optimisation as spill slots and dominated the frame, which is
+    /// why the smallest frames measured sat near `64 * 8` bytes.
+    ///
+    /// Growing on demand asks the emitter what it actually used rather than
+    /// duplicating the verifier's depth analysis in a second place, which is the
+    /// drift hazard this package has already been bitten by twice.
+    fn ensure_slot(&mut self, idx: usize) {
+        while self.slots.len() <= idx && self.slots.len() < MAX_STACK {
+            let name = format!("s{}", self.slots.len());
+            let resume = self.b.get_insert_block();
+            match self.entry.get_first_instruction() {
+                Some(i) => self.b.position_before(&i),
+                None => self.b.position_at_end(self.entry),
+            }
+            let p = self.b.build_alloca(self.i64t, &name).unwrap();
+            if let Some(bb) = resume {
+                self.b.position_at_end(bb);
+            }
+            self.slots.push(p);
+        }
+    }
+
+    fn slot(&mut self, depth: usize) -> PointerValue<'ctx> {
+        self.ensure_slot(depth);
         self.slots[depth.min(self.slots.len() - 1)]
     }
 
     fn push(&mut self, v: IntValue<'ctx>) {
-        if self.depth >= self.slots.len() {
+        if self.depth >= MAX_STACK {
             self.stack_overflow.get_or_insert(self.depth);
         }
         let slot = self.slot(self.depth);
@@ -969,9 +1005,10 @@ fn lower_chunk_body<'ctx>(
     for local in locals.iter().skip(chunk.param_count as usize) {
         b.build_store(*local, i64t.const_zero()).unwrap();
     }
-    let slots: Vec<_> = (0..MAX_STACK)
-        .map(|i| b.build_alloca(i64t, &format!("s{i}")).unwrap())
-        .collect();
+    // Operand slots are allocated LAZILY by `Lower::ensure_slot`, so a chunk
+    // that uses three of them pays for three. The previous unconditional
+    // `MAX_STACK` provisioning was measured to dominate the native frame.
+    let slots: Vec<PointerValue> = Vec::new();
 
     // The trailing pointer parameter, present only when the module declares
     // shared slots. Read once at entry; every access is an offset from it.
@@ -1024,6 +1061,7 @@ fn lower_chunk_body<'ctx>(
     let mut st = Lower {
         b,
         i64t,
+        entry,
         locals,
         slots,
         depth: 0,
