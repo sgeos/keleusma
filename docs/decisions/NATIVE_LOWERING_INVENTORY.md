@@ -4708,3 +4708,61 @@ has produced.
 
 **What it does not license** is a schedule. Nothing here measures what composite lowering costs, only what it
 delivers, and the B28 flat-byte representation is the largest single item in the remaining instruction set.
+
+## THE REAL FRAME, MEASURED: the bound is not merely unrelated, it UNDERSTATES by up to 13x
+
+A371 deferred the frame measurement because the section carrying per-function frame sizes is emitted only for
+ELF and this host produces Mach-O. **That deferral was unnecessary**: LLVM cross-targets, so an ELF object
+can be produced from any host. Emitting one and reading `.stack_sizes` gives the number directly.
+
+| Module | Verifier bound | Frame at O0 | Frame at O2 | O2 / bound |
+|---|---|---|---|---|
+| `analyze` | 64 | 1272 | 632 | **9.9x** |
+| `lexer` | 320 | 712 | 664 | 2.1x |
+| `parse` | 64 | 1832 | 824 | **12.9x** |
+| `reconstruct` | 128 | 1944 | 1192 | 9.3x |
+| `verify_datalayout` | 64 | 592 | 520 | 8.1x |
+| `verify_structural` | 64 | 616 | 600 | 9.4x |
+| `verify_typed` | 64 | 1096 | 696 | 10.9x |
+
+**The verifier's bound is exceeded by every module, by between two and thirteen times.** So the bound does
+not merely fail to constrain the frame; **it is smaller than the frame, which is the dangerous direction**.
+An artefact provisioned from it would be under-provisioned.
+
+**And no constant rescues it.** Four modules share a bound of exactly 64 and have frames of 520, 600, 632
+and 824. **Identical bound, frames differing by 58 percent.** There is no function from the bound to the
+frame, which is the empirical form of the claim A371 made structurally.
+
+### A correction to A371, found by measuring what A371 deferred
+
+A371 says the optimiser deletes the stack allocations and reports 38,601 at optimisation level zero against
+**0** afterwards, which is true of the *intermediate representation*. It then implies the frame is
+correspondingly small.
+
+**The frame is not small.** Across 19 modules the total is 298,192 bytes at O0 and **275,432 at O2, a
+reduction of only 8 percent**. The allocations are promoted and the cost stays.
+
+The mechanism is the fixed provisioning. Promoting 64 operand slots to registers on a machine with roughly
+fourteen usable general-purpose registers means most of them **spill straight back to the frame**. So
+`MAX_STACK` survives optimisation as spill slots rather than as allocations, which is why the smallest
+frames measured sit near $64 \times 8 = 512$ bytes.
+
+**A371's Result 1 is right and its explanation is incomplete**: the number does not transfer, and the reason
+is not that the provisioning is eliminated but that it is *relocated*.
+
+### What this changes
+
+- The article's claim that the optimiser "deletes all of it" must be qualified: it deletes the allocations
+  and keeps the cost.
+- **The measurement is no longer deferred**, and the "requires an object format this host does not produce"
+  caveat in the Epistemic State is now false.
+- The finding is strictly worse for the project than the version published, because an under-estimate is
+  more dangerous than an unrelated estimate.
+
+### The obvious next lever, and it is cheap
+
+`MAX_STACK` is a fixed 64. The verifier already proves a per-chunk operand depth, and the largest bound
+measured here is 320 bytes, or forty slots. **Provisioning from the proven depth instead of the constant
+would cut the dominant term in most frames**, and the verifier already computes the number. That is a small
+change with a measurable effect, and it is the first place the two systems could be made to agree on
+anything at all.
