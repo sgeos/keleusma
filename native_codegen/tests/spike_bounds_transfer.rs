@@ -68,6 +68,10 @@ fn ir_for(m: &Module, optimise: bool) -> Option<String> {
 fn q1_does_the_native_frame_reflect_the_proven_bound() {
     println!("\n================ Q1: what sizes the native frame?");
     let (mut n, mut allocas_o0, mut allocas_o2) = (0usize, 0usize, 0usize);
+    // Closed form the article publishes: every function gets MAX_STACK operand
+    // slots plus one per local, unconditionally. Asserted rather than eyeballed,
+    // because an equation in an article is a claim like any other.
+    let mut predicted = 0usize;
     for (path, m) in corpus() {
         let Some(o0) = ir_for(&m, false) else {
             continue;
@@ -83,10 +87,21 @@ fn q1_does_the_native_frame_reflect_the_proven_bound() {
             );
         }
         n += 1;
+        predicted += m
+            .chunks
+            .iter()
+            .map(|c| keleusma_native::MAX_STACK + c.local_count as usize)
+            .sum::<usize>();
         allocas_o0 += a0;
         allocas_o2 += a2;
     }
     println!("\n  modules measured : {n}");
+    println!("  predicted by formula: {predicted}");
+    assert_eq!(
+        allocas_o0, predicted,
+        "the unoptimised frame is NOT sum_f (MAX_STACK + locals(f)); the article's \
+         closed form for M_nat^O0 would be wrong"
+    );
     println!("  allocas at O0    : {allocas_o0}");
     println!("  allocas at O2    : {allocas_o2}");
     println!("\n  The lowering emits MAX_STACK = 64 operand slots per function");
