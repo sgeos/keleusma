@@ -9393,18 +9393,16 @@ fn a_region_larger_than_one_window_is_assembled_across_two() {
 /// The host places every payload at its true offset; the driver is never told
 /// where the artifact really is, only how many records to write and where in the
 /// window to start.
-#[test]
-fn a_complete_real_stage_artifact_is_assembled_byte_for_byte() {
+fn assemble_whole_artifact(label: &str, src: &str) -> (usize, usize, usize) {
     use keleusma::wire_schema::kind;
     let mut vm = vm_for(WIRE_KEL);
 
-    let src = include_str!("../src/selfhost/kel/verify_datalayout.kel");
     let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
     let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
     assert!(
         want.len() > CAPACITY,
-        "artifact is {} bytes and fits the buffer, so nothing here is composed",
+        "{label}: artifact is {} bytes and fits the buffer, so nothing here is composed",
         want.len()
     );
 
@@ -9493,7 +9491,10 @@ fn a_complete_real_stage_artifact_is_assembled_byte_for_byte() {
                 },
             )
             .expect("run");
-            assert!(ret >= 0, "kind {k} batch at {done} refused with {ret}");
+            assert!(
+                ret >= 0,
+                "{label}: kind {k} batch at {done} refused with {ret}"
+            );
             art[base + byte_at..base + byte_at + span].copy_from_slice(&win[..span]);
             done += n;
             batches += 1;
@@ -9504,7 +9505,10 @@ fn a_complete_real_stage_artifact_is_assembled_byte_for_byte() {
         regions_placed += 1;
     }
 
-    assert!(regions_placed >= 8, "only {regions_placed} regions placed");
+    assert!(
+        regions_placed >= 8,
+        "{label}: only {regions_placed} regions placed"
+    );
     assert!(
         batched_regions >= 1,
         "no region needed more than one batch, so composition with batching is \
@@ -9523,10 +9527,65 @@ fn a_complete_real_stage_artifact_is_assembled_byte_for_byte() {
             })
             .next();
         panic!(
-            "first difference at byte {at} of {} (region {owner:?}): got {:?} want {:?}",
+            "{label}: first difference at byte {at} of {} (region {owner:?}): got {:?} want {:?}",
             want.len(),
             &art[at..(at + 16).min(art.len())],
             &want[at..(at + 16).min(want.len())]
         );
     }
+    (want.len(), regions_placed, batched_regions)
+}
+
+/// The capstone over SEVERAL real stages, not one.
+///
+/// PR #21 proved composition on `verify_datalayout`. One stage is one shape: it
+/// happens to have no region larger than a window, its chunk count is two, and
+/// its kind set is whatever that source reaches. This runs the same assembly over
+/// four stages spanning 105,848 to 480,416 bytes and 2 to 76 chunks.
+///
+/// **A correction to the rationale I first recorded for this.** The handoff said
+/// a larger stage would exercise multi-window assembly inside whole-artifact
+/// composition. It does not: `assemble_whole_artifact` emits every batch at
+/// window base zero and the host splices immediately, so no window ever
+/// accumulates, however large the region. Multi-window accumulation is tested
+/// separately and is a different caller strategy, not a consequence of scale.
+/// What this actually buys is BREADTH — more kinds, more batches, and evidence
+/// that composition is not specific to one source.
+#[test]
+fn the_whole_artifact_assembly_holds_across_several_stages() {
+    const STAGES: &[(&str, &str)] = &[
+        (
+            "verify_datalayout",
+            include_str!("../src/selfhost/kel/verify_datalayout.kel"),
+        ),
+        (
+            "verify_depth",
+            include_str!("../src/selfhost/kel/verify_depth.kel"),
+        ),
+        (
+            "verify_yield",
+            include_str!("../src/selfhost/kel/verify_yield.kel"),
+        ),
+        ("codegen", include_str!("../src/selfhost/kel/codegen.kel")),
+    ];
+
+    let mut smallest = usize::MAX;
+    let mut largest = 0usize;
+    for (label, src) in STAGES {
+        let (bytes, regions, batched) = assemble_whole_artifact(label, src);
+        assert!(
+            regions >= 8 && batched >= 1,
+            "{label}: {regions} regions, {batched} batched"
+        );
+        smallest = smallest.min(bytes);
+        largest = largest.max(bytes);
+    }
+
+    // Must-fire about the CORPUS: the stages must actually differ in size, or
+    // four passes prove no more than one did.
+    assert!(
+        largest >= smallest * 4,
+        "stages span only {smallest} to {largest} bytes, too narrow to show that \
+         composition is independent of scale"
+    );
 }
