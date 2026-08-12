@@ -4607,3 +4607,60 @@ and the true marginal gains are smaller and require the full blocking lattice, w
 
 The honest reading is an ordering rather than a set of quantities: composites first, non-scalar constants
 second, and the native ABI far below where its instance count places it.
+
+## THE "CHEAP WIN" IS 1.7 PERCENT, NOT 15.5: first-blocker slack, measured
+
+One increment ago the module ranking put non-scalar `Const` second at nine modules and 15.5 percent of the
+corpus, and I recommended weighing it first on the grounds that a string constant is plausibly far cheaper
+than the composite representation. **Both halves of that were wrong, and the measurement that says so took
+one test.**
+
+### The representation is not cheap
+
+`Value::StaticStr(String)` is a **heap-owned `String`** in the runtime's tagged value enum. The backend's
+operand stack is uniformly `i64` and has no representation for it. So lowering a string constant is not a
+constant-materialisation problem; it is the **Text representation** problem, which decides how every
+consumer of a string agrees on a pointer, a length, an arena handle or something else.
+
+The refusal message this branch already emits says exactly that — "Text slot; string representation is
+Workstream A (full pass)" — and I recommended around it anyway. **The code knew and the recommendation did
+not.**
+
+### The coverage is not there either
+
+| Modules containing a static string | 11 |
+|---|---|
+| ... also needing native calls | 8 |
+| ... also needing composites and native calls | 2 |
+| **... blocked by the string ALONE** | **1** |
+
+**Of eleven, exactly one is blocked by a static string alone.** The first-blocker figure of nine modules and
+15.5 percent was almost entirely slack. The real marginal gain is **one module, 1.7 percent**, and it is the
+smallest item measured rather than the second largest.
+
+This is the attribution limit recorded with the ranking, now quantified instead of gestured at. **The
+warning was correct, generic, and did not stop me recommending against it**, which is the part worth
+carrying: a stated caveat is not a substitute for the measurement it describes.
+
+### The finding that survives, and it is a design constraint
+
+**Eight of eleven are `static-str + native-call`.** Strings and native calls travel together, which on
+reflection is forced rather than incidental: a string constant in a program without a native interface has
+nothing to be passed to. `println` and its relatives are the reason string constants exist in this corpus.
+
+So **the string representation and the native calling convention must be designed together.** Choosing a
+Text representation first and fitting the native ABI to it, or the reverse, sequences two decisions that
+constrain each other. That is a real constraint on Workstream A and Workstream D, and it does not appear in
+either plan.
+
+### The ordering, restated
+
+| Blocker | First-blocker modules | Measured marginal gain |
+|---|---|---|
+| `NewComposite` | 18 (31.0%) | not yet measured |
+| `Const` (static string) | 9 (15.5%) | **1 (1.7%)** |
+| `CallVerifiedNative` | 4 (6.9%) | not yet measured |
+
+**Composites remain first and the second place is now vacant.** The same slack measurement has not been run
+for composites or native calls, so their marginal gains are also upper bounds and the honest state is that
+only one of the three is known.
