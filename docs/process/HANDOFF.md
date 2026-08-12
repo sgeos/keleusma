@@ -16,7 +16,7 @@ misleading a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`, or a feature branch cut from it.
-- **Parent commit**: `9fdcadb8`
+- **Parent commit**: `23943578`
 - **Written**: 2026-08-11
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
@@ -40,7 +40,7 @@ this file**.
 
 ## FIRST ACTION: read the retraction before trusting the plan's residency numbers
 
-**Nothing is in flight.** PRs #9-#13, #15, #17 and #19 all merged on 22/22 CI green, each at the commit CI ran. Even-numbered
+**Nothing is in flight.** PRs #9-#13, #15, #17, #19 and #21 all merged on 22/22 CI green, each at the commit CI ran. Even-numbered
 PRs from #14 on are the other session's; **tell us apart by BASE BRANCH, not author** -- both sessions
 use the same account, so `--author @me` matches theirs too. Confirm with `gh pr list --state open`; if `gh run list --branch v0.2.3 --limit 1` is red, read
 its log first.
@@ -82,7 +82,7 @@ three PRs (#2, #3, #6).
 
 | Ref | Commit | Status |
 |---|---|---|
-| `v0.2.3` | `9fdcadb8` | eight PRs merged in, pushed |
+| `v0.2.3` | `23943578` | nine PRs merged in, pushed |
 | PR #9 | `ae01441f` | **MERGED**, 22/22 green, at the commit CI ran |
 | PR #10 | `3b93e351` | **MERGED**, 22/22 green, at the commit CI ran |
 | PR #11 | `eaf95524` | **MERGED**, 22/22 green, at the commit CI ran |
@@ -91,13 +91,14 @@ three PRs (#2, #3, #6).
 | PR #15 | `af980528` | **MERGED**, 22/22 green, at the commit CI ran |
 | PR #17 | `7edbd767` | **MERGED**, 22/22 green, at the commit CI ran |
 | PR #19 | `2cd653dc` | **MERGED**, 22/22 green, at the commit CI ran |
+| PR #21 | `c2700d45` | **MERGED**, 22/22 green — **the capstone** |
 | `v0.3.0` | — | same workflow; their last local gate is STALLED and irrelevant |
 
 Eight PRs merged on this line today, every one CI-gated, **with the local machine idle throughout**.
 
 ## WHERE THE DRIVER IS
 
-`tests/selfhost_wire.rs` is **147 tests**. Keleusma computes **all five** of the values the driver
+`tests/selfhost_wire.rs` is **148 tests**. Keleusma computes **all five** of the values the driver
 owed: the name table with both interning modes, the breadth-first constant ordering, the names
 interned **during** the walk for all three interning tags with `STRUCT_AUX` and `ENUM_AUX` alongside,
 the per-chunk ranges, and now the interning SEQUENCE itself, derived from a module description that
@@ -108,26 +109,32 @@ is `STRUCT_TEMPLATES`, and it is **structural rather than pending**: the boxed c
 needs a non-flat type, the only one is `Text` under a narrow word, and this suite is gated out of
 narrow-word builds.
 
-## THE NEXT INCREMENT: A WHOLE REAL STAGE, END TO END
+## THE MECHANICAL ARC IS COMPLETE. WHAT IS LEFT IS NOT MECHANISM.
 
-**Every mechanical piece is now in place and verified against real stage output**: all five computed
-values, batching (both the accumulator-carrying `CHUNKS` path and the generic one), window
-positioning across all seventeen record kinds, and multi-window assembly for payloads larger than the
-buffer.
+**PR #21 closed it.** Keleusma's own output builds `verify_datalayout`'s entire 105,848-byte
+auxiliary body — header area, directory and every region — byte-identical to `encode_aux_body`. The
+driver has all five computed values, batching on both paths, window positioning across all seventeen
+record kinds, multi-window assembly, and now whole-artifact composition.
 
-**Do this next: emit a COMPLETE real-stage artifact and compare it byte for byte.** Every slice so
-far has checked one region, or one region's worth of mechanism. Nothing has yet asserted that the
-whole thing composes.
+**Do NOT reach for another emitter slice. There is no obvious one left**, and inventing one is how a
+programme starts producing mechanisms that work and were not needed. Three candidates, in the order
+I would take them:
 
-`verify_datalayout` is the case: **105,848 bytes**, the smallest of the ten. Its header area is
-48 + 48n for about fifteen regions, roughly 768 bytes, so it fits the buffer and only the region
-payloads need windowing. Measured region sizes, to reuse rather than re-derive: `STRING_POOL` 30,600
-at offset 50,560; `NAMES` 24,688 at 81,160; `DATA_SLOTS` 24,672 at 992; `SHARED_LAYOUT` 24,672 at
-25,664; `CHUNKS` 96 at 50,464.
+1. **A second stage through the capstone.** `verify_yield` at 303,464 bytes exercises multi-window
+   assembly inside whole-artifact composition, which `verify_datalayout` does not — its regions all
+   fit one window. Cheap, and it tests composition at a size the current test cannot.
+2. **The residency question, which is the operator's.** About **40.7 bytes of artifact per data
+   slot**, one slot per array element, ~2.4 s of compile time per megabyte declared. That is what
+   makes `lexer` expensive rather than impossible, and it is a representation decision rather than an
+   increment.
+3. **`parse` and `verify_typed` end to end**, which need the accumulator question answered first.
 
-**Expect this one to need a caller too, and check before writing Keleusma code.** Three consecutive
-gaps in this area needed a caller rather than an emitter. The cost of not checking is not a wrong
-answer; it is a mechanism that works, passes its tests, and did not need to exist.
+**FOUR CONSECUTIVE GAPS HERE NEEDED A CALLER, NOT AN EMITTER.** Generic batching, multi-window
+assembly, the capstone, and `DEBUG_POOL` before them. **Check first, every time.** The cost of not
+checking is not a wrong answer; it is a mechanism that works, passes its tests, and did not need to
+exist. On the capstone the check was one grep — the artifact's only checksum covers twelve prologue
+bytes, not the body — and had it gone the other way the increment would have needed an incremental
+CRC carried across windows.
 
 **Do NOT do these two.** Reasoning in
 [`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md):

@@ -16,11 +16,11 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 | | |
 |---|---|
-| `v0.2.3` | `9fdcadb8`, pushed, CI confirming |
-| PRs #9-#13, #15, #17, #19 | all **MERGED** on 22/22 green, each at the commit CI ran |
+| `v0.2.3` | `23943578`, pushed, CI confirming |
+| PRs #9-#13, #15, #17, #19, #21 | all **MERGED** on 22/22 green, each at the commit CI ran |
 | Machine | idle throughout; every gate ran on hosted runners |
 
-`tests/selfhost_wire.rs` is **147 tests**. **All five** of the values the driver owed are now
+`tests/selfhost_wire.rs` is **148 tests**. **All five** of the values the driver owed are now
 computed on the Keleusma side, the last of them in PR #11, and `CHUNKS` emits in batches with its
 three running totals relayed across them (PR #12), into a low window so a real stage's region is
 reachable at all (PR #13). The window is now GENERAL: `emit_at(k, n, at)` serves all seventeen record
@@ -112,20 +112,35 @@ element with exact deltas, ~40.7 bytes of artifact per slot, and ~2.4 s of compi
 declared. Declaring `lexer`'s accumulator costs a ~400 MB body and a 25-second compile — a serious
 practical cost, not a limit violation.
 
+## The mechanical arc is complete
+
+**PR #21 was the capstone**: Keleusma's own output builds `verify_datalayout`'s entire 105,848-byte
+auxiliary body, byte-identical to the reference. All five computed values, batching on both paths,
+window positioning across all seventeen record kinds, multi-window assembly, and whole-artifact
+composition.
+
+**One grep decided that increment's size.** The artifact's only checksum is `crc32(&prologue[..12])`
+— twelve bytes, not the body. Had it covered the body the driver would have needed an incremental CRC
+carried across windows, since 105,848 bytes never fit a 65,536-byte buffer. Fourth consecutive gap
+here that needed a caller rather than an emitter, and the first where the check could plausibly have
+gone the other way.
+
 ## Next intended step
 
-**A whole real stage, end to end.** Every mechanical piece is in place and verified against real
-stage output: the five computed values, batching on both paths, window positioning across all
-seventeen record kinds, and multi-window assembly. **Nothing has yet asserted that the whole thing
-composes.** `verify_datalayout` is the case at 105,848 bytes — its header area is roughly 768 bytes
-and fits the buffer, so only the payloads need windowing.
+**Do not reach for another emitter slice — there is no obvious one left**, and inventing one is how a
+programme starts producing mechanisms that work and were not needed. In order:
 
-**Expect it to need a caller, and check first.** Three consecutive gaps in this area needed a caller
-rather than an emitter. The cost of not checking is not a wrong answer; it is a mechanism that works,
-passes its tests, and did not need to exist.
+1. **A second stage through the capstone.** `verify_yield` at 303,464 bytes exercises multi-window
+   assembly *inside* whole-artifact composition; `verify_datalayout`'s regions all fit one window.
+2. **The residency question, which is yours** — ~40.7 bytes of artifact per data slot, one slot per
+   array element, ~2.4 s of compile time per megabyte. A representation decision, not an increment.
+3. **`parse` and `verify_typed` end to end**, which need (2) answered first.
 
-The two traps still stand: **do not** replace the linear dedup scan, and **do not** compute the chunk
-record's name index.
+## A worthless mutation, recorded as worthless
+
+Verifying the `DATA_SLOTS` path I inserted an inert assignment to a scratch field. It changed no
+behaviour, the test passed, and that momentarily reads as a coverage gap. **A mutant that perturbs
+nothing proves nothing in either direction.** The real mutations fire in two different regions.
 
 ## A note on telling the two sessions apart
 

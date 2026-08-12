@@ -13,6 +13,41 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE CAPSTONE: A COMPLETE REAL-STAGE ARTIFACT, AND A GREP THAT DECIDED WHAT KIND OF INCREMENT IT WAS
+(2026-08-12).** 147 to 148 tests, no Keleusma change. Keleusma's own output now builds
+`verify_datalayout`'s entire **105,848-byte** auxiliary body — header area, directory and every
+region — byte-identical to `encode_aux_body`. **Every slice before this verified one region, or one
+region's worth of mechanism. None asserted that the whole composes.**
+
+**One grep decided whether this was a caller or a week of work.** The artifact's only checksum is
+`crc32(&prologue[..12])` — twelve bytes, not the body. Had it covered the body, the driver would have
+needed an **incremental CRC carried across windows**, because 105,848 bytes never fit a 65,536-byte
+buffer and a checksum cannot be computed over data you have never held at once. It does not, so
+assembly stays positional. **Fourth consecutive gap in this area that needed a caller rather than an
+emitter**, and the first where the check could plausibly have gone the other way.
+
+**I ran a worthless mutation and it is recorded as worthless rather than counted.** Verifying the
+`DATA_SLOTS` path, I inserted `st.pad = 0` — an inert assignment to a scratch field. It changed no
+behaviour, the test passed, and for a moment that reads as a coverage gap. **A mutant that perturbs
+nothing proves nothing in either direction**, and reporting it as evidence would have been misleading
+whichever way I spun it. The real mutation, an off-by-one on the data-slot name index, fails at byte
+992 in region 26; the pool mutation fails at byte 50,440 in region 30. Two regions, independently
+confirmed.
+
+**One check the test gets for free rather than by design, worth naming because free checks are
+usually illusions.** The assembly buffer starts as zeros and only the header and non-empty regions
+are written, so byte equality means every non-zero byte of the reference is accounted for by
+something Keleusma emitted. **Nothing passes because both sides happen to be zero** — a region
+silently skipped would leave zeros where the reference has content.
+
+**What the arc adds up to.** Across eight increments the driver went from re-emitting values the host
+had decoded to computing all five it owed, batching on both paths, positioning by window across all
+seventeen record kinds, assembling across windows, and now composing a whole artifact. What remains
+open is not mechanism: it is the residency cost the operator holds, about 40.7 bytes of artifact per
+data slot, which is what makes `lexer` expensive rather than impossible.
+
+---
+
 **A REGION LARGER THAN ONE WINDOW, AND TWO BOUNDS THAT ARE NOT THE SAME BOUND (2026-08-11).** 146 to
 147 tests, and no Keleusma change. Slice 19's test asserted its region fits a single 65,536-byte
 window, deliberately, which left this case untested rather than handled — an honest gap, and this
