@@ -4814,3 +4814,58 @@ The must-not-fire precondition `before > MAX_STACK` is now false by construction
 than deleted, with the original property kept — some alloca must exist before the pass — and the improvement
 pinned alongside it as `before < MAX_STACK`, so a regression to fixed provisioning fails a test rather than
 quietly costing half a kilobyte per function.
+
+## THE COST HALF OF THE COMPOSITE DECISION: the dominant term has zero instances
+
+The blocker ranking gave composites a delivery figure of 34.5 percent and no cost figure, and that asymmetry
+was stated three times before it was measured. It is measured now.
+
+Every composite opcode carries a compiler-baked operand with two or three forms, and they differ enormously
+in what a backend must build:
+
+| Form | Instances | What it needs |
+|---|---|---|
+| `Flat` | **300** | a constant byte offset and a typed load |
+| `FlatNested` | **2** | a composite as a value on the operand stack |
+| `Boxed` | **0** | a metadata table, a heap body, positional indices |
+
+**The boxed form has no instances.** It is fully specified, implemented in the interpreter, and used by
+nothing in the corpus. That is the term every estimate of this work was anchored on.
+
+Constructed bodies are small: `byte_size` from 8 to 64 with a median of 24, `count` from 1 to 5 with a
+median of 3. **An aggregate here is three values in twenty-four bytes.**
+
+### What remains is machinery this package already has
+
+A flat access is an address computation and a typed load, which is **exactly what `GetData` already does**:
+base pointer plus a compile-time constant, then a typed load. Construction is a stack allocation and a run
+of stores at baked offsets. `IsEnum` is a load and an integer compare. The two nested accesses need no copy,
+because a contiguous child body is a **sub-range of its parent**.
+
+### Why the estimate was wrong, and it was not carelessness
+
+Aggregates are genuinely expensive **in a compiler that decides their layout**. This one decided it three
+passes earlier and wrote the answers into instruction operands. The literature that makes the problem hard
+is about representation under **polymorphism**, where one compiled function handles values whose layout
+differs per instantiation, and this project monomorphises before bytecode.
+
+**The estimate priced every form the instruction set defines rather than every form the corpus contains**,
+and nothing in the phrase "implement aggregate data types" distinguishes those.
+
+### The caveat that survived, and one the equations produced
+
+**Cost is estimated, not measured.** Every term above is called cheap because the backend implements
+something structurally identical elsewhere. **That inference already failed once here**, when a string
+constant was judged cheap on the same grounds and proved to need a whole representation decision.
+
+And writing the construction cost as a sum exposed something the prose had hidden: stack allocations for
+composite bodies are bounded by
+
+$$\Delta M \le 239 \times 64 = 15{,}296 \text{ bytes}$$
+
+against a current corpus-wide frame total of **23,976 bytes**. The loose bound is comparable to the entire
+present frame, so **aggregates could undo much of the 91 percent frame reduction** unless bodies are reused
+or sunk into the arena. The true figure is far below the bound, since allocations in disjoint scopes share
+slots, but it is neither zero nor measured.
+
+Full treatment in article A372, drafted at `tmp/2026-08-12-cost_of_compiling_aggregates.markdown`.
