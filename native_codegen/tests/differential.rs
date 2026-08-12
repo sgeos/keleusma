@@ -938,11 +938,30 @@ fn mem2reg_removes_every_operand_slot_alloca() {
         // MUST-NOT-FIRE for the assertion below: the allocas have to be there
         // BEFORE the pass, or "none afterwards" is satisfied by a lowering that
         // never emitted any and the test proves nothing about `mem2reg`.
+        //
+        // **The bound moved on 2026-08-12 and this is the deliberate record.**
+        // It read `before > MAX_STACK`, because the lowering provisioned all 64
+        // operand slots unconditionally. The comment at the top of this test
+        // already named that as waste: "512 of those bytes are `MAX_STACK` slots
+        // the program never touches". Slots are now allocated on demand, so the
+        // count is proportional to what the chunk uses and the old assertion
+        // would fail for the right reason.
+        //
+        // The must-not-fire property is unchanged and is what is asserted: SOME
+        // alloca must exist before the pass.
         let before = alloca_count(&lm.print_to_string().to_string());
         assert!(
-            before > MAX_STACK,
-            "the unoptimised lowering must emit an alloca per operand slot; \
-             found only {before} for {src:?}"
+            before > 0,
+            "the unoptimised lowering must emit operand-slot allocas for \
+             `mem2reg` to promote; found none for {src:?}"
+        );
+        // And the improvement itself, pinned so it cannot silently regress to
+        // fixed provisioning. These programs use a handful of slots; the
+        // ceiling is 64.
+        assert!(
+            before < MAX_STACK,
+            "operand slots are allocated on demand, so a small program must not \
+             pay for all {MAX_STACK} of them; got {before} for {src:?}"
         );
 
         lm.run_passes("mem2reg", &machine, PassBuilderOptions::create())

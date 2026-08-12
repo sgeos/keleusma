@@ -4766,3 +4766,51 @@ measured here is 320 bytes, or forty slots. **Provisioning from the proven depth
 would cut the dominant term in most frames**, and the verifier already computes the number. That is a small
 change with a measurable effect, and it is the first place the two systems could be made to agree on
 anything at all.
+
+## THE FRAME LEVER, PULLED: 91 percent smaller, and the gap partly closes
+
+`MAX_STACK` was a fixed provisioning of 64 operand slots emitted unconditionally per function. It is now a
+**refusal ceiling** rather than a provisioning quantity: slots are allocated on demand, so a chunk using
+three pays for three.
+
+| | Before | After | Change |
+|---|---|---|---|
+| total frame bytes, O0 | 298,192 | **43,240** | −85.5% |
+| total frame bytes, O2 | 275,432 | **23,976** | **−91.3%** |
+| largest single frame, O2 | 1,192 | **712** | −40% |
+
+### The measurement that made this obvious was already in a test comment
+
+`mem2reg_removes_every_operand_slot_alloca` has carried this sentence since 2026-08-09: *"512 of those
+bytes are `MAX_STACK` slots the program never touches."* The waste was identified, written down, measured at
+536 bytes against 0 on `thumbv7em-none-eabihf`, **and asserted as a precondition** — the test required
+`before > MAX_STACK` so that "none afterwards" would prove something about the promotion pass.
+
+**The record contained the finding and the fix waited three days for someone to connect it to the frame
+measurement.** Nothing was hidden; the two facts sat in different files.
+
+### Some modules now fit under the bound, and the relation is still not a function
+
+| Module | Verifier | Frame O2 before | Frame O2 now |
+|---|---|---|---|
+| `verify_datalayout` | 64 | 520 | **24** |
+| `lexer` | 320 | 664 | **184** |
+| `analyze` | 64 | 632 | 152 |
+| `parse` | 64 | 824 | 328 |
+| `reconstruct` | 128 | 1192 | 712 |
+
+**Two modules are now below their verifier bound and three are still above it**, and the two sharing a bound
+of 64 differ by more than a factor of thirteen at 24 against 328. **So this does not make the bound sound.**
+It removes a dominant constant that had nothing to do with the program, which makes the residual gap
+attributable to real spilling rather than to fixed overhead.
+
+That is worth stating precisely, because a 91 percent reduction is the kind of number that invites the
+conclusion it did not earn. **The bound still does not constrain the frame.** What changed is that the frame
+is now mostly a property of the program instead of mostly a property of a constant.
+
+### A boundary moved, deliberately, and is recorded in the test
+
+The must-not-fire precondition `before > MAX_STACK` is now false by construction. It was replaced rather
+than deleted, with the original property kept — some alloca must exist before the pass — and the improvement
+pinned alongside it as `before < MAX_STACK`, so a regression to fixed provisioning fails a test rather than
+quietly costing half a kilobyte per function.
