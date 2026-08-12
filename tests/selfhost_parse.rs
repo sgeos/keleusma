@@ -187,16 +187,24 @@ fn data_slot_names(program: &keleusma::ast::Program) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The element-0 slot (base) and length of an array `data.field`, from its per-element
-/// slot names `data.field[0]`, `data.field[1]`, ...
+/// The element-0 slot (base) and length of an array `data.field`.
+///
+/// Every element of an array now carries the ARRAY's name rather than a distinct
+/// `field[k]`, because a per-element string defeated the name interner's dedup
+/// and made the pool scale with the element count. So the run is found by exact
+/// name and its length is the run's own length; the old form keyed off a `field[`
+/// prefix, which used the naming convention as a lookup index.
+///
+/// A scalar field of the same name would be a single slot, which this would
+/// report as an array of length one. That is exactly what the caller wants: the
+/// base slot and the number of elements addressable from it.
 fn array_base_len(data_slots: &[String], data: &str, field: &str) -> (i64, i64) {
-    let prefix = format!("{data}.{field}[");
+    let want = format!("{data}.{field}");
     let base = data_slots
         .iter()
-        .position(|n| n.starts_with(&prefix))
-        .unwrap_or_else(|| panic!("no array data slot with prefix `{prefix}`"))
-        as i64;
-    let len = data_slots.iter().filter(|n| n.starts_with(&prefix)).count() as i64;
+        .position(|n| n == &want)
+        .unwrap_or_else(|| panic!("no data slot named `{want}`")) as i64;
+    let len = data_slots.iter().filter(|n| *n == &want).count() as i64;
     (base, len)
 }
 
