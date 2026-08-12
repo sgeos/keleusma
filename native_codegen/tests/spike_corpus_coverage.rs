@@ -513,3 +513,95 @@ fn spike_report_module_blocker_ranking() {
     println!("     against one blocker may contain others behind it.");
     println!("================\n");
 }
+
+/// CO-OCCURRENCE: what sits BEHIND each first blocker?
+///
+/// The module ranking is first-blocker attribution and therefore an upper bound
+/// on what removing any single blocker delivers. This measures the bound's
+/// slack directly: for every refused module, it reports which other unsupported
+/// opcode classes the module also contains.
+///
+/// The question that motivated it: non-scalar `Const` is the first blocker for
+/// nine modules, and a string constant looks cheap next to the composite
+/// representation. If those same modules also contain native calls or
+/// composites, the apparent cheap win frees nothing.
+#[test]
+fn spike_report_blocker_co_occurrence() {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn classes(m: &keleusma::bytecode::Module) -> BTreeSet<&'static str> {
+        let mut set = BTreeSet::new();
+        for c in &m.chunks {
+            for op in &c.ops {
+                let k = match op {
+                    Op::NewComposite(..) => Some("composite"),
+                    Op::GetField(..)
+                    | Op::GetTupleField(..)
+                    | Op::GetEnumField(..)
+                    | Op::GetIndex(..)
+                    | Op::IsEnum(..)
+                    | Op::IsStruct(..) => Some("composite-access"),
+                    Op::CallVerifiedNative(..) | Op::CallExternalNative(..) => Some("native-call"),
+                    Op::Const(i) => match c.constants.get(*i as usize) {
+                        Some(keleusma::bytecode::ConstValue::StaticStr(_)) => Some("static-str"),
+                        Some(
+                            keleusma::bytecode::ConstValue::Tuple(_)
+                            | keleusma::bytecode::ConstValue::Array(_)
+                            | keleusma::bytecode::ConstValue::Struct { .. }
+                            | keleusma::bytecode::ConstValue::Enum { .. },
+                        ) => Some("composite-const"),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(k) = k {
+                    set.insert(k);
+                }
+            }
+        }
+        set
+    }
+
+    let mut refused_with: BTreeMap<String, usize> = BTreeMap::new();
+    let (mut refused, mut str_only) = (0usize, 0usize);
+
+    for (_, m) in compiled_corpus_modules() {
+        let ctx = inkwell::context::Context::create();
+        let lm = ctx.create_module("cooc");
+        if keleusma_native::lower_module(&ctx, &lm, &m, keleusma_native::LowerOptions::default())
+            .is_ok()
+        {
+            continue;
+        }
+        refused += 1;
+        let cs = classes(&m);
+        if cs.contains("static-str") {
+            let others: Vec<_> = cs.iter().filter(|k| **k != "static-str").copied().collect();
+            if others.is_empty() {
+                str_only += 1;
+            }
+            *refused_with
+                .entry(if others.is_empty() {
+                    String::from("static-str ALONE")
+                } else {
+                    format!("static-str + {}", others.join(" + "))
+                })
+                .or_default() += 1;
+        }
+    }
+
+    println!("\n================ CO-OCCURRENCE behind `static-str`");
+    println!("  refused modules total          : {refused}");
+    println!(
+        "  ... containing a static string : {}",
+        refused_with.values().sum::<usize>()
+    );
+    println!("  ... blocked by it ALONE        : {str_only}");
+    println!();
+    for (k, n) in &refused_with {
+        println!("   {n:3}  {k}");
+    }
+    println!("\n  -> if `ALONE` is 0, lowering static strings frees NO module by");
+    println!("     itself, and the 15.5% first-blocker figure is entirely slack.");
+    println!("================\n");
+}
