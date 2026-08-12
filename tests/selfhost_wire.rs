@@ -9374,3 +9374,159 @@ fn a_region_larger_than_one_window_is_assembled_across_two() {
         );
     }
 }
+
+/// THE CAPSTONE: a complete real-stage artifact, byte for byte.
+///
+/// Every slice so far verified one region, or one region's worth of mechanism.
+/// None asserted that the whole thing composes. This builds `verify_datalayout`'s
+/// entire 105,848-byte auxiliary body — header area, directory and every region —
+/// out of Keleusma's own output and compares it to `encode_aux_body`.
+///
+/// **Checked before writing any Keleusma code, per the rule three consecutive
+/// slices earned:** the artifact's only checksum is `crc32(&prologue[..12])`
+/// (`keleusma-wire/src/build.rs:242`), twelve bytes, not the body. Had it covered
+/// the whole artifact the driver would have needed an incremental CRC carried
+/// across windows, since 105,848 bytes never fit the 65,536-byte buffer. It does
+/// not, so assembly stays positional and this is a caller again — the fourth in a
+/// row.
+///
+/// The host places every payload at its true offset; the driver is never told
+/// where the artifact really is, only how many records to write and where in the
+/// window to start.
+#[test]
+fn a_complete_real_stage_artifact_is_assembled_byte_for_byte() {
+    use keleusma::wire_schema::kind;
+    let mut vm = vm_for(WIRE_KEL);
+
+    let src = include_str!("../src/selfhost/kel/verify_datalayout.kel");
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+    assert!(
+        want.len() > CAPACITY,
+        "artifact is {} bytes and fits the buffer, so nothing here is composed",
+        want.len()
+    );
+
+    let specs = region_counts_for(&want);
+    let header_area = 48 + 48 * specs.len();
+
+    // The header area alone, which does fit the buffer.
+    let (_, head) = run_call(
+        &mut vm,
+        &Call {
+            cmd: CMD_BUILD_REGION_TABLE,
+            nregions: specs.len() as i64,
+            seed: &[],
+            regions: &specs,
+            fields: &[],
+            names: &[],
+            pool: &[],
+            args: [0, 0, 0, 0, 0],
+            read_len: header_area,
+        },
+    )
+    .expect("run");
+
+    let mut art = vec![0u8; want.len()];
+    art[..header_area].copy_from_slice(&head[..header_area]);
+
+    let mut regions_placed = 0;
+    let mut batched_regions = 0;
+    for (k, _, _, _) in &specs {
+        let Some(region) = view.find_region(*k) else {
+            continue;
+        };
+        let (Some(base), Ok(stored)) = (region.byte_offset(), view.region_bytes(&region)) else {
+            continue;
+        };
+        if stored.is_empty() {
+            continue;
+        }
+        let is_pool = matches!(*k, kind::STRING_POOL | kind::PARAM_TYPES | kind::DEBUG_POOL);
+        let rows = if is_pool {
+            Vec::new()
+        } else {
+            rows_for_kind(&view, *k)
+        };
+        let fields = rows.first().map_or(1, Vec::len);
+        let stride = if is_pool {
+            1
+        } else {
+            stored.len() / rows.len().max(1)
+        };
+        let per_batch = if is_pool {
+            BIN_CAPACITY
+        } else {
+            FIN_CAPACITY / fields.max(1)
+        };
+        let units = if is_pool { stored.len() } else { rows.len() };
+
+        let mut done = 0usize;
+        let mut batches = 0;
+        while done < units {
+            let n = (units - done).min(per_batch);
+            let flat: Vec<i64> = if is_pool {
+                Vec::new()
+            } else {
+                rows[done..done + n].iter().flatten().copied().collect()
+            };
+            let span = n * stride;
+            let byte_at = done * stride;
+            let (ret, win) = run_call(
+                &mut vm,
+                &Call {
+                    cmd: CMD_EMIT_IN_WINDOW,
+                    nregions: 0,
+                    seed: &[],
+                    regions: &[],
+                    fields: &flat,
+                    names: &[],
+                    pool: if is_pool {
+                        &stored[byte_at..byte_at + span]
+                    } else {
+                        &[]
+                    },
+                    // Window base zero every batch; the HOST places the result.
+                    args: [i64::from(*k), n as i64, 0, 0, 0],
+                    read_len: span,
+                },
+            )
+            .expect("run");
+            assert!(ret >= 0, "kind {k} batch at {done} refused with {ret}");
+            art[base + byte_at..base + byte_at + span].copy_from_slice(&win[..span]);
+            done += n;
+            batches += 1;
+        }
+        if batches > 1 {
+            batched_regions += 1;
+        }
+        regions_placed += 1;
+    }
+
+    assert!(regions_placed >= 8, "only {regions_placed} regions placed");
+    assert!(
+        batched_regions >= 1,
+        "no region needed more than one batch, so composition with batching is \
+         untested at whole-artifact scale"
+    );
+
+    if art != want {
+        let at = (0..art.len()).find(|&i| art[i] != want[i]).unwrap_or(0);
+        let owner = specs
+            .iter()
+            .filter_map(|(k, _, _, _)| {
+                let r = view.find_region(*k)?;
+                let b = r.byte_offset()?;
+                let l = view.region_bytes(&r).ok()?.len();
+                (at >= b && at < b + l).then_some(*k)
+            })
+            .next();
+        panic!(
+            "first difference at byte {at} of {} (region {owner:?}): got {:?} want {:?}",
+            want.len(),
+            &art[at..(at + 16).min(art.len())],
+            &want[at..(at + 16).min(want.len())]
+        );
+    }
+}
