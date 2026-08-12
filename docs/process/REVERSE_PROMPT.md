@@ -16,8 +16,8 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 | | |
 |---|---|
-| `v0.2.3` | `23943578`, pushed, CI confirming |
-| PRs #9-#13, #15, #17, #19, #21 | all **MERGED** on 22/22 green, each at the commit CI ran |
+| `v0.2.3` | `6715d424`, pushed, CI confirming |
+| PRs #9-#13, #15, #17, #19, #21, #22 | all **MERGED** on 22/22 green, each at the commit CI ran |
 | Machine | idle throughout; every gate ran on hosted runners |
 
 `tests/selfhost_wire.rs` is **148 tests**. **All five** of the values the driver owed are now
@@ -135,6 +135,29 @@ programme starts producing mechanisms that work and were not needed. In order:
 2. **The residency question, which is yours** — ~40.7 bytes of artifact per data slot, one slot per
    array element, ~2.4 s of compile time per megabyte. A representation decision, not an increment.
 3. **`parse` and `verify_typed` end to end**, which need (2) answered first.
+
+## A local check of mine could not fail, and the gate caught what it missed
+
+The pre-push gate rejected a `clippy::empty_line_after_doc_comments` that a refactor introduced. My
+own check had reported clean throughout because it read `$?` after a **pipeline**:
+`cargo clippy ... | tail -2; echo "LINT_RC=$?"` reports **tail's** status, never clippy's.
+
+**That is the defect class this suite's vacuity tests exist to guard against** — a control that
+cannot report a failure, reading as evidence — committed in my own tooling, against a rule I had
+already written down after making the same masked-exit-code mistake earlier in the session.
+**Recording a rule is not following it.** What hid it was that the check kept returning the answer I
+expected.
+
+CI ran real clippy on every merged pull request, so nothing unsound shipped; the local signal was
+worthless. Exit codes now go through `PIPESTATUS`.
+
+## A rationale I recorded wrongly, caught by reading the code
+
+The handoff ranked "a second stage through the capstone" on the claim that a larger stage would
+exercise multi-window assembly inside whole-artifact composition. **It does not** — every batch is
+emitted at window base zero and spliced immediately, so no window accumulates however large the
+region. The increment bought breadth instead, which is a smaller and true claim. The wrong reason sat
+in the handoff for a day before anyone checked it.
 
 ## A worthless mutation, recorded as worthless
 

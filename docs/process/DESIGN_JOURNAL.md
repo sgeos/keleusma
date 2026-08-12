@@ -13,6 +13,38 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**FOUR STAGES INSTEAD OF ONE, A RATIONALE I HAD RECORDED WRONGLY, AND A LINT CHECK OF MINE THAT COULD
+NOT FAIL (2026-08-12).** 148 tests, unchanged in count and cost. The capstone now runs over four
+stages spanning 105,848 to 480,416 bytes and 2 to 76 chunks.
+
+**I had written the wrong reason for this increment into the handoff the day before.** It said a
+larger stage would exercise multi-window assembly inside whole-artifact composition. Reading the
+capstone before extending it shows otherwise: `assemble_whole_artifact` emits every batch at window
+base zero and the host splices immediately, so **no window ever accumulates, however large the
+region**. Multi-window accumulation is a different caller strategy, not a consequence of scale. The
+increment buys BREADTH — more kinds, more batches, evidence that composition is not specific to one
+source shape. **A smaller claim than the one it was ranked on, and the true one.** I would have
+carried the false rationale into the commit had I not read the code first.
+
+**THE MORE USEFUL FAILURE: MY LOCAL LINT CHECK COULD NOT FIRE.** The pre-push gate rejected a
+`clippy::empty_line_after_doc_comments` the refactor introduced, where extracting the helper left a
+blank line under a doc comment. My own check had reported clean throughout because it read `$?` after
+a PIPELINE — `cargo clippy ... | tail -2; echo "LINT_RC=$?"` reports **tail's** status, never
+clippy's.
+
+That is exactly the defect class this suite's vacuity tests exist to guard against: **a control that
+cannot report a failure, reading as evidence.** I have written that lesson into this file repeatedly
+today, about unreachable guards and permutation-invariant assertions, and then committed it in my own
+tooling — against a rule I had already recorded after making the same masked-exit-code mistake
+earlier in the session. **Recording a rule is not following it**, and what hid it was that the check
+kept returning the answer I expected. A control is only worth what its failure path is worth, and
+mine had none.
+
+CI ran real clippy on every previously merged pull request, so nothing unsound shipped; the local
+signal was simply worthless. Exit codes now go through `PIPESTATUS`.
+
+---
+
 **THE CAPSTONE: A COMPLETE REAL-STAGE ARTIFACT, AND A GREP THAT DECIDED WHAT KIND OF INCREMENT IT WAS
 (2026-08-12).** 147 to 148 tests, no Keleusma change. Keleusma's own output now builds
 `verify_datalayout`'s entire **105,848-byte** auxiliary body — header area, directory and every

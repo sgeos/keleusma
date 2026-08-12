@@ -16,7 +16,7 @@ misleading a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`, or a feature branch cut from it.
-- **Parent commit**: `23943578`
+- **Parent commit**: `6715d424`
 - **Written**: 2026-08-11
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
@@ -40,7 +40,7 @@ this file**.
 
 ## FIRST ACTION: read the retraction before trusting the plan's residency numbers
 
-**Nothing is in flight.** PRs #9-#13, #15, #17, #19 and #21 all merged on 22/22 CI green, each at the commit CI ran. Even-numbered
+**Nothing is in flight.** PRs #9-#13, #15, #17, #19, #21 and #22 all merged on 22/22 CI green, each at the commit CI ran. Even-numbered
 PRs from #14 on are the other session's; **tell us apart by BASE BRANCH, not author** -- both sessions
 use the same account, so `--author @me` matches theirs too. Confirm with `gh pr list --state open`; if `gh run list --branch v0.2.3 --limit 1` is red, read
 its log first.
@@ -82,7 +82,7 @@ three PRs (#2, #3, #6).
 
 | Ref | Commit | Status |
 |---|---|---|
-| `v0.2.3` | `23943578` | nine PRs merged in, pushed |
+| `v0.2.3` | `6715d424` | ten PRs merged in, pushed |
 | PR #9 | `ae01441f` | **MERGED**, 22/22 green, at the commit CI ran |
 | PR #10 | `3b93e351` | **MERGED**, 22/22 green, at the commit CI ran |
 | PR #11 | `eaf95524` | **MERGED**, 22/22 green, at the commit CI ran |
@@ -92,6 +92,7 @@ three PRs (#2, #3, #6).
 | PR #17 | `7edbd767` | **MERGED**, 22/22 green, at the commit CI ran |
 | PR #19 | `2cd653dc` | **MERGED**, 22/22 green, at the commit CI ran |
 | PR #21 | `c2700d45` | **MERGED**, 22/22 green — **the capstone** |
+| PR #22 | `50a567f5` | **MERGED**, 22/22 green — capstone over four stages |
 | `v0.3.0` | — | same workflow; their last local gate is STALLED and irrelevant |
 
 Eight PRs merged on this line today, every one CI-gated, **with the local machine idle throughout**.
@@ -120,9 +121,11 @@ record kinds, multi-window assembly, and now whole-artifact composition.
 programme starts producing mechanisms that work and were not needed. Three candidates, in the order
 I would take them:
 
-1. **A second stage through the capstone.** `verify_yield` at 303,464 bytes exercises multi-window
-   assembly inside whole-artifact composition, which `verify_datalayout` does not — its regions all
-   fit one window. Cheap, and it tests composition at a size the current test cannot.
+1. ~~A second stage through the capstone~~ — **DONE in PR #22, and the reason given here was wrong.**
+   A larger stage does NOT exercise multi-window assembly inside composition: every batch is emitted
+   at window base zero and spliced immediately, so no window accumulates however large the region.
+   What it bought was breadth, over four stages. **Do not trust a rationale in this section without
+   reading the code it describes** — this one survived a day before anyone checked it.
 2. **The residency question, which is the operator's.** About **40.7 bytes of artifact per data
    slot**, one slot per array element, ~2.4 s of compile time per megabyte declared. That is what
    makes `lexer` expensive rather than impossible, and it is a representation decision rather than an
@@ -146,6 +149,11 @@ CRC carried across windows.
 13, `emit_at` 17 with flat bodies. The cap is a depth budget of 24 shared between chain position and
 arm-body nesting: 20 arms with a no-argument body, 18 with a nested call. Exceeding it in the test
 harness is a stack overflow and SIGABRT, not a parse error.
+
+**CHECK EXIT CODES WITH `PIPESTATUS`, NEVER `$?` AFTER A PIPE.** `cargo clippy ... | tail; echo $?`
+reports tail's status. Every local "lint clean" reported that way through PR #22 was read off a
+control that could not fire; the pre-push gate is what caught the real error. Same defect class the
+vacuity tests guard against, in the tooling rather than the code.
 
 **CUT THE FEATURE BRANCH AS THE FIRST ACTION**, before any edit. PR #15's code went straight onto
 `v0.2.3`, caught only because nothing had been pushed. The moment to guard is just after a merge.
