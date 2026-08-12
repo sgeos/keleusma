@@ -16,14 +16,15 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 | | |
 |---|---|
-| `v0.2.3` | `d4108bd3`, pushed, CI confirming |
-| PRs #9 - #13 | all **MERGED** on 22/22 green, each at the commit CI ran |
+| `v0.2.3` | `89baa986`, pushed, CI confirming |
+| PRs #9-#13, #15 | all **MERGED** on 22/22 green, each at the commit CI ran (#14 is theirs) |
 | Machine | idle throughout; every gate ran on hosted runners |
 
-`tests/selfhost_wire.rs` is **142 tests**. **All five** of the values the driver owed are now
+`tests/selfhost_wire.rs` is **145 tests**. **All five** of the values the driver owed are now
 computed on the Keleusma side, the last of them in PR #11, and `CHUNKS` emits in batches with its
 three running totals relayed across them (PR #12), into a low window so a real stage's region is
-reachable at all (PR #13).
+reachable at all (PR #13). The window is now GENERAL: `emit_at(k, n, at)` serves all seventeen record
+kinds, with `emit_in_region` the absolute caller and `emit_in_window` the windowed one (PR #15).
 
 ## A guard that documented a check it did not make
 
@@ -113,24 +114,43 @@ practical cost, not a limit violation.
 
 ## Next intended step
 
-**Carry the window to the remaining record emitters.** `CHUNKS` has it; there are seventeen record
-kinds. The mechanism is settled and the per-kind work should be mechanical, but the interner-backed
-kinds (`NAMES`, `STRING_POOL`) have their own emitters and their own accumulator, so do not assume
-uniformity.
+**Batch the generic emitter.** The window test had to skip regions whose payload exceeds the
+65,536-byte window and regions whose field rows exceed `wire.fin`. `CHUNKS` has batching through its
+own commands with three running totals relayed; the generic path has none.
 
-**A correction this session produced, because an earlier version of the handoff carried the error:**
-the window base does **not** need a sixth argument slot or a 22-site widening. It makes `first`
-redundant — that field only positioned a record inside the region, and the host does that arithmetic
-now. Five arguments sufficed.
-
-**A measurement to reuse rather than redo.** Chunk counts: `parse` 94, `codegen` 76, `reconstruct`
-24, `verify_typed` 22, `lexer` 20, `analyze` 17, `verify_structural` 14, `verify_depth` 10,
-`verify_yield` 8, `verify_datalayout` 2. **A high region base does not imply many records** —
-`verify_yield` has `CHUNKS` at byte 143,096 and eight chunks — so pick a case by counting what you
-are batching, not by artifact size.
+**Check before building a carry mechanism**: `CHUNKS` is unusual in having accumulators at all, and
+for most of the other sixteen kinds the answer to "what carries across a batch" is probably nothing.
 
 The two traps still stand: **do not** replace the linear dedup scan, and **do not** compute the chunk
 record's name index.
+
+## Two defects from one reading habit, and a third of the same shape
+
+`stride_of_kind` returns **three** things and only two are strides: a positive record stride, **0 for
+a byte pool**, **-1 for an unknown kind**. Its own comment says so. I read `<= 0` as "not a record
+kind" and refused `STRING_POOL`, `PARAM_TYPES` and `DEBUG_POOL`; the same zero would have bounded
+every pool write at zero bytes. It surfaced as `kind 30 refused with -222`.
+
+**The regression test I wrote to pin that fix then found a pre-existing hole**: `emit_at` has no arm
+for `DEBUG_POOL`, which appears only under `emit_debug` and had always been driven through a
+different caller. That is the strongest argument I have met for pinning a fix rather than merely
+making it.
+
+**This is the same shape as the day's retraction, one level down.** There, `2^24` carried two
+meanings — byte offset and slot index — and I used one where the other was needed. Here `0` and `-1`
+carry different meanings and I merged them. **When a function documents its return values in prose,
+the prose is the specification.**
+
+## A process slip, caught before push
+
+I committed PR #15's code directly onto `v0.2.3` rather than a feature branch. `origin` never saw it;
+repaired locally by branching at the commit and hard-resetting the version branch to match origin. No
+shared history rewritten.
+
+The cause is mechanical: a merge had left me on the version branch, I wrote a legitimate docs commit
+there, and then started editing code. **Cut the branch as the first action of an increment.** I did
+that correctly five increments running and skipped it exactly when a merge had already put me on the
+version branch — that is the moment to guard.
 
 ## A timing scare that was mine, and the operator caught it
 

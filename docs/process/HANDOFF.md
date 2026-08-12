@@ -16,7 +16,7 @@ misleading a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`, or a feature branch cut from it.
-- **Parent commit**: `d4108bd3`
+- **Parent commit**: `89baa986`
 - **Written**: 2026-08-11
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
@@ -40,7 +40,8 @@ this file**.
 
 ## FIRST ACTION: read the retraction before trusting the plan's residency numbers
 
-**Nothing is in flight.** PRs #9 through #13 all merged on 22/22 CI green, each at the commit CI ran. Confirm with `gh pr list --state open`; if `gh run list --branch v0.2.3 --limit 1` is red, read
+**Nothing is in flight.** PRs #9 through #13 and #15 all merged on 22/22 CI green, each at the commit CI ran. (#14 is the
+other session's.) Confirm with `gh pr list --state open`; if `gh run list --branch v0.2.3 --limit 1` is red, read
 its log first.
 
 **Then read the CORRECTION section in
@@ -80,19 +81,20 @@ three PRs (#2, #3, #6).
 
 | Ref | Commit | Status |
 |---|---|---|
-| `v0.2.3` | `d4108bd3` | five PRs merged in, pushed |
+| `v0.2.3` | `89baa986` | six PRs merged in, pushed |
 | PR #9 | `ae01441f` | **MERGED**, 22/22 green, at the commit CI ran |
 | PR #10 | `3b93e351` | **MERGED**, 22/22 green, at the commit CI ran |
 | PR #11 | `eaf95524` | **MERGED**, 22/22 green, at the commit CI ran |
 | PR #12 | `ad0a1bff` | **MERGED**, 22/22 green, at the commit CI ran |
 | PR #13 | `fa4badb5` | **MERGED**, 22/22 green, at the commit CI ran |
+| PR #15 | `af980528` | **MERGED**, 22/22 green, at the commit CI ran |
 | `v0.3.0` | — | same workflow; their last local gate is STALLED and irrelevant |
 
 Eight PRs merged on this line today, every one CI-gated, **with the local machine idle throughout**.
 
 ## WHERE THE DRIVER IS
 
-`tests/selfhost_wire.rs` is **142 tests**. Keleusma computes **all five** of the values the driver
+`tests/selfhost_wire.rs` is **145 tests**. Keleusma computes **all five** of the values the driver
 owed: the name table with both interning modes, the breadth-first constant ordering, the names
 interned **during** the walk for all three interning tags with `STRUCT_AUX` and `ENUM_AUX` alongside,
 the per-chunk ranges, and now the interning SEQUENCE itself, derived from a module description that
@@ -103,41 +105,45 @@ is `STRUCT_TEMPLATES`, and it is **structural rather than pending**: the boxed c
 needs a non-flat type, the only one is `Text` under a narrow word, and this suite is gated out of
 narrow-word builds.
 
-## THE NEXT INCREMENT: CARRY THE WINDOW TO THE OTHER EMITTERS
+## THE NEXT INCREMENT: BATCH THE GENERIC EMITTER
 
-**The window base landed in PR #13, for `CHUNKS` only.** Commands 160-163 write a batch at a
-caller-chosen offset and the host places it. Verified against `parse`, the one stage that forces
-batching and the window at once.
+**The window is general as of PR #15.** `emit_at(k, n, at)` serves all seventeen kinds, `emit_in_region`
+is the absolute caller and `emit_in_window` (command 164) the windowed one, bounds-checked per kind
+through `window_span`.
 
-**The correction that increment produced, since this file carried the error:** a previous version
-here said the window base needs a SIXTH ARGUMENT SLOT and a 22-site widening. **It does not.** The
-window base makes `first` redundant — that field only ever positioned a record inside the region, and
-the host now adds `region_base + first * stride` itself. Five arguments sufficed. If you find that
-claim anywhere else, it is stale.
+**What is still missing is batching for kinds other than `CHUNKS`.** The window test had to skip two
+classes, and both are real work rather than noise:
 
-**Do this next: give the remaining record emitters the same treatment.** `CHUNKS` is one of
-seventeen record kinds. The mechanism is settled and the per-kind work should be mechanical, but
-**do not assume it is uniform** — the interner-backed kinds (`NAMES`, `STRING_POOL`) already have
-their own emitters and their own accumulator, so they are a different shape from the transcribing
-kinds.
+- a region whose payload exceeds the 65,536-byte window, and
+- a region whose field rows exceed `wire.fin`'s 1024 words.
 
-**A measurement to reuse rather than redo.** Chunk counts across the ten stages: `parse` 94,
-`codegen` 76, `reconstruct` 24, `verify_typed` 22, `lexer` 20, `analyze` 17, `verify_structural` 14,
-`verify_depth` 10, `verify_yield` 8, `verify_datalayout` 2. **A high region base does NOT imply many
-records** — `verify_yield` has `CHUNKS` at byte 143,096 and eight chunks — so pick a case by counting
-what you are batching, not by artifact size.
+`CHUNKS` has batching through its own commands (156-159) with the three running totals relayed. The
+generic path has none. Doing it generically needs a per-kind answer to *what carries across a batch*,
+and for most kinds the answer is nothing — `CHUNKS` is unusual in having accumulators at all. **Check
+that before building a carry mechanism the other sixteen kinds do not need.**
 
-**Do NOT do these two.** Both fail on inspection; reasoning in
+**A CAUTION FROM PR #15, WHICH COST TWO DEFECTS.** `stride_of_kind` returns THREE things and only two
+are strides: a positive record stride, **0 for a byte pool**, **-1 for an unknown kind**. Treating 0
+and -1 alike refuses `STRING_POOL`, `PARAM_TYPES` and `DEBUG_POOL`. Use `window_span`, which already
+encodes the distinction.
+
+**Test every kind a real stage reaches, not a representative one.** Both PR #15 defects were
+invisible to a single-kind test, and the second was pre-existing.
+
+**Do NOT do these two.** Reasoning in
 [`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md):
 
-- **Replacing the linear dedup scan.** No early exit in a total language, so a 1024-slot table runs
-  all 1024 probes against ~256 comparisons, and inputs are capped at 256.
+- **Replacing the linear dedup scan.** No early exit in a total language; inputs capped at 256.
 - **Computing the chunk record's name index.** `map[j] == j` always.
 
-**A constraint to carry into any new command.** `dispatch_driver` holds 18 arms and
-`dispatch_driver2` now holds 12; the cap is a depth budget of 24 shared between chain position and
-arm-body nesting, so a chain takes 20 arms with a no-argument body and 18 with a nested call.
+**Constraints to carry into any new command.** `dispatch_driver` holds 18 arms, `dispatch_driver2`
+holds 13, and `emit_at` holds 17 with now-flat bodies. The cap is a depth budget of 24 shared between
+chain position and arm-body nesting: 20 arms with a no-argument body, 18 with a nested call.
 Exceeding it in the test harness is a stack overflow and SIGABRT, not a parse error.
+
+**CUT THE FEATURE BRANCH AS THE FIRST ACTION**, before any edit. PR #15's code was committed directly
+onto `v0.2.3` and caught only because nothing had been pushed. The moment to guard is just after a
+merge, when you are already standing on the version branch.
 
 ## THE ONE RULE THAT MATTERED MOST TODAY
 

@@ -13,6 +13,45 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE GENERIC DISPATCH TAKES AN OFFSET, AND TESTING EVERY KIND FOUND TWO GAPS A SAMPLE WOULD NOT
+(2026-08-11).** Command 164; 142 to 145 tests. Every arm of `emit_in_region` read
+`region_base(dir_find(k))`, so the window slice would have needed a second seventeen-arm chain.
+Taking `at` as a parameter lets one chain serve both callers.
+
+**The refactor bought depth headroom I was not shopping for.** A chain's cap is a budget of 24 split
+between chain position and arm-body nesting, and `emit_x(region_base(dir_find(k)), n)` costs more of
+it than `emit_x(at, n)`. The chain stood at SEVENTEEN arms against the eighteen a nested-call body
+allows. It was one kind away from a SIGABRT, and nothing in the file said so.
+
+**Two gaps, and neither is visible to a test that picks one representative kind.**
+
+- **Mine.** `stride_of_kind` returns a positive record stride, **0 for a byte pool**, and **-1 for an
+  unknown kind** — its own comment says exactly that. I wrote `<= 0` and merged the last two,
+  refusing `STRING_POOL`, `PARAM_TYPES` and `DEBUG_POOL`. The same zero would have bounded every pool
+  write at zero bytes, since a pool's `n` is already a byte count. It surfaced as `kind 30 refused
+  with -222`, which is `PARAM_TYPES`.
+- **Pre-existing, and found BY the regression test for the first.** `emit_at` has no arm for
+  `DEBUG_POOL`. The stride table has known the kind all along; the generic path never handled it
+  because `DEBUG_POOL` appears only under `emit_debug` and slice 9 drove it through a different
+  caller. **A test written to pin my own fix found somebody else's older hole**, which is the best
+  argument yet for pinning a fix rather than just making it.
+
+**The reading error is the same one that produced today's retraction**, one level down: a value
+carrying three meanings, read as though it carried two. There it was `2^24` as byte offset and slot
+index; here it is `0` as pool and `-1` as unknown. **When a function documents its return values in
+prose, the prose is the specification** and skimming it is how both happened.
+
+**A PROCESS SLIP WORTH RECORDING BECAUSE THE CAUSE IS MECHANICAL.** I committed this increment's code
+directly onto `v0.2.3`. Caught before any push — `origin` never saw it — and repaired locally by
+branching at the commit and hard-resetting the version branch back to match origin. The cause: I had
+checked out `v0.2.3` to merge the previous pull request, wrote a legitimate docs commit there, and
+then started editing code without cutting a branch. **Cutting the branch belongs as the first action
+of an increment, before any edit.** I did that correctly for five increments running and skipped it
+exactly when a merge had already left me standing on the version branch, which is the situation to
+guard.
+
+---
+
 **THE WINDOW BASE, A DESIGN THAT SHRANK ON INSPECTION, AND A 10x TIMING SCARE I CAUSED MYSELF
 (2026-08-11).** Commands 160-163; 139 to 142 tests. Emitters positioned records at an ABSOLUTE
 artifact offset against a 65,536-byte buffer, which works for no real stage — `verify_datalayout` is
