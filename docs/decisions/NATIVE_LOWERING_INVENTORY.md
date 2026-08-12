@@ -4562,3 +4562,48 @@ The corpus does not expose this, because its single terminating chunk suspends a
 now four rather than two, and one of the four has an unresolved cost. `codegen.kel` stays refused.
 
 **Ten of eleven stages lower.** The eleventh remains blocked on a decision, not on work.
+
+## THE INSTANCE RANKING AND THE MODULE RANKING DISAGREE, AGAIN
+
+With streams lowering, the corpus was re-ranked. **The two orderings invert**, which is the previous
+article's thesis reproduced on new data rather than recalled from it.
+
+| Blocker | Instances | Modules blocked | Share of corpus |
+|---|---|---|---|
+| `CallVerifiedNative` | **1057** | 4 | 6.9% |
+| `NewComposite` | 239 | **18** | **31.0%** |
+| `Const` (non-scalar) | 111 | **9** | **15.5%** |
+| `Stream` | 24 | 4 | 6.9% |
+| `GetIndex`, `IsEnum` | 18 | 1 each | 1.7% each |
+
+**By instance count `CallVerifiedNative` dominates at four times the next item. By module count it is joint
+third and blocks four programs.** Its 1057 instances are concentrated in those four. An ordering taken from
+the instance column would put the largest single number first and free 6.9 percent of the corpus.
+
+**Composites are the answer, and non-scalar constants are the surprise.** `Const` holding a `StaticStr`
+blocks nine modules on its own, 15.5 percent, which is more than the native ABI and the stream work
+combined. That item has never appeared in any plan, because a string constant reads as a detail.
+
+### Two method notes, both earned the hard way
+
+**The ranking is taken from `lower_module`, not from `is_lowered`.** That is not a preference. Since the
+degenerate stream lowering landed, `is_lowered` is a stale model that still counts `Stream`, `Reset` and
+`Yield` as unsupported, and ranking from it credits a largely finished workstream with 98 blocking
+instances. A model that was accurate when written silently became a source of bad priorities.
+
+**The first classifier was wrong in a way worth recording.** It derived the blocker key by taking the last
+two words of the refusal message, which produced entries like `(0BSD)") Garden` and `}) 24`. A refusal that
+quotes a rejected string constant **ends in that constant's text**, so a key derived from *position* rather
+than *meaning* fails on exactly the inputs that carry data. The corrected classifier matches the opcode.
+This is the same defect class as the whitelist standing in for a predicate, one increment earlier: a rule
+written from the shape of the examples in front of the author.
+
+### Attribution limits, stated rather than implied
+
+First-blocker attribution is **order dependent**. `lower_module` refuses on the first unsupported opcode, so
+a module counted against `NewComposite` may contain non-scalar constants behind it and would not be freed by
+composites alone. **These counts are therefore an upper bound on what removing any single blocker delivers**,
+and the true marginal gains are smaller and require the full blocking lattice, which was not computed.
+
+The honest reading is an ordering rather than a set of quantities: composites first, non-scalar constants
+second, and the native ABI far below where its instance count places it.
