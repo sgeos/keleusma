@@ -9179,3 +9179,102 @@ fn the_window_emitter_distinguishes_a_byte_pool_from_an_unknown_kind() {
         );
     }
 }
+
+/// A region too large for `wire.fin` is emitted in BATCHES through the generic
+/// window command, with no new Keleusma code.
+///
+/// **The measurement that shaped this: every generic emitter is stateless per
+/// record.** Only the computed chunk emitter carries accumulators, which is what
+/// forced its bespoke carry commands. For the other sixteen kinds nothing crosses
+/// a batch boundary, so batching is a matter of feeding the right rows at the
+/// right offset — both of which the window command already takes. Checking that
+/// before building a carry mechanism is what kept this slice to a caller.
+///
+/// This is the third time in the programme that a coverage gap needed a caller
+/// rather than an emitter, so the pattern is worth naming rather than
+/// rediscovering.
+///
+/// `verify_datalayout` is the smallest of the ten stages and still forces both
+/// mechanisms on `NAMES`: 3,086 records at two fields each is 6,172 words against
+/// a 1,024-word input buffer, and the region starts at byte 81,160, past the
+/// 65,536-byte window.
+#[test]
+fn a_region_larger_than_the_input_buffer_batches_through_the_window() {
+    use keleusma::wire_schema::kind;
+    let mut vm = vm_for(WIRE_KEL);
+
+    let src = include_str!("../src/selfhost/kel/verify_datalayout.kel");
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+
+    let region = view.find_region(kind::NAMES).expect("NAMES region");
+    let base = region.byte_offset().expect("offset");
+    let stored = view.region_bytes(&region).expect("payload");
+    let rows = rows_for_kind(&view, kind::NAMES);
+    let fields = rows.first().map(Vec::len).expect("at least one record");
+    let per_batch = FIN_CAPACITY / fields;
+
+    // Three controls, each naming a mechanism that would otherwise be untested.
+    assert!(
+        rows.len() * fields > FIN_CAPACITY,
+        "{} records at {fields} fields fit in one call, so batching is untested",
+        rows.len()
+    );
+    assert!(
+        base >= CAPACITY,
+        "NAMES starts at {base}, inside the buffer, so the window is untested"
+    );
+    assert!(
+        stored.len() <= CAPACITY,
+        "payload is {} bytes and will not fit one window",
+        stored.len()
+    );
+
+    let mut got: Vec<u8> = Vec::with_capacity(stored.len());
+    let mut first = 0usize;
+    let mut batches = 0;
+    while first < rows.len() {
+        let n = (rows.len() - first).min(per_batch);
+        let flat: Vec<i64> = rows[first..first + n].iter().flatten().copied().collect();
+        // Each batch lands at its own offset inside the ONE window, so the region
+        // is assembled in place rather than stitched from separate calls. Nothing
+        // carries between them, which is the measured fact this relies on.
+        let at = got.len();
+        let (ret, win) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_EMIT_IN_WINDOW,
+                nregions: 0,
+                seed: &[],
+                regions: &[],
+                fields: &flat,
+                names: &[],
+                pool: &[],
+                args: [i64::from(kind::NAMES), n as i64, at as i64, 0, 0],
+                read_len: at + n * NAMEREF_STRIDE,
+            },
+        )
+        .expect("run");
+        assert!(ret >= 0, "batch at record {first} refused with {ret}");
+        got.extend_from_slice(&win[at..at + n * NAMEREF_STRIDE]);
+        first += n;
+        batches += 1;
+    }
+
+    assert!(
+        batches >= 2,
+        "only {batches} batch, so batching is untested"
+    );
+    assert_eq!(got.len(), stored.len(), "assembled length differs");
+    if got != stored {
+        let at = (0..got.len()).find(|&i| got[i] != stored[i]).unwrap_or(0);
+        panic!(
+            "first difference at region byte {at} (record {}, batch {}): got {:?} want {:?}",
+            at / NAMEREF_STRIDE,
+            at / NAMEREF_STRIDE / per_batch,
+            &got[at..(at + 16).min(got.len())],
+            &stored[at..(at + 16).min(stored.len())]
+        );
+    }
+}
