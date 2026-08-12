@@ -205,7 +205,25 @@ fn spike_report_modules_that_actually_lower() {
     );
 }
 
-/// Corpus discovery, shared by the spikes in this file.
+/// Compile every corpus source, discarding those that do not compile.
+///
+/// Ground truth for the module-level ranking, since `is_lowered` is a static
+/// model and this asks the real lowering.
+fn compiled_corpus_modules() -> Vec<(std::path::PathBuf, keleusma::bytecode::Module)> {
+    let mut out = Vec::new();
+    for path in corpus_sources() {
+        let Ok(src) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(toks) = tokenize(&src) else { continue };
+        let Ok(ast) = parse(&toks) else { continue };
+        let Ok(m) = compile(&ast) else { continue };
+        out.push((path, m));
+    }
+    out
+}
+
+/// Every `.kel` source in the shipped example and self-hosted corpora.
 fn corpus_sources() -> Vec<std::path::PathBuf> {
     let root = std::path::Path::new("..");
     let mut sources: Vec<std::path::PathBuf> = Vec::new();
@@ -416,5 +434,82 @@ fn spike_report_corpus_coverage() {
         "  rule-of-three upper bound on a zero-count chunk rate:    {:.3e}",
         3.0 / chunks_total as f64
     );
+    println!("================\n");
+}
+
+/// MODULE-LEVEL blocker ranking, from the REAL lowering rather than the model.
+///
+/// The instance-count ranking above answers "which opcode appears most in code
+/// that does not lower". The previous article in this series established that the
+/// useful question is different: **which blocker, if removed, frees the most
+/// whole programs**. A consumer cannot run 98 percent of a program.
+///
+/// This uses `lower_module` as ground truth rather than `is_lowered`, for a
+/// reason that now matters: since the degenerate stream lowering landed,
+/// `is_lowered` is a stale model that still counts `Stream`, `Reset` and `Yield`
+/// as unsupported. Ranking from it would put a workstream that is largely DONE
+/// at 98 blocking instances.
+///
+/// **Attribution is first-blocker and therefore order-dependent**, exactly as the
+/// previous article recorded. A module refused for `CallVerifiedNative` may also
+/// contain composites, so these counts are a lower bound on what each blocker
+/// participates in and an upper bound on what removing it alone would free.
+#[test]
+fn spike_report_module_blocker_ranking() {
+    use std::collections::BTreeMap;
+    let mut ok = 0usize;
+    let mut by_reason: BTreeMap<String, usize> = BTreeMap::new();
+
+    for (path, m) in compiled_corpus_modules() {
+        let ctx = inkwell::context::Context::create();
+        let lm = ctx.create_module("rank");
+        match keleusma_native::lower_module(&ctx, &lm, &m, keleusma_native::LowerOptions::default())
+        {
+            Ok(_) => ok += 1,
+            Err(e) => {
+                let msg = format!("{e}");
+                // Classify by OPCODE, not by position in the string. The first
+                // attempt took the last two words and produced keys like
+                // `(0BSD)") Garden`, because a refusal that quotes a rejected
+                // string constant ends in that constant's text. A key derived
+                // from position rather than meaning fails on exactly the inputs
+                // that carry data.
+                let key = if let Some(i) = msg.find("opcode ") {
+                    msg[i + 7..]
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("?")
+                        .to_string()
+                } else if msg.starts_with("Const holding") {
+                    String::from("Const (non-scalar)")
+                } else {
+                    // A `{op:?}` refusal: take the variant name before its
+                    // payload parenthesis.
+                    msg.split(['(', ' '])
+                        .next()
+                        .unwrap_or("?")
+                        .trim_matches('"')
+                        .to_string()
+                };
+                *by_reason.entry(key).or_default() += 1;
+                let _ = path;
+            }
+        }
+    }
+
+    let total = ok + by_reason.values().sum::<usize>();
+    println!("\n================ MODULE BLOCKER RANKING (real lowering)");
+    println!("  modules            : {total}");
+    println!("  LOWER END TO END   : {ok}");
+    println!("  refused            : {}", total - ok);
+    println!("\n  refused by FIRST blocker, most-blocking first:");
+    let mut v: Vec<_> = by_reason.iter().collect();
+    v.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
+    for (reason, n) in v.iter().take(12) {
+        let pct = 100.0 * **n as f64 / total as f64;
+        println!("   {n:4}  ({pct:5.1}% of corpus)  {reason}");
+    }
+    println!("\n  -> first-blocker attribution is ORDER DEPENDENT; a module counted");
+    println!("     against one blocker may contain others behind it.");
     println!("================\n");
 }
