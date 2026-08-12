@@ -16,13 +16,14 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 | | |
 |---|---|
-| `v0.2.3` | `cd064e6e`, pushed, CI confirming |
-| PRs #9 - #12 | all **MERGED** on 22/22 green, each at the commit CI ran |
+| `v0.2.3` | `d4108bd3`, pushed, CI confirming |
+| PRs #9 - #13 | all **MERGED** on 22/22 green, each at the commit CI ran |
 | Machine | idle throughout; every gate ran on hosted runners |
 
-`tests/selfhost_wire.rs` is **139 tests**. **All five** of the values the driver owed are now
+`tests/selfhost_wire.rs` is **142 tests**. **All five** of the values the driver owed are now
 computed on the Keleusma side, the last of them in PR #11, and `CHUNKS` emits in batches with its
-three running totals relayed across them (PR #12).
+three running totals relayed across them (PR #12), into a low window so a real stage's region is
+reachable at all (PR #13).
 
 ## A guard that documented a check it did not make
 
@@ -112,16 +113,37 @@ practical cost, not a limit violation.
 
 ## Next intended step
 
-**The window base.** Record emitters position at `region_base(i) + rec * stride + off`, an absolute
-artifact offset, against a 65,536-byte buffer. Measured: **every stage fails, the smallest included**
-— `verify_datalayout`'s `NAMES` region starts at byte 81,160. Absolute positioning holds for
-artifacts under 65,536 bytes, which is the constructed corpus and no stage at all.
+**Carry the window to the remaining record emitters.** `CHUNKS` has it; there are seventeen record
+kinds. The mechanism is settled and the per-kind work should be mechanical, but the interner-backed
+kinds (`NAMES`, `STRING_POOL`) have their own emitters and their own accumulator, so do not assume
+uniformity.
 
-**It is independent of batching**, and the two are easy to conflate now that batching is fresh:
-batching fixes how many records reach the emitter per call, the window base fixes where they land.
+**A correction this session produced, because an earlier version of the handoff carried the error:**
+the window base does **not** need a sixth argument slot or a 22-site widening. It makes `first`
+redundant — that field only positioned a record inside the region, and the host does that arithmetic
+now. Five arguments sufficed.
+
+**A measurement to reuse rather than redo.** Chunk counts: `parse` 94, `codegen` 76, `reconstruct`
+24, `verify_typed` 22, `lexer` 20, `analyze` 17, `verify_structural` 14, `verify_depth` 10,
+`verify_yield` 8, `verify_datalayout` 2. **A high region base does not imply many records** —
+`verify_yield` has `CHUNKS` at byte 143,096 and eight chunks — so pick a case by counting what you
+are batching, not by artifact size.
 
 The two traps still stand: **do not** replace the linear dedup scan, and **do not** compute the chunk
-record's name index (`map[j] == j` always).
+record's name index.
+
+## A timing scare that was mine, and the operator caught it
+
+The suite read **1456.76s against a 150s baseline** and I began composing an explanation about the
+cost of compiling a real stage in-suite — plausible, self-consistent, and it would have led me to
+redesign a test case that was fine. The operator asked whether the two running shells were
+productive. **One was a stale run of my own**, started before an edit that invalidated it, which I
+had noticed at the time and left running anyway. Killed it; clean measurement is **150.66s,
+unchanged**.
+
+**Kill a run the moment its inputs change** — leaving it beside a new one is the exact machine
+contention this project moved to hosted runners to escape, reproduced by me on the same day. And **a
+10x anomaly is a claim about the environment until proven otherwise.**
 
 ## A second lesson, from the batching slice
 

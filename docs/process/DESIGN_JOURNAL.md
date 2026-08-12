@@ -13,6 +13,50 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE WINDOW BASE, A DESIGN THAT SHRANK ON INSPECTION, AND A 10x TIMING SCARE I CAUSED MYSELF
+(2026-08-11).** Commands 160-163; 139 to 142 tests. Emitters positioned records at an ABSOLUTE
+artifact offset against a 65,536-byte buffer, which works for no real stage — `verify_datalayout` is
+the smallest of the ten and its `NAMES` region starts at byte 81,160. The driver now writes a batch
+at a caller-chosen offset and the host places the result.
+
+**The increment was smaller than this file's own handoff said, and the handoff was wrong because I
+wrote it without asking what a field was FOR.** It recorded that a window base needs a sixth argument
+slot and a mechanical widening across 22 call sites. It needs neither: `first` only ever positioned a
+record inside the region, so once the host places the window the driver writes records `0..n` and the
+host adds `region_base + first * stride`. **The window base REPLACES the record index rather than
+joining it.** The carries stay, because they are cross-batch state rather than position. Five
+arguments, no churn.
+
+**Choosing the test case by artifact size would have produced a test that proved half of what it
+claimed.** `verify_yield` has `CHUNKS` at byte 143,096, visibly past the buffer, and looked ideal. It
+has EIGHT chunks. **A high region base comes from the size of the EARLIER regions** — the per-element
+data-slot tables — **and says nothing about how many records follow it.** Counting chunks across all
+ten stages settled it: `parse` 94, `codegen` 76, `reconstruct` 24, down to `verify_datalayout` 2. Only
+`parse` clears the 90-record cap, so it is the single stage where batching and the window compose on
+real input. That count also confirmed the plan's "94 chunks", which slice 16 had asserted on the
+plan's authority rather than on measurement.
+
+**Reviewing my own code found a REACHABLE guard defect**, which is rarer here than the unreachable
+ones this file keeps documenting. `ck_emit_window` formed `n * chunk_stride()` for its window bound
+before anything had rejected an absurd `n`; `emit_chunks_batch` does refuse `n > 90`, but only after
+that product exists. Ordering the count check first keeps the multiplication inside a bounded range.
+It has a negative test at 91 and at 2^40, and the caller chooses `n`, so it fires on ordinary input.
+
+**The timing scare is the part worth keeping.** The suite came back at 1456.76 seconds against a
+150-second baseline, and I began composing an explanation about the cost of compiling a real stage
+inside the suite — a plausible, self-consistent story that would have led me to redesign the test
+case. The operator asked whether the two running shells were productive. **One was a stale run of my
+own**, started before an edit that invalidated it, which I had noticed at the time and left running
+anyway. Killed it; measured clean: **150.66 seconds, no change at all.** The `parse` compile overlaps
+with the existing 60-second accumulator test and costs nothing in wall clock.
+
+Two rules. **Kill a run the moment its inputs change** — I flagged the invalidation and started a
+second run beside it instead of replacing it, which is the exact machine contention this project
+moved to hosted runners to escape. And **a 10x anomaly is a claim about the environment until proven
+otherwise**; I was one step from fixing a slowdown I had caused, in code that did not have it.
+
+---
+
 **BATCHING, AND TWO WRONG TURNS THAT WERE BOTH ABOUT ADJACENT PRECEDENT (2026-08-11).** Commands
 156-159; 137 to 139 tests. `wire.fin` holds 1024 words and a chunk costs eleven, so a call caps at 90
 records while `parse` has 94. `CHUNKS` is the smallest region in the corpus that cannot be emitted in

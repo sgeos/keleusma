@@ -16,7 +16,7 @@ misleading a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`, or a feature branch cut from it.
-- **Parent commit**: `dde20ecf`
+- **Parent commit**: `d4108bd3`
 - **Written**: 2026-08-11
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
@@ -40,7 +40,7 @@ this file**.
 
 ## FIRST ACTION: read the retraction before trusting the plan's residency numbers
 
-**Nothing is in flight.** PRs #9 through #12 all merged on 22/22 CI green, each at the commit CI ran. Confirm with `gh pr list --state open`; if `gh run list --branch v0.2.3 --limit 1` is red, read
+**Nothing is in flight.** PRs #9 through #13 all merged on 22/22 CI green, each at the commit CI ran. Confirm with `gh pr list --state open`; if `gh run list --branch v0.2.3 --limit 1` is red, read
 its log first.
 
 **Then read the CORRECTION section in
@@ -80,18 +80,19 @@ three PRs (#2, #3, #6).
 
 | Ref | Commit | Status |
 |---|---|---|
-| `v0.2.3` | `cd064e6e` | four PRs merged in, pushed |
+| `v0.2.3` | `d4108bd3` | five PRs merged in, pushed |
 | PR #9 | `ae01441f` | **MERGED**, 22/22 green, at the commit CI ran |
 | PR #10 | `3b93e351` | **MERGED**, 22/22 green, at the commit CI ran |
 | PR #11 | `eaf95524` | **MERGED**, 22/22 green, at the commit CI ran |
 | PR #12 | `ad0a1bff` | **MERGED**, 22/22 green, at the commit CI ran |
+| PR #13 | `fa4badb5` | **MERGED**, 22/22 green, at the commit CI ran |
 | `v0.3.0` | — | same workflow; their last local gate is STALLED and irrelevant |
 
 Eight PRs merged on this line today, every one CI-gated, **with the local machine idle throughout**.
 
 ## WHERE THE DRIVER IS
 
-`tests/selfhost_wire.rs` is **139 tests**. Keleusma computes **all five** of the values the driver
+`tests/selfhost_wire.rs` is **142 tests**. Keleusma computes **all five** of the values the driver
 owed: the name table with both interning modes, the breadth-first constant ordering, the names
 interned **during** the walk for all three interning tags with `STRUCT_AUX` and `ENUM_AUX` alongside,
 the per-chunk ranges, and now the interning SEQUENCE itself, derived from a module description that
@@ -102,52 +103,41 @@ is `STRUCT_TEMPLATES`, and it is **structural rather than pending**: the boxed c
 needs a non-flat type, the only one is `Text` under a narrow word, and this suite is gated out of
 narrow-word builds.
 
-## THE NEXT INCREMENT: THE WINDOW BASE
+## THE NEXT INCREMENT: CARRY THE WINDOW TO THE OTHER EMITTERS
 
-**Batching landed in PR #12.** `CHUNKS` emits in batches of 90 with the three running totals relayed
-in and out, commands 156-159, verified by mutation.
+**The window base landed in PR #13, for `CHUNKS` only.** Commands 160-163 write a batch at a
+caller-chosen offset and the host places it. Verified against `parse`, the one stage that forces
+batching and the window at once.
 
-**Do this next: give the record emitters a WINDOW BASE.** They position records at
-`region_base(i) + rec * stride + off`, an ABSOLUTE artifact offset, and `wire.bytes` is 65,536.
-Measured 2026-08-11, and the threshold is sharper than the plan had it — **every stage fails, the
-smallest included**:
+**The correction that increment produced, since this file carried the error:** a previous version
+here said the window base needs a SIXTH ARGUMENT SLOT and a 22-site widening. **It does not.** The
+window base makes `first` redundant — that field only ever positioned a record inside the region, and
+the host now adds `region_base + first * stride` itself. Five arguments sufficed. If you find that
+claim anywhere else, it is stale.
 
-| Stage | artifact | `CHUNKS` at | `STRING_POOL` at | `NAMES` at |
-|---|---|---|---|---|
-| `verify_datalayout` | 105,848 | 50,464 | 50,560 | **81,160** |
-| `verify_yield` | 303,464 | **143,096** | **143,480** | **239,832** |
-| `codegen` | 480,416 | **236,216** | **239,864** | **391,160** |
+**Do this next: give the remaining record emitters the same treatment.** `CHUNKS` is one of
+seventeen record kinds. The mechanism is settled and the per-kind work should be mechanical, but
+**do not assume it is uniform** — the interner-backed kinds (`NAMES`, `STRING_POOL`) already have
+their own emitters and their own accumulator, so they are a different shape from the transcribing
+kinds.
 
-`verify_datalayout` is the smallest of the ten and its `NAMES` region already starts 15,624 bytes
-past the buffer. Absolute positioning holds for artifacts under 65,536 bytes, which is the
-constructed corpus and no stage at all.
+**A measurement to reuse rather than redo.** Chunk counts across the ten stages: `parse` 94,
+`codegen` 76, `reconstruct` 24, `verify_typed` 22, `lexer` 20, `analyze` 17, `verify_structural` 14,
+`verify_depth` 10, `verify_yield` 8, `verify_datalayout` 2. **A high region base does NOT imply many
+records** — `verify_yield` has `CHUNKS` at byte 143,096 and eight chunks — so pick a case by counting
+what you are batching, not by artifact size.
 
-**IT NEEDS A SIXTH ARGUMENT, AND THAT IS THE FIRST DECISION RATHER THAN A DETAIL.** `ck_emit_batch`
-already consumes all five slots — `n`, `first`, and the three carries — so a window base does not
-fit. The argument vector is `[i64; 5]` in the harness with **22 call sites**, and `warg5` is the last
-slot in the shared block. Widening to six is mechanical but repo-wide, and appending `warg6` is the
-established pattern (append so no slot index moves). Decide that before writing any emitter code; the
-alternative of packing two values into one slot would be cheaper to type and worse to read, and this
-file has already recorded one case where a shared field that "obviously" meant one thing meant two.
-
-**It is INDEPENDENT of batching and the two are easy to conflate now that batching is fresh**:
-batching fixes how many records reach the emitter per call, the window base fixes where they land.
-Neither substitutes for the other. The host emits a region's payload into a low window, appends it
-at the true offset, and patches the directory afterwards, which the residency section establishes it
-can do.
-
-**Do NOT do these two.** Both fail on inspection; the reasoning is in
+**Do NOT do these two.** Both fail on inspection; reasoning in
 [`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md):
 
-- **Replacing the linear dedup scan.** A total language has no early exit, so a 1024-slot table runs
-  all 1024 probes per lookup against ~256 comparisons for the scan, and inputs are capped at 256.
-- **Computing the chunk record's name index.** `map[j] == j` always, so it is untestable rather than
-  easy.
+- **Replacing the linear dedup scan.** No early exit in a total language, so a 1024-slot table runs
+  all 1024 probes against ~256 comparisons, and inputs are capped at 256.
+- **Computing the chunk record's name index.** `map[j] == j` always.
 
-**A constraint to carry into any new command.** `dispatch_driver` holds 18 arms and `dispatch_driver2`
-now holds 8; the cap is a depth budget of 24 shared between chain position and arm-body nesting, so a
-chain takes 20 arms with a no-argument body and 18 with a nested call. Exceeding it in the test
-harness is a stack overflow and SIGABRT, not a parse error.
+**A constraint to carry into any new command.** `dispatch_driver` holds 18 arms and
+`dispatch_driver2` now holds 12; the cap is a depth budget of 24 shared between chain position and
+arm-body nesting, so a chain takes 20 arms with a no-argument body and 18 with a nested call.
+Exceeding it in the test harness is a stack overflow and SIGABRT, not a parse error.
 
 ## THE ONE RULE THAT MATTERED MOST TODAY
 
