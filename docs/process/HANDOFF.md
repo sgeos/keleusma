@@ -16,7 +16,7 @@ misleading a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`, or a feature branch cut from it.
-- **Parent commit**: `a9f9a41a`
+- **Parent commit**: `9fdcadb8`
 - **Written**: 2026-08-11
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
@@ -40,8 +40,9 @@ this file**.
 
 ## FIRST ACTION: read the retraction before trusting the plan's residency numbers
 
-**Nothing is in flight.** PRs #9-#13, #15 and #17 all merged on 22/22 CI green, each at the commit CI ran. (#14 and #16 are
-the other session's.) Confirm with `gh pr list --state open`; if `gh run list --branch v0.2.3 --limit 1` is red, read
+**Nothing is in flight.** PRs #9-#13, #15, #17 and #19 all merged on 22/22 CI green, each at the commit CI ran. Even-numbered
+PRs from #14 on are the other session's; **tell us apart by BASE BRANCH, not author** -- both sessions
+use the same account, so `--author @me` matches theirs too. Confirm with `gh pr list --state open`; if `gh run list --branch v0.2.3 --limit 1` is red, read
 its log first.
 
 **Then read the CORRECTION section in
@@ -81,7 +82,7 @@ three PRs (#2, #3, #6).
 
 | Ref | Commit | Status |
 |---|---|---|
-| `v0.2.3` | `a9f9a41a` | seven PRs merged in, pushed |
+| `v0.2.3` | `9fdcadb8` | eight PRs merged in, pushed |
 | PR #9 | `ae01441f` | **MERGED**, 22/22 green, at the commit CI ran |
 | PR #10 | `3b93e351` | **MERGED**, 22/22 green, at the commit CI ran |
 | PR #11 | `eaf95524` | **MERGED**, 22/22 green, at the commit CI ran |
@@ -89,13 +90,14 @@ three PRs (#2, #3, #6).
 | PR #13 | `fa4badb5` | **MERGED**, 22/22 green, at the commit CI ran |
 | PR #15 | `af980528` | **MERGED**, 22/22 green, at the commit CI ran |
 | PR #17 | `7edbd767` | **MERGED**, 22/22 green, at the commit CI ran |
+| PR #19 | `2cd653dc` | **MERGED**, 22/22 green, at the commit CI ran |
 | `v0.3.0` | — | same workflow; their last local gate is STALLED and irrelevant |
 
 Eight PRs merged on this line today, every one CI-gated, **with the local machine idle throughout**.
 
 ## WHERE THE DRIVER IS
 
-`tests/selfhost_wire.rs` is **146 tests**. Keleusma computes **all five** of the values the driver
+`tests/selfhost_wire.rs` is **147 tests**. Keleusma computes **all five** of the values the driver
 owed: the name table with both interning modes, the breadth-first constant ordering, the names
 interned **during** the walk for all three interning tags with `STRUCT_AUX` and `ENUM_AUX` alongside,
 the per-chunk ranges, and now the interning SEQUENCE itself, derived from a module description that
@@ -106,22 +108,26 @@ is `STRUCT_TEMPLATES`, and it is **structural rather than pending**: the boxed c
 needs a non-flat type, the only one is `Text` under a narrow word, and this suite is gated out of
 narrow-word builds.
 
-## THE NEXT INCREMENT: A REGION LARGER THAN ONE WINDOW
+## THE NEXT INCREMENT: A WHOLE REAL STAGE, END TO END
 
-**Batching landed in PR #17 and needed NO Keleusma code.** The check this section asked for is what
-made that true: every generic emitter is stateless per record, so only the computed chunk emitter
-ever needed carries. Batching the other sixteen kinds is feeding the right rows at the right offset,
-and `emit_in_window` already takes both.
+**Every mechanical piece is now in place and verified against real stage output**: all five computed
+values, batching (both the accumulator-carrying `CHUNKS` path and the generic one), window
+positioning across all seventeen record kinds, and multi-window assembly for payloads larger than the
+buffer.
 
-**What remains is a region whose PAYLOAD exceeds one 65,536-byte window.** PR #17's test asserts its
-region fits in one, deliberately, so that case is untested rather than handled. `verify_datalayout`'s
-`STRING_POOL` is 30,600 bytes and fits; `lexer`'s is 6,609,960 and does not. The host would emit into
-the window repeatedly and append each time, which is a caller change again — **check that before
-writing Keleusma code**, because the last three gaps in this area all needed a caller.
+**Do this next: emit a COMPLETE real-stage artifact and compare it byte for byte.** Every slice so
+far has checked one region, or one region's worth of mechanism. Nothing has yet asserted that the
+whole thing composes.
 
-**A measurement to reuse.** Regions of `verify_datalayout`, the smallest stage:
-`STRING_POOL` 30,600 at offset 50,560; `NAMES` 24,688 at 81,160; `DATA_SLOTS` 24,672 at 992;
-`SHARED_LAYOUT` 24,672 at 25,664; `CHUNKS` 96 at 50,464. Artifact 105,848.
+`verify_datalayout` is the case: **105,848 bytes**, the smallest of the ten. Its header area is
+48 + 48n for about fifteen regions, roughly 768 bytes, so it fits the buffer and only the region
+payloads need windowing. Measured region sizes, to reuse rather than re-derive: `STRING_POOL` 30,600
+at offset 50,560; `NAMES` 24,688 at 81,160; `DATA_SLOTS` 24,672 at 992; `SHARED_LAYOUT` 24,672 at
+25,664; `CHUNKS` 96 at 50,464.
+
+**Expect this one to need a caller too, and check before writing Keleusma code.** Three consecutive
+gaps in this area needed a caller rather than an emitter. The cost of not checking is not a wrong
+answer; it is a mechanism that works, passes its tests, and did not need to exist.
 
 **Do NOT do these two.** Reasoning in
 [`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md):
@@ -135,8 +141,7 @@ arm-body nesting: 20 arms with a no-argument body, 18 with a nested call. Exceed
 harness is a stack overflow and SIGABRT, not a parse error.
 
 **CUT THE FEATURE BRANCH AS THE FIRST ACTION**, before any edit. PR #15's code went straight onto
-`v0.2.3` and was caught only because nothing had been pushed. The moment to guard is just after a
-merge, when you are already standing on the version branch.
+`v0.2.3`, caught only because nothing had been pushed. The moment to guard is just after a merge.
 
 ## THE ONE RULE THAT MATTERED MOST TODAY
 

@@ -16,11 +16,11 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 | | |
 |---|---|
-| `v0.2.3` | `89baa986`, pushed, CI confirming |
-| PRs #9-#13, #15 | all **MERGED** on 22/22 green, each at the commit CI ran (#14 is theirs) |
+| `v0.2.3` | `9fdcadb8`, pushed, CI confirming |
+| PRs #9-#13, #15, #17, #19 | all **MERGED** on 22/22 green, each at the commit CI ran |
 | Machine | idle throughout; every gate ran on hosted runners |
 
-`tests/selfhost_wire.rs` is **145 tests**. **All five** of the values the driver owed are now
+`tests/selfhost_wire.rs` is **147 tests**. **All five** of the values the driver owed are now
 computed on the Keleusma side, the last of them in PR #11, and `CHUNKS` emits in batches with its
 three running totals relayed across them (PR #12), into a low window so a real stage's region is
 reachable at all (PR #13). The window is now GENERAL: `emit_at(k, n, at)` serves all seventeen record
@@ -114,15 +114,24 @@ practical cost, not a limit violation.
 
 ## Next intended step
 
-**Batch the generic emitter.** The window test had to skip regions whose payload exceeds the
-65,536-byte window and regions whose field rows exceed `wire.fin`. `CHUNKS` has batching through its
-own commands with three running totals relayed; the generic path has none.
+**A whole real stage, end to end.** Every mechanical piece is in place and verified against real
+stage output: the five computed values, batching on both paths, window positioning across all
+seventeen record kinds, and multi-window assembly. **Nothing has yet asserted that the whole thing
+composes.** `verify_datalayout` is the case at 105,848 bytes — its header area is roughly 768 bytes
+and fits the buffer, so only the payloads need windowing.
 
-**Check before building a carry mechanism**: `CHUNKS` is unusual in having accumulators at all, and
-for most of the other sixteen kinds the answer to "what carries across a batch" is probably nothing.
+**Expect it to need a caller, and check first.** Three consecutive gaps in this area needed a caller
+rather than an emitter. The cost of not checking is not a wrong answer; it is a mechanism that works,
+passes its tests, and did not need to exist.
 
 The two traps still stand: **do not** replace the linear dedup scan, and **do not** compute the chunk
 record's name index.
+
+## A note on telling the two sessions apart
+
+Both use the same GitHub account, so `gh pr list --author @me` matches the other line's pull requests
+too. I reported "zero open PRs" more than once today on that basis. **Distinguish by BASE BRANCH**:
+anything based on `v0.3.0` is theirs.
 
 ## Two defects from one reading habit, and a third of the same shape
 

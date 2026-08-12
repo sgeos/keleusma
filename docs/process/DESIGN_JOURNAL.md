@@ -13,6 +13,31 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**A REGION LARGER THAN ONE WINDOW, AND TWO BOUNDS THAT ARE NOT THE SAME BOUND (2026-08-11).** 146 to
+147 tests, and no Keleusma change. Slice 19's test asserted its region fits a single 65,536-byte
+window, deliberately, which left this case untested rather than handled — an honest gap, and this
+closes it.
+
+**The interesting part is that two different limits govern the assembly.** A pool batch is capped at
+**8,192 bytes by `bin`**, the buffer `emit_pool_bytes` copies from; a window is capped at **65,536 by
+`wire.bytes`**. Eight batches fill a window, the host flushes it, the next batch restarts at zero.
+Conflating them would either overrun `bin` or waste seven eighths of the window, and either mistake
+still produces correct bytes on a region small enough to hide it. **A control therefore asserts
+batches outnumber windows**, so one bound cannot silently stand in for the other while the byte
+comparison stays green.
+
+**Each call must be SEEDED with the window built so far**, because shared data is re-seeded on every
+call and the accumulated bytes would otherwise vanish between batches. That is the same property the
+interner's re-run pattern works around, met here from the OUTPUT side rather than the input side.
+Worth noting because the two look unrelated until you hit the second one.
+
+**Third consecutive gap in this area that needed a CALLER rather than an EMITTER.** Generic batching,
+this, and before them `DEBUG_POOL`. That is no longer a coincidence, and the handoff now says to
+check it FIRST here rather than recording it afterwards. The cost of not checking is not a wrong
+answer — it is a mechanism that works, passes its tests, and did not need to exist.
+
+---
+
 **THE INCREMENT THAT TURNED OUT TO BE A CALLER, BECAUSE I MEASURED FIRST (2026-08-11).** 145 to 146
 tests, and **no Keleusma change at all**. The handoff said to check what carries across a batch
 before building a carry mechanism. That instruction was the whole value of the slice.
