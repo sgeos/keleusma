@@ -157,29 +157,35 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
     //
     // `Op::NewComposite` is the current boundary and does not have that
     // weakness, because no entry point lowers it at all. It belongs to
-    // Workstream C, the flat byte composite representation.
-    let src = "struct P { x: Word, y: Word }
-               fn main(a: Word, b: Word) -> Word { let p = P { x: a, y: b }; p.x }";
+    // **BOUNDARY MOVED 2026-08-13, and only after the oracle agreed.** Flat
+    // composite construction WAS the subject here. `lower_module` now lowers it,
+    // and `a_flat_struct_agrees_with_the_vm` plus its second-field companion are
+    // the evidence — moving a must-not-fire boundary on the reasoning that an
+    // admission looks safe is exactly what this file exists to prevent.
+    //
+    // The subject is now array indexing, which is still refused.
+    let src = "fn main(a: Word, b: Word) -> Word { let xs = [a, b]; xs[0] }";
     let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
 
     let entry = m
         .chunks
         .iter()
-        .find(|c| c.ops.iter().any(|op| matches!(op, Op::NewComposite(_))))
-        .expect("this test is vacuous unless some chunk emits Op::NewComposite");
+        .find(|c| c.ops.iter().any(|op| matches!(op, Op::GetIndex(_))))
+        .expect("this test is vacuous unless some chunk emits Op::GetIndex");
 
     let ctx = Context::create();
     let lm = ctx.create_module("kel");
     assert!(
         lower_chunk(&ctx, &lm, entry, "kel_entry", LowerOptions::default()).is_err(),
-        "a composite construction is outside the supported subset and must be \
-         refused, not lowered"
+        "array indexing is outside the supported subset and must be refused, not lowered"
     );
 
     // MUST-NOT-FIRE CASE, and the one whose absence let the `Op::Call` version
     // rot: the WHOLE-MODULE path must refuse it too. Without this, "refused"
     // can mean nothing more than "this entry point cannot see enough context",
-    // which is what happened when calls were implemented.
+    // which is what happened when calls were implemented — and what would now
+    // happen for composites, since `lower_chunk` refuses those only for want of
+    // the region pointer.
     let lm2 = ctx.create_module("kel2");
     assert!(
         lower_module(&ctx, &lm2, &m, LowerOptions::default()).is_err(),
@@ -2127,4 +2133,92 @@ fn the_module_still_verifies_after_the_optimisation_pipeline() {
     let vm = vm_result(src, &[9, 4]);
     let o2 = native_result_o2(src, &[9, 4]);
     assert_eq!(vm, o2);
+}
+
+/// **The first composite that actually EXECUTES natively, checked against the VM.**
+///
+/// Everything before this asserted structure. This is the only thing that can
+/// settle whether the store run, the packing offsets and the address
+/// representation are right, and it is the evidence required before the refusal
+/// boundary above may be moved.
+///
+/// The harness supplies the region exactly as a host does, which is what the
+/// calling convention promises: at least `plan_chunk_region(chunk).bytes`
+/// writable bytes, taken in production from the arena's bottom section.
+fn composite_native_result(src: &str, args: &[i64]) -> i64 {
+    use inkwell::context::Context;
+    use keleusma_native::{lower_module, region::plan_chunk_region};
+
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let idx = m
+        .chunks
+        .iter()
+        .position(|c| c.name == "main")
+        .expect("entry chunk named main");
+
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    lower_module(&ctx, &lm, &m, LowerOptions::default()).expect("lower module");
+    lm.verify().expect("LLVM module verification");
+    let ee = lm
+        .create_jit_execution_engine(OptimizationLevel::None)
+        .expect("jit");
+
+    // Sized from the same pass the emitter placed against, so a disagreement
+    // between them shows up here as a fault rather than as silent corruption.
+    let bytes = plan_chunk_region(&m.chunks[idx]).bytes as usize;
+    let mut region = vec![0u8; bytes.max(8)];
+    // Word-aligned backing for the two data pointers. This module declares no
+    // slots so neither is read, but a misaligned pointer where the ABI promises
+    // alignment is undefined behaviour rather than an unused argument.
+    let mut shared = vec![0i64; 8];
+    let mut private = vec![0i64; 8];
+
+    let sym = format!("kel_chunk_{idx}");
+    unsafe {
+        let f = ee
+            .get_function::<unsafe extern "C" fn(i64, i64, *mut i64, *mut i64, *mut u8) -> i64>(
+                &sym,
+            )
+            .expect("symbol");
+        f.call(
+            args[0],
+            args[1],
+            shared.as_mut_ptr(),
+            private.as_mut_ptr(),
+            region.as_mut_ptr(),
+        )
+    }
+}
+
+#[test]
+fn a_flat_struct_agrees_with_the_vm() {
+    let src = "struct P { x: Word, y: Word }
+               fn main(a: Word, b: Word) -> Word { let p = P { x: a, y: b }; p.x }";
+    for args in [[2, 3], [-7, 4], [0, 0], [i64::MIN, i64::MAX]] {
+        let native = composite_native_result(src, &args);
+        let vm = vm_result(src, &args);
+        assert_eq!(
+            native, vm,
+            "flat struct disagrees for {args:?}: native={native}, vm={vm}"
+        );
+    }
+}
+
+/// **Reading the SECOND field, which the first case cannot distinguish.**
+///
+/// `p.x` is at offset zero, so a lowering that ignored the field offset entirely
+/// would pass the case above. Only a non-zero offset separates them.
+#[test]
+fn the_second_field_of_a_flat_struct_agrees_with_the_vm() {
+    let src = "struct P { x: Word, y: Word }
+               fn main(a: Word, b: Word) -> Word { let p = P { x: a, y: b }; p.y }";
+    for args in [[2, 3], [-7, 4], [i64::MIN, i64::MAX]] {
+        let native = composite_native_result(src, &args);
+        let vm = vm_result(src, &args);
+        assert_eq!(
+            native, vm,
+            "second field disagrees for {args:?}: native={native}, vm={vm}"
+        );
+    }
 }
