@@ -520,9 +520,14 @@ impl<'ctx> Lower<'ctx> {
         // so that low survives as an uncaptured expression's value. Verified by
         // execution, not taken from the opcode's doc comment, which was wrong
         // about this until 2026-08-08.
-        self.push(low);
-        self.push(high);
-        self.push(flag);
+        // `low` is the arithmetic RESULT and is a word; `Checked*; PopN(2)`
+        // discards the other two, so this is the width a construction sees for
+        // `a + 1`. The flag is a boolean and `high` is the overflow word, both
+        // labelled so a construction consuming one is packed correctly rather
+        // than refused for want of a label.
+        self.push_w(low, Width::Bytes(8));
+        self.push_w(high, Width::Bytes(8));
+        self.push_w(flag, Width::Bytes(1));
     }
 }
 
