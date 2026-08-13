@@ -64,10 +64,17 @@ impl RegionLayout {
 
 /// The byte alignment every body is placed at.
 ///
-/// Eight rather than the body's natural alignment, because a flat body's fields
-/// are word-packed and a misaligned body would make every field access
-/// misaligned. Over-aligning costs at most seven bytes per site and keeps the
-/// emitted address computation a single constant add.
+/// **The justification originally given here was FALSE and is corrected.** It
+/// said a flat body's fields are word-packed, so aligning the body keeps field
+/// accesses aligned. Measured 2026-08-13, the reference packs fields strictly
+/// cumulatively with NO padding: `struct M { a: Byte, b: Word }` is nine bytes
+/// with the word at offset ONE. Aligning the body does not align the fields, and
+/// nothing can, because the layout is chosen for density.
+///
+/// Eight is kept anyway — it costs at most seven bytes per site, keeps each
+/// address a single constant add, and gives the first field the best alignment
+/// available. **The emitter must still store and load UNALIGNED**, which is a
+/// property of the layout rather than of this constant.
 const BODY_ALIGN: u32 = 8;
 
 /// Round `n` up to the next multiple of [`BODY_ALIGN`], saturating.

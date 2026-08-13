@@ -383,3 +383,79 @@ fn a_composite_module_takes_the_region_pointer() {
         "a composite-building module must take shared, private and region pointers"
     );
 }
+
+/// **The packing rule for MIXED-WIDTH fields, measured rather than assumed.**
+///
+/// The store arm must reproduce `pack_flat_in_arena` byte for byte, and the only
+/// evidence so far is uniform-word composites, where cumulative-width packing and
+/// eight-byte-stride packing are indistinguishable. A `Byte` beside a `Word`
+/// separates them: cumulative packing puts the word at offset 1, a stride puts it
+/// at 8, and an aligned-but-packed rule puts it somewhere else again.
+///
+/// `GetField(Flat { offset, .. })` carries the reference's own answer, so the
+/// compiler is asked instead of guessed at.
+#[test]
+fn spike_report_mixed_width_packing() {
+    let cases: &[(&str, &str)] = &[
+        ("byte then word", "struct M { a: Byte, b: Word }"),
+        ("word then byte", "struct M { a: Word, b: Byte }"),
+        ("three bytes", "struct M { a: Byte, b: Byte, c: Byte }"),
+        ("byte word byte", "struct M { a: Byte, b: Word, c: Byte }"),
+    ];
+    println!("================ SPIKE: mixed-width flat packing");
+    for (name, decl) in cases {
+        let fields: Vec<&str> = decl
+            .split('{')
+            .nth(1)
+            .unwrap()
+            .trim_end_matches('}')
+            .split(',')
+            .map(|f| f.split(':').next().unwrap().trim())
+            .collect();
+        let inits: Vec<String> = fields
+            .iter()
+            .map(|f| {
+                let ty = decl.split(&format!("{f}:")).nth(1).unwrap();
+                let v = if ty.trim_start().starts_with("Byte") { "1 as Byte" } else { "1" };
+                format!("{f}: {v}")
+            })
+            .collect();
+        let reads: Vec<String> = fields.iter().map(|f| format!("m.{f}")).collect();
+        let src = format!(
+            "{decl}\nfn build(x: Word) -> Word {{ let m = M {{ {} }}; {} }}\nloop main(r: Word) -> Word {{ yield build(r) }}\n",
+            inits.join(", "),
+            reads
+                .iter()
+                .map(|r| format!("({r} as Word)"))
+                .collect::<Vec<_>>()
+                .join(" + ")
+        );
+        match parse(&tokenize(&src).expect("lex")).map_err(|e| format!("{e:?}")) {
+            Err(e) => println!("  {name:16} PARSE REJECTED: {e}"),
+            Ok(a) => match compile(&a) {
+                Err(e) => println!("  {name:16} COMPILE REJECTED: {}", e.message),
+                Ok(m) => {
+                    let mut sizes = Vec::new();
+                    let mut offsets = Vec::new();
+                    for c in &m.chunks {
+                        for op in &c.ops {
+                            match op {
+                                Op::NewComposite(NewCompositeOperand::Flat {
+                                    byte_size, count, ..
+                                }) => sizes.push((*byte_size, *count)),
+                                Op::GetField(keleusma::bytecode::StructField::Flat {
+                                    offset,
+                                    kind,
+                                }) => offsets.push((*offset, format!("{kind:?}"))),
+                                _ => {}
+                            }
+                        }
+                    }
+                    println!("  {name:16} body={sizes:?} field offsets={offsets:?}");
+                }
+            },
+        }
+    }
+    println!("  -> cumulative packing puts a word after a byte at 1; a stride puts it at 8.");
+    println!("================");
+}
