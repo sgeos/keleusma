@@ -1379,6 +1379,34 @@ fn lower_chunk_body<'ctx>(
                 });
                 &normalised
             }
+            // An enum payload read is the same shape again: the operand carries
+            // an offset already measured PAST the discriminant word, so the
+            // arithmetic is identical to a struct field's and normalising costs
+            // nothing. Third consumer of one code path rather than a third copy.
+            Op::GetEnumField(ef) => {
+                use keleusma::bytecode::{EnumField as EF, StructField as SF};
+                normalised = Op::GetField(match ef {
+                    EF::Flat { offset, kind } => SF::Flat {
+                        offset: *offset,
+                        kind: *kind,
+                    },
+                    EF::FlatNested {
+                        offset,
+                        size,
+                        variant,
+                    } => SF::FlatNested {
+                        offset: *offset,
+                        size: *size,
+                        variant: *variant,
+                    },
+                    other => {
+                        return Err(LowerError::UnsupportedOp(format!(
+                            "GetEnumField reading {other:?} is not lowered"
+                        )));
+                    }
+                });
+                &normalised
+            }
             other => other,
         };
 
@@ -2240,6 +2268,53 @@ fn lower_chunk_body<'ctx>(
                     (st.b.build_int_z_extend(bv, i64t, "cizext").unwrap(), 1u32)
                 };
                 st.push_w(v, Width::Scalar(w));
+            }
+            // Enum discriminant test. **PEEKS, like `BoundsCheck`**: the virtual
+            // machine reads `stack.last()` and leaves the enum in place for the
+            // field read that follows, so popping here would consume a value the
+            // next opcode still needs.
+            //
+            // A flat enum's discriminant is the first packed value, so it is the
+            // word at offset ZERO of the body. Only the flat representation is
+            // lowered: the boxed form compares TYPE AND VARIANT NAMES, which
+            // needs string data this backend has no representation for. The
+            // `v0.2.3` line established that the boxed construction path is
+            // unreachable at a 64-bit word, so refusing it costs nothing real —
+            // but it is refused rather than assumed away.
+            Op::IsEnum(_enum_const, _var_const, disc_const) => {
+                let expected = match chunk.constants.get(*disc_const as usize) {
+                    Some(ConstValue::Int(v)) => *v,
+                    other => {
+                        return Err(LowerError::UnsupportedOp(format!(
+                            "IsEnum discriminant constant is {other:?}, not an Int"
+                        )));
+                    }
+                };
+                let addr_int = st.peek();
+                let base =
+                    st.b.build_int_to_ptr(addr_int, ctx.ptr_type(AddressSpace::default()), "cenum")
+                        .unwrap();
+                // Unaligned, like every other body access: the layout packs
+                // cumulatively and guarantees nothing about the body's address.
+                let disc =
+                    st.b.build_load(i64t, base, "cdisc")
+                        .unwrap()
+                        .into_int_value();
+                disc.as_instruction()
+                    .expect("a load is an instruction")
+                    .set_alignment(1)
+                    .expect("1 is a power of two");
+                let eq =
+                    st.b.build_int_compare(
+                        IntPredicate::EQ,
+                        disc,
+                        i64t.const_int(expected as u64, true),
+                        "cisenum",
+                    )
+                    .unwrap();
+                let z = st.b.build_int_z_extend(eq, i64t, "cisenumz").unwrap();
+                // A boolean packs into one byte, like every other `Bool`.
+                st.push_w(z, Width::Scalar(1));
             }
             // Nested composite read: a sub-range of the parent, so it is
             // POINTER ARITHMETIC and nothing else.

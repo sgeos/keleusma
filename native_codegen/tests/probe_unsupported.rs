@@ -10,6 +10,10 @@ use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 fn probe_which_sources_are_refused() {
     let cases: &[(&str, &str)] = &[
         (
+            "static string",
+            "fn main(a: Word, b: Word) -> Word { let s = \"hi\"; a + b }",
+        ),
+        (
             "nested struct",
             "struct I { a: Word }\nstruct O { i: I, b: Word }\nfn main(a: Word, b: Word) -> Word { let o = O { i: I { a: a }, b: b }; o.i.a }",
         ),

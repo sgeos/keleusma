@@ -174,12 +174,11 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
     //
     // Subjects so far, each retired the moment a differential agreed with the
     // virtual machine: composite construction, array indexing, nested composite
-    // reads, tuple fields. **The subject is now `IsEnum`**, the last refusal
-    // `probe_unsupported` reports — and every subject since the second was chosen
+    // reads, tuple fields. **The subject is now a static string constant**, the last refusal
+    // `probe_unsupported` reports — `IsEnum` and the enum payload read now lower too — and every subject since the second was chosen
     // by running that probe rather than by guessing at a source, after four
     // consecutive guesses cost four compile-and-run cycles.
-    let src = "enum E { A(Word), B(Word) }\n\
-                fn main(a: Word, b: Word) -> Word { let e = E::A(a); match e { E::A(x) => x, E::B(y) => y + b } }";
+    let src = "fn main(a: Word, b: Word) -> Word { let s = \"hi\"; a + b }";
     let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
 
     // **The vacuity guard is on the REFUSAL, not on a chunk search.** Three
@@ -191,13 +190,13 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
     let ctx = Context::create();
     let lm2 = ctx.create_module("kel2");
     let err = lower_module(&ctx, &lm2, &m, LowerOptions::default()).expect_err(
-        "lower_module must refuse an enum discriminant test; a refusal that only \
+        "lower_module must refuse a static string constant; a refusal that only \
              lower_chunk makes is not evidence the opcode is unsupported, which is \
              how the Op::Call version of this test rotted",
     );
     let rendered = format!("{err:?}");
     assert!(
-        rendered.contains("IsEnum"),
+        rendered.contains("StaticStr"),
         "refused for the wrong reason: {rendered}"
     );
 }
@@ -2528,5 +2527,29 @@ fn a_mixed_width_tuple_agrees_with_the_vm() {
             native, vm,
             "a mixed-width tuple disagrees for {args:?}: native={native}, vm={vm}"
         );
+    }
+}
+
+/// An enum match: the discriminant test and the payload read together.
+///
+/// **BOTH variants are exercised.** A lowering whose discriminant comparison was
+/// inverted, or that ignored the tested variant entirely, would still return the
+/// right answer for whichever arm the source happens to construct — which is the
+/// `maxi(2, 3)` defect this file was written about, one level up.
+#[test]
+fn an_enum_match_agrees_with_the_vm() {
+    let a_src = "enum E { A(Word), B(Word) }
+                 fn main(a: Word, b: Word) -> Word { let e = E::A(a); match e { E::A(x) => x, E::B(y) => y + b } }";
+    let b_src = "enum E { A(Word), B(Word) }
+                 fn main(a: Word, b: Word) -> Word { let e = E::B(a); match e { E::A(x) => x, E::B(y) => y + b } }";
+    for src in [a_src, b_src] {
+        for args in [[3, 4], [-11, 6], [i64::MIN, 1]] {
+            let (native, _) = composite_native_with_region(src, &args);
+            let vm = vm_result(src, &args);
+            assert_eq!(
+                native, vm,
+                "an enum match disagrees for {args:?}: native={native}, vm={vm}"
+            );
+        }
     }
 }
