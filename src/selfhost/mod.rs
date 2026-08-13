@@ -2106,9 +2106,20 @@ fn assemble_data_slots(
                         visibility,
                     });
                 } else {
-                    for k in 0..count {
+                    // ONE NAME FOR THE WHOLE ARRAY, mirroring `compiler.rs`.
+                    //
+                    // This driver builds the data layout from the self-hosted
+                    // parser's data-block records, and its output is compared
+                    // against the reference compiler's byte for byte -- including
+                    // `schema_hash`, which covers the layout. A distinct
+                    // `field[k]` per element defeated the name interner's dedup
+                    // and made the string pool scale with the element count; the
+                    // reference stopped doing it, so this must too or the two
+                    // compilers disagree.
+                    let array_name = format!("{bname}.{fname}");
+                    for _ in 0..count {
                         slots.push(DataSlot {
-                            name: format!("{bname}.{fname}[{k}]"),
+                            name: array_name.clone(),
                             visibility,
                         });
                     }
