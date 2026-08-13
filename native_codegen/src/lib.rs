@@ -763,7 +763,9 @@ pub fn lower_module<'ctx>(
         ),
         None => (0, &[]),
     };
+    let needs_region = program.chunks.iter().any(chunk_builds_composite);
     let data = DataCtx {
+        needs_region,
         shared_count,
         shared_layout,
         has_data: program
@@ -804,9 +806,21 @@ pub fn lower_module<'ctx>(
         .enumerate()
         .map(|(i, c)| {
             let mut params: Vec<_> = (0..c.param_count).map(|_| i64t.into()).collect();
-            if has_data {
+            if has_data || needs_region {
                 params.push(ptrt.into()); // shared buffer
                 params.push(ptrt.into()); // private region
+                // The composite body region. Host-supplied, and documented as
+                // coming from the arena's BOTTOM section: the caller takes at
+                // least `region::plan_chunk_region(chunk).bytes` from
+                // `alloc_bottom_bytes` and releases it with `bottom_mark`.
+                //
+                // Naming the provenance is not decoration. A region of
+                // unspecified origin would put the backend's memory outside the
+                // arena's accounting, and transferring that bound is the whole
+                // property this lowering exists to preserve. The backend never
+                // allocates and never frees; it writes at compile-time offsets
+                // into memory the host scoped.
+                params.push(ptrt.into()); // composite body region
             }
             module.add_function(
                 &format!("kel_chunk_{i}"),
@@ -854,6 +868,42 @@ struct DataCtx<'a> {
     has_data: bool,
     /// Total declared slots, shared plus private.
     slot_count: u32,
+    /// Whether ANY chunk in the module constructs a flat composite, and so
+    /// whether the trailing region pointer is present.
+    ///
+    /// Module-wide rather than per-chunk on purpose. Deciding arity per chunk
+    /// would make a caller reproduce this analysis to get the signature right,
+    /// which is the same two-dimensional arity the shared/private pair already
+    /// refuses. All three pointers or none.
+    needs_region: bool,
+}
+
+/// How many trailing pointer parameters a function in this module carries.
+///
+/// **One source, used by the signature, the call-arity check and the argument
+/// forwarding alike.** A hand-written `- 2` in the arity check drifted the
+/// moment a third pointer was added and made every correct call read as a short
+/// call; deriving it is what stops that recurring.
+fn trailing_ptrs(data: &DataCtx<'_>) -> u32 {
+    if data.has_data || data.needs_region {
+        3
+    } else {
+        0
+    }
+}
+
+/// Whether a chunk constructs a flat composite, and so needs somewhere to put a
+/// body.
+///
+/// `Boxed` does not count: it carries no baked body size, the corpus contains
+/// none, and the construction arm refuses it rather than placing it.
+fn chunk_builds_composite(chunk: &Chunk) -> bool {
+    chunk.ops.iter().any(|o| {
+        matches!(
+            o,
+            Op::NewComposite(keleusma::bytecode::NewCompositeOperand::Flat { .. })
+        )
+    })
 }
 
 /// Per-chunk lowering configuration.
@@ -1092,8 +1142,17 @@ fn lower_chunk_body<'ctx>(
 
     // The trailing pointer parameter, present only when the module declares
     // shared slots. Read once at entry; every access is an offset from it.
-    let (shared_base, private_base): (Option<PointerValue<'ctx>>, Option<PointerValue<'ctx>>) =
-        if data.has_data {
+    #[allow(clippy::type_complexity)]
+    let (shared_base, private_base, region_base): (
+        Option<PointerValue<'ctx>>,
+        Option<PointerValue<'ctx>>,
+        Option<PointerValue<'ctx>>,
+    ) =
+        // Bound whenever the three-pointer group is present, which is what
+        // decides where they sit. A module that builds a composite but declares
+        // no slot still HAS these parameters; the data arms refuse on
+        // `has_data` separately, so an unused pointer here is harmless.
+        if data.has_data || data.needs_region {
             let n = chunk.param_count as u32;
             (
                 Some(
@@ -1106,9 +1165,14 @@ fn lower_chunk_body<'ctx>(
                         .expect("data module declares the private pointer")
                         .into_pointer_value(),
                 ),
+                Some(
+                    func.get_nth_param(n + 2)
+                        .expect("the trailing region pointer")
+                        .into_pointer_value(),
+                ),
             )
         } else {
-            (None, None)
+            (None, None, None)
         };
 
     let trapfn = trap_declaration(ctx, module);
@@ -1580,7 +1644,7 @@ fn lower_chunk_body<'ctx>(
                 // calling convention from a plain native call, so it is refused
                 // rather than approximated: an arity mismatch here would produce
                 // a call LLVM accepts and the VM does not agree with.
-                let declared = callee.count_params() - if data.has_data { 2 } else { 0 };
+                let declared = callee.count_params() - trailing_ptrs(&data);
                 if u32::from(*arg_count) != declared {
                     return Err(LowerError::UnsupportedOp(format!(
                         "Call({idx}, {arg_count}) passes {arg_count} arguments to a chunk \
@@ -1597,9 +1661,10 @@ fn lower_chunk_body<'ctx>(
                 // shared slots takes the trailing pointer, so a call that
                 // omitted it would pass garbage where the callee expects the
                 // host's buffer.
-                if let (Some(sb), Some(pb)) = (shared_base, private_base) {
+                if let (Some(sb), Some(pb), Some(rb)) = (shared_base, private_base, region_base) {
                     args.push(sb.into());
                     args.push(pb.into());
+                    args.push(rb.into());
                 }
 
                 let ret = match st
