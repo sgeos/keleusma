@@ -5142,3 +5142,53 @@ Extend `Lower`'s stack to carry a width per entry; push `Unknown` from ops whose
 width is not locally determined; refuse a composite op that consumes an `Unknown`. Then the
 three emitter arms — `NewComposite(Flat)` storing at `region.rs` offsets, `GetField(Flat)`
 as a constant-offset typed load, and a composite operand represented as its i64 address.
+
+## THE REGION POINTER IS THE NEXT DECISION, AND IT IS AN ABI DECISION
+
+The width work is landed and the three arms are next, but they cannot be written until the
+emitted function knows WHERE to put a body. That is a calling-convention question, and this
+is the shape of it.
+
+**Today's signature** is `kel_chunk_N(params.., shared*, private*)`, with the two pointers
+present only when the module declares data slots and absent otherwise. The rule is stated
+at the code: arity must not vary along two independent dimensions, because a caller would
+have to reproduce that reasoning to get it right.
+
+Three options, and the third is the one to take.
+
+1. **A third trailing pointer, host-supplied.** `kel_chunk_N(params.., shared*, private*,
+   region*)`, where the host guarantees at least `plan_chunk_region(chunk).bytes` writable
+   bytes. This is EXACTLY how the shared buffer already works — supplied per call rather
+   than installed as a module global, so the lowering stays reentrant — and the same
+   argument applies unchanged.
+2. **Carve it out of the private region**, past `persistent_composite_bytes`. No ABI change
+   at all, and the address stays a base plus a constant. **But it requires
+   `required_persistent_capacity_for` to grow**, which lives in `src/vm.rs` — the shared
+   crate, the `v0.2.3` line's surface. Rejected for now on ownership, not on merit.
+3. **Option 1, with the region documented as the arena's bottom section.** The pointer is
+   host-supplied, and the host is expected to take it from `alloc_bottom_bytes` and release
+   it with `bottom_mark`. The backend never allocates and never frees; it writes at
+   compile-time offsets into memory somebody else scoped.
+
+**Why 3 and not 1 alone**: naming where the memory comes from is what makes the WCMU bound
+transfer. A region of unspecified provenance would leave the backend's memory use outside
+the arena's accounting, which is the whole property this project sells.
+
+**Why 3 and not 2**: option 2 is probably the better end state and it is not mine to build.
+Recorded so the choice is visible rather than silently foreclosed, and worth raising with
+the `v0.2.3` line rather than deciding alone.
+
+### The consequence for the differential harness
+
+`tests/differential.rs` drives `lower_chunk` through one- and two-argument signatures with
+no pointers at all. A composite case needs the harness to allocate a region and pass it,
+which is a harness change and not a runtime one — the host supplies the buffer exactly as
+it already supplies shared data. **That keeps the first composite differential inside this
+package**, with no shared-crate dependency.
+
+### Uniform arity, restated for three pointers
+
+A module that constructs a composite but declares no data slot would otherwise take a
+region pointer and no others, which is the two-dimensional arity the existing rule forbids.
+**Take all three or none**, decided by `has_data || any chunk constructs a composite`. One
+rule, stated once, and an unused pointer costs a register.
