@@ -113,6 +113,35 @@ pub struct ParsedFn {
     body: Vec<(i64, i64)>,
 }
 
+/// Whether a group of same-named heads compiles as a multiheaded guard dispatch.
+///
+/// **The decision is a property of the heads, not of the declaration keyword.** This
+/// asked `cat == 2` (a `yield` declaration) until 2026-08-12, which was wrong in both
+/// directions and silent in both:
+///
+/// - A multiheaded `fn` took the single-body path, which reads `group[0].body` and
+///   discards every later head together with every `when` guard. The reference admits
+///   and lowers a multiheaded `fn`, so the two compilers emitted different programs
+///   with no diagnostic from either.
+/// - A single-headed `yield` took the dispatch path and gained a parameter copy and a
+///   `Trap(NoMatchingHead)` the reference never emits.
+///
+/// **Neither was reachable from the corpus**, which is why the whole-stage
+/// byte-identity self-compiles never reported it: the ten stage sources contain
+/// exactly one multiheaded function, `codegen.kel`'s nine-headed `emit_next`, and it
+/// was declared `yield`. The keyword and the head count agreed on every input the
+/// oracle had ever seen. That agreement is a fact about the corpus rather than about
+/// the predicate.
+///
+/// A lone GUARDED head still needs the dispatch: its guard can fail, and the reference
+/// emits the trap for that path. A lone guarded `yield` head is inadmissible — it is
+/// not always-yielding, so structural verification rejects any `loop` that delegates
+/// productivity to it — so this predicate never has to route one.
+fn is_multihead_group(group: &[&ParsedFn]) -> bool {
+    debug_assert!(!group.is_empty(), "a head group is never empty");
+    group.len() > 1 || group.first().is_some_and(|h| !h.guard.is_empty())
+}
+
 const KINDS: usize = 1;
 
 const ARGS: usize = 1 + 1024;
@@ -687,10 +716,12 @@ pub fn self_host_compile(src: &str) -> Module {
         }
         i = j;
         let pc = group[0].params;
-        // A yield head compiles as a multihead chunk; a fn or loop as a single body.
+        // More than one head, or one guarded head, compiles as a multihead dispatch;
+        // anything else as a single body. See `is_multihead_group` for why this is not
+        // decided by the declaration keyword.
         // The reconstruction runs through the self-hosted reconstruct.kel stage, so the
         // whole compile path is Keleusma and the host only moves data between stages.
-        let body = if group[0].cat == 2 {
+        let body = if is_multihead_group(&group) {
             reconstruct_via_kel_multihead(&group, pc)
         } else {
             let category = if group[0].cat == 3 { 2 } else { 0 };
@@ -2528,7 +2559,7 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
         }
         i = j;
         let pc = group[0].params;
-        let body = if group[0].cat == 2 {
+        let body = if is_multihead_group(&group) {
             reconstruct_via_kel_multihead(&group, pc)
         } else {
             let category = if group[0].cat == 3 { 2 } else { 0 };
