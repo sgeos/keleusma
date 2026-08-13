@@ -1054,12 +1054,27 @@ fn dslot_off_visibility() -> Word { 4 }
 fn dslot_off_reserved() -> Word { 5 }
 fn dslot_off_run() -> Word { 6 }
 
-// SharedSlotRecord: offset u32 @0, kind u8 @4, reserved u8 @5, len u16 @6.
-fn sslot_stride() -> Word { 8 }
+// SharedSlotRecord: offset u32 @0, kind u8 @4, reserved u8 @5, len u16 @6,
+// first_slot u32 @8, run u16 @12, stride u16 @14. TWO words.
+//
+// A record stands for a RUN of consecutive shared slots sharing a kind and a
+// length whose offsets advance by a constant stride, which is what an array
+// declares. The first four fields keep their offsets from the one-word form,
+// so only the three new ones are additions here.
+//
+// `first_slot` and `stride` are STORED rather than derived. Deriving
+// `first_slot` would need a prefix sum, turning the host's logical slot lookup
+// into a scan; deriving `stride` would put a kind-to-size table on this side
+// AND the Rust side, and that particular duplication has already produced
+// three defects in this project.
+fn sslot_stride() -> Word { 16 }
 fn sslot_off_offset() -> Word { 0 }
 fn sslot_off_kind() -> Word { 4 }
 fn sslot_off_len() -> Word { 6 }
 fn sslot_off_reserved() -> Word { 5 }
+fn sslot_off_first_slot() -> Word { 8 }
+fn sslot_off_run() -> Word { 12 }
+fn sslot_off_stride() -> Word { 14 }
 
 // PrivateCompositeRecord: slot u16 @0, reserved u16 @2, offset u32 @4.
 fn pcomp_stride() -> Word { 8 }
@@ -1482,7 +1497,11 @@ fn emit_data_slot_records(at: Word, n: Word) -> Word {
     }
 }
 
-fn sslot_fields() -> Word { 4 }
+// Seven inputs per record, not four: the run-length form carries `first_slot`,
+// `run` and `stride` alongside the original four fields. The host supplies all
+// seven; grouping slots into runs is the CALLER's job, exactly as it is for
+// `DATA_SLOTS`.
+fn sslot_fields() -> Word { 7 }
 
 fn emit_shared_slot_records(at: Word, n: Word) -> Word {
     if (n * sslot_fields()) > fin_capacity() { 0 - 204 } else {
@@ -1499,6 +1518,18 @@ fn emit_shared_slot_records(at: Word, n: Word) -> Word {
             put_u16(
                 at + (j * sslot_stride()) + sslot_off_len(),
                 wire.fin[(j * sslot_fields()) + 3],
+            );
+            put_u32(
+                at + (j * sslot_stride()) + sslot_off_first_slot(),
+                wire.fin[(j * sslot_fields()) + 4],
+            );
+            put_u16(
+                at + (j * sslot_stride()) + sslot_off_run(),
+                wire.fin[(j * sslot_fields()) + 5],
+            );
+            put_u16(
+                at + (j * sslot_stride()) + sslot_off_stride(),
+                wire.fin[(j * sslot_fields()) + 6],
             );
         }
         n * sslot_stride()

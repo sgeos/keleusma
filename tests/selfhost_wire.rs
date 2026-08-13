@@ -2489,6 +2489,21 @@ fn the_slice_5d_offsets_and_kinds_match_the_schema() {
         kel_const("sslot_off_reserved"),
         SharedSlotRecord::OFFSET_RESERVED as i64
     );
+    // The run-length trio. These are the fields that make SharedSlotRecord two
+    // words, and a wrong offset on any of them places a run's slots at wrong
+    // byte offsets rather than failing loudly.
+    assert_eq!(
+        kel_const("sslot_off_first_slot"),
+        SharedSlotRecord::OFFSET_FIRST_SLOT as i64
+    );
+    assert_eq!(
+        kel_const("sslot_off_run"),
+        SharedSlotRecord::OFFSET_RUN as i64
+    );
+    assert_eq!(
+        kel_const("sslot_off_stride"),
+        SharedSlotRecord::OFFSET_STRIDE as i64
+    );
 
     assert_eq!(
         kel_const("pcomp_stride"),
@@ -2619,18 +2634,27 @@ fn data_artifact() -> (
             run: 1,
         },
     ];
+    // Two runs, deliberately not two singletons. A `run` of 1 leaves `stride`
+    // unused, so a fixture of singletons would not distinguish an emitter that
+    // writes the stride field from one that leaves it zero.
     let sslots = vec![
         SharedSlotRecord {
             offset: 0,
             kind: 3,
             reserved: 0,
             len: 8,
+            first_slot: 0,
+            run: 64,
+            stride: 8,
         },
         SharedSlotRecord {
             offset: 8,
             kind: 4,
             reserved: 0,
             len: 65535,
+            first_slot: 64,
+            run: 65535,
+            stride: 65535,
         },
     ];
     let pcomps = vec![
@@ -2667,12 +2691,19 @@ fn data_artifact() -> (
             })
         })
         .collect();
-    let s: Vec<[u8; 8]> = sslots
+    // SharedSlotRecord is TWO words, so it needs its own encode and push.
+    let push_all16 = |b: &mut keleusma_wire::WireBuilder, k: u16, bufs: &[[u8; 16]]| {
+        let id = b.region(k, 0).expect("region");
+        for x in bufs {
+            b.push(id, x);
+        }
+    };
+    let s: Vec<[u8; 16]> = sslots
         .iter()
         .map(|r| {
-            enc8(&|b: &mut [u8; 8]| {
-                r.write_record(b).expect("e");
-            })
+            let mut buf = [0u8; 16];
+            r.write_record(&mut buf).expect("e");
+            buf
         })
         .collect();
     let c: Vec<[u8; 8]> = pcomps
@@ -2692,7 +2723,7 @@ fn data_artifact() -> (
         })
         .collect();
     push_all(&mut b, kind::DATA_SLOTS, &d);
-    push_all(&mut b, kind::SHARED_LAYOUT, &s);
+    push_all16(&mut b, kind::SHARED_LAYOUT, &s);
     push_all(&mut b, kind::PRIVATE_COMPOSITE, &c);
     push_all(&mut b, kind::DATA_INIT, &i);
     (b.finish().expect("finish"), dslots, sslots, pcomps, dinits)
@@ -5201,15 +5232,25 @@ const SLOT_RECORD_CAP: usize = 2048;
 
 const CMD_EMIT_DATA_SLOT_RECORDS: i64 = 120;
 const CMD_EMIT_SHARED_SLOT_RECORDS: i64 = 121;
-const SLOT_STRIDE: usize = 8;
-const SLOT_FIELDS: usize = 4;
-const SLOTS_PER_BATCH: usize = FIN_CAPACITY / SLOT_FIELDS;
+// THE TWO TABLES NO LONGER SHARE A SHAPE, so they no longer share constants.
+//
+// A single `SLOT_STRIDE`/`SLOT_FIELDS` pair served both while both were one
+// word of four fields. `SharedSlotRecord` gained `first_slot`, `run` and
+// `stride` and became two words of seven. Keeping one pair would have read the
+// shared table at an 8-byte stride and decoded four of its seven fields --
+// which COMPILES, and silently produces wrong rows rather than failing.
+const DSLOT_STRIDE: usize = 8;
+const DSLOT_FIELDS: usize = 4;
+const SSLOT_STRIDE: usize = 16;
+const SSLOT_FIELDS: usize = 7;
+const DSLOTS_PER_BATCH: usize = FIN_CAPACITY / DSLOT_FIELDS;
+const SSLOTS_PER_BATCH: usize = FIN_CAPACITY / SSLOT_FIELDS;
 
 /// Both per-slot tables of a stage, as field rows and as reference bytes.
 struct SlotCase {
-    data: Vec<[i64; SLOT_FIELDS]>,
+    data: Vec<[i64; DSLOT_FIELDS]>,
     data_want: Vec<u8>,
-    shared: Vec<[i64; SLOT_FIELDS]>,
+    shared: Vec<[i64; SSLOT_FIELDS]>,
     shared_want: Vec<u8>,
 }
 
@@ -5224,7 +5265,7 @@ fn real_slot_case(src: &str) -> SlotCase {
         .find_region(kind::DATA_SLOTS)
         .expect("DATA_SLOTS region");
     let dbytes = view.region_bytes(&dregion).expect("payload").to_vec();
-    let dtable = view.records(&dregion, SLOT_STRIDE).expect("record table");
+    let dtable = view.records(&dregion, DSLOT_STRIDE).expect("record table");
     let dn = dtable.len().min(SLOT_RECORD_CAP);
     let mut dslots = Vec::with_capacity(dn);
     for i in 0..dn {
@@ -5241,7 +5282,7 @@ fn real_slot_case(src: &str) -> SlotCase {
         .find_region(kind::SHARED_LAYOUT)
         .expect("SHARED_LAYOUT region");
     let sbytes = view.region_bytes(&sregion).expect("payload").to_vec();
-    let stable = view.records(&sregion, SLOT_STRIDE).expect("record table");
+    let stable = view.records(&sregion, SSLOT_STRIDE).expect("record table");
     let sn = stable.len().min(SLOT_RECORD_CAP);
     let mut sslots = Vec::with_capacity(sn);
     for i in 0..sn {
@@ -5251,27 +5292,38 @@ fn real_slot_case(src: &str) -> SlotCase {
             i64::from(r.kind),
             i64::from(r.reserved),
             i64::from(r.len),
+            i64::from(r.first_slot),
+            i64::from(r.run),
+            i64::from(r.stride),
         ]);
     }
 
     SlotCase {
         data: dslots,
-        data_want: dbytes[..dn * SLOT_STRIDE].to_vec(),
+        data_want: dbytes[..dn * DSLOT_STRIDE].to_vec(),
         shared: sslots,
-        shared_want: sbytes[..sn * SLOT_STRIDE].to_vec(),
+        shared_want: sbytes[..sn * SSLOT_STRIDE].to_vec(),
     }
 }
 
-fn emit_slots_batched(
+/// Generic over the field count, because the two tables no longer agree on it.
+///
+/// `stride` and `per_batch` are passed rather than derived from `F`: the byte
+/// stride is a property of the record layout, not of the field count, and
+/// deriving one from the other is the coupling that made a single constant
+/// serve two tables in the first place.
+fn emit_slots_batched<const F: usize>(
     vm: &mut Vm<'static, 'static>,
     cmd: i64,
-    recs: &[[i64; SLOT_FIELDS]],
+    recs: &[[i64; F]],
     window: usize,
+    stride: usize,
+    per_batch: usize,
 ) -> Vec<u8> {
-    let mut out = Vec::with_capacity(recs.len() * SLOT_STRIDE);
-    for batch in recs.chunks(SLOTS_PER_BATCH) {
+    let mut out = Vec::with_capacity(recs.len() * stride);
+    for batch in recs.chunks(per_batch) {
         let fields: Vec<i64> = batch.iter().flat_map(|r| r.iter().copied()).collect();
-        let produced = batch.len() * SLOT_STRIDE;
+        let produced = batch.len() * stride;
         let (written, buf) = run_cmd_fields(
             vm,
             cmd,
@@ -5295,30 +5347,119 @@ fn the_emitted_per_slot_tables_match_the_reference_on_real_compiler_output() {
     for (name, src) in CORPUS_STAGES {
         let case = real_slot_case(src);
         assert!(!case.data.is_empty(), "{name}: no data slots");
-        // BOTH tables, not just `data`. Run-length encoding took `DATA_SLOTS`
-        // from one record per element to one per RUN -- 15 records for
-        // `verify_datalayout`, 76 for `codegen` -- so it can no longer cross more
-        // than a batch or two, and this control fired to say so. `SHARED_LAYOUT`
-        // is still one record per shared slot and still crosses many, and it is
-        // emitted batched in the same loop below. Tracking only `data` measured
-        // the table that stopped exercising the mechanism while ignoring the one
-        // that still does.
         deepest = deepest
-            .max(case.data.len().div_ceil(SLOTS_PER_BATCH))
-            .max(case.shared.len().div_ceil(SLOTS_PER_BATCH));
+            .max(case.data.len().div_ceil(DSLOTS_PER_BATCH))
+            .max(case.shared.len().div_ceil(SSLOTS_PER_BATCH));
 
-        let dgot = emit_slots_batched(&mut vm, CMD_EMIT_DATA_SLOT_RECORDS, &case.data, 64);
+        let dgot = emit_slots_batched(
+            &mut vm,
+            CMD_EMIT_DATA_SLOT_RECORDS,
+            &case.data,
+            64,
+            DSLOT_STRIDE,
+            DSLOTS_PER_BATCH,
+        );
         assert_eq!(dgot, case.data_want, "{name}: DATA_SLOTS differs");
 
-        let sgot = emit_slots_batched(&mut vm, CMD_EMIT_SHARED_SLOT_RECORDS, &case.shared, 64);
+        let sgot = emit_slots_batched(
+            &mut vm,
+            CMD_EMIT_SHARED_SLOT_RECORDS,
+            &case.shared,
+            64,
+            SSLOT_STRIDE,
+            SSLOTS_PER_BATCH,
+        );
         assert_eq!(sgot, case.shared_want, "{name}: SHARED_LAYOUT differs");
     }
-    // The cap must still cross several batch boundaries, or it would have
-    // quietly reduced this to a single-batch test.
+    // NEITHER TABLE CROSSES MANY BATCHES ANY MORE, and this is recorded rather
+    // than asserted away.
+    //
+    // The previous version of this test asserted `deepest >= 8`. That control
+    // was kept alive by `SHARED_LAYOUT`, which was one record per shared slot
+    // and crossed many batches after run-length encoding had already collapsed
+    // `DATA_SLOTS`. Now both tables are run-length encoded, so the real corpus
+    // produces a handful of records each and this test no longer exercises
+    // batching AT ALL.
+    //
+    // Lowering the threshold to match would be exactly the move this suite
+    // exists to prevent: an assertion retuned until it passes, still reading as
+    // coverage. So the batching property moved to
+    // `per_slot_batching_still_crosses_many_boundaries` below, which drives it
+    // from a synthetic table sized to cross boundaries by construction, and
+    // this test keeps only the property it can still measure -- byte identity
+    // against real compiler output.
     assert!(
-        deepest >= 8,
-        "the record cap left only {deepest} batches, too few to exercise batching at all"
+        deepest >= 1,
+        "the corpus produced no per-slot records at all"
     );
+}
+
+/// Batching across many boundaries, from a synthetic table.
+///
+/// Run-length encoding both per-slot tables took the real corpus from thousands
+/// of records to a handful, so the real-output test above can no longer reach a
+/// second batch, let alone an eighth. **That is a coverage loss, not a reason to
+/// lower a threshold**, and the mechanism it covered is still live: any stage
+/// whose shared declarations fragment would produce a long table again.
+///
+/// The rows here are synthetic and deliberately NOT run-compressible in shape,
+/// because the point is to exercise the batching loop rather than the encoder.
+#[test]
+fn per_slot_batching_still_crosses_many_boundaries() {
+    let mut vm = vm_for(WIRE_KEL);
+
+    let n = SSLOTS_PER_BATCH * 9 + 3;
+    let recs: Vec<[i64; SSLOT_FIELDS]> = (0..n)
+        .map(|k| {
+            [
+                (k as i64) * 8,
+                (k % 7) as i64,
+                0,
+                (k % 5) as i64,
+                k as i64,
+                1,
+                8,
+            ]
+        })
+        .collect();
+    assert!(
+        n.div_ceil(SSLOTS_PER_BATCH) >= 8,
+        "the synthetic table must cross at least eight batch boundaries, or \
+         this test measures nothing"
+    );
+
+    let got = emit_slots_batched(
+        &mut vm,
+        CMD_EMIT_SHARED_SLOT_RECORDS,
+        &recs,
+        64,
+        SSLOT_STRIDE,
+        SSLOTS_PER_BATCH,
+    );
+    assert_eq!(
+        got.len(),
+        n * SSLOT_STRIDE,
+        "batched output is the wrong length across boundaries"
+    );
+
+    // Byte identity against the reference encoder, record by record, so this
+    // checks the emitted CONTENT rather than only the length.
+    let mut want = Vec::with_capacity(n * SSLOT_STRIDE);
+    for r in &recs {
+        let rec = keleusma::wire_schema::SharedSlotRecord {
+            offset: r[0] as u32,
+            kind: r[1] as u8,
+            reserved: r[2] as u8,
+            len: r[3] as u16,
+            first_slot: r[4] as u32,
+            run: r[5] as u16,
+            stride: r[6] as u16,
+        };
+        let mut buf = [0u8; SSLOT_STRIDE];
+        keleusma_wire::WireRecord::write_record(&rec, &mut buf).expect("encode");
+        want.extend_from_slice(&buf);
+    }
+    assert_eq!(got, want, "batched emission differs from the reference");
 }
 
 /// Must-fire control for both per-slot tables, including the reserved fields.
@@ -5330,34 +5471,70 @@ fn the_emitted_per_slot_tables_match_the_reference_on_real_compiler_output() {
 fn every_per_slot_field_is_independently_observable_including_reserved() {
     let mut vm = vm_for(WIRE_KEL);
     let case = real_slot_case(CORPUS_STAGES[9].1);
-    for (label, cmd, base, want) in [
-        (
-            "DATA_SLOTS",
+
+    // The two tables have different field counts now, so they can no longer be
+    // driven from one array of tuples. Written out twice rather than forced
+    // into a shared shape, since the shared shape is what went wrong.
+    assert_eq!(
+        &emit_slots_batched(
+            &mut vm,
             CMD_EMIT_DATA_SLOT_RECORDS,
             &case.data,
-            &case.data_want,
+            64,
+            DSLOT_STRIDE,
+            DSLOTS_PER_BATCH
         ),
-        (
-            "SHARED_LAYOUT",
+        &case.data_want,
+        "DATA_SLOTS: the clean case must agree"
+    );
+    for f in 0..DSLOT_FIELDS {
+        let mut recs = case.data.clone();
+        recs[0][f] ^= 1;
+        assert_ne!(
+            &emit_slots_batched(
+                &mut vm,
+                CMD_EMIT_DATA_SLOT_RECORDS,
+                &recs,
+                64,
+                DSLOT_STRIDE,
+                DSLOTS_PER_BATCH
+            ),
+            &case.data_want,
+            "DATA_SLOTS: control did not fire, field {f} is not observable"
+        );
+    }
+
+    assert_eq!(
+        &emit_slots_batched(
+            &mut vm,
             CMD_EMIT_SHARED_SLOT_RECORDS,
             &case.shared,
-            &case.shared_want,
+            64,
+            SSLOT_STRIDE,
+            SSLOTS_PER_BATCH
         ),
-    ] {
-        assert_eq!(
-            &emit_slots_batched(&mut vm, cmd, base, 64),
-            want,
-            "{label}: the clean case must agree"
+        &case.shared_want,
+        "SHARED_LAYOUT: the clean case must agree"
+    );
+    // All SEVEN fields, including the three the run-length form added. A
+    // `first_slot` or `stride` the emitter silently skipped would still leave
+    // the other four bytes correct, which is exactly the shape of defect a
+    // whole-record comparison against a zeroed buffer can miss.
+    for f in 0..SSLOT_FIELDS {
+        let mut recs = case.shared.clone();
+        recs[0][f] ^= 1;
+        assert_ne!(
+            &emit_slots_batched(
+                &mut vm,
+                CMD_EMIT_SHARED_SLOT_RECORDS,
+                &recs,
+                64,
+                SSLOT_STRIDE,
+                SSLOTS_PER_BATCH
+            ),
+            &case.shared_want,
+            "SHARED_LAYOUT: control did not fire, field {f} is not observable"
         );
-        for f in 0..SLOT_FIELDS {
-            let mut recs = base.clone();
-            recs[0][f] ^= 1;
-            assert_ne!(
-                &emit_slots_batched(&mut vm, cmd, &recs, 64),
-                want,
-                "{label}: control did not fire, field {f} is not observable"
-            );
-        }
     }
 }
 
@@ -5365,10 +5542,12 @@ fn every_per_slot_field_is_independently_observable_including_reserved() {
 #[test]
 fn an_oversized_per_slot_batch_is_reported_rather_than_truncated() {
     let mut vm = vm_for(WIRE_KEL);
-    let over = (FIN_CAPACITY / SLOT_FIELDS) + 1;
-    for (cmd, code) in [
-        (CMD_EMIT_DATA_SLOT_RECORDS, -203),
-        (CMD_EMIT_SHARED_SLOT_RECORDS, -204),
+    // Per table: the capacity check is `n * fields > fin_capacity`, and the two
+    // tables no longer have the same field count, so one `over` would be past
+    // the cap for one and inside it for the other.
+    for (cmd, code, over) in [
+        (CMD_EMIT_DATA_SLOT_RECORDS, -203, DSLOTS_PER_BATCH + 1),
+        (CMD_EMIT_SHARED_SLOT_RECORDS, -204, SSLOTS_PER_BATCH + 1),
     ] {
         let (got, _) =
             run_cmd_fields(&mut vm, cmd, 0, &[], &[], [64, over as i64, 0, 0, 0], 0).expect("run");
@@ -6081,18 +6260,40 @@ fn region_counts_for(bytes: &[u8]) -> Vec<RegionSpec> {
         );
         // A pool passes bytes; a record table passes its record count, which is
         // what a driver holds before it knows any byte length.
+        //
+        // EVERY STRIDE IS DERIVED FROM ITS RECORD TYPE, never written as a
+        // literal. This table previously grouped nine kinds under a literal 8.
+        // When `SharedSlotRecord` became two words the group silently kept
+        // reporting 8, so a real stage's SHARED_LAYOUT count came out doubled
+        // and four tests failed with a wrong derived header rather than with
+        // anything naming the stride. That is the tenth by-name enumeration
+        // defect in this project, and the fix is to stop enumerating the
+        // number: a width change now propagates on its own.
+        use keleusma::wire_schema::{
+            ChunkRecord, ConstRecord, DataInitRecord, DataSlotRecord, EnumLayoutRecord,
+            EnumVariantRecord, HeaderRecord, NativeRecord, NativeReturnRecord,
+            PrivateCompositeRecord, SharedSlotRecord, SignatureRecord, StructTemplateRecord,
+        };
         let stride = match r.kind {
-            kind::NAMES
-            | kind::STRUCT_AUX
-            | kind::SHAPES
-            | kind::DATA_SLOTS
-            | kind::SHARED_LAYOUT
-            | kind::PRIVATE_COMPOSITE
-            | kind::DATA_INIT
-            | kind::NATIVES
-            | kind::NATIVE_RETURNS => 8,
-            kind::CHUNKS => 48,
-            kind::HEADER => 32,
+            kind::NAMES => <NameRef as WireRecord>::STRIDE,
+            kind::SHAPES => <ShapeRecord as WireRecord>::STRIDE,
+            kind::CONSTS => <ConstRecord as WireRecord>::STRIDE,
+            kind::SIGNATURES => <SignatureRecord as WireRecord>::STRIDE,
+            kind::STRUCT_TEMPLATES => <StructTemplateRecord as WireRecord>::STRIDE,
+            kind::ENUM_VARIANTS => <EnumVariantRecord as WireRecord>::STRIDE,
+            kind::ENUM_LAYOUTS => <EnumLayoutRecord as WireRecord>::STRIDE,
+            kind::DATA_SLOTS => <DataSlotRecord as WireRecord>::STRIDE,
+            kind::SHARED_LAYOUT => <SharedSlotRecord as WireRecord>::STRIDE,
+            kind::PRIVATE_COMPOSITE => <PrivateCompositeRecord as WireRecord>::STRIDE,
+            kind::DATA_INIT => <DataInitRecord as WireRecord>::STRIDE,
+            kind::NATIVES => <NativeRecord as WireRecord>::STRIDE,
+            kind::NATIVE_RETURNS => <NativeReturnRecord as WireRecord>::STRIDE,
+            kind::CHUNKS => <ChunkRecord as WireRecord>::STRIDE,
+            kind::HEADER => <HeaderRecord as WireRecord>::STRIDE,
+            // STRUCT_AUX and ENUM_AUX have no single record type here; both are
+            // one word. Left as a literal deliberately, and named rather than
+            // folded into a catch-all so it is visible if either ever widens.
+            kind::STRUCT_AUX | kind::ENUM_AUX => 8,
             _ => 16,
         };
         let passed = if is_pool { len } else { len / stride };
@@ -6311,10 +6512,34 @@ fn rows_for_kind(view: &keleusma_wire::WireView<'_>, kind: u16) -> Vec<Vec<i64>>
     // inputs, so a struct-shaped decode would return fewer fields than the
     // emitter consumes and the region would come out short. Offsets are the
     // ones the emitters use.
-    if matches!(
-        kind,
-        w::kind::DATA_SLOTS | w::kind::SHARED_LAYOUT | w::kind::STRUCT_AUX
-    ) {
+    // SHARED_LAYOUT is TWO words and seven fields, so it cannot share the
+    // 8-byte chunking below.
+    //
+    // `chunks_exact(8)` split every record in half and returned four fields.
+    // The symptom was a run of 5 and a stride of 24 where the reference has
+    // 6,149 and 8 -- the two u16 fields read as the low byte of each. That is
+    // the SAME defect the DATA_SLOTS note below records, arriving in the very
+    // decoder that note held up as having done it right. A note that a sibling
+    // is correct is a statement about the code as it stood, not a property that
+    // survives the sibling changing shape.
+    if kind == w::kind::SHARED_LAYOUT {
+        let raw = view.region_bytes(&region).expect("payload");
+        let mut out = Vec::new();
+        for c in raw.chunks_exact(16) {
+            out.push(vec![
+                i64::from(u32::from_le_bytes([c[0], c[1], c[2], c[3]])),
+                i64::from(c[4]),
+                i64::from(c[5]),
+                i64::from(u16::from_le_bytes([c[6], c[7]])),
+                i64::from(u32::from_le_bytes([c[8], c[9], c[10], c[11]])),
+                i64::from(u16::from_le_bytes([c[12], c[13]])),
+                i64::from(u16::from_le_bytes([c[14], c[15]])),
+            ]);
+        }
+        return out;
+    }
+
+    if matches!(kind, w::kind::DATA_SLOTS | w::kind::STRUCT_AUX) {
         let raw = view.region_bytes(&region).expect("payload");
         let u32le = |b: &[u8], o: usize| -> i64 {
             i64::from(u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]))
@@ -6329,7 +6554,9 @@ fn rows_for_kind(view: &keleusma_wire::WireView<'_>, kind: u16) -> Vec<Vec<i64>>
                     // silently truncating. A run of 1,536 (0x0600) came back as
                     // 0, and the emitter then wrote the zero it was handed --
                     // which reads as an emitter bug and is not one.
-                    // `SHARED_LAYOUT` immediately below already did this right.
+                    // `SHARED_LAYOUT` is decoded separately above, at its own
+                    // stride; it hit this same defect later, for the same
+                    // reason, once it grew u16 fields of its own.
                     vec![
                         u32le(c, 0),
                         i64::from(c[4]),
@@ -6337,12 +6564,6 @@ fn rows_for_kind(view: &keleusma_wire::WireView<'_>, kind: u16) -> Vec<Vec<i64>>
                         i64::from(u16::from_le_bytes([c[6], c[7]])),
                     ]
                 }
-                k if k == w::kind::SHARED_LAYOUT => vec![
-                    u32le(c, 0),
-                    i64::from(c[4]),
-                    i64::from(c[5]),
-                    i64::from(u16::from_le_bytes([c[6], c[7]])),
-                ],
                 _ => vec![u32le(c, 0), u32le(c, 4)],
             });
         }
@@ -9076,7 +9297,23 @@ fn every_fitting_region_of_a_real_stage_emits_into_a_window() {
     use keleusma::wire_schema::kind;
     let mut vm = vm_for(WIRE_KEL);
 
-    let src = include_str!("../src/selfhost/kel/verify_yield.kel");
+    // `codegen`, not `verify_yield`. THIS IS THE SECOND TIME THIS TEST HAS HAD
+    // TO MOVE, and both times for the same reason: a size reduction pulled every
+    // region inside the buffer and left the window mechanism untested.
+    //
+    // Run-length encoding `SHARED_LAYOUT` removed 43,032 bytes from `codegen`
+    // and took `verify_yield`'s whole auxiliary body to 31,576 bytes, entirely
+    // within the 65,536-byte window. The `past_the_buffer` control below fired
+    // and said so, which is the only reason this was noticed rather than
+    // silently becoming an absolute-positioning test.
+    //
+    // Measured after the change, only three stages still place a region past
+    // the buffer: `parse` (max base 299,416), `codegen` (110,648) and
+    // `verify_structural` (101,920). `codegen` is taken as the smallest of the
+    // three that still has several such regions, so the test stays cheap.
+    // If a later reduction pulls `codegen` inside too, move to `parse` and then
+    // to a synthetic case -- do NOT relax the control.
+    let src = include_str!("../src/selfhost/kel/codegen.kel");
     let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
     let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
@@ -9610,9 +9847,16 @@ fn assemble_whole_artifact(label: &str, src: &str) -> (usize, usize, usize) {
 /// PR #21 proved composition on `verify_datalayout`. One stage is one shape: it
 /// happens to have no region larger than a window, its chunk count is two, and
 /// its kind set is whatever that source reaches. This runs the same assembly over
-/// **six** stages spanning 105,848 to 2,616,320 bytes and 2 to 94 chunks — every
-/// stage the pipeline has except `lexer`, `reconstruct`, `analyze` and the two
-/// smallest verifiers.
+/// **three** stages spanning 102,256 to 304,432 bytes.
+///
+/// **That count keeps falling, and the reason is not attrition.** It said six,
+/// then four, now three. Each encoding improvement takes more stages under the
+/// 65,536-byte buffer, and a stage whose whole body fits one window cannot
+/// exercise composition. `verify_yield` and `verify_typed` left the corpus when
+/// `SHARED_LAYOUT` became run-length encoded. The stages are not gone from the
+/// suite; they are simply no longer big enough to test this property, and the
+/// helper's own control is what reports that rather than letting them pass
+/// quietly.
 ///
 /// **The two largest were nearly excluded on a botched cost comparison, and the
 /// correction is the lesson.** Adding them takes this test from 25s to about
@@ -9633,21 +9877,24 @@ fn assemble_whole_artifact(label: &str, src: &str) -> (usize, usize, usize) {
 /// that composition is not specific to one source.
 #[test]
 fn the_whole_artifact_assembly_holds_across_several_stages() {
-    // `verify_datalayout` and `verify_depth` were dropped when one-name-per-array
-    // took their artifacts under the 65,536-byte buffer -- at 50,848 bytes the
-    // whole body fits in one window, so nothing about COMPOSITION is exercised and
-    // the helper's own control says so. They are not gone from the suite; they are
-    // simply no longer large enough to test assembly across windows.
+    // THE QUALIFYING CORPUS SHRINKS EVERY TIME THE ENCODING IMPROVES, and this
+    // is the third round of it.
+    //
+    // `verify_datalayout` and `verify_depth` went under the 65,536-byte buffer
+    // when one-name-per-array landed. `verify_yield` (31,576) and `verify_typed`
+    // (44,928) went under it when `SHARED_LAYOUT` became run-length encoded.
+    // A stage whose whole body fits one window exercises nothing about
+    // COMPOSITION, and `assemble_whole_artifact`'s own control says so rather
+    // than letting it pass quietly.
+    //
+    // Measured after the change, exactly three stages still exceed the buffer:
+    // `parse` (304,432), `codegen` (111,864) and `verify_structural` (102,256).
     const STAGES: &[(&str, &str)] = &[
         (
-            "verify_yield",
-            include_str!("../src/selfhost/kel/verify_yield.kel"),
+            "verify_structural",
+            include_str!("../src/selfhost/kel/verify_structural.kel"),
         ),
         ("codegen", include_str!("../src/selfhost/kel/codegen.kel")),
-        (
-            "verify_typed",
-            include_str!("../src/selfhost/kel/verify_typed.kel"),
-        ),
         ("parse", include_str!("../src/selfhost/kel/parse.kel")),
     ];
 
@@ -9664,9 +9911,28 @@ fn the_whole_artifact_assembly_holds_across_several_stages() {
     }
 
     // Must-fire about the CORPUS: the stages must actually differ in size, or
-    // four passes prove no more than one did.
+    // several passes prove no more than one did.
+    //
+    // THIS THRESHOLD MOVED FROM 4x TO 2x, and that is a threshold change, so it
+    // is argued rather than just done. The qualifying corpus is now three stages
+    // spanning 102,256 to 304,432 bytes, a ratio of 2.98. Four is unreachable
+    // because run-length encoding took 43,032 bytes out of `codegen` and pulled
+    // the two stages that used to sit at the bottom of the range under the
+    // buffer entirely.
+    //
+    // Why this is NOT the same as the `deepest >= 8` batching control, which was
+    // moved to a synthetic case rather than lowered: there, the real corpus
+    // stopped exercising the mechanism AT ALL, so any threshold it still passed
+    // would have been measuring nothing. Here the mechanism is still exercised
+    // over a 2.98x range of real artifacts; only the achievable spread narrowed.
+    // A control whose property survives keeps its home and gets a re-derived
+    // number; a control whose property does not survive has to move.
+    //
+    // If a later reduction takes this below 2x, it has stopped being testable on
+    // real output and should move to a synthetic artifact rather than shrink
+    // again.
     assert!(
-        largest >= smallest * 4,
+        largest >= smallest * 2,
         "stages span only {smallest} to {largest} bytes, too narrow to show that \
          composition is independent of scale"
     );
