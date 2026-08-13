@@ -196,6 +196,38 @@ impl<'a> WireView<'a> {
         Some(plane.scan(data))
     }
 
+    /// Scans every protected region against its plane and sums the outcome.
+    ///
+    /// Returns `None` when the artifact carries no planes at all, which is the
+    /// normal case and is deliberately distinguished from a clean scan of zero
+    /// protected regions. A caller that treated "no ECC" as "verified" would be
+    /// reporting an unprotected artifact as sound.
+    ///
+    /// A plane region is not itself scanned. Protecting the parity of the parity
+    /// is not what SECDED buys, and a fault in a plane surfaces as a false
+    /// syndrome on the region it covers rather than as silent acceptance.
+    pub fn verify_all(&self) -> Option<EccReport> {
+        let mut total: Option<EccReport> = None;
+        for i in 0..self.region_count {
+            let Some(r) = self.region_at(i) else { continue };
+            if r.is_ecc_plane() || !r.has_ecc() {
+                continue;
+            }
+            let Some(rep) = self.verify_region(&r) else {
+                continue;
+            };
+            let acc = total.get_or_insert(EccReport {
+                words: 0,
+                corrected: 0,
+                uncorrectable: 0,
+            });
+            acc.words += rep.words;
+            acc.corrected += rep.corrected;
+            acc.uncorrectable += rep.uncorrectable;
+        }
+        total
+    }
+
     /// Finds the single region of the given kind.
     ///
     /// `parse` rejects duplicate kinds, so this is unambiguous.

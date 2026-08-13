@@ -144,6 +144,40 @@ impl WireBuilder {
         Ok(())
     }
 
+    /// Generates a parity plane for every region declared so far.
+    ///
+    /// Each plane's kind comes from [`crate::ecc::plane_kind_for`], so the
+    /// caller does not maintain a kind-per-region table. Call this LAST, after
+    /// every region exists: a region declared afterwards is simply unprotected,
+    /// silently, which is why [`Self::finish`] is the natural place to precede.
+    ///
+    /// Idempotent per region: a region that already has a plane is skipped
+    /// rather than reported, so this composes with explicit [`Self::protect`]
+    /// calls for regions wanting a non-default plane kind.
+    ///
+    /// # Cost
+    ///
+    /// One check byte per eight payload bytes, so 12.5% of the protected bytes,
+    /// plus one directory entry per plane. The region ceiling counts planes, so
+    /// this halves the number of payload regions an artifact may carry.
+    ///
+    /// # Errors
+    ///
+    /// [`WireError::TooManyRegions`] if the planes would exceed
+    /// [`crate::layout::MAX_REGIONS`]. [`WireError::DuplicateRegion`] if a
+    /// derived plane kind collides with a kind already in use, which can only
+    /// happen for a payload region whose own kind has the high bit set.
+    pub fn protect_all(&mut self) -> Result<(), WireError> {
+        for i in 0..self.regions.len() {
+            if self.regions[i].ecc_kind.is_some() {
+                continue;
+            }
+            let plane = crate::ecc::plane_kind_for(self.regions[i].kind);
+            self.protect(RegionId(i), plane)?;
+        }
+        Ok(())
+    }
+
     /// True when `kind` is taken, by a declared region or a pending plane.
     fn kind_in_use(&self, kind: u16) -> bool {
         self.regions

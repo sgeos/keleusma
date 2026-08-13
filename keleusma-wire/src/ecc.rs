@@ -49,6 +49,26 @@ use crate::scalar::{u8_at, u64_at};
 /// Number of check bits per word.
 pub const CHECK_BITS: usize = 8;
 
+/// High bit marking a region kind as the parity plane for the kind below it.
+///
+/// A plane needs its own region kind, and choosing one per protected kind by
+/// hand is a by-name enumeration waiting to drift. The convention instead
+/// derives it: the plane for kind `k` is `k | ECC_KIND_BIT`. Every schema kind
+/// this project defines sits well below `0x8000`, so the mapping is injective
+/// over the kinds in use and a plane's own kind can never collide with a
+/// payload kind.
+///
+/// The reader does not depend on this. [`crate::WireView::ecc_for`] matches on
+/// a plane's `covers` field, so the convention is the ENCODER's business alone
+/// and an artifact numbering its planes differently still reads correctly.
+pub const ECC_KIND_BIT: u16 = 0x8000;
+
+/// The parity-plane kind protecting `kind`, by the [`ECC_KIND_BIT`] convention.
+#[inline]
+pub const fn plane_kind_for(kind: u16) -> u16 {
+    kind | ECC_KIND_BIT
+}
+
 /// Parity columns: 64 data columns then 8 check columns.
 ///
 /// Generated from the construction rule so the matrix cannot drift from its
