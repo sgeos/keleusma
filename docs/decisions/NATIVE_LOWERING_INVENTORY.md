@@ -4916,3 +4916,26 @@ frequency in the corpus, and only the second one ranks work.
 
 Construction shapes, for whatever builds the emitter: `(byte_size, count)` is
 `(8,1)`x80, `(24,3)`x115, `(16,2)`x23, `(40,5)`x19, `(32,4)`x1, `(64,2)`x1.
+
+### Composites DO escape, so the section cannot be the chunk by default
+
+Measured 2026-08-12 against the operator's section-scoped bump model. All 826 corpus
+chunks carry a `ChunkSignature`, so this is complete rather than sampled.
+
+| | |
+|---|---|
+| chunks with a signature | 826 |
+| chunks **returning** a flat composite | **23** |
+| chunks **taking** a flat composite parameter | **11** |
+| chunks in modules without signatures | 0 |
+
+A per-chunk region reset on exit would free a returned body underneath its caller in 23
+places, including `rogue_dungen::random_in_room` and the `10_multbyte` arithmetic pair.
+**The bump model is not threatened; the choice of section is.** An escaping body must be
+allocated in a region that outlives the callee, which is the caller's, and that keeps every
+address a base plus a constant.
+
+The coarsest sound v1 is **one bump region per invocation, reset at `Reset`**, sized by the
+WCMU bound the verifier already computes. Nothing outlives a stream iteration except the
+persistent pool, so no escape analysis is needed to be correct — only to be tight. Finer
+sections are then a peak-bytes optimisation rather than a correctness prerequisite.

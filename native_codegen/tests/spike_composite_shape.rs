@@ -186,3 +186,55 @@ fn spike_report_flat_operand_detail() {
     }
     println!("================");
 }
+
+/// **DOES A CONSTRUCTED BODY ESCAPE ITS CHUNK?**
+///
+/// The section-scoped bump model reclaims a region when its section exits, so a
+/// body still live afterwards would be freed underneath its user. The module
+/// carries the answer directly: the typed verifier's per-chunk `ChunkSignature`
+/// records the flat shape of each chunk's return and parameters, so a composite
+/// crossing a call boundary is visible without a dataflow pass of my own.
+///
+/// Escape by the two other routes is already measured: `SetData` homing is 0 of
+/// 239, and a composite parameter is a composite argument at every call site.
+#[test]
+fn spike_report_composite_escape() {
+    let (mut ret_flat, mut param_flat, mut chunks, mut sigless) = (0usize, 0usize, 0usize, 0usize);
+    let mut offenders: Vec<String> = Vec::new();
+
+    for (name, m) in corpus() {
+        if m.signatures.is_empty() {
+            sigless += m.chunks.len();
+            continue;
+        }
+        for (c, sig) in m.chunks.iter().zip(m.signatures.iter()) {
+            chunks += 1;
+            if matches!(sig.ret, keleusma::bytecode::WireShape::Flat { .. }) {
+                ret_flat += 1;
+                offenders.push(format!("{name}::{} returns a flat composite", c.name));
+            }
+            let np = sig
+                .params
+                .iter()
+                .filter(|p| matches!(p, keleusma::bytecode::WireShape::Flat { .. }))
+                .count();
+            if np > 0 {
+                param_flat += 1;
+                offenders.push(format!("{name}::{} takes {np} flat composite param(s)", c.name));
+            }
+        }
+    }
+
+    println!("================ SPIKE: does a composite escape its chunk?");
+    println!("  chunks with a signature            : {chunks}");
+    println!("  chunks in modules WITHOUT signatures: {sigless}  (unmeasured, not zero)");
+    println!("  chunks RETURNING a flat composite  : {ret_flat}");
+    println!("  chunks TAKING a flat composite     : {param_flat}");
+    for o in offenders.iter().take(25) {
+        println!("     {o}");
+    }
+    println!("  -> if both are 0, no constructed body outlives the chunk that");
+    println!("     built it by call or return, and a per-chunk bump region with");
+    println!("     reset-on-entry is sound for this corpus.");
+    println!("================");
+}
