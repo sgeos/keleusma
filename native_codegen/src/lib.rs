@@ -1340,6 +1340,48 @@ fn lower_chunk_body<'ctx>(
             continue;
         }
 
+        // **A tuple field read IS a struct field read.** `TupleField` and
+        // `StructField` carry the same three variants with the same fields, and
+        // a flat body does not record which composite kind it came from, so the
+        // emitted address arithmetic and load are identical.
+        //
+        // Normalised here rather than given its own arms. Two copies of ~50
+        // lines of pointer arithmetic is exactly the duplication that made one
+        // predicate wrong in three places on the `v0.2.3` line and that the
+        // `is_lowered` model needs a drift control to survive. One code path
+        // cannot drift from itself.
+        let normalised;
+        let op = match op {
+            Op::GetTupleField(tf) => {
+                use keleusma::bytecode::{StructField as SF, TupleField as TF};
+                normalised = Op::GetField(match tf {
+                    TF::Flat { offset, kind } => SF::Flat {
+                        offset: *offset,
+                        kind: *kind,
+                    },
+                    TF::FlatNested {
+                        offset,
+                        size,
+                        variant,
+                    } => SF::FlatNested {
+                        offset: *offset,
+                        size: *size,
+                        variant: *variant,
+                    },
+                    // The boxed form keeps its own refusal rather than being
+                    // mapped onto a struct's, so the message names what the
+                    // source actually contains.
+                    TF::Boxed { .. } => {
+                        return Err(LowerError::UnsupportedOp(format!(
+                            "GetTupleField reading {tf:?} is not lowered"
+                        )));
+                    }
+                });
+                &normalised
+            }
+            other => other,
+        };
+
         match op {
             Op::GetLocal(n) => {
                 let v =
