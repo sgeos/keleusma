@@ -270,7 +270,22 @@ mod width_tests {
     #[test]
     fn an_unknown_width_yields_no_byte_count() {
         assert_eq!(Width::Unknown.bytes(), None);
-        assert_eq!(Width::Bytes(8).bytes(), Some(8));
+        assert_eq!(Width::Scalar(8).bytes(), Some(8));
+    }
+
+    /// **The distinction the byte count alone cannot make.** An eight-byte
+    /// nested body and a `Word` agree on `bytes()` and differ on everything the
+    /// emitter must do: one is stored, the other copied from the address the
+    /// operand holds. Storing a body would write the pointer into the parent
+    /// while every downstream offset still looked correct.
+    #[test]
+    fn a_body_and_a_scalar_of_equal_size_are_distinguishable() {
+        let scalar = Width::Scalar(8);
+        let body = Width::Body(8);
+        assert_eq!(scalar.bytes(), body.bytes(), "equal size is the hazard");
+        assert!(!scalar.is_body());
+        assert!(body.is_body());
+        assert_ne!(scalar, body);
     }
 
     /// A composite parameter's body length is not carried on its type tag, so
@@ -285,8 +300,8 @@ mod width_tests {
     /// The two tags whose packed width the signature really does state.
     #[test]
     fn scalar_tags_state_their_width() {
-        assert_eq!(width_of_tag(TypeTag::Word), Width::Bytes(8));
-        assert_eq!(width_of_tag(TypeTag::Byte), Width::Bytes(1));
-        assert_eq!(width_of_tag(TypeTag::Bool), Width::Bytes(1));
+        assert_eq!(width_of_tag(TypeTag::Word), Width::Scalar(8));
+        assert_eq!(width_of_tag(TypeTag::Byte), Width::Scalar(1));
+        assert_eq!(width_of_tag(TypeTag::Bool), Width::Scalar(1));
     }
 }

@@ -88,19 +88,35 @@ pub mod region;
 /// unknown is refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Width {
-    /// The value packs into this many bytes.
-    Bytes(u32),
+    /// The operand IS the data: `bytes` of it, stored directly.
+    Scalar(u32),
+    /// The operand POINTS AT the data: `bytes` of body at the address it holds,
+    /// copied rather than stored.
+    ///
+    /// **Splitting this from `Scalar` is not tidiness.** An eight-byte nested
+    /// composite body and a `Word` are both eight bytes, and a single-field
+    /// struct wrapping a word is exactly that shape — 80 of the corpus's
+    /// constructions are `(8, 1)`. Storing one as a scalar would write the
+    /// POINTER into the parent body while every downstream field offset still
+    /// looked correct, which is a silent wrong answer rather than a fault.
+    Body(u32),
     /// Not statically determined here. Fails a composite operation closed.
     Unknown,
 }
 
 impl Width {
-    /// Byte count, or `None` when unknown.
+    /// Byte count the value occupies in a packed body, or `None` when unknown.
     pub fn bytes(self) -> Option<u32> {
         match self {
-            Width::Bytes(n) => Some(n),
+            Width::Scalar(n) | Width::Body(n) => Some(n),
             Width::Unknown => None,
         }
+    }
+
+    /// Whether placing this operand copies from an address rather than storing
+    /// the value.
+    pub fn is_body(self) -> bool {
+        matches!(self, Width::Body(_))
     }
 }
 
@@ -117,8 +133,8 @@ fn alloc_vec_unknown(n: usize) -> Vec<Width> {
 /// guessing it is exactly the silent mispack this type exists to prevent.
 fn width_of_tag(t: TypeTag) -> Width {
     match t {
-        TypeTag::Byte | TypeTag::Bool => Width::Bytes(1),
-        TypeTag::Word => Width::Bytes(8),
+        TypeTag::Byte | TypeTag::Bool => Width::Scalar(1),
+        TypeTag::Word => Width::Scalar(8),
         _ => Width::Unknown,
     }
 }
@@ -525,9 +541,9 @@ impl<'ctx> Lower<'ctx> {
         // `a + 1`. The flag is a boolean and `high` is the overflow word, both
         // labelled so a construction consuming one is packed correctly rather
         // than refused for want of a label.
-        self.push_w(low, Width::Bytes(8));
-        self.push_w(high, Width::Bytes(8));
-        self.push_w(flag, Width::Bytes(1));
+        self.push_w(low, Width::Scalar(8));
+        self.push_w(high, Width::Scalar(8));
+        self.push_w(flag, Width::Scalar(1));
     }
 }
 
@@ -1573,9 +1589,9 @@ fn lower_chunk_body<'ctx>(
                 // `Unit` stays unknown: it is a placeholder that nothing reads,
                 // and giving it a width would let it be packed into a body.
                 let (v, w): (i64, Width) = match cv {
-                    ConstValue::Int(i) => (*i, Width::Bytes(8)),
-                    ConstValue::Byte(x) => (*x as i64, Width::Bytes(1)),
-                    ConstValue::Bool(b) => (*b as i64, Width::Bytes(1)),
+                    ConstValue::Int(i) => (*i, Width::Scalar(8)),
+                    ConstValue::Byte(x) => (*x as i64, Width::Scalar(1)),
+                    ConstValue::Bool(b) => (*b as i64, Width::Scalar(1)),
                     // Unit is pushed and popped without being read. Same
                     // placeholder, same caveat, as `PushImmediate(0)`.
                     ConstValue::Unit => (0, Width::Unknown),
@@ -1985,16 +2001,17 @@ fn lower_chunk_body<'ctx>(
                 // Widths, in OPERAND order. `width_at(0)` is the top of the
                 // stack, which is the LAST operand, so the run is reversed.
                 let n = *count as usize;
-                let mut widths: Vec<u32> = Vec::with_capacity(n);
+                let mut widths: Vec<Width> = Vec::with_capacity(n);
                 for back in (0..n).rev() {
                     // An unknown width cannot be placed. Refusing is the whole
                     // point of the default: a guess here mispacks silently, and
                     // a Byte and a Word are indistinguishable on this stack.
-                    let w = st.width_at(back).bytes().ok_or_else(|| {
-                        LowerError::UnsupportedOp(format!(
+                    let w = st.width_at(back);
+                    if w.bytes().is_none() {
+                        return Err(LowerError::UnsupportedOp(format!(
                             "NewComposite at op {i} has an operand of unknown packed width"
-                        ))
-                    })?;
+                        )));
+                    }
                     widths.push(w);
                 }
 
@@ -2003,7 +2020,7 @@ fn lower_chunk_body<'ctx>(
                 // mismatch means this backend's model of the layout has drifted
                 // from the compiler's, and emitting anyway would write a body
                 // the VM reads differently.
-                let total: u32 = widths.iter().sum();
+                let total: u32 = widths.iter().filter_map(|w| w.bytes()).sum();
                 if total != u32::from(*byte_size) {
                     return Err(LowerError::UnsupportedOp(format!(
                         "NewComposite at op {i} packs {total} bytes but the instruction bakes \
@@ -2032,7 +2049,25 @@ fn lower_chunk_body<'ctx>(
                     // layout is chosen for density: a Word can sit at offset 1.
                     // Declaring an alignment the pointer does not have is
                     // undefined behaviour that presents as a bus fault.
-                    let store = match w {
+                    let n_bytes = w.bytes().expect("checked above");
+                    if w.is_body() {
+                        // **REFUSED, and the copy is deliberately NOT written.**
+                        // Nothing can currently observe whether such a copy is
+                        // right: reading a nested body back needs
+                        // `GetField`/`GetIndex(FlatNested)`, which this backend
+                        // refuses, so no differential could distinguish a correct
+                        // copy from a wrong one. A memcpy writing the wrong bytes
+                        // would leave every downstream offset looking correct.
+                        //
+                        // Implement it when the FlatNested read lands, gated on a
+                        // differential that reads a field OUT of a copied body
+                        // rather than merely constructing one.
+                        return Err(LowerError::UnsupportedOp(format!(
+                            "NewComposite at op {i} nests a {n_bytes}-byte body; not lowered \
+                             until FlatNested reads make it verifiable"
+                        )));
+                    }
+                    let store = match n_bytes {
                         8 => st.b.build_store(addr, *v).unwrap(),
                         1 => {
                             let t = st.b.build_int_truncate(*v, i8t, "cfbyte").unwrap();
@@ -2040,13 +2075,13 @@ fn lower_chunk_body<'ctx>(
                         }
                         other => {
                             return Err(LowerError::UnsupportedOp(format!(
-                                "NewComposite at op {i} has a {other}-byte field; only 1 and 8 \
-                                 are lowered"
+                                "NewComposite at op {i} has a {other}-byte scalar field; \
+                                 only 1 and 8 are lowered"
                             )));
                         }
                     };
                     store.set_alignment(1).expect("1 is a power of two");
-                    off += w;
+                    off += n_bytes;
                 }
 
                 // The composite operand IS its address. Its packed width is the
@@ -2061,7 +2096,9 @@ fn lower_chunk_body<'ctx>(
                     .unwrap()
                 };
                 let as_int = st.b.build_ptr_to_int(base, i64t, "cbodyint").unwrap();
-                st.push_w(as_int, Width::Bytes(u32::from(*byte_size)));
+                // A construction pushes the body's ADDRESS, so it is a `Body`:
+                // placing it inside another body copies from that address.
+                st.push_w(as_int, Width::Body(u32::from(*byte_size)));
             }
             // Flat array element read. The same address-plus-typed-load as a
             // field, with a RUNTIME index and a compile-time element size.
@@ -2118,7 +2155,7 @@ fn lower_chunk_body<'ctx>(
                     // Zero, not sign: a `Byte` holds `0..=255` in a full slot.
                     (st.b.build_int_z_extend(bv, i64t, "cizext").unwrap(), 1u32)
                 };
-                st.push_w(v, Width::Bytes(w));
+                st.push_w(v, Width::Scalar(w));
             }
             // Flat field read: a constant offset from the body address and one
             // unaligned typed load, which is what `GetData` already does.
@@ -2172,7 +2209,7 @@ fn lower_chunk_body<'ctx>(
                         )));
                     }
                 };
-                st.push_w(v, Width::Bytes(w));
+                st.push_w(v, Width::Scalar(w));
             }
             // Suspension. **`Yield` is pop-one, push-one**: it pops the value
             // to yield and pushes the value the host resumes with. Treating it
