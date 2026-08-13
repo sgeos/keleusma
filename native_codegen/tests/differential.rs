@@ -2454,3 +2454,42 @@ fn a_nested_array_element_agrees_with_the_vm() {
         );
     }
 }
+
+/// **A MIXED-WIDTH composite, which is where the packing rule actually bites.**
+///
+/// `struct M { a: Byte, b: Word }` is nine bytes with the word at offset ONE.
+/// Every uniform-word composite is blind to that: cumulative packing and an
+/// eight-byte stride agree on all of them, which is five of the six shapes the
+/// corpus contains. This is the case that separates them, executed rather than
+/// inspected.
+#[test]
+fn a_mixed_width_composite_agrees_with_the_vm() {
+    let src = "struct M { a: Byte, b: Word }
+               fn main(a: Word, b: Word) -> Word { let m = M { a: 1 as Byte, b: b }; m.b }";
+    for args in [[0, 7], [0, -1], [0, i64::MIN], [0, i64::MAX]] {
+        let (native, _) = composite_native_with_region(src, &args);
+        let vm = vm_result(src, &args);
+        assert_eq!(
+            native, vm,
+            "a word at offset one disagrees for {args:?}: native={native}, vm={vm}"
+        );
+    }
+}
+
+/// Reading the BYTE of a mixed-width composite, which the word case cannot check.
+///
+/// A `Byte` occupies a full operand slot holding `0..=255`, so a sign-extending
+/// load would read `0xFF` as `-1`. The byte here is deliberately above 127.
+#[test]
+fn a_byte_field_zero_extends_like_the_vm() {
+    let src = "struct M { a: Byte, b: Word }
+               fn main(a: Word, b: Word) -> Word { let m = M { a: 200 as Byte, b: b }; m.a as Word }";
+    for args in [[0, 1], [0, -5]] {
+        let (native, _) = composite_native_with_region(src, &args);
+        let vm = vm_result(src, &args);
+        assert_eq!(
+            native, vm,
+            "a byte field disagrees for {args:?}: native={native}, vm={vm}"
+        );
+    }
+}

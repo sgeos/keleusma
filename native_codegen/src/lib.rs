@@ -374,6 +374,20 @@ impl<'ctx> Lower<'ctx> {
         }
     }
 
+    /// Relabel the top operand's packed width without touching its value.
+    ///
+    /// For a conversion that is a no-op on the bits and not on the layout:
+    /// `ByteToWord` leaves the value alone and changes how many bytes it
+    /// occupies inside a composite body. Silent if the stack is empty, which
+    /// only happens in a chunk already refused for overflow.
+    fn set_top_width(&mut self, w: Width) {
+        if let Some(d) = self.depth.checked_sub(1)
+            && d < self.widths.len()
+        {
+            self.widths[d] = w;
+        }
+    }
+
     fn pop(&mut self) -> IntValue<'ctx> {
         self.depth -= 1;
         let slot = self.slot(self.depth);
@@ -1751,13 +1765,19 @@ fn lower_chunk_body<'ctx>(
                 let m =
                     st.b.build_and(v, i64t.const_int(0xFF, false), "tobyte")
                         .unwrap();
-                st.push(m);
+                st.push_w(m, Width::Scalar(1));
             }
             // A no-op, and deliberately written as one rather than as a
             // redundant mask. If it ever needs to do work, the representation
             // invariant above has been broken somewhere else and masking here
             // would hide that rather than fix it.
-            Op::ByteToWord => {}
+            //
+            // **It is a no-op in VALUE and not in WIDTH.** The bits are already
+            // correct, but the operand now packs into eight bytes rather than
+            // one. Leaving the old label would pack a `Word` into a single byte
+            // and silently truncate it, with every later field offset still
+            // looking right — so the relabel is the whole content of this arm.
+            Op::ByteToWord => st.set_top_width(Width::Scalar(8)),
             // Peek-and-trap. **`BoundsCheck` does NOT pop**; the VM reads
             // `stack.last()` and leaves the operand in place for the indexing
             // opcode that follows. A lowering that consumed it would corrupt
