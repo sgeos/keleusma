@@ -3954,6 +3954,22 @@ struct ParsedFn {
     body: Vec<(i64, i64)>,
 }
 
+/// Whether a group of same-named heads compiles as a multiheaded guard dispatch.
+///
+/// This mirrors `keleusma::selfhost::is_multihead_group`, which it cannot call because
+/// this harness carries its own `ParsedFn`. **That duplication is the reason the same
+/// defect had to be fixed in three places**, and it is recorded here rather than left
+/// for the next reader to rediscover: `self_host_compile` below is a copy of the
+/// shipping driver, so a fix to one is not a fix to the other.
+///
+/// The predicate is a property of the heads, not of the declaration keyword. See the
+/// library copy for the two silent miscompiles the keyword form produced and for why
+/// the corpus could not reach either.
+fn is_multihead_group(group: &[&ParsedFn]) -> bool {
+    debug_assert!(!group.is_empty(), "a head group is never empty");
+    group.len() > 1 || group.first().is_some_and(|h| !h.guard.is_empty())
+}
+
 /// Drive lexer.kel then parse.kel over `src` and return every function it yields, each
 /// with its guard and body records, plus the interned-name table. Multiheaded functions
 /// appear as several same-named entries in declaration order.
@@ -4283,12 +4299,13 @@ fn self_host_compile(src: &str) -> Module {
         }
         i = j;
         let pc = group[0].params;
-        // A yield head compiles as a multihead chunk; a fn or loop as a single body.
+        // More than one head, or one guarded head, compiles as a multihead dispatch;
+        // anything else as a single body. See `is_multihead_group` above.
         // The reconstruction runs through the self-hosted reconstruct.kel stage rather
         // than the Rust `reconstruct_into`, so the whole self-host compile path is
         // Keleusma from lexing through code generation and the host only moves data
         // between stages.
-        let body = if group[0].cat == 2 {
+        let body = if is_multihead_group(&group) {
             reconstruct_via_kel_multihead(&group, pc)
         } else {
             let category = if group[0].cat == 3 { 2 } else { 0 };
