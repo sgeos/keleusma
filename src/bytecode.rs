@@ -2395,9 +2395,10 @@ pub enum Op {
     /// the high slot is unused. Same stack effect as `CheckedAdd`.
     CheckedMul(u8),
     /// Overflow-checked Word negation. Pops one `Value::Int` and
-    /// pushes three slots in the same shape: high, low, flag. The
-    /// only overflow case is `-i64::MIN`, in which the high half
-    /// is `0` and the low half is `i64::MIN` (the wrapped result).
+    /// pushes three slots in the same shape as `Op::CheckedAdd`:
+    /// low half, then high half, then flag. The only overflow case
+    /// is `-i64::MIN`, in which the high half is `0` and the low
+    /// half is `i64::MIN` (the wrapped result).
     CheckedNeg,
     /// Overflow-checked division parameterized by a Q-format
     /// fraction-bit count (B35 P3d-iii). The operand is `0` for
@@ -2819,7 +2820,7 @@ impl Op {
             Op::Not | Op::Neg => 0,
 
             // CheckedAdd / CheckedSub / CheckedMul / CheckedDiv /
-            // CheckedMod pop two operands and push (high, low,
+            // CheckedMod pop two operands and push (low, high,
             // flag); net delta +1. CheckedNeg pops one and pushes
             // three; net delta +2. The high half is the i128
             // intermediate's high 64 bits, providing the load-
