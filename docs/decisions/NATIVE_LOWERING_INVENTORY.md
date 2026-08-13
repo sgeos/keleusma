@@ -4987,3 +4987,43 @@ get the widths:
 
 **Option 1 is preferred and option 2 is viable with a drift control.** Recorded rather than
 decided, because picking (2) unilaterally is how the duplication got to three.
+
+### NEITHER FORK HAS TO BE TAKEN: 220 of 239 operand widths are locally evident
+
+Measured 2026-08-12. The fork above offered a change to the shared crate or a fourth copy
+of a model, and both were unattractive enough to be worth looking for a third option.
+
+There is one. Refuse unless every operand's width is evident from the instruction that
+PRODUCED it. That is a peephole over preceding ops, deliberately narrower than the
+verifier rather than a reimplementation of it, and it needs no coordination and duplicates
+no model.
+
+| producers treated as evident | sites covered of 239 |
+|---|---|
+| word arithmetic, comparisons, `Const`, `GetLocal` | 140 |
+| **the above plus nested `NewComposite(Flat)`** | **220 (92%)** |
+
+**The second row is the interesting one and it corrected my own rule.** The first pass
+refused 80 sites whose blocker was `NewComposite` — treating as unknown the single
+best-specified producer in the instruction set, since `NewComposite(Flat { byte_size })`
+bakes its own body length. A nested construction's width is not merely inferable, it is
+written on the instruction.
+
+Every one of the remaining 19 is blocked by `PopN`, a stack adjustment rather than a value
+producer.
+
+**THE CAVEAT, WHICH IS LARGE ENOUGH TO CHANGE THE NUMBER.** The classifier takes the
+`count` ops immediately preceding the construction as its operands. **That window is wrong
+whenever an operand takes more than one op to produce**, which is exactly the nested case
+the second row admits. So 220 is the coverage of *this crude classifier*, not of the
+peephole rule it stands for, and the true figure could fall either way: a proper stack
+simulation would attribute operands correctly and might find both more coverage and real
+blockers this window hides.
+
+**Do not quote 220 as the slice's coverage.** It is evidence that the peephole is worth
+building, not a measurement of what it delivers, and the distinction is the one this branch
+has now got wrong twice — once pricing a compiler capability as a corpus frequency, once
+reading a uniform field stride off five of six shapes.
+
+The honest next step is a stack simulation over widths, which is small, and to re-measure
+before writing the emitter against any of these numbers.

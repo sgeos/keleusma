@@ -238,3 +238,98 @@ fn spike_report_composite_escape() {
     println!("     reset-on-entry is sound for this corpus.");
     println!("================");
 }
+
+/// **Does the first slice need the abstract interpreter, or a local rule?**
+///
+/// Placing a field needs its width, and `NewComposite` bakes only the total. The
+/// recorded fork was to expose `verify_typed`'s reconstructed operand stack (a
+/// change to the shared crate) or to rebuild it inside this package (a fourth copy
+/// of a model here). Both are unattractive.
+///
+/// A third option needs neither: refuse unless every operand's width is evident
+/// from the instruction that PRODUCED it. That is a peephole over the preceding
+/// ops rather than a dataflow pass, and it is deliberately narrower than the
+/// verifier rather than a reimplementation of it. This measures what it covers.
+#[test]
+fn spike_report_locally_evident_operands() {
+    // Producers whose result width needs no context. Word-width arithmetic and
+    // comparisons, a scalar constant, and a local read of a word parameter all
+    // yield one word. Anything else is refused rather than guessed.
+    fn evident_word(op: &Op) -> bool {
+        matches!(
+            op,
+            Op::Const(_)
+                | Op::CheckedAdd
+                | Op::CheckedSub
+                | Op::CheckedMul(_)
+                | Op::CheckedDiv(_)
+                | Op::CheckedMod
+                | Op::Div
+                | Op::Mod
+                | Op::CmpEq
+                | Op::CmpNe
+                | Op::CmpLt
+                | Op::CmpLe
+                | Op::CmpGt
+                | Op::CmpGe
+                | Op::GetLocal(_)
+        )
+    }
+
+    // A nested construction's width IS locally evident: `NewComposite(Flat)`
+    // bakes its own `byte_size`. Excluding it treated the best-specified
+    // producer in the set as unknown.
+    fn evident_any(op: &Op) -> bool {
+        evident_word(op)
+            || matches!(op, Op::NewComposite(NewCompositeOperand::Flat { .. }))
+    }
+
+    let (mut covered, mut refused, mut total) = (0usize, 0usize, 0usize);
+    let mut refusal_head: BTreeMap<String, usize> = BTreeMap::new();
+
+    for (_, m) in corpus() {
+        for c in &m.chunks {
+            for (i, op) in c.ops.iter().enumerate() {
+                let Op::NewComposite(NewCompositeOperand::Flat { count, .. }) = op else {
+                    continue;
+                };
+                total += 1;
+                let n = *count as usize;
+                // The `count` ops immediately before the construction, which is
+                // where a straight-line build puts its operands. A construction
+                // whose operands are not there at all is refused, which is the
+                // conservative direction.
+                if i < n {
+                    refused += 1;
+                    *refusal_head.entry(String::from("<too few preceding ops>")).or_default() += 1;
+                    continue;
+                }
+                let window = &c.ops[i - n..i];
+                if window.iter().all(evident_any) {
+                    covered += 1;
+                } else {
+                    refused += 1;
+                    if let Some(bad) = window.iter().find(|o| !evident_any(o)) {
+                        let key = format!("{bad:?}");
+                        let key = key.split(['(', ' ']).next().unwrap_or("?").to_string();
+                        *refusal_head.entry(key).or_default() += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    println!("================ SPIKE: are operand widths locally evident?");
+    println!("  flat construction sites          : {total}");
+    println!("  every operand locally evident    : {covered}");
+    println!("  refused (needs real shape info)  : {refused}");
+    println!("  what blocks the refused ones, most common first:");
+    let mut v: Vec<_> = refusal_head.into_iter().collect();
+    v.sort_by_key(|(_, n)| core::cmp::Reverse(*n));
+    for (k, n) in v.iter().take(12) {
+        println!("     {n:4}  {k}");
+    }
+    println!("  -> a high `covered` means the first slice needs a peephole, not");
+    println!("     the abstract interpreter, and neither fork has to be taken.");
+    println!("================");
+}
