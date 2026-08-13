@@ -4568,6 +4568,108 @@ fn self_host_compiles_lexer_kel_byte_identically() {
     );
 }
 
+/// The byte-identity assertion the five `verify_*.kel` stage tests below share.
+///
+/// Written once rather than copied five times. The five stage tests above it
+/// each inline this block, which is five copies of one assertion and exactly the
+/// duplication that lets one copy drift.
+fn assert_stage_byte_identical(cache_id: &str, stage_file: &str) {
+    if common::selfhost_cache::hit(cache_id, KEL_PIPELINE) {
+        return;
+    }
+    let src = std::fs::read_to_string(common::stage_path(stage_file))
+        .unwrap_or_else(|e| panic!("read {stage_file}: {e}"));
+    let module = self_host_compile(&src);
+    let reference = compile_src(&src);
+
+    // MUST-FIRE. A stage that produced no chunks would satisfy the zip loop
+    // below vacuously, and every one of these tests would pass while comparing
+    // nothing at all.
+    assert!(
+        !reference.chunks.is_empty(),
+        "{stage_file}: the reference compiler produced no chunks, so the \
+         comparison below is vacuous"
+    );
+
+    assert_eq!(
+        module.chunks.len(),
+        reference.chunks.len(),
+        "{stage_file}: chunk count"
+    );
+    for (m, r) in module.chunks.iter().zip(reference.chunks.iter()) {
+        assert_eq!(m.name, r.name, "{stage_file}: chunk order");
+        assert_eq!(m.ops, r.ops, "{stage_file}: ops for chunk `{}`", r.name);
+        assert_eq!(
+            m.constants, r.constants,
+            "{stage_file}: pool for chunk `{}`",
+            r.name
+        );
+        assert_eq!(
+            m.local_count, r.local_count,
+            "{stage_file}: local_count for chunk `{}`",
+            r.name
+        );
+    }
+    common::selfhost_cache::record_pass(cache_id, KEL_PIPELINE);
+}
+
+// THE FIVE `verify_*.kel` STAGES, WHICH HAD NO SELF-HOSTED COVERAGE AT ALL.
+//
+// Until now exactly five of the ten stages had a byte-identity test: `lexer`,
+// `parse`, `reconstruct`, `codegen` and `analyze`. The five verifiers appeared
+// only in `tests/wire_corpus.rs` and `tests/selfhost_wire.rs`, and only as
+// REFERENCE-compiled inputs to wire-format tests, which never run the
+// self-hosted compiler over them.
+//
+// **That was a gap in the tests, not in the compiler**, and the distinction was
+// settled by a probe before any work was planned around it: all five already
+// self-compile byte-identically, so this is five test functions rather than the
+// frontier expansion "no coverage" could equally have meant. The probe carried
+// `codegen` as a control, since a probe that reports a stage WITH a passing test
+// as divergent is broken rather than informative.
+//
+// Cost: about 61 seconds for all five, against `selfhost_codegen`'s ~520.
+
+#[test]
+fn self_host_compiles_verify_structural_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_verify_structural_kel_byte_identically",
+        "verify_structural.kel",
+    );
+}
+
+#[test]
+fn self_host_compiles_verify_typed_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_verify_typed_kel_byte_identically",
+        "verify_typed.kel",
+    );
+}
+
+#[test]
+fn self_host_compiles_verify_yield_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_verify_yield_kel_byte_identically",
+        "verify_yield.kel",
+    );
+}
+
+#[test]
+fn self_host_compiles_verify_depth_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_verify_depth_kel_byte_identically",
+        "verify_depth.kel",
+    );
+}
+
+#[test]
+fn self_host_compiles_verify_datalayout_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_verify_datalayout_kel_byte_identically",
+        "verify_datalayout.kel",
+    );
+}
+
 // A `yield` written as the tail of an if branch (`if c { yield a } else { yield b }`) folds
 // its YieldExpr into that branch, not around the whole conditional. parse.kel captures the
 // operator-stack depth at each branch open and drains the YieldMark at the branch fold only
