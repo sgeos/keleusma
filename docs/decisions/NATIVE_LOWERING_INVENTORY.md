@@ -5326,3 +5326,30 @@ obscure the report it exists to produce.
 actually refuses, which this file already calls. A hand-maintained restatement of something a
 mechanism can derive is a defect waiting for the maintenance to lapse — recorded on the
 `v0.2.3` line after five instances, and this is the sixth.
+
+### THERE ARE THREE COPIES OF THE MODEL, NOT ONE
+
+Counted 2026-08-13 while going to resynchronise it: `is_lowered` exists in
+`spike_corpus_coverage.rs`, `spike_stream_sufficiency.rs` AND `spike_composite_split.rs`,
+with different signatures. Each is a hand-maintained restatement of what the lowering
+supports, and all three are stale.
+
+**That decides the fix rather than merely arguing for it.** Hand-patching three lists is how
+this defect persists: the `v0.2.3` line's multihead predicate was wrong in three places
+simultaneously for the same reason, and this repository has now recorded the
+by-name-enumeration defect seven times.
+
+**Do NOT patch the three lists.** Either share one model that both the classifier and the
+drift controls consume, or better, derive support from `lower_module` itself.
+
+**The hard part, stated so the next attempt does not rediscover it.** A per-op model cannot
+be fully derived today, because `lower_module` refuses on the FIRST unsupported opcode and
+so yields one verdict per module rather than one per op. Support is also CONDITIONAL for
+`Stream`/`Yield`/`Reset`, which lower only in the degenerate shape — any model of those
+duplicates `degenerate_stream_yield`, which is a fourth copy waiting to happen.
+
+The clean route is a diagnostic mode on the lowering that collects every refusal in a module
+instead of returning the first. That is a change to `native_codegen/src/`, it makes the
+slack measurement derivable rather than modelled, and it is the increment that unblocks
+ranking `static-str` against `native-call` — which cannot be ranked from either the
+first-blocker count or the current slack table.
