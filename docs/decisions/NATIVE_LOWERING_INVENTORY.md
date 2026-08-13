@@ -5353,3 +5353,39 @@ instead of returning the first. That is a change to `native_codegen/src/`, it ma
 slack measurement derivable rather than modelled, and it is the increment that unblocks
 ranking `static-str` against `native-call` — which cannot be ranked from either the
 first-blocker count or the current slack table.
+
+## SLACK, DERIVED AT LAST: static strings free 11 modules, not 1
+
+`module_refusals` collects one refusal per CHUNK instead of stopping at the module's first,
+so a module's refusal SET is the union over its chunks — derived from the code that decides
+rather than restated beside it.
+
+| class | present | ALONE |
+|---|---|---|
+| **static-str** | 11 | **11** |
+| native-call | 5 | 5 |
+| stream | 4 | 4 |
+
+**The stale model put `static-str` at ALONE = 1. Derived, it is 11.** That is the whole cost
+of a hand-maintained restatement: the item that ranks first was reported as freeing almost
+nothing, and the branch nearly skipped it on that basis.
+
+**The remaining bias is stated and runs the OTHER way.** A chunk's own later blockers are
+still hidden behind its first, so same-chunk co-occurrence is under-counted, which INFLATES
+`ALONE`. Every class reporting 100% alone is the signature of exactly that. Cross-chunk
+co-occurrence within a module IS detected, so the residual is narrower than the per-module
+verdict it replaces — but 11 is an upper bound, not a point estimate.
+
+**Static strings are the next implementation increment**, and this is the first time that
+claim rests on a derived figure rather than a modelled one.
+
+### A wrong answer in the reassuring direction, caught by disbelief
+
+The first version of `module_refusals` used `core::mem::take` on the sink, moving the list
+into an error the caller discards. It reported **"modules 58, refused 0"** — every module
+lowering cleanly, right after a session spent measuring twenty that do not.
+
+It was caught because the number was too good, not because anything asserted it. **A
+measurement instrument returning the answer you hoped for is the one case where no assertion
+fires and no reviewer objects.** The count now travels in the error and the list stays with
+the caller.

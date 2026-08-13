@@ -647,3 +647,73 @@ fn spike_report_blocker_co_occurrence() {
     println!("     itself, and the 15.5% first-blocker figure is entirely slack.");
     println!("================\n");
 }
+
+/// **SLACK, DERIVED FROM THE REAL LOWERING RATHER THAN FROM A MODEL.**
+///
+/// Every slack figure before this came from a hand-maintained `is_lowered` list.
+/// Three copies of that list exist, all three went stale in the PESSIMISTIC
+/// direction, and the drift control asserts only the optimistic one — so the
+/// staleness understated every blocker class silently and could not be detected.
+///
+/// `module_refusals` returns one refusal per CHUNK instead of one per module, so
+/// a module's refusal set is the union over its chunks, derived from the code
+/// that actually decides. Coarser than per-op and impossible to leave stale.
+#[test]
+fn spike_report_derived_slack() {
+    fn class_of(msg: &str) -> &'static str {
+        if msg.contains("StaticStr") {
+            "static-str"
+        } else if msg.contains("CallVerifiedNative") || msg.contains("CallExternalNative") {
+            "native-call"
+        } else if msg.contains("Stream") || msg.contains("Yield") || msg.contains("Reset") {
+            "stream"
+        } else if msg.contains("Composite")
+            || msg.contains("GetField")
+            || msg.contains("GetIndex")
+            || msg.contains("IsEnum")
+            || msg.contains("TupleField")
+            || msg.contains("EnumField")
+        {
+            "composite"
+        } else {
+            "other"
+        }
+    }
+
+    let mut present: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut alone: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let (mut refused, mut total) = (0usize, 0usize);
+
+    for (_, m) in compiled_corpus_modules() {
+        total += 1;
+        let rs = keleusma_native::module_refusals(&m, keleusma_native::LowerOptions::default());
+        if rs.is_empty() {
+            continue;
+        }
+        refused += 1;
+        let classes: std::collections::BTreeSet<&'static str> =
+            rs.iter().map(|(_, e)| class_of(&format!("{e}"))).collect();
+        for c in &classes {
+            *present.entry(c).or_default() += 1;
+        }
+        if classes.len() == 1 {
+            let only = classes.iter().next().copied().expect("one class");
+            *alone.entry(only).or_default() += 1;
+        }
+    }
+
+    println!("================ DERIVED SLACK (from lower_module, not a model)");
+    println!("  modules {total}, refused {refused}");
+    println!("  class          present   ALONE   (ALONE is what removing it frees)");
+    let mut keys: Vec<_> = present.keys().copied().collect();
+    keys.sort_by_key(|k| core::cmp::Reverse(present.get(k).copied().unwrap_or(0)));
+    for k in keys {
+        let p = present.get(k).copied().unwrap_or(0);
+        let a = alone.get(k).copied().unwrap_or(0);
+        println!("  {k:14} {p:7} {a:7}");
+    }
+    println!("  NOTE: per-CHUNK refusals, so a chunk's own later blockers are");
+    println!("  still hidden behind its first. This under-counts co-occurrence,");
+    println!("  which INFLATES ALONE — the opposite bias to the stale model.");
+    println!("================");
+}
