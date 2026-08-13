@@ -2051,21 +2051,43 @@ fn lower_chunk_body<'ctx>(
                     // undefined behaviour that presents as a bus fault.
                     let n_bytes = w.bytes().expect("checked above");
                     if w.is_body() {
-                        // **REFUSED, and the copy is deliberately NOT written.**
-                        // Nothing can currently observe whether such a copy is
-                        // right: reading a nested body back needs
-                        // `GetField`/`GetIndex(FlatNested)`, which this backend
-                        // refuses, so no differential could distinguish a correct
-                        // copy from a wrong one. A memcpy writing the wrong bytes
-                        // would leave every downstream offset looking correct.
+                        // A NESTED BODY: the operand holds the ADDRESS of
+                        // `n_bytes` of body, so placing it is a COPY. Storing it
+                        // as a scalar would write the pointer into the parent
+                        // while every downstream offset still looked correct.
                         //
-                        // Implement it when the FlatNested read lands, gated on a
-                        // differential that reads a field OUT of a copied body
-                        // rather than merely constructing one.
-                        return Err(LowerError::UnsupportedOp(format!(
-                            "NewComposite at op {i} nests a {n_bytes}-byte body; not lowered \
-                             until FlatNested reads make it verifiable"
-                        )));
+                        // Both sides are alignment 1. The layout packs
+                        // cumulatively, so neither the source body nor this
+                        // field is guaranteed anything better, and declaring an
+                        // alignment the pointer lacks is undefined behaviour.
+                        //
+                        // **This was written, deleted as unverifiable, and
+                        // restored.** The claim was wrong: it was unobservable
+                        // only through the VM differential. The test owns the
+                        // region buffer, so it can read the copied bytes back
+                        // directly, and a nested field's neighbour is readable
+                        // through the already-supported flat path. "The
+                        // differential cannot see X" was a fact about that
+                        // differential, not about X.
+                        let src = st
+                            .b
+                            .build_int_to_ptr(*v, ctx.ptr_type(AddressSpace::default()), "cnestsrc")
+                            .unwrap();
+                        st.b.build_memcpy(
+                            addr,
+                            1,
+                            src,
+                            1,
+                            i64t.const_int(u64::from(n_bytes), false),
+                        )
+                        .map_err(|e| {
+                            LowerError::UnsupportedOp(format!(
+                                "NewComposite at op {i} could not copy a {n_bytes}-byte nested \
+                                 body: {e}"
+                            ))
+                        })?;
+                        off += n_bytes;
+                        continue;
                     }
                     let store = match n_bytes {
                         8 => st.b.build_store(addr, *v).unwrap(),

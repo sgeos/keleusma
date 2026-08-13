@@ -2244,3 +2244,172 @@ fn a_flat_array_element_agrees_with_the_vm() {
         );
     }
 }
+
+/// Native result AND the region bytes the run left behind.
+///
+/// The test owns the region, so it can read back what the emitter wrote. That is
+/// what makes a nested-body copy observable without `FlatNested` reads — the
+/// point missed when this path was briefly deleted as "unverifiable".
+fn composite_native_with_region(src: &str, args: &[i64]) -> (i64, Vec<u8>) {
+    use inkwell::context::Context;
+    use keleusma_native::{lower_module, region::plan_chunk_region};
+
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let idx = m
+        .chunks
+        .iter()
+        .position(|c| c.name == "main")
+        .expect("entry chunk named main");
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    lower_module(&ctx, &lm, &m, LowerOptions::default()).expect("lower module");
+    lm.verify().expect("LLVM module verification");
+    let ee = lm
+        .create_jit_execution_engine(OptimizationLevel::None)
+        .expect("jit");
+
+    // **A GUARD BAND, because the region is the only thing standing between a
+    // mis-sized copy and heap corruption in this process.** A mutation that
+    // doubled a copy length passed every assertion here while writing past the
+    // end of the buffer: the damage was outside everything anyone looked at. The
+    // guard is checked below, so any write past the planned region is a test
+    // failure rather than undefined behaviour.
+    const GUARD: usize = 64;
+    const GUARD_BYTE: u8 = 0xAA;
+    let bytes = plan_chunk_region(&m.chunks[idx]).bytes as usize;
+    let planned = bytes.max(8);
+    let mut region = vec![0u8; planned + GUARD];
+    region[planned..].fill(GUARD_BYTE);
+    let mut shared = vec![0i64; 8];
+    let mut private = vec![0i64; 8];
+    let sym = format!("kel_chunk_{idx}");
+    let out = unsafe {
+        let f = ee
+            .get_function::<unsafe extern "C" fn(i64, i64, *mut i64, *mut i64, *mut u8) -> i64>(
+                &sym,
+            )
+            .expect("symbol");
+        f.call(
+            args[0],
+            args[1],
+            shared.as_mut_ptr(),
+            private.as_mut_ptr(),
+            region.as_mut_ptr(),
+        )
+    };
+    assert!(
+        region[planned..].iter().all(|b| *b == GUARD_BYTE),
+        "the lowering wrote past the {planned}-byte region it was given; a copy or \
+         store ran outside the body it was placing"
+    );
+    region.truncate(planned);
+    (out, region)
+}
+
+/// ROUTE 1: the NEIGHBOUR of a nested body, which costs nothing and was
+/// available all along.
+///
+/// `b` sits immediately after the nested `i` in the parent body, at a flat offset
+/// the backend already reads. A copy of the wrong LENGTH, or to the wrong offset,
+/// runs over `b` — so a supported read detects an unsupported one's mistake. This
+/// is the case whose absence made the copy look unobservable.
+#[test]
+fn a_nested_body_copy_does_not_clobber_its_neighbour() {
+    let src = "struct I { a: Word }
+               struct O { i: I, b: Word }
+               fn main(a: Word, b: Word) -> Word { let o = O { i: I { a: a }, b: b }; o.b }";
+    for args in [[7, 11], [-1, 5], [i64::MIN, i64::MAX], [0, -9]] {
+        let (native, _) = composite_native_with_region(src, &args);
+        let vm = vm_result(src, &args);
+        assert_eq!(
+            native, vm,
+            "the neighbour of a nested body disagrees for {args:?}: native={native}, vm={vm}"
+        );
+    }
+}
+
+/// ROUTE 2: read the copied bytes back out of the region directly.
+///
+/// The neighbour case proves the copy did not overrun. This proves it wrote the
+/// right CONTENT at the right place, which no amount of neighbour-checking can:
+/// a copy of the correct length that copied the wrong bytes passes route 1 and
+/// fails here.
+#[test]
+fn a_nested_body_copy_writes_the_right_bytes() {
+    use keleusma_native::region::plan_chunk_region;
+    let src = "struct I { a: Word }
+               struct O { i: I, b: Word }
+               fn main(a: Word, b: Word) -> Word { let o = O { i: I { a: a }, b: b }; o.b }";
+    let (a, b) = (0x1122_3344_5566_7788_i64, -424_242_i64);
+    let (_, region) = composite_native_with_region(src, &[a, b]);
+
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let idx = m
+        .chunks
+        .iter()
+        .position(|c| c.name == "main")
+        .expect("main");
+    let plan = plan_chunk_region(&m.chunks[idx]);
+    // Two sites: the inner `I` then the outer `O`. The outer is the last placed
+    // and is the one whose body must contain a COPY of the inner, not a pointer.
+    let outer = plan.sites.last().expect("a placed site");
+    assert_eq!(outer.size, 16, "the outer body is two words");
+
+    let at = |off: usize| -> i64 {
+        i64::from_le_bytes(region[off..off + 8].try_into().expect("eight bytes"))
+    };
+    let base = outer.offset as usize;
+    assert_eq!(
+        at(base),
+        a,
+        "the nested body's word was not COPIED into the parent; a pointer here \
+         would make every downstream offset still look correct"
+    );
+    assert_eq!(at(base + 8), b, "the neighbouring field was not written");
+}
+
+/// **The case a mutation exposed: an OVER-COPY, with the nested field LAST.**
+///
+/// `a_nested_body_copy_does_not_clobber_its_neighbour` was expected to catch a
+/// copy of the wrong length. It does not, and a mutant proved it: doubling the
+/// copy length passes both earlier tests, because the neighbouring field is
+/// stored AFTER the copy and simply overwrites the damage.
+///
+/// Putting the nested field last removes that mask — nothing is written after the
+/// copy, so an over-copy runs past the end of the body and stays there to be
+/// seen. The assertion is on the bytes BEYOND the composite, which is the only
+/// place the evidence survives.
+#[test]
+fn a_nested_body_copy_does_not_run_past_the_body() {
+    use keleusma_native::region::plan_chunk_region;
+    let src = "struct I { a: Word }
+               struct O { b: Word, i: I }
+               fn main(a: Word, b: Word) -> Word { let o = O { b: b, i: I { a: a } }; o.b }";
+    let (a, b) = (0x0F0F_0F0F_0F0F_0F0F_i64, 12345_i64);
+    let (_, region) = composite_native_with_region(src, &[a, b]);
+
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let idx = m
+        .chunks
+        .iter()
+        .position(|c| c.name == "main")
+        .expect("main");
+    let plan = plan_chunk_region(&m.chunks[idx]);
+    let outer = plan.sites.last().expect("a placed site");
+    let end = (outer.offset + outer.size) as usize;
+
+    assert!(
+        end <= region.len(),
+        "the plan places a body past the region it sized"
+    );
+    // Everything after the outer body must be untouched. The buffer starts
+    // zeroed, so a non-zero byte here is something the emitter wrote outside the
+    // body it was placing.
+    for (k, byte) in region.iter().enumerate().skip(end) {
+        assert_eq!(
+            *byte, 0,
+            "byte {k} past the end of the body at {end} was written; a copy ran \
+             past the body it was placing"
+        );
+    }
+}
