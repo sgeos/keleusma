@@ -172,9 +172,10 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
     // NESTED composite read, chosen by running `probe_unsupported` rather than by
     // guessing: four consecutive guesses at such a source cost four
     // compile-and-run cycles while the instrument to answer it already existed.
-    let src = "struct I { a: Word }
-               struct O { i: I, b: Word }
-               fn main(a: Word, b: Word) -> Word { let o = O { i: I { a: a }, b: b }; o.i.a }";
+    // Nested reads now lower too, verified by
+    // `a_field_read_out_of_a_nested_body_agrees_with_the_vm`. The subject is a
+    // TUPLE field, again chosen by running `probe_unsupported`.
+    let src = "fn main(a: Word, b: Word) -> Word { let t = (a, b); t.1 }";
     let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
 
     // **The vacuity guard is on the REFUSAL, not on a chunk search.** Three
@@ -186,13 +187,13 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
     let ctx = Context::create();
     let lm2 = ctx.create_module("kel2");
     let err = lower_module(&ctx, &lm2, &m, LowerOptions::default()).expect_err(
-        "lower_module must refuse a nested composite read; a refusal that only \
+        "lower_module must refuse a tuple field read; a refusal that only \
              lower_chunk makes is not evidence the opcode is unsupported, which is \
              how the Op::Call version of this test rotted",
     );
     let rendered = format!("{err:?}");
     assert!(
-        rendered.contains("FlatNested"),
+        rendered.contains("GetTupleField"),
         "refused for the wrong reason: {rendered}"
     );
 }
@@ -2241,6 +2242,254 @@ fn a_flat_array_element_agrees_with_the_vm() {
         assert_eq!(
             native, vm,
             "array element disagrees for {args:?}: native={native}, vm={vm}"
+        );
+    }
+}
+
+/// Native result AND the region bytes the run left behind.
+///
+/// The test owns the region, so it can read back what the emitter wrote. That is
+/// what makes a nested-body copy observable without `FlatNested` reads — the
+/// point missed when this path was briefly deleted as "unverifiable".
+fn composite_native_with_region(src: &str, args: &[i64]) -> (i64, Vec<u8>) {
+    use inkwell::context::Context;
+    use keleusma_native::{lower_module, region::plan_chunk_region};
+
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let idx = m
+        .chunks
+        .iter()
+        .position(|c| c.name == "main")
+        .expect("entry chunk named main");
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    lower_module(&ctx, &lm, &m, LowerOptions::default()).expect("lower module");
+    lm.verify().expect("LLVM module verification");
+    let ee = lm
+        .create_jit_execution_engine(OptimizationLevel::None)
+        .expect("jit");
+
+    // **A GUARD BAND, because the region is the only thing standing between a
+    // mis-sized copy and heap corruption in this process.** A mutation that
+    // doubled a copy length passed every assertion here while writing past the
+    // end of the buffer: the damage was outside everything anyone looked at. The
+    // guard is checked below, so any write past the planned region is a test
+    // failure rather than undefined behaviour.
+    const GUARD: usize = 64;
+    const GUARD_BYTE: u8 = 0xAA;
+    let bytes = plan_chunk_region(&m.chunks[idx]).bytes as usize;
+    let planned = bytes.max(8);
+    let mut region = vec![0u8; planned + GUARD];
+    region[planned..].fill(GUARD_BYTE);
+    let mut shared = vec![0i64; 8];
+    let mut private = vec![0i64; 8];
+    let sym = format!("kel_chunk_{idx}");
+    let out = unsafe {
+        let f = ee
+            .get_function::<unsafe extern "C" fn(i64, i64, *mut i64, *mut i64, *mut u8) -> i64>(
+                &sym,
+            )
+            .expect("symbol");
+        f.call(
+            args[0],
+            args[1],
+            shared.as_mut_ptr(),
+            private.as_mut_ptr(),
+            region.as_mut_ptr(),
+        )
+    };
+    assert!(
+        region[planned..].iter().all(|b| *b == GUARD_BYTE),
+        "the lowering wrote past the {planned}-byte region it was given; a copy or \
+         store ran outside the body it was placing"
+    );
+    region.truncate(planned);
+    (out, region)
+}
+
+/// ROUTE 1: the NEIGHBOUR of a nested body, which costs nothing and was
+/// available all along.
+///
+/// `b` sits immediately after the nested `i` in the parent body, at a flat offset
+/// the backend already reads. A copy of the wrong LENGTH, or to the wrong offset,
+/// runs over `b` — so a supported read detects an unsupported one's mistake. This
+/// is the case whose absence made the copy look unobservable.
+#[test]
+fn a_nested_body_copy_does_not_clobber_its_neighbour() {
+    let src = "struct I { a: Word }
+               struct O { i: I, b: Word }
+               fn main(a: Word, b: Word) -> Word { let o = O { i: I { a: a }, b: b }; o.b }";
+    for args in [[7, 11], [-1, 5], [i64::MIN, i64::MAX], [0, -9]] {
+        let (native, _) = composite_native_with_region(src, &args);
+        let vm = vm_result(src, &args);
+        assert_eq!(
+            native, vm,
+            "the neighbour of a nested body disagrees for {args:?}: native={native}, vm={vm}"
+        );
+    }
+}
+
+/// ROUTE 2: read the copied bytes back out of the region directly.
+///
+/// The neighbour case proves the copy did not overrun. This proves it wrote the
+/// right CONTENT at the right place, which no amount of neighbour-checking can:
+/// a copy of the correct length that copied the wrong bytes passes route 1 and
+/// fails here.
+#[test]
+fn a_nested_body_copy_writes_the_right_bytes() {
+    use keleusma_native::region::plan_chunk_region;
+    let src = "struct I { a: Word }
+               struct O { i: I, b: Word }
+               fn main(a: Word, b: Word) -> Word { let o = O { i: I { a: a }, b: b }; o.b }";
+    let (a, b) = (0x1122_3344_5566_7788_i64, -424_242_i64);
+    let (_, region) = composite_native_with_region(src, &[a, b]);
+
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let idx = m
+        .chunks
+        .iter()
+        .position(|c| c.name == "main")
+        .expect("main");
+    let plan = plan_chunk_region(&m.chunks[idx]);
+    // Two sites: the inner `I` then the outer `O`. The outer is the last placed
+    // and is the one whose body must contain a COPY of the inner, not a pointer.
+    let outer = plan.sites.last().expect("a placed site");
+    assert_eq!(outer.size, 16, "the outer body is two words");
+
+    let at = |off: usize| -> i64 {
+        i64::from_le_bytes(region[off..off + 8].try_into().expect("eight bytes"))
+    };
+    let base = outer.offset as usize;
+    assert_eq!(
+        at(base),
+        a,
+        "the nested body's word was not COPIED into the parent; a pointer here \
+         would make every downstream offset still look correct"
+    );
+    assert_eq!(at(base + 8), b, "the neighbouring field was not written");
+}
+
+/// **The case a mutation exposed: an OVER-COPY, with the nested field LAST.**
+///
+/// `a_nested_body_copy_does_not_clobber_its_neighbour` was expected to catch a
+/// copy of the wrong length. It does not, and a mutant proved it: doubling the
+/// copy length passes both earlier tests, because the neighbouring field is
+/// stored AFTER the copy and simply overwrites the damage.
+///
+/// Putting the nested field last removes that mask — nothing is written after the
+/// copy, so an over-copy runs past the end of the body and stays there to be
+/// seen. The assertion is on the bytes BEYOND the composite, which is the only
+/// place the evidence survives.
+#[test]
+fn a_nested_body_copy_does_not_run_past_the_body() {
+    use keleusma_native::region::plan_chunk_region;
+    let src = "struct I { a: Word }
+               struct O { b: Word, i: I }
+               fn main(a: Word, b: Word) -> Word { let o = O { b: b, i: I { a: a } }; o.b }";
+    let (a, b) = (0x0F0F_0F0F_0F0F_0F0F_i64, 12345_i64);
+    let (_, region) = composite_native_with_region(src, &[a, b]);
+
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let idx = m
+        .chunks
+        .iter()
+        .position(|c| c.name == "main")
+        .expect("main");
+    let plan = plan_chunk_region(&m.chunks[idx]);
+    let outer = plan.sites.last().expect("a placed site");
+    let end = (outer.offset + outer.size) as usize;
+
+    assert!(
+        end <= region.len(),
+        "the plan places a body past the region it sized"
+    );
+    // Everything after the outer body must be untouched. The buffer starts
+    // zeroed, so a non-zero byte here is something the emitter wrote outside the
+    // body it was placing.
+    for (k, byte) in region.iter().enumerate().skip(end) {
+        assert_eq!(
+            *byte, 0,
+            "byte {k} past the end of the body at {end} was written; a copy ran \
+             past the body it was placing"
+        );
+    }
+}
+
+/// **The full VM differential for a nested body, which was impossible until the
+/// nested read landed.**
+///
+/// This reads a scalar field OUT of a copied nested body and compares against the
+/// virtual machine. It is the case whose absence made the copy look unobservable,
+/// and it subsumes the region-inspection tests as evidence of CONTENT while they
+/// remain as evidence of PLACEMENT.
+#[test]
+fn a_field_read_out_of_a_nested_body_agrees_with_the_vm() {
+    let src = "struct I { a: Word }
+               struct O { i: I, b: Word }
+               fn main(a: Word, b: Word) -> Word { let o = O { i: I { a: a }, b: b }; o.i.a }";
+    for args in [[7, 11], [-1, 5], [i64::MIN, i64::MAX], [0, -9]] {
+        let (native, _) = composite_native_with_region(src, &args);
+        let vm = vm_result(src, &args);
+        assert_eq!(
+            native, vm,
+            "a field read out of a nested body disagrees for {args:?}: native={native}, vm={vm}"
+        );
+    }
+}
+
+/// An element of an array of arrays, indexed at RUN TIME on the outer array.
+///
+/// The nested element read is `index * size` with a composite stride, which a
+/// constant index cannot distinguish from a fixed offset.
+#[test]
+fn a_nested_array_element_agrees_with_the_vm() {
+    let src =
+        "fn main(a: Word, i: Word) -> Word { let xs = [a, a + 1]; let ys = [xs, xs]; ys[i][1] }";
+    for args in [[5, 0], [5, 1], [-2, 0], [-2, 1]] {
+        let (native, _) = composite_native_with_region(src, &args);
+        let vm = vm_result(src, &args);
+        assert_eq!(
+            native, vm,
+            "a nested array element disagrees for {args:?}: native={native}, vm={vm}"
+        );
+    }
+}
+
+/// **A MIXED-WIDTH composite, which is where the packing rule actually bites.**
+///
+/// `struct M { a: Byte, b: Word }` is nine bytes with the word at offset ONE.
+/// Every uniform-word composite is blind to that: cumulative packing and an
+/// eight-byte stride agree on all of them, which is five of the six shapes the
+/// corpus contains. This is the case that separates them, executed rather than
+/// inspected.
+#[test]
+fn a_mixed_width_composite_agrees_with_the_vm() {
+    let src = "struct M { a: Byte, b: Word }
+               fn main(a: Word, b: Word) -> Word { let m = M { a: 1 as Byte, b: b }; m.b }";
+    for args in [[0, 7], [0, -1], [0, i64::MIN], [0, i64::MAX]] {
+        let (native, _) = composite_native_with_region(src, &args);
+        let vm = vm_result(src, &args);
+        assert_eq!(
+            native, vm,
+            "a word at offset one disagrees for {args:?}: native={native}, vm={vm}"
+        );
+    }
+}
+
+/// Reading the BYTE of a mixed-width composite, which the word case cannot check.
+///
+/// A `Byte` occupies a full operand slot holding `0..=255`, so a sign-extending
+/// load would read `0xFF` as `-1`. The byte here is deliberately above 127.
+#[test]
+fn a_byte_field_zero_extends_like_the_vm() {
+    let src = "struct M { a: Byte, b: Word }
+               fn main(a: Word, b: Word) -> Word { let m = M { a: 200 as Byte, b: b }; m.a as Word }";
+    for args in [[0, 1], [0, -5]] {
+        let (native, _) = composite_native_with_region(src, &args);
+        let vm = vm_result(src, &args);
+        assert_eq!(
+            native, vm,
+            "a byte field disagrees for {args:?}: native={native}, vm={vm}"
         );
     }
 }
