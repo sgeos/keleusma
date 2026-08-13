@@ -2489,6 +2489,21 @@ fn the_slice_5d_offsets_and_kinds_match_the_schema() {
         kel_const("sslot_off_reserved"),
         SharedSlotRecord::OFFSET_RESERVED as i64
     );
+    // The run-length trio. These are the fields that make SharedSlotRecord two
+    // words, and a wrong offset on any of them places a run's slots at wrong
+    // byte offsets rather than failing loudly.
+    assert_eq!(
+        kel_const("sslot_off_first_slot"),
+        SharedSlotRecord::OFFSET_FIRST_SLOT as i64
+    );
+    assert_eq!(
+        kel_const("sslot_off_run"),
+        SharedSlotRecord::OFFSET_RUN as i64
+    );
+    assert_eq!(
+        kel_const("sslot_off_stride"),
+        SharedSlotRecord::OFFSET_STRIDE as i64
+    );
 
     assert_eq!(
         kel_const("pcomp_stride"),
@@ -2619,18 +2634,27 @@ fn data_artifact() -> (
             run: 1,
         },
     ];
+    // Two runs, deliberately not two singletons. A `run` of 1 leaves `stride`
+    // unused, so a fixture of singletons would not distinguish an emitter that
+    // writes the stride field from one that leaves it zero.
     let sslots = vec![
         SharedSlotRecord {
             offset: 0,
             kind: 3,
             reserved: 0,
             len: 8,
+            first_slot: 0,
+            run: 64,
+            stride: 8,
         },
         SharedSlotRecord {
             offset: 8,
             kind: 4,
             reserved: 0,
             len: 65535,
+            first_slot: 64,
+            run: 65535,
+            stride: 65535,
         },
     ];
     let pcomps = vec![
@@ -2667,12 +2691,19 @@ fn data_artifact() -> (
             })
         })
         .collect();
-    let s: Vec<[u8; 8]> = sslots
+    // SharedSlotRecord is TWO words, so it needs its own encode and push.
+    let push_all16 = |b: &mut keleusma_wire::WireBuilder, k: u16, bufs: &[[u8; 16]]| {
+        let id = b.region(k, 0).expect("region");
+        for x in bufs {
+            b.push(id, x);
+        }
+    };
+    let s: Vec<[u8; 16]> = sslots
         .iter()
         .map(|r| {
-            enc8(&|b: &mut [u8; 8]| {
-                r.write_record(b).expect("e");
-            })
+            let mut buf = [0u8; 16];
+            r.write_record(&mut buf).expect("e");
+            buf
         })
         .collect();
     let c: Vec<[u8; 8]> = pcomps
@@ -2692,7 +2723,7 @@ fn data_artifact() -> (
         })
         .collect();
     push_all(&mut b, kind::DATA_SLOTS, &d);
-    push_all(&mut b, kind::SHARED_LAYOUT, &s);
+    push_all16(&mut b, kind::SHARED_LAYOUT, &s);
     push_all(&mut b, kind::PRIVATE_COMPOSITE, &c);
     push_all(&mut b, kind::DATA_INIT, &i);
     (b.finish().expect("finish"), dslots, sslots, pcomps, dinits)
@@ -5201,15 +5232,25 @@ const SLOT_RECORD_CAP: usize = 2048;
 
 const CMD_EMIT_DATA_SLOT_RECORDS: i64 = 120;
 const CMD_EMIT_SHARED_SLOT_RECORDS: i64 = 121;
-const SLOT_STRIDE: usize = 8;
-const SLOT_FIELDS: usize = 4;
-const SLOTS_PER_BATCH: usize = FIN_CAPACITY / SLOT_FIELDS;
+// THE TWO TABLES NO LONGER SHARE A SHAPE, so they no longer share constants.
+//
+// A single `SLOT_STRIDE`/`SLOT_FIELDS` pair served both while both were one
+// word of four fields. `SharedSlotRecord` gained `first_slot`, `run` and
+// `stride` and became two words of seven. Keeping one pair would have read the
+// shared table at an 8-byte stride and decoded four of its seven fields --
+// which COMPILES, and silently produces wrong rows rather than failing.
+const DSLOT_STRIDE: usize = 8;
+const DSLOT_FIELDS: usize = 4;
+const SSLOT_STRIDE: usize = 16;
+const SSLOT_FIELDS: usize = 7;
+const DSLOTS_PER_BATCH: usize = FIN_CAPACITY / DSLOT_FIELDS;
+const SSLOTS_PER_BATCH: usize = FIN_CAPACITY / SSLOT_FIELDS;
 
 /// Both per-slot tables of a stage, as field rows and as reference bytes.
 struct SlotCase {
-    data: Vec<[i64; SLOT_FIELDS]>,
+    data: Vec<[i64; DSLOT_FIELDS]>,
     data_want: Vec<u8>,
-    shared: Vec<[i64; SLOT_FIELDS]>,
+    shared: Vec<[i64; SSLOT_FIELDS]>,
     shared_want: Vec<u8>,
 }
 
@@ -5224,7 +5265,7 @@ fn real_slot_case(src: &str) -> SlotCase {
         .find_region(kind::DATA_SLOTS)
         .expect("DATA_SLOTS region");
     let dbytes = view.region_bytes(&dregion).expect("payload").to_vec();
-    let dtable = view.records(&dregion, SLOT_STRIDE).expect("record table");
+    let dtable = view.records(&dregion, DSLOT_STRIDE).expect("record table");
     let dn = dtable.len().min(SLOT_RECORD_CAP);
     let mut dslots = Vec::with_capacity(dn);
     for i in 0..dn {
@@ -5241,7 +5282,7 @@ fn real_slot_case(src: &str) -> SlotCase {
         .find_region(kind::SHARED_LAYOUT)
         .expect("SHARED_LAYOUT region");
     let sbytes = view.region_bytes(&sregion).expect("payload").to_vec();
-    let stable = view.records(&sregion, SLOT_STRIDE).expect("record table");
+    let stable = view.records(&sregion, SSLOT_STRIDE).expect("record table");
     let sn = stable.len().min(SLOT_RECORD_CAP);
     let mut sslots = Vec::with_capacity(sn);
     for i in 0..sn {
@@ -5251,27 +5292,38 @@ fn real_slot_case(src: &str) -> SlotCase {
             i64::from(r.kind),
             i64::from(r.reserved),
             i64::from(r.len),
+            i64::from(r.first_slot),
+            i64::from(r.run),
+            i64::from(r.stride),
         ]);
     }
 
     SlotCase {
         data: dslots,
-        data_want: dbytes[..dn * SLOT_STRIDE].to_vec(),
+        data_want: dbytes[..dn * DSLOT_STRIDE].to_vec(),
         shared: sslots,
-        shared_want: sbytes[..sn * SLOT_STRIDE].to_vec(),
+        shared_want: sbytes[..sn * SSLOT_STRIDE].to_vec(),
     }
 }
 
-fn emit_slots_batched(
+/// Generic over the field count, because the two tables no longer agree on it.
+///
+/// `stride` and `per_batch` are passed rather than derived from `F`: the byte
+/// stride is a property of the record layout, not of the field count, and
+/// deriving one from the other is the coupling that made a single constant
+/// serve two tables in the first place.
+fn emit_slots_batched<const F: usize>(
     vm: &mut Vm<'static, 'static>,
     cmd: i64,
-    recs: &[[i64; SLOT_FIELDS]],
+    recs: &[[i64; F]],
     window: usize,
+    stride: usize,
+    per_batch: usize,
 ) -> Vec<u8> {
-    let mut out = Vec::with_capacity(recs.len() * SLOT_STRIDE);
-    for batch in recs.chunks(SLOTS_PER_BATCH) {
+    let mut out = Vec::with_capacity(recs.len() * stride);
+    for batch in recs.chunks(per_batch) {
         let fields: Vec<i64> = batch.iter().flat_map(|r| r.iter().copied()).collect();
-        let produced = batch.len() * SLOT_STRIDE;
+        let produced = batch.len() * stride;
         let (written, buf) = run_cmd_fields(
             vm,
             cmd,
@@ -5295,30 +5347,119 @@ fn the_emitted_per_slot_tables_match_the_reference_on_real_compiler_output() {
     for (name, src) in CORPUS_STAGES {
         let case = real_slot_case(src);
         assert!(!case.data.is_empty(), "{name}: no data slots");
-        // BOTH tables, not just `data`. Run-length encoding took `DATA_SLOTS`
-        // from one record per element to one per RUN -- 15 records for
-        // `verify_datalayout`, 76 for `codegen` -- so it can no longer cross more
-        // than a batch or two, and this control fired to say so. `SHARED_LAYOUT`
-        // is still one record per shared slot and still crosses many, and it is
-        // emitted batched in the same loop below. Tracking only `data` measured
-        // the table that stopped exercising the mechanism while ignoring the one
-        // that still does.
         deepest = deepest
-            .max(case.data.len().div_ceil(SLOTS_PER_BATCH))
-            .max(case.shared.len().div_ceil(SLOTS_PER_BATCH));
+            .max(case.data.len().div_ceil(DSLOTS_PER_BATCH))
+            .max(case.shared.len().div_ceil(SSLOTS_PER_BATCH));
 
-        let dgot = emit_slots_batched(&mut vm, CMD_EMIT_DATA_SLOT_RECORDS, &case.data, 64);
+        let dgot = emit_slots_batched(
+            &mut vm,
+            CMD_EMIT_DATA_SLOT_RECORDS,
+            &case.data,
+            64,
+            DSLOT_STRIDE,
+            DSLOTS_PER_BATCH,
+        );
         assert_eq!(dgot, case.data_want, "{name}: DATA_SLOTS differs");
 
-        let sgot = emit_slots_batched(&mut vm, CMD_EMIT_SHARED_SLOT_RECORDS, &case.shared, 64);
+        let sgot = emit_slots_batched(
+            &mut vm,
+            CMD_EMIT_SHARED_SLOT_RECORDS,
+            &case.shared,
+            64,
+            SSLOT_STRIDE,
+            SSLOTS_PER_BATCH,
+        );
         assert_eq!(sgot, case.shared_want, "{name}: SHARED_LAYOUT differs");
     }
-    // The cap must still cross several batch boundaries, or it would have
-    // quietly reduced this to a single-batch test.
+    // NEITHER TABLE CROSSES MANY BATCHES ANY MORE, and this is recorded rather
+    // than asserted away.
+    //
+    // The previous version of this test asserted `deepest >= 8`. That control
+    // was kept alive by `SHARED_LAYOUT`, which was one record per shared slot
+    // and crossed many batches after run-length encoding had already collapsed
+    // `DATA_SLOTS`. Now both tables are run-length encoded, so the real corpus
+    // produces a handful of records each and this test no longer exercises
+    // batching AT ALL.
+    //
+    // Lowering the threshold to match would be exactly the move this suite
+    // exists to prevent: an assertion retuned until it passes, still reading as
+    // coverage. So the batching property moved to
+    // `per_slot_batching_still_crosses_many_boundaries` below, which drives it
+    // from a synthetic table sized to cross boundaries by construction, and
+    // this test keeps only the property it can still measure -- byte identity
+    // against real compiler output.
     assert!(
-        deepest >= 8,
-        "the record cap left only {deepest} batches, too few to exercise batching at all"
+        deepest >= 1,
+        "the corpus produced no per-slot records at all"
     );
+}
+
+/// Batching across many boundaries, from a synthetic table.
+///
+/// Run-length encoding both per-slot tables took the real corpus from thousands
+/// of records to a handful, so the real-output test above can no longer reach a
+/// second batch, let alone an eighth. **That is a coverage loss, not a reason to
+/// lower a threshold**, and the mechanism it covered is still live: any stage
+/// whose shared declarations fragment would produce a long table again.
+///
+/// The rows here are synthetic and deliberately NOT run-compressible in shape,
+/// because the point is to exercise the batching loop rather than the encoder.
+#[test]
+fn per_slot_batching_still_crosses_many_boundaries() {
+    let mut vm = vm_for(WIRE_KEL);
+
+    let n = SSLOTS_PER_BATCH * 9 + 3;
+    let recs: Vec<[i64; SSLOT_FIELDS]> = (0..n)
+        .map(|k| {
+            [
+                (k as i64) * 8,
+                (k % 7) as i64,
+                0,
+                (k % 5) as i64,
+                k as i64,
+                1,
+                8,
+            ]
+        })
+        .collect();
+    assert!(
+        n.div_ceil(SSLOTS_PER_BATCH) >= 8,
+        "the synthetic table must cross at least eight batch boundaries, or \
+         this test measures nothing"
+    );
+
+    let got = emit_slots_batched(
+        &mut vm,
+        CMD_EMIT_SHARED_SLOT_RECORDS,
+        &recs,
+        64,
+        SSLOT_STRIDE,
+        SSLOTS_PER_BATCH,
+    );
+    assert_eq!(
+        got.len(),
+        n * SSLOT_STRIDE,
+        "batched output is the wrong length across boundaries"
+    );
+
+    // Byte identity against the reference encoder, record by record, so this
+    // checks the emitted CONTENT rather than only the length.
+    let mut want = Vec::with_capacity(n * SSLOT_STRIDE);
+    for r in &recs {
+        let rec = keleusma::wire_schema::SharedSlotRecord {
+            offset: r[0] as u32,
+            kind: r[1] as u8,
+            reserved: r[2] as u8,
+            len: r[3] as u16,
+            first_slot: r[4] as u32,
+            run: r[5] as u16,
+            stride: r[6] as u16,
+        };
+        let mut buf = [0u8; SSLOT_STRIDE];
+        keleusma_wire::WireRecord::write_record(&rec, &mut buf).expect("encode");
+        want.extend_from_slice(&buf);
+    }
+    assert_eq!(got, want, "batched emission differs from the reference");
 }
 
 /// Must-fire control for both per-slot tables, including the reserved fields.
@@ -5330,34 +5471,70 @@ fn the_emitted_per_slot_tables_match_the_reference_on_real_compiler_output() {
 fn every_per_slot_field_is_independently_observable_including_reserved() {
     let mut vm = vm_for(WIRE_KEL);
     let case = real_slot_case(CORPUS_STAGES[9].1);
-    for (label, cmd, base, want) in [
-        (
-            "DATA_SLOTS",
+
+    // The two tables have different field counts now, so they can no longer be
+    // driven from one array of tuples. Written out twice rather than forced
+    // into a shared shape, since the shared shape is what went wrong.
+    assert_eq!(
+        &emit_slots_batched(
+            &mut vm,
             CMD_EMIT_DATA_SLOT_RECORDS,
             &case.data,
-            &case.data_want,
+            64,
+            DSLOT_STRIDE,
+            DSLOTS_PER_BATCH
         ),
-        (
-            "SHARED_LAYOUT",
+        &case.data_want,
+        "DATA_SLOTS: the clean case must agree"
+    );
+    for f in 0..DSLOT_FIELDS {
+        let mut recs = case.data.clone();
+        recs[0][f] ^= 1;
+        assert_ne!(
+            &emit_slots_batched(
+                &mut vm,
+                CMD_EMIT_DATA_SLOT_RECORDS,
+                &recs,
+                64,
+                DSLOT_STRIDE,
+                DSLOTS_PER_BATCH
+            ),
+            &case.data_want,
+            "DATA_SLOTS: control did not fire, field {f} is not observable"
+        );
+    }
+
+    assert_eq!(
+        &emit_slots_batched(
+            &mut vm,
             CMD_EMIT_SHARED_SLOT_RECORDS,
             &case.shared,
-            &case.shared_want,
+            64,
+            SSLOT_STRIDE,
+            SSLOTS_PER_BATCH
         ),
-    ] {
-        assert_eq!(
-            &emit_slots_batched(&mut vm, cmd, base, 64),
-            want,
-            "{label}: the clean case must agree"
+        &case.shared_want,
+        "SHARED_LAYOUT: the clean case must agree"
+    );
+    // All SEVEN fields, including the three the run-length form added. A
+    // `first_slot` or `stride` the emitter silently skipped would still leave
+    // the other four bytes correct, which is exactly the shape of defect a
+    // whole-record comparison against a zeroed buffer can miss.
+    for f in 0..SSLOT_FIELDS {
+        let mut recs = case.shared.clone();
+        recs[0][f] ^= 1;
+        assert_ne!(
+            &emit_slots_batched(
+                &mut vm,
+                CMD_EMIT_SHARED_SLOT_RECORDS,
+                &recs,
+                64,
+                SSLOT_STRIDE,
+                SSLOTS_PER_BATCH
+            ),
+            &case.shared_want,
+            "SHARED_LAYOUT: control did not fire, field {f} is not observable"
         );
-        for f in 0..SLOT_FIELDS {
-            let mut recs = base.clone();
-            recs[0][f] ^= 1;
-            assert_ne!(
-                &emit_slots_batched(&mut vm, cmd, &recs, 64),
-                want,
-                "{label}: control did not fire, field {f} is not observable"
-            );
-        }
     }
 }
 
@@ -5365,10 +5542,12 @@ fn every_per_slot_field_is_independently_observable_including_reserved() {
 #[test]
 fn an_oversized_per_slot_batch_is_reported_rather_than_truncated() {
     let mut vm = vm_for(WIRE_KEL);
-    let over = (FIN_CAPACITY / SLOT_FIELDS) + 1;
-    for (cmd, code) in [
-        (CMD_EMIT_DATA_SLOT_RECORDS, -203),
-        (CMD_EMIT_SHARED_SLOT_RECORDS, -204),
+    // Per table: the capacity check is `n * fields > fin_capacity`, and the two
+    // tables no longer have the same field count, so one `over` would be past
+    // the cap for one and inside it for the other.
+    for (cmd, code, over) in [
+        (CMD_EMIT_DATA_SLOT_RECORDS, -203, DSLOTS_PER_BATCH + 1),
+        (CMD_EMIT_SHARED_SLOT_RECORDS, -204, SSLOTS_PER_BATCH + 1),
     ] {
         let (got, _) =
             run_cmd_fields(&mut vm, cmd, 0, &[], &[], [64, over as i64, 0, 0, 0], 0).expect("run");
