@@ -64,6 +64,8 @@
 //! the typed operand-stack verifier already guarantees, so a disagreement here
 //! is a lowering bug and is asserted rather than tolerated.
 
+pub mod region;
+
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
