@@ -522,3 +522,61 @@ fn spike_report_nested_yield_context() {
     println!("     suspension across a back edge and needs a real frame.");
     println!("================\n");
 }
+
+/// **THE OTHER DIRECTION, which nothing checked.**
+///
+/// `the_lowered_predicate_has_not_drifted` asserts model-says-supported implies
+/// the-lowering-accepts. It catches an OPTIMISTIC model, which would overstate
+/// what a spike figure promises. It cannot catch a PESSIMISTIC one, and a
+/// pessimistic model is what this file actually grew: composite opcodes stayed on
+/// the unsupported list for a whole session after the lowering learned them.
+///
+/// A stale-pessimistic model does not fail loudly. It silently understates the
+/// value of every OTHER blocker class, because a module carrying a
+/// now-supported opcode is still counted as blocked by it — which is exactly the
+/// error that made the `static-str` ALONE count an under-estimate.
+///
+/// So: a module the real lowering ACCEPTS must contain no op the model calls
+/// unsupported. Reported rather than asserted for now, because resynchronising
+/// the model is a separate change and a red spike would obscure the report it
+/// exists to produce.
+#[test]
+fn the_lowered_predicate_is_not_stale_pessimistic() {
+    let mut stale: BTreeMap<String, usize> = BTreeMap::new();
+    let mut accepted = 0usize;
+    for (path, m) in compiled_corpus() {
+        let ctx = Context::create();
+        let lm = ctx.create_module("staleness");
+        if keleusma_native::lower_module(&ctx, &lm, &m, keleusma_native::LowerOptions::default())
+            .is_err()
+        {
+            continue;
+        }
+        accepted += 1;
+        for c in &m.chunks {
+            for o in &c.ops {
+                if !is_lowered(o, c) {
+                    let key = format!("{o:?}");
+                    let key = key.split(['(', ' ']).next().unwrap_or("?").to_string();
+                    *stale.entry(key).or_default() += 1;
+                    let _ = &path;
+                }
+            }
+        }
+    }
+    println!("================ MODEL STALENESS (pessimistic direction)");
+    println!("  modules the real lowering ACCEPTS : {accepted}");
+    if stale.is_empty() {
+        println!("  the model calls no accepted op unsupported — in step");
+    } else {
+        println!("  ops the model still calls unsupported inside ACCEPTED modules:");
+        let mut v: Vec<_> = stale.into_iter().collect();
+        v.sort_by_key(|(_, n)| core::cmp::Reverse(*n));
+        for (k, n) in v {
+            println!("     {n:5}  {k}");
+        }
+        println!("  -> every slack and sufficiency figure computed from this model");
+        println!("     UNDERSTATES the other classes until it is resynchronised.");
+    }
+    println!("================");
+}

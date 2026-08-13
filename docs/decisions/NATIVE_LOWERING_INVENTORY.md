@@ -5254,3 +5254,102 @@ would be wrong silently rather than loudly.
 
 Until then the 1-and-8 refusal is CORRECT and deliberately narrow: it refuses exactly the
 case the type cannot distinguish, rather than guessing.
+
+## THE COMPOSITE PROGRAMME, MEASURED AT CORPUS SCALE: 21 -> 37 OF 58 MODULES
+
+Measured 2026-08-13, after construction, flat and nested field reads, array elements,
+tuple fields, mixed widths and the byte conversions all landed with VM differentials.
+
+| | modules lowering end to end | refused |
+|---|---|---|
+| before the composite work | 21 of 58 (36.2%) | 37 |
+| **after** | **37 of 58 (63.8%)** | **21** |
+
+**Sixteen modules freed against a projection of twenty.** The blocker ranking predicted
+composites alone would free 20 of 58, and the realised figure is 16 — **80% of the
+projection, and the first delivery estimate on this branch that was too HIGH rather than
+wrong in kind.** The gap is accounted for: one module still needs `IsEnum`, and others that
+contain composites also contain a second unsupported class, which the slack measurement was
+designed to detect but does not eliminate.
+
+### The blocker ranking has inverted, and the same trap is waiting
+
+| first blocker | modules |
+|---|---|
+| `Const` holding a static string | **11** |
+| `CallVerifiedNative` | 5 |
+| `Stream` | 4 |
+| `IsEnum` | 1 |
+
+**Static strings are now the dominant first blocker, and that is exactly the reading that
+was wrong last time.** The slack measurement put strings at freeing **1** module alone,
+against a first-blocker count of 11 — a 91% loss, the largest of any class measured. A
+reader taking the table above at face value would repeat the error this branch already
+recorded twice.
+
+**Re-run the slack measurement before ranking the next item.** First-blocker counts are an
+ordering hint and nothing more, and this table is a first-blocker count.
+
+### THE SLACK TABLE IS STALE, AND ITS DRIFT CONTROL COULD NEVER HAVE SAID SO
+
+The previous section said to re-run the slack measurement before ranking static strings.
+Doing so found that the measurement itself cannot currently be trusted.
+
+`the_lowered_predicate_has_not_drifted` asserts **model-says-supported implies
+lowering-accepts**. That catches an OPTIMISTIC model, which would overstate what a spike
+promises. **It cannot catch a pessimistic one**, and pessimistic is what the model became:
+
+| ops the model calls unsupported, inside modules the lowering ACCEPTS | instances |
+|---|---|
+| `NewComposite` | 62 |
+| `Yield` | 27 |
+| `GetIndex` | 14 |
+| `Reset` | 9 |
+| `Stream` | 9 |
+| `GetTupleField` | 8 |
+| `GetField` | 2 |
+
+**131 instances across seven opcodes, over 37 accepted modules.** The composite family has
+been stale for a session; `Stream`/`Yield`/`Reset` since the degenerate-stream work.
+
+**A stale-pessimistic model fails silently and in a specific direction: it UNDERSTATES every
+other class.** A module carrying a now-supported opcode is still counted as blocked by it,
+so it never reaches "blocked by X alone". That is precisely why `static-str` reports
+`ALONE = 1`: the figure is an under-estimate of unknown size, and **the static-string item
+can be ranked neither up nor down from it.**
+
+`the_lowered_predicate_is_not_stale_pessimistic` now reports this. It REPORTS rather than
+asserts, because resynchronising the model is a separate change and a red spike would
+obscure the report it exists to produce.
+
+**The real fix is to stop maintaining a model at all** and classify from what `lower_module`
+actually refuses, which this file already calls. A hand-maintained restatement of something a
+mechanism can derive is a defect waiting for the maintenance to lapse — recorded on the
+`v0.2.3` line after five instances, and this is the sixth.
+
+### THERE ARE THREE COPIES OF THE MODEL, NOT ONE
+
+Counted 2026-08-13 while going to resynchronise it: `is_lowered` exists in
+`spike_corpus_coverage.rs`, `spike_stream_sufficiency.rs` AND `spike_composite_split.rs`,
+with different signatures. Each is a hand-maintained restatement of what the lowering
+supports, and all three are stale.
+
+**That decides the fix rather than merely arguing for it.** Hand-patching three lists is how
+this defect persists: the `v0.2.3` line's multihead predicate was wrong in three places
+simultaneously for the same reason, and this repository has now recorded the
+by-name-enumeration defect seven times.
+
+**Do NOT patch the three lists.** Either share one model that both the classifier and the
+drift controls consume, or better, derive support from `lower_module` itself.
+
+**The hard part, stated so the next attempt does not rediscover it.** A per-op model cannot
+be fully derived today, because `lower_module` refuses on the FIRST unsupported opcode and
+so yields one verdict per module rather than one per op. Support is also CONDITIONAL for
+`Stream`/`Yield`/`Reset`, which lower only in the degenerate shape — any model of those
+duplicates `degenerate_stream_yield`, which is a fourth copy waiting to happen.
+
+The clean route is a diagnostic mode on the lowering that collects every refusal in a module
+instead of returning the first. That is a change to `native_codegen/src/`, it makes the
+slack measurement derivable rather than modelled, and it is the increment that unblocks
+ranking `static-str` against `native-call` — which cannot be ranked from either the
+first-blocker count or the current slack table.
