@@ -4936,3 +4936,161 @@ soundness and the opposite of what was recorded.
 `spike_native_frame.rs` reports three figures rather than two: raw at `-O0`, raw at `-O2`, and **promoted
 then `-O2`**, with the last labelled as the one that corresponds to shipped output. The two-figure version
 could not have detected this and reported a confident wrong answer instead.
+
+## THE BAKED-ADDRESS SLICE DELIVERS NOTHING: 0 of 239 constructions are slot-homed
+
+**Measured 2026-08-12, and it killed the increment it was meant to open.**
+
+Reading `compiler.rs` suggested a first composite slice that needs no allocator at all.
+`DataLayout::private_composite_layout` gives every private composite data slot a
+statically baked pool offset, described at the code as "linker-style fixed-address
+placement of program state". A composite whose home is such a slot has a compile-time
+address, so constructing it is a run of stores at baked offsets from the private pointer
+the lowering already receives. `GetField(Flat { offset, kind })` reading it back is a
+constant offset and a typed load, which is what `GetData` already does.
+
+**The corpus never does this.** Of 239 `NewComposite` sites, **0** are immediately
+followed by a `SetData`/`SetDataIndexed`, and **239** are temporaries.
+
+| | |
+|---|---|
+| construction into a baked private slot | **0** |
+| construction as a temporary | **239** |
+
+**The probe is not blind, and that is established rather than assumed.** A hand-written
+control source produces exactly the slot-homed shape — `NewComposite(Flat { kind: Struct,
+count: 2, byte_size: 16 }) ; SetData(0) ; GetData(0) ; GetField(Flat { offset: 8, kind:
+Int })` — with a layout entry at pool offset 0 and `persistent_composite_bytes` of 16. The
+must-fire control asserts that source really has a baked slot, so a zero from the corpus is
+a fact about the corpus. The classification also UNDER-counts the easy case on purpose,
+requiring an immediately adjacent store, so the true figure cannot be lower.
+
+### What this changes
+
+**The allocator question is not deferrable, it is the increment.** Every composite the
+corpus builds needs somewhere to put a body, and per the operator's correction that
+somewhere is the fixed-size arena with countable bytes, not the machine stack. The
+baked-address path stays interesting as an eventual optimisation for code written to use
+private composite slots, and it is worth nothing to the 34.5 percent figure today.
+
+### The rule this cost, which the record already contained one column over
+
+The cost section says the earlier estimate "priced every form the instruction set defines
+rather than every form the corpus contains". This is the same error inverted: **I priced a
+path the compiler implements rather than a path the corpus takes**, and the reading of
+`compiler.rs` was correct in every particular. A capability in the compiler is not a
+frequency in the corpus, and only the second one ranks work.
+
+Construction shapes, for whatever builds the emitter: `(byte_size, count)` is
+`(8,1)`x80, `(24,3)`x115, `(16,2)`x23, `(40,5)`x19, `(32,4)`x1, `(64,2)`x1.
+
+### Composites DO escape, so the section cannot be the chunk by default
+
+Measured 2026-08-12 against the operator's section-scoped bump model. All 826 corpus
+chunks carry a `ChunkSignature`, so this is complete rather than sampled.
+
+| | |
+|---|---|
+| chunks with a signature | 826 |
+| chunks **returning** a flat composite | **23** |
+| chunks **taking** a flat composite parameter | **11** |
+| chunks in modules without signatures | 0 |
+
+A per-chunk region reset on exit would free a returned body underneath its caller in 23
+places, including `rogue_dungen::random_in_room` and the `10_multbyte` arithmetic pair.
+**The bump model is not threatened; the choice of section is.** An escaping body must be
+allocated in a region that outlives the callee, which is the caller's, and that keeps every
+address a base plus a constant.
+
+The coarsest sound v1 is **one bump region per invocation, reset at `Reset`**, sized by the
+WCMU bound the verifier already computes. Nothing outlives a stream iteration except the
+persistent pool, so no escape analysis is needed to be correct — only to be tight. Finer
+sections are then a peak-bytes optimisation rather than a correctness prerequisite.
+
+### The packing rule is NOT eight bytes per field, and the widths already exist
+
+Measured 2026-08-12, and it corrects an assumption I was one step from baking into the
+emitter. The flat construction shapes look uniform — `(8,1)`, `(16,2)`, `(24,3)`, `(32,4)`,
+`(40,5)` are all eight bytes per field — but `(64,2)` is not, and it is the one that tells
+the truth.
+
+`flat_field_size` gives a field either `ScalarKind::size_in_bytes(word_bytes, float_bytes)`
+or, for a nested flat composite, that child body's `byte_len`. **Fields are variable
+width.** A `Byte` field is one byte, and a nested body is however long it is. Assuming a
+uniform stride would have produced a silently wrong body for any composite holding a
+narrow or nested field, which the byte-identity oracle would catch only where the corpus
+happens to build one.
+
+**Reads are fully specified by the instruction and construction is not.**
+`GetField(Flat { offset, kind })` carries a baked offset and kind, so a field read is a
+constant-offset typed load with nothing to infer. `NewComposite(Flat { count, byte_size })`
+carries only the total, so the emitter must know each operand's width to place it.
+
+**Those widths are already computed, by a shipping pass.** `verify_typed::AbsVal` is
+exactly this lattice — `Scalar(kind)`, `Flat { kind, size }`, `Top` — and
+`AbsVal::packed_size(word_bytes, float_bytes)` returns the byte size a value occupies
+inside a packed flat body. The A.2.1 typed operand-stack pass reconstructs it for every
+operand-stack entry at every instruction.
+
+**`Top` is deferrable for the verifier and NOT for the backend.** The verifier's sound
+defer-on-unknown mode falls back to a runtime bounds guard when it cannot reconstruct a
+shape. An emitter cannot defer: without a width there is no store to emit. So a
+`NewComposite` with any `Top` operand must be REFUSED, which is the conservative
+verification stance applied at the right boundary rather than a limitation.
+
+### The fork, which is a coordination item rather than a technical one
+
+`typed_check_chunk` returns a verdict, not the per-instruction abstract stack. Two ways to
+get the widths:
+
+1. **Expose the reconstructed stack from `verify_typed`.** One model, no drift. It is a
+   change to the shared `keleusma` crate, which is the `v0.2.3` line's surface, so it needs
+   their agreement rather than my edit — the lesson from today's collision.
+2. **Reconstruct shapes inside `native_codegen`.** No coordination, and it makes a FOURTH
+   copy of a model in this repository. The three existing ones each cost something: the
+   multihead predicate was wrong in three places at once, and the `is_lowered` model is
+   duplicated across two spikes and only survives because a drift control asserts it
+   against the real lowering.
+
+**Option 1 is preferred and option 2 is viable with a drift control.** Recorded rather than
+decided, because picking (2) unilaterally is how the duplication got to three.
+
+### NEITHER FORK HAS TO BE TAKEN: 220 of 239 operand widths are locally evident
+
+Measured 2026-08-12. The fork above offered a change to the shared crate or a fourth copy
+of a model, and both were unattractive enough to be worth looking for a third option.
+
+There is one. Refuse unless every operand's width is evident from the instruction that
+PRODUCED it. That is a peephole over preceding ops, deliberately narrower than the
+verifier rather than a reimplementation of it, and it needs no coordination and duplicates
+no model.
+
+| producers treated as evident | sites covered of 239 |
+|---|---|
+| word arithmetic, comparisons, `Const`, `GetLocal` | 140 |
+| **the above plus nested `NewComposite(Flat)`** | **220 (92%)** |
+
+**The second row is the interesting one and it corrected my own rule.** The first pass
+refused 80 sites whose blocker was `NewComposite` — treating as unknown the single
+best-specified producer in the instruction set, since `NewComposite(Flat { byte_size })`
+bakes its own body length. A nested construction's width is not merely inferable, it is
+written on the instruction.
+
+Every one of the remaining 19 is blocked by `PopN`, a stack adjustment rather than a value
+producer.
+
+**THE CAVEAT, WHICH IS LARGE ENOUGH TO CHANGE THE NUMBER.** The classifier takes the
+`count` ops immediately preceding the construction as its operands. **That window is wrong
+whenever an operand takes more than one op to produce**, which is exactly the nested case
+the second row admits. So 220 is the coverage of *this crude classifier*, not of the
+peephole rule it stands for, and the true figure could fall either way: a proper stack
+simulation would attribute operands correctly and might find both more coverage and real
+blockers this window hides.
+
+**Do not quote 220 as the slice's coverage.** It is evidence that the peephole is worth
+building, not a measurement of what it delivers, and the distinction is the one this branch
+has now got wrong twice — once pricing a compiler capability as a corpus frequency, once
+reading a uniform field stride off five of six shapes.
+
+The honest next step is a stack simulation over widths, which is small, and to re-measure
+before writing the emitter against any of these numbers.
