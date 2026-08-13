@@ -29,6 +29,12 @@
 //! distinguishable from a correct one by the headline number alone, so both
 //! directions are pinned by an encoded control below rather than by inspection.
 
+// This test compiles stage sources, so it needs the `compile` feature. Without
+// the gate the file fails to build under `--no-default-features`, where
+// `lexer`, `parser` and `compiler` are absent -- which is exactly how CI caught
+// it. Same gate `tests/wire_corpus.rs` and its siblings carry.
+#![cfg(feature = "compile")]
+
 use keleusma::bytecode::{Module, SharedSlotLayout};
 
 const STAGES: &[(&str, &str)] = &[
