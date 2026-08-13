@@ -1324,6 +1324,216 @@ fn a_data_layout_round_trips() {
     }
 }
 
+/// A shared layout built from `sample_layout` has exactly ONE shared slot, so
+/// every other test in this file exercises the run-length encoder with `run`
+/// fixed at 1. The grouping never fires and the binary search never resolves a
+/// non-zero offset within a run. **That makes the whole suite vacuous with
+/// respect to the encoding**, which is why this test exists separately rather
+/// than by widening the shared fixture.
+///
+/// Covered here: a real run, two runs separated by a break, exact round-trip
+/// of every logical slot, and resolution through the binary search. The
+/// `u16::MAX` chunking and the two non-grouping cases have their own tests
+/// below.
+#[test]
+fn a_shared_layout_run_round_trips_and_resolves_slot_by_slot() {
+    use keleusma::wire_schema::DataLayoutTable;
+
+    // 300 uniform 8-byte scalars, then a break in kind, then 40 more.
+    let mut shared = Vec::new();
+    for k in 0..300u32 {
+        shared.push(SharedSlotLayout {
+            offset: 1024 + k * 8,
+            kind: 1,
+            len: 0,
+        });
+    }
+    for k in 0..40u32 {
+        shared.push(SharedSlotLayout {
+            offset: 8192 + k * 64,
+            kind: 0x80 | 2,
+            len: 64,
+        });
+    }
+    let want = DataLayout {
+        shared_layout: shared.clone(),
+        ..sample_layout()
+    };
+
+    let mut b = SchemaBuilder::new();
+    b.add_data_layout(&want).unwrap();
+    let bytes = b.finish().unwrap();
+
+    // The decode path expands runs; it must reproduce the input exactly.
+    let got = decode_data_layout(&bytes).unwrap().expect("layout present");
+    assert_eq!(
+        got.shared_layout, want.shared_layout,
+        "expanding the runs did not reproduce the declared layout"
+    );
+
+    let t = DataLayoutTable::parse(&bytes)
+        .unwrap()
+        .expect("table present");
+
+    // MUST-FIRE CONTROL. Without this the test passes just as well against an
+    // encoder that never groups anything, which is the state this whole
+    // increment exists to leave.
+    assert_eq!(
+        t.shared_slot_count(),
+        340,
+        "logical slot count must survive the encoding"
+    );
+    assert_eq!(
+        t.shared_record_count(),
+        2,
+        "the 340 slots must collapse to exactly two runs; if this reports 340 \
+         the encoder is emitting one record per slot and every assertion below \
+         is measuring nothing"
+    );
+
+    // The binary search must resolve every logical slot, including offsets
+    // strictly inside a run, which is the case a run=1 fixture cannot reach.
+    for (i, w) in want.shared_layout.iter().enumerate() {
+        let e = t
+            .shared_slot(i)
+            .unwrap_or_else(|| panic!("logical slot {i} did not resolve"));
+        assert_eq!(
+            (e.offset, e.kind, e.len),
+            (w.offset, w.kind, w.len),
+            "logical slot {i} resolved to the wrong layout"
+        );
+    }
+
+    // One past the end is None, not a wrapped or clamped answer.
+    assert!(t.shared_slot(340).is_none(), "slot 340 must not resolve");
+    assert!(
+        t.shared_slot(usize::MAX).is_none(),
+        "an absurd index must not resolve"
+    );
+}
+
+/// A run longer than `u16::MAX` chunks into several records and must still
+/// resolve slot by slot across the chunk boundary.
+///
+/// `lexer`'s largest real run is 393,216, so this is the production case rather
+/// than a corner. A chunk boundary is where a `first_slot` that was derived
+/// instead of stored would go wrong.
+#[test]
+fn a_shared_run_longer_than_u16_max_chunks_and_still_resolves() {
+    use keleusma::wire_schema::DataLayoutTable;
+
+    let n: u32 = 70_000; // > u16::MAX, so at least two records
+    let shared: Vec<SharedSlotLayout> = (0..n)
+        .map(|k| SharedSlotLayout {
+            offset: k * 4,
+            kind: 1,
+            len: 0,
+        })
+        .collect();
+    let want = DataLayout {
+        shared_layout: shared,
+        ..sample_layout()
+    };
+
+    let mut b = SchemaBuilder::new();
+    b.add_data_layout(&want).unwrap();
+    let bytes = b.finish().unwrap();
+
+    let got = decode_data_layout(&bytes).unwrap().expect("layout present");
+    assert_eq!(got.shared_layout, want.shared_layout);
+
+    let t = DataLayoutTable::parse(&bytes)
+        .unwrap()
+        .expect("table present");
+    assert_eq!(t.shared_slot_count(), n as usize);
+    // MUST-FIRE CONTROL: the chunking actually happened.
+    assert_eq!(
+        t.shared_record_count(),
+        2,
+        "70,000 slots must chunk into exactly two records at the u16 cap"
+    );
+
+    // Either side of the boundary, and the boundary itself.
+    for i in [0usize, 65_534, 65_535, 65_536, 69_999] {
+        let e = t.shared_slot(i).unwrap_or_else(|| panic!("slot {i}"));
+        assert_eq!(
+            e.offset,
+            (i as u32) * 4,
+            "slot {i} resolved to the wrong offset across the chunk boundary"
+        );
+    }
+}
+
+/// MUST-NOT-FIRE. A non-constant stride and an oversized stride must both fall
+/// back to single-slot records rather than being grouped, because a run record
+/// can only express a constant `u16` stride and grouping either would place
+/// every later slot at a wrong offset.
+#[test]
+fn shared_slots_that_cannot_form_a_run_are_not_grouped() {
+    use keleusma::wire_schema::DataLayoutTable;
+
+    // Non-constant stride: 0, 8, 24, 32.
+    let jagged: Vec<SharedSlotLayout> = [0u32, 8, 24, 32]
+        .iter()
+        .map(|&offset| SharedSlotLayout {
+            offset,
+            kind: 1,
+            len: 0,
+        })
+        .collect();
+    let want = DataLayout {
+        shared_layout: jagged.clone(),
+        ..sample_layout()
+    };
+    let mut b = SchemaBuilder::new();
+    b.add_data_layout(&want).unwrap();
+    let bytes = b.finish().unwrap();
+    let got = decode_data_layout(&bytes).unwrap().expect("layout");
+    assert_eq!(
+        got.shared_layout, jagged,
+        "a jagged layout must round-trip exactly, grouped or not"
+    );
+    let t = DataLayoutTable::parse(&bytes).unwrap().expect("table");
+    assert_eq!(
+        t.shared_record_count(),
+        2,
+        "0,8 and 24,32 are each a constant-stride pair, so exactly two runs"
+    );
+    for (i, w) in jagged.iter().enumerate() {
+        assert_eq!(t.shared_slot(i).unwrap().offset, w.offset);
+    }
+
+    // A stride wider than u16::MAX must not be grouped, because the field
+    // cannot hold it and truncating would corrupt every later slot.
+    let far: Vec<SharedSlotLayout> = (0..4u32)
+        .map(|k| SharedSlotLayout {
+            offset: k * 100_000,
+            kind: 1,
+            len: 0,
+        })
+        .collect();
+    let want = DataLayout {
+        shared_layout: far.clone(),
+        ..sample_layout()
+    };
+    let mut b = SchemaBuilder::new();
+    b.add_data_layout(&want).unwrap();
+    let bytes = b.finish().unwrap();
+    let got = decode_data_layout(&bytes).unwrap().expect("layout");
+    assert_eq!(
+        got.shared_layout, far,
+        "an oversized stride must round-trip exactly, which it only can if the \
+         encoder declined to group it rather than truncating the stride"
+    );
+    let t = DataLayoutTable::parse(&bytes).unwrap().expect("table");
+    assert_eq!(
+        t.shared_record_count(),
+        4,
+        "a stride of 100,000 exceeds the u16 field, so each slot needs its own \
+         record; grouping here would silently truncate to 34,464"
+    );
+}
+
 #[test]
 fn an_absent_data_layout_is_none_not_empty() {
     // Region presence is what encodes Option<DataLayout>. A module with no data
@@ -1436,16 +1646,35 @@ fn an_unknown_visibility_tag_is_rejected() {
     ));
 }
 
+/// Record widths are pinned, and `SharedSlotRecord` is the one exception.
+///
+/// This test previously asserted that EVERY data record is one word. That
+/// stopped being true when `SHARED_LAYOUT` became run-length encoded: carrying
+/// `first_slot`, `run` and `stride` alongside the existing fields takes the
+/// record to two words. The assertion is kept and re-pointed rather than
+/// relaxed, because the width is exactly what makes the encoding pay or not.
+///
+/// **A two-word record is a size REGRESSION below a mean run of two.** The
+/// measured mean is 35,738 (`tests/shared_layout_runs.rs`), so it pays by four
+/// orders of magnitude — but that is a fact about how stages declare shared
+/// data, not a fact about the record. If this ever grows to three words, the
+/// break-even moves to a mean run of three and the trade needs re-deriving.
 #[test]
-fn every_data_record_is_one_word() {
+fn data_record_widths_are_pinned() {
     use keleusma::wire_schema::{DataInitRecord, PrivateCompositeRecord, SharedSlotRecord};
     assert_eq!(
         <keleusma::wire_schema::DataSlotRecord as WireRecord>::STRIDE,
         8
     );
-    assert_eq!(<SharedSlotRecord as WireRecord>::STRIDE, 8);
     assert_eq!(<PrivateCompositeRecord as WireRecord>::STRIDE, 8);
     assert_eq!(<DataInitRecord as WireRecord>::STRIDE, 8);
+    assert_eq!(
+        <SharedSlotRecord as WireRecord>::STRIDE,
+        16,
+        "SharedSlotRecord carries a run, a first_slot and a stride, so it is \
+         two words. Changing this width changes the mean run at which the \
+         run-length encoding stops paying for itself."
+    );
 }
 
 #[test]
@@ -1472,11 +1701,25 @@ fn data_layout_corruption_never_panics() {
         let mut m = bytes.clone();
         m[pos] ^= 0x80;
         if let Ok(Some(t)) = DataLayoutTable::parse(&m) {
-            for i in 0..t.slot_count().saturating_add(2) {
+            // Both index spaces, deliberately. `slot`/`shared_record` take a
+            // RECORD index and `slot_count`/`shared_slot_count` report LOGICAL
+            // slots, so driving one from the other exercises neither range
+            // properly. Overrunning each by two is the point of the test.
+            for i in 0..t.slot_record_count().saturating_add(2) {
                 let _ = t.slot(i);
                 let _ = t.slot_name(i);
             }
-            for i in 0..t.shared_count().saturating_add(2) {
+            for i in 0..t.slot_count().saturating_add(2) {
+                let _ = t.slot(i);
+            }
+            for i in 0..t.shared_record_count().saturating_add(2) {
+                let _ = t.shared_record(i);
+            }
+            // The logical lookup is a BINARY SEARCH over runs, so a corrupt
+            // `first_slot` ordering, a zero run, or a `stride` that overflows
+            // the offset all reach it here. It must return None rather than
+            // panic or resolve to a wrong offset.
+            for i in 0..t.shared_slot_count().saturating_add(2) {
                 let _ = t.shared_slot(i);
             }
             for i in 0..t.private_composite_count().saturating_add(2) {
