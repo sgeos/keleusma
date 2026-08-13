@@ -2130,12 +2130,17 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 Some(dl) => {
                     let mut shared = 0u32;
                     let mut private_ = 0u32;
-                    for i in 0..dl.slot_count() {
+                    // Iterates RECORDS and adds each run, not logical slots:
+                    // `slot(i)` takes a record index, and a slot table is now
+                    // run-length encoded. Counting one per record would
+                    // undercount an array by its element count.
+                    for i in 0..dl.slot_record_count() {
                         let Some(slot) = dl.slot(i) else { continue };
+                        let run = u32::from(slot.run);
                         if slot.visibility == crate::wire_schema::visibility_tag::SHARED {
-                            shared = shared.saturating_add(1);
+                            shared = shared.saturating_add(run);
                         } else {
-                            private_ = private_.saturating_add(1);
+                            private_ = private_.saturating_add(run);
                         }
                     }
                     (shared, private_)

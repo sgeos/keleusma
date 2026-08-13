@@ -2468,8 +2468,8 @@ fn the_slice_5d_offsets_and_kinds_match_the_schema() {
         DataSlotRecord::OFFSET_RESERVED as i64
     );
     assert_eq!(
-        kel_const("dslot_off_reserved2"),
-        DataSlotRecord::OFFSET_RESERVED2 as i64
+        kel_const("dslot_off_run"),
+        DataSlotRecord::OFFSET_RUN as i64
     );
 
     assert_eq!(kel_const("sslot_stride"), SharedSlotRecord::STRIDE as i64);
@@ -2610,13 +2610,13 @@ fn data_artifact() -> (
             name: 1,
             visibility: 1,
             reserved: 0,
-            reserved2: 0,
+            run: 1,
         },
         DataSlotRecord {
             name: 2,
             visibility: 2,
             reserved: 0,
-            reserved2: 0,
+            run: 1,
         },
     ];
     let sslots = vec![
@@ -5233,7 +5233,7 @@ fn real_slot_case(src: &str) -> SlotCase {
             i64::from(r.name),
             i64::from(r.visibility),
             i64::from(r.reserved),
-            i64::from(r.reserved2),
+            i64::from(r.run),
         ]);
     }
 
@@ -5295,7 +5295,17 @@ fn the_emitted_per_slot_tables_match_the_reference_on_real_compiler_output() {
     for (name, src) in CORPUS_STAGES {
         let case = real_slot_case(src);
         assert!(!case.data.is_empty(), "{name}: no data slots");
-        deepest = deepest.max(case.data.len().div_ceil(SLOTS_PER_BATCH));
+        // BOTH tables, not just `data`. Run-length encoding took `DATA_SLOTS`
+        // from one record per element to one per RUN -- 15 records for
+        // `verify_datalayout`, 76 for `codegen` -- so it can no longer cross more
+        // than a batch or two, and this control fired to say so. `SHARED_LAYOUT`
+        // is still one record per shared slot and still crosses many, and it is
+        // emitted batched in the same loop below. Tracking only `data` measured
+        // the table that stopped exercising the mechanism while ignoring the one
+        // that still does.
+        deepest = deepest
+            .max(case.data.len().div_ceil(SLOTS_PER_BATCH))
+            .max(case.shared.len().div_ceil(SLOTS_PER_BATCH));
 
         let dgot = emit_slots_batched(&mut vm, CMD_EMIT_DATA_SLOT_RECORDS, &case.data, 64);
         assert_eq!(dgot, case.data_want, "{name}: DATA_SLOTS differs");
@@ -6313,11 +6323,18 @@ fn rows_for_kind(view: &keleusma_wire::WireView<'_>, kind: u16) -> Vec<Vec<i64>>
         for c in raw.chunks_exact(8) {
             out.push(match kind {
                 k if k == w::kind::DATA_SLOTS => {
+                    // Field 3 is a U16 `run`, not a byte. It read `c[6]` alone
+                    // while the field was an unused `reserved2`, where a
+                    // one-byte read was harmless; run-length encoding made that
+                    // silently truncating. A run of 1,536 (0x0600) came back as
+                    // 0, and the emitter then wrote the zero it was handed --
+                    // which reads as an emitter bug and is not one.
+                    // `SHARED_LAYOUT` immediately below already did this right.
                     vec![
                         u32le(c, 0),
                         i64::from(c[4]),
                         i64::from(c[5]),
-                        i64::from(c[6]),
+                        i64::from(u16::from_le_bytes([c[6], c[7]])),
                     ]
                 }
                 k if k == w::kind::SHARED_LAYOUT => vec![
@@ -9214,28 +9231,33 @@ fn the_window_emitter_distinguishes_a_byte_pool_from_an_unknown_kind() {
 /// rather than an emitter, so the pattern is worth naming rather than
 /// rediscovering.
 ///
-/// **Re-pointed after one-name-per-array.** This used `verify_datalayout`'s
-/// `NAMES`, which was 3,086 records; collapsing per-element slot names took that
-/// table to 17 records, and the control here reported the loss rather than
-/// passing quietly. `SHARED_LAYOUT` on `codegen` still forces both mechanisms:
-/// 5,379 records at four fields each is 21,516 words against a 1,024-word input
-/// buffer, and the region starts at byte 90,824, past the 65,536-byte window.
+/// **Re-pointed twice, and the reason is the same both times.** It began on
+/// `verify_datalayout`'s `NAMES` (3,086 records); one-name-per-array took that to
+/// 17. It moved to `codegen`'s `SHARED_LAYOUT`; run-length encoding `DATA_SLOTS`
+/// shrank everything before it and pulled `SHARED_LAYOUT` back to byte 2,784,
+/// inside the buffer. **Both times the control reported the loss rather than
+/// passing quietly**, which is the whole reason it is phrased as three separate
+/// assertions about the corpus.
+///
+/// `CHUNKS` on `parse` satisfies all three today: 94 records at fourteen fields is
+/// 1,316 words against a 1,024-word input buffer, the payload is 4,512 bytes so it
+/// fits one window, and the region starts at byte 617,008 — far past the
+/// 65,536-byte buffer. Chunk counts do not move when slot tables shrink, which is
+/// why this one should survive Option C part two.
 #[test]
 fn a_region_larger_than_the_input_buffer_batches_through_the_window() {
     use keleusma::wire_schema::kind;
     let mut vm = vm_for(WIRE_KEL);
 
-    let src = include_str!("../src/selfhost/kel/codegen.kel");
+    let src = include_str!("../src/selfhost/kel/parse.kel");
     let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
     let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
 
-    let region = view
-        .find_region(kind::SHARED_LAYOUT)
-        .expect("SHARED_LAYOUT region");
+    let region = view.find_region(kind::CHUNKS).expect("CHUNKS region");
     let base = region.byte_offset().expect("offset");
     let stored = view.region_bytes(&region).expect("payload");
-    let rows = rows_for_kind(&view, kind::SHARED_LAYOUT);
+    let rows = rows_for_kind(&view, kind::CHUNKS);
     let fields = rows.first().map(Vec::len).expect("at least one record");
     let per_batch = FIN_CAPACITY / fields;
     // Derived from the region rather than a constant, so re-pointing this test at
@@ -9250,7 +9272,7 @@ fn a_region_larger_than_the_input_buffer_batches_through_the_window() {
     );
     assert!(
         base >= CAPACITY,
-        "SHARED_LAYOUT starts at {base}, inside the buffer, so the window is untested"
+        "CHUNKS starts at {base}, inside the buffer, so the window is untested"
     );
     assert!(
         stored.len() <= CAPACITY,
@@ -9278,7 +9300,7 @@ fn a_region_larger_than_the_input_buffer_batches_through_the_window() {
                 fields: &flat,
                 names: &[],
                 pool: &[],
-                args: [i64::from(kind::SHARED_LAYOUT), n as i64, at as i64, 0, 0],
+                args: [i64::from(kind::CHUNKS), n as i64, at as i64, 0, 0],
                 read_len: at + n * stride,
             },
         )

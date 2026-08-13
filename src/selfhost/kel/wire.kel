@@ -1052,7 +1052,7 @@ fn dslot_off_visibility() -> Word { 4 }
 // ignore them; an emitter that leaves them to a zeroed buffer is the defect
 // slice 4 argued against, and would diverge the moment a window is reused.
 fn dslot_off_reserved() -> Word { 5 }
-fn dslot_off_reserved2() -> Word { 6 }
+fn dslot_off_run() -> Word { 6 }
 
 // SharedSlotRecord: offset u32 @0, kind u8 @4, reserved u8 @5, len u16 @6.
 fn sslot_stride() -> Word { 8 }
@@ -1474,7 +1474,7 @@ fn emit_data_slot_records(at: Word, n: Word) -> Word {
                 wire.fin[(j * dslot_fields()) + 2],
             );
             put_u16(
-                at + (j * dslot_stride()) + dslot_off_reserved2(),
+                at + (j * dslot_stride()) + dslot_off_run(),
                 wire.fin[(j * dslot_fields()) + 3],
             );
         }

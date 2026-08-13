@@ -1811,8 +1811,20 @@ pub struct DataSlotRecord {
     pub visibility: u8,
     /// Reserved.
     pub reserved: u8,
-    /// Reserved; keeps the record one whole word.
-    pub reserved2: u16,
+    /// RUN LENGTH: how many consecutive slots this record stands for, all
+    /// sharing this name and visibility. Never zero.
+    ///
+    /// An array declares one slot per element and every element carries the
+    /// ARRAY's name, so an array is exactly such a run. Emitting one record per
+    /// element made this table scale with the element count -- 3,166,272 bytes
+    /// for `lexer`. A `u16` caps a single record at 65,535 elements; a longer
+    /// array simply emits another record, which is why the field needs no
+    /// escape value.
+    ///
+    /// This is an ENCODING detail. `slot_count` still reports logical slots and
+    /// `Op::GetData`/`SetData` operands are still logical slot indices; nothing
+    /// about addressing changes.
+    pub run: u16,
 }
 
 /// One shared slot's byte layout in the host buffer. A single word.
@@ -1869,20 +1881,42 @@ impl SchemaBuilder {
         let privcomp = self.b.region(kind::PRIVATE_COMPOSITE, 0)?;
         let init = self.b.region(kind::DATA_INIT, 0)?;
 
-        for s in &layout.slots {
+        // Consecutive slots sharing a name and visibility collapse into one
+        // record with a run length. Grouping is on the ENCODED pair, so two
+        // adjacent arrays that happen to share a name and visibility merge into
+        // one run -- which is correct, because the expansion is identical.
+        let mut i = 0usize;
+        while i < layout.slots.len() {
+            let s = &layout.slots[i];
+            let vis = match s.visibility {
+                SlotVisibility::Shared => visibility_tag::SHARED,
+                SlotVisibility::Private => visibility_tag::PRIVATE,
+            };
+            let mut n = 1usize;
+            while i + n < layout.slots.len()
+                && layout.slots[i + n].name == s.name
+                && layout.slots[i + n].visibility == s.visibility
+            {
+                n += 1;
+            }
             let name = self.names.intern(&s.name);
-            self.b.push_record(
-                slots,
-                &DataSlotRecord {
-                    name,
-                    visibility: match s.visibility {
-                        SlotVisibility::Shared => visibility_tag::SHARED,
-                        SlotVisibility::Private => visibility_tag::PRIVATE,
+            // Chunked at `u16::MAX` rather than rejected: a longer array is
+            // legal and simply needs a second record.
+            let mut left = n;
+            while left > 0 {
+                let take = left.min(u16::MAX as usize);
+                self.b.push_record(
+                    slots,
+                    &DataSlotRecord {
+                        name,
+                        visibility: vis,
+                        reserved: 0,
+                        run: take as u16,
                     },
-                    reserved: 0,
-                    reserved2: 0,
-                },
-            );
+                );
+                left -= take;
+            }
+            i += n;
         }
         for l in &layout.shared_layout {
             self.b.push_record(
@@ -1952,7 +1986,7 @@ impl<'a> DataLayoutTable<'a> {
             init,
         };
 
-        for i in 0..t.slot_count() {
+        for i in 0..t.slot_record_count() {
             let r = t.slot(i).ok_or(SchemaError::BadIndex)?;
             if r.name as usize >= t.names.len() {
                 return Err(SchemaError::BadIndex);
@@ -1960,17 +1994,38 @@ impl<'a> DataLayoutTable<'a> {
             if r.visibility != visibility_tag::SHARED && r.visibility != visibility_tag::PRIVATE {
                 return Err(SchemaError::UnknownTag(r.visibility as u16));
             }
+            // A zero run would make the table describe fewer slots than it has
+            // records, so every logical index past it would be off by one with
+            // nothing else detecting it.
+            if r.run == 0 {
+                return Err(SchemaError::UnknownTag(0));
+            }
         }
         Ok(Some(t))
     }
 
-    /// Number of declared slots.
+    /// Number of LOGICAL slots, expanding run lengths.
+    ///
+    /// A slot index in a `GetData`/`SetData` operand counts logical slots, so
+    /// this is the number those operands are bounded by. It is NOT the number of
+    /// records in the table -- use [`Self::slot_record_count`] for that. The two
+    /// were the same before slot runs, and code that conflates them will index a
+    /// record with a logical index.
     #[inline]
     pub fn slot_count(&self) -> usize {
+        (0..self.slots.len())
+            .filter_map(|i| self.slots.get_as::<DataSlotRecord>(i))
+            .map(|r| r.run as usize)
+            .sum()
+    }
+
+    /// Number of RECORDS in the slot table, each standing for `run` slots.
+    #[inline]
+    pub fn slot_record_count(&self) -> usize {
         self.slots.len()
     }
 
-    /// The slot record at `index`.
+    /// The slot record at `index`, indexed by RECORD rather than logical slot.
     #[inline]
     pub fn slot(&self, index: usize) -> Option<DataSlotRecord> {
         self.slots.get_as::<DataSlotRecord>(index)
@@ -2028,20 +2083,26 @@ pub fn decode_data_layout(bytes: &[u8]) -> Result<Option<DataLayout>, SchemaErro
         return Ok(None);
     };
 
+    // Iterates RECORDS and expands each run. Iterating logical indices would
+    // rescan the run table per slot, which is quadratic on the tables this
+    // encoding exists to shrink.
     let mut slots = Vec::with_capacity(t.slot_count());
-    for i in 0..t.slot_count() {
+    for i in 0..t.slot_record_count() {
         let r = t.slot(i).ok_or(SchemaError::BadIndex)?;
         let name = core::str::from_utf8(t.slot_name(i).ok_or(SchemaError::BadName)?)
             .map(String::from)
             .map_err(|_| SchemaError::BadName)?;
-        slots.push(DataSlot {
-            name,
-            visibility: if r.visibility == visibility_tag::SHARED {
-                SlotVisibility::Shared
-            } else {
-                SlotVisibility::Private
-            },
-        });
+        let visibility = if r.visibility == visibility_tag::SHARED {
+            SlotVisibility::Shared
+        } else {
+            SlotVisibility::Private
+        };
+        for _ in 0..r.run {
+            slots.push(DataSlot {
+                name: name.clone(),
+                visibility,
+            });
+        }
     }
 
     let mut shared_layout = Vec::with_capacity(t.shared_count());
