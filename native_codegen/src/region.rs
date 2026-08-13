@@ -111,8 +111,8 @@ pub fn plan_chunk_region(chunk: &Chunk) -> RegionLayout {
 mod tests {
     use super::*;
     use keleusma::bytecode::Module;
-    use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
     use keleusma::value_layout::CompositeKind;
+    use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 
     fn compile_src(src: &str) -> Module {
         compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile")
@@ -189,7 +189,12 @@ mod tests {
     fn every_body_is_aligned() {
         let l = plan_chunk_region(&chunk_with(vec![flat(4, 1), flat(12, 2), flat(8, 1)]));
         for s in &l.sites {
-            assert_eq!(s.offset % BODY_ALIGN, 0, "body at {} is misaligned", s.offset);
+            assert_eq!(
+                s.offset % BODY_ALIGN,
+                0,
+                "body at {} is misaligned",
+                s.offset
+            );
         }
     }
 
@@ -230,11 +235,51 @@ mod tests {
              fn build(a: Word) -> Word { let p = P { x: a, y: a }; p.y }\n\
              loop main(r: Word) -> Word { yield build(r) }\n",
         );
-        let placed: usize = m.chunks.iter().map(|c| plan_chunk_region(c).sites.len()).sum();
+        let placed: usize = m
+            .chunks
+            .iter()
+            .map(|c| plan_chunk_region(c).sites.len())
+            .sum();
         assert!(
             placed > 0,
             "a source written to construct a struct produced no placement, so this \
              pass cannot see what the compiler actually emits"
         );
+    }
+}
+
+#[cfg(test)]
+mod width_tests {
+    use crate::{Width, width_of_tag};
+    use keleusma::bytecode::TypeTag;
+
+    /// **The default must be `Unknown`, and this is the assertion that pins it.**
+    ///
+    /// A `Byte` occupies a full `i64` operand slot, so a `Byte` and a `Word` are
+    /// indistinguishable on the emitter's stack while packing to one byte and
+    /// eight. If an unstated width ever became a word, every byte field would
+    /// mispack silently, and the byte-identity oracle would only notice where
+    /// the corpus happens to build one.
+    #[test]
+    fn an_unknown_width_yields_no_byte_count() {
+        assert_eq!(Width::Unknown.bytes(), None);
+        assert_eq!(Width::Bytes(8).bytes(), Some(8));
+    }
+
+    /// A composite parameter's body length is not carried on its type tag, so
+    /// it must stay unknown rather than be guessed at a word.
+    #[test]
+    fn a_composite_tag_has_no_known_width() {
+        assert_eq!(width_of_tag(TypeTag::Composite), Width::Unknown);
+        assert_eq!(width_of_tag(TypeTag::Float), Width::Unknown);
+        assert_eq!(width_of_tag(TypeTag::Fixed), Width::Unknown);
+    }
+
+    /// The two tags whose packed width the signature really does state.
+    #[test]
+    fn scalar_tags_state_their_width() {
+        assert_eq!(width_of_tag(TypeTag::Word), Width::Bytes(8));
+        assert_eq!(width_of_tag(TypeTag::Byte), Width::Bytes(1));
+        assert_eq!(width_of_tag(TypeTag::Bool), Width::Bytes(1));
     }
 }

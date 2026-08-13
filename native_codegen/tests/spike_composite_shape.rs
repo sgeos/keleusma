@@ -99,8 +99,16 @@ fn spike_report_private_composite_op_shape() {
     let m = compile(&parse(&tokenize(PRIVATE_COMPOSITE_SRC).expect("lex")).expect("parse"))
         .expect("compile");
     println!("================ CONTROL SOURCE: private composite slot");
-    println!("  persistent_composite_bytes : {}", m.persistent_composite_bytes);
-    for e in &m.data_layout.as_ref().expect("data layout").private_composite_layout {
+    println!(
+        "  persistent_composite_bytes : {}",
+        m.persistent_composite_bytes
+    );
+    for e in &m
+        .data_layout
+        .as_ref()
+        .expect("data layout")
+        .private_composite_layout
+    {
         println!("  layout: slot {} at pool offset {}", e.slot, e.offset);
     }
     for c in &m.chunks {
@@ -220,7 +228,10 @@ fn spike_report_composite_escape() {
                 .count();
             if np > 0 {
                 param_flat += 1;
-                offenders.push(format!("{name}::{} takes {np} flat composite param(s)", c.name));
+                offenders.push(format!(
+                    "{name}::{} takes {np} flat composite param(s)",
+                    c.name
+                ));
             }
         }
     }
@@ -280,8 +291,7 @@ fn spike_report_locally_evident_operands() {
     // bakes its own `byte_size`. Excluding it treated the best-specified
     // producer in the set as unknown.
     fn evident_any(op: &Op) -> bool {
-        evident_word(op)
-            || matches!(op, Op::NewComposite(NewCompositeOperand::Flat { .. }))
+        evident_word(op) || matches!(op, Op::NewComposite(NewCompositeOperand::Flat { .. }))
     }
 
     let (mut covered, mut refused, mut total) = (0usize, 0usize, 0usize);
@@ -301,7 +311,9 @@ fn spike_report_locally_evident_operands() {
                 // conservative direction.
                 if i < n {
                     refused += 1;
-                    *refusal_head.entry(String::from("<too few preceding ops>")).or_default() += 1;
+                    *refusal_head
+                        .entry(String::from("<too few preceding ops>"))
+                        .or_default() += 1;
                     continue;
                 }
                 let window = &c.ops[i - n..i];

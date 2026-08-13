@@ -66,6 +66,63 @@
 
 pub mod region;
 
+/// The PACKED width of an operand-stack value, for placing it inside a flat
+/// composite body.
+///
+/// # Why this is carried rather than recovered
+///
+/// Recovering an operand's width by looking backwards from a `NewComposite`
+/// needed either a change to the shared crate, a second copy of the verifier's
+/// abstract interpretation, or an adjacency heuristic. None was necessary: the
+/// emitter already maintains the operand stack and already pops exactly each
+/// opcode's operands. It only lacked this.
+///
+/// # `Unknown` is the DEFAULT, and that is deliberate
+///
+/// A `Byte` occupies a full `i64` operand slot holding a value in `0..=255`, so
+/// **a `Byte` and a `Word` are indistinguishable on this stack** — and they pack
+/// into a body at ONE byte and EIGHT. Defaulting to word width would therefore
+/// silently mispack any byte field, and the byte-identity oracle would only
+/// catch it where the corpus happens to build one. Everything is unknown until
+/// an opcode arm states otherwise, and a composite operation that consumes an
+/// unknown is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Width {
+    /// The value packs into this many bytes.
+    Bytes(u32),
+    /// Not statically determined here. Fails a composite operation closed.
+    Unknown,
+}
+
+impl Width {
+    /// Byte count, or `None` when unknown.
+    pub fn bytes(self) -> Option<u32> {
+        match self {
+            Width::Bytes(n) => Some(n),
+            Width::Unknown => None,
+        }
+    }
+}
+
+/// A vector of `n` unknown widths.
+fn alloc_vec_unknown(n: usize) -> Vec<Width> {
+    vec![Width::Unknown; n]
+}
+
+/// Packed width of a declared parameter type.
+///
+/// `Word` is eight bytes because this backend is 64-bit throughout; a narrow-word
+/// target is refused elsewhere. `Composite` is UNKNOWN rather than a guess: a
+/// composite parameter's body length is not carried on the type tag, and
+/// guessing it is exactly the silent mispack this type exists to prevent.
+fn width_of_tag(t: TypeTag) -> Width {
+    match t {
+        TypeTag::Byte | TypeTag::Bool => Width::Bytes(1),
+        TypeTag::Word => Width::Bytes(8),
+        _ => Width::Unknown,
+    }
+}
+
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
@@ -75,7 +132,7 @@ use inkwell::module::Module as LlvmModule;
 use inkwell::types::IntType;
 use inkwell::values::{FunctionValue, IntValue, PointerValue, ValueKind};
 use keleusma::bytecode::{
-    BlockType, Chunk, ConstValue, Module, Op, SharedSlotLayout, SlotVisibility,
+    BlockType, Chunk, ConstValue, Module, Op, SharedSlotLayout, SlotVisibility, TypeTag,
 };
 use std::collections::BTreeMap;
 
@@ -207,6 +264,14 @@ struct Lower<'ctx> {
     /// claim that exceeding it "is a lowering bug, not a program error" was an
     /// assumption with nothing enforcing it.
     stack_overflow: Option<usize>,
+    /// Packed width of each live operand, parallel to the slot at the same
+    /// depth. Grown alongside `slots` and defaulted to [`Width::Unknown`], so an
+    /// arm that does not state a width cannot be mistaken for one that did.
+    widths: Vec<Width>,
+    /// Packed width most recently stored into each local, so `GetLocal` can
+    /// restore what `SetLocal` put there. A local never written in this chunk
+    /// stays unknown.
+    local_widths: Vec<Width>,
 }
 
 impl<'ctx> Lower<'ctx> {
@@ -249,11 +314,24 @@ impl<'ctx> Lower<'ctx> {
     }
 
     fn push(&mut self, v: IntValue<'ctx>) {
+        self.push_w(v, Width::Unknown);
+    }
+
+    /// Push, stating the value's packed width.
+    ///
+    /// The unstated form defaults to [`Width::Unknown`] rather than to a word,
+    /// so an unlabelled arm fails a composite operation closed instead of
+    /// mispacking it. See [`Width`].
+    fn push_w(&mut self, v: IntValue<'ctx>, w: Width) {
         if self.depth >= MAX_STACK {
             self.stack_overflow.get_or_insert(self.depth);
         }
         let slot = self.slot(self.depth);
         self.b.build_store(slot, v).unwrap();
+        if self.widths.len() <= self.depth {
+            self.widths.resize(self.depth + 1, Width::Unknown);
+        }
+        self.widths[self.depth] = w;
         self.depth += 1;
     }
 
@@ -1060,6 +1138,16 @@ fn lower_chunk_body<'ctx>(
         .map(|&t| (t, ctx.append_basic_block(func, &format!("op{t}"))))
         .collect();
 
+    // Parameter widths come from the chunk's declared signature, which is the
+    // only place they are stated. Everything else starts unknown so an
+    // unlabelled write cannot be mistaken for a word.
+    let mut local_widths = alloc_vec_unknown(locals.len());
+    for (i, t) in chunk.param_types.iter().enumerate() {
+        if i < local_widths.len() {
+            local_widths[i] = width_of_tag(*t);
+        }
+    }
+
     let mut st = Lower {
         b,
         i64t,
@@ -1068,7 +1156,20 @@ fn lower_chunk_body<'ctx>(
         slots,
         depth: 0,
         stack_overflow: None,
+        widths: Vec::new(),
+        local_widths,
     };
+
+    // Every local this chunk writes anywhere, computed up front so the decision
+    // does not depend on instruction order. See the `GetLocal` arm.
+    let written_locals: std::collections::BTreeSet<usize> = chunk
+        .ops
+        .iter()
+        .filter_map(|o| match o {
+            Op::SetLocal(n) => Some(*n as usize),
+            _ => None,
+        })
+        .collect();
 
     // Operand-stack depth at each merge point, recorded per incoming edge.
     let mut tdepth: BTreeMap<usize, usize> = BTreeMap::new();
@@ -1125,7 +1226,24 @@ fn lower_chunk_body<'ctx>(
                     st.b.build_load(i64t, st.locals[*n as usize], "gl")
                         .unwrap()
                         .into_int_value();
-                st.push(v);
+                // A local's width is trusted ONLY when the chunk never writes
+                // it, so its value is the parameter the signature described.
+                //
+                // A linear scan of `SetLocal` cannot establish more than that:
+                // it walks instructions in order and CANNOT SEE A BACK EDGE, so
+                // a local rewritten later in a loop body would be read here at
+                // the width of the write that appears earlier in the text and
+                // packed wrongly on every iteration after the first. Anything
+                // written is unknown, which costs coverage and cannot mispack.
+                let w = if written_locals.contains(&(*n as usize)) {
+                    Width::Unknown
+                } else {
+                    st.local_widths
+                        .get(*n as usize)
+                        .copied()
+                        .unwrap_or(Width::Unknown)
+                };
+                st.push_w(v, w);
             }
             Op::SetLocal(n) => {
                 let v = st.pop();
@@ -1348,13 +1466,17 @@ fn lower_chunk_body<'ctx>(
                 let cv = chunk.constants.get(*idx as usize).ok_or_else(|| {
                     LowerError::UnsupportedOp(format!("Const({idx}) out of range"))
                 })?;
-                let v: i64 = match cv {
-                    ConstValue::Int(i) => *i,
-                    ConstValue::Byte(x) => *x as i64,
-                    ConstValue::Bool(b) => *b as i64,
+                // The constant's own variant states its packed width exactly,
+                // which makes this the least ambiguous producer in the set.
+                // `Unit` stays unknown: it is a placeholder that nothing reads,
+                // and giving it a width would let it be packed into a body.
+                let (v, w): (i64, Width) = match cv {
+                    ConstValue::Int(i) => (*i, Width::Bytes(8)),
+                    ConstValue::Byte(x) => (*x as i64, Width::Bytes(1)),
+                    ConstValue::Bool(b) => (*b as i64, Width::Bytes(1)),
                     // Unit is pushed and popped without being read. Same
                     // placeholder, same caveat, as `PushImmediate(0)`.
-                    ConstValue::Unit => 0,
+                    ConstValue::Unit => (0, Width::Unknown),
                     other => {
                         return Err(LowerError::UnsupportedOp(format!(
                             "Const holding {other:?}"
@@ -1362,7 +1484,7 @@ fn lower_chunk_body<'ctx>(
                     }
                 };
                 let c = i64t.const_int(v as u64, true);
-                st.push(c);
+                st.push_w(c, w);
             }
             // Encoding per `Op::PushImmediate`: 0 = Unit, 1 = true, 2 = false,
             // 3 = None, 4..=19 = Int(operand - 4).
