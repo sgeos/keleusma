@@ -856,9 +856,15 @@ impl SchemaBuilder {
     /// # What it buys and what it costs
     ///
     /// One flipped bit per 64-bit word becomes correctable and two become
-    /// detectable, per protected region. The cost is 12.5% of the protected
-    /// bytes plus one directory entry per plane, and the region ceiling counts
-    /// planes, so an artifact may carry half as many payload regions.
+    /// detectable, per protected region. The cost approaches 12.5% of the
+    /// protected bytes plus one directory entry per plane, and the region
+    /// ceiling counts planes, so an artifact may carry half as many payload
+    /// regions.
+    ///
+    /// **12.5% is asymptotic and a small artifact pays much more.** Each plane
+    /// is padded to a whole word and every artifact here carries the same
+    /// nineteen regions, so the rounding is amortised only by size. Measured:
+    /// **20.0% at 680 payload bytes**, 12.6% at 30,616, 12.5% at 303,472.
     ///
     /// # Compatibility
     ///
@@ -2816,7 +2822,9 @@ pub fn encode_aux_body(aux: &crate::wire_format::WireAuxBody) -> Result<Vec<u8>,
 ///
 /// Same bytes as [`encode_aux_body`] for every payload region, plus one plane
 /// region each. One flipped bit per 64-bit word becomes correctable and two
-/// become detectable; the cost is 12.5% of the protected bytes.
+/// become detectable. The cost approaches 12.5% of the protected bytes and is
+/// **20.0% on a small artifact**, because each plane is padded to a whole word
+/// and the rounding is per region.
 ///
 /// Read back with the ordinary [`decode_aux_body`], which is unaffected — planes
 /// are additive regions and every reader resolves by kind. Use
@@ -2825,7 +2833,7 @@ pub fn encode_aux_body(aux: &crate::wire_format::WireAuxBody) -> Result<Vec<u8>,
 /// # Errors
 ///
 /// [`WireError`] as [`encode_aux_body`], plus
-/// [`WireError::TooManyRegions`](keleusma_wire::WireError::TooManyRegions) if
+/// [`WireError::TooManyRegions`] if
 /// the planes push the artifact past the region ceiling.
 pub fn encode_aux_body_with_ecc(
     aux: &crate::wire_format::WireAuxBody,

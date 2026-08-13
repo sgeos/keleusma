@@ -114,8 +114,14 @@ impl WireBuilder {
     /// point — before or after the region's contents are appended.
     ///
     /// A protected region gains one check byte per eight payload bytes, so the
-    /// cost is 12.5% of the region's size, and single-bit faults in it become
-    /// correctable rather than silently wrong.
+    /// cost approaches 12.5% of the region's size, and single-bit faults in it
+    /// become correctable rather than silently wrong.
+    ///
+    /// **12.5% is the asymptote, not the cost of a small region.** The plane is
+    /// itself a region and is padded to a whole word, so a region below 512
+    /// bytes pays the rounding. Measured across real artifacts: 12.5% at
+    /// 303,472 payload bytes and **20.0% at 680**, where nineteen regions each
+    /// round their plane up.
     ///
     /// # Errors
     ///
@@ -157,9 +163,14 @@ impl WireBuilder {
     ///
     /// # Cost
     ///
-    /// One check byte per eight payload bytes, so 12.5% of the protected bytes,
-    /// plus one directory entry per plane. The region ceiling counts planes, so
-    /// this halves the number of payload regions an artifact may carry.
+    /// One check byte per eight payload bytes, approaching 12.5% of the
+    /// protected bytes, plus one directory entry per plane. The region ceiling
+    /// counts planes, so this halves the number of payload regions an artifact
+    /// may carry.
+    ///
+    /// **The rounding is per region and it dominates on a small artifact**,
+    /// since every plane is padded to a whole word. Measured: 20.0% at 680
+    /// payload bytes across nineteen regions, against 12.5% at 303,472.
     ///
     /// # Errors
     ///
