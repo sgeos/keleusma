@@ -348,6 +348,16 @@ impl<'ctx> Lower<'ctx> {
             .into_int_value()
     }
 
+    /// Packed width of the operand `back` entries below the top, `back == 0`
+    /// being the top. Unknown when out of range, so an overflowing chunk fails a
+    /// composite closed rather than indexing wildly.
+    fn width_at(&self, back: usize) -> Width {
+        match self.depth.checked_sub(back + 1) {
+            Some(d) => self.widths.get(d).copied().unwrap_or(Width::Unknown),
+            None => Width::Unknown,
+        }
+    }
+
     fn pop(&mut self) -> IntValue<'ctx> {
         self.depth -= 1;
         let slot = self.slot(self.depth);
@@ -1921,6 +1931,163 @@ fn lower_chunk_body<'ctx>(
                             .expect("PRIVATE_SLOT_BYTES is a power of two");
                     }
                 }
+            }
+            // Flat composite construction. The body goes at a COMPILE-TIME
+            // offset in the host-supplied region, so there is no allocator, no
+            // cursor and nothing that can fail at run time. See `region.rs`.
+            Op::NewComposite(keleusma::bytecode::NewCompositeOperand::Flat {
+                count,
+                byte_size,
+                ..
+            }) => {
+                let region = region_base.ok_or_else(|| {
+                    LowerError::UnsupportedOp(
+                        "NewComposite needs the region pointer, which lower_chunk does not \
+                         receive"
+                            .into(),
+                    )
+                })?;
+                let plan = crate::region::plan_chunk_region(chunk);
+                let site = plan.sites.iter().find(|s| s.op_index == i).ok_or_else(|| {
+                    LowerError::UnsupportedOp(format!(
+                        "no region placement for the NewComposite at op {i}"
+                    ))
+                })?;
+
+                // Widths, in OPERAND order. `width_at(0)` is the top of the
+                // stack, which is the LAST operand, so the run is reversed.
+                let n = *count as usize;
+                let mut widths: Vec<u32> = Vec::with_capacity(n);
+                for back in (0..n).rev() {
+                    // An unknown width cannot be placed. Refusing is the whole
+                    // point of the default: a guess here mispacks silently, and
+                    // a Byte and a Word are indistinguishable on this stack.
+                    let w = st.width_at(back).bytes().ok_or_else(|| {
+                        LowerError::UnsupportedOp(format!(
+                            "NewComposite at op {i} has an operand of unknown packed width"
+                        ))
+                    })?;
+                    widths.push(w);
+                }
+
+                // The reference packs fields cumulatively with NO padding, so
+                // the widths must account for the baked body exactly. A
+                // mismatch means this backend's model of the layout has drifted
+                // from the compiler's, and emitting anyway would write a body
+                // the VM reads differently.
+                let total: u32 = widths.iter().sum();
+                if total != u32::from(*byte_size) {
+                    return Err(LowerError::UnsupportedOp(format!(
+                        "NewComposite at op {i} packs {total} bytes but the instruction bakes \
+                         {byte_size}; the layout model has drifted"
+                    )));
+                }
+
+                let vals: Vec<IntValue<'ctx>> = {
+                    let mut v: Vec<_> = (0..n).map(|_| st.pop()).collect();
+                    v.reverse();
+                    v
+                };
+
+                let mut off = site.offset;
+                for (v, w) in vals.iter().zip(widths.iter()) {
+                    let addr = unsafe {
+                        st.b.build_in_bounds_gep(
+                            i8t,
+                            region,
+                            &[i64t.const_int(u64::from(off), false)],
+                            "cfieldptr",
+                        )
+                        .unwrap()
+                    };
+                    // Truncate to the field's width, then store UNALIGNED. The
+                    // layout is chosen for density: a Word can sit at offset 1.
+                    // Declaring an alignment the pointer does not have is
+                    // undefined behaviour that presents as a bus fault.
+                    let store = match w {
+                        8 => st.b.build_store(addr, *v).unwrap(),
+                        1 => {
+                            let t = st.b.build_int_truncate(*v, i8t, "cfbyte").unwrap();
+                            st.b.build_store(addr, t).unwrap()
+                        }
+                        other => {
+                            return Err(LowerError::UnsupportedOp(format!(
+                                "NewComposite at op {i} has a {other}-byte field; only 1 and 8 \
+                                 are lowered"
+                            )));
+                        }
+                    };
+                    store.set_alignment(1).expect("1 is a power of two");
+                    off += w;
+                }
+
+                // The composite operand IS its address. Its packed width is the
+                // body length, so a nested construction places it correctly.
+                let base = unsafe {
+                    st.b.build_in_bounds_gep(
+                        i8t,
+                        region,
+                        &[i64t.const_int(u64::from(site.offset), false)],
+                        "cbody",
+                    )
+                    .unwrap()
+                };
+                let as_int = st.b.build_ptr_to_int(base, i64t, "cbodyint").unwrap();
+                st.push_w(as_int, Width::Bytes(u32::from(*byte_size)));
+            }
+            // Flat field read: a constant offset from the body address and one
+            // unaligned typed load, which is what `GetData` already does.
+            Op::GetField(keleusma::bytecode::StructField::Flat { offset, kind }) => {
+                use keleusma::value_layout::ScalarKind as SK;
+                let addr_int = st.pop();
+                let base = st
+                    .b
+                    .build_int_to_ptr(addr_int, ctx.ptr_type(AddressSpace::default()), "cfbase")
+                    .unwrap();
+                let addr = unsafe {
+                    st.b.build_in_bounds_gep(
+                        i8t,
+                        base,
+                        &[i64t.const_int(u64::from(*offset), false)],
+                        "cfaddr",
+                    )
+                    .unwrap()
+                };
+                let (v, w) = match kind {
+                    SK::Int => {
+                        let iv =
+                            st.b.build_load(i64t, addr, "cfint")
+                                .unwrap()
+                                .into_int_value();
+                        iv.as_instruction()
+                            .expect("a load is an instruction")
+                            .set_alignment(1)
+                            .expect("1 is a power of two");
+                        (iv, 8u32)
+                    }
+                    // A `Byte` occupies a full `i64` slot holding `0..=255`, so
+                    // the extension is ZERO and not sign. Sign-extending would
+                    // read `0xFF` as `-1` and break the invariant that makes
+                    // `ByteToWord` free.
+                    SK::Byte | SK::Bool => {
+                        let bv =
+                            st.b.build_load(i8t, addr, "cfbyte")
+                                .unwrap()
+                                .into_int_value();
+                        bv.as_instruction()
+                            .expect("a load is an instruction")
+                            .set_alignment(1)
+                            .expect("1 is a power of two");
+                        let z = st.b.build_int_z_extend(bv, i64t, "cfzext").unwrap();
+                        (z, 1u32)
+                    }
+                    other => {
+                        return Err(LowerError::UnsupportedOp(format!(
+                            "GetField reading {other:?} is not lowered"
+                        )));
+                    }
+                };
+                st.push_w(v, Width::Bytes(w));
             }
             // Suspension. **`Yield` is pop-one, push-one**: it pops the value
             // to yield and pushes the value the host resumes with. Treating it

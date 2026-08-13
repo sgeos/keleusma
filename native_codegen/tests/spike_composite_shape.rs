@@ -416,7 +416,11 @@ fn spike_report_mixed_width_packing() {
             .iter()
             .map(|f| {
                 let ty = decl.split(&format!("{f}:")).nth(1).unwrap();
-                let v = if ty.trim_start().starts_with("Byte") { "1 as Byte" } else { "1" };
+                let v = if ty.trim_start().starts_with("Byte") {
+                    "1 as Byte"
+                } else {
+                    "1"
+                };
                 format!("{f}: {v}")
             })
             .collect();
@@ -441,7 +445,9 @@ fn spike_report_mixed_width_packing() {
                         for op in &c.ops {
                             match op {
                                 Op::NewComposite(NewCompositeOperand::Flat {
-                                    byte_size, count, ..
+                                    byte_size,
+                                    count,
+                                    ..
                                 }) => sizes.push((*byte_size, *count)),
                                 Op::GetField(keleusma::bytecode::StructField::Flat {
                                     offset,
