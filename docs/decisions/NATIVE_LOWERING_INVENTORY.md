@@ -5192,3 +5192,37 @@ A module that constructs a composite but declares no data slot would otherwise t
 region pointer and no others, which is the two-dimensional arity the existing rule forbids.
 **Take all three or none**, decided by `has_data || any chunk constructs a composite`. One
 rule, stated once, and an unused pointer costs a register.
+
+### THE PACKING RULE, MEASURED: strictly cumulative, no padding, fields may be UNALIGNED
+
+Measured 2026-08-13 by asking the reference compiler for `GetField(Flat { offset, .. })`
+rather than inferring a rule.
+
+| source | body | field offsets |
+|---|---|---|
+| `{ a: Byte, b: Word }` | **9** | 0, **1** |
+| `{ a: Word, b: Byte }` | 9 | 0, 8 |
+| `{ a: Byte, b: Byte, c: Byte }` | 3 | 0, 1, 2 |
+| `{ a: Byte, b: Word, c: Byte }` | **10** | 0, **1**, 9 |
+
+**A `Word` sits at offset 1.** The layout is chosen for density: fields pack cumulatively in
+declaration order with no padding and no alignment whatsoever.
+
+**Every uniform-word composite in the corpus is blind to this.** Cumulative packing and an
+eight-byte stride are indistinguishable when every field is a word, which is 5 of the 6
+observed shapes — the same blindness that made `(64,2)` the only shape telling the truth
+about field width.
+
+### Two consequences, one of them a correction to this branch's own code
+
+- **The emitter must store and load UNALIGNED.** An LLVM store assuming natural alignment
+  at offset 1 is wrong. Alignment 1 on every field access, or the emitted code is unsound on
+  any target that cares and silently mispacks on any target that does not.
+- **`region.rs`'s stated reason for 8-byte body alignment was FALSE**, and is corrected in
+  place. It claimed fields are word-packed so aligning the body keeps accesses aligned.
+  Aligning the body cannot align the fields, and nothing can. The constant is kept for
+  density and address simplicity; the justification it shipped with was wrong.
+
+**This is the third time on this branch that a rule inferred from uniform-word shapes has
+been wrong**, after the eight-bytes-per-field stride and the adjacency window. The corpus
+cannot distinguish these cases, so the compiler has to be asked directly.
