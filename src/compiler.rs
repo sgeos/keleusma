@@ -3282,9 +3282,27 @@ pub fn compile_with_options(
                         visibility,
                     });
                 } else {
-                    for k in 0..n_slots {
+                    // ONE NAME FOR THE WHOLE ARRAY, NOT ONE PER ELEMENT.
+                    //
+                    // `SchemaBuilder::add_data_layout` interns each slot's name
+                    // with dedup, so identical names collapse to a single
+                    // `NAMES` record and a single run of pool bytes. A distinct
+                    // `field[k]` per element defeated that dedup and made the
+                    // string pool and name table scale with the ELEMENT COUNT:
+                    // for `lexer` they were 6,609,960 and 3,166,432 bytes, 60.7%
+                    // of a 16,114,608-byte artifact built from a 21 KB source.
+                    //
+                    // Nothing addresses a slot by name at runtime. The host reads
+                    // and writes through `Vm::get_shared`/`set_shared` by slot
+                    // INDEX, and `Op::GetDataIndexed` resolves `base + k * stride`
+                    // as an index too; `DataSlot::name` is documented as being for
+                    // host initialization and debugging. An element's name is
+                    // recoverable as `name[k]` from the array's base slot, so the
+                    // per-element string was storing what the index already says.
+                    let array_name = format!("{}.{}", decl.name, field.name);
+                    for _ in 0..n_slots {
                         target.push(DataSlot {
-                            name: format!("{}.{}[{}]", decl.name, field.name, k),
+                            name: array_name.clone(),
                             visibility,
                         });
                     }

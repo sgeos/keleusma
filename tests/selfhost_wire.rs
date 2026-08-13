@@ -5108,16 +5108,36 @@ fn the_emitted_accumulator_regions_match_the_reference_on_real_compiler_output()
         let got_pool = emit_pool_batched(&mut vm, &case.pool_logical, 64, BIN_CAPACITY);
         assert_eq!(got_pool, case.pool_stored, "{name}: STRING_POOL differs");
     }
-    // Everything before this slice batched at most twice. Asserted so a corpus
-    // change that shrank these tables would report the loss of deep-batch
-    // coverage rather than silently keeping the test green.
+    // THIS CONTROL FIRED, AND IT WAS RIGHT TO. It read `> 100` and reported the
+    // loss when one-name-per-array collapsed `NAMES` from thousands of records to
+    // a handful: every element of an array now shares the array's name, which the
+    // interner dedups, so a real stage's name table is small. Deep-batch coverage
+    // over `NAMES` is genuinely unreachable from real sources now, and lowering
+    // the number without saying where the coverage went would be exactly the quiet
+    // green the original comment warned about.
+    //
+    // It moved: `a_region_larger_than_the_input_buffer_batches_through_the_window`
+    // batches `SHARED_LAYOUT` on `codegen`, 5,379 records at four fields, which is
+    // 21 input batches. The slot tables are what stayed large.
     assert!(
-        most_name_batches > 100,
-        "deepest NAMES run was only {most_name_batches} batches"
+        most_name_batches > 1,
+        "deepest NAMES run was only {most_name_batches} batches; even shallow \
+         batching is now untested here"
     );
+    // Also fired, also correctly. After one-name-per-array a real stage's
+    // `STRING_POOL` holds only genuine literals and block/field names -- 1,840
+    // bytes for `codegen`, 7,680 for `parse` -- so it no longer fills even ONE
+    // 8,192-byte batch, let alone a hundred.
+    //
+    // **Byte-pool multi-batch is therefore unreachable from real stage sources.**
+    // That is worth stating rather than papering over: the mechanism still exists
+    // and a user program with many distinct literals would exercise it, but this
+    // corpus cannot. Multi-batch and multi-window are covered over RECORD regions
+    // instead, which stayed large -- `SHARED_LAYOUT` and `CONSTS` on `codegen`.
     assert!(
-        most_pool_batches > 100,
-        "deepest STRING_POOL run was only {most_pool_batches} batches"
+        most_pool_batches >= 1,
+        "deepest STRING_POOL run was {most_pool_batches} batches; the pool \
+         emitter is not being driven at all"
     );
 }
 
@@ -9194,26 +9214,33 @@ fn the_window_emitter_distinguishes_a_byte_pool_from_an_unknown_kind() {
 /// rather than an emitter, so the pattern is worth naming rather than
 /// rediscovering.
 ///
-/// `verify_datalayout` is the smallest of the ten stages and still forces both
-/// mechanisms on `NAMES`: 3,086 records at two fields each is 6,172 words against
-/// a 1,024-word input buffer, and the region starts at byte 81,160, past the
-/// 65,536-byte window.
+/// **Re-pointed after one-name-per-array.** This used `verify_datalayout`'s
+/// `NAMES`, which was 3,086 records; collapsing per-element slot names took that
+/// table to 17 records, and the control here reported the loss rather than
+/// passing quietly. `SHARED_LAYOUT` on `codegen` still forces both mechanisms:
+/// 5,379 records at four fields each is 21,516 words against a 1,024-word input
+/// buffer, and the region starts at byte 90,824, past the 65,536-byte window.
 #[test]
 fn a_region_larger_than_the_input_buffer_batches_through_the_window() {
     use keleusma::wire_schema::kind;
     let mut vm = vm_for(WIRE_KEL);
 
-    let src = include_str!("../src/selfhost/kel/verify_datalayout.kel");
+    let src = include_str!("../src/selfhost/kel/codegen.kel");
     let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
     let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
 
-    let region = view.find_region(kind::NAMES).expect("NAMES region");
+    let region = view
+        .find_region(kind::SHARED_LAYOUT)
+        .expect("SHARED_LAYOUT region");
     let base = region.byte_offset().expect("offset");
     let stored = view.region_bytes(&region).expect("payload");
-    let rows = rows_for_kind(&view, kind::NAMES);
+    let rows = rows_for_kind(&view, kind::SHARED_LAYOUT);
     let fields = rows.first().map(Vec::len).expect("at least one record");
     let per_batch = FIN_CAPACITY / fields;
+    // Derived from the region rather than a constant, so re-pointing this test at
+    // another kind does not silently keep a stale stride.
+    let stride = stored.len() / rows.len();
 
     // Three controls, each naming a mechanism that would otherwise be untested.
     assert!(
@@ -9223,7 +9250,7 @@ fn a_region_larger_than_the_input_buffer_batches_through_the_window() {
     );
     assert!(
         base >= CAPACITY,
-        "NAMES starts at {base}, inside the buffer, so the window is untested"
+        "SHARED_LAYOUT starts at {base}, inside the buffer, so the window is untested"
     );
     assert!(
         stored.len() <= CAPACITY,
@@ -9251,13 +9278,13 @@ fn a_region_larger_than_the_input_buffer_batches_through_the_window() {
                 fields: &flat,
                 names: &[],
                 pool: &[],
-                args: [i64::from(kind::NAMES), n as i64, at as i64, 0, 0],
-                read_len: at + n * NAMEREF_STRIDE,
+                args: [i64::from(kind::SHARED_LAYOUT), n as i64, at as i64, 0, 0],
+                read_len: at + n * stride,
             },
         )
         .expect("run");
         assert!(ret >= 0, "batch at record {first} refused with {ret}");
-        got.extend_from_slice(&win[at..at + n * NAMEREF_STRIDE]);
+        got.extend_from_slice(&win[at..at + n * stride]);
         first += n;
         batches += 1;
     }
@@ -9303,13 +9330,28 @@ fn a_region_larger_than_one_window_is_assembled_across_two() {
     use keleusma::wire_schema::kind;
     let mut vm = vm_for(WIRE_KEL);
 
-    let src = include_str!("../src/selfhost/kel/verify_yield.kel");
+    // RE-POINTED FROM A BYTE POOL TO A RECORD REGION, and the reason is a real
+    // loss of reach rather than a preference. This drove `verify_yield`'s
+    // `STRING_POOL`, 96,352 bytes. One-name-per-array took that pool to a few
+    // kilobytes -- it now holds only genuine literals and block/field names -- so
+    // no byte pool in any stage reaches even one 8,192-byte batch, and the control
+    // below reported that rather than passing on a 328-byte payload.
+    //
+    // `CONSTS` on `codegen` is 101,408 bytes and still spans two windows. The two
+    // bounds it exercises are the same pair, at different sizes: a batch is capped
+    // by `wire.fin` at 1,024 WORDS (256 four-field records), a window by
+    // `wire.bytes` at 65,536 BYTES.
+    let src = include_str!("../src/selfhost/kel/codegen.kel");
     let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
     let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
 
-    let region = view.find_region(kind::STRING_POOL).expect("STRING_POOL");
+    let region = view.find_region(kind::CONSTS).expect("CONSTS");
     let stored = view.region_bytes(&region).expect("payload");
+    let rows = rows_for_kind(&view, kind::CONSTS);
+    let fields = rows.first().map(Vec::len).expect("at least one record");
+    let stride = stored.len() / rows.len();
+    let per_batch = FIN_CAPACITY / fields;
     assert!(
         stored.len() > CAPACITY,
         "payload is {} bytes and fits one window, so multi-window is untested",
@@ -9321,9 +9363,10 @@ fn a_region_larger_than_one_window_is_assembled_across_two() {
     let mut windows = 0;
     let mut batches = 0;
     let mut fed = 0usize;
-    while fed < stored.len() {
-        let n = (stored.len() - fed).min(BIN_CAPACITY);
-        if window.len() + n > CAPACITY {
+    while fed < rows.len() {
+        let n = (rows.len() - fed).min(per_batch);
+        let span = n * stride;
+        if window.len() + span > CAPACITY {
             // The window is full: the host takes it and starts a fresh one.
             got.extend_from_slice(&window);
             window.clear();
@@ -9337,16 +9380,20 @@ fn a_region_larger_than_one_window_is_assembled_across_two() {
                 nregions: 0,
                 seed: &window,
                 regions: &[],
-                fields: &[],
+                fields: &rows[fed..fed + n]
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .collect::<Vec<i64>>(),
                 names: &[],
-                pool: &stored[fed..fed + n],
-                args: [i64::from(kind::STRING_POOL), n as i64, at as i64, 0, 0],
-                read_len: at + n,
+                pool: &[],
+                args: [i64::from(kind::CONSTS), n as i64, at as i64, 0, 0],
+                read_len: at + span,
             },
         )
         .expect("run");
         assert!(ret >= 0, "batch at byte {fed} refused with {ret}");
-        window = buf[..at + n].to_vec();
+        window = buf[..at + span].to_vec();
         fed += n;
         batches += 1;
     }
@@ -9564,15 +9611,12 @@ fn assemble_whole_artifact(label: &str, src: &str) -> (usize, usize, usize) {
 /// that composition is not specific to one source.
 #[test]
 fn the_whole_artifact_assembly_holds_across_several_stages() {
+    // `verify_datalayout` and `verify_depth` were dropped when one-name-per-array
+    // took their artifacts under the 65,536-byte buffer -- at 50,848 bytes the
+    // whole body fits in one window, so nothing about COMPOSITION is exercised and
+    // the helper's own control says so. They are not gone from the suite; they are
+    // simply no longer large enough to test assembly across windows.
     const STAGES: &[(&str, &str)] = &[
-        (
-            "verify_datalayout",
-            include_str!("../src/selfhost/kel/verify_datalayout.kel"),
-        ),
-        (
-            "verify_depth",
-            include_str!("../src/selfhost/kel/verify_depth.kel"),
-        ),
         (
             "verify_yield",
             include_str!("../src/selfhost/kel/verify_yield.kel"),

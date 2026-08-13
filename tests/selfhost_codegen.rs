@@ -197,19 +197,26 @@ fn data_slot(ctx: &Ctx, data_name: &str, field: &str) -> i64 {
 }
 
 /// Resolve a `data.field[..]` array reference to its element-0 slot (base) and its
-/// length, from the per-element slot names `data.field[0]`, `data.field[1]`, ...
+/// length.
+///
+/// Every element of an array carries the ARRAY's name rather than a distinct
+/// `field[k]`: a per-element string defeated the name interner's dedup and made
+/// the string pool scale with the element count. The run is therefore found by
+/// EXACT name and its length is the run's own length. The older form keyed off a
+/// `field[` prefix, using the naming convention as a lookup index.
+///
+/// **This is the third copy of this lookup in the test suite** — the others are in
+/// `selfhost_parse.rs` and the data-slot model below. All three encoded the same
+/// convention independently, which is why changing it in `compiler.rs` broke six
+/// tests in three places rather than one.
 fn array_base_len(ctx: &Ctx, data_name: &str, field: &str) -> (i64, i64) {
-    let prefix = format!("{data_name}.{field}[");
-    let base =
-        ctx.data_slots
-            .iter()
-            .position(|n| n.starts_with(&prefix))
-            .unwrap_or_else(|| panic!("no array data slot with prefix `{prefix}`")) as i64;
-    let len = ctx
+    let want = format!("{data_name}.{field}");
+    let base = ctx
         .data_slots
         .iter()
-        .filter(|n| n.starts_with(&prefix))
-        .count() as i64;
+        .position(|n| n == &want)
+        .unwrap_or_else(|| panic!("no data slot named `{want}`")) as i64;
+    let len = ctx.data_slots.iter().filter(|n| *n == &want).count() as i64;
     (base, len)
 }
 
@@ -5231,9 +5238,16 @@ fn assemble_data_slots(
                         visibility,
                     });
                 } else {
-                    for k in 0..count {
+                    // ONE NAME FOR THE WHOLE ARRAY, mirroring the reference
+                    // compiler. A distinct `field[k]` per element defeated the
+                    // name interner's dedup and made the string pool and name
+                    // table scale with the ELEMENT COUNT. This model exists to
+                    // agree with `compiler.rs` byte for byte, so it tracks that
+                    // change rather than encoding the older convention.
+                    let array_name = format!("{bname}.{fname}");
+                    for _ in 0..count {
                         slots.push(DataSlot {
-                            name: format!("{bname}.{fname}[{k}]"),
+                            name: array_name.clone(),
                             visibility,
                         });
                     }
