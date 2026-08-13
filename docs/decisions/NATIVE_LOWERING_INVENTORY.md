@@ -5254,3 +5254,38 @@ would be wrong silently rather than loudly.
 
 Until then the 1-and-8 refusal is CORRECT and deliberately narrow: it refuses exactly the
 case the type cannot distinguish, rather than guessing.
+
+## THE COMPOSITE PROGRAMME, MEASURED AT CORPUS SCALE: 21 -> 37 OF 58 MODULES
+
+Measured 2026-08-13, after construction, flat and nested field reads, array elements,
+tuple fields, mixed widths and the byte conversions all landed with VM differentials.
+
+| | modules lowering end to end | refused |
+|---|---|---|
+| before the composite work | 21 of 58 (36.2%) | 37 |
+| **after** | **37 of 58 (63.8%)** | **21** |
+
+**Sixteen modules freed against a projection of twenty.** The blocker ranking predicted
+composites alone would free 20 of 58, and the realised figure is 16 — **80% of the
+projection, and the first delivery estimate on this branch that was too HIGH rather than
+wrong in kind.** The gap is accounted for: one module still needs `IsEnum`, and others that
+contain composites also contain a second unsupported class, which the slack measurement was
+designed to detect but does not eliminate.
+
+### The blocker ranking has inverted, and the same trap is waiting
+
+| first blocker | modules |
+|---|---|
+| `Const` holding a static string | **11** |
+| `CallVerifiedNative` | 5 |
+| `Stream` | 4 |
+| `IsEnum` | 1 |
+
+**Static strings are now the dominant first blocker, and that is exactly the reading that
+was wrong last time.** The slack measurement put strings at freeing **1** module alone,
+against a first-blocker count of 11 — a 91% loss, the largest of any class measured. A
+reader taking the table above at face value would repeat the error this branch already
+recorded twice.
+
+**Re-run the slack measurement before ranking the next item.** First-blocker counts are an
+ordering hint and nothing more, and this table is a first-blocker count.
