@@ -167,15 +167,19 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
     // a comment that contradicts itself is worse than a stale one, because a
     // reader cannot tell which half to trust.
     //
-    // Array indexing was the subject briefly and now lowers too, with
-    // `a_flat_array_element_agrees_with_the_vm` as its evidence. The subject is a
-    // NESTED composite read, chosen by running `probe_unsupported` rather than by
-    // guessing: four consecutive guesses at such a source cost four
-    // compile-and-run cycles while the instrument to answer it already existed.
-    // Nested reads now lower too, verified by
-    // `a_field_read_out_of_a_nested_body_agrees_with_the_vm`. The subject is a
-    // TUPLE field, again chosen by running `probe_unsupported`.
-    let src = "fn main(a: Word, b: Word) -> Word { let t = (a, b); t.1 }";
+    // **This paragraph is rewritten whole each time the subject moves, not
+    // appended to.** Four successive appends left a running commentary in which
+    // each sentence contradicted the one before it, and a reader could not tell
+    // which was current.
+    //
+    // Subjects so far, each retired the moment a differential agreed with the
+    // virtual machine: composite construction, array indexing, nested composite
+    // reads, tuple fields. **The subject is now `IsEnum`**, the last refusal
+    // `probe_unsupported` reports — and every subject since the second was chosen
+    // by running that probe rather than by guessing at a source, after four
+    // consecutive guesses cost four compile-and-run cycles.
+    let src = "enum E { A(Word), B(Word) }\n\
+                fn main(a: Word, b: Word) -> Word { let e = E::A(a); match e { E::A(x) => x, E::B(y) => y + b } }";
     let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
 
     // **The vacuity guard is on the REFUSAL, not on a chunk search.** Three
@@ -187,13 +191,13 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
     let ctx = Context::create();
     let lm2 = ctx.create_module("kel2");
     let err = lower_module(&ctx, &lm2, &m, LowerOptions::default()).expect_err(
-        "lower_module must refuse a tuple field read; a refusal that only \
+        "lower_module must refuse an enum discriminant test; a refusal that only \
              lower_chunk makes is not evidence the opcode is unsupported, which is \
              how the Op::Call version of this test rotted",
     );
     let rendered = format!("{err:?}");
     assert!(
-        rendered.contains("GetTupleField"),
+        rendered.contains("IsEnum"),
         "refused for the wrong reason: {rendered}"
     );
 }
@@ -2490,6 +2494,39 @@ fn a_byte_field_zero_extends_like_the_vm() {
         assert_eq!(
             native, vm,
             "a byte field disagrees for {args:?}: native={native}, vm={vm}"
+        );
+    }
+}
+
+/// Tuple fields, which reach the emitter through the `GetTupleField`
+/// normalisation rather than through arms of their own.
+///
+/// Element ONE, deliberately: element zero sits at offset zero and would pass
+/// even if the normalisation dropped the offset entirely.
+#[test]
+fn a_tuple_field_agrees_with_the_vm() {
+    let src = "fn main(a: Word, b: Word) -> Word { let t = (a, b); t.1 }";
+    for args in [[2, 3], [-7, 4], [i64::MIN, i64::MAX]] {
+        let (native, _) = composite_native_with_region(src, &args);
+        let vm = vm_result(src, &args);
+        assert_eq!(
+            native, vm,
+            "a tuple field disagrees for {args:?}: native={native}, vm={vm}"
+        );
+    }
+}
+
+/// A tuple of mixed widths, where the normalisation has to carry the offset the
+/// packing rule produced rather than a stride.
+#[test]
+fn a_mixed_width_tuple_agrees_with_the_vm() {
+    let src = "fn main(a: Word, b: Word) -> Word { let t = (1 as Byte, b); t.1 }";
+    for args in [[0, 9], [0, -3], [0, i64::MAX]] {
+        let (native, _) = composite_native_with_region(src, &args);
+        let vm = vm_result(src, &args);
+        assert_eq!(
+            native, vm,
+            "a mixed-width tuple disagrees for {args:?}: native={native}, vm={vm}"
         );
     }
 }
