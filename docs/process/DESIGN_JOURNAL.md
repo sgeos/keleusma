@@ -13,6 +13,52 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**A REPORTED DEFECT AT ONE SITE WAS A DEFECT AT EIGHT, AND THE REVERSAL IS WHY (2026-08-13).** The
+`v0.3.0` session reported that `docs/spec/GRAMMAR.md:747` states the runtime pushes
+`(high, low, flag)` when it pushes `(low, high, flag)`. Verified against the implementation before
+acting, then swept the repository rather than fixing the line reported. **Eight sites carried the
+error**, including two in `src/compiler.rs` sitting directly beside the `PopN(2)` whose correctness
+depends on the order, and one in `src/bytecode.rs` claiming `CheckedNeg` pushes in "the same shape:
+high, low, flag" **twenty lines below** the `CheckedAdd` doc that had already been corrected to say
+the opposite. A file contradicting itself within twenty lines is what an incremental single-site fix
+produces.
+
+**The reason this error is durable is that BOTH orders are real.** The runtime pushes low, high,
+flag. The surface form binds `overflow(h, l)`, high first. They are genuine opposites, so any given
+statement of "the high and low halves" is correct or incorrect depending on which layer it describes,
+and a reader checking one against the other finds a contradiction that looks like a typo in either
+place. Six further sites say `(high, low)` **correctly**, about the binding.
+
+**So the fix is not a search and replace.** Each of the fourteen sites was read in context and
+classified. `GRAMMAR.md` and `book/src/BIG_NUMBERS.md` now state **both** orders and why they differ,
+rather than correcting one and leaving the reversal to be rediscovered. The reason is load-bearing
+and is now recorded at the spec: an uncaptured operation lowers to the opcode plus `PopN(2)`, which
+discards the top two slots, so pushing low first is what leaves the wrapped low half as the value of
+the expression.
+
+**Two classes deliberately left alone, and the distinction is worth keeping.** `CHANGELOG.md:340` and
+`TASKLOG.md:320,331` carry the same error in **dated historical entries**, one of them describing a
+published release. Rewriting already-published text is a separate call and is flagged rather than
+taken. Separately, `src/vm.rs:7468` and `src/bytecode.rs:2377` say "high, low" while **narrating the
+previous wrong state**; correcting those would destroy the record of the correction.
+
+**A coupling found by looking rather than by failing.** `book/` is a bilingual mdbook driven by
+gettext, so editing an English source string invalidates the matching `book/po/ja.po` entry and the
+Japanese build silently falls back to English for that block. Checked before deciding: the catalogue
+is already **four `book/src` commits stale**, so translation lag is the project's existing accepted
+state and this change adds to it rather than introducing a new failure mode. Also checked, and this
+one could have bitten: `book/src/INSTRUCTION_SET.md` is **generated** from the spec and gated by
+`git diff --exit-code` in CI. It was not edited, and it was already correct. There are two
+big-number documents in the book and only one was the right target.
+
+**What made the sweep worth more than the fix.** The reported site was in a specification. The
+unreported ones were in compiler comments that a maintainer reads while changing the very code whose
+stack discipline they misdescribe. **A defect report names where a reader happened to look, not where
+the defect is** — the same shape as "the corpus cannot reach X is a fact about the corpus", arriving
+from the direction of a bug report rather than a test corpus.
+
+---
+
 **FOUR STAGES INSTEAD OF ONE, A RATIONALE I HAD RECORDED WRONGLY, AND A LINT CHECK OF MINE THAT COULD
 NOT FAIL (2026-08-12).** 148 tests, unchanged in count and cost. The capstone now runs over four
 stages spanning 105,848 to 480,416 bytes and 2 to 76 chunks.

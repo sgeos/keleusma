@@ -1159,10 +1159,11 @@ fn compile_scalar_shift_variable(
             fc.emit(Op::Const(one));
             fc.emit(Op::Const(wb_c));
             fc.emit(Op::GetLocal(lc));
-            // Word subtraction routes through the checked opcode; the low
-            // word of the (high, low, flag) triple is the wrapping result
-            // and the high/flag are discarded (Consolidation B removed the
-            // unchecked `Op::Sub` Int arm).
+            // Word subtraction routes through the checked opcode. The
+            // triple is pushed (low, high, flag), so the `PopN(2)` below
+            // discards flag and high and leaves the low word, which is the
+            // wrapping result (Consolidation B removed the unchecked
+            // `Op::Sub` Int arm).
             fc.emit(Op::CheckedSub);
             fc.emit(Op::PopN(2)); // word_bits - c
             fc.emit(Op::Shl); // 1 lsl (word_bits - c)
@@ -9869,7 +9870,9 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
 /// 1. Emit the operands and the checked opcode (`CheckedAdd`,
 ///    `CheckedSub`, `CheckedMul`, `CheckedNeg`, or `Div`/`Mod`
 ///    with stamped overflow contract). The stack carries
-///    `[high, low, flag]` after the opcode.
+///    `[low, high, flag]` after the opcode, bottom to top. Note
+///    that this is the reverse of the arm binding order: the
+///    surface form `overflow(h, l)` binds high first.
 /// 2. Stash all three slots into temporary locals.
 /// 3. Wrap the arms in a virtual `Loop` so the first matching
 ///    arm can `Break` out with its body's result on the stack.
@@ -9954,8 +9957,8 @@ fn compile_checked(
                 _ => None,
             });
 
-    // Emit the checked operation. Each path leaves [high, low,
-    // flag] on the stack.
+    // Emit the checked operation. Each path leaves [low, high,
+    // flag] on the stack, bottom to top.
     match op_expr {
         Expr::BinOp {
             op: BinOp::Add,
