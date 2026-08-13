@@ -155,42 +155,45 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
     // refusal that no longer meant "outside the subset". A self-check on the
     // OPCODE is not a self-check on the REASON.
     //
-    // `Op::NewComposite` is the current boundary and does not have that
-    // weakness, because no entry point lowers it at all. It belongs to
     // **BOUNDARY MOVED 2026-08-13, and only after the oracle agreed.** Flat
-    // composite construction WAS the subject here. `lower_module` now lowers it,
+    // composite construction was the subject here. `lower_module` now lowers it,
     // and `a_flat_struct_agrees_with_the_vm` plus its second-field companion are
     // the evidence — moving a must-not-fire boundary on the reasoning that an
     // admission looks safe is exactly what this file exists to prevent.
     //
-    // The subject is now array indexing, which is still refused.
-    let src = "fn main(a: Word, b: Word) -> Word { let xs = [a, b]; xs[0] }";
+    // A sentence claiming `Op::NewComposite` "does not have that weakness,
+    // because no entry point lowers it at all" was left stranded here by a
+    // scripted edit, asserting the opposite of the paragraph above it. Removed:
+    // a comment that contradicts itself is worse than a stale one, because a
+    // reader cannot tell which half to trust.
+    //
+    // Array indexing was the subject briefly and now lowers too, with
+    // `a_flat_array_element_agrees_with_the_vm` as its evidence. The subject is a
+    // NESTED composite read, chosen by running `probe_unsupported` rather than by
+    // guessing: four consecutive guesses at such a source cost four
+    // compile-and-run cycles while the instrument to answer it already existed.
+    let src = "struct I { a: Word }
+               struct O { i: I, b: Word }
+               fn main(a: Word, b: Word) -> Word { let o = O { i: I { a: a }, b: b }; o.i.a }";
     let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
 
-    let entry = m
-        .chunks
-        .iter()
-        .find(|c| c.ops.iter().any(|op| matches!(op, Op::GetIndex(_))))
-        .expect("this test is vacuous unless some chunk emits Op::GetIndex");
-
+    // **The vacuity guard is on the REFUSAL, not on a chunk search.** Three
+    // attempts to locate the offending op by pattern or by debug rendering
+    // reported "no such op" for a module `lower_module` demonstrably refuses by
+    // name — a test defect that reads exactly like a corpus fact. Asserting that
+    // the refusal names the construct is stronger anyway: it pins WHICH opcode is
+    // unsupported, which a chunk search never did.
     let ctx = Context::create();
-    let lm = ctx.create_module("kel");
-    assert!(
-        lower_chunk(&ctx, &lm, entry, "kel_entry", LowerOptions::default()).is_err(),
-        "array indexing is outside the supported subset and must be refused, not lowered"
-    );
-
-    // MUST-NOT-FIRE CASE, and the one whose absence let the `Op::Call` version
-    // rot: the WHOLE-MODULE path must refuse it too. Without this, "refused"
-    // can mean nothing more than "this entry point cannot see enough context",
-    // which is what happened when calls were implemented — and what would now
-    // happen for composites, since `lower_chunk` refuses those only for want of
-    // the region pointer.
     let lm2 = ctx.create_module("kel2");
+    let err = lower_module(&ctx, &lm2, &m, LowerOptions::default()).expect_err(
+        "lower_module must refuse a nested composite read; a refusal that only \
+             lower_chunk makes is not evidence the opcode is unsupported, which is \
+             how the Op::Call version of this test rotted",
+    );
+    let rendered = format!("{err:?}");
     assert!(
-        lower_module(&ctx, &lm2, &m, LowerOptions::default()).is_err(),
-        "lower_module must refuse it too; a refusal that only lower_chunk makes \
-         is not evidence the opcode is unsupported"
+        rendered.contains("FlatNested"),
+        "refused for the wrong reason: {rendered}"
     );
 }
 
@@ -2219,6 +2222,25 @@ fn the_second_field_of_a_flat_struct_agrees_with_the_vm() {
         assert_eq!(
             native, vm,
             "second field disagrees for {args:?}: native={native}, vm={vm}"
+        );
+    }
+}
+
+/// Array element reads, with the index VARIED at run time.
+///
+/// A constant index would let a lowering that ignored the stride entirely pass,
+/// which is the same defect the second-field struct case guards against one level
+/// down. Element zero and element one must both be right, and the index arrives
+/// as a parameter so it cannot be folded away.
+#[test]
+fn a_flat_array_element_agrees_with_the_vm() {
+    let src = "fn main(a: Word, i: Word) -> Word { let xs = [a, a + 1]; xs[i] }";
+    for args in [[10, 0], [10, 1], [-3, 0], [-3, 1], [i64::MAX, 1]] {
+        let native = composite_native_result(src, &args);
+        let vm = vm_result(src, &args);
+        assert_eq!(
+            native, vm,
+            "array element disagrees for {args:?}: native={native}, vm={vm}"
         );
     }
 }

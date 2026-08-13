@@ -2040,6 +2040,63 @@ fn lower_chunk_body<'ctx>(
                 let as_int = st.b.build_ptr_to_int(base, i64t, "cbodyint").unwrap();
                 st.push_w(as_int, Width::Bytes(u32::from(*byte_size)));
             }
+            // Flat array element read. The same address-plus-typed-load as a
+            // field, with a RUNTIME index and a compile-time element size.
+            //
+            // The bound is not checked here: the compiler emits `Op::BoundsCheck`
+            // before the index, which this backend already lowers and which peeks
+            // rather than pops for exactly this reason.
+            Op::GetIndex(keleusma::bytecode::ArrayElem::Flat { kind }) => {
+                use keleusma::value_layout::ScalarKind as SK;
+                let elem: u64 = match kind {
+                    SK::Int => 8,
+                    SK::Byte | SK::Bool => 1,
+                    other => {
+                        return Err(LowerError::UnsupportedOp(format!(
+                            "GetIndex reading {other:?} is not lowered"
+                        )));
+                    }
+                };
+                // The index is popped BEFORE the array, matching the virtual
+                // machine's order; reversing them reads the array handle as an
+                // index and indexes by a pointer.
+                let index = st.pop();
+                let addr_int = st.pop();
+                let base = st
+                    .b
+                    .build_int_to_ptr(addr_int, ctx.ptr_type(AddressSpace::default()), "cibase")
+                    .unwrap();
+                let byte =
+                    st.b.build_int_mul(index, i64t.const_int(elem, false), "cistride")
+                        .unwrap();
+                let addr = unsafe {
+                    st.b.build_in_bounds_gep(i8t, base, &[byte], "ciaddr")
+                        .unwrap()
+                };
+                let (v, w) = if elem == 8 {
+                    let iv =
+                        st.b.build_load(i64t, addr, "ciint")
+                            .unwrap()
+                            .into_int_value();
+                    iv.as_instruction()
+                        .expect("a load is an instruction")
+                        .set_alignment(1)
+                        .expect("1 is a power of two");
+                    (iv, 8u32)
+                } else {
+                    let bv =
+                        st.b.build_load(i8t, addr, "cibyte")
+                            .unwrap()
+                            .into_int_value();
+                    bv.as_instruction()
+                        .expect("a load is an instruction")
+                        .set_alignment(1)
+                        .expect("1 is a power of two");
+                    // Zero, not sign: a `Byte` holds `0..=255` in a full slot.
+                    (st.b.build_int_z_extend(bv, i64t, "cizext").unwrap(), 1u32)
+                };
+                st.push_w(v, Width::Bytes(w));
+            }
             // Flat field read: a constant offset from the body address and one
             // unaligned typed load, which is what `GetData` already does.
             Op::GetField(keleusma::bytecode::StructField::Flat { offset, kind }) => {
