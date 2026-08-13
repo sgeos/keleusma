@@ -412,6 +412,54 @@ test helpers). Store it.
 `SHARED_LAYOUT` is 43,032 bytes of `codegen`'s 154,880 after part one, so roughly
 27% of what remains. Part one delivered more for less.
 
+##### MEASURED 2026-08-13: THE RUNS ARE ENORMOUS, AND A CONCERN I RAISED IS REFUTED
+
+**The section above is silent on the one number that decides the increment.** A
+run record needs `first_slot`, `run` and `stride` on top of the existing fields,
+which takes `SharedSlotRecord` from ONE word to TWO. So the encoding is a
+**pessimisation** unless the mean run exceeds 2, and neither the plan nor the
+27% figure measured the distribution that depends on. I raised that as a blocker
+before writing any code. **It is refuted, by four orders of magnitude.**
+
+Measured across all eleven stage sources (`tests/shared_layout_runs.rs`), with
+the `u16` `run` field's 65,535 chunking accounted for:
+
+| | slots | runs | mean run | table now | run-length | |
+|---|---|---|---|---|---|---|
+| `lexer` | 395,778 | 3 | 131,926 | 3,166,224 | 144 | |
+| `verify_typed` | 56,134 | 1 | 56,134 | 449,072 | 16 | |
+| `wire` | 91,143 | 6 | 15,190 | 729,144 | 112 | |
+| `codegen` | 5,379 | 1 | 5,379 | 43,032 | 16 | |
+| **all eleven** | **643,276** | **18** | **35,738** | **5,146,208** | **400** | |
+
+**Break-even is a mean run of 2. The measurement is 35,738.** The table does not
+shrink by 27%, it effectively disappears: eighteen records stand for the entire
+shared layout of every stage this project compiles.
+
+**Two consequences for the design, one of which simplifies it.**
+
+- **The `first_slot` binary search is still right, but it is no longer the
+  interesting cost.** With one to six records per stage, even a linear scan
+  would be fast. Binary search is kept anyway, because "fast in practice on
+  today's corpus" is not the property this project sells — a scan's bound is
+  data-dependent, and a `log2(records)` bound is static. The hot-path warning
+  above stands as reasoning even though the magnitude collapsed.
+- **The `u16` `run` field is load-bearing rather than incidental.** `lexer`'s
+  largest run is 393,216, so it chunks into seven records exactly as
+  `DATA_SLOTS` does. Counting logical runs rather than emitted records
+  understates `lexer` sevenfold, which is the kind of error that would make a
+  projection look better than the artifact.
+
+**Why the measurement is now a test rather than a note.** The payoff is a
+property of how stages DECLARE shared data — a few large arrays — not a property
+of the encoder. A stage that declared many small distinct shared slots would
+fragment the runs and silently turn the encoding into a size regression that
+nothing else would report. `tests/shared_layout_runs.rs` fails first, and it
+carries a control on **its own guard**: a fully fragmented synthetic layout is
+asserted to be rejected by the same threshold, because a check passing by four
+orders of magnitude is otherwise indistinguishable from one that can no longer
+report anything.
+
 #### CORRECTION: THE PROJECTION STANDS. WHAT THE PLAN OMITTED IS ARTIFACT SIZE (2026-08-11)
 
 **Two earlier commits on this branch claimed the 77% projection was "refuted by about a factor of
