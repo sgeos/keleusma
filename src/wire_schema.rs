@@ -1848,7 +1848,7 @@ pub struct DataSlotRecord {
 ///
 /// # Why `first_slot` is stored rather than derived
 ///
-/// [`AuxDataLayout::shared_slot`] resolves a LOGICAL slot index on the
+/// [`DataLayoutTable::shared_slot`] resolves a LOGICAL slot index on the
 /// `get_shared`/`set_shared` path, which runs on every host access to a shared
 /// slot. Deriving each run's first index would mean a prefix sum, so a lookup
 /// would scan. Storing it makes the lookup a binary search whose bound is
