@@ -345,3 +345,41 @@ fn spike_report_locally_evident_operands() {
     println!("     the abstract interpreter, and neither fork has to be taken.");
     println!("================");
 }
+
+/// **The arity rule, pinned.** A module that constructs a composite takes the
+/// three trailing pointers even when it declares no data slot.
+///
+/// Deciding arity per chunk, or along a second dimension, would make a caller
+/// reproduce the backend's analysis to get the signature right — the same defect
+/// the shared/private pair already refuses. This asserts the rule rather than
+/// leaving it to a reader of the emitter.
+#[test]
+fn a_composite_module_takes_the_region_pointer() {
+    use inkwell::context::Context;
+    let src = "struct P { x: Word, y: Word }\n\
+               fn build(a: Word) -> Word { let p = P { x: a, y: a }; p.y }\n\
+               loop main(r: Word) -> Word { yield build(r) }\n";
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    assert!(
+        m.chunks
+            .iter()
+            .any(|c| c.ops.iter().any(|o| matches!(o, Op::NewComposite(_)))),
+        "the control source built no composite, so this asserts nothing"
+    );
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    // Lowering may still refuse for unrelated reasons; the signature is decided
+    // before any body is emitted, so declare-only is what is under test here.
+    let _ = keleusma_native::lower_module(&ctx, &lm, &m, keleusma_native::LowerOptions::default());
+    let f = lm.get_function("kel_chunk_0").expect("chunk 0 declared");
+    let ptrs = f
+        .get_type()
+        .get_param_types()
+        .iter()
+        .filter(|t| t.is_pointer_type())
+        .count();
+    assert_eq!(
+        ptrs, 3,
+        "a composite-building module must take shared, private and region pointers"
+    );
+}
