@@ -1798,6 +1798,43 @@ pub fn module_to_signed_wire_bytes(
     module: &Module,
     signing_key: &ed25519_dalek::SigningKey,
 ) -> Result<Vec<u8>, LoadError> {
+    module_to_signed_wire_bytes_opt(module, signing_key, false)
+}
+
+#[cfg(feature = "signatures")]
+/// Signs a module whose auxiliary body carries a (72,64) SECDED parity plane
+/// per region.
+///
+/// # Why both exist, and why the plane is inside the signature
+///
+/// A parity plane repairs a flipped bit; a signature refuses a changed byte.
+/// Composing them has a right order, and the plane being **inside** the signed
+/// span is what makes the right order available: a repair reproduces the
+/// original bytes exactly, so the signature computed over those bytes verifies
+/// against the repaired artifact.
+///
+/// **The repair must precede the verification, and every later repair must be
+/// followed by a fresh verification.** A signature check is a statement about
+/// the bytes at the moment it ran, and a scrub is a modification. See
+/// [`crate::wire_schema::SchemaBuilder::with_ecc`] and
+/// `docs/decisions/ECC_SIGNATURE_ORDERING.md`.
+///
+/// # Errors
+///
+/// As [`module_to_signed_wire_bytes`].
+pub fn module_to_signed_wire_bytes_with_ecc(
+    module: &Module,
+    signing_key: &ed25519_dalek::SigningKey,
+) -> Result<Vec<u8>, LoadError> {
+    module_to_signed_wire_bytes_opt(module, signing_key, true)
+}
+
+#[cfg(feature = "signatures")]
+fn module_to_signed_wire_bytes_opt(
+    module: &Module,
+    signing_key: &ed25519_dalek::SigningKey,
+    ecc: bool,
+) -> Result<Vec<u8>, LoadError> {
     use ed25519_dalek::Signer;
 
     // Re-run the per-chunk encoding so we have the opcode stream,
@@ -1846,8 +1883,12 @@ pub fn module_to_signed_wire_bytes(
         private_data_bytes: module.private_data_bytes,
         schema_hash: module.schema_hash,
     };
-    let aux_bytes = crate::wire_schema::encode_aux_body(&aux)
-        .map_err(|e| LoadError::Codec(format!("aux body encode failed: {}", e)))?;
+    let aux_bytes = if ecc {
+        crate::wire_schema::encode_aux_body_with_ecc(&aux)
+    } else {
+        crate::wire_schema::encode_aux_body(&aux)
+    }
+    .map_err(|e| LoadError::Codec(format!("aux body encode failed: {}", e)))?;
     let mut operand_pool_bytes: Vec<u8> =
         Vec::with_capacity(operand_pool.len() * OPERAND_POOL_ENTRY_BYTES);
     for entry in &operand_pool {
