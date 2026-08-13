@@ -16,7 +16,7 @@ misleading a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`, or a feature branch cut from it.
-- **Parent commit**: `6715d424`
+- **Parent commit**: `4a20a8ab`
 - **Written**: 2026-08-11
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
@@ -38,18 +38,26 @@ this file**.
    (newest first), [`TASKLOG.md`](./TASKLOG.md).
 4. **Read [`AUTONOMOUS_IMPLEMENTATION_LOOP.md`](./AUTONOMOUS_IMPLEMENTATION_LOOP.md).**
 
-## FIRST ACTION: read the retraction before trusting the plan's residency numbers
+## FIRST ACTION: nothing is in flight; read this section, then pick from THE NEXT WORK
 
-**Nothing is in flight.** PRs #9-#13, #15, #17, #19, #21 and #22 all merged on 22/22 CI green, each at the commit CI ran. Even-numbered
-PRs from #14 on are the other session's; **tell us apart by BASE BRANCH, not author** -- both sessions
-use the same account, so `--author @me` matches theirs too. Confirm with `gh pr list --state open`; if `gh run list --branch v0.2.3 --limit 1` is red, read
-its log first.
+**No pull request of this line is open.** Confirm with `gh pr list --state open` — anything based on
+`v0.3.0` is the OTHER session's. **Both lines share a GitHub account, so `--author @me` matches
+theirs too; tell them apart by BASE BRANCH.**
 
-**Then read the CORRECTION section in
-[`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md).** Two
-commits on this branch, `db700212` and `5bec2df8`, published a residency "refutation" and a
-~321,000-slot budget that are **withdrawn** by `69a32862`. If you have those numbers in context from
-a summary rather than from the file, they are wrong. The plan's original 77% projection stands.
+**Two things in this file were retracted and you should not act on their earlier forms.** The
+residency "refutation" and its ~321,000-slot budget are withdrawn (see
+[`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md)); the
+plan's original 77% projection stands. And the claim that `codegen.kel` lacked a multiheaded-`fn`
+capability was wrong — no capability was missing.
+
+**THE OTHER LINE MAY HAVE UNCOMMITTED WORK OR BRANCHES IN THIS CHECKOUT.** It happened on
+2026-08-12 after a compaction left it believing it owned `v0.2.3`. Its uncommitted changes were in
+this working tree, survived a `git checkout` only because a tracked file was dirty, and then
+vanished — recovered from a scratchpad copy. Two finished branches were sitting unexamined while an
+hour was spent rebuilding a worse version of the same work.
+
+**So: `git status` AND `git branch --list` before writing anything on a shared surface.** A branch
+survives what a dirty working tree does not.
 
 ## THE WORKFLOW CHANGED TODAY. CI GATES FEATURE BRANCHES.
 
@@ -80,22 +88,19 @@ three PRs (#2, #3, #6).
 
 ## THE STATE
 
-| Ref | Commit | Status |
-|---|---|---|
-| `v0.2.3` | `6715d424` | ten PRs merged in, pushed |
-| PR #9 | `ae01441f` | **MERGED**, 22/22 green, at the commit CI ran |
-| PR #10 | `3b93e351` | **MERGED**, 22/22 green, at the commit CI ran |
-| PR #11 | `eaf95524` | **MERGED**, 22/22 green, at the commit CI ran |
-| PR #12 | `ad0a1bff` | **MERGED**, 22/22 green, at the commit CI ran |
-| PR #13 | `fa4badb5` | **MERGED**, 22/22 green, at the commit CI ran |
-| PR #15 | `af980528` | **MERGED**, 22/22 green, at the commit CI ran |
-| PR #17 | `7edbd767` | **MERGED**, 22/22 green, at the commit CI ran |
-| PR #19 | `2cd653dc` | **MERGED**, 22/22 green, at the commit CI ran |
-| PR #21 | `c2700d45` | **MERGED**, 22/22 green — **the capstone** |
-| PR #22 | `50a567f5` | **MERGED**, 22/22 green — capstone over four stages |
-| `v0.3.0` | — | same workflow; their last local gate is STALLED and irrelevant |
+`v0.2.3` is at `4a20a8ab`, everything below merged and CI-green at the commit CI ran.
 
-Eight PRs merged on this line today, every one CI-gated, **with the local machine idle throughout**.
+| merged 2026-08-12/13 | |
+|---|---|
+| one slot name per array | artifacts −52 to −59% |
+| multihead predicate (v0.3.0's work, reviewed here) | two silent miscompiles closed |
+| `main` yields what `emit_next` returns | `codegen.kel` now lowers |
+| `DATA_SLOTS` run-length encoded | artifacts −75 to −79% cumulative |
+| `perf_canary` out of the routine pre-push tier | |
+| the fall-through message names `Reset` | |
+
+**Artifact sizes, measured**: `wire.kel` 3,714,560 → **789,064**; `verify_datalayout` 105,848 →
+**26,296**. No opcode, `BYTECODE_VERSION`, or language change in any of it.
 
 ## WHERE THE DRIVER IS
 
@@ -110,53 +115,33 @@ is `STRUCT_TEMPLATES`, and it is **structural rather than pending**: the boxed c
 needs a non-flat type, the only one is `Text` under a narrow word, and this suite is gated out of
 narrow-word builds.
 
-## THE MECHANICAL ARC IS COMPLETE. WHAT IS LEFT IS NOT MECHANISM.
+## THE NEXT WORK, RANKED, WITH THE TRAP NAMED FOR EACH
 
-**PR #21 closed it.** Keleusma's own output builds `verify_datalayout`'s entire 105,848-byte
-auxiliary body — header area, directory and every region — byte-identical to `encode_aux_body`. The
-driver has all five computed values, batching on both paths, window positioning across all seventeen
-record kinds, multi-window assembly, and now whole-artifact composition.
+**1. Option C part two: run-length `SHARED_LAYOUT`.** 43,032 bytes of `codegen`'s 154,880, so ~27%
+of what remains — less than part one delivered.
 
-**Do NOT reach for another emitter slice. There is no obvious one left**, and inventing one is how a
-programme starts producing mechanisms that work and were not needed. Three candidates, in the order
-I would take them:
+> **IT IS NOT PART ONE AGAIN.** Part one was nearly free because its only consumer COUNTED slots.
+> `Vm::shared_layout_entry` resolves a LOGICAL slot index against the artifact in place on every
+> `get_shared`/`set_shared`, so run-length encoding turns an O(1) index into a scan on a hot path.
+> A correct design carries `first_slot` per record for binary search, or expands at decode time —
+> and the latter contradicts the in-place zero-copy reading the container exists for. **Store the
+> stride, do not derive it**: deriving needs a kind-to-size table on both the Rust and Keleusma
+> sides, and cross-language duplication of exactly that shape produced three defects on 2026-08-12.
+> Full reasoning in the plan document.
 
-1. ~~A second stage through the capstone~~ — **DONE in PR #22, and the reason given here was wrong.**
-   A larger stage does NOT exercise multi-window assembly inside composition: every batch is emitted
-   at window base zero and spliced immediately, so no window accumulates however large the region.
-   What it bought was breadth, over four stages. **Do not trust a rationale in this section without
-   reading the code it describes** — this one survived a day before anyone checked it.
-2. **The residency question, which is the operator's.** About **40.7 bytes of artifact per data
-   slot**, one slot per array element, ~2.4 s of compile time per megabyte declared. That is what
-   makes `lexer` expensive rather than impossible, and it is a representation decision rather than an
-   increment.
-3. **`parse` and `verify_typed` end to end**, which need the accumulator question answered first.
+**2. The (72,64) SECDED plane, end to end.** The operator has called this a gap to close;
+prioritisation is open. It has unit tests in `keleusma-wire/src/ecc.rs` including exhaustive
+single-bit correction, and **no artifact the shipping encoder produces ever carries a plane**. Given
+radiation hardness is the stated value proposition, a feature proven only in isolation is the
+weakest part of that claim.
 
-**FOUR CONSECUTIVE GAPS HERE NEEDED A CALLER, NOT AN EMITTER.** Generic batching, multi-window
-assembly, the capstone, and `DEBUG_POOL` before them. **Check first, every time.** The cost of not
-checking is not a wrong answer; it is a mechanism that works, passes its tests, and did not need to
-exist. On the capstone the check was one grep — the artifact's only checksum covers twelve prologue
-bytes, not the body — and had it gone the other way the increment would have needed an incremental
-CRC carried across windows.
+**3. Do NOT reach for another emitter slice.** The mechanical arc is complete: five computed values,
+batching on both paths, window positioning across seventeen kinds, multi-window assembly, and
+whole-artifact composition over six real stages. Inventing another is how a programme starts
+producing mechanisms that work and were not needed.
 
-**Do NOT do these two.** Reasoning in
-[`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md):
-
-- **Replacing the linear dedup scan.** No early exit in a total language; inputs capped at 256.
-- **Computing the chunk record's name index.** `map[j] == j` always.
-
-**Constraints to carry into any new command.** `dispatch_driver` holds 18 arms, `dispatch_driver2`
-13, `emit_at` 17 with flat bodies. The cap is a depth budget of 24 shared between chain position and
-arm-body nesting: 20 arms with a no-argument body, 18 with a nested call. Exceeding it in the test
-harness is a stack overflow and SIGABRT, not a parse error.
-
-**CHECK EXIT CODES WITH `PIPESTATUS`, NEVER `$?` AFTER A PIPE.** `cargo clippy ... | tail; echo $?`
-reports tail's status. Every local "lint clean" reported that way through PR #22 was read off a
-control that could not fire; the pre-push gate is what caught the real error. Same defect class the
-vacuity tests guard against, in the tooling rather than the code.
-
-**CUT THE FEATURE BRANCH AS THE FIRST ACTION**, before any edit. PR #15's code went straight onto
-`v0.2.3`, caught only because nothing had been pushed. The moment to guard is just after a merge.
+**Two standing traps.** Do not replace the linear dedup scan (no early exit in a total language;
+inputs capped at 256). Do not compute the chunk record's name index (`map[j] == j` always).
 
 ## THE ONE RULE THAT MATTERED MOST TODAY
 
@@ -214,6 +199,24 @@ guards are unreachable and deliberately untested; that is recorded at the code.
   or `Reset` — a constraint on anything a backend emits.
 
 ## METHOD RULES THIS ARC PAID FOR
+
+- **`git branch --list` before writing on a shared surface.** An hour went into rebuilding a worse
+  version of work sitting one command away. Finding ONE artefact of the other line should prompt a
+  search for others.
+- **Back up someone else's uncommitted work the moment you find it.** Theirs vanished between two
+  commands and was recovered only from a scratchpad copy.
+- **Capture exit codes with `PIPESTATUS`, never `$?` after a pipe.** `cargo clippy ... | tail; echo
+  $?` reports tail's status. Every local "lint clean" through 2026-08-12 was read off a control that
+  could not fire, and a background task's wrapper exit code is not the tool's either.
+- **Assert that an edit matched.** Two `replace` calls silently did nothing after `cargo fmt`
+  rewrapped their targets, leaving a test whose message said `CHUNKS` while its code read
+  `SHARED_LAYOUT`. A silent no-op edit is worse than a crash: it produces a plausible wrong state.
+- **A stale comment is not a diagnosis.** "The multiheaded guard dispatch are the next increment"
+  explained a failure that had not been traced, and became a wrong cost estimate sent to the other
+  line.
+- **When judging whether a test is affordable, the denominator is the test that GOVERNS the suite**,
+  not the one being edited. And discount for machine load rather than merely noting it — this
+  machine swings four- to fivefold.
 
 - **"The corpus cannot reach X" is a fact about the corpus.** Whether a SOURCE can reach X is a
   separate question. Asking it overturned two committed conclusions.
