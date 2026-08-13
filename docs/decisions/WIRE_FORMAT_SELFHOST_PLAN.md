@@ -378,6 +378,40 @@ ordering read out of `SchemaBuilder`. No Keleusma emitter has been run against a
 peak figure is a projection of the Rust encoder's structure onto a design that does not exist yet.
 Treat 77% as an estimate to be confirmed by the first driver, not as a measurement.
 
+#### OPTION C PART TWO IS NOT PART ONE AGAIN: `SHARED_LAYOUT` IS ON A HOT PATH (2026-08-13)
+
+Part one run-length encoded `DATA_SLOTS` and was nearly free at runtime: the only
+consumer, `src/vm.rs`, merely COUNTED slots, so summing runs replaced 91,183
+iterations with about 60 and was faster.
+
+**`SHARED_LAYOUT` has a different consumer and the difference is categorical.**
+`Vm::shared_layout_entry` calls `dl.shared_slot(slot)` with a LOGICAL slot index,
+reading the artifact in place, and it runs on every `get_shared` and `set_shared`
+— every host access to a shared slot. Run-length encoding turns that O(1) array
+index into a scan over runs.
+
+**So the two-word `run + stride` record described earlier is incomplete.** It is
+right about size and silent about cost. A correct design needs one of:
+
+- **A `first_slot` field per record**, so a logical index resolves by binary
+  search over runs. `offset: u32, kind: u8, reserved: u8, len: u16, first_slot:
+  u32, run: u16, stride: u16` fits two words and keeps lookup O(log runs).
+- **Expansion at decode time into an owned `Vec`**, which contradicts the in-place
+  zero-copy reading the container was built for (P10) and is therefore the worse
+  answer here, not merely the slower one.
+
+**The stride is derivable but should not be derived.** A scalar run advances by
+`kind.size_in_bytes()` and a composite run by `len`. Deriving it would put a
+kind-to-size table on BOTH the Rust and Keleusma sides, and cross-language
+duplication of exactly this shape produced three separate defects on 2026-08-12
+(the multihead predicate in three copies, the `DATA_SLOTS` row decoder reading a
+`u16` as a byte, and the naming convention encoded as a lookup index in three
+test helpers). Store it.
+
+**Expected saving, for judging whether the complexity earns its place**:
+`SHARED_LAYOUT` is 43,032 bytes of `codegen`'s 154,880 after part one, so roughly
+27% of what remains. Part one delivered more for less.
+
 #### CORRECTION: THE PROJECTION STANDS. WHAT THE PLAN OMITTED IS ARTIFACT SIZE (2026-08-11)
 
 **Two earlier commits on this branch claimed the 77% projection was "refuted by about a factor of
