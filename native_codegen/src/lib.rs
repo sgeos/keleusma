@@ -1241,14 +1241,25 @@ fn lower_chunk_body<'ctx>(
 
     // Every local this chunk writes anywhere, computed up front so the decision
     // does not depend on instruction order. See the `GetLocal` arm.
-    let written_locals: std::collections::BTreeSet<usize> = chunk
-        .ops
-        .iter()
-        .filter_map(|o| match o {
-            Op::SetLocal(n) => Some(*n as usize),
-            _ => None,
-        })
-        .collect();
+    // How many times each local is WRITTEN anywhere in the chunk, counted up
+    // front so the rule does not depend on instruction order.
+    //
+    // A local written EXACTLY ONCE has an unambiguous width: there is no second
+    // write to disagree with, whatever the control flow. That admits the `let`
+    // bindings the corpus is built from, which the previous rule refused
+    // outright — every composite assembled from a `let` was rejected for want of
+    // a width, including every array of arrays.
+    //
+    // Two or more writes stay unknown. Joining them would need a real dataflow
+    // pass: a LINEAR walk cannot see a back edge, so a local rewritten later in
+    // a loop body would be read at the width of the textually earlier write and
+    // packed wrongly on every iteration after the first.
+    let mut local_write_count: BTreeMap<usize, u32> = BTreeMap::new();
+    for o in &chunk.ops {
+        if let Op::SetLocal(n) = o {
+            *local_write_count.entry(*n as usize).or_default() += 1;
+        }
+    }
 
     // Operand-stack depth at each merge point, recorded per incoming edge.
     let mut tdepth: BTreeMap<usize, usize> = BTreeMap::new();
@@ -1314,19 +1325,31 @@ fn lower_chunk_body<'ctx>(
                 // the width of the write that appears earlier in the text and
                 // packed wrongly on every iteration after the first. Anything
                 // written is unknown, which costs coverage and cannot mispack.
-                let w = if written_locals.contains(&(*n as usize)) {
-                    Width::Unknown
-                } else {
-                    st.local_widths
-                        .get(*n as usize)
-                        .copied()
-                        .unwrap_or(Width::Unknown)
+                // Trusted when the local is never written (a parameter, seeded
+                // from the signature) or written exactly once. In the
+                // single-write case the width is whatever that write recorded;
+                // a read that textually PRECEDES the write finds no recorded
+                // width and stays unknown, which is the conservative direction.
+                let idx = *n as usize;
+                let w = match local_write_count.get(&idx).copied().unwrap_or(0) {
+                    0 | 1 => st.local_widths.get(idx).copied().unwrap_or(Width::Unknown),
+                    _ => Width::Unknown,
                 };
                 st.push_w(v, w);
             }
             Op::SetLocal(n) => {
+                // Read the width BEFORE popping; `pop` lowers the depth and
+                // `width_at` is relative to it.
+                let w = st.width_at(0);
                 let v = st.pop();
                 st.b.build_store(st.locals[*n as usize], v).unwrap();
+                let idx = *n as usize;
+                if local_write_count.get(&idx).copied().unwrap_or(0) == 1 {
+                    if st.local_widths.len() <= idx {
+                        st.local_widths.resize(idx + 1, Width::Unknown);
+                    }
+                    st.local_widths[idx] = w;
+                }
             }
             Op::PopN(n) => {
                 st.depth -= *n as usize;

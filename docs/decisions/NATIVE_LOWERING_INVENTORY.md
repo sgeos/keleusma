@@ -5226,3 +5226,31 @@ about field width.
 **This is the third time on this branch that a rule inferred from uniform-word shapes has
 been wrong**, after the eight-bytes-per-field stride and the adjacency window. The corpus
 cannot distinguish these cases, so the compiler has to be asked directly.
+
+### `Width` CANNOT EXPRESS THE NEXT CASE: a value that IS data versus one that POINTS to it
+
+Surfaced 2026-08-13 by trusting single-write locals, which moved `[[a, b], [a, b]]` from
+"operand of unknown packed width" to "has a 16-byte field; only 1 and 8 are lowered". The
+second message is progress and it is also a dead end as the type currently stands.
+
+**A composite operand is its ADDRESS; a scalar operand is its VALUE.** Placing a scalar is a
+store of the value. Placing a nested composite body is a **copy of `n` bytes from the
+address the operand holds**. `Width::Bytes(n)` cannot tell the emitter which to do.
+
+**And the ambiguity is real, not theoretical: an eight-byte nested composite body and a
+`Word` are both `Bytes(8)`.** A single-field struct wrapping a word is exactly that, and the
+corpus builds 80 composites of `(8, 1)`. Emitting a scalar store for one would write the
+POINTER into the parent body instead of the pointee — a silent wrong answer of the worst
+kind, since every field offset downstream would still look correct.
+
+**The fix is to split the type**, not to special-case sizes: a `Scalar(bytes)` that is stored
+and a `Body(bytes)` that is copied. `NewComposite` already knows which it pushes, since it
+pushes an address; `GetField`/`GetIndex` know from the `kind` they read. Every other producer
+pushes scalars.
+
+**Do not reach for a size heuristic.** "Eight bytes means a word" is the same shape as the
+uniform-word inferences that have now been wrong three times on this branch, and this one
+would be wrong silently rather than loudly.
+
+Until then the 1-and-8 refusal is CORRECT and deliberately narrow: it refuses exactly the
+case the type cannot distinguish, rather than guessing.
