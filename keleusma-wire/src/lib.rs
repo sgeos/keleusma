@@ -123,7 +123,7 @@ mod view;
 #[cfg(feature = "alloc")]
 pub use build::{RegionId, WireBuilder};
 pub use crc::crc32;
-pub use ecc::{EccPlane, EccReport, WordStatus};
+pub use ecc::{ECC_KIND_BIT, EccPlane, EccReport, WordStatus, plane_kind_for};
 pub use error::WireError;
 pub use layout::Region;
 pub use record::WireRecord;

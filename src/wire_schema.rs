@@ -566,6 +566,8 @@ pub struct SchemaBuilder {
     /// Set once any contributor asks for a constant pool, so an artifact with no
     /// constants emits no constant regions rather than three empty ones.
     wants_constants: bool,
+    /// Set by [`SchemaBuilder::with_ecc`]; emits a parity plane per region.
+    want_ecc: bool,
     /// Every contributor's struct templates, concatenated. Deferred for the same
     /// reason constants are: templates are declared **per chunk**, so the table
     /// serves many contributors and each needs a range rather than the whole of it.
@@ -836,7 +838,37 @@ impl SchemaBuilder {
         for r in &self.names.refs {
             self.b.push_record(names, r);
         }
+        // Planes LAST, after every region exists. A region declared after this
+        // point would be silently unprotected.
+        if self.want_ecc {
+            self.b.protect_all()?;
+        }
         self.b.finish()
+    }
+
+    /// Emits a (72,64) SECDED parity plane beside every region.
+    ///
+    /// **Off by default, and that default is load-bearing.** Planes change the
+    /// artifact's bytes, and byte identity against this encoder is the oracle
+    /// the self-hosted compiler is verified with. Turning them on unconditionally
+    /// would move every artifact the corpus compares against.
+    ///
+    /// # What it buys and what it costs
+    ///
+    /// One flipped bit per 64-bit word becomes correctable and two become
+    /// detectable, per protected region. The cost is 12.5% of the protected
+    /// bytes plus one directory entry per plane, and the region ceiling counts
+    /// planes, so an artifact may carry half as many payload regions.
+    ///
+    /// # Compatibility
+    ///
+    /// Purely additive. Planes are extra regions, and every reader in this
+    /// project resolves regions BY KIND rather than by enumerating the
+    /// directory, so an artifact with planes decodes identically through the
+    /// ordinary path. No `BYTECODE_VERSION` change.
+    pub fn with_ecc(mut self) -> Self {
+        self.want_ecc = true;
+        self
     }
 }
 
@@ -2777,7 +2809,38 @@ impl<'a> ModuleTable<'a> {
 ///
 /// Propagates a [`WireError`] from the container builder.
 pub fn encode_aux_body(aux: &crate::wire_format::WireAuxBody) -> Result<Vec<u8>, WireError> {
+    encode_aux_body_opt(aux, false)
+}
+
+/// Encodes an auxiliary body with a (72,64) SECDED parity plane per region.
+///
+/// Same bytes as [`encode_aux_body`] for every payload region, plus one plane
+/// region each. One flipped bit per 64-bit word becomes correctable and two
+/// become detectable; the cost is 12.5% of the protected bytes.
+///
+/// Read back with the ordinary [`decode_aux_body`], which is unaffected — planes
+/// are additive regions and every reader resolves by kind. Use
+/// [`keleusma_wire::WireView::verify_all`] to scan them.
+///
+/// # Errors
+///
+/// [`WireError`] as [`encode_aux_body`], plus
+/// [`WireError::TooManyRegions`](keleusma_wire::WireError::TooManyRegions) if
+/// the planes push the artifact past the region ceiling.
+pub fn encode_aux_body_with_ecc(
+    aux: &crate::wire_format::WireAuxBody,
+) -> Result<Vec<u8>, WireError> {
+    encode_aux_body_opt(aux, true)
+}
+
+fn encode_aux_body_opt(
+    aux: &crate::wire_format::WireAuxBody,
+    ecc: bool,
+) -> Result<Vec<u8>, WireError> {
     let mut b = SchemaBuilder::new();
+    if ecc {
+        b = b.with_ecc();
+    }
 
     // Per-chunk data first, so each chunk record can carry the ranges the
     // contributions returned. A chunk cannot describe a range it did not write.
