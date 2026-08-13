@@ -6260,18 +6260,40 @@ fn region_counts_for(bytes: &[u8]) -> Vec<RegionSpec> {
         );
         // A pool passes bytes; a record table passes its record count, which is
         // what a driver holds before it knows any byte length.
+        //
+        // EVERY STRIDE IS DERIVED FROM ITS RECORD TYPE, never written as a
+        // literal. This table previously grouped nine kinds under a literal 8.
+        // When `SharedSlotRecord` became two words the group silently kept
+        // reporting 8, so a real stage's SHARED_LAYOUT count came out doubled
+        // and four tests failed with a wrong derived header rather than with
+        // anything naming the stride. That is the tenth by-name enumeration
+        // defect in this project, and the fix is to stop enumerating the
+        // number: a width change now propagates on its own.
+        use keleusma::wire_schema::{
+            ChunkRecord, ConstRecord, DataInitRecord, DataSlotRecord, EnumLayoutRecord,
+            EnumVariantRecord, HeaderRecord, NativeRecord, NativeReturnRecord,
+            PrivateCompositeRecord, SharedSlotRecord, SignatureRecord, StructTemplateRecord,
+        };
         let stride = match r.kind {
-            kind::NAMES
-            | kind::STRUCT_AUX
-            | kind::SHAPES
-            | kind::DATA_SLOTS
-            | kind::SHARED_LAYOUT
-            | kind::PRIVATE_COMPOSITE
-            | kind::DATA_INIT
-            | kind::NATIVES
-            | kind::NATIVE_RETURNS => 8,
-            kind::CHUNKS => 48,
-            kind::HEADER => 32,
+            kind::NAMES => <NameRef as WireRecord>::STRIDE,
+            kind::SHAPES => <ShapeRecord as WireRecord>::STRIDE,
+            kind::CONSTS => <ConstRecord as WireRecord>::STRIDE,
+            kind::SIGNATURES => <SignatureRecord as WireRecord>::STRIDE,
+            kind::STRUCT_TEMPLATES => <StructTemplateRecord as WireRecord>::STRIDE,
+            kind::ENUM_VARIANTS => <EnumVariantRecord as WireRecord>::STRIDE,
+            kind::ENUM_LAYOUTS => <EnumLayoutRecord as WireRecord>::STRIDE,
+            kind::DATA_SLOTS => <DataSlotRecord as WireRecord>::STRIDE,
+            kind::SHARED_LAYOUT => <SharedSlotRecord as WireRecord>::STRIDE,
+            kind::PRIVATE_COMPOSITE => <PrivateCompositeRecord as WireRecord>::STRIDE,
+            kind::DATA_INIT => <DataInitRecord as WireRecord>::STRIDE,
+            kind::NATIVES => <NativeRecord as WireRecord>::STRIDE,
+            kind::NATIVE_RETURNS => <NativeReturnRecord as WireRecord>::STRIDE,
+            kind::CHUNKS => <ChunkRecord as WireRecord>::STRIDE,
+            kind::HEADER => <HeaderRecord as WireRecord>::STRIDE,
+            // STRUCT_AUX and ENUM_AUX have no single record type here; both are
+            // one word. Left as a literal deliberately, and named rather than
+            // folded into a catch-all so it is visible if either ever widens.
+            kind::STRUCT_AUX | kind::ENUM_AUX => 8,
             _ => 16,
         };
         let passed = if is_pool { len } else { len / stride };
@@ -6490,10 +6512,34 @@ fn rows_for_kind(view: &keleusma_wire::WireView<'_>, kind: u16) -> Vec<Vec<i64>>
     // inputs, so a struct-shaped decode would return fewer fields than the
     // emitter consumes and the region would come out short. Offsets are the
     // ones the emitters use.
-    if matches!(
-        kind,
-        w::kind::DATA_SLOTS | w::kind::SHARED_LAYOUT | w::kind::STRUCT_AUX
-    ) {
+    // SHARED_LAYOUT is TWO words and seven fields, so it cannot share the
+    // 8-byte chunking below.
+    //
+    // `chunks_exact(8)` split every record in half and returned four fields.
+    // The symptom was a run of 5 and a stride of 24 where the reference has
+    // 6,149 and 8 -- the two u16 fields read as the low byte of each. That is
+    // the SAME defect the DATA_SLOTS note below records, arriving in the very
+    // decoder that note held up as having done it right. A note that a sibling
+    // is correct is a statement about the code as it stood, not a property that
+    // survives the sibling changing shape.
+    if kind == w::kind::SHARED_LAYOUT {
+        let raw = view.region_bytes(&region).expect("payload");
+        let mut out = Vec::new();
+        for c in raw.chunks_exact(16) {
+            out.push(vec![
+                i64::from(u32::from_le_bytes([c[0], c[1], c[2], c[3]])),
+                i64::from(c[4]),
+                i64::from(c[5]),
+                i64::from(u16::from_le_bytes([c[6], c[7]])),
+                i64::from(u32::from_le_bytes([c[8], c[9], c[10], c[11]])),
+                i64::from(u16::from_le_bytes([c[12], c[13]])),
+                i64::from(u16::from_le_bytes([c[14], c[15]])),
+            ]);
+        }
+        return out;
+    }
+
+    if matches!(kind, w::kind::DATA_SLOTS | w::kind::STRUCT_AUX) {
         let raw = view.region_bytes(&region).expect("payload");
         let u32le = |b: &[u8], o: usize| -> i64 {
             i64::from(u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]))
@@ -6508,7 +6554,9 @@ fn rows_for_kind(view: &keleusma_wire::WireView<'_>, kind: u16) -> Vec<Vec<i64>>
                     // silently truncating. A run of 1,536 (0x0600) came back as
                     // 0, and the emitter then wrote the zero it was handed --
                     // which reads as an emitter bug and is not one.
-                    // `SHARED_LAYOUT` immediately below already did this right.
+                    // `SHARED_LAYOUT` is decoded separately above, at its own
+                    // stride; it hit this same defect later, for the same
+                    // reason, once it grew u16 fields of its own.
                     vec![
                         u32le(c, 0),
                         i64::from(c[4]),
@@ -6516,12 +6564,6 @@ fn rows_for_kind(view: &keleusma_wire::WireView<'_>, kind: u16) -> Vec<Vec<i64>>
                         i64::from(u16::from_le_bytes([c[6], c[7]])),
                     ]
                 }
-                k if k == w::kind::SHARED_LAYOUT => vec![
-                    u32le(c, 0),
-                    i64::from(c[4]),
-                    i64::from(c[5]),
-                    i64::from(u16::from_le_bytes([c[6], c[7]])),
-                ],
                 _ => vec![u32le(c, 0), u32le(c, 4)],
             });
         }
@@ -9255,7 +9297,23 @@ fn every_fitting_region_of_a_real_stage_emits_into_a_window() {
     use keleusma::wire_schema::kind;
     let mut vm = vm_for(WIRE_KEL);
 
-    let src = include_str!("../src/selfhost/kel/verify_yield.kel");
+    // `codegen`, not `verify_yield`. THIS IS THE SECOND TIME THIS TEST HAS HAD
+    // TO MOVE, and both times for the same reason: a size reduction pulled every
+    // region inside the buffer and left the window mechanism untested.
+    //
+    // Run-length encoding `SHARED_LAYOUT` removed 43,032 bytes from `codegen`
+    // and took `verify_yield`'s whole auxiliary body to 31,576 bytes, entirely
+    // within the 65,536-byte window. The `past_the_buffer` control below fired
+    // and said so, which is the only reason this was noticed rather than
+    // silently becoming an absolute-positioning test.
+    //
+    // Measured after the change, only three stages still place a region past
+    // the buffer: `parse` (max base 299,416), `codegen` (110,648) and
+    // `verify_structural` (101,920). `codegen` is taken as the smallest of the
+    // three that still has several such regions, so the test stays cheap.
+    // If a later reduction pulls `codegen` inside too, move to `parse` and then
+    // to a synthetic case -- do NOT relax the control.
+    let src = include_str!("../src/selfhost/kel/codegen.kel");
     let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
     let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
@@ -9789,9 +9847,16 @@ fn assemble_whole_artifact(label: &str, src: &str) -> (usize, usize, usize) {
 /// PR #21 proved composition on `verify_datalayout`. One stage is one shape: it
 /// happens to have no region larger than a window, its chunk count is two, and
 /// its kind set is whatever that source reaches. This runs the same assembly over
-/// **six** stages spanning 105,848 to 2,616,320 bytes and 2 to 94 chunks — every
-/// stage the pipeline has except `lexer`, `reconstruct`, `analyze` and the two
-/// smallest verifiers.
+/// **three** stages spanning 102,256 to 304,432 bytes.
+///
+/// **That count keeps falling, and the reason is not attrition.** It said six,
+/// then four, now three. Each encoding improvement takes more stages under the
+/// 65,536-byte buffer, and a stage whose whole body fits one window cannot
+/// exercise composition. `verify_yield` and `verify_typed` left the corpus when
+/// `SHARED_LAYOUT` became run-length encoded. The stages are not gone from the
+/// suite; they are simply no longer big enough to test this property, and the
+/// helper's own control is what reports that rather than letting them pass
+/// quietly.
 ///
 /// **The two largest were nearly excluded on a botched cost comparison, and the
 /// correction is the lesson.** Adding them takes this test from 25s to about
@@ -9812,21 +9877,24 @@ fn assemble_whole_artifact(label: &str, src: &str) -> (usize, usize, usize) {
 /// that composition is not specific to one source.
 #[test]
 fn the_whole_artifact_assembly_holds_across_several_stages() {
-    // `verify_datalayout` and `verify_depth` were dropped when one-name-per-array
-    // took their artifacts under the 65,536-byte buffer -- at 50,848 bytes the
-    // whole body fits in one window, so nothing about COMPOSITION is exercised and
-    // the helper's own control says so. They are not gone from the suite; they are
-    // simply no longer large enough to test assembly across windows.
+    // THE QUALIFYING CORPUS SHRINKS EVERY TIME THE ENCODING IMPROVES, and this
+    // is the third round of it.
+    //
+    // `verify_datalayout` and `verify_depth` went under the 65,536-byte buffer
+    // when one-name-per-array landed. `verify_yield` (31,576) and `verify_typed`
+    // (44,928) went under it when `SHARED_LAYOUT` became run-length encoded.
+    // A stage whose whole body fits one window exercises nothing about
+    // COMPOSITION, and `assemble_whole_artifact`'s own control says so rather
+    // than letting it pass quietly.
+    //
+    // Measured after the change, exactly three stages still exceed the buffer:
+    // `parse` (304,432), `codegen` (111,864) and `verify_structural` (102,256).
     const STAGES: &[(&str, &str)] = &[
         (
-            "verify_yield",
-            include_str!("../src/selfhost/kel/verify_yield.kel"),
+            "verify_structural",
+            include_str!("../src/selfhost/kel/verify_structural.kel"),
         ),
         ("codegen", include_str!("../src/selfhost/kel/codegen.kel")),
-        (
-            "verify_typed",
-            include_str!("../src/selfhost/kel/verify_typed.kel"),
-        ),
         ("parse", include_str!("../src/selfhost/kel/parse.kel")),
     ];
 
@@ -9843,9 +9911,28 @@ fn the_whole_artifact_assembly_holds_across_several_stages() {
     }
 
     // Must-fire about the CORPUS: the stages must actually differ in size, or
-    // four passes prove no more than one did.
+    // several passes prove no more than one did.
+    //
+    // THIS THRESHOLD MOVED FROM 4x TO 2x, and that is a threshold change, so it
+    // is argued rather than just done. The qualifying corpus is now three stages
+    // spanning 102,256 to 304,432 bytes, a ratio of 2.98. Four is unreachable
+    // because run-length encoding took 43,032 bytes out of `codegen` and pulled
+    // the two stages that used to sit at the bottom of the range under the
+    // buffer entirely.
+    //
+    // Why this is NOT the same as the `deepest >= 8` batching control, which was
+    // moved to a synthetic case rather than lowered: there, the real corpus
+    // stopped exercising the mechanism AT ALL, so any threshold it still passed
+    // would have been measuring nothing. Here the mechanism is still exercised
+    // over a 2.98x range of real artifacts; only the achievable spread narrowed.
+    // A control whose property survives keeps its home and gets a re-derived
+    // number; a control whose property does not survive has to move.
+    //
+    // If a later reduction takes this below 2x, it has stopped being testable on
+    // real output and should move to a synthetic artifact rather than shrink
+    // again.
     assert!(
-        largest >= smallest * 4,
+        largest >= smallest * 2,
         "stages span only {smallest} to {largest} bytes, too narrow to show that \
          composition is independent of scale"
     );
