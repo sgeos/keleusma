@@ -5094,3 +5094,51 @@ reading a uniform field stride off five of six shapes.
 
 The honest next step is a stack simulation over widths, which is small, and to re-measure
 before writing the emitter against any of these numbers.
+
+## THE WIDTH QUESTION DISSOLVES: carry it forward, do not recover it backwards
+
+**This obsoletes the increment that preceded it, and the reason is worth more than the
+number that increment produced.**
+
+The width problem was posed as: given a `NewComposite`, recover the width of each operand
+by looking BACKWARDS at the instructions that produced them. Every answer to that question
+was unattractive. Expose `verify_typed`'s abstract stack, and it is a change to the shared
+crate. Rebuild the abstract interpretation here, and it is a fourth copy of a model.
+Classify by an adjacency window, and it is a heuristic whose own caveat was larger than its
+result.
+
+**The emitter already maintains the operand stack.** `Lower` carries a `depth` and a vector
+of i64 alloca slots, with `push`, `pop` and `peek` keeping them in step, and every opcode
+arm already pops exactly its operands in the right order. **The emitter never needed to
+work out which values are a construction's operands — it has them.** What it lacks is one
+field: the width of what it pushed.
+
+So carry it. A parallel width per stack entry, written by `push` and returned by `pop`,
+makes a construction's operand widths available by construction rather than by analysis.
+No coordination, no duplicated model, no window, and no heuristic.
+
+**`Top` becomes local and honest.** A value pushed by an op whose result width the emitter
+does not know — an unsignatured native result, a resume value — is pushed as unknown, and a
+`NewComposite` that pops one is REFUSED. That is the same conservative boundary already
+argued for, arrived at without an analysis pass.
+
+### What this says about the previous increment
+
+The 220-of-239 measurement was honestly performed, correctly caveated, and **answered a
+question that did not need asking.** It is not retracted: nothing in it is false, and the
+finding that `NewComposite` bakes its own `byte_size` remains the reason nested
+construction is tractable. But it priced a recovery problem that the emitter's existing
+structure never had.
+
+**The rule.** Three of this branch's four composite findings came from measuring the corpus
+and one from reading the emitter, and the one that dissolved the problem is the one that
+read the code that would do the work. **Before measuring what an analysis would have to
+recover, check what the consumer already holds.** That is the same shape as the four
+consecutive gaps on the `v0.2.3` line that needed a caller rather than a mechanism.
+
+### Next, concretely
+
+Extend `Lower`'s stack to carry a width per entry; push `Unknown` from ops whose result
+width is not locally determined; refuse a composite op that consumes an `Unknown`. Then the
+three emitter arms — `NewComposite(Flat)` storing at `region.rs` offsets, `GetField(Flat)`
+as a constant-offset typed load, and a composite operand represented as its i64 address.
