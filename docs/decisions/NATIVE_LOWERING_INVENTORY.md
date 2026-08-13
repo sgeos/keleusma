@@ -4869,3 +4869,50 @@ or sunk into the arena. The true figure is far below the bound, since allocation
 slots, but it is neither zero nor measured.
 
 Full treatment in article A372, drafted at `tmp/2026-08-12-cost_of_compiling_aggregates.markdown`.
+
+## THE BAKED-ADDRESS SLICE DELIVERS NOTHING: 0 of 239 constructions are slot-homed
+
+**Measured 2026-08-12, and it killed the increment it was meant to open.**
+
+Reading `compiler.rs` suggested a first composite slice that needs no allocator at all.
+`DataLayout::private_composite_layout` gives every private composite data slot a
+statically baked pool offset, described at the code as "linker-style fixed-address
+placement of program state". A composite whose home is such a slot has a compile-time
+address, so constructing it is a run of stores at baked offsets from the private pointer
+the lowering already receives. `GetField(Flat { offset, kind })` reading it back is a
+constant offset and a typed load, which is what `GetData` already does.
+
+**The corpus never does this.** Of 239 `NewComposite` sites, **0** are immediately
+followed by a `SetData`/`SetDataIndexed`, and **239** are temporaries.
+
+| | |
+|---|---|
+| construction into a baked private slot | **0** |
+| construction as a temporary | **239** |
+
+**The probe is not blind, and that is established rather than assumed.** A hand-written
+control source produces exactly the slot-homed shape — `NewComposite(Flat { kind: Struct,
+count: 2, byte_size: 16 }) ; SetData(0) ; GetData(0) ; GetField(Flat { offset: 8, kind:
+Int })` — with a layout entry at pool offset 0 and `persistent_composite_bytes` of 16. The
+must-fire control asserts that source really has a baked slot, so a zero from the corpus is
+a fact about the corpus. The classification also UNDER-counts the easy case on purpose,
+requiring an immediately adjacent store, so the true figure cannot be lower.
+
+### What this changes
+
+**The allocator question is not deferrable, it is the increment.** Every composite the
+corpus builds needs somewhere to put a body, and per the operator's correction that
+somewhere is the fixed-size arena with countable bytes, not the machine stack. The
+baked-address path stays interesting as an eventual optimisation for code written to use
+private composite slots, and it is worth nothing to the 34.5 percent figure today.
+
+### The rule this cost, which the record already contained one column over
+
+The cost section says the earlier estimate "priced every form the instruction set defines
+rather than every form the corpus contains". This is the same error inverted: **I priced a
+path the compiler implements rather than a path the corpus takes**, and the reading of
+`compiler.rs` was correct in every particular. A capability in the compiler is not a
+frequency in the corpus, and only the second one ranks work.
+
+Construction shapes, for whatever builds the emitter: `(byte_size, count)` is
+`(8,1)`x80, `(24,3)`x115, `(16,2)`x23, `(40,5)`x19, `(32,4)`x1, `(64,2)`x1.
