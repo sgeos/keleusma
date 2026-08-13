@@ -93,6 +93,33 @@ fn frame_sizes(bin: &std::path::Path, ir: &str, opt: &str) -> Vec<(String, u64)>
     sizes
 }
 
+/// Lower `m` and run the real middle end over it, returning the promoted IR.
+///
+/// This is the step `llc` does NOT perform. `mem2reg` is a middle-end pass, so
+/// raw IR handed to `llc` keeps every operand slot in the frame whatever `-O`
+/// level is requested.
+fn promoted_ir(m: &Module) -> Option<String> {
+    use inkwell::OptimizationLevel;
+    use inkwell::passes::PassBuilderOptions;
+    use inkwell::targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine};
+    let ctx = Context::create();
+    let lm = ctx.create_module("promoted");
+    lower_module(&ctx, &lm, m, LowerOptions::default()).ok()?;
+    Target::initialize_native(&InitializationConfig::default()).ok()?;
+    let triple = TargetMachine::get_default_triple();
+    let machine = Target::from_triple(&triple).ok()?.create_target_machine(
+        &triple,
+        "generic",
+        "",
+        OptimizationLevel::Default,
+        RelocMode::PIC,
+        CodeModel::Default,
+    )?;
+    lm.run_passes("default<O2>", &machine, PassBuilderOptions::create())
+        .ok()?;
+    Some(lm.print_to_string().to_string())
+}
+
 fn corpus() -> Vec<(std::path::PathBuf, Module)> {
     let root = std::path::Path::new("..");
     let mut out = Vec::new();
@@ -133,6 +160,7 @@ fn spike_report_real_native_frame() {
     println!("  toolchain: {}", bin.display());
 
     let (mut n, mut sum0, mut sum2, mut max0, mut max2) = (0usize, 0u64, 0u64, 0u64, 0u64);
+    let (mut sump, mut maxp) = (0u64, 0u64);
     let mut shown = 0usize;
     for (path, m) in corpus() {
         let ctx = Context::create();
@@ -141,8 +169,14 @@ fn spike_report_real_native_frame() {
             continue;
         }
         let ir = lm.print_to_string().to_string();
+        // THREE measurements, not two. `llc` does not run `mem2reg`, which is a
+        // middle-end pass, so raw IR through `llc -O0` and `llc -O2` differ only
+        // by back-end choices and BOTH carry every operand slot in the frame.
+        // Measuring only those two answers a question nobody asked.
         let f0 = frame_sizes(&bin, &ir, "-O0");
         let f2 = frame_sizes(&bin, &ir, "-O2");
+        let promoted = promoted_ir(&m).unwrap_or_else(|| ir.clone());
+        let fp = frame_sizes(&bin, &promoted, "-O2");
         if f0.is_empty() {
             continue;
         }
@@ -155,6 +189,10 @@ fn spike_report_real_native_frame() {
             sum2 += *b;
             max2 = max2.max(*b);
         }
+        for (_, b) in &fp {
+            sump += *b;
+            maxp = maxp.max(*b);
+        }
         // Print the verifier's bound beside the real frame for stream entries.
         for chunk in m
             .chunks
@@ -165,10 +203,15 @@ fn spike_report_real_native_frame() {
                 break;
             }
             if let Ok((stack_bytes, _)) = wcmu_stream_iteration(chunk) {
-                let biggest0 = f0.iter().map(|(_, b)| *b).max().unwrap_or(0);
                 let biggest2 = f2.iter().map(|(_, b)| *b).max().unwrap_or(0);
+                let biggestp = fp.iter().map(|(_, b)| *b).max().unwrap_or(0);
+                let ratio = if stack_bytes > 0 {
+                    biggestp as f64 / stack_bytes as f64
+                } else {
+                    0.0
+                };
                 println!(
-                    "  {:26} verifier={stack_bytes:6}  frame O0={biggest0:6}  O2={biggest2:6}",
+                    "  {:24} verifier={stack_bytes:5}  raw@O2={biggest2:5}  PROMOTED={biggestp:5}  ratio={ratio:5.2}",
                     path.file_name().unwrap_or_default().to_string_lossy()
                 );
                 shown += 1;
@@ -180,6 +223,9 @@ fn spike_report_real_native_frame() {
     println!("  total frame bytes at O2 : {sum2}");
     println!("  largest single frame O0 : {max0}");
     println!("  largest single frame O2 : {max2}");
+    println!("\n  PROMOTED then llc -O2 (the measurement that matters):");
+    println!("  total frame bytes       : {sump}");
+    println!("  largest single frame    : {maxp}");
     println!("\n  The verifier's number counts virtual-machine operand slots. The");
     println!("  frame counts machine bytes the register allocator could not keep");
     println!("  in registers. If O2 is far below O0, the frame is the optimiser's");

@@ -4870,6 +4870,73 @@ slots, but it is neither zero nor measured.
 
 Full treatment in article A372, drafted at `tmp/2026-08-12-cost_of_compiling_aggregates.markdown`.
 
+## RETRACTION: the frame measurement never ran the optimiser, and the conclusion was backwards
+
+**Three claims recorded in this document are false.** All three trace to one error, and it was documented in
+this repository three days before I made it.
+
+### The error
+
+Every frame figure came from `llc -O0` against `llc -O2` on the **same unpromoted intermediate
+representation**. `mem2reg` is a middle-end pass and **`llc` does not run it**, so neither measurement had
+the optimiser applied.
+
+That fact is written in `differential.rs`, in a comment dated 2026-08-09:
+
+> the frame is decided by WHICH TOOL RUNS, not by the optimisation level: `llc` at `-O0`, `-O1`, `-O2` and
+> `-Os` all give 536, because `mem2reg` is a middle-end pass and `llc` does not run it.
+
+**I wrote that warning and then walked into it**, and the reported 7.6 percent is back-end noise between two
+`llc` levels rather than anything about optimisation.
+
+### What is retracted
+
+**1. "The provisioning is relocated, not eliminated."** False. Promotion **eliminates** the slots, because
+the unused ones are dead and are removed rather than spilled. Corpus-wide the frame goes from 275,432 bytes
+to **5,048** once the middle end runs, a factor of 54.
+
+**2. "The bound understates the frame by two to thirteen times."** Backwards. Against the promoted frame the
+verifier's `stack_bytes` **exceeds** the real frame in every module measured:
+
+| Module | verifier | promoted frame | ratio |
+|---|---|---|---|
+| `parse` | 64 | 56 | 0.88 |
+| `reconstruct` | 128 | 104 | 0.81 |
+| `analyze` | 64 | 40 | 0.62 |
+| `verify_structural` | 64 | 40 | 0.62 |
+| `verify_typed` | 64 | 40 | 0.62 |
+| `verify_depth` | 64 | 24 | 0.38 |
+| `lexer` | 320 | 40 | 0.12 |
+| `verify_datalayout` | 64 | 8 | 0.12 |
+
+**Every ratio is below one.** The bound is conservative in the shipped configuration, not dangerous.
+
+**3. "On-demand provisioning cut frames by 91 percent."** True only for unpromoted builds. Reverting to
+eager provisioning and re-measuring under promotion gives **5,048 bytes either way — identical.** The change
+bought nothing for the pipeline that ships.
+
+### What the on-demand change is still worth
+
+It is not withdrawn, and it is also not the improvement it was reported as. It removes 38,601 dead
+allocations from the emitted intermediate representation, which shortens what the optimiser must delete and
+helps any consumer that runs `llc` without a middle end. **It does not reduce the shipped frame.**
+
+### What survives
+
+That `heap_bytes` transfers exactly, that `stack_bytes` counts virtual-machine operand slots with no native
+counterpart, and that the native frame is a third quantity. Those came from the operator and are unaffected.
+
+**And the frame is not bounded by the verifier's number as a matter of construction.** Eight modules agree
+with no mechanism guaranteeing it; the units differ and the agreement is coincidence. The honest statement
+is **empirically conservative on this corpus under the shipped pipeline**, which is a far weaker claim than
+soundness and the opposite of what was recorded.
+
+### The instrument now measures the axis that matters
+
+`spike_native_frame.rs` reports three figures rather than two: raw at `-O0`, raw at `-O2`, and **promoted
+then `-O2`**, with the last labelled as the one that corresponds to shipped output. The two-figure version
+could not have detected this and reported a confident wrong answer instead.
+
 ## THE BAKED-ADDRESS SLICE DELIVERS NOTHING: 0 of 239 constructions are slot-homed
 
 **Measured 2026-08-12, and it killed the increment it was meant to open.**
