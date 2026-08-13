@@ -4939,3 +4939,51 @@ The coarsest sound v1 is **one bump region per invocation, reset at `Reset`**, s
 WCMU bound the verifier already computes. Nothing outlives a stream iteration except the
 persistent pool, so no escape analysis is needed to be correct — only to be tight. Finer
 sections are then a peak-bytes optimisation rather than a correctness prerequisite.
+
+### The packing rule is NOT eight bytes per field, and the widths already exist
+
+Measured 2026-08-12, and it corrects an assumption I was one step from baking into the
+emitter. The flat construction shapes look uniform — `(8,1)`, `(16,2)`, `(24,3)`, `(32,4)`,
+`(40,5)` are all eight bytes per field — but `(64,2)` is not, and it is the one that tells
+the truth.
+
+`flat_field_size` gives a field either `ScalarKind::size_in_bytes(word_bytes, float_bytes)`
+or, for a nested flat composite, that child body's `byte_len`. **Fields are variable
+width.** A `Byte` field is one byte, and a nested body is however long it is. Assuming a
+uniform stride would have produced a silently wrong body for any composite holding a
+narrow or nested field, which the byte-identity oracle would catch only where the corpus
+happens to build one.
+
+**Reads are fully specified by the instruction and construction is not.**
+`GetField(Flat { offset, kind })` carries a baked offset and kind, so a field read is a
+constant-offset typed load with nothing to infer. `NewComposite(Flat { count, byte_size })`
+carries only the total, so the emitter must know each operand's width to place it.
+
+**Those widths are already computed, by a shipping pass.** `verify_typed::AbsVal` is
+exactly this lattice — `Scalar(kind)`, `Flat { kind, size }`, `Top` — and
+`AbsVal::packed_size(word_bytes, float_bytes)` returns the byte size a value occupies
+inside a packed flat body. The A.2.1 typed operand-stack pass reconstructs it for every
+operand-stack entry at every instruction.
+
+**`Top` is deferrable for the verifier and NOT for the backend.** The verifier's sound
+defer-on-unknown mode falls back to a runtime bounds guard when it cannot reconstruct a
+shape. An emitter cannot defer: without a width there is no store to emit. So a
+`NewComposite` with any `Top` operand must be REFUSED, which is the conservative
+verification stance applied at the right boundary rather than a limitation.
+
+### The fork, which is a coordination item rather than a technical one
+
+`typed_check_chunk` returns a verdict, not the per-instruction abstract stack. Two ways to
+get the widths:
+
+1. **Expose the reconstructed stack from `verify_typed`.** One model, no drift. It is a
+   change to the shared `keleusma` crate, which is the `v0.2.3` line's surface, so it needs
+   their agreement rather than my edit — the lesson from today's collision.
+2. **Reconstruct shapes inside `native_codegen`.** No coordination, and it makes a FOURTH
+   copy of a model in this repository. The three existing ones each cost something: the
+   multihead predicate was wrong in three places at once, and the `is_lowered` model is
+   duplicated across two spikes and only survives because a drift control asserts it
+   against the real lowering.
+
+**Option 1 is preferred and option 2 is viable with a drift control.** Recorded rather than
+decided, because picking (2) unilaterally is how the duplication got to three.
