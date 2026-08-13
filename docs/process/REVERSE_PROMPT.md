@@ -16,14 +16,19 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 | | |
 |---|---|
-| `v0.2.3` | `b5ddc418`, pushed |
-| PR #42 | `docs/checked-push-order`, draft, CI running |
-| PR #43 | `feat/shared-layout-runs`, draft, CI running |
+| `v0.2.3` | `1f73e29a`, pushed |
+| PR #42 push-order sweep | **MERGED**, 22/22 |
+| PR #43 run measurement | **MERGED**, 22/22 |
+| PR #44 `SHARED_LAYOUT` encoding | **MERGED**, 22/22 |
+| PR #46 SECDED end to end | open, draft, CI running |
 | PR #41 | **not mine** — base `v0.3.0`, the other line's |
-| Machine | free; both CI runs on hosted runners |
+| Machine | free; every gate ran on hosted runners |
 
-Two increments this session, both small and both gated by CI rather than by the local
-gate. Nothing merged yet.
+Four increments, three merged. Every merge was at the commit CI ran, without rebasing.
+
+**Artifact sizes after the `SHARED_LAYOUT` work**, measured: `codegen`'s auxiliary body
+154,880 → **111,864** bytes, `lexer`'s → **7,456**. The plan's ~27% projection
+materialised exactly.
 
 ## A defect report named one site and the defect was at eight
 
@@ -125,14 +130,34 @@ mailbox as such.
 - **`MAX_PARSE_DEPTH` on small stacks**, above.
 - **MSRV**: CI checks 1.85 for `keleusma-arena` and 1.88 for `keleusma`.
 
+## The SECDED plane is emitted and verified, and one half of it is a decision for you
+
+PR #46. The code had exhaustive single-bit unit tests and **no artifact the shipping
+encoder produced ever carried a plane**. Now `encode_aux_body_with_ecc` emits one per
+region and `WireView::verify_all` scans them, proven on real compiler output: a single
+flipped bit is corrected across 32 positions per stage, two bits in one word are reported
+uncorrectable rather than silently "corrected", and the ordinary decode path is unaffected.
+
+**Off by default, deliberately.** Planes change the artifact's bytes, and byte identity
+against this encoder is the oracle the self-hosted compiler is verified with.
+
+**The control is the part worth trusting.** The same flip is asserted to be INVISIBLE
+without a plane. The container also carries a CRC, region lengths and structural
+validation, any of which might have caught the same damage — in which case the plane would
+be decoration and the other three tests would still pass.
+
+**What is NOT done, and is yours rather than mine**: nothing calls `verify_all` at module
+load. What a host should do about a corrected word, or an uncorrectable one, is a policy
+question, and in-place correction is not obviously available when the artifact may be read
+from read-only storage. I did not pick a default.
+
 ## Next intended step
 
-1. **Merge #42 and #43 on CI green**, at the commit CI ran, without rebasing.
-2. **Implement the `SHARED_LAYOUT` run-length encoding**, which now has a measured basis and
-   a design: `first_slot` for binary search, stride **stored** rather than derived, `u16`
-   run chunking as `DATA_SLOTS` already does. This moves `SharedSlotRecord`, which is the
-   `v0.3.0` session's declared read surface; advance notice is already in their mailbox.
-3. **The (72,64) SECDED plane end to end**, if the operator prioritises it.
+1. **Merge #46 on CI green**, at the commit CI ran, without rebasing.
+2. **Load-time ECC policy**, once you have ruled on the question above.
+3. **Five of ten stages still have no self-hosted byte-identity coverage** — the
+   `verify_*.kel` stages. This is the largest untested surface I know of on this line and
+   was not previously recorded as a gap anywhere.
 
 ## Parallel development
 
