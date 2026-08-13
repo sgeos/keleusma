@@ -5289,3 +5289,40 @@ recorded twice.
 
 **Re-run the slack measurement before ranking the next item.** First-blocker counts are an
 ordering hint and nothing more, and this table is a first-blocker count.
+
+### THE SLACK TABLE IS STALE, AND ITS DRIFT CONTROL COULD NEVER HAVE SAID SO
+
+The previous section said to re-run the slack measurement before ranking static strings.
+Doing so found that the measurement itself cannot currently be trusted.
+
+`the_lowered_predicate_has_not_drifted` asserts **model-says-supported implies
+lowering-accepts**. That catches an OPTIMISTIC model, which would overstate what a spike
+promises. **It cannot catch a pessimistic one**, and pessimistic is what the model became:
+
+| ops the model calls unsupported, inside modules the lowering ACCEPTS | instances |
+|---|---|
+| `NewComposite` | 62 |
+| `Yield` | 27 |
+| `GetIndex` | 14 |
+| `Reset` | 9 |
+| `Stream` | 9 |
+| `GetTupleField` | 8 |
+| `GetField` | 2 |
+
+**131 instances across seven opcodes, over 37 accepted modules.** The composite family has
+been stale for a session; `Stream`/`Yield`/`Reset` since the degenerate-stream work.
+
+**A stale-pessimistic model fails silently and in a specific direction: it UNDERSTATES every
+other class.** A module carrying a now-supported opcode is still counted as blocked by it,
+so it never reaches "blocked by X alone". That is precisely why `static-str` reports
+`ALONE = 1`: the figure is an under-estimate of unknown size, and **the static-string item
+can be ranked neither up nor down from it.**
+
+`the_lowered_predicate_is_not_stale_pessimistic` now reports this. It REPORTS rather than
+asserts, because resynchronising the model is a separate change and a red spike would
+obscure the report it exists to produce.
+
+**The real fix is to stop maintaining a model at all** and classify from what `lower_module`
+actually refuses, which this file already calls. A hand-maintained restatement of something a
+mechanism can derive is a defect waiting for the maintenance to lapse — recorded on the
+`v0.2.3` line after five instances, and this is the sixth.
