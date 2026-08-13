@@ -172,9 +172,10 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
     // NESTED composite read, chosen by running `probe_unsupported` rather than by
     // guessing: four consecutive guesses at such a source cost four
     // compile-and-run cycles while the instrument to answer it already existed.
-    let src = "struct I { a: Word }
-               struct O { i: I, b: Word }
-               fn main(a: Word, b: Word) -> Word { let o = O { i: I { a: a }, b: b }; o.i.a }";
+    // Nested reads now lower too, verified by
+    // `a_field_read_out_of_a_nested_body_agrees_with_the_vm`. The subject is a
+    // TUPLE field, again chosen by running `probe_unsupported`.
+    let src = "fn main(a: Word, b: Word) -> Word { let t = (a, b); t.1 }";
     let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
 
     // **The vacuity guard is on the REFUSAL, not on a chunk search.** Three
@@ -186,13 +187,13 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
     let ctx = Context::create();
     let lm2 = ctx.create_module("kel2");
     let err = lower_module(&ctx, &lm2, &m, LowerOptions::default()).expect_err(
-        "lower_module must refuse a nested composite read; a refusal that only \
+        "lower_module must refuse a tuple field read; a refusal that only \
              lower_chunk makes is not evidence the opcode is unsupported, which is \
              how the Op::Call version of this test rotted",
     );
     let rendered = format!("{err:?}");
     assert!(
-        rendered.contains("FlatNested"),
+        rendered.contains("GetTupleField"),
         "refused for the wrong reason: {rendered}"
     );
 }
@@ -2410,6 +2411,46 @@ fn a_nested_body_copy_does_not_run_past_the_body() {
             *byte, 0,
             "byte {k} past the end of the body at {end} was written; a copy ran \
              past the body it was placing"
+        );
+    }
+}
+
+/// **The full VM differential for a nested body, which was impossible until the
+/// nested read landed.**
+///
+/// This reads a scalar field OUT of a copied nested body and compares against the
+/// virtual machine. It is the case whose absence made the copy look unobservable,
+/// and it subsumes the region-inspection tests as evidence of CONTENT while they
+/// remain as evidence of PLACEMENT.
+#[test]
+fn a_field_read_out_of_a_nested_body_agrees_with_the_vm() {
+    let src = "struct I { a: Word }
+               struct O { i: I, b: Word }
+               fn main(a: Word, b: Word) -> Word { let o = O { i: I { a: a }, b: b }; o.i.a }";
+    for args in [[7, 11], [-1, 5], [i64::MIN, i64::MAX], [0, -9]] {
+        let (native, _) = composite_native_with_region(src, &args);
+        let vm = vm_result(src, &args);
+        assert_eq!(
+            native, vm,
+            "a field read out of a nested body disagrees for {args:?}: native={native}, vm={vm}"
+        );
+    }
+}
+
+/// An element of an array of arrays, indexed at RUN TIME on the outer array.
+///
+/// The nested element read is `index * size` with a composite stride, which a
+/// constant index cannot distinguish from a fixed offset.
+#[test]
+fn a_nested_array_element_agrees_with_the_vm() {
+    let src =
+        "fn main(a: Word, i: Word) -> Word { let xs = [a, a + 1]; let ys = [xs, xs]; ys[i][1] }";
+    for args in [[5, 0], [5, 1], [-2, 0], [-2, 1]] {
+        let (native, _) = composite_native_with_region(src, &args);
+        let vm = vm_result(src, &args);
+        assert_eq!(
+            native, vm,
+            "a nested array element disagrees for {args:?}: native={native}, vm={vm}"
         );
     }
 }

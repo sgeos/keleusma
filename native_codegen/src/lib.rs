@@ -2179,6 +2179,35 @@ fn lower_chunk_body<'ctx>(
                 };
                 st.push_w(v, Width::Scalar(w));
             }
+            // Nested composite read: a sub-range of the parent, so it is
+            // POINTER ARITHMETIC and nothing else.
+            //
+            // A composite operand is an address and a nested body is contiguous
+            // inside its parent, so re-wrapping is just `parent + offset` with
+            // the child's length. No copy, no load, and `variant` does not reach
+            // the machine: it says how to interpret bytes, which only the reader
+            // of a scalar field needs.
+            Op::GetField(keleusma::bytecode::StructField::FlatNested { offset, size, .. }) => {
+                let parent = st.pop();
+                let addr =
+                    st.b.build_int_add(
+                        parent,
+                        i64t.const_int(u64::from(*offset), false),
+                        "cnestoff",
+                    )
+                    .unwrap();
+                st.push_w(addr, Width::Body(u32::from(*size)));
+            }
+            // The same, indexed: the element offset is `index * size`.
+            Op::GetIndex(keleusma::bytecode::ArrayElem::FlatNested { size, .. }) => {
+                let index = st.pop();
+                let parent = st.pop();
+                let byte =
+                    st.b.build_int_mul(index, i64t.const_int(u64::from(*size), false), "cnstride")
+                        .unwrap();
+                let addr = st.b.build_int_add(parent, byte, "cnestidx").unwrap();
+                st.push_w(addr, Width::Body(u32::from(*size)));
+            }
             // Flat field read: a constant offset from the body address and one
             // unaligned typed load, which is what `GetData` already does.
             Op::GetField(keleusma::bytecode::StructField::Flat { offset, kind }) => {
