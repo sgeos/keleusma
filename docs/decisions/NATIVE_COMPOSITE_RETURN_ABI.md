@@ -124,3 +124,46 @@ The per-call-site region-cost measurement recorded above is still owed and is st
 as `#[ignore]` with the reason, plus the two boundary cases that pass. The `#[ignore]` is a
 pinned defect awaiting a repair, not a skipped test, and `10_multbyte.kel` remains in
 `KNOWN_DISAGREEMENTS` where the set-equality assertion keeps it visible.
+
+---
+
+# Step one, taken at last: `sret` costs 4.9% of region bytes
+
+`native_codegen/tests/probe_sret_cost.rs`, 2026-08-14. This document made measuring the
+per-call-site cost step one when the convention was authorised, and it had never been taken.
+
+| | |
+|---|---|
+| composite-returning call sites, whole corpus | **13**, across 5 modules |
+| region bytes today | 4576 |
+| bytes `sret` adds | **+224** |
+| growth | **4.9%** |
+
+| module | region now | `+sret` | sites |
+|---|---|---|---|
+| `09_big_numbers.kel` | 96 | 32 | 2 |
+| `10_multbyte.kel` | 192 | 32 | 2 |
+| `piano_roll_0.kel` | 1280 | 24 | 1 |
+| `piano_roll_1.kel` | 1280 | 24 | 1 |
+| `rogue_dungen.kel` | 16 | **112** | 7 |
+
+## The verdict: proceed
+
+**4.9% is not a blow-up**, and the concern this measurement existed to test — that per-SITE
+reservation would multiply where per-live-value would not — does not materialise at corpus
+scale. Thirteen sites in fifty-five modules is a thin surface.
+
+**`rogue_dungen` is the outlier and reads worse than it is.** Its `+112` is 800% of a 16-byte
+current region, which is arithmetic on a small base rather than a scaling problem. In absolute
+terms it is a hundred and twelve bytes.
+
+The figure is an **upper bound** on what any liveness-aware reuse could achieve, since a slot
+is reserved per site whether or not two sites' values are ever live together. Nobody needs to
+pursue that reuse on these numbers.
+
+## What this does not license
+
+The measurement clears the COST. It says nothing about the implementation being correct, which
+`composite_return_aliasing.rs` and `corpus_differential.rs` are for. And it does not license
+widening the convention: one `sret` pointer still describes one contiguous body, and a case
+needing split storage remains an operator decision.
