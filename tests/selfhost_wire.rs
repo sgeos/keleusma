@@ -10468,13 +10468,33 @@ const CMD_MI_CHUNK_NAMES: i64 = 165;
 /// from the blob by Keleusma, so the producer is doing work rather than copying.
 fn module_input_blob(module: &keleusma::bytecode::Module) -> Vec<u8> {
     let mut out = Vec::new();
-    let n = u16::try_from(module.chunks.len()).expect("chunk count fits u16");
-    out.extend_from_slice(&n.to_le_bytes());
-    for c in &module.chunks {
-        let b = c.name.as_bytes();
+    let push_name = |out: &mut Vec<u8>, s: &str| {
+        let b = s.as_bytes();
         let l = u16::try_from(b.len()).expect("name length fits u16");
         out.extend_from_slice(&l.to_le_bytes());
         out.extend_from_slice(b);
+    };
+
+    let n = u16::try_from(module.chunks.len()).expect("chunk count fits u16");
+    out.extend_from_slice(&n.to_le_bytes());
+    for c in &module.chunks {
+        push_name(&mut out, &c.name);
+    }
+
+    // THE ENUM COUNT IS ALWAYS WRITTEN, including when it is zero. Inferring
+    // "no enum section" from the blob ENDING cannot distinguish an empty
+    // section from a truncated one. It also would have passed by accident here:
+    // `bin` is zero-filled past the blob, so a reader would find a zero count
+    // and be right for a reason that is not the encoding.
+    let e = u16::try_from(module.enum_layouts.len()).expect("enum count fits u16");
+    out.extend_from_slice(&e.to_le_bytes());
+    for l in &module.enum_layouts {
+        push_name(&mut out, &l.type_name);
+        let v = u16::try_from(l.variants.len()).expect("variant count fits u16");
+        out.extend_from_slice(&v.to_le_bytes());
+        for var in &l.variants {
+            push_name(&mut out, &var.name);
+        }
     }
     out
 }
@@ -10493,7 +10513,7 @@ fn module_input_blob(module: &keleusma::bytecode::Module) -> Vec<u8> {
 /// are restricted to ones with no other contributor, and the restriction is
 /// checked rather than assumed.
 #[test]
-fn keleusma_produces_the_chunk_name_interner_sequence_from_a_module_blob() {
+fn keleusma_produces_the_interner_sequence_from_a_module_blob() {
     const CASES: &[(&str, &str)] = &[
         ("single", "fn main() -> Word { 42 }"),
         (
@@ -10506,10 +10526,19 @@ fn keleusma_produces_the_chunk_name_interner_sequence_from_a_module_blob() {
             "fn a_function_with_a_deliberately_long_name(x: Word) -> Word { x }\n\
              fn main() -> Word { a_function_with_a_deliberately_long_name(7) }",
         ),
+        // THE MODE CASES. A variant name that collides with an enum NAME is
+        // what separates dedup from fresh: under dedup the second `B` would
+        // resolve to the first, and it must not.
+        ("one-enum", "enum E { A, B }\nfn main() -> Word { 42 }"),
+        (
+            "colliding-names",
+            "enum A { B, X }\nenum B { Y, Z }\nfn main() -> Word { 42 }",
+        ),
     ];
 
     let mut vm = vm_for(WIRE_KEL);
     let mut checked = 0;
+    let mut fresh_seen = 0;
 
     for (label, src) in CASES {
         let module =
@@ -10518,11 +10547,6 @@ fn keleusma_produces_the_chunk_name_interner_sequence_from_a_module_blob() {
         // The model this slice is replacing covers only some contributors, so a
         // source reaching another one would compare against a short sequence.
         assert_no_other_contributors(label, &module);
-        assert!(
-            module.enum_layouts.is_empty(),
-            "{label}: enum layouts contribute names and this slice covers chunk names only"
-        );
-
         let want: Vec<(String, i64)> = interner_input(&module);
         assert!(
             !want.is_empty(),
@@ -10567,6 +10591,9 @@ fn keleusma_produces_the_chunk_name_interner_sequence_from_a_module_blob() {
                 *mode,
                 "{label}: name {i} ({name}) mode"
             );
+            if *mode == MODE_FRESH {
+                fresh_seen += 1;
+            }
         }
         checked += 1;
     }
@@ -10574,4 +10601,13 @@ fn keleusma_produces_the_chunk_name_interner_sequence_from_a_module_blob() {
     // MUST-FIRE on the corpus: every case must have run, or a `continue` added
     // later would leave this passing while measuring nothing.
     assert_eq!(checked, CASES.len(), "not every case was checked");
+
+    // MUST-FIRE on the MODE, which is the content of the enum section. If no
+    // case reaches a fresh-mode name, a producer that wrote dedup mode
+    // throughout would pass every assertion above.
+    assert!(
+        fresh_seen > 0,
+        "no case produced a fresh-mode name, so the dedup/fresh distinction is untested and a \
+         producer ignoring the mode would pass"
+    );
 }
