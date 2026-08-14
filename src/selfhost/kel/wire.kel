@@ -2552,6 +2552,10 @@ private data nm {
     ctag: Word,
     cpay: Word,
     cfirst: Word,
+    ckids: Word,
+    cflags: Word,
+    cdisc: Word,
+    cnames: Word,
     quiet: Word,
     // Byte cursor into the INPUT concatenation in `wire.bin`.
     icur: Word,
@@ -2781,6 +2785,24 @@ fn mi_pair(k: Word, len: Word, mode: Word) -> Word {
 // a fresh choice.
 fn mi_node_words() -> Word { 6 }
 
+fn mi_put_node_full(
+    i: Word,
+    tag: Word,
+    payload: Word,
+    kids: Word,
+    nfirst: Word,
+    flags: Word,
+    disc: Word,
+) -> Word {
+    nm.sink = put_u64(i * (mi_node_words() * 8), tag);
+    nm.sink = put_u64((i * (mi_node_words() * 8)) + 8, payload);
+    nm.sink = put_u64((i * (mi_node_words() * 8)) + 16, kids);
+    nm.sink = put_u64((i * (mi_node_words() * 8)) + 24, nfirst);
+    nm.sink = put_u64((i * (mi_node_words() * 8)) + 32, flags);
+    nm.sink = put_u64((i * (mi_node_words() * 8)) + 40, disc);
+    i + 1
+}
+
 fn mi_put_node(i: Word, tag: Word, payload: Word, nfirst: Word) -> Word {
     nm.sink = put_u64(i * (mi_node_words() * 8), tag);
     nm.sink = put_u64((i * (mi_node_words() * 8)) + 8, payload);
@@ -2901,31 +2923,64 @@ fn mi_tag_is_composite(t: Word) -> Word {
     if t == 11 { 1 } else { 0 } } } }
 }
 
+// The per-name intern mode for a composite node, from the tag and the name's
+// position. Verified against `preorder_13b`, not inferred.
+//
+//   STATIC_STR  one name,  dedup
+//   STRUCT      type name dedup, THEN EVERY FIELD NAME FRESH -- the layout
+//               addresses a field by `first + i`, so a dedup hit would break the
+//               run's contiguity
+//   ENUM        type name and variant name, BOTH dedup -- nothing addresses a
+//               variant by position, so there is no contiguity to protect
+//
+// A single "a composite interns its names" rule would be wrong for one of the
+// two, and only where a name repeats.
+fn mi_name_mode(tag: Word, i: Word) -> Word {
+    if tag == mi_tag_struct() {
+        if i == 0 { nm_mode_intern() } else { nm_mode_fresh() }
+    } else { nm_mode_intern() }
+}
+
+fn mi_tag_struct() -> Word { 10 }
+
 fn mi_const_names() -> Word {
     nm.ccnt = mi_u16(nm.icur);
     nm.icur = nm.icur + 2;
     nm.err = if nm.ccnt > nm_max_names() { 0 - 240 } else { nm.err };
     for c in 0..mi_bounded(nm.ccnt) limit 256 {
         nm.sink = if nm.err < 0 { 0 } else {
+            // ONE LINEAR SCAN, NOT A STACK WALK (slice 14e). The blob carries
+            // the forest in PREORDER, and `preorder_13b` pushes a node then
+            // descends, so the node table and the name sequence are BOTH in
+            // that order. A linear scan therefore reproduces both exactly. An
+            // explicit stack is needed only to reconstruct tree SHAPE, which
+            // this producer does not do -- the child count is carried through
+            // and the flattener consumes it.
             nm.ctag = mi_u16(nm.icur);
             nm.icur = nm.icur + 2;
             nm.cpay = mi_u64(nm.icur);
             nm.icur = nm.icur + 8;
-            // A composite root would need the nesting walk, which the corpus
-            // cannot reach and which is therefore not written. Refused loudly.
-            nm.err = if mi_tag_is_composite(nm.ctag) == 1 { 0 - 241 } else { nm.err };
-            // `names_first` is the index this name TAKES, so it is read before
-            // the counter advances.
-            nm.cfirst = nm.cnt;
-            nm.cnt = if nm.ctag == mi_tag_static_str() {
-                mi_pair(nm.cnt, mi_u16(nm.icur), nm_mode_intern())
-            } else { nm.cnt };
-            nm.icur = if nm.ctag == mi_tag_static_str() {
-                nm.icur + 2 + mi_u16(nm.icur)
-            } else { nm.icur };
+            nm.ckids = mi_u16(nm.icur);
+            nm.icur = nm.icur + 2;
+            nm.cflags = mi_u64(nm.icur);
+            nm.icur = nm.icur + 8;
+            nm.cdisc = mi_u64(nm.icur);
+            nm.icur = nm.icur + 8;
+            nm.cnames = mi_u16(nm.icur);
+            nm.icur = nm.icur + 2;
+            // `names_first` is the index the node's FIRST name takes, so it is
+            // read before any of them advance the counter. A node with no names
+            // records zero, matching the reference.
+            nm.cfirst = if nm.cnames == 0 { 0 } else { nm.cnt };
+            for q in 0..mi_bounded(nm.cnames) limit 256 {
+                nm.sink = if nm.err < 0 { 0 } else {
+                    nm.cnt = mi_pair(nm.cnt, mi_u16(nm.icur), mi_name_mode(nm.ctag, q));
+                    nm.icur = nm.icur + 2 + mi_u16(nm.icur);
+                    0
+                };
+            }
             nm.sink = if nm.quiet == 1 {
-                mi_put_node(c, nm.ctag, nm.cpay,
-                    if nm.ctag == mi_tag_static_str() { nm.cfirst } else { 0 })
+                mi_put_node_full(c, nm.ctag, nm.cpay, nm.ckids, nm.cfirst, nm.cflags, nm.cdisc)
             } else { 0 };
             0
         };
