@@ -490,74 +490,95 @@ fn occurrence_rows(ast: &keleusma::ast::Program) -> OccurrenceRows {
     (declared, occurrences, wildcard)
 }
 
-/// Required-tag claims: (actual, required).
+/// Expression nodes as (kind, a, b), the last channel to migrate.
 ///
-/// Two sources, sharing one channel because both are "a tag must equal a
-/// required tag":
+/// **The host reports the shape; the stage decides what the shape means.** A
+/// binary operation contributes its two operand tags and the kind that says
+/// they must agree. A field access on a scalar contributes the operand tag and
+/// the kind that says a scalar will not do. Nothing here computes a verdict.
 ///
-/// - a condition must be bool
-/// - a field access or an index needs a composite, not a scalar
-///
-/// **A required tag of 0 is no requirement and never rejects**, which is how a
-/// construct this collector cannot type stays silent instead of guessing.
-///
-/// The composite requirement uses tags 9 and 10, outside the literal-tag range,
-/// so a scalar's tag can never accidentally satisfy it.
-fn tag_claims(ast: &keleusma::ast::Program) -> Vec<(i64, i64)> {
-    use keleusma::ast::{Expr, Pattern, Stmt, TypeExpr};
+/// One table rather than one per kind, because every rule is "these two must
+/// agree" or "this must be bool", and a channel per kind would multiply a slot
+/// chain that has already produced two off-by-one defects.
+fn expression_nodes(ast: &keleusma::ast::Program) -> Vec<(i64, i64, i64)> {
+    use keleusma::ast::{Expr, Pattern, Stmt, TypeDef, TypeExpr};
     use keleusma::visitor::Visitor;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
-    const REQ_BOOL: i64 = 2;
-    const REQ_COMPOSITE: i64 = 9;
-    const REQ_ARRAY: i64 = 10;
+    const BINOP: i64 = 1;
+    const ARRAY_ELEM: i64 = 2;
+    const CONDITION: i64 = 3;
+    const BRANCH_PAIR: i64 = 4;
+    const FIELD_ON_VALUE: i64 = 5;
+    const INDEX_ON_VALUE: i64 = 6;
+    const STRUCT_LIT: i64 = 7;
+    const TAIL_VS_RETURN: i64 = 8;
 
-    struct Claims {
-        scalars: BTreeMap<String, i64>,
-        out: Vec<(i64, i64)>,
+    let mut struct_fields: BTreeMap<String, i64> = BTreeMap::new();
+    for t in &ast.types {
+        if let TypeDef::Struct(d) = t {
+            struct_fields.insert(d.name.clone(), d.fields.len() as i64);
+        }
     }
-    impl Visitor for Claims {
+
+    struct Nodes<'a> {
+        structs: &'a BTreeMap<String, i64>,
+        scalars: BTreeSet<String>,
+        out: Vec<(i64, i64, i64)>,
+    }
+    impl Visitor for Nodes<'_> {
         fn visit_stmt(&mut self, stmt: &Stmt) {
-            // A `let` with a declared PRIMITIVE type gives the name a scalar
-            // tag. Only an explicit annotation counts: inferring one would mean
-            // running inference, which is the thing this stage must not borrow.
             if let Stmt::Let(l) = stmt
                 && let Pattern::Variable(n, _) = &l.pattern
                 && let Some(TypeExpr::Prim(_, _)) = &l.type_expr
             {
-                self.scalars.insert(n.clone(), 1);
+                self.scalars.insert(n.clone());
             }
             self.walk_stmt(stmt);
         }
         fn visit_expr(&mut self, expr: &Expr) {
             match expr {
+                Expr::BinOp { left, right, .. } => {
+                    self.out.push((BINOP, expr_tag(left), expr_tag(right)));
+                }
+                Expr::ArrayLiteral { elements, .. } => {
+                    if let Some(first) = elements.first() {
+                        let ft = expr_tag(first);
+                        for e in elements.iter().skip(1) {
+                            self.out.push((ARRAY_ELEM, ft, expr_tag(e)));
+                        }
+                    }
+                }
                 Expr::If {
                     condition,
                     then_block,
                     else_block,
                     ..
                 } => {
-                    self.out.push((expr_tag(condition), REQ_BOOL));
-                    // Both arms' tail expressions must agree. A block with no
-                    // tail contributes tag 0 and therefore no claim.
+                    self.out.push((CONDITION, expr_tag(condition), 0));
                     if let Some(e) = else_block {
                         let t = then_block.tail_expr.as_ref().map_or(0, |e| expr_tag(e));
                         let f = e.tail_expr.as_ref().map_or(0, |e| expr_tag(e));
-                        self.out.push((t, f));
+                        self.out.push((BRANCH_PAIR, t, f));
                     }
                 }
                 Expr::FieldAccess { object, .. } => {
                     if let Expr::Ident { name, .. } = object.as_ref()
-                        && self.scalars.contains_key(name)
+                        && self.scalars.contains(name)
                     {
-                        self.out.push((1, REQ_COMPOSITE));
+                        self.out.push((FIELD_ON_VALUE, 1, 0));
                     }
                 }
                 Expr::ArrayIndex { object, .. } => {
                     if let Expr::Ident { name, .. } = object.as_ref()
-                        && self.scalars.contains_key(name)
+                        && self.scalars.contains(name)
                     {
-                        self.out.push((1, REQ_ARRAY));
+                        self.out.push((INDEX_ON_VALUE, 1, 0));
+                    }
+                }
+                Expr::StructInit { name, fields, .. } => {
+                    if let Some(n) = self.structs.get(name) {
+                        self.out.push((STRUCT_LIT, *n, fields.len() as i64));
                     }
                 }
                 _ => {}
@@ -566,58 +587,20 @@ fn tag_claims(ast: &keleusma::ast::Program) -> Vec<(i64, i64)> {
         }
     }
 
-    let mut c = Claims {
-        scalars: BTreeMap::new(),
-        out: Vec::new(),
-    };
+    let mut out = Vec::new();
     for f in &ast.functions {
-        c.visit_block(&f.body);
-    }
-    c.out
-}
-
-/// Struct-literal field counts, as (declared, actual).
-///
-/// **The same comparison as call arity**, and it goes down the same channel for
-/// that reason: a struct literal supplying the wrong number of fields is the
-/// identical claim as a call supplying the wrong number of arguments. Giving it
-/// its own rule would be two spellings of one idea, and the second spelling is
-/// where they drift apart.
-fn struct_arity(ast: &keleusma::ast::Program) -> Vec<(i64, i64)> {
-    use keleusma::ast::{Expr, TypeDef};
-    use keleusma::visitor::Visitor;
-    use std::collections::BTreeMap;
-
-    let mut decls: BTreeMap<String, i64> = BTreeMap::new();
-    for t in &ast.types {
-        if let TypeDef::Struct(d) = t {
-            decls.insert(d.name.clone(), d.fields.len() as i64);
+        let mut n = Nodes {
+            structs: &struct_fields,
+            scalars: BTreeSet::new(),
+            out: Vec::new(),
+        };
+        n.visit_block(&f.body);
+        out.extend(n.out);
+        if let Some(tail) = f.body.tail_expr.as_ref() {
+            out.push((TAIL_VS_RETURN, expr_tag(tail), type_tag(&f.return_type)));
         }
     }
-
-    struct Lits<'a> {
-        decls: &'a BTreeMap<String, i64>,
-        out: Vec<(i64, i64)>,
-    }
-    impl Visitor for Lits<'_> {
-        fn visit_expr(&mut self, expr: &Expr) {
-            if let Expr::StructInit { name, fields, .. } = expr
-                && let Some(n) = self.decls.get(name)
-            {
-                self.out.push((*n, fields.len() as i64));
-            }
-            self.walk_expr(expr);
-        }
-    }
-
-    let mut l = Lits {
-        decls: &decls,
-        out: Vec::new(),
-    };
-    for f in &ast.functions {
-        l.visit_block(&f.body);
-    }
-    l.out
+    out
 }
 
 /// Struct field sets and field accesses, kept SEPARATE so the stage searches.
@@ -716,20 +699,6 @@ fn field_sets(ast: &keleusma::ast::Program) -> FieldSets {
     (first, count, flat, accesses)
 }
 
-/// A function body's tail type against its declared return type.
-///
-/// Only a literal tail and a primitive return type produce a claim. A body
-/// ending in anything else is tag 0, which never rejects.
-fn return_claims(ast: &keleusma::ast::Program) -> Vec<(i64, i64)> {
-    let mut out = Vec::new();
-    for f in &ast.functions {
-        if let Some(tail) = f.body.tail_expr.as_ref() {
-            out.push((expr_tag(tail), type_tag(&f.return_type)));
-        }
-    }
-    out
-}
-
 /// The stage's verdict for a program, with its operand pairs marshalled in.
 fn stage_accepts_program(pairs: &[(i64, i64)]) -> bool {
     stage_verdict(&StageInput {
@@ -756,6 +725,7 @@ struct StageInput<'a> {
     sites: &'a [(i64, i64)],
     sets: Option<&'a FieldSets>,
     occ: Option<&'a OccurrenceRows>,
+    nodes: &'a [(i64, i64, i64)],
 }
 
 fn stage_verdict(input: &StageInput<'_>) -> bool {
@@ -768,6 +738,7 @@ fn stage_verdict(input: &StageInput<'_>) -> bool {
         sites,
         sets,
         occ,
+        nodes,
     } = *input;
     static EMPTY_SETS: FieldSets = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let sets = sets.unwrap_or(&EMPTY_SETS);
@@ -1060,6 +1031,29 @@ fn stage_verdict(input: &StageInput<'_>) -> bool {
         keleusma::bytecode::Value::Int(i64::from(*wildcard)),
     )
     .expect("oskip");
+    const EN_SLOT: usize = OSKIP_SLOT + 1;
+    const EKIND_SLOT: usize = EN_SLOT + 1;
+    const EA_SLOT: usize = EKIND_SLOT + 256;
+    const EB_SLOT: usize = EA_SLOT + 256;
+    assert!(nodes.len() <= 256, "the expression table overflows");
+    vm.set_shared(
+        &mut shared,
+        EN_SLOT,
+        keleusma::bytecode::Value::Int(nodes.len() as i64),
+    )
+    .expect("en");
+    for (i, (k, a, b)) in nodes.iter().enumerate() {
+        vm.set_shared(
+            &mut shared,
+            EKIND_SLOT + i,
+            keleusma::bytecode::Value::Int(*k),
+        )
+        .expect("ekind");
+        vm.set_shared(&mut shared, EA_SLOT + i, keleusma::bytecode::Value::Int(*a))
+            .expect("ea");
+        vm.set_shared(&mut shared, EB_SLOT + i, keleusma::bytecode::Value::Int(*b))
+            .expect("eb");
+    }
     let out = vm
         .call_with_shared(&mut shared, &[keleusma::bytecode::Value::Int(0)])
         .expect("run");
@@ -1388,19 +1382,24 @@ fn slices_four_and_five_reject_conditions_and_structural_mismatches() {
         "wrong-field-count",
         "index-a-scalar",
         "field-access-on-a-scalar",
+        // MOVED IN BY THE CONSOLIDATION, not by a new rule. The unified node
+        // table carries the function tail against its declared return type, so
+        // this shape is now reached by the same input the others are. Asserting
+        // it here is STRICTER than leaving it out: an in-scope shape must be
+        // rejected, where an out-of-scope one merely must not be rejected for
+        // the wrong reason.
+        "body-versus-return",
     ];
 
     let verdict = |src: &str| -> bool {
         let ast = parse(&tokenize(src).expect("lex")).expect("parse");
-        let (mut arity, arg_pairs) = call_rows(&ast);
-        arity.extend(struct_arity(&ast));
-        let mut pairs = operand_pairs(&ast);
-        pairs.extend(arg_pairs);
+        let (dparams, sites, arg_pairs) = decl_call_rows(&ast);
         stage_verdict(&StageInput {
-            pairs: &pairs,
-            arity: &arity,
+            pairs: &arg_pairs,
+            nodes: &expression_nodes(&ast),
             occ: Some(&occurrence_rows(&ast)),
-            claims: &tag_claims(&ast),
+            dparams: &dparams,
+            sites: &sites,
             ..Default::default()
         })
     };
@@ -1444,12 +1443,14 @@ fn slices_four_and_five_reject_conditions_and_structural_mismatches() {
     // The two still outstanding, asserted as OUTSTANDING rather than left
     // unmentioned. A shape that quietly started passing would otherwise look
     // like coverage nobody claimed.
-    for label in ["unknown-field", "body-versus-return"] {
-        assert!(
-            !IN_SCOPE.contains(&label),
-            "{label} is now in scope; move it into IN_SCOPE and out of this list"
-        );
-    }
+    // The one shape still outstanding for THIS test's input, asserted as
+    // outstanding rather than left unmentioned: a shape that quietly started
+    // passing would otherwise look like coverage nobody claimed. It is covered
+    // by the whole-corpus test, which passes the field sets this one does not.
+    assert!(
+        !IN_SCOPE.contains(&"unknown-field"),
+        "unknown-field is now in scope here; move it into IN_SCOPE"
+    );
 }
 
 /// THE FULL CORPUS: every shape rejected, every control accepted.
@@ -1468,12 +1469,11 @@ fn slices_four_and_five_reject_conditions_and_structural_mismatches() {
 fn the_stage_agrees_with_the_reference_on_the_whole_corpus() {
     let verdict = |src: &str| -> bool {
         let ast = parse(&tokenize(src).expect("lex")).expect("parse");
-        let (_, arg_pairs) = call_rows(&ast);
-        let arity = struct_arity(&ast);
-        let mut pairs = operand_pairs(&ast);
-        pairs.extend(arg_pairs);
-        let mut claims = tag_claims(&ast);
-        claims.extend(return_claims(&ast));
+        // Argument-type pairs remain a pair channel: they compare a DECLARED
+        // parameter type against an argument, which is a join with the
+        // declaration table rather than a property of one expression.
+        let (_, _, arg_pairs) = decl_call_rows(&ast);
+        let pairs = arg_pairs;
         // CALL ARITY NO LONGER RIDES THE PRE-JOINED CHANNEL. `arity` carries
         // struct-literal field counts only; call sites go through the join, so
         // the join is load-bearing rather than redundant with a channel that
@@ -1481,8 +1481,7 @@ fn the_stage_agrees_with_the_reference_on_the_whole_corpus() {
         let (dparams, sites, _) = decl_call_rows(&ast);
         stage_verdict(&StageInput {
             pairs: &pairs,
-            arity: &arity,
-            claims: &claims,
+            nodes: &expression_nodes(&ast),
             dparams: &dparams,
             sites: &sites,
             sets: Some(&field_sets(&ast)),
