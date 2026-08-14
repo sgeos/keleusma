@@ -13,6 +13,62 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE COVERAGE GAP THAT WAS A MISSING CAPABILITY, AND THE FIRST VALUE THE HOST DID NOT ALREADY HOLD
+(2026-08-14).** Four merges: the record-shape coverage measurement and its closure, the dedup-scan
+settlement, and two slices of the module-input producer. Plus the type checker's implementation plan.
+
+**A measurement that had to be a measurement.** The wire-format plan recorded seven region kinds
+carrying zero records across the ten stages, and the obvious way to check whether that was still true
+is to grep for the kinds in the test file. Doing so returns seven hits out of seven and **proves
+nothing**: a kind can be named in a stride table, a decoder, or a negative test without any record of
+that shape ever being written. Instrumenting every emit command across the whole suite, logging
+`(command, kind, record count)` with the issuing test, gives the real answer: **sixteen of seventeen
+shapes emitted with at least one record, and `STRUCT_TEMPLATES` under no command at any count.**
+
+**The gap was not a weak assertion. It was a missing capability.** `rows_for_kind` had no decoder for
+`0x0017`, and `emit_at` had no dispatch arm, so the emitter refused the kind outright with `-222`.
+The emitter itself has existed since slice 7 and is reachable as command 130; no caller that chooses
+the kind generically had ever asked for it. **A differential cannot see a mistranscribed offset in a
+shape it never reaches, and here it could not even have reached it.**
+
+**Why no artifact could surface it.** A struct template is written only on the compiler's BOXED path,
+and every ordinary struct flattens. `flat_alloc_bytes` returns `None` above the sixteen-bit operand
+bound, so the shortest route is a struct wider than 65,535 bytes -- 8,300 `Word` fields. All six
+formerly-empty shapes turn out to be reachable from REAL COMPILED MODULES, including `STRUCT_AUX` and
+`ENUM_AUX` via `const data`. The plan expected hand-built artifacts to be necessary; they are not,
+and real sources are the stronger oracle.
+
+**Two statements that read as a contradiction and were not.** The roadmap listed "replacing a linear
+dedup scan" among the remaining work; a standing trap said not to replace it. **They name different
+sites.** `intern_run` is batch-local and capped at 256, where a 1024-slot table would cost 1024 probes
+against roughly 256 comparisons, because a total language has no early exit. The walk-nested scan
+through `NAMES` is the one the reference's 782-second lesson bears on, and it is to be MEASURED at
+stage scale. Recorded because acting on the wrong reading either wastes an increment or undoes a
+deliberate decision.
+
+**The first value on the wiring path the host did not already hold.** Every earlier slice took input
+the host had decoded and made Keleusma recompute it. The interning SEQUENCE was the last piece still
+produced by a Rust model. A producer handed a per-name LENGTH would be hollow, so the module reaches
+Keleusma as bytes with structure and Keleusma recovers the lengths itself. Two constraints shaped the
+encoding: shared data is re-seeded on every VM call, so `nin` does not survive the return and the
+pairs are mirrored to the output buffer; and `highest_command()` refused the new command with `-99`
+until raised, which is the guard working rather than failing.
+
+**The enum section is where the two intern modes diverge**, and a producer writing dedup mode
+throughout would agree with the reference on any corpus that never repeats a name. The corpus now
+carries `enum A { B, X }` beside `enum B { Y, Z }`, where an enum NAME collides with another enum's
+VARIANT. **The enum count is always written, including when zero** -- inferring an absent section
+from the blob ending cannot distinguish empty from truncated, and it would have passed here for the
+wrong reason, since `bin` is zero-filled past the blob.
+
+**A push that reported success and did not push.** The gate ran, printed "all checks passed", and the
+ref was never created; `git ls-remote` is what caught it. The output had been truncated with `tail
+-3`, which cut the line that would have said so. **That is the truncation rule arriving in a new
+place**: not a verification whose result I meant to quote, but a command whose EFFECT I meant to
+rely on.
+
+---
+
 **A CORPUS THAT CANNOT ERODE, AND TWO GUARDS THAT WOULD HAVE SHIPPED UNEXERCISED (2026-08-13).**
 151 selfhost_wire tests, up two. The whole-artifact capstone gains a fourth case that is synthetic
 and sized against the encoder's measured output.
