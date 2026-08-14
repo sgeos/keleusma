@@ -10458,3 +10458,120 @@ fn the_synthetic_source_grows_when_the_first_attempt_is_too_small() {
         "growth stopped at {functions} functions and {len} bytes, short of {target}"
     );
 }
+
+const CMD_MI_CHUNK_NAMES: i64 = 165;
+
+/// The module-input blob: `[u16 count][u16 len][bytes]...` for chunk names.
+///
+/// Built by the HOST here, and by `codegen.kel` eventually. What matters for
+/// this slice is that the LENGTHS are not passed as numbers: they are recovered
+/// from the blob by Keleusma, so the producer is doing work rather than copying.
+fn module_input_blob(module: &keleusma::bytecode::Module) -> Vec<u8> {
+    let mut out = Vec::new();
+    let n = u16::try_from(module.chunks.len()).expect("chunk count fits u16");
+    out.extend_from_slice(&n.to_le_bytes());
+    for c in &module.chunks {
+        let b = c.name.as_bytes();
+        let l = u16::try_from(b.len()).expect("name length fits u16");
+        out.extend_from_slice(&l.to_le_bytes());
+        out.extend_from_slice(b);
+    }
+    out
+}
+
+/// Keleusma produces the interner input sequence from the module, not the host.
+///
+/// **This is the first value on the wiring path that the host did not already
+/// hold.** Every earlier slice took something the host had decoded and had
+/// Keleusma recompute it. Here the module arrives as bytes with structure and
+/// Keleusma recovers the per-name lengths and the mode, which is what
+/// `interner_input` -- a Rust model in this file -- has produced until now.
+///
+/// Scope, stated so the next slice knows what is left: chunk names only. Enum
+/// layouts contribute a type name in dedup mode and a variant name per variant
+/// in FRESH mode, and the constant walk contributes names inline. Sources here
+/// are restricted to ones with no other contributor, and the restriction is
+/// checked rather than assumed.
+#[test]
+fn keleusma_produces_the_chunk_name_interner_sequence_from_a_module_blob() {
+    const CASES: &[(&str, &str)] = &[
+        ("single", "fn main() -> Word { 42 }"),
+        (
+            "several",
+            "fn alpha(a: Word) -> Word { a }\nfn beta(b: Word) -> Word { b }\n\
+             fn main() -> Word { alpha(1) + beta(2) }",
+        ),
+        (
+            "long-names",
+            "fn a_function_with_a_deliberately_long_name(x: Word) -> Word { x }\n\
+             fn main() -> Word { a_function_with_a_deliberately_long_name(7) }",
+        ),
+    ];
+
+    let mut vm = vm_for(WIRE_KEL);
+    let mut checked = 0;
+
+    for (label, src) in CASES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+
+        // The model this slice is replacing covers only some contributors, so a
+        // source reaching another one would compare against a short sequence.
+        assert_no_other_contributors(label, &module);
+        assert!(
+            module.enum_layouts.is_empty(),
+            "{label}: enum layouts contribute names and this slice covers chunk names only"
+        );
+
+        let want: Vec<(String, i64)> = interner_input(&module);
+        assert!(
+            !want.is_empty(),
+            "{label}: the model produced no names, so this case compares nothing"
+        );
+
+        let blob = module_input_blob(&module);
+        let (ret, out) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_MI_CHUNK_NAMES,
+                nregions: 0,
+                seed: &[],
+                regions: &[],
+                fields: &[],
+                names: &[],
+                pool: &blob,
+                args: [0, 0, 0, 0, 0],
+                read_len: want.len() * 8,
+            },
+        )
+        .expect("run");
+        assert_eq!(
+            ret,
+            want.len() as i64,
+            "{label}: Keleusma recovered {ret} names, the model has {}",
+            want.len()
+        );
+
+        // The produced pairs, read from the output buffer.
+        let u32le = |b: &[u8], o: usize| -> i64 {
+            i64::from(u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]))
+        };
+        for (i, (name, mode)) in want.iter().enumerate() {
+            assert_eq!(
+                u32le(&out, i * 8),
+                name.len() as i64,
+                "{label}: name {i} ({name}) length"
+            );
+            assert_eq!(
+                u32le(&out, (i * 8) + 4),
+                *mode,
+                "{label}: name {i} ({name}) mode"
+            );
+        }
+        checked += 1;
+    }
+
+    // MUST-FIRE on the corpus: every case must have run, or a `continue` added
+    // later would leave this passing while measuring nothing.
+    assert_eq!(checked, CASES.len(), "not every case was checked");
+}

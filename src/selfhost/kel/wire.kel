@@ -2700,6 +2700,64 @@ fn nm_intern_at(m: Word) -> Word {
     wire.nout[nm_map_base() + m]
 }
 
+// --- The module-input encoding (slice 14) --------------------------------
+//
+// **The first thing on this path that is not a value the host already decoded.**
+// Every prior slice took input the host had computed and made Keleusma compute a
+// value from it. The interning SEQUENCE was the last piece still produced by a
+// Rust model in the test file, and a producer handed a per-name LENGTH would be
+// hollow -- it would prove Keleusma can copy a number. So the module reaches
+// Keleusma as BYTES with structure, and Keleusma recovers the lengths itself.
+//
+// The blob lives in `bin`, read-only to the interner and therefore free between
+// its own batches:
+//
+//   [u16 count][u16 len_0][len_0 bytes][u16 len_1][len_1 bytes]...
+//
+// Lengths are two bytes rather than one because a function name is not bounded
+// by 255 and a truncating read is the defect class this project has hit ten
+// times by enumerating a width by hand.
+fn mi_u16(at: Word) -> Word {
+    (wire.bin[at] as Word) + ((wire.bin[at + 1] as Word) lsl 8)
+}
+
+fn mi_count() -> Word { mi_u16(0) }
+
+// The (length, mode) pairs the interner consumes, recovered from the blob.
+//
+// Chunk names all intern in DEDUP mode; the fresh mode belongs to enum variants,
+// which a later slice adds. Writing mode 0 for everything here would be right by
+// accident, so the mode is written from `nm_mode_intern()` rather than as a
+// literal zero.
+fn nm_mode_intern() -> Word { 0 }
+
+fn mi_chunk_names() -> Word {
+    nm.err = 0;
+    nm.icur = 2;
+    nm.cnt = 0;
+    nm.err = if mi_count() > nm_max_names() { 0 - 236 } else { nm.err };
+    for i in 0..mi_count() limit 256 {
+        nm.sink = if nm.err < 0 { 0 } else {
+            // The length is READ from the blob, not supplied. `icur` walks the
+            // blob; the interner's own cursor is set up separately by its caller.
+            wire.nin[i * 2] = mi_u16(nm.icur);
+            wire.nin[(i * 2) + 1] = nm_mode_intern();
+            // ALSO written to the output buffer, because shared data is
+            // re-seeded on every VM call: `nin` does not survive the return, so
+            // a host that could only read `nin` afterwards would be reading the
+            // next call's zeros. The interner consumes `nin` within the call;
+            // the output copy is what makes the producer differentiable on its
+            // own, before the coupling slice wires the two together.
+            nm.sink = put_u32(i * 8, wire.nin[i * 2]);
+            nm.sink = put_u32((i * 8) + 4, wire.nin[(i * 2) + 1]);
+            nm.icur = nm.icur + 2 + mi_u16(nm.icur);
+            nm.cnt = nm.cnt + 1;
+            0
+        };
+    }
+    if nm.err < 0 { nm.err } else { nm.cnt }
+}
+
 fn intern_run(n: Word) -> Word {
     nm.ocur = 0;
     nm.cnt = 0;
@@ -3749,7 +3807,11 @@ fn dispatch_driver2(cmd: Word) -> Word {
     if cmd == 162 { ck_window_templates() } else {
     if cmd == 163 { ck_window_ptypes() } else {
     if cmd == 164 { emit_in_window() } else {
-    0 - 98 }}}}}}}}}}}}}
+    // Slice 14: the module-input producer. Fourteen arms in this chain, which is
+    // four clear of `emit_at`'s eighteen, so there is room here that there is not
+    // there.
+    if cmd == 165 { mi_chunk_names() } else {
+    0 - 98 }}}}}}}}}}}}}}
 }
 
 fn dispatch_driver(cmd: Word) -> Word {
@@ -3779,7 +3841,7 @@ fn dispatch_driver(cmd: Word) -> Word {
 // UNREACHABLE and its own test fails immediately. The fall-through sweep reads
 // this value out of the source instead of restating a bound, which is what it
 // did for four consecutive slices — and got wrong once.
-fn highest_command() -> Word { 164 }
+fn highest_command() -> Word { 165 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {
