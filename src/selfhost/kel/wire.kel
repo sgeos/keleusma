@@ -2543,6 +2543,11 @@ fn emit_in_window() -> Word {
 // the wrong direction, and the record pairs coincide only when nothing has been
 // deduped yet, where the input pair is read before the output pair is written.
 private data nm {
+    // Enum-section counters (slice 14b). Fields rather than locals for the
+    // reason `crc.acc` records: this file uses no locals, so a nested walk has
+    // to carry its counts in state.
+    ecnt: Word,
+    vcnt: Word,
     // Byte cursor into the INPUT concatenation in `wire.bin`.
     icur: Word,
     // Byte cursor into the OUTPUT pool, compacted in place over the input.
@@ -2731,6 +2736,31 @@ fn mi_count() -> Word { mi_u16(0) }
 // literal zero.
 fn nm_mode_intern() -> Word { 0 }
 
+// Enum layouts contribute a type name that DEDUPS and variant names that do
+// NOT (slice 14b). `SchemaBuilder::add_enum_layouts` calls `names.intern` for
+// the type name and `names.intern_fresh` per variant, and the difference is the
+// whole content of this section: a producer that wrote dedup mode throughout
+// would agree with the reference on any corpus that never repeats a name.
+fn nm_mode_fresh() -> Word { 1 }
+
+// Append one pair and mirror it to the output buffer.
+fn mi_pair(k: Word, len: Word, mode: Word) -> Word {
+    wire.nin[k * 2] = len;
+    wire.nin[(k * 2) + 1] = mode;
+    nm.sink = put_u32(k * 8, len);
+    nm.sink = put_u32((k * 8) + 4, mode);
+    k + 1
+}
+
+// A count read from the blob, clamped to zero when it exceeds the cap.
+//
+// `for .. limit` TRAPS on entry when the runtime range exceeds the static cap,
+// so an oversize count must never REACH a loop; a sticky error flag set inside
+// would never be read. The error is recorded and the loop is given zero.
+fn mi_bounded(v: Word) -> Word {
+    if v > nm_max_names() { 0 } else { v }
+}
+
 fn mi_chunk_names() -> Word {
     nm.err = 0;
     nm.icur = 2;
@@ -2755,7 +2785,40 @@ fn mi_chunk_names() -> Word {
             0
         };
     }
-    if nm.err < 0 { nm.err } else { nm.cnt }
+    if nm.err < 0 { nm.err } else { mi_enum_names() }
+}
+
+// The enum section, continuing from where the chunk walk left `nm.icur`.
+//
+// The count is written even when there are no enums. A producer that inferred
+// "no enum section" from the blob ENDING could not tell an empty section from a
+// truncated blob, which is the same class of defect as reading a length one byte
+// wide.
+fn mi_enum_names() -> Word {
+    nm.ecnt = mi_u16(nm.icur);
+    nm.icur = nm.icur + 2;
+    nm.err = if nm.ecnt > nm_max_names() { 0 - 237 } else { nm.err };
+    for e in 0..mi_bounded(nm.ecnt) limit 256 {
+        nm.sink = if nm.err < 0 { 0 } else {
+            // The type name DEDUPS.
+            nm.cnt = mi_pair(nm.cnt, mi_u16(nm.icur), nm_mode_intern());
+            nm.icur = nm.icur + 2 + mi_u16(nm.icur);
+            nm.vcnt = mi_u16(nm.icur);
+            nm.icur = nm.icur + 2;
+            nm.err = if nm.vcnt > nm_max_names() { 0 - 238 } else { nm.err };
+            0
+        };
+        for v in 0..mi_bounded(nm.vcnt) limit 256 {
+            nm.sink = if nm.err < 0 { 0 } else {
+                // The variants do NOT dedup.
+                nm.cnt = mi_pair(nm.cnt, mi_u16(nm.icur), nm_mode_fresh());
+                nm.icur = nm.icur + 2 + mi_u16(nm.icur);
+                0
+            };
+        }
+    }
+    if nm.err < 0 { nm.err } else {
+    if nm.cnt > nm_max_names() { 0 - 239 } else { nm.cnt } }
 }
 
 fn intern_run(n: Word) -> Word {
