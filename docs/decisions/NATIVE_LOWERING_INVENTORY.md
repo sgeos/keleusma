@@ -5694,3 +5694,20 @@ per query, which changes what that spike is.
 **Staleness, unchanged and still safe-direction**: CallVerifiedNative 1019, NewComposite 225,
 Const 111, Yield 38, IsEnum 29, Reset/Stream 20 each, GetIndex/GetTupleField 14 each,
 GetEnumField 4, GetField 2.
+
+### One of the three `is_lowered` copies is RETIRED, not resynchronised
+
+`spike_corpus_coverage.rs` no longer carries a per-opcode model. It asks
+`module_refusals` and derives a **per-CHUNK** `refused_chunks` set instead.
+
+**Retired rather than brought back into step**, because a second copy of a predicate is a
+drift hazard whatever its current accuracy, and this branch has been bitten by exactly that
+three times. The granularity changed with it and the change is honest: the model claimed to
+know per OPCODE, and the truth is known per CHUNK. The refusal message names the blocking
+construct anyway, which is better attribution than the model ever gave.
+
+**Two copies remain**, in `spike_stream_sufficiency.rs` and `spike_composite_split.rs`. The
+second is the hard one and the obstacle is structural, not clerical:
+`classify_ops` takes a bare `&[Op]` so a case can be stated without standing up a chunk, and
+`module_refusals` needs a `Module`. Asking the real lowering there means synthesising a chunk
+per query, which changes what that spike is for.
