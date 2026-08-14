@@ -2556,7 +2556,8 @@ private data nm {
     cflags: Word,
     cdisc: Word,
     cnames: Word,
-    quiet: Word,
+    mode: Word,
+    total: Word,
     // Byte cursor into the INPUT concatenation in `wire.bin`.
     icur: Word,
     // Byte cursor into the OUTPUT pool, compacted in place over the input.
@@ -2768,6 +2769,21 @@ fn nm_mode_intern() -> Word { 0 }
 fn nm_mode_fresh() -> Word { 1 }
 
 // Append one pair and mirror it to the output buffer.
+// The producer's output MODES.
+//
+//   0  write the (length, mode) pairs to the output buffer   -- the pair probe
+//   1  write the constant node table to the output buffer    -- the node probe
+//   2  write NEITHER                                         -- the join
+//
+// Generalized from a boolean when the join arrived. A third caller wanting
+// neither output is not a third boolean; two booleans would admit a fourth
+// state nobody defined.
+fn mi_mode_pairs() -> Word { 0 }
+
+fn mi_mode_nodes() -> Word { 1 }
+
+fn mi_mode_silent() -> Word { 2 }
+
 fn mi_pair(k: Word, len: Word, mode: Word) -> Word {
     wire.nin[k * 2] = len;
     wire.nin[(k * 2) + 1] = mode;
@@ -2775,9 +2791,26 @@ fn mi_pair(k: Word, len: Word, mode: Word) -> Word {
     // because the node walk still needs the running name index that the pair
     // sequence defines, and a mode that skipped it would compute
     // `names_first` from a counter with a different history.
-    nm.sink = if nm.quiet == 1 { 0 } else { put_u32(k * 8, len) };
-    nm.sink = if nm.quiet == 1 { 0 } else { put_u32((k * 8) + 4, mode) };
+    nm.sink = if nm.mode == mi_mode_pairs() { put_u32(k * 8, len) } else { 0 };
+    nm.sink = if nm.mode == mi_mode_pairs() { put_u32((k * 8) + 4, mode) } else { 0 };
     k + 1
+}
+
+// Record where name `k`'s BYTES begin in the blob.
+//
+// **This is the whole of the obstacle the join had to clear.** `nm_offsets`
+// computes each offset as a cumulative sum of the lengths in `nin`, which is
+// right exactly when `bin` holds the names concatenated with nothing between
+// them. The module blob interleaves a two-byte length prefix before every name,
+// so that sum is wrong by two bytes per preceding name -- and the failure would
+// present as a corrupt pool rather than as an offset convention.
+//
+// Written UNCONDITIONALLY rather than only in the join's mode. Nothing else
+// uses this region of `nout` while the producer runs, and one code path cannot
+// disagree with itself about where a name is.
+fn mi_offset(k: Word, at: Word) -> Word {
+    wire.nout[nm_off_base() + k] = at;
+    k
 }
 
 // Six words per node: tag, payload, child count, names_first, flags, disc.
@@ -2831,14 +2864,14 @@ fn mi_bounded(v: Word) -> Word {
 // data PERSISTS across calls in the arena, unlike shared data which is re-seeded,
 // so a flag left set by a previous call would silently suppress this one`s output.
 fn mi_pairs() -> Word {
-    nm.quiet = 0;
+    nm.mode = mi_mode_pairs();
     mi_chunk_names()
 }
 
 fn mi_const_nodes() -> Word {
-    nm.quiet = 1;
+    nm.mode = mi_mode_nodes();
     nm.sink = mi_chunk_names();
-    nm.quiet = 0;
+    nm.mode = mi_mode_pairs();
     if nm.sink < 0 { nm.sink } else { nm.ccnt }
 }
 
@@ -2851,6 +2884,7 @@ fn mi_chunk_names() -> Word {
         nm.sink = if nm.err < 0 { 0 } else {
             // The length is READ from the blob, not supplied. `icur` walks the
             // blob; the interner's own cursor is set up separately by its caller.
+            nm.sink = mi_offset(i, nm.icur + 2);
             wire.nin[i * 2] = mi_u16(nm.icur);
             wire.nin[(i * 2) + 1] = nm_mode_intern();
             // ALSO written to the output buffer, because shared data is
@@ -2882,6 +2916,7 @@ fn mi_enum_names() -> Word {
     for e in 0..mi_bounded(nm.ecnt) limit 256 {
         nm.sink = if nm.err < 0 { 0 } else {
             // The type name DEDUPS.
+            nm.sink = mi_offset(nm.cnt, nm.icur + 2);
             nm.cnt = mi_pair(nm.cnt, mi_u16(nm.icur), nm_mode_intern());
             nm.icur = nm.icur + 2 + mi_u16(nm.icur);
             nm.vcnt = mi_u16(nm.icur);
@@ -2892,6 +2927,7 @@ fn mi_enum_names() -> Word {
         for v in 0..mi_bounded(nm.vcnt) limit 256 {
             nm.sink = if nm.err < 0 { 0 } else {
                 // The variants do NOT dedup.
+                nm.sink = mi_offset(nm.cnt, nm.icur + 2);
                 nm.cnt = mi_pair(nm.cnt, mi_u16(nm.icur), nm_mode_fresh());
                 nm.icur = nm.icur + 2 + mi_u16(nm.icur);
                 0
@@ -2974,12 +3010,13 @@ fn mi_const_names() -> Word {
             nm.cfirst = if nm.cnames == 0 { 0 } else { nm.cnt };
             for q in 0..mi_bounded(nm.cnames) limit 256 {
                 nm.sink = if nm.err < 0 { 0 } else {
+                    nm.sink = mi_offset(nm.cnt, nm.icur + 2);
                     nm.cnt = mi_pair(nm.cnt, mi_u16(nm.icur), mi_name_mode(nm.ctag, q));
                     nm.icur = nm.icur + 2 + mi_u16(nm.icur);
                     0
                 };
             }
-            nm.sink = if nm.quiet == 1 {
+            nm.sink = if nm.mode == mi_mode_nodes() {
                 mi_put_node_full(c, nm.ctag, nm.cpay, nm.ckids, nm.cfirst, nm.cflags, nm.cdisc)
             } else { 0 };
             0
@@ -2999,6 +3036,63 @@ fn intern_run(n: Word) -> Word {
         nm.sink = if nm.err < 0 { 0 } else { nm_intern_at(j) };
     }
     if nm.err < 0 { nm.err } else { nm.cnt }
+}
+
+// The interner, for input whose byte offsets are ALREADY in `nout`.
+//
+// **Additive, not a change to `intern_run`.** The sequential path keeps its own
+// offset computation and therefore cannot regress: a defect introduced here
+// cannot reach it. That is the whole reason this is a second function rather
+// than a flag on the first.
+//
+// The per-name LENGTH CHECK is carried over deliberately. It rode along inside
+// `nm_offsets` because both wanted one pass, so a variant that merely skipped
+// `nm_offsets` would drop a guard while appearing to drop only an arithmetic
+// step -- and a length too large to compare must be refused BEFORE it is used
+// as a loop bound.
+//
+// The `bin_capacity` check uses the producer's final cursor, which is the blob
+// length. That is the same quantity `intern_run` checks, arrived at by walking
+// the blob rather than by summing lengths.
+fn intern_run_preoffset(n: Word) -> Word {
+    nm.ocur = 0;
+    nm.cnt = 0;
+    nm.err = if nm.icur > bin_capacity() { 0 - 232 } else { 0 };
+    for m in 0..n limit 256 {
+        nm.err = if wire.nin[m * 2] > nm_max_name() { 0 - 231 } else { nm.err };
+    }
+    for j in 0..n limit 256 {
+        nm.sink = if nm.err < 0 { 0 } else { nm_intern_at(j) };
+    }
+    if nm.err < 0 { nm.err } else { nm.cnt }
+}
+
+// THE JOIN. Producer, interner and emitters in ONE call.
+//
+// One call because shared data is RE-SEEDED on every VM call: `nin` and the
+// offset table do not survive a return, so a host that ran these as three calls
+// would hand the interner an empty table and the emitters an empty pool.
+//
+// This is what connects two chains that were each verified and unconnected: the
+// producer was checked against the Rust models, the emitters against
+// `encode_aux_body`, and nothing ran one into the other.
+fn mi_join() -> Word {
+    nm.mode = mi_mode_silent();
+    nm.total = mi_chunk_names();
+    nm.mode = mi_mode_pairs();
+    if nm.total < 0 { nm.total } else {
+    if intern_run_preoffset(nm.total) < 0 { nm.err } else {
+    if dir_find(kind_names()) < 0 { 0 - 233 } else {
+    if dir_find(kind_string_pool()) < 0 { 0 - 234 } else {
+        emit_name_records_from_nout(region_base(dir_find(kind_names())), nm.cnt)
+            + emit_pool_bytes_from_bout(
+                region_base(dir_find(kind_string_pool())),
+                nm.ocur,
+            )
+            + emit_pool_pad(
+                region_base(dir_find(kind_string_pool())) + nm.ocur,
+                nm.ocur,
+            ) } } } }
 }
 
 // The `NAMES` index that input name `j` resolved to.
@@ -4043,7 +4137,8 @@ fn dispatch_driver2(cmd: Word) -> Word {
     // there.
     if cmd == 165 { mi_pairs() } else {
     if cmd == 166 { mi_const_nodes() } else {
-    0 - 98 }}}}}}}}}}}}}}}
+    if cmd == 167 { mi_join() } else {
+    0 - 98 }}}}}}}}}}}}}}}}
 }
 
 fn dispatch_driver(cmd: Word) -> Word {
@@ -4073,7 +4168,7 @@ fn dispatch_driver(cmd: Word) -> Word {
 // UNREACHABLE and its own test fails immediately. The fall-through sweep reads
 // this value out of the source instead of restating a bound, which is what it
 // did for four consecutive slices — and got wrong once.
-fn highest_command() -> Word { 166 }
+fn highest_command() -> Word { 167 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {
