@@ -5389,3 +5389,35 @@ It was caught because the number was too good, not because anything asserted it.
 measurement instrument returning the answer you hoped for is the one case where no assertion
 fires and no reviewer objects.** The count now travels in the error and the list stays with
 the caller.
+
+### AND THE DERIVED FIGURE WAS INFLATED TOO: static strings free ONE module
+
+Checked by OP PRESENCE across the whole module rather than by refusal order, which is the
+one bias the derived measurement announced about itself.
+
+| | |
+|---|---|
+| modules where a static string blocks | 11 |
+| ... that contain NO other blocking op | **1** |
+| ... that also contain a native call | 10 |
+| ... that also contain `Stream`/`Yield`/`Reset` | 10 |
+
+**The ten are the `piano_roll` family, and each needs all three classes.** Implementing
+static strings alone delivers **one** module.
+
+**Two errors cancelled, and noticing that matters more than either.** The stale model said
+`ALONE = 1` and I dismissed it as an under-estimate caused by staleness. The derived
+measurement said 11 and I flagged it as an upper bound. **The true figure is 1** — the
+stale model's number was right for the wrong reason, and my correction of it was wrong in
+the opposite direction. Being right about the instrument being broken did not make its
+answer wrong.
+
+**Static strings are NOT the next increment.** The next real item is whatever frees the
+`piano_roll` family, which needs native calls AND non-degenerate streams together — a
+larger, coupled piece of work than any single-class ranking suggests, and the ranking
+machinery cannot express a package deal.
+
+**Third time on this branch a headline number has not survived contact**: the baked-address
+slice at 34.5% measured zero, `static-str` at 11 measures one, and the model that would have
+caught the second was itself stale. The rule that keeps holding is to ask the corpus what it
+CONTAINS rather than what a ranking says it needs.

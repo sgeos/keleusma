@@ -717,3 +717,67 @@ fn spike_report_derived_slack() {
     println!("  which INFLATES ALONE — the opposite bias to the stale model.");
     println!("================");
 }
+
+/// **Would static strings actually free those 11 modules?**
+///
+/// The derived slack says `static-str` is ALONE in 11 of 20 refused modules, but
+/// it reads one refusal per CHUNK, so a blocker sitting AFTER the string inside
+/// the same chunk is invisible to it. This checks the same modules by OP
+/// PRESENCE, which cannot hide behind refusal order.
+///
+/// The question is not academic: the baked-address composite slice was ranked at
+/// 34.5% of the corpus and measured at ZERO once the corpus was asked what it
+/// actually contains.
+#[test]
+fn spike_report_what_blocks_the_static_string_modules() {
+    let mut freed = 0usize;
+    let mut also: BTreeMap<&'static str, usize> = BTreeMap::new();
+
+    for (path, m) in compiled_corpus_modules() {
+        let rs = keleusma_native::module_refusals(&m, keleusma_native::LowerOptions::default());
+        if rs.is_empty() {
+            continue;
+        }
+        let mentions_str = rs.iter().any(|(_, e)| format!("{e}").contains("StaticStr"));
+        if !mentions_str {
+            continue;
+        }
+        // Op presence across the WHOLE module, independent of refusal order.
+        let mut others: Vec<&'static str> = Vec::new();
+        for c in &m.chunks {
+            for op in &c.ops {
+                match op {
+                    Op::CallVerifiedNative(..) | Op::CallExternalNative(..) => {
+                        others.push("native-call")
+                    }
+                    Op::Stream | Op::Yield | Op::Reset => others.push("stream"),
+                    _ => {}
+                }
+            }
+        }
+        others.sort_unstable();
+        others.dedup();
+        if others.is_empty() {
+            freed += 1;
+        } else {
+            for o in &others {
+                *also.entry(o).or_default() += 1;
+            }
+            let name = path
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            println!("  {name:32} also contains {others:?}");
+        }
+    }
+
+    println!("================ WOULD STATIC STRINGS FREE THEM?");
+    println!("  string-blocked modules with NO other blocking op : {freed}");
+    for (k, n) in &also {
+        println!("  ... also containing {k:14} : {n}");
+    }
+    println!("  -> `freed` is what implementing static strings would actually");
+    println!("     deliver. The ALONE column cannot see a blocker that sits");
+    println!("     after the string inside the same chunk.");
+    println!("================");
+}
