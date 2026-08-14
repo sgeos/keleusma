@@ -6,7 +6,32 @@ The sliced implementation plan the scoping document
 ([`TYPECHECK_SELFHOST_PLAN.md`](./TYPECHECK_SELFHOST_PLAN.md)) deferred until its two spikes had
 run. Both have. Written 2026-08-14.
 
-Status: **PLANNED, NOT BUILT.**
+Status: **BUILT. Full verdict agreement on the corpus, 2026-08-14.**
+
+The stage rejects all sixteen ill-typed programs and accepts all seven well-typed ones. Six slices,
+each merged on a green gate: the harness with an accepting checker, operand agreement, call arity and
+argument types, name resolution, conditions and structural claims, and the last two shapes.
+`src/selfhost/kel/verify_types.kel` is the stage and `tests/selfhost_typecheck.rs` the differential.
+
+**What the slices taught that the plan did not predict.**
+
+- **A well-typed control caught a FALSE REJECTION**, in slice 3. The name collector knew only
+  functions and locals, so `shared data s { n: Word }` reading `s.n` resolved to nothing and was
+  refused. A valid program rejected is a language change, not a conservative choice, and **a
+  rejection-only corpus would have scored it a success**. This is the plan's own warning arriving as
+  an actual defect rather than a hypothetical.
+- **A wildcard import makes resolution undecidable**, and the sound response is to stop deciding
+  rather than guess. `use audio::*` brings in names the collector cannot enumerate, so the whole
+  table is dropped for such a program.
+- **Struct field count is call arity.** A struct literal with the wrong number of fields is the
+  identical claim as a call with the wrong number of arguments, and it goes down the same channel.
+  Two spellings of one idea is where they drift apart.
+- **The stage compares; the host supplies syntactic facts.** Tags come from literal kinds and
+  declared types, never from the reference's inference, which would make agreement true by
+  construction. That division is the one `verify_*.kel` already uses.
+
+**What is NOT done**: this is rejection only, which is the whole Order-1 obligation but not a type
+checker. Inference for emission was measured to be unnecessary and remains so.
 
 ## What this is not
 
