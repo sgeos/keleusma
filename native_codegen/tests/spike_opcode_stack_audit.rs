@@ -113,6 +113,47 @@ const CASES: &[(&str, &str)] = &[
         "static_str",
         "use host::name\nfn main(a: Word, b: Word) -> Word { host::name(\"x\"); a }",
     ),
+    // Added 2026-08-14 to close the audit's own hole: sixteen opcodes occurred
+    // in the shipped corpus with no isolating case. Each entry forces one.
+    (
+        "cmp_eq",
+        "fn main(a: Word, b: Word) -> Word { if a == b { a } else { b + b } }",
+    ),
+    (
+        "cmp_ne",
+        "fn main(a: Word, b: Word) -> Word { if a != b { a } else { b + b } }",
+    ),
+    (
+        "cmp_le",
+        "fn main(a: Word, b: Word) -> Word { if a <= b { a } else { b + b } }",
+    ),
+    (
+        "cmp_ge",
+        "fn main(a: Word, b: Word) -> Word { if a >= b { a } else { b + b } }",
+    ),
+    (
+        "logical_not",
+        "fn main(a: Word, b: Word) -> Word { if not (a == b) { a } else { b } }",
+    ),
+    ("bit_and2", "fn main(a: Word, b: Word) -> Word { a band b }"),
+    ("bit_or2", "fn main(a: Word, b: Word) -> Word { a bor b }"),
+    ("bit_xor2", "fn main(a: Word, b: Word) -> Word { a bxor b }"),
+    (
+        "shift_left",
+        "fn main(a: Word, b: Word) -> Word { a lsl 2 }",
+    ),
+    (
+        "shift_right",
+        "fn main(a: Word, b: Word) -> Word { a lsr 2 }",
+    ),
+    (
+        "break_if2",
+        "fn main(a: Word, b: Word) -> Word { let mut s = 0; loop { s = s + 1; break if s > 3; }; s }",
+    ),
+    (
+        "stream_scalar",
+        "loop main(input: Word) -> Word { let _ = yield input; 0 }",
+    ),
 ];
 
 fn compiled_cases() -> Vec<(&'static str, Module)> {
