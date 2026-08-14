@@ -1052,6 +1052,20 @@ the format. The work is an input encoding, a producer, and the residency staging
 395,804 names force — which is the same batching problem the scan note above defers to. **Those two
 are the same increment, and doing either alone is wasted.**
 
+#### `read_stage` IS NOT A SMALL INDEPENDENT ITEM (checked 2026-08-14)
+
+`src/selfhost/mod.rs` states the criterion precisely: `wire.kel` "joins the stage table when it
+produces bytes rather than a checksum". **It now produces bytes**, byte-identically, for whole
+artifacts. So the criterion reads as met and the item reads as a one-line change.
+
+**It is not.** `read_stage` feeds the DRIVER, and the driver still has no role for `wire.kel`: the
+other ten sources are pipeline stages that take a source and produce a stage output, while
+`wire.kel` is an emitter library driven by commands from a host that already holds a module. Adding
+it to the table without a driver that calls it would record a capability the system does not have.
+
+**The item is therefore blocked behind "wire the driver to a module", not beside it.** Checked so
+that a later session does not spend an increment rediscovering it as an easy win.
+
 #### THE TWO DEDUP SCANS ARE DIFFERENT SCANS (settled 2026-08-14)
 
 Two statements in this repository read as a contradiction, and they are not one. They name
