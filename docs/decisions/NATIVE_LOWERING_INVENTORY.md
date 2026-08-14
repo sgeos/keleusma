@@ -5711,3 +5711,38 @@ second is the hard one and the obstacle is structural, not clerical:
 `classify_ops` takes a bare `&[Op]` so a case can be stated without standing up a chunk, and
 `module_refusals` needs a `Module`. Asking the real lowering there means synthesising a chunk
 per query, which changes what that spike is for.
+
+### CORRECTION: the rogue AI blocker is the RETURN type, and it is the caller-region case
+
+An earlier note here said `rogue_ai_boss::main` "takes a tuple". True, and the less important
+half. The signature is:
+
+```text
+loop main(input: (Word, Word, Word, Word, Word)) -> (Word, Word, Word)
+```
+
+**It RETURNS a composite.** That is exactly the case the region design refuses deliberately,
+and for a reason that is about ownership rather than convenience: a returned flat body must
+outlive the chunk that built it, so it belongs in the CALLER's region, and no convention for
+that exists.
+
+A composite ARGUMENT would have been no decision at all — the emitter already represents every
+composite operand as an `i64` address, so a parameter arriving as an address invents nothing.
+I briefly reframed the blocker that way and it was wrong. **The return type is what needs the
+decision**, and it is the same decision the plan reserved for `rogue_dungen`, arriving from a
+module nobody expected it from.
+
+So of the five refusals:
+
+| module | blocked on |
+|---|---|
+| `rogue_ai_boss/hunter/tracker` | **caller-region convention for a returned composite** — operator decision |
+| `codegen.kel` | delegated suspension — a soundness refusal, needs a design, must not be widened |
+| `rogue_dungen.kel` | an unknown-width `NewComposite` operand — mine, and probably small |
+
+**Four of five are blocked on decisions rather than effort.** Only `rogue_dungen` is
+straightforwardly implementable, and it is the one the plan had marked as needing an operator
+call.
+
+The tail-walk widening is still correct and still worth re-applying: it is what lets these
+three reach the point where the return convention is the only thing left.
