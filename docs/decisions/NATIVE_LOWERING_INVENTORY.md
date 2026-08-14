@@ -5421,3 +5421,174 @@ machinery cannot express a package deal.
 slice at 34.5% measured zero, `static-str` at 11 measures one, and the model that would have
 caught the second was itself stale. The rule that keeps holding is to ask the corpus what it
 CONTAINS rather than what a ranking says it needs.
+
+---
+
+## The `piano_roll` family, decomposed — and "non-degenerate streams" is not real
+
+`native_codegen/tests/probe_piano_roll.rs`, 2026-08-13. The family was carried as needing
+**static strings AND native calls AND non-degenerate streams together**. Two of those three
+survive measurement. The third does not.
+
+### The streams are already fine. All ten of them.
+
+| fact | measured |
+|---|---|
+| `Stream` chunks in the family | 10, exactly one per module |
+| structurally clean, i.e. degenerate | **10** |
+| defective | **0** |
+
+Every one is `params 1, yields 1, no non-Func callee, Stream first, Reset last` — precisely
+the degenerate shape that has lowered since the stream increment. **No non-degenerate stream
+work is required for this family**, and an increment scoped to deliver it would have
+delivered nothing.
+
+This fact is not subject to the instrument bias below, because the probe reads block type,
+first and last op, parameter count and callee categories **directly off the bytecode** rather
+than re-deriving `degenerate_stream_yield`. Three copies of a re-derived `is_lowered` are
+already stale in this directory; the fix for that is not a fourth copy.
+
+### The refusal list under-states, exactly as the op-presence ranking over-stated
+
+`module_refusals` reports **one** class across all ten modules, `Const holding StaticStr`,
+and that reads as "static strings are the only blocker". It is wrong, and the reason is
+structural: refusals are collected **per chunk and stop at the first**, so every op after the
+string in the same chunk is unexamined. The string is `host::song_name(...)` in the init
+block, near the top.
+
+**This is the `static-str ALONE = 11` failure inverted.** That number over-stated what
+removing one class would free. A refusal list under-states what remains. Neither is a plan,
+and the two biases point in opposite directions, so neither corrects the other.
+
+The instrument that cannot hide anything is a **full op histogram**, which counts every op in
+every chunk regardless of refusal order. Across the family: **40 distinct op kinds, 16 393 op
+instances**. The two with no emitter arm anywhere:
+
+| blocker | instances | note |
+|---|---|---|
+| `CallVerifiedNative` | **999** | no arm in `src/lib.rs` at all |
+| `Const(StaticStr)` | **10** | one per module, the song name |
+
+The count ordering is the opposite of the attention ordering. Static strings were the named
+item for two increments and are **ten instances**; native calls were never ranked and are
+**999**.
+
+### The fact that decides the native-call design: zero of 999 sites carry a return shape
+
+`Module::native_return_shapes` is parallel to `native_names` and records `WireShape::Top` for
+a native declared without a resolving `use ... -> R` signature.
+
+| | sites |
+|---|---|
+| native call sites in the family | 999 |
+| **whose native has a return shape** | **0** |
+| whose native has none (`Top` or absent) | **999**, across 15 distinct `host::*` natives |
+
+**A fail-closed-on-unknown-return design lowers zero of this family.** That is the whole
+increment lost, and it would have been discovered after implementation rather than before.
+The result must instead push `Width::Unknown` and fail closed only at a **use** of the width,
+which is the defer-on-unknown mechanism the emitter already has. It is sound here for a
+reason the histogram shows: **1643 `PopN` against 999 calls** — these results are
+overwhelmingly discarded, and a width that is never used is never needed.
+
+### Two more shape facts, both able to corrupt the operand stack silently
+
+- **The argument-count byte is not a count.** Its high bit is the B35 P7 error-reify flag and
+  a site carrying it pushes **two** slots, `(code, flag)`, not one. Measured in this family:
+  **0 error-reify sites of 999**, so refusing the flag costs nothing and is honest.
+- **Argument counts are `{1, 2, 3, 5}`** — 68, 705, 118 and 108 sites. Bounded and small, so
+  an argument buffer needs no dynamic allocation.
+
+### What this changes about the plan
+
+The increment is **native calls, then static strings**, and it is two classes rather than
+three. Native calls dominate by two orders of magnitude and are the design-bearing half;
+static strings are ten constants. The observable to differentiate is **the call sequence**,
+not a return value — these natives are side effects, and `(name, args)` in order is what the
+virtual machine and the native path must agree on.
+
+**The candidate blocker set is two, not proven to be two.** The other 38 op kinds were
+screened by grep for an emitter arm, and an arm existing is not the same as every operand
+configuration lowering — this branch has already recorded that "an opcode being emitted does
+not mean its operands are". Whatever surfaces in the next refusal round after these two land
+is the real remainder.
+
+---
+
+## Native calls and static strings land: 38 -> 53 of 58 modules
+
+2026-08-13, and the two halves are worth separating because the second number is
+the one that has been wrong three times before.
+
+| step | modules lowering | refused |
+|---|---|---|
+| before | 38 of 58 | 20 |
+| native calls | **42** | 16 |
+| static strings | **53** | **5** |
+
+**Static strings freed eleven modules, exactly what the discredited ranking said.** That
+ranking was measured at ONE module on 2026-08-13 and the correction was right at the time:
+ten of the eleven also contained native calls, so strings alone freed one. Doing native calls
+first made the same figure come true. The ranking was not wrong about the eleven; it was
+wrong about *alone*, and the word was doing all the work.
+
+The remaining five refusals are `stream` (4) and `composite` (1). The `piano_roll` family is
+**ten of ten with zero refusals**, pinned by an assertion in `probe_piano_roll.rs` rather
+than left as printed output.
+
+### The native-call ABI
+
+`kel_native_<mangled name>`, called directly, arguments in declaration order, result an
+`i64` of unknown width.
+
+- **Name-derived, not index-derived**, because `Vm::run` resolves the operand through
+  `native_name(idx)` and then searches its registry BY NAME. `kel_native_<index>` would have
+  bound the object file to declaration order, which is a property of the source text.
+- **Each separator character becomes one underscore**, so `host::two` -> `kel_native_host__two`
+  and `host_two` -> `kel_native_host_two` stay distinct. Collapsing `::` reads better and
+  would collide precisely the likelier pair. Still not injective, so a **module-level**
+  precondition refuses a collision; no call site can see a hazard that is a property of a
+  pair.
+
+### The static-string layout, and the ABI decision inside it
+
+`{ i64 len, [n+1 x i8] bytes }`, constant, internal linkage, address in the operand slot.
+
+**The length is explicit because a Keleusma string is a byte string, not a C string.** A raw
+NUL inside a source literal is accepted by the lexer — verified, not assumed — so a bare
+`char*` would silently truncate one. The trailing NUL is added anyway, one byte, so an
+ordinary C host can pass the pointer to a string function for the common case.
+
+**This is host-visible new surface and the operator may want a different shape.** On the
+virtual machine a string-taking native receives an owned `String` through marshalling;
+natively it receives this pointer. The two embeddings are therefore not source-compatible for
+a string-taking native. That is inherent to ahead-of-time lowering rather than a defect, but
+it is a decision, not a detail.
+
+No deduplication of identical literals. Sharing them means naming a global by a hash of its
+contents, and a collision would bind two DIFFERENT strings to one global — a wrong-answer
+failure to save a handful of bytes, against ten literals in the whole corpus.
+
+### What the differential compares, and why not the return value
+
+**The call sequence.** These 999 sites are side effects whose results are discarded 1643
+times over, so a lowering that dropped every call, reordered them, or reversed their
+arguments would still return the right integer. Both sides log `(name, args)` and the logs
+are compared. String arguments are logged **decoded**, since a marshalled `String` and a
+pointer are not comparable as raw operands, and a pointer that is merely non-null proves
+nothing about what it addresses.
+
+### Two things that cost a cycle each, both worth the cycle
+
+- **`add_global_mapping` compiled and then segfaulted on the first call.** Exporting the
+  mangled symbol with `#[unsafe(no_mangle)]` instead lets the execution engine resolve it as a
+  real link would — and makes the test assert something it otherwise would not, that
+  `native_symbol` emits a name an ordinary linker binds. The first failure was a
+  double-underscore mismatch the IR dump showed immediately and no amount of reasoning would
+  have.
+- **When the boundary test's subject entered the subset, every case `probe_unsupported`
+  carried began reporting LOWERS.** Extending it with five candidates found that three — all
+  three stream shapes — are **rejected by the reference compiler**, not refused by this
+  backend. That is not a subset boundary and would have made the must-not-fire test assert
+  nothing. The probe distinguishes the two outcomes; a guess does not. The subject is now a
+  `Float` constant.
