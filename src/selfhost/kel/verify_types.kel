@@ -90,6 +90,17 @@ shared data ty {
     qn: Word,
     qact: [Word; 256],
     qreq: [Word; 256],
+    // THE LAST TWO SHAPES: a field access naming a field its type does not
+    // declare, and a body whose type differs from the declared return type.
+    //
+    // Membership is a table of 1/0 rather than names, because the stage compares
+    // rather than searches: the host supplies the syntactic fact "this field is
+    // among that type's declared fields", and the RULE -- that a referenced
+    // field must exist -- is the stage's. That is the same division the
+    // verify_*.kel family uses, where the host marshals op tables and the stage
+    // applies the algorithm.
+    mn: Word,
+    member: [Word; 256],
 }
 
 // The verdict constants, named rather than spelled as bare integers at the call sites, so a later
@@ -158,6 +169,11 @@ fn ty_check() -> Word {
         } else {
             ty.verdict
         };
+    }
+    // A referenced field must be declared. Only 0 rejects: a row the host could
+    // not decide is not written at all, so absence and denial stay distinct.
+    for m in 0..ty.mn limit 256 {
+        ty.verdict = if ty.member[m] == 0 { ty_reject() } else { ty.verdict };
     }
     ty.verdict
 }

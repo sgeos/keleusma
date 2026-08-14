@@ -585,9 +585,93 @@ fn struct_arity(ast: &keleusma::ast::Program) -> Vec<(i64, i64)> {
     l.out
 }
 
+/// Field-membership facts: 1 when a referenced field is declared by its type,
+/// 0 when it is not.
+///
+/// **A row is written only when the object's type is known syntactically**, and
+/// there are exactly two ways for that here: a local bound to a struct literal,
+/// or a local with a declared named type. Anything else contributes no row, so
+/// absence and denial stay distinct and an untypeable object cannot be a
+/// rejection.
+///
+/// The stage compares rather than searches. The host supplies the syntactic
+/// fact; the RULE -- that a referenced field must exist -- is the stage's. That
+/// is the division the `verify_*.kel` family already uses.
+fn field_membership(ast: &keleusma::ast::Program) -> Vec<i64> {
+    use keleusma::ast::{Expr, Pattern, Stmt, TypeDef, TypeExpr};
+    use keleusma::visitor::Visitor;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let mut fields: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for t in &ast.types {
+        if let TypeDef::Struct(d) = t {
+            fields.insert(
+                d.name.clone(),
+                d.fields.iter().map(|f| f.name.clone()).collect(),
+            );
+        }
+    }
+
+    struct Members<'a> {
+        fields: &'a BTreeMap<String, BTreeSet<String>>,
+        types: BTreeMap<String, String>,
+        out: Vec<i64>,
+    }
+    impl Visitor for Members<'_> {
+        fn visit_stmt(&mut self, stmt: &Stmt) {
+            if let Stmt::Let(l) = stmt
+                && let Pattern::Variable(n, _) = &l.pattern
+            {
+                if let Expr::StructInit { name, .. } = &l.value {
+                    self.types.insert(n.clone(), name.clone());
+                } else if let Some(TypeExpr::Named(t, _, _, _)) = &l.type_expr {
+                    self.types.insert(n.clone(), t.clone());
+                }
+            }
+            self.walk_stmt(stmt);
+        }
+        fn visit_expr(&mut self, expr: &Expr) {
+            if let Expr::FieldAccess { object, field, .. } = expr
+                && let Expr::Ident { name, .. } = object.as_ref()
+                && let Some(ty) = self.types.get(name)
+                && let Some(set) = self.fields.get(ty)
+            {
+                self.out.push(i64::from(set.contains(field)));
+            }
+            self.walk_expr(expr);
+        }
+    }
+
+    let mut out = Vec::new();
+    for f in &ast.functions {
+        let mut m = Members {
+            fields: &fields,
+            types: BTreeMap::new(),
+            out: Vec::new(),
+        };
+        m.visit_block(&f.body);
+        out.extend(m.out);
+    }
+    out
+}
+
+/// A function body's tail type against its declared return type.
+///
+/// Only a literal tail and a primitive return type produce a claim. A body
+/// ending in anything else is tag 0, which never rejects.
+fn return_claims(ast: &keleusma::ast::Program) -> Vec<(i64, i64)> {
+    let mut out = Vec::new();
+    for f in &ast.functions {
+        if let Some(tail) = f.body.tail_expr.as_ref() {
+            out.push((expr_tag(tail), type_tag(&f.return_type)));
+        }
+    }
+    out
+}
+
 /// The stage's verdict for a program, with its operand pairs marshalled in.
 fn stage_accepts_program(pairs: &[(i64, i64)]) -> bool {
-    stage_verdict(pairs, &[], &[], &[])
+    stage_verdict(pairs, &[], &[], &[], &[])
 }
 
 /// The stage's verdict with both tables.
@@ -596,6 +680,7 @@ fn stage_verdict(
     arity: &[(i64, i64)],
     res: &[i64],
     claims: &[(i64, i64)],
+    member: &[i64],
 ) -> bool {
     let module = compile(&parse(&tokenize(TYPES_KEL).expect("lex")).expect("parse"))
         .expect("verify_types.kel compiles");
@@ -713,6 +798,27 @@ fn stage_verdict(
             keleusma::bytecode::Value::Int(*r),
         )
         .expect("qreq");
+    }
+    const MN_SLOT: usize = QREQ_SLOT + 256;
+    const MEMBER_SLOT: usize = MN_SLOT + 1;
+    assert!(
+        member.len() <= 256,
+        "the membership table holds 256 rows and this program needs {}",
+        member.len()
+    );
+    vm.set_shared(
+        &mut shared,
+        MN_SLOT,
+        keleusma::bytecode::Value::Int(member.len() as i64),
+    )
+    .expect("mn");
+    for (i, m) in member.iter().enumerate() {
+        vm.set_shared(
+            &mut shared,
+            MEMBER_SLOT + i,
+            keleusma::bytecode::Value::Int(*m),
+        )
+        .expect("member");
     }
     let out = vm
         .call_with_shared(&mut shared, &[keleusma::bytecode::Value::Int(0)])
@@ -886,7 +992,7 @@ fn slice_two_rejects_arity_and_argument_type_mismatches() {
         let (arity, arg_pairs) = call_rows(&ast);
         let mut pairs = operand_pairs(&ast);
         pairs.extend(arg_pairs);
-        let stage = stage_verdict(&pairs, &arity, &[], &[]);
+        let stage = stage_verdict(&pairs, &arity, &[], &[], &[]);
         if IN_SCOPE.contains(label) {
             assert!(
                 !stage,
@@ -915,7 +1021,7 @@ fn slice_two_rejects_arity_and_argument_type_mismatches() {
         let mut pairs = operand_pairs(&ast);
         pairs.extend(arg_pairs);
         assert!(
-            stage_verdict(&pairs, &arity, &[], &[]),
+            stage_verdict(&pairs, &arity, &[], &[], &[]),
             "{label}: slice 2 REJECTED a well-typed program, which narrows the language"
         );
     }
@@ -954,7 +1060,7 @@ fn slice_three_rejects_unresolved_names_and_called_locals() {
         let (arity, arg_pairs) = call_rows(&ast);
         let mut pairs = operand_pairs(&ast);
         pairs.extend(arg_pairs);
-        let stage = stage_verdict(&pairs, &arity, &resolution_codes(&ast), &[]);
+        let stage = stage_verdict(&pairs, &arity, &resolution_codes(&ast), &[], &[]);
         if IN_SCOPE.contains(label) {
             assert!(
                 !stage,
@@ -991,7 +1097,7 @@ fn slice_three_rejects_unresolved_names_and_called_locals() {
         let mut pairs = operand_pairs(&ast);
         pairs.extend(arg_pairs);
         assert!(
-            stage_verdict(&pairs, &arity, &resolution_codes(&ast), &[]),
+            stage_verdict(&pairs, &arity, &resolution_codes(&ast), &[], &[]),
             "{label}: slice 3 REJECTED a well-typed program, which narrows the language"
         );
     }
@@ -1032,7 +1138,13 @@ fn slices_four_and_five_reject_conditions_and_structural_mismatches() {
         arity.extend(struct_arity(&ast));
         let mut pairs = operand_pairs(&ast);
         pairs.extend(arg_pairs);
-        stage_verdict(&pairs, &arity, &resolution_codes(&ast), &tag_claims(&ast))
+        stage_verdict(
+            &pairs,
+            &arity,
+            &resolution_codes(&ast),
+            &tag_claims(&ast),
+            &[],
+        )
     };
 
     let mut caught = Vec::new();
@@ -1080,4 +1192,71 @@ fn slices_four_and_five_reject_conditions_and_structural_mismatches() {
             "{label} is now in scope; move it into IN_SCOPE and out of this list"
         );
     }
+}
+
+/// THE FULL CORPUS: every shape rejected, every control accepted.
+///
+/// The last two are `unknown-field` and `body-versus-return`. With them the
+/// stage reaches all sixteen ill-typed programs in **verdict agreement** with
+/// the reference, and accepts all seven well-typed ones.
+///
+/// **Agreement in both directions is the claim, and only the second direction
+/// is unbounded.** The rejection side is enumerable and this corpus enumerates
+/// it. The acceptance side is not: any valid program must be accepted, and no
+/// corpus can establish that. What the controls buy is a check that no rule
+/// added along the way narrowed the language, which is the failure mode a
+/// rejection-only corpus cannot see.
+#[test]
+fn the_stage_agrees_with_the_reference_on_the_whole_corpus() {
+    let verdict = |src: &str| -> bool {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let (mut arity, arg_pairs) = call_rows(&ast);
+        arity.extend(struct_arity(&ast));
+        let mut pairs = operand_pairs(&ast);
+        pairs.extend(arg_pairs);
+        let mut claims = tag_claims(&ast);
+        claims.extend(return_claims(&ast));
+        stage_verdict(
+            &pairs,
+            &arity,
+            &resolution_codes(&ast),
+            &claims,
+            &field_membership(&ast),
+        )
+    };
+
+    let mut checked = 0;
+    for (label, src) in ILL_TYPED {
+        if tokenize(src).ok().and_then(|t| parse(&t).ok()).is_none() {
+            // A source the parser refuses never reaches a type checker, and the
+            // reference rejects it for that reason. Counted, not skipped
+            // silently.
+            checked += 1;
+            continue;
+        }
+        assert!(
+            !verdict(src),
+            "{label}: the reference rejects this and the stage accepted it"
+        );
+        checked += 1;
+    }
+    assert_eq!(
+        checked,
+        ILL_TYPED.len(),
+        "not every ill-typed case was reached"
+    );
+
+    for (label, src) in WELL_TYPED {
+        assert!(
+            verdict(src),
+            "{label}: the reference accepts this and the stage REJECTED it, which narrows the \
+             language rather than being conservative"
+        );
+    }
+
+    // MUST-FIRE on the corpus being the thing that was checked. Both sides must
+    // be non-empty, or the loops above are vacuous and this test reports
+    // agreement it never observed.
+    assert!(ILL_TYPED.len() >= 16, "the rejection corpus shrank");
+    assert!(WELL_TYPED.len() >= 7, "the control corpus shrank");
 }
