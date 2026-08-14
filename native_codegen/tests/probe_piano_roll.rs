@@ -172,6 +172,32 @@ fn probe_what_the_piano_roll_family_actually_needs() {
         }
     }
 
+    // **The goal condition, as an assertion rather than as printed output.**
+    //
+    // Every module in the family must lower with no refusal at all. This is
+    // deliberately NOT a coverage percentage: a number target is satisfied by
+    // picking whichever modules are cheapest, which is the behaviour that
+    // produced one slice worth zero of 239 sites and another worth one module
+    // where eleven were claimed.
+    //
+    // `refusals.is_empty()` is a weaker claim than "the family is correct" and
+    // is not offered as more. What makes the constructs trustworthy is the
+    // differential in `native_calls.rs`, which compares the CALL SEQUENCE
+    // against the virtual machine; this guards against a regression that would
+    // put a construct back outside the subset.
+    let still_refused: Vec<&str> = mods
+        .iter()
+        .filter(|(_, m)| {
+            !keleusma_native::module_refusals(m, keleusma_native::LowerOptions::default())
+                .is_empty()
+        })
+        .map(|(n, _)| n.as_str())
+        .collect();
+    assert!(
+        still_refused.is_empty(),
+        "the piano_roll family must lower end to end; still refused: {still_refused:?}"
+    );
+
     println!("================ AGGREGATE across {} modules", mods.len());
     println!("  refusal class -> modules mentioning it");
     for (k, v) in &refusal_classes {

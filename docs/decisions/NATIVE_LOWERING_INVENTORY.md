@@ -5512,3 +5512,83 @@ screened by grep for an emitter arm, and an arm existing is not the same as ever
 configuration lowering — this branch has already recorded that "an opcode being emitted does
 not mean its operands are". Whatever surfaces in the next refusal round after these two land
 is the real remainder.
+
+---
+
+## Native calls and static strings land: 38 -> 53 of 58 modules
+
+2026-08-13, and the two halves are worth separating because the second number is
+the one that has been wrong three times before.
+
+| step | modules lowering | refused |
+|---|---|---|
+| before | 38 of 58 | 20 |
+| native calls | **42** | 16 |
+| static strings | **53** | **5** |
+
+**Static strings freed eleven modules, exactly what the discredited ranking said.** That
+ranking was measured at ONE module on 2026-08-13 and the correction was right at the time:
+ten of the eleven also contained native calls, so strings alone freed one. Doing native calls
+first made the same figure come true. The ranking was not wrong about the eleven; it was
+wrong about *alone*, and the word was doing all the work.
+
+The remaining five refusals are `stream` (4) and `composite` (1). The `piano_roll` family is
+**ten of ten with zero refusals**, pinned by an assertion in `probe_piano_roll.rs` rather
+than left as printed output.
+
+### The native-call ABI
+
+`kel_native_<mangled name>`, called directly, arguments in declaration order, result an
+`i64` of unknown width.
+
+- **Name-derived, not index-derived**, because `Vm::run` resolves the operand through
+  `native_name(idx)` and then searches its registry BY NAME. `kel_native_<index>` would have
+  bound the object file to declaration order, which is a property of the source text.
+- **Each separator character becomes one underscore**, so `host::two` -> `kel_native_host__two`
+  and `host_two` -> `kel_native_host_two` stay distinct. Collapsing `::` reads better and
+  would collide precisely the likelier pair. Still not injective, so a **module-level**
+  precondition refuses a collision; no call site can see a hazard that is a property of a
+  pair.
+
+### The static-string layout, and the ABI decision inside it
+
+`{ i64 len, [n+1 x i8] bytes }`, constant, internal linkage, address in the operand slot.
+
+**The length is explicit because a Keleusma string is a byte string, not a C string.** A raw
+NUL inside a source literal is accepted by the lexer — verified, not assumed — so a bare
+`char*` would silently truncate one. The trailing NUL is added anyway, one byte, so an
+ordinary C host can pass the pointer to a string function for the common case.
+
+**This is host-visible new surface and the operator may want a different shape.** On the
+virtual machine a string-taking native receives an owned `String` through marshalling;
+natively it receives this pointer. The two embeddings are therefore not source-compatible for
+a string-taking native. That is inherent to ahead-of-time lowering rather than a defect, but
+it is a decision, not a detail.
+
+No deduplication of identical literals. Sharing them means naming a global by a hash of its
+contents, and a collision would bind two DIFFERENT strings to one global — a wrong-answer
+failure to save a handful of bytes, against ten literals in the whole corpus.
+
+### What the differential compares, and why not the return value
+
+**The call sequence.** These 999 sites are side effects whose results are discarded 1643
+times over, so a lowering that dropped every call, reordered them, or reversed their
+arguments would still return the right integer. Both sides log `(name, args)` and the logs
+are compared. String arguments are logged **decoded**, since a marshalled `String` and a
+pointer are not comparable as raw operands, and a pointer that is merely non-null proves
+nothing about what it addresses.
+
+### Two things that cost a cycle each, both worth the cycle
+
+- **`add_global_mapping` compiled and then segfaulted on the first call.** Exporting the
+  mangled symbol with `#[unsafe(no_mangle)]` instead lets the execution engine resolve it as a
+  real link would — and makes the test assert something it otherwise would not, that
+  `native_symbol` emits a name an ordinary linker binds. The first failure was a
+  double-underscore mismatch the IR dump showed immediately and no amount of reasoning would
+  have.
+- **When the boundary test's subject entered the subset, every case `probe_unsupported`
+  carried began reporting LOWERS.** Extending it with five candidates found that three — all
+  three stream shapes — are **rejected by the reference compiler**, not refused by this
+  backend. That is not a subset boundary and would have made the must-not-fire test assert
+  nothing. The probe distinguishes the two outcomes; a guess does not. The subject is now a
+  `Float` constant.

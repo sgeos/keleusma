@@ -37,6 +37,30 @@ fn probe_which_sources_are_refused() {
             "struct in array",
             "struct P { x: Word }\nfn main(a: Word, b: Word) -> Word { let xs = [P { x: a }, P { x: b }]; xs[1].x }",
         ),
+        // Added 2026-08-13, when native calls and static strings both entered
+        // the subset and EVERY case above began to report LOWERS. A boundary
+        // test needs a live subject, and the corpus says the remaining classes
+        // are `stream` (4 modules) and `composite` (1).
+        (
+            "loop with prologue",
+            "fn main(a: Word, b: Word) -> Word { let c = a + b; loop { let _ = yield c; } }",
+        ),
+        (
+            "stream calling yield fn",
+            "yield fn tick(x: Word) -> Word { let _ = yield x; x }\nfn main(a: Word, b: Word) -> Word { loop { let _ = yield tick(a); } }",
+        ),
+        (
+            "bare loop stream",
+            "fn main(a: Word, b: Word) -> Word { loop { let _ = yield a + b; } }",
+        ),
+        (
+            "float constant",
+            "fn main(a: Word, b: Word) -> Word { let f = 1.5; a + b }",
+        ),
+        (
+            "composite returned from fn",
+            "struct P { x: Word }\nfn mk(v: Word) -> P { P { x: v } }\nfn main(a: Word, b: Word) -> Word { mk(a).x + b }",
+        ),
     ];
     println!("================ PROBE: what does lower_module refuse?");
     for (name, src) in cases {

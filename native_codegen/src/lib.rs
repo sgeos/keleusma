@@ -745,6 +745,68 @@ fn yield_hook<'ctx>(ctx: &'ctx Context, module: &LlvmModule<'ctx>) -> FunctionVa
     })
 }
 
+/// Emit a static string literal as a constant global and return its address.
+///
+/// # Layout: `{ i64 len, [n+1 x i8] bytes }`, the bytes NUL-terminated
+///
+/// The length is explicit and comes first because **a Keleusma string is a byte
+/// string, not a C string**: nothing in the language forbids an interior NUL, so
+/// a bare `char*` would silently truncate one. The trailing NUL is added anyway,
+/// costing one byte, so that a host written in C can pass the pointer straight
+/// to a string function for the overwhelmingly common literal that contains no
+/// NUL. A host that cares reads the length; a host that does not still works.
+///
+/// # This is a host-visible ABI decision
+///
+/// On the virtual machine a string-taking native receives an owned `String`
+/// through marshalling. Natively it receives this pointer. **The two embeddings
+/// are therefore not source-compatible for a string-taking native**, which is
+/// inherent to ahead-of-time lowering rather than a defect here, but it is new
+/// surface and the operator may want a different shape.
+///
+/// # Why no deduplication
+///
+/// Identical literals get separate globals. Sharing them means naming a global
+/// by a hash of its contents, and a hash collision would silently bind two
+/// DIFFERENT strings to one global — a wrong-answer failure to save a handful
+/// of bytes. The whole shipped corpus contains **ten** static strings.
+fn static_string_global<'ctx>(
+    ctx: &'ctx Context,
+    module: &LlvmModule<'ctx>,
+    s: &str,
+) -> PointerValue<'ctx> {
+    let i64t = ctx.i64_type();
+    let i8t = ctx.i8_type();
+
+    // First unused name. Linear probing, which is quadratic in the number of
+    // string literals and irrelevant at ten.
+    let mut n = 0usize;
+    let name = loop {
+        let cand = format!("kel_str_{n}");
+        if module.get_global(&cand).is_none() {
+            break cand;
+        }
+        n += 1;
+    };
+
+    let mut bytes: Vec<_> = s
+        .as_bytes()
+        .iter()
+        .map(|b| i8t.const_int(u64::from(*b), false))
+        .collect();
+    bytes.push(i8t.const_zero());
+    let data = i8t.const_array(&bytes);
+
+    let ty = ctx.struct_type(&[i64t.into(), data.get_type().into()], false);
+    let init = ty.const_named_struct(&[i64t.const_int(s.len() as u64, false).into(), data.into()]);
+
+    let g = module.add_global(ty, None, &name);
+    g.set_initializer(&init);
+    g.set_constant(true);
+    g.set_linkage(inkwell::module::Linkage::Internal);
+    g.as_pointer_value()
+}
+
 /// Declare `llvm.trap`, reusing the existing declaration if the module already
 /// carries one. Lowering a second chunk into the same module must not redeclare
 /// it.
@@ -1816,21 +1878,33 @@ fn lower_chunk_body<'ctx>(
                 // which makes this the least ambiguous producer in the set.
                 // `Unit` stays unknown: it is a placeholder that nothing reads,
                 // and giving it a width would let it be packed into a body.
-                let (v, w): (i64, Width) = match cv {
-                    ConstValue::Int(i) => (*i, Width::Scalar(8)),
-                    ConstValue::Byte(x) => (*x as i64, Width::Scalar(1)),
-                    ConstValue::Bool(b) => (*b as i64, Width::Scalar(1)),
-                    // Unit is pushed and popped without being read. Same
-                    // placeholder, same caveat, as `PushImmediate(0)`.
-                    ConstValue::Unit => (0, Width::Unknown),
-                    other => {
-                        return Err(LowerError::UnsupportedOp(format!(
-                            "Const holding {other:?}"
-                        )));
-                    }
-                };
-                let c = i64t.const_int(v as u64, true);
-                st.push_w(c, w);
+                // A static string is a REFERENCE, not a packable scalar, so it
+                // cannot be produced as an `i64` literal like the others.
+                if let ConstValue::StaticStr(s) = cv {
+                    let g = static_string_global(ctx, module, s);
+                    let addr = st.b.build_ptr_to_int(g, i64t, "kstr").unwrap();
+                    // Unknown width, deliberately. The operand is an address,
+                    // and packing an address into a composite body as though it
+                    // were a scalar is exactly the mistake `Width::Unknown`
+                    // exists to make impossible.
+                    st.push_w(addr, Width::Unknown);
+                } else {
+                    let (v, w): (i64, Width) = match cv {
+                        ConstValue::Int(i) => (*i, Width::Scalar(8)),
+                        ConstValue::Byte(x) => (*x as i64, Width::Scalar(1)),
+                        ConstValue::Bool(b) => (*b as i64, Width::Scalar(1)),
+                        // Unit is pushed and popped without being read. Same
+                        // placeholder, same caveat, as `PushImmediate(0)`.
+                        ConstValue::Unit => (0, Width::Unknown),
+                        other => {
+                            return Err(LowerError::UnsupportedOp(format!(
+                                "Const holding {other:?}"
+                            )));
+                        }
+                    };
+                    let c = i64t.const_int(v as u64, true);
+                    st.push_w(c, w);
+                }
             }
             // Encoding per `Op::PushImmediate`: 0 = Unit, 1 = true, 2 = false,
             // 3 = None, 4..=19 = Int(operand - 4).

@@ -155,30 +155,34 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
     // refusal that no longer meant "outside the subset". A self-check on the
     // OPCODE is not a self-check on the REASON.
     //
-    // **BOUNDARY MOVED 2026-08-13, and only after the oracle agreed.** Flat
-    // composite construction was the subject here. `lower_module` now lowers it,
-    // and `a_flat_struct_agrees_with_the_vm` plus its second-field companion are
-    // the evidence — moving a must-not-fire boundary on the reasoning that an
-    // admission looks safe is exactly what this file exists to prevent.
-    //
-    // A sentence claiming `Op::NewComposite` "does not have that weakness,
-    // because no entry point lowers it at all" was left stranded here by a
-    // scripted edit, asserting the opposite of the paragraph above it. Removed:
-    // a comment that contradicts itself is worse than a stale one, because a
-    // reader cannot tell which half to trust.
-    //
     // **This paragraph is rewritten whole each time the subject moves, not
     // appended to.** Four successive appends left a running commentary in which
     // each sentence contradicted the one before it, and a reader could not tell
     // which was current.
     //
+    // **BOUNDARY MOVED 2026-08-13, and only after the oracle agreed.** A static
+    // string constant was the subject. `lower_module` now lowers one, and the
+    // five string cases in `native_calls.rs` are the evidence — including an
+    // interior NUL, which is what proves the length is carried rather than a C
+    // string's terminator. Moving a must-not-fire boundary because an admission
+    // merely looks safe is exactly what this file exists to prevent.
+    //
     // Subjects so far, each retired the moment a differential agreed with the
     // virtual machine: composite construction, array indexing, nested composite
-    // reads, tuple fields. **The subject is now a static string constant**, the last refusal
-    // `probe_unsupported` reports — `IsEnum` and the enum payload read now lower too — and every subject since the second was chosen
-    // by running that probe rather than by guessing at a source, after four
-    // consecutive guesses cost four compile-and-run cycles.
-    let src = "fn main(a: Word, b: Word) -> Word { let s = \"hi\"; a + b }";
+    // reads, tuple fields, static string constants. **The subject is now a
+    // `Float` constant.**
+    //
+    // It was chosen by running `probe_unsupported`, as every subject since the
+    // second has been, after four consecutive guesses cost four compile-and-run
+    // cycles. That run mattered here: when native calls and static strings both
+    // entered the subset, EVERY case the probe carried began reporting LOWERS,
+    // so the probe was extended with five candidates first. Three of them —
+    // all three stream shapes — turned out to be REJECTED BY THE REFERENCE
+    // COMPILER rather than refused by this backend, which is not a subset
+    // boundary at all and would have made this test assert nothing about the
+    // lowering. The probe distinguishes those two outcomes; a guess would not
+    // have.
+    let src = "fn main(a: Word, b: Word) -> Word { let f = 1.5; a + b }";
     let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
 
     // **The vacuity guard is on the REFUSAL, not on a chunk search.** Three
@@ -190,13 +194,13 @@ fn an_unsupported_opcode_is_refused_rather_than_mislowered() {
     let ctx = Context::create();
     let lm2 = ctx.create_module("kel2");
     let err = lower_module(&ctx, &lm2, &m, LowerOptions::default()).expect_err(
-        "lower_module must refuse a static string constant; a refusal that only \
+        "lower_module must refuse a Float constant; a refusal that only \
              lower_chunk makes is not evidence the opcode is unsupported, which is \
              how the Op::Call version of this test rotted",
     );
     let rendered = format!("{err:?}");
     assert!(
-        rendered.contains("StaticStr"),
+        rendered.contains("Float"),
         "refused for the wrong reason: {rendered}"
     );
 }
