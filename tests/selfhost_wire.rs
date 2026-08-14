@@ -10481,6 +10481,23 @@ fn module_input_blob(module: &keleusma::bytecode::Module) -> Vec<u8> {
         push_name(&mut out, &c.name);
     }
 
+    // The constant section: a tag per constant, and a name only where one
+    // exists. STATIC_STR is the only tag that interns, and it dedups.
+    let consts = const_roots_of(module);
+    let cn = u16::try_from(consts.len()).expect("const count fits u16");
+    let mut tail = Vec::new();
+    tail.extend_from_slice(&cn.to_le_bytes());
+    for c in &consts {
+        let (tag, name) = const_tag_and_name(c);
+        tail.extend_from_slice(&tag.to_le_bytes());
+        if let Some(n) = name {
+            let b = n.as_bytes();
+            let l = u16::try_from(b.len()).expect("name length fits u16");
+            tail.extend_from_slice(&l.to_le_bytes());
+            tail.extend_from_slice(b);
+        }
+    }
+
     // THE ENUM COUNT IS ALWAYS WRITTEN, including when it is zero. Inferring
     // "no enum section" from the blob ENDING cannot distinguish an empty
     // section from a truncated one. It also would have passed by accident here:
@@ -10496,7 +10513,31 @@ fn module_input_blob(module: &keleusma::bytecode::Module) -> Vec<u8> {
             push_name(&mut out, &var.name);
         }
     }
+    out.extend_from_slice(&tail);
     out
+}
+
+/// The wire tag for a constant root, and its interned name where it has one.
+///
+/// Mirrors `preorder_13b`. Composite tags are returned rather than rejected
+/// here, so the REFUSAL comes from the stage: a host that quietly dropped them
+/// would make the stage's guard untestable.
+fn const_tag_and_name(c: &keleusma::bytecode::ConstValue) -> (u16, Option<String>) {
+    use keleusma::bytecode::ConstValue as K;
+    match c {
+        K::Unit => (1, None),
+        K::Bool(_) => (2, None),
+        K::Int(_) => (3, None),
+        K::Byte(_) => (4, None),
+        K::Fixed(_) => (5, None),
+        K::None => (12, None),
+        K::StaticStr(s) => (7, Some(s.clone())),
+        K::Tuple(_) => (8, None),
+        K::Array(_) => (9, None),
+        K::Struct { .. } => (10, None),
+        K::Enum { .. } => (11, None),
+        other => panic!("const_tag_and_name has no tag for {other:?}"),
+    }
 }
 
 /// Keleusma produces the interner input sequence from the module, not the host.
@@ -10534,11 +10575,22 @@ fn keleusma_produces_the_interner_sequence_from_a_module_blob() {
             "colliding-names",
             "enum A { B, X }\nenum B { Y, Z }\nfn main() -> Word { 42 }",
         ),
+        // THE CONSTANT CASES. A string literal becomes a STATIC_STR constant,
+        // which is the only constant tag that interns.
+        (
+            "one-string",
+            "fn s() -> Text { \"hi\" }\nfn main() -> Word { 42 }",
+        ),
+        (
+            "two-strings",
+            "fn s() -> Text { \"hi\" }\nfn t() -> Text { \"there\" }\nfn main() -> Word { 42 }",
+        ),
     ];
 
     let mut vm = vm_for(WIRE_KEL);
     let mut checked = 0;
     let mut fresh_seen = 0;
+    let mut const_names_seen = 0;
 
     for (label, src) in CASES {
         let module =
@@ -10547,7 +10599,23 @@ fn keleusma_produces_the_interner_sequence_from_a_module_blob() {
         // The model this slice is replacing covers only some contributors, so a
         // source reaching another one would compare against a short sequence.
         assert_no_other_contributors(label, &module);
-        let want: Vec<(String, i64)> = interner_input(&module);
+        // The expected sequence is the prefix plus the constant roots' names, in
+        // root order. `interner_input` models the prefix only; the constant
+        // contribution is what this slice adds, so it is appended here rather
+        // than compared against a model that does not have it.
+        let mut want: Vec<(String, i64)> = interner_input(&module);
+        for c in const_roots_of(&module) {
+            let (tag, name) = const_tag_and_name(&c);
+            assert!(
+                !matches!(tag, 8..=11),
+                "{label}: a composite constant root needs the nesting walk, which this slice \
+                 does not cover and the stage refuses"
+            );
+            if let Some(n) = name {
+                want.push((n, MODE_INTERN));
+                const_names_seen += 1;
+            }
+        }
         assert!(
             !want.is_empty(),
             "{label}: the model produced no names, so this case compares nothing"
@@ -10605,6 +10673,14 @@ fn keleusma_produces_the_interner_sequence_from_a_module_blob() {
     // MUST-FIRE on the MODE, which is the content of the enum section. If no
     // case reaches a fresh-mode name, a producer that wrote dedup mode
     // throughout would pass every assertion above.
+    // MUST-FIRE on the constant section: without a STATIC_STR root, the section
+    // contributes nothing and a stage that skipped it entirely would pass.
+    assert!(
+        const_names_seen > 0,
+        "no case produced a constant name, so the constant section is untested and a stage \
+         ignoring it would pass"
+    );
+
     assert!(
         fresh_seen > 0,
         "no case produced a fresh-mode name, so the dedup/fresh distinction is untested and a \

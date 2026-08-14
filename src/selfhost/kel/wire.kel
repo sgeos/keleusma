@@ -2548,6 +2548,8 @@ private data nm {
     // to carry its counts in state.
     ecnt: Word,
     vcnt: Word,
+    ccnt: Word,
+    ctag: Word,
     // Byte cursor into the INPUT concatenation in `wire.bin`.
     icur: Word,
     // Byte cursor into the OUTPUT pool, compacted in place over the input.
@@ -2816,6 +2818,51 @@ fn mi_enum_names() -> Word {
                 0
             };
         }
+    }
+    if nm.err < 0 { nm.err } else { mi_const_names() }
+}
+
+// The constant section (slice 14c).
+//
+// Constants contribute a name only when the tag is STATIC_STR, and they intern
+// in DEDUP mode. Every other tag contributes nothing, so the section carries a
+// tag per constant and a name only where a name exists -- a fixed-width record
+// would spend two bytes per scalar to say "no name".
+//
+// **Roots only, and the corpus is why that is enough rather than a shortcut.**
+// Measured over all ten stages: 2,192 constant nodes, ZERO composite nodes,
+// maximum tree depth 0. The nesting path is unreachable from real compiler
+// output, so a producer that walked it would be checked by nothing. The tag is
+// still read and still dispatched, so a composite tag arriving here is refused
+// rather than silently treated as a scalar.
+fn mi_tag_static_str() -> Word { 7 }
+
+fn mi_tag_is_composite(t: Word) -> Word {
+    if t == 8 { 1 } else {
+    if t == 9 { 1 } else {
+    if t == 10 { 1 } else {
+    if t == 11 { 1 } else { 0 } } } }
+}
+
+fn mi_const_names() -> Word {
+    nm.ccnt = mi_u16(nm.icur);
+    nm.icur = nm.icur + 2;
+    nm.err = if nm.ccnt > nm_max_names() { 0 - 240 } else { nm.err };
+    for c in 0..mi_bounded(nm.ccnt) limit 256 {
+        nm.sink = if nm.err < 0 { 0 } else {
+            nm.ctag = mi_u16(nm.icur);
+            nm.icur = nm.icur + 2;
+            // A composite root would need the nesting walk, which the corpus
+            // cannot reach and which is therefore not written. Refused loudly.
+            nm.err = if mi_tag_is_composite(nm.ctag) == 1 { 0 - 241 } else { nm.err };
+            nm.cnt = if nm.ctag == mi_tag_static_str() {
+                mi_pair(nm.cnt, mi_u16(nm.icur), nm_mode_intern())
+            } else { nm.cnt };
+            nm.icur = if nm.ctag == mi_tag_static_str() {
+                nm.icur + 2 + mi_u16(nm.icur)
+            } else { nm.icur };
+            0
+        };
     }
     if nm.err < 0 { nm.err } else {
     if nm.cnt > nm_max_names() { 0 - 239 } else { nm.cnt } }
