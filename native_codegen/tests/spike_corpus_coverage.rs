@@ -13,93 +13,24 @@
 use keleusma::bytecode::Op;
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use std::collections::BTreeMap;
-
-/// Every opcode the lowering handles today **as a static, per-opcode question**.
+/// Which chunks the REAL lowering refuses, by name.
 ///
-/// # This is now DELIBERATELY narrower than the real lowering
+/// **This replaced a hand-maintained per-opcode model on 2026-08-14.** That
+/// model was measured stale by 1019 `CallVerifiedNative` instances alone, in the
+/// safe direction, and every figure below was correspondingly conservative. It
+/// is gone rather than resynchronised: a second copy of a predicate is a drift
+/// hazard whatever its current accuracy, and this branch has now been bitten by
+/// that three times.
 ///
-/// Since the degenerate stream lowering landed, `Op::Stream`, `Op::Reset` and
-/// `Op::Yield` DO lower in a chunk shaped `Stream ; body ; Yield ; PopN(1) ;
-/// Reset` whose callees are all `Func`. That is a per-CHUNK property, and this is
-/// a per-OPCODE predicate, so it cannot express it and does not try.
-///
-/// The consequence is that the two figures derived from this predicate —
-/// opcode instances and fully-lowerable chunks — now **UNDERSTATE** coverage.
-/// That is the safe direction, and it is why the drift control in
-/// `spike_stream_sufficiency.rs` still passes: the control fires when the
-/// predicate claims MORE than the lowering delivers, which is the direction that
-/// causes wasted work.
-///
-/// **The module-level figure is not affected**, because it calls `lower_module`
-/// and therefore measures the real lowering rather than this model. When the two
-/// disagree, the module-level figure is the true one.
-///
-/// Relabelled rather than restructured: making this chunk-aware means either
-/// duplicating the degeneracy predicate, which is the drift hazard that has
-/// already bitten once here, or widening the crate's public surface to export it.
-/// Neither is worth it for a spike whose headline number is already measured
-/// directly.
-fn is_lowered(op: &Op, chunk: &keleusma::bytecode::Chunk) -> bool {
-    // `Const` is PARTIAL: the lowering accepts Int, Byte, Bool and Unit and
-    // refuses a StaticStr or any composite. This copy listed `Op::Const(_)`
-    // unconditionally until 2026-08-10, which OVERSTATED every figure below.
-    // Caught by the drift control in `spike_stream_sufficiency.rs`, not here.
-    if let Op::Const(idx) = op {
-        return matches!(
-            chunk.constants.get(*idx as usize),
-            Some(
-                keleusma::bytecode::ConstValue::Int(_)
-                    | keleusma::bytecode::ConstValue::Byte(_)
-                    | keleusma::bytecode::ConstValue::Bool(_)
-                    | keleusma::bytecode::ConstValue::Unit
-            )
-        );
-    }
-    matches!(
-        op,
-        Op::GetLocal(_)
-            | Op::SetLocal(_)
-            | Op::PopN(_)
-            | Op::Dup
-            | Op::PushImmediate(_)
-            | Op::CheckedAdd
-            | Op::CheckedSub
-            | Op::CheckedNeg
-            | Op::CheckedMul(0)
-            | Op::Div
-            | Op::Mod
-            | Op::CheckedDiv(0)
-            | Op::CheckedMod
-            | Op::CmpEq
-            | Op::CmpNe
-            | Op::CmpLt
-            | Op::CmpGt
-            | Op::CmpLe
-            | Op::CmpGe
-            | Op::Not
-            | Op::BitAnd
-            | Op::BitOr
-            | Op::BitXor
-            | Op::Shl
-            | Op::Shr
-            | Op::If(_)
-            | Op::Else(_)
-            | Op::EndIf
-            | Op::Loop(_)
-            | Op::EndLoop(_)
-            | Op::Break(_)
-            | Op::BreakIf(_)
-            | Op::Return
-            | Op::Trap(_)
-            | Op::Call(_, _)
-            | Op::WordToByte
-            | Op::ByteToWord
-            | Op::BoundsCheck(_)
-            | Op::GetData(_)
-            | Op::SetData(_)
-            | Op::GetDataIndexed(..)
-            | Op::SetDataIndexed(..)
-    )
+/// The granularity changed with it, and honestly so. The model claimed to know
+/// per OPCODE; `module_refusals` knows per CHUNK. Per-chunk truth beats per-op
+/// fiction, and the refusal message names the blocking construct anyway — which
+/// is better attribution than the model ever gave.
+fn refused_chunks(m: &keleusma::bytecode::Module) -> std::collections::BTreeSet<String> {
+    keleusma_native::module_refusals(m, keleusma_native::LowerOptions::default())
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect()
 }
 
 /// Which workstream owns an unsupported opcode, per the inventory.
@@ -207,7 +138,7 @@ fn spike_report_modules_that_actually_lower() {
 
 /// Compile every corpus source, discarding those that do not compile.
 ///
-/// Ground truth for the module-level ranking, since `is_lowered` is a static
+/// Ground truth for the module-level ranking, since the retired per-op model was a static
 /// model and this asks the real lowering.
 fn compiled_corpus_modules() -> Vec<(std::path::PathBuf, keleusma::bytecode::Module)> {
     let mut out = Vec::new();
@@ -325,6 +256,7 @@ fn spike_report_corpus_coverage() {
             }
         };
         compiled += 1;
+        let refused = refused_chunks(&m);
         for c in &m.chunks {
             chunks_total += 1;
             chunk_lengths.push(c.ops.len());
@@ -332,7 +264,7 @@ fn spike_report_corpus_coverage() {
             let mut first: Option<&'static str> = None;
             for op in &c.ops {
                 total_ops += 1;
-                if is_lowered(op, c) {
+                if !refused.contains(&c.name) {
                     lowered_ops += 1;
                 } else {
                     *blocking.entry(opcode_name(op)).or_default() += 1;
@@ -444,9 +376,9 @@ fn spike_report_corpus_coverage() {
 /// useful question is different: **which blocker, if removed, frees the most
 /// whole programs**. A consumer cannot run 98 percent of a program.
 ///
-/// This uses `lower_module` as ground truth rather than `is_lowered`, for a
+/// This uses `lower_module` as ground truth rather than a per-op model, for a
 /// reason that now matters: since the degenerate stream lowering landed,
-/// `is_lowered` is a stale model that still counts `Stream`, `Reset` and `Yield`
+/// That model was stale and still counted `Stream`, `Reset` and `Yield`
 /// as unsupported. Ranking from it would put a workstream that is largely DONE
 /// at 98 blocking instances.
 ///
@@ -650,7 +582,7 @@ fn spike_report_blocker_co_occurrence() {
 
 /// **SLACK, DERIVED FROM THE REAL LOWERING RATHER THAN FROM A MODEL.**
 ///
-/// Every slack figure before this came from a hand-maintained `is_lowered` list.
+/// Every slack figure before this came from a hand-maintained per-op list, now retired.
 /// Three copies of that list exist, all three went stale in the PESSIMISTIC
 /// direction, and the drift control asserts only the optimistic one — so the
 /// staleness understated every blocker class silently and could not be detected.

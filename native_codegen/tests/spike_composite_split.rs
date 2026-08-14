@@ -37,7 +37,19 @@ use std::collections::BTreeMap;
 /// a class were supported — and a counterfactual cannot be asked of the real
 /// entry point, which refuses on the first unsupported op and reports no more.
 /// Kept adjacent to that test so the two are updated together.
-fn is_lowered(op: &Op) -> bool {
+///
+/// # Renamed 2026-08-14, and NOT retired with the other two
+///
+/// Two files carried a predicate called `is_lowered`; both are gone, replaced
+/// by `module_refusals`, which is the real lowering. **This one is a different
+/// thing that happened to share their name.** It answers a COUNTERFACTUAL — what
+/// would lower if composites were supported — and no query against the real
+/// entry point can answer that, for the reason above.
+///
+/// The name is changed so it no longer reads as a third copy of a retired
+/// model, and `the_counterfactual_never_overstates` guards the one direction
+/// that costs anything: claiming coverage the lowering does not deliver.
+fn lowers_ignoring_composites(op: &Op) -> bool {
     matches!(
         op,
         Op::GetLocal(_)
@@ -189,7 +201,7 @@ fn classify_ops(ops: &[Op], word_bytes: u32) -> (Verdict, Vec<Ctor>) {
     let mut ctors: Vec<Ctor> = Vec::new();
 
     for op in ops {
-        if is_lowered(op) {
+        if lowers_ignoring_composites(op) {
             continue;
         }
         if is_composite(op) {
@@ -357,7 +369,7 @@ fn spike_report_read_only_chunk_provenance() {
                 chunk.param_count
             );
             for (i, op) in chunk.ops.iter().enumerate() {
-                let mark = if is_lowered(op) {
+                let mark = if lowers_ignoring_composites(op) {
                     " "
                 } else if is_composite(op) {
                     "C"
@@ -622,5 +634,59 @@ fn control_size_consistent_construction_still_needs_recovery() {
         v,
         Verdict::NeedsWidthRecovery,
         "a size coincidence must not be read as licensing uniform packing"
+    );
+}
+
+/// **The counterfactual must never OVERSTATE.**
+///
+/// A model that under-states wastes nothing — figures built on it are merely
+/// conservative. A model that claims an op lowers where the real lowering
+/// refuses promises coverage that does not exist, and every estimate built on it
+/// is then wrong in the expensive direction.
+///
+/// Checkable without resolving the counterfactual: over any module whose ops the
+/// model says ALL lower — so it is asserting no composite is involved — the real
+/// lowering must accept it.
+#[test]
+fn the_counterfactual_never_overstates() {
+    let mut checked = 0usize;
+    let mut overstated: Vec<String> = Vec::new();
+    for path in corpus_sources() {
+        let Ok(src) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some(m) = tokenize(&src)
+            .ok()
+            .and_then(|t| parse(&t).ok())
+            .and_then(|a| compile(&a).ok())
+        else {
+            continue;
+        };
+        if !m
+            .chunks
+            .iter()
+            .all(|c| c.ops.iter().all(lowers_ignoring_composites))
+        {
+            continue;
+        }
+        checked += 1;
+        if !keleusma_native::module_refusals(&m, keleusma_native::LowerOptions::default())
+            .is_empty()
+        {
+            overstated.push(
+                path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into(),
+            );
+        }
+    }
+    println!("  modules where the counterfactual claims full coverage: {checked}");
+    assert!(
+        overstated.is_empty(),
+        "the counterfactual OVERSTATES on {} module(s): it calls every op lowered \
+         while the real lowering refuses them. Modules: {:?}",
+        overstated.len(),
+        overstated
     );
 }
