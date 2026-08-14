@@ -2,8 +2,8 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-Settled 2026-08-13. **Status: DECIDED for the artifact layer. One consequence is left open and is
-named at the end.**
+Settled 2026-08-13, in two passes. **Status: DECIDED.** The order is fixed, the verbs that make both
+responses expressible are implemented, and what remains open is scheduling policy, named at the end.
 
 An artifact may carry a (72,64) SECDED parity plane, which repairs a flipped bit, and an Ed25519
 signature, which refuses a changed byte. Composing them forces an order that neither feature
@@ -96,18 +96,51 @@ body carries planes, so the composition is exercisable and is exercised. `WireVi
 scans. The plane-inside-signature property is pinned. Planes remain **off by default**, because they
 change artifact bytes and byte identity is the oracle the self-hosted compiler is verified with.
 
-**Not implemented, and it is the open consequence.** *Nothing calls a scrub at module load.* Reading
-the load paths, **no path holds a mutable reference to the artifact bytes**: the virtual machine is
-constructed from an owned module, the deserialiser takes a shared reference, and the zero-copy path
-yields a shared slice. So a scrub cannot run before verification without new API, and the only place
-it fits today is afterwards, which rule 1 forbids.
+**Superseded by the section below, and the original text is worth keeping because the conclusion it
+reached was wrong.** It said no load path holds a mutable reference, therefore a scrub could not run
+before verification without new API, therefore the interface made the unsound order the convenient
+one. The first two clauses are correct and the inference is not. **The fix was not to add a mutable
+LOAD path**, which would have pushed `&mut` into the common path and cost the zero-copy and
+worst-case-memory properties the reader exists for. It was to add a separate mutating VERB that the
+load path never calls.
 
-**The interface makes the unsound order the convenient one**, which is a design defect even though
-no code has taken that path.
+## Report and scrub are separate verbs, and scrub returns no artifact
+
+**Settled 2026-08-13, second pass.** The response is exposed as two verbs a host may use or ignore,
+so the runtime supplies mechanism and the host supplies policy.
+
+```
+report:  &[u8]      -> Option<EccReport>     WireView::verify_all, verify_region, EccPlane::scan
+scrub:   &mut [u8]  -> Option<EccReport>     keleusma_wire::scrub
+```
+
+**Report already existed.** The reading verbs were built first and deliberately do not repair,
+because the read path borrows the caller's buffer. Only the scrub verb was missing, so this finishes
+a split rather than inventing one.
+
+**Scrub returns counts, not an artifact.** That is the structural condition. Handing back repaired
+bytes would make the unsound order convenient, which is the defect this document exists to prevent.
+There is nothing to load, so the repaired buffer must be re-authenticated by whatever authorised it
+originally.
+
+**The `&mut [u8]` signature makes the unsound order unrepresentable on the zero-copy path.** A live
+`WireView`, or a runtime reading the artifact in place, holds `&[u8]`, so `&mut [u8]` cannot be
+obtained while either exists. Scrubbing must precede construction, and constructing again re-runs
+the checks. **The guarantee is weaker where the artifact is copied out**, since an owned decode no
+longer borrows the buffer; there the invariant is the caller's to honour and the documentation says
+so.
+
+**Optional means optional.** A host on read-only storage cannot scrub, and report-only is also the
+bounded-time choice. A host that calls neither verb gets exactly today's behaviour, which the
+documentation states rather than implying that a plane's presence confers protection.
+
+**`EccReport::is_clean` is documented as not an integrity check.** It means the code noticed nothing.
+5,133 of 635,376 four-bit patterns are reported clean while the word is wrong, and a caller skipping
+a cryptographic check on the strength of it would accept every one.
 
 ## Held by the operator
 
-**What a host should do about a corrected word, or an uncorrectable one, is policy rather than
-fact.** The decision above fixes the ORDER and leaves the RESPONSE open. The realistic options are
-report-only, which needs no new API and no mutable path, and report-plus-scrub, which needs both and
-buys the availability the plane was added for. This document does not choose.
+**Whether a host SHOULD scrub, and on what schedule, remains policy and is deliberately not
+decided here.** The verbs make both answers expressible. What is no longer open is the order, which
+is fixed by the invariant above, and whether the unsound order is reachable by accident, which the
+signature now prevents wherever the reader borrows the buffer.

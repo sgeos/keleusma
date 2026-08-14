@@ -447,3 +447,293 @@ impl<'a> Pool<'a> {
         self.bytes.get(start..end)
     }
 }
+
+/// Repairs every protected region of a wire CONTAINER in place.
+///
+/// `bytes` is a container as [`WireView::parse`] accepts one. A caller whose
+/// container is embedded in a larger framing slices it out first; handing this
+/// the outer buffer makes the parse fail on the magic and the scrub returns
+/// `None` having repaired nothing.
+///
+/// This is the **scrub** verb, the mutating counterpart to the reporting verbs
+/// [`WireView::verify_all`] and [`WireView::verify_region`]. It returns `None`
+/// when the artifact carries no parity plane, exactly as `verify_all` does, so
+/// a caller cannot mistake an unprotected artifact for a repaired one.
+///
+/// # The ordering invariant, which this signature exists to protect
+///
+/// **A repair must precede the check that authorises the bytes it produced, and
+/// every later repair must be followed by a fresh check.** The invariant is that
+/// no byte is executed which has been modified since the last successful
+/// verification, and a scrub is a modification.
+///
+/// That is not advice. It is measured. Enumerated over one 64-bit word, a
+/// (72,64) code repairs all 64 single-bit patterns exactly and detects all 2,016
+/// double-bit patterns, but **reports 23,364 of 41,664 triple-bit patterns as a
+/// successful repair while producing the wrong word**. This function therefore
+/// hands back **counts, not an artifact**: there is nothing here for a caller to
+/// load, and the repaired bytes must be re-authenticated by whatever authorised
+/// them originally.
+///
+/// # What the signature buys on the zero-copy path
+///
+/// Taking `&mut [u8]` makes the unsound order **unrepresentable** wherever the
+/// reader borrows the buffer: a live [`WireView`], or a virtual machine reading
+/// the artifact in place, holds `&[u8]`, so `&mut [u8]` cannot be obtained while
+/// either exists. Scrubbing must happen before the reader is constructed, and
+/// constructing it again re-runs whatever checks it performs.
+///
+/// **The guarantee is weaker where the artifact is copied out.** A consumer that
+/// decodes into owned structures no longer borrows the buffer, so nothing
+/// prevents a scrub after the check, and the invariant above must be honoured by
+/// the caller.
+///
+/// # Cost
+///
+/// One linear pass over the protected regions, no allocation, and bounded by the
+/// artifact's own region count and lengths. Nothing is written unless a word
+/// decodes as corrected, so a clean artifact is left byte-identical.
+pub fn scrub(bytes: &mut [u8]) -> Option<EccReport> {
+    // Whether any plane exists at all, decided before anything is written.
+    let region_count = WireView::parse(bytes).ok()?.region_count();
+    let mut any_plane = false;
+    let mut total = EccReport {
+        words: 0,
+        corrected: 0,
+        uncorrectable: 0,
+    };
+
+    for i in 0..region_count {
+        // The view borrows `bytes` immutably, so its spans are copied out as
+        // plain integers and the view is dropped BEFORE anything is written.
+        // Holding it across the write would not compile, which is the point.
+        let spans = {
+            let view = WireView::parse(bytes).ok()?;
+            let Some(r) = view.region_at(i) else { continue };
+            if r.is_ecc_plane() || !r.has_ecc() {
+                continue;
+            }
+            let (Some(base), Ok(data)) = (r.byte_offset(), view.region_bytes(&r)) else {
+                continue;
+            };
+            // Locate the plane by the kind it covers, as `ecc_for` does, and
+            // take its offset rather than its bytes so nothing stays borrowed.
+            let mut plane: Option<(usize, usize)> = None;
+            for j in 0..view.region_count() {
+                let Some(c) = view.region_at(j) else { continue };
+                if c.is_ecc_plane() && c.covers == r.kind {
+                    if let (Some(pb), Ok(pd)) = (c.byte_offset(), view.region_bytes(&c)) {
+                        plane = Some((pb, pd.len()));
+                    }
+                    break;
+                }
+            }
+            plane.map(|(pb, pl)| (base, data.len(), pb, pl))
+        };
+        let Some((base, len, plane_base, plane_len)) = spans else {
+            continue;
+        };
+        any_plane = true;
+
+        for w in 0..len.div_ceil(8) {
+            let at = base + w * 8;
+            let Some(check) = bytes.get(plane_base + w).copied() else {
+                break;
+            };
+            if w >= plane_len {
+                break;
+            }
+            // The last word of a region may be partial; the encoder computed its
+            // parity over the zero-padded word, so the decode must match that.
+            let mut word = [0u8; 8];
+            let end = core::cmp::min(at + 8, base + len);
+            let Some(src) = bytes.get(at..end) else { break };
+            word[..end - at].copy_from_slice(src);
+            let value = u64::from_le_bytes(word);
+            total.words += 1;
+            match crate::ecc::decode_word(value, check) {
+                crate::ecc::WordStatus::Corrected(fixed) => {
+                    total.corrected += 1;
+                    let le = fixed.to_le_bytes();
+                    bytes[at..end].copy_from_slice(&le[..end - at]);
+                }
+                crate::ecc::WordStatus::Uncorrectable => total.uncorrectable += 1,
+                crate::ecc::WordStatus::Clean(_) => {}
+            }
+        }
+    }
+
+    if any_plane { Some(total) } else { None }
+}
+
+#[cfg(all(test, feature = "alloc"))]
+mod scrub_tests {
+    extern crate alloc;
+
+    use super::*;
+    use crate::WireBuilder;
+    use alloc::vec::Vec;
+
+    /// An artifact with one protected region of known bytes.
+    fn artifact() -> Vec<u8> {
+        let mut b = WireBuilder::new();
+        let id = b.region(0x0010, 0).expect("region");
+        b.push(
+            id,
+            &[1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+        );
+        b.protect_all().expect("protect");
+        b.finish().expect("finish")
+    }
+
+    #[test]
+    fn an_unprotected_artifact_reports_none_rather_than_a_clean_scrub() {
+        let mut b = WireBuilder::new();
+        let id = b.region(0x0010, 0).expect("region");
+        b.push(id, &[1u8, 2, 3, 4, 5, 6, 7, 8]);
+        let mut bytes = b.finish().expect("finish");
+        let before = bytes.clone();
+        assert!(
+            scrub(&mut bytes).is_none(),
+            "an artifact with no plane must report None, since a caller treating a clean \
+             report as verified would call an unprotected artifact sound"
+        );
+        assert_eq!(
+            bytes, before,
+            "scrubbing an unprotected artifact must not write"
+        );
+    }
+
+    #[test]
+    fn scrubbing_a_clean_artifact_is_the_identity() {
+        let mut bytes = artifact();
+        let before = bytes.clone();
+        let report = scrub(&mut bytes).expect("planes present");
+        assert!(
+            report.is_clean(),
+            "a fresh artifact reported faults: {report:?}"
+        );
+        assert!(
+            report.words > 0,
+            "the scrub examined zero words, so it measured nothing"
+        );
+        assert_eq!(
+            bytes, before,
+            "scrubbing an undamaged artifact changed it, which would break every consumer \
+             that authenticates the bytes"
+        );
+    }
+
+    #[test]
+    fn a_single_fault_is_repaired_in_place_and_exactly() {
+        let clean = artifact();
+        // Every bit of the first two bytes of the protected payload.
+        let base = {
+            let v = WireView::parse(&clean).expect("parses");
+            let r = v.region_at(0).expect("region");
+            r.byte_offset().expect("offset")
+        };
+        for off in [0usize, 1, 8] {
+            for bit in 0..8u32 {
+                let mut damaged = clean.clone();
+                damaged[base + off] ^= 1 << bit;
+                let report = scrub(&mut damaged).expect("planes present");
+                assert_eq!(
+                    (report.corrected, report.uncorrectable),
+                    (1, 0),
+                    "byte {off} bit {bit}: expected exactly one corrected word"
+                );
+                assert_eq!(
+                    damaged, clean,
+                    "byte {off} bit {bit}: the repair did not reproduce the original bytes \
+                     exactly, so no signature over the original could verify against it"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_double_fault_is_reported_uncorrectable_and_not_silently_repaired() {
+        let clean = artifact();
+        let base = {
+            let v = WireView::parse(&clean).expect("parses");
+            v.region_at(0)
+                .expect("region")
+                .byte_offset()
+                .expect("offset")
+        };
+        for (a, b) in [(0u32, 1u32), (0, 7), (3, 4)] {
+            let mut damaged = clean.clone();
+            damaged[base] ^= (1 << a) | (1 << b);
+            let report = scrub(&mut damaged).expect("planes present");
+            assert_eq!(
+                (report.corrected, report.uncorrectable),
+                (0, 1),
+                "bits {a},{b}: a double fault must be reported uncorrectable and NOT repaired, \
+                 since a silently wrong repair is the dangerous failure"
+            );
+        }
+    }
+
+    /// A clean report is NOT an integrity check, and the count that proves it.
+    ///
+    /// Weight-four codewords exist in a distance-four code, so an error pattern
+    /// that IS a codeword passes with a zero syndrome. A caller that skipped a
+    /// cryptographic check because the scrub came back clean would accept this.
+    #[test]
+    fn a_clean_report_does_not_mean_the_artifact_is_undamaged() {
+        let clean = artifact();
+        let base = {
+            let v = WireView::parse(&clean).expect("parses");
+            v.region_at(0)
+                .expect("region")
+                .byte_offset()
+                .expect("offset")
+        };
+        // Search the weight-four patterns of one byte-pair for an invisible one.
+        let mut found = false;
+        for i in 0..64u32 {
+            for j in (i + 1)..64 {
+                for k in (j + 1)..64 {
+                    for l in (k + 1)..64 {
+                        let e = (1u64 << i) | (1u64 << j) | (1u64 << k) | (1u64 << l);
+                        if crate::ecc::check_byte(e) != 0 {
+                            continue;
+                        }
+                        let mut damaged = clean.clone();
+                        let word = u64::from_le_bytes(
+                            damaged[base..base + 8].try_into().expect("8 bytes"),
+                        );
+                        damaged[base..base + 8].copy_from_slice(&(word ^ e).to_le_bytes());
+                        let report = scrub(&mut damaged).expect("planes present");
+                        assert!(
+                            report.is_clean(),
+                            "a weight-four codeword error must decode CLEAN, which is what makes \
+                             a clean report unusable as an integrity check"
+                        );
+                        assert_ne!(
+                            damaged, clean,
+                            "the artifact is genuinely damaged and the scrub reported clean"
+                        );
+                        found = true;
+                        break;
+                    }
+                    if found {
+                        break;
+                    }
+                }
+                if found {
+                    break;
+                }
+            }
+            if found {
+                break;
+            }
+        }
+        assert!(
+            found,
+            "no weight-four codeword was found, so this test never exercised the case it exists \
+             for and the claim that a clean report is not an integrity check is unsupported here"
+        );
+    }
+}

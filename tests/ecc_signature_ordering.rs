@@ -41,7 +41,7 @@
 
 use ed25519_dalek::SigningKey;
 use keleusma::wire_format::{module_to_signed_wire_bytes_with_ecc, verify_module_signature};
-use keleusma_wire::{WireView, WordStatus};
+use keleusma_wire::WireView;
 
 const SRC: &str = "signed fn main() -> Word { 21 + 21 }";
 
@@ -63,42 +63,26 @@ fn aux_span(bytes: &[u8]) -> (usize, usize) {
     (start, len)
 }
 
-/// A scrub over the whole artifact: repair every protected region in place.
+/// The shipped scrub verb, applied to the whole artifact.
 ///
-/// This is the operation whose composition with verification is in question, so
-/// the test performs it rather than reasoning about it. It returns the repaired
-/// artifact and the counts, and it does NOT decide whether the result is
-/// trustworthy, which is exactly the point.
+/// This calls `keleusma_wire::scrub` rather than reimplementing it. An earlier
+/// draft of this file carried its own copy, which would have tested a private
+/// reimplementation and left the shipped verb unexercised on a signed artifact
+/// -- the exact shape of a test that passes while measuring something other than
+/// the thing it names.
 fn scrub(bytes: &[u8]) -> (Vec<u8>, usize, usize) {
+    // `keleusma_wire::scrub` takes a wire CONTAINER, not a framed module. The
+    // framing header is a Keleusma concept the wire crate knows nothing about,
+    // so the caller slices the auxiliary body out. Handing it the whole framed
+    // artifact makes `WireView::parse` fail on the magic and the scrub silently
+    // returns None, repairing nothing -- which is what the first version of this
+    // helper did, and the local reimplementation it replaced had hidden.
     let (aux_start, aux_len) = aux_span(bytes);
     let mut out = bytes.to_vec();
-    let (mut corrected, mut uncorrectable) = (0usize, 0usize);
-    let view = WireView::parse(&bytes[aux_start..aux_start + aux_len]).expect("aux parses");
-    for i in 0..view.region_count() {
-        let Some(r) = view.region_at(i) else { continue };
-        if r.is_ecc_plane() || !r.has_ecc() {
-            continue;
-        }
-        let (Some(base), Ok(data)) = (r.byte_offset(), view.region_bytes(&r)) else {
-            continue;
-        };
-        let Some(plane) = view.ecc_for(&r) else {
-            continue;
-        };
-        for w in 0..data.len().div_ceil(8) {
-            match plane.word(data, w) {
-                Some(WordStatus::Corrected(v)) => {
-                    corrected += 1;
-                    let at = aux_start + base + w * 8;
-                    let end = core::cmp::min(at + 8, out.len());
-                    out[at..end].copy_from_slice(&v.to_le_bytes()[..end - at]);
-                }
-                Some(WordStatus::Uncorrectable) => uncorrectable += 1,
-                _ => {}
-            }
-        }
+    match keleusma_wire::scrub(&mut out[aux_start..aux_start + aux_len]) {
+        Some(r) => (out, r.corrected, r.uncorrectable),
+        None => (out, 0, 0),
     }
-    (out, corrected, uncorrectable)
 }
 
 /// Byte offset, within the whole artifact, of a protected non-empty region.
