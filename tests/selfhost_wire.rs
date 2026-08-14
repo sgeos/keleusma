@@ -10484,20 +10484,14 @@ fn module_input_blob(module: &keleusma::bytecode::Module) -> Vec<u8> {
     // The constant section: a tag per constant, and a name only where one
     // exists. STATIC_STR is the only tag that interns, and it dedups.
     let consts = const_roots_of(module);
-    let cn = u16::try_from(consts.len()).expect("const count fits u16");
+    let mut nodes = Vec::new();
+    for c in &consts {
+        push_blob_node(c, &mut nodes);
+    }
+    let cn = u16::try_from(count_blob_nodes(&consts)).expect("node count fits u16");
     let mut tail = Vec::new();
     tail.extend_from_slice(&cn.to_le_bytes());
-    for c in &consts {
-        let (tag, payload, name) = const_tag_and_name(c);
-        tail.extend_from_slice(&tag.to_le_bytes());
-        tail.extend_from_slice(&payload.to_le_bytes());
-        if let Some(n) = name {
-            let b = n.as_bytes();
-            let l = u16::try_from(b.len()).expect("name length fits u16");
-            tail.extend_from_slice(&l.to_le_bytes());
-            tail.extend_from_slice(b);
-        }
-    }
+    tail.extend_from_slice(&nodes);
 
     // THE ENUM COUNT IS ALWAYS WRITTEN, including when it is zero. Inferring
     // "no enum section" from the blob ENDING cannot distinguish an empty
@@ -10523,6 +10517,85 @@ fn module_input_blob(module: &keleusma::bytecode::Module) -> Vec<u8> {
 /// Mirrors `preorder_13b`. Composite tags are returned rather than rejected
 /// here, so the REFUSAL comes from the stage: a host that quietly dropped them
 /// would make the stage's guard untestable.
+/// Total nodes in a forest, counting every descendant.
+fn count_blob_nodes(roots: &[keleusma::bytecode::ConstValue]) -> usize {
+    use keleusma::bytecode::ConstValue as K;
+    fn go(c: &K) -> usize {
+        1 + match c {
+            K::Tuple(v) | K::Array(v) => v.iter().map(go).sum::<usize>(),
+            K::Struct { fields, .. } => fields.iter().map(|(_, v)| go(v)).sum::<usize>(),
+            K::Enum { fields, .. } => fields.iter().map(go).sum::<usize>(),
+            _ => 0,
+        }
+    }
+    roots.iter().map(go).sum()
+}
+
+/// One node in PREORDER: tag, payload, child count, flags, discriminant, then
+/// its interned names, then its children.
+///
+/// The order is the reference's, not a fresh choice: `preorder_13b` pushes a
+/// node and then descends, so both the node table and the name sequence are
+/// depth-first preorder. Writing the blob in that order is what lets the stage
+/// reproduce both with a linear scan.
+fn push_blob_node(c: &keleusma::bytecode::ConstValue, out: &mut Vec<u8>) {
+    use keleusma::bytecode::ConstValue as K;
+    let mut names: Vec<&str> = Vec::new();
+    let children: Vec<&K> = match c {
+        K::Tuple(v) | K::Array(v) => v.iter().collect(),
+        K::Struct { type_name, fields } => {
+            names.push(type_name);
+            names.extend(fields.iter().map(|(n, _)| n.as_str()));
+            fields.iter().map(|(_, v)| v).collect()
+        }
+        K::Enum {
+            type_name,
+            variant,
+            fields,
+            ..
+        } => {
+            names.push(type_name);
+            names.push(variant);
+            fields.iter().collect()
+        }
+        K::StaticStr(s) => {
+            names.push(s);
+            Vec::new()
+        }
+        _ => Vec::new(),
+    };
+    let (tag, payload, _) = const_tag_and_name(c);
+    let (flags, disc): (i64, i64) = match c {
+        K::Enum {
+            discriminant: Some(d),
+            ..
+        } => (1, *d),
+        _ => (0, 0),
+    };
+    out.extend_from_slice(&tag.to_le_bytes());
+    out.extend_from_slice(&payload.to_le_bytes());
+    out.extend_from_slice(
+        &u16::try_from(children.len())
+            .expect("kids fit u16")
+            .to_le_bytes(),
+    );
+    out.extend_from_slice(&flags.to_le_bytes());
+    out.extend_from_slice(&disc.to_le_bytes());
+    out.extend_from_slice(
+        &u16::try_from(names.len())
+            .expect("names fit u16")
+            .to_le_bytes(),
+    );
+    for n in names {
+        let b = n.as_bytes();
+        out.extend_from_slice(&u16::try_from(b.len()).expect("len fits u16").to_le_bytes());
+        out.extend_from_slice(b);
+    }
+    for ch in children {
+        push_blob_node(ch, out);
+    }
+}
+
 fn const_tag_and_name(c: &keleusma::bytecode::ConstValue) -> (u16, i64, Option<String>) {
     use keleusma::bytecode::ConstValue as K;
     match c {
@@ -10786,5 +10859,159 @@ fn keleusma_produces_the_constant_node_table_for_scalar_roots() {
         named_nodes_seen > 0,
         "no case produced a STATIC_STR node, so `names_first` is never checked and the one \
          computed field of the node table is untested"
+    );
+}
+
+/// The constant walk's CHILD positions, names and node table together.
+///
+/// **One linear scan, not a stack walk.** The blob carries the forest in
+/// preorder, and `preorder_13b` pushes a node then descends, so the node table
+/// and the name sequence are both in that order. A linear scan reproduces both.
+/// An explicit stack would be needed only to reconstruct tree SHAPE, which this
+/// producer does not do: the child count is carried through and the flattener
+/// consumes it.
+///
+/// **The mode is what the corpus has to discriminate.** A struct interns its
+/// type name with dedup and every field name FRESH, because the layout
+/// addresses a field by `first + i` and a dedup hit would break the run's
+/// contiguity. An enum interns both its names with dedup. A single "a composite
+/// interns its names" rule would be wrong for one of the two, and only where a
+/// name repeats -- so a case with a repeated field name is required, and
+/// `two-strings-depth-2` does not provide one because it discriminates depth.
+#[test]
+fn keleusma_produces_the_nested_constant_walk() {
+    const CASES: &[(&str, &str)] = &[
+        (
+            "str-in-tuple",
+            "const data k { t: (Text, Word) = (\"hi\", 1) }\nfn main() -> Word { k.t.1 }",
+        ),
+        (
+            "two-strings-depth-2",
+            "const data k { t: ((Text, Word), Text) = ((\"aaa\", 1), \"bbb\") }\n\
+             fn take(v: ((Text, Word), Text)) -> Word { 1 }\nfn main() -> Word { take(k.t) }",
+        ),
+        (
+            "one-struct",
+            "struct P { x: Word, y: Word }\nconst data k { p: P = P { x: 1, y: 2 } }\n\
+             fn take(v: P) -> Word { v.x }\nfn main() -> Word { take(k.p) }",
+        ),
+        // THE MODE DISCRIMINATOR. Two structs sharing a field name: under dedup
+        // the second `x` would resolve to the first, and it must not, because
+        // each struct's field run has to stay contiguous from its own
+        // `names_first`.
+        (
+            "repeated-field-name",
+            "struct P { x: Word, y: Word }\nstruct Q { x: Word, z: Word }\n\
+             const data k { p: P = P { x: 1, y: 2 }, q: Q = Q { x: 3, z: 4 } }\n\
+             fn tp(v: P) -> Word { v.x }\nfn tq(v: Q) -> Word { v.x }\n\
+             fn main() -> Word { tp(k.p) + tq(k.q) }",
+        ),
+    ];
+
+    let mut vm = vm_for(WIRE_KEL);
+    let mut nested_seen = 0;
+    let mut fresh_seen = 0;
+
+    for (label, src) in CASES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let roots = const_roots_of(&module);
+        let prefix_len = interner_input(&module).len();
+        let (want_fin, want_names) = preorder_13b(&roots, prefix_len);
+        let total_nodes = want_fin.len() / 6;
+
+        // GUARD. A case with no child node exercises nothing this test exists
+        // for, and would pass as a root-only case.
+        assert!(
+            total_nodes > roots.len(),
+            "{label}: {total_nodes} nodes for {} roots, so nothing nests here",
+            roots.len()
+        );
+        nested_seen += 1;
+        fresh_seen += want_names.iter().filter(|(_, m)| *m == MODE_FRESH).count();
+
+        let blob = module_input_blob(&module);
+        let u64le = |b: &[u8], o: usize| -> i64 {
+            i64::from_le_bytes([
+                b[o],
+                b[o + 1],
+                b[o + 2],
+                b[o + 3],
+                b[o + 4],
+                b[o + 5],
+                b[o + 6],
+                b[o + 7],
+            ])
+        };
+
+        // The node table.
+        let (ret, out) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_MI_CONST_NODES,
+                nregions: 0,
+                seed: &[],
+                regions: &[],
+                fields: &[],
+                names: &[],
+                pool: &blob,
+                args: [0, 0, 0, 0, 0],
+                read_len: total_nodes * 6 * 8,
+            },
+        )
+        .expect("run");
+        assert_eq!(ret, total_nodes as i64, "{label}: node count");
+        for (i, want) in want_fin.iter().enumerate() {
+            assert_eq!(
+                u64le(&out, i * 8),
+                *want,
+                "{label}: node word {i} (node {}, field {})",
+                i / 6,
+                i % 6
+            );
+        }
+
+        // The name sequence, prefix plus the walk's names, with their modes.
+        let mut want_seq: Vec<(String, i64)> = interner_input(&module);
+        want_seq.extend(want_names.iter().cloned());
+        let (ret2, out2) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_MI_CHUNK_NAMES,
+                nregions: 0,
+                seed: &[],
+                regions: &[],
+                fields: &[],
+                names: &[],
+                pool: &blob,
+                args: [0, 0, 0, 0, 0],
+                read_len: want_seq.len() * 8,
+            },
+        )
+        .expect("run");
+        assert_eq!(ret2, want_seq.len() as i64, "{label}: name count");
+        let u32le = |b: &[u8], o: usize| -> i64 {
+            i64::from(u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]))
+        };
+        for (i, (name, mode)) in want_seq.iter().enumerate() {
+            assert_eq!(
+                u32le(&out2, i * 8),
+                name.len() as i64,
+                "{label}: name {i} ({name}) length"
+            );
+            assert_eq!(
+                u32le(&out2, (i * 8) + 4),
+                *mode,
+                "{label}: name {i} ({name}) mode"
+            );
+        }
+    }
+
+    assert_eq!(nested_seen, CASES.len(), "not every case nested");
+    // MUST-FIRE on the mode. Without a fresh-mode name the struct rule is
+    // untested and a producer interning everything with dedup would pass.
+    assert!(
+        fresh_seen > 0,
+        "no case produced a fresh-mode name, so the struct field rule is untested"
     );
 }
