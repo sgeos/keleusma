@@ -236,8 +236,89 @@ fn operand_pairs(ast: &keleusma::ast::Program) -> Vec<(i64, i64)> {
     p.0
 }
 
+/// A declared type's tag, from its SYNTACTIC spelling.
+///
+/// Deliberately parallel to `literal_tag`, and the two must agree on their
+/// numbering or a correct argument would read as a mismatch. `Word` and an
+/// integer literal are both 1 for that reason.
+fn type_tag(t: &keleusma::ast::TypeExpr) -> i64 {
+    use keleusma::ast::{PrimType, TypeExpr as T};
+    match t {
+        T::Prim(PrimType::Word, _) => 1,
+        T::Prim(PrimType::Bool, _) => 2,
+        T::Prim(PrimType::Byte, _) => 3,
+        T::Prim(PrimType::Float, _) => 4,
+        _ => 0,
+    }
+}
+
+/// A program's call sites: arity rows and argument-type rows.
+///
+/// Named rather than returned as a tuple of two identical vector types, which
+/// clippy rejects and which a reader would have to count parentheses to
+/// disambiguate. Two `Vec<(i64, i64)>` in a row is exactly the shape where
+/// swapping the halves compiles and is wrong.
+type CallRows = (Vec<(i64, i64)>, Vec<(i64, i64)>);
+
+/// Call sites paired against their declarations: (declared arity, actual
+/// arity), plus an argument-type pair per positional argument.
+///
+/// **A call to a name with no declaration contributes nothing.** Undefined
+/// functions are a later slice, and inventing a declared arity of zero for one
+/// would reject it here for a reason this slice cannot defend.
+fn call_rows(ast: &keleusma::ast::Program) -> CallRows {
+    use keleusma::ast::Expr;
+    use keleusma::visitor::Visitor;
+    use std::collections::BTreeMap;
+
+    let mut decls: BTreeMap<String, Vec<i64>> = BTreeMap::new();
+    for f in &ast.functions {
+        decls.insert(
+            f.name.clone(),
+            f.params
+                .iter()
+                .map(|p| p.type_expr.as_ref().map_or(0, type_tag))
+                .collect(),
+        );
+    }
+
+    struct Calls<'a> {
+        decls: &'a BTreeMap<String, Vec<i64>>,
+        arity: Vec<(i64, i64)>,
+        args: Vec<(i64, i64)>,
+    }
+    impl Visitor for Calls<'_> {
+        fn visit_expr(&mut self, expr: &Expr) {
+            if let Expr::Call { name, args, .. } = expr
+                && let Some(params) = self.decls.get(name)
+            {
+                self.arity.push((params.len() as i64, args.len() as i64));
+                for (p, a) in params.iter().zip(args.iter()) {
+                    self.args.push((*p, expr_tag(a)));
+                }
+            }
+            self.walk_expr(expr);
+        }
+    }
+
+    let mut c = Calls {
+        decls: &decls,
+        arity: Vec::new(),
+        args: Vec::new(),
+    };
+    for f in &ast.functions {
+        c.visit_block(&f.body);
+    }
+    (c.arity, c.args)
+}
+
 /// The stage's verdict for a program, with its operand pairs marshalled in.
 fn stage_accepts_program(pairs: &[(i64, i64)]) -> bool {
+    stage_verdict(pairs, &[])
+}
+
+/// The stage's verdict with both tables.
+fn stage_verdict(pairs: &[(i64, i64)], arity: &[(i64, i64)]) -> bool {
     let module = compile(&parse(&tokenize(TYPES_KEL).expect("lex")).expect("parse"))
         .expect("verify_types.kel compiles");
     let need = required_persistent_capacity_for(&module);
@@ -277,6 +358,34 @@ fn stage_accepts_program(pairs: &[(i64, i64)]) -> bool {
             keleusma::bytecode::Value::Int(*r),
         )
         .expect("rhs");
+    }
+    const CN_SLOT: usize = RHS_SLOT + 256;
+    const CDECL_SLOT: usize = CN_SLOT + 1;
+    const CACT_SLOT: usize = CDECL_SLOT + 128;
+    assert!(
+        arity.len() <= 128,
+        "the call table holds 128 rows and this program needs {}",
+        arity.len()
+    );
+    vm.set_shared(
+        &mut shared,
+        CN_SLOT,
+        keleusma::bytecode::Value::Int(arity.len() as i64),
+    )
+    .expect("cn");
+    for (i, (d, a)) in arity.iter().enumerate() {
+        vm.set_shared(
+            &mut shared,
+            CDECL_SLOT + i,
+            keleusma::bytecode::Value::Int(*d),
+        )
+        .expect("cdecl");
+        vm.set_shared(
+            &mut shared,
+            CACT_SLOT + i,
+            keleusma::bytecode::Value::Int(*a),
+        )
+        .expect("cact");
     }
     let out = vm
         .call_with_shared(&mut shared, &[keleusma::bytecode::Value::Int(0)])
@@ -414,6 +523,73 @@ fn slice_one_rejects_operand_disagreement_and_nothing_else() {
         assert!(
             stage_accepts_program(&operand_pairs(&ast)),
             "{label}: slice 1 REJECTED a well-typed program, which narrows the language"
+        );
+    }
+}
+
+/// SLICE 2: call arity and argument types.
+///
+/// Arity is **purely syntactic** -- it needs no types at all -- which is why
+/// two of the fifteen shapes fall to one comparison, and why they are the same
+/// comparison rather than two rules: too few and too many arguments are both
+/// "declared does not equal actual".
+///
+/// The argument-type rows reuse slice 1's operand-pair channel, because
+/// "these two must agree" is the same claim whether the two are a binary
+/// operator's operands or a parameter and its argument.
+#[test]
+fn slice_two_rejects_arity_and_argument_type_mismatches() {
+    const IN_SCOPE: &[&str] = &[
+        "add-word-and-bool",
+        "array-elements-differ",
+        "too-few-arguments",
+        "too-many-arguments",
+        "wrong-argument-type",
+        "byte-against-word-argument",
+    ];
+
+    let mut caught = Vec::new();
+    let mut out_of_scope_rejected = Vec::new();
+
+    for (label, src) in ILL_TYPED {
+        let ast = match tokenize(src).ok().and_then(|t| parse(&t).ok()) {
+            Some(a) => a,
+            None => continue,
+        };
+        let (arity, arg_pairs) = call_rows(&ast);
+        let mut pairs = operand_pairs(&ast);
+        pairs.extend(arg_pairs);
+        let stage = stage_verdict(&pairs, &arity);
+        if IN_SCOPE.contains(label) {
+            assert!(
+                !stage,
+                "{label}: slice 2 has a rule for this shape and accepted it"
+            );
+            caught.push(*label);
+        } else if !stage {
+            out_of_scope_rejected.push(*label);
+        }
+    }
+
+    assert_eq!(
+        caught.len(),
+        IN_SCOPE.len(),
+        "reached {caught:?}, expected {IN_SCOPE:?}"
+    );
+    assert!(
+        out_of_scope_rejected.is_empty(),
+        "slice 2 rejected shapes it has no rule for: {out_of_scope_rejected:?}"
+    );
+
+    // The direction that admits no over-approximation.
+    for (label, src) in WELL_TYPED {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let (arity, arg_pairs) = call_rows(&ast);
+        let mut pairs = operand_pairs(&ast);
+        pairs.extend(arg_pairs);
+        assert!(
+            stage_verdict(&pairs, &arity),
+            "{label}: slice 2 REJECTED a well-typed program, which narrows the language"
         );
     }
 }
