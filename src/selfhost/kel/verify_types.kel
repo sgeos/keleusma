@@ -22,7 +22,9 @@
 // The second is bounded by a corpus; the first is not, which is why the well-typed side of the
 // corpus grows with every slice rather than staying at the controls the sizing spike used.
 //
-// SLICE 0, WHICH IS THIS FILE: no rules. `verdict` is always ACCEPT. That is the point rather than
+// SLICE 1: operand agreement. `verdict` rejects when two operands that must agree do not.
+//
+// SLICE 0, WHICH THIS REPLACED: no rules, `verdict` always ACCEPT. That is the point rather than
 // a placeholder -- the corpus must then show every well-typed case agreeing and every ill-typed
 // case DISAGREEING, and a harness reporting success here is broken. Finding that out costs nothing
 // before a rule exists, and costs a great deal afterwards.
@@ -36,9 +38,22 @@ require word >= 32;
 // stating that in the encoding is better than accepting a table nothing reads: a reader of this
 // file can tell at a glance that a passing corpus here proves the harness works and nothing about
 // type checking.
+// SLICE 1 gives the stage its first input: a table of OPERAND PAIRS, each a
+// place where two values must agree in type.
+//
+// **The tags are SYNTACTIC, and that is what keeps the oracle honest.** They
+// come from literal kinds in the parse tree -- `1` is an integer, `true` is a
+// bool -- not from the reference's inference. Marshalling inferred types would
+// make the stage agree with the reference by construction and prove nothing.
+// An operand whose type is not syntactically evident is tag 0, UNKNOWN, and an
+// unknown pair is not a rejection: this stage may not reject a valid program.
 shared data ty {
     cmd: Word,
     verdict: Word,
+    // Operand pairs. `n` rows of (left tag, right tag).
+    n: Word,
+    lhs: [Word; 256],
+    rhs: [Word; 256],
 }
 
 // The verdict constants, named rather than spelled as bare integers at the call sites, so a later
@@ -47,12 +62,37 @@ fn ty_accept() -> Word { 0 }
 
 fn ty_reject() -> Word { 0 - 1 }
 
-// The whole of slice 0. Every program is accepted, because no rule exists to reject one.
+fn ty_unknown() -> Word { 0 }
+
+// Two operands disagree when BOTH are known and they differ.
 //
-// This is a MUST-NOT-FIRE by construction: the stage is incapable of rejecting, so any rejection
-// the harness observes would be the harness's own defect rather than this stage's opinion.
+// **The unknown case accepts, and the asymmetry is the whole of the soundness
+// argument.** `verify_*.kel` may over-approximate because an over-approximation
+// defers to a runtime guard. A type checker has no such latitude in the
+// accepting direction: rejecting a valid program is a LANGUAGE CHANGE. So an
+// operand this slice cannot type is not evidence of anything, and silence is
+// the only sound answer.
+fn ty_pair_disagrees(l: Word, r: Word) -> Word {
+    if l == ty_unknown() { 0 } else {
+    if r == ty_unknown() { 0 } else {
+    if l == r { 0 } else { 1 } } }
+}
+
+// Slice 1: reject when any operand pair disagrees.
+//
+// The loop runs to completion rather than stopping at the first disagreement,
+// because the language is total and there is nothing to break out of. The
+// verdict is sticky, which also means a second disagreement cannot un-reject a
+// program.
 fn ty_check() -> Word {
     ty.verdict = ty_accept();
+    for i in 0..ty.n limit 256 {
+        ty.verdict = if ty_pair_disagrees(ty.lhs[i], ty.rhs[i]) == 1 {
+            ty_reject()
+        } else {
+            ty.verdict
+        };
+    }
     ty.verdict
 }
 
