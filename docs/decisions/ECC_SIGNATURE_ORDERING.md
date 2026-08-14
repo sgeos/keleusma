@@ -138,9 +138,43 @@ documentation states rather than implying that a plane's presence confers protec
 5,133 of 635,376 four-bit patterns are reported clean while the word is wrong, and a caller skipping
 a cryptographic check on the strength of it would accept every one.
 
+## Scheduling is the host's, decided 2026-08-13
+
+**A host may scrub on its own schedule.** Operator decision. Nothing in the runtime scrubs, nothing
+requires a host to, and no schedule is imposed.
+
+What is **not** the host's choice is what follows a repair. The invariant stands: a repair must be
+followed by a fresh verification. So the module-level surface is a pair, and the sound composition is
+the shorter call:
+
+```
+scrub_module_bytes(&mut [u8])                    -> Option<EccReport>
+scrub_and_verify_signed(&mut [u8], &[key])       -> Result<EccReport, LoadError>
+```
+
+`scrub_module_bytes` exists because the container is the auxiliary body **alone**, and a host that
+passed the whole framed buffer to the container-level verb would have the parse fail on its magic and
+the scrub silently repair nothing. That is not hypothetical; it happened in this project's own test
+before the module-level verb existed.
+
+`scrub_and_verify_signed` repairs and then verifies what the repair produced, and **returns the
+report only if verification passed**. There is no path through it that yields a report without
+having verified, which inverts the convenience the earlier design had backwards.
+
+**What each outcome means to a host.** A clean report means the module was undamaged. A report with
+corrections means the module had taken repairable damage, the buffer now holds the publisher's bytes,
+and **writing it back restores the margin** before a second fault lands in a word that already
+carries one. An error means the module is not the one that was signed, and it deliberately does not
+distinguish unrepairable damage from a wrong repair from tampering, because none of them may load.
+
+**One operational consequence, stated because it constrains scheduling.** On the zero-copy path a
+running virtual machine borrows the artifact, so a scrub cannot run underneath it; the cycle is drop,
+scrub, reconstruct, and reconstruction re-runs the checks. That is the invariant being enforced by
+the borrow checker rather than a limitation, and it means a scrub is a reload rather than a
+background touch-up. A host wanting to scrub without interrupting execution must hold its own copy of
+the artifact bytes and swap it in.
+
 ## Held by the operator
 
-**Whether a host SHOULD scrub, and on what schedule, remains policy and is deliberately not
-decided here.** The verbs make both answers expressible. What is no longer open is the order, which
-is fixed by the invariant above, and whether the unsound order is reachable by accident, which the
-signature now prevents wherever the reader borrows the buffer.
+Nothing. The order is fixed, the verbs are implemented, scheduling is the host's, and the unsound
+order is unrepresentable wherever the reader borrows the buffer.

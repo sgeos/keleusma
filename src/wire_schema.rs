@@ -2825,7 +2825,7 @@ pub fn encode_aux_body(aux: &crate::wire_format::WireAuxBody) -> Result<Vec<u8>,
 /// # Errors
 ///
 /// [`WireError`] as [`encode_aux_body`], plus
-/// [`WireError::TooManyRegions`](keleusma_wire::WireError::TooManyRegions) if
+/// [`WireError::TooManyRegions`] if
 /// the planes push the artifact past the region ceiling.
 pub fn encode_aux_body_with_ecc(
     aux: &crate::wire_format::WireAuxBody,

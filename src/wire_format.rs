@@ -2595,6 +2595,97 @@ pub fn module_from_wire_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
     })
 }
 
+/// Repairs a framed module's auxiliary body in place, on the caller's schedule.
+///
+/// This is the **scrub** verb at the module level. It locates the auxiliary body
+/// from the framing header and hands it to [`keleusma_wire::scrub`], which is
+/// the step a caller must not get wrong by hand: the wire container is the
+/// auxiliary body ALONE, and passing the whole framed buffer makes the container
+/// parse fail on its magic and the scrub silently repair nothing.
+///
+/// Returns `None` when the module carries no parity plane, which is the default,
+/// and is deliberately distinguished from a clean scrub of a protected module.
+///
+/// # The caller schedules this, and the caller must re-authenticate afterwards
+///
+/// Scrubbing is a maintenance operation and its schedule is the host's. What is
+/// **not** the host's choice is what follows it: **a repair must be followed by
+/// a fresh verification**, because a signature check describes the bytes at the
+/// moment it ran and a scrub modifies them. For a signed module,
+/// [`scrub_and_verify_signed`] performs the pair in the sound order and is the
+/// call to prefer.
+///
+/// The reason is measured rather than cautionary. A (72,64) code reports
+/// **23,364 of 41,664 triple-bit fault patterns as a successful repair while
+/// producing the wrong word**, so a caller that trusted the returned report and
+/// skipped re-verification would run bytes no publisher signed.
+///
+/// # Errors
+///
+/// Returns `None` rather than an error for a module that is unprotected, too
+/// short, or whose header does not describe a well-formed auxiliary body. This
+/// function repairs or does nothing; it is not a validator.
+pub fn scrub_module_bytes(bytes: &mut [u8]) -> Option<keleusma_wire::EccReport> {
+    if bytes.len() < WIRE_FORMAT_HEADER_BYTES + WIRE_FORMAT_FOOTER_BYTES {
+        return None;
+    }
+    if bytes[0..4] != BYTECODE_MAGIC {
+        return None;
+    }
+    let start = u32::from_le_bytes([bytes[48], bytes[49], bytes[50], bytes[51]]) as usize;
+    let len = u32::from_le_bytes([bytes[52], bytes[53], bytes[54], bytes[55]]) as usize;
+    let end = start.checked_add(len)?;
+    if len == 0 || end > bytes.len() {
+        return None;
+    }
+    keleusma_wire::scrub(&mut bytes[start..end])
+}
+
+/// Scrubs a signed module and then verifies it, which is the sound order.
+///
+/// # Why this exists
+///
+/// The two orders a scrub and a signature check can compose in are
+/// indistinguishable on every undamaged module and differ only on damaged input,
+/// which is the case the parity plane exists for. Getting them the wrong way
+/// round leaves the scrub's writes unauthenticated.
+///
+/// **This function makes the sound order the convenient one.** It repairs, then
+/// verifies what the repair produced, and returns the report only if
+/// verification passed. A caller cannot obtain the report and skip the check,
+/// because there is no path through this function that returns one without
+/// having verified.
+///
+/// # What each outcome means
+///
+/// - `Ok(report)` with `report.is_clean()`: the module was undamaged and
+///   verified.
+/// - `Ok(report)` with `report.corrected > 0`: the module had taken repairable
+///   damage, the repair reproduced the publisher's bytes exactly, and the
+///   signature confirms it. **The buffer has been rewritten** and should be
+///   written back to storage so the margin is restored before a second fault
+///   lands in a word that already carries one.
+/// - `Err(_)`: the module is not the one that was signed. This covers damage the
+///   code could not repair, damage it repaired WRONGLY, and ordinary tampering,
+///   and it does not distinguish them, because none of them may be loaded.
+///
+/// That last case is the one the design turns on. The corrector reports success
+/// on inputs outside its guarantee, and the signature is what refuses them.
+///
+/// # Errors
+///
+/// [`LoadError`] when the module is unsigned, malformed, or fails verification
+/// against every supplied key.
+#[cfg(feature = "signatures")]
+pub fn scrub_and_verify_signed(
+    bytes: &mut [u8],
+    keys: &[ed25519_dalek::VerifyingKey],
+) -> Result<keleusma_wire::EccReport, LoadError> {
+    let report = scrub_module_bytes(bytes).unwrap_or_default();
+    verify_module_signature(bytes, keys)?;
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

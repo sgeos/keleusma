@@ -213,3 +213,57 @@ fn a_mis_repaired_artifact_is_still_refused_which_is_why_the_signature_must_run_
          test does not establish that the composition is fail-closed"
     );
 }
+
+/// The host-facing pair, scheduled by the host and sound by construction.
+///
+/// `scrub_and_verify_signed` is the composition a host on its own maintenance
+/// schedule should call. These assertions are about the API a host actually
+/// touches, rather than about the container-level primitive underneath it.
+#[test]
+fn the_host_facing_pair_repairs_and_reauthenticates_in_one_call() {
+    use keleusma::wire_format::{scrub_and_verify_signed, scrub_module_bytes};
+
+    let (clean, key) = signed_with_planes();
+    let at = protected_offset(&clean);
+
+    // CONTROL. An undamaged module returns a clean report and is unchanged.
+    let mut ok = clean.clone();
+    let report = scrub_and_verify_signed(&mut ok, &[key]).expect("undamaged must verify");
+    assert!(
+        report.is_clean(),
+        "an undamaged module reported faults: {report:?}"
+    );
+    assert_eq!(ok, clean, "scrubbing an undamaged module rewrote it");
+
+    // A repairable fault: repaired, re-authenticated, and the buffer now holds
+    // the publisher's bytes so the host can write it back.
+    let mut damaged = clean.clone();
+    damaged[at] ^= 0x01;
+    let report = scrub_and_verify_signed(&mut damaged, &[key])
+        .expect("a single-bit fault must repair and then verify");
+    assert_eq!(report.corrected, 1, "expected one corrected word");
+    assert_eq!(
+        damaged, clean,
+        "the buffer must hold the publisher's bytes after a successful repair, or writing it          back would persist something that was never signed"
+    );
+
+    // A mis-repair: the corrector reports success, the signature refuses, and
+    // the caller never receives a report.
+    let mut wrecked = clean.clone();
+    wrecked[at] ^= 0b0000_0111;
+    let outcome = scrub_and_verify_signed(&mut wrecked, &[key]);
+    assert!(
+        outcome.is_err(),
+        "a mis-repaired module returned Ok, which would hand a caller a report for bytes no          publisher signed"
+    );
+
+    // MUST-FIRE. The mis-repair path must actually have mis-repaired, or the
+    // assertion above passed for the wrong reason.
+    let mut probe = clean.clone();
+    probe[at] ^= 0b0000_0111;
+    let r = scrub_module_bytes(&mut probe).expect("planes present");
+    assert!(
+        r.corrected > 0 && probe != clean,
+        "the triple fault was not mis-repaired, so the refusal above did not exercise the case          this test exists for: {r:?}"
+    );
+}
