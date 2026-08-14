@@ -190,3 +190,80 @@ would have left a third instrument in an intermediate state next to two stale on
 The staleness is in the **safe** direction — the model understates coverage — so the figures
 derived from it are conservative rather than misleading. That is why this could wait; it is
 not why it should.
+
+---
+
+# Addendum, 2026-08-14: `CheckedAdd` does NOT stand alone
+
+The finding above was reached by accident. This is the systematic answer, from
+`native_codegen/tests/spike_opcode_stack_audit.rs`.
+
+**Four opcodes are wrong, in two different ways.** The distinction matters, because a repair
+that treats them alike will fix one kind and leave the other.
+
+## Kind 1 — the NET is wrong: the flat scalar-field accessors
+
+| opcode | `verify_typed` models | `stack_growth`/`stack_shrink` declare | |
+|---|---|---|---|
+| `GetField(Flat)` | pop 1, push 1 → **net 0** | 0 / 1 → **net -1** | **WRONG** |
+| `GetTupleField(Flat)` | pop 1, push 1 → **net 0** | 0 / 1 → **net -1** | **WRONG** |
+| `GetEnumField(Flat)` | pop 1, push 1 → **net 0** | 0 / 1 → **net -1** | **WRONG** |
+
+Each pops the composite and pushes the field. The model records the pop and not the push, so
+the running depth loses one slot per field access. **This is what drives the offset negative**
+— `manhattan_norm` has two field reads and bottoms out at exactly `-1`.
+
+`verify_typed` is an independent in-tree reconstruction of the same operand stack, written to
+validate flat offsets. Two models of one quantity, disagreeing.
+
+## Kind 2 — the NET is right and the TRANSIENT is wrong: checked arithmetic
+
+`CheckedAdd`, `CheckedSub`, `CheckedMul`, `CheckedDiv`, `CheckedMod` declare `growth = 1,
+shrink = 0`; `CheckedNeg` declares `growth = 2, shrink = 0`.
+
+**The net is correct**: each pops two and pushes `(high, low, flag)`, so `+1` is right. The
+defect is that `wcmu_region` uses `growth` as the **transient rise** when computing
+`peak = max(peak, current_offset + growth)`, and the transient is the **gross push of 3**, not
+the net `1`. The peak is under-counted by two at every checked-arithmetic site.
+
+The comment on the shrink arm — *"peak vs. final; shrink is zero because there is no net pop"*
+— shows the peak/final distinction was in mind. The value supplied for the peak is
+nonetheless the net one.
+
+## What is CORRECT, checked rather than assumed
+
+The four flat accessors do **not** behave alike, and assuming they did would have produced a
+wrong list:
+
+| opcode | why it is right |
+|---|---|
+| `GetIndex(Flat)` | pops **index and array**, pushes the element → net `-1` is correct |
+| `NewComposite(Flat)` | `shrink = c.count()`, arity-aware; the `2` seen in the audit table is one instance's field count, not a constant |
+| `Div`, `Mod`, `If`, `SetLocal`, `SetData`, `SetDataIndexed`, `PopN` | genuine consumers |
+| `GetDataIndexed`, `IsEnum`, `GetLocal`, `GetData` | net matches the typed reconstruction |
+
+**`GetIndex` is the one that makes the point.** It sits in the same syntactic family as the
+three wrong accessors and declares the same net `-1`, and it is right, because it consumes an
+extra operand they do not.
+
+## Coverage, stated rather than implied
+
+The synthetic corpus is **19 compiled cases of 23**. The four rejections are reference-compiler
+rejections, printed by the test, not backend gaps: `bitwise` and `shift` use function-call
+syntax the parser does not accept for those operators, `loop_for` a `for` form it does not
+parse, and `stream` fails the type checker on a `loop` body producing `()`.
+
+**16 opcodes appear in the shipped corpus but in no isolating synthetic case**: `BitAnd`,
+`BitOr`, `BitXor`, `BreakIf`, `CmpEq`, `CmpGe`, `CmpLe`, `CmpNe`, `Dup`, `Not`,
+`PushImmediate`, `Reset`, `Shl`, `Shr`, `Stream`, `Yield`. These were walked by the
+shipped-corpus scan and are not implicated by it, but a defect in one could be masked by
+co-occurrence. **They are the audit's remaining hole and are not claimed as clean.**
+
+## Verdict on the question asked
+
+**No — `CheckedAdd` does not stand alone.** Four opcodes are wrong across two distinct defect
+kinds, and the three flat accessors are the ones that actually produce the negative depth.
+Sixteen opcodes remain unisolated and are named above rather than passed over.
+
+Still **reported, not repaired**: `src/verify.rs` and `src/bytecode.rs` belong to the `v0.2.3`
+line and are untouched here.

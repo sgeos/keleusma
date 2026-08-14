@@ -5663,6 +5663,59 @@ untouched.
 
 ---
 
+## The `is_lowered` drift control is now an ASSERTION, and the model is not retired
+
+2026-08-14. Partial, and the split is deliberate rather than a shortfall of effort.
+
+**What landed.** `the_lowered_predicate_is_not_stale_pessimistic` now **asserts** the
+dangerous direction: over every module the real lowering REFUSES, the model must not claim
+that every op lowers. That is the direction that causes wasted work — a model promising
+coverage the lowering does not deliver — and it is checkable **without resynchronising the
+model at all**, which is why it could be done now. It passes.
+
+The safe direction, the model understating, stays a printed figure. A pessimistic model wastes
+nothing.
+
+**What did NOT land, and why it is not a five-minute job.** Retiring the model outright needs
+all six call sites rewritten across three files, and the truth is per-CHUNK where the model is
+per-OP:
+
+| file | sites | obstacle |
+|---|---|---|
+| `spike_corpus_coverage.rs` | 1 | wants a per-op blocking histogram; truth gives a per-chunk refusal reason |
+| `spike_stream_sufficiency.rs` | 3 | two are mechanical; one is the control above |
+| `spike_composite_split.rs` | 2 | **`classify_ops` runs on hand-written op slices with no module to ask** |
+
+That last one is the real obstacle and was not visible from the call-site count. `module_refusals`
+needs a `Module`; `classify_ops` is given a bare `&[Op]` so a case can be stated directly
+without standing up a chunk. Asking the real lowering there means building a synthetic chunk
+per query, which changes what that spike is.
+
+**Staleness, unchanged and still safe-direction**: CallVerifiedNative 1019, NewComposite 225,
+Const 111, Yield 38, IsEnum 29, Reset/Stream 20 each, GetIndex/GetTupleField 14 each,
+GetEnumField 4, GetField 2.
+
+### One of the three `is_lowered` copies is RETIRED, not resynchronised
+
+`spike_corpus_coverage.rs` no longer carries a per-opcode model. It asks
+`module_refusals` and derives a **per-CHUNK** `refused_chunks` set instead.
+
+**Retired rather than brought back into step**, because a second copy of a predicate is a
+drift hazard whatever its current accuracy, and this branch has been bitten by exactly that
+three times. The granularity changed with it and the change is honest: the model claimed to
+know per OPCODE, and the truth is known per CHUNK. The refusal message names the blocking
+construct anyway, which is better attribution than the model ever gave.
+
+**Two copies remain**, in `spike_stream_sufficiency.rs` and `spike_composite_split.rs`. The
+second is the hard one and the obstacle is structural, not clerical:
+`classify_ops` takes a bare `&[Op]` so a case can be stated without standing up a chunk, and
+`module_refusals` needs a `Module`. Asking the real lowering there means synthesising a chunk
+per query, which changes what that spike is for.
+
+### CORRECTION: the rogue AI blocker is the RETURN type, and it is the caller-region case
+
+An earlier note here said `rogue_ai_boss::main` "takes a tuple". True, and the less important
+half. The signature is:
 ## Part B: the three rogue AI streams EXECUTE. 53 -> 56 of 58, refused 5 -> 2
 
 2026-08-14. The tail-walk widening is re-applied and now stands on a differential rather than
@@ -5692,6 +5745,67 @@ These modules take **and return** a composite:
 loop main(input: (Word, Word, Word, Word, Word)) -> (Word, Word, Word)
 ```
 
+**It RETURNS a composite.** That is exactly the case the region design refuses deliberately,
+and for a reason that is about ownership rather than convenience: a returned flat body must
+outlive the chunk that built it, so it belongs in the CALLER's region, and no convention for
+that exists.
+
+A composite ARGUMENT would have been no decision at all — the emitter already represents every
+composite operand as an `i64` address, so a parameter arriving as an address invents nothing.
+I briefly reframed the blocker that way and it was wrong. **The return type is what needs the
+decision**, and it is the same decision the plan reserved for `rogue_dungen`, arriving from a
+module nobody expected it from.
+
+So of the five refusals:
+
+| module | blocked on |
+|---|---|
+| `rogue_ai_boss/hunter/tracker` | **caller-region convention for a returned composite** — operator decision |
+| `codegen.kel` | delegated suspension — a soundness refusal, needs a design, must not be widened |
+| `rogue_dungen.kel` | an unknown-width `NewComposite` operand — mine, and probably small |
+
+**Four of five are blocked on decisions rather than effort.** Only `rogue_dungen` is
+straightforwardly implementable, and it is the one the plan had marked as needing an operator
+call.
+
+The tail-walk widening is still correct and still worth re-applying: it is what lets these
+three reach the point where the return convention is the only thing left.
+
+---
+
+## `is_lowered` is retired. Zero definitions remain.
+
+2026-08-14. Three files carried a predicate by that name. **They were not three copies of one
+thing**, and treating them as such is why the job looked mechanical and was not.
+
+| file | resolution |
+|---|---|
+| `spike_corpus_coverage.rs` | **retired** — asks `module_refusals` and derives a per-CHUNK refused set |
+| `spike_stream_sufficiency.rs` | **retired** — its one real consumer now reads refusal messages; the two tests that existed only to police the model are deleted with it |
+| `spike_composite_split.rs` | **renamed** to `lowers_ignoring_composites`, kept, and guarded |
+
+### Why the third is kept rather than retired
+
+It answers a **counterfactual** — what would lower if composites were supported — and no query
+against the real entry point can answer that, because `lower_module` refuses at the first
+unsupported op and reports nothing beyond it. The file said so all along; the shared name is
+what made it look like a third copy of a stale model.
+
+It is now named for what it does, and `the_counterfactual_never_overstates` guards the one
+direction that costs anything: over every module whose ops it claims all lower, the real
+lowering must accept. Understating wastes nothing; overstating promises coverage that does not
+exist.
+
+### What the retirement cost, honestly
+
+**Granularity.** The model claimed to know per OPCODE; `module_refusals` knows per CHUNK. The
+figures in the sufficiency report are correspondingly coarser — and true, where the model was
+stale by 1019 `CallVerifiedNative` instances alone. The refusal message names the blocking
+construct, which is better attribution than the model ever gave.
+
+Two tests were deleted rather than fixed: `the_lowered_predicate_has_not_drifted` and
+`the_lowered_predicate_is_not_stale_pessimistic`. Both existed solely because the model
+existed. Keeping a control for a thing that is gone would be worse than deleting it.
 Both directions are an `i64` address, since that is how the emitter represents every composite
 operand. The returned body lives in the **region buffer the caller passed in**, which outlives
 the call — and each of these modules is a **single chunk**, so there is no caller/callee offset
