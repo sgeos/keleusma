@@ -1052,6 +1052,31 @@ the format. The work is an input encoding, a producer, and the residency staging
 395,804 names force — which is the same batching problem the scan note above defers to. **Those two
 are the same increment, and doing either alone is wasted.**
 
+#### THE TWO DEDUP SCANS ARE DIFFERENT SCANS (settled 2026-08-14)
+
+Two statements in this repository read as a contradiction, and they are not one. They name
+**different sites**, and acting on the wrong reading either wastes an increment or undoes a
+deliberate decision.
+
+| site | bound | verdict |
+|---|---|---|
+| `intern_run`, `wire.kel` | `for j in 0..n limit 256`, batch-local | **Do not replace.** |
+| the walk-nested scan through `NAMES` via `rec_u32`, once per interned name | unbounded at stage scale | **Measure, do not assume.** |
+
+**The first is the one the standing trap protects**, and the arithmetic above settles it: a total
+language has no early exit, so a 1024-slot table costs 1024 probes where the linear scan costs about
+256 comparisons. The driver's inputs are capped at 256 because `nin`, `nout` and `bin` are sized for
+a batch rather than for a stage. The table only wins past roughly a thousand entries.
+
+**The second is the site the reference's 782-second lesson actually bears on.** It is nested inside
+another walk and reads the `NAMES` region per interned name. Raising the cap to a stage's 395,804
+names is not a tuning change but the staged-batching problem, so the ordering stands: **batching
+first, index second.**
+
+**The roadmap's Order-1 cell is stale on this point.** It lists "replacing a linear dedup scan" among
+the remaining work, which was written before the 2026-08-11 analysis reversed it. Corrected there to
+point here rather than restating the reasoning in two places.
+
 #### TWO NEXT-INCREMENTS THAT DO NOT SURVIVE INSPECTION (2026-08-11)
 
 Both were on the list. Neither is worth doing, and the reasons are worth more than the increments
