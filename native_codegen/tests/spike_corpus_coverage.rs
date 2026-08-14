@@ -647,3 +647,137 @@ fn spike_report_blocker_co_occurrence() {
     println!("     itself, and the 15.5% first-blocker figure is entirely slack.");
     println!("================\n");
 }
+
+/// **SLACK, DERIVED FROM THE REAL LOWERING RATHER THAN FROM A MODEL.**
+///
+/// Every slack figure before this came from a hand-maintained `is_lowered` list.
+/// Three copies of that list exist, all three went stale in the PESSIMISTIC
+/// direction, and the drift control asserts only the optimistic one — so the
+/// staleness understated every blocker class silently and could not be detected.
+///
+/// `module_refusals` returns one refusal per CHUNK instead of one per module, so
+/// a module's refusal set is the union over its chunks, derived from the code
+/// that actually decides. Coarser than per-op and impossible to leave stale.
+#[test]
+fn spike_report_derived_slack() {
+    fn class_of(msg: &str) -> &'static str {
+        if msg.contains("StaticStr") {
+            "static-str"
+        } else if msg.contains("CallVerifiedNative") || msg.contains("CallExternalNative") {
+            "native-call"
+        } else if msg.contains("Stream") || msg.contains("Yield") || msg.contains("Reset") {
+            "stream"
+        } else if msg.contains("Composite")
+            || msg.contains("GetField")
+            || msg.contains("GetIndex")
+            || msg.contains("IsEnum")
+            || msg.contains("TupleField")
+            || msg.contains("EnumField")
+        {
+            "composite"
+        } else {
+            "other"
+        }
+    }
+
+    let mut present: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut alone: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let (mut refused, mut total) = (0usize, 0usize);
+
+    for (_, m) in compiled_corpus_modules() {
+        total += 1;
+        let rs = keleusma_native::module_refusals(&m, keleusma_native::LowerOptions::default());
+        if rs.is_empty() {
+            continue;
+        }
+        refused += 1;
+        let classes: std::collections::BTreeSet<&'static str> =
+            rs.iter().map(|(_, e)| class_of(&format!("{e}"))).collect();
+        for c in &classes {
+            *present.entry(c).or_default() += 1;
+        }
+        if classes.len() == 1 {
+            let only = classes.iter().next().copied().expect("one class");
+            *alone.entry(only).or_default() += 1;
+        }
+    }
+
+    println!("================ DERIVED SLACK (from lower_module, not a model)");
+    println!("  modules {total}, refused {refused}");
+    println!("  class          present   ALONE   (ALONE is what removing it frees)");
+    let mut keys: Vec<_> = present.keys().copied().collect();
+    keys.sort_by_key(|k| core::cmp::Reverse(present.get(k).copied().unwrap_or(0)));
+    for k in keys {
+        let p = present.get(k).copied().unwrap_or(0);
+        let a = alone.get(k).copied().unwrap_or(0);
+        println!("  {k:14} {p:7} {a:7}");
+    }
+    println!("  NOTE: per-CHUNK refusals, so a chunk's own later blockers are");
+    println!("  still hidden behind its first. This under-counts co-occurrence,");
+    println!("  which INFLATES ALONE — the opposite bias to the stale model.");
+    println!("================");
+}
+
+/// **Would static strings actually free those 11 modules?**
+///
+/// The derived slack says `static-str` is ALONE in 11 of 20 refused modules, but
+/// it reads one refusal per CHUNK, so a blocker sitting AFTER the string inside
+/// the same chunk is invisible to it. This checks the same modules by OP
+/// PRESENCE, which cannot hide behind refusal order.
+///
+/// The question is not academic: the baked-address composite slice was ranked at
+/// 34.5% of the corpus and measured at ZERO once the corpus was asked what it
+/// actually contains.
+#[test]
+fn spike_report_what_blocks_the_static_string_modules() {
+    let mut freed = 0usize;
+    let mut also: BTreeMap<&'static str, usize> = BTreeMap::new();
+
+    for (path, m) in compiled_corpus_modules() {
+        let rs = keleusma_native::module_refusals(&m, keleusma_native::LowerOptions::default());
+        if rs.is_empty() {
+            continue;
+        }
+        let mentions_str = rs.iter().any(|(_, e)| format!("{e}").contains("StaticStr"));
+        if !mentions_str {
+            continue;
+        }
+        // Op presence across the WHOLE module, independent of refusal order.
+        let mut others: Vec<&'static str> = Vec::new();
+        for c in &m.chunks {
+            for op in &c.ops {
+                match op {
+                    Op::CallVerifiedNative(..) | Op::CallExternalNative(..) => {
+                        others.push("native-call")
+                    }
+                    Op::Stream | Op::Yield | Op::Reset => others.push("stream"),
+                    _ => {}
+                }
+            }
+        }
+        others.sort_unstable();
+        others.dedup();
+        if others.is_empty() {
+            freed += 1;
+        } else {
+            for o in &others {
+                *also.entry(o).or_default() += 1;
+            }
+            let name = path
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            println!("  {name:32} also contains {others:?}");
+        }
+    }
+
+    println!("================ WOULD STATIC STRINGS FREE THEM?");
+    println!("  string-blocked modules with NO other blocking op : {freed}");
+    for (k, n) in &also {
+        println!("  ... also containing {k:14} : {n}");
+    }
+    println!("  -> `freed` is what implementing static strings would actually");
+    println!("     deliver. The ALONE column cannot see a blocker that sits");
+    println!("     after the string inside the same chunk.");
+    println!("================");
+}

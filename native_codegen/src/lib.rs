@@ -201,6 +201,17 @@ pub struct LowerOptions {
 /// Error cases the lowering refuses rather than guesses at.
 #[derive(Debug)]
 pub enum LowerError {
+    /// Diagnostic mode collected refusals rather than stopping at the first.
+    ///
+    /// Always an error, never a success carrying a warning list: the module is
+    /// incomplete wherever a chunk was abandoned, so handing it back as `Ok`
+    /// would invite someone to run it. Produced only by [`module_refusals`],
+    /// which discards the module and keeps the list.
+    ///
+    /// Carries the COUNT only. The list stays with the caller, because an
+    /// earlier version moved it into this error and left the caller's vector
+    /// empty — reporting that every module lowers cleanly.
+    Diagnostic(usize),
     /// An opcode outside the currently supported subset.
     UnsupportedOp(String),
     /// The module declares a word width this backend does not lower.
@@ -231,6 +242,9 @@ pub enum LowerError {
 impl core::fmt::Display for LowerError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            LowerError::Diagnostic(n) => {
+                write!(f, "diagnostic lowering collected {n} chunk refusal(s)")
+            }
             LowerError::UnsupportedOp(op) => {
                 write!(f, "native lowering does not yet support opcode {op}")
             }
@@ -792,6 +806,36 @@ pub fn lower_module<'ctx>(
     program: &Module,
     opts: LowerOptions,
 ) -> Result<Vec<FunctionValue<'ctx>>, LowerError> {
+    lower_module_with(ctx, module, program, opts, None)
+}
+
+/// Every chunk-level refusal in `program`, rather than only the first.
+///
+/// **This exists to make the slack measurement DERIVABLE.** Every blocker ranking
+/// on this line has been computed from a hand-maintained model of what the
+/// lowering supports, because `lower_module` returns one verdict per module and
+/// stops. Three copies of that model exist and all three went stale, in the
+/// pessimistic direction, which the drift control could not detect and which
+/// silently understates every other blocker class.
+///
+/// A module's refusal SET is the union over its chunks. That is coarser than
+/// per-op and derived from the real lowering rather than restated beside it,
+/// which is the property that matters.
+pub fn module_refusals(program: &Module, opts: LowerOptions) -> Vec<(String, LowerError)> {
+    let ctx = Context::create();
+    let m = ctx.create_module("refusals");
+    let mut sink = Vec::new();
+    let _ = lower_module_with(&ctx, &m, program, opts, Some(&mut sink));
+    sink
+}
+
+fn lower_module_with<'ctx>(
+    ctx: &'ctx Context,
+    module: &LlvmModule<'ctx>,
+    program: &Module,
+    opts: LowerOptions,
+    mut refusals: Option<&mut Vec<(String, LowerError)>>,
+) -> Result<Vec<FunctionValue<'ctx>>, LowerError> {
     check_word_width(program.word_bits_log2)?;
     let i64t = ctx.i64_type();
     let ptrt = ctx.ptr_type(AddressSpace::default());
@@ -881,7 +925,39 @@ pub fn lower_module<'ctx>(
             opts,
             degenerate_yield: tail.as_deref(),
         };
-        lower_chunk_body(ctx, module, chunk, *func, &declared, data, cfg)?;
+        match lower_chunk_body(ctx, module, chunk, *func, &declared, data, cfg) {
+            Ok(_) => {}
+            Err(e) => {
+                // In diagnostic mode, record and carry on to the NEXT CHUNK.
+                //
+                // A chunk's own lowering still stops at its first refusal, since
+                // continuing inside one would desynchronise the operand-stack
+                // depth and produce nonsense. Per-chunk is nonetheless strictly
+                // better than the per-module verdict every ranking has been
+                // computed from: a module's refusal SET is the union over its
+                // chunks, which is what makes a slack measurement derivable from
+                // the real lowering instead of from a hand-maintained model. The
+                // module is left unusable either way, which is why this returns
+                // the refusals rather than the functions.
+                if let Some(sink) = refusals.as_mut() {
+                    sink.push((chunk.name.clone(), e));
+                    continue;
+                }
+                return Err(e);
+            }
+        }
+    }
+    if let Some(sink) = refusals.as_ref() {
+        // Diagnostic mode never claims a usable module: the IR is incomplete
+        // wherever a chunk was abandoned, so returning it would invite someone
+        // to run it.
+        //
+        // The error carries only a COUNT; the list stays with the caller. An
+        // earlier version used `core::mem::take`, which emptied the caller's
+        // vector into an error the caller discards — so `module_refusals`
+        // reported that every module lowers cleanly. A wrong answer in the
+        // reassuring direction, which is the one nobody questions.
+        return Err(LowerError::Diagnostic(sink.len()));
     }
 
     // Ask LLVM to verify what we just produced. This was previously done only in
