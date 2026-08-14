@@ -5915,3 +5915,45 @@ and it is the must-not-fire control in `rogue_ai_differential.rs`.
 
 The goal that drove this arc called it "a milestone rather than a count". The probe showed it
 is a soundness refusal — the one case in the five where the right action is to leave it alone.
+
+---
+
+## Probed: what it takes to EXECUTE every module that lowers
+
+`native_codegen/tests/probe_corpus_shapes.rs`, 2026-08-14, before building anything.
+
+**55 modules lower** over the full corpus (`examples/scripts`, `src/selfhost/kel`,
+`examples/rtos/scripts`, `compiler/kel`). Fourteen are executed. The probe asks what the rest
+require, so the generic harness is built against measured shapes.
+
+### The fact that makes a generic harness possible
+
+**42 distinct natives across the corpus, and NOT ONE has more than a single arity.** A stub
+table can therefore be keyed by native index with a fixed arity per entry; had any native been
+called at two arities, one stub could not have served both call sites.
+
+### Entry shapes, measured
+
+| property | values |
+|---|---|
+| source arity | `{0: 11, 1: 27, 2: 4, 3: 2, 4: 2, 5: 9}` — zero through five |
+| block type | `Func` and `Stream` both, so both drive paths are needed |
+| entry chunk index | 0, 1, 2, 3, 4, 6, 8, 14, 21, 24, 34, **207** — never assume chunk 0 |
+| shared bytes | 0 to **449 072** (`verify_typed.kel`) |
+| private slots | 0 to **16 576** (`parse.kel`) |
+| region bytes | 0 to 1280 |
+
+`Module::signatures` (`ChunkSignature { params, ret, resume }`) carries the flat shape of every
+parameter and the return, which is how the harness will know whether an argument is a scalar or
+a composite address rather than guessing per module.
+
+### The eight that do not lower, named rather than counted
+
+| module | reason |
+|---|---|
+| `prelude.kel` (×2, rtos and compiler) | **no entry point** — a prelude declares, it does not run |
+| `event_listener`, `faulty`, `heartbeat`, `led`, `sensor` (rtos) | **rejected by the reference compiler**, not by this backend |
+| `codegen.kel` | **backend refuses** — delegated suspension, deliberately |
+
+Five of the eight are reference-compiler rejections. That distinction is the one this branch
+keeps having to redraw, and it is drawn here before any work is planned against them.
