@@ -22,7 +22,7 @@
 // The second is bounded by a corpus; the first is not, which is why the well-typed side of the
 // corpus grows with every slice rather than staying at the controls the sizing spike used.
 //
-// SLICE 2: operand agreement, plus call arity and argument types.
+// SLICE 3: operand agreement, call arity and argument types, and name resolution.
 //
 // SLICE 0, WHICH THIS REPLACED: no rules, `verdict` always ACCEPT. That is the point rather than
 // a placeholder -- the corpus must then show every well-typed case agreeing and every ill-typed
@@ -65,6 +65,21 @@ shared data ty {
     cn: Word,
     cdecl: [Word; 128],
     cact: [Word; 128],
+    // SLICE 3: name resolution, as a table of per-occurrence RESOLUTION CODES.
+    //
+    //   1  resolves to a declared function, called as one   -- fine
+    //   2  resolves to a local or parameter, read as a value -- fine
+    //   3  resolves to nothing                               -- REJECT
+    //   4  resolves to a local and is CALLED                 -- REJECT
+    //
+    // **Code 4 is not a type error.** It is a V0.2.0 surface restriction, and
+    // it is the one rejection of the fifteen that carries no `type error:`
+    // prefix in the reference. A stage locating rejections by that prefix would
+    // miss it entirely, and a stage reproducing the reference's routing would
+    // be reproducing English rather than deciding anything. It is a separate
+    // code here for exactly that reason.
+    rn: Word,
+    res: [Word; 256],
 }
 
 // The verdict constants, named rather than spelled as bare integers at the call sites, so a later
@@ -89,6 +104,17 @@ fn ty_pair_disagrees(l: Word, r: Word) -> Word {
     if l == r { 0 } else { 1 } } }
 }
 
+// A resolution code the language does not admit.
+//
+// Enumerated POSITIVELY rather than as "not 1 and not 2". A negative rule
+// admits any code a later slice adds without anyone deciding it should, and a
+// new code arriving as silently acceptable is the failure this shape is prone
+// to: the codes are produced by a host walk that grows with the language.
+fn ty_resolution_bad(r: Word) -> Word {
+    if r == 3 { 1 } else {
+    if r == 4 { 1 } else { 0 } }
+}
+
 // Slice 1: reject when any operand pair disagrees.
 //
 // The loop runs to completion rather than stopping at the first disagreement,
@@ -109,6 +135,10 @@ fn ty_check() -> Word {
     // comparison rather than two rules.
     for j in 0..ty.cn limit 128 {
         ty.verdict = if ty.cdecl[j] == ty.cact[j] { ty.verdict } else { ty_reject() };
+    }
+    // Slice 3. Unresolved names and called locals.
+    for k in 0..ty.rn limit 256 {
+        ty.verdict = if ty_resolution_bad(ty.res[k]) == 1 { ty_reject() } else { ty.verdict };
     }
     ty.verdict
 }

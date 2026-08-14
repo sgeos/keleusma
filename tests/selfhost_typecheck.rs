@@ -312,13 +312,156 @@ fn call_rows(ast: &keleusma::ast::Program) -> CallRows {
     (c.arity, c.args)
 }
 
+/// Resolution codes for every name occurrence.
+///
+/// | code | meaning | verdict |
+/// |---|---|---|
+/// | 1 | a declared function, called as one | fine |
+/// | 2 | a local or parameter, read as a value | fine |
+/// | 3 | resolves to nothing | REJECT |
+/// | 4 | a local, and it is CALLED | REJECT |
+///
+/// **Code 4 is not a type error.** It is a V0.2.0 surface restriction and the
+/// one rejection of the fifteen carrying no `type error:` prefix, so it is a
+/// separate code rather than folded in with the others.
+///
+/// The local set is approximated by every name a `let` or parameter binds
+/// ANYWHERE in the function, without block scoping. **That over-approximates
+/// what is in scope, and the direction is the safe one**: a name wrongly
+/// considered local is code 2 or 4 rather than 3, so the risk is a missed
+/// rejection rather than a false one, and a false rejection is the only kind
+/// that would narrow the language.
+fn resolution_codes(ast: &keleusma::ast::Program) -> Vec<i64> {
+    use keleusma::ast::{Expr, Pattern, Stmt};
+    use keleusma::visitor::Visitor;
+    use std::collections::BTreeSet;
+
+    let funcs: BTreeSet<String> = ast.functions.iter().map(|f| f.name.clone()).collect();
+
+    // EVERY OTHER NAME A PROGRAM CAN BIND AT THE TOP LEVEL, not just functions.
+    //
+    // The first version of this collector knew only functions and locals, and
+    // it FALSELY REJECTED `shared data s { n: Word }` reading `s.n`: `s` is
+    // neither, so it resolved to nothing. **A well-typed control caught it**,
+    // which is the entire reason that side of the corpus exists -- a rejection
+    // corpus alone would have scored this as a success.
+    //
+    // Data blocks, type declarations and `use` imports are all names a body may
+    // legitimately mention, so all three are resolvable here.
+    let mut globals: BTreeSet<String> = BTreeSet::new();
+    for d in &ast.data_decls {
+        globals.insert(d.name.clone());
+    }
+    for t in &ast.types {
+        globals.insert(
+            match t {
+                keleusma::ast::TypeDef::Struct(d) => &d.name,
+                keleusma::ast::TypeDef::Enum(d) => &d.name,
+                keleusma::ast::TypeDef::Newtype(d) => &d.name,
+            }
+            .clone(),
+        );
+    }
+    // A WILDCARD IMPORT MAKES NAME RESOLUTION UNDECIDABLE HERE, and the sound
+    // response is to stop deciding rather than to guess. `use audio::*` brings
+    // in names this collector cannot enumerate, so any unresolved name in such
+    // a program might be one of them; reporting code 3 would be a false
+    // rejection. The whole table is dropped instead.
+    let mut wildcard = false;
+    for u in &ast.uses {
+        match &u.import {
+            keleusma::ast::ImportItem::Name(n) => {
+                globals.insert(n.clone());
+            }
+            keleusma::ast::ImportItem::Wildcard => wildcard = true,
+        }
+    }
+    if wildcard {
+        return Vec::new();
+    }
+
+    struct Names<'a> {
+        funcs: &'a BTreeSet<String>,
+        globals: &'a BTreeSet<String>,
+        locals: BTreeSet<String>,
+        out: Vec<i64>,
+    }
+    impl Visitor for Names<'_> {
+        fn visit_stmt(&mut self, stmt: &Stmt) {
+            if let Stmt::Let(l) = stmt
+                && let Pattern::Variable(n, _) = &l.pattern
+            {
+                self.locals.insert(n.clone());
+            }
+            self.walk_stmt(stmt);
+        }
+        fn visit_expr(&mut self, expr: &Expr) {
+            match expr {
+                Expr::Call { name, .. } => {
+                    self.out.push(if self.locals.contains(name) {
+                        4
+                    } else if self.funcs.contains(name) || self.globals.contains(name) {
+                        1
+                    } else {
+                        3
+                    });
+                }
+                Expr::Ident { name, .. } => {
+                    self.out.push(
+                        if self.locals.contains(name)
+                            || self.funcs.contains(name)
+                            || self.globals.contains(name)
+                        {
+                            2
+                        } else {
+                            3
+                        },
+                    );
+                }
+                _ => {}
+            }
+            self.walk_expr(expr);
+        }
+    }
+
+    let mut out = Vec::new();
+    for f in &ast.functions {
+        let mut locals: BTreeSet<String> = BTreeSet::new();
+        for p in &f.params {
+            if let Pattern::Variable(n, _) = &p.pattern {
+                locals.insert(n.clone());
+            }
+        }
+        // Bindings are collected before the walk that reads them, because a
+        // `let` later in the body still makes the name local to this
+        // approximation and the visitor would otherwise depend on statement
+        // order.
+        let mut pre = Names {
+            funcs: &funcs,
+            globals: &globals,
+            locals,
+            out: Vec::new(),
+        };
+        pre.visit_block(&f.body);
+        let mut pass = Names {
+            funcs: &funcs,
+            globals: &globals,
+            locals: pre.locals,
+            out: Vec::new(),
+        };
+        pass.visit_block(&f.body);
+        out.extend(pass.out);
+    }
+    out
+}
+
 /// The stage's verdict for a program, with its operand pairs marshalled in.
 fn stage_accepts_program(pairs: &[(i64, i64)]) -> bool {
-    stage_verdict(pairs, &[])
+    stage_verdict(pairs, &[], &[])
 }
 
 /// The stage's verdict with both tables.
-fn stage_verdict(pairs: &[(i64, i64)], arity: &[(i64, i64)]) -> bool {
+fn stage_verdict(pairs: &[(i64, i64)], arity: &[(i64, i64)], res: &[i64]) -> bool {
     let module = compile(&parse(&tokenize(TYPES_KEL).expect("lex")).expect("parse"))
         .expect("verify_types.kel compiles");
     let need = required_persistent_capacity_for(&module);
@@ -386,6 +529,27 @@ fn stage_verdict(pairs: &[(i64, i64)], arity: &[(i64, i64)]) -> bool {
             keleusma::bytecode::Value::Int(*a),
         )
         .expect("cact");
+    }
+    const RN_SLOT: usize = CACT_SLOT + 128;
+    const RES_SLOT: usize = RN_SLOT + 1;
+    assert!(
+        res.len() <= 256,
+        "the resolution table holds 256 rows and this program needs {}",
+        res.len()
+    );
+    vm.set_shared(
+        &mut shared,
+        RN_SLOT,
+        keleusma::bytecode::Value::Int(res.len() as i64),
+    )
+    .expect("rn");
+    for (i, r) in res.iter().enumerate() {
+        vm.set_shared(
+            &mut shared,
+            RES_SLOT + i,
+            keleusma::bytecode::Value::Int(*r),
+        )
+        .expect("res");
     }
     let out = vm
         .call_with_shared(&mut shared, &[keleusma::bytecode::Value::Int(0)])
@@ -559,7 +723,7 @@ fn slice_two_rejects_arity_and_argument_type_mismatches() {
         let (arity, arg_pairs) = call_rows(&ast);
         let mut pairs = operand_pairs(&ast);
         pairs.extend(arg_pairs);
-        let stage = stage_verdict(&pairs, &arity);
+        let stage = stage_verdict(&pairs, &arity, &[]);
         if IN_SCOPE.contains(label) {
             assert!(
                 !stage,
@@ -588,8 +752,84 @@ fn slice_two_rejects_arity_and_argument_type_mismatches() {
         let mut pairs = operand_pairs(&ast);
         pairs.extend(arg_pairs);
         assert!(
-            stage_verdict(&pairs, &arity),
+            stage_verdict(&pairs, &arity, &[]),
             "{label}: slice 2 REJECTED a well-typed program, which narrows the language"
+        );
+    }
+}
+
+/// SLICE 3: name resolution, including the shape that is not a type error.
+///
+/// Three shapes: an undefined function, an undefined identifier, and **calling
+/// a local**. The third is a V0.2.0 surface restriction rather than a type
+/// error, and it is the one rejection of the fifteen that carries no
+/// `type error:` prefix in the reference. A stage locating rejections by that
+/// prefix would miss it; a stage reproducing the reference's routing would be
+/// reproducing English. It is its own resolution code for that reason.
+#[test]
+fn slice_three_rejects_unresolved_names_and_called_locals() {
+    const IN_SCOPE: &[&str] = &[
+        "add-word-and-bool",
+        "array-elements-differ",
+        "too-few-arguments",
+        "too-many-arguments",
+        "wrong-argument-type",
+        "byte-against-word-argument",
+        "undefined-function",
+        "undefined-identifier",
+        "calling-a-local",
+    ];
+
+    let mut caught = Vec::new();
+    let mut out_of_scope_rejected = Vec::new();
+
+    for (label, src) in ILL_TYPED {
+        let ast = match tokenize(src).ok().and_then(|t| parse(&t).ok()) {
+            Some(a) => a,
+            None => continue,
+        };
+        let (arity, arg_pairs) = call_rows(&ast);
+        let mut pairs = operand_pairs(&ast);
+        pairs.extend(arg_pairs);
+        let stage = stage_verdict(&pairs, &arity, &resolution_codes(&ast));
+        if IN_SCOPE.contains(label) {
+            assert!(
+                !stage,
+                "{label}: slice 3 has a rule for this shape and accepted it"
+            );
+            caught.push(*label);
+        } else if !stage {
+            out_of_scope_rejected.push(*label);
+        }
+    }
+
+    assert_eq!(
+        caught.len(),
+        IN_SCOPE.len(),
+        "reached {caught:?}, expected {IN_SCOPE:?}"
+    );
+    assert!(
+        out_of_scope_rejected.is_empty(),
+        "slice 3 rejected shapes it has no rule for: {out_of_scope_rejected:?}"
+    );
+
+    // MUST-FIRE on the odd shape specifically. It is the one a prefix-based
+    // stage would miss, so its presence in `caught` is asserted by name rather
+    // than left to the count.
+    assert!(
+        caught.contains(&"calling-a-local"),
+        "the surface-restriction shape was not among those caught, and it is the one a stage \
+         routing on the `type error:` prefix would miss"
+    );
+
+    for (label, src) in WELL_TYPED {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let (arity, arg_pairs) = call_rows(&ast);
+        let mut pairs = operand_pairs(&ast);
+        pairs.extend(arg_pairs);
+        assert!(
+            stage_verdict(&pairs, &arity, &resolution_codes(&ast)),
+            "{label}: slice 3 REJECTED a well-typed program, which narrows the language"
         );
     }
 }
