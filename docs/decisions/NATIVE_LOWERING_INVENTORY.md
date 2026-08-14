@@ -5660,3 +5660,37 @@ A green execution differential over ten modules is not a proof. It is evidence o
 2100 ticks happen to take, and the modules were selected because they are the family this arc
 targeted. The remaining five corpus refusals — `stream` (4) and `composite` (1) — are
 untouched.
+
+---
+
+## The `is_lowered` drift control is now an ASSERTION, and the model is not retired
+
+2026-08-14. Partial, and the split is deliberate rather than a shortfall of effort.
+
+**What landed.** `the_lowered_predicate_is_not_stale_pessimistic` now **asserts** the
+dangerous direction: over every module the real lowering REFUSES, the model must not claim
+that every op lowers. That is the direction that causes wasted work — a model promising
+coverage the lowering does not deliver — and it is checkable **without resynchronising the
+model at all**, which is why it could be done now. It passes.
+
+The safe direction, the model understating, stays a printed figure. A pessimistic model wastes
+nothing.
+
+**What did NOT land, and why it is not a five-minute job.** Retiring the model outright needs
+all six call sites rewritten across three files, and the truth is per-CHUNK where the model is
+per-OP:
+
+| file | sites | obstacle |
+|---|---|---|
+| `spike_corpus_coverage.rs` | 1 | wants a per-op blocking histogram; truth gives a per-chunk refusal reason |
+| `spike_stream_sufficiency.rs` | 3 | two are mechanical; one is the control above |
+| `spike_composite_split.rs` | 2 | **`classify_ops` runs on hand-written op slices with no module to ask** |
+
+That last one is the real obstacle and was not visible from the call-site count. `module_refusals`
+needs a `Module`; `classify_ops` is given a bare `&[Op]` so a case can be stated directly
+without standing up a chunk. Asking the real lowering there means building a synthetic chunk
+per query, which changes what that spike is.
+
+**Staleness, unchanged and still safe-direction**: CallVerifiedNative 1019, NewComposite 225,
+Const 111, Yield 38, IsEnum 29, Reset/Stream 20 each, GetIndex/GetTupleField 14 each,
+GetEnumField 4, GetField 2.

@@ -561,9 +561,54 @@ fn the_lowered_predicate_is_not_stale_pessimistic() {
                     *stale.entry(key).or_default() += 1;
                     let _ = &path;
                 }
+                // **The dangerous direction, now ASSERTED rather than
+                // reported.** The model overstating is what causes wasted work:
+                // it claims an op lowers where the real lowering refuses, and
+                // every slack figure built on it then promises coverage that
+                // does not exist. This is checkable WITHOUT resynchronising the
+                // model, because the enclosing module is one the real lowering
+                // ACCEPTED -- so no op in it can legitimately be refused, and a
+                // model that called one unsupported is merely pessimistic.
+                //
+                // The converse is the direction the printout below tracks and
+                // is safe: a pessimistic model understates coverage.
             }
         }
     }
+
+    // The overstating direction, checked over every module the real lowering
+    // REFUSES: if the model claims every op in such a module lowers, it is
+    // promising more than the lowering delivers.
+    let mut overstated: Vec<String> = Vec::new();
+    for (path, m) in compiled_corpus() {
+        let ctx = Context::create();
+        let lm = ctx.create_module("overstate");
+        if keleusma_native::lower_module(&ctx, &lm, &m, keleusma_native::LowerOptions::default())
+            .is_ok()
+        {
+            continue;
+        }
+        let model_says_all_fine = m
+            .chunks
+            .iter()
+            .all(|c| c.ops.iter().all(|o| is_lowered(o, c)));
+        if model_says_all_fine {
+            overstated.push(
+                path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into(),
+            );
+        }
+    }
+    assert!(
+        overstated.is_empty(),
+        "the model OVERSTATES on {} module(s): it calls every op lowered while \
+         the real lowering refuses them. That is the direction that causes \
+         wasted work, and it is asserted rather than printed. Modules: {:?}",
+        overstated.len(),
+        overstated
+    );
     println!("================ MODEL STALENESS (pessimistic direction)");
     println!("  modules the real lowering ACCEPTS : {accepted}");
     if stale.is_empty() {
