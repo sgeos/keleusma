@@ -2429,7 +2429,29 @@ fn emit_at(k: Word, n: Word, at: Word) -> Word {
     // the window emitter does, can reach it, which is why a corpus that never sets
     // `emit_debug` left the gap invisible.
     if k == kind_debug_pool() { emit_pool_bytes(at, n) } else {
-    0 - 222 }}}}}}}}}}}}}}}}}
+    // STRUCT_TEMPLATES reaches this dispatch for the first time here, and the
+    // shape of the omission is the same as DEBUG_POOL's above: the EMITTER has
+    // existed since slice 7 and is reachable as command 130, but no caller that
+    // chooses the kind generically ever asked for it, so the arm was never
+    // written. A template record is produced only on the compiler's BOXED
+    // struct path, which every ordinary struct avoids by flattening, so no
+    // corpus artifact could surface the gap.
+    //
+    // Measured 2026-08-14 by instrumenting every emit command over the whole
+    // suite: of the seventeen record shapes, sixteen were emitted with at least
+    // one record and this one appeared under no command at any count. The
+    // `-222` refusal is what surfaced it, the fourth time this guard has earned
+    // its place on a kind nobody had exercised.
+    //
+    // THIS ARM TAKES THE CHAIN TO EIGHTEEN, and `MAX_PARSE_DEPTH` is a depth
+    // budget of 24 SHARED between chain position and arm-body nesting. Eighteen
+    // arms with a nested-call body is the measured ceiling for this shape in the
+    // TEST HARNESS, which is the binding measurement because that is where
+    // `wire.kel` compiles; the CLI reads two to three arms more generous and
+    // the harness aborts where the CLI reports a clean parse error. A nineteenth
+    // arm of this shape needs the chain restructured, not extended.
+    if k == kind_struct_templates() { emit_struct_template_records(at, n) } else {
+    0 - 222 }}}}}}}}}}}}}}}}}}
 }
 
 // The absolute caller, unchanged in meaning. The directory guard lives here

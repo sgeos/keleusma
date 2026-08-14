@@ -6643,6 +6643,20 @@ fn rows_for_kind(view: &keleusma_wire::WireView<'_>, kind: u16) -> Vec<Vec<i64>>
                     i64::from(r.offset),
                 ]
             }
+            // STRUCT_TEMPLATES had no decoder at all, and the reason is the
+            // point: nothing in this suite ever produced a template record, so
+            // the arm was never needed. The harness could not decode the one
+            // record shape the differential never reached -- the gap showing up
+            // as a missing decoder rather than as a weak assertion.
+            k if k == w::kind::STRUCT_TEMPLATES => {
+                let r: w::StructTemplateRecord = t.get_as(i).expect("rec");
+                vec![
+                    i64::from(r.type_name),
+                    i64::from(r.field_names_first),
+                    i64::from(r.field_count),
+                    i64::from(r.reserved),
+                ]
+            }
             other => panic!("rows_for_kind has no decoder for {other:#06x}"),
         });
     }
@@ -9688,10 +9702,17 @@ fn a_region_larger_than_one_window_is_assembled_across_two() {
 /// assembler keeps -- the same regions are placed, the same batches run, and
 /// every call returns success -- so only the byte comparison can catch it. That
 /// is precisely the property the capstone claims to have.
+///
+/// `CorruptRegion` flips one byte of the ASSEMBLED artifact inside a named
+/// region, after every emitter call has returned. It answers a narrower
+/// question than `MisplaceOneBatch`: does the byte comparison actually cover
+/// THIS region's bytes? A region the comparison skipped would let a
+/// mistranscribed record through, and no count would notice.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Sabotage {
     None,
     MisplaceOneBatch,
+    CorruptRegion(u16),
 }
 
 /// THE CAPSTONE: a complete real-stage artifact, byte for byte.
@@ -9848,13 +9869,25 @@ fn assemble_whole_artifact(label: &str, src: &str, sabotage: Sabotage) -> (usize
          untested at whole-artifact scale"
     );
 
+    // The region-targeted defect is planted after assembly, since it asks
+    // whether the COMPARISON covers the region rather than whether the emitter
+    // placed it.
+    if let Sabotage::CorruptRegion(k) = sabotage
+        && let Some(r) = view.find_region(k)
+        && let (Some(base), Ok(stored)) = (r.byte_offset(), view.region_bytes(&r))
+        && !stored.is_empty()
+    {
+        art[base] ^= 0xFF;
+        sabotage_planted = true;
+    }
+
     // A CONTROL ON THE GUARD, not only on the detector. If the caller asked for a
     // defect and no defect was planted, the byte comparison below is about to
     // report agreement and the must-fire case would read that as "the detector
     // stayed quiet" when the truth is "nothing was ever broken".
     assert!(
-        sabotage != Sabotage::MisplaceOneBatch || sabotage_planted,
-        "{label}: the sabotage was requested and never planted, so the must-fire \
+        sabotage == Sabotage::None || sabotage_planted,
+        "{label}: the sabotage {sabotage:?} was requested and never planted, so the must-fire \
          case would pass for the wrong reason"
     );
 
@@ -10104,6 +10137,233 @@ fn the_whole_artifact_assembly_holds_across_several_stages() {
         largest >= smallest * 2,
         "stages span only {smallest} to {largest} bytes, too narrow to show that \
          composition is independent of scale"
+    );
+}
+
+/// The seventeen record shapes, and for the six the stage corpus never
+/// populates, a real source that does.
+///
+/// **Six shapes carry zero records across all ten stages.** Measured, not
+/// assumed. For an emitter, an absent region and an empty one are the same
+/// problem: no record of that shape is ever written, so a differential
+/// validated only against the stages cannot see a mistranscribed offset in it.
+/// Every entry here is a real compiled module rather than a hand-built
+/// artifact, which is a stronger oracle and was not obvious to be available --
+/// the wire-format plan expected these to need hand-built cases.
+const SHAPE_EVIDENCE: &[(u16, &str, &str)] = &[
+    (
+        keleusma::wire_schema::kind::NATIVES,
+        "native-bare-use",
+        "use beep\nfn main() -> Word { 42 }",
+    ),
+    (
+        keleusma::wire_schema::kind::NATIVE_RETURNS,
+        "native-with-signature",
+        "use beep(Word) -> Word\nfn main() -> Word { beep(1) }",
+    ),
+    (
+        keleusma::wire_schema::kind::PRIVATE_COMPOSITE,
+        "private-struct-field",
+        "struct P { x: Word, y: Word }\nprivate data d { p: P }\n\
+         fn main() -> Word { d.p = P { x: 1, y: 2 }; d.p.x }",
+    ),
+    (
+        keleusma::wire_schema::kind::STRUCT_AUX,
+        "const-struct",
+        "struct P { x: Word, y: Word }\nconst data c { p: P = P { x: 1, y: 2 } }\n\
+         fn main() -> Word { c.p.x }",
+    ),
+    (
+        keleusma::wire_schema::kind::ENUM_AUX,
+        "const-enum",
+        "enum E { A, B }\nconst data c { e: E = E::A }\n\
+         fn main() -> Word { match c.e { E::A => 1, E::B => 2 } }",
+    ),
+];
+
+/// Every record shape is populated by some artifact the differential builds.
+///
+/// **The method, recorded because the number is only as good as it.** The whole
+/// suite was run with every emit command instrumented, logging `(command, kind,
+/// record count)` with the test that issued it. Sixteen of the seventeen shapes
+/// were emitted with at least one record; `STRUCT_TEMPLATES` appeared under no
+/// command at any count. That instrumentation was temporary. This test is the
+/// durable form: it checks the artifact-level precondition, which is what an
+/// emitter case needs, and it is the thing that goes stale silently otherwise.
+#[test]
+fn every_record_shape_is_populated_by_some_artifact_in_the_differential() {
+    use keleusma::wire_schema::kind;
+
+    const SHAPES: &[(u16, &str)] = &[
+        (kind::NAMES, "NAMES"),
+        (kind::CONSTS, "CONSTS"),
+        (kind::STRUCT_AUX, "STRUCT_AUX"),
+        (kind::ENUM_AUX, "ENUM_AUX"),
+        (kind::SHAPES, "SHAPES"),
+        (kind::SIGNATURES, "SIGNATURES"),
+        (kind::STRUCT_TEMPLATES, "STRUCT_TEMPLATES"),
+        (kind::ENUM_VARIANTS, "ENUM_VARIANTS"),
+        (kind::ENUM_LAYOUTS, "ENUM_LAYOUTS"),
+        (kind::DATA_SLOTS, "DATA_SLOTS"),
+        (kind::SHARED_LAYOUT, "SHARED_LAYOUT"),
+        (kind::PRIVATE_COMPOSITE, "PRIVATE_COMPOSITE"),
+        (kind::DATA_INIT, "DATA_INIT"),
+        (kind::CHUNKS, "CHUNKS"),
+        (kind::NATIVES, "NATIVES"),
+        (kind::NATIVE_RETURNS, "NATIVE_RETURNS"),
+        (kind::HEADER, "HEADER"),
+    ];
+
+    let populated = |src: &str| -> std::collections::BTreeSet<u16> {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let bytes = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("enc");
+        let view = keleusma_wire::WireView::parse(&bytes).expect("parses");
+        let mut out = std::collections::BTreeSet::new();
+        for (k, _) in SHAPES {
+            if let Some(r) = view.find_region(*k)
+                && view.region_bytes(&r).map(<[u8]>::len).unwrap_or(0) > 0
+            {
+                out.insert(*k);
+            }
+        }
+        out
+    };
+
+    let mut from_stages = std::collections::BTreeSet::new();
+    for (_, src) in CORPUS_STAGES {
+        from_stages.extend(populated(src));
+    }
+
+    let mut all = from_stages.clone();
+    for (_, _, src) in SHAPE_EVIDENCE {
+        all.extend(populated(src));
+    }
+    all.extend(populated(&boxed_struct_source()));
+
+    // MUST-FIRE on the evidence being load-bearing. If the stage corpus grew to
+    // cover everything, these extra sources would be dead weight and this test
+    // would silently stop measuring what it claims to.
+    assert_eq!(
+        SHAPES.len() - from_stages.len(),
+        6,
+        "the stage corpus covers {} of {} shapes, not 11. The evidence sources below are sized \
+         against that gap, so re-derive them rather than adjusting this number.",
+        from_stages.len(),
+        SHAPES.len()
+    );
+
+    let missing: Vec<&str> = SHAPES
+        .iter()
+        .filter(|(k, _)| !all.contains(k))
+        .map(|(_, n)| *n)
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "record shapes with no populated artifact anywhere in the differential: {missing:?}. \
+         An emitter differential cannot see a mistranscribed offset in a shape no artifact \
+         contains."
+    );
+}
+
+/// A source whose struct is too large to flatten, so the compiler boxes it and
+/// records a STRUCT_TEMPLATE.
+///
+/// **This is the seventeenth record shape, and the only one nothing reached.**
+/// A template is written only on the boxed path (`src/compiler.rs`, the `None`
+/// arm of the `flat_alloc_bytes` match), and every ordinary struct flattens, so
+/// no stage and no hand-written case in this file ever produced one. Measured
+/// over the whole suite by instrumenting every emit command: sixteen of the
+/// seventeen shapes were emitted with at least one record, and
+/// `STRUCT_TEMPLATES` appeared under no command at any count.
+///
+/// `flat_alloc_bytes` returns `None` when the flat size exceeds the sixteen-bit
+/// operand bound, so the shortest route to the boxed path is a struct wider than
+/// 65,535 bytes. At eight bytes per `Word` that is 8,192 fields; this uses 8,300
+/// for margin against a width change. It compiles in well under a second.
+fn boxed_struct_source() -> String {
+    const FIELDS: usize = 8_300;
+    let mut s = String::from("struct Big {");
+    for i in 0..FIELDS {
+        s.push_str(&format!(" f{i}: Word,"));
+    }
+    s.push_str(" }\nfn main() -> Word { let b = Big {");
+    for i in 0..FIELDS {
+        s.push_str(&format!(" f{i}: 0,"));
+    }
+    s.push_str(" }; b.f0 }\n");
+    s
+}
+
+/// The seventeenth record shape, emitted and compared byte for byte.
+///
+/// The artifact is 107,752 bytes, so it goes through the windowed assembler
+/// rather than the single-window path the other never-populated regions use.
+#[test]
+fn the_struct_template_shape_is_emitted_from_real_compiler_output() {
+    use keleusma::wire_schema::kind;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let src = boxed_struct_source();
+    let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
+
+    // GUARD ONE. The compiler must actually have boxed it. If a later change
+    // widens the operand or flattens differently, this source stops reaching the
+    // shape and the test must say so rather than pass over an absent region.
+    let templates: usize = module.chunks.iter().map(|c| c.struct_templates.len()).sum();
+    assert!(
+        templates > 0,
+        "the oversized struct produced no template, so the boxed path was not reached and this \
+         case no longer covers the STRUCT_TEMPLATES record shape"
+    );
+
+    // GUARD TWO. The region must carry records, or the assembly below drives
+    // nothing for the shape this test exists for.
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+    let region = view
+        .find_region(kind::STRUCT_TEMPLATES)
+        .expect("STRUCT_TEMPLATES region absent");
+    let stored = view.region_bytes(&region).expect("payload");
+    assert!(
+        !stored.is_empty(),
+        "the STRUCT_TEMPLATES region is empty, so this case is decoration"
+    );
+
+    // The whole artifact, byte for byte, with the template region in it.
+    let (bytes, regions, batched) = assemble_whole_artifact("boxed-struct", &src, Sabotage::None);
+    assert!(
+        regions >= 8 && batched >= 1,
+        "boxed-struct: {regions} regions, {batched} batched"
+    );
+    assert_eq!(bytes, want.len(), "assembled length disagrees");
+
+    // MUST-FIRE, targeted at THIS shape. A whole-artifact comparison that
+    // happened to skip the region would pass every assertion above: the region
+    // is populated, the counts are right, and the emitter returned success.
+    // Corrupting a byte inside it proves the comparison reaches those bytes.
+    let sabotaged = catch_unwind(AssertUnwindSafe(|| {
+        assemble_whole_artifact(
+            "boxed-struct",
+            &src,
+            Sabotage::CorruptRegion(kind::STRUCT_TEMPLATES),
+        )
+    }));
+    let Err(payload) = sabotaged else {
+        panic!(
+            "MUST-FIRE: a byte inside the STRUCT_TEMPLATES region was corrupted and the \
+             whole-artifact comparison still reported agreement, so a mistranscribed template \
+             record would go unnoticed"
+        );
+    };
+    let message = payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .unwrap_or("<non-string panic payload>");
+    assert!(
+        message.contains("first difference at byte"),
+        "MUST-FIRE fired, but not from the byte comparison. The panic was: {message}"
     );
 }
 
