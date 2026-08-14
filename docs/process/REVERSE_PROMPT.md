@@ -84,13 +84,18 @@ not the gate.**
 
 ## Next intended step
 
-**The constant walk's CHILD positions.** Roots are done, names and node table both. What remains is
-the nesting: `STRUCT` and `ENUM` intern as the walk descends, and the walk needs an explicit stack
-because the language has no recursion. The corpus reaches nesting only through `const data`, which
-the `interner_input` model refuses, so the case table has to come from `FX_CASES` rather than be
-extended in place.
+**The constant contributor is COMPLETE** as of slice 14e. Roots and child positions, names and node
+table, all four.
 
-**Then the two that are one increment**: removing `wire.kel` from the `read_stage` exclusion and the
+**A prediction of mine that the implementation disproved.** This section previously said the nesting
+walk "needs an explicit stack because the language has no recursion". It does not. The blob carries
+the forest in PREORDER, and the reference pushes a node then descends, so the node table and the name
+sequence are BOTH in that order and a linear scan reproduces both. A stack is needed only to
+reconstruct tree SHAPE, which the producer does not do: the child count is carried through and the
+flattener consumes it. **The cost of a total language was assumed rather than measured**, and the
+assumption was wrong in the cheap direction for once.
+
+**Next: the two that are one increment**: removing `wire.kel` from the `read_stage` exclusion and the
 residency staging a stage`s 395,804 names force. The plan is explicit that doing either alone is
 wasted.
 
