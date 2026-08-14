@@ -5758,3 +5758,46 @@ rather than by a third guess. And the first version of the new differential segf
 a composite-building module gains three trailing pointers while the simple harness calls the
 entry as `fn(i64, i64)`. **`native_calls.rs`'s harness now asserts its parameter count**, so
 that mismatch fails loudly instead of crashing.
+
+---
+
+## `rogue_dungen` EXECUTES. 57 of 58, and the last refusal is deliberate.
+
+2026-08-14. **Refused: 1.** Only `codegen.kel` remains, and it must stay refused.
+
+### The fix was a SOURCE change, and calling it an ABI decision was over-cautious
+
+`random_in_room` builds a tuple from two `host::rng_range` results. The emitter now consults
+`native_return_shapes`, but an undeclared native records `WireShape::Top`, so the result has no
+width and `NewComposite` cannot pack it.
+
+The source now says `use host::rng_range(Word, Word) -> Word` — **the form
+`examples/rtos/scripts/prelude.kel` already uses throughout**. Declaring a type the native
+already has is not inventing an ABI, and an earlier note here treated it as though it were.
+That is the second time on this branch that a blocker was classified as an operator decision
+when measurement showed it was not; the first was the "composite entry parameter".
+
+**One line of shipped example source changed.** Nothing else about the example moves.
+
+### The oracle
+
+`rogue_dungen` is a dungeon generator, so its output IS the host call sequence — rooms,
+corridors, monsters, items — plus the map state left behind. Both sides compare the **call
+sequence**, the **return value**, and the **shared segment byte for byte**, on two floors.
+
+`rng_range` is a deterministic stub, which is what makes the two runs comparable at all. That
+is a property of the harness; the module sees an ordinary native either way.
+
+Vacuity guards: more than twenty host calls must be logged, and the shared segment must not be
+all zero. A generator that placed nothing would otherwise compare equal on two empty logs.
+
+### What is left, and why it is not a gap
+
+**`codegen.kel` alone**, on delegated suspension: no `Yield` of its own and a `Reentrant`
+callee, so `resume_after_enter` would write the ENTRY chunk's slot 0 while the native
+`kel_yield` return reached only the callee, and the next iteration would read a stale resume
+value. **Executing it requires a design for delegated suspension, not a predicate widening**,
+and it is the must-not-fire control in `rogue_ai_differential.rs`.
+
+The goal that drove this arc called it "a milestone rather than a count". The probe showed it
+is a soundness refusal — the one case in the five where the right action is to leave it alone.
