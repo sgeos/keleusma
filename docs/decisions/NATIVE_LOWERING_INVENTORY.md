@@ -5746,3 +5746,39 @@ call.
 
 The tail-walk widening is still correct and still worth re-applying: it is what lets these
 three reach the point where the return convention is the only thing left.
+
+---
+
+## `is_lowered` is retired. Zero definitions remain.
+
+2026-08-14. Three files carried a predicate by that name. **They were not three copies of one
+thing**, and treating them as such is why the job looked mechanical and was not.
+
+| file | resolution |
+|---|---|
+| `spike_corpus_coverage.rs` | **retired** — asks `module_refusals` and derives a per-CHUNK refused set |
+| `spike_stream_sufficiency.rs` | **retired** — its one real consumer now reads refusal messages; the two tests that existed only to police the model are deleted with it |
+| `spike_composite_split.rs` | **renamed** to `lowers_ignoring_composites`, kept, and guarded |
+
+### Why the third is kept rather than retired
+
+It answers a **counterfactual** — what would lower if composites were supported — and no query
+against the real entry point can answer that, because `lower_module` refuses at the first
+unsupported op and reports nothing beyond it. The file said so all along; the shared name is
+what made it look like a third copy of a stale model.
+
+It is now named for what it does, and `the_counterfactual_never_overstates` guards the one
+direction that costs anything: over every module whose ops it claims all lower, the real
+lowering must accept. Understating wastes nothing; overstating promises coverage that does not
+exist.
+
+### What the retirement cost, honestly
+
+**Granularity.** The model claimed to know per OPCODE; `module_refusals` knows per CHUNK. The
+figures in the sufficiency report are correspondingly coarser — and true, where the model was
+stale by 1019 `CallVerifiedNative` instances alone. The refusal message names the blocking
+construct, which is better attribution than the model ever gave.
+
+Two tests were deleted rather than fixed: `the_lowered_predicate_has_not_drifted` and
+`the_lowered_predicate_is_not_stale_pessimistic`. Both existed solely because the model
+existed. Keeping a control for a thing that is gone would be worse than deleting it.

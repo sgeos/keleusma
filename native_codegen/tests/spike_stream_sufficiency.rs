@@ -21,95 +21,9 @@
 //!
 //! Run with `cargo test --test spike_stream_sufficiency -- --nocapture`.
 
-use inkwell::context::Context;
-use keleusma::bytecode::{BlockType, Chunk, ConstValue, Module, Op};
+use keleusma::bytecode::{BlockType, Module, Op};
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use std::collections::BTreeMap;
-
-/// Every opcode the lowering handles today.
-///
-/// **This is a MODEL of the lowering, and a model can drift from what it
-/// models.** `spike_corpus_coverage.rs` carries the same list, and a second copy
-/// is a second thing to forget. It is duplicated rather than shared because these
-/// are independent spikes, and the drift is made detectable rather than
-/// prevented: `the_lowered_predicate_has_not_drifted` below asserts that every
-/// module this predicate calls fully-supported is one `lower_module` actually
-/// accepts. A silently stale copy would make every sufficiency figure here
-/// optimistic, which is the direction that causes wasted work.
-///
-/// # `Const` is why this takes the chunk
-///
-/// **The control caught this predicate over-claiming, which is what it is for.**
-/// An earlier version listed `Op::Const(_)` unconditionally. The real lowering
-/// accepts only `Int`, `Byte`, `Bool` and `Unit`; a `StaticStr` or any composite
-/// is refused. The inventory's status table has said "`Const` (scalars)" and
-/// listed it as one of three PARTIAL entries all along — **the qualifier was
-/// dropped in the copy**, which is exactly the drift a duplicated model invites.
-///
-/// The consequence was not cosmetic: a stage module holding a string constant
-/// would have been reported as freed by the stream work alone when it is not.
-/// `spike_corpus_coverage.rs` carries the same unqualified list and is very
-/// likely wrong in the same way.
-fn is_lowered(op: &Op, chunk: &Chunk) -> bool {
-    // Resolve the constant rather than trusting the opcode.
-    if let Op::Const(idx) = op {
-        return matches!(
-            chunk.constants.get(*idx as usize),
-            Some(ConstValue::Int(_) | ConstValue::Byte(_) | ConstValue::Bool(_) | ConstValue::Unit)
-        );
-    }
-    matches!(
-        op,
-        Op::GetLocal(_)
-            | Op::SetLocal(_)
-            | Op::PopN(_)
-            | Op::Dup
-            | Op::PushImmediate(_)
-            | Op::CheckedAdd
-            | Op::CheckedSub
-            | Op::CheckedNeg
-            | Op::CheckedMul(0)
-            | Op::Div
-            | Op::Mod
-            | Op::CheckedDiv(0)
-            | Op::CheckedMod
-            | Op::CmpEq
-            | Op::CmpNe
-            | Op::CmpLt
-            | Op::CmpGt
-            | Op::CmpLe
-            | Op::CmpGe
-            | Op::Not
-            | Op::BitAnd
-            | Op::BitOr
-            | Op::BitXor
-            | Op::Shl
-            | Op::Shr
-            | Op::If(_)
-            | Op::Else(_)
-            | Op::EndIf
-            | Op::Loop(_)
-            | Op::EndLoop(_)
-            | Op::Break(_)
-            | Op::BreakIf(_)
-            | Op::Return
-            | Op::Trap(_)
-            | Op::Call(_, _)
-            | Op::WordToByte
-            | Op::ByteToWord
-            | Op::BoundsCheck(_)
-            | Op::GetData(_)
-            | Op::SetData(_)
-            | Op::GetDataIndexed(..)
-            | Op::SetDataIndexed(..)
-    )
-}
-
-/// The three opcodes the stream work itself would add. Everything else that is
-/// unsupported is a SEPARATE blocker, and separating them is the whole point.
-fn is_stream_op(op: &Op) -> bool {
-    matches!(op, Op::Stream | Op::Reset | Op::Yield)
-}
 
 fn corpus_sources() -> Vec<std::path::PathBuf> {
     let root = std::path::Path::new("..");
@@ -216,15 +130,27 @@ fn spike_report_stream_sufficiency() {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
 
+        // **Derived from the real lowering, not from a model.** This asked a
+        // hand-maintained per-opcode predicate until 2026-08-14, and that
+        // predicate was measured stale by 1019 `CallVerifiedNative` instances
+        // alone. `module_refusals` reports per CHUNK rather than per op, which
+        // is coarser and TRUE; the refusal message names the blocking construct,
+        // which is better attribution than the model gave.
         let mut others: BTreeMap<String, usize> = BTreeMap::new();
-        for chunk in &m.chunks {
-            for op in &chunk.ops {
-                if !is_lowered(op, chunk) && !is_stream_op(op) {
-                    let disc = format!("{op:?}");
-                    let disc = disc.split('(').next().unwrap_or(&disc).to_string();
-                    *others.entry(disc).or_default() += 1;
-                }
+        for (_, e) in keleusma_native::module_refusals(&m, keleusma_native::LowerOptions::default())
+        {
+            let text = format!("{e}");
+            // The stream family is what this report holds constant.
+            if text.contains("Stream") || text.contains("Reset") || text.contains("Yield") {
+                continue;
             }
+            let head: String = text
+                .split(['(', ':'])
+                .next()
+                .unwrap_or(&text)
+                .trim()
+                .to_string();
+            *others.entry(head).or_default() += 1;
         }
 
         if others.is_empty() {
@@ -304,66 +230,6 @@ fn spike_report_yield_shapes() {
         }
     }
     println!("================\n");
-}
-
-/// CONTROL for `is_lowered`, which is a duplicated model of the real lowering.
-///
-/// Every MODULE whose every op is `is_lowered` must be one `lower_module`
-/// accepts. If the predicate has drifted stale, this fires — and it fires in the
-/// direction that matters, because a stale predicate makes the sufficiency report
-/// claim more is freed than really is.
-///
-/// It deliberately does NOT assert the converse. The lowering may refuse for a
-/// structural reason unrelated to any single opcode, and requiring `is_lowered`
-/// to predict that would assert a stronger claim than the predicate makes.
-///
-/// # Why `lower_module` and not `lower_chunk`
-///
-/// The first version of this control used `lower_chunk` and **failed for a reason
-/// that was not drift**: `lower_chunk` refuses every `Op::Call` outright, because
-/// resolving a callee index needs the whole module and a single chunk does not
-/// carry one. So it refused `01_arithmetic.kel::main` while `is_lowered` was
-/// perfectly correct that `Call` is supported.
-///
-/// The doc comment above anticipated exactly this — "may refuse for a structural
-/// reason unrelated to any single opcode" — and the assertion was still written
-/// so that it tripped on it. **Naming a failure mode is not the same as excluding
-/// it**, which is this control's own lesson about controls.
-///
-/// `lower_module` is also the better boundary on its own merits: it is what a
-/// consumer calls, and it is what the sufficiency report models.
-#[test]
-fn the_lowered_predicate_has_not_drifted() {
-    let mut checked = 0usize;
-    for (path, m) in compiled_corpus() {
-        // A module containing a Stream chunk is excluded automatically, since
-        // `Op::Stream` is not in `is_lowered`.
-        if !m
-            .chunks
-            .iter()
-            .all(|c| c.ops.iter().all(|o| is_lowered(o, c)))
-        {
-            continue;
-        }
-        let ctx = Context::create();
-        let lm = ctx.create_module("drift");
-        let r =
-            keleusma_native::lower_module(&ctx, &lm, &m, keleusma_native::LowerOptions::default());
-        assert!(
-            r.is_ok(),
-            "`is_lowered` says every op of every chunk in {} is supported, but \
-             lower_module refused: {:?}\n\
-             The predicate has drifted from the lowering; every sufficiency figure \
-             in this file is optimistic until it is resynchronised.",
-            path.display(),
-            r.err()
-        );
-        checked += 1;
-    }
-    assert!(
-        checked > 5,
-        "only {checked} modules were fully supported, so this control proved almost nothing"
-    );
 }
 
 /// Guard against measuring nothing, which is what makes every zero above look
@@ -521,107 +387,4 @@ fn spike_report_nested_yield_context() {
     println!("\n  -> If-only nesting is a control-flow join. Loop nesting is a");
     println!("     suspension across a back edge and needs a real frame.");
     println!("================\n");
-}
-
-/// **THE OTHER DIRECTION, which nothing checked.**
-///
-/// `the_lowered_predicate_has_not_drifted` asserts model-says-supported implies
-/// the-lowering-accepts. It catches an OPTIMISTIC model, which would overstate
-/// what a spike figure promises. It cannot catch a PESSIMISTIC one, and a
-/// pessimistic model is what this file actually grew: composite opcodes stayed on
-/// the unsupported list for a whole session after the lowering learned them.
-///
-/// A stale-pessimistic model does not fail loudly. It silently understates the
-/// value of every OTHER blocker class, because a module carrying a
-/// now-supported opcode is still counted as blocked by it — which is exactly the
-/// error that made the `static-str` ALONE count an under-estimate.
-///
-/// So: a module the real lowering ACCEPTS must contain no op the model calls
-/// unsupported. Reported rather than asserted for now, because resynchronising
-/// the model is a separate change and a red spike would obscure the report it
-/// exists to produce.
-#[test]
-fn the_lowered_predicate_is_not_stale_pessimistic() {
-    let mut stale: BTreeMap<String, usize> = BTreeMap::new();
-    let mut accepted = 0usize;
-    for (path, m) in compiled_corpus() {
-        let ctx = Context::create();
-        let lm = ctx.create_module("staleness");
-        if keleusma_native::lower_module(&ctx, &lm, &m, keleusma_native::LowerOptions::default())
-            .is_err()
-        {
-            continue;
-        }
-        accepted += 1;
-        for c in &m.chunks {
-            for o in &c.ops {
-                if !is_lowered(o, c) {
-                    let key = format!("{o:?}");
-                    let key = key.split(['(', ' ']).next().unwrap_or("?").to_string();
-                    *stale.entry(key).or_default() += 1;
-                    let _ = &path;
-                }
-                // **The dangerous direction, now ASSERTED rather than
-                // reported.** The model overstating is what causes wasted work:
-                // it claims an op lowers where the real lowering refuses, and
-                // every slack figure built on it then promises coverage that
-                // does not exist. This is checkable WITHOUT resynchronising the
-                // model, because the enclosing module is one the real lowering
-                // ACCEPTED -- so no op in it can legitimately be refused, and a
-                // model that called one unsupported is merely pessimistic.
-                //
-                // The converse is the direction the printout below tracks and
-                // is safe: a pessimistic model understates coverage.
-            }
-        }
-    }
-
-    // The overstating direction, checked over every module the real lowering
-    // REFUSES: if the model claims every op in such a module lowers, it is
-    // promising more than the lowering delivers.
-    let mut overstated: Vec<String> = Vec::new();
-    for (path, m) in compiled_corpus() {
-        let ctx = Context::create();
-        let lm = ctx.create_module("overstate");
-        if keleusma_native::lower_module(&ctx, &lm, &m, keleusma_native::LowerOptions::default())
-            .is_ok()
-        {
-            continue;
-        }
-        let model_says_all_fine = m
-            .chunks
-            .iter()
-            .all(|c| c.ops.iter().all(|o| is_lowered(o, c)));
-        if model_says_all_fine {
-            overstated.push(
-                path.file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into(),
-            );
-        }
-    }
-    assert!(
-        overstated.is_empty(),
-        "the model OVERSTATES on {} module(s): it calls every op lowered while \
-         the real lowering refuses them. That is the direction that causes \
-         wasted work, and it is asserted rather than printed. Modules: {:?}",
-        overstated.len(),
-        overstated
-    );
-    println!("================ MODEL STALENESS (pessimistic direction)");
-    println!("  modules the real lowering ACCEPTS : {accepted}");
-    if stale.is_empty() {
-        println!("  the model calls no accepted op unsupported — in step");
-    } else {
-        println!("  ops the model still calls unsupported inside ACCEPTED modules:");
-        let mut v: Vec<_> = stale.into_iter().collect();
-        v.sort_by_key(|(_, n)| core::cmp::Reverse(*n));
-        for (k, n) in v {
-            println!("     {n:5}  {k}");
-        }
-        println!("  -> every slack and sufficiency figure computed from this model");
-        println!("     UNDERSTATES the other classes until it is resynchronised.");
-    }
-    println!("================");
 }
