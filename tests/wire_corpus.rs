@@ -339,13 +339,23 @@ fn every_self_hosted_stage_round_trips_through_the_new_schema() {
 ///
 /// An entry here is a decision, not an oversight, and the test below requires
 /// every file in the directory to be in one list or the other.
-const EXCLUDED: &[(&str, &str)] = &[(
-    "wire.kel",
-    "the wire format written in Keleusma (step 6). Not a pipeline stage, not \
-     driven by `read_stage`, and not compiled by the self-hosted driver, so it \
-     has nothing to round-trip through the auxiliary-body codec. Covered by \
-     tests/selfhost_wire.rs instead.",
-)];
+const EXCLUDED: &[(&str, &str)] = &[
+    (
+        "wire.kel",
+        "the wire format written in Keleusma (step 6). Not a pipeline stage, not \
+         driven by `read_stage`, and not compiled by the self-hosted driver, so it \
+         has nothing to round-trip through the auxiliary-body codec. Covered by \
+         tests/selfhost_wire.rs instead.",
+    ),
+    (
+        "verify_types.kel",
+        "the self-hosted TYPE REJECTION stage, slice 0. Not a pipeline stage and \
+         not driven by `read_stage`: it answers accept-versus-reject about a \
+         program rather than transforming one, so it has no stage output to \
+         round-trip. It joins the corpus if it ever emits an artifact. Covered by \
+         tests/selfhost_typecheck.rs instead.",
+    ),
+];
 
 #[test]
 fn every_kel_source_is_either_in_the_corpus_or_explicitly_excluded() {
