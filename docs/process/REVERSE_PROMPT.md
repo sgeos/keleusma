@@ -17,9 +17,9 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 | | |
 |---|---|
 | `v0.2.3` | pushed, tree clean, in sync with origin |
-| PRs merged this session | **#54, #57, #58, #59, #60**, each 22 of 22 green, merged at the commit CI ran |
+| PRs merged this session | **#54, #57, #58, #59, #60, #61, #62, #63, #64, #65**, each 22 of 22 green, merged at the commit CI ran |
 | Open PRs of this line | **none** |
-| `selfhost_wire` | **154 tests** |
+| `selfhost_wire` | **155 tests** |
 | Record-shape coverage | **17 of 17**, pinned by a test rather than by this note |
 
 ## The three-part goal, and where each stands
@@ -37,9 +37,10 @@ the emitter refused the kind with `-222`. Closed from real compiler output, with
 | module-input encoding defined | done |
 | producer: chunk names | done (#58) |
 | producer: enum layouts, both intern modes | done (#59) |
-| producer: the constant walk's names, interned inline | **not started** |
-| per-chunk ranges | **not started** |
-| `wire.kel` removed from the `read_stage` exclusion | **not started** |
+| producer: constant ROOTS, names and the six-word node table | done (#62, #65) |
+| per-chunk ranges | **already self-hosted**; the roadmap was stale (#63) |
+| producer: constant CHILD positions, `STRUCT`/`ENUM` interning as the walk descends | **not started** |
+| `wire.kel` removed from the `read_stage` exclusion | **blocked behind the driver**, not beside it (#64) |
 | residency staging for a stage's 395,804 names | **not started** |
 
 The plan is explicit that the last two are **the same increment** and that doing either alone is
@@ -83,10 +84,19 @@ not the gate.**
 
 ## Next intended step
 
-**The constant walk's interner coupling**, which is the next contributor to the interning sequence
-and the last one before per-chunk ranges. Then the input-encoding question the type-checker plan
-shares: **neither line should invent a second encoding**, and the checker must not be built before
-its input encoding exists.
+**The constant walk's CHILD positions.** Roots are done, names and node table both. What remains is
+the nesting: `STRUCT` and `ENUM` intern as the walk descends, and the walk needs an explicit stack
+because the language has no recursion. The corpus reaches nesting only through `const data`, which
+the `interner_input` model refuses, so the case table has to come from `FX_CASES` rather than be
+extended in place.
+
+**Then the two that are one increment**: removing `wire.kel` from the `read_stage` exclusion and the
+residency staging a stage`s 395,804 names force. The plan is explicit that doing either alone is
+wasted.
+
+**B is blocked on the same question.** The type-checker plan and the wire-format line share an
+input-encoding problem, and **neither should invent a second encoding**. The checker must not be
+built before its input encoding exists.
 
 ## Parallel development
 
