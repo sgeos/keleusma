@@ -16,167 +16,127 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 | | |
 |---|---|
-| `v0.2.3` | `1f73e29a`, pushed |
-| PR #42 push-order sweep | **MERGED**, 22/22 |
-| PR #43 run measurement | **MERGED**, 22/22 |
-| PR #44 `SHARED_LAYOUT` encoding | **MERGED**, 22/22 |
-| PR #46 SECDED end to end | open, draft, CI running |
-| PR #41 | **not mine** — base `v0.3.0`, the other line's |
-| Machine | free; every gate ran on hosted runners |
+| `v0.2.3` | `f1fc5ffc`, pushed, tree clean, in sync with origin |
+| PRs merged this session | **#42, #43, #44, #46, #47, #50, #51, #53** — each 22 of 22 green, merged at the commit CI ran |
+| Open PRs of this line | **none** |
+| Branches | 73 merged branches pruned; what remains is the other line's, a worktree, and a backup |
+| Boundary counts | **79 Ok / 4 Gap / 1 RefRejects, 84 cases** — recounted from the table with comments stripped, matches the recorded figure |
 
-Four increments, three merged. Every merge was at the commit CI ran, without rebasing.
+**The parity-plane arc is complete and `docs/decisions/ECC_SIGNATURE_ORDERING.md` holds nothing
+open.** Self-hosted byte-identity coverage reached ten of ten stages. Artifact sizes fell again:
+`codegen`'s auxiliary body 154,880 to **111,864** bytes, `lexer`'s to **7,456**.
 
-**Artifact sizes after the `SHARED_LAYOUT` work**, measured: `codegen`'s auxiliary body
-154,880 → **111,864** bytes, `lexer`'s → **7,456**. The plan's ~27% projection
-materialised exactly.
+## Two conclusions that measurement overturned after I had written them down
 
-## A defect report named one site and the defect was at eight
+**The ordering decision was wrong in its first form.** I wrote that verify-then-scrub is a hole
+outright. Writing the soundness condition as an equation showed it is not: an adversary without the
+key cannot produce a verifying artifact other than the original, and scrubbing an undamaged artifact
+is the identity, so **at a single instant the order is safe**. The real defect is that verification is
+a statement about a moment. A system verifies at load and scrubs later, and the assumption that order
+needs is that no fault occurs in the window, **which is exactly what the parity plane exists because
+is false**. The corrected argument is stronger and it connects the problem to
+time-of-check-to-time-of-use, which the first version had no reason to reach for.
 
-The `v0.3.0` session reported that `docs/spec/GRAMMAR.md:747` states the runtime pushes
-`(high, low, flag)` for the checked-arithmetic opcodes when it pushes `(low, high, flag)`.
-**Verified against the implementation before acting, then swept the repository rather than
-fixing the line reported.** Eight sites carried it. Five are in `src/*.rs`, and three of
-those are compiler comments — two sitting directly beside the `PopN(2)` whose correctness
-depends on the order.
+**A sampled measurement reported 100 percent where the truth is 56.08 percent.** Six hand-chosen
+triple-bit faults all mis-corrected. Enumerating all 41,664 gives 23,364, and the six sat inside byte
+0 where the rate genuinely is 100 percent. **A biased sample presented as a measurement**, wrong by
+nearly a factor of two, over a space small enough that sampling was never justified. The enumeration
+also produced the result the design turns on: **5,133 of 635,376 four-bit patterns are reported
+CLEAN**, because the error pattern is itself a codeword. A clean report is not an integrity check, and
+`EccReport::is_clean` now says so.
 
-One of them is worth stating on its own: `src/bytecode.rs` claimed `CheckedNeg` pushes in
-"the same shape: high, low, flag" **twenty lines below** the `CheckedAdd` doc that had
-already been corrected to say the opposite. **A file contradicting itself within twenty
-lines is what an incremental single-site fix produces.**
+## A design correction that came from the operator, not from me
 
-**The error is durable because both orders are real.** The runtime pushes low first; the
-surface form `overflow(h, l)` binds high first. Six further sites say `(high, low)`
-**correctly**, about the binding, so a search and replace would have broken them. All
-fourteen candidate sites were read in context and classified. `GRAMMAR.md` and
-`book/src/BIG_NUMBERS.md` now state **both** orders and why they differ, rather than
-correcting one and leaving the reversal to be rediscovered.
+I had concluded the fix for the ordering problem was a mutable **load path**. That would have pushed
+`&mut` into the common path and cost the zero-copy and worst-case-memory properties the reader exists
+for. **Report and scrub as separate verbs is the right shape**: report already existed and only the
+mutating counterpart was missing. `scrub` returns counts rather than an artifact, so there is nothing
+to load without re-authenticating, and `&mut [u8]` makes the unsound order unrepresentable wherever
+the reader borrows the buffer. Scheduling is the host's by operator decision.
 
-**The generalisation: a defect report names where a reader happened to look, not where the
-defect is.** Same shape as "the corpus cannot reach X is a fact about the corpus", arriving
-from the direction of a bug report instead of a test corpus.
+## The mistake I made four times in one day
 
-## A plan's central number was unmeasured, and checking it took ten minutes
+**I approximated the gate's invocation instead of reproducing it**, and each narrowing hid a different
+failure:
 
-The plan ranked run-length encoding `SHARED_LAYOUT` as the next increment at "roughly 27%"
-saving. **`SharedSlotRecord` is ONE word today**, and a run record needs `first_slot` (for
-binary search on the `get_shared`/`set_shared` hot path) plus `run` and `stride`, taking it
-to **TWO**. So the encoding is a **pessimisation** unless the mean run exceeds 2 — and
-neither the plan nor the 27% figure measured that distribution.
+| what I ran | what it missed |
+|---|---|
+| default features | a `compile`-feature gate miss, failing `--no-default-features` |
+| `--features signatures` | a `signatures`-gate miss, failing the **default** build |
+| `cargo doc` default features | a rustdoc error visible only under the docs.rs feature set |
+| `clippy --tests --all-features` | a `collapsible_if` visible only under `--all-targets` |
 
-**Raised as a blocker before writing encoder code, and refuted by four orders of
-magnitude.** Across all eleven stage sources, accounting for the `u16` `run` field's 65,535
-chunking: **643,276 slots collapse to 18 runs, mean 35,738.** The table goes from 5,146,208
-bytes to **400**.
+All four were caught by the pre-push gate or CI, so nothing unsound shipped. **The local signal was
+worth less than it appeared each time**, which is the same shape as the `$?`-after-a-pipeline defect
+recorded on 2026-08-12.
 
-Two consequences, one of which corrects the plan's own reasoning:
+## Two smaller findings worth not rediscovering
 
-- **`first_slot` binary search is kept, but not for the reason given.** With one to six
-  records per stage a linear scan would be fast. It is kept because a scan's bound is
-  **data-dependent** and this project sells static bounds, not typical-case speed.
-- **The `u16` `run` field is load-bearing.** `lexer`'s largest run is 393,216, chunking into
-  seven records. Counting logical runs rather than emitted records understates `lexer`
-  sevenfold — the kind of error that makes a projection look better than the artifact.
+**A reimplementation hid an interface mismatch.** The ordering test carried its own copy of a scrub,
+exercising a private reimplementation and leaving the shipped verb untested. Wiring it to the real one
+failed at once: `keleusma_wire::scrub` takes a wire **container** and the test handed it a **framed**
+module. The parse failed on the magic, the scrub returned `None`, and nothing was repaired, silently.
+`scrub_module_bytes` exists so no host repeats it.
 
-The measurement is now `tests/shared_layout_runs.rs` rather than a note, because the payoff
-is a property of how stages **declare** shared data, not of the encoder. It carries a
-control on **its own guard**: a fully fragmented synthetic layout must be rejected by the
-same threshold, because a check passing by four orders of magnitude is otherwise
-indistinguishable from one that can no longer report anything.
-
-## The other line asked me to run something that does not exist
-
-They asked for `assert_stream_sequences_agree` over the ten stages. **There is no such
-function anywhere in the repository.** I ran the nearest thing that answers the question —
-the per-stage self-hosted byte-identity tests — and got **82 passed, 0 failed, 288.76 s**.
-
-**The part that matters more than the green result**: only **five** of the ten stages have
-a self-hosted byte-identity test at all (`lexer`, `parse`, `reconstruct`, `codegen`,
-`analyze`). The five `verify_*.kel` stages have **none** — they appear in
-`tests/wire_corpus.rs` and `tests/selfhost_wire.rs` only as **reference-compiled** inputs to
-wire-format tests, which never run the self-hosted compiler over them. So the honest answer
-is five of ten verified and five of ten unverified, not ten of ten green. Reported to their
-mailbox as such.
-
-## Two of my own process failures this session
-
-- **I piped a verification through `tail -40`**, which truncated the very evidence I meant
-  to report to the other line and hid whether the `analyze` case had run. Recovered by
-  counting that exactly 82 functions match the filter against the reported "82 passed",
-  which is sound, but the pipe should not have been there. **Do not truncate the output of
-  a run whose result you intend to quote.**
-- **I nearly skipped the run-distribution measurement** because the plan stated a saving
-  with apparent confidence. The plan document is this project's own artifact and it had the
-  same unmeasured-premise defect the loop document warns about in recorded status claims.
+**`git push origin --delete` runs the full pre-push test tier, once per branch.** Deleting 32 refs in
+a loop timed out after ten minutes having spent all of it running tests in order to delete pointers.
+One push naming every branch, or `gh api -X DELETE .../git/refs/heads/<b>`, avoids it.
 
 ## Concerns raised, not acted on
 
-- **`MAX_PARSE_DEPTH` does not do its stated job on a small stack.** Unchanged from the last
-  session and still the operator's call. The constant is 24 (`src/parser.rs:98`); on a 2 MB
-  thread the stack blows before the guard fires, so an embedder parsing untrusted source on
-  a small-stack thread gets a SIGABRT rather than a `ParseError`. That is an availability
-  failure at the trust boundary the guard exists to hold.
-- **`CHANGELOG.md:340` states the push order wrongly, and it describes a published
-  release.** `TASKLOG.md:320,331` likewise. Left unchanged deliberately: rewriting
-  already-published text is a separate call from correcting a live specification.
-- **Five of ten stages have no self-hosted byte-identity coverage**, above. This was not
-  previously stated anywhere as a coverage gap.
+- **`MAX_PARSE_DEPTH` does not do its stated job on a small stack.** Unchanged and still yours. The
+  constant is 24 (`src/parser.rs:98`); on a 2 MB thread the stack blows before the guard fires, so an
+  embedder parsing untrusted source on a small-stack thread gets a SIGABRT rather than a `ParseError`.
+  An availability failure at the trust boundary the guard exists to hold.
+- **`CHANGELOG.md:340` states the checked-arithmetic push order wrongly and describes a published
+  release.** `TASKLOG.md:320,331` likewise. Left unchanged: rewriting already-published text is a
+  separate call from correcting a live specification.
+- **A local gate quiet for 68 hours is still shown in the status line.** That is `gate-status.sh`'s
+  call and it is honestly labelled; suppressing it would change the other session's semantics, so it
+  is raised in their mailbox instead.
 
 ## Open, held by the operator
 
 - **Publication remains HELD.** Nothing is published.
-- **The (72,64) SECDED plane is entirely unexercised** by the shipping encoder. Called a gap
-  to close; prioritisation open. Given radiation hardness is the stated value proposition, a
-  feature proven only in isolation is the weakest part of that claim.
+- **`v0.2.3-prerebase-backup`**, 309 commits ahead, local only. A deliberate safety copy of pre-rebase
+  history, not deleted and not to be without being asked.
 - **`MAX_PARSE_DEPTH` on small stacks**, above.
 - **MSRV**: CI checks 1.85 for `keleusma-arena` and 1.88 for `keleusma`.
 
-## The SECDED plane is emitted and verified, and one half of it is a decision for you
-
-PR #46. The code had exhaustive single-bit unit tests and **no artifact the shipping
-encoder produced ever carried a plane**. Now `encode_aux_body_with_ecc` emits one per
-region and `WireView::verify_all` scans them, proven on real compiler output: a single
-flipped bit is corrected across 32 positions per stage, two bits in one word are reported
-uncorrectable rather than silently "corrected", and the ordinary decode path is unaffected.
-
-**Off by default, deliberately.** Planes change the artifact's bytes, and byte identity
-against this encoder is the oracle the self-hosted compiler is verified with.
-
-**The control is the part worth trusting.** The same flip is asserted to be INVISIBLE
-without a plane. The container also carries a CRC, region lengths and structural
-validation, any of which might have caught the same damage — in which case the plane would
-be decoration and the other three tests would still pass.
-
-**What is NOT done, and is yours rather than mine**: nothing calls `verify_all` at module
-load. What a host should do about a corrected word, or an uncorrectable one, is a policy
-question, and in-place correction is not obviously available when the artifact may be read
-from read-only storage. I did not pick a default.
-
 ## Next intended step
 
-1. **Merge #46 on CI green**, at the commit CI ran, without rebasing.
-2. **Load-time ECC policy**, once you have ruled on the question above.
-3. **Five of ten stages still have no self-hosted byte-identity coverage** — the
-   `verify_*.kel` stages. This is the largest untested surface I know of on this line and
-   was not previously recorded as a gap anywhere.
+The ECC programme is finished, so the next increment is a genuine choice among bounded roadmap tasks
+rather than a continuation. In order of my preference:
+
+1. **A second stage through the whole-artifact capstone under the new encoding.** Artifacts shrank
+   twice this session and the capstone corpus lost two stages to that; only three still exceed one
+   window. Worth confirming the composition still holds where it can.
+2. **The Order-1 type checker**, scoped in
+   [`../decisions/TYPECHECK_SELFHOST_PLAN.md`](../decisions/TYPECHECK_SELFHOST_PLAN.md) at about 15
+   rejection shapes, sized by execution. The oracle is verdict agreement, not message agreement.
+3. **Load-time ECC policy**, which is now purely a question of whether a host should scrub and on what
+   schedule. The verbs make both answers expressible and nothing forces either.
 
 ## Parallel development
 
 `v0.3.0` carries native code generation on the same CI-gated workflow. Their mailbox is
 `git show origin/v0.3.0:docs/process/handoffs/v0.3.0.md`; mine is
-[`handoffs/v0.2.3.md`](./handoffs/v0.2.3.md). Poll at increment boundaries — there is no
-wake. **Tell the two lines apart by BASE BRANCH, not by author**: we share one GitHub
-account, so `--author @me` matches theirs.
+[`handoffs/v0.2.3.md`](./handoffs/v0.2.3.md). Poll at increment boundaries, since there is no wake.
+**Tell the two lines apart by BASE BRANCH, not by author**: we share one GitHub account.
+
+Three notes are waiting for them: the `SharedSlotRecord` move with its accessor split, the status-line
+change with the reasoning for not touching `gate-status.sh`, and the branch prune with what remains
+that is theirs.
 
 ## Method rules this session paid for
 
-- **Verify a defect report against the implementation, then sweep rather than fix the line
-  named.** One reported site was eight, and the unreported ones were in compiler comments a
-  maintainer reads while changing the very code they misdescribe.
-- **A plan document is not evidence.** Its central number was a projection stated in the
-  register of a measurement, in this project's own artifact.
-- **Put a control on the guard, not only on the detector.** A threshold passing by four
-  orders of magnitude cannot report anything, and nothing about the headline number says so.
-- **Do not truncate output you intend to quote.**
-- **Check whether the file you are about to edit is generated.** `book/src/INSTRUCTION_SET.md`
-  is generated from the spec and gated by `git diff --exit-code` in CI, and there are two
-  big-number documents in the book of which only one was the right target.
+- **Reproduce the gate's invocation, do not approximate it.** Four defects, four narrowings, one day.
+- **Enumerate a small space instead of sampling it.** 41,664 triple-fault patterns, and the sample was
+  wrong by nearly a factor of two.
+- **Write the condition as an equation before deciding it holds.** That is what showed the first
+  ordering conclusion was wrong.
+- **Call the shipped API from the test, not a copy of it.** A reimplementation hid a real interface
+  mismatch.
+- **A defect report names where a reader happened to look, not where the defect is.** One reported
+  site was eight.
+- **Do not truncate the output of a run whose result you intend to quote.** Done twice today.
