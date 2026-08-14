@@ -14131,6 +14131,62 @@ mod tests {
         }
     }
 
+    /// The signature covers the auxiliary body, and therefore any parity plane.
+    ///
+    /// # Why this is a test and not an observation
+    ///
+    /// A parity plane is a region of the auxiliary body, and the signature
+    /// covers the whole framed buffer, so the plane is signed. **That is
+    /// inherited from a coincidence of layout and nothing enforces it.** A
+    /// change that moved the auxiliary body outside the signed span, or emitted
+    /// planes into a trailer, would leave an attacker able to supply a hostile
+    /// plane and steer the corrections a scrub applies. Under a
+    /// scrub-then-verify order the signature still refuses the result, so
+    /// integrity holds and it becomes an **availability** attack requiring no
+    /// key, against a mechanism installed to improve availability.
+    ///
+    /// # Why it flips a byte instead of comparing offsets
+    ///
+    /// Comparing the auxiliary-body span against the signed span is arithmetic
+    /// over two numbers this crate computes, so it would agree with itself if
+    /// both were wrong. Flipping a byte and requiring verification to FAIL
+    /// establishes coverage by execution.
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn the_signature_covers_the_auxiliary_body_where_a_parity_plane_would_live() {
+        use ed25519_dalek::SigningKey;
+        let signer = SigningKey::from_bytes(&[77u8; 32]);
+        let verifying = signer.verifying_key();
+        let src = "signed fn main() -> Word { 21 + 21 }";
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let bytes =
+            crate::wire_format::module_to_signed_wire_bytes(&module, &signer).expect("sign");
+
+        // CONTROL. The undamaged artifact must verify, or every assertion below
+        // passes against a signature that never verified in the first place.
+        crate::wire_format::verify_module_signature(&bytes, &[verifying])
+            .expect("CONTROL: the freshly signed artifact must verify");
+
+        let aux_start = u32::from_le_bytes([bytes[48], bytes[49], bytes[50], bytes[51]]) as usize;
+        let aux_len = u32::from_le_bytes([bytes[52], bytes[53], bytes[54], bytes[55]]) as usize;
+        assert!(
+            aux_len > 0 && aux_start + aux_len <= bytes.len(),
+            "the auxiliary body span must lie inside the artifact"
+        );
+
+        // Every byte of the auxiliary body is covered. A plane lives here.
+        for off in [aux_start, aux_start + aux_len / 2, aux_start + aux_len - 1] {
+            let mut damaged = bytes.clone();
+            damaged[off] ^= 0x01;
+            assert!(
+                crate::wire_format::verify_module_signature(&damaged, &[verifying]).is_err(),
+                "a flipped bit at auxiliary-body offset {off} did not break verification, so the \
+                 signature does not cover the region a parity plane occupies"
+            );
+        }
+    }
+
     #[cfg(all(feature = "signatures", feature = "encryption"))]
     #[test]
     fn load_encrypted_signed_bytes_executes_decrypted_module() {

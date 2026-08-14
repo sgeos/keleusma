@@ -275,6 +275,12 @@ A fixed-size prologue at fixed offsets is votable with no prior knowledge. The v
 
 A region may be protected by a companion region holding a (72,64) SECDED code: eight check bits per 64-bit data word, held in a **parallel** plane rather than interleaved with the data, so the protected payload stays readable in place. The plane corrects any single-bit error in a word and detects any double-bit error.
 
+The shipping encoder emits planes on request through `encode_aux_body_with_ecc`, and `WireView::verify_all` scans every protected region against its plane. **Planes are off by default**, because they change an artifact's bytes and byte identity against this encoder is the oracle the self-hosted compiler is verified with. They are purely additive otherwise, since every reader resolves regions by kind instead of enumerating the directory, so an artifact carrying planes decodes identically through the ordinary path and no `BYTECODE_VERSION` change is implied.
+
+**The overhead is one check byte per eight payload bytes asymptotically, and more on a small artifact.** Each plane is a region and is padded to a whole word, so the rounding is paid once per protected region. Measured across real compiler output: 12.5 percent at 303,472 payload bytes and 20.0 percent at 680, where nineteen regions each round up.
+
+**The corrector is not an authority on the outcome, and a reader must not treat a clean scan as an integrity check.** A (72,64) code has minimum distance four, so it makes no claim beyond two errors. Enumerated over one word: all 64 single-bit patterns repair exactly, all 2,016 double-bit patterns are detected, **23,364 of 41,664 triple-bit patterns are reported as a successful repair while producing the wrong word**, and **5,133 of 635,376 quadruple-bit patterns are reported clean** because the error pattern is itself a codeword. A cryptographic signature remains the only authority on integrity, and any repair must be followed by a fresh verification because a signature check describes the bytes at the moment it ran.
+
 Correction returns a **value** and never writes to the caller's buffer. An in-place corrector would require a mutable borrow, and the read path is allocation-free and immutable by construction.
 
 ### Region kinds used by Keleusma's schema
