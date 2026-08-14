@@ -5721,3 +5721,40 @@ an all-zero triple sequence.
 
 `codegen.kel` remains refused as the must-not-fire control: no `Yield` of its own and a
 `Reentrant` callee, which is delegated suspension and a soundness matter.
+
+### `rogue_dungen`: the emitter gap was real, and the module still refuses AS SHIPPED
+
+Traced to `random_in_room` op 40:
+
+```text
+  OP29 CallVerifiedNative(0, 2)   -> SetLocal(5)
+  OP36 CallVerifiedNative(0, 2)   -> SetLocal(6)
+  OP38 GetLocal(5) ; OP39 GetLocal(6)
+  OP40 NewComposite(Flat { kind: Tuple, count: 2, byte_size: 64 })
+```
+
+The tuple is built from two native results. The lowering pushed **every** native result at
+`Width::Unknown`, so `NewComposite` could not pack them.
+
+**Fixed: the emitter now consults `Module::native_return_shapes`.** `Scalar` maps to a
+width, `Flat` to a body length, and `Top`/absent/unmodelled still fall back to
+`Width::Unknown` — which is every unsignatured native, and that is all of them in the shipped
+corpus today.
+
+| source | refusals |
+|---|---|
+| as shipped (`use host::rng_range`) | **1**, correctly — the width is genuinely unknown |
+| with `use host::rng_range(Word, Word) -> Word` | **0** |
+
+**So `rogue_dungen` stays refused and that is the fail-closed path working.** Admitting it
+needs a SOURCE change — declaring the native's signature — to a shipped example. That is a
+reasonable change and arguably overdue, but it is example code and the operator's call, not a
+backend fix to make a count move.
+
+**Two guessing failures worth recording**, both caught rather than shipped. `use host::x -> Word`
+is not the syntax and the reference compiler rejected it; the real form is
+`use host::x(ArgTypes) -> Return`, found by grepping `examples/rtos/scripts/prelude.kel`
+rather than by a third guess. And the first version of the new differential segfaulted because
+a composite-building module gains three trailing pointers while the simple harness calls the
+entry as `fn(i64, i64)`. **`native_calls.rs`'s harness now asserts its parameter count**, so
+that mismatch fails loudly instead of crashing.

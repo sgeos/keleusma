@@ -845,6 +845,7 @@ pub fn lower_chunk<'ctx>(
             opts,
             degenerate_yield: None,
             natives: &[],
+            native_shapes: &[],
         },
     )
 }
@@ -1000,6 +1001,7 @@ fn lower_module_with<'ctx>(
             opts,
             degenerate_yield: tail.as_deref(),
             natives: &program.native_names,
+            native_shapes: &program.native_return_shapes,
         };
         match lower_chunk_body(ctx, module, chunk, *func, &declared, data, cfg) {
             Ok(_) => {}
@@ -1130,6 +1132,14 @@ struct BodyCfg<'a> {
     /// have bound the object file to declaration order, which is a property of
     /// the source text rather than of the interface.
     natives: &'a [String],
+    /// Return-value shape of each declared native, parallel to `natives`.
+    ///
+    /// **Consulted rather than ignored.** Before 2026-08-14 every native result
+    /// was pushed at `Width::Unknown`, which is correct when the shape is `Top`
+    /// and needlessly lossy when it is not: a composite built from a signatured
+    /// native's result was refused for a width the module actually declares.
+    /// `rogue_dungen` is the corpus case.
+    native_shapes: &'a [keleusma::bytecode::WireShape],
 }
 
 /// The external symbol a declared native binds to.
@@ -1379,6 +1389,7 @@ fn lower_chunk_body<'ctx>(
         opts,
         degenerate_yield,
         natives,
+        native_shapes,
     } = cfg;
     let i64t = ctx.i64_type();
     let i128t = ctx.i128_type();
@@ -2153,7 +2164,25 @@ fn lower_chunk_body<'ctx>(
                         unreachable!("every native is declared returning i64, never void")
                     }
                 };
-                st.push(ret);
+                // Take the declared return shape when the module carries one.
+                // `Top`, an absent entry, and a shape this backend does not
+                // model all fall back to `Width::Unknown`, which fails closed at
+                // a USE rather than here — the behaviour every unsignatured
+                // native still gets, and that is all of them in the shipped
+                // corpus today.
+                let w = match native_shapes.get(usize::from(*idx)) {
+                    Some(keleusma::bytecode::WireShape::Scalar { kind }) => {
+                        match keleusma::value_layout::ScalarKind::from_tag(*kind) {
+                            Some(k) => {
+                                Width::Scalar(u32::try_from(k.size_in_bytes(8, 8)).unwrap_or(0))
+                            }
+                            None => Width::Unknown,
+                        }
+                    }
+                    Some(keleusma::bytecode::WireShape::Flat { size, .. }) => Width::Body(*size),
+                    _ => Width::Unknown,
+                };
+                st.push_w(ret, w);
             }
             // `Byte` occupies a full `i64` slot holding a value in `0..=255`.
             // **That invariant is what makes `ByteToWord` free**, and it is the

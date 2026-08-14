@@ -173,6 +173,20 @@ fn native_run(src: &str, args: &[i64]) -> (i64, Vec<(String, Vec<i64>)>) {
     ));
 
     let name = format!("kel_chunk_{entry}");
+    // **Assert the ABI before calling through it.** A module that builds a
+    // composite or declares data gains three trailing pointer parameters, and
+    // calling such an entry through this two-argument signature is undefined
+    // behaviour that manifests as SIGSEGV inside JIT-compiled code, with no
+    // stack and no indication of which side is wrong. It cost a cycle here.
+    let declared = lm.get_function(&name).expect("entry fn").count_params() as usize;
+    assert_eq!(
+        declared,
+        args.len(),
+        "entry `{name}` takes {declared} parameters but this harness passes {}; \
+         it does not carry the trailing shared/private/region pointers, so use \
+         a harness that does",
+        args.len()
+    );
     let out = match args.len() {
         1 => {
             let f = unsafe { ee.get_function::<unsafe extern "C" fn(i64) -> i64>(&name) }
@@ -403,5 +417,99 @@ fn multibyte_utf8_survives() {
     assert_agrees(
         "use host::name\nfn main(a: Word, b: Word) -> Word { host::name(\"é日本\"); a + b }",
         &[1, 2],
+    );
+}
+
+/// A composite built from a SIGNATURED native's result.
+///
+/// # What this pins
+///
+/// The lowering used to push every native result at `Width::Unknown`, which is
+/// right when the shape is `Top` and needlessly lossy when the module actually
+/// declares one. A composite built from such a result was refused for a width
+/// the module knew — `rogue_dungen.kel` is the corpus case, and it goes from one
+/// refusal to zero once `use host::rng_range(Word, Word) -> Word` is declared.
+///
+/// Driven through its own harness because building a composite adds the three
+/// trailing pointers to the entry.
+#[test]
+fn a_composite_from_a_signatured_native_result_agrees_with_the_vm() {
+    let src = "use host::one(Word) -> Word\n\
+               fn main(a: Word, b: Word) -> Word { let t = (host::one(a), host::one(b)); t.0 + t.1 }";
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+
+    // Native side.
+    let _ = take_log();
+    std::hint::black_box(kel_native_host__one as *const ());
+    let entry = m.entry_point.expect("entry");
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    lower_module(&ctx, &lm, &m, LowerOptions::default()).expect("lower");
+    lm.verify().expect("llvm verify");
+    let ee = lm
+        .create_jit_execution_engine(OptimizationLevel::None)
+        .expect("jit");
+    let n_region: usize = m
+        .chunks
+        .iter()
+        .map(|c| keleusma_native::region::plan_chunk_region(c).bytes as usize)
+        .sum();
+    const CANARY: u64 = 0xDEAD_BEEF_FEED_FACE;
+    let mut region = vec![0u64; n_region.div_ceil(8) + 1];
+    let canary_at = n_region.div_ceil(8);
+    region[canary_at] = CANARY;
+    let mut shared = vec![0u8; 8];
+    let mut privs = vec![0u64; 1];
+    let sym = format!("kel_chunk_{entry}");
+    assert_eq!(
+        lm.get_function(&sym).expect("entry fn").count_params(),
+        5,
+        "expected two arguments plus the three trailing pointers"
+    );
+    let f = unsafe {
+        ee.get_function::<unsafe extern "C" fn(i64, i64, *mut u8, *mut u8, *mut u8) -> i64>(&sym)
+    }
+    .expect("symbol");
+    let nr = unsafe {
+        f.call(
+            5,
+            9,
+            shared.as_mut_ptr(),
+            privs.as_mut_ptr() as *mut u8,
+            region.as_mut_ptr() as *mut u8,
+        )
+    };
+    assert_eq!(
+        region[canary_at], CANARY,
+        "wrote past the {n_region}-byte region"
+    );
+    let nlog = take_log();
+
+    // VM side.
+    let (vr, vlog) = vm_run(src, &[5, 9]);
+    assert_eq!(vr, nr, "return value disagrees");
+    assert_eq!(vlog, nlog, "native call sequence disagrees");
+    assert!(
+        !vlog.is_empty(),
+        "no native calls logged; the test asserts nothing"
+    );
+}
+
+/// **Must not fire.** The same program with the signature removed must still be
+/// refused: without a declared shape the width is genuinely unknown, and
+/// guessing it would pack a composite at a width nothing established.
+#[test]
+fn the_same_composite_is_refused_when_the_native_is_unsignatured() {
+    let src = "use host::one\n\
+               fn main(a: Word, b: Word) -> Word { let t = (host::one(a), host::one(b)); t.0 + t.1 }";
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let ctx = Context::create();
+    let lm = ctx.create_module("kel");
+    let err = lower_module(&ctx, &lm, &m, LowerOptions::default())
+        .expect_err("an unsignatured native result has no width and must fail closed");
+    let text = format!("{err}");
+    assert!(
+        text.contains("unknown packed width") || text.contains("Diagnostic"),
+        "must refuse for the WIDTH, not incidentally: {text}"
     );
 }
