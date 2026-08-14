@@ -11015,3 +11015,121 @@ fn keleusma_produces_the_nested_constant_walk() {
         "no case produced a fresh-mode name, so the struct field rule is untested"
     );
 }
+
+const CMD_MI_JOIN: i64 = 167;
+
+/// THE JOIN: the producer's sequence fed into the interner and the emitters,
+/// byte-identical to the reference.
+///
+/// **Two chains were verified and unconnected.** The producer was checked
+/// against the Rust models `interner_input` and `preorder_13b`; the emitters
+/// were checked byte-identical against `encode_aux_body`. Nothing ran one into
+/// the other, so "the sequence is Keleusma's" and "the artifact is
+/// byte-identical" were true separately and unproven together. This asserts
+/// them together.
+///
+/// **The obstacle was one assumption.** `nm_offsets` computes each name's byte
+/// offset as a cumulative sum of the lengths in `nin`, which is right exactly
+/// when `bin` holds the names concatenated. The module blob interleaves a
+/// two-byte length prefix before every name, so the sum is wrong by two bytes
+/// per preceding name -- and the failure presents as a corrupt pool rather than
+/// as an offset convention. The producer now records each offset as it walks,
+/// and `intern_run_preoffset` consumes them. `intern_run` is untouched.
+///
+/// **One VM call, because shared data is re-seeded on every call.** `nin` and
+/// the offset table do not survive a return, so three calls would hand the
+/// interner an empty table.
+#[test]
+fn the_produced_sequence_emits_names_and_pool_byte_identically() {
+    use keleusma::wire_schema::kind;
+
+    const CASES: &[(&str, &str)] = &[
+        ("minimal", "fn main() -> Word { 42 }"),
+        (
+            "several-functions",
+            "fn alpha(a: Word) -> Word { a }\nfn beta(b: Word) -> Word { b }\n\
+             fn main() -> Word { alpha(1) + beta(2) }",
+        ),
+        ("one-enum", "enum E { A, B }\nfn main() -> Word { 42 }"),
+        (
+            "colliding-names",
+            "enum A { B, X }\nenum B { Y, Z }\nfn main() -> Word { 42 }",
+        ),
+        (
+            "with-strings",
+            "fn s() -> Text { \"hi\" }\nfn t() -> Text { \"there\" }\nfn main() -> Word { 42 }",
+        ),
+    ];
+
+    let mut vm = vm_for(WIRE_KEL);
+    let mut checked = 0;
+
+    for (label, src) in CASES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+        let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+        let specs = region_counts_for(&want);
+        let total = want.len();
+        assert!(
+            total < CAPACITY,
+            "{label}: {total} bytes does not fit one window; the staged path is a later slice"
+        );
+
+        // The directory first, so `dir_find` can locate NAMES and STRING_POOL.
+        let (_, art) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_BUILD_REGION_TABLE,
+                nregions: specs.len() as i64,
+                seed: &[],
+                regions: &specs,
+                fields: &[],
+                names: &[],
+                pool: &[],
+                args: [0, 0, 0, 0, 0],
+                read_len: total,
+            },
+        )
+        .expect("run");
+
+        // The join. The blob is the ONLY input describing the names: no
+        // lengths, no offsets, no sequence.
+        let blob = module_input_blob(&module);
+        let (ret, out) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_MI_JOIN,
+                nregions: specs.len() as i64,
+                seed: &art,
+                regions: &specs,
+                fields: &[],
+                names: &[],
+                pool: &blob,
+                args: [0, 0, 0, 0, 0],
+                read_len: total,
+            },
+        )
+        .expect("run");
+        assert!(ret >= 0, "{label}: the join refused with {ret}");
+
+        // Both regions, byte for byte, against the reference.
+        for k in [kind::NAMES, kind::STRING_POOL] {
+            let region = view.find_region(k).expect("region");
+            let base = region.byte_offset().expect("offset");
+            let stored = view.region_bytes(&region).expect("payload");
+            assert!(
+                !stored.is_empty(),
+                "{label}: region {k:#06x} is empty, so this case compares nothing"
+            );
+            assert_eq!(
+                &out[base..base + stored.len()],
+                stored,
+                "{label}: region {k:#06x} differs from the reference"
+            );
+        }
+        checked += 1;
+    }
+
+    assert_eq!(checked, CASES.len(), "not every case was checked");
+}
