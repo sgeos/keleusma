@@ -5716,6 +5716,30 @@ per query, which changes what that spike is for.
 
 An earlier note here said `rogue_ai_boss::main` "takes a tuple". True, and the less important
 half. The signature is:
+## Part B: the three rogue AI streams EXECUTE. 53 -> 56 of 58, refused 5 -> 2
+
+2026-08-14. The tail-walk widening is re-applied and now stands on a differential rather than
+on `module_refusals(...).is_empty()`.
+
+| | before | after |
+|---|---|---|
+| modules lowering | 53 | **56 of 58** |
+| refused | 5 | **2** — `rogue_dungen` (composite) and `codegen.kel` (stream) |
+
+### The widening, and why it was safe
+
+`degenerate_stream_yield`'s tail walk now admits `NewComposite(Flat { count, .. })` with
+`delta += 1 - count`. All three modules end
+`Yield ; PopN(1) ; Const(0) x3 ; NewComposite(Tuple, 3) ; PopN(1) ; Reset` — a trailing tuple
+built and thrown away. **Their net delta was ALREADY exactly `-1`**, the value the rule
+demands; only the allowed-op set rejected them. It writes scratch only, nothing reads it, and
+it cannot trap, call out, or touch the data segment.
+
+That is the same mistake the allowlist made once before, one construct further along.
+
+### `sret` was NOT needed for these, and the reason is worth keeping
+
+These modules take **and return** a composite:
 
 ```text
 loop main(input: (Word, Word, Word, Word, Word)) -> (Word, Word, Word)
@@ -5782,3 +5806,112 @@ construct, which is better attribution than the model ever gave.
 Two tests were deleted rather than fixed: `the_lowered_predicate_has_not_drifted` and
 `the_lowered_predicate_is_not_stale_pessimistic`. Both existed solely because the model
 existed. Keeping a control for a thing that is gone would be worse than deleting it.
+Both directions are an `i64` address, since that is how the emitter represents every composite
+operand. The returned body lives in the **region buffer the caller passed in**, which outlives
+the call — and each of these modules is a **single chunk**, so there is no caller/callee offset
+collision to resolve.
+
+**The `sret` convention is still the right general answer** and is recorded in
+`NATIVE_COMPOSITE_RETURN_ABI.md`; it is what a multi-chunk case needs, where a callee's region
+sites would overlap the caller's live body. It simply was not the blocker here. The earlier
+framing — "blocked on a caller-region decision" — was **over-cautious**: the decision is real
+and needed, but not for these three.
+
+### Verified by mutation, not by its own green
+
+Perturbing the flat field-read offset by one word makes **all three** diverge at **tick 0**.
+`src/lib.rs` was then restored and confirmed **byte-identical under `cmp`**.
+
+An earlier mutation attempt silently failed to apply and the suite passed — which proves
+nothing and looked exactly like success. The applied-mutation count is now checked before the
+result is read.
+
+### The oracle
+
+Per-tick **returned triple**, decoded on both sides, plus the shared data segment byte for
+byte. Inputs are asymmetric in every position, so a swapped or dropped element changes the
+answer. Three canaries — shared, private, region — bound the writes. A vacuity guard rejects
+an all-zero triple sequence.
+
+`codegen.kel` remains refused as the must-not-fire control: no `Yield` of its own and a
+`Reentrant` callee, which is delegated suspension and a soundness matter.
+
+### `rogue_dungen`: the emitter gap was real, and the module still refuses AS SHIPPED
+
+Traced to `random_in_room` op 40:
+
+```text
+  OP29 CallVerifiedNative(0, 2)   -> SetLocal(5)
+  OP36 CallVerifiedNative(0, 2)   -> SetLocal(6)
+  OP38 GetLocal(5) ; OP39 GetLocal(6)
+  OP40 NewComposite(Flat { kind: Tuple, count: 2, byte_size: 64 })
+```
+
+The tuple is built from two native results. The lowering pushed **every** native result at
+`Width::Unknown`, so `NewComposite` could not pack them.
+
+**Fixed: the emitter now consults `Module::native_return_shapes`.** `Scalar` maps to a
+width, `Flat` to a body length, and `Top`/absent/unmodelled still fall back to
+`Width::Unknown` — which is every unsignatured native, and that is all of them in the shipped
+corpus today.
+
+| source | refusals |
+|---|---|
+| as shipped (`use host::rng_range`) | **1**, correctly — the width is genuinely unknown |
+| with `use host::rng_range(Word, Word) -> Word` | **0** |
+
+**So `rogue_dungen` stays refused and that is the fail-closed path working.** Admitting it
+needs a SOURCE change — declaring the native's signature — to a shipped example. That is a
+reasonable change and arguably overdue, but it is example code and the operator's call, not a
+backend fix to make a count move.
+
+**Two guessing failures worth recording**, both caught rather than shipped. `use host::x -> Word`
+is not the syntax and the reference compiler rejected it; the real form is
+`use host::x(ArgTypes) -> Return`, found by grepping `examples/rtos/scripts/prelude.kel`
+rather than by a third guess. And the first version of the new differential segfaulted because
+a composite-building module gains three trailing pointers while the simple harness calls the
+entry as `fn(i64, i64)`. **`native_calls.rs`'s harness now asserts its parameter count**, so
+that mismatch fails loudly instead of crashing.
+
+---
+
+## `rogue_dungen` EXECUTES. 57 of 58, and the last refusal is deliberate.
+
+2026-08-14. **Refused: 1.** Only `codegen.kel` remains, and it must stay refused.
+
+### The fix was a SOURCE change, and calling it an ABI decision was over-cautious
+
+`random_in_room` builds a tuple from two `host::rng_range` results. The emitter now consults
+`native_return_shapes`, but an undeclared native records `WireShape::Top`, so the result has no
+width and `NewComposite` cannot pack it.
+
+The source now says `use host::rng_range(Word, Word) -> Word` — **the form
+`examples/rtos/scripts/prelude.kel` already uses throughout**. Declaring a type the native
+already has is not inventing an ABI, and an earlier note here treated it as though it were.
+That is the second time on this branch that a blocker was classified as an operator decision
+when measurement showed it was not; the first was the "composite entry parameter".
+
+**One line of shipped example source changed.** Nothing else about the example moves.
+
+### The oracle
+
+`rogue_dungen` is a dungeon generator, so its output IS the host call sequence — rooms,
+corridors, monsters, items — plus the map state left behind. Both sides compare the **call
+sequence**, the **return value**, and the **shared segment byte for byte**, on two floors.
+
+`rng_range` is a deterministic stub, which is what makes the two runs comparable at all. That
+is a property of the harness; the module sees an ordinary native either way.
+
+Vacuity guards: more than twenty host calls must be logged, and the shared segment must not be
+all zero. A generator that placed nothing would otherwise compare equal on two empty logs.
+
+### What is left, and why it is not a gap
+
+**`codegen.kel` alone**, on delegated suspension: no `Yield` of its own and a `Reentrant`
+callee, so `resume_after_enter` would write the ENTRY chunk's slot 0 while the native
+`kel_yield` return reached only the callee, and the next iteration would read a stale resume
+value. **Executing it requires a design for delegated suspension, not a predicate widening**,
+and it is the must-not-fire control in `rogue_ai_differential.rs`.
+
+The goal that drove this arc called it "a milestone rather than a count". The probe showed it
+is a soundness refusal — the one case in the five where the right action is to leave it alone.
