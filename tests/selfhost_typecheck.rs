@@ -374,81 +374,66 @@ fn call_rows(ast: &keleusma::ast::Program) -> CallRows {
     (c.arity, c.args)
 }
 
-/// Resolution codes for every name occurrence.
+/// Declared names and name occurrences, kept SEPARATE so the stage classifies.
 ///
-/// | code | meaning | verdict |
-/// |---|---|---|
-/// | 1 | a declared function, called as one | fine |
-/// | 2 | a local or parameter, read as a value | fine |
-/// | 3 | resolves to nothing | REJECT |
-/// | 4 | a local, and it is CALLED | REJECT |
+/// Returns (declared name indices, occurrences as (name index, is-local,
+/// is-call), whether the collector had to give up).
 ///
-/// **Code 4 is not a type error.** It is a V0.2.0 surface restriction and the
-/// one rejection of the fifteen carrying no `type error:` prefix, so it is a
-/// separate code rather than folded in with the others.
+/// **The host says "occurrence 4 names index 12 and it is a call". It does not
+/// say "that is an undefined function".** Deciding which combinations the
+/// language refuses is the stage's, and it is the whole content of this
+/// migration.
 ///
-/// The local set is approximated by every name a `let` or parameter binds
-/// ANYWHERE in the function, without block scoping. **That over-approximates
-/// what is in scope, and the direction is the safe one**: a name wrongly
-/// considered local is code 2 or 4 rather than 3, so the risk is a missed
-/// rejection rather than a false one, and a false rejection is the only kind
-/// that would narrow the language.
-fn resolution_codes(ast: &keleusma::ast::Program) -> Vec<i64> {
-    use keleusma::ast::{Expr, Pattern, Stmt};
+/// Names are interned into their own shared index space, for the reason the
+/// field sets are: the stage has no string type, and two spellings of one name
+/// must be one index or the comparison misses.
+type OccurrenceRows = (Vec<i64>, Vec<(i64, i64, i64)>, bool);
+
+fn occurrence_rows(ast: &keleusma::ast::Program) -> OccurrenceRows {
+    use keleusma::ast::{Expr, ImportItem, Pattern, Stmt, TypeDef};
     use keleusma::visitor::Visitor;
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
-    let funcs: BTreeSet<String> = ast.functions.iter().map(|f| f.name.clone()).collect();
+    let mut ids: BTreeMap<String, i64> = BTreeMap::new();
+    let intern = |n: &str, ids: &mut BTreeMap<String, i64>| -> i64 {
+        let next = ids.len() as i64;
+        *ids.entry(n.to_string()).or_insert(next)
+    };
 
-    // EVERY OTHER NAME A PROGRAM CAN BIND AT THE TOP LEVEL, not just functions.
-    //
-    // The first version of this collector knew only functions and locals, and
-    // it FALSELY REJECTED `shared data s { n: Word }` reading `s.n`: `s` is
-    // neither, so it resolved to nothing. **A well-typed control caught it**,
-    // which is the entire reason that side of the corpus exists -- a rejection
-    // corpus alone would have scored this as a success.
-    //
-    // Data blocks, type declarations and `use` imports are all names a body may
-    // legitimately mention, so all three are resolvable here.
-    let mut globals: BTreeSet<String> = BTreeSet::new();
+    let mut declared: Vec<i64> = Vec::new();
+    let mut wildcard = false;
+    for f in &ast.functions {
+        let i = intern(&f.name, &mut ids);
+        declared.push(i);
+    }
     for d in &ast.data_decls {
-        globals.insert(d.name.clone());
+        let i = intern(&d.name, &mut ids);
+        declared.push(i);
     }
     for t in &ast.types {
-        globals.insert(
-            match t {
-                keleusma::ast::TypeDef::Struct(d) => &d.name,
-                keleusma::ast::TypeDef::Enum(d) => &d.name,
-                keleusma::ast::TypeDef::Newtype(d) => &d.name,
-            }
-            .clone(),
-        );
+        let n = match t {
+            TypeDef::Struct(d) => &d.name,
+            TypeDef::Enum(d) => &d.name,
+            TypeDef::Newtype(d) => &d.name,
+        };
+        let i = intern(n, &mut ids);
+        declared.push(i);
     }
-    // A WILDCARD IMPORT MAKES NAME RESOLUTION UNDECIDABLE HERE, and the sound
-    // response is to stop deciding rather than to guess. `use audio::*` brings
-    // in names this collector cannot enumerate, so any unresolved name in such
-    // a program might be one of them; reporting code 3 would be a false
-    // rejection. The whole table is dropped instead.
-    let mut wildcard = false;
     for u in &ast.uses {
         match &u.import {
-            keleusma::ast::ImportItem::Name(n) => {
-                globals.insert(n.clone());
+            ImportItem::Name(n) => {
+                let i = intern(n, &mut ids);
+                declared.push(i);
             }
-            keleusma::ast::ImportItem::Wildcard => wildcard = true,
+            ImportItem::Wildcard => wildcard = true,
         }
     }
-    if wildcard {
-        return Vec::new();
-    }
 
-    struct Names<'a> {
-        funcs: &'a BTreeSet<String>,
-        globals: &'a BTreeSet<String>,
+    struct Occ {
         locals: BTreeSet<String>,
-        out: Vec<i64>,
+        seen: Vec<(String, i64, i64)>,
     }
-    impl Visitor for Names<'_> {
+    impl Visitor for Occ {
         fn visit_stmt(&mut self, stmt: &Stmt) {
             if let Stmt::Let(l) = stmt
                 && let Pattern::Variable(n, _) = &l.pattern
@@ -460,25 +445,12 @@ fn resolution_codes(ast: &keleusma::ast::Program) -> Vec<i64> {
         fn visit_expr(&mut self, expr: &Expr) {
             match expr {
                 Expr::Call { name, .. } => {
-                    self.out.push(if self.locals.contains(name) {
-                        4
-                    } else if self.funcs.contains(name) || self.globals.contains(name) {
-                        1
-                    } else {
-                        3
-                    });
+                    let local = i64::from(self.locals.contains(name));
+                    self.seen.push((name.clone(), local, 1));
                 }
                 Expr::Ident { name, .. } => {
-                    self.out.push(
-                        if self.locals.contains(name)
-                            || self.funcs.contains(name)
-                            || self.globals.contains(name)
-                        {
-                            2
-                        } else {
-                            3
-                        },
-                    );
+                    let local = i64::from(self.locals.contains(name));
+                    self.seen.push((name.clone(), local, 0));
                 }
                 _ => {}
             }
@@ -486,7 +458,7 @@ fn resolution_codes(ast: &keleusma::ast::Program) -> Vec<i64> {
         }
     }
 
-    let mut out = Vec::new();
+    let mut seen: Vec<(String, i64, i64)> = Vec::new();
     for f in &ast.functions {
         let mut locals: BTreeSet<String> = BTreeSet::new();
         for p in &f.params {
@@ -494,27 +466,28 @@ fn resolution_codes(ast: &keleusma::ast::Program) -> Vec<i64> {
                 locals.insert(n.clone());
             }
         }
-        // Bindings are collected before the walk that reads them, because a
-        // `let` later in the body still makes the name local to this
-        // approximation and the visitor would otherwise depend on statement
-        // order.
-        let mut pre = Names {
-            funcs: &funcs,
-            globals: &globals,
+        // Two passes: bindings first, because a `let` later in the body still
+        // makes the name local to this approximation and a one-pass walk would
+        // depend on statement order.
+        let mut pre = Occ {
             locals,
-            out: Vec::new(),
+            seen: Vec::new(),
         };
         pre.visit_block(&f.body);
-        let mut pass = Names {
-            funcs: &funcs,
-            globals: &globals,
+        let mut pass = Occ {
             locals: pre.locals,
-            out: Vec::new(),
+            seen: Vec::new(),
         };
         pass.visit_block(&f.body);
-        out.extend(pass.out);
+        seen.extend(pass.seen);
     }
-    out
+
+    let occurrences = seen
+        .into_iter()
+        .map(|(n, local, call)| (intern(&n, &mut ids), local, call))
+        .collect();
+
+    (declared, occurrences, wildcard)
 }
 
 /// Required-tag claims: (actual, required).
@@ -777,27 +750,29 @@ fn stage_accepts_program(pairs: &[(i64, i64)]) -> bool {
 struct StageInput<'a> {
     pairs: &'a [(i64, i64)],
     arity: &'a [(i64, i64)],
-    res: &'a [i64],
     claims: &'a [(i64, i64)],
     member: &'a [i64],
     dparams: &'a [i64],
     sites: &'a [(i64, i64)],
     sets: Option<&'a FieldSets>,
+    occ: Option<&'a OccurrenceRows>,
 }
 
 fn stage_verdict(input: &StageInput<'_>) -> bool {
     let StageInput {
         pairs,
         arity,
-        res,
         claims,
         member,
         dparams,
         sites,
         sets,
+        occ,
     } = *input;
     static EMPTY_SETS: FieldSets = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let sets = sets.unwrap_or(&EMPTY_SETS);
+    static EMPTY_OCC: OccurrenceRows = (Vec::new(), Vec::new(), false);
+    let occ = occ.unwrap_or(&EMPTY_OCC);
     let module = compile(&parse(&tokenize(TYPES_KEL).expect("lex")).expect("parse"))
         .expect("verify_types.kel compiles");
     let need = required_persistent_capacity_for(&module);
@@ -866,28 +841,9 @@ fn stage_verdict(input: &StageInput<'_>) -> bool {
         )
         .expect("cact");
     }
-    const RN_SLOT: usize = CACT_SLOT + 128;
-    const RES_SLOT: usize = RN_SLOT + 1;
-    assert!(
-        res.len() <= 256,
-        "the resolution table holds 256 rows and this program needs {}",
-        res.len()
-    );
-    vm.set_shared(
-        &mut shared,
-        RN_SLOT,
-        keleusma::bytecode::Value::Int(res.len() as i64),
-    )
-    .expect("rn");
-    for (i, r) in res.iter().enumerate() {
-        vm.set_shared(
-            &mut shared,
-            RES_SLOT + i,
-            keleusma::bytecode::Value::Int(*r),
-        )
-        .expect("res");
-    }
-    const QN_SLOT: usize = RES_SLOT + 256;
+    // The pre-classified resolution channel is gone from the stage, so its
+    // slots are gone from here too. The next block starts where it used to.
+    const QN_SLOT: usize = CACT_SLOT + 128;
     const QACT_SLOT: usize = QN_SLOT + 1;
     const QREQ_SLOT: usize = QACT_SLOT + 256;
     assert!(
@@ -1041,6 +997,69 @@ fn stage_verdict(input: &StageInput<'_>) -> bool {
         )
         .expect("aname");
     }
+    // `hit` is a scratch WORD sitting between the field-set tables and these,
+    // so it must be stepped over. Naming it rather than folding a +1 into the
+    // next constant: an unexplained +1 in a slot chain is indistinguishable
+    // from an off-by-one, and this chain has already produced one.
+    const HIT_SLOT: usize = ANAME_SLOT + 256;
+    const DNN_SLOT: usize = HIT_SLOT + 1;
+    const DNAME_SLOT: usize = DNN_SLOT + 1;
+    const ON_SLOT: usize = DNAME_SLOT + 128;
+    const ONAME_SLOT: usize = ON_SLOT + 1;
+    const OLOCAL_SLOT: usize = ONAME_SLOT + 256;
+    const OCALL_SLOT: usize = OLOCAL_SLOT + 256;
+    const OSKIP_SLOT: usize = OCALL_SLOT + 256;
+    let (declared, occurrences, wildcard) = occ;
+    assert!(
+        declared.len() <= 128 && occurrences.len() <= 256,
+        "occurrence tables overflow"
+    );
+    vm.set_shared(
+        &mut shared,
+        DNN_SLOT,
+        keleusma::bytecode::Value::Int(declared.len() as i64),
+    )
+    .expect("dnn");
+    for (i, d) in declared.iter().enumerate() {
+        vm.set_shared(
+            &mut shared,
+            DNAME_SLOT + i,
+            keleusma::bytecode::Value::Int(*d),
+        )
+        .expect("dname");
+    }
+    vm.set_shared(
+        &mut shared,
+        ON_SLOT,
+        keleusma::bytecode::Value::Int(occurrences.len() as i64),
+    )
+    .expect("on");
+    for (i, (n, l, c)) in occurrences.iter().enumerate() {
+        vm.set_shared(
+            &mut shared,
+            ONAME_SLOT + i,
+            keleusma::bytecode::Value::Int(*n),
+        )
+        .expect("oname");
+        vm.set_shared(
+            &mut shared,
+            OLOCAL_SLOT + i,
+            keleusma::bytecode::Value::Int(*l),
+        )
+        .expect("olocal");
+        vm.set_shared(
+            &mut shared,
+            OCALL_SLOT + i,
+            keleusma::bytecode::Value::Int(*c),
+        )
+        .expect("ocall");
+    }
+    vm.set_shared(
+        &mut shared,
+        OSKIP_SLOT,
+        keleusma::bytecode::Value::Int(i64::from(*wildcard)),
+    )
+    .expect("oskip");
     let out = vm
         .call_with_shared(&mut shared, &[keleusma::bytecode::Value::Int(0)])
         .expect("run");
@@ -1292,7 +1311,7 @@ fn slice_three_rejects_unresolved_names_and_called_locals() {
         let stage = stage_verdict(&StageInput {
             pairs: &pairs,
             arity: &arity,
-            res: &resolution_codes(&ast),
+            occ: Some(&occurrence_rows(&ast)),
             ..Default::default()
         });
         if IN_SCOPE.contains(label) {
@@ -1334,7 +1353,7 @@ fn slice_three_rejects_unresolved_names_and_called_locals() {
             stage_verdict(&StageInput {
                 pairs: &pairs,
                 arity: &arity,
-                res: &resolution_codes(&ast),
+                occ: Some(&occurrence_rows(&ast)),
                 ..Default::default()
             }),
             "{label}: slice 3 REJECTED a well-typed program, which narrows the language"
@@ -1380,7 +1399,7 @@ fn slices_four_and_five_reject_conditions_and_structural_mismatches() {
         stage_verdict(&StageInput {
             pairs: &pairs,
             arity: &arity,
-            res: &resolution_codes(&ast),
+            occ: Some(&occurrence_rows(&ast)),
             claims: &tag_claims(&ast),
             ..Default::default()
         })
@@ -1463,11 +1482,11 @@ fn the_stage_agrees_with_the_reference_on_the_whole_corpus() {
         stage_verdict(&StageInput {
             pairs: &pairs,
             arity: &arity,
-            res: &resolution_codes(&ast),
             claims: &claims,
             dparams: &dparams,
             sites: &sites,
             sets: Some(&field_sets(&ast)),
+            occ: Some(&occurrence_rows(&ast)),
             ..Default::default()
         })
     };
