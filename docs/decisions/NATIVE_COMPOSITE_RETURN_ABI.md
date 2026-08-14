@@ -167,3 +167,36 @@ The measurement clears the COST. It says nothing about the implementation being 
 `composite_return_aliasing.rs` and `corpus_differential.rs` are for. And it does not license
 widening the convention: one `sret` pointer still describes one contiguous body, and a case
 needing split storage remains an operator decision.
+
+## The implementation's shape, discovered while starting it
+
+Larger than the convention makes it sound, and the reason is worth having written down before
+anyone budgets for it.
+
+**`plan_chunk_region(chunk: &Chunk)` cannot see callee return shapes.** It takes a chunk, and
+the return slot must be sized from `Module::signatures[callee].ret`. It needs a module-aware
+variant, and the existing per-chunk one has seven tests against it.
+
+**The hidden pointer changes the SIGNATURE of every composite-returning chunk**, and that
+ripples:
+
+| touched | why |
+|---|---|
+| `trailing_ptrs` | today all-three-or-none; the return slot is a fourth, present only on some chunks |
+| the `Op::Call` arity check | compares `arg_count` against `count_params() - trailing_ptrs()` |
+| `lower_module`'s declaration loop | builds each `kel_chunk_N` signature |
+| **every harness** | `corpus_differential.rs`, `rogue_ai_differential.rs`, `module_differential.rs`, `rogue_dungen_differential.rs` and `native_calls.rs` all assert `count_params()` before calling |
+
+Those assertions are a feature, not an obstacle: they are why a signature change fails loudly
+instead of segfaulting. But they must all move together, and they are the reason this is not a
+one-sitting change.
+
+**A tempting substitute to refuse.** The caller could leave signatures alone and `memcpy` the
+returned body into a per-site slot immediately after the call. That fixes the aliasing and
+costs a copy per call where `sret` costs none. It is a different convention from the one
+authorised, and the goal's instruction not to quietly substitute applies to it as much as to
+the bump pointer. If the copy is ever wanted, it should be chosen, not slid in.
+
+**Status: step one complete and favourable (4.9%), implementation NOT started.** The pinned
+defect stands, `10_multbyte.kel` remains in `KNOWN_DISAGREEMENTS`, and nothing has been widened
+or allowlisted to make anything pass.
