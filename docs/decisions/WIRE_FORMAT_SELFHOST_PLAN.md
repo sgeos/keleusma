@@ -1138,6 +1138,25 @@ carrying an interner's dedup state across hundreds of batches with a pool far la
 which is a genuine architecture problem. Staging for 627 means two batches with the emitted pool
 still resident. **The first design would have been built and then not needed.**
 
+**The slot contributor's ORDER and SPELLING, measured rather than assumed.** For
+`shared data s { alpha: Word, beta: Word }` with functions `zulu` and `main`, the reference `NAMES`
+region is:
+
+```
+main, zulu, s.alpha, s.beta
+```
+
+So slot names **append after the chunk names**, and each is spelled `<block>.<field>` rather than the
+bare field name. Both facts are needed to extend the producer and neither is guessable from the
+declaration: a producer emitting `alpha` in declaration order would be wrong twice over, and the
+first name would still dedup against nothing and look plausible.
+
+**The remaining ceiling, stated precisely.** `nin` holds two words per name in a 1024-word array, so
+512 names is the hard limit before any staging and `parse` needs 627. Two batches suffice if the host
+carries `bout` and the running counts between calls and re-seeds them, because shared data is
+re-seeded on every call. The emitted pool stays resident: at roughly 6 KB it fits `bout`'s 8192
+bytes, which is what makes two batches enough and is the fact the old 395,804 framing hid.
+
 **The pre-run-length-encoding state is where the large figure came from**, when `SHARED_LAYOUT` held
 one record per array element and `lexer.kel` alone expanded to roughly 76,000 shared slots. Run-length
 encoding took `SHARED_LAYOUT` to between one and nine records per stage. The figure outlived the
