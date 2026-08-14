@@ -10134,12 +10134,18 @@ fn a_misplaced_batch_fails_the_whole_artifact_comparison() {
          would prove nothing about the sabotage"
     );
 
-    let previous = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
+    // THE EXPECTED PANIC BELOW PRINTS, AND THAT IS DELIBERATE.
+    //
+    // Silencing it means `std::panic::set_hook`, which is GLOBAL TO THE PROCESS.
+    // `cargo test` runs this binary's tests as threads in one process, so for as
+    // long as the sabotaged assembly runs, any other test that panicked would
+    // have its message swallowed. It would still be recorded as failed, with the
+    // one thing a reader needs to diagnose it removed. Trading a genuinely
+    // failing test's evidence for tidier output on a passing one is the wrong
+    // way round, so the noise stays.
     let sabotaged = catch_unwind(AssertUnwindSafe(|| {
         assemble_whole_artifact("verify_structural", SRC, Sabotage::MisplaceOneBatch)
     }));
-    std::panic::set_hook(previous);
 
     let Err(payload) = sabotaged else {
         panic!(
