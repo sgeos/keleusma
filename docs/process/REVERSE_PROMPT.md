@@ -10,133 +10,109 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-13 (session 42)
+**Date**: 2026-08-13 (session 43)
 
 ## Where things stand
 
 | | |
 |---|---|
-| `v0.2.3` | `f1fc5ffc`, pushed, tree clean, in sync with origin |
-| PRs merged this session | **#42, #43, #44, #46, #47, #50, #51, #53** — each 22 of 22 green, merged at the commit CI ran |
+| `v0.2.3` | `33103cab`, pushed, tree clean, in sync with origin |
+| PRs merged this session | **#54**, 22 of 22 green, merged at the commit CI ran |
 | Open PRs of this line | **none** |
-| Branches | 73 merged branches pruned; what remains is the other line's, a worktree, and a backup |
-| Boundary counts | **79 Ok / 4 Gap / 1 RefRejects, 84 cases** — recounted from the table with comments stripped, matches the recorded figure |
+| Boundary counts | **79 Ok / 4 Gap / 1 RefRejects, 84 cases** — recounted, matches |
+| `selfhost_wire` | **151 tests**, up two |
 
-**The parity-plane arc is complete and `docs/decisions/ECC_SIGNATURE_ORDERING.md` holds nothing
-open.** Self-hosted byte-identity coverage reached ten of ten stages. Artifact sizes fell again:
-`codegen`'s auxiliary body 154,880 to **111,864** bytes, `lexer`'s to **7,456**.
+## The ranked item was already done, and reading first is what found that
 
-## Two conclusions that measurement overturned after I had written them down
+The handoff ranked "a second stage through the whole-artifact capstone under the new encoding"
+first. **It had already landed** in `45a8870f`, inside the run-length-encoding pull request, which
+updated the corpus to three stages and lowered the size-span control from 4x to 2x in the same
+change. Confirming that cost two commands. Starting the work would have cost an increment and
+produced a diff that reverted nothing and added nothing.
 
-**The ordering decision was wrong in its first form.** I wrote that verify-then-scrub is a hole
-outright. Writing the soundness condition as an equation showed it is not: an adversary without the
-key cannot produce a verifying artifact other than the original, and scrubbing an undamaged artifact
-is the identity, so **at a single instant the order is safe**. The real defect is that verification is
-a statement about a moment. A system verifies at load and scrubs later, and the assumption that order
-needs is that no fault occurs in the window, **which is exactly what the parity plane exists because
-is false**. The corrected argument is stronger and it connects the problem to
-time-of-check-to-time-of-use, which the first version had no reason to reach for.
+What was actually open is the thing the test says about itself.
 
-**A sampled measurement reported 100 percent where the truth is 56.08 percent.** Six hand-chosen
-triple-bit faults all mis-corrected. Enumerating all 41,664 gives 23,364, and the six sat inside byte
-0 where the rate genuinely is 100 percent. **A biased sample presented as a measurement**, wrong by
-nearly a factor of two, over a space small enough that sampling was never justified. The enumeration
-also produced the result the design turns on: **5,133 of 635,376 four-bit patterns are reported
-CLEAN**, because the error pattern is itself a codeword. A clean report is not an integrity check, and
-`EccReport::is_clean` now says so.
+## A corpus that cannot erode
 
-## A design correction that came from the operator, not from me
+**The capstone's qualifying corpus has shrunk three times, never from attrition.** Every encoding
+improvement takes another real stage under the 65,536-byte window, and a stage whose body fits one
+window exercises nothing about composition. Six became four, then three.
 
-I had concluded the fix for the ordering problem was a mutable **load path**. That would have pushed
-`&mut` into the common path and cost the zero-copy and worst-case-memory properties the reader exists
-for. **Report and scrub as separate verbs is the right shape**: report already existed and only the
-mutating counterpart was missing. `scrub` returns counts rather than an artifact, so there is nothing
-to load without re-authenticating, and `&mut [u8]` makes the unsound order unrepresentable wherever
-the reader borrows the buffer. Scheduling is the host's by operator decision.
+**A test whose corpus is destroyed by its own project's success will be weakened to keep it green**,
+and the pressure arrives while landing an improvement, which is exactly when lowering a threshold
+looks reasonable. The fourth case is synthetic and **sized against the encoder's measured output**,
+so an encoding win makes it emit more functions rather than pushing it under the window. It sits
+beside the real stages, is excluded from the size-span figures, and **the 2x threshold is
+unchanged**.
 
-## The mistake I made four times in one day
+Measured: 384 functions, 143,320 bytes, 2.19x the window, eleven regions, five batched.
 
-**I approximated the gate's invocation instead of reproducing it**, and each narrowing hid a different
-failure:
+## Two guards that would have shipped unexercised
 
-| what I ran | what it missed |
-|---|---|
-| default features | a `compile`-feature gate miss, failing `--no-default-features` |
-| `--features signatures` | a `signatures`-gate miss, failing the **default** build |
-| `cargo doc` default features | a rustdoc error visible only under the docs.rs feature set |
-| `clippy --tests --all-features` | a `collapsible_if` visible only under `--all-targets` |
+**Every assertion in the assembler other than the byte comparison is a count** — regions placed,
+batches run, calls returning success. A batch written to the wrong offset changes none of them, so
+without a planted defect the capstone's passing is consistent with an assembler that places bytes
+anywhere. The defect is planted through the real assembler rather than a copy.
 
-All four were caught by the pre-push gate or CI, so nothing unsound shipped. **The local signal was
-worth less than it appeared each time**, which is the same shape as the `$?`-after-a-pipeline defect
-recorded on 2026-08-12.
+**The growth loop never runs today.** The first attempt already clears twice the window, so the one
+mechanism the increment exists to install would first execute on the day a future encoding win made
+it necessary. A separate case asks for a target the first attempt cannot meet.
 
-## Two smaller findings worth not rediscovering
+## Three corrections to my own work, caught before merge
 
-**A reimplementation hid an interface mismatch.** The ordering test carried its own copy of a scrub,
-exercising a private reimplementation and leaving the shipped verb untested. Wiring it to the real one
-failed at once: `keleusma_wire::scrub` takes a wire **container** and the test handed it a **framed**
-module. The parse failed on the magic, the scrub returned `None`, and nothing was repaired, silently.
-`scrub_module_bytes` exists so no host repeats it.
+**A control that fires is not yet a control that fired for the right reason.** The must-fire case
+passed the moment it was written, by catching a panic. But the assembler's own guard, which reports
+that the sabotage could not be planted, panics too and arrives as the same `Err`. Read naively it
+would report the detector working at the moment nothing had been broken. It now asserts which panic
+fired.
 
-**`git push origin --delete` runs the full pre-push test tier, once per branch.** Deleting 32 refs in
-a loop timed out after ten minutes having spent all of it running tests in order to delete pointers.
-One push naming every branch, or `gh api -X DELETE .../git/refs/heads/<b>`, avoids it.
+**A bound on a loop is not a bound on the damage.** The growth cap was first twelve doublings, which
+terminates and is useless: doubling makes the last attempt the expensive one, so attempt twelve
+compiles 786,432 functions and a broken assumption becomes an hours-long hang rather than a legible
+failure. Six allows a 32x collapse in bytes per function and keeps the worst source near three
+megabytes.
+
+**`std::panic::set_hook` is global to the process.** The must-fire case used it to silence its own
+expected panic. `cargo test` runs a binary's tests as threads in one process, so any other test that
+panicked in that window would have its message swallowed while still being recorded as failed. That
+trades a failing test's evidence for tidier output on a passing one. **nextest would never have shown
+this**, because it gives each test its own process, and CI's `Test` job runs nextest; the hazard is
+live under `cargo test`, which `scripts/release-gate.sh` runs.
 
 ## Concerns raised, not acted on
 
-- **`MAX_PARSE_DEPTH` does not do its stated job on a small stack.** Unchanged and still yours. The
-  constant is 24 (`src/parser.rs:98`); on a 2 MB thread the stack blows before the guard fires, so an
-  embedder parsing untrusted source on a small-stack thread gets a SIGABRT rather than a `ParseError`.
-  An availability failure at the trust boundary the guard exists to hold.
-- **`CHANGELOG.md:340` states the checked-arithmetic push order wrongly and describes a published
-  release.** `TASKLOG.md:320,331` likewise. Left unchanged: rewriting already-published text is a
-  separate call from correcting a live specification.
-- **A local gate quiet for 68 hours is still shown in the status line.** That is `gate-status.sh`'s
-  call and it is honestly labelled; suppressing it would change the other session's semantics, so it
-  is raised in their mailbox instead.
+- **`MAX_PARSE_DEPTH` does not do its stated job on a small stack.** Unchanged and still yours.
+- **`CHANGELOG.md:340` states the checked-arithmetic push order wrongly** and describes a published
+  release. `TASKLOG.md:320,331` likewise.
 
 ## Open, held by the operator
 
 - **Publication remains HELD.** Nothing is published.
-- **`v0.2.3-prerebase-backup`**, 309 commits ahead, local only. A deliberate safety copy of pre-rebase
-  history, not deleted and not to be without being asked.
-- **`MAX_PARSE_DEPTH` on small stacks**, above.
+- **`v0.2.3-prerebase-backup`**, local only, a deliberate pre-rebase safety copy.
 - **MSRV**: CI checks 1.85 for `keleusma-arena` and 1.88 for `keleusma`.
 
 ## Next intended step
 
-The ECC programme is finished, so the next increment is a genuine choice among bounded roadmap tasks
-rather than a continuation. In order of my preference:
-
-1. **A second stage through the whole-artifact capstone under the new encoding.** Artifacts shrank
-   twice this session and the capstone corpus lost two stages to that; only three still exceed one
-   window. Worth confirming the composition still holds where it can.
-2. **The Order-1 type checker**, scoped in
-   [`../decisions/TYPECHECK_SELFHOST_PLAN.md`](../decisions/TYPECHECK_SELFHOST_PLAN.md) at about 15
-   rejection shapes, sized by execution. The oracle is verdict agreement, not message agreement.
-3. **Load-time ECC policy**, which is now purely a question of whether a host should scrub and on what
-   schedule. The verbs make both answers expressible and nothing forces either.
+1. **The Order-1 type checker**, scoped in
+   [`../decisions/TYPECHECK_SELFHOST_PLAN.md`](../decisions/TYPECHECK_SELFHOST_PLAN.md) at about
+   fifteen rejection shapes. **The oracle is verdict agreement, not message agreement.**
+2. **Load-time ECC policy**, now only "should a host scrub, and when". The order is fixed and
+   recorded; only scheduling is open.
 
 ## Parallel development
 
-`v0.3.0` carries native code generation on the same CI-gated workflow. Their mailbox is
+`v0.3.0` carries native code generation. Their mailbox is
 `git show origin/v0.3.0:docs/process/handoffs/v0.3.0.md`; mine is
-[`handoffs/v0.2.3.md`](./handoffs/v0.2.3.md). Poll at increment boundaries, since there is no wake.
-**Tell the two lines apart by BASE BRANCH, not by author**: we share one GitHub account.
-
-Three notes are waiting for them: the `SharedSlotRecord` move with its accessor split, the status-line
-change with the reasoning for not touching `gate-status.sh`, and the branch prune with what remains
-that is theirs.
+[`handoffs/v0.2.3.md`](./handoffs/v0.2.3.md). Poll at increment boundaries. **Tell the two lines
+apart by BASE BRANCH, not by author.** Their prune notes are answered; nothing of theirs is
+outstanding on my side.
 
 ## Method rules this session paid for
 
-- **Reproduce the gate's invocation, do not approximate it.** Four defects, four narrowings, one day.
-- **Enumerate a small space instead of sampling it.** 41,664 triple-fault patterns, and the sample was
-  wrong by nearly a factor of two.
-- **Write the condition as an equation before deciding it holds.** That is what showed the first
-  ordering conclusion was wrong.
-- **Call the shipped API from the test, not a copy of it.** A reimplementation hid a real interface
-  mismatch.
-- **A defect report names where a reader happened to look, not where the defect is.** One reported
-  site was eight.
-- **Do not truncate the output of a run whose result you intend to quote.** Done twice today.
+- **Read the test and the history before starting the increment they describe.** The ranked item was
+  already merged.
+- **Assert WHICH failure fired**, not merely that one did. Two different panics meant opposite
+  things.
+- **A bound on a loop is not a bound on the damage.** Doubling puts the cost in the last attempt.
+- **A global hook in a test is a hazard to every other test in the process**, and the runner that
+  hides it is not the runner that gates the release.

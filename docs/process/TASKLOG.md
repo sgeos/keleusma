@@ -105,6 +105,17 @@ Current sprint source of truth.
 - **Autonomy-loop increment 2 (enum-in-struct equality) is COMPLETE and merged to `v0.2.3`.** The loop selected it without an operator prompt (context-switching-avoidance policy). Four commits on `feat/selfhost-nested-eq`: the `sd_fenum` tracker (A), then the coupled parse detector / reconstruct `seb` assembly / codegen variant-dispatch inner loop (B/C/D). No opcode, record/node kind, or `BYTECODE_VERSION` change; `EXPECTED_SELF_COMPILE` 68 -> 69 (a factored `push_nested_enum_loop`). Byte-identical across the blast-radius suite and the FULL `scripts/release-gate.sh` (feature matrix, docs, subproject) GREEN. The edit-level plan is retained at [`docs/decisions/ENUM_IN_STRUCT_PLAN.md`](../decisions/ENUM_IN_STRUCT_PLAN.md).
 - **Process-audit closure and item 7 prep (2026-07-24/25).** The 2026-07-22 audit is fully addressed: item 3's memoization is implemented in the complete-key form (a gate-inert cache; the heavy self-host tests are near-instant on a warm fast lane), and item 7's autonomy substrate is written ([`AUTONOMOUS_IMPLEMENTATION_LOOP.md`](./AUTONOMOUS_IMPLEMENTATION_LOOP.md)) alongside the parallel-development infrastructure. The nested-composite-equality frontier was re-scouted post-P11 (in [`DESIGN_JOURNAL.md`](./DESIGN_JOURNAL.md)): **tuple-of-struct** is the confirmed smallest-bounded next increment (step 1 `tup_estruct` merged; no new opcode needed, the nested extract reuses op 53). Both halves of item 7 are prep-complete, pending only the operator's go.
 
+**The whole-artifact capstone now carries a synthetic case (2026-08-13, PR #54).** Its qualifying
+corpus of real stages had shrunk three times, each time because an encoding improvement took another
+stage under the 65,536-byte window, and the size-span control had already been lowered once from 4x
+to 2x. A fourth case is generated and **sized against the encoder's measured output** rather than
+inherited from it, so an encoding win makes it emit more functions instead of pushing it under the
+window. It sits beside the three real stages, is excluded from the size-span figures, and the 2x
+threshold is unchanged. Two controls were added with it: a mis-placed batch must fail the byte
+comparison (planted through the real assembler, asserting *which* panic fired), and the size-growth
+loop must actually grow (the first attempt already clears the target, so the mechanism would
+otherwise ship unexercised). `selfhost_wire` is at 151 tests.
+
 ## Active Milestone
 
 **Self-hosting language-surface phase, COMPLETED and merged into `v0.2.3`.** The fourteen byte-identical increments (85th through 98th) and the P11 Option E encoding-capacity change are done and merged. The live state is summarized under **Current Phase** above. The full increment-by-increment reasoning, the byte-identity findings, the gotchas, and the prior-session status paragraphs (sessions 3 through 28) live in the append-only [`DESIGN_JOURNAL.md`](./DESIGN_JOURNAL.md), per the channel-discipline split (process-audit worklist item 5). This section is now a bounded pointer rather than an accreting log. Increment reasoning is appended to the journal and current state goes under Current Phase.

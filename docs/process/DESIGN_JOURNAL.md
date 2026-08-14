@@ -13,6 +13,74 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**A CORPUS THAT CANNOT ERODE, AND TWO GUARDS THAT WOULD HAVE SHIPPED UNEXERCISED (2026-08-13).**
+151 selfhost_wire tests, up two. The whole-artifact capstone gains a fourth case that is synthetic
+and sized against the encoder's measured output.
+
+**The increment was ranked for one reason and turned out to be needed for another.** The handoff
+ranked "a second stage through the capstone under the new encoding" first. Reading the test and the
+history before starting showed that work had already landed in `45a8870f`, inside the run-length
+encoding pull request, which updated the corpus to three stages and lowered the size-span control
+from 4x to 2x in the same change. **The ranked item was already discharged.** What was actually open
+was the thing the test says about itself: its qualifying corpus has shrunk three times, never from
+attrition, and always because the encoding improved.
+
+**A test whose corpus is destroyed by its own project's success will be weakened to keep it green.**
+The pressure arrives while landing an improvement, which is exactly the moment a lowered threshold
+looks reasonable and a reviewer is thinking about something else. The fix is to stop the corpus
+depending on what the compiler happens to emit. `synthetic_source_over` grows a generated stage until
+the encoder's own output clears a target, so an encoding win makes it emit more functions rather than
+pushing it under the window.
+
+**It sits beside the real stages and is excluded from the size-span figures.** Real artifacts are what
+make the capstone trustworthy, because they are the bytes the compiler actually emits. A synthetic
+size folded into the span control would make that control report on its own parameter.
+
+**Both guards this change installs would have shipped unexercised, and each needed a separate case.**
+
+The first is the byte comparison. **Every other assertion in the assembler is a count** -- regions
+placed, batches run, calls returning success -- and a batch written to the wrong offset changes none
+of them. Without a planted defect, the capstone's passing is consistent with an assembler that places
+bytes anywhere at all. The defect is planted through the real assembler rather than a copy, because
+this suite has already paid for the other approach once.
+
+The second is the growth loop itself. The first attempt of 384 functions already clears twice the
+window, so the doubling path never runs and **the one mechanism the increment exists to install would
+first execute on the day a future encoding win made it necessary**, which is the worst moment to
+discover it wrong. A separate case asks for a target the first attempt cannot meet.
+
+**A control that fires is not yet a control that fired for the right reason.** The must-fire case
+passed the moment it was written, by catching a panic. But the assembler's own guard, which reports
+that the sabotage could not be planted, panics too and arrives as the same `Err`. Read naively, the
+case would report the detector working at the exact moment nothing had been broken. It now asserts
+which panic fired.
+
+**A bound on a loop is not a bound on the damage.** The growth cap was first written as twelve
+doublings, which terminates and is useless: doubling makes the last attempt the expensive one, so
+attempt twelve compiles 786,432 functions and a broken assumption becomes an hours-long hang instead
+of a legible failure. Six attempts allow a 32x collapse in bytes per function, far beyond anything an
+encoding change has produced here, and keep the worst compiled source near three megabytes.
+
+**The compiler rejected the first synthetic source, correctly.** A private data block that is never
+mutated must be `const data`. That is the language holding a line rather than an obstacle, and the
+shared block plus one function that touches it is what survives the check.
+
+**A tidiness reflex in my own test was destroying evidence, and the runner that hides it is the one
+CI uses.** The must-fire case silenced its expected panic with `std::panic::set_hook`, which is
+GLOBAL TO THE PROCESS. `cargo test` runs a binary's tests as threads in one process, so for the
+seconds the sabotaged assembly runs, any other test that panicked would have its message swallowed
+while still being recorded as failed -- **a failing test stripped of the one thing needed to diagnose
+it, to keep a passing test's output tidy**. nextest gives each test its own process and would never
+have surfaced this, and CI's `Test` job runs nextest; the hazard is live under `cargo test`, which is
+what `scripts/release-gate.sh` runs. The expected panic now prints, with a comment saying the noise
+is deliberate so it is not tidied away again.
+
+Measured: 384 functions, 143,320 bytes, 2.19x the window, eleven regions, five of them batched. The
+capstone went from 9.58s to 12.73s on a quiet machine. The 2x threshold is unchanged and the three
+real stages are untouched.
+
+---
+
 **THE PARITY PLANE ARC, AND A DECISION THAT CHANGED SHAPE TWICE UNDER MEASUREMENT (2026-08-13).**
 Six merges: `SHARED_LAYOUT` run-length encoding, byte-identity coverage for the five `verify_*.kel`
 stages, the SECDED plane emitted and verified end to end, the plane-inside-signature property pinned,
