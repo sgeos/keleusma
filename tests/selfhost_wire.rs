@@ -11133,3 +11133,80 @@ fn the_produced_sequence_emits_names_and_pool_byte_identically() {
 
     assert_eq!(checked, CASES.len(), "not every case was checked");
 }
+
+/// THE DRIVER emits through `wire.kel`, which is what makes its place in the
+/// stage table honest.
+///
+/// Until this existed the driver ran pipeline stages and produced no auxiliary
+/// body at all, so an entry in `read_stage` would have recorded a capability
+/// the system did not have. That was checked and written down before it was
+/// added, and the entry follows the capability rather than announcing it.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_driver_emits_names_and_pool_through_wire_kel() {
+    use keleusma::wire_schema::kind;
+
+    let src = "fn alpha(a: Word) -> Word { a }\nfn main() -> Word { alpha(1) }";
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+
+    // The directory, built the same way the harness builds it, so the driver
+    // call has a directory to locate regions in.
+    let specs = region_counts_for(&want);
+    let mut vm = vm_for(WIRE_KEL);
+    let (_, directory) = run_call(
+        &mut vm,
+        &Call {
+            cmd: CMD_BUILD_REGION_TABLE,
+            nregions: specs.len() as i64,
+            seed: &[],
+            regions: &specs,
+            fields: &[],
+            names: &[],
+            pool: &[],
+            args: [0, 0, 0, 0, 0],
+            read_len: want.len(),
+        },
+    )
+    .expect("run");
+
+    let blob = module_input_blob(&module);
+    let names = interner_input(&module).len();
+    let out =
+        keleusma::selfhost::wire_names_via_kel(&module, &blob, &directory, names, specs.len())
+            .expect("the driver emits");
+
+    for k in [kind::NAMES, kind::STRING_POOL] {
+        let region = view.find_region(k).expect("region");
+        let base = region.byte_offset().expect("offset");
+        let stored = view.region_bytes(&region).expect("payload");
+        assert!(!stored.is_empty(), "region {k:#06x} is empty");
+        assert_eq!(
+            &out[base..base + stored.len()],
+            stored,
+            "region {k:#06x} differs from the reference"
+        );
+    }
+}
+
+/// The bound is REFUSED, not truncated.
+///
+/// A stage's 395,804 names do not fit the interner's per-call cap, and a silent
+/// partial artifact would be far worse than a refusal because it would be
+/// byte-identical for a prefix. Residency staging is a separate increment with
+/// a measurement in front of it.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_driver_refuses_more_names_than_one_call_can_intern() {
+    let module =
+        compile(&parse(&tokenize("fn main() -> Word { 42 }").expect("lex")).expect("parse"))
+            .expect("compile");
+    let err = keleusma::selfhost::wire_names_via_kel(&module, &[], &[], 257, 0)
+        .expect_err("over the cap must refuse");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("staging is not implemented"),
+        "the refusal must name the reason, got: {msg}"
+    );
+}

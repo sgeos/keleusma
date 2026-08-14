@@ -66,6 +66,13 @@ fn read_stage(rel: &str) -> String {
         "verify_depth.kel" => include_str!("kel/verify_depth.kel"),
         "verify_typed.kel" => include_str!("kel/verify_typed.kel"),
         "verify_datalayout.kel" => include_str!("kel/verify_datalayout.kel"),
+        // JOINED THE TABLE when the driver gained a path that emits through it
+        // (`wire_names_via_kel` below). The criterion this module has carried
+        // since step 6 was "when it produces bytes rather than a checksum"; it
+        // produced bytes in the tests some time before the DRIVER could ask it
+        // to, and an entry added then would have recorded a capability the
+        // system did not have.
+        "wire.kel" => include_str!("kel/wire.kel"),
         other => panic!("unknown embedded stage source `{other}`"),
     };
     s.to_string()
@@ -2706,6 +2713,91 @@ impl core::fmt::Display for SelfHostError {
 }
 
 impl std::error::Error for SelfHostError {}
+
+/// Emit a module's `NAMES` and `STRING_POOL` regions through `wire.kel`.
+///
+/// **This is the first thing the DRIVER asks `wire.kel` to do**, and it is what
+/// makes `wire.kel`'s place in the stage table honest. Until now the wire format
+/// was exercised only from the test harness; the driver ran pipeline stages and
+/// produced no auxiliary body at all.
+///
+/// The module reaches Keleusma as a length-prefixed blob and nothing else: no
+/// name lengths, no offsets, no interning sequence. Keleusma recovers all three
+/// and runs the interner and the emitters in ONE call, because shared data is
+/// re-seeded on every call and the sequence would not survive a return.
+///
+/// **Bounded, and it says so.** The interner admits at most `NAME_CAP` names per
+/// call, so a real stage's 395,804 do not fit and this refuses rather than
+/// truncating. Staging them is a separate increment with a measurement in front
+/// of it; see `WIRE_FORMAT_SELFHOST_PLAN.md`. A silent partial artifact would be
+/// far worse than a refusal, because it would be byte-identical for a prefix.
+pub fn wire_names_via_kel(
+    module: &Module,
+    blob: &[u8],
+    directory: &[u8],
+    names: usize,
+    regions: usize,
+) -> Result<Vec<u8>, SelfHostError> {
+    /// The interner's per-call name bound, mirrored from `wire.kel`'s
+    /// `nm_max_names`. Named rather than spelled inline so a widening there is
+    /// a compile-time mismatch here rather than a silent overrun.
+    const NAME_CAP: usize = 256;
+    if names > NAME_CAP {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "wire.kel interns at most {NAME_CAP} names per call and this module has \
+                 {names}; staging is not implemented"
+            ),
+        });
+    }
+    let _ = module;
+    let m = compile_src(&read_stage("kel/wire.kel"));
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    // Slot layout mirrors `wire.kel`'s shared block: `len`, then `bytes`, then
+    // the region inputs. The directory is seeded so `dir_find` can locate
+    // NAMES and STRING_POOL; the blob rides `bin`.
+    const NREGIONS_SLOT: usize = 1 + 65536;
+    const BIN_SLOT: usize = 1 + 65536 + 1 + 1024 * 4 + 5 + 1024;
+    const CMD_JOIN: i64 = 167;
+    vm.set_shared(&mut shared, 0, Value::Int(directory.len() as i64))
+        .expect("len");
+    // `dir_find` walks `0..wire.nregions`, so a directory seeded without its
+    // COUNT is a directory the stage cannot see: the first attempt refused with
+    // -233, which reads as "no NAMES region" and means "no regions at all".
+    vm.set_shared(&mut shared, NREGIONS_SLOT, Value::Int(regions as i64))
+        .expect("nregions");
+    for (i, &b) in directory.iter().enumerate() {
+        vm.set_shared(&mut shared, 1 + i, Value::Byte(b))
+            .expect("seed");
+    }
+    for (i, &b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(b))
+            .expect("blob");
+    }
+    let st = vm
+        .call_with_shared(&mut shared, &[Value::Int(CMD_JOIN)])
+        .expect("run wire.kel");
+    match st {
+        crate::vm::VmState::Finished(Value::Int(v)) if v >= 0 => {}
+        other => {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel refused the join: {other:?}"),
+            });
+        }
+    }
+    let mut out = vec![0u8; directory.len()];
+    for (i, slot) in out.iter_mut().enumerate() {
+        *slot = match vm.get_shared(&shared, 1 + i).expect("read") {
+            Value::Byte(b) => b,
+            other => panic!("shared byte slot held {other:?}"),
+        };
+    }
+    Ok(out)
+}
 
 /// Compile a whole program with the self-hosted pipeline, returning a self-hosted-built
 /// [`Module`] for an in-subset program at the host target.
