@@ -164,9 +164,80 @@ fn reference_accepts(src: &str) -> bool {
     }
 }
 
-/// The stage's verdict. Slice 0 has no input surface, so the program is not
-/// passed: the stage cannot see it and says so by accepting.
-fn stage_accepts() -> bool {
+/// A literal's type tag, from its SYNTACTIC kind alone.
+///
+/// **Never from the reference's inference.** Marshalling inferred types would
+/// make the stage agree with the reference by construction and prove nothing
+/// about the stage. `1` is an integer because it is written as one.
+fn literal_tag(l: &keleusma::ast::Literal) -> i64 {
+    use keleusma::ast::Literal as L;
+    match l {
+        L::Int(_) => 1,
+        L::Bool(_) => 2,
+        L::Byte(_) => 3,
+        L::Float(_) => 4,
+        L::Fixed { .. } => 5,
+        L::Unit => 6,
+        _ => 0,
+    }
+}
+
+/// The tag of an expression, or UNKNOWN.
+///
+/// Only literals are typed here. Anything else is 0, and an unknown operand is
+/// **not** a rejection: this stage may not reject a valid program, so silence is
+/// the only sound answer for something it cannot type.
+fn expr_tag(e: &keleusma::ast::Expr) -> i64 {
+    match e {
+        keleusma::ast::Expr::Literal { value, .. } => literal_tag(value),
+        _ => 0,
+    }
+}
+
+/// Every place two values must agree in type, as (left tag, right tag).
+///
+/// Two sources at this slice: a binary operation's operands, and an array
+/// literal's elements against its first.
+fn operand_pairs(ast: &keleusma::ast::Program) -> Vec<(i64, i64)> {
+    use keleusma::ast::Expr;
+    use keleusma::visitor::Visitor;
+
+    /// Collected through the crate's own `Visitor` rather than a hand-written
+    /// recursion. **A hand-written walk is a by-name enumeration of the
+    /// expression forms**, and it goes stale the moment a form is added --
+    /// silently, because a missed form yields fewer pairs and therefore fewer
+    /// rejections, which reads as the stage being permissive rather than as the
+    /// collector being incomplete.
+    struct Pairs(Vec<(i64, i64)>);
+    impl Visitor for Pairs {
+        fn visit_expr(&mut self, expr: &Expr) {
+            match expr {
+                Expr::BinOp { left, right, .. } => {
+                    self.0.push((expr_tag(left), expr_tag(right)));
+                }
+                Expr::ArrayLiteral { elements, .. } => {
+                    if let Some(first) = elements.first() {
+                        let ft = expr_tag(first);
+                        for e in elements.iter().skip(1) {
+                            self.0.push((ft, expr_tag(e)));
+                        }
+                    }
+                }
+                _ => {}
+            }
+            self.walk_expr(expr);
+        }
+    }
+
+    let mut p = Pairs(Vec::new());
+    for f in &ast.functions {
+        p.visit_block(&f.body);
+    }
+    p.0
+}
+
+/// The stage's verdict for a program, with its operand pairs marshalled in.
+fn stage_accepts_program(pairs: &[(i64, i64)]) -> bool {
     let module = compile(&parse(&tokenize(TYPES_KEL).expect("lex")).expect("parse"))
         .expect("verify_types.kel compiles");
     let need = required_persistent_capacity_for(&module);
@@ -178,6 +249,35 @@ fn stage_accepts() -> bool {
         .expect("arena persistent region");
     let mut vm = Vm::new(module, arena).expect("verify");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
+    // Slot layout: cmd, verdict, n, then lhs[256], then rhs[256].
+    const N_SLOT: usize = 2;
+    const LHS_SLOT: usize = 3;
+    const RHS_SLOT: usize = LHS_SLOT + 256;
+    assert!(
+        pairs.len() <= 256,
+        "the operand table holds 256 rows and this program needs {}",
+        pairs.len()
+    );
+    vm.set_shared(
+        &mut shared,
+        N_SLOT,
+        keleusma::bytecode::Value::Int(pairs.len() as i64),
+    )
+    .expect("n");
+    for (i, (l, r)) in pairs.iter().enumerate() {
+        vm.set_shared(
+            &mut shared,
+            LHS_SLOT + i,
+            keleusma::bytecode::Value::Int(*l),
+        )
+        .expect("lhs");
+        vm.set_shared(
+            &mut shared,
+            RHS_SLOT + i,
+            keleusma::bytecode::Value::Int(*r),
+        )
+        .expect("rhs");
+    }
     let out = vm
         .call_with_shared(&mut shared, &[keleusma::bytecode::Value::Int(0)])
         .expect("run");
@@ -222,7 +322,7 @@ fn the_corpus_labels_agree_with_the_reference() {
 /// something other than what it claims.
 #[test]
 fn the_accepting_stage_agrees_on_every_control_and_on_no_rejection() {
-    let stage = stage_accepts();
+    let stage = stage_accepts_program(&[]);
     assert!(
         stage,
         "the slice-0 stage rejected, and it is incapable of rejecting, so the harness is reading \
@@ -254,4 +354,66 @@ fn the_accepting_stage_agrees_on_every_control_and_on_no_rejection() {
          the harness is not comparing verdicts at all, which is the failure this slice exists to \
          rule out before any rule is written."
     );
+}
+
+/// SLICE 1: operand agreement, in verdict agreement with the reference.
+///
+/// The rule is the smallest real one: two operands that must agree in type and
+/// do not. It reaches `1 + true` and `[1, true]`.
+///
+/// **The other fourteen shapes are still expected to disagree**, and this test
+/// asserts that rather than tolerating it. A slice that quietly started
+/// rejecting a shape it has no rule for would be rejecting for the wrong
+/// reason, and the reason is the only thing distinguishing a checker from a
+/// coin.
+#[test]
+fn slice_one_rejects_operand_disagreement_and_nothing_else() {
+    // The shapes slice 1 is expected to catch.
+    const IN_SCOPE: &[&str] = &["add-word-and-bool", "array-elements-differ"];
+
+    let mut caught = 0;
+    let mut out_of_scope_rejected = Vec::new();
+
+    for (label, src) in ILL_TYPED {
+        let ast = match tokenize(src).ok().and_then(|t| parse(&t).ok()) {
+            Some(a) => a,
+            // A source the parser refuses never reaches a type checker at all,
+            // and the reference rejects it for that reason. Nothing for this
+            // slice to say.
+            None => continue,
+        };
+        let stage = stage_accepts_program(&operand_pairs(&ast));
+        if IN_SCOPE.contains(label) {
+            assert!(
+                !stage,
+                "{label}: slice 1 has a rule for this shape and accepted it"
+            );
+            caught += 1;
+        } else if !stage {
+            out_of_scope_rejected.push(*label);
+        }
+    }
+
+    assert_eq!(
+        caught,
+        IN_SCOPE.len(),
+        "not every in-scope shape was reached; the corpus and IN_SCOPE disagree"
+    );
+    assert!(
+        out_of_scope_rejected.is_empty(),
+        "slice 1 rejected shapes it has no rule for: {out_of_scope_rejected:?}. A rejection for \
+         the wrong reason is indistinguishable from a correct one on this corpus, and the reason \
+         is the only thing separating a checker from a coin."
+    );
+
+    // THE DIRECTION THAT IS NOT SYMMETRIC. Every well-typed control must still
+    // be accepted: a false rejection is a language change, not a conservative
+    // choice, so this side admits no over-approximation at all.
+    for (label, src) in WELL_TYPED {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            stage_accepts_program(&operand_pairs(&ast)),
+            "{label}: slice 1 REJECTED a well-typed program, which narrows the language"
+        );
+    }
 }
