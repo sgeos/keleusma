@@ -73,3 +73,54 @@ minimal-ISA constraint is untouched.
    there is nothing to stub. `lower_module` returning `Ok` is not verification.
 6. Keep `codegen.kel` refused as the must-not-fire control — its refusal is delegated
    suspension, a soundness matter, and must not be widened by this work.
+
+---
+
+# The corpus DID force this, and I said it did not. `10_multbyte.kel` is the counterexample.
+
+2026-08-14. The section above states that no multi-chunk composite return exists in the corpus,
+so `sret` was authorised but not yet forced. **That was wrong.**
+
+## The defect, in three lines
+
+```text
+fn mk(x: Word, y: Word) -> [Word; 2] { [x, y] }
+fn main(a: Word, b: Word) -> Word { let p = mk(a, b); let r = mk(b, a); p[0] + r[0] }
+```
+
+With `a = 3, b = 4` the answer is `3 + 4 = 7`. **Natively it is 8**, because `p[0]` reads `4`:
+the second call's body overwrote the first's.
+
+## The mechanism
+
+`plan_chunk_region` gives every flat site in a chunk a distinct offset, and plans **per chunk
+from zero**. `mk` therefore writes its result at the same region offset on every call, while
+the caller holds two of those results live at once. One buffer, one offset, two live values.
+
+**A single composite return is correct**, and so is a caller composite beside one callee
+result — both are pinned as passing tests in `composite_return_aliasing.rs`. That is exactly
+why the corpus looked clean: nothing was wrong until a caller kept two alive, and no test kept
+two alive.
+
+## How it surfaced
+
+`corpus_differential.rs` reported `10_multbyte.kel` returning `1` on the virtual machine and
+`0` natively, on its first run. That module calls `add_2` and `sub_2`, each returning
+`[Word; 2]`, from a `main` that also builds four arrays of its own. It had lowered
+"successfully" since composites landed and **had never been executed**, so nothing contradicted
+the no-multi-chunk-return claim.
+
+## What `sret` fixes, and why it is now forced
+
+Under the caller-allocated return slot the caller reserves a **distinct slot per CALL SITE**,
+so two calls to one callee write to two places and cannot alias. The convention was the right
+answer before this was known; it is now also a repair rather than a provision for the future.
+
+The per-call-site region-cost measurement recorded above is still owed and is still step one.
+
+## Status
+
+**Reported and pinned, not repaired.** `composite_return_aliasing.rs` carries the failing case
+as `#[ignore]` with the reason, plus the two boundary cases that pass. The `#[ignore]` is a
+pinned defect awaiting a repair, not a skipped test, and `10_multbyte.kel` remains in
+`KNOWN_DISAGREEMENTS` where the set-equality assertion keeps it visible.
