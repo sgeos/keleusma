@@ -5421,3 +5421,94 @@ machinery cannot express a package deal.
 slice at 34.5% measured zero, `static-str` at 11 measures one, and the model that would have
 caught the second was itself stale. The rule that keeps holding is to ask the corpus what it
 CONTAINS rather than what a ranking says it needs.
+
+---
+
+## The `piano_roll` family, decomposed — and "non-degenerate streams" is not real
+
+`native_codegen/tests/probe_piano_roll.rs`, 2026-08-13. The family was carried as needing
+**static strings AND native calls AND non-degenerate streams together**. Two of those three
+survive measurement. The third does not.
+
+### The streams are already fine. All ten of them.
+
+| fact | measured |
+|---|---|
+| `Stream` chunks in the family | 10, exactly one per module |
+| structurally clean, i.e. degenerate | **10** |
+| defective | **0** |
+
+Every one is `params 1, yields 1, no non-Func callee, Stream first, Reset last` — precisely
+the degenerate shape that has lowered since the stream increment. **No non-degenerate stream
+work is required for this family**, and an increment scoped to deliver it would have
+delivered nothing.
+
+This fact is not subject to the instrument bias below, because the probe reads block type,
+first and last op, parameter count and callee categories **directly off the bytecode** rather
+than re-deriving `degenerate_stream_yield`. Three copies of a re-derived `is_lowered` are
+already stale in this directory; the fix for that is not a fourth copy.
+
+### The refusal list under-states, exactly as the op-presence ranking over-stated
+
+`module_refusals` reports **one** class across all ten modules, `Const holding StaticStr`,
+and that reads as "static strings are the only blocker". It is wrong, and the reason is
+structural: refusals are collected **per chunk and stop at the first**, so every op after the
+string in the same chunk is unexamined. The string is `host::song_name(...)` in the init
+block, near the top.
+
+**This is the `static-str ALONE = 11` failure inverted.** That number over-stated what
+removing one class would free. A refusal list under-states what remains. Neither is a plan,
+and the two biases point in opposite directions, so neither corrects the other.
+
+The instrument that cannot hide anything is a **full op histogram**, which counts every op in
+every chunk regardless of refusal order. Across the family: **40 distinct op kinds, 16 393 op
+instances**. The two with no emitter arm anywhere:
+
+| blocker | instances | note |
+|---|---|---|
+| `CallVerifiedNative` | **999** | no arm in `src/lib.rs` at all |
+| `Const(StaticStr)` | **10** | one per module, the song name |
+
+The count ordering is the opposite of the attention ordering. Static strings were the named
+item for two increments and are **ten instances**; native calls were never ranked and are
+**999**.
+
+### The fact that decides the native-call design: zero of 999 sites carry a return shape
+
+`Module::native_return_shapes` is parallel to `native_names` and records `WireShape::Top` for
+a native declared without a resolving `use ... -> R` signature.
+
+| | sites |
+|---|---|
+| native call sites in the family | 999 |
+| **whose native has a return shape** | **0** |
+| whose native has none (`Top` or absent) | **999**, across 15 distinct `host::*` natives |
+
+**A fail-closed-on-unknown-return design lowers zero of this family.** That is the whole
+increment lost, and it would have been discovered after implementation rather than before.
+The result must instead push `Width::Unknown` and fail closed only at a **use** of the width,
+which is the defer-on-unknown mechanism the emitter already has. It is sound here for a
+reason the histogram shows: **1643 `PopN` against 999 calls** — these results are
+overwhelmingly discarded, and a width that is never used is never needed.
+
+### Two more shape facts, both able to corrupt the operand stack silently
+
+- **The argument-count byte is not a count.** Its high bit is the B35 P7 error-reify flag and
+  a site carrying it pushes **two** slots, `(code, flag)`, not one. Measured in this family:
+  **0 error-reify sites of 999**, so refusing the flag costs nothing and is honest.
+- **Argument counts are `{1, 2, 3, 5}`** — 68, 705, 118 and 108 sites. Bounded and small, so
+  an argument buffer needs no dynamic allocation.
+
+### What this changes about the plan
+
+The increment is **native calls, then static strings**, and it is two classes rather than
+three. Native calls dominate by two orders of magnitude and are the design-bearing half;
+static strings are ten constants. The observable to differentiate is **the call sequence**,
+not a return value — these natives are side effects, and `(name, args)` in order is what the
+virtual machine and the native path must agree on.
+
+**The candidate blocker set is two, not proven to be two.** The other 38 op kinds were
+screened by grep for an emitter arm, and an arm existing is not the same as every operand
+configuration lowering — this branch has already recorded that "an opcode being emitted does
+not mean its operands are". Whatever surfaces in the next refusal round after these two land
+is the real remainder.
