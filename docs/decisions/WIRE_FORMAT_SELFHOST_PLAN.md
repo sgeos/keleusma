@@ -1052,6 +1052,45 @@ the format. The work is an input encoding, a producer, and the residency staging
 395,804 names force — which is the same batching problem the scan note above defers to. **Those two
 are the same increment, and doing either alone is wasted.**
 
+#### THE CHILD-POSITION SLICE, SPECIFIED BEFORE IT IS BUILT (2026-08-14)
+
+Roots are done: names (slice 14c) and the six-word node table (slice 14d). What remains of the
+constant contributor is the nesting, and it is **more intricate than the root case in three separate
+ways**. Each was verified against `preorder_13b` rather than inferred, and each is a way to produce a
+plausible artifact that is wrong.
+
+**1. Two orders are in play at once, and they are not the same order.** The name sequence follows a
+DEPTH-FIRST preorder, because that is the order `go()` descends. The record emission follows a
+BREADTH-FIRST queue, which is what `fq` holds. A walk that used one order for both would agree with
+the reference on every single-level constant and diverge at depth two, which is exactly where the
+corpus has no coverage to catch it.
+
+**2. `STRUCT` and `ENUM` intern in DIFFERENT MODES, and the difference is load-bearing.**
+
+| tag | names interned | modes |
+|---|---|---|
+| `STRUCT` | type name, then every field name | type name DEDUP, **each field name FRESH** |
+| `ENUM` | type name, then the variant name | **both DEDUP** |
+
+The struct's field run is fresh because the layout addresses a field by `first + i`, so the run has
+to stay contiguous and a dedup hit would break the contiguity. Nothing addresses a variant that way,
+so the enum has no contiguity to protect. **A single "composite interns its names" rule would be
+wrong for one of the two**, and would only show up where a name repeats.
+
+**3. Field NAMES are not children; field VALUES are.** The child count and the name count come from
+the same `fields` list and are unrelated quantities. Writing one where the other belongs produces a
+node table whose subtree sizes are self-consistent and wrong.
+
+**The corpus reaches nesting only through `const data`**, which `assert_no_other_contributors`
+refuses because it introduces a data layout. So the child-position cases cannot extend the slice-14
+table in place; they belong with `FX_CASES`, which already carries `str-in-tuple`,
+`two-strings-depth-2`, `one-struct` and the enum cases, and whose model (`fx_input`) already covers
+the constant contributor.
+
+**The must-fire this slice needs** is a case with a name repeated across a struct field run, where
+dedup and fresh give different answers. `two-strings-depth-2` discriminates depth; it does not
+discriminate mode.
+
 #### `read_stage` IS NOT A SMALL INDEPENDENT ITEM (checked 2026-08-14)
 
 `src/selfhost/mod.rs` states the criterion precisely: `wire.kel` "joins the stage table when it
