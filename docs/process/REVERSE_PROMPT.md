@@ -39,14 +39,23 @@ the emitter refused the kind with `-222`. Closed from real compiler output, with
 | producer: enum layouts, both intern modes | done (#59) |
 | producer: constant ROOTS, names and the six-word node table | done (#62, #65) |
 | per-chunk ranges | **already self-hosted**; the roadmap was stale (#63) |
-| producer: constant CHILD positions, `STRUCT`/`ENUM` interning as the walk descends | **not started** |
+| producer: constant CHILD positions, `STRUCT`/`ENUM` interning as the walk descends | done (#69) |
 | `wire.kel` removed from the `read_stage` exclusion | **blocked behind the driver**, not beside it (#64) |
 | residency staging for a stage's 395,804 names | **not started** |
 
 The plan is explicit that the last two are **the same increment** and that doing either alone is
 wasted.
 
-**B. Self-hosted type rejection — PLAN MERGED, NOTHING BUILT.** Six slices over the fifteen shapes.
+**B. Self-hosted type rejection — DONE.** All six slices merged. The stage rejects all sixteen
+ill-typed programs and accepts all seven well-typed ones, in **verdict agreement** and never message
+agreement, including `calling-a-local`, which carries no `type error:` prefix and has its own
+resolution code for that reason. `src/selfhost/kel/verify_types.kel` and
+`tests/selfhost_typecheck.rs`.
+
+**The control that earned its place.** Slice 3 FALSELY REJECTED `shared data s { n: Word }` reading
+`s.n`, because the name collector knew only functions and locals. A valid program refused is a
+language change, not a conservative choice, and **a rejection-only corpus would have scored it a
+success**.
 
 ## What the measurements changed
 
