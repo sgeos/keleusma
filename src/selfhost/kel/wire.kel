@@ -2550,6 +2550,9 @@ private data nm {
     vcnt: Word,
     ccnt: Word,
     ctag: Word,
+    cpay: Word,
+    cfirst: Word,
+    quiet: Word,
     // Byte cursor into the INPUT concatenation in `wire.bin`.
     icur: Word,
     // Byte cursor into the OUTPUT pool, compacted in place over the input.
@@ -2728,6 +2731,21 @@ fn mi_u16(at: Word) -> Word {
     (wire.bin[at] as Word) + ((wire.bin[at + 1] as Word) lsl 8)
 }
 
+fn mi_u32(at: Word) -> Word {
+    (wire.bin[at] as Word)
+        + ((wire.bin[at + 1] as Word) lsl 8)
+        + ((wire.bin[at + 2] as Word) lsl 16)
+        + ((wire.bin[at + 3] as Word) lsl 24)
+}
+
+// The stage declares `require word >= 64`, so a constant payload is carried
+// whole rather than split. Composed from two 32-bit reads because that is the
+// widest reader the file already had, and a hand-written eight-term sum is the
+// by-name enumeration this project keeps paying for.
+fn mi_u64(at: Word) -> Word {
+    mi_u32(at) + (mi_u32(at + 4) lsl 32)
+}
+
 fn mi_count() -> Word { mi_u16(0) }
 
 // The (length, mode) pairs the interner consumes, recovered from the blob.
@@ -2749,9 +2767,29 @@ fn nm_mode_fresh() -> Word { 1 }
 fn mi_pair(k: Word, len: Word, mode: Word) -> Word {
     wire.nin[k * 2] = len;
     wire.nin[(k * 2) + 1] = mode;
-    nm.sink = put_u32(k * 8, len);
-    nm.sink = put_u32((k * 8) + 4, mode);
+    // `quiet` suppresses the OUTPUT copy only. The `nin` write always happens,
+    // because the node walk still needs the running name index that the pair
+    // sequence defines, and a mode that skipped it would compute
+    // `names_first` from a counter with a different history.
+    nm.sink = if nm.quiet == 1 { 0 } else { put_u32(k * 8, len) };
+    nm.sink = if nm.quiet == 1 { 0 } else { put_u32((k * 8) + 4, mode) };
     k + 1
+}
+
+// Six words per node: tag, payload, child count, names_first, flags, disc.
+// Mirrors the reference preorder exactly; the widths are the reference's, not
+// a fresh choice.
+fn mi_node_words() -> Word { 6 }
+
+fn mi_put_node(i: Word, tag: Word, payload: Word, nfirst: Word) -> Word {
+    nm.sink = put_u64(i * (mi_node_words() * 8), tag);
+    nm.sink = put_u64((i * (mi_node_words() * 8)) + 8, payload);
+    // A scalar root has no children, and this slice emits scalars only.
+    nm.sink = put_u64((i * (mi_node_words() * 8)) + 16, 0);
+    nm.sink = put_u64((i * (mi_node_words() * 8)) + 24, nfirst);
+    nm.sink = put_u64((i * (mi_node_words() * 8)) + 32, 0);
+    nm.sink = put_u64((i * (mi_node_words() * 8)) + 40, 0);
+    i + 1
 }
 
 // A count read from the blob, clamped to zero when it exceeds the cap.
@@ -2761,6 +2799,25 @@ fn mi_pair(k: Word, len: Word, mode: Word) -> Word {
 // would never be read. The error is recorded and the loop is given zero.
 fn mi_bounded(v: Word) -> Word {
     if v > nm_max_names() { 0 } else { v }
+}
+
+// The node-table entry point: the same walk, with the pair output suppressed
+// and the constant nodes written instead. ONE WALK rather than two, because a
+// second walk would compute `names_first` from a counter with its own history
+// and the two could drift without any test noticing.
+// The pair entry point. Sets `quiet` explicitly rather than trusting it: private
+// data PERSISTS across calls in the arena, unlike shared data which is re-seeded,
+// so a flag left set by a previous call would silently suppress this one`s output.
+fn mi_pairs() -> Word {
+    nm.quiet = 0;
+    mi_chunk_names()
+}
+
+fn mi_const_nodes() -> Word {
+    nm.quiet = 1;
+    nm.sink = mi_chunk_names();
+    nm.quiet = 0;
+    if nm.sink < 0 { nm.sink } else { nm.ccnt }
 }
 
 fn mi_chunk_names() -> Word {
@@ -2852,15 +2909,24 @@ fn mi_const_names() -> Word {
         nm.sink = if nm.err < 0 { 0 } else {
             nm.ctag = mi_u16(nm.icur);
             nm.icur = nm.icur + 2;
+            nm.cpay = mi_u64(nm.icur);
+            nm.icur = nm.icur + 8;
             // A composite root would need the nesting walk, which the corpus
             // cannot reach and which is therefore not written. Refused loudly.
             nm.err = if mi_tag_is_composite(nm.ctag) == 1 { 0 - 241 } else { nm.err };
+            // `names_first` is the index this name TAKES, so it is read before
+            // the counter advances.
+            nm.cfirst = nm.cnt;
             nm.cnt = if nm.ctag == mi_tag_static_str() {
                 mi_pair(nm.cnt, mi_u16(nm.icur), nm_mode_intern())
             } else { nm.cnt };
             nm.icur = if nm.ctag == mi_tag_static_str() {
                 nm.icur + 2 + mi_u16(nm.icur)
             } else { nm.icur };
+            nm.sink = if nm.quiet == 1 {
+                mi_put_node(c, nm.ctag, nm.cpay,
+                    if nm.ctag == mi_tag_static_str() { nm.cfirst } else { 0 })
+            } else { 0 };
             0
         };
     }
@@ -3920,8 +3986,9 @@ fn dispatch_driver2(cmd: Word) -> Word {
     // Slice 14: the module-input producer. Fourteen arms in this chain, which is
     // four clear of `emit_at`'s eighteen, so there is room here that there is not
     // there.
-    if cmd == 165 { mi_chunk_names() } else {
-    0 - 98 }}}}}}}}}}}}}}
+    if cmd == 165 { mi_pairs() } else {
+    if cmd == 166 { mi_const_nodes() } else {
+    0 - 98 }}}}}}}}}}}}}}}
 }
 
 fn dispatch_driver(cmd: Word) -> Word {
@@ -3951,7 +4018,7 @@ fn dispatch_driver(cmd: Word) -> Word {
 // UNREACHABLE and its own test fails immediately. The fall-through sweep reads
 // this value out of the source instead of restating a bound, which is what it
 // did for four consecutive slices — and got wrong once.
-fn highest_command() -> Word { 165 }
+fn highest_command() -> Word { 166 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {

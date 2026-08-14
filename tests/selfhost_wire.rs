@@ -10488,8 +10488,9 @@ fn module_input_blob(module: &keleusma::bytecode::Module) -> Vec<u8> {
     let mut tail = Vec::new();
     tail.extend_from_slice(&cn.to_le_bytes());
     for c in &consts {
-        let (tag, name) = const_tag_and_name(c);
+        let (tag, payload, name) = const_tag_and_name(c);
         tail.extend_from_slice(&tag.to_le_bytes());
+        tail.extend_from_slice(&payload.to_le_bytes());
         if let Some(n) = name {
             let b = n.as_bytes();
             let l = u16::try_from(b.len()).expect("name length fits u16");
@@ -10522,20 +10523,20 @@ fn module_input_blob(module: &keleusma::bytecode::Module) -> Vec<u8> {
 /// Mirrors `preorder_13b`. Composite tags are returned rather than rejected
 /// here, so the REFUSAL comes from the stage: a host that quietly dropped them
 /// would make the stage's guard untestable.
-fn const_tag_and_name(c: &keleusma::bytecode::ConstValue) -> (u16, Option<String>) {
+fn const_tag_and_name(c: &keleusma::bytecode::ConstValue) -> (u16, i64, Option<String>) {
     use keleusma::bytecode::ConstValue as K;
     match c {
-        K::Unit => (1, None),
-        K::Bool(_) => (2, None),
-        K::Int(_) => (3, None),
-        K::Byte(_) => (4, None),
-        K::Fixed(_) => (5, None),
-        K::None => (12, None),
-        K::StaticStr(s) => (7, Some(s.clone())),
-        K::Tuple(_) => (8, None),
-        K::Array(_) => (9, None),
-        K::Struct { .. } => (10, None),
-        K::Enum { .. } => (11, None),
+        K::Unit => (1, 0, None),
+        K::Bool(b) => (2, i64::from(*b), None),
+        K::Int(v) => (3, *v, None),
+        K::Byte(v) => (4, i64::from(*v), None),
+        K::Fixed(v) => (5, *v, None),
+        K::None => (12, 0, None),
+        K::StaticStr(s) => (7, 0, Some(s.clone())),
+        K::Tuple(_) => (8, 0, None),
+        K::Array(_) => (9, 0, None),
+        K::Struct { .. } => (10, 0, None),
+        K::Enum { .. } => (11, 0, None),
         other => panic!("const_tag_and_name has no tag for {other:?}"),
     }
 }
@@ -10605,7 +10606,7 @@ fn keleusma_produces_the_interner_sequence_from_a_module_blob() {
         // than compared against a model that does not have it.
         let mut want: Vec<(String, i64)> = interner_input(&module);
         for c in const_roots_of(&module) {
-            let (tag, name) = const_tag_and_name(&c);
+            let (tag, _payload, name) = const_tag_and_name(&c);
             assert!(
                 !matches!(tag, 8..=11),
                 "{label}: a composite constant root needs the nesting walk, which this slice \
@@ -10685,5 +10686,105 @@ fn keleusma_produces_the_interner_sequence_from_a_module_blob() {
         fresh_seen > 0,
         "no case produced a fresh-mode name, so the dedup/fresh distinction is untested and a \
          producer ignoring the mode would pass"
+    );
+}
+
+const CMD_MI_CONST_NODES: i64 = 166;
+
+/// Keleusma produces the constant preorder node table, not just the names.
+///
+/// `preorder_13b` is the Rust model that has produced `fin` until now. This
+/// covers its SCALAR path, which is the whole of what the ten stages reach:
+/// measured over all of them, 2,192 constant nodes and **zero** composite nodes.
+/// The nesting path is a later slice, and the stage refuses a composite tag
+/// rather than guessing at it.
+///
+/// **One walk, not two.** The node walk reuses the pair walk with its output
+/// suppressed, because `names_first` is the index a name takes in the combined
+/// sequence, and a second walk would compute it from a counter with its own
+/// history. The two could then drift with nothing to notice.
+#[test]
+fn keleusma_produces_the_constant_node_table_for_scalar_roots() {
+    const CASES: &[(&str, &str)] = &[
+        ("no-consts", "fn main() -> Word { 42 }"),
+        (
+            "one-string",
+            "fn s() -> Text { \"hi\" }\nfn main() -> Word { 42 }",
+        ),
+        (
+            "two-strings",
+            "fn s() -> Text { \"hi\" }\nfn t() -> Text { \"there\" }\nfn main() -> Word { 42 }",
+        ),
+    ];
+
+    let mut vm = vm_for(WIRE_KEL);
+    let mut nodes_seen = 0;
+    let mut named_nodes_seen = 0;
+
+    for (label, src) in CASES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        assert_no_other_contributors(label, &module);
+
+        let roots = const_roots_of(&module);
+        let prefix_len = interner_input(&module).len();
+        let (want_fin, _) = preorder_13b(&roots, prefix_len);
+
+        let blob = module_input_blob(&module);
+        let (ret, out) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_MI_CONST_NODES,
+                nregions: 0,
+                seed: &[],
+                regions: &[],
+                fields: &[],
+                names: &[],
+                pool: &blob,
+                args: [0, 0, 0, 0, 0],
+                read_len: roots.len() * 6 * 8,
+            },
+        )
+        .expect("run");
+        assert_eq!(ret, roots.len() as i64, "{label}: node count");
+        assert_eq!(
+            want_fin.len(),
+            roots.len() * 6,
+            "{label}: the model produced a nested preorder, which this slice does not cover"
+        );
+
+        let u64le = |b: &[u8], o: usize| -> i64 {
+            i64::from_le_bytes([
+                b[o],
+                b[o + 1],
+                b[o + 2],
+                b[o + 3],
+                b[o + 4],
+                b[o + 5],
+                b[o + 6],
+                b[o + 7],
+            ])
+        };
+        for (i, want) in want_fin.iter().enumerate() {
+            assert_eq!(
+                u64le(&out, i * 8),
+                *want,
+                "{label}: node word {i} (node {}, field {})",
+                i / 6,
+                i % 6
+            );
+        }
+        nodes_seen += roots.len();
+        named_nodes_seen += want_fin.chunks_exact(6).filter(|n| n[0] == 7).count();
+    }
+
+    // MUST-FIRE on the corpus. A table of zero nodes compares nothing, and a
+    // table with no STATIC_STR node never exercises `names_first`, which is the
+    // one field the walk has to compute rather than copy.
+    assert!(nodes_seen > 0, "no case produced a constant node");
+    assert!(
+        named_nodes_seen > 0,
+        "no case produced a STATIC_STR node, so `names_first` is never checked and the one \
+         computed field of the node table is untested"
     );
 }
