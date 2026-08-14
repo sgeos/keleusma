@@ -10,109 +10,97 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-13 (session 43)
+**Date**: 2026-08-14 (session 43, continued)
 
 ## Where things stand
 
 | | |
 |---|---|
-| `v0.2.3` | `33103cab`, pushed, tree clean, in sync with origin |
-| PRs merged this session | **#54**, 22 of 22 green, merged at the commit CI ran |
+| `v0.2.3` | pushed, tree clean, in sync with origin |
+| PRs merged this session | **#54, #57, #58, #59, #60**, each 22 of 22 green, merged at the commit CI ran |
 | Open PRs of this line | **none** |
-| Boundary counts | **79 Ok / 4 Gap / 1 RefRejects, 84 cases** — recounted, matches |
-| `selfhost_wire` | **151 tests**, up two |
+| `selfhost_wire` | **154 tests** |
+| Record-shape coverage | **17 of 17**, pinned by a test rather than by this note |
 
-## The ranked item was already done, and reading first is what found that
+## The three-part goal, and where each stands
 
-The handoff ranked "a second stage through the whole-artifact capstone under the new encoding"
-first. **It had already landed** in `45a8870f`, inside the run-length-encoding pull request, which
-updated the corpus to three stages and lowered the size-span control from 4x to 2x in the same
-change. Confirming that cost two commands. Starting the work would have cost an increment and
-produced a diff that reverted nothing and added nothing.
+**C. Emitter record-shape coverage — DONE.** Measured by instrumenting every emit command across the
+whole suite: sixteen of seventeen shapes emitted with at least one record, `STRUCT_TEMPLATES` under
+none. The gap was a **missing capability**, not a weak assertion: no decoder and no dispatch arm, so
+the emitter refused the kind with `-222`. Closed from real compiler output, with a targeted must-fire.
 
-What was actually open is the thing the test says about itself.
+**A. Drive the emitter from the pipeline — PARTLY DONE, and the remainder is the large half.**
 
-## A corpus that cannot erode
+| | |
+|---|---|
+| dedup-scan contradiction settled and recorded | done |
+| module-input encoding defined | done |
+| producer: chunk names | done (#58) |
+| producer: enum layouts, both intern modes | done (#59) |
+| producer: the constant walk's names, interned inline | **not started** |
+| per-chunk ranges | **not started** |
+| `wire.kel` removed from the `read_stage` exclusion | **not started** |
+| residency staging for a stage's 395,804 names | **not started** |
 
-**The capstone's qualifying corpus has shrunk three times, never from attrition.** Every encoding
-improvement takes another real stage under the 65,536-byte window, and a stage whose body fits one
-window exercises nothing about composition. Six became four, then three.
+The plan is explicit that the last two are **the same increment** and that doing either alone is
+wasted.
 
-**A test whose corpus is destroyed by its own project's success will be weakened to keep it green**,
-and the pressure arrives while landing an improvement, which is exactly when lowering a threshold
-looks reasonable. The fourth case is synthetic and **sized against the encoder's measured output**,
-so an encoding win makes it emit more functions rather than pushing it under the window. It sits
-beside the real stages, is excluded from the size-span figures, and **the 2x threshold is
-unchanged**.
+**B. Self-hosted type rejection — PLAN MERGED, NOTHING BUILT.** Six slices over the fifteen shapes.
 
-Measured: 384 functions, 143,320 bytes, 2.19x the window, eleven regions, five batched.
+## What the measurements changed
 
-## Two guards that would have shipped unexercised
+**A grep would have reported this closed.** All seven previously-empty kinds appear in the test file,
+seven hits out of seven, because a kind can be named in a stride table or a negative test without any
+record of that shape ever being written. The instrumented count is the only thing that answers it.
 
-**Every assertion in the assembler other than the byte comparison is a count** — regions placed,
-batches run, calls returning success. A batch written to the wrong offset changes none of them, so
-without a planted defect the capstone's passing is consistent with an assembler that places bytes
-anywhere. The defect is planted through the real assembler rather than a copy.
+**All six formerly-empty shapes are reachable from real compiled modules**, including `STRUCT_AUX`
+and `ENUM_AUX` via `const data`. The wire-format plan expected hand-built artifacts to be necessary.
+They are not, and real sources are the stronger oracle.
 
-**The growth loop never runs today.** The first attempt already clears twice the window, so the one
-mechanism the increment exists to install would first execute on the day a future encoding win made
-it necessary. A separate case asks for a target the first attempt cannot meet.
+**The two dedup scans are different scans.** `intern_run` is batch-local and capped at 256, where a
+1024-slot table costs 1024 probes against roughly 256 comparisons, because a total language has no
+early exit — do not replace it. The walk-nested scan through `NAMES` is the one the 782-second lesson
+bears on, and it is to be measured at stage scale. The roadmap cell was stale and now points at the
+settlement.
 
-## Three corrections to my own work, caught before merge
+## The mistake worth not repeating
 
-**A control that fires is not yet a control that fired for the right reason.** The must-fire case
-passed the moment it was written, by catching a panic. But the assembler's own guard, which reports
-that the sabotage could not be planted, panics too and arrives as the same `Err`. Read naively it
-would report the detector working at the moment nothing had been broken. It now asserts which panic
-fired.
-
-**A bound on a loop is not a bound on the damage.** The growth cap was first twelve doublings, which
-terminates and is useless: doubling makes the last attempt the expensive one, so attempt twelve
-compiles 786,432 functions and a broken assumption becomes an hours-long hang rather than a legible
-failure. Six allows a 32x collapse in bytes per function and keeps the worst source near three
-megabytes.
-
-**`std::panic::set_hook` is global to the process.** The must-fire case used it to silence its own
-expected panic. `cargo test` runs a binary's tests as threads in one process, so any other test that
-panicked in that window would have its message swallowed while still being recorded as failed. That
-trades a failing test's evidence for tidier output on a passing one. **nextest would never have shown
-this**, because it gives each test its own process, and CI's `Test` job runs nextest; the hazard is
-live under `cargo test`, which `scripts/release-gate.sh` runs.
-
-## Concerns raised, not acted on
-
-- **`MAX_PARSE_DEPTH` does not do its stated job on a small stack.** Unchanged and still yours.
-- **`CHANGELOG.md:340` states the checked-arithmetic push order wrongly** and describes a published
-  release. `TASKLOG.md:320,331` likewise.
+**A push reported success and did not push.** The gate ran, printed "all checks passed", and the ref
+was never created. `git ls-remote` caught it. The output had been truncated with `tail -3`, which cut
+the line that would have said so. That is the truncation rule in a new place: not a verification
+whose result I meant to quote, but a command whose **effect** I meant to rely on. **Verify the ref,
+not the gate.**
 
 ## Open, held by the operator
 
 - **Publication remains HELD.** Nothing is published.
 - **`v0.2.3-prerebase-backup`**, local only, a deliberate pre-rebase safety copy.
+- **`MAX_PARSE_DEPTH` on a small stack.** Unchanged. Related and new: `emit_at` is now at eighteen
+  arms, the measured ceiling for that shape in the test harness. A nineteenth needs the chain
+  restructured, not extended.
+- **`CHANGELOG.md:340`** states the checked-arithmetic push order wrongly in published text.
 - **MSRV**: CI checks 1.85 for `keleusma-arena` and 1.88 for `keleusma`.
 
 ## Next intended step
 
-1. **The Order-1 type checker**, scoped in
-   [`../decisions/TYPECHECK_SELFHOST_PLAN.md`](../decisions/TYPECHECK_SELFHOST_PLAN.md) at about
-   fifteen rejection shapes. **The oracle is verdict agreement, not message agreement.**
-2. **Load-time ECC policy**, now only "should a host scrub, and when". The order is fixed and
-   recorded; only scheduling is open.
+**The constant walk's interner coupling**, which is the next contributor to the interning sequence
+and the last one before per-chunk ranges. Then the input-encoding question the type-checker plan
+shares: **neither line should invent a second encoding**, and the checker must not be built before
+its input encoding exists.
 
 ## Parallel development
 
 `v0.3.0` carries native code generation. Their mailbox is
 `git show origin/v0.3.0:docs/process/handoffs/v0.3.0.md`; mine is
 [`handoffs/v0.2.3.md`](./handoffs/v0.2.3.md). Poll at increment boundaries. **Tell the two lines
-apart by BASE BRANCH, not by author.** Their prune notes are answered; nothing of theirs is
-outstanding on my side.
+apart by BASE BRANCH, not by author.**
 
 ## Method rules this session paid for
 
-- **Read the test and the history before starting the increment they describe.** The ranked item was
-  already merged.
-- **Assert WHICH failure fired**, not merely that one did. Two different panics meant opposite
-  things.
-- **A bound on a loop is not a bound on the damage.** Doubling puts the cost in the last attempt.
-- **A global hook in a test is a hazard to every other test in the process**, and the runner that
-  hides it is not the runner that gates the release.
+- **Instrument, do not grep, when the question is "does anything ever do X".** Seven hits out of
+  seven meant nothing.
+- **Verify the ref after a push, not the gate output.** A gate can pass on a push that did not land.
+- **Write the encoding down before relying on it.** The enum count would have read correctly from
+  zero-filled memory whether or not the encoder wrote it.
+- **A guard refusing loudly is the guard working.** `-99` on an unregistered command, `-222` on an
+  unhandled kind: both surfaced real gaps as refusals rather than as wrong artifacts.
