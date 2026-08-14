@@ -38,7 +38,7 @@ use keleusma::vm::{
     Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for, shared_data_bytes_for,
 };
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
-use keleusma_native::{LowerOptions, lower_module, region::plan_chunk_region};
+use keleusma_native::{LowerOptions, lower_module};
 use std::cell::RefCell;
 
 thread_local! {
@@ -182,11 +182,10 @@ fn run_native(m: &Module, floor: i64) -> (i64, Vec<String>, Vec<u8>) {
                 .count()
         })
         .unwrap_or(0);
-    let n_region: usize = m
-        .chunks
-        .iter()
-        .map(|c| plan_chunk_region(c).bytes as usize)
-        .sum();
+    // **Transitive**, not the per-chunk sum. Each call site now receives a
+    // disjoint block of the caller's region, so the entry needs everything it
+    // can reach. The per-chunk sum under-counts and the canary would catch it.
+    let n_region: usize = keleusma_native::region::region_total_bytes(m, entry, 0) as usize;
 
     let ctx = Context::create();
     let lm = ctx.create_module("kel");

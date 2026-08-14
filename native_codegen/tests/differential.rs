@@ -2154,11 +2154,11 @@ fn the_module_still_verifies_after_the_optimisation_pipeline() {
 /// boundary above may be moved.
 ///
 /// The harness supplies the region exactly as a host does, which is what the
-/// calling convention promises: at least `plan_chunk_region(chunk).bytes`
+/// calling convention promises: at least `keleusma_native::region::plan_chunk_region(chunk).bytes`
 /// writable bytes, taken in production from the arena's bottom section.
 fn composite_native_result(src: &str, args: &[i64]) -> i64 {
     use inkwell::context::Context;
-    use keleusma_native::{lower_module, region::plan_chunk_region};
+    use keleusma_native::lower_module;
 
     let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     let idx = m
@@ -2177,7 +2177,7 @@ fn composite_native_result(src: &str, args: &[i64]) -> i64 {
 
     // Sized from the same pass the emitter placed against, so a disagreement
     // between them shows up here as a fault rather than as silent corruption.
-    let bytes = plan_chunk_region(&m.chunks[idx]).bytes as usize;
+    let bytes = keleusma_native::region::plan_chunk_region(&m.chunks[idx]).bytes as usize;
     let mut region = vec![0u8; bytes.max(8)];
     // Word-aligned backing for the two data pointers. This module declares no
     // slots so neither is read, but a misaligned pointer where the ABI promises
@@ -2260,7 +2260,7 @@ fn a_flat_array_element_agrees_with_the_vm() {
 /// point missed when this path was briefly deleted as "unverifiable".
 fn composite_native_with_region(src: &str, args: &[i64]) -> (i64, Vec<u8>) {
     use inkwell::context::Context;
-    use keleusma_native::{lower_module, region::plan_chunk_region};
+    use keleusma_native::lower_module;
 
     let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     let idx = m
@@ -2284,7 +2284,7 @@ fn composite_native_with_region(src: &str, args: &[i64]) -> (i64, Vec<u8>) {
     // failure rather than undefined behaviour.
     const GUARD: usize = 64;
     const GUARD_BYTE: u8 = 0xAA;
-    let bytes = plan_chunk_region(&m.chunks[idx]).bytes as usize;
+    let bytes = keleusma_native::region::plan_chunk_region(&m.chunks[idx]).bytes as usize;
     let planned = bytes.max(8);
     let mut region = vec![0u8; planned + GUARD];
     region[planned..].fill(GUARD_BYTE);
@@ -2344,7 +2344,6 @@ fn a_nested_body_copy_does_not_clobber_its_neighbour() {
 /// fails here.
 #[test]
 fn a_nested_body_copy_writes_the_right_bytes() {
-    use keleusma_native::region::plan_chunk_region;
     let src = "struct I { a: Word }
                struct O { i: I, b: Word }
                fn main(a: Word, b: Word) -> Word { let o = O { i: I { a: a }, b: b }; o.b }";
@@ -2357,7 +2356,7 @@ fn a_nested_body_copy_writes_the_right_bytes() {
         .iter()
         .position(|c| c.name == "main")
         .expect("main");
-    let plan = plan_chunk_region(&m.chunks[idx]);
+    let plan = keleusma_native::region::plan_chunk_region(&m.chunks[idx]);
     // Two sites: the inner `I` then the outer `O`. The outer is the last placed
     // and is the one whose body must contain a COPY of the inner, not a pointer.
     let outer = plan.sites.last().expect("a placed site");
@@ -2389,7 +2388,6 @@ fn a_nested_body_copy_writes_the_right_bytes() {
 /// place the evidence survives.
 #[test]
 fn a_nested_body_copy_does_not_run_past_the_body() {
-    use keleusma_native::region::plan_chunk_region;
     let src = "struct I { a: Word }
                struct O { b: Word, i: I }
                fn main(a: Word, b: Word) -> Word { let o = O { b: b, i: I { a: a } }; o.b }";
@@ -2402,7 +2400,7 @@ fn a_nested_body_copy_does_not_run_past_the_body() {
         .iter()
         .position(|c| c.name == "main")
         .expect("main");
-    let plan = plan_chunk_region(&m.chunks[idx]);
+    let plan = keleusma_native::region::plan_chunk_region(&m.chunks[idx]);
     let outer = plan.sites.last().expect("a placed site");
     let end = (outer.offset + outer.size) as usize;
 

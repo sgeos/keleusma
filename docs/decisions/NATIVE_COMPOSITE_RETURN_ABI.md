@@ -200,3 +200,56 @@ the bump pointer. If the copy is ever wanted, it should be chosen, not slid in.
 **Status: step one complete and favourable (4.9%), implementation NOT started.** The pinned
 defect stands, `10_multbyte.kel` remains in `KNOWN_DISAGREEMENTS`, and nothing has been widened
 or allowlisted to make anything pass.
+
+---
+
+# IMPLEMENTED 2026-08-14. The aliasing is repaired and no signature changed.
+
+## The shape that made it contained
+
+The section above predicted a hidden trailing parameter rippling into `trailing_ptrs`, the
+`Op::Call` arity check, and five harnesses. **It did not need one.**
+
+**The region pointer is already a parameter the caller forwards.** Instead of forwarding its
+own base, the caller forwards `base + a per-call-site offset`. The callee writes its flat sites
+at offsets it plans from zero, relative to whatever pointer it receives — so two calls to one
+callee land in two disjoint places.
+
+That is the authorised convention exactly: **the caller reserves storage it owns and hands the
+callee an address.** The callee still never names an arena, so it still survives the operator's
+expected multiple arenas. It is not a bump pointer — every offset is planned statically.
+
+| added | what it does |
+|---|---|
+| `region_total_bytes(module, chunk, depth)` | bytes a chunk needs **including every callee it can reach**. Terminates because the type checker rejects recursion, the same property the native stack bound leans on; a depth guard covers bytecode that did not come from the compiler |
+| `plan_call_site_regions(module, chunk)` | the chunk's own sites occupy `[0, own_bytes)`, then each `Op::Call` gets a disjoint block sized by its callee's transitive total |
+
+## Verified
+
+| check | result |
+|---|---|
+| `two_live_composite_returns_must_not_alias` | **un-ignored and PASSING** |
+| `a_single_composite_return_is_correct` | still passes |
+| `a_caller_composite_beside_one_callee_result_is_correct` | still passes |
+| `corpus_differential.rs` | **40 executed and agreeing**, up from 39 |
+| `KNOWN_DISAGREEMENTS` | **EMPTY** |
+
+**The allowlist emptied because the behaviour changed, and the set-equality assertion proved
+it**: the test FAILED on `10_multbyte.kel`'s departure and had to be updated to match. That is
+the mechanism working in the direction that means success, and it is why the entry could not
+have been removed quietly.
+
+**Mutation-verified**, with the mutation count checked before the result was read: forcing
+every call site's offset to zero restores the aliasing and fails the guard. `src/region.rs`
+restored byte-identical under `cmp`.
+
+## What did NOT happen
+
+No signature changed. **No refusal was widened** — composite-returning chunks remain admitted,
+and were repaired rather than re-refused. The caller-side `memcpy` substitute was not used.
+
+## The harnesses now size the region transitively
+
+Five harnesses summed `plan_chunk_region` per chunk, which **under-counts** once each call site
+gets its own block. They use `region_total_bytes(m, entry, 0)`. The canary would have caught
+the under-count as a write past the buffer; sizing it correctly is better than relying on that.

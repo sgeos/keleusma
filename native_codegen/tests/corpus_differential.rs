@@ -33,7 +33,7 @@ use keleusma::vm::{
     Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for, shared_data_bytes_for,
 };
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
-use keleusma_native::{LowerOptions, lower_module, region::plan_chunk_region};
+use keleusma_native::{LowerOptions, lower_module};
 use std::cell::RefCell;
 
 /// Ticks to drive a `Stream` entry. Enough to leave any init branch.
@@ -328,11 +328,9 @@ fn run_native(m: &Module, table: &[(String, usize)]) -> Option<Run> {
                 .count()
         })
         .unwrap_or(0);
-    let n_region: usize = m
-        .chunks
-        .iter()
-        .map(|c| plan_chunk_region(c).bytes as usize)
-        .sum();
+    // Transitive, not the per-chunk sum: each call site now receives a disjoint
+    // block of the caller's region, so the entry needs everything it can reach.
+    let n_region: usize = keleusma_native::region::region_total_bytes(m, entry, 0) as usize;
 
     let ctx = Context::create();
     let lm = ctx.create_module("kel");
@@ -527,15 +525,15 @@ fn run_native(m: &Module, table: &[(String, usize)]) -> Option<Run> {
 ///
 /// The test asserts the disagreement set EQUALS this list, so a new
 /// disagreement fails and a fixed one also fails — neither can rot into
-/// silence. An empty allowlist would be nicer and would also be a lie.
+/// silence.
 ///
-/// `10_multbyte.kel`: the entry returns `1` on the virtual machine and `0`
-/// natively. **Found by this harness on its first run**, in a module that had
-/// been lowering "successfully" since composites landed and was never executed.
-/// It exercises the multi-word fixed-point family. Root cause NOT diagnosed;
-/// diagnosing it is the next increment and it is a real defect, not an artifact
-/// — the return is a scalar on both sides and the values simply differ.
-const KNOWN_DISAGREEMENTS: &[&str] = &["10_multbyte.kel"];
+/// **EMPTY since 2026-08-14.** `10_multbyte.kel` was the only entry, and it left
+/// because the BEHAVIOUR CHANGED: the `sret` repair gives each call site a
+/// disjoint block of the caller's region, so two live composite returns no
+/// longer alias. It was not removed to make the suite green — the set-equality
+/// assertion failed on its departure, which is the mechanism working in the
+/// direction that means success.
+const KNOWN_DISAGREEMENTS: &[&str] = &[];
 
 /// The whole corpus, in one test, because the interesting output is the
 /// EXEMPTION LIST and that is a property of the set rather than of any module.

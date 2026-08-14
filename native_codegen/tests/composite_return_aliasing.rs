@@ -117,10 +117,10 @@ const MK: &str = "fn mk(x: Word, y: Word) -> [Word; 2] { [x, y] }\n";
 
 /// **The defect.** Two live results from one callee alias.
 ///
-/// Marked `#[ignore]` because it FAILS: it is a pinned defect awaiting the
-/// `sret` repair, not a regression guard. Run it with `--ignored`.
+/// **REPAIRED 2026-08-14** and un-ignored. It was a pinned failing case; it is
+/// now a regression guard. The repair gives each CALL SITE a disjoint block of
+/// the caller's region, so two calls to one callee no longer share offsets.
 #[test]
-#[ignore = "pinned defect: awaits the sret repair; run with --ignored"]
 fn two_live_composite_returns_must_not_alias() {
     let src = format!(
         "{MK}fn main(a: Word, b: Word) -> Word {{ let p = mk(a, b); let r = mk(b, a); p[0] + r[0] }}"

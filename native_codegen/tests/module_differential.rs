@@ -43,7 +43,7 @@ use keleusma::vm::{
     Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for, shared_data_bytes_for,
 };
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
-use keleusma_native::{LowerOptions, lower_module, region::plan_chunk_region};
+use keleusma_native::{LowerOptions, lower_module};
 use std::cell::RefCell;
 
 /// How many ticks to drive. `piano_roll_7` has section onsets at 256, 512, 768,
@@ -228,7 +228,7 @@ fn private_slot_count(m: &Module) -> usize {
 fn region_bytes(m: &Module) -> usize {
     m.chunks
         .iter()
-        .map(|c| plan_chunk_region(c).bytes as usize)
+        .map(|c| keleusma_native::region::plan_chunk_region(c).bytes as usize)
         .sum()
 }
 

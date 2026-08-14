@@ -305,3 +305,72 @@ mod width_tests {
         assert_eq!(width_of_tag(TypeTag::Bool), Width::Scalar(1));
     }
 }
+
+/// Total region bytes a chunk needs INCLUDING every callee it can reach.
+///
+/// # Why the transitive figure, and why it terminates
+///
+/// A callee writes its own flat sites at offsets it plans from zero. If the
+/// caller hands it the same region base it uses itself, the two collide — and
+/// worse, two calls to ONE callee collide with each other, which is the
+/// `10_multbyte.kel` defect: `p[0]` reads `r[0]`'s value.
+///
+/// So each call site is given a DISJOINT BLOCK of the caller's region, big
+/// enough for everything the callee can reach. That is the authorised
+/// caller-allocated return slot expressed through the pointer the caller
+/// already passes: the callee never names an arena, it writes through an
+/// address its caller chose.
+///
+/// The recursion terminates because the type checker rejects direct and mutual
+/// recursion, so the call graph is acyclic — the same property the native stack
+/// bound leans on. An unresolvable callee index contributes zero rather than
+/// panicking; `lower_module` refuses such a module elsewhere.
+pub fn region_total_bytes(
+    module: &keleusma::bytecode::Module,
+    chunk_index: usize,
+    depth: usize,
+) -> u32 {
+    // Depth guard: acyclicity is a language property, and this is a library
+    // walking bytecode that may not have come from the compiler.
+    if depth > 64 {
+        return 0;
+    }
+    let Some(chunk) = module.chunks.get(chunk_index) else {
+        return 0;
+    };
+    let mut total = plan_chunk_region(chunk).bytes;
+    for op in &chunk.ops {
+        if let Op::Call(idx, _) = op {
+            total = align_up(total).saturating_add(region_total_bytes(
+                module,
+                usize::from(*idx),
+                depth + 1,
+            ));
+        }
+    }
+    total
+}
+
+/// Per-call-site region offsets for one chunk, in instruction order.
+///
+/// The chunk's own flat sites occupy `[0, plan_chunk_region(chunk).bytes)`;
+/// each `Op::Call` then receives a disjoint block sized by
+/// [`region_total_bytes`] of its callee. Returned as `(op_index, offset)` so the
+/// emitter can hand the callee `region_base + offset`.
+pub fn plan_call_site_regions(
+    module: &keleusma::bytecode::Module,
+    chunk_index: usize,
+) -> Vec<(usize, u32)> {
+    let Some(chunk) = module.chunks.get(chunk_index) else {
+        return Vec::new();
+    };
+    let mut next = align_up(plan_chunk_region(chunk).bytes);
+    let mut out = Vec::new();
+    for (op_index, op) in chunk.ops.iter().enumerate() {
+        if let Op::Call(idx, _) = op {
+            out.push((op_index, next));
+            next = align_up(next.saturating_add(region_total_bytes(module, usize::from(*idx), 0)));
+        }
+    }
+    out
+}
