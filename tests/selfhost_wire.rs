@@ -9681,6 +9681,19 @@ fn a_region_larger_than_one_window_is_assembled_across_two() {
     }
 }
 
+/// Whether `assemble_whole_artifact` assembles honestly or plants a known defect.
+///
+/// `MisplaceOneBatch` shifts one batch's destination one word earlier than the
+/// truth. It is the cheapest defect that is invisible to every count the
+/// assembler keeps -- the same regions are placed, the same batches run, and
+/// every call returns success -- so only the byte comparison can catch it. That
+/// is precisely the property the capstone claims to have.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Sabotage {
+    None,
+    MisplaceOneBatch,
+}
+
 /// THE CAPSTONE: a complete real-stage artifact, byte for byte.
 ///
 /// Every slice so far verified one region, or one region's worth of mechanism.
@@ -9699,7 +9712,11 @@ fn a_region_larger_than_one_window_is_assembled_across_two() {
 /// The host places every payload at its true offset; the driver is never told
 /// where the artifact really is, only how many records to write and where in the
 /// window to start.
-fn assemble_whole_artifact(label: &str, src: &str) -> (usize, usize, usize) {
+///
+/// `sabotage` exists so the must-fire control runs through THIS assembler rather
+/// than a copy of it. A test that reimplements the thing it checks measures the
+/// reimplementation, which this suite has already paid for once.
+fn assemble_whole_artifact(label: &str, src: &str, sabotage: Sabotage) -> (usize, usize, usize) {
     use keleusma::wire_schema::kind;
     let mut vm = vm_for(WIRE_KEL);
 
@@ -9737,6 +9754,7 @@ fn assemble_whole_artifact(label: &str, src: &str) -> (usize, usize, usize) {
 
     let mut regions_placed = 0;
     let mut batched_regions = 0;
+    let mut sabotage_planted = false;
     for (k, _, _, _) in &specs {
         let Some(region) = view.find_region(*k) else {
             continue;
@@ -9801,7 +9819,16 @@ fn assemble_whole_artifact(label: &str, src: &str) -> (usize, usize, usize) {
                 ret >= 0,
                 "{label}: kind {k} batch at {done} refused with {ret}"
             );
-            art[base + byte_at..base + byte_at + span].copy_from_slice(&win[..span]);
+            // The honest destination is the region base plus this batch's own
+            // byte offset. The sabotage moves it one word earlier, which stays in
+            // bounds because a batch after the first starts at least one stride in
+            // and every stride here is at least one word.
+            let mut dst = base + byte_at;
+            if sabotage == Sabotage::MisplaceOneBatch && !sabotage_planted && done > 0 && dst >= 8 {
+                dst -= 8;
+                sabotage_planted = true;
+            }
+            art[dst..dst + span].copy_from_slice(&win[..span]);
             done += n;
             batches += 1;
         }
@@ -9819,6 +9846,16 @@ fn assemble_whole_artifact(label: &str, src: &str) -> (usize, usize, usize) {
         batched_regions >= 1,
         "no region needed more than one batch, so composition with batching is \
          untested at whole-artifact scale"
+    );
+
+    // A CONTROL ON THE GUARD, not only on the detector. If the caller asked for a
+    // defect and no defect was planted, the byte comparison below is about to
+    // report agreement and the must-fire case would read that as "the detector
+    // stayed quiet" when the truth is "nothing was ever broken".
+    assert!(
+        sabotage != Sabotage::MisplaceOneBatch || sabotage_planted,
+        "{label}: the sabotage was requested and never planted, so the must-fire \
+         case would pass for the wrong reason"
     );
 
     if art != want {
@@ -9842,6 +9879,83 @@ fn assemble_whole_artifact(label: &str, src: &str) -> (usize, usize, usize) {
     (want.len(), regions_placed, batched_regions)
 }
 
+/// The synthetic generator's shape parameters, lifted out of the function so a
+/// test can state what the first attempt was and detect that growth ran.
+///
+/// **`SYNTH_MAX_ATTEMPTS` bounds the WALL CLOCK, not merely the loop.** Doubling
+/// makes the last attempt the expensive one, so a generous cap does not fail
+/// generously -- it fails slowly. Six attempts allow a 32x collapse in bytes per
+/// function, far beyond anything an encoding change has ever produced here, while
+/// keeping the worst compiled source near three megabytes. A larger cap would
+/// turn a broken assumption into an hours-long hang instead of a legible failure.
+const SYNTH_TERMS: usize = 16;
+const SYNTH_FIRST_TRY: usize = 384;
+const SYNTH_MAX_ATTEMPTS: usize = 6;
+
+/// A synthetic stage source of a caller-chosen size.
+///
+/// The shape is deliberately ordinary: a shared-data block with one array of each
+/// element width, a function that touches it so the block is not optimised away,
+/// and `functions` pure arithmetic functions each folding `terms` distinct large
+/// constants. That reaches eleven non-empty regions, which is three clear of the
+/// assembler's own eight-region floor, and it grows the chunk table, the string
+/// pool and the constant pool together rather than inflating one of them.
+///
+/// A private-data block was tried and REJECTED BY THE COMPILER, which is the
+/// right answer: an unmutated private block must be `const data`. The shared
+/// block plus `zz_touch` is what survives that check.
+fn synthetic_stage_source(functions: usize, terms: usize) -> String {
+    let mut s = String::new();
+    s.push_str("require word >= 32;\n");
+    s.push_str("shared data zz {\n    n: Word,\n    xs: [Word; 64],\n    ys: [Byte; 128],\n    out: Word,\n}\n");
+    s.push_str("fn zz_touch(i: Word) -> Word { zz.out = zz.xs[i] + zz.n; zz.out }\n");
+    for i in 0..functions {
+        s.push_str(&format!(
+            "fn synthetic_capstone_function_{i:05}(a: Word) -> Word {{ a"
+        ));
+        for j in 0..terms {
+            s.push_str(&format!(" + {}", 1_000_003 + i * 7919 + j * 104_729));
+        }
+        s.push_str(" }\n");
+    }
+    s
+}
+
+/// A synthetic source whose ENCODED artifact is at least `min_bytes`.
+///
+/// **This is the whole point of the synthetic case.** The real-stage corpus
+/// shrinks every time the encoding improves, because a stage's artifact is
+/// whatever the compiler happens to emit today. This one is sized against the
+/// encoder's own measured output, so an encoding win makes it emit MORE
+/// functions rather than pushing it under the window. It cannot erode.
+///
+/// Termination is by construction rather than by hope. The artifact size is
+/// monotonically increasing in the function count -- each function contributes a
+/// chunk record, a name and its constants, and nothing is shared between them --
+/// so doubling reaches any finite target. The attempt count is capped, and
+/// exhausting it is a hard failure rather than a silent fallback to whatever
+/// size the last attempt reached.
+fn synthetic_source_over(min_bytes: usize) -> (String, usize, usize) {
+    let mut functions = SYNTH_FIRST_TRY;
+    for _ in 0..SYNTH_MAX_ATTEMPTS {
+        let src = synthetic_stage_source(functions, SYNTH_TERMS);
+        let module =
+            compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
+        let len = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module))
+            .expect("encode")
+            .len();
+        if len >= min_bytes {
+            return (src, len, functions);
+        }
+        functions *= 2;
+    }
+    panic!(
+        "no synthetic source reached {min_bytes} bytes within {SYNTH_MAX_ATTEMPTS} doublings \
+         from {SYNTH_FIRST_TRY} functions, which means artifact size stopped growing with the \
+         function count and the assumption this generator rests on is no longer true"
+    );
+}
+
 /// The capstone over SEVERAL real stages, not one.
 ///
 /// PR #21 proved composition on `verify_datalayout`. One stage is one shape: it
@@ -9857,6 +9971,22 @@ fn assemble_whole_artifact(label: &str, src: &str) -> (usize, usize, usize) {
 /// suite; they are simply no longer big enough to test this property, and the
 /// helper's own control is what reports that rather than letting them pass
 /// quietly.
+///
+/// **A FOURTH CASE IS SYNTHETIC, AND THAT IS WHAT STOPS THE EROSION.** A test
+/// whose corpus is destroyed by its own project's success will eventually be
+/// weakened to keep it green, and the pressure arrives at the worst moment --
+/// while landing an improvement, with a green-looking reason to lower a
+/// threshold. `synthetic_source_over` sizes a generated stage against the
+/// encoder's MEASURED output, so an encoding win makes it emit more functions
+/// rather than pushing it under the window. Measured on the day it was added:
+/// 384 functions, 143,320 bytes, 2.19x the window, eleven regions, five of them
+/// batched.
+///
+/// **It is added BESIDE the real stages, never instead of them.** Real artifacts
+/// are what make this test trustworthy, because they are the bytes the compiler
+/// actually emits; the synthetic one only makes it durable. A synthetic-only
+/// capstone would check the assembler against the test author's idea of an
+/// artifact.
 ///
 /// **The two largest were nearly excluded on a botched cost comparison, and the
 /// correction is the lesson.** Adding them takes this test from 25s to about
@@ -9901,7 +10031,7 @@ fn the_whole_artifact_assembly_holds_across_several_stages() {
     let mut smallest = usize::MAX;
     let mut largest = 0usize;
     for (label, src) in STAGES {
-        let (bytes, regions, batched) = assemble_whole_artifact(label, src);
+        let (bytes, regions, batched) = assemble_whole_artifact(label, src, Sabotage::None);
         assert!(
             regions >= 8 && batched >= 1,
             "{label}: {regions} regions, {batched} batched"
@@ -9909,6 +10039,43 @@ fn the_whole_artifact_assembly_holds_across_several_stages() {
         smallest = smallest.min(bytes);
         largest = largest.max(bytes);
     }
+
+    // THE SYNTHETIC CASE, BESIDE THE REAL STAGES AND NOT INSTEAD OF THEM.
+    //
+    // The real stages are what makes this test trustworthy: they are the bytes
+    // the compiler actually emits. The synthetic case is what makes it DURABLE.
+    // Its size is chosen against the encoder's measured output rather than
+    // inherited from it, so the next encoding improvement grows it instead of
+    // pushing it under the window, which is what removed four real stages from
+    // this corpus across three earlier rounds.
+    //
+    // It is deliberately NOT folded into the size-span figures below. Those
+    // measure the spread of REAL artifacts, and a synthetic size the test chose
+    // for itself would make that control report on its own parameter.
+    let (synth_src, synth_target, synth_functions) = synthetic_source_over(CAPACITY * 2);
+    let (synth_bytes, synth_regions, synth_batched) =
+        assemble_whole_artifact("synthetic", &synth_src, Sabotage::None);
+
+    // Preconditions, stated with their measured values so a later reader can see
+    // what the case actually exercised rather than what it was intended to.
+    assert_eq!(
+        synth_bytes, synth_target,
+        "the sized source and the assembled artifact disagree on length"
+    );
+    assert!(
+        synth_bytes > CAPACITY,
+        "the synthetic artifact is {synth_bytes} bytes from {synth_functions} functions and fits \
+         the {CAPACITY}-byte window, so it composes nothing"
+    );
+    assert!(
+        synth_batched >= 1,
+        "no synthetic region needed more than one batch, so the synthetic case is a \
+         single-batch artifact wearing a large size"
+    );
+    assert!(
+        synth_regions >= 8,
+        "the synthetic artifact placed only {synth_regions} regions"
+    );
 
     // Must-fire about the CORPUS: the stages must actually differ in size, or
     // several passes prove no more than one did.
@@ -9930,10 +10097,98 @@ fn the_whole_artifact_assembly_holds_across_several_stages() {
     //
     // If a later reduction takes this below 2x, it has stopped being testable on
     // real output and should move to a synthetic artifact rather than shrink
-    // again.
+    // again. THAT ARTIFACT NOW EXISTS, below, which is what makes the migration a
+    // deletion rather than a piece of work to be invented under pressure. The
+    // threshold is unchanged and is not to be lowered a second time.
     assert!(
         largest >= smallest * 2,
         "stages span only {smallest} to {largest} bytes, too narrow to show that \
          composition is independent of scale"
+    );
+}
+
+/// MUST-FIRE for the capstone: a mis-placed batch has to be caught.
+///
+/// Every assertion in `assemble_whole_artifact` other than the byte comparison
+/// is a COUNT -- regions placed, batches run, calls that returned success. A
+/// batch written to the wrong offset changes none of them. So without this case
+/// the capstone's passing is consistent with an assembler that places bytes
+/// anywhere at all, and the test would be a statement about the driver returning
+/// zero rather than about composition.
+///
+/// The defect is planted through the real assembler rather than a copy, and the
+/// assembler carries its own control that the plant actually happened.
+#[test]
+fn a_misplaced_batch_fails_the_whole_artifact_comparison() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    // The smallest qualifying real stage, so the control costs one assembly.
+    const SRC: &str = include_str!("../src/selfhost/kel/verify_structural.kel");
+
+    let honest = catch_unwind(AssertUnwindSafe(|| {
+        assemble_whole_artifact("verify_structural", SRC, Sabotage::None)
+    }));
+    assert!(
+        honest.is_ok(),
+        "MUST-NOT-FIRE: the honest assembly failed, so the must-fire case below \
+         would prove nothing about the sabotage"
+    );
+
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let sabotaged = catch_unwind(AssertUnwindSafe(|| {
+        assemble_whole_artifact("verify_structural", SRC, Sabotage::MisplaceOneBatch)
+    }));
+    std::panic::set_hook(previous);
+
+    let Err(payload) = sabotaged else {
+        panic!(
+            "MUST-FIRE: a batch was written one word away from its true offset and the \
+             whole-artifact comparison still reported agreement. The capstone cannot \
+             distinguish a correct assembly from an incorrect one."
+        );
+    };
+
+    // WHICH panic fired decides what this case proved. The assembler's own guard
+    // panics when the sabotage could not be planted, and that failure would also
+    // arrive here as an `Err`. Reading it as a caught defect would invert the
+    // result: the case would report the detector working at the exact moment
+    // nothing had been broken.
+    let message = payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .unwrap_or("<non-string panic payload>");
+    assert!(
+        message.contains("first difference at byte"),
+        "MUST-FIRE fired, but not from the byte comparison. The panic was: {message}"
+    );
+}
+
+/// The growth loop is what makes the synthetic case erosion-proof, and today it
+/// never runs.
+///
+/// `SYNTH_FIRST_TRY` functions already clear twice the window, so the capstone
+/// takes the first attempt every time and the doubling path is dead code from its
+/// point of view. **The one mechanism this increment exists to install would
+/// therefore ship unexercised**, and would first run on the day a future encoding
+/// improvement made it necessary, which is the worst moment to discover it wrong.
+///
+/// This asks for a target the first attempt cannot meet, so growth must happen.
+#[test]
+fn the_synthetic_source_grows_when_the_first_attempt_is_too_small() {
+    let target = CAPACITY * 4;
+    let (_src, len, functions) = synthetic_source_over(target);
+
+    // MUST-FIRE on the growth path: if the first attempt had been enough, this
+    // case would report success while testing nothing.
+    assert!(
+        functions > SYNTH_FIRST_TRY,
+        "the first attempt of {SYNTH_FIRST_TRY} functions already met a {target}-byte target, \
+         so the doubling path did not run and growth remains unexercised"
+    );
+    assert!(
+        len >= target,
+        "growth stopped at {functions} functions and {len} bytes, short of {target}"
     );
 }
