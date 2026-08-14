@@ -7,18 +7,16 @@ on resume. Unlike the three resume channels it is **not** kept always-current. I
 stamped with the commit it describes, so a stale handoff self-reports as stale rather than
 misleading a resuming agent.
 
-> **Rewritten whole, 2026-08-11**, not patched. Incremental edits had left it asserting 14 REAL / 6
-> DERIVE, 125 tests and 116 tests in three separate places, alongside a "next increment" section
-> describing work finished hours earlier and a Gating section for a workflow that no longer exists.
-> **A handoff that contradicts itself is worse than a stale one**: a reader cannot tell which half to
-> trust. Overwrite this file; do not append to it.
+> **Rewritten whole, 2026-08-13**, not patched. A handoff that contradicts itself is worse than a
+> stale one, because a reader cannot tell which half to trust. Overwrite this file; do not append.
 
 ## Validity
 
 - **Branch**: `v0.2.3`, or a feature branch cut from it.
-- **Parent commit**: `4a20a8ab`
-- **Written**: 2026-08-11
-- **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
+- **Parent commit**: `fe0e66f2`
+- **Written**: 2026-08-13
+- **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint. It governs
+  documentation, commit messages, code comments, and anything drafted for publication.
 
 **Check both.** `git rev-parse --abbrev-ref HEAD` is `v0.2.3` or a branch off it, and
 `git rev-parse HEAD~1` equals the parent above. The branch half is not redundant: `v0.3.0` carries
@@ -32,241 +30,209 @@ this file**.
 
 1. **Read `secret/notes/APPENDIX_B.md`.**
 2. **Read the other session's mailbox**: `git show origin/v0.3.0:docs/process/handoffs/v0.3.0.md`.
-   It has no wake; poll at increment boundaries.
+   It has no wake; poll at increment boundaries. **Read it to the end** — the last request in it was
+   missed once by stopping early.
 3. **Read this branch's mailbox** [`handoffs/v0.2.3.md`](./handoffs/v0.2.3.md) and the three
    channels: [`REVERSE_PROMPT.md`](./REVERSE_PROMPT.md), [`DESIGN_JOURNAL.md`](./DESIGN_JOURNAL.md)
    (newest first), [`TASKLOG.md`](./TASKLOG.md).
 4. **Read [`AUTONOMOUS_IMPLEMENTATION_LOOP.md`](./AUTONOMOUS_IMPLEMENTATION_LOOP.md).**
 
-## FIRST ACTION: nothing is in flight; read this section, then pick from THE NEXT WORK
+## FIRST ACTION: the tree is quiet. Confirm it, then pick from THE NEXT WORK.
 
-**No pull request of this line is open.** Confirm with `gh pr list --state open` — anything based on
-`v0.3.0` is the OTHER session's. **Both lines share a GitHub account, so `--author @me` matches
-theirs too; tell them apart by BASE BRANCH.**
+**Nothing of this line is in flight.** No pull request open, no branch of mine unmerged, no monitor
+armed, tree clean and in sync. Confirm with `git status`, `git branch --list`, and
+`gh pr list --state open`. **Anything based on `v0.3.0` is the OTHER session's — both lines share a
+GitHub account, so `--author @me` matches theirs too. Tell them apart by BASE BRANCH.**
 
-**Two things in this file were retracted and you should not act on their earlier forms.** The
-residency "refutation" and its ~321,000-slot budget are withdrawn (see
-[`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md)); the
-plan's original 77% projection stands. And the claim that `codegen.kel` lacked a multiheaded-`fn`
-capability was wrong — no capability was missing.
+**`git branch --list` is not optional even now.** The other line has left uncommitted work and
+branches in this checkout before, on 2026-08-12, after a compaction left it believing it owned
+`v0.2.3`. Its changes survived a `git checkout` only because a tracked file was dirty, then vanished,
+and were recovered from a scratchpad copy. **A branch survives what a dirty working tree does not.**
 
-**THE OTHER LINE MAY HAVE UNCOMMITTED WORK OR BRANCHES IN THIS CHECKOUT.** It happened on
-2026-08-12 after a compaction left it believing it owned `v0.2.3`. Its uncommitted changes were in
-this working tree, survived a `git checkout` only because a tracked file was dirty, and then
-vanished — recovered from a scratchpad copy. Two finished branches were sitting unexamined while an
-hour was spent rebuilding a worse version of the same work.
+## THE WORKFLOW: CI GATES FEATURE BRANCHES
 
-**So: `git status` AND `git branch --list` before writing anything on a shared surface.** A branch
-survives what a dirty working tree does not.
+**Do not run `scripts/release-gate.sh` to gate a merge.** Operator decision, 2026-08-11.
 
-## THE WORKFLOW CHANGED TODAY. CI GATES FEATURE BRANCHES.
+1. Cut the feature branch **as the first action of an increment**. The moment to guard is just after
+   a merge or a docs commit has left you on the version branch; that is exactly when code has been
+   written directly onto `v0.2.3` twice, once caught only before push.
+2. Verify locally as you go.
+3. Push, open a **draft PR to `v0.2.3`**.
+4. **Merge on CI green, at the commit CI ran, without rebasing.** Push. Delete the branch.
 
-**Do not run `scripts/release-gate.sh` to gate a merge.** Operator decision, 2026-08-11: gate time
-was the project's bottleneck and two sessions were serialising on one machine.
+**Reproduce the gate's invocation; do not approximate it.** This cost four defects in one day, each
+from a different narrowing:
 
-1. Feature branch cut from `v0.2.3`.
-2. Verify locally as you go — the suite and tier 1 are cheap and catch things before CI does.
-3. Push, open a **draft PR to `v0.2.3`**. `pull_request: branches: [main, 'v*']` triggers the full
-   23-job matrix on hosted runners.
-4. **Merge on CI green, at the commit CI ran, without rebasing.** Push. Confirm CI on the merge.
+| what was run | what it missed |
+|---|---|
+| default features | a `compile`-feature gate miss, failing `--no-default-features` |
+| `--features signatures` | a `signatures`-gate miss, failing the **default** build |
+| `cargo doc` with default features | a rustdoc error only under `--features signatures,encryption,shell` |
+| `clippy --tests --all-features` | a `collapsible_if` only under `--all-targets` |
 
-**CI is a verified strict superset of the local gate**, checked job by job rather than assumed. Every
-one of the twelve local steps has a CI job, including `keleusma-wire` in *both* configurations. CI
-also runs Miri, two MSRV checks, `no_std`, the RTOS `thumbv8m` cross-build, `keleusma-bench`, SDL3
-examples, the LSP, the extension and the WASM playground. **~48 minutes contending for nothing,
-against ~2h30m exclusive.**
+The gate's own invocations are in `.cargo-husky/hooks/pre-push`. Read them rather than remembering.
 
-**The `perf_canary` courtesy is retired.** Once neither session holds the machine, neither has a
-canary window to protect. **Run builds freely.** `scripts/gate-status.sh` still works and still
-reports an abandoned run on a `previous:` line; it is now an occasional check, not a scheduling
-instrument.
-
-**The local gate keeps two uses**: a pre-publication run with `--miri`, and working offline.
-
-**It worked for both sessions.** `v0.3.0` abandoned three local gates today and has since merged
-three PRs (#2, #3, #6).
+**`git push origin --delete` runs the full pre-push test tier, once per branch.** Deleting 32 refs in
+a loop timed out after ten minutes. Use one push naming every branch, or
+`gh api -X DELETE repos/sgeos/keleusma/git/refs/heads/<branch>`.
 
 ## THE STATE
 
-`v0.2.3` is at `4a20a8ab`, everything below merged and CI-green at the commit CI ran.
+`v0.2.3` is at `fe0e66f2`. Eight pull requests merged on 2026-08-13, each 22 of 22 CI jobs green.
 
-| merged 2026-08-12/13 | |
+| merged | |
 |---|---|
-| one slot name per array | artifacts −52 to −59% |
-| multihead predicate (v0.3.0's work, reviewed here) | two silent miscompiles closed |
-| `main` yields what `emit_next` returns | `codegen.kel` now lowers |
-| `DATA_SLOTS` run-length encoded | artifacts −75 to −79% cumulative |
-| `perf_canary` out of the routine pre-push tier | |
-| the fall-through message names `Reset` | |
+| the checked-arithmetic push order, corrected at eight sites | reported as one |
+| `SHARED_LAYOUT` run-length encoded | `codegen` aux body 154,880 → **111,864** bytes |
+| byte-identity coverage for the five `verify_*.kel` stages | **ten of ten stages** now |
+| the SECDED plane emitted and verified end to end | off by default |
+| the plane-inside-the-signature property pinned | was inherited from layout, not enforced |
+| the scrub / signature ORDER settled by execution | `ECC_SIGNATURE_ORDERING.md` holds nothing open |
+| report and scrub as separate optional verbs | scheduling is the host's |
+| in-flight CI in the status line | the display had shown a 66-hour-dead gate |
 
-**Artifact sizes, measured**: `wire.kel` 3,714,560 → **789,064**; `verify_datalayout` 105,848 →
-**26,296**. No opcode, `BYTECODE_VERSION`, or language change in any of it.
+**Boundary counts: 79 Ok / 4 Gap / 1 RefRejects, 84 cases.** Recounted 2026-08-13 from the case table
+of `self_hosted_construct_support_boundary` with comment lines stripped. **Recount it the same way
+rather than trusting this number** — it has been found stale twice, and two of my own three
+extraction attempts returned zero because they read the wrong `let cases` table and the wrong enum
+spelling. The right one is the `&[(&str, Support, &str)]` table inside that function.
 
-## WHERE THE DRIVER IS
-
-`tests/selfhost_wire.rs` is **148 tests**. Keleusma computes **all five** of the values the driver
-owed: the name table with both interning modes, the breadth-first constant ordering, the names
-interned **during** the walk for all three interning tags with `STRUCT_AUX` and `ENUM_AUX` alongside,
-the per-chunk ranges, and now the interning SEQUENCE itself, derived from a module description that
-is grouped by kind rather than pre-ordered.
-
-**The emitter coverage matrix is 19 REAL / 1 DERIVE**, up from 14 / 6. The one remaining DERIVE row
-is `STRUCT_TEMPLATES`, and it is **structural rather than pending**: the boxed construction path
-needs a non-flat type, the only one is `Text` under a narrow word, and this suite is gated out of
-narrow-word builds.
+**73 branches were pruned**, 42 local and 31 remote. What remains is the other line's four local and
+three remote `native`/`llvm` branches, `feat/selfhost-wire-data` held by a worktree, and
+`v0.2.3-prerebase-backup`. Recovery manifest at `tmp/branch-prune-manifest-20260813.txt`.
 
 ## THE NEXT WORK, RANKED, WITH THE TRAP NAMED FOR EACH
 
-**1. Option C part two: run-length `SHARED_LAYOUT`.** 43,032 bytes of `codegen`'s 154,880, so ~27%
-of what remains — less than part one delivered.
+**The ECC programme is finished.** This is a genuine choice among bounded roadmap tasks, which the
+loop document says is yours to make without prompting the operator.
 
-> **IT IS NOT PART ONE AGAIN.** Part one was nearly free because its only consumer COUNTED slots.
-> `Vm::shared_layout_entry` resolves a LOGICAL slot index against the artifact in place on every
-> `get_shared`/`set_shared`, so run-length encoding turns an O(1) index into a scan on a hot path.
-> A correct design carries `first_slot` per record for binary search, or expands at decode time —
-> and the latter contradicts the in-place zero-copy reading the container exists for. **Store the
-> stride, do not derive it**: deriving needs a kind-to-size table on both the Rust and Keleusma
-> sides, and cross-language duplication of exactly that shape produced three defects on 2026-08-12.
-> Full reasoning in the plan document.
+**1. A second stage through the whole-artifact capstone under the new encoding.**
 
-**2. The (72,64) SECDED plane, end to end.** The operator has called this a gap to close;
-prioritisation is open. It has unit tests in `keleusma-wire/src/ecc.rs` including exhaustive
-single-bit correction, and **no artifact the shipping encoder produces ever carries a plane**. Given
-radiation hardness is the stated value proposition, a feature proven only in isolation is the
-weakest part of that claim.
+> **The trap is that the corpus shrank under you.** Artifacts fell twice this session, and the
+> capstone lost `verify_yield` and `verify_typed` because their whole bodies now fit one window.
+> **Only `parse` (304,432), `codegen` (111,864) and `verify_structural` (102,256) still exceed it.**
+> Its size-span control was lowered from 4x to 2x for that reason, and if a further reduction takes
+> it below 2x the property has stopped being testable on real output and must move to a synthetic
+> artifact rather than shrink again. Do not lower it a second time.
 
-**3. Do NOT reach for another emitter slice.** The mechanical arc is complete: five computed values,
-batching on both paths, window positioning across seventeen kinds, multi-window assembly, and
-whole-artifact composition over six real stages. Inventing another is how a programme starts
-producing mechanisms that work and were not needed.
+**2. The Order-1 type checker.** Scoped in
+[`../decisions/TYPECHECK_SELFHOST_PLAN.md`](../decisions/TYPECHECK_SELFHOST_PLAN.md) at about fifteen
+rejection shapes, sized by execution rather than counted from 163 `TypeError` sites.
+
+> **The oracle is verdict agreement, not message agreement.** Do not chase identical diagnostics.
+
+**3. Load-time ECC policy**, which is now only "should a host scrub, and when". The verbs make both
+answers expressible and nothing forces either.
+
+> **The trap is re-deciding what is decided.** The ORDER is fixed and recorded. Only scheduling is
+> open, and the operator has already said a host may scrub on its own schedule.
 
 **Two standing traps.** Do not replace the linear dedup scan (no early exit in a total language;
 inputs capped at 256). Do not compute the chunk record's name index (`map[j] == j` always).
 
-## THE ONE RULE THAT MATTERED MOST TODAY
+## THE RULE THAT MATTERED MOST TODAY
 
-**A differential's failure mode is not a wrong answer. It is a corpus that cannot tell right from
-wrong.** Byte identity against a strong oracle reads like proof and is only ever as strong as the
-inputs behind it.
+**Measurement overturned two conclusions AFTER they had been written down, and both were mine.**
 
-Four vacuity controls were needed this arc and **three would have passed while measuring nothing**:
+**Writing a condition as an equation is what falsified the first.** The ordering decision said
+verify-then-scrub is a hole outright. Written formally, it is not: a verifying artifact IS the
+original, and scrubbing an undamaged artifact is the identity, so at a single instant the order is
+safe. The real defect is that **verification is a statement about a moment** — a system verifies at
+load and scrubs later, and the assumption that order needs is that no fault occurs in the window,
+which is exactly what the parity plane exists because is false. **A design cannot rest on the
+negation of its own motivation.**
 
-- the flattener went green while four of five cases could not distinguish breadth-first from
-  depth-first, because a composite in LAST position makes the walks coincide;
-- that control compared tags alone, which cannot separate `((1,2),3)` under the two walks;
-- the struct version counted only strings, so every struct case looked non-discriminating;
-- with one chunk every range starts at zero, so a driver emitting a constant `0` would have passed.
-
-**The corollary, which bit later**: a guard whose triggering input the corpus cannot generate is
-untested by construction, and writing a test to make it *look* covered is theatre. Two pool-capacity
-guards are unreachable and deliberately untested; that is recorded at the code.
+**Enumerating a small space falsified the second.** Six hand-chosen triple-bit faults all
+mis-corrected, reading as 100 percent. All 41,664 give **23,364, or 56.08 percent**, and the six sat
+inside byte 0 where the rate genuinely is 100. A biased sample presented as a measurement, over a
+space small enough that sampling was never justified.
 
 ## FACTS THAT COST REAL EFFORT
 
-- **`const data`, referenced from a function, emits real composite constants** to depth 2 in ~1 KB.
-  This overturned a committed plan conclusion. There are **three** data visibilities, not two.
-- **A struct interns its type name, THEN captures `field_names_first`, THEN interns fields FRESH.**
-  Capturing it first is off by one on every struct whose type name is new — invisible on a corpus of
-  familiar names.
-- **An enum's two names both DEDUP**, unlike a struct's field run, and the discriminant flag cannot
-  be derived from the value: `Some(0)` and `None` both present as zero.
-- **A LAST match wins** in the interner: `intern_fresh` inserts into the reference's index, so a
-  later `intern` yields the second occurrence. A first-match scan gives byte-identical `NAMES` and
-  `STRING_POOL` and a wrong `ENUM_LAYOUTS`.
-- **In-place pool compaction is unsound** once interning order differs from input order; two
-  ten-byte names break it.
-- **A dispatch chain's cap is a DEPTH BUDGET OF 24 SHARED between chain position and arm-body
-  nesting, not an arm count** — measured 2026-08-11, superseding the "nineteen arms" figure that
-  stood here. Every level an arm body nests costs one arm off the chain, which is why earlier
-  sessions recorded 19 and 23 and both were right for their shape. In the TEST HARNESS, which is the
-  binding context because that is where `wire.kel` is compiled, `dispatch_driver` holds **20 arms**
-  with a no-argument call body and **18** with a nested-call body. It is at 18 today: two arms of
-  headroom, or none, depending on what the arm calls. All three figures measured against the real
-  chain, not a synthetic one: 20 / 19 / 18 arms for a no-argument body, `emit_in_region(a, b)`, and a
-  nested-call body respectively.
-- **The failure mode differs by context, and the test harness gets the worse one.** A 2 MB test
-  thread overflows its stack and SIGABRTs before `MAX_PARSE_DEPTH` (`src/parser.rs:98`) can report;
-  the CLI, on the main thread's larger stack, rejects the same source cleanly at 23 arms with a
-  `ParseError` naming the limit. **So do not size a chain from a CLI measurement** — that reads two
-  to three arms too generous. Flagged for the operator below.
+- **A (72,64) SECDED code reports 23,364 of 41,664 triple-bit faults as a SUCCESSFUL repair while
+  producing the wrong word, and 5,133 of 635,376 four-bit faults as CLEAN.** Both are structural, not
+  implementation defects. **A clean report is not an integrity check**; only a signature is.
+- **`keleusma_wire::scrub` takes a wire CONTAINER, not a framed module.** Handing it the framed buffer
+  makes the parse fail on the magic and the scrub silently repair nothing. Use
+  `wire_format::scrub_module_bytes`, which slices the auxiliary body first.
+- **A test that reimplements the shipped API tests the reimplementation.** The ordering test carried
+  its own scrub and left the real verb unexercised; wiring it to the real one exposed the container
+  mismatch above immediately.
+- **The plane overhead is 12.5% asymptotically and 20.0% at 680 payload bytes**, because each plane is
+  padded to a whole word and every artifact carries the same nineteen regions.
+- **`MAX_PARSE_DEPTH` is a DEPTH BUDGET OF 24 SHARED between chain position and arm-body nesting**,
+  not an arm count. In the TEST HARNESS, which binds because that is where `wire.kel` compiles,
+  `dispatch_driver` holds 20 arms with a no-argument body and 18 with a nested-call body. **Do not
+  size a chain from a CLI measurement** — that reads two to three arms too generous, and the harness
+  SIGABRTs where the CLI reports a clean `ParseError`.
 - **`Op::Reset` is a path exit.** A `loop` chunk has no `Loop` op and ends in `Reset`.
 - **Shared data is re-seeded on every VM call**, so a multi-call artifact is carried forward as bytes.
 - **A faulted VM is unusable for later calls.**
-- **An enum discriminant takes a literal with an optional unary minus**; `A = 0 - 5` is rejected with
-  "expected type name" — right column, wrong explanation.
 - **Chained tuple indexing `k.t.0.1` is not admitted.** Pass the nested tuple to a function.
-- **`verify()` rejects a chunk that can run off its end.** Every path must exit via `Return`, `Trap`
-  or `Reset` — a constraint on anything a backend emits.
+- **The checked-arithmetic opcodes push `(low, high, flag)`**, while the surface form `overflow(h, l)`
+  binds high first. Both orders are real and six sites state the binding order correctly.
+- **On macOS `timeout` does not exist**; it is `gtimeout`.
 
 ## METHOD RULES THIS ARC PAID FOR
 
-- **`git branch --list` before writing on a shared surface.** An hour went into rebuilding a worse
-  version of work sitting one command away. Finding ONE artefact of the other line should prompt a
-  search for others.
-- **Back up someone else's uncommitted work the moment you find it.** Theirs vanished between two
-  commands and was recovered only from a scratchpad copy.
-- **Capture exit codes with `PIPESTATUS`, never `$?` after a pipe.** `cargo clippy ... | tail; echo
-  $?` reports tail's status. Every local "lint clean" through 2026-08-12 was read off a control that
-  could not fire, and a background task's wrapper exit code is not the tool's either.
-- **Assert that an edit matched.** Two `replace` calls silently did nothing after `cargo fmt`
-  rewrapped their targets, leaving a test whose message said `CHUNKS` while its code read
-  `SHARED_LAYOUT`. A silent no-op edit is worse than a crash: it produces a plausible wrong state.
-- **A stale comment is not a diagnosis.** "The multiheaded guard dispatch are the next increment"
-  explained a failure that had not been traced, and became a wrong cost estimate sent to the other
-  line.
-- **When judging whether a test is affordable, the denominator is the test that GOVERNS the suite**,
-  not the one being edited. And discount for machine load rather than merely noting it — this
-  machine swings four- to fivefold.
-
-- **"The corpus cannot reach X" is a fact about the corpus.** Whether a SOURCE can reach X is a
-  separate question. Asking it overturned two committed conclusions.
-- **Read back what you just wrote.** Three defects this arc were in code whose full targeted suite
-  was green: an unvalidated node count, a guard placed where its own test could not reach it, and a
-  scratch pass that could overwrite a live artifact.
-- **A test can catch what reading cannot.** The `fl_tag_in_scope` coupling was found by a negative
-  test written one slice earlier for a different tag. Neither instrument subsumes the other.
-- **A hand-written list or bound is a by-name enumeration.** Nine instances catalogued; four found
-  today in TEST harness `match` arms. All silent, all reading as success.
-- **A region-level diff names the kind; a byte diff names nothing.** It located four harness defects
-  in one sitting and is kept in the test rather than removed as scaffolding.
-- **Fixing a failure mode in one tool does not fix it in the tool that shares the assumption.** The
-  abandoned-run display was fixed in the morning; the same bug survived in the waiter beside it.
-- **Check `$?` explicitly.** A command piped to `tail` reports *tail's* status. Hit again today.
-- **Make a textual patch ASSERT its anchor**, and beware `replace(..., 1)` when two tests share a
-  line shape — it silently patched the wrong function.
-- **A roll-up drops the qualifier the detail records.** Prefer a table.
+- **Reproduce the gate's invocation, do not approximate it.** Four defects, four narrowings, one day.
+- **Enumerate a small space instead of sampling it**, and say so when a sample is hand-chosen.
+- **Call the shipped API from a test, never a copy of it.**
+- **A defect report names where a reader happened to look, not where the defect is.** One reported
+  site was eight, five of them in `src/*.rs`.
+- **Do not truncate output you intend to quote.** Piping a verification through `tail` destroyed the
+  evidence twice in one day.
+- **Put a control on the guard, not only on the detector.** A threshold passing by four orders of
+  magnitude cannot report anything.
+- **Check whether a file is generated before editing it.** `book/src/INSTRUCTION_SET.md` is generated
+  from the spec and gated by `git diff --exit-code` in CI.
+- **`git branch --list` before writing on a shared surface**, and **back up someone else's
+  uncommitted work the moment you find it**.
 
 ## Order-1 status
 
 - **Monomorphizer: EMPTY.** Identity on all ten stage sources, pinned with a must-fire control.
-- **Type checker: ~15 rejection shapes**, sized by execution rather than counted from 163 `TypeError`
-  sites. **The oracle is verdict agreement, not message agreement.** See
-  [`../decisions/TYPECHECK_SELFHOST_PLAN.md`](../decisions/TYPECHECK_SELFHOST_PLAN.md).
-- **Wire format: emittable end to end**, driver computing four of five values.
+- **Type checker: ~15 rejection shapes**, verdict agreement is the oracle.
+- **Wire format: emittable end to end**, all five driver-owed values computed, and now with an
+  optional SECDED plane the encoder can emit and the reader can verify and repair.
 
 ## Open, held by the operator
 
 - **Publication remains HELD.** Nothing is published.
-- **Per-element data slots.** One slot and one interned name per array element is why a 21 KB source
-  makes a 16 MB artifact, paid three times over in parallel tables plus the pool they index.
-- **The (72,64) SECDED plane is entirely unexercised** by the shipping encoder.
-- **`MAX_PARSE_DEPTH` does not do its stated job on a small stack, and this is a runtime concern
-  rather than a workflow one.** The constant is 24 (`src/parser.rs:98`) and its message says deep
-  nesting is "rejected to prevent stack overflow". Measured 2026-08-11: on a 2 MB thread the stack
-  blows BEFORE the guard fires, so the process aborts with SIGABRT instead of returning a
-  `ParseError`. The limit is evidently calibrated for a main thread's larger stack. An embedder that
-  parses untrusted source on a small-stack thread therefore gets an abort, not a rejection, which is
-  an availability failure at a trust boundary the guard was written to hold. **Not changed
-  unilaterally**: lowering the constant narrows the admitted language surface and would need a
-  reason beyond one measurement, so this is the operator's call.
+- **`v0.2.3-prerebase-backup`**, 309 commits ahead, local only. A deliberate pre-rebase safety copy.
+  **Do not delete it without being asked.**
+- **`MAX_PARSE_DEPTH` does not do its stated job on a small stack.** On a 2 MB thread the stack blows
+  before the guard fires, so an embedder parsing untrusted source gets a SIGABRT rather than a
+  `ParseError`. An availability failure at a trust boundary. Lowering the constant narrows the
+  admitted language surface, so it is not changed unilaterally.
+- **`CHANGELOG.md:340` states the checked-arithmetic push order wrongly and describes a PUBLISHED
+  release.** `TASKLOG.md:320,331` likewise. Rewriting already-published text is a separate call.
+- **A local gate quiet for 68 hours is still shown in the status line.** `gate-status.sh` is the other
+  session's instrument and suppressing it would change their semantics.
 - **MSRV**: CI checks 1.85 for `keleusma-arena` and 1.88 for `keleusma`.
 
 ## Parallel development
 
-`v0.3.0` carries native code generation and is on the same CI-gated workflow. Their measurement that
-matters here: **ten of eleven stage modules refuse native lowering on `Stream`, not on composites**,
-so Order 1's native path is gated on sub-coroutines. Their caveat stands — `lower_module` refuses on
-the first unsupported opcode, so `Stream` is necessary, not provably sole.
+`v0.3.0` carries native code generation on the same CI-gated workflow. **Three notes are waiting for
+them** in `docs/process/handoffs/v0.2.3.md`: the `SharedSlotRecord` move with its accessor split
+(`shared_count` is gone, replaced by `shared_record_count` and `shared_slot_count`), the status-line
+change with the reasoning for leaving `gate-status.sh` untouched, and the branch prune with what
+remains that is theirs.
 
-**A courtesy worth asking them for again**: announce a gate start in the mailbox. Restarting silently
-reopens a canary window, and that cost a disclosed overlap today.
+They hold `src/wire_schema.rs` and `src/bytecode.rs` read-only and announce before widening. Extend
+the same courtesy: **announce a change to their read surface before making it.**
+
+## Untracked artifacts a fresh session cannot see
+
+`tmp/` is gitignored, so none of this is in the repository:
+
+- **`tmp/2026-08-10-when_error_correction_meets_a_signature.markdown`** — research spike A373 on
+  ECC-and-signature composition, 4.8 MB, 13,796 references, passing the blog corpus checker with **0
+  findings**. Identifiers came from Crossref by title-and-author query, never from memory; a bare
+  title query returned the WRONG work for 11 of 74, and eight remain unregistered and are cited as
+  plain text.
+- **`tmp/a373/`** — the harvest pipeline: `harvest.py`, `select.py`, `gate.py`, `resolve_hand.py`,
+  `refine_hand.py`, `gen_refs.py`, `assemble.py`, and the four Crossref rounds.
+- **`tmp/a373_instrument_*.rs`** — the two measurement instruments behind the article.
+- **`tmp/branch-prune-manifest-20260813.txt`** — the ONLY record of 73 deleted branches, with recovery
+  commands in its header.
