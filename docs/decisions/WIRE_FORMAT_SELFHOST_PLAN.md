@@ -1105,6 +1105,63 @@ it to the table without a driver that calls it would record a capability the sys
 **The item is therefore blocked behind "wire the driver to a module", not beside it.** Checked so
 that a later session does not spend an increment rediscovering it as an easy win.
 
+#### RESIDENCY STAGING WAS SIZED FROM THE WRONG REGION (measured 2026-08-14)
+
+This document, the roadmap and my own goal statement all said residency staging is forced by **"a
+real stage's 395,804 names"**. Measured across all ten stages, that figure describes **no name count
+at all**.
+
+| stage | `NAMES` records | of which DATA_SLOTS | largest region |
+|---|---|---|---|
+| `parse` | **627** | 375 | `CONSTS`, 34,782 units |
+| `codegen` | 152 | 76 | `CONSTS`, 12,676 |
+| `verify_structural` | 42 | 28 | `CONSTS`, 12,404 |
+| `lexer` | 31 | 17 | `CONSTS`, 522 |
+| `verify_datalayout` | 17 | 15 | `STRING_POOL`, 19 |
+
+**The largest NAMES region in the corpus is 627 records.** The 395,804 figure is a REGION record
+count, and the largest region is `CONSTS`. The number was carried from one context into another
+where it was never true, and it made a two-and-a-half-times problem look like a fifteen-hundred-times
+one.
+
+**What actually remains, restated from the measurement.**
+
+1. **The DATA_SLOTS name contributor is not in the producer at all.** It is the difference between
+   the producer's sequence and the reference's `NAMES`: 252 against 627 for `parse`. This is the
+   real gap, and it is a new contributor rather than a scaling problem.
+2. **The sequence then exceeds one call, but barely.** The interner admits 256 names, and `nin`
+   holds two words per name in a 1024-word array, so **512 is the hard ceiling before any staging**
+   and 627 is past it. Two calls, or wider arrays, or both.
+
+**Why the old framing would have produced the wrong design.** Staging for 395,804 names means
+carrying an interner's dedup state across hundreds of batches with a pool far larger than `bin`,
+which is a genuine architecture problem. Staging for 627 means two batches with the emitted pool
+still resident. **The first design would have been built and then not needed.**
+
+**The slot contributor's ORDER and SPELLING, measured rather than assumed.** For
+`shared data s { alpha: Word, beta: Word }` with functions `zulu` and `main`, the reference `NAMES`
+region is:
+
+```
+main, zulu, s.alpha, s.beta
+```
+
+So slot names **append after the chunk names**, and each is spelled `<block>.<field>` rather than the
+bare field name. Both facts are needed to extend the producer and neither is guessable from the
+declaration: a producer emitting `alpha` in declaration order would be wrong twice over, and the
+first name would still dedup against nothing and look plausible.
+
+**The remaining ceiling, stated precisely.** `nin` holds two words per name in a 1024-word array, so
+512 names is the hard limit before any staging and `parse` needs 627. Two batches suffice if the host
+carries `bout` and the running counts between calls and re-seeds them, because shared data is
+re-seeded on every call. The emitted pool stays resident: at roughly 6 KB it fits `bout`'s 8192
+bytes, which is what makes two batches enough and is the fact the old 395,804 framing hid.
+
+**The pre-run-length-encoding state is where the large figure came from**, when `SHARED_LAYOUT` held
+one record per array element and `lexer.kel` alone expanded to roughly 76,000 shared slots. Run-length
+encoding took `SHARED_LAYOUT` to between one and nine records per stage. The figure outlived the
+representation it described.
+
 #### THE END-TO-END SLICE, AND THE ONE OBSTACLE IN IT (specified 2026-08-14)
 
 The producer is complete: Keleusma derives the interning SEQUENCE and the constant node table from a
