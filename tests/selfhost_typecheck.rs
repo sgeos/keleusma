@@ -260,6 +260,68 @@ fn type_tag(t: &keleusma::ast::TypeExpr) -> i64 {
 /// swapping the halves compiles and is wrong.
 type CallRows = (Vec<(i64, i64)>, Vec<(i64, i64)>);
 
+/// Declarations and call sites, kept SEPARATE so the stage joins them.
+///
+/// Returns (declared parameter counts by index, call sites as (index, argument
+/// count), argument-type pairs).
+///
+/// **The host resolves a name to an index and counts arguments. It does not
+/// decide whether the arity is right.** That decision moved into the stage, and
+/// the difference between a migration and a relocation is exactly which side
+/// holds it.
+type DeclCallRows = (Vec<i64>, Vec<(i64, i64)>, Vec<(i64, i64)>);
+
+fn decl_call_rows(ast: &keleusma::ast::Program) -> DeclCallRows {
+    use keleusma::ast::Expr;
+    use keleusma::visitor::Visitor;
+    use std::collections::BTreeMap;
+
+    let mut index: BTreeMap<String, usize> = BTreeMap::new();
+    let mut params: Vec<i64> = Vec::new();
+    let mut ptypes: Vec<Vec<i64>> = Vec::new();
+    for f in &ast.functions {
+        index.insert(f.name.clone(), params.len());
+        params.push(f.params.len() as i64);
+        ptypes.push(
+            f.params
+                .iter()
+                .map(|p| p.type_expr.as_ref().map_or(0, type_tag))
+                .collect(),
+        );
+    }
+
+    struct Sites<'a> {
+        index: &'a BTreeMap<String, usize>,
+        ptypes: &'a [Vec<i64>],
+        sites: Vec<(i64, i64)>,
+        args: Vec<(i64, i64)>,
+    }
+    impl Visitor for Sites<'_> {
+        fn visit_expr(&mut self, expr: &Expr) {
+            if let Expr::Call { name, args, .. } = expr
+                && let Some(i) = self.index.get(name)
+            {
+                self.sites.push((*i as i64, args.len() as i64));
+                for (p, a) in self.ptypes[*i].iter().zip(args.iter()) {
+                    self.args.push((*p, expr_tag(a)));
+                }
+            }
+            self.walk_expr(expr);
+        }
+    }
+
+    let mut s = Sites {
+        index: &index,
+        ptypes: &ptypes,
+        sites: Vec::new(),
+        args: Vec::new(),
+    };
+    for f in &ast.functions {
+        s.visit_block(&f.body);
+    }
+    (params, s.sites, s.args)
+}
+
 /// Call sites paired against their declarations: (declared arity, actual
 /// arity), plus an argument-type pair per positional argument.
 ///
@@ -671,7 +733,7 @@ fn return_claims(ast: &keleusma::ast::Program) -> Vec<(i64, i64)> {
 
 /// The stage's verdict for a program, with its operand pairs marshalled in.
 fn stage_accepts_program(pairs: &[(i64, i64)]) -> bool {
-    stage_verdict(pairs, &[], &[], &[], &[])
+    stage_verdict(pairs, &[], &[], &[], &[], &[], &[])
 }
 
 /// The stage's verdict with both tables.
@@ -681,6 +743,8 @@ fn stage_verdict(
     res: &[i64],
     claims: &[(i64, i64)],
     member: &[i64],
+    dparams: &[i64],
+    sites: &[(i64, i64)],
 ) -> bool {
     let module = compile(&parse(&tokenize(TYPES_KEL).expect("lex")).expect("parse"))
         .expect("verify_types.kel compiles");
@@ -819,6 +883,49 @@ fn stage_verdict(
             keleusma::bytecode::Value::Int(*m),
         )
         .expect("member");
+    }
+    const DN_SLOT: usize = MEMBER_SLOT + 256;
+    const DPARAMS_SLOT: usize = DN_SLOT + 1;
+    const CSN_SLOT: usize = DPARAMS_SLOT + 128;
+    const CSITE_SLOT: usize = CSN_SLOT + 1;
+    const CARGS_SLOT: usize = CSITE_SLOT + 128;
+    assert!(
+        dparams.len() <= 128 && sites.len() <= 128,
+        "declaration tables overflow"
+    );
+    vm.set_shared(
+        &mut shared,
+        DN_SLOT,
+        keleusma::bytecode::Value::Int(dparams.len() as i64),
+    )
+    .expect("dn");
+    for (i, d) in dparams.iter().enumerate() {
+        vm.set_shared(
+            &mut shared,
+            DPARAMS_SLOT + i,
+            keleusma::bytecode::Value::Int(*d),
+        )
+        .expect("dparams");
+    }
+    vm.set_shared(
+        &mut shared,
+        CSN_SLOT,
+        keleusma::bytecode::Value::Int(sites.len() as i64),
+    )
+    .expect("csn");
+    for (i, (idx, n)) in sites.iter().enumerate() {
+        vm.set_shared(
+            &mut shared,
+            CSITE_SLOT + i,
+            keleusma::bytecode::Value::Int(*idx),
+        )
+        .expect("csite");
+        vm.set_shared(
+            &mut shared,
+            CARGS_SLOT + i,
+            keleusma::bytecode::Value::Int(*n),
+        )
+        .expect("cargs");
     }
     let out = vm
         .call_with_shared(&mut shared, &[keleusma::bytecode::Value::Int(0)])
@@ -992,7 +1099,7 @@ fn slice_two_rejects_arity_and_argument_type_mismatches() {
         let (arity, arg_pairs) = call_rows(&ast);
         let mut pairs = operand_pairs(&ast);
         pairs.extend(arg_pairs);
-        let stage = stage_verdict(&pairs, &arity, &[], &[], &[]);
+        let stage = stage_verdict(&pairs, &arity, &[], &[], &[], &[], &[]);
         if IN_SCOPE.contains(label) {
             assert!(
                 !stage,
@@ -1021,7 +1128,7 @@ fn slice_two_rejects_arity_and_argument_type_mismatches() {
         let mut pairs = operand_pairs(&ast);
         pairs.extend(arg_pairs);
         assert!(
-            stage_verdict(&pairs, &arity, &[], &[], &[]),
+            stage_verdict(&pairs, &arity, &[], &[], &[], &[], &[]),
             "{label}: slice 2 REJECTED a well-typed program, which narrows the language"
         );
     }
@@ -1060,7 +1167,7 @@ fn slice_three_rejects_unresolved_names_and_called_locals() {
         let (arity, arg_pairs) = call_rows(&ast);
         let mut pairs = operand_pairs(&ast);
         pairs.extend(arg_pairs);
-        let stage = stage_verdict(&pairs, &arity, &resolution_codes(&ast), &[], &[]);
+        let stage = stage_verdict(&pairs, &arity, &resolution_codes(&ast), &[], &[], &[], &[]);
         if IN_SCOPE.contains(label) {
             assert!(
                 !stage,
@@ -1097,7 +1204,7 @@ fn slice_three_rejects_unresolved_names_and_called_locals() {
         let mut pairs = operand_pairs(&ast);
         pairs.extend(arg_pairs);
         assert!(
-            stage_verdict(&pairs, &arity, &resolution_codes(&ast), &[], &[]),
+            stage_verdict(&pairs, &arity, &resolution_codes(&ast), &[], &[], &[], &[]),
             "{label}: slice 3 REJECTED a well-typed program, which narrows the language"
         );
     }
@@ -1143,6 +1250,8 @@ fn slices_four_and_five_reject_conditions_and_structural_mismatches() {
             &arity,
             &resolution_codes(&ast),
             &tag_claims(&ast),
+            &[],
+            &[],
             &[],
         )
     };
@@ -1210,18 +1319,25 @@ fn slices_four_and_five_reject_conditions_and_structural_mismatches() {
 fn the_stage_agrees_with_the_reference_on_the_whole_corpus() {
     let verdict = |src: &str| -> bool {
         let ast = parse(&tokenize(src).expect("lex")).expect("parse");
-        let (mut arity, arg_pairs) = call_rows(&ast);
-        arity.extend(struct_arity(&ast));
+        let (_, arg_pairs) = call_rows(&ast);
+        let arity = struct_arity(&ast);
         let mut pairs = operand_pairs(&ast);
         pairs.extend(arg_pairs);
         let mut claims = tag_claims(&ast);
         claims.extend(return_claims(&ast));
+        // CALL ARITY NO LONGER RIDES THE PRE-JOINED CHANNEL. `arity` carries
+        // struct-literal field counts only; call sites go through the join, so
+        // the join is load-bearing rather than redundant with a channel that
+        // already knew the answer.
+        let (dparams, sites, _) = decl_call_rows(&ast);
         stage_verdict(
             &pairs,
             &arity,
             &resolution_codes(&ast),
             &claims,
             &field_membership(&ast),
+            &dparams,
+            &sites,
         )
     };
 

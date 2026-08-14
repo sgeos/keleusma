@@ -101,6 +101,27 @@ shared data ty {
     // applies the algorithm.
     mn: Word,
     member: [Word; 256],
+    // PART 2 SLICE a: declarations and call sites arrive SEPARATELY and the
+    // stage joins them.
+    //
+    // **A migrated channel that still receives the answer is not a migration.**
+    // The host may say "this call names declaration 3 and passes 2 arguments";
+    // it may NOT say "this call has the wrong arity". The lookup is the work,
+    // and the work is what moves.
+    //
+    //   dparams[f]  the declared parameter count of function f
+    //   csite[c]    the declaration index this call names
+    //   cargs[c]    how many arguments it passes
+    //
+    // APPENDED LAST, so no existing slot index moves. Inserting these in the
+    // middle is exactly what broke four tests on the first attempt: the shared
+    // block is addressed by SLOT, and every field after the insertion point
+    // silently shifted.
+    dn: Word,
+    dparams: [Word; 128],
+    csn: Word,
+    csite: [Word; 128],
+    cargs: [Word; 128],
 }
 
 // The verdict constants, named rather than spelled as bare integers at the call sites, so a later
@@ -156,6 +177,16 @@ fn ty_check() -> Word {
     // comparison rather than two rules.
     for j in 0..ty.cn limit 128 {
         ty.verdict = if ty.cdecl[j] == ty.cact[j] { ty.verdict } else { ty_reject() };
+    }
+    // THE JOIN. Each call site names a declaration; the stage reads that
+    // declaration's parameter count and compares. A site naming an index outside
+    // the declaration table is REFUSED rather than skipped: an out-of-range
+    // index means the host and the stage disagree about the table, and guessing
+    // which is right would hide it.
+    for c in 0..ty.csn limit 128 {
+        ty.verdict = if ty.csite[c] >= ty.dn { ty_reject() } else {
+            if ty.dparams[ty.csite[c]] == ty.cargs[c] { ty.verdict } else { ty_reject() }
+        };
     }
     // Slice 3. Unresolved names and called locals.
     for k in 0..ty.rn limit 256 {
