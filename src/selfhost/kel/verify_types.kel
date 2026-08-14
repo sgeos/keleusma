@@ -1,0 +1,61 @@
+// src/selfhost/kel/verify_types.kel -- the self-hosted TYPE REJECTION stage.
+//
+// **Rejection only, and that is a measured scope rather than a simplification.**
+// Two spikes shrank the Order-1 type-checker obligation to this. Monomorphization is an identity
+// transform on all ten stage sources, pinned by `tests/selfhost_monomorphize_identity.rs`. And
+// clearing `program.fn_expr_types` leaves every stage module byte-identical, so the emitter's
+// structural fallback covers everything the subset reaches and INFERENCE FOR EMISSION IS NOT
+// REQUIRED. What remains is deciding that an ill-typed program is ill-typed, and this stage needs
+// exactly as much type propagation as that decision takes.
+//
+// **The oracle is VERDICT agreement, not message agreement.** Accept versus reject, which is what
+// the `verify_*.kel` family already uses. Reproducing the reference's English would commit this
+// stage to diagnostics the reference is free to reword.
+//
+// **The two directions are NOT symmetric, unlike the structural verifier's.** `verify_structural`
+// and friends may over-approximate and defer to a runtime guard. A type checker may not: rejecting
+// a valid program is a LANGUAGE CHANGE, not a conservative choice. So:
+//
+//   the reference accepts  ->  this stage MUST accept. A false rejection narrows the language.
+//   the reference rejects  ->  this stage must reject, for the enumerated shapes.
+//
+// The second is bounded by a corpus; the first is not, which is why the well-typed side of the
+// corpus grows with every slice rather than staying at the controls the sizing spike used.
+//
+// SLICE 0, WHICH IS THIS FILE: no rules. `verdict` is always ACCEPT. That is the point rather than
+// a placeholder -- the corpus must then show every well-typed case agreeing and every ill-typed
+// case DISAGREEING, and a harness reporting success here is broken. Finding that out costs nothing
+// before a rule exists, and costs a great deal afterwards.
+//
+// See `docs/decisions/TYPECHECK_IMPLEMENTATION_PLAN.md` for the six slices and the fifteen shapes.
+require word >= 32;
+
+// The host-facing block. `cmd` selects the operation; `verdict` carries the answer out.
+//
+// The input surface is deliberately EMPTY at slice 0. The stage cannot yet see the program, and
+// stating that in the encoding is better than accepting a table nothing reads: a reader of this
+// file can tell at a glance that a passing corpus here proves the harness works and nothing about
+// type checking.
+shared data ty {
+    cmd: Word,
+    verdict: Word,
+}
+
+// The verdict constants, named rather than spelled as bare integers at the call sites, so a later
+// slice adding a rejection code cannot collide with the accept value by accident.
+fn ty_accept() -> Word { 0 }
+
+fn ty_reject() -> Word { 0 - 1 }
+
+// The whole of slice 0. Every program is accepted, because no rule exists to reject one.
+//
+// This is a MUST-NOT-FIRE by construction: the stage is incapable of rejecting, so any rejection
+// the harness observes would be the harness's own defect rather than this stage's opinion.
+fn ty_check() -> Word {
+    ty.verdict = ty_accept();
+    ty.verdict
+}
+
+fn main(cmd: Word) -> Word {
+    if cmd == 0 { ty_check() } else { 0 - 99 }
+}
