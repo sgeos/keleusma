@@ -13,7 +13,7 @@ misleading a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`, or a feature branch cut from it.
-- **Parent commit**: `bafcf108`
+- **Parent commit**: `b5b9c2b6`
 - **Written**: 2026-08-14
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint. It governs
   documentation, commit messages, code comments, and anything drafted for publication.
@@ -66,7 +66,7 @@ MSRV together is a runner, not a defect.
 
 ## THE STATE
 
-**Thirteen pull requests merged, each 22 of 22 CI jobs green.** `selfhost_wire` is at **155 tests**.
+**Seventeen pull requests merged, each 22 of 22 CI jobs green.** `selfhost_wire` is at **156 tests**.
 
 | | |
 |---|---|
@@ -77,7 +77,8 @@ MSRV together is a runner, not a defect.
 | the type checker's sliced implementation plan | #60 |
 | the constant contributor: roots, names | #62 |
 | the constant contributor: roots, six-word node table | #65 |
-| roadmap and plan currency corrections | #61, #63, #64, #66, #67 |
+| the constant contributor: CHILD positions, names and node table -- **the contributor is COMPLETE** | #69 |
+| roadmap and plan currency corrections | #61, #63, #64, #66, #67, #70 |
 
 **Boundary counts: 79 Ok / 4 Gap / 1 RefRejects, 84 cases.** Recount from the
 `&[(&str, Support, &str)]` table inside `self_hosted_construct_support_boundary`, comment lines
@@ -86,20 +87,21 @@ stripped. **Three of my own extraction attempts have returned a wrong number** â
 
 ## THE NEXT INCREMENT, SPECIFIED
 
-**The constant walk's CHILD positions.** Roots are done. The specification is written down at
-"THE CHILD-POSITION SLICE, SPECIFIED BEFORE IT IS BUILT" in
-[`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md), verified
-against `preorder_13b` rather than inferred. **Read it before writing any of it.** Three ways to
-produce a plausible artifact that is wrong:
+**THE CONSTANT CONTRIBUTOR IS COMPLETE** (slice 14e, #69): roots and child positions, names and node
+table, all four. The interning sequence is no longer a Rust model.
 
-- **Two orders at once.** Names follow a DEPTH-FIRST preorder; emission follows a BREADTH-FIRST
-  queue. One order for both agrees on every single-level constant and diverges at depth two.
-- **`STRUCT` interns its field names FRESH; `ENUM` interns both names DEDUP.** A single "composite
-  interns its names" rule is wrong for one of the two, and only where a name repeats.
-- **Field NAMES are not children; field VALUES are.** Confusing them yields a node table that is
-  self-consistent and wrong.
+**A prediction that increment disproved, recorded because the reflex would inflate every remaining
+estimate on this line.** The plan and this file both said the nesting walk "needs an explicit stack
+because the language has no recursion". **It does not.** The blob carries the forest in PREORDER and
+the reference pushes a node then descends, so the node table and the name sequence are BOTH in that
+order and a linear scan reproduces both. A stack is needed only to reconstruct tree SHAPE, which the
+producer does not do. **The cost of a total language was assumed rather than measured.**
 
-**Then the two that are ONE increment**: removing `wire.kel` from the `read_stage` exclusion and the
+What survives from that specification and still binds: **`STRUCT` interns its field names FRESH while
+`ENUM` interns both names DEDUP**, and a single "a composite interns its names" rule is wrong for one
+of the two, visibly only where a name repeats.
+
+**Next, and they are ONE increment**: removing `wire.kel` from the `read_stage` exclusion and the
 residency staging a stage's 395,804 names force. The plan is explicit that doing either alone is
 wasted, and `read_stage` is **blocked behind the driver, not beside it** â€” its stated criterion
 ("when it produces bytes rather than a checksum") now reads as met, and it is still not a one-line
