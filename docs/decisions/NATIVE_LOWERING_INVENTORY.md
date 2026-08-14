@@ -5660,3 +5660,64 @@ A green execution differential over ten modules is not a proof. It is evidence o
 2100 ticks happen to take, and the modules were selected because they are the family this arc
 targeted. The remaining five corpus refusals — `stream` (4) and `composite` (1) — are
 untouched.
+
+---
+
+## Part B: the three rogue AI streams EXECUTE. 53 -> 56 of 58, refused 5 -> 2
+
+2026-08-14. The tail-walk widening is re-applied and now stands on a differential rather than
+on `module_refusals(...).is_empty()`.
+
+| | before | after |
+|---|---|---|
+| modules lowering | 53 | **56 of 58** |
+| refused | 5 | **2** — `rogue_dungen` (composite) and `codegen.kel` (stream) |
+
+### The widening, and why it was safe
+
+`degenerate_stream_yield`'s tail walk now admits `NewComposite(Flat { count, .. })` with
+`delta += 1 - count`. All three modules end
+`Yield ; PopN(1) ; Const(0) x3 ; NewComposite(Tuple, 3) ; PopN(1) ; Reset` — a trailing tuple
+built and thrown away. **Their net delta was ALREADY exactly `-1`**, the value the rule
+demands; only the allowed-op set rejected them. It writes scratch only, nothing reads it, and
+it cannot trap, call out, or touch the data segment.
+
+That is the same mistake the allowlist made once before, one construct further along.
+
+### `sret` was NOT needed for these, and the reason is worth keeping
+
+These modules take **and return** a composite:
+
+```text
+loop main(input: (Word, Word, Word, Word, Word)) -> (Word, Word, Word)
+```
+
+Both directions are an `i64` address, since that is how the emitter represents every composite
+operand. The returned body lives in the **region buffer the caller passed in**, which outlives
+the call — and each of these modules is a **single chunk**, so there is no caller/callee offset
+collision to resolve.
+
+**The `sret` convention is still the right general answer** and is recorded in
+`NATIVE_COMPOSITE_RETURN_ABI.md`; it is what a multi-chunk case needs, where a callee's region
+sites would overlap the caller's live body. It simply was not the blocker here. The earlier
+framing — "blocked on a caller-region decision" — was **over-cautious**: the decision is real
+and needed, but not for these three.
+
+### Verified by mutation, not by its own green
+
+Perturbing the flat field-read offset by one word makes **all three** diverge at **tick 0**.
+`src/lib.rs` was then restored and confirmed **byte-identical under `cmp`**.
+
+An earlier mutation attempt silently failed to apply and the suite passed — which proves
+nothing and looked exactly like success. The applied-mutation count is now checked before the
+result is read.
+
+### The oracle
+
+Per-tick **returned triple**, decoded on both sides, plus the shared data segment byte for
+byte. Inputs are asymmetric in every position, so a swapped or dropped element changes the
+answer. Three canaries — shared, private, region — bound the writes. A vacuity guard rejects
+an all-zero triple sequence.
+
+`codegen.kel` remains refused as the must-not-fire control: no `Yield` of its own and a
+`Reentrant` callee, which is delegated suspension and a soundness matter.

@@ -1324,6 +1324,31 @@ fn degenerate_stream_yield(chunk: &Chunk, module: &Module) -> Option<Vec<usize>>
                     delta -= 1;
                     j += 1;
                 }
+                // Building a composite that is then discarded.
+                //
+                // **The same mistake the allowlist above already made once**,
+                // one construct further along. `rogue_ai_boss`, `_hunter` and
+                // `_tracker` all end `Yield ; PopN(1) ; Const(0) x3 ;
+                // NewComposite(Tuple, 3) ; PopN(1) ; Reset` -- a trailing tuple
+                // built and thrown away. Their net delta is ALREADY exactly
+                // `-1`, the value this rule demands; only the allowed-op set
+                // rejected them.
+                //
+                // Sound for the same reason as the constants: it writes only
+                // the scratch region, nothing reads it because the value is
+                // discarded by the following `PopN` and `Reset` rewinds, and it
+                // can neither trap nor call out nor touch the data segment.
+                //
+                // `Flat` only. A `Boxed` body allocates outside the region and
+                // the emitter refuses it anyway, so admitting it here would
+                // widen the predicate ahead of the lowering.
+                Some(Op::NewComposite(keleusma::bytecode::NewCompositeOperand::Flat {
+                    count,
+                    ..
+                })) => {
+                    delta += 1 - i32::from(*count);
+                    j += 1;
+                }
                 Some(Op::Reset) => break,
                 // Anything else may consume the resumed value, write the data
                 // segment, call out, or trap. None of those survives.
