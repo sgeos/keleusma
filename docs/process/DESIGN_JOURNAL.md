@@ -13,6 +13,58 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE PARITY PLANE ARC, AND A DECISION THAT CHANGED SHAPE TWICE UNDER MEASUREMENT (2026-08-13).**
+Six merges: `SHARED_LAYOUT` run-length encoding, byte-identity coverage for the five `verify_*.kel`
+stages, the SECDED plane emitted and verified end to end, the plane-inside-signature property pinned,
+the scrub-and-signature ordering settled, and the report/scrub verbs.
+
+**A PLAN'S CENTRAL NUMBER WAS UNMEASURED AND CHECKING IT TOOK TEN MINUTES.** The plan ranked
+run-length encoding `SHARED_LAYOUT` at "roughly 27%" without measuring the distribution the saving
+depends on. `SharedSlotRecord` was ONE word and a run record needs `first_slot`, `run` and `stride`,
+taking it to TWO, so the encoding is a **pessimisation** below a mean run of 2. Raised as a blocker
+before writing encoder code and **refuted by four orders of magnitude**: 643,276 slots across eleven
+stages collapse to 18 runs, mean 35,738. The table went from 5,146,208 bytes to 400, and `codegen`'s
+auxiliary body from 154,880 to 111,864, which is the projected 27% arriving exactly.
+
+**THE ORDERING DECISION WAS WRONG IN ITS FIRST FORM AND THE EQUATIONS EXPOSED IT.** The first draft
+said verify-then-scrub is a hole outright. Writing the soundness condition as an equation showed it is
+not: `Ver(X)` forces `X = M`, and scrubbing an undamaged artifact is the identity, so at a single
+instant the order is safe. **The defect is that verification is a statement about a moment.** A
+deployed system verifies at load and scrubs later, and the assumption that ordering needs is that no
+fault occurs in the window, which is exactly what the parity plane exists because is false. **A design
+cannot rest on the negation of its own motivation.** The corrected argument is stronger and it
+connects the problem to time-of-check-to-time-of-use, a literature the first version had no reason to
+reach for.
+
+**A SAMPLED MEASUREMENT REPORTED 100% WHERE THE TRUTH IS 56.08%.** Six hand-chosen triple faults all
+mis-corrected. Enumerating all 41,664 gives 23,364, and the six were confined to byte 0 where the rate
+genuinely is 100%. A biased sample presented as a measurement, wrong by nearly a factor of two, caught
+only by enumerating a space small enough that sampling was never justified. The enumeration also
+produced the result the design turns on: **5,133 of 635,376 four-bit patterns are reported CLEAN**
+because the error pattern is itself a codeword, so a clean report is not an integrity check.
+
+**A SEPARATION SUGGESTED BY THE OPERATOR CORRECTED MY DESIGN.** I had concluded the fix was a mutable
+LOAD path. That would have pushed `&mut` into the common path and cost the zero-copy and
+worst-case-memory properties the reader exists for. Report and scrub as separate VERBS is the right
+shape: report already existed and only the mutating counterpart was missing. `scrub` returns counts
+rather than an artifact, so there is nothing to load without re-authenticating, and `&mut [u8]` makes
+the unsound order **unrepresentable** wherever the reader borrows the buffer.
+
+**FOUR DEFECTS THE GATES CAUGHT THAT MY OWN CHECKS DID NOT**, all the same shape: I approximated the
+gate's invocation instead of reproducing it. A `compile`-feature miss failed
+`--no-default-features`; a `signatures`-gate miss failed the default build; a rustdoc
+redundant-explicit-link error appeared only under the docs.rs feature set; and a `collapsible_if`
+appeared only under `--all-targets`. **Four times in one day, from four different narrowings.**
+
+**A REIMPLEMENTATION HID AN INTERFACE MISMATCH.** The ordering test carried its own copy of a scrub,
+so it exercised a private reimplementation and left the shipped verb untested. Wiring it to the real
+one failed immediately: `keleusma_wire::scrub` takes a wire CONTAINER and the test handed it a FRAMED
+module, whose header the wire crate knows nothing about. The parse failed on the magic, the scrub
+returned `None`, and nothing was repaired, silently. That is why the module-level
+`scrub_module_bytes` now exists.
+
+---
+
 **A REPORTED DEFECT AT ONE SITE WAS A DEFECT AT EIGHT, AND THE REVERSAL IS WHY (2026-08-13).** The
 `v0.3.0` session reported that `docs/spec/GRAMMAR.md:747` states the runtime pushes
 `(high, low, flag)` when it pushes `(low, high, flag)`. Verified against the implementation before
