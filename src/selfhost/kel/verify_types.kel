@@ -22,7 +22,7 @@
 // The second is bounded by a corpus; the first is not, which is why the well-typed side of the
 // corpus grows with every slice rather than staying at the controls the sizing spike used.
 //
-// SLICE 1: operand agreement. `verdict` rejects when two operands that must agree do not.
+// SLICE 2: operand agreement, plus call arity and argument types.
 //
 // SLICE 0, WHICH THIS REPLACED: no rules, `verdict` always ACCEPT. That is the point rather than
 // a placeholder -- the corpus must then show every well-typed case agreeing and every ill-typed
@@ -54,6 +54,17 @@ shared data ty {
     n: Word,
     lhs: [Word; 256],
     rhs: [Word; 256],
+    // SLICE 2: call sites, as (declared parameter count, actual argument
+    // count). Arity is PURELY SYNTACTIC -- it needs no types at all -- which is
+    // why it is the cheapest of the fifteen shapes to reach and why two of them
+    // fall to one comparison.
+    //
+    // A call to a name with no declaration contributes NO row. Undefined
+    // functions are slice 3, and inventing a declared count of zero for one
+    // would reject it here for a reason this slice cannot defend.
+    cn: Word,
+    cdecl: [Word; 128],
+    cact: [Word; 128],
 }
 
 // The verdict constants, named rather than spelled as bare integers at the call sites, so a later
@@ -92,6 +103,12 @@ fn ty_check() -> Word {
         } else {
             ty.verdict
         };
+    }
+    // Slice 2. Arity is exact rather than a bound: a call with too FEW and one
+    // with too MANY arguments are both rejections, and they are the same
+    // comparison rather than two rules.
+    for j in 0..ty.cn limit 128 {
+        ty.verdict = if ty.cdecl[j] == ty.cact[j] { ty.verdict } else { ty_reject() };
     }
     ty.verdict
 }
