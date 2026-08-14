@@ -5957,3 +5957,69 @@ a composite address rather than guessing per module.
 
 Five of the eight are reference-compiler rejections. That distinction is the one this branch
 keeps having to redraw, and it is drawn here before any work is planned against them.
+
+---
+
+## The corpus differential: 39 modules EXECUTE, every other one is named
+
+`native_codegen/tests/corpus_differential.rs`, 2026-08-14. Nothing in it is written per
+module.
+
+| | |
+|---|---|
+| executed and agreeing | **39** |
+| exempt, each with a stated reason | **23** |
+| disagreeing | **1**, tracked |
+
+Before this, 14 modules were executed and 41 rested on `lower_module` returning `Ok`.
+
+### It found a real defect on its first run
+
+**`10_multbyte.kel` returns `1` on the virtual machine and `0` natively.** The return is a
+scalar on both sides and the values simply differ, so this is not a harness artifact. The
+module had been lowering "successfully" since composites landed and had never been executed.
+It exercises the multi-word fixed-point family. **Root cause not diagnosed** — that is the next
+increment.
+
+It is tracked in `KNOWN_DISAGREEMENTS`, and the test asserts the disagreement set **equals**
+that list. A new disagreement fails; a fixed one also fails and must be removed. Neither can rot
+into silence, which an `is_empty()` assertion with an ignore would have allowed.
+
+### How it is generic
+
+Natives and their arities come from the bytecode (`native_names`, `n & 0x7F`); parameter and
+return shapes from `Module::signatures`; buffer sizes from the data layout and
+`plan_chunk_region`. Stubs bind by `add_global_mapping` against the declaration **looked up
+from the lowered module**, so the harness never reproduces `native_symbol`'s mangling — getting
+that wrong is exactly what segfaulted an earlier attempt.
+
+**One stub table serves 42 natives** because every stub takes five `i64`s and reads only the
+`argc` the bytecode records. That is sound only because **no native in the corpus is called at
+two arities**, which the harness asserts rather than assumes.
+
+### Three ordering and shape facts that cost a cycle each
+
+- **The virtual machine must run FIRST.** A trapping module reports an error there; natively
+  the same trap is `llvm.trap`, which kills the process with SIGTRAP and takes the harness with
+  it. Asking the tolerant side first turns a fatal signal into a named exemption.
+- **A Stream's first call is tick 0**, matching the native driver. Passing `args_for` instead
+  desynchronised every stream in the corpus, and it presented as a call-COUNT difference rather
+  than a value difference.
+- **Report the first differing ELEMENT, not the lengths.** The initial diagnostic printed
+  lengths, which were equal in 26 of 26 cases and said nothing.
+
+### The 23 exemptions, by class
+
+| class | count | note |
+|---|---|---|
+| reference-compiler rejection | 5 | rtos scripts. **Not a backend gap** |
+| no entry point | 2 | a prelude declares, it does not run |
+| native takes a REFERENCE argument | 10 | the `piano_roll` family — a string is an arena handle on one side and a pointer on the other, so neither renders as the same integer. Covered by `module_differential.rs`, which decodes it |
+| composite entry parameter | 3 | the rogue AI streams, covered by `rogue_ai_differential.rs` |
+| requires a signed load | 1 | `11_signed.kel` declares `FLAG_REQUIRES_SIGNATURE` |
+| VM refuses to run it | 1 | `rogue_dungen` traps on synthesised arguments; covered by its own differential with real ones |
+| backend refuses | 1 | `codegen.kel`, deliberately |
+
+**Verified by mutation**, with the mutation count checked before the result was read: perturbing
+the flat field-read offset changes the disagreement set and fails the test. `src/lib.rs` was
+restored byte-identical under `cmp`.
