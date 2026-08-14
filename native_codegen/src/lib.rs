@@ -782,6 +782,7 @@ pub fn lower_chunk<'ctx>(
         BodyCfg {
             opts,
             degenerate_yield: None,
+            natives: &[],
         },
     )
 }
@@ -919,11 +920,24 @@ fn lower_module_with<'ctx>(
         })
         .collect();
 
+    // A module-level precondition, checked before any body is lowered. Two
+    // natives whose names differ but whose SYMBOLS coincide would each bind to
+    // the same host definition, and every call site would look correct in
+    // isolation. Refusing the module is the only place this is visible.
+    if let Some((sym, names)) = native_symbol_collisions(&program.native_names) {
+        return Err(LowerError::UnsupportedOp(format!(
+            "natives {names:?} all mangle to the external symbol `{sym}`; the \
+             lowering refuses rather than binding several declarations to one \
+             host definition"
+        )));
+    }
+
     for (chunk, func) in program.chunks.iter().zip(declared.iter()) {
         let tail = degenerate_stream_yield(chunk, program);
         let cfg = BodyCfg {
             opts,
             degenerate_yield: tail.as_deref(),
+            natives: &program.native_names,
         };
         match lower_chunk_body(ctx, module, chunk, *func, &declared, data, cfg) {
             Ok(_) => {}
@@ -1041,6 +1055,59 @@ struct BodyCfg<'a> {
     /// the bytecode module; `lower_chunk` passes `None` for the same reason it
     /// refuses `Op::Call`.
     degenerate_yield: Option<&'a [usize]>,
+    /// The module's declared native names, indexed by the operand of
+    /// `CallVerifiedNative`/`CallExternalNative`.
+    ///
+    /// Empty for `lower_chunk`, which therefore refuses a native call for the
+    /// same reason it refuses `Op::Call`: the operand is an index into a
+    /// module-level table a single chunk does not receive.
+    ///
+    /// **Names rather than indices, because that is what the runtime binds on.**
+    /// `Vm::run` resolves the operand to a name through `native_name(idx)` and
+    /// then searches its registry by NAME. Emitting `kel_native_<index>` would
+    /// have bound the object file to declaration order, which is a property of
+    /// the source text rather than of the interface.
+    natives: &'a [String],
+}
+
+/// The external symbol a declared native binds to.
+///
+/// `host::play` becomes `kel_native_host_play`. Any character outside
+/// `[A-Za-z0-9_]` becomes `_`, since a Keleusma path separator is not a legal C
+/// identifier and the whole point of this backend is an object file an ordinary
+/// linker resolves.
+///
+/// **The mapping is not injective**, which is why [`native_symbol_collisions`]
+/// exists: `host::play` and `host_play` both land here. Two natives sharing a
+/// symbol would silently bind both call sites to whichever the host defined,
+/// and the differential oracle would only catch it if the corpus happened to
+/// call both.
+fn native_symbol(name: &str) -> String {
+    let mut s = String::from("kel_native_");
+    for c in name.chars() {
+        s.push(if c.is_ascii_alphanumeric() || c == '_' {
+            c
+        } else {
+            '_'
+        });
+    }
+    s
+}
+
+/// Distinct native names that collide onto one external symbol.
+///
+/// Returns the offending symbol and the names that share it. A module-level
+/// precondition rather than a per-site check, because the hazard is a PAIR of
+/// declarations and no single call site can see it.
+fn native_symbol_collisions(names: &[String]) -> Option<(String, Vec<String>)> {
+    let mut by_symbol: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for n in names {
+        by_symbol
+            .entry(native_symbol(n))
+            .or_default()
+            .push(n.clone());
+    }
+    by_symbol.into_iter().find(|(_, ns)| ns.len() > 1)
 }
 
 /// Is this chunk a **degenerate stream**, lowerable as a plain function?
@@ -1224,6 +1291,7 @@ fn lower_chunk_body<'ctx>(
     let BodyCfg {
         opts,
         degenerate_yield,
+        natives,
     } = cfg;
     let i64t = ctx.i64_type();
     let i128t = ctx.i128_type();
@@ -1890,6 +1958,100 @@ fn lower_chunk_body<'ctx>(
                     ValueKind::Basic(v) => v.into_int_value(),
                     ValueKind::Instruction(_) => {
                         unreachable!("every lowered chunk returns an i64, never void")
+                    }
+                };
+                st.push(ret);
+            }
+            // A call out to a host-registered native, as a direct call to an
+            // external symbol.
+            //
+            // # The argument-count byte is NOT a count
+            //
+            // Its high bit is the B35 P7 error-reify flag, and a site carrying it
+            // pushes TWO slots `(code, flag)` rather than one. Reading the byte
+            // as a count would both call with 128 too many arguments and leave
+            // the operand stack one slot short at every such site. Refused
+            // rather than approximated; measured at 0 of 999 sites in the
+            // `piano_roll` family, so refusing costs nothing today.
+            //
+            // # Why the result is pushed with an UNKNOWN width
+            //
+            // `Module::native_return_shapes` records `WireShape::Top` for a
+            // native declared without a resolving `use ... -> R` signature, and
+            // **zero of the 999 call sites in the corpus have anything else**. A
+            // design that refused an unknown return shape would lower none of
+            // them. `push` defaults to `Width::Unknown`, which fails closed at a
+            // USE of the width rather than at the call, and that is sound here
+            // for a reason the corpus shows directly: there are 1643 `PopN`
+            // against those 999 calls, so the results are overwhelmingly
+            // discarded, and a width that is never used is never needed.
+            //
+            // # Argument order
+            //
+            // `Vm::run` does `stack.drain(len - n..)`, so the native receives its
+            // arguments in DECLARATION order with the last on top of the stack.
+            // Popping yields them reversed, hence the reversal — the same trap
+            // the `Op::Call` arm above documents, and just as invisible for a
+            // one-argument native or one whose arguments happen to be equal.
+            // Sixty-eight of the corpus sites take one argument.
+            Op::CallVerifiedNative(idx, n) | Op::CallExternalNative(idx, n) => {
+                if n & 0x80 != 0 {
+                    return Err(LowerError::UnsupportedOp(format!(
+                        "native call #{idx} sets the B35 P7 error-reify flag \
+                         (argument byte {n:#04x}), which reifies a soft host \
+                         failure as a two-slot (code, flag) result; the two-slot \
+                         form is not lowered"
+                    )));
+                }
+                let argc = usize::from(n & 0x7F);
+                let name = natives.get(usize::from(*idx)).ok_or_else(|| {
+                    LowerError::UnsupportedOp(format!(
+                        "native call #{idx} indexes a native table of {} entries; \
+                         lower_module resolves it, lower_chunk cannot",
+                        natives.len()
+                    ))
+                })?;
+                let sym = native_symbol(name);
+
+                // Reuse an existing declaration, as `yield_hook` and
+                // `trap_declaration` do, since a second chunk calling the same
+                // native must not redeclare it. An arity disagreement between
+                // two sites is refused: LLVM would accept the call and the host
+                // would read a garbage argument.
+                let f = match module.get_function(&sym) {
+                    Some(f) => {
+                        let declared = f.count_params() as usize;
+                        if declared != argc {
+                            return Err(LowerError::UnsupportedOp(format!(
+                                "native `{name}` is called with {argc} arguments \
+                                 here and {declared} at an earlier site; the \
+                                 lowering refuses rather than emitting a call \
+                                 whose arity disagrees with its declaration"
+                            )));
+                        }
+                        f
+                    }
+                    None => {
+                        let params: Vec<inkwell::types::BasicMetadataTypeEnum> =
+                            (0..argc).map(|_| i64t.into()).collect();
+                        module.add_function(&sym, i64t.fn_type(&params, false), None)
+                    }
+                };
+
+                let mut args: Vec<_> = (0..argc).map(|_| st.pop()).collect();
+                args.reverse();
+                let args: Vec<inkwell::values::BasicMetadataValueEnum> =
+                    args.into_iter().map(|a| a.into()).collect();
+
+                let ret = match st
+                    .b
+                    .build_call(f, &args, "native")
+                    .unwrap()
+                    .try_as_basic_value()
+                {
+                    ValueKind::Basic(v) => v.into_int_value(),
+                    ValueKind::Instruction(_) => {
+                        unreachable!("every native is declared returning i64, never void")
                     }
                 };
                 st.push(ret);
