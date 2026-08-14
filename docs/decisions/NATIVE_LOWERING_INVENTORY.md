@@ -5737,3 +5737,39 @@ Five refusals are **three separate pieces of work**, of which one should not be 
 
 The probe cost one test file and settled all three. Implementing against the original premise
 would have produced a predicate widening aimed at `codegen.kel`, which must not be widened.
+
+### The widening WORKS and is REVERTED, because it is not verified
+
+Applied to `degenerate_stream_yield`'s tail walk — admit
+`NewComposite(Flat { count, .. })` with `delta += 1 - count` — the three rogue AI modules go
+to **zero refusals**, and `codegen.kel` **correctly stays refused**, which is the must-not-fire
+control behaving.
+
+**It is reverted anyway.** `lower_module` returning `Ok` is not verification, and the
+differential did not get there. The change is thirty lines and fully described above;
+re-applying it is trivial. Shipping it green-but-unverified is the thing this line has already
+been burned by.
+
+### Why the differential did not land: `main` takes a TUPLE
+
+```text
+CALL ERR: TypeError("cannot tuple-index Int")
+```
+
+`rogue_ai_boss::main` does not take a `Word`. It takes a **composite**, and the harness fed it
+`Value::Int(t)`. Natively the same mistake is worse and was the SIGSEGV: an integer was passed
+where the code tuple-indexes, so it dereferenced `t` as a body address.
+
+**This is the real remaining work for these three**, and it is a genuine ABI question rather
+than a harness detail: a composite ENTRY PARAMETER means the caller must build a body and pass
+its address, so the native entry convention for a composite argument has to be settled and
+tested. The `piano_roll` and rogue data-segment harnesses both pass scalars and gave no
+warning of it.
+
+Sequence for whoever picks this up:
+
+1. re-apply the tail-walk widening (thirty lines, described above);
+2. settle how a composite entry parameter is passed, and build the body in the harness;
+3. differentiate all three against the virtual machine — they declare **no host natives**, so
+   there is nothing to stub;
+4. keep `codegen_kel_is_still_refused_for_delegated_suspension` as the must-not-fire control.
