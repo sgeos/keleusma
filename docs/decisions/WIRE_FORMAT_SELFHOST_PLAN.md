@@ -1105,6 +1105,44 @@ it to the table without a driver that calls it would record a capability the sys
 **The item is therefore blocked behind "wire the driver to a module", not beside it.** Checked so
 that a later session does not spend an increment rediscovering it as an easy win.
 
+#### THE END-TO-END SLICE, AND THE ONE OBSTACLE IN IT (specified 2026-08-14)
+
+The producer is complete: Keleusma derives the interning SEQUENCE and the constant node table from a
+module blob, for chunk names, enum layouts with both intern modes, and the constant forest including
+child positions. The Rust models `interner_input` and `preorder_13b` are no longer the source of
+either.
+
+**What is NOT yet closed is that the produced sequence has never been FED INTO the emitters.** The
+producer is verified against the Rust models; the emitters are verified byte-identical against
+`encode_aux_body`. Those are two chains, and nothing yet joins them. Until they are joined, "the
+sequence is Keleusma's" and "the artifact is byte-identical" are true separately and unproven
+together.
+
+**The obstacle is one assumption inside the interner.** `nm_offsets` computes each name's byte
+offset as a CUMULATIVE SUM of the lengths in `nin`, which is correct exactly when `bin` holds the
+names concatenated with nothing between them. **The module blob interleaves a two-byte length prefix
+before every name**, so the cumulative sum is wrong by two bytes per preceding name. Feeding the
+producer's output straight into `intern_run` would read each name shifted, and the failure would look
+like a corrupt pool rather than like an offset convention.
+
+**The fix is additive rather than a modification, which is why it should be done in one pass by
+someone with the room to verify it.**
+
+1. The producer already knows where each name's bytes begin: `nm.icur + 2`, at the moment it reads
+   the length. Record that into `wire.nout[nm_off_base() + k]` as it walks.
+2. Add `intern_run_preoffset(n)`, identical to `intern_run` except that it does NOT call
+   `nm_offsets`, since the offsets are already present. **Additive, not a change to `intern_run`** --
+   the sequential path keeps its own offset computation and cannot regress.
+3. One command that runs the producer, then `intern_run_preoffset`, then the existing
+   `intern_emit_names` and `intern_emit_pool`, all within a single VM call, because shared data is
+   re-seeded on every call and `nin` does not survive a return.
+4. Compare the emitted `NAMES` and `STRING_POOL` regions against `encode_aux_body` for a real
+   compiled module. **That comparison is the thing that joins the two chains.**
+
+**Then, and only then, `read_stage`.** The driver produces no auxiliary body today; it runs pipeline
+stages and nothing else. `wire.kel` joining the stage table is meaningful once the driver can emit
+through it, and the step above is what makes that possible.
+
 #### THE TWO DEDUP SCANS ARE DIFFERENT SCANS (settled 2026-08-14)
 
 Two statements in this repository read as a contradiction, and they are not one. They name
