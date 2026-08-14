@@ -306,3 +306,32 @@ was not reached; that one is a genuine remaining hole and is named as such.
 `loop_for` a `for` form it does not parse, `stream` fails the type checker, and `break_if2`
 fails the parser. **Rejections, not backend gaps** — printed by the test, never silently
 dropped, which is the distinction this branch keeps having to redraw.
+
+## `BreakIf` stays unisolated, and the reason is a GRAMMAR/PARSER discrepancy
+
+Not a failed guess this time. `docs/spec/GRAMMAR.md` documents the form directly:
+
+```text
+for i in 0..8 {
+  if channels[i] > 0.0 {
+    break;
+  }
+  audio::set_volume(i, 1.0);
+}
+```
+
+Reproduced faithfully — `break;` inside an `if` inside a `for`, with a trailing statement after
+the `if` so the block is not the loop body's value — the reference compiler still rejects it:
+
+```text
+break_cond   parse: ParseError { message: "unexpected token Semicolon in expression" }
+```
+
+The error is at the `break;` semicolon, not at the float in the grammar's example. **The parser
+does not accept the statement the grammar specifies**, so `BreakIf` cannot be reached from
+source by any form documented for it.
+
+That leaves three opcodes unisolated, and all three now have a stated reason rather than a
+gap: `Dup` and `PushImmediate` are compiler-emitted only, and **`BreakIf` is unreachable
+through the documented syntax**. Whether the grammar is aspirational or the parser lags is a
+question for the `v0.2.3` line; either way it is not a native-lowering matter.

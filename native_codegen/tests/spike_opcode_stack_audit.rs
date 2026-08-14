@@ -146,9 +146,14 @@ const CASES: &[(&str, &str)] = &[
         "shift_right",
         "fn main(a: Word, b: Word) -> Word { a lsr 2 }",
     ),
+    // `break` is a plain statement valid ONLY inside a `for` loop, and invalid
+    // in a `loop` function (docs/spec/GRAMMAR.md). `BreakIf` is what the
+    // compiler emits for a CONDITIONAL break. My earlier `break if <cond>` was
+    // invented and the parser rejected it; this form came from the grammar and
+    // `04_for_in.kel`, not from a third guess.
     (
-        "break_if2",
-        "fn main(a: Word, b: Word) -> Word { let mut s = 0; loop { s = s + 1; break if s > 3; }; s }",
+        "break_cond",
+        "data s { n: Word }\nfn main(a: Word, b: Word) -> Word { let xs = [1, 2, 3, 4]; for x in xs { if x > a { break; } s.n = x; }; b }",
     ),
     (
         "stream_scalar",
