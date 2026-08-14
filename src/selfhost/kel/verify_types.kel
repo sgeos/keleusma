@@ -66,21 +66,6 @@ shared data ty {
     cn: Word,
     cdecl: [Word; 128],
     cact: [Word; 128],
-    // SLICE 3: name resolution, as a table of per-occurrence RESOLUTION CODES.
-    //
-    //   1  resolves to a declared function, called as one   -- fine
-    //   2  resolves to a local or parameter, read as a value -- fine
-    //   3  resolves to nothing                               -- REJECT
-    //   4  resolves to a local and is CALLED                 -- REJECT
-    //
-    // **Code 4 is not a type error.** It is a V0.2.0 surface restriction, and
-    // it is the one rejection of the fifteen that carries no `type error:`
-    // prefix in the reference. A stage locating rejections by that prefix would
-    // miss it entirely, and a stage reproducing the reference's routing would
-    // be reproducing English rather than deciding anything. It is a separate
-    // code here for exactly that reason.
-    rn: Word,
-    res: [Word; 256],
     // SLICES 4 and 5: conditions that must be bool, and structural claims about
     // a composite. Both are "a tag must equal a required tag", so they share one
     // table of (actual, required) rather than growing a channel each.
@@ -152,6 +137,29 @@ shared data ty {
     // block, and because a total language has no early exit: the search sets a
     // flag and runs to its bound rather than returning from inside the loop.
     hit: Word,
+    // PART 2 SLICE c: name occurrences and the declared sets arrive SEPARATELY
+    // and the stage CLASSIFIES.
+    //
+    // The host says "occurrence 4 names index 12, and it is a call". It does
+    // not say "that is an undefined function". Classification is the work.
+    //
+    //   dname[d]   a declared name index, for the whole top-level set
+    //   oname[o]   the name index this occurrence mentions
+    //   olocal[o]  1 when the occurrence resolves to a local or parameter
+    //   ocall[o]   1 when the occurrence is a CALL rather than a value read
+    //
+    // Appended last.
+    dnn: Word,
+    dname: [Word; 128],
+    on: Word,
+    oname: [Word; 256],
+    olocal: [Word; 256],
+    ocall: [Word; 256],
+    // A program the collector could not decide about at all, for instance one
+    // with a wildcard import bringing in names it cannot enumerate. The stage
+    // then makes no resolution claim, because a name it cannot see is not
+    // evidence of anything and a rejection would narrow the language.
+    oskip: Word,
 }
 
 // The verdict constants, named rather than spelled as bare integers at the call sites, so a later
@@ -174,17 +182,6 @@ fn ty_pair_disagrees(l: Word, r: Word) -> Word {
     if l == ty_unknown() { 0 } else {
     if r == ty_unknown() { 0 } else {
     if l == r { 0 } else { 1 } } }
-}
-
-// A resolution code the language does not admit.
-//
-// Enumerated POSITIVELY rather than as "not 1 and not 2". A negative rule
-// admits any code a later slice adds without anyone deciding it should, and a
-// new code arriving as silently acceptable is the failure this shape is prone
-// to: the codes are produced by a host walk that grows with the language.
-fn ty_resolution_bad(r: Word) -> Word {
-    if r == 3 { 1 } else {
-    if r == 4 { 1 } else { 0 } }
 }
 
 // Slice 1: reject when any operand pair disagrees.
@@ -220,6 +217,41 @@ fn ty_bounded(v: Word) -> Word {
     if v > 64 { 0 } else { v }
 }
 
+// How many occurrences to classify. Zero when the collector could not decide.
+fn ty_occurrences() -> Word {
+    if ty.oskip == 1 { 0 } else { ty.on }
+}
+
+// Whether a top-level declaration carries this name.
+fn ty_declared(f: Word) -> Word {
+    ty.hit = 0;
+    for i in 0..ty_bounded128(ty.dnn) limit 128 {
+        ty.hit = if ty.dname[i] == f { 1 } else { ty.hit };
+    }
+    ty.hit
+}
+
+fn ty_bounded128(v: Word) -> Word {
+    if v > 128 { 0 } else { v }
+}
+
+// The two refusals, derived rather than received.
+//
+//   a local that is CALLED  -- a V0.2.0 SURFACE RESTRICTION, not a type error,
+//                              and the one shape carrying no `type error:`
+//                              prefix in the reference
+//   neither local nor declared -- an unresolved name
+//
+// A local read as a VALUE is fine, and a declared name called or read is fine,
+// so the two conditions are written out rather than folded into one test.
+fn ty_occurrence_bad(o: Word) -> Word {
+    if ty.olocal[o] == 1 {
+        if ty.ocall[o] == 1 { 1 } else { 0 }
+    } else {
+        if ty_declared(ty.oname[o]) == 1 { 0 } else { 1 }
+    }
+}
+
 fn ty_check() -> Word {
     ty.verdict = ty_accept();
     for i in 0..ty.n limit 256 {
@@ -245,9 +277,14 @@ fn ty_check() -> Word {
             if ty.dparams[ty.csite[c]] == ty.cargs[c] { ty.verdict } else { ty_reject() }
         };
     }
-    // Slice 3. Unresolved names and called locals.
-    for k in 0..ty.rn limit 256 {
-        ty.verdict = if ty_resolution_bad(ty.res[k]) == 1 { ty_reject() } else { ty.verdict };
+    // Slice 3's pre-classified channel is GONE, not merely unfed. A dead input
+    // that still rejects is a rule nobody can see being applied, and leaving it
+    // would let a future caller re-enter the old path by accident.
+    // THE CLASSIFICATION. A local that is CALLED is refused, and so is a name
+    // that is neither local nor declared. Both are computed here from facts,
+    // not received as verdicts.
+    for o in 0..ty_occurrences() limit 256 {
+        ty.verdict = if ty_occurrence_bad(o) == 1 { ty_reject() } else { ty.verdict };
     }
     // Slices 4 and 5. A required tag of 0 is no requirement, so it reuses the
     // same disagreement predicate the operand pairs use: unknown never rejects.
