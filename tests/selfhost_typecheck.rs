@@ -455,13 +455,148 @@ fn resolution_codes(ast: &keleusma::ast::Program) -> Vec<i64> {
     out
 }
 
+/// Required-tag claims: (actual, required).
+///
+/// Two sources, sharing one channel because both are "a tag must equal a
+/// required tag":
+///
+/// - a condition must be bool
+/// - a field access or an index needs a composite, not a scalar
+///
+/// **A required tag of 0 is no requirement and never rejects**, which is how a
+/// construct this collector cannot type stays silent instead of guessing.
+///
+/// The composite requirement uses tags 9 and 10, outside the literal-tag range,
+/// so a scalar's tag can never accidentally satisfy it.
+fn tag_claims(ast: &keleusma::ast::Program) -> Vec<(i64, i64)> {
+    use keleusma::ast::{Expr, Pattern, Stmt, TypeExpr};
+    use keleusma::visitor::Visitor;
+    use std::collections::BTreeMap;
+
+    const REQ_BOOL: i64 = 2;
+    const REQ_COMPOSITE: i64 = 9;
+    const REQ_ARRAY: i64 = 10;
+
+    struct Claims {
+        scalars: BTreeMap<String, i64>,
+        out: Vec<(i64, i64)>,
+    }
+    impl Visitor for Claims {
+        fn visit_stmt(&mut self, stmt: &Stmt) {
+            // A `let` with a declared PRIMITIVE type gives the name a scalar
+            // tag. Only an explicit annotation counts: inferring one would mean
+            // running inference, which is the thing this stage must not borrow.
+            if let Stmt::Let(l) = stmt
+                && let Pattern::Variable(n, _) = &l.pattern
+                && let Some(TypeExpr::Prim(_, _)) = &l.type_expr
+            {
+                self.scalars.insert(n.clone(), 1);
+            }
+            self.walk_stmt(stmt);
+        }
+        fn visit_expr(&mut self, expr: &Expr) {
+            match expr {
+                Expr::If {
+                    condition,
+                    then_block,
+                    else_block,
+                    ..
+                } => {
+                    self.out.push((expr_tag(condition), REQ_BOOL));
+                    // Both arms' tail expressions must agree. A block with no
+                    // tail contributes tag 0 and therefore no claim.
+                    if let Some(e) = else_block {
+                        let t = then_block.tail_expr.as_ref().map_or(0, |e| expr_tag(e));
+                        let f = e.tail_expr.as_ref().map_or(0, |e| expr_tag(e));
+                        self.out.push((t, f));
+                    }
+                }
+                Expr::FieldAccess { object, .. } => {
+                    if let Expr::Ident { name, .. } = object.as_ref()
+                        && self.scalars.contains_key(name)
+                    {
+                        self.out.push((1, REQ_COMPOSITE));
+                    }
+                }
+                Expr::ArrayIndex { object, .. } => {
+                    if let Expr::Ident { name, .. } = object.as_ref()
+                        && self.scalars.contains_key(name)
+                    {
+                        self.out.push((1, REQ_ARRAY));
+                    }
+                }
+                _ => {}
+            }
+            self.walk_expr(expr);
+        }
+    }
+
+    let mut c = Claims {
+        scalars: BTreeMap::new(),
+        out: Vec::new(),
+    };
+    for f in &ast.functions {
+        c.visit_block(&f.body);
+    }
+    c.out
+}
+
+/// Struct-literal field counts, as (declared, actual).
+///
+/// **The same comparison as call arity**, and it goes down the same channel for
+/// that reason: a struct literal supplying the wrong number of fields is the
+/// identical claim as a call supplying the wrong number of arguments. Giving it
+/// its own rule would be two spellings of one idea, and the second spelling is
+/// where they drift apart.
+fn struct_arity(ast: &keleusma::ast::Program) -> Vec<(i64, i64)> {
+    use keleusma::ast::{Expr, TypeDef};
+    use keleusma::visitor::Visitor;
+    use std::collections::BTreeMap;
+
+    let mut decls: BTreeMap<String, i64> = BTreeMap::new();
+    for t in &ast.types {
+        if let TypeDef::Struct(d) = t {
+            decls.insert(d.name.clone(), d.fields.len() as i64);
+        }
+    }
+
+    struct Lits<'a> {
+        decls: &'a BTreeMap<String, i64>,
+        out: Vec<(i64, i64)>,
+    }
+    impl Visitor for Lits<'_> {
+        fn visit_expr(&mut self, expr: &Expr) {
+            if let Expr::StructInit { name, fields, .. } = expr
+                && let Some(n) = self.decls.get(name)
+            {
+                self.out.push((*n, fields.len() as i64));
+            }
+            self.walk_expr(expr);
+        }
+    }
+
+    let mut l = Lits {
+        decls: &decls,
+        out: Vec::new(),
+    };
+    for f in &ast.functions {
+        l.visit_block(&f.body);
+    }
+    l.out
+}
+
 /// The stage's verdict for a program, with its operand pairs marshalled in.
 fn stage_accepts_program(pairs: &[(i64, i64)]) -> bool {
-    stage_verdict(pairs, &[], &[])
+    stage_verdict(pairs, &[], &[], &[])
 }
 
 /// The stage's verdict with both tables.
-fn stage_verdict(pairs: &[(i64, i64)], arity: &[(i64, i64)], res: &[i64]) -> bool {
+fn stage_verdict(
+    pairs: &[(i64, i64)],
+    arity: &[(i64, i64)],
+    res: &[i64],
+    claims: &[(i64, i64)],
+) -> bool {
     let module = compile(&parse(&tokenize(TYPES_KEL).expect("lex")).expect("parse"))
         .expect("verify_types.kel compiles");
     let need = required_persistent_capacity_for(&module);
@@ -550,6 +685,34 @@ fn stage_verdict(pairs: &[(i64, i64)], arity: &[(i64, i64)], res: &[i64]) -> boo
             keleusma::bytecode::Value::Int(*r),
         )
         .expect("res");
+    }
+    const QN_SLOT: usize = RES_SLOT + 256;
+    const QACT_SLOT: usize = QN_SLOT + 1;
+    const QREQ_SLOT: usize = QACT_SLOT + 256;
+    assert!(
+        claims.len() <= 256,
+        "the claim table holds 256 rows and this program needs {}",
+        claims.len()
+    );
+    vm.set_shared(
+        &mut shared,
+        QN_SLOT,
+        keleusma::bytecode::Value::Int(claims.len() as i64),
+    )
+    .expect("qn");
+    for (i, (a, r)) in claims.iter().enumerate() {
+        vm.set_shared(
+            &mut shared,
+            QACT_SLOT + i,
+            keleusma::bytecode::Value::Int(*a),
+        )
+        .expect("qact");
+        vm.set_shared(
+            &mut shared,
+            QREQ_SLOT + i,
+            keleusma::bytecode::Value::Int(*r),
+        )
+        .expect("qreq");
     }
     let out = vm
         .call_with_shared(&mut shared, &[keleusma::bytecode::Value::Int(0)])
@@ -723,7 +886,7 @@ fn slice_two_rejects_arity_and_argument_type_mismatches() {
         let (arity, arg_pairs) = call_rows(&ast);
         let mut pairs = operand_pairs(&ast);
         pairs.extend(arg_pairs);
-        let stage = stage_verdict(&pairs, &arity, &[]);
+        let stage = stage_verdict(&pairs, &arity, &[], &[]);
         if IN_SCOPE.contains(label) {
             assert!(
                 !stage,
@@ -752,7 +915,7 @@ fn slice_two_rejects_arity_and_argument_type_mismatches() {
         let mut pairs = operand_pairs(&ast);
         pairs.extend(arg_pairs);
         assert!(
-            stage_verdict(&pairs, &arity, &[]),
+            stage_verdict(&pairs, &arity, &[], &[]),
             "{label}: slice 2 REJECTED a well-typed program, which narrows the language"
         );
     }
@@ -791,7 +954,7 @@ fn slice_three_rejects_unresolved_names_and_called_locals() {
         let (arity, arg_pairs) = call_rows(&ast);
         let mut pairs = operand_pairs(&ast);
         pairs.extend(arg_pairs);
-        let stage = stage_verdict(&pairs, &arity, &resolution_codes(&ast));
+        let stage = stage_verdict(&pairs, &arity, &resolution_codes(&ast), &[]);
         if IN_SCOPE.contains(label) {
             assert!(
                 !stage,
@@ -828,8 +991,93 @@ fn slice_three_rejects_unresolved_names_and_called_locals() {
         let mut pairs = operand_pairs(&ast);
         pairs.extend(arg_pairs);
         assert!(
-            stage_verdict(&pairs, &arity, &resolution_codes(&ast)),
+            stage_verdict(&pairs, &arity, &resolution_codes(&ast), &[]),
             "{label}: slice 3 REJECTED a well-typed program, which narrows the language"
+        );
+    }
+}
+
+/// SLICES 4 and 5: conditions, branch agreement, and structural claims.
+///
+/// Five more shapes: a non-bool condition, `if` branches of differing types, a
+/// struct literal with the wrong field count, indexing a scalar, and a field
+/// access on a scalar.
+///
+/// **Struct field count goes down the call-arity channel.** A struct literal
+/// supplying the wrong number of fields is the identical claim as a call
+/// supplying the wrong number of arguments, and giving it its own rule would be
+/// two spellings of one idea. The second spelling is where they drift apart.
+#[test]
+fn slices_four_and_five_reject_conditions_and_structural_mismatches() {
+    const IN_SCOPE: &[&str] = &[
+        "add-word-and-bool",
+        "array-elements-differ",
+        "too-few-arguments",
+        "too-many-arguments",
+        "wrong-argument-type",
+        "byte-against-word-argument",
+        "undefined-function",
+        "undefined-identifier",
+        "calling-a-local",
+        "non-bool-condition",
+        "if-branches-differ",
+        "wrong-field-count",
+        "index-a-scalar",
+        "field-access-on-a-scalar",
+    ];
+
+    let verdict = |src: &str| -> bool {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let (mut arity, arg_pairs) = call_rows(&ast);
+        arity.extend(struct_arity(&ast));
+        let mut pairs = operand_pairs(&ast);
+        pairs.extend(arg_pairs);
+        stage_verdict(&pairs, &arity, &resolution_codes(&ast), &tag_claims(&ast))
+    };
+
+    let mut caught = Vec::new();
+    let mut out_of_scope_rejected = Vec::new();
+
+    for (label, src) in ILL_TYPED {
+        if tokenize(src).ok().and_then(|t| parse(&t).ok()).is_none() {
+            continue;
+        }
+        let stage = verdict(src);
+        if IN_SCOPE.contains(label) {
+            assert!(
+                !stage,
+                "{label}: there is a rule for this shape and it accepted"
+            );
+            caught.push(*label);
+        } else if !stage {
+            out_of_scope_rejected.push(*label);
+        }
+    }
+
+    assert_eq!(
+        caught.len(),
+        IN_SCOPE.len(),
+        "reached {caught:?}, expected {IN_SCOPE:?}"
+    );
+    assert!(
+        out_of_scope_rejected.is_empty(),
+        "rejected shapes with no rule: {out_of_scope_rejected:?}"
+    );
+
+    for (label, src) in WELL_TYPED {
+        assert!(
+            verdict(src),
+            "{label}: REJECTED a well-typed program, which narrows the language"
+        );
+    }
+
+    // The two still outstanding, asserted as OUTSTANDING rather than left
+    // unmentioned. A shape that quietly started passing would otherwise look
+    // like coverage nobody claimed.
+    for label in ["unknown-field", "body-versus-return"] {
+        assert!(
+            !IN_SCOPE.contains(&label),
+            "{label} is now in scope; move it into IN_SCOPE and out of this list"
         );
     }
 }

@@ -22,7 +22,8 @@
 // The second is bounded by a corpus; the first is not, which is why the well-typed side of the
 // corpus grows with every slice rather than staying at the controls the sizing spike used.
 //
-// SLICE 3: operand agreement, call arity and argument types, and name resolution.
+// SLICES 1 to 5: operand agreement, call arity and argument types, name resolution, conditions,
+// and structural claims about composites.
 //
 // SLICE 0, WHICH THIS REPLACED: no rules, `verdict` always ACCEPT. That is the point rather than
 // a placeholder -- the corpus must then show every well-typed case agreeing and every ill-typed
@@ -80,6 +81,15 @@ shared data ty {
     // code here for exactly that reason.
     rn: Word,
     res: [Word; 256],
+    // SLICES 4 and 5: conditions that must be bool, and structural claims about
+    // a composite. Both are "a tag must equal a required tag", so they share one
+    // table of (actual, required) rather than growing a channel each.
+    //
+    // A required tag of 0 means "no requirement" and never rejects, which is how
+    // a construct this stage cannot type stays silent rather than guessing.
+    qn: Word,
+    qact: [Word; 256],
+    qreq: [Word; 256],
 }
 
 // The verdict constants, named rather than spelled as bare integers at the call sites, so a later
@@ -139,6 +149,15 @@ fn ty_check() -> Word {
     // Slice 3. Unresolved names and called locals.
     for k in 0..ty.rn limit 256 {
         ty.verdict = if ty_resolution_bad(ty.res[k]) == 1 { ty_reject() } else { ty.verdict };
+    }
+    // Slices 4 and 5. A required tag of 0 is no requirement, so it reuses the
+    // same disagreement predicate the operand pairs use: unknown never rejects.
+    for q in 0..ty.qn limit 256 {
+        ty.verdict = if ty_pair_disagrees(ty.qact[q], ty.qreq[q]) == 1 {
+            ty_reject()
+        } else {
+            ty.verdict
+        };
     }
     ty.verdict
 }
