@@ -122,6 +122,36 @@ shared data ty {
     csn: Word,
     csite: [Word; 128],
     cargs: [Word; 128],
+    // PART 2 SLICE b: struct field sets and field accesses arrive SEPARATELY
+    // and the stage SEARCHES.
+    //
+    // This is the channel where the copy was most obvious: the host answered
+    // "is this field declared" and the stage compared its answer to zero. Now
+    // the host says "type 2, field name 7" and the stage looks.
+    //
+    // Names are compared as interned INDICES rather than bytes, because the
+    // stage has no string type and the host already assigns every name an
+    // index. Two spellings of one name would be two indices and the search
+    // would miss -- so the index space must be shared, which it is: one table
+    // for every name mentioned by either side.
+    //
+    //   sfirst[t]/scount[t]  type t's declared field names, as a run in sfield
+    //   sfield[i]            a declared field name index
+    //   atype[a]/aname[a]    an access: the type, and the field name it names
+    //
+    // Appended last, per the convention slice a learned the hard way.
+    stn: Word,
+    sfirst: [Word; 64],
+    scount: [Word; 64],
+    sfield: [Word; 256],
+    an: Word,
+    atype: [Word; 256],
+    aname: [Word; 256],
+    // Scratch for the field search. A field rather than a local because this
+    // file follows `wire.kel`'s convention of carrying loop state in the data
+    // block, and because a total language has no early exit: the search sets a
+    // flag and runs to its bound rather than returning from inside the loop.
+    hit: Word,
 }
 
 // The verdict constants, named rather than spelled as bare integers at the call sites, so a later
@@ -163,6 +193,33 @@ fn ty_resolution_bad(r: Word) -> Word {
 // because the language is total and there is nothing to break out of. The
 // verdict is sticky, which also means a second disagreement cannot un-reject a
 // program.
+// Whether type `t` declares field name `f`.
+//
+// A linear walk of the type's own run, which is the right shape here for the
+// same reason the interner's dedup scan is: the language is TOTAL and has no
+// early exit, so a loop that finds the answer on its first step still costs its
+// full bound. A structure that beat a scan would have to beat it at field
+// counts a struct actually has, and those are single digits.
+//
+// `nm.found`-style state rather than a return inside the loop, because there is
+// nothing to return early from.
+fn ty_field_declared(t: Word, f: Word) -> Word {
+    ty.hit = 0;
+    for i in 0..ty_bounded(ty.scount[t]) limit 64 {
+        ty.hit = if ty.sfield[ty.sfirst[t] + i] == f { 1 } else { ty.hit };
+    }
+    ty.hit
+}
+
+// A count clamped to its table bound.
+//
+// `for .. limit` traps on ENTRY when the runtime range exceeds the static cap,
+// so an oversize count must never reach a loop. The same shape the producer's
+// `mi_bounded` uses, for the same reason.
+fn ty_bounded(v: Word) -> Word {
+    if v > 64 { 0 } else { v }
+}
+
 fn ty_check() -> Word {
     ty.verdict = ty_accept();
     for i in 0..ty.n limit 256 {
@@ -205,6 +262,13 @@ fn ty_check() -> Word {
     // not decide is not written at all, so absence and denial stay distinct.
     for m in 0..ty.mn limit 256 {
         ty.verdict = if ty.member[m] == 0 { ty_reject() } else { ty.verdict };
+    }
+    // THE SEARCH. Each access names a type and a field; the stage walks that
+    // type's declared run looking for the name.
+    for a in 0..ty.an limit 256 {
+        ty.verdict = if ty.atype[a] >= ty.stn { ty_reject() } else {
+            if ty_field_declared(ty.atype[a], ty.aname[a]) == 1 { ty.verdict } else { ty_reject() }
+        };
     }
     ty.verdict
 }

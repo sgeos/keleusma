@@ -647,39 +647,55 @@ fn struct_arity(ast: &keleusma::ast::Program) -> Vec<(i64, i64)> {
     l.out
 }
 
-/// Field-membership facts: 1 when a referenced field is declared by its type,
-/// 0 when it is not.
+/// Struct field sets and field accesses, kept SEPARATE so the stage searches.
 ///
-/// **A row is written only when the object's type is known syntactically**, and
-/// there are exactly two ways for that here: a local bound to a struct literal,
-/// or a local with a declared named type. Anything else contributes no row, so
-/// absence and denial stay distinct and an untypeable object cannot be a
-/// rejection.
+/// Returns (first index per type, count per type, the flattened field-name
+/// indices, the accesses as (type index, field-name index)).
 ///
-/// The stage compares rather than searches. The host supplies the syntactic
-/// fact; the RULE -- that a referenced field must exist -- is the stage's. That
-/// is the division the `verify_*.kel` family already uses.
-fn field_membership(ast: &keleusma::ast::Program) -> Vec<i64> {
+/// **Names travel as interned indices, not bytes.** The stage has no string
+/// type, and the host already has to assign every name an index. The index
+/// space is SHARED between the declared sets and the accesses -- one table for
+/// every name either side mentions -- because two spellings of one name would
+/// otherwise be two indices and the search would miss.
+///
+/// **The host no longer answers the question.** It says "type 2, field name 7";
+/// whether type 2 declares name 7 is the stage's to determine.
+type FieldSets = (Vec<i64>, Vec<i64>, Vec<i64>, Vec<(i64, i64)>);
+
+fn field_sets(ast: &keleusma::ast::Program) -> FieldSets {
     use keleusma::ast::{Expr, Pattern, Stmt, TypeDef, TypeExpr};
     use keleusma::visitor::Visitor;
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
 
-    let mut fields: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    // One shared index space for every field name either side mentions.
+    let mut names: BTreeMap<String, i64> = BTreeMap::new();
+    let intern = |n: &str, names: &mut BTreeMap<String, i64>| -> i64 {
+        let next = names.len() as i64;
+        *names.entry(n.to_string()).or_insert(next)
+    };
+
+    let mut type_index: BTreeMap<String, i64> = BTreeMap::new();
+    let mut first: Vec<i64> = Vec::new();
+    let mut count: Vec<i64> = Vec::new();
+    let mut flat: Vec<i64> = Vec::new();
     for t in &ast.types {
         if let TypeDef::Struct(d) = t {
-            fields.insert(
-                d.name.clone(),
-                d.fields.iter().map(|f| f.name.clone()).collect(),
-            );
+            type_index.insert(d.name.clone(), first.len() as i64);
+            first.push(flat.len() as i64);
+            count.push(d.fields.len() as i64);
+            for f in &d.fields {
+                let i = intern(&f.name, &mut names);
+                flat.push(i);
+            }
         }
     }
 
-    struct Members<'a> {
-        fields: &'a BTreeMap<String, BTreeSet<String>>,
+    struct Access<'a> {
+        type_index: &'a BTreeMap<String, i64>,
         types: BTreeMap<String, String>,
-        out: Vec<i64>,
+        pending: Vec<(String, String)>,
     }
-    impl Visitor for Members<'_> {
+    impl Visitor for Access<'_> {
         fn visit_stmt(&mut self, stmt: &Stmt) {
             if let Stmt::Let(l) = stmt
                 && let Pattern::Variable(n, _) = &l.pattern
@@ -696,25 +712,35 @@ fn field_membership(ast: &keleusma::ast::Program) -> Vec<i64> {
             if let Expr::FieldAccess { object, field, .. } = expr
                 && let Expr::Ident { name, .. } = object.as_ref()
                 && let Some(ty) = self.types.get(name)
-                && let Some(set) = self.fields.get(ty)
+                && self.type_index.contains_key(ty)
             {
-                self.out.push(i64::from(set.contains(field)));
+                self.pending.push((ty.clone(), field.clone()));
             }
             self.walk_expr(expr);
         }
     }
 
-    let mut out = Vec::new();
+    let mut pending = Vec::new();
     for f in &ast.functions {
-        let mut m = Members {
-            fields: &fields,
+        let mut a = Access {
+            type_index: &type_index,
             types: BTreeMap::new(),
-            out: Vec::new(),
+            pending: Vec::new(),
         };
-        m.visit_block(&f.body);
-        out.extend(m.out);
+        a.visit_block(&f.body);
+        pending.extend(a.pending);
     }
-    out
+
+    let accesses = pending
+        .into_iter()
+        .map(|(ty, field)| {
+            let t = type_index[&ty];
+            let f = intern(&field, &mut names);
+            (t, f)
+        })
+        .collect();
+
+    (first, count, flat, accesses)
 }
 
 /// A function body's tail type against its declared return type.
@@ -733,19 +759,45 @@ fn return_claims(ast: &keleusma::ast::Program) -> Vec<(i64, i64)> {
 
 /// The stage's verdict for a program, with its operand pairs marshalled in.
 fn stage_accepts_program(pairs: &[(i64, i64)]) -> bool {
-    stage_verdict(pairs, &[], &[], &[], &[], &[], &[])
+    stage_verdict(&StageInput {
+        pairs,
+        ..Default::default()
+    })
 }
 
 /// The stage's verdict with both tables.
-fn stage_verdict(
-    pairs: &[(i64, i64)],
-    arity: &[(i64, i64)],
-    res: &[i64],
-    claims: &[(i64, i64)],
-    member: &[i64],
-    dparams: &[i64],
-    sites: &[(i64, i64)],
-) -> bool {
+/// Everything the stage reads, in one place.
+///
+/// **The growing argument list was the symptom, and clippy naming it is fair.**
+/// Eight parameters is what an input surface assembled channel by channel looks
+/// like from the outside. Bundling them does not consolidate the encoding, but
+/// it stops the shape of the debt being hidden behind positional arguments,
+/// where swapping two `&[(i64, i64)]` compiles and is wrong.
+#[derive(Default)]
+struct StageInput<'a> {
+    pairs: &'a [(i64, i64)],
+    arity: &'a [(i64, i64)],
+    res: &'a [i64],
+    claims: &'a [(i64, i64)],
+    member: &'a [i64],
+    dparams: &'a [i64],
+    sites: &'a [(i64, i64)],
+    sets: Option<&'a FieldSets>,
+}
+
+fn stage_verdict(input: &StageInput<'_>) -> bool {
+    let StageInput {
+        pairs,
+        arity,
+        res,
+        claims,
+        member,
+        dparams,
+        sites,
+        sets,
+    } = *input;
+    static EMPTY_SETS: FieldSets = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let sets = sets.unwrap_or(&EMPTY_SETS);
     let module = compile(&parse(&tokenize(TYPES_KEL).expect("lex")).expect("parse"))
         .expect("verify_types.kel compiles");
     let need = required_persistent_capacity_for(&module);
@@ -927,6 +979,68 @@ fn stage_verdict(
         )
         .expect("cargs");
     }
+    const STN_SLOT: usize = CARGS_SLOT + 128;
+    const SFIRST_SLOT: usize = STN_SLOT + 1;
+    const SCOUNT_SLOT: usize = SFIRST_SLOT + 64;
+    const SFIELD_SLOT: usize = SCOUNT_SLOT + 64;
+    const AN_SLOT: usize = SFIELD_SLOT + 256;
+    const ATYPE_SLOT: usize = AN_SLOT + 1;
+    const ANAME_SLOT: usize = ATYPE_SLOT + 256;
+    let (sfirst, scount, sfield, accesses) = sets;
+    assert!(
+        sfirst.len() <= 64 && sfield.len() <= 256 && accesses.len() <= 256,
+        "field-set tables overflow"
+    );
+    vm.set_shared(
+        &mut shared,
+        STN_SLOT,
+        keleusma::bytecode::Value::Int(sfirst.len() as i64),
+    )
+    .expect("stn");
+    for (i, v) in sfirst.iter().enumerate() {
+        vm.set_shared(
+            &mut shared,
+            SFIRST_SLOT + i,
+            keleusma::bytecode::Value::Int(*v),
+        )
+        .expect("sfirst");
+    }
+    for (i, v) in scount.iter().enumerate() {
+        vm.set_shared(
+            &mut shared,
+            SCOUNT_SLOT + i,
+            keleusma::bytecode::Value::Int(*v),
+        )
+        .expect("scount");
+    }
+    for (i, v) in sfield.iter().enumerate() {
+        vm.set_shared(
+            &mut shared,
+            SFIELD_SLOT + i,
+            keleusma::bytecode::Value::Int(*v),
+        )
+        .expect("sfield");
+    }
+    vm.set_shared(
+        &mut shared,
+        AN_SLOT,
+        keleusma::bytecode::Value::Int(accesses.len() as i64),
+    )
+    .expect("an");
+    for (i, (t, f)) in accesses.iter().enumerate() {
+        vm.set_shared(
+            &mut shared,
+            ATYPE_SLOT + i,
+            keleusma::bytecode::Value::Int(*t),
+        )
+        .expect("atype");
+        vm.set_shared(
+            &mut shared,
+            ANAME_SLOT + i,
+            keleusma::bytecode::Value::Int(*f),
+        )
+        .expect("aname");
+    }
     let out = vm
         .call_with_shared(&mut shared, &[keleusma::bytecode::Value::Int(0)])
         .expect("run");
@@ -1099,7 +1213,11 @@ fn slice_two_rejects_arity_and_argument_type_mismatches() {
         let (arity, arg_pairs) = call_rows(&ast);
         let mut pairs = operand_pairs(&ast);
         pairs.extend(arg_pairs);
-        let stage = stage_verdict(&pairs, &arity, &[], &[], &[], &[], &[]);
+        let stage = stage_verdict(&StageInput {
+            pairs: &pairs,
+            arity: &arity,
+            ..Default::default()
+        });
         if IN_SCOPE.contains(label) {
             assert!(
                 !stage,
@@ -1128,7 +1246,11 @@ fn slice_two_rejects_arity_and_argument_type_mismatches() {
         let mut pairs = operand_pairs(&ast);
         pairs.extend(arg_pairs);
         assert!(
-            stage_verdict(&pairs, &arity, &[], &[], &[], &[], &[]),
+            stage_verdict(&StageInput {
+                pairs: &pairs,
+                arity: &arity,
+                ..Default::default()
+            }),
             "{label}: slice 2 REJECTED a well-typed program, which narrows the language"
         );
     }
@@ -1167,7 +1289,12 @@ fn slice_three_rejects_unresolved_names_and_called_locals() {
         let (arity, arg_pairs) = call_rows(&ast);
         let mut pairs = operand_pairs(&ast);
         pairs.extend(arg_pairs);
-        let stage = stage_verdict(&pairs, &arity, &resolution_codes(&ast), &[], &[], &[], &[]);
+        let stage = stage_verdict(&StageInput {
+            pairs: &pairs,
+            arity: &arity,
+            res: &resolution_codes(&ast),
+            ..Default::default()
+        });
         if IN_SCOPE.contains(label) {
             assert!(
                 !stage,
@@ -1204,7 +1331,12 @@ fn slice_three_rejects_unresolved_names_and_called_locals() {
         let mut pairs = operand_pairs(&ast);
         pairs.extend(arg_pairs);
         assert!(
-            stage_verdict(&pairs, &arity, &resolution_codes(&ast), &[], &[], &[], &[]),
+            stage_verdict(&StageInput {
+                pairs: &pairs,
+                arity: &arity,
+                res: &resolution_codes(&ast),
+                ..Default::default()
+            }),
             "{label}: slice 3 REJECTED a well-typed program, which narrows the language"
         );
     }
@@ -1245,15 +1377,13 @@ fn slices_four_and_five_reject_conditions_and_structural_mismatches() {
         arity.extend(struct_arity(&ast));
         let mut pairs = operand_pairs(&ast);
         pairs.extend(arg_pairs);
-        stage_verdict(
-            &pairs,
-            &arity,
-            &resolution_codes(&ast),
-            &tag_claims(&ast),
-            &[],
-            &[],
-            &[],
-        )
+        stage_verdict(&StageInput {
+            pairs: &pairs,
+            arity: &arity,
+            res: &resolution_codes(&ast),
+            claims: &tag_claims(&ast),
+            ..Default::default()
+        })
     };
 
     let mut caught = Vec::new();
@@ -1330,15 +1460,16 @@ fn the_stage_agrees_with_the_reference_on_the_whole_corpus() {
         // the join is load-bearing rather than redundant with a channel that
         // already knew the answer.
         let (dparams, sites, _) = decl_call_rows(&ast);
-        stage_verdict(
-            &pairs,
-            &arity,
-            &resolution_codes(&ast),
-            &claims,
-            &field_membership(&ast),
-            &dparams,
-            &sites,
-        )
+        stage_verdict(&StageInput {
+            pairs: &pairs,
+            arity: &arity,
+            res: &resolution_codes(&ast),
+            claims: &claims,
+            dparams: &dparams,
+            sites: &sites,
+            sets: Some(&field_sets(&ast)),
+            ..Default::default()
+        })
     };
 
     let mut checked = 0;
