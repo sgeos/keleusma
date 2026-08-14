@@ -160,6 +160,30 @@ shared data ty {
     // then makes no resolution claim, because a name it cannot see is not
     // evidence of anything and a rejection would narrow the language.
     oskip: Word,
+    // PART 2 SLICE d: EXPRESSION NODES, the last channel and the largest.
+    //
+    // A flat table, one row per node the checker cares about. The host reports
+    // the SHAPE; the stage decides what the shape means.
+    //
+    //   ekind[e]   what the node is        1 binop  2 array element
+    //                                      3 condition  4 branch pair
+    //                                      5 field access on a value
+    //                                      6 index on a value
+    //                                      7 struct literal
+    //                                      8 function tail against its return
+    //   ea[e]/eb[e]  the two quantities the kind compares. For a binop they are
+    //                operand tags; for a struct literal, declared and actual
+    //                field counts; for a condition, the tag and 0.
+    //
+    // ONE TABLE RATHER THAN ONE PER KIND. Every rule here is "these two must
+    // agree" or "this must be bool", and a channel per kind would multiply the
+    // slot chain that has already produced two off-by-one defects.
+    //
+    // Appended last.
+    en: Word,
+    ekind: [Word; 256],
+    ea: [Word; 256],
+    eb: [Word; 256],
 }
 
 // The verdict constants, named rather than spelled as bare integers at the call sites, so a later
@@ -252,6 +276,48 @@ fn ty_occurrence_bad(o: Word) -> Word {
     }
 }
 
+// A node kind requiring its two quantities to be EQUAL.
+//
+// Binops, array elements, branch pairs, struct-literal field counts and a
+// function tail against its return type are all one claim wearing five names.
+fn ty_kind_is_equality(k: Word) -> Word {
+    if k == 1 { 1 } else {
+    if k == 2 { 1 } else {
+    if k == 4 { 1 } else {
+    if k == 7 { 1 } else {
+    if k == 8 { 1 } else { 0 } } } } }
+}
+
+// A node kind requiring a COMPOSITE rather than a scalar.
+fn ty_kind_needs_composite(k: Word) -> Word {
+    if k == 5 { 1 } else {
+    if k == 6 { 1 } else { 0 } }
+}
+
+// Whether a node is a rejection.
+//
+// The unknown tag never rejects, for the reason established in slice 1: this
+// stage may not reject a valid program, so a shape it cannot type is silence
+// rather than a guess. A struct-literal count of 0 is a real count and not an
+// unknown, which is why the equality kinds test the KIND before the values.
+fn ty_node_bad(k: Word, a: Word, b: Word) -> Word {
+    if ty_kind_is_equality(k) == 1 {
+        if k == 7 {
+            // Counts, where 0 is a real value rather than "unknown".
+            if a == b { 0 } else { 1 }
+        } else { ty_pair_disagrees(a, b) }
+    } else {
+    if ty_kind_needs_composite(k) == 1 {
+        // The operand is a known scalar, which a field access or an index
+        // cannot be. The host reports the tag; a 0 means it could not tell.
+        if a == ty_unknown() { 0 } else { 1 }
+    } else {
+    if k == 3 {
+        // A condition must be bool.
+        ty_pair_disagrees(a, 2)
+    } else { 0 } } }
+}
+
 fn ty_check() -> Word {
     ty.verdict = ty_accept();
     for i in 0..ty.n limit 256 {
@@ -288,6 +354,15 @@ fn ty_check() -> Word {
     }
     // Slices 4 and 5. A required tag of 0 is no requirement, so it reuses the
     // same disagreement predicate the operand pairs use: unknown never rejects.
+    // THE EXPRESSION RULES, applied from shapes rather than received as
+    // verdicts.
+    for e in 0..ty.en limit 256 {
+        ty.verdict = if ty_node_bad(ty.ekind[e], ty.ea[e], ty.eb[e]) == 1 {
+            ty_reject()
+        } else {
+            ty.verdict
+        };
+    }
     for q in 0..ty.qn limit 256 {
         ty.verdict = if ty_pair_disagrees(ty.qact[q], ty.qreq[q]) == 1 {
             ty_reject()
