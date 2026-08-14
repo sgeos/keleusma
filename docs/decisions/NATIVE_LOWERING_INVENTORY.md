@@ -5592,3 +5592,71 @@ nothing about what it addresses.
   backend. That is not a subset boundary and would have made the must-not-fire test assert
   nothing. The probe distinguishes the two outcomes; a guess does not. The subject is now a
   `Float` constant.
+
+---
+
+## The `piano_roll` family, EXECUTED — not merely lowered
+
+`native_codegen/tests/module_differential.rs`, 2026-08-14. All ten modules run natively and
+on the virtual machine for **2100 ticks each** and agree.
+
+**This replaces a claim that was weaker than it read.** The family was previously verified by
+`module_refusals(...).is_empty()` — that is, by `lower_module` returning `Ok`. That is a
+statement about the COMPILER, not the program. Every construct had its own differential; the
+assembled module had none.
+
+### The oracle is three things, and each catches what the others cannot
+
+| compared | what only it catches |
+|---|---|
+| **native call sequence**, `(name, args)` in order | a dropped, reordered or mis-argued call — these modules are almost entirely side effects |
+| **per-tick return value** | a wrong result where the calls happen to be right |
+| **shared data segment**, byte for byte | a slot written at the wrong offset, which returns the right value AND makes the right calls |
+
+Roughly **2199 logged calls per module**. `TICKS = 2100` is chosen to cross the 2048-tick
+loop boundary, so the wrap-around reset branch is taken; a shorter run passes while leaving
+every section-onset branch untaken.
+
+**Two vacuity guards, because both comparisons can pass while checking nothing.** The call log
+must be non-empty, and the shared segment must not be all zeros — two all-zero buffers compare
+equal.
+
+### Verified by mutation, not by its own green
+
+Reversing the native argument order in the emitter makes `piano_roll_7` diverge at **index 3
+of 2199**. `src/lib.rs` was then restored and confirmed **byte-identical with `cmp`**, rather
+than trusted to a copy.
+
+### Four harness facts, each of which cost a cycle
+
+- **The entry is not chunk 0.** It is `kel_chunk_2`, `kel_chunk_21`, `kel_chunk_24`,
+  `kel_chunk_4` across the family — chunk 0 for only two of ten. Use `m.entry_point`.
+- **`data state` compiles to SHARED slots, not private.** For `piano_roll_7`: 184 shared
+  bytes, **zero** private slots, **zero** region bytes. The region pointer is present in the
+  signature regardless, because `trailing_ptrs` is all three or none.
+- **One tick is a `Reset` leg then a `Yielded` leg, and the SAME reply goes to both.** The
+  `PopN(1); Reset` tail is walked by the resume after the yield. A fresh reply on the `Reset`
+  leg is silently discarded and desynchronises the sides. The native side has no counterpart
+  leg — the degenerate lowering is one call per tick, and that asymmetry is the
+  transformation under test.
+- **`auto_arena_capacity_for` is not enough.** Eight of ten died with `OutOfArena` growing the
+  operand stack; the runtime's own message directs the host to add a margin. A property of
+  the virtual machine's harness, not of the lowering, whose frame is fixed.
+
+### Two ABI facts the harness forced into the open
+
+- **`register_fn` marshals at most FOUR arguments** and `host::set_adsr` takes five, so the
+  typed helper cannot express this family. The numeric natives go through
+  `register_native_closure`.
+- **The raw path hands back a `KStr`, an ARENA HANDLE**, rendering as
+  `KStr(KString(ArenaHandle { ptr: ... }))` — a value that differs between runs and carries no
+  text. Resolving a handle to its contents is what the marshalling layer is for, so
+  `host::song_name` goes through `register_fn` after all. Two paths because the two natives
+  genuinely differ, not for convenience.
+
+### Still true, and still the gap
+
+A green execution differential over ten modules is not a proof. It is evidence over the paths
+2100 ticks happen to take, and the modules were selected because they are the family this arc
+targeted. The remaining five corpus refusals — `stream` (4) and `composite` (1) — are
+untouched.
