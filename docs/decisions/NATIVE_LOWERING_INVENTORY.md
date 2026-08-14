@@ -5660,3 +5660,80 @@ A green execution differential over ten modules is not a proof. It is evidence o
 2100 ticks happen to take, and the modules were selected because they are the family this arc
 targeted. The remaining five corpus refusals — `stream` (4) and `composite` (1) — are
 untouched.
+
+---
+
+## Part B probed: the premise was wrong on TWO of the five
+
+2026-08-14, before any implementation. The goal named five refusals as one package; they are
+three different things, and two of them are not what the plan assumed.
+
+| module | refusal | what it actually is |
+|---|---|---|
+| `rogue_ai_boss`, `rogue_ai_hunter`, `rogue_ai_tracker` | `Stream` | **a narrow tail-walk gap. Tractable.** |
+| `codegen.kel` | `Stream` | **a deliberate SOUNDNESS refusal, not a gap** |
+| `rogue_dungen.kel` | `NewComposite` | **an unknown-width operand, NOT the caller-region issue the plan predicted** |
+
+### The three rogue AI modules: the tail walk is too narrow, and that is all
+
+Their envelopes are **clean** — `Stream` first, `Reset` last, `param_count` 1, one `Yield`, no
+non-`Func` callee. The predicate rejects them on the tail-position rule alone. The tail of
+`rogue_ai_boss::main`:
+
+```text
+  113 Yield
+  114 PopN(1)
+  115 Const(0) ; 116 Const(0) ; 117 Const(0)
+  118 NewComposite(Flat { kind: Tuple, count: 3, byte_size: 24 })
+  119 PopN(1)
+  120 Reset
+```
+
+The loop body's trailing expression builds a `(0,0,0)` tuple and discards it. **The net delta
+is `-1`, which is exactly what the rule requires**: `-1 +3 -2 -1 = -1`. What fails is the
+walk's *allowed-op set*, which admits only block delimiters and the final `PopN(1)`. `Const`
+and `NewComposite` are neither, so it bails on an op sequence whose arithmetic it would have
+accepted.
+
+**The widening is well defined**: admit ops in the tail that are pure and unobservable —
+`Const`, `NewComposite` into scratch — provided the net delta still reaches `-1`. The value is
+discarded and `Reset` rewinds, so it is dead code on both sides.
+
+**It is not licensed by this document.** Widening a soundness predicate on the reasoning that
+a case "looks fine" is precisely what the must-not-fire boundary exists to prevent, and these
+three modules need a VM differential before the predicate moves — the goal's own rule that
+`lower_module` returning `Ok` is not verification.
+
+### `codegen.kel` is a soundness refusal and should NOT be "fixed"
+
+It has **zero `Yield`s of its own** and a **`Reentrant` callee**. That is the delegated-
+suspension case `degenerate_stream_yield` refuses deliberately and documents: the runtime's
+`resume_after_enter` writes slot 0 of the ENTRY chunk whenever that entry is a `Stream`,
+regardless of which frame actually suspended, so a nested `yield fn` callee's suspension
+updates the entry's resume parameter in the virtual machine while natively the `kel_yield`
+return reaches only the callee's operand stack. The next iteration would read a stale value.
+
+**Admitting it needs a design for delegated suspension, not a predicate widening.** Counting
+it alongside the three rogue modules as "four `Stream` refusals" was the plan's error: they
+share an opcode and nothing else.
+
+### `rogue_dungen.kel` is not the caller-region case
+
+The plan predicted a chunk RETURNING a flat composite, needing the caller's region, and
+flagged it as an operator decision. The measured refusal is
+`NewComposite at op 40 has an operand of unknown width` — the `Width::Unknown` fail-closed
+path in the emitter, which is **my surface and not an ABI question at all**.
+
+**The operator decision the plan reserved is not needed here.** Whether some other chunk needs
+a caller-region convention remains open, but `rogue_dungen` is not the evidence for it.
+
+### What this changes
+
+Five refusals are **three separate pieces of work**, of which one should not be done:
+
+1. widen the tail walk, VM-differentiate the three rogue modules — the real B;
+2. trace one unknown-width operand in `rogue_dungen` — likely small, and mine;
+3. leave `codegen.kel` refused until delegated suspension has a design.
+
+The probe cost one test file and settled all three. Implementing against the original premise
+would have produced a predicate widening aimed at `codegen.kel`, which must not be widened.
