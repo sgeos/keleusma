@@ -13,7 +13,7 @@ misleading a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`, or a feature branch cut from it.
-- **Parent commit**: `b5b9c2b6`
+- **Parent commit**: `57f71c37`
 - **Written**: 2026-08-14
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint. It governs
   documentation, commit messages, code comments, and anything drafted for publication.
@@ -66,55 +66,56 @@ MSRV together is a runner, not a defect.
 
 ## THE STATE
 
-**Seventeen pull requests merged, each 22 of 22 CI jobs green.** `selfhost_wire` is at **156 tests**.
+**Thirty-five pull requests merged on 2026-08-13/14**, each 22 of 22 CI jobs green, merged at the
+commit CI ran. `selfhost_wire` is at 157 tests, `selfhost_typecheck` at 7.
 
 | | |
 |---|---|
-| the whole-artifact capstone gains a synthetic, erosion-proof case | #54 |
-| record-shape coverage measured and closed at **17 of 17** | #57 |
-| the module-input producer: chunk names | #58 |
-| the module-input producer: enum layouts, both intern modes | #59 |
-| the type checker's sliced implementation plan | #60 |
-| the constant contributor: roots, names | #62 |
-| the constant contributor: roots, six-word node table | #65 |
-| the constant contributor: CHILD positions, names and node table -- **the contributor is COMPLETE** | #69 |
-| roadmap and plan currency corrections | #61, #63, #64, #66, #67, #70 |
+| record-shape coverage | **17 of 17**, pinned by a test |
+| self-hosted type rejection | **16 ill-typed rejected, 7 well-typed accepted**, verdict agreement |
+| the end-to-end join | producer to interner to emitters, `NAMES`/`STRING_POOL` byte-identical |
+| the checker's input path | all four channels migrated off the test harness |
+| `read_stage` | `wire.kel` joined, because the driver emits through it |
+| the data-slot contributor | built; it was the 252-against-627 gap |
 
 **Boundary counts: 79 Ok / 4 Gap / 1 RefRejects, 84 cases.** Recount from the
-`&[(&str, Support, &str)]` table inside `self_hosted_construct_support_boundary`, comment lines
-stripped. **Three of my own extraction attempts have returned a wrong number** — the enum aliases are
-`SOk`, `Gap`, `RefRejects`, only the first carries the `S`.
+`&[(&str, Support, &str)]` table inside `self_hosted_construct_support_boundary`, comments
+stripped. The enum aliases are `SOk`, `Gap`, `RefRejects` -- only the first carries the `S`, and
+three of my extraction attempts have returned a wrong number.
 
 ## THE NEXT INCREMENT, SPECIFIED
 
-**THE CONSTANT CONTRIBUTOR IS COMPLETE** (slice 14e, #69): roots and child positions, names and node
-table, all four. The interning sequence is no longer a Rust model.
+**One ceiling.** `parse` needs 627 names and the hard limit is 512. Specified at "WHAT IS LEFT OF THE
+CEILING" in [`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md).
 
-**A prediction that increment disproved, recorded because the reflex would inflate every remaining
-estimate on this line.** The plan and this file both said the nesting walk "needs an explicit stack
-because the language has no recursion". **It does not.** The blob carries the forest in PREORDER and
-the reference pushes a node then descends, so the node table and the name sequence are BOTH in that
-order and a linear scan reproduces both. A stack is needed only to reconstruct tree SHAPE, which the
-producer does not do. **The cost of a total language was assumed rather than measured.**
+> **It is not two constants.** Every `for .. limit 256` must rise with `nm_max_names`, and
+> `for .. limit` TRAPS on entry rather than degrading -- a loop left behind aborts on exactly the
+> inputs the raise was for. And verifying it needs `parse`, whose 304,432-byte artifact does not fit
+> the single-window join harness. **So the raise and the staged path are one decision**: either the
+> join grows a windowed variant, or the ceiling rises and a new harness carries `parse`.
+>
+> Growing the buffer is NARROW in slot terms, which is worth knowing so the next attempt does not
+> over-estimate it: `nin` is followed by `nout` and `bout`, and the harness addresses none of them
+> by slot. `NIN_SLOT` and `NIN_CAPACITY` are the only constants that move.
 
-What survives from that specification and still binds: **`STRUCT` interns its field names FRESH while
-`ENUM` interns both names DEDUP**, and a single "a composite interns its names" rule is wrong for one
-of the two, visibly only where a name repeats.
-
-**Next, and they are ONE increment**: removing `wire.kel` from the `read_stage` exclusion and the
-residency staging a stage's 395,804 names force. The plan is explicit that doing either alone is
-wasted, and `read_stage` is **blocked behind the driver, not beside it** — its stated criterion
-("when it produces bytes rather than a checksum") now reads as met, and it is still not a one-line
-change.
-
-**B, the self-hosted type checker, is blocked on the same question.** Its plan is merged
-([`../decisions/TYPECHECK_IMPLEMENTATION_PLAN.md`](../decisions/TYPECHECK_IMPLEMENTATION_PLAN.md),
-rejection only, six slices). It shares an input-encoding problem with the wire-format line, and
-**neither should invent a second encoding**. Do not build the checker before its input encoding
-exists.
+**THE FIGURE THAT WAS WRONG IN THREE PLACES.** "A real stage's 395,804 names" describes no name
+count. The largest `NAMES` region is **627 records**; 395,804 is a REGION record count belonging to
+`CONSTS`. It came from the pre-run-length-encoding state and outlived the representation it
+described, surviving in the plan, the roadmap and a goal statement. **Check a figure against the
+thing it claims to measure.**
 
 ## FACTS THAT COST REAL EFFORT
 
+- **CHECK A FIGURE AGAINST THE THING IT CLAIMS TO MEASURE.** "395,804 names" was a region record
+  count and survived three documents, making a 2.5x problem look like a 1500x one.
+- **APPEND TO A SLOT-ADDRESSED BLOCK, NEVER INSERT.** Two off-by-one defects came from ignoring the
+  convention the file states: once shifting every later field and failing four tests at
+  once, once stepping over a scratch word so `calling-a-local` was silently ACCEPTED.
+- **Say which fact a green suite does NOT establish.** The slot-name intern mode is unverified by
+  the corpus: a mutation to fresh mode passes every test, because a slot name is `<block>.<field>`
+  and cannot collide with anything.
+- **`git checkout <file>` to undo a bad edit discards everything else in that file.** An hour of
+  unrelated work went that way; only the part living in another file survived.
 - **When the question is "does anything ever do X", INSTRUMENT, do not grep.** All seven
   previously-empty region kinds appear in the test file, seven hits out of seven, and that proves
   nothing: a kind can be named in a stride table or a negative test with no record of that shape ever
