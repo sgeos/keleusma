@@ -16,115 +16,74 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 | | |
 |---|---|
-| `v0.2.3` | pushed, tree clean, in sync with origin |
-| PRs merged this session | **#54, #57, #58, #59, #60, #61, #62, #63, #64, #65**, each 22 of 22 green, merged at the commit CI ran |
-| Open PRs of this line | **none** |
-| `selfhost_wire` | **155 tests** |
-| Record-shape coverage | **17 of 17**, pinned by a test rather than by this note |
+| `v0.2.3` | pushed, tree clean, in sync, **no open PRs of this line** |
+| PRs merged this session | **thirty-four**, each 22 of 22 green, merged at the commit CI ran |
+| `selfhost_wire` | 157 tests; `selfhost_typecheck` 7 |
+| Record-shape coverage | **17 of 17**, pinned by a test |
+| Type rejection | **16 ill-typed rejected, 7 well-typed accepted**, verdict agreement |
 
 ## The three-part goal, and where each stands
 
-**C. Emitter record-shape coverage — DONE.** Measured by instrumenting every emit command across the
-whole suite: sixteen of seventeen shapes emitted with at least one record, `STRUCT_TEMPLATES` under
-none. The gap was a **missing capability**, not a weak assertion: no decoder and no dispatch arm, so
-the emitter refused the kind with `-222`. Closed from real compiler output, with a targeted must-fire.
+**1. THE END-TO-END JOIN — DONE.** The producer's sequence now feeds the interner and the emitters in
+one VM call, and `NAMES` and `STRING_POOL` come back byte-identical to `encode_aux_body` with the
+module blob as the ONLY input describing names. `intern_run` is untouched; `intern_run_preoffset` is
+a second function so the sequential path cannot regress.
 
-**A. Drive the emitter from the pipeline — PARTLY DONE, and the remainder is the large half.**
+**2. THE INPUT-PATH CONSOLIDATION — DONE.** All four channels migrated: the stage joins declarations
+to call sites, searches struct field sets, classifies name occurrences, and applies the expression
+rules. Every superseded collector on the authoritative path is deleted rather than left unused.
+Verdict agreement held at sixteen and seven throughout.
 
-| | |
-|---|---|
-| dedup-scan contradiction settled and recorded | done |
-| module-input encoding defined | done |
-| producer: chunk names | done (#58) |
-| producer: enum layouts, both intern modes | done (#59) |
-| producer: constant ROOTS, names and the six-word node table | done (#62, #65) |
-| per-chunk ranges | **already self-hosted**; the roadmap was stale (#63) |
-| producer: constant CHILD positions, `STRUCT`/`ENUM` interning as the walk descends | done (#69) |
-| `wire.kel` removed from the `read_stage` exclusion | **blocked behind the driver**, not beside it (#64) |
-| residency staging for a stage's 395,804 names | **not started** |
+**3. `read_stage` AND STAGING — HALF DONE, and the other half was mis-sized by everyone including
+me.**
 
-The plan is explicit that the last two are **the same increment** and that doing either alone is
-wasted.
+- `read_stage` is DONE. `wire.kel` joined the stage table because the driver can now emit through it
+  (`wire_names_via_kel`), not before.
+- The DATA-SLOT contributor is DONE. It was missing entirely and is the difference between the
+  producer's 252 and the reference's 627 on `parse`.
+- **What remains is one ceiling**: `parse` needs 627 names against a hard 512.
 
-**B. Self-hosted type rejection — DONE.** All six slices merged. The stage rejects all sixteen
-ill-typed programs and accepts all seven well-typed ones, in **verdict agreement** and never message
-agreement, including `calling-a-local`, which carries no `type error:` prefix and has its own
-resolution code for that reason. `src/selfhost/kel/verify_types.kel` and
-`tests/selfhost_typecheck.rs`.
+## The measurement that overturned the premise
 
-**The control that earned its place.** Slice 3 FALSELY REJECTED `shared data s { n: Word }` reading
-`s.n`, because the name collector knew only functions and locals. A valid program refused is a
-language change, not a conservative choice, and **a rejection-only corpus would have scored it a
-success**.
+**"A real stage's 395,804 names" describes no name count.** Measured across all ten stages, the
+largest `NAMES` region is **627 records**; 395,804 is a REGION record count belonging to `CONSTS`
+(34,782 units for `parse`). The figure came from the pre-run-length-encoding state, when
+`SHARED_LAYOUT` held one record per array element, and it outlived the representation it described.
+**It made a two-and-a-half-times problem look like a fifteen-hundred-times one**, and the design that
+framing implied would have been built and not needed.
 
-## What the measurements changed
+I put that number in the goal statement myself, from the plan.
 
-**A grep would have reported this closed.** All seven previously-empty kinds appear in the test file,
-seven hits out of seven, because a kind can be named in a stride table or a negative test without any
-record of that shape ever being written. The instrumented count is the only thing that answers it.
+## The two things a green suite would otherwise overstate
 
-**All six formerly-empty shapes are reachable from real compiled modules**, including `STRUCT_AUX`
-and `ENUM_AUX` via `const data`. The wire-format plan expected hand-built artifacts to be necessary.
-They are not, and real sources are the stronger oracle.
+**The slot-name intern MODE is unverified by the corpus.** A mutation to fresh mode passes every
+test, because a slot name is `<block>.<field>` and cannot collide with anything. The claim rests on
+reading `add_data_layout`. Recorded in the source as the weakest link.
 
-**The two dedup scans are different scans.** `intern_run` is batch-local and capped at 256, where a
-1024-slot table costs 1024 probes against roughly 256 comparisons, because a total language has no
-early exit — do not replace it. The walk-nested scan through `NAMES` is the one the 782-second lesson
-bears on, and it is to be measured at stage scale. The roadmap cell was stale and now points at the
-settlement.
-
-## The mistake worth not repeating
-
-**A push reported success and did not push.** The gate ran, printed "all checks passed", and the ref
-was never created. `git ls-remote` caught it. The output had been truncated with `tail -3`, which cut
-the line that would have said so. That is the truncation rule in a new place: not a verification
-whose result I meant to quote, but a command whose **effect** I meant to rely on. **Verify the ref,
-not the gate.**
+**The remaining ceiling raise is not two constants.** Every `for .. limit 256` must rise with
+`nm_max_names`, and `for .. limit` TRAPS rather than degrades. Verifying it needs `parse`, whose
+artifact does not fit the single-window join harness.
 
 ## Open, held by the operator
 
-- **Publication remains HELD.** Nothing is published.
-- **`v0.2.3-prerebase-backup`**, local only, a deliberate pre-rebase safety copy.
-- **`MAX_PARSE_DEPTH` on a small stack.** Unchanged. Related and new: `emit_at` is now at eighteen
-  arms, the measured ceiling for that shape in the test harness. A nineteenth needs the chain
-  restructured, not extended.
+- **Publication remains HELD.**
+- **`v0.2.3-prerebase-backup`**, local only.
+- **`MAX_PARSE_DEPTH` on a small stack.** Also: `emit_at` is at eighteen arms, the measured harness
+  ceiling for that shape.
 - **`CHANGELOG.md:340`** states the checked-arithmetic push order wrongly in published text.
-- **MSRV**: CI checks 1.85 for `keleusma-arena` and 1.88 for `keleusma`.
+- **MSRV**: 1.85 for `keleusma-arena`, 1.88 for `keleusma`.
 
 ## Next intended step
 
-**The constant contributor is COMPLETE** as of slice 14e. Roots and child positions, names and node
-table, all four.
-
-**A prediction of mine that the implementation disproved.** This section previously said the nesting
-walk "needs an explicit stack because the language has no recursion". It does not. The blob carries
-the forest in PREORDER, and the reference pushes a node then descends, so the node table and the name
-sequence are BOTH in that order and a linear scan reproduces both. A stack is needed only to
-reconstruct tree SHAPE, which the producer does not do: the child count is carried through and the
-flattener consumes it. **The cost of a total language was assumed rather than measured**, and the
-assumption was wrong in the cheap direction for once.
-
-**Next: the two that are one increment**: removing `wire.kel` from the `read_stage` exclusion and the
-residency staging a stage`s 395,804 names force. The plan is explicit that doing either alone is
-wasted.
-
-**B is blocked on the same question.** The type-checker plan and the wire-format line share an
-input-encoding problem, and **neither should invent a second encoding**. The checker must not be
-built before its input encoding exists.
-
-## Parallel development
-
-`v0.3.0` carries native code generation. Their mailbox is
-`git show origin/v0.3.0:docs/process/handoffs/v0.3.0.md`; mine is
-[`handoffs/v0.2.3.md`](./handoffs/v0.2.3.md). Poll at increment boundaries. **Tell the two lines
-apart by BASE BRANCH, not by author.**
+**The ceiling, and it needs a harness decision first**: either the join grows a windowed variant, or
+the ceiling rises and a new harness carries `parse`. Specified at "WHAT IS LEFT OF THE CEILING" in
+[`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md).
 
 ## Method rules this session paid for
 
-- **Instrument, do not grep, when the question is "does anything ever do X".** Seven hits out of
-  seven meant nothing.
-- **Verify the ref after a push, not the gate output.** A gate can pass on a push that did not land.
-- **Write the encoding down before relying on it.** The enum count would have read correctly from
-  zero-filled memory whether or not the encoder wrote it.
-- **A guard refusing loudly is the guard working.** `-99` on an unregistered command, `-222` on an
-  unhandled kind: both surfaced real gaps as refusals rather than as wrong artifacts.
+- **Instrument, do not grep**, when asking whether anything ever does X.
+- **Verify the ref after a push**, not the gate output.
+- **Check a figure against the thing it claims to measure.** 395,804 survived three documents.
+- **Append to a slot-addressed block, never insert.** Two off-by-one defects came from ignoring it.
+- **Say which fact a green suite does NOT establish.** The slot mode is the example.
+- **A guard refusing loudly is the guard working**: `-99`, `-222`, `-233` each surfaced a real gap.
