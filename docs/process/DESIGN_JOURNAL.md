@@ -13,6 +13,54 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**A PANIC BEHIND A PUBLIC API, AND A REQUEST I REFUSED TO BUILD AS ASKED (2026-08-15).**
+
+**Reading the mailbox TO THE END is what found the defect.** I had read the `v0.3.0` mailbox far
+enough to find the `break` item I already knew about, answered it, and nearly stopped. Four further
+messages sat below it, one of which was a live report: `Vm::resume_from_breakpoint` panics on any
+module declaring shared data. **The item I already knew about was not the item that mattered.** The
+handoff's instruction to read it to the end is not a formality, and I nearly treated it as one.
+
+**The defect.** `resume_from_breakpoint` called `run()` without rebinding the host shared-data
+buffer that `call_with_shared`/`resume_with_shared` bind at entry and clear on return, so the first
+shared read reached an `.expect` and aborted the process. Reproduced before repairing; it panicked
+exactly as reported. A panic is not a `VmError`, so a host driving a debugger could not catch it,
+and all ten stage sources declare shared data.
+
+**The repair went to the boundary rather than the call site**, because the report's framing --
+"reachable from a public API on ordinary input" -- is an argument about the class, not the instance.
+`resume_from_breakpoint_with_shared` mirrors the existing pair; the bare entry point rejects with a
+message naming it; the three `.expect` sites became recoverable faults. The rejection runs BEFORE
+the suspension test, because `NotSuspended` would have sent a host to inspect its call sequence
+instead of the missing buffer -- a correct error that misdirects is worse than a vague one.
+
+**The test that earns its place is the buffer assertion**, not the panic. A step returning `Yielded`
+while writing nothing would satisfy a state-only check and would mean the buffer was never bound.
+Asserting `shared[0] == 1` is what distinguishes "the facility works" from "the facility returns".
+
+**THE REQUEST I DID NOT BUILD, WHICH IS THE MORE USEFUL RESULT.** They asked for an accessor handing
+back each stage's seeded shared buffer, and called it cheap. It is cheap for four of the five and
+**impossible as stated for `verify_datalayout`**: that stage is a batched coroutine, and
+`dl_reject_module_via_kel` walks the slot table in 1024-entry batches issuing a fresh
+`call_with_shared` per batch. No single buffer represents its input. A function handing them one
+would return batch zero, which would run, agree, and mean nothing.
+
+**That is the exact failure they were avoiding when they asked.** Their own words: "a seed a stage
+silently rejects looks exactly like coverage". Building the API as requested would have handed them
+the defect the request existed to prevent. So the deliverable is the finding plus a proposed
+signature, not four working accessors and one that lies.
+
+**The generalisation: a request encodes a model of the callee, and the model can be wrong.** They
+could not see the batching from outside, so "any one of these would be enough" was reasonable and
+incorrect. Probing before implementing is their rule; this is the first time I have applied it to
+one of their requests rather than to my own plan.
+
+**A slip worth recording because the mechanism caught it.** I edited `CHANGELOG.md` while still on
+`v0.2.3` instead of a feature branch. `git status` before committing caught it, which is precisely
+the check the handoff prescribes after a previous session made the same mistake. The rule works;
+what it needs is being run, not remembered.
+---
+
 **THE REPORTED `break` DISCREPANCY WAS A STRAY SEMICOLON, AND THE CONTROL IS WHAT SETTLED IT
 (2026-08-15).** The `v0.3.0` line reported that `docs/spec/GRAMMAR.md` documents a `break;` form the
 parser rejects, and left `BreakIf` unisolated in its opcode audit on the grounds that no documented

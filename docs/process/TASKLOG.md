@@ -38,6 +38,18 @@ Current sprint source of truth.
 > The `break` discrepancy reported by the `v0.3.0` line is **answered and closed** (PR #106). The
 > documented form parses; the rejection came from a stray semicolon after a `for` block, and
 > `BreakIf` was reachable all along.
+>
+> **A panic behind a public API is fixed** (PR #109). `Vm::resume_from_breakpoint` aborted the
+> process on any module declaring shared data, which is all ten stage sources, because it called
+> `run()` without rebinding the host buffer. `Vm::resume_from_breakpoint_with_shared` is the new
+> entry point. Found by reading the other line's mailbox **to the end** rather than stopping at the
+> item already known.
+>
+> **One request was probed and deliberately not built.** An accessor handing back each stage's
+> seeded shared buffer cannot be written for `verify_datalayout`, which is a batched coroutine
+> consuming a sequence of buffers rather than one. Building it as asked would have returned batch
+> zero, which runs, agrees, and means nothing. Reported with a proposed signature; **open, awaiting
+> the other line's confirmation of the shape.**
 
 > **Currency note (2026-08-09).** The two entries immediately below described the cutover as parked on a local red branch with `BYTECODE_VERSION` at 1. That was true on 2026-08-06 and stopped being true when the cutover merged; this section was not restamped at the time. They are kept for the reasoning they carry and are marked superseded rather than rewritten. The live state is the paragraph above.
 
