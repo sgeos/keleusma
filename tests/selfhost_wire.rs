@@ -11269,24 +11269,52 @@ fn the_driver_emits_names_and_pool_through_wire_kel() {
     }
 }
 
-/// The bound is REFUSED, not truncated.
+/// BOTH driver bounds are REFUSED, not truncated.
 ///
-/// A stage's 395,804 names do not fit the interner's per-call cap, and a silent
-/// partial artifact would be far worse than a refusal because it would be
-/// byte-identical for a prefix. Residency staging is a separate increment with
-/// a measurement in front of it.
+/// A silent partial artifact would be far worse than a refusal, because it
+/// would be byte-identical for a prefix and wrong after it.
+///
+/// **Derived from `NAME_CAP`, not spelled as a literal.** This test was written
+/// against a cap of 256 and pinned `257`; the ceiling raise took the cap to
+/// 1024 and the case silently stopped being over the bound, so the driver
+/// accepted where the test demanded a refusal. It was the ONLY thing in the
+/// suite that caught the raise's loose end, and it caught it in CI rather than
+/// locally because it sits behind `self-host`, which a default-feature run does
+/// not enable.
+///
+/// The text here previously said "a stage's 395,804 names do not fit". That
+/// figure described no name count -- it was a `CONSTS` region record count. The
+/// largest `NAMES` region in the corpus is `parse` at 627, which now FITS.
 #[cfg(feature = "self-host")]
 #[test]
 fn the_driver_refuses_more_names_than_one_call_can_intern() {
     let module =
         compile(&parse(&tokenize("fn main() -> Word { 42 }").expect("lex")).expect("parse"))
             .expect("compile");
-    let err = keleusma::selfhost::wire_names_via_kel(&module, &[], &[], 257, 0)
-        .expect_err("over the cap must refuse");
+
+    // One past the name cap.
+    let err = keleusma::selfhost::wire_names_via_kel(&module, &[], &[], NAME_CAP + 1, 0)
+        .expect_err("over the name cap must refuse");
     let msg = format!("{err:?}");
     assert!(
         msg.contains("staging is not implemented"),
         "the refusal must name the reason, got: {msg}"
+    );
+    assert!(
+        msg.contains(&(NAME_CAP + 1).to_string()),
+        "the refusal must report the offending count, got: {msg}"
+    );
+
+    // One past the blob buffer. A SEPARATE bound with a separate message: the
+    // blob is checked host-side because `wire.kel` cannot see a seeding overrun,
+    // and a module can breach this while its name count is fine.
+    let blob = vec![0u8; BIN_CAPACITY + 1];
+    let err = keleusma::selfhost::wire_names_via_kel(&module, &blob, &[], 1, 0)
+        .expect_err("over the blob cap must refuse");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("blob buffer holds"),
+        "the blob refusal must name its own bound, got: {msg}"
     );
 }
 
