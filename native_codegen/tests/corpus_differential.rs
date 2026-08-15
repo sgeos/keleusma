@@ -521,6 +521,63 @@ fn run_native(m: &Module, table: &[(String, usize)]) -> Option<Run> {
     })
 }
 
+/// Did this run produce any observable work at all?
+///
+/// The harness compares three things, and a module that exits immediately is
+/// trivial in all three at once: one repeated result, no host calls, and a shared
+/// segment still holding the zeros it was handed. Two sides agreeing on that
+/// state assert nothing about the emitter.
+///
+/// **Conservative by construction.** A run is vacuous only when EVERY observable
+/// is trivial, so a module doing real work in any one of them is counted as
+/// executed. The consequence is that this under-reports vacuity rather than
+/// over-reporting it, which is the safe direction for a number quoted as
+/// coverage.
+///
+/// **Only a STREAM is judged.** A single-call module produces exactly one result
+/// by construction, so "every result is the same" is true of it vacuously and
+/// says nothing. A first attempt omitted this and classified 32 modules as
+/// vacuous, including `10_multbyte.kel` — the module whose execution exposed the
+/// composite-return aliasing defect, and therefore the clearest possible
+/// counterexample to its own classification.
+fn is_vacuous(run: &Run) -> bool {
+    if run.results.len() < 2 {
+        return false;
+    }
+    let mut distinct: Vec<i64> = run.results.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    distinct.len() <= 1 && run.log.is_empty() && run.shared.iter().all(|b| *b == 0)
+}
+
+/// Modules that AGREE while producing nothing, tracked rather than counted.
+///
+/// Every one is a self-hosted compiler stage that reads its input from the shared
+/// data segment. This harness supplies that segment as zeros, so each takes an
+/// immediate end-of-input exit — `lexer.kel` yielded `62`, its own documented
+/// end-of-source marker, sixty times.
+///
+/// **They were inside the "executed and agreeing" count until 2026-08-14**, which
+/// is why the headline moved from 40 to 34. Nothing regressed; the number was
+/// measuring the harness rather than the emitter.
+///
+/// `lexer.kel` and `parse.kel` now have REAL coverage in `stage_differential.rs`,
+/// which seeds the segment identically on both sides. They stay listed here
+/// because this harness still drives them on nothing.
+///
+/// The other four consume abstract-syntax-tree and descriptor blocks whose
+/// layouts belong to the `src/selfhost/mod.rs` driver, which this line may read
+/// but must not edit. Seeding those means reproducing four input formats, and a
+/// seed a stage silently rejects looks exactly like coverage.
+const KNOWN_VACUOUS: &[&str] = &[
+    "lexer.kel",
+    "reconstruct.kel",
+    "verify_datalayout.kel",
+    "verify_depth.kel",
+    "verify_structural.kel",
+    "verify_typed.kel",
+];
+
 /// Modules KNOWN to disagree, tracked rather than ignored.
 ///
 /// The test asserts the disagreement set EQUALS this list, so a new
@@ -540,6 +597,7 @@ const KNOWN_DISAGREEMENTS: &[&str] = &[];
 #[test]
 fn every_lowering_module_executes_or_is_exempt() {
     let mut executed: Vec<String> = Vec::new();
+    let mut vacuous: Vec<String> = Vec::new();
     let mut exempt: Vec<(String, String)> = Vec::new();
     let mut disagreed: Vec<String> = Vec::new();
 
@@ -659,11 +717,38 @@ fn every_lowering_module_executes_or_is_exempt() {
             disagreed.push(format!("{name}: {where_}"));
             continue;
         }
+        // **Agreement is not evidence unless the run did something.** Nine of the
+        // stage sources agreed here for months while doing nothing at all: they
+        // read their input from the shared segment, which this harness supplies
+        // as zeros, so each took an immediate end-of-input exit. `lexer.kel`
+        // yielded 62 — its own documented end-of-source marker — sixty times.
+        //
+        // The three observables are all trivial in that state, so a run is
+        // classified vacuous only when EVERY one of them is, which is
+        // conservative: a module doing real work fails the test on any one.
+        if is_vacuous(&vm) {
+            vacuous.push(name);
+            continue;
+        }
         executed.push(name);
     }
 
     println!("================ CORPUS DIFFERENTIAL");
     println!("  EXECUTED AND AGREEING : {}", executed.len());
+    println!(
+        "  AGREED BUT VACUOUS    : {}  <- agreement on a run that produced nothing",
+        vacuous.len()
+    );
+    for n in &vacuous {
+        println!("     {n:26}");
+    }
+    if !vacuous.is_empty() {
+        println!(
+            "     ^ these read their input from the shared segment, which this harness\n\
+             \x20      supplies as zeros. Real coverage for `lexer.kel` and `parse.kel` is in\n\
+             \x20      `stage_differential.rs`, which seeds the segment on BOTH sides."
+        );
+    }
     println!("  EXEMPT                : {}", exempt.len());
     for (n, why) in &exempt {
         println!("     {n:26} {why}");
@@ -692,6 +777,19 @@ fn every_lowering_module_executes_or_is_exempt() {
          KNOWN_DISAGREEMENTS.\n  detail:\n{}",
         disagreed.join("\n")
     );
+    let mut vac: Vec<&str> = vacuous.iter().map(String::as_str).collect();
+    vac.sort();
+    let mut known_vac: Vec<&str> = KNOWN_VACUOUS.to_vec();
+    known_vac.sort();
+    assert_eq!(
+        vac, known_vac,
+        "the VACUOUS set changed.\n  A module that JOINED it agrees while producing \
+         nothing, so its entry in the executed count was never evidence.\n  A module \
+         that LEFT it is now doing real work and should be removed from KNOWN_VACUOUS.\n  \
+         Neither direction may pass silently: this list was 40-strong-looking coverage \
+         for months precisely because nothing checked it."
+    );
+
     assert!(
         executed.len() >= 20,
         "only {} modules executed; the harness is not covering the corpus and \
