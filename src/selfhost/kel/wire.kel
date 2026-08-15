@@ -83,7 +83,7 @@ shared data wire {
     //
     // Also a BATCH buffer. 8192 bytes covers `PARAM_TYPES` whole, and the host
     // feeds the large pools in successive batches while appending the output.
-    bin: [Byte; 8192],
+    bin: [Byte; 49152],
     // Flattener scratch (slice 13). `fq` is the breadth-first queue, holding
     // PREORDER indices in the order their records are emitted; `fsz` is each
     // preorder node's subtree size, which is what locates a later sibling.
@@ -105,12 +105,11 @@ shared data wire {
     // cap, so the two cannot share it — and slice 13b has them running in ONE
     // call, because `flatten` interns as it walks.
     //
-    // `nin` is (length, mode) pairs in; `nout` is (offset, length) pairs out for
-    // `[0, 2*cnt)` and the input-to-index map from `nm_map_base()`. The pool is
-    // still compacted in place in `bin`, which is sound for the reason recorded
-    // at `intern_run`: the output cursor never overtakes the input cursor.
-    nin: [Word; 1024],
-    nout: [Word; 1024],
+    // `nin` is (length, mode) pairs IN, two words per input name; `nout` is
+    // (offset, length) pairs OUT, two words per DEDUPED name. Both are sized at
+    // `2 * nm_max_names()`.
+    nin: [Word; 2048],
+    nout: [Word; 2048],
     // THE POOL'S OUTPUT BUFFER, separate from its input.
     //
     // Slice 12 compacted the pool over its own input in `bin`, justified by the
@@ -122,7 +121,31 @@ shared data wire {
     //
     // A separate buffer makes the aliasing question disappear rather than
     // answering it. `bin` is now read-only to the interner.
-    bout: [Byte; 8192],
+    bout: [Byte; 16384],
+    // THE MAP AND THE OFFSETS, EACH ITS OWN ARRAY. They used to be the upper two
+    // thirds of `nout`, reached through `nm_map_base()` and `nm_off_base()`, and
+    // the three regions tiled 1024 words EXACTLY with no slack at the 256-name
+    // cap. That layout could not be raised: the pairs would have run into the
+    // map, the map into the offsets, and the offsets off the end, with no bound
+    // violated that the language could catch. The old comment said as much and
+    // offered two repairs; this is the second one, taken because it removes the
+    // coupling rather than re-establishing it at a larger size. Raising the cap
+    // now means changing three array lengths and nothing else.
+    //
+    // Appended last so no existing slot index moves.
+    //
+    // `nmap` is the input-to-index map: what `NAMES` index each INPUT name
+    // resolved to. It is the piece downstream records consume -- a chunk cites a
+    // name index, not a name -- and it is the only way the interner's last-match
+    // rule is observable at all, since first-match and last-match produce
+    // identical `NAMES` and `STRING_POOL` bytes.
+    nmap: [Word; 1024],
+    // `noff` is each INPUT name's byte offset into `bin`. Slice 12 never
+    // materialised these: it walked `nin` in order with a running cursor, so an
+    // offset was always the cursor's current value. Slice 13b interns during a
+    // breadth-first walk, in an order that is not the input order, so an
+    // arbitrary name's offset has to be recoverable on demand.
+    noff: [Word; 1024],
 }
 
 // The running checksum. It lives in a data block because locals are immutable:
@@ -1346,6 +1369,11 @@ fn emit_header_record_at(at: Word) -> Word {
 fn chunk_fields() -> Word { 14 }
 fn fin_capacity() -> Word { 1024 }
 
+// `nout`'s capacity in WORDS, which at two words per name record admits exactly
+// `nm_max_names()` names. Stated as its own function so the emitter reading
+// `nout` can be guarded by `nout`'s size rather than by another buffer's.
+fn nout_capacity() -> Word { 2048 }
+
 // One chunk record at byte address `at`, reading fourteen fields from `wire.fin`
 // starting at `k`.
 fn emit_chunk_record_at(at: Word, k: Word) -> Word {
@@ -1401,13 +1429,13 @@ fn emit_chunk_records(at: Word, n: Word) -> Word {
 // extreme case of one logical byte in an eight-byte region. Residues 1, 2 and 6
 // do not occur and are covered by a hand-built sweep instead.
 
-fn bin_capacity() -> Word { 8192 }
+fn bin_capacity() -> Word { 49152 }
 
 // `bout` is the same size as `bin` TODAY, and that is a coincidence rather than
 // a constraint. A guard on the output buffer that names the input one is right
 // only until either is resized, and the two have already diverged in ROLE — bin
 // is read-only to the interner, bout is written by it.
-fn bout_capacity() -> Word { 8192 }
+fn bout_capacity() -> Word { 16384 }
 
 // Copy `n` input bytes into the window at `at`.
 //
@@ -1415,9 +1443,15 @@ fn bout_capacity() -> Word { 8192 }
 // host, and a batch larger than `wire.bin` would read past the array's end. A
 // distinct code says which contract was broken rather than faulting on a value
 // the host chose.
+// THE LIMIT IS `bin_capacity()`'s VALUE, NOT AN INDEPENDENT NUMBER. The guard
+// above admits any `n` up to `bin_capacity()`, so a loop capped lower does not
+// reject the excess -- it TRAPS with `LoopLimitExceeded` on entry, past the
+// guard that already said yes. This was 8192 while `bin` was 8192 and stayed
+// 8192 when `bin` became 49152, and three whole-artifact tests aborted on
+// exactly the large pools the raise was for. Change the two together.
 fn emit_pool_bytes(at: Word, n: Word) -> Word {
     if n > bin_capacity() { 0 - 201 } else {
-        for j in 0..n limit 8192 {
+        for j in 0..n limit 49152 {
             wire.bytes[at + j] = wire.bin[j];
         }
         n
@@ -2581,6 +2615,17 @@ private data nm {
     // A separate field rather than a borrowed one, for the reason `st.pad` is
     // separate from `st.dis`: reusing an accumulator here would read as a bug.
     sink: Word,
+    // THE JOIN'S THREE EMITTER RESULTS, HELD SEPARATELY SO A FAILURE CANNOT BE
+    // SUMMED AWAY. `mi_join` used to return
+    // `emit_names(..) + emit_pool(..) + emit_pad(..)`, and a sum is not a
+    // conjunction: the names emitter returned -202 on `parse` while the pool
+    // emitter returned 7680, so the call reported 7478 -- positive, therefore
+    // "success" to every caller -- with the `NAMES` region left entirely zero.
+    //
+    // Appended last so no existing slot index moves.
+    jn: Word,
+    jp: Word,
+    jd: Word,
 }
 
 // The longest name this slice admits, and it is a STATED CAP rather than a
@@ -2592,43 +2637,26 @@ fn nm_max_name() -> Word { 256 }
 
 // The most names one call admits.
 //
-// 256 rather than the 512 that two words per name would allow, because the
-// upper half of `wire.fin` carries the input-to-index MAP. That map is the piece
-// downstream records actually consume — a chunk cites a name index, not a name —
-// and it is also the only way the last-match rule above is observable at all:
-// first-match and last-match produce identical `NAMES` and `STRING_POOL`
-// regions, so without the map the rule would be logic with no test that could
-// fail. Halving the cap to make a rule testable is the right trade.
-fn nm_max_names() -> Word { 256 }
-
-// Where the input-to-index map starts in `wire.nout`. Output record pairs occupy
-// `[0, 2 * cnt)` and `cnt <= n <= 256`, so they never reach here.
-fn nm_map_base() -> Word { 512 }
-
-// Where each INPUT name's byte offset into `bin` lives, one word per name.
+// **1024, raised from 256, because `parse.kel` interns 627** and every other
+// stage interns fewer -- the next largest is `codegen` at 152. The value is not
+// 640-and-done: 1024 is what the twenty region emitters already use as their
+// `limit`, so matching it leaves the file with ONE name ceiling instead of two
+// that must be kept in step.
 //
-// Slice 12 never materialised these: it walked `nin` in order with a running
-// cursor, so an offset was always the cursor's current value. Slice 13b interns
-// during a breadth-first walk, in an order that is not the input order, so an
-// arbitrary name's offset has to be recoverable on demand. A prefix sum over
-// `nin` computed once is cheaper than widening `nin` to (offset, length, mode)
-// triples, which would change every test that feeds the interner.
+// THE COST IS QUADRATIC AND IT IS THE REAL PRICE OF THE RAISE. `nm_find` scans
+// every name interned so far, with no early exit -- a total language has none --
+// so the interning phase's static worst case is `nm_max_names` squared byte
+// comparisons. Going from 256 to 1024 multiplies that bound by SIXTEEN
+// (65,536 name comparisons to 1,048,576). It costs nothing on real input, where
+// the scan runs to `cnt`, but the WCET bound is computed from the cap and the
+// bound is what this project sells.
 //
-// THE THREE REGIONS OF `nout` TILE IT EXACTLY, WITH NO SLACK, and that is a
-// fragility worth spelling out because nothing checks it:
-//
-//   record pairs   [0, 2 * cnt)      cnt <= 256   ->  [0, 512)
-//   input->index   [512, 512 + n)    n   <= 256   ->  [512, 768)
-//   byte offsets   [768, 768 + n)    n   <= 256   ->  [768, 1024)
-//
-// `nout` is 1024 words, so a 256-name run fills it to the last slot. **Raising
-// `nm_max_names` breaks all three layouts at once and silently**: the pairs
-// would run into the map, the map into the offsets, and the offsets off the end,
-// with no bound violated that the language could catch. Raising the cap means
-// resizing `nout` and moving both bases, together, or giving each region its own
-// array. The `-230` rejection is what keeps the cap honest at runtime; this
-// comment is what keeps it honest at edit time.
-fn nm_off_base() -> Word { 768 }
+// The earlier text here said 256 was chosen "rather than the 512 that two words
+// per name would allow, because the upper half of `wire.fin` carries the
+// input-to-index MAP". That reasoning belonged to a layout where the map shared
+// an array with the record pairs; it does not any more (see `nmap`/`noff`
+// below), so the cap is now bounded by the arrays' own sizes and nothing else.
+fn nm_max_names() -> Word { 1024 }
 
 // Whether two names in `wire.bin` hold the same bytes.
 //
@@ -2656,7 +2684,7 @@ fn nm_bytes_equal(pool_off: Word, in_off: Word, len: Word) -> Word {
 // is the correct one, and the difference is deliberate.
 fn nm_find(coff: Word, clen: Word, upto: Word) -> Word {
     nm.found = 0 - 1;
-    for i in 0..upto limit 512 {
+    for i in 0..upto limit 1024 {
         nm.found = if wire.nout[(i * 2) + 1] == clen
             andalso nm_bytes_equal(wire.nout[i * 2], coff, clen) == 1 { i } else { nm.found };
     }
@@ -2687,8 +2715,8 @@ fn nm_append(ioff: Word, ilen: Word) -> Word {
 // too large to compare must be rejected BEFORE it is used as a loop bound.
 fn nm_offsets(n: Word) -> Word {
     nm.icur = 0;
-    for m in 0..n limit 256 {
-        wire.nout[nm_off_base() + m] = nm.icur;
+    for m in 0..n limit 1024 {
+        wire.noff[m] = nm.icur;
         nm.icur = nm.icur + wire.nin[m * 2];
         nm.err = if wire.nin[m * 2] > nm_max_name() { 0 - 231 } else { nm.err };
     }
@@ -2705,15 +2733,15 @@ fn nm_offsets(n: Word) -> Word {
 //
 // Returns the `NAMES` index this input resolved to.
 fn nm_intern_at(m: Word) -> Word {
-    nm.ioff = wire.nout[nm_off_base() + m];
+    nm.ioff = wire.noff[m];
     nm.found = if wire.nin[(m * 2) + 1] == 0 {
                    nm_find(nm.ioff, wire.nin[m * 2], nm.cnt)
                } else { 0 - 1 };
     // Written BEFORE the count moves: a name about to be appended takes the
     // index `nm.cnt` currently holds.
-    wire.nout[nm_map_base() + m] = if nm.found < 0 { nm.cnt } else { nm.found };
+    wire.nmap[m] = if nm.found < 0 { nm.cnt } else { nm.found };
     nm.cnt = if nm.found < 0 { nm_append(nm.ioff, wire.nin[m * 2]) } else { nm.cnt };
-    wire.nout[nm_map_base() + m]
+    wire.nmap[m]
 }
 
 // --- The module-input encoding (slice 14) --------------------------------
@@ -2810,7 +2838,7 @@ fn mi_pair(k: Word, len: Word, mode: Word) -> Word {
 // uses this region of `nout` while the producer runs, and one code path cannot
 // disagree with itself about where a name is.
 fn mi_offset(k: Word, at: Word) -> Word {
-    wire.nout[nm_off_base() + k] = at;
+    wire.noff[k] = at;
     k
 }
 
@@ -2881,21 +2909,26 @@ fn mi_chunk_names() -> Word {
     nm.icur = 2;
     nm.cnt = 0;
     nm.err = if mi_count() > nm_max_names() { 0 - 236 } else { nm.err };
-    for i in 0..mi_count() limit 256 {
+    for i in 0..mi_count() limit 1024 {
         nm.sink = if nm.err < 0 { 0 } else {
             // The length is READ from the blob, not supplied. `icur` walks the
             // blob; the interner's own cursor is set up separately by its caller.
             nm.sink = mi_offset(i, nm.icur + 2);
-            wire.nin[i * 2] = mi_u16(nm.icur);
-            wire.nin[(i * 2) + 1] = nm_mode_intern();
-            // ALSO written to the output buffer, because shared data is
-            // re-seeded on every VM call: `nin` does not survive the return, so
-            // a host that could only read `nin` afterwards would be reading the
-            // next call's zeros. The interner consumes `nin` within the call;
-            // the output copy is what makes the producer differentiable on its
-            // own, before the coupling slice wires the two together.
-            nm.sink = put_u32(i * 8, wire.nin[i * 2]);
-            nm.sink = put_u32((i * 8) + 4, wire.nin[(i * 2) + 1]);
+            // THROUGH `mi_pair`, WHICH HONOURS `nm.mode`. This loop used to
+            // write the `nin` pair and then call `put_u32` twice DIRECTLY,
+            // unconditionally -- the one producer on this path that ignored the
+            // mode. `mi_join` runs the walk in SILENT mode precisely because the
+            // artifact is already in `wire.bytes` and must not be written over,
+            // and the output copy lands at byte `8 * i`, so the seventh chunk
+            // onward overwrote the directory at byte 48 and every later chunk
+            // overwrote a region payload.
+            //
+            // It was invisible for as long as it existed: the failure needs a
+            // module with SEVEN OR MORE chunks, and every case in the join
+            // corpus had at most three. `parse.kel` has 94 and refused with
+            // `-233`, which reads as "no NAMES region" and meant "the directory
+            // that named it has been overwritten with name lengths".
+            nm.sink = mi_pair(i, mi_u16(nm.icur), nm_mode_intern());
             nm.icur = nm.icur + 2 + mi_u16(nm.icur);
             nm.cnt = nm.cnt + 1;
             0
@@ -2914,7 +2947,7 @@ fn mi_enum_names() -> Word {
     nm.ecnt = mi_u16(nm.icur);
     nm.icur = nm.icur + 2;
     nm.err = if nm.ecnt > nm_max_names() { 0 - 237 } else { nm.err };
-    for e in 0..mi_bounded(nm.ecnt) limit 256 {
+    for e in 0..mi_bounded(nm.ecnt) limit 1024 {
         nm.sink = if nm.err < 0 { 0 } else {
             // The type name DEDUPS.
             nm.sink = mi_offset(nm.cnt, nm.icur + 2);
@@ -2925,7 +2958,7 @@ fn mi_enum_names() -> Word {
             nm.err = if nm.vcnt > nm_max_names() { 0 - 238 } else { nm.err };
             0
         };
-        for v in 0..mi_bounded(nm.vcnt) limit 256 {
+        for v in 0..mi_bounded(nm.vcnt) limit 1024 {
             nm.sink = if nm.err < 0 { 0 } else {
                 // The variants do NOT dedup.
                 nm.sink = mi_offset(nm.cnt, nm.icur + 2);
@@ -2969,7 +3002,7 @@ fn mi_slot_names() -> Word {
     nm.scnt = mi_u16(nm.icur);
     nm.icur = nm.icur + 2;
     nm.err = if nm.scnt > nm_max_names() { 0 - 242 } else { nm.err };
-    for t in 0..mi_bounded(nm.scnt) limit 256 {
+    for t in 0..mi_bounded(nm.scnt) limit 1024 {
         nm.sink = if nm.err < 0 { 0 } else {
             nm.sink = mi_offset(nm.cnt, nm.icur + 2);
             nm.cnt = mi_pair(nm.cnt, mi_u16(nm.icur), nm_mode_intern());
@@ -3026,7 +3059,7 @@ fn mi_const_names() -> Word {
     nm.ccnt = mi_u16(nm.icur);
     nm.icur = nm.icur + 2;
     nm.err = if nm.ccnt > nm_max_names() { 0 - 240 } else { nm.err };
-    for c in 0..mi_bounded(nm.ccnt) limit 256 {
+    for c in 0..mi_bounded(nm.ccnt) limit 1024 {
         nm.sink = if nm.err < 0 { 0 } else {
             // ONE LINEAR SCAN, NOT A STACK WALK (slice 14e). The blob carries
             // the forest in PREORDER, and `preorder_13b` pushes a node then
@@ -3051,7 +3084,7 @@ fn mi_const_names() -> Word {
             // read before any of them advance the counter. A node with no names
             // records zero, matching the reference.
             nm.cfirst = if nm.cnames == 0 { 0 } else { nm.cnt };
-            for q in 0..mi_bounded(nm.cnames) limit 256 {
+            for q in 0..mi_bounded(nm.cnames) limit 1024 {
                 nm.sink = if nm.err < 0 { 0 } else {
                     nm.sink = mi_offset(nm.cnt, nm.icur + 2);
                     nm.cnt = mi_pair(nm.cnt, mi_u16(nm.icur), mi_name_mode(nm.ctag, q));
@@ -3075,7 +3108,7 @@ fn intern_run(n: Word) -> Word {
     nm.err = 0;
     nm.sink = nm_offsets(n);
     nm.err = if nm.icur > bin_capacity() { 0 - 232 } else { nm.err };
-    for j in 0..n limit 256 {
+    for j in 0..n limit 1024 {
         nm.sink = if nm.err < 0 { 0 } else { nm_intern_at(j) };
     }
     if nm.err < 0 { nm.err } else { nm.cnt }
@@ -3101,10 +3134,10 @@ fn intern_run_preoffset(n: Word) -> Word {
     nm.ocur = 0;
     nm.cnt = 0;
     nm.err = if nm.icur > bin_capacity() { 0 - 232 } else { 0 };
-    for m in 0..n limit 256 {
+    for m in 0..n limit 1024 {
         nm.err = if wire.nin[m * 2] > nm_max_name() { 0 - 231 } else { nm.err };
     }
-    for j in 0..n limit 256 {
+    for j in 0..n limit 1024 {
         nm.sink = if nm.err < 0 { 0 } else { nm_intern_at(j) };
     }
     if nm.err < 0 { nm.err } else { nm.cnt }
@@ -3127,15 +3160,19 @@ fn mi_join() -> Word {
     if intern_run_preoffset(nm.total) < 0 { nm.err } else {
     if dir_find(kind_names()) < 0 { 0 - 233 } else {
     if dir_find(kind_string_pool()) < 0 { 0 - 234 } else {
-        emit_name_records_from_nout(region_base(dir_find(kind_names())), nm.cnt)
-            + emit_pool_bytes_from_bout(
-                region_base(dir_find(kind_string_pool())),
-                nm.ocur,
-            )
-            + emit_pool_pad(
-                region_base(dir_find(kind_string_pool())) + nm.ocur,
-                nm.ocur,
-            ) } } } }
+        // EACH RESULT IS CHECKED, NOT SUMMED. See `nm.jn` for what a sum hid.
+        nm.jn = emit_name_records_from_nout(region_base(dir_find(kind_names())), nm.cnt);
+        nm.jp = emit_pool_bytes_from_bout(
+            region_base(dir_find(kind_string_pool())),
+            nm.ocur,
+        );
+        nm.jd = emit_pool_pad(
+            region_base(dir_find(kind_string_pool())) + nm.ocur,
+            nm.ocur,
+        );
+        if nm.jn < 0 { nm.jn } else {
+        if nm.jp < 0 { nm.jp } else {
+        if nm.jd < 0 { nm.jd } else { nm.jn + nm.jp + nm.jd } } } } } } }
 }
 
 // The `NAMES` index that input name `j` resolved to.
@@ -3146,15 +3183,19 @@ fn mi_join() -> Word {
 fn intern_index_of(n: Word, j: Word) -> Word {
     nm.sink = intern_names(n);
     if nm.err < 0 { nm.err } else {
-    if j >= n { 0 - 235 } else { wire.nout[nm_map_base() + j] } }
+    if j >= n { 0 - 235 } else { wire.nmap[j] } }
 }
 
 // The count guard is SEPARATE from the loop rather than a condition inside it.
 //
-// `for j in 0..n limit 512` TRAPS with `LoopLimitExceeded` when the runtime
+// `for j in 0..n limit 1024` TRAPS with `LoopLimitExceeded` when the runtime
 // range exceeds the static cap, so a sticky error flag would not help: the trap
 // happens on entry, before any flag could be read. The oversize case must
 // therefore never reach the loop at all.
+//
+// The limit must equal `nm_max_names()`, not merely exceed the corpus. A guard
+// that admits 1024 in front of a loop that traps at 512 rejects nothing and
+// aborts everything between the two.
 fn intern_names(n: Word) -> Word {
     if n > nm_max_names() { nm.err = 0 - 230; nm.cnt = 0; nm.ocur = 0; nm.err }
     else { intern_run(n) }
@@ -3180,8 +3221,20 @@ fn intern_pool_len(n: Word) -> Word {
 // than a parameterisable base, and because slice 5's emitter is driven directly
 // by its own tests with `fin`-shaped input. Duplicating four lines is cheaper
 // than making the older emitter's tests depend on the newer channel.
+// THE GUARD NAMED THE WRONG BUFFER, AND THAT IS WHERE "512" CAME FROM.
+//
+// This emitter reads `wire.nout`. It was guarding against `fin_capacity()`,
+// copied from its sibling `emit_name_records`, which genuinely does read
+// `wire.fin`. With `fin_capacity()` at 1024 and two fields per record the guard
+// refused any module past 1024/2 = **512 names** -- a ceiling that had nothing
+// to do with the buffer this function touches, and the one recorded as "the
+// hard limit is 512". `parse` needs 627 and was refused with `-202`.
+//
+// The bound that belongs here is `nout`'s own. `-256` rather than `-202` for
+// the reason `emit_pool_bytes_from_bout` carries its own `-255`: two guards
+// sharing one code leave a caller unable to say which buffer overflowed.
 fn emit_name_records_from_nout(at: Word, n: Word) -> Word {
-    if (n * nameref_fields()) > fin_capacity() { 0 - 202 } else {
+    if (n * nameref_fields()) > nout_capacity() { 0 - 256 } else {
         for j in 0..n limit 1024 {
             put_u32(
                 at + (j * nameref_stride()) + nameref_off_offset(),
@@ -3218,14 +3271,21 @@ fn emit_pool_bytes_from_bout(at: Word, n: Word) -> Word {
     // caller unable to say which buffer overflowed, and these two are reached
     // from different directions entirely.
     //
-    // UNREACHABLE BY CONSTRUCTION TODAY, and kept anyway: `nm.ocur` is the sum
-    // of the EMITTED names' lengths, which is bounded by the sum of all input
-    // lengths, which `intern_run` already refuses above `bin_capacity()`. The
-    // guard is here so the emitter does not depend on a caller's invariant —
-    // which is also why it has no negative test: nothing this corpus can build
-    // reaches it, and a test asserting an unreachable code would be theatre.
+    // **THIS GUARD IS NOW LIVE, AND IT WAS NOT BEFORE.** The text here used to
+    // argue it was unreachable by construction: `nm.ocur` is the sum of the
+    // EMITTED names' lengths, bounded by the sum of all INPUT lengths, which
+    // `intern_run` refuses above `bin_capacity()`. That argument was sound only
+    // while `bin_capacity()` and `bout_capacity()` were both 8192. The name
+    // ceiling raise took `bin` to 49152 and `bout` to 16384, so an input whose
+    // names total between those two figures now passes the input guard and
+    // overflows the output buffer. `-255` is what catches it.
+    //
+    // It still has no negative test, and that is now a GAP rather than a
+    // justified omission: reaching it needs a module with more than 16 KB of
+    // distinct name bytes, which the corpus cannot build (the largest is
+    // `parse` at 7,680).
     if n > bout_capacity() { 0 - 255 } else {
-        for j in 0..n limit 8192 {
+        for j in 0..n limit 16384 {
             wire.bytes[at + j] = wire.bout[j];
         }
         n
@@ -3664,7 +3724,7 @@ fn fx_seed() -> Word {
     nm.err = 0;
     nm.sink = nm_offsets(wire.warg);
     nm.err = if nm.icur > bin_capacity() { 0 - 232 } else { nm.err };
-    for j in 0..wire.warg2 limit 256 {
+    for j in 0..wire.warg2 limit 1024 {
         nm.sink = if nm.err < 0 { 0 } else { nm_intern_at(j) };
     }
     nm.err
@@ -4062,7 +4122,7 @@ fn sq_scan() -> Word {
 fn sq_put(m: Word, len: Word, mode: Word) -> Word {
     wire.nin[m * 2] = len;
     wire.nin[(m * 2) + 1] = mode;
-    wire.nout[nm_off_base() + m] = sq.boff;
+    wire.noff[m] = sq.boff;
     sq.boff = sq.boff + len;
     sq.err = if len > nm_max_name() { 0 - 231 } else { sq.err };
     m + 1
@@ -4107,7 +4167,7 @@ fn sq_run(n: Word) -> Word {
     nm.cnt = 0;
     nm.err = sq.err;
     nm.err = if sq.boff > bin_capacity() { 0 - 232 } else { nm.err };
-    for j in 0..n limit 256 {
+    for j in 0..n limit 1024 {
         nm.sink = if nm.err < 0 { 0 } else { nm_intern_at(j) };
     }
     if nm.err < 0 { nm.err } else { nm.cnt }

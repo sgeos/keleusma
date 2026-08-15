@@ -91,7 +91,7 @@ const FIN_CAPACITY: usize = 1024;
 /// Byte-pool input. A pool has no stride and no fields, so `fin` is the wrong
 /// channel: a word per byte would cost eight times the space.
 const BIN_SLOT: usize = FIN_SLOT + FIN_CAPACITY;
-const BIN_CAPACITY: usize = 8192;
+const BIN_CAPACITY: usize = 49152;
 
 /// The flattener's scratch, `fq` and `fsz`, sits between `bin` and the
 /// interner's channels. Nothing seeds it — it is written by the walk — but it
@@ -103,7 +103,14 @@ const FSZ_CAPACITY: usize = 1024;
 /// The interner's (length, mode) input, split off `fin` in slice 13b so the
 /// flattener can own `fin` for its six-word-per-node preorder.
 const NIN_SLOT: usize = BIN_SLOT + BIN_CAPACITY + FQ_CAPACITY + FSZ_CAPACITY;
-const NIN_CAPACITY: usize = 1024;
+const NIN_CAPACITY: usize = 2048;
+/// The interner's per-call name cap, mirrored from `wire.kel`'s `nm_max_names`.
+///
+/// Named rather than spelled as a literal at each guard test, because the two
+/// oversize cases below are the only things that would notice a raise in
+/// `wire.kel` that was not matched here — and they would notice it by passing
+/// for the wrong reason, not by failing.
+const NAME_CAP: usize = 1024;
 
 /// Build a `Vm` over `src` with a persistent region sized for its private data.
 ///
@@ -7382,11 +7389,28 @@ fn an_append_only_interner_produces_the_wrong_count() {
 fn the_interner_reports_an_input_it_cannot_hold() {
     let mut vm = vm_for(WIRE_KEL);
 
-    // Too many names. 257 exceeds the 256 the map's placement allows.
-    let over: Vec<(String, i64)> = (0..257).map(|i| (format!("n{i}"), MODE_INTERN)).collect();
+    // Too many names: one past `nm_max_names()`.
+    //
+    // The DECLARED count is `NAME_CAP + 1` while `nin` is seeded with `NAME_CAP`
+    // names, because `nin` is exactly two words per admissible name and a
+    // one-past input is therefore not representable in it. That is not a
+    // weakening of the case: `intern_names` guards the COUNT and must refuse
+    // before anything indexes `nin`, so a host that miscounts is precisely the
+    // threat, and seeding a full buffer while claiming one more is precisely
+    // that host.
+    let n = NAME_CAP + 1;
+    let over: Vec<(String, i64)> = (0..NAME_CAP)
+        .map(|i| (format!("n{i}"), MODE_INTERN))
+        .collect();
     let (fields, pool) = interner_channels(&over);
     assert_eq!(
-        run_intern(&mut vm, CMD_INTERN_NAMES, &fields, &pool, [257, 0, 0, 0, 0]),
+        run_intern(
+            &mut vm,
+            CMD_INTERN_NAMES,
+            &fields,
+            &pool,
+            [n as i64, 0, 0, 0, 0]
+        ),
         -230,
         "an oversized name count was not reported"
     );
@@ -8530,15 +8554,20 @@ fn the_uninterning_flatten_command_still_refuses_a_string() {
 /// The 13b caps are reported rather than truncated.
 #[test]
 fn the_walk_reports_input_it_will_not_intern() {
-    // More names than `nin` can hold.
+    // More names than `nin` can hold: one past `nm_max_names()`. The declared
+    // count exceeds the seeded one for the reason recorded at
+    // `the_interner_reports_an_input_it_cannot_hold`.
     let mut vm = vm_for(WIRE_KEL);
-    let over: Vec<(String, i64)> = (0..257).map(|i| (format!("n{i}"), MODE_INTERN)).collect();
+    let n = NAME_CAP + 1;
+    let over: Vec<(String, i64)> = (0..NAME_CAP)
+        .map(|i| (format!("n{i}"), MODE_INTERN))
+        .collect();
     let (nin, bin) = interner_channels(&over);
     let inp = FxInput {
         fin: vec![3, 7, 0, 0, 0, 0],
         nin,
         bin,
-        args: [257, 257, 1, 1, 0],
+        args: [n as i64, n as i64, 1, 1, 0],
     };
     assert_eq!(
         run_fx(&mut vm, CMD_FX_NAMES, &inp),
@@ -11259,4 +11288,160 @@ fn the_driver_refuses_more_names_than_one_call_can_intern() {
         msg.contains("staging is not implemented"),
         "the refusal must name the reason, got: {msg}"
     );
+}
+
+/// THE CEILING CONTROL: the join on the largest real stage, `parse.kel`.
+///
+/// **This case fails on every state of the tree before the ceiling raise**, and
+/// that is the whole point of it: every other test in this file passes in both
+/// states, so without this one the raise would be verified by nothing.
+///
+/// It did not fail once. Bringing it up refused THREE times, each for a
+/// different reason, and two of those were defects that the raise did not cause
+/// and that no existing test could reach:
+///
+/// 1. `-236`, the name-count cap: 627 against 256. The ceiling this increment
+///    set out to raise.
+/// 2. `-233`, read as "no NAMES region" and meaning "the directory has been
+///    overwritten". `mi_chunk_names` wrote its output copy ignoring `nm.mode`,
+///    at byte `8 * i`, while `mi_join` runs the walk in SILENT mode precisely
+///    because the artifact is already in the buffer. It needs SEVEN chunks to
+///    reach the directory at byte 48; the join corpus tops out at three.
+/// 3. `-202`, from a guard naming the wrong buffer: the emitter reads `nout`
+///    and was bounded by `fin_capacity()`, which at two fields per record is
+///    **the 512 the plan recorded as "the hard limit"**. It was never a
+///    property of the names path at all.
+///
+/// Defect 3 was additionally MASKED: `mi_join` returned the SUM of its three
+/// emitter results, so `-202` from the names emitter plus 7,680 from the pool
+/// emitter reported 7,478 — a positive number, therefore success — with the
+/// `NAMES` region left entirely zero. A sum is not a conjunction.
+///
+/// **The whole artifact is not needed and was the reason this looked blocked.**
+/// `parse`'s auxiliary body is 304,432 bytes and does not fit the 65,536-byte
+/// window, which the plan recorded as "the verifying input does not fit the
+/// verifying harness". But the join writes exactly two regions, and what places
+/// them is the DIRECTORY, not the artifact's total size. Handing it a directory
+/// of just `NAMES` and `STRING_POOL` — about 12.7 KB for `parse` — puts the
+/// verifying case inside the existing window with room to spare. No windowed
+/// join variant and no second harness were needed.
+///
+/// The bytes compared are the region PAYLOADS. Their offsets differ from the
+/// reference's because this directory holds two regions rather than twenty;
+/// the contents must not.
+#[test]
+fn the_join_holds_on_the_largest_real_stage() {
+    use keleusma::wire_schema::kind;
+
+    let module = compile(
+        &parse(&tokenize(include_str!("../src/selfhost/kel/parse.kel")).expect("lex"))
+            .expect("parse"),
+    )
+    .expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let reference = keleusma_wire::WireView::parse(&want).expect("reference parses");
+
+    // The control's premise, asserted rather than assumed: this module must
+    // exceed the OLD ceilings, or it verifies nothing that a smaller case did
+    // not already verify.
+    let blob = module_input_blob(&module);
+    // The count comes from the REFERENCE's own `NAMES` region, not from
+    // `interner_input`. That model predates the data-slot contributor and
+    // reports 252 for `parse` where the reference emits 627; using it here would
+    // have asserted the premise against a number that is not the one the cap
+    // bounds.
+    let names = reference
+        .records(
+            &reference.find_region(kind::NAMES).expect("names region"),
+            <NameRef as WireRecord>::STRIDE,
+        )
+        .expect("name records")
+        .len();
+    assert!(
+        names > 256,
+        "parse interns {names} names, which does not exceed the pre-raise cap of 256"
+    );
+    assert!(
+        blob.len() > 8192,
+        "parse's blob is {} bytes, which does not exceed the pre-raise bin of 8192",
+        blob.len()
+    );
+    assert!(names <= NAME_CAP, "parse interns {names}, past the cap");
+    assert!(
+        blob.len() <= BIN_CAPACITY,
+        "parse's blob is {} bytes, past bin",
+        blob.len()
+    );
+
+    // Only the two regions the join writes.
+    let specs: Vec<RegionSpec> = region_counts_for(&want)
+        .into_iter()
+        .filter(|(k, _, _, _)| *k == kind::NAMES || *k == kind::STRING_POOL)
+        .collect();
+    assert_eq!(specs.len(), 2, "expected exactly NAMES and STRING_POOL");
+
+    let mut vm = vm_for(WIRE_KEL);
+    let (_, directory) = run_call(
+        &mut vm,
+        &Call {
+            cmd: CMD_BUILD_REGION_TABLE,
+            nregions: specs.len() as i64,
+            seed: &[],
+            regions: &specs,
+            fields: &[],
+            names: &[],
+            pool: &[],
+            args: [0, 0, 0, 0, 0],
+            read_len: CAPACITY,
+        },
+    )
+    .expect("build the directory");
+
+    let built = keleusma_wire::WireView::parse(&directory).expect("the built directory parses");
+    let span = {
+        let mut end = 0usize;
+        for i in 0..built.region_count() {
+            let r = built.region_at(i).expect("region");
+            let at = r.byte_offset().expect("offset") + (r.word_length as usize) * 8;
+            end = end.max(at);
+        }
+        end
+    };
+    assert!(
+        span < CAPACITY,
+        "the two-region artifact is {span} bytes and does not fit the window"
+    );
+
+    let (ret, out) = run_call(
+        &mut vm,
+        &Call {
+            cmd: CMD_MI_JOIN,
+            nregions: specs.len() as i64,
+            seed: &directory,
+            regions: &specs,
+            fields: &[],
+            names: &[],
+            pool: &blob,
+            args: [0, 0, 0, 0, 0],
+            read_len: span,
+        },
+    )
+    .expect("run the join");
+    assert!(ret >= 0, "the join refused parse with {ret}");
+
+    for k in [kind::STRING_POOL, kind::NAMES] {
+        let theirs = reference.find_region(k).expect("reference region");
+        let want_bytes = reference.region_bytes(&theirs).expect("reference payload");
+        let mine = built.find_region(k).expect("built region");
+        let base = mine.byte_offset().expect("offset");
+        assert!(
+            !want_bytes.is_empty(),
+            "region {k:#06x} is empty, so this compares nothing"
+        );
+        let got = &out[base..base + want_bytes.len()];
+        assert_eq!(
+            got, want_bytes,
+            "region {k:#06x} differs from the reference on parse.kel"
+        );
+    }
 }

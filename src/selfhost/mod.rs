@@ -2727,10 +2727,16 @@ impl std::error::Error for SelfHostError {}
 /// re-seeded on every call and the sequence would not survive a return.
 ///
 /// **Bounded, and it says so.** The interner admits at most `NAME_CAP` names per
-/// call, so a real stage's 395,804 do not fit and this refuses rather than
-/// truncating. Staging them is a separate increment with a measurement in front
-/// of it; see `WIRE_FORMAT_SELFHOST_PLAN.md`. A silent partial artifact would be
-/// far worse than a refusal, because it would be byte-identical for a prefix.
+/// call and the blob must fit `wire.kel`'s `bin`. Both bounds now cover every
+/// stage in the corpus: the largest, `parse`, interns 627 names from a
+/// 33,395-byte blob. A module past either bound is refused rather than
+/// truncated, because a silent partial artifact would be byte-identical for a
+/// prefix and wrong after it.
+///
+/// The figure previously named here — "a real stage's 395,804" — described no
+/// name count. It was a REGION RECORD count belonging to `CONSTS`, carried over
+/// from the pre-run-length-encoding representation, and it made a 2.5x problem
+/// look like a 1500x one. Measured: the largest `NAMES` region is 627 records.
 pub fn wire_names_via_kel(
     module: &Module,
     blob: &[u8],
@@ -2741,12 +2747,29 @@ pub fn wire_names_via_kel(
     /// The interner's per-call name bound, mirrored from `wire.kel`'s
     /// `nm_max_names`. Named rather than spelled inline so a widening there is
     /// a compile-time mismatch here rather than a silent overrun.
-    const NAME_CAP: usize = 256;
+    const NAME_CAP: usize = 1024;
+    /// The blob buffer's size, mirrored from `wire.kel`'s `bin_capacity`.
+    ///
+    /// Checked HERE because the stage cannot check it: the host seeds `bin` by
+    /// slot before the call, and a blob longer than the array writes past it or
+    /// is silently truncated depending on the seeding loop. `bin_capacity` is
+    /// consulted inside `wire.kel` only against the interner's cursor, which is
+    /// a different quantity.
+    const BLOB_CAP: usize = 49152;
     if names > NAME_CAP {
         return Err(SelfHostError::Unsupported {
             detail: alloc::format!(
                 "wire.kel interns at most {NAME_CAP} names per call and this module has \
                  {names}; staging is not implemented"
+            ),
+        });
+    }
+    if blob.len() > BLOB_CAP {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "wire.kel's blob buffer holds {BLOB_CAP} bytes and this module's blob is \
+                 {}; staging is not implemented",
+                blob.len()
             ),
         });
     }

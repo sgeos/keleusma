@@ -1105,7 +1105,108 @@ it to the table without a driver that calls it would record a capability the sys
 **The item is therefore blocked behind "wire the driver to a module", not beside it.** Checked so
 that a later session does not spend an increment rediscovering it as an easy win.
 
+#### THE CEILING IS RAISED, AND FOUR OF ITS FIVE PREMISES WERE WRONG (2026-08-15)
+
+**Done.** `parse.kel` -- 627 names, a 33,395-byte module blob -- now emits `NAMES` and
+`STRING_POOL` byte-identically to `encode_aux_body`, pinned by
+`the_join_holds_on_the_largest_real_stage` in `tests/selfhost_wire.rs`. The section below records
+what the raise actually cost, because the estimate under it was wrong in four separate ways and each
+one pointed the work somewhere it did not need to go.
+
+**Its fifth premise was right, and it is the one that mattered**: "it is not two constants" held
+exactly as written, and the loop it warned about is the loop that trapped. A document can be wrong
+about every figure and still correct about the hazard.
+
+**1. "The hard ceiling is 512" was a guard naming the wrong buffer.** `emit_name_records_from_nout`
+reads `wire.nout`. It was bounded by `fin_capacity()`, copied from its sibling
+`emit_name_records`, which genuinely reads `wire.fin`. At 1024 words and two fields per record that
+guard refuses 512 names -- a number with no relationship to the buffer the function touches. It is
+now bounded by `nout_capacity()` with its own code `-256`, because two guards sharing `-202` leave a
+caller unable to say which buffer overflowed.
+
+**2. The binding ceiling was never the name count.** Measured across all ten stages:
+
+| stage | NAMES records | pool bytes | module blob |
+|---|---|---|---|
+| `parse` | **627** | 7,680 | **33,395** |
+| `codegen` | 152 | 1,840 | **21,225** |
+| `reconstruct` | 96 | 1,120 | **8,849** |
+| `lexer` | 31 | 248 | 7,963 |
+
+`bin` was 8,192 bytes, so **three stages did not fit, not one**, and `lexer` sat at 97% of it. The
+name count was the ceiling the plan named and the third-largest of the four that bind.
+
+**3. "`parse`'s 304,432-byte artifact does not fit the single-window join harness" is true and
+irrelevant.** The join writes exactly two regions, and what places them is the DIRECTORY, not the
+artifact's total size. A directory holding only `NAMES` and `STRING_POOL` is 12,840 bytes for
+`parse`, comfortably inside the existing 65,536-byte window. **No windowed join variant and no second
+harness were built**; the decision the plan framed as a fork did not have to be taken.
+
+**4. "`NIN_SLOT` and `NIN_CAPACITY` are the only constants that move" is true of the harness's slot
+arithmetic and false as a sizing claim.** What moved: `nm_max_names` 256 -> 1024, `nin` and `nout`
+1024 -> 2048 words, `bin` 8,192 -> 49,152 bytes, `bout` 8,192 -> 16,384, twelve name-count loop
+limits 256 -> 1024, `nm_find` 512 -> 1024, `emit_pool_bytes` 8,192 -> 49,152,
+`emit_pool_bytes_from_bout` 8,192 -> 16,384, and two new arrays.
+
+**The map and the offsets are now their own arrays.** They were the upper two thirds of `nout`,
+reached through `nm_map_base()` and `nm_off_base()`, tiling 1024 words exactly with no slack. The old
+comment named that as a fragility and offered two repairs; the second was taken, so raising the cap
+again means changing three array lengths and no base constants.
+
+#### THE TRAP THE GOAL NAMED, OBSERVED (2026-08-15)
+
+**A loop left behind aborts on exactly the inputs the raise was for**, and one was left behind.
+`emit_pool_bytes` guards `n > bin_capacity()` and then loops `limit 8192`. Raising `bin` to 49,152
+left the guard admitting six times what the loop would run, so three whole-artifact tests died with
+`LoopLimitExceeded` -- past a guard that had already said yes. The limit is now `bin_capacity()`'s
+value, with the coupling stated where a later editor will meet it.
+
+**Enumerating by the literal `256` was not sufficient.** `nm_find` was at `limit 512`, so a sweep for
+`limit 256` missed the one loop whose bound is quadratic in the cap. The enumeration has to be by
+WHAT BOUNDS THE LOOP: two loops at `limit 256` are bounded by a name's BYTE LENGTH, not by a name
+count, and raising those would have inflated the innermost loop of three for nothing.
+
+#### TWO DEFECTS THE CONTROL FOUND THAT THE RAISE DID NOT CAUSE (2026-08-15)
+
+Both were invisible to a green suite, and both needed real stage input to reach.
+
+**`mi_chunk_names` ignored `nm.mode`.** It wrote its output copy through `put_u32` directly rather
+than through `mi_pair`, which honours the mode -- the one producer on that path that did not.
+`mi_join` runs the walk in SILENT mode precisely because the artifact is already in `wire.bytes`, so
+the copy landed on the artifact at byte `8 * i`: the seventh chunk overwrote the directory at byte
+48, and every later chunk overwrote a region payload. **It needs seven chunks to fire and the join
+corpus topped out at three.** `parse` has 94 and refused with `-233`, which reads as "no NAMES
+region" and meant "the directory that named it has been overwritten with name lengths".
+
+**`mi_join` summed its three emitter results.** A sum is not a conjunction: `-202` from the names
+emitter plus 7,680 from the pool emitter reported **7,478 -- positive, therefore success** -- with
+the `NAMES` region left entirely zero. Each result is now checked separately. Any caller of the join
+before this fix could have accepted a half-written artifact as a good one.
+
+#### WHAT THE RAISE COST, MEASURED (2026-08-15)
+
+**`shared_data_bytes` 155,704 -> 237,624, up 52.6%.** The composition is exact and reproduces the
+figure: 13,319 words at 8 bytes (106,552) plus three byte arrays (65,536 + 49,152 + 16,384).
+
+**The WCET bound rises faster than the memory does, and that is the real price.** `nm_find` scans
+every name interned so far with no early exit -- a total language has none -- so the interning
+phase's static worst case is quadratic in `nm_max_names`. Going 256 -> 1024 multiplies that bound by
+**sixteen**, from 65,536 name comparisons to 1,048,576. It costs nothing on real input, where the
+scan runs to `cnt`; it is the BOUND that moves, and the bound is what this project sells.
+
+**`-255` became live and has no negative test.** `emit_pool_bytes_from_bout`'s overflow guard was
+argued unreachable because `intern_run` refuses above `bin_capacity()` -- sound only while `bin` and
+`bout` were both 8,192. They are now 49,152 and 16,384, so an input whose names total between the two
+passes the input guard and overflows the output buffer. Reaching it needs a module with more than
+16 KB of distinct name bytes, which the corpus cannot build (`parse` is the largest at 7,680), so
+this is a coverage GAP rather than a justified omission.
+
 #### WHAT IS LEFT OF THE CEILING, AND WHY IT IS NOT A ONE-LINE RAISE (2026-08-14)
+
+> **SUPERSEDED 2026-08-15** by the four sections above. Kept for the reasoning it carries and because
+> three of its five premises were wrong in instructive ways. The measurements in it are stale; the
+> ones above were taken against the code.
+
 
 The data-slot contributor is built, so the producer's sequence now matches the reference's `NAMES` on
 every corpus case tested. **One thing remains: `parse` needs 627 names and the hard ceiling is 512.**
