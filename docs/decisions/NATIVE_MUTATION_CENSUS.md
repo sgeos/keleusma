@@ -197,3 +197,41 @@ whose layout belongs to `src/selfhost/mod.rs`.
 - **Static sites, not dynamic execution.** The map counts where an opcode is
   emitted, not where it runs. A detected opcode may still be observed by only a
   fraction of its sites.
+
+---
+
+## PART B, 2026-08-15: the corpus under the O2 middle end
+
+### A correction first
+
+This gap was stated as *"no differential and no object file has ever been
+optimised"*. **The second half was wrong.** `aot_linkage.rs` runs `default<O2>`
+and links the result into a running C program, and its own header says that is
+why it exists. The real gap was narrower: one hand-written module through the
+middle end, against thirty-seven in the corpus.
+
+### The result
+
+`corpus_differential` runs the whole corpus through `default<O2>` when
+`KEL_OPTIMIZE` is set. **37 executed and agreeing, 6 vacuous, zero
+disagreements — identical to the unoptimised run.**
+
+### What that does and does NOT show
+
+**It shows** the optimiser did not exploit anything on these inputs, for these
+modules, and that the emitted IR still passes `Module::verify` after the middle
+end — checked on six modules of different shapes in `optimised_lowering.rs`.
+
+**It does NOT show the IR is free of undefined behaviour.** Undefined behaviour is
+a licence the optimiser may or may not take, and not taking it on one input set is
+not evidence of its absence. A future pass, a different target, or an input that
+reaches a different path can all change the answer. **This must not be recorded as
+the stronger claim.**
+
+### The vacuity guard, because this run could have been a no-op
+
+A green optimised differential proves nothing if the pipeline never ran.
+`the_o2_pipeline_measurably_transforms_a_real_module` asserts a measured change:
+`09_big_numbers.kel` goes from **408 instructions to 61**, a 6.7x reduction. The
+increment this belongs to opened with nine modules agreeing while doing nothing,
+and an unguarded "it passes under O2" would be the same mistake in a new place.

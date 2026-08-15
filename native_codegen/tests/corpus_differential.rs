@@ -140,6 +140,38 @@ fn sources() -> Vec<std::path::PathBuf> {
     out
 }
 
+/// The source to compile for `p`, with the rtos prelude prepended where the
+/// rtos host prepends it.
+///
+/// **Five exemptions were harness artefacts.** `event_listener`, `faulty`,
+/// `heartbeat`, `led` and `sensor` were recorded as "rejected by the REFERENCE
+/// compiler", which reads as a statement about the scripts. It was a statement
+/// about this harness: it compiled each `.kel` standalone, while the rtos host
+/// does
+///
+/// ```ignore
+/// let combined = format!("{}\n{}", PRELUDE, src);   // examples/rtos/src/setup.rs:429
+/// ```
+///
+/// so every script referencing a prelude declaration failed to compile.
+///
+/// **This is NOT the thing Part B of this increment refused to do.** Declining
+/// to reproduce the self-hosted stages' input formats was right because a seed a
+/// stage silently rejects looks exactly like coverage. This composition is four
+/// lines, it is the shipping host's own, it is quoted from `setup.rs`, and the
+/// scripts document it themselves. A wrong composition fails loudly at compile
+/// time rather than producing a plausible run.
+fn source_for(p: &std::path::Path) -> Option<String> {
+    let src = std::fs::read_to_string(p).ok()?;
+    let is_rtos = p.components().any(|c| c.as_os_str() == "rtos");
+    let is_prelude = p.file_name().is_some_and(|n| n == "prelude.kel");
+    if is_rtos && !is_prelude {
+        let prelude = std::fs::read_to_string("../examples/rtos/scripts/prelude.kel").ok()?;
+        return Some(format!("{prelude}\n{src}"));
+    }
+    Some(src)
+}
+
 /// `(native index, argc)` for every native the module actually calls.
 ///
 /// Asserts the single-arity property this whole design rests on.
@@ -357,6 +389,34 @@ fn run_native(m: &Module, table: &[(String, usize)], seed: usize) -> Option<Run>
     let lm = ctx.create_module("kel");
     lower_module(&ctx, &lm, m, LowerOptions::default()).expect("lower module");
     lm.verify().expect("LLVM module verification");
+    // **PART B: run the O2 middle end when asked.**
+    //
+    // `create_jit_execution_engine(OptimizationLevel::_)` sets the CODEGEN level
+    // only; `mem2reg` and the rest of the middle end are a pass pipeline and do
+    // not run from it. `aot_linkage.rs` already runs `default<O2>` on one
+    // hand-written module — so the claim "no object file has ever been
+    // optimised" was wrong — but no CORPUS-WIDE differential has ever run the
+    // middle end. Undefined behaviour in emitted IR is invisible at `-O0`.
+    if std::env::var("KEL_OPTIMIZE").is_ok() {
+        use inkwell::passes::PassBuilderOptions;
+        use inkwell::targets::{InitializationConfig, Target, TargetMachine};
+        Target::initialize_native(&InitializationConfig::default()).expect("init target");
+        let triple = TargetMachine::get_default_triple();
+        let machine = Target::from_triple(&triple)
+            .expect("target")
+            .create_target_machine(
+                &triple,
+                "generic",
+                "",
+                OptimizationLevel::Default,
+                inkwell::targets::RelocMode::PIC,
+                inkwell::targets::CodeModel::Default,
+            )
+            .expect("target machine");
+        lm.run_passes("default<O2>", &machine, PassBuilderOptions::create())
+            .expect("O2 pipeline");
+    }
+
     let ee = lm
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("jit");
@@ -636,7 +696,7 @@ fn every_lowering_module_executes_or_is_exempt() {
         {
             continue;
         }
-        let Ok(src) = std::fs::read_to_string(&p) else {
+        let Some(src) = source_for(&p) else {
             continue;
         };
         let Some(m) = tokenize(&src)
@@ -851,11 +911,7 @@ fn every_lowering_module_executes_or_is_exempt() {
     // fail spuriously, so the run reports and exits instead. The sweep reads the
     // exit status, so the disagreement must still fail the process.
     if only.is_some() {
-        assert!(
-            disagreed.is_empty(),
-            "disagreed: {}",
-            disagreed.join("; ")
-        );
+        assert!(disagreed.is_empty(), "disagreed: {}", disagreed.join("; "));
         return;
     }
 

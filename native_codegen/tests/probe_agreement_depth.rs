@@ -515,7 +515,10 @@ fn dump_opcode_module_map() {
     for (k, mods) in &map {
         println!("OPCODEMAP {k} {}", mods.join(" "));
     }
-    assert!(!map.is_empty(), "the map is empty; the sweep would run nothing");
+    assert!(
+        !map.is_empty(),
+        "the map is empty; the sweep would run nothing"
+    );
 }
 
 /// **Is an "undetected" mutation actually REACHABLE?**
@@ -574,7 +577,11 @@ fn operand_level_reachability_of_the_undetected_mutations() {
     println!("\n================ REACHABILITY OF THE UNDETECTED MUTATIONS");
     println!("  PushImmediate operand distribution (the mutation touched index 1):");
     for (n, c) in &imm {
-        let flag = if *n == 1 { "   <- THE MUTATED INDEX" } else { "" };
+        let flag = if *n == 1 {
+            "   <- THE MUTATED INDEX"
+        } else {
+            ""
+        };
         println!("    immediate {n:>3} : {c:>6} sites{flag}");
     }
     let idx1 = imm.get(&1).copied().unwrap_or(0);
@@ -595,5 +602,8 @@ fn operand_level_reachability_of_the_undetected_mutations() {
         println!("    {k:<8} {:>5} sites in {:?}", mods.len(), u);
     }
     println!("================");
-    assert!(!imm.is_empty(), "no PushImmediate sites; the check is vacuous");
+    assert!(
+        !imm.is_empty(),
+        "no PushImmediate sites; the check is vacuous"
+    );
 }

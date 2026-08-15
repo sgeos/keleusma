@@ -1,6 +1,7 @@
 # The corpus differential's exemptions: which are real?
 
-**Status**: two findings established by reading; execution confirmation pending.
+**Status**: CONFIRMED by execution. 34 -> 37 executed, 23 -> 20 exempt.
+One prediction was wrong and the miss is recorded below.
 **Date**: 2026-08-15.
 
 `corpus_differential` exempts 23 sources with a stated reason each. The reasons
@@ -106,3 +107,44 @@ whatever happened as expected is how a check stops being one.
 - **This is not a coverage claim.** Admitting five modules that then agree
   vacuously would be no gain at all, which is the lesson of the stage finding
   earlier in this increment. Each admitted module must clear the vacuity bar.
+
+---
+
+## MEASURED 2026-08-15: three of four, and the miss was informative
+
+**Executed and agreeing: 34 -> 37. Exempt: 23 -> 20.**
+
+### The prediction against the outcome
+
+| predicted | actual |
+|---|---|
+| `event_listener`, `heartbeat`, `led`, `sensor` compile and become candidates | **three did.** `led.kel` compiles and then FAULTS |
+| `faulty.kel` compiles, then faults with `DivisionByZero` | **exactly so**: *"the VM refuses to resume it: `DivisionByZero`"* |
+
+So the prediction was right about `faulty.kel`, right that the rejections were a
+harness artefact, and **wrong that all four would execute**.
+
+### The miss confirms Finding 1's generalisation
+
+`led.kel` now reports *"the VM refuses to run it: `NoMatchingArm`"*. It matches on
+the `Status` enum returned by the `gpio_set` native; the generic stub returns
+`stub_value(...)`, an arbitrary integer corresponding to no variant, so no arm
+matches.
+
+**That is the `rogue_dungen` mechanism again, in a module found by fixing a
+different problem.** Finding 1 said the generic stub *"can drive any module into a
+state a contract-respecting host would never produce"* and that it *"was the only
+one of its kind, but the reasoning generalises"*. It generalised within the hour,
+and the second instance was not predicted.
+
+Two exemptions therefore remain that describe the HARNESS rather than the module:
+`rogue_dungen.kel` and `led.kel`. Both are honestly stated now, and both would be
+closed by a stub that respects its native's contract — which the harness cannot
+derive from the bytecode, since a declaration carries types and not ranges or
+enum domains.
+
+### Not a coverage claim without the vacuity bar
+
+The three new modules are not in `KNOWN_VACUOUS`, so each is non-trivial on at
+least one observable. That was checked rather than assumed, because admitting
+modules that then agree vacuously would be no gain at all.
