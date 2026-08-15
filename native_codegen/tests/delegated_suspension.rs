@@ -28,6 +28,8 @@ use keleusma::vm::{
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use keleusma_native::{LowerOptions, lower_module};
 
+mod common;
+
 const TICKS: i64 = 40;
 
 /// The qualifying shape. `emit` yields in tail position; `step` is a plain `fn`
@@ -128,6 +130,7 @@ fn run_native(m: &Module) -> Vec<i64> {
     let lm = ctx.create_module("kel");
     lower_module(&ctx, &lm, m, with_flag()).expect("lower with delegated suspension");
     lm.verify().expect("LLVM module verification");
+    common::maybe_optimize(&lm);
     let ee = lm
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("jit");

@@ -470,3 +470,288 @@ fn how_often_does_each_opcode_occur_in_the_measured_corpus() {
         "no opcodes counted; this census would make any mutation look vacuous"
     );
 }
+
+/// Machine-readable `opcode -> modules containing it`, for the mutation sweep.
+///
+/// `tools/mutation_sweep.py` reads this to run each mutation only against the
+/// modules that actually emit the mutated opcode. That is both faster and more
+/// honest: a module with no site for an opcode cannot detect a defect in it, and
+/// counting it as "did not detect" would understate the corpus.
+#[test]
+fn dump_opcode_module_map() {
+    use std::collections::BTreeMap;
+    let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    for p in sources() {
+        let name = p.file_name().unwrap().to_str().unwrap().to_string();
+        let Ok(src) = std::fs::read_to_string(&p) else {
+            continue;
+        };
+        let Some(m) = tokenize(&src)
+            .ok()
+            .and_then(|t| parse(&t).ok())
+            .and_then(|a| compile(&a).ok())
+        else {
+            continue;
+        };
+        if !keleusma_native::module_refusals(&m, LowerOptions::default()).is_empty() {
+            continue;
+        }
+        let Some(entry) = m.entry_point else { continue };
+        if !params_are_scalar(&m, entry) {
+            continue;
+        }
+        for c in &m.chunks {
+            for op in &c.ops {
+                let d = format!("{op:?}");
+                let d = d.split('(').next().unwrap_or(&d).to_string();
+                let e = map.entry(d).or_default();
+                if !e.contains(&name) {
+                    e.push(name.clone());
+                }
+            }
+        }
+    }
+    for (k, mods) in &map {
+        println!("OPCODEMAP {k} {}", mods.join(" "));
+    }
+    assert!(
+        !map.is_empty(),
+        "the map is empty; the sweep would run nothing"
+    );
+}
+
+/// **Is an "undetected" mutation actually REACHABLE?**
+///
+/// Round two of the sweep left six opcodes undetected even with their result
+/// replaced by a constant. That has two readings, and only one is a coverage
+/// hole: either the corpus never observes the opcode, or the mutation never
+/// applied to a site the corpus emits.
+///
+/// `PushImmediate` is the case that forces the question. Its arm maps an
+/// IMMEDIATE INDEX to a value, and the mutation changed the arm for index `1`
+/// only. With 1337 sites across 26 modules that sounds broad, but if none of
+/// those sites carries index 1 the mutation is vacuous and says nothing at all
+/// about coverage. Counting a vacuous mutation as a hole is the same error as
+/// counting a vacuous agreement as coverage.
+#[test]
+fn operand_level_reachability_of_the_undetected_mutations() {
+    use std::collections::BTreeMap;
+    let mut imm: BTreeMap<u8, usize> = BTreeMap::new();
+    let mut owners: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+
+    for p in sources() {
+        let name = p.file_name().unwrap().to_str().unwrap().to_string();
+        let Ok(src) = std::fs::read_to_string(&p) else {
+            continue;
+        };
+        let Some(m) = tokenize(&src)
+            .ok()
+            .and_then(|t| parse(&t).ok())
+            .and_then(|a| compile(&a).ok())
+        else {
+            continue;
+        };
+        if !keleusma_native::module_refusals(&m, LowerOptions::default()).is_empty() {
+            continue;
+        }
+        let Some(entry) = m.entry_point else { continue };
+        if !params_are_scalar(&m, entry) {
+            continue;
+        }
+        for c in &m.chunks {
+            for op in &c.ops {
+                match op {
+                    Op::PushImmediate(n) => *imm.entry(*n).or_insert(0) += 1,
+                    Op::BitAnd => owners.entry("BitAnd").or_default().push(name.clone()),
+                    Op::BitOr => owners.entry("BitOr").or_default().push(name.clone()),
+                    Op::Shl => owners.entry("Shl").or_default().push(name.clone()),
+                    Op::Shr => owners.entry("Shr").or_default().push(name.clone()),
+                    Op::CmpNe => owners.entry("CmpNe").or_default().push(name.clone()),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    println!("\n================ REACHABILITY OF THE UNDETECTED MUTATIONS");
+    println!("  PushImmediate operand distribution (the mutation touched index 1):");
+    for (n, c) in &imm {
+        let flag = if *n == 1 {
+            "   <- THE MUTATED INDEX"
+        } else {
+            ""
+        };
+        println!("    immediate {n:>3} : {c:>6} sites{flag}");
+    }
+    let idx1 = imm.get(&1).copied().unwrap_or(0);
+    println!(
+        "\n  => index 1 has {idx1} sites. {}",
+        if idx1 == 0 {
+            "THE MUTATION WAS VACUOUS -- it is not a coverage hole."
+        } else {
+            "The mutation was reachable, so the hole is real."
+        }
+    );
+
+    println!("\n  Modules owning each undetected opcode:");
+    for (k, mods) in &owners {
+        let mut u: Vec<String> = mods.clone();
+        u.sort();
+        u.dedup();
+        println!("    {k:<8} {:>5} sites in {:?}", mods.len(), u);
+    }
+    println!("================");
+    assert!(
+        !imm.is_empty(),
+        "no PushImmediate sites; the check is vacuous"
+    );
+}
+
+/// **Operand distribution for the opcodes the first sweep skipped.**
+///
+/// The reachability rule, learned the hard way: `PushImmediate` looked like the
+/// largest hole in the first sweep and was a vacuous mutation, because all 1337
+/// sites carry immediate index 0 and the mutation changed index 1, which has
+/// none.
+///
+/// The 25 skipped opcodes are mostly operand-carrying, and several have variants
+/// (`Flat` against `FlatNested` against `Boxed`) reached by different emitter
+/// arms. Mutating an arm the corpus never enters would repeat that error at
+/// larger scale, so this prints which variants actually occur BEFORE the
+/// mutation table for them is written.
+#[test]
+fn variant_distribution_of_the_skipped_opcodes() {
+    use std::collections::BTreeMap;
+    let mut var: BTreeMap<String, usize> = BTreeMap::new();
+    let mut popn: BTreeMap<u8, usize> = BTreeMap::new();
+    let mut callargs: BTreeMap<u8, usize> = BTreeMap::new();
+
+    for p in sources() {
+        let Ok(src) = std::fs::read_to_string(&p) else {
+            continue;
+        };
+        let Some(m) = tokenize(&src)
+            .ok()
+            .and_then(|t| parse(&t).ok())
+            .and_then(|a| compile(&a).ok())
+        else {
+            continue;
+        };
+        if !keleusma_native::module_refusals(&m, LowerOptions::default()).is_empty() {
+            continue;
+        }
+        let Some(entry) = m.entry_point else { continue };
+        if !params_are_scalar(&m, entry) {
+            continue;
+        }
+        for c in &m.chunks {
+            for op in &c.ops {
+                // The FULL debug rendering, truncated to the variant, so
+                // `GetField(Flat { .. })` and `GetField(FlatNested { .. })` are
+                // counted apart rather than together.
+                let d = format!("{op:?}");
+                let key = match op {
+                    Op::GetField(_)
+                    | Op::GetIndex(_)
+                    | Op::GetTupleField(_)
+                    | Op::GetEnumField(_)
+                    | Op::NewComposite(_) => {
+                        let head = d.split('(').next().unwrap_or("").to_string();
+                        let variant = d
+                            .split_once('(')
+                            .map(|(_, r)| r.split_whitespace().next().unwrap_or("?").to_string())
+                            .unwrap_or_default();
+                        format!("{head}({variant}")
+                    }
+                    Op::Div | Op::Mod | Op::Trap(_) | Op::IsEnum(_, _, _) => {
+                        d.split('(').next().unwrap_or(&d).to_string()
+                    }
+                    Op::GetData(_)
+                    | Op::SetData(_)
+                    | Op::GetDataIndexed(_, _)
+                    | Op::SetDataIndexed(_, _) => d.split('(').next().unwrap_or(&d).to_string(),
+                    Op::PopN(n) => {
+                        *popn.entry(*n).or_insert(0) += 1;
+                        continue;
+                    }
+                    Op::Call(_, n) => {
+                        *callargs.entry(*n).or_insert(0) += 1;
+                        continue;
+                    }
+                    _ => continue,
+                };
+                *var.entry(key).or_insert(0) += 1;
+            }
+        }
+    }
+
+    println!("\n================ VARIANT DISTRIBUTION, opcodes skipped by sweep one");
+    for (k, n) in &var {
+        println!("  {k:<34} {n:>7}");
+    }
+    println!("\n  PopN operand distribution:");
+    for (k, n) in &popn {
+        println!("    PopN({k:<3}) {n:>7}");
+    }
+    println!("\n  Call argument-count distribution:");
+    for (k, n) in &callargs {
+        println!("    Call(_, {k:<3}) {n:>7}");
+    }
+    println!("================");
+    println!("  A mutation to a variant with ZERO sites is vacuous, whatever the");
+    println!("  opcode's headline count says.");
+    assert!(!var.is_empty(), "no variants counted; the check is vacuous");
+}
+
+/// **What contract can the harness DERIVE for a native's return value?**
+///
+/// Two exemptions are artefacts of a contractless stub: `rogue_dungen` faults
+/// because the stub ignores the range implied by `rng_range(lo, hi)`, and `led`
+/// faults because it matches a `Status` enum and the stub returns an integer
+/// matching no variant.
+///
+/// The rule is derive, do not guess. This prints what the bytecode actually
+/// records, so the line between the two is drawn from evidence rather than from
+/// what would be convenient.
+#[test]
+fn what_return_contract_does_the_bytecode_record() {
+    for path in [
+        "../examples/rtos/scripts/led.kel",
+        "../examples/scripts/rogue/rogue_dungen.kel",
+    ] {
+        let Ok(raw) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        // The rtos scripts need the prelude, as the host prepends it.
+        let src = if path.contains("/rtos/") {
+            let p =
+                std::fs::read_to_string("../examples/rtos/scripts/prelude.kel").expect("prelude");
+            format!("{p}\n{raw}")
+        } else {
+            raw
+        };
+        let Some(m) = tokenize(&src)
+            .ok()
+            .and_then(|t| parse(&t).ok())
+            .and_then(|a| compile(&a).ok())
+        else {
+            println!("\n{path}: reference compiler rejects it");
+            continue;
+        };
+        println!("\n================ {path}");
+        println!("  natives and their RECORDED return shapes:");
+        for (i, name) in m.native_names.iter().enumerate() {
+            if name.is_empty() {
+                continue;
+            }
+            let shape = m.native_return_shapes.get(i);
+            println!("    {i:>2} {name:<28} {shape:?}");
+        }
+        println!("  enum layouts recorded: {}", m.enum_layouts.len());
+    }
+    println!("\n================");
+    println!("  A `Scalar`/`Flat` shape is derivable and can be stubbed faithfully.");
+    println!("  `Top` or absent records NOTHING, and a numeric RANGE is never in the");
+    println!("  bytecode at all -- `use host::f(Word, Word) -> Word` carries types only.");
+}

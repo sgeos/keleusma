@@ -30,6 +30,8 @@ use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use keleusma_native::{LowerOptions, lower_module};
 use std::sync::Mutex;
 
+mod common;
+
 /// Values the native program yielded, in order, and the replies handed back.
 ///
 /// **These are process-global because the yield ABI is a plain `extern "C"`
@@ -121,6 +123,7 @@ fn native_sequence(src: &str, args: &[i64], replies: &[i64]) -> (Vec<i64>, i64) 
     let lm = ctx.create_module("kel");
     let fns = lower_module(&ctx, &lm, &m, LowerOptions::default()).expect("lower module");
     lm.verify().expect("LLVM module verification");
+    common::maybe_optimize(&lm);
     let ee = lm
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("jit");
@@ -289,6 +292,7 @@ fn native_stream_sequence(src: &str, args: &[i64], replies: &[i64]) -> Vec<i64> 
     let lm = ctx.create_module("kel");
     lower_module(&ctx, &lm, &m, LowerOptions::default()).expect("lower module");
     lm.verify().expect("LLVM module verification");
+    common::maybe_optimize(&lm);
     let ee = lm
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("jit");

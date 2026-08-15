@@ -36,6 +36,8 @@ use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use keleusma_native::{LowerOptions, lower_module};
 use std::cell::RefCell;
 
+mod common;
+
 /// Ticks to drive a `Stream` entry. Enough to leave any init branch.
 const TICKS: i64 = 60;
 /// Stub slots. Must be at least the corpus's distinct-native count (42).
@@ -58,6 +60,34 @@ fn take_log() -> Vec<String> {
     LOG.with(|l| core::mem::take(&mut *l.borrow_mut()))
 }
 
+/// **Why two exemptions are NOT closed by a contract, and what it would take.**
+///
+/// `rogue_dungen.kel` and `led.kel` both fault because this stub honours no
+/// contract. The bytecode was checked rather than assumed
+/// (`what_return_contract_does_the_bytecode_record`), and the two cases differ:
+///
+/// | native | recorded return shape | derivable? |
+/// |---|---|---|
+/// | `host::rng_range` | `Scalar { kind: 3 }` | the TYPE, yes. the RANGE, **no** |
+/// | `host::gpio_set` | `Flat { kind: 3, size: 16 }` | the SHAPE, yes. the value needs a body |
+///
+/// **`rogue_dungen` cannot be closed at all.** `use host::rng_range(Word, Word)
+/// -> Word` records types and nothing else; `[lo, hi)` exists only in the host's
+/// head. Inferring a range from the argument positions would work here and is
+/// exactly the guess that must not be made.
+///
+/// **`led` is closeable, and the work is specific**: `gpio_set` returns a
+/// sixteen-byte enum body, so a faithful stub must return a body ADDRESS on both
+/// sides — an arena-resident `Value::Enum(EnumBody::Flat(_))` on the virtual
+/// machine side, which needs `register_native_with_ctx_closure` rather than the
+/// plain closure used here, and a matching sixteen-byte buffer behind the native
+/// stub. Picking a variant deterministically is no more of an invention than
+/// `stub_value` already is for a `Word`, so the obstacle is the composite return
+/// path and not the choice of value.
+///
+/// Both stay exempt until that lands. A stub that makes a module pass by
+/// accident is worse than an exemption.
+///
 /// The value a native returns, on BOTH sides.
 ///
 /// Deterministic, and asymmetric in the argument positions so a swapped or
@@ -140,6 +170,38 @@ fn sources() -> Vec<std::path::PathBuf> {
     out
 }
 
+/// The source to compile for `p`, with the rtos prelude prepended where the
+/// rtos host prepends it.
+///
+/// **Five exemptions were harness artefacts.** `event_listener`, `faulty`,
+/// `heartbeat`, `led` and `sensor` were recorded as "rejected by the REFERENCE
+/// compiler", which reads as a statement about the scripts. It was a statement
+/// about this harness: it compiled each `.kel` standalone, while the rtos host
+/// does
+///
+/// ```ignore
+/// let combined = format!("{}\n{}", PRELUDE, src);   // examples/rtos/src/setup.rs:429
+/// ```
+///
+/// so every script referencing a prelude declaration failed to compile.
+///
+/// **This is NOT the thing Part B of this increment refused to do.** Declining
+/// to reproduce the self-hosted stages' input formats was right because a seed a
+/// stage silently rejects looks exactly like coverage. This composition is four
+/// lines, it is the shipping host's own, it is quoted from `setup.rs`, and the
+/// scripts document it themselves. A wrong composition fails loudly at compile
+/// time rather than producing a plausible run.
+fn source_for(p: &std::path::Path) -> Option<String> {
+    let src = std::fs::read_to_string(p).ok()?;
+    let is_rtos = p.components().any(|c| c.as_os_str() == "rtos");
+    let is_prelude = p.file_name().is_some_and(|n| n == "prelude.kel");
+    if is_rtos && !is_prelude {
+        let prelude = std::fs::read_to_string("../examples/rtos/scripts/prelude.kel").ok()?;
+        return Some(format!("{prelude}\n{src}"));
+    }
+    Some(src)
+}
+
 /// `(native index, argc)` for every native the module actually calls.
 ///
 /// Asserts the single-arity property this whole design rests on.
@@ -195,7 +257,49 @@ fn arena_for(m: &Module) -> keleusma_arena::Arena {
 /// Seed 1 makes every argument equal, which is what drives a comparison to its
 /// boundary. Seed 2 is all zeros, the identity case. Seed 3 descends, so an
 /// ordering assumption that holds under seed 0 fails here.
-const SEEDS: usize = 4;
+///
+/// **Seeds 4 and up sweep a small constant, and that is about COMMAND
+/// SELECTORS rather than about arithmetic.** The four shapes above reach four
+/// distinct values of a first parameter, which is ample for a module that
+/// computes and useless for one that DISPATCHES. `wire.kel` branches twenty-odd
+/// ways on its first argument, so four shapes reached four of its commands and
+/// left the rest of the module unexecuted while the harness reported it as
+/// running.
+///
+/// **Every step below is a measured mutation-sweep result, not a rationale.**
+/// Round two named four real holes, all owned by `wire.kel`, and the recorded
+/// repair was to drive that module with real input. Seeding the shared segment
+/// was necessary and NOT sufficient:
+///
+/// | | `BitAnd` 54 | `Shr` 20 | `BitOr` 9 | `Shl` 48 | `CmpNe` 26 |
+/// |---|---|---|---|---|---|
+/// | round two | -- | -- | -- | -- | -- |
+/// | seeded segment, 4 seeds | **YES** | **YES** | -- | -- | -- |
+/// | 24 seeds | YES | YES | **YES** | **YES** | **YES** |
+///
+/// Seeding alone reached only the EMIT direction, which extracts bytes with a
+/// mask and a right shift. `BitOr` and `Shl` live in the PARSE direction, which
+/// reassembles a multi-byte integer, and no argument SHAPE reaches it -- only a
+/// selector VALUE does. **`Shl` is why the constant runs to 19 rather than to a
+/// single digit**: an intermediate setting reaching selectors 0..7 left it
+/// undetected.
+///
+/// The intermediate row is deliberately not tabulated. It was measured before
+/// `mutation_sweep.py` calibrated its timeout, and an under-sized timeout can
+/// manufacture a detection but never suppress one -- so its negative results
+/// stand and its positive ones are not evidence. Only the two rows above were
+/// taken under the corrected instrument.
+///
+/// **Generic rather than tuned to `wire.kel`.** The values are not chosen by
+/// reading its dispatch table -- picking `cmd == 9` because that is where the
+/// undetected sites are would make this a demonstration rather than a
+/// measurement, the same error the pre-registered mutation set exists to avoid.
+/// Consecutive small integers reach a dense selector in any module that has one.
+///
+/// **Cost, since this is paid on every run including CI**: 35s at 4 seeds, 58s
+/// at 24. Sublinear because a `Stream` entry and a zero-parameter entry both
+/// keep a single seed, so the sweep only widens the modules it can widen.
+const SEEDS: usize = 24;
 
 fn args_for_seed(n: usize, seed: usize) -> Vec<i64> {
     (0..n)
@@ -203,7 +307,8 @@ fn args_for_seed(n: usize, seed: usize) -> Vec<i64> {
             0 => (i as i64 + 1) * 3 + 1,
             1 => 5,
             2 => 0,
-            _ => (n as i64 - i as i64) * 3 + 1,
+            3 => (n as i64 - i as i64) * 3 + 1,
+            k => (k - 4) as i64,
         })
         .collect()
 }
@@ -223,6 +328,56 @@ fn params_are_scalar(m: &Module, entry: usize) -> bool {
         // which cannot carry a composite.
         None => m.chunks[entry].param_count == 0,
     }
+}
+
+/// Byte offset of the shared slot named `suffix`, or of its element zero.
+///
+/// An array slot expands to one slot per element (`wire.bytes[0]`), so a plain
+/// match on `bytes` finds nothing. `shared_layout` is parallel to the SHARED
+/// prefix of `slots`, so the index is counted among shared slots.
+fn shared_offset(m: &Module, suffix: &str) -> Option<u32> {
+    let dl = m.data_layout.as_ref()?;
+    let scalar = format!(".{suffix}");
+    let element0 = format!(".{suffix}[0]");
+    let mut shared_ix = 0usize;
+    for sl in &dl.slots {
+        if sl.visibility != SlotVisibility::Shared {
+            continue;
+        }
+        if sl.name.ends_with(&scalar) || sl.name.ends_with(&element0) {
+            return dl.shared_layout.get(shared_ix).map(|l| l.offset);
+        }
+        shared_ix += 1;
+    }
+    None
+}
+
+/// A payload for any module declaring the documented `len` + `bytes`
+/// convention, written identically into both sides' buffers.
+///
+/// **This is a convention, not a special case.** `wire.kel` and `lexer.kel` each
+/// document the same host contract in their own headers: `len` at slot 0,
+/// `bytes[i]` at slot `1 + i`. Keying on that is why one rule serves both.
+///
+/// It exists because `wire.kel` owned every undetected opcode in the mutation
+/// sweep -- 131 sites of `BitAnd`, `BitOr`, `Shl` and `Shr` -- and finished after
+/// 0 ticks. `cmd == 0` is a bitwise CRC-32 over `bytes[0..len]`, which is exactly
+/// where those sites are, and seed 2 already drives `cmd == 0`. The only thing
+/// missing was something to checksum.
+const PAYLOAD: &[u8] = b"keleusma wire payload: 0123456789 ABCDEF \x01\x02\x7f\x80\xfe\xff";
+
+fn seed_len_bytes(m: &Module, buf: &mut [u8]) -> bool {
+    let (Some(len_off), Some(bytes_off)) = (shared_offset(m, "len"), shared_offset(m, "bytes"))
+    else {
+        return false;
+    };
+    let (len_off, bytes_off) = (len_off as usize, bytes_off as usize);
+    if len_off + 8 > buf.len() || bytes_off + PAYLOAD.len() > buf.len() {
+        return false;
+    }
+    buf[len_off..len_off + 8].copy_from_slice(&(PAYLOAD.len() as u64).to_le_bytes());
+    buf[bytes_off..bytes_off + PAYLOAD.len()].copy_from_slice(PAYLOAD);
+    true
 }
 
 struct Run {
@@ -278,6 +433,7 @@ fn run_vm(m: &Module, table: &[(String, usize)], seed: usize) -> Result<Run, Str
         args_for_seed(n, seed).into_iter().map(Value::Int).collect()
     };
     let mut shared = vec![0u8; shared_data_bytes_for(m)];
+    seed_len_bytes(m, &mut shared);
     let mut results = Vec::new();
 
     let first = match vm.call_with_shared(&mut shared, &vals) {
@@ -357,6 +513,8 @@ fn run_native(m: &Module, table: &[(String, usize)], seed: usize) -> Option<Run>
     let lm = ctx.create_module("kel");
     lower_module(&ctx, &lm, m, LowerOptions::default()).expect("lower module");
     lm.verify().expect("LLVM module verification");
+    common::maybe_optimize(&lm);
+
     let ee = lm
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("jit");
@@ -390,6 +548,13 @@ fn run_native(m: &Module, table: &[(String, usize)], seed: usize) -> Option<Run>
 
     const CANARY: u64 = 0xDEAD_BEEF_FEED_FACE;
     let mut shared = vec![0u8; n_shared + 8];
+    {
+        // Seeded into the SAME offsets as the VM side. The segment is plain
+        // bytes, so one helper serves both and there is no second encoding to
+        // drift.
+        let (body, _) = shared.split_at_mut(n_shared);
+        seed_len_bytes(m, body);
+    }
     shared[n_shared..].copy_from_slice(&CANARY.to_le_bytes());
     let mut privs = vec![0u64; n_priv + 1];
     privs[n_priv] = CANARY;
@@ -582,16 +747,19 @@ fn is_vacuous(run: &Run) -> bool {
 /// is why the headline moved from 40 to 34. Nothing regressed; the number was
 /// measuring the harness rather than the emitter.
 ///
-/// `lexer.kel` and `parse.kel` now have REAL coverage in `stage_differential.rs`,
-/// which seeds the segment identically on both sides. They stay listed here
-/// because this harness still drives them on nothing.
+/// `parse.kel` has REAL coverage in `stage_differential.rs`, which seeds the
+/// segment identically on both sides. It stays listed here because this harness
+/// cannot seed a token stream from the convention alone.
 ///
 /// The other four consume abstract-syntax-tree and descriptor blocks whose
 /// layouts belong to the `src/selfhost/mod.rs` driver, which this line may read
 /// but must not edit. Seeding those means reproducing four input formats, and a
 /// seed a stage silently rejects looks exactly like coverage.
 const KNOWN_VACUOUS: &[&str] = &[
-    "lexer.kel",
+    // `lexer.kel` LEFT this list on 2026-08-15, and the set-equality assertion
+    // is what noticed. It declares the documented `len` + `bytes` host
+    // convention, so `seed_len_bytes` now gives it a real payload and it does
+    // real work inside this harness rather than only in `stage_differential`.
     "reconstruct.kel",
     "verify_datalayout.kel",
     "verify_depth.kel",
@@ -622,9 +790,21 @@ fn every_lowering_module_executes_or_is_exempt() {
     let mut exempt: Vec<(String, String)> = Vec::new();
     let mut disagreed: Vec<String> = Vec::new();
 
+    // **Single-module mode**, for the mutation sweep. `tools/mutation_sweep.py`
+    // runs this binary once per module in its own PROCESS, so a mutation that
+    // kills a module with SIGBUS or SIGTRAP costs one measurement rather than
+    // the whole census. Without process isolation two of the first four
+    // mutations tried took the entire run down and yielded no per-module data.
+    let only = std::env::var("KEL_ONLY_MODULE").ok();
+
     for p in sources() {
         let name = p.file_name().unwrap().to_str().unwrap().to_string();
-        let Ok(src) = std::fs::read_to_string(&p) else {
+        if let Some(want) = &only
+            && &name != want
+        {
+            continue;
+        }
+        let Some(src) = source_for(&p) else {
             continue;
         };
         let Some(m) = tokenize(&src)
@@ -834,6 +1014,14 @@ fn every_lowering_module_executes_or_is_exempt() {
         }
     }
     println!("================");
+
+    // In single-module mode the pinned sets describe the WHOLE corpus and would
+    // fail spuriously, so the run reports and exits instead. The sweep reads the
+    // exit status, so the disagreement must still fail the process.
+    if only.is_some() {
+        assert!(disagreed.is_empty(), "disagreed: {}", disagreed.join("; "));
+        return;
+    }
 
     let mut names: Vec<&str> = disagreed
         .iter()
