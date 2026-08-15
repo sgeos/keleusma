@@ -1,7 +1,8 @@
 # What can the corpus differential actually detect?
 
-**Status**: measured, and the harness repaired in response.
-**Date**: 2026-08-14.
+**Status**: measured, the harness repaired twice, and **one hole open** — `Trap`,
+which is undetectable by construction rather than for want of inputs. See Part C.
+**Date**: 2026-08-14, extended 2026-08-15 (Parts B and C).
 
 ## The question, and why the obvious instrument was wrong
 
