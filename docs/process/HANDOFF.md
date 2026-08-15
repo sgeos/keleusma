@@ -218,3 +218,34 @@ courtesy. **Both items they were awaiting from this line are now answered.**
 - **`tmp/2026-08-10-when_error_correction_meets_a_signature.markdown`** — research spike A373, 4.8 MB.
 - **`tmp/a373/`** — the harvest pipeline.
 - **`tmp/branch-prune-manifest-20260813.txt`** — the ONLY record of 73 deleted branches.
+- **`tmp/branch-prune-manifest-20260815.txt`** — the record of the one branch deleted on 2026-08-15.
+  Its substance is duplicated in the section below **because a manifest in a gitignored directory is
+  a single point of failure**, which the 2026-08-13 entry already flagged and did not act on.
+
+## Housekeeping settled on 2026-08-15, so it is not re-investigated
+
+**`feat/selfhost-wire-data` is DELETED** (`35bd458f`, recoverable with `git branch <name> <commit>`),
+and its worktree `keleusma-worktrees/wire-directory` is removed. The `v0.3.0` line had flagged it for
+my decision. It was one commit ahead and 283 behind, touching only
+`docs/decisions/WIRE_FORMAT_SELFHOST_PLAN.md`.
+
+**Verified by reading the text, not by trusting `git cherry`.** Its `-` marker says "already
+upstream", but the file still differed, because `v0.2.3` had moved. The check that settled it was
+finding both of its claims present on `v0.2.3` — the `DEBUG_POOL` identification and the
+struct-templates correction — **and a later refinement the branch does not have**. `git branch -d`
+refused, as it should, because the commit is not an ancestor even though its content is. `-D` was
+taken only after that verification.
+
+**The `wire-corpus` worktree is KEPT, deliberately.** It is 4.4 GB and its HEAD `79fc97d1` is fully
+contained in `v0.2.3`, so it looks like an obvious prune. It is not. Disk is at 186 GB free, the
+cache represents hours of compilation, and the local gate's one remaining use is the pre-publication
+`--miri` run. **Do not delete it to tidy up.** The `wire-corpus-*.log` files beside it are the
+cost-model calibration record and are cited in the mailbox; they stay for the same reason.
+
+**Everything else under `keleusma-worktrees/` belongs to the `v0.3.0` line** — `arena-composites`,
+`gate`, `llvm-backend-spike`, `native` — as do every remaining local `feat/native-*` and
+`feat/llvm-backend-spike` branch. Tell them apart by base branch, never by author. The two worktrees
+under `projects/blog/tmp/` are not this project's.
+
+**`v0.2.3` is 806 ahead of `main` and that is correct.** `main` holds releases, publication is HELD,
+and merging to it is a release action rather than housekeeping.
