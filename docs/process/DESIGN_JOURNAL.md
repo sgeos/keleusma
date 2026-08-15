@@ -13,6 +13,55 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE THREE-PART ORDER-1 WIRING LINE, AND A FIGURE THAT SURVIVED THREE DOCUMENTS (2026-08-14).**
+The end-to-end join, the type checker's input-path consolidation, and half of `read_stage` plus
+staging. Thirty-four merges.
+
+**Two chains were each verified and unconnected.** The producer was checked against the Rust models,
+the emitters against `encode_aux_body`, and nothing ran one into the other -- so "the sequence is
+Keleusma's" and "the artifact is byte-identical" were true separately and unproven together. The
+obstacle was one assumption: `nm_offsets` sums lengths assuming concatenated names while the blob
+interleaves a two-byte prefix, so feeding the producer's output straight in would read every name
+shifted and **the failure would present as a corrupt pool rather than as an offset convention**.
+`intern_run_preoffset` is a second function rather than a flag, so the sequential path cannot regress.
+
+**A migrated channel that still receives the answer is not a migration.** All four of the type
+checker's channels moved, and the test is whether the host still holds the DECISION: it may say "this
+call names declaration 3 and passes 2 arguments" and may not say "this call has the wrong arity".
+Every superseded collector on the authoritative path is deleted, so the migration is visible in the
+diff rather than claimed in a message.
+
+**THE FIGURE THAT WAS WRONG IN THREE PLACES.** This document, the roadmap and my own goal statement
+all said residency staging is forced by "a real stage's 395,804 names". Measured across all ten
+stages, the largest `NAMES` region is **627 records**. 395,804 is a REGION record count belonging to
+`CONSTS`. It came from the pre-run-length-encoding state, when `SHARED_LAYOUT` held one record per
+array element and `lexer.kel` alone expanded to roughly 76,000 slots, and it outlived the
+representation it described. **It made a two-and-a-half-times problem look like a fifteen-hundred-times
+one**, and staging for 395,804 -- dedup state across hundreds of batches with a pool larger than
+`bin` -- would have been built and then not needed.
+
+**The measurement found the real gap while looking for something else.** The difference between the
+producer's 252 and the reference's 627 on `parse` is the DATA-SLOT contributor, which was missing
+entirely. Its order, spelling and count were measured; the mode was only read.
+
+**The mode is the one fact the corpus cannot check**, and a green suite would overstate it. A mutation
+to fresh mode passes every test, because a slot name is `<block>.<field>` and cannot collide: the dot
+keeps it from function and enum names, and a declaration cannot name the same field twice. Recorded in
+the source as the weakest link rather than left for a reader to infer.
+
+**A slot-addressed block punishes insertion twice.** Adding fields mid-block shifted every later
+field and failed four tests at once, two untouched by the change; the second time, a scratch word
+sitting between two table blocks was stepped over and `calling-a-local` was silently ACCEPTED. The
+file carries the convention "appended last so no existing slot index moves" and I ignored it twice.
+
+**`git checkout <file>` to undo a bad edit discarded an hour of unrelated work** in the same file. The
+stage change survived only because it lives elsewhere.
+
+**A commit message made a claim I had not checked.** It said six collectors were deleted; a grep said
+one remained and checking found two. Amended before merge, because the message is a claim.
+
+---
+
 **THE COVERAGE GAP THAT WAS A MISSING CAPABILITY, AND THE FIRST VALUE THE HOST DID NOT ALREADY HOLD
 (2026-08-14).** Four merges: the record-shape coverage measurement and its closure, the dedup-scan
 settlement, and two slices of the module-input producer. Plus the type checker's implementation plan.

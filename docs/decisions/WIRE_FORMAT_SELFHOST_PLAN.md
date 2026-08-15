@@ -1105,6 +1105,30 @@ it to the table without a driver that calls it would record a capability the sys
 **The item is therefore blocked behind "wire the driver to a module", not beside it.** Checked so
 that a later session does not spend an increment rediscovering it as an easy win.
 
+#### WHAT IS LEFT OF THE CEILING, AND WHY IT IS NOT A ONE-LINE RAISE (2026-08-14)
+
+The data-slot contributor is built, so the producer's sequence now matches the reference's `NAMES` on
+every corpus case tested. **One thing remains: `parse` needs 627 names and the hard ceiling is 512.**
+
+`nin` holds two words per name in a 1024-word array, and `nm_max_names` is 256. Raising the ceiling
+looks like two constants and is not:
+
+1. **Every `for .. limit 256` in the interner and the producer must rise with it.** `for .. limit`
+   TRAPS on entry when the runtime range exceeds the static cap, so a loop left at 256 does not
+   degrade -- it aborts. A missed loop is a runtime trap on exactly the inputs the raise was for.
+2. **Verifying it needs a module with more than 256 names, and the only one in the corpus is
+   `parse`**, whose artifact is 304,432 bytes. The join test asserts `total < CAPACITY` because it
+   uses the single-window path, so the verifying case does not fit the harness that would verify it.
+
+**So the raise and the staged path are the same decision after all** -- not for the reason the
+395,804 figure suggested, but because the only input that exercises either is one the current test
+path cannot hold. Either the join grows a windowed variant, or the ceiling rises and a new harness
+carries `parse`.
+
+**Growing the buffer is narrow in SLOT terms**, which is worth recording so the next attempt does not
+over-estimate it: `nin` is followed by `nout` and `bout`, and the test harness addresses none of them
+by slot. `NIN_SLOT` and `NIN_CAPACITY` are the only constants that move.
+
 #### RESIDENCY STAGING WAS SIZED FROM THE WRONG REGION (measured 2026-08-14)
 
 This document, the roadmap and my own goal statement all said residency staging is forced by **"a
