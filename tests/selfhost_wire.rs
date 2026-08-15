@@ -10508,6 +10508,33 @@ fn module_input_blob(module: &keleusma::bytecode::Module) -> Vec<u8> {
             push_name(&mut out, &var.name);
         }
     }
+    // The DATA-SLOT section, one name per RUN. Consecutive slots sharing a name
+    // and visibility collapse into one record in the reference, and the name is
+    // interned once per run; interning per SLOT would emit one name per array
+    // element, which is how the pre-run-length-encoding artifact reached tens of
+    // thousands of names.
+    let mut runs: Vec<String> = Vec::new();
+    if let Some(dl) = &module.data_layout {
+        let mut i = 0usize;
+        while i < dl.slots.len() {
+            let s = &dl.slots[i];
+            let mut n = 1usize;
+            while i + n < dl.slots.len()
+                && dl.slots[i + n].name == s.name
+                && dl.slots[i + n].visibility == s.visibility
+            {
+                n += 1;
+            }
+            runs.push(s.name.clone());
+            i += n;
+        }
+    }
+    let sn = u16::try_from(runs.len()).expect("slot run count fits u16");
+    out.extend_from_slice(&sn.to_le_bytes());
+    for r in &runs {
+        push_name(&mut out, r);
+    }
+
     out.extend_from_slice(&tail);
     out
 }
@@ -11058,6 +11085,29 @@ fn the_produced_sequence_emits_names_and_pool_byte_identically() {
         (
             "with-strings",
             "fn s() -> Text { \"hi\" }\nfn t() -> Text { \"there\" }\nfn main() -> Word { 42 }",
+        ),
+        // THE SLOT CONTRIBUTOR. Data-slot names are spelled `<block>.<field>`,
+        // interned in DEDUP mode, once per RUN, and ordered after the chunk and
+        // enum-layout names. All four facts are measured against the reference,
+        // and getting any of them wrong changes NAMES.
+        (
+            "shared-slots",
+            "shared data s { alpha: Word, beta: Word }\n\
+             fn zulu() -> Word { s.alpha }\nfn main() -> Word { zulu() }",
+        ),
+        // A RUN. Two adjacent array slots share a name, so the reference emits
+        // ONE record and interns ONE name. A producer interning per slot would
+        // emit one per element and the region would be longer.
+        (
+            "slot-run",
+            "shared data s { xs: [Word; 4], n: Word }\n\
+             fn touch(i: Word) -> Word { s.xs[i] + s.n }\nfn main() -> Word { touch(0) }",
+        ),
+        (
+            "enums-and-slots",
+            "enum E { A, B }\nshared data s { k: Word }\n\
+             fn pick() -> Word { match E::A { E::A => s.k, E::B => 0 } }\n\
+             fn main() -> Word { pick() }",
         ),
     ];
 

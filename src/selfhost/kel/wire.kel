@@ -2548,6 +2548,7 @@ private data nm {
     // to carry its counts in state.
     ecnt: Word,
     vcnt: Word,
+    scnt: Word,
     ccnt: Word,
     ctag: Word,
     cpay: Word,
@@ -2933,6 +2934,48 @@ fn mi_enum_names() -> Word {
                 0
             };
         }
+    }
+    if nm.err < 0 { nm.err } else { mi_slot_names() }
+}
+
+// The DATA-SLOT section (slice 14f).
+//
+// **The contributor that made the reference`s NAMES longer than the producer`s
+// sequence**: 252 against 627 for `parse`. It was missing entirely, which the
+// residency measurement found while looking for something else.
+//
+// Three facts, each MEASURED against the reference rather than assumed:
+//
+//   ORDER     after the chunk and enum-layout names. `encode_aux_body` calls
+//             add_chunk, add_signatures, add_enum_layouts, add_natives, then
+//             add_data_layout, and natives are outside the corpus.
+//   SPELLING  `<block>.<field>`, not the bare field name.
+//   MODE      DEDUP. `add_data_layout` calls `names.intern`, not intern_fresh.
+//
+// **THE MODE IS THE ONE FACT THE CORPUS CANNOT CHECK, and that is recorded
+// rather than left for a reader to assume.** A mutation to `nm_mode_fresh`
+// here passes every test. The two modes differ only where a name REPEATS, and a
+// slot name is `<block>.<field>`: it cannot collide with a function or enum
+// name because of the dot, and it cannot collide with another slot because a
+// declaration cannot name the same field of the same block twice. So the claim
+// rests on READING `add_data_layout`, not on executing anything, and it is the
+// weakest link in this section.
+//
+// And one that decides the COUNT: consecutive slots sharing a name and
+// visibility collapse into one run, and the name is interned ONCE PER RUN. A
+// producer interning per slot would emit one name per array ELEMENT, which is
+// how the pre-run-length-encoding artifact reached tens of thousands.
+fn mi_slot_names() -> Word {
+    nm.scnt = mi_u16(nm.icur);
+    nm.icur = nm.icur + 2;
+    nm.err = if nm.scnt > nm_max_names() { 0 - 242 } else { nm.err };
+    for t in 0..mi_bounded(nm.scnt) limit 256 {
+        nm.sink = if nm.err < 0 { 0 } else {
+            nm.sink = mi_offset(nm.cnt, nm.icur + 2);
+            nm.cnt = mi_pair(nm.cnt, mi_u16(nm.icur), nm_mode_intern());
+            nm.icur = nm.icur + 2 + mi_u16(nm.icur);
+            0
+        };
     }
     if nm.err < 0 { nm.err } else { mi_const_names() }
 }
