@@ -183,8 +183,29 @@ fn arena_for(m: &Module) -> keleusma_arena::Arena {
 }
 
 /// Scalar arguments for an entry of `n` parameters. Asymmetric per position.
-fn args_for(n: usize) -> Vec<i64> {
-    (0..n).map(|i| (i as i64 + 1) * 3 + 1).collect()
+/// The argument vectors each module is driven with, in order.
+///
+/// **Seed 0 is the original vector and every other seed is new.** Driving one
+/// vector of pairwise-DISTINCT ascending arguments is what left a hole: `SLT`
+/// and `SLE` differ only when the operands are EQUAL, and nothing in seed 0 ever
+/// makes two comparands equal. Measured: with `Op::CmpLt` lowered as `SLE` --
+/// 126 sites across 25 modules -- the whole differential passed. Inverting it to
+/// `SGT` outright was caught by only 2 of those 25.
+///
+/// Seed 1 makes every argument equal, which is what drives a comparison to its
+/// boundary. Seed 2 is all zeros, the identity case. Seed 3 descends, so an
+/// ordering assumption that holds under seed 0 fails here.
+const SEEDS: usize = 4;
+
+fn args_for_seed(n: usize, seed: usize) -> Vec<i64> {
+    (0..n)
+        .map(|i| match seed {
+            0 => (i as i64 + 1) * 3 + 1,
+            1 => 5,
+            2 => 0,
+            _ => (n as i64 - i as i64) * 3 + 1,
+        })
+        .collect()
 }
 
 /// Is every parameter of this entry a scalar the harness can synthesise?
@@ -210,7 +231,7 @@ struct Run {
     shared: Vec<u8>,
 }
 
-fn run_vm(m: &Module, table: &[(String, usize)]) -> Result<Run, String> {
+fn run_vm(m: &Module, table: &[(String, usize)], seed: usize) -> Result<Run, String> {
     let _ = take_log();
     SAW_REF_ARG.with(|f| *f.borrow_mut() = false);
     let arena = arena_for(m);
@@ -254,7 +275,7 @@ fn run_vm(m: &Module, table: &[(String, usize)]) -> Result<Run, String> {
     let vals: Vec<Value> = if m.chunks[entry].block_type == BlockType::Stream && n == 1 {
         vec![Value::Int(0)]
     } else {
-        args_for(n).into_iter().map(Value::Int).collect()
+        args_for_seed(n, seed).into_iter().map(Value::Int).collect()
     };
     let mut shared = vec![0u8; shared_data_bytes_for(m)];
     let mut results = Vec::new();
@@ -310,7 +331,7 @@ fn scalar_of(st: &VmState) -> i64 {
     }
 }
 
-fn run_native(m: &Module, table: &[(String, usize)]) -> Option<Run> {
+fn run_native(m: &Module, table: &[(String, usize)], seed: usize) -> Option<Run> {
     let _ = take_log();
     TABLE.with(|t| *t.borrow_mut() = table.to_vec());
     let addrs = stub_addrs();
@@ -390,7 +411,7 @@ fn run_native(m: &Module, table: &[(String, usize)]) -> Option<Run> {
          pointers, which is neither none nor the three the ABI defines"
     );
 
-    let a = args_for(src_arity);
+    let a = args_for_seed(src_arity, seed);
     let sp = shared.as_mut_ptr();
     let pp = privs.as_mut_ptr() as *mut u8;
     let rp = region.as_mut_ptr() as *mut u8;
@@ -641,25 +662,64 @@ fn every_lowering_module_executes_or_is_exempt() {
             continue;
         }
 
-        // **The virtual machine runs FIRST, and that ordering is load-bearing.**
-        // A module that traps reports an error here; natively the same trap is
-        // `llvm.trap`, which kills the process with SIGTRAP and takes the whole
-        // harness with it. Asking the tolerant side first turns a fatal signal
-        // into a named exemption.
-        let vm = match run_vm(&m, &table) {
-            Ok(v) => v,
-            Err(why) => {
-                exempt.push((name, why));
-                continue;
-            }
+        // **Drive each module with SEVERAL argument vectors, not one.**
+        //
+        // Seed 0 alone left a measured hole: with `Op::CmpLt` lowered as `SLE`,
+        // 126 sites across 25 modules, the whole differential passed. `SLT` and
+        // `SLE` differ only when the comparands are EQUAL, and seed 0's
+        // pairwise-distinct ascending arguments never make two equal.
+        //
+        // A stream's single parameter is the tick, which the driver already
+        // varies across 60 iterations, so seeding it would change what the run
+        // MEANS rather than broaden it. Streams keep seed 0.
+        let n_params = m.chunks[entry].param_count as usize;
+        let seeds = if m.chunks[entry].block_type == BlockType::Stream || n_params == 0 {
+            1
+        } else {
+            SEEDS
         };
-        let Some(nat) = run_native(&m, &table) else {
-            exempt.push((
-                name,
-                "entry signature shape the harness does not drive".into(),
-            ));
+
+        let mut runs: Vec<(usize, Run, Run)> = Vec::new();
+        let mut bail: Option<String> = None;
+        for seed in 0..seeds {
+            // **The virtual machine runs FIRST, and that ordering is load-bearing.**
+            // A module that traps reports an error here; natively the same trap is
+            // `llvm.trap`, which kills the process with SIGTRAP and takes the whole
+            // harness with it. Asking the tolerant side first turns a fatal signal
+            // into a named exemption.
+            let v = match run_vm(&m, &table, seed) {
+                Ok(v) => v,
+                Err(why) => {
+                    // A LATER seed that traps is not an exemption for the module:
+                    // seed 0 already ran. Stop widening and keep what agreed,
+                    // rather than discarding coverage the module does have.
+                    if seed == 0 {
+                        bail = Some(why);
+                    }
+                    break;
+                }
+            };
+            let Some(n) = run_native(&m, &table, seed) else {
+                if seed == 0 {
+                    bail = Some("entry signature shape the harness does not drive".into());
+                }
+                break;
+            };
+            runs.push((seed, v, n));
+        }
+        if let Some(why) = bail {
+            exempt.push((name, why));
             continue;
-        };
+        }
+        if runs.is_empty() {
+            exempt.push((name, "no seed produced a comparable run".into()));
+            continue;
+        }
+        // Seed 0 supplies the reported observables, so the vacuity classification
+        // and the printed figures still describe the same run they always did.
+        // The native side of seed 0 is compared in the loop below with every
+        // other seed, so only the VM half is bound here.
+        let vm = &runs[0].1;
 
         // A COMPOSITE return is a body address natively and a decoded value on
         // the VM side; the two are not comparable as integers, and the hand-
@@ -670,9 +730,23 @@ fn every_lowering_module_executes_or_is_exempt() {
             m.signatures.get(entry).map(|s| &s.ret),
             Some(WireShape::Scalar { .. })
         );
-        let vm_scalar = vm.results.iter().all(|v| *v != i64::MIN);
-        let results_differ = ret_scalar && vm_scalar && vm.results != nat.results;
-        if results_differ || vm.log != nat.log || vm.shared != nat.shared {
+
+        // **EVERY seed is compared**, not only the one whose figures are
+        // reported. The first disagreeing seed is the one described, and its
+        // number is printed, because "module X disagrees" is far less useful than
+        // "module X disagrees on the all-equal argument vector".
+        let mut found: Option<(usize, &Run, &Run)> = None;
+        for (seed, v, n) in &runs {
+            let vm_scalar = v.results.iter().all(|x| *x != i64::MIN);
+            let differ = ret_scalar && vm_scalar && v.results != n.results;
+            if differ || v.log != n.log || v.shared != n.shared {
+                found = Some((*seed, v, n));
+                break;
+            }
+        }
+        if let Some((seed, vm, nat)) = found {
+            let vm_scalar = vm.results.iter().all(|x| *x != i64::MIN);
+            let results_differ = ret_scalar && vm_scalar && vm.results != nat.results;
             // Report the FIRST differing element, not the lengths. Lengths are
             // equal in most real disagreements and say nothing.
             let where_ = if results_differ {
@@ -714,7 +788,7 @@ fn every_lowering_module_executes_or_is_exempt() {
                     nat.shared.get(i)
                 )
             };
-            disagreed.push(format!("{name}: {where_}"));
+            disagreed.push(format!("{name}: seed {seed}: {where_}"));
             continue;
         }
         // **Agreement is not evidence unless the run did something.** Nine of the
@@ -726,7 +800,7 @@ fn every_lowering_module_executes_or_is_exempt() {
         // The three observables are all trivial in that state, so a run is
         // classified vacuous only when EVERY one of them is, which is
         // conservative: a module doing real work fails the test on any one.
-        if is_vacuous(&vm) {
+        if is_vacuous(vm) {
             vacuous.push(name);
             continue;
         }
