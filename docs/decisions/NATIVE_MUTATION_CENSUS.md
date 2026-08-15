@@ -228,6 +228,27 @@ not evidence of its absence. A future pass, a different target, or an input that
 reaches a different path can all change the answer. **This must not be recorded as
 the stronger claim.**
 
+### EXTENDED 2026-08-15: every differential, not just the corpus one
+
+The first pass covered `corpus_differential` only. The goal said *"run the
+differentials"*, plural, and eleven test files create a JIT — including
+`composite_return_aliasing.rs`, which pins the composite-return aliasing defect,
+**the only genuine codegen defect this line has ever found**. Region aliasing is
+exactly what an optimiser reasons about, so that was the worst one to leave at
+`-O0`.
+
+`tests/common/mod.rs::maybe_optimize` now runs `default<O2>` on demand and is
+called from all eleven, so the two paths cannot drift apart. It verifies the
+module after the pipeline, since IR that verified before and not after is the
+finding this exercise is looking for.
+
+**Result: 195 tests pass under `KEL_OPTIMIZE`, identical to the unoptimised
+baseline. No module diverges only under optimisation.**
+
+Checked for vacuity two ways: every one of the eleven files was confirmed to CALL
+the helper rather than merely declare the module, and the instruction-count guard
+below shows the pipeline transforms real code.
+
 ### The vacuity guard, because this run could have been a no-op
 
 A green optimised differential proves nothing if the pipeline never ran.

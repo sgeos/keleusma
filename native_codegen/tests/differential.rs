@@ -42,6 +42,8 @@ use keleusma_native::{
 };
 use std::collections::BTreeMap;
 
+mod common;
+
 /// Run `src` on the VM with `args`, returning the finished integer result.
 fn vm_result(src: &str, args: &[i64]) -> i64 {
     let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
@@ -72,6 +74,7 @@ fn native_result(src: &str, args: &[i64]) -> i64 {
     .expect("lower");
     lm.verify().expect("LLVM module verification");
 
+    common::maybe_optimize(&lm);
     let ee = lm
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("jit");
@@ -520,6 +523,7 @@ fn native_result_of(m: &keleusma::bytecode::Module, args: &[i64]) -> i64 {
     )
     .expect("lower");
     lm.verify().expect("LLVM module verification");
+    common::maybe_optimize(&lm);
     let ee = lm
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("jit");
@@ -647,6 +651,7 @@ fn native_result_multi(src: &str, entry: &str, args: &[i64]) -> i64 {
     lower_module(&ctx, &lm, &m, LowerOptions::default()).expect("lower module");
     lm.verify().expect("LLVM module verification");
 
+    common::maybe_optimize(&lm);
     let ee = lm
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("jit");
@@ -1743,6 +1748,7 @@ fn native_result_mutated(src: &str, mutate: impl FnOnce(&mut keleusma::bytecode:
     // Fix 3 makes `lower_module` verify internally; this stays as the explicit
     // statement of what the control is about.
     lm.verify().expect("LLVM module verification");
+    common::maybe_optimize(&lm);
     let ee = lm
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("jit");
@@ -2173,6 +2179,7 @@ fn composite_native_result(src: &str, args: &[i64]) -> i64 {
     let lm = ctx.create_module("kel");
     lower_module(&ctx, &lm, &m, LowerOptions::default()).expect("lower module");
     lm.verify().expect("LLVM module verification");
+    common::maybe_optimize(&lm);
     let ee = lm
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("jit");
@@ -2274,6 +2281,7 @@ fn composite_native_with_region(src: &str, args: &[i64]) -> (i64, Vec<u8>) {
     let lm = ctx.create_module("kel");
     lower_module(&ctx, &lm, &m, LowerOptions::default()).expect("lower module");
     lm.verify().expect("LLVM module verification");
+    common::maybe_optimize(&lm);
     let ee = lm
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("jit");

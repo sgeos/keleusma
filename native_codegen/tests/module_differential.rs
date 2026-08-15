@@ -46,6 +46,8 @@ use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use keleusma_native::{LowerOptions, lower_module};
 use std::cell::RefCell;
 
+mod common;
+
 /// How many ticks to drive. `piano_roll_7` has section onsets at 256, 512, 768,
 /// 1024, 1280, 1536 and 1792 and wraps at 2048, so a run must cross 2048 to
 /// exercise the loop-boundary reset rather than only the init block. A shorter
@@ -314,6 +316,7 @@ fn run_native(m: &Module) -> (Vec<i64>, Vec<String>, Vec<u8>) {
     let lm = ctx.create_module("kel");
     lower_module(&ctx, &lm, m, LowerOptions::default()).expect("lower module");
     lm.verify().expect("LLVM module verification");
+    common::maybe_optimize(&lm);
     let ee = lm
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("jit");

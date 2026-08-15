@@ -44,6 +44,8 @@ use keleusma::bytecode::Value;
 use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 
+mod common;
+
 /// `(vm, native)` for a two-argument entry, driving the trailing pointers when
 /// the module builds composites.
 fn both(src: &str, a: i64, b: i64) -> (i64, i64) {
@@ -67,6 +69,7 @@ fn both(src: &str, a: i64, b: i64) -> (i64, i64) {
     let lm = ctx.create_module("k");
     keleusma_native::lower_module(&ctx, &lm, &m, keleusma_native::LowerOptions::default())
         .expect("lower");
+    common::maybe_optimize(&lm);
     let ee = lm
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("jit");

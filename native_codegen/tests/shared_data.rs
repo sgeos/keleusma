@@ -25,6 +25,8 @@ use keleusma::vm::{
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use keleusma_native::{LowerOptions, lower_module};
 
+mod common;
+
 /// Build an arena sized for BOTH the operand stack and the persistent region.
 ///
 /// `auto_arena_capacity_for` covers the stack and call frames and **not** the
@@ -74,6 +76,7 @@ fn native_shared(src: &str, args: &[i64]) -> (i64, Vec<u8>) {
     let lm = ctx.create_module("kel");
     lower_module(&ctx, &lm, &m, LowerOptions::default()).expect("lower module");
     lm.verify().expect("LLVM module verification");
+    common::maybe_optimize(&lm);
     let ee = lm
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("jit");

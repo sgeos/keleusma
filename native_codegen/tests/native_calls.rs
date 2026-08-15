@@ -27,6 +27,8 @@ use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use keleusma_native::{LowerOptions, lower_module};
 use std::cell::RefCell;
 
+mod common;
+
 // The recorded call sequence for whichever side is running.
 //
 // Thread-local rather than a global mutex: the JIT calls back on the calling
@@ -157,6 +159,7 @@ fn native_run(src: &str, args: &[i64]) -> (i64, Vec<(String, Vec<i64>)>) {
     lower_module(&ctx, &lm, &m, LowerOptions::default()).expect("lower");
     lm.verify().expect("LLVM module verification");
 
+    common::maybe_optimize(&lm);
     let ee = lm
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("jit");
@@ -446,6 +449,7 @@ fn a_composite_from_a_signatured_native_result_agrees_with_the_vm() {
     let lm = ctx.create_module("kel");
     lower_module(&ctx, &lm, &m, LowerOptions::default()).expect("lower");
     lm.verify().expect("llvm verify");
+    common::maybe_optimize(&lm);
     let ee = lm
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("jit");

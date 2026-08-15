@@ -36,6 +36,8 @@ use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use keleusma_native::{LowerOptions, lower_module};
 use std::cell::RefCell;
 
+mod common;
+
 /// Ticks to drive a `Stream` entry. Enough to leave any init branch.
 const TICKS: i64 = 60;
 /// Stub slots. Must be at least the corpus's distinct-native count (42).
@@ -389,33 +391,7 @@ fn run_native(m: &Module, table: &[(String, usize)], seed: usize) -> Option<Run>
     let lm = ctx.create_module("kel");
     lower_module(&ctx, &lm, m, LowerOptions::default()).expect("lower module");
     lm.verify().expect("LLVM module verification");
-    // **PART B: run the O2 middle end when asked.**
-    //
-    // `create_jit_execution_engine(OptimizationLevel::_)` sets the CODEGEN level
-    // only; `mem2reg` and the rest of the middle end are a pass pipeline and do
-    // not run from it. `aot_linkage.rs` already runs `default<O2>` on one
-    // hand-written module — so the claim "no object file has ever been
-    // optimised" was wrong — but no CORPUS-WIDE differential has ever run the
-    // middle end. Undefined behaviour in emitted IR is invisible at `-O0`.
-    if std::env::var("KEL_OPTIMIZE").is_ok() {
-        use inkwell::passes::PassBuilderOptions;
-        use inkwell::targets::{InitializationConfig, Target, TargetMachine};
-        Target::initialize_native(&InitializationConfig::default()).expect("init target");
-        let triple = TargetMachine::get_default_triple();
-        let machine = Target::from_triple(&triple)
-            .expect("target")
-            .create_target_machine(
-                &triple,
-                "generic",
-                "",
-                OptimizationLevel::Default,
-                inkwell::targets::RelocMode::PIC,
-                inkwell::targets::CodeModel::Default,
-            )
-            .expect("target machine");
-        lm.run_passes("default<O2>", &machine, PassBuilderOptions::create())
-            .expect("O2 pipeline");
-    }
+    common::maybe_optimize(&lm);
 
     let ee = lm
         .create_jit_execution_engine(OptimizationLevel::None)

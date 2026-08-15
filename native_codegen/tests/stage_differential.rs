@@ -41,6 +41,8 @@ use keleusma::vm::{
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use keleusma_native::{LowerOptions, lower_module};
 
+mod common;
+
 /// Enough iterations to scan the whole seed and reach end of source. One byte is
 /// consumed per iteration, so this must exceed the seed length.
 const TICKS: i64 = 400;
@@ -183,6 +185,7 @@ fn run_native(m: &Module, seeded: &[u8]) -> Outcome {
     let lm = ctx.create_module("kel");
     lower_module(&ctx, &lm, m, LowerOptions::default()).expect("lower module");
     lm.verify().expect("LLVM module verification");
+    common::maybe_optimize(&lm);
     let ee = lm
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("jit");
