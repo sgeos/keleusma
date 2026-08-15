@@ -20,12 +20,13 @@
 //! subproject re-exports this module and its `main.rs`/tests drive it). `prelude.kel` is
 //! not read by the Rust host and stays in `compiler/kel/`.
 //!
-//! `src/selfhost/kel/` also holds **`wire.kel`, which is not one of those ten** and is
-//! deliberately absent from the `read_stage` table. It is the wire format being written in
-//! Keleusma (step 6 of the wire-format programme), and the driver does not run it because
-//! it does not yet emit an artifact. `tests/selfhost_wire.rs` compiles it directly against
-//! the Rust implementation. It joins the stage table when it produces bytes rather than a
-//! checksum. See `docs/decisions/WIRE_FORMAT_SELFHOST_PLAN.md`.
+//! `src/selfhost/kel/` also holds **`wire.kel`, which is not one of those ten**. It is the
+//! wire format written in Keleusma (step 6 of the wire-format programme), and it IS in the
+//! `read_stage` table: it joined when the driver gained a path that emits through it, which
+//! is `wire_names_via_kel` below. This paragraph said the opposite — "deliberately absent
+//! from the `read_stage` table" — for as long as the entry existed fifty lines below it, so
+//! the file contradicted itself and a reader could not tell which half to trust. See
+//! `docs/decisions/WIRE_FORMAT_SELFHOST_PLAN.md`.
 
 use alloc::boxed::Box;
 use alloc::format;
@@ -2722,6 +2723,225 @@ impl std::error::Error for SelfHostError {}
 /// produced no auxiliary body at all.
 ///
 /// The module reaches Keleusma as a length-prefixed blob and nothing else: no
+/// Every constant root in a module, in chunk order.
+fn const_roots_of(module: &Module) -> Vec<ConstValue> {
+    let mut roots = Vec::new();
+    for c in &module.chunks {
+        roots.extend(c.constants.iter().cloned());
+    }
+    roots
+}
+
+/// The wire tag and payload for a constant node.
+///
+/// Composite tags are RETURNED rather than rejected, so a refusal comes from the
+/// stage. A host that quietly dropped them would make the stage's guard
+/// untestable, which is the same reason the blob carries a zero enum count
+/// rather than omitting the section.
+fn const_tag_and_name(c: &ConstValue) -> (u16, i64) {
+    use ConstValue as K;
+    match c {
+        K::Unit => (1, 0),
+        K::Bool(b) => (2, i64::from(*b)),
+        K::Int(v) => (3, *v),
+        K::Byte(v) => (4, i64::from(*v)),
+        K::Fixed(v) => (5, *v),
+        K::None => (12, 0),
+        K::StaticStr(_) => (7, 0),
+        K::Tuple(_) => (8, 0),
+        K::Array(_) => (9, 0),
+        K::Struct { .. } => (10, 0),
+        K::Enum { .. } => (11, 0),
+        other => panic!("const_tag_and_name has no tag for {other:?}"),
+    }
+}
+
+/// Total nodes in a constant forest, counting every descendant.
+fn count_blob_nodes(roots: &[ConstValue]) -> usize {
+    use ConstValue as K;
+    fn go(c: &K) -> usize {
+        1 + match c {
+            K::Tuple(v) | K::Array(v) => v.iter().map(go).sum::<usize>(),
+            K::Struct { fields, .. } => fields.iter().map(|(_, v)| go(v)).sum::<usize>(),
+            K::Enum { fields, .. } => fields.iter().map(go).sum::<usize>(),
+            _ => 0,
+        }
+    }
+    roots.iter().map(go).sum()
+}
+
+/// The names a constant node contributes, in the order the reference interns
+/// them.
+fn blob_node_names(c: &ConstValue) -> Vec<&str> {
+    use ConstValue as K;
+    match c {
+        K::Struct { type_name, fields } => {
+            let mut n = vec![type_name.as_str()];
+            n.extend(fields.iter().map(|(f, _)| f.as_str()));
+            n
+        }
+        K::Enum {
+            type_name, variant, ..
+        } => vec![type_name.as_str(), variant.as_str()],
+        K::StaticStr(s) => vec![s.as_str()],
+        _ => Vec::new(),
+    }
+}
+
+/// One constant node in PREORDER: tag, payload, child count, flags,
+/// discriminant, its interned names, then its children.
+///
+/// The order is the reference's rather than a fresh choice: the reference
+/// flattener pushes a node and then descends, so both the node table and the
+/// name sequence are depth-first preorder. Writing the blob in that order is
+/// what lets the stage reproduce both with a linear scan.
+fn push_blob_node(c: &ConstValue, out: &mut Vec<u8>, names: &mut usize) {
+    use ConstValue as K;
+    let node_names = blob_node_names(c);
+    let children: Vec<&ConstValue> = match c {
+        K::Tuple(v) | K::Array(v) => v.iter().collect(),
+        K::Struct { fields, .. } => fields.iter().map(|(_, v)| v).collect(),
+        K::Enum { fields, .. } => fields.iter().collect(),
+        _ => Vec::new(),
+    };
+    let (tag, payload) = const_tag_and_name(c);
+    let (flags, disc): (i64, i64) = match c {
+        K::Enum {
+            discriminant: Some(d),
+            ..
+        } => (1, *d),
+        _ => (0, 0),
+    };
+    out.extend_from_slice(&tag.to_le_bytes());
+    out.extend_from_slice(&payload.to_le_bytes());
+    out.extend_from_slice(
+        &u16::try_from(children.len())
+            .expect("kids fit u16")
+            .to_le_bytes(),
+    );
+    out.extend_from_slice(&flags.to_le_bytes());
+    out.extend_from_slice(&disc.to_le_bytes());
+    out.extend_from_slice(
+        &u16::try_from(node_names.len())
+            .expect("names fit u16")
+            .to_le_bytes(),
+    );
+    for n in node_names {
+        let b = n.as_bytes();
+        out.extend_from_slice(&u16::try_from(b.len()).expect("len fits u16").to_le_bytes());
+        out.extend_from_slice(b);
+        *names += 1;
+    }
+    for ch in children {
+        push_blob_node(ch, out, names);
+    }
+}
+
+/// The module-input blob and an UPPER BOUND on the names it interns.
+///
+/// **The two are returned together deliberately.** They are the same walk, and
+/// until this moved out of the test harness the caller supplied the count
+/// separately — from a model that omitted the data-slot contributor entirely,
+/// reporting 252 for `parse` where the module really interns 627. A count that
+/// disagrees with the blob it describes is the "one model with two readers"
+/// shape that produced the understated worst-case-memory bound, so there is one
+/// walk and no second opinion.
+///
+/// **It is a BOUND rather than the record count, and the direction matters.**
+/// The count returned here is the number of interning EVENTS. The reference
+/// dedups, so its `NAMES` record count can be lower — and by how much is
+/// order-dependent, because `Names::intern_fresh` records its entry in the
+/// index so a later `intern` can share it. Reproducing the exact count
+/// host-side would mean replicating the reference's interning ORDER, which is
+/// precisely what `wire.kel`'s `mi_*` producers already do and what the
+/// byte-identity oracle already checks. Duplicating it here would be a second
+/// model of the thing under test.
+///
+/// The bound's only consumer is the cap check in [`wire_names_via_kel`], where
+/// over-counting refuses slightly early and under-counting would admit a module
+/// that overruns the interner. The old caller under-counted. On all ten corpus
+/// stages the bound is exact; an enum constant makes it loose, and both facts
+/// are pinned by test.
+///
+/// Sections, in the order `wire.kel`'s `mi_*` producers read them: chunk names,
+/// the enum layouts, the data-slot runs, then the constant forest as a tail.
+/// **Every count is written even when it is zero.** Inferring an absent section
+/// from the blob ENDING cannot distinguish empty from truncated, and it would
+/// have passed here by accident, because `bin` is zero-filled past the blob so a
+/// reader would find a zero count and be right for a reason that is not the
+/// encoding.
+pub fn module_input(module: &Module) -> (Vec<u8>, usize) {
+    let mut out = Vec::new();
+    let mut names = 0usize;
+    fn push_name(out: &mut Vec<u8>, s: &str, names: &mut usize) {
+        let b = s.as_bytes();
+        let l = u16::try_from(b.len()).expect("name length fits u16");
+        out.extend_from_slice(&l.to_le_bytes());
+        out.extend_from_slice(b);
+        *names += 1;
+    }
+
+    let n = u16::try_from(module.chunks.len()).expect("chunk count fits u16");
+    out.extend_from_slice(&n.to_le_bytes());
+    for c in &module.chunks {
+        push_name(&mut out, &c.name, &mut names);
+    }
+
+    // The constant section rides at the END, so the sections the stage reads
+    // first are at fixed offsets from the start.
+    let consts = const_roots_of(module);
+    let mut nodes = Vec::new();
+    let mut const_names = 0usize;
+    for c in &consts {
+        push_blob_node(c, &mut nodes, &mut const_names);
+    }
+    let cn = u16::try_from(count_blob_nodes(&consts)).expect("node count fits u16");
+    let mut tail = Vec::new();
+    tail.extend_from_slice(&cn.to_le_bytes());
+    tail.extend_from_slice(&nodes);
+
+    let e = u16::try_from(module.enum_layouts.len()).expect("enum count fits u16");
+    out.extend_from_slice(&e.to_le_bytes());
+    for l in &module.enum_layouts {
+        push_name(&mut out, &l.type_name, &mut names);
+        let v = u16::try_from(l.variants.len()).expect("variant count fits u16");
+        out.extend_from_slice(&v.to_le_bytes());
+        for var in &l.variants {
+            push_name(&mut out, &var.name, &mut names);
+        }
+    }
+
+    // The DATA-SLOT section, one name per RUN. Consecutive slots sharing a name
+    // and visibility collapse into one record in the reference, and the name is
+    // interned once per run; interning per SLOT would emit one name per array
+    // element, which is how the pre-run-length-encoding artifact reached tens of
+    // thousands of names and produced the 395,804 figure that outlived it.
+    let mut runs: Vec<&str> = Vec::new();
+    if let Some(dl) = &module.data_layout {
+        let mut i = 0usize;
+        while i < dl.slots.len() {
+            let s = &dl.slots[i];
+            let mut n = 1usize;
+            while i + n < dl.slots.len()
+                && dl.slots[i + n].name == s.name
+                && dl.slots[i + n].visibility == s.visibility
+            {
+                n += 1;
+            }
+            runs.push(s.name.as_str());
+            i += n;
+        }
+    }
+    let sn = u16::try_from(runs.len()).expect("slot run count fits u16");
+    out.extend_from_slice(&sn.to_le_bytes());
+    for r in &runs {
+        push_name(&mut out, r, &mut names);
+    }
+
+    out.extend_from_slice(&tail);
+    (out, names + const_names)
+}
+
 /// name lengths, no offsets, no interning sequence. Keleusma recovers all three
 /// and runs the interner and the emitters in ONE call, because shared data is
 /// re-seeded on every call and the sequence would not survive a return.
@@ -2737,11 +2957,35 @@ impl std::error::Error for SelfHostError {}
 /// name count. It was a REGION RECORD count belonging to `CONSTS`, carried over
 /// from the pre-run-length-encoding representation, and it made a 2.5x problem
 /// look like a 1500x one. Measured: the largest `NAMES` region is 627 records.
+///
+/// **THE DRIVER IS WIRED TO THE MODULE, NOT TO A MODEL.** It builds the blob and
+/// its name count with [`module_input`] rather than accepting them. Until this
+/// changed the function took a pre-built blob and opened with `let _ = module;`
+/// — the module was in the signature and unused, and the only producer of the
+/// blob was a Rust function in the test harness. A path that cannot be driven
+/// from a `Module` is not a compile path, however byte-identical its output.
+///
+/// [`wire_names_from_input`] remains for tests that must inject a blob or a
+/// count the encoder would never produce, which is the only way to reach the
+/// two cap refusals.
 pub fn wire_names_via_kel(
     module: &Module,
-    blob: &[u8],
     directory: &[u8],
+    regions: usize,
+) -> Result<Vec<u8>, SelfHostError> {
+    let (blob, names) = module_input(module);
+    wire_names_from_input(&blob, names, directory, regions)
+}
+
+/// [`wire_names_via_kel`] with the module input supplied directly.
+///
+/// Separate so the cap refusals are reachable: both bounds cover every stage in
+/// the corpus, so no real module can exercise them and a negative test must
+/// inject the input.
+pub fn wire_names_from_input(
+    blob: &[u8],
     names: usize,
+    directory: &[u8],
     regions: usize,
 ) -> Result<Vec<u8>, SelfHostError> {
     /// The interner's per-call name bound, mirrored from `wire.kel`'s
@@ -2773,7 +3017,6 @@ pub fn wire_names_via_kel(
             ),
         });
     }
-    let _ = module;
     let m = compile_src(&read_stage("kel/wire.kel"));
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);

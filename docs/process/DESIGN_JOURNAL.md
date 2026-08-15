@@ -13,6 +13,53 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE DRIVER IS WIRED TO A MODULE, AND THE INCREMENT WAS A THIRD THE SIZE THE PLAN SAID (2026-08-15).**
+
+**Three of the four things the plan listed as remaining were already done, and I found that by
+reading the code rather than the plan.** The plan named a module-input encoding, a Keleusma-side
+producer of the interning sequence, residency staging, and removing `wire.kel` from the `read_stage`
+exclusion. Measured against the tree: `wire.kel` was ALREADY in `read_stage`; the producer was
+ALREADY self-hosted as `mi_chunk_names`/`mi_enum_names`/`mi_slot_names`/`mi_const_nodes`; and the
+staging was NEVER NEEDED. What was actually missing was the ENCODER, which lived in the test harness.
+
+**The tell was one line.** `wire_names_via_kel(module, blob, ...)` opened with `let _ = module;`. A
+function that takes a module and discards it, while a test builds its real input, is a compile path
+in appearance only. That single line located the gap faster than the plan's four-item list did.
+
+**THE STAGING COUPLING CAME FROM THE FIGURE THAT HAS NOW MISLED THIS PROJECT THREE TIMES.** The plan
+says the producer and the staging "are the same increment, and doing either alone is wasted", which
+follows from 395,804 names. Measured: the worst stage, `parse`, interns 627 from a 33,395-byte blob
+against caps of 1024 and 49,152 — 61% and 68%. Nothing in the corpus needs staging. The 395,804 is a
+`CONSTS` region record count and it still sits at five sites in that plan. **A wrong figure does not
+merely misstate a size; it invents a dependency between two pieces of work.**
+
+**The count was wrong in the unsafe direction and nothing compared it to anything.** The caller
+passed `interner_input(&module).len()` — a model that omits the data-slot contributor — which reports
+252 for `parse` where the module interns 627. Its only consumer is a cap check whose purpose is to
+refuse a module that would overrun the interner, so an under-count defeats the guard. Returning the
+blob and the count from ONE walk is the fix; that is the same "one model with two readers" shape as
+the operand-stack defect, arriving in a different file a day later.
+
+**ADDING COVERAGE IS WHAT FOUND THE REAL SEMANTICS.** I first asserted the derived count EQUALS the
+reference's `NAMES` record count, and it passed on all ten stages. Then I added a named-constant case
+and it failed, 9 against 4. The reference dedups, and `Names::intern_fresh` records its entry so a
+later `intern` can share it — so the exact count is ORDER-dependent, and reproducing it host-side
+would mean replicating the reference's interning order, which is a second model of the thing under
+test. The right answer is an explicit upper bound, documented as one, with soundness asserted and the
+looseness pinned by the case that exhibits it. **Equality on ten stages was a corpus property I was
+one test away from writing down as a guarantee.**
+
+**Two controls, and the second is the more useful.** Dropping the data-slot names from the count
+fails loudly (20 against 31 on `lexer`), so the check has teeth. Dropping the CONSTANT names leaves
+all ten stages green — which establishes by mutation that no stage in the corpus reaches that branch,
+confirming a gap this line had recorded but not demonstrated. That is why the named-constant cases
+are in the suite rather than a note in a comment.
+
+**Reported, not repaired:** `cargo doc --features self-host` fails with four unresolved intra-doc
+links on the clean base. CI's Doc job builds `signatures,encryption,shell`, so that feature set is
+never doc-built. Same class as the red Doc job V0.2.1 shipped with.
+---
+
 **A PANIC BEHIND A PUBLIC API, AND A REQUEST I REFUSED TO BUILD AS ASKED (2026-08-15).**
 
 **Reading the mailbox TO THE END is what found the defect.** I had read the `v0.3.0` mailbox far
