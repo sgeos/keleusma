@@ -32,13 +32,19 @@ OUTCOMES PER MODULE
   AGREE      the differential passed -- this module did NOT detect the defect
   DISAGREE   the differential reported a mismatch -- detected
   SIGNAL     the process died on a signal -- detected, fatally
-  HANG       the run did not terminate inside PER_MODULE_TIMEOUT -- detected.
+  HANG       the run did not terminate inside its CALIBRATED budget -- detected.
              A total-functional language whose whole value proposition is a
              definitive WCET bound does not get to loop forever, so
              non-termination is a real observation and not merely a timeout.
              The first attempt at this sweep had NO timeout and stalled twelve
              minutes on one module, because turning `CheckedAdd` into a
              subtraction stops a loop counter ever reaching its bound.
+
+             **THE BUDGET IS MEASURED, AND A FIXED ONE PRODUCED FALSE
+             POSITIVES.** With a flat 20s and a differential widened to 24
+             seeds, `wire.kel` took 30.7s unmutated, exceeded the budget under
+             every mutation, and was scored as detecting all of them. Four
+             opcodes looked closed that were not. See `calibrate()`.
   NOLOWER    the module stopped lowering -- the mutation broke the emitter
              rather than changing its meaning, so it is not a semantic
              perturbation and the row is not evidence either way
@@ -53,10 +59,19 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import tempfile
 
 # A mutated module may simply not terminate; see HANG above.
+#
+# **This is a FLOOR, not the budget.** The budget is measured per module by
+# `calibrate()`; see the note there for the false positive a fixed value caused.
 PER_MODULE_TIMEOUT = 20
+# How much slower than its healthy self a module may run before the sweep calls
+# it non-terminating.
+HANG_MULTIPLIER = 6
+# A module that cannot finish unmutated inside this is already pathological.
+CALIBRATION_CEILING = 300
 BUILD_TIMEOUT = 900
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -297,8 +312,76 @@ MUTATIONS_ROUND3 = {
     ),
 }
 
-# Opcodes with sites that are NOT perturbed, each with the reason.  Recorded so
-# the sweep's coverage is explicit rather than implied by omission.
+# ---------------------------------------------------------------------------
+# ROUND THREE, DISCRIMINATING.  Added AFTER round three reported `Trap` and
+# `WordToByte` undetected, exactly as `MUTATIONS_STRONG` was added after round
+# one, and kept in its own table so the pre-registered set above stays the set
+# that was committed before running.
+#
+# `WordToByte` only.  `Trap` is deliberately absent, and its absence is the
+# finding rather than a gap -- see `TRAP_IS_UNDETECTABLE_BY_CONSTRUCTION`.
+#
+# A FALSIFIED PREDICTION IS RECORDED HERE BECAUSE IT NARROWED THE CAUSE.  The
+# round-three mutation was `0xFF -> 0x7F`, which differs only in bit 7, and the
+# seeded payload at the time held no byte above `0x7F`, so the mutant looked
+# equivalent by construction of the payload.  Predicted: adding `\x80\xfe\xff`
+# would make it detected.  It did NOT.  Masking is therefore not the mechanism,
+# and replacing the result outright is what separates "the site is reached and
+# its value is unobserved" from "the site is never reached at all".
+# ---------------------------------------------------------------------------
+MUTATIONS_ROUND3_STRONG = {
+    "WordToByte": (
+        '                    st.b.build_and(v, i64t.const_int(0xFF, false), "tobyte")',
+        '                    st.b.build_and(v, i64t.const_zero(), "tobyte")',
+    ),
+}
+
+# ---------------------------------------------------------------------------
+# REACHABILITY, not semantics.  Zeroing `WordToByte`'s result was still
+# undetected, which leaves two very different readings: the site is EXECUTED and
+# its value never reaches an observable, or the site is NEVER EXECUTED.
+#
+# The mutations here do not change a value at all.  They branch to the trap
+# block, so an executed site kills the process and the sweep records SIGNAL.
+# AGREE therefore means the instruction never ran, which no value perturbation
+# can establish.  This is the instrument-rather-than-grep rule applied to
+# "does anything ever do X".
+# ---------------------------------------------------------------------------
+MUTATIONS_REACHABILITY = {
+    "WordToByte": (
+        "            Op::WordToByte => {\n                let v = st.pop();",
+        "            Op::WordToByte => {\n                st.b.build_unconditional_branch(trap_bb).unwrap();\n                st.b.position_at_end(ctx.append_basic_block(func, \"wtbreach\"));\n                let v = st.pop();",
+    ),
+}
+
+# **THE FINDING ROUND THREE ACTUALLY PRODUCED, and it is not a value defect.**
+#
+# `Trap` was undetected across all 28 modules that emit it, under a maximally
+# destructive mutation: branch-to-trap replaced by return-zero, so a program that
+# must abort instead returns a value.  Nothing noticed.
+#
+# It is a GENUINE hole and no seed can close it, because the harness excludes the
+# evidence by construction.  `corpus_differential` runs the virtual machine FIRST
+# precisely so that a trapping module is turned into a named exemption instead of
+# a SIGTRAP that kills the whole run -- the comment at that site says so.  So a
+# module that REACHES a trap is exempted and never compared, and a module that is
+# compared is one whose virtual-machine run did not fault, which means it reached
+# no trap either.  Every compared run has an unexecuted trap block.
+#
+# Closing it needs a different OBSERVABLE, not better inputs: for a module whose
+# virtual-machine run faults, run the native side in a subprocess and require it
+# to die with SIGTRAP.  That is agreement on the FACT of the fault rather than on
+# a returned value, and it is the named next increment.
+TRAP_IS_UNDETECTABLE_BY_CONSTRUCTION = True
+
+# Opcodes with sites that were NOT perturbed in rounds one and two, each with the
+# reason.  Recorded so the sweep's coverage is explicit rather than implied by
+# omission.
+#
+# **This dict is a HISTORICAL record, not a current one.** Round three perturbed
+# seventeen of these, so an entry here does not mean the opcode is still
+# unperturbed.  The summary computes the real residue by subtracting every
+# mutation table, which is why it cannot go stale the way the printed count did.
 NOT_PERTURBED = {
     "EndIf": "lowers to nothing; a structural marker with no emitted code",
     "Loop": "lowers to nothing; its operand is consumed by Break/EndLoop",
@@ -342,6 +425,49 @@ def run(cmd, **kw):
     return subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, **kw)
 
 
+def calibrate(modules):
+    """Unmutated wall time per module, so the HANG budget is MEASURED.
+
+    **This exists because a fixed budget silently turned into a false
+    positive.**  `PER_MODULE_TIMEOUT` was 20 seconds against a corpus whose
+    slowest module took about 4.  Raising the differential's seed count to 24
+    took `wire.kel` to **30.7 seconds unmutated**, so it exceeded the budget on
+    every mutation and was scored as detecting all of them -- including
+    `PushImmediate`, whose mutation edits an arm with zero sites and therefore
+    cannot be detected at all.  Four opcodes looked closed that were not.
+
+    A timeout is only evidence of non-termination while a healthy run fits
+    comfortably inside it, and "comfortably" is a fact about the corpus that
+    changes whenever the harness does.  Measuring it removes the standing
+    obligation to remember to re-tune the constant.
+
+    The floor keeps a fast module from getting an unusably tight budget; the
+    multiplier is what still catches a real infinite loop, which does not
+    terminate at any budget.
+    """
+    budget = {}
+    for mod in sorted(modules):
+        env = dict(os.environ, KEL_ONLY_MODULE=mod)
+        t0 = time.monotonic()
+        try:
+            run(
+                ["cargo", "test", "--test", "corpus_differential"],
+                env=env,
+                timeout=CALIBRATION_CEILING,
+            )
+            base = time.monotonic() - t0
+        except subprocess.TimeoutExpired:
+            # Already pathological unmutated. Give it the ceiling and say so,
+            # rather than silently handing it a budget derived from a run that
+            # never finished.
+            base = CALIBRATION_CEILING
+            print(f"  !! {mod} did not finish unmutated inside {CALIBRATION_CEILING}s")
+        budget[mod] = max(PER_MODULE_TIMEOUT, base * HANG_MULTIPLIER)
+    slow = max(budget.items(), key=lambda kv: kv[1])
+    print(f"  calibrated {len(budget)} modules; slowest budget {slow[0]} {slow[1]:.0f}s\n")
+    return budget
+
+
 def opcode_module_map():
     r = run(
         [
@@ -375,11 +501,25 @@ def main():
         wanted.remove("--round3")
         table = MUTATIONS_ROUND3
         print("ROUND THREE: the memory and composite surface\n")
+    if "--round3-strong" in wanted:
+        wanted.remove("--round3-strong")
+        table = MUTATIONS_ROUND3_STRONG
+        print("ROUND THREE, discriminating (result replaced by a constant)\n")
+    if "--reachability" in wanted:
+        wanted.remove("--reachability")
+        table = MUTATIONS_REACHABILITY
+        print("REACHABILITY: an executed site traps, so AGREE means never run\n")
     backup = tempfile.NamedTemporaryFile(delete=False, suffix=".rs").name
     shutil.copy(LIB, backup)
     original = open(LIB).read()
 
     mapping = opcode_module_map()
+    # Calibrate over exactly the modules this invocation will drive, so a
+    # single-opcode run does not pay for the whole corpus.
+    driven = {m for op, mods in mapping.items()
+              if (not wanted or op in wanted) and op in table
+              for m in mods}
+    budgets = calibrate(driven)
     results = {}
     try:
         for opcode, (old, new) in sorted(table.items()):
@@ -418,7 +558,7 @@ def main():
                     r = run(
                         ["cargo", "test", "--test", "corpus_differential", "--", "--nocapture"],
                         env=env,
-                        timeout=PER_MODULE_TIMEOUT,
+                        timeout=budgets.get(mod, PER_MODULE_TIMEOUT),
                     )
                 except subprocess.TimeoutExpired:
                     per.append((mod, "HANG"))
@@ -442,10 +582,23 @@ def main():
                     per.append((mod, "NOLOWER"))
             detected = [m for m, o in per if o in ("DISAGREE", "SIGNAL", "HANG")]
             nolower = [m for m, o in per if o == "NOLOWER"]
+            # **SAY HOW IT WAS DETECTED, not merely that it was.** The three
+            # outcomes are not interchangeable evidence. A `HANG` is a TIMEOUT,
+            # and a timeout is only evidence of a defect while the unmutated run
+            # comfortably fits the budget -- raising the seed count moved several
+            # modules toward it, and an inflated `DETECTED` reads exactly like a
+            # closed hole. `PushImmediate` is the calibration case: its mutation
+            # edits an arm with ZERO sites, so it CANNOT be detected, and any
+            # verdict other than undetected is an instrument artefact.
+            kinds = ", ".join(
+                f"{k} {sum(1 for _, o in per if o == k)}"
+                for k in ("DISAGREE", "SIGNAL", "HANG")
+                if any(o == k for _, o in per)
+            )
             if len(nolower) == len(per):
                 results[opcode] = ("NOT SEMANTIC (lowering aborted)", per)
             elif detected:
-                results[opcode] = (f"DETECTED by {len(detected)}/{len(per)}", per)
+                results[opcode] = (f"DETECTED by {len(detected)}/{len(per)} [{kinds}]", per)
             else:
                 results[opcode] = (f"**UNDETECTED** across {len(per)}", per)
             open(LIB, "w").write(original)
@@ -462,7 +615,20 @@ def main():
         if verdict.startswith("**UNDETECTED**"):
             undetected.append(opcode)
     print("\n  UNDETECTED OPCODES:", undetected or "none")
-    print(f"  not perturbed: {len(NOT_PERTURBED)}, each with a stated reason")
+    # **COMPUTED, not a stored count.** This line read
+    # `len(NOT_PERTURBED)` and printed "not perturbed: 25" underneath a round
+    # three that had just perturbed seventeen of those twenty-five. A tally
+    # maintained by hand beside a table that grows is a claim that goes stale
+    # silently, which is the failure this whole census exists to catch.
+    perturbed = (
+        set(MUTATIONS)
+        | set(MUTATIONS_STRONG)
+        | set(MUTATIONS_ROUND3)
+        | set(MUTATIONS_ROUND3_STRONG)
+        | set(MUTATIONS_REACHABILITY)
+    )
+    residue = sorted(set(NOT_PERTURBED) - perturbed)
+    print(f"  never perturbed in ANY round: {len(residue)} {residue}")
     print("================")
 
 

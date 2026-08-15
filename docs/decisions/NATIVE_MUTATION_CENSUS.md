@@ -164,6 +164,13 @@ available — so a survivor is a real hole.
 
 ### The four real holes, and they have ONE cause
 
+> **SUPERSEDED 2026-08-15 — all four are CLOSED.** See PART C. The diagnosis
+> below is correct and the proposed repair worked, but it was not sufficient on
+> its own: seeding the shared segment closed `BitAnd` and `Shr`, and closing
+> `BitOr` and `Shl` additionally needed the harness to drive a range of COMMAND
+> SELECTOR values. Retained because the diagnosis is what made the repair
+> findable.
+
 | opcode | sites | owning modules |
 |---|---|---|
 | `BitAnd` | 54 | `wire.kel` |
@@ -256,3 +263,161 @@ A green optimised differential proves nothing if the pipeline never ran.
 `09_big_numbers.kel` goes from **408 instructions to 61**, a 6.7x reduction. The
 increment this belongs to opened with nine modules agreeing while doing nothing,
 and an unguarded "it passes under O2" would be the same mistake in a new place.
+
+---
+
+## PART C, 2026-08-15: round three, a false-positive instrument, and one hole left
+
+### Read this first: an intermediate result in this section's history was WRONG
+
+Round three ran, then the harness was widened, and the widened harness reported
+**every opcode detected**. That was false. The sequence is recorded rather than
+tidied away, because the error was silent, it favoured the flattering answer, and
+the thing that caught it was a deliberately planted known answer.
+
+### Round three: the memory and composite surface
+
+Seventeen mutations, pre-registered in `f8f7dcc4` and committed **before** being
+run, covering opcodes round one had skipped. Most had been skipped because
+several opcodes share an emitter arm and one swap could not be attributed; round
+three guards each mutation on the opcode, so `GetData` and `SetData` attribute
+separately through `is_read`, and `Div` and `Mod` through `matches!`.
+
+Every variant was confirmed reachable first. `GetField(FlatNested)` has **zero**
+sites and is deliberately absent, because mutating it would have repeated the
+`PushImmediate` error, where the largest apparent hole was a mutation of an
+operand the corpus never emits.
+
+**Result under the corrected instrument, 16 of 17 detected:**
+
+`NewComposite` 18/21, `Div` 11/12, `SetData` 8/23, `GetData` 6/22, `Yield` 4/20,
+`Call` 2/31, `GetIndex` 2/2, `GetTupleField` 2/5, `GetDataIndexed` 2/13,
+`SetDataIndexed` 2/12, `CallVerifiedNative` 1/15, `Mod` 1/12, `GetField` 1/1,
+`GetEnumField` 1/1, `IsEnum` 1/3, `WordToByte` 1/1.
+
+**Undetected: `Trap`, across all 28 modules that emit it.**
+
+### THE INSTRUMENT DEFECT: a fixed timeout manufactured four closures
+
+Round two's four holes were all owned by `wire.kel`, and the recorded repair was
+to drive that module with real input. Two changes did that: a seeded shared
+segment, and widening the differential from 4 argument vectors to 24 so that a
+module dispatching on a command selector reaches more than four of its commands.
+
+**The widened run then reported every opcode detected, and that was an
+artefact.** `PER_MODULE_TIMEOUT` was a flat 20 seconds, chosen when the slowest
+module took about 4. At 24 seeds `wire.kel` takes **30.7 seconds unmutated**, so
+it exceeded the budget under *every* mutation, and the driver counts a timeout as
+detection. Every `DETECTED by 1/1` was `wire.kel` failing to finish.
+
+**`PushImmediate` is what exposed it.** Round two had established that its
+mutation edits an emitter arm with **zero** sites, so it cannot be detected by
+anything. When it reported DETECTED, the contradiction with a known answer was
+the signal — exactly as the `CmpLt` misclassification was caught earlier in this
+same document. **Without a case whose answer is fixed in advance, four false
+closures would have been published as findings.**
+
+The repair is that the budget is **measured, not fixed**. `calibrate()` times
+each module unmutated and allows `HANG_MULTIPLIER` times that, with the old
+constant kept only as a floor; `wire.kel` gets 168 seconds. A real infinite loop
+does not terminate at any budget, so nothing is lost. The verdict line now also
+prints **how** each detection was reached — `[DISAGREE 1]` against `[HANG 1]` —
+because the three outcomes are not interchangeable evidence and the summary
+previously hid the difference.
+
+A flat constant that must be re-tuned whenever the harness changes is a standing
+maintenance obligation, and this document already records the same species of
+error twice.
+
+**HOW FAR BACK THE DEFECT REACHES, and the answer is bounded.** The failure is
+one-directional: an under-sized budget can turn a healthy run into a false
+DETECTED, but it can never turn a genuine detection into an UNDETECTED. So
+**every undetected finding in this document survives** — rounds one and two, and
+`Trap` — and only positive results measured under the flat budget are suspect.
+Those are re-measured above. The earlier rounds are additionally unaffected in
+fact, since they predate the seed widening that made any module approach 20
+seconds.
+
+### The round-two holes ARE closed, on corrected evidence
+
+| | `BitAnd` 54 | `Shr` 20 | `BitOr` 9 | `Shl` 48 | `CmpNe` 26 |
+|---|---|---|---|---|---|
+| round two | -- | -- | -- | -- | -- |
+| seeded shared segment, 4 seeds | **YES** | **YES** | -- | -- | -- |
+| 24 seeds, calibrated budget | YES | YES | **YES** | **YES** | **YES** |
+
+Every one is a genuine `DISAGREE`, except `CmpNe` which is a `SIGNAL`. None rests
+on a timeout.
+
+**Seeding alone was not sufficient, and the reason generalises.** A payload in
+the shared segment reaches only the EMIT direction, which extracts bytes with a
+mask and a right shift — hence `BitAnd` and `Shr`. `BitOr` and `Shl` live in the
+PARSE direction, which reassembles a multi-byte integer, and no argument SHAPE
+reaches it: only a selector VALUE does. `wire.kel` branches twenty-odd ways on
+its first argument, so four argument shapes reached four of its commands and left
+the rest unexecuted while the harness reported the module as running.
+
+Seeds 4 and up therefore sweep a consecutive small constant. This is
+**deliberately generic**: the values are not chosen by reading `wire.kel`'s
+dispatch table, because picking `cmd == 9` for being where the undetected sites
+are would make the exercise a demonstration rather than a measurement.
+
+`WordToByte` closed the same way. At 4 seeds its single site was measured
+**unreachable** — a probe that made the site branch to the trap block still went
+undetected, which no value perturbation could have shown. At 24 seeds it is
+reached and detected. The 4-seed reading was correct about the harness at the
+time and wrong as a statement about the opcode.
+
+**`PushImmediate` remains undetected and is not a hole**, for the reason round
+two established.
+
+### `Trap`: the one real hole, and it is undetectable BY CONSTRUCTION
+
+Undetected across all **28** modules that emit it, under 24 seeds and a
+calibrated budget, with a maximally destructive mutation: branch-to-trap replaced
+by return-zero, so a program that must abort instead returns a value. Nothing
+noticed.
+
+The cause is in the harness and it is deliberate. `corpus_differential` runs the
+virtual machine **first**, precisely so a trapping module becomes a named
+exemption rather than a `SIGTRAP` that kills the entire run. The consequence had
+never been written down:
+
+- a module that **reaches** a trap is exempted, and never compared;
+- a module that **is** compared is one whose virtual-machine run did not fault,
+  so it reached no trap either.
+
+**Every compared run has an unexecuted trap block.** No amount of input diversity
+changes this, because the exemption rule removes exactly the evidence needed.
+This is a different kind of hole from every other one in this document: the
+others were inputs the harness never supplied, this one is an observation the
+harness is structured to discard.
+
+Closing it needs a different OBSERVABLE, not better inputs: for a module whose
+virtual-machine run faults, run the native side in a subprocess and require it to
+die with `SIGTRAP` — agreement on the FACT of the fault rather than on a returned
+value. **This is the named next increment.** It matters more than one row
+suggests, because the trap path is the safety path of a language whose
+proposition is that unbounded programs are rejected rather than silently wrong.
+
+### Cost, and what this still does not establish
+
+24 seeds instead of 4 takes `corpus_differential` from **35s to 58s**, sublinear
+because a `Stream` entry and a zero-parameter entry each keep a single seed. The
+sweep additionally pays one unmutated calibration run per module it will drive.
+
+- **The `Trap` hole is open**, and it is the largest this census has found: 28
+  modules, the safety path, undetectable by construction.
+- **Eight opcodes have never been perturbed in any round** — `Break`, `Else`,
+  `EndIf`, `EndLoop`, `Loop`, `PopN`, `Reset`, `Stream` — each with a stated
+  reason. The summary now computes that residue by subtracting every mutation
+  table, because the previous hand-maintained count printed "25" underneath a
+  round that had just perturbed seventeen of them.
+- **Static sites, not dynamic execution.** The map counts where an opcode is
+  emitted, not where it runs; a detected opcode may be observed by only a
+  fraction of its sites.
+- **One perturbation per opcode per round**, so an opcode may have a boundary a
+  single perturbation misses.
+- **A calibrated budget is not a proof of termination.** It rules out the false
+  positive measured here; it does not establish that every remaining `HANG` is
+  genuine non-termination rather than a slower machine.

@@ -257,7 +257,49 @@ fn arena_for(m: &Module) -> keleusma_arena::Arena {
 /// Seed 1 makes every argument equal, which is what drives a comparison to its
 /// boundary. Seed 2 is all zeros, the identity case. Seed 3 descends, so an
 /// ordering assumption that holds under seed 0 fails here.
-const SEEDS: usize = 4;
+///
+/// **Seeds 4 and up sweep a small constant, and that is about COMMAND
+/// SELECTORS rather than about arithmetic.** The four shapes above reach four
+/// distinct values of a first parameter, which is ample for a module that
+/// computes and useless for one that DISPATCHES. `wire.kel` branches twenty-odd
+/// ways on its first argument, so four shapes reached four of its commands and
+/// left the rest of the module unexecuted while the harness reported it as
+/// running.
+///
+/// **Every step below is a measured mutation-sweep result, not a rationale.**
+/// Round two named four real holes, all owned by `wire.kel`, and the recorded
+/// repair was to drive that module with real input. Seeding the shared segment
+/// was necessary and NOT sufficient:
+///
+/// | | `BitAnd` 54 | `Shr` 20 | `BitOr` 9 | `Shl` 48 | `CmpNe` 26 |
+/// |---|---|---|---|---|---|
+/// | round two | -- | -- | -- | -- | -- |
+/// | seeded segment, 4 seeds | **YES** | **YES** | -- | -- | -- |
+/// | 24 seeds | YES | YES | **YES** | **YES** | **YES** |
+///
+/// Seeding alone reached only the EMIT direction, which extracts bytes with a
+/// mask and a right shift. `BitOr` and `Shl` live in the PARSE direction, which
+/// reassembles a multi-byte integer, and no argument SHAPE reaches it -- only a
+/// selector VALUE does. **`Shl` is why the constant runs to 19 rather than to a
+/// single digit**: an intermediate setting reaching selectors 0..7 left it
+/// undetected.
+///
+/// The intermediate row is deliberately not tabulated. It was measured before
+/// `mutation_sweep.py` calibrated its timeout, and an under-sized timeout can
+/// manufacture a detection but never suppress one -- so its negative results
+/// stand and its positive ones are not evidence. Only the two rows above were
+/// taken under the corrected instrument.
+///
+/// **Generic rather than tuned to `wire.kel`.** The values are not chosen by
+/// reading its dispatch table -- picking `cmd == 9` because that is where the
+/// undetected sites are would make this a demonstration rather than a
+/// measurement, the same error the pre-registered mutation set exists to avoid.
+/// Consecutive small integers reach a dense selector in any module that has one.
+///
+/// **Cost, since this is paid on every run including CI**: 35s at 4 seeds, 58s
+/// at 24. Sublinear because a `Stream` entry and a zero-parameter entry both
+/// keep a single seed, so the sweep only widens the modules it can widen.
+const SEEDS: usize = 24;
 
 fn args_for_seed(n: usize, seed: usize) -> Vec<i64> {
     (0..n)
@@ -265,7 +307,8 @@ fn args_for_seed(n: usize, seed: usize) -> Vec<i64> {
             0 => (i as i64 + 1) * 3 + 1,
             1 => 5,
             2 => 0,
-            _ => (n as i64 - i as i64) * 3 + 1,
+            3 => (n as i64 - i as i64) * 3 + 1,
+            k => (k - 4) as i64,
         })
         .collect()
 }
@@ -321,7 +364,7 @@ fn shared_offset(m: &Module, suffix: &str) -> Option<u32> {
 /// 0 ticks. `cmd == 0` is a bitwise CRC-32 over `bytes[0..len]`, which is exactly
 /// where those sites are, and seed 2 already drives `cmd == 0`. The only thing
 /// missing was something to checksum.
-const PAYLOAD: &[u8] = b"keleusma wire payload: 0123456789 ABCDEF \x01\x02\x7f";
+const PAYLOAD: &[u8] = b"keleusma wire payload: 0123456789 ABCDEF \x01\x02\x7f\x80\xfe\xff";
 
 fn seed_len_bytes(m: &Module, buf: &mut [u8]) -> bool {
     let (Some(len_off), Some(bytes_off)) = (shared_offset(m, "len"), shared_offset(m, "bytes"))

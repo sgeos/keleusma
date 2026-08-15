@@ -4,6 +4,13 @@
 One prediction was wrong and the miss is recorded below.
 **Date**: 2026-08-15.
 
+> **Later the same day: 38 executed, 5 vacuous, 20 exempt.** The extra module is
+> `lexer.kel`, which left `KNOWN_VACUOUS` rather than the exemption list, so the
+> figures in this document are unchanged where it speaks about EXEMPTIONS. The
+> two remaining exemptions analysed below — `rogue_dungen.kel` and `led.kel` —
+> are unaffected, and what the bytecode records for each is now measured rather
+> than assumed: see `what_return_contract_does_the_bytecode_record`.
+
 `corpus_differential` exempts 23 sources with a stated reason each. The reasons
 were believed legitimate. Two groups are not: **their reasons describe the
 HARNESS and read as properties of the module.**
