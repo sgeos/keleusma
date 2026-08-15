@@ -670,9 +670,7 @@ fn variant_distribution_of_the_skipped_opcodes() {
                     Op::GetData(_)
                     | Op::SetData(_)
                     | Op::GetDataIndexed(_, _)
-                    | Op::SetDataIndexed(_, _) => {
-                        d.split('(').next().unwrap_or(&d).to_string()
-                    }
+                    | Op::SetDataIndexed(_, _) => d.split('(').next().unwrap_or(&d).to_string(),
                     Op::PopN(n) => {
                         *popn.entry(*n).or_insert(0) += 1;
                         continue;
@@ -704,4 +702,56 @@ fn variant_distribution_of_the_skipped_opcodes() {
     println!("  A mutation to a variant with ZERO sites is vacuous, whatever the");
     println!("  opcode's headline count says.");
     assert!(!var.is_empty(), "no variants counted; the check is vacuous");
+}
+
+/// **What contract can the harness DERIVE for a native's return value?**
+///
+/// Two exemptions are artefacts of a contractless stub: `rogue_dungen` faults
+/// because the stub ignores the range implied by `rng_range(lo, hi)`, and `led`
+/// faults because it matches a `Status` enum and the stub returns an integer
+/// matching no variant.
+///
+/// The rule is derive, do not guess. This prints what the bytecode actually
+/// records, so the line between the two is drawn from evidence rather than from
+/// what would be convenient.
+#[test]
+fn what_return_contract_does_the_bytecode_record() {
+    for path in [
+        "../examples/rtos/scripts/led.kel",
+        "../examples/scripts/rogue/rogue_dungen.kel",
+    ] {
+        let Ok(raw) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        // The rtos scripts need the prelude, as the host prepends it.
+        let src = if path.contains("/rtos/") {
+            let p =
+                std::fs::read_to_string("../examples/rtos/scripts/prelude.kel").expect("prelude");
+            format!("{p}\n{raw}")
+        } else {
+            raw
+        };
+        let Some(m) = tokenize(&src)
+            .ok()
+            .and_then(|t| parse(&t).ok())
+            .and_then(|a| compile(&a).ok())
+        else {
+            println!("\n{path}: reference compiler rejects it");
+            continue;
+        };
+        println!("\n================ {path}");
+        println!("  natives and their RECORDED return shapes:");
+        for (i, name) in m.native_names.iter().enumerate() {
+            if name.is_empty() {
+                continue;
+            }
+            let shape = m.native_return_shapes.get(i);
+            println!("    {i:>2} {name:<28} {shape:?}");
+        }
+        println!("  enum layouts recorded: {}", m.enum_layouts.len());
+    }
+    println!("\n================");
+    println!("  A `Scalar`/`Flat` shape is derivable and can be stubbed faithfully.");
+    println!("  `Top` or absent records NOTHING, and a numeric RANGE is never in the");
+    println!("  bytecode at all -- `use host::f(Word, Word) -> Word` carries types only.");
 }

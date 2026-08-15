@@ -60,6 +60,34 @@ fn take_log() -> Vec<String> {
     LOG.with(|l| core::mem::take(&mut *l.borrow_mut()))
 }
 
+/// **Why two exemptions are NOT closed by a contract, and what it would take.**
+///
+/// `rogue_dungen.kel` and `led.kel` both fault because this stub honours no
+/// contract. The bytecode was checked rather than assumed
+/// (`what_return_contract_does_the_bytecode_record`), and the two cases differ:
+///
+/// | native | recorded return shape | derivable? |
+/// |---|---|---|
+/// | `host::rng_range` | `Scalar { kind: 3 }` | the TYPE, yes. the RANGE, **no** |
+/// | `host::gpio_set` | `Flat { kind: 3, size: 16 }` | the SHAPE, yes. the value needs a body |
+///
+/// **`rogue_dungen` cannot be closed at all.** `use host::rng_range(Word, Word)
+/// -> Word` records types and nothing else; `[lo, hi)` exists only in the host's
+/// head. Inferring a range from the argument positions would work here and is
+/// exactly the guess that must not be made.
+///
+/// **`led` is closeable, and the work is specific**: `gpio_set` returns a
+/// sixteen-byte enum body, so a faithful stub must return a body ADDRESS on both
+/// sides — an arena-resident `Value::Enum(EnumBody::Flat(_))` on the virtual
+/// machine side, which needs `register_native_with_ctx_closure` rather than the
+/// plain closure used here, and a matching sixteen-byte buffer behind the native
+/// stub. Picking a variant deterministically is no more of an invention than
+/// `stub_value` already is for a `Word`, so the obstacle is the composite return
+/// path and not the choice of value.
+///
+/// Both stay exempt until that lands. A stub that makes a module pass by
+/// accident is worse than an exemption.
+///
 /// The value a native returns, on BOTH sides.
 ///
 /// Deterministic, and asymmetric in the argument positions so a swapped or
@@ -259,6 +287,56 @@ fn params_are_scalar(m: &Module, entry: usize) -> bool {
     }
 }
 
+/// Byte offset of the shared slot named `suffix`, or of its element zero.
+///
+/// An array slot expands to one slot per element (`wire.bytes[0]`), so a plain
+/// match on `bytes` finds nothing. `shared_layout` is parallel to the SHARED
+/// prefix of `slots`, so the index is counted among shared slots.
+fn shared_offset(m: &Module, suffix: &str) -> Option<u32> {
+    let dl = m.data_layout.as_ref()?;
+    let scalar = format!(".{suffix}");
+    let element0 = format!(".{suffix}[0]");
+    let mut shared_ix = 0usize;
+    for sl in &dl.slots {
+        if sl.visibility != SlotVisibility::Shared {
+            continue;
+        }
+        if sl.name.ends_with(&scalar) || sl.name.ends_with(&element0) {
+            return dl.shared_layout.get(shared_ix).map(|l| l.offset);
+        }
+        shared_ix += 1;
+    }
+    None
+}
+
+/// A payload for any module declaring the documented `len` + `bytes`
+/// convention, written identically into both sides' buffers.
+///
+/// **This is a convention, not a special case.** `wire.kel` and `lexer.kel` each
+/// document the same host contract in their own headers: `len` at slot 0,
+/// `bytes[i]` at slot `1 + i`. Keying on that is why one rule serves both.
+///
+/// It exists because `wire.kel` owned every undetected opcode in the mutation
+/// sweep -- 131 sites of `BitAnd`, `BitOr`, `Shl` and `Shr` -- and finished after
+/// 0 ticks. `cmd == 0` is a bitwise CRC-32 over `bytes[0..len]`, which is exactly
+/// where those sites are, and seed 2 already drives `cmd == 0`. The only thing
+/// missing was something to checksum.
+const PAYLOAD: &[u8] = b"keleusma wire payload: 0123456789 ABCDEF \x01\x02\x7f";
+
+fn seed_len_bytes(m: &Module, buf: &mut [u8]) -> bool {
+    let (Some(len_off), Some(bytes_off)) = (shared_offset(m, "len"), shared_offset(m, "bytes"))
+    else {
+        return false;
+    };
+    let (len_off, bytes_off) = (len_off as usize, bytes_off as usize);
+    if len_off + 8 > buf.len() || bytes_off + PAYLOAD.len() > buf.len() {
+        return false;
+    }
+    buf[len_off..len_off + 8].copy_from_slice(&(PAYLOAD.len() as u64).to_le_bytes());
+    buf[bytes_off..bytes_off + PAYLOAD.len()].copy_from_slice(PAYLOAD);
+    true
+}
+
 struct Run {
     results: Vec<i64>,
     log: Vec<String>,
@@ -312,6 +390,7 @@ fn run_vm(m: &Module, table: &[(String, usize)], seed: usize) -> Result<Run, Str
         args_for_seed(n, seed).into_iter().map(Value::Int).collect()
     };
     let mut shared = vec![0u8; shared_data_bytes_for(m)];
+    seed_len_bytes(m, &mut shared);
     let mut results = Vec::new();
 
     let first = match vm.call_with_shared(&mut shared, &vals) {
@@ -426,6 +505,13 @@ fn run_native(m: &Module, table: &[(String, usize)], seed: usize) -> Option<Run>
 
     const CANARY: u64 = 0xDEAD_BEEF_FEED_FACE;
     let mut shared = vec![0u8; n_shared + 8];
+    {
+        // Seeded into the SAME offsets as the VM side. The segment is plain
+        // bytes, so one helper serves both and there is no second encoding to
+        // drift.
+        let (body, _) = shared.split_at_mut(n_shared);
+        seed_len_bytes(m, body);
+    }
     shared[n_shared..].copy_from_slice(&CANARY.to_le_bytes());
     let mut privs = vec![0u64; n_priv + 1];
     privs[n_priv] = CANARY;
@@ -618,16 +704,19 @@ fn is_vacuous(run: &Run) -> bool {
 /// is why the headline moved from 40 to 34. Nothing regressed; the number was
 /// measuring the harness rather than the emitter.
 ///
-/// `lexer.kel` and `parse.kel` now have REAL coverage in `stage_differential.rs`,
-/// which seeds the segment identically on both sides. They stay listed here
-/// because this harness still drives them on nothing.
+/// `parse.kel` has REAL coverage in `stage_differential.rs`, which seeds the
+/// segment identically on both sides. It stays listed here because this harness
+/// cannot seed a token stream from the convention alone.
 ///
 /// The other four consume abstract-syntax-tree and descriptor blocks whose
 /// layouts belong to the `src/selfhost/mod.rs` driver, which this line may read
 /// but must not edit. Seeding those means reproducing four input formats, and a
 /// seed a stage silently rejects looks exactly like coverage.
 const KNOWN_VACUOUS: &[&str] = &[
-    "lexer.kel",
+    // `lexer.kel` LEFT this list on 2026-08-15, and the set-equality assertion
+    // is what noticed. It declares the documented `len` + `bytes` host
+    // convention, so `seed_len_bytes` now gives it a real payload and it does
+    // real work inside this harness rather than only in `stage_differential`.
     "reconstruct.kel",
     "verify_datalayout.kel",
     "verify_depth.kel",
