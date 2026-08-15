@@ -460,6 +460,8 @@ for i in 0..8 {
 
 The loop variable is immutable within each iteration. Ranges use `..` for exclusive upper bound. The compiler verifies that the iterable is a fixed-size array or a range expression with statically known or bounded endpoints.
 
+A `for` loop is a statement and takes **no** trailing semicolon. A semicolon after the closing brace is rejected with `unexpected token Semicolon in expression`, because the parser resumes at statement position and reads the semicolon as the start of an expression. This differs from the block-form `if`, `match`, and `loop` statements, which accept a trailing semicolon as well as omitting one. The asymmetry is stated here because the diagnostic names the semicolon and not the `for`, which has misdirected at least one defect report toward `break`. Both halves are pinned by `tests/block_form_statements.rs`.
+
 All host-provided iterable types are assumed finite by contract. The compiler checks that only iterable types are used with `for..in`. The host is responsible for not providing infinite iterators.
 
 ### Bounded Repetition with a Limit
