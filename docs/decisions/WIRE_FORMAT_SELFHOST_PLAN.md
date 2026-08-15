@@ -1105,6 +1105,55 @@ it to the table without a driver that calls it would record a capability the sys
 **The item is therefore blocked behind "wire the driver to a module", not beside it.** Checked so
 that a later session does not spend an increment rediscovering it as an easy win.
 
+#### THE JOIN COVERS TEN STAGES, AND THE DEDUP BRANCH COVERS NONE (2026-08-15)
+
+All ten stage sources now emit `NAMES` and `STRING_POOL` byte-identically through `mi_join`, pinned
+by `the_join_holds_across_every_stage`. They passed on the first run, so the increment's substance is
+the measurement of what that is worth.
+
+**NINE OF THE TEN REACH NO NEW MAXIMUM.** `parse` is the largest in every dimension measured --
+chunks (94), enum names (158), slot runs (375), constant names, constant nodes (815), constant depth
+-- and nothing else exceeds it anywhere. The widening is a REGRESSION NET over nine real shapes, not
+additional scale. The dominance is asserted rather than described, so a stage growing past `parse`
+reports itself instead of quietly making the test worth more. What it genuinely adds is nine
+ZERO-ENUM modules: `parse` is the only stage with enum layouts, so that path had no real module
+behind it in the join.
+
+**THE DEDUP BRANCH HAS NO REAL-MODULE COVERAGE, AND THAT BEARS ON THE CAP'S JUSTIFICATION.**
+Making `nm_find` report "not found" unconditionally leaves all ten stages byte-identical. Every
+dedup-mode name in every stage is distinct, so the matching branch has never been taken by real
+input.
+
+That is not a curiosity. `nm_find` is the quadratic scan whose cost is the stated reason the name
+count is capped at all -- the raise from 256 to 1024 multiplies its static bound by sixteen -- and
+the branch that cost pays for is exercised only by synthetic cases. **The cap is priced on a path no
+stage reaches.**
+
+**Reading the counts would not have established it.** Input and output name counts being equal is
+consistent with dedup firing and finding nothing to merge; only disabling the branch and observing no
+change distinguishes "never collides" from "collides and is handled". The counts suggested it, the
+mutation established it, and the encoded proxy is the asserted equality between the blob's input name
+count and the `NAMES` record count.
+
+**TWO FURTHER GAPS PINNED AS ASSERTIONS THAT A LIMITATION STILL HOLDS**: no stage contributes a
+constant-interned name, and no stage nests a constant past depth one. The constant contributor's name
+and child-position paths are exercised by `FX_CASES` and by nothing real. Both are written so that
+firing means coverage was GAINED, and the response is to record that rather than restore the zero.
+
+#### A GUARD PINNED TO A LITERAL, CAUGHT BY CI AND NOT BY THE BENCH (2026-08-15)
+
+`the_driver_refuses_more_names_than_one_call_can_intern` spelled `257` against a cap of 256. The
+ceiling raise took the cap to 1024, so the case silently stopped being over the bound: the driver
+accepted where the test demanded a refusal. **It was the only thing in the suite that caught the
+raise's loose end.**
+
+It reached CI rather than the bench because it sits behind the `self-host` feature, and neither
+`cargo test --workspace` nor `cargo test --features compile` enables it. Both were run and both were
+green. The gate is `cargo nextest run --profile ci` across a five-entry feature matrix
+(`--workspace`, `self-host`, `signatures`, `--no-default-features`, and the `keleusma-wire` pair),
+and a default-feature run is an APPROXIMATION of it -- the thing the workflow already says not to
+substitute. Every cap-pinned test now derives from a named `NAME_CAP` rather than a literal.
+
 #### THE CEILING IS RAISED, AND FOUR OF ITS FIVE PREMISES WERE WRONG (2026-08-15)
 
 **Done.** `parse.kel` -- 627 names, a 33,395-byte module blob -- now emits `NAMES` and
