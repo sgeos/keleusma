@@ -196,6 +196,23 @@ pub enum OverflowPolicy {
 pub struct LowerOptions {
     /// How an unhandled checked arithmetic operation lowers.
     pub overflow: OverflowPolicy,
+    /// Admit a stream whose suspension is DELEGATED to a tail-position callee.
+    ///
+    /// **Off by default, and that default is the decision, not an oversight.**
+    /// The transform is verified by execution on a synthetic module of the
+    /// qualifying shape (`delegated_suspension.rs`). The one module in the
+    /// shipped corpus that qualifies is `codegen.kel`, and it **cannot be
+    /// execution-differentiated by this subproject**: its input is an
+    /// abstract-syntax-tree block whose 78 slot constants and two seeding
+    /// helpers are private to `src/selfhost/mod.rs`, a file this line may read
+    /// but must not edit. Admitting it by default would rest on `lower_module`
+    /// returning `Ok`, which is a fact about the compiler and not about the
+    /// program.
+    ///
+    /// Turning this on is therefore an explicit statement that unexecuted
+    /// lowering is acceptable for the module in hand. See
+    /// `docs/decisions/NATIVE_DELEGATED_SUSPENSION.md`.
+    pub delegated_suspension: bool,
 }
 
 /// Error cases the lowering refuses rather than guesses at.
@@ -844,6 +861,7 @@ pub fn lower_chunk<'ctx>(
         BodyCfg {
             opts,
             degenerate_yield: None,
+            delegated_call: None,
             natives: &[],
             native_shapes: &[],
             // `lower_chunk` sees no module, so it resolves no call and needs no
@@ -998,12 +1016,41 @@ fn lower_module_with<'ctx>(
         )));
     }
 
+    // A delegated suspension affects exactly TWO chunks: the entry, whose tail
+    // call becomes the return, and the callee, whose yields become returns.
+    let delegated = if opts.delegated_suspension {
+        delegated_suspension_plan(program)
+    } else {
+        None
+    };
+
     for (i, (chunk, func)) in program.chunks.iter().zip(declared.iter()).enumerate() {
-        let tail = degenerate_stream_yield(chunk, program);
+        let mut tail = degenerate_stream_yield(chunk, program);
+        let mut delegated_call = None;
+        if let Some((entry, callee, call_ix)) = delegated {
+            if i == entry {
+                // An EMPTY yield list, deliberately: it makes `Stream` and
+                // `Reset` lower to nothing, exactly as in a degenerate stream,
+                // while marking no `Yield` for return -- the entry has none.
+                tail = Some(Vec::new());
+                delegated_call = Some(call_ix);
+            } else if i == callee {
+                tail = Some(
+                    chunk
+                        .ops
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, o)| matches!(o, Op::Yield))
+                        .map(|(ix, _)| ix)
+                        .collect(),
+                );
+            }
+        }
         let call_regions = region::plan_call_site_regions(program, i);
         let cfg = BodyCfg {
             opts,
             degenerate_yield: tail.as_deref(),
+            delegated_call,
             natives: &program.native_names,
             native_shapes: &program.native_return_shapes,
             call_regions: &call_regions,
@@ -1124,6 +1171,10 @@ struct BodyCfg<'a> {
     /// the bytecode module; `lower_chunk` passes `None` for the same reason it
     /// refuses `Op::Call`.
     degenerate_yield: Option<&'a [usize]>,
+    /// Op index of a tail-position `Call` whose result is RETURNED rather than
+    /// pushed, because the callee suspends on the caller's behalf. See
+    /// [`delegated_suspension_plan`].
+    delegated_call: Option<usize>,
     /// The module's declared native names, indexed by the operand of
     /// `CallVerifiedNative`/`CallExternalNative`.
     ///
@@ -1234,6 +1285,108 @@ fn native_symbol_collisions(names: &[String]) -> Option<(String, Vec<String>)> {
 /// enable.
 ///
 /// Returns the indices of every `Op::Yield` that becomes a return.
+/// Can this module's suspension be delegated across ONE call edge?
+///
+/// Returns `(entry, callee, call_op_index)` when it can.
+///
+/// # Why this is not a widening of [`degenerate_stream_yield`]
+///
+/// That predicate asks whether a chunk suspends and returns in tail position.
+/// This one asks whether an entry hands its ENTIRE body to a callee that does.
+/// The two share a soundness argument but not a shape, and folding them together
+/// is what would turn a refusal into a silent miscompile.
+///
+/// # The soundness argument, in one line
+///
+/// On resume the virtual machine writes the input into slot 0 of the ENTRY frame
+/// and pushes it as the suspended frame's yield value. When every `Yield` in the
+/// callee is immediately followed by `Return`, that pushed value is returned
+/// straight out and discarded by the caller's `PopN(1)`, so it is DEAD. The only
+/// live path is the entry's slot 0, which the next native call supplies as its
+/// argument. Executed, not reasoned: see
+/// `probe_delegated_suspension.rs::the_resume_value_reaches_the_entrys_slot_zero_and_is_dead_in_the_callee`.
+///
+/// # Every clause refuses a case the transform cannot model
+fn delegated_suspension_plan(module: &Module) -> Option<(usize, usize, usize)> {
+    let entry = module.entry_point?;
+    let chunk = module.chunks.get(entry)?;
+    if chunk.block_type != BlockType::Stream {
+        return None;
+    }
+    // Clause 1: the entry is a prologue-free `Stream ... Call ; PopN(1) ; Reset`.
+    // An op before `Stream` runs once in the VM and on every native call.
+    let ops = &chunk.ops;
+    if !matches!(ops.first(), Some(Op::Stream)) || !matches!(ops.last(), Some(Op::Reset)) {
+        return None;
+    }
+    if ops.len() < 4 {
+        return None;
+    }
+    // The call must be in TAIL position: `Call ; PopN(1) ; Reset` and nothing else.
+    let call_ix = ops.len() - 3;
+    if !matches!(ops.get(ops.len() - 2), Some(Op::PopN(1))) {
+        return None;
+    }
+    let Some(Op::Call(target, _)) = ops.get(call_ix) else {
+        return None;
+    };
+    let callee_ix = *target as usize;
+    // The entry must contain no `Yield` of its own; one would be the ordinary
+    // degenerate case and the two transforms must not both fire.
+    if ops.iter().any(|o| matches!(o, Op::Yield)) {
+        return None;
+    }
+    // Nor any other call: a second callee would run after the delegated return.
+    if ops
+        .iter()
+        .enumerate()
+        .any(|(i, o)| i != call_ix && matches!(o, Op::Call(_, _)))
+    {
+        return None;
+    }
+
+    let callee = module.chunks.get(callee_ix)?;
+    // Clause 2: EVERY `Yield` in the callee is immediately followed by `Return`.
+    // One that is not makes the resumed value live in the callee, and the
+    // transform would lose it silently. This is where the general case is
+    // refused, and refusing it is the point.
+    let mut yields = 0usize;
+    for (i, op) in callee.ops.iter().enumerate() {
+        if matches!(op, Op::Yield) {
+            yields += 1;
+            if !matches!(callee.ops.get(i + 1), Some(Op::Return)) {
+                return None;
+            }
+        }
+    }
+    if yields == 0 {
+        return None;
+    }
+    // Clause 3: the callee calls only `Func` chunks, so suspension is exactly
+    // one frame deep. An unresolvable index refuses rather than skips.
+    for op in &callee.ops {
+        if let Op::Call(t, _) = op
+            && module.chunks.get(*t as usize).map(|c| c.block_type) != Some(BlockType::Func)
+        {
+            return None;
+        }
+    }
+    // Clause 5: no OTHER call site of the callee anywhere in the module. A
+    // second caller would reach a `Yield` lowered as a return and take it for an
+    // ordinary result.
+    for (ci, c) in module.chunks.iter().enumerate() {
+        for (oi, op) in c.ops.iter().enumerate() {
+            if let Op::Call(t, _) = op
+                && *t as usize == callee_ix
+                && !(ci == entry && oi == call_ix)
+            {
+                return None;
+            }
+        }
+    }
+    Some((entry, callee_ix, call_ix))
+}
+
 fn degenerate_stream_yield(chunk: &Chunk, module: &Module) -> Option<Vec<usize>> {
     if chunk.block_type != BlockType::Stream {
         return None;
@@ -1403,6 +1556,7 @@ fn lower_chunk_body<'ctx>(
     let BodyCfg {
         opts,
         degenerate_yield,
+        delegated_call,
         natives,
         native_shapes,
         call_regions,
@@ -2108,7 +2262,16 @@ fn lower_chunk_body<'ctx>(
                         unreachable!("every lowered chunk returns an i64, never void")
                     }
                 };
-                st.push(ret);
+                // A DELEGATED suspension. The callee returned at its `Yield`, so
+                // this value is the yielded one and the host must see it now.
+                // The `PopN(1)` and `Reset` that follow are the virtual
+                // machine's bookkeeping for a frame this side has already left,
+                // and the loop's `dead` tracking skips them.
+                if delegated_call == Some(i) {
+                    st.b.build_return(Some(&ret)).unwrap();
+                } else {
+                    st.push(ret);
+                }
             }
             // A call out to a host-registered native, as a direct call to an
             // external symbol.

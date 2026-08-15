@@ -1,6 +1,7 @@
 # Delegated suspension in the native lowering
 
-**Status**: design, measured. Not implemented.
+**Status**: IMPLEMENTED behind an off-by-default flag, verified by execution on a
+synthetic module. `codegen.kel` remains refused by default. See the closing section.
 **Subject**: `codegen.kel`, the last module the native backend refuses.
 **Date**: 2026-08-14.
 
@@ -177,3 +178,76 @@ cargo test --test probe_delegated_suspension -- --nocapture
 
 Four tests: the bytecode shape of `codegen.kel`, the entry's zero yields, the
 synthetic reproducer's structure, and the executed resume-value semantics.
+
+---
+
+## OUTCOME 2026-08-14: implemented, flagged off, `codegen.kel` still refused
+
+### The seam Part B needed does not exist, and that is why the flag is off
+
+The plan was to seed the five vacuous stages from the real driver, which would
+also have given `codegen.kel` a real input and dissolved the gate above.
+**It cannot be done from this subproject**, and the reason is specific rather
+than a matter of taste:
+
+- the per-stage seeding is written **inline** in each `*_via_kel` function, not
+  factored into anything that returns the buffer;
+- the **78** slot constants (`SV_*`, `DV_*`, `TV_*`, `DL_*`, `BR_*`) are private;
+- the two helpers a copy would need, `analyze_class` and
+  `verify_depth_kel_module`, are private as well, so even a verbatim copy would
+  not compile;
+- **no function anywhere in `src/selfhost/mod.rs` returns or exposes a seeded
+  shared buffer.**
+
+Reproducing the formats by hand is the one thing that must not be done here: a
+seed a stage silently rejects looks exactly like coverage, which is the defect
+this whole arc exists to remove.
+
+### What was implemented
+
+`LowerOptions::delegated_suspension`, **off by default**, plus
+`delegated_suspension_plan`, which implements the five clauses above and returns
+`(entry, callee, call_op_index)`.
+
+The lowering touches exactly two chunks. The callee's `Yield`s become returns
+through the existing `degenerate_yield` mechanism. The entry is given an **empty**
+yield list, which makes `Stream` and `Reset` lower to nothing while marking no
+`Yield`, and its tail-position `Call` returns its result instead of pushing it.
+
+### Verified by execution, and by mutation
+
+`delegated_suspension.rs`, five tests:
+
+- the synthetic shape **agrees with the virtual machine over 40 ticks**, on an
+  observable that depends on both a persistent counter and the resume value, with
+  a distinct-value floor so a run that stops working fails rather than passes;
+- with the flag **off** the same shape is still refused;
+- a callee whose `Yield` is **not** in tail position is refused even with the flag
+  on — clause 2, the clause that refuses the general case;
+- that control was checked to refuse **for the right reason**: the two sources
+  differ only in what follows the yield, the tail one lowers, and the non-tail one
+  reports `UnsupportedOp("Stream")`. A control that fired for an unrelated reason
+  would leave clause 2 untested while looking tested;
+- `codegen.kel` **qualifies under the predicate** and is **still refused by
+  default**. Both halves are asserted, because the first shows the predicate is
+  not merely fitted to the synthetic case and the second is the standing decision.
+
+Mutation: removing the delegated return makes the native side yield forty zeros
+against the virtual machine's real sequence. `src/lib.rs` restored byte-identical
+under `cmp`.
+
+### The decision that is now the operator's, with its cost
+
+The transform exists and works. Turning the flag on for `codegen.kel` would take
+the self-hosted stages from ten of eleven to **eleven of eleven** and remove the
+last refusal in the corpus.
+
+**The cost is that `codegen.kel`'s lowering would be unexecuted.** Nothing would
+run it natively and compare, so its admission would rest on `lower_module`
+returning `Ok` — a fact about the compiler and not about the program, and the
+claim that has been wrong twice on this line.
+
+The alternative that removes the cost entirely is a seam on the `v0.2.3` side:
+any one of a `pub` on the slot constants, a function returning a seeded buffer,
+or a `#[cfg(feature = "self-host")]` accessor would let this line drive the stages
+on real input. That is a request, not a change to make here.

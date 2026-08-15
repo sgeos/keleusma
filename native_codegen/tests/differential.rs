@@ -1610,6 +1610,7 @@ fn the_trap_overflow_policy_emits_a_guard_on_every_checked_opcode() {
             src,
             LowerOptions {
                 overflow: OverflowPolicy::Trap,
+                ..LowerOptions::default()
             },
         );
         assert!(
@@ -1625,6 +1626,7 @@ fn the_trap_overflow_policy_emits_a_guard_on_every_checked_opcode() {
             src,
             LowerOptions {
                 overflow: OverflowPolicy::Wrap,
+                ..LowerOptions::default()
             },
         );
         assert!(
