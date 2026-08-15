@@ -16,11 +16,16 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 | | |
 |---|---|
-| `v0.2.3` | PR #105 and PR #106 merged green; nothing of this line is open |
+| `v0.2.3` | PRs #105, #106, #107 merged green; nothing of this line is open |
 | The crashed session's work | recovered intact and landed, not rebuilt |
 | The three remaining host models | checked against independent sources, two findings pinned |
 | The reported `break` discrepancy | answered and closed; it was never about `break` |
 | Construct-support boundary | 79 Ok / 4 Gap / 1 RefRejects, 84 cases, recounted |
+| Housekeeping | one stale branch pruned after verification; worktrees settled |
+
+**This is a stopping point.** The tree is clean, no pull request of this line is open, the handoff
+validates by ancestry and content against the current tip, and the three open questions below are
+the operator's rather than blockers on my side.
 
 ## The crash cost the push, not the work
 
