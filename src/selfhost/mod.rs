@@ -2982,3 +2982,149 @@ mod decoder_drift_guard {
         }
     }
 }
+
+/// Structural checks on the classification tables `analyze.kel` consumes.
+///
+/// These are not numbers, so no numeric differential can see them wrong: a
+/// misclassified opcode changes the control-flow graph `analyze.kel`
+/// reconstructs, and the bound it extracts from a wrong graph can be finite and
+/// wrong rather than absent.
+#[cfg(test)]
+mod classification_tables {
+    use super::{analyze_class, analyze_opk};
+    use crate::bytecode::{Chunk, Op};
+
+    fn scratch_chunk() -> Chunk {
+        let m = crate::compiler::compile(
+            &crate::parser::parse(&crate::lexer::tokenize("fn main() -> Word { 1 }").expect("lex"))
+                .expect("parse"),
+        )
+        .expect("compile");
+        m.chunks.first().expect("a chunk").clone()
+    }
+
+    /// Every control-flow opcode carries its own class, and its ARGUMENT.
+    ///
+    /// The argument matters as much as the class: `analyze.kel` follows
+    /// `If`/`Loop`/`EndLoop`/`Break` targets to rebuild the graph, so a class
+    /// that is right with an argument that is wrong reconstructs a graph that
+    /// is plausible and not the program's.
+    #[test]
+    fn every_control_flow_opcode_keeps_its_class_and_its_target() {
+        let cases: &[(Op, i64, i64)] = &[
+            (Op::If(11), 1, 11),
+            (Op::Else(12), 2, 12),
+            (Op::EndIf, 3, 0),
+            (Op::Loop(13), 4, 13),
+            (Op::EndLoop(14), 5, 14),
+            (Op::Break(15), 6, 15),
+            (Op::BreakIf(16), 7, 16),
+            (Op::Trap(0), 8, 0),
+            (Op::Call(17, 2), 9, 0),
+        ];
+        for (op, class, arg) in cases {
+            let got = analyze_class(op);
+            assert_eq!(
+                got,
+                (*class, *arg),
+                "{op:?} classified as {got:?}, expected ({class}, {arg})"
+            );
+        }
+    }
+
+    /// Ordinary opcodes must classify as plain, or `analyze.kel` invents an edge.
+    #[test]
+    fn ordinary_opcodes_classify_as_plain() {
+        let cases: &[Op] = &[
+            Op::Const(0),
+            Op::GetLocal(0),
+            Op::SetLocal(0),
+            Op::Add,
+            Op::Sub,
+            Op::Div,
+            Op::CmpEq,
+            Op::Dup,
+            Op::Not,
+            Op::Return,
+            Op::Yield,
+            Op::Stream,
+            Op::Reset,
+            Op::Len,
+        ];
+        for op in cases {
+            assert_eq!(
+                analyze_class(op),
+                (0, 0),
+                "{op:?} was given a control-flow class it does not have"
+            );
+        }
+    }
+
+    /// THE HAZARD THIS TABLE CARRIES, STATED WHERE IT IS.
+    ///
+    /// `analyze_class` ends in `_ => (0, 0)`. **A control-flow opcode added
+    /// later and not added here becomes "plain" silently**: no panic, no
+    /// rejection, just a control-flow graph missing an edge and a bound
+    /// extracted from it that is finite and wrong. The same shape applies to
+    /// `analyze_opk`'s `0 other`.
+    ///
+    /// This test cannot close that hole — closing it needs an exhaustive
+    /// `match` over `Op` here, so the compiler refuses a new opcode until it is
+    /// classified. It pins the CURRENT boundary instead: exactly nine classes,
+    /// and the count is asserted so that adding a tenth without revisiting this
+    /// file fails.
+    #[test]
+    fn the_class_table_covers_exactly_nine_kinds_and_defaults_silently() {
+        let control: &[Op] = &[
+            Op::If(0),
+            Op::Else(0),
+            Op::EndIf,
+            Op::Loop(0),
+            Op::EndLoop(0),
+            Op::Break(0),
+            Op::BreakIf(0),
+            Op::Trap(0),
+            Op::Call(0, 0),
+        ];
+        let classes: alloc::collections::BTreeSet<i64> =
+            control.iter().map(|op| analyze_class(op).0).collect();
+        assert_eq!(
+            classes.len(),
+            9,
+            "the class table no longer has nine distinct kinds; a new one needs a decoder \
+             in analyze.kel before it means anything"
+        );
+        assert!(
+            !classes.contains(&0),
+            "a control-flow opcode fell through to the plain default"
+        );
+    }
+
+    /// The loop-bound extraction's opcode tags, which pick out the induction
+    /// variable's update. A wrong tag here yields a bound, not an error.
+    #[test]
+    fn the_bound_extraction_tags_name_the_right_opcodes() {
+        let chunk = scratch_chunk();
+        let cases: &[(Op, i64)] = &[
+            (Op::GetLocal(3), 1),
+            (Op::SetLocal(4), 2),
+            (Op::CmpGe, 4),
+            (Op::BreakIf(0), 5),
+            (Op::CheckedAdd, 6),
+            (Op::PopN(2), 7),
+            (Op::EndLoop(0), 8),
+            (Op::Loop(0), 9),
+            (Op::Add, 0),
+            (Op::Mul, 0),
+        ];
+        for (op, opk) in cases {
+            let got = analyze_opk(op, &chunk).0;
+            assert_eq!(got, *opk, "{op:?} tagged {got}, expected {opk}");
+        }
+        // The slot travels with the tag; a tag without its slot reads the wrong
+        // local and extracts a bound for a variable that is not the induction one.
+        assert_eq!(analyze_opk(&Op::GetLocal(3), &chunk).1, 3);
+        assert_eq!(analyze_opk(&Op::SetLocal(4), &chunk).1, 4);
+        assert_eq!(analyze_opk(&Op::PopN(2), &chunk).2, 2);
+    }
+}

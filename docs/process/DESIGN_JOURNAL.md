@@ -13,6 +13,56 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE THREE REMAINING HOST MODELS, CHECKED AGAINST SOURCES THAT ARE NOT THEMSELVES (2026-08-15).**
+`analyze.kel` self-hosts the control-flow algorithm and the bound extraction, not the models, so the
+self-hosted differential reproduces whatever the reference says. One of its four inputs was found
+unsound while every differential was green. These are the other three.
+
+**`heap_alloc`: CHECKED AND CORRECT.** It claims only `NewComposite` allocates, and exactly
+`alloc_bytes()`. The arena is an independent source -- it reports what was actually handed out. Across
+seven composite shapes (tuple, array, struct, enum, nested tuple, array of struct, byte array), the
+modelled bytes equal the observed bytes above a composite-free baseline, exactly. Control: halving the
+model fails the check with "16 observed, 8 predicted".
+
+**`Op::cost()`: CHECKED, AND IT DISAGREES WITH MEASUREMENT.** The nominal model documents itself as
+"unmeasured estimates chosen for RELATIVE ORDERING", so equality is the wrong test and ordering is the
+claim. Two findings, both pinned rather than repaired, because changing a calibration is a judgment
+call rather than a correctness fix:
+
+1. **The nominal tier boundary is not supported.** Nominal separates `{Div, Mod}` (3) from
+   `{CmpEq, CmpLt}` (2). Measured on aarch64 with the SAME `ops_per_pattern: 4`, so setup overhead is
+   comparable: `Div` 138.56, `Mod` 139.36, `CmpEq` 140.70, `CmpLt` 133.55. Four opcodes within seven
+   cycles, and `Div` is the CHEAPEST -- placed by the nominal model in the dearer tier. The same
+   inversion appears on `thumbv8m` (9,164 against 10,079).
+2. **The generator discards measurements into buckets.** `CmpEq` measured 140.70 and is emitted as
+   164; `CmpLt` measured 133.55 and is emitted as 164. Overstating is conservative and therefore safe
+   for a bound, but it destroys the ordering the model exists to provide, and it is what creates the
+   apparent 140-against-164 gap that the raw measurements do not show.
+
+**I nearly reported that as one clean inversion.** The emitted model shows twenty-one pairwise
+inversions, which reduce to one tier disagreement; and checking the provenance header showed the
+comparison is only valid between opcodes sharing a pattern size. `Op::Add` itself was never measured
+-- the arithmetic bucket came from `CheckedAdd`/`CheckedSub`/`CheckedMul`, whose pattern tears down
+three stack slots against division's one -- so the headline "Div is cheaper than Add" is confounded
+and is deliberately NOT asserted. **Check a figure against the thing it claims to measure**, again.
+
+**Coverage that a green result here does not give**: 17 opcodes of 66 were ever measured. Every other
+value in the emitted model is a bucket assignment, so no ordering claim about them is checked by
+anything.
+
+**The class and opcode-kind tables: CHECKED AND CORRECT, WITH A STRUCTURAL HAZARD.** Nine classes,
+each carrying its argument -- and the argument matters as much as the class, since `analyze.kel`
+follows `If`/`Loop`/`EndLoop`/`Break` targets to rebuild the graph. Control: dropping `Loop`'s target
+while keeping its class fails with "Loop(13) classified as (4, 0), expected (4, 13)".
+
+**The hazard is the `_ => (0, 0)` catch-all.** A control-flow opcode added later and not added here
+becomes "plain" SILENTLY: no panic, no rejection, a graph missing an edge, and a bound extracted from
+it that is finite and wrong. The test pins the current boundary at nine classes but cannot close the
+hole; closing it needs an exhaustive `match` over `Op` so the compiler refuses a new opcode until it
+is classified.
+
+---
+
 **AN UNSOUND WORST-CASE-MEMORY BOUND, AND THE ROOT WAS ONE MODEL WITH TWO READERS (2026-08-15).**
 `GetField`/`GetTupleField`/`GetEnumField` declared an operand-stack net of -1 where the virtual
 machine's is 0. The net propagates into `current_offset`, so every later operation's peak was
