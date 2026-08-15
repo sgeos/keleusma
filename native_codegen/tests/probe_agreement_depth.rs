@@ -470,3 +470,50 @@ fn how_often_does_each_opcode_occur_in_the_measured_corpus() {
         "no opcodes counted; this census would make any mutation look vacuous"
     );
 }
+
+/// Machine-readable `opcode -> modules containing it`, for the mutation sweep.
+///
+/// `tools/mutation_sweep.py` reads this to run each mutation only against the
+/// modules that actually emit the mutated opcode. That is both faster and more
+/// honest: a module with no site for an opcode cannot detect a defect in it, and
+/// counting it as "did not detect" would understate the corpus.
+#[test]
+fn dump_opcode_module_map() {
+    use std::collections::BTreeMap;
+    let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    for p in sources() {
+        let name = p.file_name().unwrap().to_str().unwrap().to_string();
+        let Ok(src) = std::fs::read_to_string(&p) else {
+            continue;
+        };
+        let Some(m) = tokenize(&src)
+            .ok()
+            .and_then(|t| parse(&t).ok())
+            .and_then(|a| compile(&a).ok())
+        else {
+            continue;
+        };
+        if !keleusma_native::module_refusals(&m, LowerOptions::default()).is_empty() {
+            continue;
+        }
+        let Some(entry) = m.entry_point else { continue };
+        if !params_are_scalar(&m, entry) {
+            continue;
+        }
+        for c in &m.chunks {
+            for op in &c.ops {
+                let d = format!("{op:?}");
+                let d = d.split('(').next().unwrap_or(&d).to_string();
+                let e = map.entry(d).or_default();
+                if !e.contains(&name) {
+                    e.push(name.clone());
+                }
+            }
+        }
+    }
+    for (k, mods) in &map {
+        println!("OPCODEMAP {k} {}", mods.join(" "));
+    }
+    assert!(!map.is_empty(), "the map is empty; the sweep would run nothing");
+}

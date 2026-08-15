@@ -622,8 +622,20 @@ fn every_lowering_module_executes_or_is_exempt() {
     let mut exempt: Vec<(String, String)> = Vec::new();
     let mut disagreed: Vec<String> = Vec::new();
 
+    // **Single-module mode**, for the mutation sweep. `tools/mutation_sweep.py`
+    // runs this binary once per module in its own PROCESS, so a mutation that
+    // kills a module with SIGBUS or SIGTRAP costs one measurement rather than
+    // the whole census. Without process isolation two of the first four
+    // mutations tried took the entire run down and yielded no per-module data.
+    let only = std::env::var("KEL_ONLY_MODULE").ok();
+
     for p in sources() {
         let name = p.file_name().unwrap().to_str().unwrap().to_string();
+        if let Some(want) = &only
+            && &name != want
+        {
+            continue;
+        }
         let Ok(src) = std::fs::read_to_string(&p) else {
             continue;
         };
@@ -834,6 +846,18 @@ fn every_lowering_module_executes_or_is_exempt() {
         }
     }
     println!("================");
+
+    // In single-module mode the pinned sets describe the WHOLE corpus and would
+    // fail spuriously, so the run reports and exits instead. The sweep reads the
+    // exit status, so the disagreement must still fail the process.
+    if only.is_some() {
+        assert!(
+            disagreed.is_empty(),
+            "disagreed: {}",
+            disagreed.join("; ")
+        );
+        return;
+    }
 
     let mut names: Vec<&str> = disagreed
         .iter()
