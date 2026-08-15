@@ -2,29 +2,62 @@
 
 > **Navigation**: [Process](./README.md) | [Documentation Root](../README.md)
 
-The self-contained, imperative resume prompt, written **before a planned compaction** and validated
-on resume. Unlike the three resume channels it is **not** kept always-current. It is a snapshot
-stamped with the commit it describes, so a stale handoff self-reports as stale rather than
-misleading a resuming agent.
+The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
+always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **Rewritten whole, 2026-08-14**, not patched. A handoff that contradicts itself is worse than a
+> **Rewritten whole, 2026-08-15**, not patched. A handoff that contradicts itself is worse than a
 > stale one, because a reader cannot tell which half to trust. Overwrite this file; do not append.
 
 ## Validity
 
-- **Branch**: `v0.2.3`, or a feature branch cut from it.
-- **Parent commit**: `a618c112`
-- **Written**: 2026-08-14
+- **Branch**: `v0.2.3`, or a branch cut from it. If you are on `v0.3.0`, read
+  `docs/process/handoffs/v0.3.0.md` and **do not overwrite this file**.
+- **Written**: 2026-08-15, describing the tree at `0de6d6d0`.
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint. It governs
   documentation, commit messages, code comments, and anything drafted for publication.
 
-**Check both.** `git rev-parse --abbrev-ref HEAD` is `v0.2.3` or a branch off it, and
-`git rev-parse HEAD~1` equals the parent above. The branch half is not redundant: `v0.3.0` carries
-parallel native-codegen work and can satisfy the commit check while describing a different
-workstream. If you are on `v0.3.0`, read `docs/process/handoffs/v0.3.0.md` and **do not overwrite
-this file**.
+**THE PREVIOUS STAMP WAS A HASH MATCH AND IT SELF-INVALIDATED.** It required `git rev-parse HEAD~1`
+to equal a recorded parent, so the first unrelated merge made a otherwise-accurate handoff report
+itself stale. That is what happened on 2026-08-15: three merges landed and the file failed its own
+check while its contents were still largely true. The `v0.3.0` line hit the same defect and fixed it
+the same way. **Validate by ancestry and by content, never by a hash match.**
 
-- **Both match → VALID.** **Commit mismatch → INVALID and STALE.** **Branch mismatch → NOT YOURS.**
+```sh
+git merge-base --is-ancestor 0de6d6d0 HEAD    # must succeed
+```
+
+**Then validate the CONTENT, which is what actually matters:**
+
+```sh
+cargo test --features compile,verify --test block_form_statements    # 8 passed
+
+# The construct-support boundary. This finds the table by its own declaration
+# rather than by line number, because a hardcoded range is the defect this file
+# spends a section warning about.
+awk '/let cases: &\[\(&str, Support, &str\)\] = &\[/{f=1;next} f&&/^    \];/{f=0} f' \
+    tests/selfhost_codegen.rs \
+  | sed 's://.*::' | grep -oE '\b(SOk|Gap|RefRejects)\b' | sort | uniq -c
+# expect: 4 Gap, 1 RefRejects, 79 SOk
+```
+
+**Strip the comments before counting.** The aliases are `SOk`, `Gap`, and `RefRejects` — only the
+first carries the `S` — and a previous session reported three wrong numbers extracting them by hand.
+
+If the counts differ, the boundary has moved and the state below is stale. **Say so rather than
+acting on it.**
+
+## Derive numbers, do not copy them forward
+
+This file used to carry a `selfhost_wire` test count. It said 157 while the tree held 161. Every
+hand-maintained restatement of something a mechanism can derive is a defect waiting for the
+maintenance to lapse, and this project has now been bitten by that class **six** times. So:
+
+```sh
+grep -c '^\s*#\[test\]' tests/selfhost_wire.rs        # the wire differential
+git log --oneline -1 v0.2.3                           # where the version branch is
+gh pr list --state open                               # what is in flight, BY BASE BRANCH
+git log -1 --format=%cd v0.2.3 -- docs/process/handoffs/v0.2.3.md   # when my mailbox last moved
+```
 
 ## On resume, before doing anything
 
@@ -36,141 +69,138 @@ this file**.
    (newest first), [`TASKLOG.md`](./TASKLOG.md).
 4. **Read [`AUTONOMOUS_IMPLEMENTATION_LOOP.md`](./AUTONOMOUS_IMPLEMENTATION_LOOP.md).**
 
-## FIRST ACTION: confirm the tree is quiet, then take the named increment
+## FIRST ACTION: confirm the tree is quiet
 
-`git status`, `git branch --list`, `gh pr list --state open`. **Thirty-six pull requests merged on
-2026-08-13/14, none open of this line.** **Anything based on `v0.3.0` is the OTHER session's — both lines share a
-GitHub account, so tell them apart by BASE BRANCH, not by author.**
+`git status`, `git branch --list`, `gh pr list --state open`. **Anything based on `v0.3.0` is the
+OTHER session's — both lines share a GitHub account, so tell them apart by BASE BRANCH, not by
+author.**
 
 ## THE WORKFLOW: CI GATES FEATURE BRANCHES
 
-**Do not run `scripts/release-gate.sh` to gate a merge.** Operator decision, 2026-08-11.
+**Do not run `scripts/release-gate.sh` to gate a merge.** Operator decision, 2026-08-11. CI is a
+verified strict superset of the local gate and runs in about 48 minutes against roughly 2h30m.
 
-1. Cut the feature branch **as the first action of an increment**. This session left one slice's
-   changes sitting on a documentation branch by not switching after creating it; `git status` before
-   committing is what caught it.
+1. Cut the feature branch **as the first action of an increment**, and `git status` before
+   committing. A previous session left a slice's changes on the wrong branch by not switching.
 2. Verify locally as you go. **Reproduce the gate's invocation, do not approximate it.** The
    invocations are in `.cargo-husky/hooks/pre-push`.
 3. Push, open a **draft PR to `v0.2.3`**.
 4. **Merge on CI green, at the commit CI ran, without rebasing.** Push. Delete the branch.
 
-**VERIFY THE REF AFTER A PUSH, NOT THE GATE OUTPUT.** A push this session printed
-"pre-push: all checks passed" and **never created the ref**. `git ls-remote --heads origin <branch>`
-is the check. The output had been truncated with `tail -3`, which cut the line that would have said
-so.
+**VERIFY THE REF AFTER A PUSH, NOT THE GATE OUTPUT.** `git ls-remote --heads origin <branch>` is the
+check. A push once printed "pre-push: all checks passed" and never created the ref. **Do not pipe the
+push through `tail`** — it truncates the very evidence you meant to read, which happened again on
+2026-08-15 and cost the hook log on an otherwise clean push.
 
-**Two CI failures this session were INFRASTRUCTURE, not the diff.** Six jobs failing at `Set up job`,
-and a lost runner after 59 minutes with no retrievable log. Both cleared on `gh run rerun <id>
---failed`. Check the failing STEP before believing a failure: a docs-only change failing Clippy and
-MSRV together is a runner, not a defect.
+**A default-feature run is not the gate.** `cargo test --workspace` and `--features compile` both
+miss `self-host`, and a cap-pinned test escaped both while being caught by CI. The gate is a
+five-entry feature matrix.
+
+**Check the failing STEP before believing a CI failure.** Two failures were infrastructure, not the
+diff, and both cleared on `gh run rerun <id> --failed`. A docs-only change failing Clippy and MSRV
+together is a runner, not a defect.
 
 ## THE STATE
 
-**Thirty-six pull requests merged on 2026-08-13/14**, each 22 of 22 CI jobs green, merged at the
-commit CI ran. `selfhost_wire` is at 157 tests, `selfhost_typecheck` at 7.
+**Everything of this line is merged; nothing of mine is open.** Confirm with `gh pr list --state
+open` and treat anything based on `v0.3.0` as the other session's.
 
 | | |
 |---|---|
-| record-shape coverage | **17 of 17**, pinned by a test |
-| self-hosted type rejection | **16 ill-typed rejected, 7 well-typed accepted**, verdict agreement |
-| the end-to-end join | producer to interner to emitters, `NAMES`/`STRING_POOL` byte-identical |
-| the checker's input path | all four channels migrated off the test harness |
-| `read_stage` | `wire.kel` joined, because the driver emits through it |
-| the data-slot contributor | built; it was the 252-against-627 gap |
+| the name ceiling | RAISED. `parse` joins byte-identically at 627 names, 33,395-byte blob |
+| the join corpus | all ten stages byte-identical through `mi_join` |
+| the operand-stack model | **repaired**; the understated WCMU bound is closed |
+| the three remaining host models | **checked against independent sources**, two findings pinned |
+| the reported `break` discrepancy | **answered**; it was a stray semicolon, not `break` |
+| construct-support boundary | **79 Ok / 4 Gap / 1 RefRejects, 84 cases** |
 
-**Boundary counts: 79 Ok / 4 Gap / 1 RefRejects, 84 cases.** Recount from the
-`&[(&str, Support, &str)]` table inside `self_hosted_construct_support_boundary`, comments
-stripped. The enum aliases are `SOk`, `Gap`, `RefRejects` -- only the first carries the `S`, and
-three of my extraction attempts have returned a wrong number.
+## WHAT THE LAST TWO INCREMENTS ESTABLISHED, AND WHAT THEY DID NOT
 
-## THE NEXT INCREMENT, SPECIFIED
+**A differential against the model under test cannot detect that the model is wrong.** `analyze.kel`
+self-hosts the control-flow ALGORITHM, not the models; it receives `Op::cost()`, the stack-effect
+pair, `Op::heap_alloc()` and the class tables from the host, so the self-hosted differential agrees
+**by construction**. One of those four inputs was unsound while every differential in the tree was
+green. All four are now checked against sources that are not themselves.
 
-**One ceiling.** `parse` needs 627 names and the hard limit is 512. Specified at "WHAT IS LEFT OF THE
-CEILING" in [`../decisions/WIRE_FORMAT_SELFHOST_PLAN.md`](../decisions/WIRE_FORMAT_SELFHOST_PLAN.md).
+**`Op::cost()` disagrees with measurement and is PINNED, NOT REPAIRED.** The nominal tier boundary
+separating `{Div, Mod}` from `{CmpEq, CmpLt}` is unsupported — measured at the same
+`ops_per_pattern`, all four sit within seven cycles with `Div` the cheapest, and the same inversion
+appears on `thumbv8m`. Changing a calibration is a judgment call, not a correctness fix.
 
-> **It is not two constants.** Every `for .. limit 256` must rise with `nm_max_names`, and
-> `for .. limit` TRAPS on entry rather than degrading -- a loop left behind aborts on exactly the
-> inputs the raise was for. And verifying it needs `parse`, whose 304,432-byte artifact does not fit
-> the single-window join harness. **So the raise and the staged path are one decision**: either the
-> join grows a windowed variant, or the ceiling rises and a new harness carries `parse`.
->
-> Growing the buffer is NARROW in slot terms, which is worth knowing so the next attempt does not
-> over-estimate it: `nin` is followed by `nout` and `bout`, and the harness addresses none of them
-> by slot. `NIN_SLOT` and `NIN_CAPACITY` are the only constants that move.
+**Only 17 opcodes of 66 were ever measured.** Every other value in the emitted cost model is a bucket
+assignment, checked by nothing. Do not read the model's ordering as evidence outside those 17.
 
-**THE FIGURE THAT WAS WRONG IN THREE PLACES.** "A real stage's 395,804 names" describes no name
-count. The largest `NAMES` region is **627 records**; 395,804 is a REGION record count belonging to
-`CONSTS`. It came from the pre-run-length-encoding state and outlived the representation it
-described, surviving in the plan, the roadmap and a goal statement. **Check a figure against the
-thing it claims to measure.**
+**A live structural hazard remains open**: `analyze_class` ends in `_ => (0, 0)`, so a control-flow
+opcode added later and not classified becomes "plain" **silently** — a graph missing an edge and a
+bound that is finite and wrong. The boundary is pinned at nine classes but the hole is not closed.
+Closing it needs an exhaustive `match` over `Op` so the compiler refuses a new opcode until it is
+classified. **This is the highest-value open item on the correctness surface.**
 
 ## FACTS THAT COST REAL EFFORT
 
 - **CHECK A FIGURE AGAINST THE THING IT CLAIMS TO MEASURE.** "395,804 names" was a region record
-  count and survived three documents, making a 2.5x problem look like a 1500x one.
+  count belonging to `CONSTS` and survived three documents, making a 2.5x problem look like a 1500x
+  one. Separately, "the hard limit is 512" was a guard reading `wire.nout` while bounded by
+  `fin_capacity()`, a number with no relationship to the buffer it touches. **Twice in two sessions,
+  in one document.**
+- **A DIAGNOSTIC NAMES WHERE THE PARSER STOPPED, NOT WHAT IT OBJECTED TO.** The `v0.3.0` line
+  reported `GRAMMAR.md` documenting a `break;` the parser rejects. The documented form parses. The
+  rejection came from a stray `;` after a `for` block, and `unexpected token Semicolon in expression`
+  named the semicolon. **The control settles it**: remove `break` entirely, keep the stray semicolon,
+  and the failure is identical.
+- **A DEFECT REPORT NAMES WHERE A READER HAPPENED TO LOOK, NOT WHERE THE DEFECT IS.** That was the
+  other line's lesson to me about `GRAMMAR.md`, and it came back the other way within a week.
 - **APPEND TO A SLOT-ADDRESSED BLOCK, NEVER INSERT.** Two off-by-one defects came from ignoring the
-  convention the file states: once shifting every later field and failing four tests at
-  once, once stepping over a scratch word so `calling-a-local` was silently ACCEPTED.
-- **Say which fact a green suite does NOT establish.** The slot-name intern mode is unverified by
-  the corpus: a mutation to fresh mode passes every test, because a slot name is `<block>.<field>`
-  and cannot collide with anything.
-- **`git checkout <file>` to undo a bad edit discards everything else in that file.** An hour of
-  unrelated work went that way; only the part living in another file survived.
-- **When the question is "does anything ever do X", INSTRUMENT, do not grep.** All seven
-  previously-empty region kinds appear in the test file, seven hits out of seven, and that proves
-  nothing: a kind can be named in a stride table or a negative test with no record of that shape ever
-  written. Instrumenting every emit command gave 16 of 17, and named the missing one.
-- **A missing capability can hide behind a coverage gap.** `STRUCT_TEMPLATES` had no decoder AND no
-  dispatch arm; the emitter refused it with `-222`. A differential cannot see a mistranscribed offset
-  in a shape it never reaches.
-- **All six formerly-empty record shapes are reachable from REAL COMPILED MODULES**, including
-  `STRUCT_AUX` and `ENUM_AUX` via `const data`. The plan expected hand-built artifacts; they are not
-  needed.
-- **A struct template is written only on the BOXED path.** `flat_alloc_bytes` returns `None` above the
-  sixteen-bit operand bound, so a struct wider than 65,535 bytes reaches it — 8,300 `Word` fields.
-- **THE TWO DEDUP SCANS ARE DIFFERENT SCANS.** `intern_run` is batch-local, capped at 256, and must
-  NOT be replaced: a total language has no early exit, so a 1024-slot table costs 1024 probes against
-  about 256 comparisons. The walk-nested scan through `NAMES` is the one the 782-second lesson bears
-  on, and it is to be MEASURED at stage scale.
-- **PER-CHUNK RANGES ARE ALREADY SELF-HOSTED.** `emit_chunks_batch` accumulates the cursors and writes
-  each `*_first` before advancing. The roadmap listed them as remaining; it was stale.
-- **Private data PERSISTS across VM calls; shared data is RE-SEEDED.** A flag left set by one call
-  silently changes the next. `mi_pairs` sets `quiet` explicitly for this reason.
-- **`emit_at` is at EIGHTEEN arms**, the measured parse-depth ceiling for that shape in the TEST
-  HARNESS, which binds because that is where `wire.kel` compiles. A nineteenth needs the chain
+  convention the file states: once shifting every later field and failing four tests at once, once
+  stepping over a scratch word so `calling-a-local` was silently ACCEPTED.
+- **Say which fact a green suite does NOT establish**, in the source, where a reader of the code will
+  meet it. The slot-name intern mode is unverified by the corpus. The dedup branch has no real-module
+  coverage: making `nm_find` report "not found" unconditionally leaves all ten stages byte-identical,
+  and that is the scan whose cost is the stated reason the name count is capped at all.
+- **When the question is "does anything ever do X", INSTRUMENT, do not grep.** Seven hits out of
+  seven proved nothing; instrumenting every emit command gave 16 of 17 and named the missing one.
+- **`git checkout <file>` to undo a bad edit discards everything else in that file.**
+- **`emit_at` is at EIGHTEEN arms**, the measured parse-depth ceiling for that shape in the test
+  harness, which binds because that is where `wire.kel` compiles. A nineteenth needs the chain
   restructured, not extended.
 - **`highest_command()` is a real guard.** A new command returns `-99` until the ceiling is raised.
+- **Private data PERSISTS across VM calls; shared data is RE-SEEDED.**
+- **A struct template is written only on the BOXED path**, so a struct wider than 65,535 bytes
+  reaches it — about 8,300 `Word` fields.
 - **On macOS `timeout` does not exist**; it is `gtimeout`.
+- **`git push origin --delete` runs the full pre-push tier, once per branch.** Use one push naming
+  every branch, or `gh api -X DELETE`, which skips the hook.
 
-## METHOD RULES THIS SESSION PAID FOR
+## METHOD RULES THIS LINE PAID FOR
 
+- **A control removes the suspected cause and checks the failure survives.** It is the cheapest
+  discriminator there is and it settled the `break` report in one probe.
+- **A control runs in one direction only**, so a must-fire case and a must-not-fire case are both
+  required.
 - **Instrument rather than grep** when asking whether anything ever does X.
-- **Verify the ref after a push**, not the gate output.
-- **Write the encoding down before relying on it.** The enum count would have read correctly out of
-  zero-filled memory whether or not the encoder wrote it.
+- **Verify the ref after a push**, not the gate output, and never through `tail`.
 - **A guard refusing loudly is the guard working.** `-99`, `-222`, and a compiler rejecting
   `if <Word>` each surfaced a real gap as a refusal rather than a wrong artifact.
-- **Check an item against the code before repeating it.** Two roadmap items moved on inspection.
 - **Assert WHICH failure fired**, not merely that one did.
-- **A bound on a loop is not a bound on the damage.** Doubling puts the cost in the last attempt.
-- **CHECK A FIGURE AGAINST THE THING IT CLAIMS TO MEASURE.** "395,804 names" was a region record
-  count and survived three documents including a goal statement.
-- **APPEND TO A SLOT-ADDRESSED BLOCK, NEVER INSERT.** Two off-by-one defects, one of which silently
-  ACCEPTED an ill-typed program.
-- **Say which fact a green suite does NOT establish**, in the source, where a reader of the code
-  will meet it.
-- **A commit message is a claim.** One said six collectors were deleted; two remained. Amended
-  before merge.
+- **A commit message is a claim.** One said six collectors were deleted; two remained.
+- **PIN rather than repair when the change is a judgment call**, and say so in the source.
 
 ## Open, held by the operator
 
 - **Publication remains HELD.** Nothing is published.
+- **The `analyze_class` catch-all**, above. Closing it changes a `match`, not a bound.
+- **The `for` trailing-semicolon asymmetry.** `if`, `match`, and `loop` accept one; `for` does not.
+  Accepting it widens the admitted language, so it is pinned rather than repaired.
 - **`v0.2.3-prerebase-backup`**, local only, a deliberate pre-rebase safety copy. Do not delete it
   without being asked.
 - **`MAX_PARSE_DEPTH` does not do its stated job on a small stack.** An availability failure at a
   trust boundary. Lowering the constant narrows the admitted language, so it is not changed
   unilaterally.
 - **`CHANGELOG.md:340`** states the checked-arithmetic push order wrongly in published text.
+- **`-255` is live and has no negative test.** Reaching it needs more than 16 KB of distinct name
+  bytes; the corpus tops out at 7,680.
+- **`bin` was raised, not fixed.** 49,152 covers `parse` at 1.47x; a stage half again as large breaks
+  it.
 - **MSRV**: CI checks 1.85 for `keleusma-arena` and 1.88 for `keleusma`.
 
 ## Parallel development
@@ -179,13 +209,12 @@ thing it claims to measure.**
 `git show origin/v0.3.0:docs/process/handoffs/v0.3.0.md`; mine is
 [`handoffs/v0.2.3.md`](./handoffs/v0.2.3.md). Poll at increment boundaries. They hold
 `src/wire_schema.rs` and `src/bytecode.rs` read-only and announce before widening; extend the same
-courtesy.
+courtesy. **Both items they were awaiting from this line are now answered.**
 
 ## Untracked artifacts a fresh session cannot see
 
 `tmp/` is gitignored:
 
-- **`tmp/2026-08-10-when_error_correction_meets_a_signature.markdown`** — research spike A373, 4.8 MB,
-  13,796 references, passing the blog corpus checker with 0 findings.
+- **`tmp/2026-08-10-when_error_correction_meets_a_signature.markdown`** — research spike A373, 4.8 MB.
 - **`tmp/a373/`** — the harvest pipeline.
 - **`tmp/branch-prune-manifest-20260813.txt`** — the ONLY record of 73 deleted branches.

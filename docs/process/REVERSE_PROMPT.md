@@ -10,128 +10,86 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-15 (session 44)
+**Date**: 2026-08-15 (session 45, resumed after a system crash)
 
 ## Where things stand
 
 | | |
 |---|---|
-| `v0.2.3` | PR #101 merged green (22 of 22); the join-corpus increment is in flight |
-| The name ceiling | RAISED. `parse` joins byte-identically: 627 names, 33,395-byte blob |
-| The join corpus | all ten stages byte-identical through `mi_join` |
-| `selfhost_wire` | 161 tests |
+| `v0.2.3` | PR #105 and PR #106 merged green; nothing of this line is open |
+| The crashed session's work | recovered intact and landed, not rebuilt |
+| The three remaining host models | checked against independent sources, two findings pinned |
+| The reported `break` discrepancy | answered and closed; it was never about `break` |
+| Construct-support boundary | 79 Ok / 4 Gap / 1 RefRejects, 84 cases, recounted |
 
-## The ceiling, and four premises that were wrong
+## The crash cost the push, not the work
 
-**"The hard limit is 512" was a guard naming the wrong buffer.**
-`emit_name_records_from_nout` reads `wire.nout` and was bounded by `fin_capacity()`, copied from a
-sibling that reads `wire.fin`. At two fields per record that yields 512 — a number with no
-relationship to the buffer the function touches, which reached the plan, the roadmap and a goal
-statement. **This is the same failure as the 395,804: twice in two sessions, in one document.**
+The previous session had committed a complete increment to a local feature branch and never pushed
+it. Working tree clean, no stash, all four channels updated in the same commit. **Nothing needed
+rebuilding.** What it cost was the push, the pull request, and an accurate handoff.
 
-**The binding ceiling was `bin`, and three stages breached it, not one**: `parse` 33,395,
-`codegen` 21,225, `reconstruct` 8,849 against 8,192, with `lexer` at 97% of it.
+**`HANDOFF.md` reported itself STALE, correctly, and for the wrong reason.** Its validity check
+required `git rev-parse HEAD~1` to equal a recorded parent, so the first unrelated merge invalidated
+it while its contents were still largely true. Three merges had landed. The stamp is now an
+**ancestor check plus a content check**, which is what the `v0.3.0` line moved to after hitting the
+identical defect. A hash match is a claim that nothing else ever lands.
 
-**"`parse`'s artifact does not fit the window" was true and not load-bearing.** The join writes two
-regions and the DIRECTORY places them, so a two-region directory is 12,840 bytes. The fork the plan
-posed — windowed variant or second harness — did not have to be taken.
+It also carried a stale `selfhost_wire` count, 157 against the tree's 161. The rewritten file
+**derives** such numbers with a command rather than restating them.
 
-**Right, and the one that mattered**: "it is not two constants". A loop left at `limit 8192` behind a
-guard admitting 49,152 killed three tests with `LoopLimitExceeded`, past a guard that had said yes.
+## The `break` report: the grammar is right, the parser is right
 
-## Two defects the control found that the raise did not cause
+The `v0.3.0` line reported that `GRAMMAR.md` documents a `break;` form the parser rejects, and left
+`BreakIf` unisolated in its opcode audit on that basis. **Both halves are wrong.**
 
-- **`mi_chunk_names` ignored `nm.mode`**, overwriting the directory from the seventh chunk onward.
-  The join corpus topped out at three chunks; `parse` has 94.
-- **`mi_join` SUMMED its three emitter results.** `-202` plus 7,680 reported 7,478 — positive,
-  therefore success — with `NAMES` entirely zero. A sum is not a conjunction.
+The documented form parses verbatim. `TokenKind::Break` is handled at statement position in
+`parse_block`, so there is no route from that form to an expression-position diagnostic at all.
 
-## The dedup branch has no real-module coverage, and it prices the cap
+**The real cause is a stray `;` after a `for` block** in their probe source. A `for` loop is a
+statement and consumes no trailing semicolon, so the parser resumes at statement position and reads
+the `;` as the start of an expression. The diagnostic, `unexpected token Semicolon in expression`,
+names the semicolon, and their source has two near each other.
 
-Making `nm_find` report "not found" unconditionally leaves all ten stages byte-identical. `nm_find`
-is the quadratic scan whose cost is the stated reason the name count is capped at all, and the raise
-multiplied its static bound by sixteen. **The cap is priced on a path no stage reaches.** Established
-by MUTATION; the counts only suggested it.
+**The control settles it rather than my reasoning**: remove `break` entirely, keep the stray
+semicolon, and the failure is identical.
 
-## What the gate caught that my bench could not
+**`BreakIf` is reachable.** One semicolon deleted, nothing else changed, and `main` carries
+`BreakIf(41)` and `Break(41)`. Their probe source is now a named case pinned by execution.
 
-`the_driver_refuses_more_names_than_one_call_can_intern` pinned the literal `257` against a cap of
-256; the raise made that input admissible, so the driver accepted where the test demanded a refusal.
-**It sits behind `self-host`, which neither `cargo test --workspace` nor `cargo test --features
-compile` enables.** Both were run and both were green. The gate is `cargo nextest run --profile ci`
-across a five-entry feature matrix; a default-feature run is an approximation of it. Every cap-pinned
-test now derives from a named `NAME_CAP`.
+**Pinned, not repaired.** `if`, `match`, and `loop` accept a trailing semicolon and `for` does not.
+Accepting it widens the admitted language, which is a judgment call rather than a correctness fix.
+`GRAMMAR.md` gains the rule it was silent on, and all three accepting forms are pinned, not
+generalised from `if`.
 
-## Cost, measured
+## A claim of mine that needed checking before it shipped
 
-`shared_data_bytes` 155,704 → 237,624 (+52.6%). The WCET bound moves further: the interning phase is
-quadratic in the cap, so 256 → 1024 multiplies its static bound by sixteen. Real input is unaffected;
-the BOUND moves, and the bound is the product.
-
-## The unsound worst-case-memory bound, FIXED
-
-`GetField`/`GetTupleField`/`GetEnumField` declared an operand-stack net of −1 where the virtual
-machine's is 0. The net propagates, so every later operation's peak was computed from a base one slot
-too low per field read: `wcmu_stream_iteration` reported **96 bytes for a Stream chunk where 128 is
-correct**. An UNDERSTATED bound, not a loose one — the opposite direction from the
-conservative-verification stance.
-
-**The root was one model with two readers.** `stack_growth`/`stack_shrink` served both the peak walk
-(which wants a transient reach and a NET) and `text_size`'s shadow stack (which wants literal POP and
-PUSH counts). Those coincide only for an operation that does not both pop and push. The repair splits
-the ROLES: those two are now exclusively the peak model, and `verify::op_depth_effect` —
-`(required, delta)`, true semantics all along — is the pop/push model that `text_size` reads. The
-field reads become `(0, 0)`: exact, not merely conservative.
-
-**Two corrections to the report this came from.** `GetIndex` is NOT another instance — it genuinely
-pops the container AND the index, so its −1 is right and only the match arm was misleading. And the
-checked family's TRANSIENT is not understated: the virtual machine pops both operands before pushing,
-so `growth = 1` is the true reach. Its DECOMPOSITION was wrong, which only the shadow stack noticed.
-
-**Why nothing caught it, and it generalises.** `analyze.kel` consumes these numbers as host-seeded
-arrays, so the self-hosted differential agrees by construction. **A differential against the model
-under test cannot detect that the model is wrong.** The control compares against an independent model
-instead, and fails before the repair.
-
-## The three remaining host models, checked
-
-`analyze.kel` self-hosts the ALGORITHM, not the models, so the differential agrees with the reference
-by construction. One of its four inputs was unsound while every differential was green. Verdicts on
-the other three:
-
-| model | verdict |
-|---|---|
-| `Op::heap_alloc()` | **correct** — modelled bytes equal observed arena consumption across seven composite shapes |
-| `Op::cost()` | **disagrees with measurement**, two findings pinned |
-| `analyze_class`/`analyze_opk` | **correct**, with a structural hazard |
-
-**`Op::cost()` finding 1**: nominal separates `{Div, Mod}` (3) from `{CmpEq, CmpLt}` (2), but measured
-at the same `ops_per_pattern: 4` they are `Div` 138.56, `Mod` 139.36, `CmpEq` 140.70, `CmpLt` 133.55 —
-one band, with `Div` the CHEAPEST. Same inversion on `thumbv8m`.
-
-**Finding 2**: the generator buckets measurements away. `CmpEq` measured 140.70 and is emitted as 164.
-Conservative, therefore safe for a bound, but it destroys the ordering the model exists for — and it
-is what creates the apparent 140-against-164 gap the raw numbers do not show.
-
-**Not asserted, deliberately**: "Div is cheaper than Add". `Op::Add` was never measured; the
-arithmetic bucket came from the checked family, whose pattern tears down three stack slots against
-division's one. Confounded.
-
-**Coverage**: 17 opcodes of 66 were ever measured. Every other emitted value is a bucket assignment,
-checked by nothing.
-
-**The structural hazard**: `analyze_class` ends in `_ => (0, 0)`, so a control-flow opcode added later
-and not classified becomes "plain" silently — a graph missing an edge and a bound that is finite and
-wrong. Closing it needs an exhaustive `match` over `Op`; the test pins the boundary at nine classes
-but cannot close the hole.
+The grammar sentence names `if`, `match`, and `loop`. I had measured only `if`. I checked the other
+two before the merge rather than after, and both hold — but the sentence would have been a
+three-part claim resting on one measurement. **The same class as everything else on this list.**
 
 ## Open
 
-- **`-255` is live and has no negative test** — reaching it needs more than 16 KB of distinct name
-  bytes; the corpus tops out at 7,680. Recorded in the source as a gap.
+- **The `analyze_class` catch-all is the highest-value open correctness item.** It ends in
+  `_ => (0, 0)`, so a control-flow opcode added later and not classified becomes "plain" silently: a
+  graph missing an edge and a bound that is finite and wrong. The boundary is pinned at nine classes
+  but the hole is not closed. Closing it needs an exhaustive `match` over `Op` so the compiler
+  refuses a new opcode until it is classified. **This is my proposed next increment.**
+- **`Op::cost()` disagrees with measurement**, two findings pinned rather than repaired. Only 17
+  opcodes of 66 were ever measured; every other emitted value is a bucket assignment checked by
+  nothing.
+- **The `for` trailing-semicolon asymmetry**, pinned. Widening is the operator's call.
+- **`-255` is live and has no negative test**; the corpus tops out at 7,680 distinct name bytes.
+- **`bin` was raised, not fixed.** 49,152 covers `parse` at 1.47x.
 - **Two pinned coverage gaps**: no stage contributes a constant-interned name, and none nests a
   constant past depth one.
-- **`bin` was raised, not fixed.** 49,152 covers `parse` at 1.47×; a stage half again as large breaks
-  it. Batching the blob does NOT remove the name cap, because the deduped output table must stay
-  resident for the dedup scan.
+- **`CHANGELOG.md:340`** states the checked-arithmetic push order wrongly in published text.
 - Publication remains **HELD**.
+
+## Questions for the operator
+
+1. **The `analyze_class` catch-all.** Closing it is mechanical and changes a `match`, not a bound,
+   but it will refuse to compile until every `Op` is classified, which is the point. Proceed?
+2. **The `for` trailing-semicolon asymmetry.** Accept a trailing semicolon after `for`, matching the
+   other three block forms, or leave the asymmetry pinned as it stands?
+3. **`Op::cost()`.** The two findings are pinned, not repaired. Recalibrating is a judgment call I
+   have deliberately not taken.
