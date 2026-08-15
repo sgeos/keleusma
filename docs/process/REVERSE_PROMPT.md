@@ -93,6 +93,38 @@ arrays, so the self-hosted differential agrees by construction. **A differential
 under test cannot detect that the model is wrong.** The control compares against an independent model
 instead, and fails before the repair.
 
+## The three remaining host models, checked
+
+`analyze.kel` self-hosts the ALGORITHM, not the models, so the differential agrees with the reference
+by construction. One of its four inputs was unsound while every differential was green. Verdicts on
+the other three:
+
+| model | verdict |
+|---|---|
+| `Op::heap_alloc()` | **correct** — modelled bytes equal observed arena consumption across seven composite shapes |
+| `Op::cost()` | **disagrees with measurement**, two findings pinned |
+| `analyze_class`/`analyze_opk` | **correct**, with a structural hazard |
+
+**`Op::cost()` finding 1**: nominal separates `{Div, Mod}` (3) from `{CmpEq, CmpLt}` (2), but measured
+at the same `ops_per_pattern: 4` they are `Div` 138.56, `Mod` 139.36, `CmpEq` 140.70, `CmpLt` 133.55 —
+one band, with `Div` the CHEAPEST. Same inversion on `thumbv8m`.
+
+**Finding 2**: the generator buckets measurements away. `CmpEq` measured 140.70 and is emitted as 164.
+Conservative, therefore safe for a bound, but it destroys the ordering the model exists for — and it
+is what creates the apparent 140-against-164 gap the raw numbers do not show.
+
+**Not asserted, deliberately**: "Div is cheaper than Add". `Op::Add` was never measured; the
+arithmetic bucket came from the checked family, whose pattern tears down three stack slots against
+division's one. Confounded.
+
+**Coverage**: 17 opcodes of 66 were ever measured. Every other emitted value is a bucket assignment,
+checked by nothing.
+
+**The structural hazard**: `analyze_class` ends in `_ => (0, 0)`, so a control-flow opcode added later
+and not classified becomes "plain" silently — a graph missing an edge and a bound that is finite and
+wrong. Closing it needs an exhaustive `match` over `Op`; the test pins the boundary at nine classes
+but cannot close the hole.
+
 ## Open
 
 - **`-255` is live and has no negative test** — reaching it needs more than 16 KB of distinct name
