@@ -13,7 +13,7 @@ misleading a resuming agent.
 ## Validity
 
 - **Branch**: `v0.2.3`, or a feature branch cut from it.
-- **Parent commit**: `57f71c37`
+- **Parent commit**: `a618c112`
 - **Written**: 2026-08-14
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint. It governs
   documentation, commit messages, code comments, and anything drafted for publication.
