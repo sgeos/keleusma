@@ -6023,3 +6023,53 @@ two arities**, which the harness asserts rather than assumes.
 **Verified by mutation**, with the mutation count checked before the result was read: perturbing
 the flat field-read offset changes the disagreement set and fails the test. `src/lib.rs` was
 restored byte-identical under `cmp`.
+
+---
+
+## A real object file, linked and run, exercising the ABI
+
+2026-08-14. `aot_linkage.rs` already emitted an object, linked it with the system linker and
+ran it as a separate process — but only over arithmetic, a branch, a loop and a call, all of
+which live in registers and the object's own text. **None of that touches the ABI.**
+
+The new case does:
+
+| exercised | why it matters across a LINKER rather than a JIT |
+|---|---|
+| the three trailing pointers | shared, private and region, passed from a C `main` as real buffers |
+| a **native resolved by name** | the C host DEFINES `kel_native_host__mix`. Every JIT differential bound natives by ADDRESS through `add_global_mapping`, which cannot fail the way a real link can — a wrong mangling is a link error here and invisible there |
+| a composite in the caller's region | the region pointer is actually dereferenced across the boundary |
+
+`host::mix` returns `x * 10 + y`, **not commutative**, deliberately. The third vacuous test of
+this arc was a commutative callee that could not detect an argument swap; the trap applies to
+natives and to linked boundaries too.
+
+**Mutation-verified**, count checked before the result was read: removing the argument reversal
+in the native-call lowering gives `native=41, vm=77`. **Only the new test caught it** — the
+existing linked test passed, because it calls no native.
+
+### What it does NOT cover, stated rather than implied
+
+**No string**, and that is deliberate — see below. **No composite RETURN across the boundary**;
+the `sret` per-call-site block is verified through the JIT by `composite_return_aliasing.rs` and
+is not re-verified here. **No `Stream` entry**; the linked entry is a `Func`.
+
+### THE STRING ABI IS SURFACED, NOT SETTLED
+
+A string-taking native's C signature must be one of:
+
+```c
+long long kel_native_host__name(const struct { long long len; char b[]; } *s);
+long long kel_native_host__name(const char *s);   /* NUL-terminated only */
+```
+
+The lowering emits the first; the virtual machine hands its native a marshalled `String`. **The
+two embeddings are not source-compatible for such a native.** Writing a C host for one would
+have settled the question by writing whichever compiles, so the test omits strings and the
+choice stays with the operator.
+
+### Toolchain cost
+
+A C compiler (`cc`, `clang` or `gcc`) and the system linker. **Absent, it SKIPS LOUDLY** — a
+step that quietly does nothing reads as a step that passed, which is the existing file's own
+rule and is kept.
