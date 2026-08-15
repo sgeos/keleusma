@@ -205,6 +205,98 @@ MUTATIONS_STRONG = {
     "PushImmediate": ("                    1 => 1,", "                    1 => 0,"),
 }
 
+# ---------------------------------------------------------------------------
+# ROUND THREE: the 25 opcodes sweep one skipped -- the MEMORY AND COMPOSITE
+# surface, where the only genuine codegen defect this line has found lived.
+#
+# Most were skipped because opcodes share an emitter arm and one swap could not
+# be attributed. The fix is to GUARD the mutation on the opcode, the way round
+# two guarded `CmpNe` with `matches!(op, Op::CmpNe)`. `GetData` and `SetData`
+# share a path, so each is guarded on `is_read`.
+#
+# EVERY VARIANT HERE WAS CONFIRMED REACHABLE FIRST by
+# `variant_distribution_of_the_skipped_opcodes`. `GetField(FlatNested)` has ZERO
+# sites and is deliberately absent: mutating it would repeat the `PushImmediate`
+# error, where the largest apparent hole was a mutation of an operand the corpus
+# never emits.
+# ---------------------------------------------------------------------------
+MUTATIONS_ROUND3 = {
+    # --- the shared data arm, split by direction and by indexing -----------
+    "GetData": (
+        "                        let (byte_off, w, k) = resolve_shared_scalar(&data, slot, i8t, i64t)?;",
+        "                        let (byte_off, w, k) = resolve_shared_scalar(&data, slot, i8t, i64t)?;\n                        let byte_off = if is_read { byte_off + 1 } else { byte_off };",
+    ),
+    "SetData": (
+        "                        let (byte_off, w, k) = resolve_shared_scalar(&data, slot, i8t, i64t)?;",
+        "                        let (byte_off, w, k) = resolve_shared_scalar(&data, slot, i8t, i64t)?;\n                        let byte_off = if is_read { byte_off } else { byte_off + 1 };",
+    ),
+    "GetDataIndexed": (
+        "                        let (first_off, w, k) = resolve_shared_array(&data, slot, bound)?;",
+        "                        let (first_off, w, k) = resolve_shared_array(&data, slot, bound)?;\n                        let first_off = if is_read { first_off + 1 } else { first_off };",
+    ),
+    "SetDataIndexed": (
+        "                        let (first_off, w, k) = resolve_shared_array(&data, slot, bound)?;",
+        "                        let (first_off, w, k) = resolve_shared_array(&data, slot, bound)?;\n                        let first_off = if is_read { first_off } else { first_off + 1 };",
+    ),
+    # --- the division family, guarded so each attributes -------------------
+    "Div": (
+        "            Op::Div | Op::Mod => {\n                let rhs = st.pop();\n                let lhs = st.pop();",
+        "            Op::Div | Op::Mod => {\n                let rhs = st.pop();\n                let lhs = if matches!(op, Op::Div) { rhs } else { st.pop() };\n                let _unused = st.depth;",
+    ),
+    "Mod": (
+        "            Op::Div | Op::Mod => {\n                let rhs = st.pop();\n                let lhs = st.pop();",
+        "            Op::Div | Op::Mod => {\n                let rhs = st.pop();\n                let lhs = st.pop();\n                let (lhs, rhs) = if matches!(op, Op::Mod) { (rhs, lhs) } else { (lhs, rhs) };",
+    ),
+    # --- composites --------------------------------------------------------
+    "NewComposite": (
+                "                let mut off = site.offset;",
+                "                let mut off = site.offset + 8;",
+    ),
+    "GetField": (
+        '                        &[i64t.const_int(u64::from(*offset), false)],\n                        "cfaddr",',
+        '                        &[i64t.const_int(u64::from(*offset) + 1, false)],\n                        "cfaddr",',
+    ),
+    "GetTupleField": (
+        "                    TF::Flat { offset, kind } => SF::Flat {\n                        offset: *offset,",
+        "                    TF::Flat { offset, kind } => SF::Flat {\n                        offset: *offset + 1,",
+    ),
+    "GetEnumField": (
+        "                    EF::Flat { offset, kind } => SF::Flat {\n                        offset: *offset,",
+        "                    EF::Flat { offset, kind } => SF::Flat {\n                        offset: *offset + 1,",
+    ),
+    "GetIndex": (
+        "                let elem: u64 = match kind {\n                    SK::Int => 8,",
+        "                let elem: u64 = match kind {\n                    SK::Int => 4,",
+    ),
+    "IsEnum": (
+        "                    Some(ConstValue::Int(v)) => *v,",
+        "                    Some(ConstValue::Int(v)) => *v + 1,",
+    ),
+    # --- calls and conversions --------------------------------------------
+    # `args.reverse()` appears twice, once per call arm; the surrounding line
+    # disambiguates so each attributes to its own opcode.
+    "Call": (
+        "                let mut args: Vec<_> = (0..*arg_count).map(|_| st.pop()).collect();\n                args.reverse();",
+        "                let mut args: Vec<_> = (0..*arg_count).map(|_| st.pop()).collect();",
+    ),
+    "CallVerifiedNative": (
+        "                let mut args: Vec<_> = (0..argc).map(|_| st.pop()).collect();\n                args.reverse();",
+        "                let mut args: Vec<_> = (0..argc).map(|_| st.pop()).collect();",
+    ),
+    "WordToByte": (
+        '                    st.b.build_and(v, i64t.const_int(0xFF, false), "tobyte")',
+        '                    st.b.build_and(v, i64t.const_int(0x7F, false), "tobyte")',
+    ),
+    "Trap": (
+        "            Op::Trap(_) => {\n                st.b.build_unconditional_branch(trap_bb).unwrap();",
+        "            Op::Trap(_) => {\n                st.b.build_return(Some(&i64t.const_zero())).unwrap();",
+    ),
+    "Yield": (
+        "            Op::Yield if degenerate_yield.is_some_and(|ys| ys.contains(&i)) => {\n                let v = st.pop();\n                st.b.build_return(Some(&v)).unwrap();",
+        "            Op::Yield if degenerate_yield.is_some_and(|ys| ys.contains(&i)) => {\n                let v = st.pop();\n                let _ = v;\n                st.b.build_return(Some(&i64t.const_zero())).unwrap();",
+    ),
+}
+
 # Opcodes with sites that are NOT perturbed, each with the reason.  Recorded so
 # the sweep's coverage is explicit rather than implied by omission.
 NOT_PERTURBED = {
@@ -279,6 +371,10 @@ def main():
         wanted.remove("--strong")
         table = MUTATIONS_STRONG
         print("ROUND TWO: discriminating (result replaced by a constant)\n")
+    if "--round3" in wanted:
+        wanted.remove("--round3")
+        table = MUTATIONS_ROUND3
+        print("ROUND THREE: the memory and composite surface\n")
     backup = tempfile.NamedTemporaryFile(delete=False, suffix=".rs").name
     shutil.copy(LIB, backup)
     original = open(LIB).read()

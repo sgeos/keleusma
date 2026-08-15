@@ -607,3 +607,101 @@ fn operand_level_reachability_of_the_undetected_mutations() {
         "no PushImmediate sites; the check is vacuous"
     );
 }
+
+/// **Operand distribution for the opcodes the first sweep skipped.**
+///
+/// The reachability rule, learned the hard way: `PushImmediate` looked like the
+/// largest hole in the first sweep and was a vacuous mutation, because all 1337
+/// sites carry immediate index 0 and the mutation changed index 1, which has
+/// none.
+///
+/// The 25 skipped opcodes are mostly operand-carrying, and several have variants
+/// (`Flat` against `FlatNested` against `Boxed`) reached by different emitter
+/// arms. Mutating an arm the corpus never enters would repeat that error at
+/// larger scale, so this prints which variants actually occur BEFORE the
+/// mutation table for them is written.
+#[test]
+fn variant_distribution_of_the_skipped_opcodes() {
+    use std::collections::BTreeMap;
+    let mut var: BTreeMap<String, usize> = BTreeMap::new();
+    let mut popn: BTreeMap<u8, usize> = BTreeMap::new();
+    let mut callargs: BTreeMap<u8, usize> = BTreeMap::new();
+
+    for p in sources() {
+        let Ok(src) = std::fs::read_to_string(&p) else {
+            continue;
+        };
+        let Some(m) = tokenize(&src)
+            .ok()
+            .and_then(|t| parse(&t).ok())
+            .and_then(|a| compile(&a).ok())
+        else {
+            continue;
+        };
+        if !keleusma_native::module_refusals(&m, LowerOptions::default()).is_empty() {
+            continue;
+        }
+        let Some(entry) = m.entry_point else { continue };
+        if !params_are_scalar(&m, entry) {
+            continue;
+        }
+        for c in &m.chunks {
+            for op in &c.ops {
+                // The FULL debug rendering, truncated to the variant, so
+                // `GetField(Flat { .. })` and `GetField(FlatNested { .. })` are
+                // counted apart rather than together.
+                let d = format!("{op:?}");
+                let key = match op {
+                    Op::GetField(_)
+                    | Op::GetIndex(_)
+                    | Op::GetTupleField(_)
+                    | Op::GetEnumField(_)
+                    | Op::NewComposite(_) => {
+                        let head = d.split('(').next().unwrap_or("").to_string();
+                        let variant = d
+                            .split_once('(')
+                            .map(|(_, r)| r.split_whitespace().next().unwrap_or("?").to_string())
+                            .unwrap_or_default();
+                        format!("{head}({variant}")
+                    }
+                    Op::Div | Op::Mod | Op::Trap(_) | Op::IsEnum(_, _, _) => {
+                        d.split('(').next().unwrap_or(&d).to_string()
+                    }
+                    Op::GetData(_)
+                    | Op::SetData(_)
+                    | Op::GetDataIndexed(_, _)
+                    | Op::SetDataIndexed(_, _) => {
+                        d.split('(').next().unwrap_or(&d).to_string()
+                    }
+                    Op::PopN(n) => {
+                        *popn.entry(*n).or_insert(0) += 1;
+                        continue;
+                    }
+                    Op::Call(_, n) => {
+                        *callargs.entry(*n).or_insert(0) += 1;
+                        continue;
+                    }
+                    _ => continue,
+                };
+                *var.entry(key).or_insert(0) += 1;
+            }
+        }
+    }
+
+    println!("\n================ VARIANT DISTRIBUTION, opcodes skipped by sweep one");
+    for (k, n) in &var {
+        println!("  {k:<34} {n:>7}");
+    }
+    println!("\n  PopN operand distribution:");
+    for (k, n) in &popn {
+        println!("    PopN({k:<3}) {n:>7}");
+    }
+    println!("\n  Call argument-count distribution:");
+    for (k, n) in &callargs {
+        println!("    Call(_, {k:<3}) {n:>7}");
+    }
+    println!("================");
+    println!("  A mutation to a variant with ZERO sites is vacuous, whatever the");
+    println!("  opcode's headline count says.");
+    assert!(!var.is_empty(), "no variants counted; the check is vacuous");
+}
