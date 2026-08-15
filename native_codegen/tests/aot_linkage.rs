@@ -267,3 +267,172 @@ fn the_emitted_object_exports_the_entry_symbol() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// **The ABI, across a real linker.** Composites, a data segment, and a native
+/// call — the three things the existing linked test does not reach.
+///
+/// # Why this module and not an easier one
+///
+/// `a_linked_native_object_agrees_with_the_vm` links arithmetic, a branch, a
+/// loop and a call. All of that lives in registers and the object's own text.
+/// **None of it exercises the ABI**, which is where the interesting failures
+/// are:
+///
+/// - the **three trailing pointers** (shared, private, region) that every
+///   data-bearing or composite-building module carries;
+/// - a **native symbol resolved by the linker** rather than by
+///   `add_global_mapping`, which is how every JIT differential on this branch
+///   bound them and which cannot fail the way a real link can;
+/// - a **composite** built in the caller-provided region, so the region pointer
+///   is actually dereferenced across the boundary.
+///
+/// # What it does NOT cover, stated rather than implied
+///
+/// **No string.** A string-taking native is the operator's open decision (see
+/// below), and writing a C host for one would settle it by writing whichever
+/// host compiles. **No composite RETURN across the boundary** — the `sret`
+/// per-call-site block is exercised by `composite_return_aliasing.rs` through
+/// the JIT and is not re-verified here. **No `Stream` entry**; the linked entry
+/// is a `Func`.
+///
+/// # THE STRING ABI, WHICH THIS DELIBERATELY DOES NOT DECIDE
+///
+/// A string-taking native's C signature would have to be one of:
+///
+/// ```c
+/// long long kel_native_host__name(const struct { long long len; char b[]; } *s);
+/// long long kel_native_host__name(const char *s);   /* NUL-terminated only */
+/// ```
+///
+/// The lowering emits the first; the virtual machine hands its native a
+/// marshalled `String`. **The two embeddings are not source-compatible for such
+/// a native**, and choosing between them is host-visible surface. Surfaced, not
+/// settled.
+#[test]
+fn a_linked_object_with_natives_and_a_data_segment_agrees_with_the_vm() {
+    let Some(cc) = c_compiler() else {
+        eprintln!(
+            "\n\x1b[1;33mSKIPPED: no C compiler found, so ahead-of-time linkage of the \
+             ABI surface was NOT verified by this run.\x1b[0m\n"
+        );
+        return;
+    };
+
+    // `host::mix` is NOT commutative in its arguments, deliberately. The third
+    // vacuous test of this arc was a commutative callee that could not detect an
+    // argument swap; the same trap applies across a linked boundary and applies
+    // to natives too.
+    let src = "use host::mix(Word, Word) -> Word\n\
+               data s { acc: Word }\n\
+               fn main(a: Word, b: Word) -> Word {\n\
+                   s.acc = host::mix(a, b);\n\
+                   let p = (a, b);\n\
+                   s.acc + p.0 - p.1\n\
+               }";
+    let args = [[7i64, 3], [3, 7], [-5, 2], [0, 0]];
+
+    let dir = scratch("linked_abi");
+    let (obj, sym) = emit_object(src, "main", &dir);
+    assert!(obj.exists(), "no object file was written");
+
+    // The C host DEFINES the native. A JIT would have bound it by address; a
+    // linker must resolve the symbol by name, which is the stronger check and
+    // the one that fails if `native_symbol`'s mangling is wrong.
+    let cases: Vec<String> = args
+        .iter()
+        .map(|a| {
+            format!(
+                "    {{ char sh[64] = {{0}}; long long pv[8] = {{0}}; char rg[256] = {{0}};\n\
+                 \x20     printf(\"%lld\\n\", (long long){sym}({}LL, {}LL, sh, (char*)pv, rg)); }}",
+                a[0], a[1]
+            )
+        })
+        .collect();
+    let driver = format!(
+        "#include <stdio.h>\n\
+         long long kel_native_host__mix(long long x, long long y) {{ return x * 10 + y; }}\n\
+         long long {sym}(long long, long long, char*, char*, char*);\n\
+         int main(void) {{\n{}\n    return 0;\n}}\n",
+        cases.join("\n")
+    );
+    let cpath = dir.join("driver.c");
+    std::fs::write(&cpath, driver).expect("write driver");
+
+    let exe = dir.join("driver");
+    let link = Command::new(&cc)
+        .arg(&cpath)
+        .arg(&obj)
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("run the C compiler");
+    assert!(
+        link.status.success(),
+        "LINKING FAILED, which is itself the finding this test exists to \
+         surface — a JIT resolves what a linker will not:\n{}",
+        String::from_utf8_lossy(&link.stderr)
+    );
+
+    let run = Command::new(&exe).output().expect("run the linked binary");
+    assert!(
+        run.status.success(),
+        "the linked binary did not exit cleanly: {:?}",
+        run.status
+    );
+    let got: Vec<i64> = String::from_utf8_lossy(&run.stdout)
+        .lines()
+        .map(|l| l.trim().parse().expect("numeric output"))
+        .collect();
+
+    // The VM side registers the SAME native, so both sides compute `x * 10 + y`.
+    let expected: Vec<i64> = args
+        .iter()
+        .map(|a| {
+            let m = keleusma::compiler::compile(
+                &keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex"))
+                    .expect("parse"),
+            )
+            .expect("compile");
+            let need = keleusma::vm::required_persistent_capacity_for(&m);
+            let cap =
+                keleusma::vm::auto_arena_capacity_for(&m, &[]).expect("arena") + need + (1 << 20);
+            let mut arena = keleusma_arena::Arena::with_capacity(cap);
+            arena.resize_persistent(need).expect("persistent");
+            let n_shared = keleusma::vm::shared_data_bytes_for(&m);
+            let mut vm = keleusma::vm::Vm::new(m, &arena).expect("vm");
+            vm.register_native_closure("host::mix", |v: &[keleusma::bytecode::Value]| {
+                let g = |i: usize| match v.get(i) {
+                    Some(keleusma::bytecode::Value::Int(x)) => *x,
+                    other => panic!("host::mix got {other:?}"),
+                };
+                Ok(keleusma::bytecode::Value::Int(g(0) * 10 + g(1)))
+            });
+            let mut sh = vec![0u8; n_shared];
+            match vm
+                .call_with_shared(
+                    &mut sh,
+                    &[
+                        keleusma::bytecode::Value::Int(a[0]),
+                        keleusma::bytecode::Value::Int(a[1]),
+                    ],
+                )
+                .expect("vm run")
+            {
+                keleusma::vm::VmState::Finished(keleusma::bytecode::Value::Int(v))
+                | keleusma::vm::VmState::Yielded(keleusma::bytecode::Value::Int(v)) => v,
+                other => panic!("unexpected VM outcome: {other:?}"),
+            }
+        })
+        .collect();
+
+    assert_eq!(got.len(), expected.len(), "line count mismatch");
+    for (i, (g, e)) in got.iter().zip(expected.iter()).enumerate() {
+        assert_eq!(
+            g, e,
+            "LINKED native and VM disagree for args {:?}: native={g}, vm={e}",
+            args[i]
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
