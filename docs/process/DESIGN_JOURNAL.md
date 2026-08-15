@@ -13,6 +13,59 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE REPORTED `break` DISCREPANCY WAS A STRAY SEMICOLON, AND THE CONTROL IS WHAT SETTLED IT
+(2026-08-15).** The `v0.3.0` line reported that `docs/spec/GRAMMAR.md` documents a `break;` form the
+parser rejects, and left `BreakIf` unisolated in its opcode audit on the grounds that no documented
+form reaches it. Both halves are wrong, and the second cost them coverage.
+
+**The documented form parses verbatim.** I transcribed the grammar's own "Break Statement" example
+with nothing added but a function wrapper, and it is accepted, as are `break;` alone as a loop body,
+`break;` as the whole body of a conditional that is itself the whole loop body, and `break;`
+followed by further statements. `TokenKind::Break` is handled at statement position in `parse_block`,
+so there is no route from that form to an expression-position diagnostic at all. I established that
+by reproduction before reading the parser, and the parser then explained the reproduction rather
+than the other way round.
+
+**The real cause.** Their `break_cond` probe reads `for x in xs { ... }; b`. A `for` loop is a
+statement and consumes no trailing semicolon, so the parser resumes at statement position, reads the
+`;` as the start of an expression, and reports `unexpected token Semicolon in expression`. The
+diagnostic names the semicolon, and their source has two of them close together.
+
+**THE CONTROL IS THE WHOLE ARGUMENT.** Remove `break` entirely, keep the stray semicolon, and the
+failure is byte-identical. Without that, I would have had a plausible story about where the parser
+stopped and no evidence about what it objected to. One probe, and it converts a narrative into an
+attribution.
+
+**`BreakIf` is reachable.** With that one semicolon deleted and nothing else changed, the probe
+compiles and `main` carries `BreakIf(41)` and `Break(41)`. Measured, then pinned by execution using
+their own probe source as the case.
+
+**PINNED, NOT REPAIRED.** `if`, `match`, and `loop` accept a trailing semicolon; `for` does not.
+Accepting it widens the admitted language, which is the operator's call and not a correctness fix.
+`semicolon_and_tail_forms_are_unchanged` already pinned the accepting half for `if`, so the two
+tests now state an asymmetry rather than a rule.
+
+**A claim of my own that needed the same treatment.** The `GRAMMAR.md` sentence I wrote names three
+constructs. I had measured one. I checked `match` and `loop` before the merge rather than after,
+both hold, and all three are pinned instead of generalised from `if` — but the sentence would
+otherwise have been a three-part claim resting on a third of its evidence. **Writing the
+generalisation is the moment to check the generalisation.**
+
+**THE SHAPE, AND IT ARRIVED FROM BOTH DIRECTIONS IN ONE WEEK.** The other line sent me "a defect
+report names where a reader happened to look, not where the defect is", about `GRAMMAR.md`. This is
+the same shape returning: **a diagnostic names where the parser stopped, not what it objected to.**
+The cheap discriminator in both cases is a control that removes the suspected cause and checks the
+failure survives.
+
+**PROCESS, FROM THE CRASH RECOVERY THAT OPENED THIS SESSION.** `HANDOFF.md` reported itself stale
+correctly and for the wrong reason: its validity check was a hash match on `HEAD~1`, so the first
+unrelated merge invalidated a file whose contents were still largely true. It also carried a
+`selfhost_wire` count of 157 against the tree's 161. The rewrite uses an **ancestor check plus a
+content check** and **derives** counts with commands rather than restating them — including the
+boundary recount, whose first draft I wrote with hardcoded line numbers and then had to fix, which
+is the same defect inside the document warning about it.
+---
+
 **THE THREE REMAINING HOST MODELS, CHECKED AGAINST SOURCES THAT ARE NOT THEMSELVES (2026-08-15).**
 `analyze.kel` self-hosts the control-flow algorithm and the bound extraction, not the models, so the
 self-hosted differential reproduces whatever the reference says. One of its four inputs was found

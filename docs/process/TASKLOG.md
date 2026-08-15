@@ -15,8 +15,29 @@ Current sprint source of truth.
 > `STRING_POOL` byte-identically, as do the other nine stages. The "hard limit of 512" recorded in
 > the plan and the roadmap was a guard naming the wrong buffer, not a property of the names path.
 > Two latent defects surfaced doing it: `mi_chunk_names` overwrote the directory from the seventh
-> chunk onward, and `mi_join` summed its emitter results so a failure read as success. **Known open
-> and unsound**: the field ops' operand-stack net understates the WCMU peak; see REVERSE_PROMPT.
+> chunk onward, and `mi_join` summed its emitter results so a failure read as success. ~~**Known open
+> and unsound**: the field ops' operand-stack net understates the WCMU peak.~~ **CLOSED** later the
+> same day; see the note below.
+
+> **Currency note (2026-08-15, later).** The understated worst-case-memory bound is **FIXED** and
+> merged (`d3fd5cb6`, PR #104). `GetField`/`GetTupleField`/`GetEnumField` declared an operand-stack
+> net of −1 where the virtual machine's is 0, so every later operation's peak was computed from a
+> base one slot too low per field read. The repair splits the two ROLES that one model was serving:
+> `stack_growth`/`stack_shrink` are now exclusively the peak model, and `verify::op_depth_effect`
+> is the pop/push model that `text_size` reads. The line above is struck rather than deleted because
+> it records why the defect survived.
+>
+> All four models `analyze.kel` consumes are now checked against sources that are not themselves
+> (PR #105), because **a differential against the model under test cannot detect that the model is
+> wrong**. `Op::heap_alloc()` is correct. `Op::cost()` **disagrees with measurement**, two findings
+> pinned rather than repaired, and only 17 opcodes of 66 were ever measured. The class tables are
+> correct but `analyze_class` ends in `_ => (0, 0)`, so a control-flow opcode added later and not
+> classified becomes "plain" silently — **open, and the highest-value item on the correctness
+> surface**.
+>
+> The `break` discrepancy reported by the `v0.3.0` line is **answered and closed** (PR #106). The
+> documented form parses; the rejection came from a stray semicolon after a `for` block, and
+> `BreakIf` was reachable all along.
 
 > **Currency note (2026-08-09).** The two entries immediately below described the cutover as parked on a local red branch with `BYTECODE_VERSION` at 1. That was true on 2026-08-06 and stopped being true when the cutover merged; this section was not restamped at the time. They are kept for the reasoning they carry and are marked superseded rather than rewritten. The live state is the paragraph above.
 
