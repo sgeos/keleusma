@@ -267,3 +267,71 @@ Sixteen opcodes remain unisolated and are named above rather than passed over.
 
 Still **reported, not repaired**: `src/verify.rs` and `src/bytecode.rs` belong to the `v0.2.3`
 line and are untouched here.
+
+---
+
+# Addendum 2, 2026-08-14: the audit's hole is closed. Nothing further is wrong.
+
+Sixteen opcodes occurred in the shipped corpus with no isolating synthetic case and were
+explicitly **not claimed clean**. Twelve new cases now isolate thirteen of them.
+
+## The verdict: nothing further
+
+`BitAnd`, `BitOr`, `BitXor` and all six comparisons declare **net −1**, and that is
+**CORRECT** — each pops two operands and pushes one. `Reset`, `Stream`, `Yield` and `Not` are
+likewise consistent.
+
+**The wrong set is unchanged**: `GetField`, `GetTupleField` and `GetEnumField` on the net, and
+the checked-arithmetic family on the transient. No new defect.
+
+This is the outcome the goal named as a success in its own right, and it is worth stating
+plainly rather than burying: **the four already reported are the whole set, over every opcode
+the corpus exercises that a minimal case can reach.**
+
+## Three remain unreachable, and why
+
+| opcode | why no isolating case |
+|---|---|
+| `BreakIf` | the `break if <cond>` form the case used is **rejected by the parser**; the real syntax was not found and is not guessed at |
+| `Dup` | **compiler-emitted only** — no source construct maps to it directly |
+| `PushImmediate` | **compiler-emitted only** — an optimisation of `Const` for small values |
+
+`Dup` and `PushImmediate` are not reachable from source by construction, so "no isolating
+case" is a property of the language rather than a gap in the audit. `BreakIf` is reachable and
+was not reached; that one is a genuine remaining hole and is named as such.
+
+## Five of the seventeen cases are reference-compiler rejections
+
+`bitwise` and `shift` use call syntax the parser does not accept for those operators,
+`loop_for` a `for` form it does not parse, `stream` fails the type checker, and `break_if2`
+fails the parser. **Rejections, not backend gaps** — printed by the test, never silently
+dropped, which is the distinction this branch keeps having to redraw.
+
+## `BreakIf` stays unisolated, and the reason is a GRAMMAR/PARSER discrepancy
+
+Not a failed guess this time. `docs/spec/GRAMMAR.md` documents the form directly:
+
+```text
+for i in 0..8 {
+  if channels[i] > 0.0 {
+    break;
+  }
+  audio::set_volume(i, 1.0);
+}
+```
+
+Reproduced faithfully — `break;` inside an `if` inside a `for`, with a trailing statement after
+the `if` so the block is not the loop body's value — the reference compiler still rejects it:
+
+```text
+break_cond   parse: ParseError { message: "unexpected token Semicolon in expression" }
+```
+
+The error is at the `break;` semicolon, not at the float in the grammar's example. **The parser
+does not accept the statement the grammar specifies**, so `BreakIf` cannot be reached from
+source by any form documented for it.
+
+That leaves three opcodes unisolated, and all three now have a stated reason rather than a
+gap: `Dup` and `PushImmediate` are compiler-emitted only, and **`BreakIf` is unreachable
+through the documented syntax**. Whether the grammar is aspirational or the parser lags is a
+question for the `v0.2.3` line; either way it is not a native-lowering matter.

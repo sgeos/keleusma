@@ -73,3 +73,183 @@ minimal-ISA constraint is untouched.
    there is nothing to stub. `lower_module` returning `Ok` is not verification.
 6. Keep `codegen.kel` refused as the must-not-fire control — its refusal is delegated
    suspension, a soundness matter, and must not be widened by this work.
+
+---
+
+# The corpus DID force this, and I said it did not. `10_multbyte.kel` is the counterexample.
+
+2026-08-14. The section above states that no multi-chunk composite return exists in the corpus,
+so `sret` was authorised but not yet forced. **That was wrong.**
+
+## The defect, in three lines
+
+```text
+fn mk(x: Word, y: Word) -> [Word; 2] { [x, y] }
+fn main(a: Word, b: Word) -> Word { let p = mk(a, b); let r = mk(b, a); p[0] + r[0] }
+```
+
+With `a = 3, b = 4` the answer is `3 + 4 = 7`. **Natively it is 8**, because `p[0]` reads `4`:
+the second call's body overwrote the first's.
+
+## The mechanism
+
+`plan_chunk_region` gives every flat site in a chunk a distinct offset, and plans **per chunk
+from zero**. `mk` therefore writes its result at the same region offset on every call, while
+the caller holds two of those results live at once. One buffer, one offset, two live values.
+
+**A single composite return is correct**, and so is a caller composite beside one callee
+result — both are pinned as passing tests in `composite_return_aliasing.rs`. That is exactly
+why the corpus looked clean: nothing was wrong until a caller kept two alive, and no test kept
+two alive.
+
+## How it surfaced
+
+`corpus_differential.rs` reported `10_multbyte.kel` returning `1` on the virtual machine and
+`0` natively, on its first run. That module calls `add_2` and `sub_2`, each returning
+`[Word; 2]`, from a `main` that also builds four arrays of its own. It had lowered
+"successfully" since composites landed and **had never been executed**, so nothing contradicted
+the no-multi-chunk-return claim.
+
+## What `sret` fixes, and why it is now forced
+
+Under the caller-allocated return slot the caller reserves a **distinct slot per CALL SITE**,
+so two calls to one callee write to two places and cannot alias. The convention was the right
+answer before this was known; it is now also a repair rather than a provision for the future.
+
+The per-call-site region-cost measurement recorded above is still owed and is still step one.
+
+## Status
+
+**Reported and pinned, not repaired.** `composite_return_aliasing.rs` carries the failing case
+as `#[ignore]` with the reason, plus the two boundary cases that pass. The `#[ignore]` is a
+pinned defect awaiting a repair, not a skipped test, and `10_multbyte.kel` remains in
+`KNOWN_DISAGREEMENTS` where the set-equality assertion keeps it visible.
+
+---
+
+# Step one, taken at last: `sret` costs 4.9% of region bytes
+
+`native_codegen/tests/probe_sret_cost.rs`, 2026-08-14. This document made measuring the
+per-call-site cost step one when the convention was authorised, and it had never been taken.
+
+| | |
+|---|---|
+| composite-returning call sites, whole corpus | **13**, across 5 modules |
+| region bytes today | 4576 |
+| bytes `sret` adds | **+224** |
+| growth | **4.9%** |
+
+| module | region now | `+sret` | sites |
+|---|---|---|---|
+| `09_big_numbers.kel` | 96 | 32 | 2 |
+| `10_multbyte.kel` | 192 | 32 | 2 |
+| `piano_roll_0.kel` | 1280 | 24 | 1 |
+| `piano_roll_1.kel` | 1280 | 24 | 1 |
+| `rogue_dungen.kel` | 16 | **112** | 7 |
+
+## The verdict: proceed
+
+**4.9% is not a blow-up**, and the concern this measurement existed to test — that per-SITE
+reservation would multiply where per-live-value would not — does not materialise at corpus
+scale. Thirteen sites in fifty-five modules is a thin surface.
+
+**`rogue_dungen` is the outlier and reads worse than it is.** Its `+112` is 800% of a 16-byte
+current region, which is arithmetic on a small base rather than a scaling problem. In absolute
+terms it is a hundred and twelve bytes.
+
+The figure is an **upper bound** on what any liveness-aware reuse could achieve, since a slot
+is reserved per site whether or not two sites' values are ever live together. Nobody needs to
+pursue that reuse on these numbers.
+
+## What this does not license
+
+The measurement clears the COST. It says nothing about the implementation being correct, which
+`composite_return_aliasing.rs` and `corpus_differential.rs` are for. And it does not license
+widening the convention: one `sret` pointer still describes one contiguous body, and a case
+needing split storage remains an operator decision.
+
+## The implementation's shape, discovered while starting it
+
+Larger than the convention makes it sound, and the reason is worth having written down before
+anyone budgets for it.
+
+**`plan_chunk_region(chunk: &Chunk)` cannot see callee return shapes.** It takes a chunk, and
+the return slot must be sized from `Module::signatures[callee].ret`. It needs a module-aware
+variant, and the existing per-chunk one has seven tests against it.
+
+**The hidden pointer changes the SIGNATURE of every composite-returning chunk**, and that
+ripples:
+
+| touched | why |
+|---|---|
+| `trailing_ptrs` | today all-three-or-none; the return slot is a fourth, present only on some chunks |
+| the `Op::Call` arity check | compares `arg_count` against `count_params() - trailing_ptrs()` |
+| `lower_module`'s declaration loop | builds each `kel_chunk_N` signature |
+| **every harness** | `corpus_differential.rs`, `rogue_ai_differential.rs`, `module_differential.rs`, `rogue_dungen_differential.rs` and `native_calls.rs` all assert `count_params()` before calling |
+
+Those assertions are a feature, not an obstacle: they are why a signature change fails loudly
+instead of segfaulting. But they must all move together, and they are the reason this is not a
+one-sitting change.
+
+**A tempting substitute to refuse.** The caller could leave signatures alone and `memcpy` the
+returned body into a per-site slot immediately after the call. That fixes the aliasing and
+costs a copy per call where `sret` costs none. It is a different convention from the one
+authorised, and the goal's instruction not to quietly substitute applies to it as much as to
+the bump pointer. If the copy is ever wanted, it should be chosen, not slid in.
+
+**Status: step one complete and favourable (4.9%), implementation NOT started.** The pinned
+defect stands, `10_multbyte.kel` remains in `KNOWN_DISAGREEMENTS`, and nothing has been widened
+or allowlisted to make anything pass.
+
+---
+
+# IMPLEMENTED 2026-08-14. The aliasing is repaired and no signature changed.
+
+## The shape that made it contained
+
+The section above predicted a hidden trailing parameter rippling into `trailing_ptrs`, the
+`Op::Call` arity check, and five harnesses. **It did not need one.**
+
+**The region pointer is already a parameter the caller forwards.** Instead of forwarding its
+own base, the caller forwards `base + a per-call-site offset`. The callee writes its flat sites
+at offsets it plans from zero, relative to whatever pointer it receives — so two calls to one
+callee land in two disjoint places.
+
+That is the authorised convention exactly: **the caller reserves storage it owns and hands the
+callee an address.** The callee still never names an arena, so it still survives the operator's
+expected multiple arenas. It is not a bump pointer — every offset is planned statically.
+
+| added | what it does |
+|---|---|
+| `region_total_bytes(module, chunk, depth)` | bytes a chunk needs **including every callee it can reach**. Terminates because the type checker rejects recursion, the same property the native stack bound leans on; a depth guard covers bytecode that did not come from the compiler |
+| `plan_call_site_regions(module, chunk)` | the chunk's own sites occupy `[0, own_bytes)`, then each `Op::Call` gets a disjoint block sized by its callee's transitive total |
+
+## Verified
+
+| check | result |
+|---|---|
+| `two_live_composite_returns_must_not_alias` | **un-ignored and PASSING** |
+| `a_single_composite_return_is_correct` | still passes |
+| `a_caller_composite_beside_one_callee_result_is_correct` | still passes |
+| `corpus_differential.rs` | **40 executed and agreeing**, up from 39 |
+| `KNOWN_DISAGREEMENTS` | **EMPTY** |
+
+**The allowlist emptied because the behaviour changed, and the set-equality assertion proved
+it**: the test FAILED on `10_multbyte.kel`'s departure and had to be updated to match. That is
+the mechanism working in the direction that means success, and it is why the entry could not
+have been removed quietly.
+
+**Mutation-verified**, with the mutation count checked before the result was read: forcing
+every call site's offset to zero restores the aliasing and fails the guard. `src/region.rs`
+restored byte-identical under `cmp`.
+
+## What did NOT happen
+
+No signature changed. **No refusal was widened** — composite-returning chunks remain admitted,
+and were repaired rather than re-refused. The caller-side `memcpy` substitute was not used.
+
+## The harnesses now size the region transitively
+
+Five harnesses summed `plan_chunk_region` per chunk, which **under-counts** once each call site
+gets its own block. They use `region_total_bytes(m, entry, 0)`. The canary would have caught
+the under-count as a write past the buffer; sizing it correctly is better than relying on that.

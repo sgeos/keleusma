@@ -846,6 +846,9 @@ pub fn lower_chunk<'ctx>(
             degenerate_yield: None,
             natives: &[],
             native_shapes: &[],
+            // `lower_chunk` sees no module, so it resolves no call and needs no
+            // per-site offsets; it refuses `Op::Call` for the same reason.
+            call_regions: &[],
         },
     )
 }
@@ -995,13 +998,15 @@ fn lower_module_with<'ctx>(
         )));
     }
 
-    for (chunk, func) in program.chunks.iter().zip(declared.iter()) {
+    for (i, (chunk, func)) in program.chunks.iter().zip(declared.iter()).enumerate() {
         let tail = degenerate_stream_yield(chunk, program);
+        let call_regions = region::plan_call_site_regions(program, i);
         let cfg = BodyCfg {
             opts,
             degenerate_yield: tail.as_deref(),
             natives: &program.native_names,
             native_shapes: &program.native_return_shapes,
+            call_regions: &call_regions,
         };
         match lower_chunk_body(ctx, module, chunk, *func, &declared, data, cfg) {
             Ok(_) => {}
@@ -1140,6 +1145,16 @@ struct BodyCfg<'a> {
     /// native's result was refused for a width the module actually declares.
     /// `rogue_dungen` is the corpus case.
     native_shapes: &'a [keleusma::bytecode::WireShape],
+    /// Region offset for each `Op::Call` in this chunk, by op index.
+    ///
+    /// **The caller-allocated return slot, expressed through the pointer the
+    /// caller already passes.** A callee writes its flat sites at offsets it
+    /// plans from zero, so handing every call site the same region base makes
+    /// two calls to one callee overwrite each other — the `10_multbyte.kel`
+    /// defect, where `p[0]` read `r[0]`'s value. Giving each site a disjoint
+    /// block fixes it without changing any signature: the callee still receives
+    /// one region pointer and never names an arena.
+    call_regions: &'a [(usize, u32)],
 }
 
 /// The external symbol a declared native binds to.
@@ -1390,6 +1405,7 @@ fn lower_chunk_body<'ctx>(
         degenerate_yield,
         natives,
         native_shapes,
+        call_regions,
     } = cfg;
     let i64t = ctx.i64_type();
     let i128t = ctx.i128_type();
@@ -2056,7 +2072,29 @@ fn lower_chunk_body<'ctx>(
                 if let (Some(sb), Some(pb), Some(rb)) = (shared_base, private_base, region_base) {
                     args.push(sb.into());
                     args.push(pb.into());
-                    args.push(rb.into());
+                    // **A disjoint region block per CALL SITE**, not the caller's
+                    // own base. Two calls to one callee otherwise write to the
+                    // same offsets and the first result is destroyed by the
+                    // second; `composite_return_aliasing.rs` pins that case.
+                    let off = call_regions
+                        .iter()
+                        .find(|(ip, _)| *ip == i)
+                        .map(|(_, o)| *o)
+                        .unwrap_or(0);
+                    if off == 0 {
+                        args.push(rb.into());
+                    } else {
+                        let base = unsafe {
+                            st.b.build_in_bounds_gep(
+                                i8t,
+                                rb,
+                                &[i64t.const_int(u64::from(off), false)],
+                                "callee_region",
+                            )
+                            .unwrap()
+                        };
+                        args.push(base.into());
+                    }
                 }
 
                 let ret = match st

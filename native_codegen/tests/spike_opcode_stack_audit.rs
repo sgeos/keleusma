@@ -113,6 +113,52 @@ const CASES: &[(&str, &str)] = &[
         "static_str",
         "use host::name\nfn main(a: Word, b: Word) -> Word { host::name(\"x\"); a }",
     ),
+    // Added 2026-08-14 to close the audit's own hole: sixteen opcodes occurred
+    // in the shipped corpus with no isolating case. Each entry forces one.
+    (
+        "cmp_eq",
+        "fn main(a: Word, b: Word) -> Word { if a == b { a } else { b + b } }",
+    ),
+    (
+        "cmp_ne",
+        "fn main(a: Word, b: Word) -> Word { if a != b { a } else { b + b } }",
+    ),
+    (
+        "cmp_le",
+        "fn main(a: Word, b: Word) -> Word { if a <= b { a } else { b + b } }",
+    ),
+    (
+        "cmp_ge",
+        "fn main(a: Word, b: Word) -> Word { if a >= b { a } else { b + b } }",
+    ),
+    (
+        "logical_not",
+        "fn main(a: Word, b: Word) -> Word { if not (a == b) { a } else { b } }",
+    ),
+    ("bit_and2", "fn main(a: Word, b: Word) -> Word { a band b }"),
+    ("bit_or2", "fn main(a: Word, b: Word) -> Word { a bor b }"),
+    ("bit_xor2", "fn main(a: Word, b: Word) -> Word { a bxor b }"),
+    (
+        "shift_left",
+        "fn main(a: Word, b: Word) -> Word { a lsl 2 }",
+    ),
+    (
+        "shift_right",
+        "fn main(a: Word, b: Word) -> Word { a lsr 2 }",
+    ),
+    // `break` is a plain statement valid ONLY inside a `for` loop, and invalid
+    // in a `loop` function (docs/spec/GRAMMAR.md). `BreakIf` is what the
+    // compiler emits for a CONDITIONAL break. My earlier `break if <cond>` was
+    // invented and the parser rejected it; this form came from the grammar and
+    // `04_for_in.kel`, not from a third guess.
+    (
+        "break_cond",
+        "data s { n: Word }\nfn main(a: Word, b: Word) -> Word { let xs = [1, 2, 3, 4]; for x in xs { if x > a { break; } s.n = x; }; b }",
+    ),
+    (
+        "stream_scalar",
+        "loop main(input: Word) -> Word { let _ = yield input; 0 }",
+    ),
 ];
 
 fn compiled_cases() -> Vec<(&'static str, Module)> {
