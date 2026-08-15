@@ -517,3 +517,83 @@ fn dump_opcode_module_map() {
     }
     assert!(!map.is_empty(), "the map is empty; the sweep would run nothing");
 }
+
+/// **Is an "undetected" mutation actually REACHABLE?**
+///
+/// Round two of the sweep left six opcodes undetected even with their result
+/// replaced by a constant. That has two readings, and only one is a coverage
+/// hole: either the corpus never observes the opcode, or the mutation never
+/// applied to a site the corpus emits.
+///
+/// `PushImmediate` is the case that forces the question. Its arm maps an
+/// IMMEDIATE INDEX to a value, and the mutation changed the arm for index `1`
+/// only. With 1337 sites across 26 modules that sounds broad, but if none of
+/// those sites carries index 1 the mutation is vacuous and says nothing at all
+/// about coverage. Counting a vacuous mutation as a hole is the same error as
+/// counting a vacuous agreement as coverage.
+#[test]
+fn operand_level_reachability_of_the_undetected_mutations() {
+    use std::collections::BTreeMap;
+    let mut imm: BTreeMap<u8, usize> = BTreeMap::new();
+    let mut owners: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+
+    for p in sources() {
+        let name = p.file_name().unwrap().to_str().unwrap().to_string();
+        let Ok(src) = std::fs::read_to_string(&p) else {
+            continue;
+        };
+        let Some(m) = tokenize(&src)
+            .ok()
+            .and_then(|t| parse(&t).ok())
+            .and_then(|a| compile(&a).ok())
+        else {
+            continue;
+        };
+        if !keleusma_native::module_refusals(&m, LowerOptions::default()).is_empty() {
+            continue;
+        }
+        let Some(entry) = m.entry_point else { continue };
+        if !params_are_scalar(&m, entry) {
+            continue;
+        }
+        for c in &m.chunks {
+            for op in &c.ops {
+                match op {
+                    Op::PushImmediate(n) => *imm.entry(*n).or_insert(0) += 1,
+                    Op::BitAnd => owners.entry("BitAnd").or_default().push(name.clone()),
+                    Op::BitOr => owners.entry("BitOr").or_default().push(name.clone()),
+                    Op::Shl => owners.entry("Shl").or_default().push(name.clone()),
+                    Op::Shr => owners.entry("Shr").or_default().push(name.clone()),
+                    Op::CmpNe => owners.entry("CmpNe").or_default().push(name.clone()),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    println!("\n================ REACHABILITY OF THE UNDETECTED MUTATIONS");
+    println!("  PushImmediate operand distribution (the mutation touched index 1):");
+    for (n, c) in &imm {
+        let flag = if *n == 1 { "   <- THE MUTATED INDEX" } else { "" };
+        println!("    immediate {n:>3} : {c:>6} sites{flag}");
+    }
+    let idx1 = imm.get(&1).copied().unwrap_or(0);
+    println!(
+        "\n  => index 1 has {idx1} sites. {}",
+        if idx1 == 0 {
+            "THE MUTATION WAS VACUOUS -- it is not a coverage hole."
+        } else {
+            "The mutation was reachable, so the hole is real."
+        }
+    );
+
+    println!("\n  Modules owning each undetected opcode:");
+    for (k, mods) in &owners {
+        let mut u: Vec<String> = mods.clone();
+        u.sort();
+        u.dedup();
+        println!("    {k:<8} {:>5} sites in {:?}", mods.len(), u);
+    }
+    println!("================");
+    assert!(!imm.is_empty(), "no PushImmediate sites; the check is vacuous");
+}

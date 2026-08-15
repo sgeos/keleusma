@@ -32,6 +32,13 @@ OUTCOMES PER MODULE
   AGREE      the differential passed -- this module did NOT detect the defect
   DISAGREE   the differential reported a mismatch -- detected
   SIGNAL     the process died on a signal -- detected, fatally
+  HANG       the run did not terminate inside PER_MODULE_TIMEOUT -- detected.
+             A total-functional language whose whole value proposition is a
+             definitive WCET bound does not get to loop forever, so
+             non-termination is a real observation and not merely a timeout.
+             The first attempt at this sweep had NO timeout and stalled twelve
+             minutes on one module, because turning `CheckedAdd` into a
+             subtraction stops a loop counter ever reaching its bound.
   NOLOWER    the module stopped lowering -- the mutation broke the emitter
              rather than changing its meaning, so it is not a semantic
              perturbation and the row is not evidence either way
@@ -47,6 +54,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+
+# A mutated module may simply not terminate; see HANG above.
+PER_MODULE_TIMEOUT = 20
+BUILD_TIMEOUT = 900
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -148,6 +159,52 @@ MUTATIONS = {
     ),
 }
 
+# ---------------------------------------------------------------------------
+# ROUND TWO: the DISCRIMINATING set, added after round one reported eight
+# opcodes undetected.
+#
+# An "undetected" result has two very different causes and round one cannot tell
+# them apart:
+#
+#   * a GENUINE HOLE -- the corpus never observes this opcode's contribution;
+#   * an EQUIVALENT MUTANT -- the perturbation does not change behaviour, so
+#     there was nothing to detect and the corpus is not at fault.
+#
+# `PushImmediate 1 => 2` is the clearest case of the second: booleans are
+# consumed by `If`/`BreakIf`, which test `!= 0`, and 2 is exactly as truthy as 1.
+#
+# Each mutation below replaces the opcode's RESULT with a constant, which is the
+# most observable change available. If a maximally destructive mutation is still
+# undetected, the hole is real.
+# ---------------------------------------------------------------------------
+MUTATIONS_STRONG = {
+    "BitAnd": (
+        'Op::BitAnd => st.b.build_and(lhs, rhs, "band").unwrap(),',
+        'Op::BitAnd => { let _ = (lhs, rhs); i64t.const_zero() },',
+    ),
+    "BitOr": (
+        'Op::BitOr => st.b.build_or(lhs, rhs, "bor").unwrap(),',
+        'Op::BitOr => { let _ = (lhs, rhs); i64t.const_zero() },',
+    ),
+    "Shl": (
+        'Op::Shl => st.b.build_left_shift(value, masked, "shl").unwrap(),',
+        'Op::Shl => { let _ = (value, masked); i64t.const_zero() },',
+    ),
+    "Shr": (
+        'Op::Shr => st.b.build_right_shift(value, masked, true, "shr").unwrap(),',
+        'Op::Shr => { let _ = (value, masked); i64t.const_zero() },',
+    ),
+    "CmpNe": (
+        "let c = st.b.build_int_compare(pred, lhs, rhs, \"cmp\").unwrap();",
+        "let c = st.b.build_int_compare(if matches!(op, Op::CmpNe) { IntPredicate::EQ } else { pred }, lhs, rhs, \"cmp\").unwrap();",
+    ),
+    "Dup": (
+        "Op::Dup => {\n                let v = st.pop();\n                st.push(v);\n                st.push(v);",
+        "Op::Dup => {\n                let v = st.pop();\n                let _ = v;\n                st.push(i64t.const_zero());\n                st.push(i64t.const_zero());",
+    ),
+    "PushImmediate": ("                    1 => 1,", "                    1 => 0,"),
+}
+
 # Opcodes with sites that are NOT perturbed, each with the reason.  Recorded so
 # the sweep's coverage is explicit rather than implied by omission.
 NOT_PERTURBED = {
@@ -216,7 +273,12 @@ def opcode_module_map():
 
 
 def main():
-    wanted = sys.argv[1:]
+    wanted = list(sys.argv[1:])
+    table = MUTATIONS
+    if "--strong" in wanted:
+        wanted.remove("--strong")
+        table = MUTATIONS_STRONG
+        print("ROUND TWO: discriminating (result replaced by a constant)\n")
     backup = tempfile.NamedTemporaryFile(delete=False, suffix=".rs").name
     shutil.copy(LIB, backup)
     original = open(LIB).read()
@@ -224,7 +286,7 @@ def main():
     mapping = opcode_module_map()
     results = {}
     try:
-        for opcode, (old, new) in sorted(MUTATIONS.items()):
+        for opcode, (old, new) in sorted(table.items()):
             if wanted and opcode not in wanted:
                 continue
             mods = mapping.get(opcode, [])
@@ -241,7 +303,13 @@ def main():
             open(LIB, "w").write(original.replace(old, new))
             assert new in open(LIB).read(), "mutation did not land"
 
-            build = run(["cargo", "build", "--tests"])
+            # Build ONLY the target the sweep runs. `--tests` relinks every
+            # test binary against LLVM and dominated the first attempt's wall
+            # clock.
+            build = run(
+                ["cargo", "build", "--test", "corpus_differential"],
+                timeout=BUILD_TIMEOUT,
+            )
             if build.returncode != 0:
                 results[opcode] = ("BUILD FAILED", [])
                 open(LIB, "w").write(original)
@@ -250,20 +318,33 @@ def main():
             per = []
             for mod in mods:
                 env = dict(os.environ, KEL_ONLY_MODULE=mod)
-                r = run(
-                    ["cargo", "test", "--test", "corpus_differential", "--", "--nocapture"],
-                    env=env,
-                )
+                try:
+                    r = run(
+                        ["cargo", "test", "--test", "corpus_differential", "--", "--nocapture"],
+                        env=env,
+                        timeout=PER_MODULE_TIMEOUT,
+                    )
+                except subprocess.TimeoutExpired:
+                    per.append((mod, "HANG"))
+                    continue
                 txt = r.stdout + r.stderr
+                # **Classify on the EXIT STATUS first.** An earlier version
+                # tested `"EXEMPT" in txt`, which is true of every run because
+                # the summary always prints an EXEMPT line, so every DISAGREE
+                # was misfiled as NOLOWER and `CmpLt` came back "undetected" --
+                # contradicting a result already verified by hand. The
+                # contradiction is what exposed it.
                 if "signal:" in txt:
                     per.append((mod, "SIGNAL"))
-                elif "EXECUTED AND AGREEING : 0" in txt and "EXEMPT" in txt:
-                    per.append((mod, "NOLOWER"))
-                elif r.returncode == 0:
+                elif r.returncode != 0:
+                    per.append((mod, "DISAGREE"))
+                elif "EXECUTED AND AGREEING : 1" in txt:
                     per.append((mod, "AGREE"))
                 else:
-                    per.append((mod, "DISAGREE"))
-            detected = [m for m, o in per if o in ("DISAGREE", "SIGNAL")]
+                    # Exit 0 with nothing executed: the module was exempted,
+                    # most often because the mutation stopped it lowering.
+                    per.append((mod, "NOLOWER"))
+            detected = [m for m, o in per if o in ("DISAGREE", "SIGNAL", "HANG")]
             nolower = [m for m, o in per if o == "NOLOWER"]
             if len(nolower) == len(per):
                 results[opcode] = ("NOT SEMANTIC (lowering aborted)", per)
