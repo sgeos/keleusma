@@ -2808,11 +2808,28 @@ impl Op {
         NOMINAL_COST_MODEL.cycles(self)
     }
 
-    /// Number of operand-stack slots pushed by this instruction.
+    /// Transient reach of this instruction ABOVE its starting operand depth.
     ///
-    /// This is the maximum the operand stack can grow during execution of
-    /// this single instruction relative to its starting depth. Used by the
-    /// WCMU analysis to compute peak stack consumption.
+    /// **This is not a push count, and reading it as one is a defect this
+    /// project has already paid for.** Together with [`Op::stack_shrink`] it
+    /// forms exactly one model, the operand-stack PEAK model that the
+    /// worst-case-memory-usage walk consumes:
+    ///
+    /// - `stack_growth` is how far the stack rises above its current depth
+    ///   during the instruction, which is what bounds the peak.
+    /// - `stack_growth - stack_shrink` is the NET, which propagates into the
+    ///   base every later instruction's peak is measured from.
+    ///
+    /// For an instruction that pops and then pushes, neither number is its pop
+    /// or push count. `Op::GetField` pops a composite and pushes a field value,
+    /// so it pushes one and pops one — and its correct entries here are `0` and
+    /// `0`, because it never rises above the slot it popped and its net is zero.
+    ///
+    /// **For true pop and push counts use [`crate::verify::op_depth_effect`]**,
+    /// which returns `(required, delta)`: the instruction pops `required` and
+    /// pushes `required + delta`. `text_size` reads that one; it used to read
+    /// this one and desynchronised its shadow stack on every pop-and-push
+    /// instruction.
     pub fn stack_growth(&self) -> u32 {
         match self {
             Op::Const(_) | Op::GetLocal(_) | Op::GetData(_) | Op::Dup => 1,
@@ -2903,7 +2920,15 @@ impl Op {
         }
     }
 
-    /// Number of operand-stack slots popped by this instruction.
+    /// The subtrahend of the operand-stack PEAK model's net.
+    ///
+    /// **Not a pop count.** See [`Op::stack_growth`] for the full contract: the
+    /// pair states a transient reach and a net, and `stack_growth - stack_shrink`
+    /// is the only quantity this value is meaningful in. `Op::CheckedAdd` pops
+    /// two operands and pushes three, and its entry here is `0`, because its net
+    /// is `+1` and `stack_growth` already carries the whole of it.
+    ///
+    /// For true pop counts use [`crate::verify::op_depth_effect`].
     pub fn stack_shrink(&self) -> u32 {
         match self {
             Op::Const(_) | Op::GetLocal(_) | Op::GetData(_) | Op::Dup => 0,
@@ -2954,8 +2979,29 @@ impl Op {
             // discriminant counts as one) (B28 P4).
             Op::NewComposite(c) => c.count() as u32,
 
-            Op::GetField(_) | Op::GetIndex(_) | Op::GetTupleField(_) | Op::GetEnumField(_) => 1,
-            Op::Len => 0,
+            // `GetIndex` pops the container AND the index and pushes one value,
+            // so its net is -1 and `growth 0 / shrink 1` states that correctly.
+            // It shares no defect with the field reads below; it only shared a
+            // match arm with them, which is what made it look like a fourth
+            // instance of their problem.
+            Op::GetIndex(_) => 1,
+            // THE FIELD READS POP ONE COMPOSITE AND PUSH ONE FIELD VALUE, SO
+            // THEIR NET IS ZERO. They were grouped with `GetIndex` at `shrink 1`,
+            // which declared a net of -1 and was UNSOUND rather than merely
+            // wrong: the net propagates into `current_offset`, so every later
+            // operation's peak was computed from a base one slot too low, per
+            // field read, and the worst-case-memory bound came out smaller than
+            // the operand stack the chunk actually needs. Measured before the
+            // repair: a Stream chunk with two field reads reported 96 bytes
+            // where 128 is correct.
+            //
+            // Nothing caught it. The whole suite passed in both states, and so
+            // did the self-hosted differential: `analyze.kel` consumes these
+            // numbers as host-seeded arrays, so it reproduces whatever the
+            // reference says. A differential against the model under test cannot
+            // detect that the model is wrong. `verify::op_depth_effect` had the
+            // net right all along, and is now the control.
+            Op::GetField(_) | Op::GetTupleField(_) | Op::GetEnumField(_) | Op::Len => 0,
 
             Op::IsEnum(_, _, _) | Op::IsStruct(_) => 0,
 

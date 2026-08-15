@@ -68,15 +68,33 @@ test now derives from a named `NAME_CAP`.
 quadratic in the cap, so 256 → 1024 multiplies its static bound by sixteen. Real input is unaffected;
 the BOUND moves, and the bound is the product.
 
+## The unsound worst-case-memory bound, FIXED
+
+`GetField`/`GetTupleField`/`GetEnumField` declared an operand-stack net of −1 where the virtual
+machine's is 0. The net propagates, so every later operation's peak was computed from a base one slot
+too low per field read: `wcmu_stream_iteration` reported **96 bytes for a Stream chunk where 128 is
+correct**. An UNDERSTATED bound, not a loose one — the opposite direction from the
+conservative-verification stance.
+
+**The root was one model with two readers.** `stack_growth`/`stack_shrink` served both the peak walk
+(which wants a transient reach and a NET) and `text_size`'s shadow stack (which wants literal POP and
+PUSH counts). Those coincide only for an operation that does not both pop and push. The repair splits
+the ROLES: those two are now exclusively the peak model, and `verify::op_depth_effect` —
+`(required, delta)`, true semantics all along — is the pop/push model that `text_size` reads. The
+field reads become `(0, 0)`: exact, not merely conservative.
+
+**Two corrections to the report this came from.** `GetIndex` is NOT another instance — it genuinely
+pops the container AND the index, so its −1 is right and only the match arm was misleading. And the
+checked family's TRANSIENT is not understated: the virtual machine pops both operands before pushing,
+so `growth = 1` is the true reach. Its DECOMPOSITION was wrong, which only the shadow stack noticed.
+
+**Why nothing caught it, and it generalises.** `analyze.kel` consumes these numbers as host-seeded
+arrays, so the self-hosted differential agrees by construction. **A differential against the model
+under test cannot detect that the model is wrong.** The control compares against an independent model
+instead, and fails before the repair.
+
 ## Open
 
-- **The field ops' operand-stack net is UNSOUND and unfixed.**
-  `GetField`/`GetTupleField`/`GetEnumField` declare net −1 where the VM's net is 0, so
-  `wcmu_stream_iteration` reports 96 bytes for a Stream chunk where 128 is correct. The
-  understatement scales with field reads and only surfaces when a field read is on the
-  peak-determining path, which is why it survived. **`GetIndex` is NOT a fifth instance** — it
-  genuinely pops two. The checked family's TRANSIENT is fine; its DECOMPOSITION is wrong and only
-  `text_size.rs` notices. Scheduled as the next increment.
 - **`-255` is live and has no negative test** — reaching it needs more than 16 KB of distinct name
   bytes; the corpus tops out at 7,680. Recorded in the source as a gap.
 - **Two pinned coverage gaps**: no stage contributes a constant-interned name, and none nests a

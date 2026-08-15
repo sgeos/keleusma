@@ -13,6 +13,51 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**AN UNSOUND WORST-CASE-MEMORY BOUND, AND THE ROOT WAS ONE MODEL WITH TWO READERS (2026-08-15).**
+`GetField`/`GetTupleField`/`GetEnumField` declared an operand-stack net of -1 where the virtual
+machine's is 0. The net propagates into `current_offset`, so every later operation's peak was
+computed from a base one slot too low per field read. Measured on a real Stream chunk:
+`wcmu_stream_iteration` reported **96 bytes where 128 is correct**.
+
+**That is an understated bound, not a loose one.** The conservative-verification stance permits
+over-approximation; this was the other direction. A module could be certified against an operand
+budget smaller than the one it needs.
+
+**It only surfaces when a field read is on the peak-determining path.** A chunk whose peak is set
+elsewhere reports correctly, which is how it survived — and why the control has to be built from
+cases where the field read IS the peak, rather than from whatever the corpus happens to contain.
+
+**THE ROOT WAS NOT THE ARITHMETIC.** `stack_growth`/`stack_shrink` were read by two consumers
+wanting different quantities: `verify.rs` wants a transient reach and a NET, `text_size.rs` wants
+literal POP and PUSH counts. Those coincide only for an operation that does not both pop and push,
+and the field reads are exactly that shape. One pair of numbers cannot serve both, so any fix
+phrased as "correct the numbers" fixes one reader by breaking the other.
+
+The repair splits the roles rather than the values. `stack_growth`/`stack_shrink` are now
+exclusively the PEAK model; `verify::op_depth_effect`, which returns `(required, delta)` and had the
+true semantics all along, is the POP/PUSH model, and `text_size` reads that. The field reads then
+become `(0, 0)`: net and transient both EXACT rather than conservative. My first plan was `(1, 1)`,
+which is sound but over-approximates the peak by one slot per field read; moving `text_size` made
+the exact answer available.
+
+**TWO CORRECTIONS TO THE REPORT I WAS ACTING ON.** `GetIndex` was flagged as a fourth instance
+because it shares the match arm. It is not: it genuinely pops the container AND the index, so its
+net of -1 is right. And the checked family's transient is NOT understated — the virtual machine pops
+both operands before pushing any result, so `growth = 1` is exactly the true reach. What is wrong
+there is its DECOMPOSITION (`shrink = 0` against two real pops), which only the shadow stack
+noticed. So the two defects genuinely differ in kind, but not in the way reported: one is a wrong
+NET, the other a wrong DECOMPOSITION the memory arithmetic is insensitive to.
+
+**WHY NOTHING CAUGHT IT, AND THE LESSON GENERALISES.** `analyze.kel` consumes these numbers as
+host-seeded arrays through `analyze_stack_effect`, so the self-hosted differential reproduces
+whatever the reference says and agrees by construction. **A differential against the model under
+test cannot detect that the model is wrong.** The byte-identity oracle is the strongest tool in this
+project and it is blind here, because both sides read one source of truth. The control therefore
+compares the peak model against an INDEPENDENT model in the same tree, and it fails before the
+repair.
+
+---
+
 **THE JOIN ACROSS TEN STAGES, AND WHAT TEN GREEN CASES ARE ACTUALLY WORTH (2026-08-15).**
 All ten stage sources now emit `NAMES` and `STRING_POOL` byte-identically through `mi_join`.
 They passed on the first run, and the increment's real output is the measurement of what that
