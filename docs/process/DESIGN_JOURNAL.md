@@ -13,6 +13,56 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE NAME CEILING, AND A NUMBER THAT WAS A GUARD ON THE WRONG BUFFER (2026-08-15).**
+`parse.kel` now emits `NAMES` and `STRING_POOL` byte-identically through the join: 627 names from a
+33,395-byte blob, pinned by `the_join_holds_on_the_largest_real_stage`.
+
+**The plan's "hard ceiling is 512" was not a ceiling on names.** It was
+`fin_capacity() / nameref_fields()`, and `emit_name_records_from_nout` does not read `fin` -- it
+reads `nout`. The guard was copied from a sibling that genuinely reads `fin`, and the 512 it produced
+was recorded in the plan, in the roadmap and in a goal statement as a property of the names path. It
+is now bounded by `nout_capacity()` under its own code. **This is the same failure as the 395,804:
+a number carried forward without being checked against the thing it claims to measure.** Twice in two
+sessions, in the same document.
+
+**The binding ceiling was `bin`, and three stages breached it rather than one.** Measured:
+`parse` 33,395 bytes, `codegen` 21,225, `reconstruct` 8,849, against a buffer of 8,192 -- with
+`lexer` at 7,963, one edit from breaking. The plan named the name count, which was the third-largest
+of the four ceilings that bind.
+
+**"`parse`'s artifact does not fit the window" was true and did not matter.** The join writes two
+regions; what places them is the directory, not the artifact. A two-region directory for `parse` is
+12,840 bytes, well inside the existing 65,536-byte window. The plan framed a fork -- windowed join
+variant, or new harness -- and neither had to be built. **Check whether the obstacle is load-bearing
+before designing around it.**
+
+**The trap the goal named fired exactly as written.** `emit_pool_bytes` guards against
+`bin_capacity()` and looped `limit 8192`; raising `bin` left a guard admitting six times what the
+loop would run, and three tests died with `LoopLimitExceeded` past a guard that had said yes.
+Enumerating by the literal `256` was also not enough: `nm_find` sat at `limit 512` and is the one
+loop quadratic in the cap. **Enumerate by what BOUNDS the loop, not by the number written in it** --
+two loops at `limit 256` are bounded by a name's byte length and had to stay.
+
+**The control found two defects the raise did not cause, and a green suite could not have.**
+`mi_chunk_names` wrote its output copy ignoring `nm.mode`, so from the seventh chunk it overwrote the
+directory it would later need; the join corpus topped out at three chunks. And `mi_join` returned the
+SUM of three emitter results, so `-202` plus 7,680 reported 7,478 -- positive, therefore success --
+with `NAMES` left entirely zero. **A sum is not a conjunction.** Any earlier caller of the join could
+have accepted a half-written artifact.
+
+**Cost, measured rather than asserted.** `shared_data_bytes` 155,704 -> 237,624, up 52.6%. The WCET
+bound moves further than the memory: `nm_find` has no early exit, so the interning phase is quadratic
+in the cap and 256 -> 1024 multiplies its static bound by sixteen. Real input is unaffected; the
+BOUND is what moves, and the bound is the product.
+
+**One gap opened rather than closed.** `-255` guards `bout` overflow and was argued unreachable
+because `intern_run` refuses above `bin_capacity()` -- sound only while both buffers were 8,192. They
+are now 49,152 and 16,384, so the guard is live and has no negative test: reaching it needs more than
+16 KB of distinct name bytes and the corpus tops out at 7,680. Recorded in the source as a gap, not
+left as the old justification.
+
+---
+
 **THE THREE-PART ORDER-1 WIRING LINE, AND A FIGURE THAT SURVIVED THREE DOCUMENTS (2026-08-14).**
 The end-to-end join, the type checker's input-path consolidation, and half of `read_stage` plus
 staging. Thirty-four merges.
