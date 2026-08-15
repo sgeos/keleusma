@@ -13,6 +13,56 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE JOIN ACROSS TEN STAGES, AND WHAT TEN GREEN CASES ARE ACTUALLY WORTH (2026-08-15).**
+All ten stage sources now emit `NAMES` and `STRING_POOL` byte-identically through `mi_join`.
+They passed on the first run, and the increment's real output is the measurement of what that
+does and does not mean.
+
+**NINE OF THE TEN REACH NO NEW MAXIMUM.** `parse` is the largest in every dimension measured:
+chunks (94), enum names (158), slot runs (375), constant names, constant nodes (815) and
+constant depth. Nothing else exceeds it anywhere. So the widening is a REGRESSION NET over nine
+real shapes, not additional scale, and ten green cases are not ten times the assurance of the
+one already covered. The dominance is asserted rather than described, so a stage growing past
+`parse` reports itself instead of quietly making the test worth more.
+
+**WHAT IT GENUINELY ADDS IS NINE ZERO-ENUM MODULES.** `parse` is the only stage with enum
+layouts, so before this the zero-enum path through `mi_enum_names` had no real module behind it
+in the join -- only synthetic cases.
+
+**THE DEDUP PATH HAS NO REAL-MODULE COVERAGE, AND MUTATION IS WHAT ESTABLISHED IT.** Making
+`nm_find` report "not found" unconditionally leaves all ten stages byte-identical. Every
+dedup-mode name in every stage is distinct, so the matching branch has never been taken by real
+input. `nm_find` is the quadratic scan whose cost justified capping the name count in the first
+place, and the cap's whole justification rests on a branch no stage exercises. Pinned by the
+equality between input name count and `NAMES` record count, which is the observable proxy.
+
+**Reading the counts would not have found it.** Input and output name counts being equal is
+consistent with dedup firing and finding nothing to merge; only disabling the branch and seeing
+no change distinguishes "never collides" from "collides and is handled". The counts suggested
+it; the mutation established it.
+
+**TWO MORE THINGS THE CORPUS CANNOT ESTABLISH**, both pinned as assertions that a limitation
+still holds: no stage contributes a constant-interned name, and no stage nests a constant past
+depth one. The constant contributor's name and child-position paths are exercised by `FX_CASES`
+and by nothing real. Both assertions are written so that firing means coverage was GAINED and
+the right response is to record that, not to restore the zero.
+
+**A GUARD TEST PINNED TO A LITERAL FAILED IN CI RATHER THAN ON THE BENCH.**
+`the_driver_refuses_more_names_than_one_call_can_intern` spelled `257` against a cap of 256; the
+ceiling raise took the cap to 1024 and the case silently stopped being over the bound, so the
+driver accepted where the test demanded a refusal. It was the only thing in the suite that
+caught the raise's loose end.
+
+It reached CI rather than the bench because it sits behind the `self-host` feature, and neither
+`cargo test --workspace` nor `cargo test --features compile` enables it. **Both were run and
+both were green.** The standing rule is to reproduce the gate's invocation rather than
+approximate it, and a default-feature run is an approximation: the gate is
+`cargo nextest run --profile ci` across a five-entry feature matrix. Every cap-pinned test is
+now derived from a named `NAME_CAP` rather than a literal, so the next raise moves them or
+fails loudly.
+
+---
+
 **THE NAME CEILING, AND A NUMBER THAT WAS A GUARD ON THE WRONG BUFFER (2026-08-15).**
 `parse.kel` now emits `NAMES` and `STRING_POOL` byte-identically through the join: 627 names from a
 33,395-byte blob, pinned by `the_join_holds_on_the_largest_real_stage`.

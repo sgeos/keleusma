@@ -11473,3 +11473,277 @@ fn the_join_holds_on_the_largest_real_stage() {
         );
     }
 }
+
+/// Every stage source the corpus has, joined and compared byte for byte.
+///
+/// `the_join_holds_on_the_largest_real_stage` above proved the join works on
+/// ONE real module. This runs all ten, and its more useful output is not that
+/// they pass — it is the measurement of what passing does and does not mean.
+///
+/// **NINE OF THE TEN REACH NO NEW MAXIMUM.** `parse` is the largest in every
+/// dimension measured below: chunks, enum names, slot runs, constant names,
+/// constant nodes and constant depth. So this suite is a REGRESSION NET over
+/// nine real shapes, not additional scale, and ten green cases are not ten
+/// times the assurance of one. The dominance is asserted rather than described,
+/// so that a stage growing past `parse` reports itself instead of quietly
+/// making this test worth more.
+///
+/// **WHAT IT DOES ADD** is nine modules with NO enum layouts. `parse` is the
+/// only stage that has any, so before this the zero-enum path through
+/// `mi_enum_names` had no real module behind it in the join — only synthetic
+/// cases.
+///
+/// **THREE THINGS A GREEN RESULT HERE DOES NOT ESTABLISH**, all pinned below.
+/// No stage contributes a single constant-interned name, and no stage nests a
+/// constant past depth one, so the constant contributor's name and
+/// child-position paths are exercised by `FX_CASES` and by nothing real.
+///
+/// The third is the one worth the most, and it was found by MUTATION rather
+/// than by reading counts: **the interner's dedup path has no real-module
+/// coverage at all.** Making `nm_find` report "not found" unconditionally
+/// leaves all ten stages byte-identical, because every dedup-mode name in every
+/// stage is distinct. `nm_find` is the quadratic scan whose cost justified the
+/// name cap, and no real input has ever taken its matching branch.
+#[test]
+fn the_join_holds_across_every_stage() {
+    use keleusma::wire_schema::kind;
+
+    /// The dimensions a stage can be the first, or the only, to reach.
+    #[derive(Default, Clone, Copy)]
+    struct Dims {
+        chunks: usize,
+        enum_names: usize,
+        slot_runs: usize,
+        const_names: usize,
+        const_nodes: usize,
+        const_depth: usize,
+    }
+
+    fn walk(c: &keleusma::bytecode::ConstValue, d: &mut Dims, depth: usize) {
+        use keleusma::bytecode::ConstValue as K;
+        d.const_nodes += 1;
+        d.const_depth = d.const_depth.max(depth);
+        match c {
+            K::StaticStr(_) => d.const_names += 1,
+            K::Tuple(xs) | K::Array(xs) => {
+                for x in xs {
+                    walk(x, d, depth + 1);
+                }
+            }
+            K::Struct { fields, .. } => {
+                d.const_names += 1 + fields.len();
+                for (_, v) in fields {
+                    walk(v, d, depth + 1);
+                }
+            }
+            K::Enum { fields, .. } => {
+                d.const_names += 2;
+                for p in fields {
+                    walk(p, d, depth + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn dims_of(m: &keleusma::bytecode::Module) -> Dims {
+        let mut d = Dims {
+            chunks: m.chunks.len(),
+            enum_names: m.enum_layouts.iter().map(|l| 1 + l.variants.len()).sum(),
+            ..Dims::default()
+        };
+        if let Some(dl) = &m.data_layout {
+            let mut i = 0usize;
+            while i < dl.slots.len() {
+                let s = &dl.slots[i];
+                let mut k = 1usize;
+                while i + k < dl.slots.len()
+                    && dl.slots[i + k].name == s.name
+                    && dl.slots[i + k].visibility == s.visibility
+                {
+                    k += 1;
+                }
+                d.slot_runs += 1;
+                i += k;
+            }
+        }
+        for c in &m.chunks {
+            for k in &c.constants {
+                walk(k, &mut d, 1);
+            }
+        }
+        d
+    }
+
+    let mut vm = vm_for(WIRE_KEL);
+    let mut measured: Vec<(&str, Dims, usize, usize)> = Vec::new();
+
+    for (label, src) in CORPUS_STAGES {
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+        let reference = keleusma_wire::WireView::parse(&want).expect("reference parses");
+        let blob = module_input_blob(&module);
+
+        let specs: Vec<RegionSpec> = region_counts_for(&want)
+            .into_iter()
+            .filter(|(k, _, _, _)| *k == kind::NAMES || *k == kind::STRING_POOL)
+            .collect();
+        assert_eq!(
+            specs.len(),
+            2,
+            "{label}: expected exactly NAMES and STRING_POOL"
+        );
+
+        let (_, directory) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_BUILD_REGION_TABLE,
+                nregions: specs.len() as i64,
+                seed: &[],
+                regions: &specs,
+                fields: &[],
+                names: &[],
+                pool: &[],
+                args: [0, 0, 0, 0, 0],
+                read_len: CAPACITY,
+            },
+        )
+        .expect("build the directory");
+        let built = keleusma_wire::WireView::parse(&directory).expect("the built directory parses");
+        let span = (0..built.region_count())
+            .filter_map(|i| built.region_at(i))
+            .map(|r| r.byte_offset().unwrap_or(0) + (r.word_length as usize) * 8)
+            .max()
+            .unwrap_or(0);
+        assert!(span < CAPACITY, "{label}: two regions span {span} bytes");
+
+        let (ret, out) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_MI_JOIN,
+                nregions: specs.len() as i64,
+                seed: &directory,
+                regions: &specs,
+                fields: &[],
+                names: &[],
+                pool: &blob,
+                args: [0, 0, 0, 0, 0],
+                read_len: span,
+            },
+        )
+        .expect("run the join");
+        // THE CODE, NOT MERELY THE SIGN. `-233` reads as "no NAMES region" and
+        // meant "the directory was overwritten"; an assertion on `ret < 0`
+        // alone would have named neither.
+        assert!(ret >= 0, "{label}: the join refused with code {ret}");
+
+        let mut pool_bytes = 0usize;
+        let mut name_records = 0usize;
+        for k in [kind::NAMES, kind::STRING_POOL] {
+            let theirs = reference.find_region(k).expect("reference region");
+            let want_bytes = reference.region_bytes(&theirs).expect("reference payload");
+            let mine = built.find_region(k).expect("built region");
+            let base = mine.byte_offset().expect("offset");
+            assert!(
+                !want_bytes.is_empty(),
+                "{label}: region {k:#06x} is empty, so this compares nothing"
+            );
+            assert_eq!(
+                &out[base..base + want_bytes.len()],
+                want_bytes,
+                "{label}: region {k:#06x} differs from the reference"
+            );
+            if k == kind::STRING_POOL {
+                pool_bytes = want_bytes.len();
+            } else {
+                name_records = want_bytes.len() / <NameRef as WireRecord>::STRIDE;
+            }
+        }
+        // THE DEDUP PATH HAS NO REAL-MODULE COVERAGE, AND THIS IS THE PROXY
+        // THAT PINS IT. Every name the blob carries reaches `NAMES` as its own
+        // record, so no dedup-mode name in any stage ever collides and
+        // `nm_find` never reports a hit. Verified directly by mutation, not
+        // inferred from the counts: making `nm_find` return "not found"
+        // unconditionally leaves all ten stages byte-identical.
+        //
+        // If this fires, a stage has gained a duplicate name and the dedup path
+        // has real coverage for the first time. Record that; do not relax it.
+        let d = dims_of(&module);
+        assert_eq!(
+            d.chunks + d.enum_names + d.slot_runs + d.const_names,
+            name_records,
+            "{label}: input names and NAMES records differ, so a dedup hit occurred -- the \
+             corpus has gained dedup coverage it did not have"
+        );
+        measured.push((label, d, blob.len(), pool_bytes));
+    }
+
+    assert_eq!(
+        measured.len(),
+        CORPUS_STAGES.len(),
+        "not every stage was joined"
+    );
+
+    // --- what the ten cases are actually worth -----------------------------
+
+    let p = measured
+        .iter()
+        .find(|(n, _, _, _)| *n == "parse")
+        .expect("parse is in the corpus")
+        .1;
+    for (label, d, _, _) in &measured {
+        if *label == "parse" {
+            continue;
+        }
+        for (dim, mine, theirs) in [
+            ("chunks", d.chunks, p.chunks),
+            ("enum names", d.enum_names, p.enum_names),
+            ("slot runs", d.slot_runs, p.slot_runs),
+            ("constant names", d.const_names, p.const_names),
+            ("constant nodes", d.const_nodes, p.const_nodes),
+            ("constant depth", d.const_depth, p.const_depth),
+        ] {
+            assert!(
+                mine <= theirs,
+                "{label} exceeds parse on {dim} ({mine} > {theirs}). That is GOOD NEWS and \
+                 this test is now understated: it claims nine dominated cases. Re-measure and \
+                 rewrite the claim rather than raising the bound."
+            );
+        }
+    }
+
+    // The zero-enum path, which is the one thing widening genuinely adds.
+    let zero_enum = measured
+        .iter()
+        .filter(|(_, d, _, _)| d.enum_names == 0)
+        .count();
+    assert_eq!(
+        zero_enum,
+        CORPUS_STAGES.len() - 1,
+        "expected exactly one stage with enum layouts (parse); the zero-enum path's real-module \
+         coverage has changed"
+    );
+
+    // TWO PINNED GAPS. These assert that a limitation still holds. If either
+    // fires, the corpus has GAINED coverage and the right response is to record
+    // that here, not to restore the zero.
+    assert!(
+        measured.iter().all(|(_, d, _, _)| d.const_names == 0),
+        "a stage now contributes constant-interned names; the constant name path had no real \
+         module behind it and now does. Record that rather than restoring this assertion."
+    );
+    assert!(
+        measured.iter().all(|(_, d, _, _)| d.const_depth <= 1),
+        "a stage now nests a constant past depth one; the child-position walk had no real module \
+         behind it and now does. Record that rather than restoring this assertion."
+    );
+
+    // The margin on the buffers this rides on, reported rather than re-derived.
+    let widest_blob = measured.iter().map(|(_, _, b, _)| *b).max().unwrap_or(0);
+    let widest_pool = measured.iter().map(|(_, _, _, p)| *p).max().unwrap_or(0);
+    assert!(
+        widest_blob <= BIN_CAPACITY && widest_pool <= 16384,
+        "widest blob {widest_blob} of {BIN_CAPACITY}, widest pool {widest_pool} of 16384"
+    );
+}
