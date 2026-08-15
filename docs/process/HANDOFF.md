@@ -38,8 +38,8 @@ this file**.
 
 ## FIRST ACTION: confirm the tree is quiet, then take the named increment
 
-`git status`, `git branch --list`, `gh pr list --state open`. Thirteen pull requests merged on
-2026-08-13/14, none open. **Anything based on `v0.3.0` is the OTHER session's — both lines share a
+`git status`, `git branch --list`, `gh pr list --state open`. **Thirty-six pull requests merged on
+2026-08-13/14, none open of this line.** **Anything based on `v0.3.0` is the OTHER session's — both lines share a
 GitHub account, so tell them apart by BASE BRANCH, not by author.**
 
 ## THE WORKFLOW: CI GATES FEATURE BRANCHES
@@ -66,7 +66,7 @@ MSRV together is a runner, not a defect.
 
 ## THE STATE
 
-**Thirty-five pull requests merged on 2026-08-13/14**, each 22 of 22 CI jobs green, merged at the
+**Thirty-six pull requests merged on 2026-08-13/14**, each 22 of 22 CI jobs green, merged at the
 commit CI ran. `selfhost_wire` is at 157 tests, `selfhost_typecheck` at 7.
 
 | | |
@@ -153,6 +153,14 @@ thing it claims to measure.**
 - **Check an item against the code before repeating it.** Two roadmap items moved on inspection.
 - **Assert WHICH failure fired**, not merely that one did.
 - **A bound on a loop is not a bound on the damage.** Doubling puts the cost in the last attempt.
+- **CHECK A FIGURE AGAINST THE THING IT CLAIMS TO MEASURE.** "395,804 names" was a region record
+  count and survived three documents including a goal statement.
+- **APPEND TO A SLOT-ADDRESSED BLOCK, NEVER INSERT.** Two off-by-one defects, one of which silently
+  ACCEPTED an ill-typed program.
+- **Say which fact a green suite does NOT establish**, in the source, where a reader of the code
+  will meet it.
+- **A commit message is a claim.** One said six collectors were deleted; two remained. Amended
+  before merge.
 
 ## Open, held by the operator
 
