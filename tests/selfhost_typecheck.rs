@@ -1644,3 +1644,198 @@ fn the_rules_reach_only_literal_direct_occurrences() {
         "every case here must be one the reference rejects and the stage accepts"
     );
 }
+
+// ---------------------------------------------------------------------------
+// SIZING SPIKE: what would it take to reach a non-literal operand?
+//
+// A MEASUREMENT, NOT AN IMPLEMENTATION. Nothing here is wired into the stage.
+// The question is what the pipeline would have to compute, and the answer
+// determines whether the next increment is small or is a Hindley-Milner port.
+// ---------------------------------------------------------------------------
+
+/// A prototype tagger, host-side and deliberately throwaway.
+///
+/// It extends `expr_tag` with exactly two rules, both LOCAL:
+///
+/// 1. a `let` whose initialiser is a literal binds that literal's tag;
+/// 2. a call to a declared function takes the declared return type's tag.
+///
+/// **Neither rule unifies anything.** There is no substitution, no occurs check,
+/// no type variable. Both are lookups over information the source states
+/// outright, which is why this is the cheap end of the design space.
+fn prototype_tag(
+    e: &keleusma::ast::Expr,
+    lets: &std::collections::BTreeMap<String, i64>,
+    rets: &std::collections::BTreeMap<String, i64>,
+) -> i64 {
+    use keleusma::ast::Expr;
+    match e {
+        Expr::Literal { value, .. } => literal_tag(value),
+        Expr::Ident { name, .. } => lets.get(name).copied().unwrap_or(0),
+        Expr::Call { name, .. } => rets.get(name).copied().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// How far the two local rules get, measured over cases the stage accepts today.
+///
+/// **This is the sizing result and it is the whole point of the spike.** If every
+/// currently-missed rejection falls to local propagation, the next increment is a
+/// tagger over records the pipeline already emits. If some need unification, the
+/// next increment is much larger and should be planned as such.
+#[test]
+fn sizing_how_far_local_propagation_reaches() {
+    use keleusma::ast::{Expr, Pattern, Stmt, TypeExpr};
+    use keleusma::visitor::Visitor;
+    use std::collections::BTreeMap;
+
+    // (label, source, needs) where `needs` names the least information that
+    // would decide the operand types.
+    const CASES: &[(&str, &str, &str)] = &[
+        (
+            "let-bound literal",
+            "fn main() -> Word { let b = true; 1 + b }",
+            "local: let initialiser",
+        ),
+        (
+            "call return",
+            "fn g() -> Word { 1 }\nfn main() -> Word { g() + true }",
+            "local: declared return type",
+        ),
+        (
+            "two let-bound literals",
+            "fn main() -> Word { let a = 1; let b = true; a + b }",
+            "local: let initialiser",
+        ),
+        (
+            "let bound to a call",
+            "fn g() -> Word { 1 }\nfn main() -> Word { let a = g(); a + true }",
+            "local: both rules composed",
+        ),
+        (
+            "parameter operand",
+            "fn f(a: Word) -> Word { a + true }\nfn main() -> Word { f(1) }",
+            "local: declared parameter type",
+        ),
+    ];
+
+    let mut reached = 0;
+    let mut missed: Vec<&str> = Vec::new();
+
+    for (label, src, _needs) in CASES {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+
+        // The reference must reject, or the case measures nothing.
+        let mut for_ref = ast.clone();
+        assert!(
+            keleusma::typecheck::check(&mut for_ref).is_err(),
+            "{label}: the reference ACCEPTS this; it is not an ill-typed case"
+        );
+
+        // Declared return types, by name.
+        let mut rets: BTreeMap<String, i64> = BTreeMap::new();
+        for f in &ast.functions {
+            if let TypeExpr::Prim(p, _) = &f.return_type {
+                rets.insert(f.name.clone(), prim_tag(p));
+            }
+        }
+
+        // Let-bound literals and declared parameters, by name.
+        struct Binds<'a> {
+            lets: BTreeMap<String, i64>,
+            rets: &'a BTreeMap<String, i64>,
+        }
+        impl Visitor for Binds<'_> {
+            fn visit_stmt(&mut self, stmt: &Stmt) {
+                if let Stmt::Let(l) = stmt
+                    && let Pattern::Variable(n, _) = &l.pattern
+                {
+                    let t = prototype_tag(&l.value, &self.lets, self.rets);
+                    if t != 0 {
+                        self.lets.insert(n.clone(), t);
+                    }
+                }
+                self.walk_stmt(stmt);
+            }
+        }
+        let mut binds = Binds {
+            lets: BTreeMap::new(),
+            rets: &rets,
+        };
+        for f in &ast.functions {
+            for (pname, pty) in f
+                .params
+                .iter()
+                .filter_map(|p| match (&p.pattern, &p.type_expr) {
+                    (Pattern::Variable(n, _), Some(TypeExpr::Prim(x, _))) => {
+                        Some((n.clone(), prim_tag(x)))
+                    }
+                    _ => None,
+                })
+            {
+                binds.lets.insert(pname, pty);
+            }
+            binds.visit_block(&f.body);
+        }
+
+        // Would a binary operation now disagree?
+        struct Check<'a> {
+            lets: &'a BTreeMap<String, i64>,
+            rets: &'a BTreeMap<String, i64>,
+            caught: bool,
+        }
+        impl Visitor for Check<'_> {
+            fn visit_expr(&mut self, expr: &Expr) {
+                if let Expr::BinOp { left, right, .. } = expr {
+                    let l = prototype_tag(left, self.lets, self.rets);
+                    let r = prototype_tag(right, self.lets, self.rets);
+                    if l != 0 && r != 0 && l != r {
+                        self.caught = true;
+                    }
+                }
+                self.walk_expr(expr);
+            }
+        }
+        let mut chk = Check {
+            lets: &binds.lets,
+            rets: &rets,
+            caught: false,
+        };
+        for f in &ast.functions {
+            chk.visit_block(&f.body);
+        }
+
+        if chk.caught {
+            reached += 1;
+        } else {
+            missed.push(label);
+        }
+    }
+
+    println!("local propagation reaches {reached} of {}", CASES.len());
+    if !missed.is_empty() {
+        println!("not reached: {missed:?}");
+    }
+
+    // THE PINNED RESULT. If this number moves, the sizing in
+    // TYPECHECK_INFERENCE_SIZING.md is stale and must be re-derived.
+    assert_eq!(
+        reached,
+        CASES.len(),
+        "local propagation reached {reached} of {}; the cases it missed are {missed:?}, and \
+         each one is evidence that something beyond the two local rules is needed",
+        CASES.len()
+    );
+}
+
+/// The primitive-type tag, matching `literal_tag`'s numbering.
+fn prim_tag(p: &keleusma::ast::PrimType) -> i64 {
+    use keleusma::ast::PrimType as P;
+    match p {
+        P::Word => 1,
+        P::Bool => 2,
+        P::Byte => 3,
+        P::Float => 4,
+        _ => 0,
+    }
+}
