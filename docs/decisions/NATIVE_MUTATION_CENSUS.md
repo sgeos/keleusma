@@ -506,3 +506,44 @@ subject list.
   virtual machine distinguishes `NoMatchingHead` from `DivisionByZero`; the
   native side raises the same signal for both. A lowering that trapped for the
   wrong reason would pass.
+
+---
+
+## PART E, 2026-08-16: the corpus this census measures EXCLUDES five modules
+
+**Every figure above is over a corpus that silently omits every `examples/rtos/scripts/` source.**
+Measured, not inferred: `event_listener`, `faulty`, `heartbeat`, `led` and `sensor` appear **zero**
+times in `dump_opcode_module_map`, for *every* opcode — checked against `Const`, the most ubiquitous
+one, not merely against `Trap`.
+
+**The cause is a compile failure the map does not report.** The map compiles each source standalone.
+These five need `prelude.kel` prepended, which the real host does at
+`examples/rtos/src/setup.rs:429`. Standalone they do not compile, so they never enter the map.
+
+**`tools/mutation_sweep.py` drives only the modules the map lists per opcode.** So a
+`DETECTED by n/m` denominator is over a corpus smaller than a reader would assume, and these five
+modules have never participated in any mutation round.
+
+**This is the same species as the vacuity findings** — a coverage claim that is really a claim about
+the instrument's input list, which is the error this whole document exists to catch. It cost nothing
+here because no reported conclusion depends on those five; it is recorded so that the next figure
+quoted from this census carries its true denominator.
+
+**Recorded rather than repaired, deliberately.** Prepending the prelude would change what the map
+MEANS: a module compiled with a prelude is not the module `corpus_differential` drives standalone,
+and the two would no longer be the same corpus. That is a decision about the instrument, not a
+defect to patch quietly. `the_opcode_map_excludes_every_rtos_script` pins the current state and says
+what to do if it ever changes.
+
+### A related closure, for the record
+
+**`led.kel` is no longer exempt.** `host::gpio_set` records a sixteen-byte enum body and the generic
+stub returned a plain integer, which the native side dereferenced as an address — SIGSEGV against
+the virtual machine's `NoMatchingArm`. The stub now builds a real body on both sides from one shared
+byte builder.
+
+**It cost a `Trap` subject rather than gaining one**, which is the opposite of what was expected.
+`led.kel` does emit `Op::Trap`, but it matches both `Status::Ok` and `Status::Err(code)`, so a
+faithful stub returns a valid variant, an arm matches, and the trap is never reached. Reaching it
+would require a discriminant matching no variant — an unfaithful stub and a false agreement. **The
+`Op::Trap` subject remains synthetic.**

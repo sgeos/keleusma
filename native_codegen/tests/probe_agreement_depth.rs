@@ -704,6 +704,108 @@ fn variant_distribution_of_the_skipped_opcodes() {
     assert!(!var.is_empty(), "no variants counted; the check is vacuous");
 }
 
+/// **THE OPCODE MAP EXCLUDES EVERY rtos SCRIPT, so the mutation sweep never
+/// drives them.** Measured, not inferred.
+///
+/// `dump_opcode_module_map` compiles each source STANDALONE. Every source under
+/// `examples/rtos/scripts/` needs `prelude.kel` prepended to compile — the host
+/// does exactly that at `examples/rtos/src/setup.rs:429` — so each fails to
+/// compile here and is silently absent from the map.
+///
+/// **`tools/mutation_sweep.py` drives only the modules the map lists per
+/// opcode.** So every figure in `NATIVE_MUTATION_CENSUS.md` is over a corpus
+/// that excludes these five, and a "DETECTED by n/m" denominator is smaller than
+/// the corpus a reader would assume.
+///
+/// **This is the same species as the vacuity findings**: a coverage claim that
+/// is really a claim about the instrument's input list. Recorded rather than
+/// repaired, because prepending the prelude changes what the map MEANS — a
+/// module compiled with a prelude is not the module the differential drives
+/// standalone — and that is a decision, not a fix.
+#[test]
+fn the_opcode_map_excludes_every_rtos_script() {
+    let map_out = std::process::Command::new(std::env::current_exe().expect("exe"))
+        .args(["--exact", "dump_opcode_module_map", "--nocapture"])
+        .output()
+        .expect("re-exec for the map");
+    let text = String::from_utf8_lossy(&map_out.stdout);
+
+    let rtos: Vec<&str> = ["event_listener.kel", "faulty.kel", "heartbeat.kel", "led.kel", "sensor.kel"]
+        .into_iter()
+        .filter(|n| text.contains(n))
+        .collect();
+
+    println!("\n================ rtos scripts in the opcode map");
+    println!("  present: {rtos:?}");
+    println!("  The map compiles standalone; these need `prelude.kel` prepended,");
+    println!("  so the mutation sweep -- which drives only mapped modules -- has");
+    println!("  never exercised them. Census denominators exclude them.");
+    println!("================\n");
+
+    assert!(
+        !text.is_empty(),
+        "the map produced no output, so this asserts nothing about it"
+    );
+    assert!(
+        rtos.is_empty(),
+        "rtos scripts now appear in the opcode map: {rtos:?}. If the map began \
+         prepending the prelude, the mutation sweep's corpus grew and the census \
+         denominators changed -- update the census rather than deleting this test."
+    );
+}
+
+/// **DOES `led.kel` REACH `Op::Trap`? Answered from the bytecode, because nothing
+/// else can answer it.**
+///
+/// `led.kel` faults on the virtual machine with `NoMatchingArm`, which SOUNDS
+/// like the opcode. It matches `Status::Ok` and `Status::Err(code)`, which is
+/// exhaustive over the declared variants, so whether the compiler still emits a
+/// fallthrough trap is a real question rather than a formality.
+///
+/// **`dump_opcode_module_map` CANNOT answer it.** `led.kel` appears there zero
+/// times for EVERY opcode, not merely for `Trap`: the map compiles each source
+/// standalone and every `examples/rtos/scripts/` source needs `prelude.kel`
+/// prepended (`examples/rtos/src/setup.rs:429`). **Absence from that map is
+/// absence of the module, not absence of the opcode**, and reading it the other
+/// way would have settled this question wrongly.
+#[test]
+fn does_led_kel_reach_op_trap() {
+    let prelude =
+        std::fs::read_to_string("../examples/rtos/scripts/prelude.kel").expect("prelude");
+    let raw = std::fs::read_to_string("../examples/rtos/scripts/led.kel").expect("led.kel");
+    let m = compile(&parse(&tokenize(&format!("{prelude}\n{raw}")).expect("lex")).expect("parse"))
+        .expect("compile");
+
+    let mut sites = Vec::new();
+    for (ci, c) in m.chunks.iter().enumerate() {
+        for (oi, op) in c.ops.iter().enumerate() {
+            if matches!(op, Op::Trap(_)) {
+                sites.push(format!("chunk {ci} `{}` op {oi}: {op:?}", c.name));
+            }
+        }
+    }
+
+    println!("\n================ does led.kel reach Op::Trap?");
+    println!("  chunks: {}", m.chunks.len());
+    println!("  Op::Trap sites: {}", sites.len());
+    for s in sites.iter().take(12) {
+        println!("    {s}");
+    }
+    println!("\n  A site is EMITTED code. Whether a run REACHES it is a separate");
+    println!("  question, and the trap differential is what answers that.");
+    println!("================\n");
+
+    // Recorded as an assertion so the answer cannot rot into a comment. If this
+    // ever flips, the trap-observable subject labelling must be revisited --
+    // `Op` and `Guard` subjects are asserted against exactly this property.
+    assert!(
+        !sites.is_empty(),
+        "led.kel emits NO Op::Trap. Its VM fault is `NoMatchingArm`, so it would \
+         be a GUARD subject rather than an opcode-reaching one, and any labelling \
+         that calls it an Op::Trap subject is wrong."
+    );
+}
+
 /// **What contract can the harness DERIVE for a native's return value?**
 ///
 /// Two exemptions are artefacts of a contractless stub: `rogue_dungen` faults
