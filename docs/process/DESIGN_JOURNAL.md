@@ -13,6 +13,35 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE CONTROL I ADDED FOR ONE INSTANCE CANNOT REACH THE NEXT ONE (2026-08-15).**
+
+The `v0.3.0` line reports `Op::Yield` with a wrong net in the peak model. **Confirmed by walking my
+own corpus**: `analyze::main` and `verify_depth::main` reach -1, first at `PopN(1)`. `stack_growth`
+0 / `stack_shrink` 1 gives net -1; `verify::op_depth_effect` gives `(1, 0)` above a comment saying
+the resume pushes the input back. The `PopN(1)` that discards the resumed value then has nothing to
+discard.
+
+**This is the same defect class as `GetField`, which `d3fd5cb6` fixed a day ago, and the control
+that repair added cannot see it.** `the_peak_model_agrees_with_the_depth_model` compares the two
+models over five hand-written sources — struct fields, tuple field, index, checked arithmetic — and
+**not one of them yields**. It caught `GetField` because a case exercised `GetField`.
+
+**That is the third instance this session of the same meta-defect**: a suite whose coverage is a
+property of its case list, mistaken for a property of the thing under test. The enum intern mode,
+the constant-name branch, and now a stack-effect control. In every case the code was reachable and
+the evidence was not, and in every case a mutation or a corpus walk found it while green did not.
+
+**A trap I nearly fell into while checking.** I first probed the two models on a small yielding
+chunk and got peak 3 against depth 3 — agreement — and almost recorded the report as unreproduced.
+The peak is a MAX; it can coincide while the running offset underneath it is wrong. The negative
+walk is the instrument that discriminates, and their framing was sharper than my first test.
+
+**The generalisable form**: a control over a case list is only as good as the list, and the fix for
+"this control missed an opcode" is not another case but a check that ranges over the opcode set —
+the same move that closed `analyze_class`, where the compiler was made to enumerate rather than a
+test.
+---
+
 **ONE TRUE DISCOVERY CARRIED AN UNTRUE CONCLUSION ABOUT ITS NEIGHBOUR (2026-08-15).**
 
 E1 had two halves. I established that the larger one — CI never doc-builds the self-host surface —
