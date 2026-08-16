@@ -27,6 +27,48 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 validates by ancestry and content against the current tip, and the three open questions below are
 the operator's rather than blockers on my side.
 
+## B1 is done, and it was a third the size the plan stated
+
+**`wire_names_via_kel` takes a `Module` and builds its own input.** It previously accepted a
+pre-built blob and opened with `let _ = module;`, while the only producer of that blob was a Rust
+function in the test harness. Byte identity against the reference is unchanged; 163 wire tests,
+1242 library tests, 133 codegen tests green.
+
+**Three of the plan's four remaining items were already done**, established by reading the code
+rather than the plan: `wire.kel` was already in `read_stage`, the interning-sequence producer was
+already self-hosted in `wire.kel`, and the residency staging was never needed. What was missing was
+the ENCODER.
+
+**The staging coupling came from the 395,804 figure.** The plan says the producer and the staging
+"are the same increment, and doing either alone is wasted". Measured: the worst stage, `parse`,
+interns 627 names from a 33,395-byte blob against caps of 1024 and 49,152, so **nothing in the
+corpus needs staging**. That figure is a `CONSTS` region record count and still sits at five sites
+in the plan. A wrong figure did not merely misstate a size, it invented a dependency between two
+pieces of work.
+
+**The name count was wrong in the unsafe direction.** The caller passed
+`interner_input(&module).len()`, which omits the data-slot contributor: 252 for `parse` where the
+module interns 627. Its only consumer is the cap check that exists to refuse a module which would
+overrun the interner, so an under-count defeats the guard. The blob and the count now come from one
+walk.
+
+**Adding coverage found the real semantics.** Asserting the count EQUALS the reference's `NAMES`
+record count passed on all ten stages; a named-constant case then failed, 9 against 4. The reference
+dedups and `intern_fresh` records its entry so a later `intern` can share it, making the exact count
+order-dependent. Reproducing it host-side would be a second model of the thing under test, so the
+value is an explicit upper bound with soundness asserted and the looseness pinned. **Equality on ten
+stages was a corpus property I was one test away from recording as a guarantee.**
+
+**What these green suites do NOT establish**: that the bound is tight for arbitrary modules (it is
+not, and a case proves it), and that the constant-name branch matters to any stage (it does not —
+dropping it leaves all ten green, which is why the named-constant cases exist).
+
+## Reported, not repaired
+
+**`cargo doc --features self-host` fails with four unresolved intra-doc links on the clean base.**
+CI's Doc job builds `signatures,encryption,shell`, so that feature set is never doc-built. Same
+class as the red Doc job V0.2.1 shipped with.
+
 ## The crash cost the push, not the work
 
 The previous session had committed a complete increment to a local feature branch and never pushed

@@ -45,6 +45,13 @@ Current sprint source of truth.
 > entry point. Found by reading the other line's mailbox **to the end** rather than stopping at the
 > item already known.
 >
+> **B1 is DONE (2026-08-15).** `wire_names_via_kel` takes a `Module` and builds its own input via
+> `selfhost::module_input`; it previously accepted a pre-built blob and discarded the module. Three
+> of the plan's four remaining items were already done, and the residency staging was never needed:
+> the worst stage, `parse`, interns 627 names from a 33,395-byte blob against caps of 1024 and
+> 49,152. The plan's claim that the producer and the staging are one increment followed from the
+> 395,804 figure, which is a `CONSTS` region record count and still sits at five sites there.
+>
 > **One request was probed and deliberately not built.** An accessor handing back each stage's
 > seeded shared buffer cannot be written for `verify_datalayout`, which is a batched coroutine
 > consuming a sequence of buffers rather than one. Building it as asked would have returned batch

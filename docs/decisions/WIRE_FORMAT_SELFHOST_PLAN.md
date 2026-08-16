@@ -1030,7 +1030,43 @@ is that all three are about inputs the corpus does not produce** — which is th
 "real compiler output is a strong oracle for volume and a weak one for variety", arriving from the
 other direction.
 
-#### THE ACTUAL NEXT INCREMENT: wire the driver to a module, not to a model
+#### DONE (2026-08-15): the driver is wired to a module, and the staging half was never needed
+
+**Read this before the section below it, which specified the increment and is now history.**
+
+`wire_names_via_kel` takes a `Module` and builds its own input with `selfhost::module_input`.
+Before this it accepted a pre-built blob and opened with `let _ = module;` — the module was in the
+signature and unused, and the only producer of the blob was a Rust function in the test harness. A
+path that cannot be driven from a `Module` is not a compile path, however byte-identical its output.
+Byte identity against the reference is unchanged.
+
+**THE TWO HALVES WERE NOT ONE INCREMENT, AND THE COUPLING CAME FROM THE WRONG FIGURE.** The section
+below states that the producer and the residency staging "are the same increment, and doing either
+alone is wasted". That followed from sizing the problem at 395,804 names. Measured across all ten
+stages, the worst case is `parse` at **627 names from a 33,395-byte blob**, against caps of 1024 and
+49,152 — **61% and 68%**. No stage in the corpus requires staging at all, and the conclusion is now
+an assertion (`every_stage_fits_the_driver_caps_with_margin`) so a stage that grows past either bound
+fails with the number rather than surfacing as an `Unsupported` at some later call site.
+
+**The producer was ALREADY self-hosted** and this section did not say so: `mi_chunk_names`,
+`mi_enum_names`, `mi_slot_names` and `mi_const_nodes` in `wire.kel` produce the interning sequence
+from the blob, joined by `mi_join`. What was host-side was the ENCODER, not the producer.
+
+**`wire.kel` was already in `read_stage`.** This document and `src/selfhost/mod.rs`'s module comment
+both still said it was "deliberately absent" while the entry sat fifty lines below that comment. The
+comment is corrected; a file contradicting itself is worse than one that omits the detail.
+
+**What the name count is, and is not.** `module_input` returns the blob and an UPPER BOUND on the
+names interned, not the record count. The reference dedups, and by how much is order-dependent
+because `Names::intern_fresh` records its entry so a later `intern` can share it. Reproducing the
+exact count host-side would mean replicating the reference's interning ORDER — a second model of the
+thing under test. The bound is exact on all ten stages and demonstrably loose on an enum constant
+(9 derived against 4 emitted), and both facts are pinned. The direction is the safe one: the previous
+caller passed `interner_input(&module).len()`, which omits the data-slot contributor and reported
+**252 for `parse` where the module interns 627** — an under-count feeding a cap check whose whole
+purpose is to refuse a module that would overrun the interner.
+
+#### THE ACTUAL NEXT INCREMENT: wire the driver to a module, not to a model (SUPERSEDED, see above)
 
 With four of five values computed and the coverage matrix at 19 REAL / 1 DERIVE, what remains is
 **not another emitter slice**. It is the step this document has called "wiring, not invention" since

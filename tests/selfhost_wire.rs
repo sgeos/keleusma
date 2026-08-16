@@ -11250,11 +11250,11 @@ fn the_driver_emits_names_and_pool_through_wire_kel() {
     )
     .expect("run");
 
-    let blob = module_input_blob(&module);
-    let names = interner_input(&module).len();
-    let out =
-        keleusma::selfhost::wire_names_via_kel(&module, &blob, &directory, names, specs.len())
-            .expect("the driver emits");
+    // THE DRIVER BUILDS ITS OWN INPUT FROM THE MODULE. It used to be handed a
+    // blob this file produced, which meant the byte identity below held for a
+    // path no caller outside the harness could take.
+    let out = keleusma::selfhost::wire_names_via_kel(&module, &directory, specs.len())
+        .expect("the driver emits");
 
     for k in [kind::NAMES, kind::STRING_POOL] {
         let region = view.find_region(k).expect("region");
@@ -11288,12 +11288,14 @@ fn the_driver_emits_names_and_pool_through_wire_kel() {
 #[cfg(feature = "self-host")]
 #[test]
 fn the_driver_refuses_more_names_than_one_call_can_intern() {
-    let module =
-        compile(&parse(&tokenize("fn main() -> Word { 42 }").expect("lex")).expect("parse"))
-            .expect("compile");
+    // NO MODULE IS COMPILED HERE, AND THAT IS THE POINT. Both caps cover every
+    // stage in the corpus -- the largest, `parse`, interns 627 names from a
+    // 33,395-byte blob against bounds of 1024 and 49,152 -- so no real module
+    // reaches either refusal. The input is injected because it cannot be
+    // produced.
 
     // One past the name cap.
-    let err = keleusma::selfhost::wire_names_via_kel(&module, &[], &[], NAME_CAP + 1, 0)
+    let err = keleusma::selfhost::wire_names_from_input(&[], NAME_CAP + 1, &[], 0)
         .expect_err("over the name cap must refuse");
     let msg = format!("{err:?}");
     assert!(
@@ -11309,7 +11311,7 @@ fn the_driver_refuses_more_names_than_one_call_can_intern() {
     // blob is checked host-side because `wire.kel` cannot see a seeding overrun,
     // and a module can breach this while its name count is fine.
     let blob = vec![0u8; BIN_CAPACITY + 1];
-    let err = keleusma::selfhost::wire_names_via_kel(&module, &blob, &[], 1, 0)
+    let err = keleusma::selfhost::wire_names_from_input(&blob, 1, &[], 0)
         .expect_err("over the blob cap must refuse");
     let msg = format!("{err:?}");
     assert!(
@@ -11746,4 +11748,130 @@ fn the_join_holds_across_every_stage() {
         widest_blob <= BIN_CAPACITY && widest_pool <= 16384,
         "widest blob {widest_blob} of {BIN_CAPACITY}, widest pool {widest_pool} of 16384"
     );
+}
+
+/// The driver's derived name bound equals the reference's `NAMES` record count on
+/// every stage in the corpus, and is a sound upper bound everywhere else.
+///
+/// **This is the check the old interface could not make.** The caller used to
+/// pass the count separately, from `interner_input` — a model in this file that
+/// omits the data-slot contributor entirely. It reports 252 for `parse` where
+/// the module really interns 627, and nothing compared the two, because the
+/// count is consumed only as a bound. An under-reported bound admits a module
+/// that should have been refused, and the refusal exists to prevent a silently
+/// truncated artifact.
+///
+/// `module_input` returns the blob and the count from ONE walk for that reason.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_derived_name_bound_is_exact_on_every_stage_and_sound_elsewhere() {
+    use keleusma::wire_schema::kind;
+
+    let mut checked = 0;
+    for (name, src) in CORPUS_STAGES {
+        let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&m)).expect("encode");
+        let view = keleusma_wire::WireView::parse(&want).expect("artifact parses");
+        let region = view.find_region(kind::NAMES).expect("NAMES region");
+        let stride = <NameRef as WireRecord>::STRIDE;
+        let reference_records = (region.word_length as usize) * 8 / stride;
+
+        let (_, derived) = keleusma::selfhost::module_input(&m);
+        assert_eq!(
+            derived, reference_records,
+            "{name}: the driver derives {derived} names but the reference emitted \
+             {reference_records} NAMES records"
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, CORPUS_STAGES.len(), "not every stage was checked");
+
+    // THE CORPUS DOES NOT REACH THE CONSTANT-NAME BRANCH, established by
+    // mutation rather than by reading: dropping constant names from the count
+    // entirely leaves all ten stages passing. These two do reach it, so the
+    // branch is covered by real compiled modules rather than by inspection.
+    // Without them the `const_names` term above would be checked by nothing.
+    const NAMED_CONST_CASES: &[(&str, &str)] = &[
+        (
+            "struct-const",
+            "struct P { x: Word, y: Word }\nconst data k { p: P = P { x: 1, y: 2 } }\n\
+             fn main() -> Word { k.p.x }",
+        ),
+        (
+            "enum-const",
+            "enum E { A, B }\nconst data k { e: E = E::A }\n\
+             fn main() -> Word { match k.e { E::A => 1, E::B => 2 } }",
+        ),
+    ];
+    let mut loose = 0;
+    for (name, src) in NAMED_CONST_CASES {
+        let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&m)).expect("encode");
+        let view = keleusma_wire::WireView::parse(&want).expect("artifact parses");
+        let region = view.find_region(kind::NAMES).expect("NAMES region");
+        let reference_records = (region.word_length as usize) * 8 / <NameRef as WireRecord>::STRIDE;
+        let (_, derived) = keleusma::selfhost::module_input(&m);
+        // SOUNDNESS, which is the property the cap check depends on. Under-
+        // counting would admit a module that overruns the interner; over-
+        // counting refuses early.
+        assert!(
+            derived >= reference_records,
+            "{name}: the bound {derived} is BELOW the reference's {reference_records} \
+             records, so it is not a bound"
+        );
+        if derived > reference_records {
+            loose += 1;
+        }
+    }
+    // THE BOUND IS DEMONSTRABLY LOOSE, and this pins that rather than leaving it
+    // to be rediscovered. `enum-const` derives 9 where the reference emits 4:
+    // the enum's type name and variant collide with the `StaticStr` constants
+    // the match arms emit, and `intern_fresh` records its entry so a later
+    // `intern` shares it. Exactness would require replicating the reference's
+    // interning ORDER host-side, which `wire.kel` already does.
+    assert!(
+        loose > 0,
+        "no case exercises the bound's looseness, so equality above proves nothing \
+         about dedup"
+    );
+}
+
+/// Every stage fits both of the driver's caps, with the margin stated.
+///
+/// **Residency staging is therefore not required for the corpus**, which is the
+/// opposite of what the plan concluded while it sized the problem from 395,804.
+/// That figure was a `CONSTS` region record count. Measured, the worst stage is
+/// `parse` at 627 names against a cap of 1024 and 33,395 blob bytes against
+/// 49,152 — 61% and 68%.
+///
+/// This is an ASSERTION rather than a note because the conclusion is load
+/// bearing: a stage that grows past either bound turns the driver's honest
+/// refusal into a wall, and it should fail here with the number rather than
+/// surface as an `Unsupported` at some later call site.
+#[cfg(feature = "self-host")]
+#[test]
+fn every_stage_fits_the_driver_caps_with_margin() {
+    const NAME_CAP: usize = 1024;
+    const BLOB_CAP: usize = 49152;
+
+    let mut worst_names = 0usize;
+    let mut worst_blob = 0usize;
+    for (name, src) in CORPUS_STAGES {
+        let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let (blob, names) = keleusma::selfhost::module_input(&m);
+        assert!(
+            names <= NAME_CAP,
+            "{name}: {names} names exceeds the {NAME_CAP} cap; staging is now required"
+        );
+        assert!(
+            blob.len() <= BLOB_CAP,
+            "{name}: a {}-byte blob exceeds the {BLOB_CAP} cap",
+            blob.len()
+        );
+        worst_names = worst_names.max(names);
+        worst_blob = worst_blob.max(blob.len());
+    }
+    // Pinned so a change in the worst case is visible rather than absorbed.
+    assert_eq!(worst_names, 627, "the worst-case name count moved");
+    assert_eq!(worst_blob, 33395, "the worst-case blob size moved");
 }
