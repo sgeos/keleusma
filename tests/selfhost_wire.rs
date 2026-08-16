@@ -11244,6 +11244,145 @@ fn the_produced_sequence_emits_names_and_pool_byte_identically() {
     assert_eq!(checked, CASES.len(), "not every case was checked");
 }
 
+/// THE DRIVER EMITS A THIRD REGION, AND THE THIRD IS WEAKER THAN THE FIRST TWO.
+///
+/// `NAMES` and `STRING_POOL` are COMPUTED by the stage: it walks the module blob,
+/// interns the names itself, and derives every byte from that walk. The `HEADER`
+/// record is ENCODED but not derived -- the host reads eleven scalars off the
+/// `Module` and seeds them, and the stage decides offsets, widths and endianness.
+///
+/// Both are module-driven, since neither payload comes from the reference. Only
+/// the first two are self-hosted end to end, and the distinction is asserted
+/// below rather than left to the reader: `a_header_field_the_host_got_wrong_is
+/// _visible` shows the stage will faithfully encode whatever it is handed, which
+/// is exactly what "encoded but not derived" means.
+///
+/// # Why the next region is not here
+///
+/// `CONSTS` is the obvious target at 663,120 bytes across the eleven stages
+/// against 34,960 for `NAMES` and `STRING_POOL` together. It is NOT wiring. The
+/// node producer writes into `wire.bytes` at byte zero, where the artifact lives,
+/// while the flattener reads nodes from `wire.fin`; and the two paths intern in
+/// DIFFERENT ORDERS, preorder against breadth-first, which is observable in
+/// `NAMES`. `STRUCT_AUX` and `ENUM_AUX` are not candidates either: measured over
+/// the eleven stages, both are EMPTY in all of them, so a byte identity for
+/// either would pass while emitting nothing.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_driver_emits_names_pool_and_the_header_record() {
+    use keleusma::wire_schema::kind;
+
+    let src = "fn alpha(a: Word) -> Word { a }\nfn main() -> Word { alpha(1) }";
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+
+    let specs = region_counts_for(&want);
+    let mut vm = vm_for(WIRE_KEL);
+    let (_, directory) = run_call(
+        &mut vm,
+        &Call {
+            cmd: CMD_BUILD_REGION_TABLE,
+            nregions: specs.len() as i64,
+            seed: &[],
+            regions: &specs,
+            fields: &[],
+            names: &[],
+            pool: &[],
+            args: [0, 0, 0, 0, 0],
+            read_len: want.len(),
+        },
+    )
+    .expect("run");
+
+    let out = keleusma::selfhost::wire_regions_via_kel(&module, &directory, specs.len())
+        .expect("the driver emits");
+
+    let mut checked = 0;
+    for k in [kind::NAMES, kind::STRING_POOL, kind::HEADER] {
+        let region = view.find_region(k).expect("region");
+        let base = region.byte_offset().expect("offset");
+        let stored = view.region_bytes(&region).expect("payload");
+        assert!(
+            !stored.is_empty(),
+            "region {k:#06x} is empty, so this case compares nothing"
+        );
+        assert_eq!(
+            &out[base..base + stored.len()],
+            stored,
+            "region {k:#06x} differs from the reference"
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, 3, "expected three regions compared");
+
+    // The set is STRICTLY LARGER than what `wire_names_via_kel` covers, which is
+    // the whole point of this test existing beside that one.
+    let narrow = keleusma::selfhost::wire_names_via_kel(&module, &directory, specs.len())
+        .expect("the narrow driver emits");
+    let hdr = view.find_region(kind::HEADER).expect("header region");
+    let hbase = hdr.byte_offset().expect("offset");
+    let hlen = view.region_bytes(&hdr).expect("payload").len();
+    assert_ne!(
+        &narrow[hbase..hbase + hlen],
+        &out[hbase..hbase + hlen],
+        "the narrow and widened drivers agree on the HEADER region, so the \
+         widening emitted nothing new"
+    );
+}
+
+/// MUST FIRE, and it is what makes the "encoded, not derived" claim honest.
+///
+/// The stage encodes whatever field values it is handed. Feed it a wrong one and
+/// the artifact differs from the reference -- which demonstrates that the values
+/// are the host's contribution, not the stage's. If this ever passes silently,
+/// either the field stopped being encoded or the comparison stopped reaching it.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_header_field_the_host_got_wrong_is_visible() {
+    use keleusma::wire_schema::kind;
+
+    let src = "fn alpha(a: Word) -> Word { a }\nfn main() -> Word { alpha(1) }";
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+
+    let specs = region_counts_for(&want);
+    let mut vm = vm_for(WIRE_KEL);
+    let (_, directory) = run_call(
+        &mut vm,
+        &Call {
+            cmd: CMD_BUILD_REGION_TABLE,
+            nregions: specs.len() as i64,
+            seed: &[],
+            regions: &specs,
+            fields: &[],
+            names: &[],
+            pool: &[],
+            args: [0, 0, 0, 0, 0],
+            read_len: want.len(),
+        },
+    )
+    .expect("run");
+
+    let (blob, names) = keleusma::selfhost::module_input(&module);
+    // Every field zero: a plausible-looking header that is not this module's.
+    let wrong = [0i64; 11];
+    let out =
+        keleusma::selfhost::wire_regions_from_input(&blob, names, &directory, specs.len(), &wrong)
+            .expect("the driver emits");
+
+    let hdr = view.find_region(kind::HEADER).expect("header region");
+    let base = hdr.byte_offset().expect("offset");
+    let stored = view.region_bytes(&hdr).expect("payload");
+    assert_ne!(
+        &out[base..base + stored.len()],
+        stored,
+        "a header of all zeroes matched the reference, so this comparison cannot \
+         detect a wrong field value and the test above proves nothing"
+    );
+}
+
 /// THE DRIVER emits through `wire.kel`, which is what makes its place in the
 /// stage table honest.
 ///

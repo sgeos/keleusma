@@ -69,6 +69,26 @@ fn peak_under_depth_effect(ops: &[Op], chunk: &Chunk) -> i32 {
 /// differential against the model under test cannot detect that the model is
 /// wrong, which is why this compares against `op_depth_effect` instead.
 ///
+/// # WHAT THIS TEST DOES NOT ESTABLISH, AND WHAT NOW DOES
+///
+/// **Its coverage is a property of its case list, not of the opcode set.** It
+/// compares the two models over the five sources below. None of them yields, so
+/// it could never have reported `Op::Yield`, whose peak-model net was already
+/// wrong when this test was written — and none reaches a fixed-point multiply
+/// or divide, whose entries were also wrong and went unreported until something
+/// ranged over the opcodes.
+///
+/// The check that does range over the whole opcode set is
+/// `the_two_operand_stack_models_agree_across_the_whole_opcode_set`, in
+/// `src/verify.rs`. It lives there rather than here because completeness is
+/// asserted against the canonical wire-format opcode table, which is private to
+/// the crate. It found two disagreeing opcodes on its first run.
+///
+/// **Adding a sixth case here does not close the class.** It closes one
+/// instance and leaves the next invisible. These cases are kept because they
+/// name the specific defect they were written for and fail loudly on it; they
+/// are not the instrument for finding the next one.
+///
 /// Measured before the repair: `two-fields-added` reported a peak of 1 against
 /// a true 3, and its Stream twin reported 96 WCMU bytes where 128 is correct.
 /// The understatement scales with the number of field reads, and it propagates:

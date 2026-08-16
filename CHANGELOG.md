@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`ParsedFn` accessors and a widened self-hosted emit entry, both under the
+  off-by-default `self-host` feature.** `ParsedFn::category`, `param_count`,
+  `guard_records` and `body_records` make `seed_reconstruct_shared` callable by an
+  external harness, which is what the native-code-generation line needed to drive
+  the `reconstruct` stage on real input instead of an all-zero segment. Accessors
+  rather than public fields, so the parse representation stays free to change.
+  `seed_reconstruct_multihead_shared` needed nothing: `parse_functions` was already
+  public and yields `Vec<ParsedFn>`, so that entry point was always reachable.
+  `wire_regions_via_kel` emits `NAMES`, `STRING_POOL` and the `HEADER` record from a
+  compiled module, byte-identical to the reference encoder. The first two are
+  computed by the Keleusma stage from the module blob; the header record is encoded
+  by the stage from eleven scalar field values the host supplies, so the stage owns
+  the record layout and the host owns the numbers. The distinction is asserted in
+  the tests rather than left to the reader.
+
+
 - **Five per-item seed accessors on `keleusma::selfhost`, behind the off-by-default
   `self-host` feature.** `seed_reconstruct_shared`,
   `seed_reconstruct_multihead_shared`, `seed_verify_depth_shared`,
@@ -165,6 +181,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `BYTECODE_VERSION` change.
 
 ### Fixed
+
+- **A conflated figure that had been repeated across the roadmap, the handoff and
+  the resume channels.** "Self-hosted type rejection is 7 tests against ~15 shapes"
+  read a test count as a shape count. The rejection rules are complete: all fifteen
+  enumerated shapes plus the `calling-a-local` surface restriction are rejected over
+  a sixteen-case ill-typed corpus with well-typed controls. What remains is the
+  input path, and the tests now say which half of the checker is self-hosted — the
+  stage decides the verdict, while a host helper supplies the structure by walking
+  the reference parser's abstract syntax tree, and the type tags it supplies cover
+  literals only. Three cases where the reference rejects and the stage accepts are
+  pinned as measured disagreements rather than described in prose.
+
+
+- **An understated worst-case-memory bound on every chunk whose paths leave
+  without falling through, which is every multiheaded function.** The WCMU walk
+  returned an `Option` in which the "does not fall through" case carried no
+  resources at all, so four separate sites discarded an accumulated operand-stack
+  peak and arena heap total: the `Trap` arm, the `If` arm when both branches
+  exited, the `Loop` arm when the body never fell through, and every top-level
+  caller including the per-chunk `module_wcmu` that feeds the shipped module
+  header. Because a multiheaded function compiles to guarded heads with a
+  trailing no-match dispatch trap, **every such function reported a body peak of
+  exactly zero**; measured across the example corpus, six of sixty-four
+  non-Stream chunks did, one of them 3905 operations. `keleusma::verify`'s
+  `wcmu_whole_chunk`, `wcmu_stream_iteration` and `module_wcmu` therefore return
+  **larger** stack and heap figures for affected chunks. Resources are monotone
+  along a path while control flow is not, and the walk's return type now
+  separates the two so the omission cannot recur at a fifth site. No public
+  signature changes.
+
+- **The same understatement in the worst-case EXECUTION TIME bound.** `wcet_region` discarded an
+  accumulated cycle count at the identical four sites, so the cycles a program spends before it
+  traps or returns were omitted from its WCET. Found while repairing the memory bound, and fixed
+  the same way: cost is now always reported and only the fall-through fact is optional. A
+  multiheaded dispatch is also no longer costed as though every head ran in sequence.
+
+- **Three defects in the self-hosted resource analyzer, surfaced by the differential oracle when
+  the reference moved.** `analyze.kel` zeroed a region's cost, peak and heap whenever no path fell
+  through, which — since every single-head function ends in a top-level return — zeroed the body
+  contribution of essentially every function in every stage. `Op::Return` also had no control-flow
+  class, so a multiheaded dispatch was analysed as though every head ran in sequence; it now shares
+  the path-exit class with `Op::Trap`, adding no class. And `tests/selfhost_codegen.rs` carried a
+  second copy of the class table that had already drifted from the shipping one, keeping a
+  catch-all arm the driver's had replaced with an exhaustive match and passing zero where the
+  driver passes real branch targets — so the differential was running against the unrepaired
+  table. `analyze_class` and `analyze_opk` now live in `keleusma::selfhost_host`, which is
+  available whenever `compile` and `verify` are, and the duplicate is deleted. They are not
+  merely made public on the driver, because that module is gated on `self-host` and the
+  consumer builds without it — which is why the copy existed at all.
+
+- **An overstated bound on multiheaded dispatch, present at the same time and
+  partially cancelling the understatement above.** `Op::Return` fell through the
+  walk's catch-all rather than ending the path, so a dispatch chain was analysed
+  as though every head executed in sequence, each head's return leaving its
+  operand offset for the next. It is now a path exit, and the affected chunks
+  report the peak their two operand-stack models and the native emitter agree on.
+  One consequence is stated explicitly: a loop whose body always returns is now
+  accepted with an iteration count of one where it previously required a
+  statically extractable bound. This compiler cannot emit that shape, and it is
+  sound for hand-written bytecode, since a body that always returns iterates once.
+
 
 - **`Vm::resume_from_breakpoint` no longer panics on a module that declares shared
   data.** It called `run()` without rebinding the host shared-data buffer that

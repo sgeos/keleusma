@@ -2626,6 +2626,10 @@ private data nm {
     jn: Word,
     jp: Word,
     jd: Word,
+    // Results of the header-widened join. Separate slots because each emit
+    // result is CHECKED, not summed; see `jn` for what a sum hid.
+    jj: Word,
+    jh: Word,
 }
 
 // The longest name this slice admits, and it is a STATED CAP rather than a
@@ -3173,6 +3177,27 @@ fn mi_join() -> Word {
         if nm.jn < 0 { nm.jn } else {
         if nm.jp < 0 { nm.jp } else {
         if nm.jd < 0 { nm.jd } else { nm.jn + nm.jp + nm.jd } } } } } } }
+}
+
+// THE JOIN, WIDENED TO THE HEADER RECORD.
+//
+// ADDITIVE rather than a flag on `mi_join`. That function is what the shipping
+// driver calls and its three emit results are individually checked; a flag would
+// put the widened path and the proven path through one branch, and this file
+// already records what a summed result hid.
+//
+// WHAT KELEUSMA COMPUTES HERE IS THE RECORD ENCODING, NOT THE FIELD VALUES.
+// The eleven header fields ride in `fin`, seeded by the host from the module, so
+// the stage decides offsets, widths and endianness while the host decides the
+// numbers. That is a WEAKER claim than the one `NAMES` and `STRING_POOL` carry,
+// where the walk derives everything from the blob itself, and it is written here
+// so a reader does not over-read the coverage.
+fn mi_join_header() -> Word {
+    nm.jj = mi_join();
+    if nm.jj < 0 { nm.jj } else {
+    if dir_find(kind_header()) < 0 { 0 - 255 } else {
+        nm.jh = emit_header_record_at(region_base(dir_find(kind_header())));
+        if nm.jh < 0 { nm.jh } else { nm.jj + nm.jh } } }
 }
 
 // The `NAMES` index that input name `j` resolved to.
@@ -4241,7 +4266,8 @@ fn dispatch_driver2(cmd: Word) -> Word {
     if cmd == 165 { mi_pairs() } else {
     if cmd == 166 { mi_const_nodes() } else {
     if cmd == 167 { mi_join() } else {
-    0 - 98 }}}}}}}}}}}}}}}}
+    if cmd == 168 { mi_join_header() } else {
+    0 - 98 }}}}}}}}}}}}}}}}}
 }
 
 fn dispatch_driver(cmd: Word) -> Word {
@@ -4271,7 +4297,9 @@ fn dispatch_driver(cmd: Word) -> Word {
 // UNREACHABLE and its own test fails immediately. The fall-through sweep reads
 // this value out of the source instead of restating a bound, which is what it
 // did for four consecutive slices — and got wrong once.
-fn highest_command() -> Word { 167 }
+// RAISED FROM 167 for `mi_join_header`. This is a REAL GUARD: a new command
+// returns `0 - 99` until the ceiling moves, so the two must change together.
+fn highest_command() -> Word { 168 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {

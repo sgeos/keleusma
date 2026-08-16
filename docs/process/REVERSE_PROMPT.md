@@ -10,279 +10,262 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 ## Last Updated
 
-**Date**: 2026-08-15 (session 45, resumed after a system crash)
+**Date**: 2026-08-16 (session 46)
 
 ## Where things stand
 
 | | |
 |---|---|
-| `v0.2.3` | PRs #105, #106, #107 merged green; nothing of this line is open |
-| The crashed session's work | recovered intact and landed, not rebuilt |
-| The three remaining host models | checked against independent sources, two findings pinned |
-| The reported `break` discrepancy | answered and closed; it was never about `break` |
-| Construct-support boundary | 79 Ok / 4 Gap / 1 RefRejects, 84 cases, recounted |
-| Housekeeping | one stale branch pruned after verification; worktrees settled |
+| `reconstruct` seeding | **unblocked**, and one of the two was never blocked |
+| Module-driven emit path | **three** region kinds, two computed and one encoded-not-derived |
+| The next region, `CONSTS` | **not wiring** — measured obstacles, recorded below |
+| A vacuous target avoided | `STRUCT_AUX` and `ENUM_AUX` are empty in all eleven stages |
+| Previous increment | WCMU/WCET exit-path repair, merged at `e923a57f`, 22/22 green |
 
-**This is a stopping point.** The tree is clean, no pull request of this line is open, the handoff
-validates by ancestry and content against the current tip, and the three open questions below are
-the operator's rather than blockers on my side.
+## TWO INHERITED CLAIMS WERE WRONG, ONE FROM EACH LINE
 
-## B1 is done, and it was a third the size the plan stated
+**Theirs.** The `v0.3.0` line reported both `seed_reconstruct_*` accessors unreachable because
+"the function that produces one is private". **`parse_functions` is `pub`** and returns
+`Vec<ParsedFn>`, so `seed_reconstruct_multihead_shared` was callable from outside the crate all
+along. Measured before changing anything and kept as a standing test that would have passed against
+the old tree. Only `seed_reconstruct_shared` was genuinely blocked; `ParsedFn` now has four
+accessors rather than public fields, so the parse representation stays ours to change.
 
-**`wire_names_via_kel` takes a `Module` and builds its own input.** It previously accepted a
-pre-built blob and opened with `let _ = module;`, while the only producer of that blob was a Rust
-function in the test harness. Byte identity against the reference is unchanged; 163 wire tests,
-1242 library tests, 133 codegen tests green.
+**Mine.** "The self-hosted path emits two region kinds" understated the tree, the same shape as the
+395,804 incident. It is true of `wire_names_via_kel`, but `wire.kel` already carries `emit_*`
+commands for nineteen kinds, and the differential already drives Keleusma computation of six of them
+to whole-artifact byte identity — from harness inputs rather than from a `Module`.
 
-**Three of the plan's four remaining items were already done**, established by reading the code
-rather than the plan: `wire.kel` was already in `read_stage`, the interning-sequence producer was
-already self-hosted in `wire.kel`, and the residency staging was never needed. What was missing was
-the ENCODER.
+## THE MEASUREMENT THAT SAVED THE INCREMENT FROM BEING VACUOUS
 
-**The staging coupling came from the 395,804 figure.** The plan says the producer and the staging
-"are the same increment, and doing either alone is wasted". Measured: the worst stage, `parse`,
-interns 627 names from a 33,395-byte blob against caps of 1024 and 49,152, so **nothing in the
-corpus needs staging**. That figure is a `CONSTS` region record count and still sits at five sites
-in the plan. A wrong figure did not merely misstate a size, it invented a dependency between two
-pieces of work.
+I had chosen `ENUM_AUX` as the next region, on the reasonable ground that the blob carries enum names
+and an emitter exists. Measured payload sizes across the eleven stages first:
 
-**The name count was wrong in the unsafe direction.** The caller passed
-`interner_input(&module).len()`, which omits the data-slot contributor: 252 for `parse` where the
-module interns 627. Its only consumer is the cap check that exists to refuse a module which would
-overrun the interner, so an under-count defeats the guard. The blob and the count now come from one
-walk.
+| region | non-empty | bytes |
+|---|---|---|
+| `CONSTS` | 11/11 | **663,120** |
+| `CHUNKS` | 11/11 | 36,096 |
+| `NAMES` + `STRING_POOL` | 11/11 | 34,960 |
+| `SIGNATURES` | 11/11 | 12,032 |
+| **`STRUCT_AUX`, `ENUM_AUX`** | **0/11** | **0** |
 
-**Adding coverage found the real semantics.** Asserting the count EQUALS the reference's `NAMES`
-record count passed on all ten stages; a named-constant case then failed, 9 against 4. The reference
-dedups and `intern_fresh` records its entry so a later `intern` can share it, making the exact count
-order-dependent. Reproducing it host-side would be a second model of the thing under test, so the
-value is an explicit upper bound with soundness asserted and the looseness pinned. **Equality on ten
-stages was a corpus property I was one test away from recording as a guarantee.**
+**`ENUM_AUX` is empty in every stage.** A byte identity for it would have passed while emitting
+nothing. One increment from adding an instance of the exact vacuity this line keeps finding.
 
-**What these green suites do NOT establish**: that the bound is tight for arbitrary modules (it is
-not, and a case proves it), and that the constant-name branch matters to any stage (it does not —
-dropping it leaves all ten green, which is why the named-constant cases exist).
+## `CONSTS` IS 94% OF THE BODY AND IT IS NOT WIRING
 
-## CORRECTION TO MY OWN RETRACTION: half of E1 was real and I dismissed it
+Two obstacles, both found by reading the code rather than predicted:
 
-**I said "the doc-coverage gap I reported does not exist". That over-claimed.** The CI half did not
-exist — the Doc job already builds the self-host surface. But the THREE UNRESOLVED LINKS were real,
-`cargo doc --features self-host` genuinely failed on them, and I declined to fix them on my own
-judgment that they were "not a defect because no shipped configuration builds that set". **That was a
-judgment to offer, not one to substitute for the instruction.**
+1. **The producer and consumer use different arrays.** `mi_put_node_full` writes the constant node
+   table into `wire.bytes` at byte zero — where the artifact lives — while the flattener reads its
+   nodes from `wire.fin`. A join doing both would overwrite the directory, the same failure already
+   recorded for the seventh chunk onward.
+2. **The two paths intern in different orders.** The module walk interns preorder by linear scan;
+   the flattener interns breadth-first as it walks, and that order is observable in `NAMES`. One
+   artifact cannot carry both.
 
-**THE COUNT IS THREE, AND THE "FOUR" WAS MINE.** Settled from git rather than argued: doc-building
-the commit before the fix reports `unresolved link to crate::encryption::EncryptionMetadata`,
-`crate::vm::Vm::register_verifying_key` and `scrub_and_verify_signed` — three — plus rustdoc's
-aggregate `could not document keleusma`. My original report ran `grep -cE "^error"`, got 4, and
-counted the summary line as a finding; the goal statement then inherited it. **A count of errors is
-not a count of defects**, which is the same class as the 395,804 figure counting one thing and being
-read as another.
+**Do not size `CONSTS` as integration.** That is what I was about to do.
 
-Post-fix sweep across **twelve** feature configurations — each of `self-host`, `signatures`,
-`encryption`, `shell` alone, their pairs, the docs.rs set, that set plus `self-host`,
-`compile,verify,floats` with and without `self-host`, and the bare default — reports **zero**
-unresolved links. There is no unfound fourth.
+## WHAT LANDED, STATED WEAKER THAN IT LOOKS
 
-**E1 LANDED IN TWO INCREMENTS AND SHOULD HAVE BEEN ONE.** #116 retracted the false half; #122 fixed
-the real half, and it landed AFTER A1 and B2 rather than before them. The split is a direct
-consequence of getting the judgment wrong the first time: had the dismissal not happened, one
-increment would have carried both halves in sequence. Recorded rather than smoothed over, because
-the ordering in the record is evidence about how the work actually went.
+`wire_regions_via_kel` emits `NAMES`, `STRING_POOL` and the `HEADER` record from a `Module`,
+byte-identical to the reference.
 
-Both halves are now landed. The links name the feature that gates each target — which the hyperlink
-never told the reader — and `cargo doc` is clean across five feature configurations including the
-bare default. CI gains ONE step, the lean `--features self-host` set, because both existing steps
-enable `signatures` and `encryption` and therefore mask exactly this defect class. Measured cost:
-5.05 s against 5.16 s for a step already in the job.
+- `NAMES` and `STRING_POOL` are **computed** — the stage walks the blob and derives every byte.
+- `HEADER` is **encoded but not derived** — the host reads eleven scalars off the `Module`, the
+  stage owns the record's offsets, widths and endianness.
 
-**The lesson is narrower than "check the code" and worth separating from it.** Finding that the
-larger half of a task is already done is not evidence that the smaller half is. I let one true
-discovery carry an untrue conclusion about its neighbour.
+Both are module-driven, since neither payload comes from the reference, but only two are self-hosted
+end to end. The must-fire control makes that concrete: feed a wrong field value and the artifact
+differs, which is what "the host owns the numbers" means.
 
-## The retraction itself, which stands
-
-**I reported that CI never doc-builds the `self-host` feature surface. That is false, and the
-error was mine.** The Doc job already carries a step named "keleusma (self-host feature surface)"
-running `cargo doc -p keleusma --no-deps --features signatures,encryption,shell,self-host`, which is
-the exact command I independently derived as the fix. It ran on PR #114 and passed, so the ~200
-lines of doc comments B1 added to `src/selfhost/` were checked all along.
-
-**How I got it wrong**: I read the FIRST step of the Doc job, saw the docs.rs feature set, and
-reported the job's coverage from it without reading the remaining steps. The comment immediately
-above the step I missed says this job "lists crates BY NAME, so a new crate is invisible to it until
-someone remembers", and records that broken intra-doc links in `src/selfhost/` once survived four
-releases — so the gap was found and closed before I claimed it was open.
-
-**Two figures in that report were also wrong.** It is three unresolved links, not four; the fourth
-line I counted was rustdoc's aggregate `could not document`. And they are not a defect: they resolve
-under every feature set the project actually documents, and fail only under `--features self-host`
-alone, which neither docs.rs nor CI builds. Fixing them would mean de-linking or duplicating prose
-under `cfg_attr` to serve a configuration nobody ships.
-
-**The lesson is the one already written down**: check an item against the code before repeating it.
-I made that error while writing a finding that a goal statement then carried forward.
-
-## The crash cost the push, not the work
-
-The previous session had committed a complete increment to a local feature branch and never pushed
-it. Working tree clean, no stash, all four channels updated in the same commit. **Nothing needed
-rebuilding.** What it cost was the push, the pull request, and an accurate handoff.
-
-**`HANDOFF.md` reported itself STALE, correctly, and for the wrong reason.** Its validity check
-required `git rev-parse HEAD~1` to equal a recorded parent, so the first unrelated merge invalidated
-it while its contents were still largely true. Three merges had landed. The stamp is now an
-**ancestor check plus a content check**, which is what the `v0.3.0` line moved to after hitting the
-identical defect. A hash match is a claim that nothing else ever lands.
-
-It also carried a stale `selfhost_wire` count, 157 against the tree's 161. The rewritten file
-**derives** such numbers with a command rather than restating them.
-
-## The `break` report: the grammar is right, the parser is right
-
-The `v0.3.0` line reported that `GRAMMAR.md` documents a `break;` form the parser rejects, and left
-`BreakIf` unisolated in its opcode audit on that basis. **Both halves are wrong.**
-
-The documented form parses verbatim. `TokenKind::Break` is handled at statement position in
-`parse_block`, so there is no route from that form to an expression-position diagnostic at all.
-
-**The real cause is a stray `;` after a `for` block** in their probe source. A `for` loop is a
-statement and consumes no trailing semicolon, so the parser resumes at statement position and reads
-the `;` as the start of an expression. The diagnostic, `unexpected token Semicolon in expression`,
-names the semicolon, and their source has two near each other.
-
-**The control settles it rather than my reasoning**: remove `break` entirely, keep the stray
-semicolon, and the failure is identical.
-
-**`BreakIf` is reachable.** One semicolon deleted, nothing else changed, and `main` carries
-`BreakIf(41)` and `Break(41)`. Their probe source is now a named case pinned by execution.
-
-**Pinned, not repaired.** `if`, `match`, and `loop` accept a trailing semicolon and `for` does not.
-Accepting it widens the admitted language, which is a judgment call rather than a correctness fix.
-`GRAMMAR.md` gains the rule it was silent on, and all three accepting forms are pinned, not
-generalised from `if`.
-
-## A claim of mine that needed checking before it shipped
-
-The grammar sentence names `if`, `match`, and `loop`. I had measured only `if`. I checked the other
-two before the merge rather than after, and both hold — but the sentence would have been a
-three-part claim resting on one measurement. **The same class as everything else on this list.**
-
-## B2: the slice was built, and one of its three hazards was asserted by nothing
-
-The child-position slice is **built** — the fourth item this session a plan listed as remaining that
-the tree had already done. What was not done is the coverage.
-
-**Collapsing `mi_name_mode` to the struct rule for every tag left the entire 163-test wire suite
-green.** `STRUCT` interns field names FRESH for contiguity, `ENUM` interns type and variant BOTH
-DEDUP, and the two differ only where a name repeats. Every constant case in both lists was a string
-or a struct, so no enum variant name ever repeated.
-
-**The test that should have caught it states the hazard in its own doc comment** and its case list
-contains no enum. A comment asserting a property beside a suite that does not check it reads as
-coverage. Closed by `two-enums-same-variant`; the must-fire control reports
-`two-enums-same-variant: name 6 (A) mode`.
-
-**Said plainly about my own addition**: I also added the case to `FX_CASES`, and I did NOT
-demonstrate which mutation it discriminates there — that path is `fx_*`, not `mi_*`. The comment
-says so rather than borrowing the mi finding's evidence.
-
-## The `concurrency` group is in, and not in the form requested
-
-`ci.yml` now supersedes an in-flight run when a PULL REQUEST is pushed again, and leaves branch runs
-alone. That closes a failure the `v0.3.0` line measured at about twenty minutes and asked for three
-times, and which cost this line two hand-cancelled runs in one session.
-
-**The requested form would have cost something.** `group: ${{ github.workflow }}-${{ github.ref }}`
-with `cancel-in-progress: true` also groups PUSH events, because this workflow triggers on both — so
-a second merge to a version branch cancels the first commit's verification run, leaving an
-intermediate tip with no green run of its own. That per-tip result is what distinguishes an
-integrated state from a proposed one.
-
-**What landed** keys the group on the ref for a pull request and on the unique `run_id` otherwise, so
-branch runs can neither cancel nor queue. Grouping them with `cancel-in-progress: false` is worse
-than it sounds: it does not cancel, it SERIALISES ~45-minute runs behind one another.
-
-**No `CHANGELOG.md` entry, deliberately**: `.github/` is not in the crate tarball, so nothing a
-downstream embedder can observe changes. Recorded rather than silently omitted.
-
-**What this does NOT establish**: the branch-run half is correct by construction, not by test — a
-`run_id` group is unique per run, so there is no collision to observe. Only the pull-request half was
-verified by execution.
-
-## The five seed accessors are built
-
-Public under `self-host`: the four `*_kel_module()` builders, plus
-`seed_reconstruct_shared`, `seed_reconstruct_multihead_shared`, `seed_verify_depth_shared`,
-`seed_verify_structural_shared`, `seed_verify_typed_shared`.
-
-**One encoding, not two.** Every driver entry point now seeds through them rather than inline, so
-there is no second copy to drift — which was the `v0.3.0` line's stated reason for wanting the `Vm`
-passed in rather than constructed inside.
-
-**Five because `reconstruct` has two entry points.** Their refinement, and it was the one I would
-have got wrong: the multihead form takes a head group rather than a record stream, and it is where a
-dispatch predicate was once wrong in both directions with no oracle catching it.
-
-**Not built for `verify_datalayout`**, as agreed: three phases with different operand encodings and a
-verdict accumulating across calls, so batch zero cannot produce a verdict at all.
-
-**What the green suite does not establish.** The accessor test compares two callers of ONE encoding,
-so a defect in the encoding is invisible to it. It reads the `verify_depth` verdict slot as a literal
-duplicating a private constant, and every chunk in its source is accepted, so a wrong index would
-agree vacuously. And only the seeding is public — the verdict slot constants are not, which suits
-driving stages on real input and not reading results out.
-
-## TOP OPEN CORRECTNESS ITEM: `Op::Yield`'s peak-model net, confirmed by execution
-
-**Reported by the `v0.3.0` line and reproduced on this tree.** Walking
-`stack_growth - stack_shrink` over the stage corpus, `analyze::main` and `verify_depth::main` both
-reach **-1, first at op 3 = `PopN(1)`**. An operand stack cannot hold a negative number of slots, so
-wherever this happens the walk is not tracking the real stack.
-
-**The two models disagree and one states the reason.** `Op::stack_growth` is 0 and `stack_shrink` is
-1, giving `Yield` a net of **-1**. `verify::op_depth_effect` gives `(1, 0)` — net **0** — above the
-comment "Yield pops the output and the resume pushes the input: net 0". Their measurement across a
-larger corpus: 8 of 958 chunks, low -1, and emitted operand slots exceeding the proven bound on two.
-
-**THE CONTROL ADDED FOR THE LAST INSTANCE CANNOT REACH THIS ONE.** `d3fd5cb6` split the two models
-because one had a wrong net, and added `the_peak_model_agrees_with_the_depth_model`. That control
-compares them over **five hand-written cases, none of which yields** — all plain `fn` chunks. It
-caught `GetField` because a case exercised `GetField`. Its coverage is a fact about its case list,
-not about the opcode set. **Same shape as the enum hazard found in the wire suite this session.**
-
-**Do not read a matching peak as evidence.** On a small yielding chunk the two models return the
-same peak, 3 and 3, because a max can coincide while the running offset is wrong. The negative-walk
-measurement is the sharper instrument.
-
-**Not repaired.** Changing a bound model is the same class of work as `d3fd5cb6` and wants its own
-increment, with a control that reaches `Yield` rather than another case list that happens not to.
+`mi_join_header` is additive beside `mi_join` rather than a flag on it, and `highest_command` moved
+167 to 168 — a real guard, so the two had to change together.
 
 ## Open
 
-- ~~**The `analyze_class` catch-all**~~ **CLOSED.** `analyze_class` and `analyze_opk` are exhaustive
-  over `Op`; adding a variant now fails to build at both sites with `E0004`, verified rather than
-  asserted. No bound changed and the nine-class boundary still reports nine. **`analyze_class` was
-  the outlier**: seven other matches over `Op` in this crate were already exhaustive, so the codebase
-  already had the discipline and this one function silently absorbed a new opcode.
-  **Residual, and it is not closable by a compiler**: exhaustiveness forces a DECISION, not a correct
-  one. A new control-flow opcode placed in the plain group satisfies the compiler and reintroduces
-  the silent missing edge. The pinned nine-class count is what guards that.
-- **`Op::cost()` disagrees with measurement**, two findings pinned rather than repaired. Only 17
-  opcodes of 66 were ever measured; every other emitted value is a bucket assignment checked by
-  nothing.
+- **`CONSTS`, `CHUNKS`, `SIGNATURES`** and the rest of the emit path. See the obstacles above.
+- **`FixedMul`/`FixedDiv` peak-model nets**, pinned; repairing them LOWERS shipped bounds. Yours.
+- **`Op::Yield`'s peak-model net**, pinned; repairing it raises them.
+- **`Op::cost()`**, 17 of 66 opcodes ever measured.
+- **Self-hosted type rejection**: RULES COMPLETE, INPUT NOT. All fifteen shapes plus
+  `calling-a-local` are rejected. The stage's channels come from Rust walking the REFERENCE AST,
+  and the tags are literal-only, so every rule reaches only literal-direct occurrences. Needs
+  SOURCE TYPES, which no pipeline stage computes.
+- **The `for` trailing-semicolon asymmetry**, pinned. **`CHANGELOG.md:340`** wrong in published text.
+- Publication remains **HELD**.
+
+## THE BOUND WAS NOT OFF BY ONE. THE BODY CONTRIBUTION WAS ABSENT
+
+The `v0.3.0` line reported `06_multiheaded::classify` and `rogue_bestiary::corpse_fill` at a bound
+of **2** where both peak models and their emitter said **3**. Reproduced, and **their report
+understated its own finding**: the 2 is `local_count` alone. The reported body peak was exactly **0**.
+
+**The cause is a type, not the arm anyone was looking at.** `wcmu_region` returned
+`Option<McuResult>`, in which `None` meant "no path reaches the end" and carried no resources at all.
+Four sites discarded an accumulated peak and heap on that encoding: the `Trap` arm, the `If` arm when
+both branches exited, the `Loop` arm when the body never fell through, and every top-level caller's
+`unwrap_or(McuResult::empty())` — `module_wcmu` included, so the shipped module header carried it.
+**Patching the arm named in the report would have left three.**
+
+It is now `McuOutcome`: `peak_above_initial` and `heap_total` are always meaningful, and only
+`delta: Option<i32>` carries the control-flow fact. Resources are monotone along a path; control flow
+is not, and the old encoding conflated them.
+
+**The reach is the whole multihead construct**, since each compiles to guarded heads with a trailing
+no-match dispatch `Trap`. The corpus split before the repair is total rather than suggestive:
+
+| | body peak zero | body peak non-zero |
+|---|---|---|
+| ends in `Trap` | **6** | 0 |
+| no trailing `Trap` | 0 | **58** |
+
+## A SECOND DEFECT, POINTING THE OTHER WAY, WAS UNDERNEATH IT
+
+With the discard fixed, `classify` reported **7** against an emitter allocating 3. `Op::Return` fell
+through the catch-all, so a multiheaded dispatch was walked as though every head ran in sequence,
+each head's `Return` leaving its offset for the next. Made a path exit like `Trap`. Both chunks now
+report a body peak of **3**.
+
+**The two errors were present simultaneously and partially cancelled.** That is why the symptom
+presented as a small understatement rather than as two large opposite ones, and it is the reason to
+distrust a bound that looks nearly right when checked against a hand walk.
+
+## THE CONTROL, BECAUSE THE MEASUREMENT ALONE WOULD NOT HAVE SETTLED IT
+
+Two sources whose compiled bodies differ only by the trailing dispatch trap. Single-head reports a
+body peak of 3; multihead reports 0; and the multihead body strictly contains the single-head body.
+That is what makes it a defect rather than a modelling choice.
+
+## THE RANGING CHECK FOUND TWO OPCODES IMMEDIATELY
+
+`the_peak_model_agrees_with_the_depth_model` compared the two models over five hand-written sources.
+**Its coverage was a property of its case list**, and it is now superseded by a check ranging over
+the opcode set, with completeness asserted against the wire format's canonical opcode table so a new
+opcode is reported **by name** rather than skipped. It is mutation-verified: mutating one shared
+match arm makes it report all nine opcodes in that arm.
+
+On its first run it reported **`FixedMul` and `FixedDiv`**, which declare a peak-model net of 0
+against a virtual-machine handler that pops twice and pushes once. **Reachable by no case in the list
+it replaced.**
+
+**Pinned, not repaired**, and the reason is directional: that error OVERSTATES, so it is a precision
+defect rather than a soundness one, and repairing it LOWERS bounds on shipped chunks — the opposite
+direction from this increment's subject. `Op::Yield` stays pinned for the same reason and a different
+cause. The check fails if either is repaired without removing its entry, so neither can be lost.
+
+## A MISTAKE I ALMOST WROTE DOWN AS A FINDING
+
+The first draft of the known-disagreement list predicted that the six control-flow opcodes would
+disagree, on the reasonable ground that `verify_depth_region` intercepts them before their
+`op_depth_effect` entry is read. **All six agree.** The staleness assertion — every known entry must
+still disagree — is what said so. Six plausible entries with a plausible reason would otherwise have
+gone in unchallenged. **A list of expected failures needs the same control as a list of expected
+passes.**
+
+Two instrument faults were mine and neither reached a conclusion. My first depth walk destructured
+`op_depth_effect` as `(push, pop)` when it returns `(required, net)` — the same misreading that
+produced a retracted report on the other line last week. My first corpus walk was straight-line over
+a branching op array and reported an understatement of 1801 slots.
+
+## `wcet_region` HAS THE IDENTICAL DEFECT, AND I HAVE NOT REPAIRED IT
+
+**This is now the top open correctness item on this line.** `wcet_region`'s `Op::Trap` arm
+accumulates `cost`, then does `let _ = cost;` and returns `Ok(None)` — the same idiom, in the sibling
+analysis, so the cycles spent before a trap are discarded from the worst-case EXECUTION TIME bound.
+Found by reading the structure, not from any report.
+
+**Deliberately out of this increment.** It is a different analysis with its own corpus and tests, and
+a self-hosted mirror whose cost folding would have to move with it. This increment already changes a
+bound model, and mixing a WCET change into it would make the diff illegible. **It is a real
+understatement and should be the next thing taken, or the one after the `ParsedFn` decision.**
+
+## `analyze.kel` HAD THE SAME DEFECT, AND I FIRST REPORTED THAT IT DID NOT
+
+**Correcting myself.** I read `account_op` running before the broke flag, saw the frame retain its
+peak, and concluded the self-hosted stage never had the reference's top-level discard. That was
+wrong, and the differential said so. `run()` ended with
+
+    let region_peak = if an.child_broke == 1 { 0 } else { an.child_peak };
+
+for cost, peak and heap alike — the exact analogue of `unwrap_or(McuResult::empty())`. **Every
+single-head function ends in a top-level `return`, so this zeroed the body contribution of
+essentially every `fn` in every stage.** I had checked the child-frame path and stopped before the
+place the answer is actually produced.
+
+**Two further things were wrong underneath it.**
+
+`Op::Return` had no control-flow class, so `analyze.kel` walked a multiheaded dispatch as though
+every head ran in sequence. It now shares class 8 with `Trap`, which is a PATH EXIT rather than a
+trap class; no tenth class was needed and the pinned nine-class boundary still reports nine.
+
+**And `tests/selfhost_codegen.rs` carried its own second copy of the class table**, which had already
+drifted: it kept the `_ => (0, 0)` catch-all after the driver's was made exhaustive, and passed `0`
+where the driver passes real `EndLoop`/`Break`/`BreakIf` targets. **The differential that is supposed
+to be the oracle was running against the unrepaired table**, which is why my first driver-side fix
+changed nothing. `analyze_class` and `analyze_opk` now live in `selfhost_host`, which is gated on
+`compile + verify` rather than `self-host`, and the duplicate is deleted — one encoding, the
+same reasoning as the per-item seed accessors.
+
+**WHY THE COPY EXISTED, WHICH I ONLY LEARNED FROM A RED CI JOB.** My first fix made the driver's
+copies `pub`. That failed the MSRV and broad-feature jobs with `unresolved import
+keleusma::selfhost`, because `selfhost` is gated on `self-host` and **the test file builds without
+it**. The duplicate was not carelessness; the consumer genuinely could not reach the original.
+`selfhost_host` already existed for precisely this — its own doc says it is there "so the
+parse-record transport lives in one place instead of being copied into every consumer" — so that
+is where they belong. **A duplicate with a structural cause comes back unless the cause is
+removed.**
+
+**This is the strongest argument in the whole increment for the differential.** Three defects in the
+self-hosted analyzer, one of them a silently drifted copy of a table repaired a day earlier, and none
+of them was visible until a reference change forced the two sides apart.
+
+## What these green suites do NOT establish
+
+- The corpus invariant is a property of the example corpus, which is a case list. The property-level
+  test that does not depend on any corpus is `a_chunk_that_only_traps_still_reports_what_it_consumed`.
+- Agreement at 3 between the repaired bound, the two peak models and the emitter is agreement among
+  four readers of the same instruction stream, not a measurement of the machine's actual stack use.
+- The ranging check compares the two models against each other. It is not evidence that either
+  matches the virtual machine; that link is made per opcode, by hand, against the handler.
+
+## One behavioural widening, stated rather than buried
+
+A loop whose body always returns is now accepted with an iteration count of 1 where it previously
+required an extractable bound. **Unreachable from this compiler** — the dispatch `Loop` wrapper is
+emitted only for Stream chunks, whose heads emit `Break` rather than `Return` — but reachable by
+hand-crafted bytecode, and sound there, since a body that always returns iterates once.
+
+## Owed to the `v0.3.0` line
+
+**Their per-chunk WCMU numbers have moved and should be re-measured, not reused.** Bounds rise on
+chunks whose paths exit without falling through and fall on multiheaded chunks. Their
+emitted-slots-exceed-proven-bound count and their 8-of-958 negative walk are both computed against
+numbers that changed.
+
+**`ParsedFn` is still blocking their `seed_reconstruct_*` accessors**, and I deliberately did not
+bundle a visibility decision into a bound repair. My inclination is a `pub fn` returning the records
+for a source string rather than opening the fields, so the stage's input shape stays ours to change.
+It is the next thing I pick up unless redirected.
+
+## Open
+
+- **`wcet_region` discards the cycles consumed before a trap**, the same defect in the sibling
+  analysis. **Highest open correctness item.** Not repaired here, deliberately.
+- **`Op::Yield`'s peak-model net**, pinned in the ranging check. Different cause from the above.
+- **`FixedMul`/`FixedDiv` peak-model nets**, pinned in the same place, verified against the handler.
+- **`Op::cost()` disagrees with measurement**; 17 opcodes of 66 were ever measured.
+- **Order 1 remains the real gap**: the self-hosted path emits two region kinds against a schema of
+  about twenty, and type rejection has complete RULES but a host-supplied, literal-only INPUT. The roadmap cell now says so.
 - **The `for` trailing-semicolon asymmetry**, pinned. Widening is the operator's call.
-- **`-255` is live and has no negative test**; the corpus tops out at 7,680 distinct name bytes.
-- **`bin` was raised, not fixed.** 49,152 covers `parse` at 1.47x.
-- **Two pinned coverage gaps**: no stage contributes a constant-interned name, and none nests a
-  constant past depth one.
 - **`CHANGELOG.md:340`** states the checked-arithmetic push order wrongly in published text.
 - Publication remains **HELD**.
 
 ## Questions for the operator
 
-1. ~~**The `analyze_class` catch-all.**~~ Done; no bound changed.
-2. **The `for` trailing-semicolon asymmetry.** Accept a trailing semicolon after `for`, matching the
-   other three block forms, or leave the asymmetry pinned as it stands?
-3. **`Op::cost()`.** The two findings are pinned, not repaired. Recalibrating is a judgment call I
-   have deliberately not taken.
+1. **`FixedMul`/`FixedDiv`.** Repair the peak-model nets, which lowers bounds on shipped chunks, or
+   leave them pinned? I have not taken it, because lowering a bound in an increment about raising one
+   would make the diff illegible.
+2. **`ParsedFn` visibility.** A `pub fn` returning records, or `pub` fields? The other line asked us
+   to choose and I would rather confirm than guess.
+3. **`Op::cost()`.** Still pinned, still a judgment call I have deliberately not taken.
