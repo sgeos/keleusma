@@ -131,6 +131,25 @@ The grammar sentence names `if`, `match`, and `loop`. I had measured only `if`. 
 two before the merge rather than after, and both hold — but the sentence would have been a
 three-part claim resting on one measurement. **The same class as everything else on this list.**
 
+## B2: the slice was built, and one of its three hazards was asserted by nothing
+
+The child-position slice is **built** — the fourth item this session a plan listed as remaining that
+the tree had already done. What was not done is the coverage.
+
+**Collapsing `mi_name_mode` to the struct rule for every tag left the entire 163-test wire suite
+green.** `STRUCT` interns field names FRESH for contiguity, `ENUM` interns type and variant BOTH
+DEDUP, and the two differ only where a name repeats. Every constant case in both lists was a string
+or a struct, so no enum variant name ever repeated.
+
+**The test that should have caught it states the hazard in its own doc comment** and its case list
+contains no enum. A comment asserting a property beside a suite that does not check it reads as
+coverage. Closed by `two-enums-same-variant`; the must-fire control reports
+`two-enums-same-variant: name 6 (A) mode`.
+
+**Said plainly about my own addition**: I also added the case to `FX_CASES`, and I did NOT
+demonstrate which mutation it discriminates there — that path is `fx_*`, not `mi_*`. The comment
+says so rather than borrowing the mi finding's evidence.
+
 ## Open
 
 - ~~**The `analyze_class` catch-all**~~ **CLOSED.** `analyze_class` and `analyze_opk` are exhaustive

@@ -56,6 +56,14 @@ Current sprint source of truth.
 > `self-host` feature surface; it does, in a Doc-job step I did not read. The finding reached a
 > resume channel and a goal statement before being checked against the code. Nothing to repair.
 >
+> **B2 (child-position slice): already built; the coverage was not.** Collapsing `mi_name_mode` to
+> the struct rule left the whole 163-test wire suite green, so the `ENUM` dedup half was asserted by
+> nothing. Closed by `two-enums-same-variant` with a named must-fire control. The test that should
+> have caught it described the hazard in its own doc comment and carried no enum case.
+>
+> **A1 done**: `analyze_class` and `analyze_opk` exhaustive over `Op`; seven other matches were
+> already exhaustive, so this was the outlier.
+>
 > **D1 done opportunistically**: the wire-format plan gains a governing currency banner, and the two
 > places where the 395,804 figure ordered work are corrected in place.
 >
