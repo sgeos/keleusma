@@ -52,6 +52,11 @@ Current sprint source of truth.
 > 49,152. The plan's claim that the producer and the staging are one increment followed from the
 > 395,804 figure, which is a `CONSTS` region record count and still sits at five sites there.
 >
+> **The five seed accessors are BUILT (2026-08-15).** Public under `self-host`, with the four stage
+> module builders. Every driver entry point seeds through them, so one encoding exists rather than
+> two. Five because `reconstruct` has two entry points — the `v0.3.0` line's refinement, and the part
+> I had scoped wrong. Not built for `verify_datalayout`, as agreed.
+>
 > **NEW, OPEN, TOP CORRECTNESS ITEM (2026-08-15): `Op::Yield`'s peak-model net.** Reported by the
 > `v0.3.0` line, reproduced here: the operand walk reaches -1 on `analyze::main` and
 > `verify_depth::main`, first at `PopN(1)`. `stack_growth`/`stack_shrink` give net -1;

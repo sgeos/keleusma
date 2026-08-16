@@ -13,6 +13,43 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE ACCESSOR REQUEST WAS RIGHT, AND THEIR REFINEMENT WAS THE PART I HAD WRONG (2026-08-15).**
+
+Five per-item seed accessors are public under `self-host`, with the four stage-module builders
+alongside them because without those an outside caller cannot construct the `Vm` the seeders take.
+
+**FIVE, NOT FOUR, AND THAT WAS THEIRS.** I scoped `reconstruct` as one unit of work by reading
+`reconstruct_via_kel` and not looking for a second entry point. `reconstruct_via_kel_multihead` takes
+a head GROUP rather than a record stream, and they pointed out it is where a dispatch predicate was
+once wrong in both directions with no oracle catching it, because every corpus input agreed on
+keyword and head count. **An accessor for the first alone would have handed them the path that has
+never been the problem.** The same class as my own `wire_names_via_kel` finding: a function taking an
+argument it does not use, or a table with one entry point where there are two, is invisible until
+someone looks for the second.
+
+**THE REFACTOR IS THE DELIVERABLE, not the new functions.** Every driver entry point now seeds
+THROUGH the accessor rather than inline, so exactly one encoding exists. Publishing a seeder while
+leaving the driver's own copy in place would have produced precisely the drift the request existed to
+prevent — and their reason for wanting the `Vm` passed IN rather than constructed inside is the same
+argument, which is better than the hot-path one I had offered.
+
+**WHAT I SAID THE GREEN SUITE DOES NOT ESTABLISH**, because it is weaker than it looks:
+
+- It compares the accessor's verdict against the driver's, which is two callers of ONE encoding. A
+  defect IN that encoding is invisible to it by construction.
+- It reads the `verify_depth` verdict slot as the literal `1 + 1536 * 5`, duplicating a constant
+  private to the module, and every chunk in its source is ACCEPTED — so a wrong index reading zero
+  would agree vacuously. The non-zero-buffer assertion guards the seeding, not the read.
+- Only the SEEDING is public. The verdict slot constants are not, which suits driving stages on real
+  input and does not suit reading results out. Left that way rather than widening the surface
+  unasked.
+
+**MECHANICAL FRICTION WORTH RECORDING.** Extracting a closure-based seeder changes `&vm` to `vm` at
+every call site, and my regex caught the single-line forms and missed the multi-line ones. Clippy's
+`needless_borrow` found six across three functions. The lesson is small and real: a mechanical
+transform applied by pattern needs the compiler to confirm it, not a second reading of the pattern.
+---
+
 **THE CONTROL I ADDED FOR ONE INSTANCE CANNOT REACH THE NEXT ONE (2026-08-15).**
 
 The `v0.3.0` line reports `Op::Yield` with a wrong net in the peak model. **Confirmed by walking my
