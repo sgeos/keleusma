@@ -600,6 +600,14 @@ struct Run {
     results: Vec<i64>,
     log: Vec<String>,
     shared: Vec<u8>,
+    /// Whether the run CHANGED the shared segment from the bytes it was given.
+    ///
+    /// Not the same question as whether the segment is non-zero. A seeded module
+    /// starts non-zero, so a zero test answers "was it seeded", never "did it do
+    /// anything" — and every seeded stage would leave the vacuous set the moment
+    /// it was seeded, whether or not it ran. This is the honest form of that
+    /// question and it is what `is_vacuous` reads.
+    wrote_shared: bool,
 }
 
 fn run_vm(
@@ -718,6 +726,12 @@ fn run_vm(
             seed_len_bytes(m, &mut shared);
         }
     }
+    // **The segment as the module FOUND it**, kept so vacuity can ask whether the
+    // run changed anything rather than whether the buffer is non-zero. Seeding
+    // makes a non-zero test true before the module executes a single op, so
+    // without this a seeded module leaves the vacuous set BY CONSTRUCTION and the
+    // departure is evidence of nothing. See `is_vacuous`.
+    let initial_shared = shared.clone();
     let mut results = Vec::new();
 
     let first = match vm.call_with_shared(&mut shared, &vals) {
@@ -752,6 +766,7 @@ fn run_vm(
     }
     Ok(Run {
         results,
+        wrote_shared: shared != initial_shared,
         log: take_log(),
         shared,
     })
@@ -853,6 +868,9 @@ fn run_native(
         }
     }
     shared[n_shared..].copy_from_slice(&CANARY.to_le_bytes());
+    // The segment as the module found it. See `is_vacuous`: a seeded module is
+    // non-zero before it runs, so vacuity must ask what the run CHANGED.
+    let initial_shared = shared[..n_shared].to_vec();
     let mut privs = vec![0u64; n_priv + 1];
     privs[n_priv] = CANARY;
     let mut region = vec![0u64; n_region.div_ceil(8) + 1];
@@ -999,6 +1017,7 @@ fn run_native(
     shared.truncate(n_shared);
     Some(Run {
         results,
+        wrote_shared: shared != initial_shared,
         log: take_log(),
         shared,
     })
@@ -1008,8 +1027,22 @@ fn run_native(
 ///
 /// The harness compares three things, and a module that exits immediately is
 /// trivial in all three at once: one repeated result, no host calls, and a shared
-/// segment still holding the zeros it was handed. Two sides agreeing on that
-/// state assert nothing about the emitter.
+/// segment the run never changed. Two sides agreeing on that state assert nothing
+/// about the emitter.
+///
+/// **THE THIRD TEST WAS "IS THE SEGMENT ALL ZERO" UNTIL 2026-08-16, AND SEEDING
+/// DEFEATED IT.** A seeded module holds a non-zero segment before it executes a
+/// single operation, so the zero test answered "was it seeded" rather than "did it
+/// do anything", and **every stage left this list the moment it was given a seed,
+/// whether or not the seed changed the run.** Three did, on 2026-08-15 and
+/// 2026-08-16, and the headline moved from 40 to 44 on the strength of it. The
+/// test now compares against the bytes the module was HANDED, so a seeded stage
+/// that writes nothing is correctly vacuous again and those three returned to this
+/// list. `reconstruct.kel` stayed out, which is the difference between a stage
+/// that does observable work and a stage that merely receives an input.
+///
+/// This is the same defect class the file already documents twice over: an
+/// experiment that cannot fail looks exactly like success.
 ///
 /// **Conservative by construction.** A run is vacuous only when EVERY observable
 /// is trivial, so a module doing real work in any one of them is counted as
@@ -1030,7 +1063,7 @@ fn is_vacuous(run: &Run) -> bool {
     let mut distinct: Vec<i64> = run.results.clone();
     distinct.sort_unstable();
     distinct.dedup();
-    distinct.len() <= 1 && run.log.is_empty() && run.shared.iter().all(|b| *b == 0)
+    distinct.len() <= 1 && run.log.is_empty() && !run.wrote_shared
 }
 
 /// Modules that AGREE while producing nothing, tracked rather than counted.
@@ -1044,28 +1077,39 @@ fn is_vacuous(run: &Run) -> bool {
 /// is why the headline moved from 40 to 34. Nothing regressed; the number was
 /// measuring the harness rather than the emitter.
 ///
-/// **The list is down to ONE**, and every departure was forced by the
-/// set-equality assertion below rather than chosen. The stages that left did so
-/// because `stage_seed` hands them a real input built by the driver's own public
-/// accessors, so the bytes are the ones a real driver supplies and this harness
-/// carries no second encoding of any input format.
+/// **The list GREW on 2026-08-16, and that is a repair rather than a regression.**
+/// `is_vacuous` had asked whether the shared segment was all zero, which a seeded
+/// module fails before it runs. Three `verify_*` stages had left this list on that
+/// basis alone and are now back. The count they were credited with, 44 executed,
+/// was measuring the fact that they had been seeded.
 ///
-/// The one that remains is not waiting on an accessor. It cannot be driven from a
-/// single seeded buffer at all, for the reason recorded beside it. Seeding it
-/// anyway would produce a run that agrees and means nothing, which is the precise
-/// defect this list exists to prevent.
+/// **Seeding a stage is not the same as a stage doing observable work**, and only
+/// `reconstruct.kel` has cleared the second bar. Every departure and every return
+/// was forced by the set-equality assertion below rather than chosen.
+///
+/// **These stages DO run.** `probe_stage_vacuity` measures each entering strictly
+/// more chunks when seeded, so the accessors bought real execution. What they did
+/// not buy is an observable this harness can compare, which is why both
+/// instruments are kept and why neither is quoted alone.
 const KNOWN_VACUOUS: &[&str] = &[
     // `lexer.kel` LEFT this list on 2026-08-15, and the set-equality assertion
     // is what noticed. It declares the documented `len` + `bytes` host
     // convention, so `seed_len_bytes` now gives it a real payload and it does
     // real work inside this harness rather than only in `stage_differential`.
     //
-    // `verify_depth.kel`, `verify_typed.kel` and `verify_structural.kel` LEFT on
-    // 2026-08-16, by the same mechanism. The
-    // `v0.2.3` line landed per-item seed accessors (`fa649ec3`) that this line
-    // requested, and `stage_seed` now hands it a REAL compiled chunk built by
-    // `seed_verify_depth_shared` -- the driver's own encoding, not a second one
-    // reproduced here.
+    // **`verify_depth.kel`, `verify_typed.kel` and `verify_structural.kel` LEFT on
+    // 2026-08-16 AND CAME BACK THE SAME DAY.** The departure was an artifact: the
+    // vacuity test asked whether the segment was all zero, and seeding makes it
+    // non-zero before the module runs, so being seeded was sufficient to leave.
+    // With the test comparing against the bytes the module was handed, all three
+    // are vacuous again -- they yield one constant value, call no native, and
+    // write nothing back.
+    //
+    // **This is not a criticism of the accessors, which work.** `probe_stage_vacuity`
+    // shows each stage entering strictly more chunks when seeded (5->7, 6->14,
+    // 4->6). They execute more of themselves and produce no observable this
+    // harness can compare. Do NOT remove them from this list to recover the
+    // headline count.
     //
     // **`verify_datalayout.kel` will NOT leave this list by seeding, and that is
     // correct rather than a gap.** It has no accessor by joint agreement: its
@@ -1081,7 +1125,15 @@ const KNOWN_VACUOUS: &[&str] = &[
     // the whole time and no new accessor was needed. The `v0.2.3` line caught
     // the error. Only the single-head `seed_reconstruct_shared` was ever truly
     // blocked, and it still is, on field accessors that are not on this tree.
+    //
+    // **`reconstruct.kel` stayed OUT when the vacuity test was repaired**, which
+    // is the difference that matters: it writes the reconstructed forest back into
+    // the segment, so its departure survives asking whether the run changed
+    // anything. The three stages above did not.
     "verify_datalayout.kel",
+    "verify_depth.kel",
+    "verify_structural.kel",
+    "verify_typed.kel",
 ];
 
 /// Modules KNOWN to disagree, tracked rather than ignored.
