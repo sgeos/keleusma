@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`ParsedFn` accessors and a widened self-hosted emit entry, both under the
+  off-by-default `self-host` feature.** `ParsedFn::category`, `param_count`,
+  `guard_records` and `body_records` make `seed_reconstruct_shared` callable by an
+  external harness, which is what the native-code-generation line needed to drive
+  the `reconstruct` stage on real input instead of an all-zero segment. Accessors
+  rather than public fields, so the parse representation stays free to change.
+  `seed_reconstruct_multihead_shared` needed nothing: `parse_functions` was already
+  public and yields `Vec<ParsedFn>`, so that entry point was always reachable.
+  `wire_regions_via_kel` emits `NAMES`, `STRING_POOL` and the `HEADER` record from a
+  compiled module, byte-identical to the reference encoder. The first two are
+  computed by the Keleusma stage from the module blob; the header record is encoded
+  by the stage from eleven scalar field values the host supplies, so the stage owns
+  the record layout and the host owns the numbers. The distinction is asserted in
+  the tests rather than left to the reader.
+
+
 - **Five per-item seed accessors on `keleusma::selfhost`, behind the off-by-default
   `self-host` feature.** `seed_reconstruct_shared`,
   `seed_reconstruct_multihead_shared`, `seed_verify_depth_shared`,

@@ -16,12 +16,81 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 | | |
 |---|---|
-| The understated WCMU bound | **FIXED**, and it was much larger than reported |
-| A second, opposite defect underneath it | **FIXED** in the same increment |
-| The five-case model control | **replaced** by a check ranging over the opcode set |
-| What that check found on its first run | **two opcodes** no case list had reached |
-| The roadmap's Order 1 cell | corrected; it now states the actual gap |
-| Owed to `v0.3.0` | one visibility decision, deliberately not bundled |
+| `reconstruct` seeding | **unblocked**, and one of the two was never blocked |
+| Module-driven emit path | **three** region kinds, two computed and one encoded-not-derived |
+| The next region, `CONSTS` | **not wiring** — measured obstacles, recorded below |
+| A vacuous target avoided | `STRUCT_AUX` and `ENUM_AUX` are empty in all eleven stages |
+| Previous increment | WCMU/WCET exit-path repair, merged at `e923a57f`, 22/22 green |
+
+## TWO INHERITED CLAIMS WERE WRONG, ONE FROM EACH LINE
+
+**Theirs.** The `v0.3.0` line reported both `seed_reconstruct_*` accessors unreachable because
+"the function that produces one is private". **`parse_functions` is `pub`** and returns
+`Vec<ParsedFn>`, so `seed_reconstruct_multihead_shared` was callable from outside the crate all
+along. Measured before changing anything and kept as a standing test that would have passed against
+the old tree. Only `seed_reconstruct_shared` was genuinely blocked; `ParsedFn` now has four
+accessors rather than public fields, so the parse representation stays ours to change.
+
+**Mine.** "The self-hosted path emits two region kinds" understated the tree, the same shape as the
+395,804 incident. It is true of `wire_names_via_kel`, but `wire.kel` already carries `emit_*`
+commands for nineteen kinds, and the differential already drives Keleusma computation of six of them
+to whole-artifact byte identity — from harness inputs rather than from a `Module`.
+
+## THE MEASUREMENT THAT SAVED THE INCREMENT FROM BEING VACUOUS
+
+I had chosen `ENUM_AUX` as the next region, on the reasonable ground that the blob carries enum names
+and an emitter exists. Measured payload sizes across the eleven stages first:
+
+| region | non-empty | bytes |
+|---|---|---|
+| `CONSTS` | 11/11 | **663,120** |
+| `CHUNKS` | 11/11 | 36,096 |
+| `NAMES` + `STRING_POOL` | 11/11 | 34,960 |
+| `SIGNATURES` | 11/11 | 12,032 |
+| **`STRUCT_AUX`, `ENUM_AUX`** | **0/11** | **0** |
+
+**`ENUM_AUX` is empty in every stage.** A byte identity for it would have passed while emitting
+nothing. One increment from adding an instance of the exact vacuity this line keeps finding.
+
+## `CONSTS` IS 94% OF THE BODY AND IT IS NOT WIRING
+
+Two obstacles, both found by reading the code rather than predicted:
+
+1. **The producer and consumer use different arrays.** `mi_put_node_full` writes the constant node
+   table into `wire.bytes` at byte zero — where the artifact lives — while the flattener reads its
+   nodes from `wire.fin`. A join doing both would overwrite the directory, the same failure already
+   recorded for the seventh chunk onward.
+2. **The two paths intern in different orders.** The module walk interns preorder by linear scan;
+   the flattener interns breadth-first as it walks, and that order is observable in `NAMES`. One
+   artifact cannot carry both.
+
+**Do not size `CONSTS` as integration.** That is what I was about to do.
+
+## WHAT LANDED, STATED WEAKER THAN IT LOOKS
+
+`wire_regions_via_kel` emits `NAMES`, `STRING_POOL` and the `HEADER` record from a `Module`,
+byte-identical to the reference.
+
+- `NAMES` and `STRING_POOL` are **computed** — the stage walks the blob and derives every byte.
+- `HEADER` is **encoded but not derived** — the host reads eleven scalars off the `Module`, the
+  stage owns the record's offsets, widths and endianness.
+
+Both are module-driven, since neither payload comes from the reference, but only two are self-hosted
+end to end. The must-fire control makes that concrete: feed a wrong field value and the artifact
+differs, which is what "the host owns the numbers" means.
+
+`mi_join_header` is additive beside `mi_join` rather than a flag on it, and `highest_command` moved
+167 to 168 — a real guard, so the two had to change together.
+
+## Open
+
+- **`CONSTS`, `CHUNKS`, `SIGNATURES`** and the rest of the emit path. See the obstacles above.
+- **`FixedMul`/`FixedDiv` peak-model nets**, pinned; repairing them LOWERS shipped bounds. Yours.
+- **`Op::Yield`'s peak-model net**, pinned; repairing it raises them.
+- **`Op::cost()`**, 17 of 66 opcodes ever measured.
+- **Self-hosted type rejection**, 7 tests against roughly 15 shapes.
+- **The `for` trailing-semicolon asymmetry**, pinned. **`CHANGELOG.md:340`** wrong in published text.
+- Publication remains **HELD**.
 
 ## THE BOUND WAS NOT OFF BY ONE. THE BODY CONTRIBUTION WAS ABSENT
 
