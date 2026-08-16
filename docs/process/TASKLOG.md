@@ -31,7 +31,7 @@ Current sprint source of truth.
 > (PR #105), because **a differential against the model under test cannot detect that the model is
 > wrong**. `Op::heap_alloc()` is correct. `Op::cost()` **disagrees with measurement**, two findings
 > pinned rather than repaired, and only 17 opcodes of 66 were ever measured. The class tables are
-> correct but `analyze_class` ends in `_ => (0, 0)`, so a control-flow opcode added later and not
+> correct but `analyze_class` ended in `_ => (0, 0)` (**CLOSED 2026-08-15**, exhaustive over `Op`), so a control-flow opcode added later and not
 > classified becomes "plain" silently — **open, and the highest-value item on the correctness
 > surface**.
 >

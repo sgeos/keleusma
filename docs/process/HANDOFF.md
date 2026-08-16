@@ -130,11 +130,16 @@ appears on `thumbv8m`. Changing a calibration is a judgment call, not a correctn
 **Only 17 opcodes of 66 were ever measured.** Every other value in the emitted cost model is a bucket
 assignment, checked by nothing. Do not read the model's ordering as evidence outside those 17.
 
-**A live structural hazard remains open**: `analyze_class` ends in `_ => (0, 0)`, so a control-flow
-opcode added later and not classified becomes "plain" **silently** — a graph missing an edge and a
-bound that is finite and wrong. The boundary is pinned at nine classes but the hole is not closed.
-Closing it needs an exhaustive `match` over `Op` so the compiler refuses a new opcode until it is
-classified. **This is the highest-value open item on the correctness surface.**
+~~**A live structural hazard remains open**: `analyze_class` ends in `_ => (0, 0)`.~~ **CLOSED
+2026-08-15.** `analyze_class` and `analyze_opk` are exhaustive over `Op`, so the compiler refuses a
+new opcode until someone decides its class. Verified by adding a variant to `Op` and observing
+`E0004` at both sites. **The classification is unchanged** — every opcode the catch-all matched
+still maps to the plain group; what changed is that the decision is now forced rather than defaulted.
+
+**What the compiler still cannot guarantee is that a classification is RIGHT.** Exhaustiveness is
+satisfied just as well by putting a new control-flow opcode in the plain group, which is the same
+silent-edge defect wearing a different hat. The nine-class count stays pinned by test for that
+reason.
 
 ## FACTS THAT COST REAL EFFORT
 
