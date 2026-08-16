@@ -272,7 +272,11 @@ fn chunk_coverage_with(
     let mut shared = vec![0u8; shared_data_bytes_for(m)];
     if let Some(bytes) = preseed {
         if bytes.len() != shared.len() {
-            return Err(format!("preseed {} vs segment {}", bytes.len(), shared.len()));
+            return Err(format!(
+                "preseed {} vs segment {}",
+                bytes.len(),
+                shared.len()
+            ));
         }
         shared.copy_from_slice(bytes);
     } else if let Some(src) = seed
@@ -387,12 +391,19 @@ fn main(a: Word) -> Word { helper(a) }
 fn how_many_chunks_does_each_stage_actually_enter() {
     println!("\n================ CHUNK COVERAGE, measured with breakpoints");
     println!("  reached = control arrived at the chunk's first op, once or many times");
-    println!("  {:<26} {:>9}  {:>7}   {:>8}", "stage", "reached", "of", "seeded");
+    println!(
+        "  {:<26} {:>9}  {:>7}   {:>8}",
+        "stage", "reached", "of", "seeded"
+    );
 
     let mut any_nonzero = false;
     let mut rows: Vec<(String, usize, usize)> = Vec::new();
     for p in stage_sources() {
-        let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let name = p
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         let Some(m) = module_of(&p) else {
             println!("  {name:<26} reference compiler rejects it");
             continue;
@@ -468,12 +479,12 @@ fn how_many_chunks_does_each_stage_actually_enter() {
 
 /// **DID THE ACCESSOR SEED MOVE EACH STAGE, measured directly?**
 ///
-/// `corpus_differential` reports that three stages left `KNOWN_VACUOUS` once the
-/// `v0.2.3` accessors gave them real inputs. That is one instrument saying the
-/// OBSERVABLES changed. This is the other, and they are blind to different
-/// things: chunk coverage says whether more of the module RUNS, which an
-/// observable-only measure cannot distinguish from the same code producing
-/// different output.
+/// `corpus_differential` reports that four stages left `KNOWN_VACUOUS` once real
+/// inputs were built from the driver's own public accessors. That is one
+/// instrument saying the OBSERVABLES changed. This is the other, and they are
+/// blind to different things: chunk coverage says whether more of the module
+/// RUNS, which an observable-only measure cannot distinguish from the same code
+/// producing different output.
 ///
 /// **Asserted per stage, not in aggregate.** A total that rose because one stage
 /// moved a lot would hide a second that did not move at all — and a seed a stage
@@ -493,10 +504,21 @@ fn the_accessor_seeds_move_each_stages_chunk_coverage() {
         .expect("subject chunk");
 
     println!("\n================ accessor-seeded chunk coverage");
-    println!("  {:<26} {:>9} {:>9} {:>7}", "stage", "unseeded", "seeded", "of");
+    println!(
+        "  {:<26} {:>9} {:>9} {:>7}",
+        "stage", "unseeded", "seeded", "of"
+    );
 
     let mut checked = 0usize;
-    for stage in ["verify_depth.kel", "verify_typed.kel", "verify_structural.kel"] {
+    for stage in [
+        "verify_depth.kel",
+        "verify_typed.kel",
+        "verify_structural.kel",
+        // **`reconstruct.kel` joined on 2026-08-16.** It is seeded from a
+        // different subject and by a different accessor from the three above, so
+        // it is listed here rather than folded into their subject.
+        "reconstruct.kel",
+    ] {
         let Some(path) = stage_sources()
             .into_iter()
             .find(|p| p.file_name().unwrap_or_default().to_string_lossy() == stage)
@@ -527,6 +549,37 @@ fn the_accessor_seeds_move_each_stages_chunk_coverage() {
                     fb,
                 )
             }
+            // The multiheaded reconstruct path. Its record stream comes from
+            // `parse_functions`, which is `pub` -- the report that this stage was
+            // blocked on a private producer was wrong and is retracted. The head
+            // grouping and parameter count are NOT part of that record format;
+            // they are properties of the subject, asserted and derived here rather
+            // than assumed, since a seed the stage rejects looks like coverage.
+            "reconstruct.kel" => {
+                let msrc = std::fs::read_to_string("../examples/scripts/06_multiheaded.kel")
+                    .expect("multiheaded subject source");
+                let (fns, _names, _, _) = keleusma::selfhost::parse_functions(&msrc);
+                assert_eq!(
+                    fns.len(),
+                    4,
+                    "06_multiheaded.kel no longer declares three `classify` heads \
+                     then `main`, so the leading run is no longer the group"
+                );
+                let heads: Vec<&keleusma::selfhost::ParsedFn> = fns[..3].iter().collect();
+                let msub = compile(&parse(&tokenize(&msrc).expect("lex")).expect("parse"))
+                    .expect("compile");
+                let idx = msub
+                    .chunks
+                    .iter()
+                    .position(|c| c.name == "classify")
+                    .expect("subject has a `classify` chunk");
+                let pc = msub
+                    .signatures
+                    .get(idx)
+                    .map(|s| s.params.len())
+                    .expect("subject carries a signature for `classify`");
+                keleusma::selfhost::seed_reconstruct_multihead_shared(&vm, &heads, pc)
+            }
             _ => {
                 let always = keleusma::selfhost::self_hosted_always_yielding(&subject);
                 keleusma::selfhost::seed_verify_structural_shared(&vm, &subject, chunk, &always)
@@ -551,7 +604,7 @@ fn the_accessor_seeds_move_each_stages_chunk_coverage() {
         checked += 1;
     }
     println!("================\n");
-    assert_eq!(checked, 3, "not every seeded stage was measured");
+    assert_eq!(checked, 4, "not every seeded stage was measured");
 }
 
 fn scalar(v: &Value) -> i64 {

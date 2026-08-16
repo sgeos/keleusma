@@ -730,10 +730,16 @@ fn the_opcode_map_excludes_every_rtos_script() {
         .expect("re-exec for the map");
     let text = String::from_utf8_lossy(&map_out.stdout);
 
-    let rtos: Vec<&str> = ["event_listener.kel", "faulty.kel", "heartbeat.kel", "led.kel", "sensor.kel"]
-        .into_iter()
-        .filter(|n| text.contains(n))
-        .collect();
+    let rtos: Vec<&str> = [
+        "event_listener.kel",
+        "faulty.kel",
+        "heartbeat.kel",
+        "led.kel",
+        "sensor.kel",
+    ]
+    .into_iter()
+    .filter(|n| text.contains(n))
+    .collect();
 
     println!("\n================ rtos scripts in the opcode map");
     println!("  present: {rtos:?}");
@@ -770,8 +776,7 @@ fn the_opcode_map_excludes_every_rtos_script() {
 /// way would have settled this question wrongly.
 #[test]
 fn does_led_kel_reach_op_trap() {
-    let prelude =
-        std::fs::read_to_string("../examples/rtos/scripts/prelude.kel").expect("prelude");
+    let prelude = std::fs::read_to_string("../examples/rtos/scripts/prelude.kel").expect("prelude");
     let raw = std::fs::read_to_string("../examples/rtos/scripts/led.kel").expect("led.kel");
     let m = compile(&parse(&tokenize(&format!("{prelude}\n{raw}")).expect("lex")).expect("parse"))
         .expect("compile");

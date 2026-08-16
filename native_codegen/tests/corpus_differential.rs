@@ -508,28 +508,76 @@ fn stage_seed(m: &Module, name: &str) -> Result<Vec<u8>, String> {
             let always = keleusma::selfhost::self_hosted_always_yielding(&subject);
             keleusma::selfhost::seed_verify_structural_shared(&vm, &subject, chunk, &always)
         }
-        // **`reconstruct.kel` CANNOT be driven from here, and it is not for want
-        // of an accessor.** Both `seed_reconstruct_shared` and
-        // `seed_reconstruct_multihead_shared` landed. The first wants
-        // `records: &[(i64, i64)]` and the second `heads: &[&ParsedFn]` --
-        // `ParsedFn` is `pub` but every FIELD is private, and the function that
-        // produces one is private too. So the input cannot be obtained from
-        // outside the crate, and inventing a record stream is precisely the
-        // "reproduce the stage's input format" this line asked the accessors to
-        // avoid: a stream the stage silently rejects looks exactly like coverage.
+        // **`reconstruct.kel` IS drivable from here. The earlier claim that its
+        // producer is private is RETRACTED** -- `parse_functions` is `pub`, and it
+        // returns the parsed heads directly, so the record stream handed to the
+        // stage is the driver's own rather than a second encoding written here.
+        //
+        // What is genuinely unreachable is `ParsedFn`'s FIELDS. Two scalars
+        // therefore cannot be read off the parsed values: which heads form the
+        // multiheaded group, and how many value parameters they declare. Neither
+        // is part of the stage's input record format -- they are properties of the
+        // SUBJECT -- and both are derived or asserted below rather than assumed,
+        // because a subject that quietly stops containing the construct it is
+        // named for is this harness's own recorded failure mode.
+        //
+        // **`seed_reconstruct_shared`, the single-head form, stays blocked.** It
+        // wants `records: &[(i64, i64)]`, which cannot be built without the field
+        // accessors. Those are on the `v0.2.3` line's open work and are not on this
+        // tree, so exactly one of the two reconstruct paths is exercised here.
         "reconstruct.kel" => {
-            return Err(
-                "blocked: needs `records` or `&[&ParsedFn]`, and ParsedFn's fields \
-                 and producer are private outside the crate"
-                    .into(),
-            );
+            let path = sources()
+                .into_iter()
+                .find(|p| {
+                    p.file_name().unwrap_or_default().to_string_lossy() == "06_multiheaded.kel"
+                })
+                .ok_or("06_multiheaded.kel is not in the corpus")?;
+            let src = std::fs::read_to_string(&path).map_err(|e| format!("read subject: {e}"))?;
+            let (fns, _names, _, _) = keleusma::selfhost::parse_functions(&src);
+            // The subject declares its three `classify` heads FIRST and then
+            // `main`, so the group is the leading run. Asserted, not trusted: if
+            // the file gains a function the seed would silently describe a
+            // different program, and a rejected seed looks exactly like coverage.
+            if fns.len() != 4 {
+                return Err(format!(
+                    "subject shape changed: expected 4 parsed heads in \
+                     06_multiheaded.kel, got {}",
+                    fns.len()
+                ));
+            }
+            let heads: Vec<&keleusma::selfhost::ParsedFn> = fns[..3].iter().collect();
+            // The parameter count is DERIVED from the compiled subject's signature
+            // for the multiheaded chunk, never written as a literal, so the two
+            // cannot drift apart.
+            let subj = compile(
+                &parse(&tokenize(&src).map_err(|e| format!("subject lex: {e:?}"))?)
+                    .map_err(|e| format!("subject parse: {e:?}"))?,
+            )
+            .map_err(|e| format!("subject compile: {e:?}"))?;
+            let idx = subj
+                .chunks
+                .iter()
+                .position(|c| c.name == "classify")
+                .ok_or("subject has no `classify` chunk")?;
+            let pc = subj
+                .signatures
+                .get(idx)
+                .map(|s| s.params.len())
+                .ok_or("subject carries no signature for `classify`")?;
+            if pc == 0 {
+                return Err("`classify` reports zero parameters".into());
+            }
+            keleusma::selfhost::seed_reconstruct_multihead_shared(&vm, &heads, pc)
         }
         other => return Err(format!("no arm for {other}")),
     };
     // The stage's own layout sizes it; the harness must not assume they agree.
     let want = shared_data_bytes_for(m);
     if seed.len() != want {
-        return Err(format!("size mismatch: accessor {} vs harness {want}", seed.len()));
+        return Err(format!(
+            "size mismatch: accessor {} vs harness {want}",
+            seed.len()
+        ));
     }
     Ok(seed)
 }
@@ -996,14 +1044,16 @@ fn is_vacuous(run: &Run) -> bool {
 /// is why the headline moved from 40 to 34. Nothing regressed; the number was
 /// measuring the harness rather than the emitter.
 ///
-/// `parse.kel` has REAL coverage in `stage_differential.rs`, which seeds the
-/// segment identically on both sides. It stays listed here because this harness
-/// cannot seed a token stream from the convention alone.
+/// **The list is down to ONE**, and every departure was forced by the
+/// set-equality assertion below rather than chosen. The stages that left did so
+/// because `stage_seed` hands them a real input built by the driver's own public
+/// accessors, so the bytes are the ones a real driver supplies and this harness
+/// carries no second encoding of any input format.
 ///
-/// The other four consume abstract-syntax-tree and descriptor blocks whose
-/// layouts belong to the `src/selfhost/mod.rs` driver, which this line may read
-/// but must not edit. Seeding those means reproducing four input formats, and a
-/// seed a stage silently rejects looks exactly like coverage.
+/// The one that remains is not waiting on an accessor. It cannot be driven from a
+/// single seeded buffer at all, for the reason recorded beside it. Seeding it
+/// anyway would produce a run that agrees and means nothing, which is the precise
+/// defect this list exists to prevent.
 const KNOWN_VACUOUS: &[&str] = &[
     // `lexer.kel` LEFT this list on 2026-08-15, and the set-equality assertion
     // is what noticed. It declares the documented `len` + `bytes` host
@@ -1023,12 +1073,14 @@ const KNOWN_VACUOUS: &[&str] = &[
     // retained buffer, with a whole-module contiguity comparison at the end, so
     // a single seeded buffer cannot produce a verdict at all. Do not invent a
     // batch-zero seed for it -- it would run, agree, and mean nothing.
-    // `reconstruct.kel` stays for a DIFFERENT reason from `verify_datalayout`.
-    // Its accessors exist; its INPUTS are unreachable. `ParsedFn` is `pub` with
-    // private fields and a private producer, so neither `records` nor
-    // `&[&ParsedFn]` can be obtained here. Reported to the `v0.2.3` line as a
-    // request rather than worked around by inventing a record stream.
-    "reconstruct.kel",
+    //
+    // **`reconstruct.kel` LEFT on 2026-08-16, and the report that had kept it
+    // here was WRONG.** This line told the `v0.2.3` line the stage was blocked
+    // because `ParsedFn`'s producer is private. It is not: `parse_functions` is
+    // `pub` and returns the parsed heads, so the multiheaded path was reachable
+    // the whole time and no new accessor was needed. The `v0.2.3` line caught
+    // the error. Only the single-head `seed_reconstruct_shared` was ever truly
+    // blocked, and it still is, on field accessors that are not on this tree.
     "verify_datalayout.kel",
 ];
 
@@ -1233,7 +1285,11 @@ fn a_trapping_programs_native_side_dies_with_sigtrap() {
         );
 
         let out = std::process::Command::new(std::env::current_exe().expect("current exe"))
-            .args(["--exact", "trap_child_runs_one_module_natively", "--nocapture"])
+            .args([
+                "--exact",
+                "trap_child_runs_one_module_natively",
+                "--nocapture",
+            ])
             .env("KEL_TRAP_CHILD", name)
             .env_remove("KEL_ONLY_MODULE")
             .output()
@@ -1287,7 +1343,11 @@ fn a_trapping_programs_native_side_dies_with_sigtrap() {
                 continue;
             };
             let out = std::process::Command::new(std::env::current_exe().expect("current exe"))
-                .args(["--exact", "trap_child_runs_one_module_natively", "--nocapture"])
+                .args([
+                    "--exact",
+                    "trap_child_runs_one_module_natively",
+                    "--nocapture",
+                ])
                 .env("KEL_TRAP_CHILD", name)
                 .env_remove("KEL_ONLY_MODULE")
                 .output()
