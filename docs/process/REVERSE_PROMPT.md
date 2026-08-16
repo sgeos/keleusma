@@ -187,6 +187,29 @@ coverage. Closed by `two-enums-same-variant`; the must-fire control reports
 demonstrate which mutation it discriminates there — that path is `fx_*`, not `mi_*`. The comment
 says so rather than borrowing the mi finding's evidence.
 
+## The five seed accessors are built
+
+Public under `self-host`: the four `*_kel_module()` builders, plus
+`seed_reconstruct_shared`, `seed_reconstruct_multihead_shared`, `seed_verify_depth_shared`,
+`seed_verify_structural_shared`, `seed_verify_typed_shared`.
+
+**One encoding, not two.** Every driver entry point now seeds through them rather than inline, so
+there is no second copy to drift — which was the `v0.3.0` line's stated reason for wanting the `Vm`
+passed in rather than constructed inside.
+
+**Five because `reconstruct` has two entry points.** Their refinement, and it was the one I would
+have got wrong: the multihead form takes a head group rather than a record stream, and it is where a
+dispatch predicate was once wrong in both directions with no oracle catching it.
+
+**Not built for `verify_datalayout`**, as agreed: three phases with different operand encodings and a
+verdict accumulating across calls, so batch zero cannot produce a verdict at all.
+
+**What the green suite does not establish.** The accessor test compares two callers of ONE encoding,
+so a defect in the encoding is invisible to it. It reads the `verify_depth` verdict slot as a literal
+duplicating a private constant, and every chunk in its source is accepted, so a wrong index would
+agree vacuously. And only the seeding is public — the verdict slot constants are not, which suits
+driving stages on real input and not reading results out.
+
 ## TOP OPEN CORRECTNESS ITEM: `Op::Yield`'s peak-model net, confirmed by execution
 
 **Reported by the `v0.3.0` line and reproduced on this tree.** Walking
