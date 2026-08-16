@@ -121,30 +121,40 @@ constant walk; `wire.kel` in `read_stage`; residency staging). Correct it before
 
 ## OPEN CORRECTNESS ITEMS, HIGHEST FIRST
 
-**1. `wcmu_region` reports 2 where both peak models and the emitter say 3.** Reported by the `v0.3.0`
-line on `06_multiheaded::classify` and `rogue_bestiary::corpse_fill`. **An UNDERSTATED bound on
-shipped chunks, which is the one thing this project sells.** Same family as `manhattan_norm`, but the
-accessor repair cannot reach it: **neither chunk contains a `GetField`**. They eliminated the emitter
-and their own harness pairing by measurement; what remains is the bound. **What they could not
-establish, and it is inside our function**: why `wcmu_region` returns 2 when the same peak model
-walked by hand reaches op 18 and returns 3 — its `If` arm recurses and `Op::Return` falls through the
-catch-all rather than terminating the walk. Start there.
+> **Updated 2026-08-16 after PR #135 (`e923a57f`).** Items 1 and 3 below are CLOSED and item 2 is
+> deliberately still open. Left in place rather than deleted, because what the old item 1 turned out
+> to be is the most useful thing on this page.
 
-**2. `Op::Yield`'s peak-model net.** `stack_growth` 0 / `stack_shrink` 1 gives net −1;
-`verify::op_depth_effect` gives `(1, 0)`, net 0, above a comment saying the resume pushes the input
-back. The walk goes negative: `analyze::main` and `verify_depth::main` reach −1 at `PopN(1)`.
-Confirmed on both trees; `v0.3.0` measures 8 of 958 chunks. **Derive the corrected pair from the
-virtual machine, not by analogy with the `GetField` repair**, and note that on a small yielding chunk
-both models return peak 3 — **a peak that agrees is not evidence the net is right.**
+**~~1. `wcmu_region` reports 2 where both peak models say 3.~~ CLOSED, and it was not off by one.**
+The reported 2 was `local_count` alone; the BODY peak was exactly 0. `wcmu_region` returned
+`Option<McuResult>` where `None` meant "does not fall through" AND carried no resources, so four
+sites discarded an accumulated peak and heap. **Every multiheaded function was affected.** A second,
+opposite defect sat underneath (`Op::Return` fell through the catch-all, so a dispatch was walked as
+though every head ran in sequence) and the two partially cancelled. `wcet_region` had the identical
+defect, so the WCET bound was understated the same way. `analyze.kel` had it in three places, and
+`tests/selfhost_codegen.rs` held a second copy of the class table that had already drifted. See
+`tests/wcmu_exit_path_bounds.rs` and the 2026-08-16 journal entry.
 
-**3. The control that cannot reach either.** `the_peak_model_agrees_with_the_depth_model` compares the
-two models over five hand-written cases, none of which yields. **Its coverage is a property of its
-case list, not of the opcode set.** The fix is a check RANGING OVER `Op`, not another case — adding a
-case closes one instance and leaves the next invisible, which is exactly how `Yield` survived a repair
-made the day before.
+**2. `Op::Yield`'s peak-model net. STILL OPEN, deliberately.** `stack_growth` 0 / `stack_shrink` 1
+gives net −1; `verify::op_depth_effect` gives net 0, above a comment saying the resume pushes the
+input back. **It is now pinned in `the_two_operand_stack_models_agree_across_the_whole_opcode_set`,
+which fails if it is repaired without removing its entry**, so it cannot be lost. Measured to be a
+different cause from item 1. Derive the corrected pair from the virtual machine, not by analogy.
+
+**2b. `FixedMul`/`FixedDiv` peak-model nets, FOUND by that check on its first run.** Both declare
+net 0 against a handler that pops twice and pushes once. Pinned rather than repaired **because the
+error OVERSTATES**, so fixing it lowers bounds on shipped chunks. Operator's call.
+
+**~~3. The control that cannot reach either.~~ CLOSED.** The five hand-written cases are superseded
+by a check ranging over the opcode set, with completeness asserted against the wire format's
+canonical opcode table so a new opcode is reported BY NAME. Mutation-verified.
 
 **4. `Op::cost()` disagrees with measurement.** Two findings pinned, not repaired. Only 17 opcodes of
 66 were ever measured; every other emitted value is an unchecked bucket assignment.
+
+**5. OWED TO `v0.3.0`: the `ParsedFn` visibility decision.** Their `seed_reconstruct_*` accessors are
+one `pub` away from being callable. They asked us to choose between `pub` fields and a `pub fn`
+returning the records for a source string. Not bundled into #135 on purpose.
 
 ## THE META-DEFECT THIS LINE KEEPS FINDING
 
