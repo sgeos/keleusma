@@ -52,6 +52,14 @@ Current sprint source of truth.
 > 49,152. The plan's claim that the producer and the staging are one increment followed from the
 > 395,804 figure, which is a `CONSTS` region record count and still sits at five sites there.
 >
+> **HANDED BACK TO MAINLINE (2026-08-16).** Measured against the roadmap: none of the five V0.2.x
+> success criteria hold, and Order 1 of six is unmet on two items — the self-hosted path emits two
+> region kinds of about twenty, and self-hosted type rejection is 7 tests against ~15 shapes. The
+> roadmap's own Order 1 cell is stale (125 tests against 163) and lists done work as remaining.
+>
+> **Top correctness item is now `wcmu_region` reporting 2 where the models and emitter say 3** on two
+> shipped chunks — an understated bound, unreachable by the `GetField` repair.
+>
 > **`concurrency` group landed on `ci.yml` (2026-08-15)**, superseding pull-request runs only. The
 > requested workflow-wide form would also have cancelled version-branch verification runs, since the
 > workflow triggers on push as well; the group keys on `run_id` for non-PR events so branch runs
