@@ -71,6 +71,25 @@ exist — the Doc job already builds the self-host surface. But the THREE UNRESO
 judgment that they were "not a defect because no shipped configuration builds that set". **That was a
 judgment to offer, not one to substitute for the instruction.**
 
+**THE COUNT IS THREE, AND THE "FOUR" WAS MINE.** Settled from git rather than argued: doc-building
+the commit before the fix reports `unresolved link to crate::encryption::EncryptionMetadata`,
+`crate::vm::Vm::register_verifying_key` and `scrub_and_verify_signed` — three — plus rustdoc's
+aggregate `could not document keleusma`. My original report ran `grep -cE "^error"`, got 4, and
+counted the summary line as a finding; the goal statement then inherited it. **A count of errors is
+not a count of defects**, which is the same class as the 395,804 figure counting one thing and being
+read as another.
+
+Post-fix sweep across **twelve** feature configurations — each of `self-host`, `signatures`,
+`encryption`, `shell` alone, their pairs, the docs.rs set, that set plus `self-host`,
+`compile,verify,floats` with and without `self-host`, and the bare default — reports **zero**
+unresolved links. There is no unfound fourth.
+
+**E1 LANDED IN TWO INCREMENTS AND SHOULD HAVE BEEN ONE.** #116 retracted the false half; #122 fixed
+the real half, and it landed AFTER A1 and B2 rather than before them. The split is a direct
+consequence of getting the judgment wrong the first time: had the dismissal not happened, one
+increment would have carried both halves in sequence. Recorded rather than smoothed over, because
+the ordering in the record is evidence about how the work actually went.
+
 Both halves are now landed. The links name the feature that gates each target — which the hyperlink
 never told the reader — and `cargo doc` is clean across five feature configurations including the
 bare default. CI gains ONE step, the lean `--features self-host` set, because both existing steps

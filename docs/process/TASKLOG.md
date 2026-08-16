@@ -60,6 +60,13 @@ Current sprint source of truth.
 > cannot reach this. Not repaired; wants its own increment with a control that ranges over the
 > opcode set.
 >
+> **E1 link count settled: THREE, not four.** Measured from the commit before the fix: three
+> `unresolved link` errors plus rustdoc's aggregate `could not document` line. The original report
+> counted `grep -cE "^error"` and the goal statement inherited the 4. Post-fix sweep across twelve
+> feature configurations reports zero unresolved links, so there is no unfound fourth. E1 also
+> landed in TWO increments (#116, #122) where one was intended, and #122 landed after A1 and B2 —
+> a direct consequence of the initial wrong judgment.
+>
 > **E1: both halves now landed (2026-08-15, corrected).** The CI half was already done and my
 > report of it was wrong. The LINKS half was real and I dismissed it; three unresolved intra-doc
 > links to feature-gated items are fixed by naming the gate, and CI gains one lean-feature-set doc
