@@ -13,6 +13,53 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**I REPORTED A GAP THAT WAS ALREADY CLOSED, AND THE GOAL STATEMENT CARRIED IT (2026-08-15).**
+
+**The finding was wrong and the error is instructive because of WHEN it happened.** I reported that
+CI never doc-builds the `self-host` feature surface, put it in `REVERSE_PROMPT.md`, and it was then
+written into a goal statement as the next increment. It is false. The Doc job already runs
+`cargo doc -p keleusma --no-deps --features signatures,encryption,shell,self-host` — the exact
+command I later derived independently as "the fix" — and it passed on the pull request immediately
+before.
+
+**How.** I read the FIRST step of the Doc job, saw the docs.rs feature set, and reported the job's
+coverage from it. The comment directly above the step I did not reach says the job "lists crates BY
+NAME, so a new crate is invisible to it until someone remembers", and records that broken intra-doc
+links in `src/selfhost/` once survived four releases. **The gap had been found and closed, and its
+own comment says so.** I stopped reading one step early.
+
+**Two figures inside the same report were also wrong.** Three unresolved links, not four — the
+fourth was rustdoc's aggregate `could not document` line, counted as a finding. And they are not a
+defect at all: they resolve under every feature set the project documents, and fail only under
+`--features self-host` alone, which neither docs.rs nor CI builds. Repairing them would mean
+de-linking or duplicating prose under `cfg_attr` to serve a configuration nobody ships.
+
+**THE COST OF THIS CLASS IS NOT THE WASTED WORK, IT IS THAT A WRONG FINDING PROPAGATES.** It went
+from a probe, into a resume channel, into a candidate list, into a goal statement, and would have
+become a change to `ci.yml` — a file that gates the other line and whose runners are already
+contended. They would have paid runner time for a step that already exists. The check that would
+have caught it at every stage is the one already written down and now in the goal's own second
+paragraph: **check the item against the code before repeating it.**
+
+**The control was worth running even though the conclusion was wrong.** I introduced a deliberately
+broken intra-doc link in `src/selfhost/` and confirmed the docs.rs feature set reports zero errors
+while the self-host set catches it. That is a real must-fire/must-not-fire pair, and it is what
+proved the coverage exists rather than my reading of the YAML.
+
+**D1, and it is the same failure in miniature.** The sweep was scoped as "five sites" for the
+395,804 figure. There are about sixteen appearances, roughly ten of them stale. **I under-counted
+the sites of a figure whose entire lesson is checking figures.** The fix is a governing currency
+banner at the top rather than sixteen patches, because the correction already existed at line 1310
+while the stale claims sit at 355 and 806 — a reader meets the wrong version first, which is how a
+document with a correction in it still misleads.
+
+**Two live conclusions were corrected rather than annotated**, because they order work: "the scan
+must be replaced before the interner is driven by a real stage, where the count reaches 395,804"
+(it is driven, and the count is 627), and "batching first, index second" (there is no batching
+problem; the worst stage fits one call at 61% of the cap). The second is the second time this figure
+has manufactured a dependency between two pieces of work.
+---
+
 **THE DRIVER IS WIRED TO A MODULE, AND THE INCREMENT WAS A THIRD THE SIZE THE PLAN SAID (2026-08-15).**
 
 **Three of the four things the plan listed as remaining were already done, and I found that by
