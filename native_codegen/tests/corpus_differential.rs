@@ -781,6 +781,260 @@ const KNOWN_VACUOUS: &[&str] = &[
 /// direction that means success.
 const KNOWN_DISAGREEMENTS: &[&str] = &[];
 
+/// **THE `Trap` OBSERVABLE.**
+///
+/// `(name, expected VM fault, kind)`. A name starting `synthetic:` is compiled
+/// from a source string below; anything else is a corpus file.
+///
+/// **THE TWO KINDS ARE NOT INTERCHANGEABLE, and conflating them cost a whole
+/// implementation of this test.** The first version used only corpus files that
+/// fault, and it passed. It also proved nothing about `Op::Trap`: `faulty.kel`
+/// faults through the emitter's DIVISION GUARD and `rogue_dungen.kel` through its
+/// BOUNDS CHECK, neither of which is the opcode. Measured afterwards with
+/// `dump_opcode_module_map`: **no module in the shipped corpus that faults on the
+/// virtual machine emits `Op::Trap` at all.** Mutating `Op::Trap` left the test
+/// green, which is how the gap surfaced.
+///
+/// So a synthetic subject is not a convenience here; it is the only way to reach
+/// the opcode. A multiheaded function whose guards all fail emits
+/// `Trap(NoMatchingHead)`.
+const TRAP_SUBJECTS: &[(&str, &str, TrapKind)] = &[
+    ("synthetic:no_matching_head", "NoMatchingHead", TrapKind::Op),
+    ("faulty.kel", "DivisionByZero", TrapKind::Guard),
+    ("rogue_dungen.kel", "IndexOutOfBounds", TrapKind::Guard),
+];
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum TrapKind {
+    /// Reaches an `Op::Trap` instruction. Asserted, not assumed.
+    Op,
+    /// Faults through an emitter-inserted guard (division, bounds). Valuable,
+    /// and NOT evidence about `Op::Trap`.
+    Guard,
+}
+
+/// A multiheaded function with no matching head, which is what emits `Op::Trap`.
+const SYNTHETIC_NO_MATCHING_HEAD: &str = "\
+fn pick(x: Word) -> Word when x > 100 { 1 }
+fn pick(x: Word) -> Word when x < 0 { 2 }
+fn main(a: Word) -> Word { pick(a) }
+";
+
+fn subject_source(name: &str) -> Option<String> {
+    if let Some(key) = name.strip_prefix("synthetic:") {
+        return match key {
+            "no_matching_head" => Some(SYNTHETIC_NO_MATCHING_HEAD.to_string()),
+            _ => None,
+        };
+    }
+    let path = sources()
+        .into_iter()
+        .find(|p| p.file_name().unwrap_or_default().to_string_lossy() == name)?;
+    let raw = std::fs::read_to_string(&path).ok()?;
+    if path.to_string_lossy().contains("/rtos/") {
+        let prelude = std::fs::read_to_string("../examples/rtos/scripts/prelude.kel").ok()?;
+        Some(format!("{prelude}\n{raw}"))
+    } else {
+        Some(raw)
+    }
+}
+
+/// **`led.kel` LOOKS like a subject and is NOT one. Measured, not assumed.**
+///
+/// Its virtual-machine run faults with `NoMatchingArm`, so it passes the entry
+/// criterion. Its native side dies with **SIGSEGV, not SIGTRAP** — checked, and
+/// the reason is on record in `NATIVE_EXEMPTION_AUDIT.md`: `host::gpio_set`
+/// records a return shape of `Flat { kind: 3, size: 16 }`, a sixteen-byte enum
+/// body, and the generic stub returns a plain integer that the native side then
+/// dereferences as a body address.
+///
+/// **The two sides therefore fault for DIFFERENT REASONS**, and admitting it
+/// would be a false agreement. A check that accepted "died by some signal" would
+/// have counted it and been wrong.
+const TRAP_NOT_SUBJECTS: &[(&str, &str)] = &[(
+    "led.kel",
+    "native side dies with SIGSEGV, not SIGTRAP: the stub returns an integer where \
+     `host::gpio_set` records a 16-byte enum body, and the native side dereferences it",
+)];
+
+/// Marker the child prints immediately before entering native code.
+///
+/// **The vacuity guard.** Without it, a child that died before reaching the
+/// native call — a compile error, a missing file, a panic in setup — is
+/// indistinguishable from one that trapped, because the parent would only see
+/// "did not exit 0".
+const TRAP_CHILD_MARKER: &str = "TRAP-CHILD-ENTERING-NATIVE";
+
+/// The child half: runs ONE subject natively and is expected to die.
+///
+/// A no-op unless `KEL_TRAP_CHILD` names one, so the ordinary suite never pays
+/// for it and never dies from it.
+#[test]
+fn trap_child_runs_one_module_natively() {
+    let Ok(want) = std::env::var("KEL_TRAP_CHILD") else {
+        return;
+    };
+    let src = subject_source(&want).unwrap_or_else(|| panic!("no subject named {want}"));
+    let m = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
+    let table = native_table(&m);
+
+    // Printed and FLUSHED before the native call, so the parent can tell "it
+    // trapped" from "it never got here".
+    println!("{TRAP_CHILD_MARKER}");
+    use std::io::Write;
+    std::io::stdout().flush().ok();
+
+    let _ = run_native(&m, &table, 0);
+
+    // Reaching this line means the native side did NOT trap where the virtual
+    // machine faults. Exit non-zero WITHOUT a signal, which the parent reports
+    // distinctly from a clean trap.
+    println!("TRAP-CHILD-SURVIVED");
+    std::process::exit(3);
+}
+
+/// **Does the native side agree that a faulting program FAULTS?**
+///
+/// This closes the one hole the mutation census could not. `Op::Trap` was
+/// undetected across all 28 modules that emit it, and no seed could change that:
+/// `every_lowering_module_executes_or_is_exempt` runs the virtual machine FIRST
+/// precisely so a trapping module becomes a named exemption rather than a
+/// `SIGTRAP` that kills the run — so a module that REACHES a trap is never
+/// compared, and a module that IS compared reached none.
+///
+/// The observable therefore changes: not a returned value, but **the fact of the
+/// fault**. The virtual machine reports an error; natively `llvm.trap` raises
+/// `SIGTRAP`. Comparing those needs the native side in its own process.
+///
+/// **Cost control, stated because it is a real trade.** Under `KEL_ONLY_MODULE`
+/// — how `tools/mutation_sweep.py` drives this binary — only the `Op::Trap`
+/// subject runs, because that is the one the sweep needs and it is one spawn
+/// rather than three. A full run drives all of them.
+#[test]
+fn a_trapping_programs_native_side_dies_with_sigtrap() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let filtered = std::env::var("KEL_ONLY_MODULE").is_ok();
+    let (mut op_checked, mut guard_checked) = (0usize, 0usize);
+
+    for (name, want_fault, kind) in TRAP_SUBJECTS {
+        if filtered && *kind != TrapKind::Op {
+            continue;
+        }
+        let src = subject_source(name).unwrap_or_else(|| panic!("subject {name} is missing"));
+        let m = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
+
+        // **THE ASSERTION THAT WOULD HAVE CAUGHT THE FIRST VERSION.** A subject
+        // labelled `Op` must actually contain the opcode; a `Guard` subject must
+        // not, or the two kinds are not being told apart.
+        let has_trap = m
+            .chunks
+            .iter()
+            .any(|c| c.ops.iter().any(|o| matches!(o, Op::Trap(_))));
+        match kind {
+            TrapKind::Op => assert!(
+                has_trap,
+                "{name} is labelled an Op::Trap subject and emits no Op::Trap. \
+                 Mutating Op::Trap could not affect it, so it would prove nothing."
+            ),
+            TrapKind::Guard => assert!(
+                !has_trap,
+                "{name} is labelled a guard subject but DOES emit Op::Trap. Relabel it \
+                 -- the distinction is what stops guard coverage being read as opcode coverage."
+            ),
+        }
+
+        let table = native_table(&m);
+
+        // **The premise, checked rather than assumed.** If it stops faulting,
+        // this is comparing nothing and must say so instead of passing.
+        let vm_err = match run_vm(&m, &table, 0) {
+            Err(e) => e,
+            Ok(_) => panic!(
+                "{name} no longer faults on the VM side, so it is not a trap subject any more. \
+                 Do not delete the row silently -- `NATIVE_EXEMPTION_AUDIT.md` predicts exactly \
+                 that for the stub-artefact subjects."
+            ),
+        };
+        assert!(
+            vm_err.contains(want_fault),
+            "{name}: expected the VM to fault with {want_fault}, got {vm_err}"
+        );
+
+        let out = std::process::Command::new(std::env::current_exe().expect("current exe"))
+            .args(["--exact", "trap_child_runs_one_module_natively", "--nocapture"])
+            .env("KEL_TRAP_CHILD", name)
+            .env_remove("KEL_ONLY_MODULE")
+            .output()
+            .expect("spawn the child");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+
+        assert!(
+            stdout.contains(TRAP_CHILD_MARKER),
+            "{name}: the child never reached the native call, so its death says nothing \
+             about the lowering. This is the vacuity guard firing. stdout: {stdout}\nstderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            !stdout.contains("TRAP-CHILD-SURVIVED"),
+            "{name}: the native side RETURNED where the VM faults with {want_fault}. \
+             A program that must abort instead produced a value."
+        );
+        assert_eq!(
+            out.status.signal(),
+            Some(SIGTRAP),
+            "{name}: expected the native side to die with SIGTRAP; got code {:?}, signal {:?}",
+            out.status.code(),
+            out.status.signal()
+        );
+        match kind {
+            TrapKind::Op => op_checked += 1,
+            TrapKind::Guard => guard_checked += 1,
+        }
+    }
+
+    // **At least one Op::Trap subject, always.** Without this the test could pass
+    // on guard subjects alone, which is precisely the state the first version
+    // shipped in.
+    assert!(
+        op_checked > 0,
+        "no Op::Trap subject was checked, so this asserts nothing about the opcode"
+    );
+    println!(
+        "  TRAP OBSERVABLE: {op_checked} Op::Trap and {guard_checked} guard subject(s) died with SIGTRAP"
+    );
+
+    // **The exclusion is ASSERTED, not commented.** If the composite return path
+    // lands and the stub returns a body address, this fires and `led.kel` should
+    // MOVE into TRAP_SUBJECTS -- a comment would have gone stale instead.
+    if !filtered {
+        for (name, why) in TRAP_NOT_SUBJECTS {
+            let Some(src) = subject_source(name) else {
+                continue;
+            };
+            let Ok(_m) = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")) else {
+                continue;
+            };
+            let out = std::process::Command::new(std::env::current_exe().expect("current exe"))
+                .args(["--exact", "trap_child_runs_one_module_natively", "--nocapture"])
+                .env("KEL_TRAP_CHILD", name)
+                .env_remove("KEL_ONLY_MODULE")
+                .output()
+                .expect("spawn the child");
+            assert_ne!(
+                out.status.signal(),
+                Some(SIGTRAP),
+                "{name} now dies with SIGTRAP and is a valid trap subject. It was excluded \
+                 because: {why}. MOVE it into TRAP_SUBJECTS rather than deleting this check."
+            );
+        }
+    }
+}
+
+/// `SIGTRAP` is 5 on Linux and on macOS. Named so the one place another platform
+/// would change is obvious.
+const SIGTRAP: i32 = 5;
+
 /// The whole corpus, in one test, because the interesting output is the
 /// EXEMPTION LIST and that is a property of the set rather than of any module.
 #[test]
