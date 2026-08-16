@@ -56,6 +56,12 @@ Current sprint source of truth.
 > `self-host` feature surface; it does, in a Doc-job step I did not read. The finding reached a
 > resume channel and a goal statement before being checked against the code. Nothing to repair.
 >
+> **Process note (2026-08-15)**: B2 was cut in parallel with A1 and conflicted in
+> `DESIGN_JOURNAL.md`. It was rebased BEFORE its first push, so CI ran once on the final commit and
+> the merge was at that commit. The alternative — leaving it conflicting — produces no CI run at all
+> and merges something untested. The mistake was the parallel cut; the workflow section now says to
+> cut sequential branches one at a time.
+>
 > **B2 (child-position slice): already built; the coverage was not.** Collapsing `mi_name_mode` to
 > the struct rule left the whole 163-test wire suite green, so the `ENUM` dedup half was asserted by
 > nothing. Closed by `two-enums-same-variant` with a named must-fire control. The test that should

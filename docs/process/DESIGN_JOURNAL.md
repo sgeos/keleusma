@@ -13,6 +13,38 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**TWO PROCESS RULES COLLIDED, AND THE SAFE ROUTE LOOKED LIKE THE VIOLATION (2026-08-15).**
+
+The workflow says to cut each feature branch as the first action of an increment, and to merge "at
+the commit CI ran, without rebasing". For sequential increments those two collide, because
+`DESIGN_JOURNAL.md`, `REVERSE_PROMPT.md` and `TASKLOG.md` are prepended to by **every** increment,
+so any two branches cut in parallel conflict by construction.
+
+I cut B2's branch while A1 was still in continuous integration. When A1 merged, B2 conflicted in the
+journal. That left two routes:
+
+- **Rebase before the first push**, so CI runs once, on the final commit, and the merge is at that
+  commit. Chosen. Verified afterwards: one CI run for the branch, on `4dfefcf1`, and PR #120's head
+  and merge base were that same commit. **No CI result was invalidated.**
+- **Leave it conflicting**, in which case GitHub produces **no CI run at all, silently** — a hazard
+  the `v0.3.0` line recorded — and merging means merging something CI never tested.
+
+**The second route is the one the rule exists to forbid, and it is the one that looks compliant.**
+"Without rebasing" protects the invariant "merged at the commit CI ran". Read as a blanket ban on
+`git rebase`, it would have forced the untested merge. A rule stated as a mechanism rather than as
+the property it protects can be followed into the failure it was written to prevent.
+
+**The actual mistake was upstream of both routes**: cutting the second branch before the first
+merged. Sequential items whose channels overlap must be cut one at a time, and since the three
+channels overlap on every increment, that means always. Written into the workflow section rather
+than left as this session's private knowledge.
+
+**Worth separating from the above**: this is not a defence of rebasing generally. On a shared or
+pushed branch it destroys the property outright. What made it safe here is that the branch had never
+been pushed and CI had never run on it, so there was no green result to invalidate — and I checked
+that after the fact rather than assuming it.
+---
+
 **A TEST DESCRIBED THE HAZARD IN ITS DOC COMMENT AND DID NOT CONTAIN THE CASE (2026-08-15).**
 
 B2 was specified as "the child-position slice", the constant NESTING work. **It is built** — the
