@@ -255,27 +255,50 @@ fn rogue_ai_tracker_agrees_with_the_vm() {
     assert_agrees("rogue_ai_tracker.kel");
 }
 
-/// **Must not fire.** `codegen.kel` refuses on `Stream` for a SOUNDNESS reason,
-/// not a gap: it has no `Yield` of its own and a `Reentrant` callee, which is
-/// the delegated-suspension case. `resume_after_enter` writes slot 0 of the
-/// ENTRY chunk whenever that entry is a `Stream`, regardless of which frame
-/// suspended, so natively a callee's `kel_yield` return would reach only the
-/// callee and the next iteration would read a stale resume value.
+/// **THIS CONTROL HAS LOST ITS SUBJECT, and it fired to say so.**
 ///
-/// The tail-walk widening must not have admitted it. Counting it alongside the
-/// three modules above as "four `Stream` refusals" was a planning error: they
-/// share an opcode and nothing else.
+/// It existed to prove the tail-walk widening had not admitted `codegen.kel`,
+/// which refused on `Stream` for a SOUNDNESS reason rather than a gap: no `Yield`
+/// of its own plus a `Reentrant` callee, the delegated-suspension case. Counting
+/// it alongside the three `rogue_ai` modules as "four `Stream` refusals" was a
+/// planning error; they shared an opcode and nothing else.
+///
+/// **`codegen.kel` is no longer that case.** The `v0.2.3` line applied the
+/// nine-line refactor this line requested (`aaa87a01`): `emit_next` became a
+/// plain `fn` and `main` yields what it returns, so the module lowers with no
+/// flag. This control failed on the first run after the sync, which is the guard
+/// working rather than a regression.
+///
+/// **What it now pins is the WIDENING, which is the half that was always the
+/// point.** The three `rogue_ai` modules above must agree with the virtual
+/// machine, and no module may be admitted by a refusal-count check alone. The
+/// soundness half no longer has a subject in the corpus, and that is recorded in
+/// `probe_delegated_suspension.rs` rather than papered over here.
 #[test]
-fn codegen_kel_is_still_refused_for_delegated_suspension() {
+fn codegen_kel_lowers_since_the_refactor_and_the_widening_is_not_why() {
     let src = std::fs::read_to_string("../src/selfhost/kel/codegen.kel").expect("read codegen.kel");
     let m = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
+
     let refusals = keleusma_native::module_refusals(&m, LowerOptions::default());
     assert!(
-        refusals
-            .iter()
-            .any(|(_, e)| format!("{e}").contains("Stream")),
-        "codegen.kel must still refuse on Stream; the widening was meant to \
-         admit a discarded-composite tail, not a delegated suspension. \
-         Refusals: {refusals:?}"
+        refusals.is_empty(),
+        "codegen.kel is expected to lower since `aaa87a01`. Refusals: {refusals:?}"
+    );
+
+    // **The half that still discriminates.** It lowers because its entry now
+    // yields, NOT because a widening admitted a nested suspension. If the entry
+    // ever loses its `Yield` again the module is a delegated-suspension case once
+    // more, and lowering it would then be unsound rather than fine.
+    let entry = m.entry_point.expect("entry point");
+    let entry_yields = m.chunks[entry]
+        .ops
+        .iter()
+        .filter(|o| matches!(o, keleusma::bytecode::Op::Yield))
+        .count();
+    assert!(
+        entry_yields > 0,
+        "codegen.kel lowers but its ENTRY has no `Yield`. That combination is the \
+         delegated-suspension case being admitted by default, which is exactly \
+         what this control exists to catch."
     );
 }

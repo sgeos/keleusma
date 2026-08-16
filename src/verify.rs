@@ -2360,9 +2360,12 @@ fn verify_stack_depth(chunk: &Chunk) -> Result<(), VerifyError> {
             chunk_name: chunk.name.clone(),
             message: alloc::format!(
                 "chunk can run off the end of its instructions at operand depth {depth} \
-                 without a terminating Return; the fall-through path does not truncate the \
-                 frame's locals, so each call would leave residue the worst-case-memory bound \
-                 does not account for. Every path must exit via Return or Trap."
+                 without a terminating instruction; the fall-through path does not truncate \
+                 the frame's locals, so each call would leave residue the worst-case-memory \
+                 bound does not account for. Every path must exit via Return, Trap or Reset. \
+                 A `loop` chunk ends in Reset rather than Return -- the Stream/Reset envelope \
+                 is mandatory for one and adding a Return is not available -- so if this is a \
+                 loop, the missing terminator is Reset."
             ),
         }),
     }

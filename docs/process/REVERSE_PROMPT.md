@@ -6,137 +6,137 @@ AI to Human communication channel. This is the **bounded latest-state handoff**,
 overwritten each session per [COMMUNICATION.md](./COMMUNICATION.md). The append-only
 increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.md).
 
-> **Rewritten rather than prepended, 2026-08-09.** Six slices of prepending had produced a file
-> whose newest section was accurate and whose oldest sections contradicted it — the git-state block
-> still announced "everything is merged, nothing in flight" while six unmerged commits sat on a
-> feature branch. That is the accretion this file's own spec exists to prevent, and prepending is
-> not overwriting. The per-slice reasoning is in the design journal, which is where it belongs.
-
 ---
 
 ## Last Updated
 
-**Date**: 2026-08-09 (session 40, continued)
+**Date**: 2026-08-15 (session 45, resumed after a system crash)
 
-## Where things stand, 2026-08-10
-
-**The wire format is emittable end to end from Keleusma, and the driver has started.**
+## Where things stand
 
 | | |
 |---|---|
-| `v0.2.3` | wiring slices 1–8 merged, **WCMU verifier fix merged** (local, unpushed) |
-| `feat/selfhost-wire-debugpool` | slices 9–10 plus five probe write-ups, **local only** |
-| Machine | held by the `v0.3.0` session, gating `3d36feb` |
+| `v0.2.3` | PRs #105, #106, #107 merged green; nothing of this line is open |
+| The crashed session's work | recovered intact and landed, not rebuilt |
+| The three remaining host models | checked against independent sources, two findings pinned |
+| The reported `break` discrepancy | answered and closed; it was never about `break` |
+| Construct-support boundary | 79 Ok / 4 Gap / 1 RefRejects, 84 cases, recounted |
+| Housekeeping | one stale branch pruned after verification; worktrees settled |
 
-**Every one of the twenty region kinds now has an emitter**, the populated kinds driven by real
-compiler output, the six the corpus leaves empty oracled against the derive, and `DEBUG_POOL` from
-a real `emit_debug` compile. Slice 10 began the **driver**: region lengths are derived from record
-counts, so all seventeen strides live on the Keleusma side.
+**This is a stopping point.** The tree is clean, no pull request of this line is open, the handoff
+validates by ancestry and content against the current tip, and the three open questions below are
+the operator's rather than blockers on my side.
 
-**A WCMU soundness hole is closed.** `verify()` used to admit a chunk that can run off the end of
-its instructions, which leaks `local_count + k - 1` operand slots per call and breaks the attested
-bound. Reported by the `v0.3.0` session, reproduced here first, fixed, gated GREEN over 13 steps.
+## B1 is done, and it was a third the size the plan stated
 
-### Nothing is pushed, and that is deliberate
+**`wire_names_via_kel` takes a `Module` and builds its own input.** It previously accepted a
+pre-built blob and opened with `let _ = module;`, while the only producer of that blob was a Rust
+function in the test harness. Byte identity against the reference is unchanged; 163 wire tests,
+1242 library tests, 133 codegen tests green.
 
-Six commits are local-only. The pre-push hook runs the routine test tier, `perf_canary` was
-executing inside the other session's gate, and EVE Online was at 133% CPU. Firing a test tier into
-their canary window is what I asked them to spare me, twice. **Push when their gate clears** — that
-also re-runs my own canary quiet, which is the "re-run alone" step it asked for when it tripped.
+**Three of the plan's four remaining items were already done**, established by reading the code
+rather than the plan: `wire.kel` was already in `read_stage`, the interning-sequence producer was
+already self-hosted in `wire.kel`, and the residency staging was never needed. What was missing was
+the ENCODER.
 
-### The driver's next piece, already scoped by four probes
+**The staging coupling came from the 395,804 figure.** The plan says the producer and the staging
+"are the same increment, and doing either alone is wasted". Measured: the worst stage, `parse`,
+interns 627 names from a 33,395-byte blob against caps of 1024 and 49,152, so **nothing in the
+corpus needs staging**. That figure is a `CONSTS` region record count and still sits at five sites
+in the plan. A wrong figure did not merely misstate a size, it invented a dependency between two
+pieces of work.
 
-1. **A minimal artifact is 912 bytes, 1.4% of the buffer**, so the first slice emits a COMPLETE
-   artifact and compares byte for byte. The residency problem that governs `lexer` does not arise
-   at that size.
-2. **Region order is measured, not inferred**, and is not the schema's numeric order. Most regions
-   are present with length zero; only the data-layout group and `DEBUG_POOL` are conditional.
-3. **The interner needs BOTH modes.** `intern_fresh` exists for contiguity, not freshness, and a
-   dedup-only port is a defect that surfaces only on enum layouts or struct constants — neither of
-   which small test cases have.
-4. **The flattener's composite path is unreachable from the corpus**: 2,192 constant nodes, zero
-   composite, depth zero. It needs hand-built constant trees.
+**The name count was wrong in the unsafe direction.** The caller passed
+`interner_input(&module).len()`, which omits the data-slot contributor: 252 for `parse` where the
+module interns 627. Its only consumer is the cap check that exists to refuse a module which would
+overrun the interner, so an under-count defeats the guard. The blob and the count now come from one
+walk.
 
-### The standing lesson from all of it
+**Adding coverage found the real semantics.** Asserting the count EQUALS the reference's `NAMES`
+record count passed on all ten stages; a named-constant case then failed, 9 against 4. The reference
+dedups and `intern_fresh` records its entry so a later `intern` can share it, making the exact count
+order-dependent. Reproducing it host-side would be a second model of the thing under test, so the
+value is an explicit upper bound with soundness asserted and the looseness pinned. **Equality on ten
+stages was a corpus property I was one test away from recording as a guarantee.**
 
-**Real compiler output is a strong oracle for VOLUME and a weak one for VARIETY.** The ten stages
-are large but semantically narrow, and this arc found three separate paths they cannot reach. A
-slice should say which of the two it is buying.
+**What these green suites do NOT establish**: that the bound is tight for arbitrary modules (it is
+not, and a case proves it), and that the constant-name branch matters to any stage (it does not —
+dropping it leaves all ten green, which is why the named-constant cases exist).
 
-## Two things that are yours to decide, not mine
+## Reported, not repaired
 
-**1. Slice 5 costs about nine minutes of gate time.** The accumulator test is **201 s** measured,
-taking the suite from ~23 s to ~224 s, and the gate runs the suite once per feature configuration.
-That time is not inefficiency to optimise away: it is roughly 7.4 million `set_shared`/`get_shared`
-calls in a debug build, which is what driving 6.6 MB through the public API costs, and batching
-depth is the property under test. Restricting it to `parse` would still give 226 and 131 batches for
-about a third of the time. **Kept at full coverage**, because that is a gate-scope trade in the same
-class as trimming the feature matrix, and "probably safe" narrowing is how two coverage holes were
-made here before.
+**`cargo doc --features self-host` fails with four unresolved intra-doc links on the clean base.**
+CI's Doc job builds `signatures,encryption,shell`, so that feature set is never doc-built. Same
+class as the red Doc job V0.2.1 shipped with.
 
-**2. The SECDED plane is entirely unexercised by the shipping encoder.** `SchemaBuilder` declares
-every region as `region(kind, 0)` and builds no parity plane anywhere, so real artifacts carry flags
-0 and covers 0 throughout. Whether that is a deliberate cost choice or an unwired capability is not
-mine to settle. It is pinned in the firing direction, and it reduces emitter scope: no ECC support
-is needed for byte identity with the encoder as it stands.
+## The crash cost the push, not the work
 
-## Next, in order
+The previous session had committed a complete increment to a local feature branch and never pushed
+it. Working tree clean, no stash, all four channels updated in the same commit. **Nothing needed
+rebuilding.** What it cost was the push, the pull request, and an accurate handoff.
 
-1. ~~The remaining populated record tables.~~ **DONE in slice 7.**
-2. ~~The six record shapes with no corpus coverage.~~ **DONE in slice 8**, oracled against the
-   derive's `write_record` since the corpus cannot reach them. `DEBUG_POOL` remains: its region is
-   never emitted at all, and it is a byte pool, so slice 4's emitter already covers the mechanism —
-   what is missing is a case, not code.
-3. **The driver**, where values stop being decoded from the reference and start being computed. That
-   is the real remaining work, and the residency measurement governs it.
+**`HANDOFF.md` reported itself STALE, correctly, and for the wrong reason.** Its validity check
+required `git rev-parse HEAD~1` to equal a recorded parent, so the first unrelated merge invalidated
+it while its contents were still largely true. Three merges had landed. The stamp is now an
+**ancestor check plus a content check**, which is what the `v0.3.0` line moved to after hitting the
+identical defect. A hash match is a claim that nothing else ever lands.
 
-~~A debt worth paying early in the next slice.~~ **PAID in slice 7, as a mechanism.** `wire.kel`
-declares `highest_command()`, `main` refuses anything above it, and the sweep reads the value from
-the source. A command added past the number is unreachable and fails its own test; a control on
-`highest + 1` stops the bound drifting below the real top.
+It also carried a stale `selfhost_wire` count, 157 against the tree's 161. The rewritten file
+**derives** such numbers with a command rather than restating them.
 
-## Order-1: integration, not invention
+## The `break` report: the grammar is right, the parser is right
 
-- **Monomorphizer: EMPTY** for the first pass. Identity on all ten stage sources, pinned by
-  `tests/selfhost_monomorphize_identity.rs` with a must-fire control.
-- **Type checker: REJECTION ALONE.** Clearing `program.fn_expr_types` leaves every stage module
-  byte-identical. Three controls, in
-  [`../decisions/TYPECHECK_SELFHOST_PLAN.md`](../decisions/TYPECHECK_SELFHOST_PLAN.md).
-- **Wire-format serialization: expressible end to end**, and **every one of the seventeen record
-  shapes now has an emitter** — the populated kinds driven by real compiler output, the rest
-  oracled against the derive. What is left is the driver.
+The `v0.3.0` line reported that `GRAMMAR.md` documents a `break;` form the parser rejects, and left
+`BreakIf` unisolated in its opcode audit on that basis. **Both halves are wrong.**
 
-## Open, held by the operator
+The documented form parses verbatim. `TokenKind::Break` is handled at statement position in
+`parse_block`, so there is no route from that form to an expression-position diagnostic at all.
 
-- **Publication remains HELD.** Nothing is published.
-- **Trimming the gate's feature matrix.** Argued against by evidence: the non-`--all-features`
-  clippy caught lints in five separate increments, and `--no-default-features` caught a stray
-  `examples/` file.
-- **Per-element data slots.** One slot and one interned name per array element is why a 21 KB source
-  produces a 16 MB artifact, and the cost is paid **three times over** in parallel tables plus the
-  pool they index. A format and data-layout question with WCMU implications.
-- **MSRV 1.85 declared, never verified.**
+**The real cause is a stray `;` after a `for` block** in their probe source. A `for` loop is a
+statement and consumes no trailing semicolon, so the parser resumes at statement position and reads
+the `;` as the start of an expression. The diagnostic, `unexpected token Semicolon in expression`,
+names the semicolon, and their source has two near each other.
 
-## Parallel development
+**The control settles it rather than my reasoning**: remove `break` entirely, keep the stray
+semicolon, and the failure is identical.
 
-`v0.3.0` carries native code generation. **Their gate on `9ac2be3` went GREEN**; they had rebased
-onto my exact tip `78a5bc1`, so their run validated my step-6 merge too. I then took the machine
-with `KEL_GATE_NAME=wire-corpus` and a separate target directory, leaving the default gate worktree
-theirs. Their mailbox is `git show origin/v0.3.0:docs/process/handoffs/v0.3.0.md`; mine is
-[`handoffs/v0.2.3.md`](./handoffs/v0.2.3.md). Poll at increment boundaries — there is no wake.
+**`BreakIf` is reachable.** One semicolon deleted, nothing else changed, and `main` carries
+`BreakIf(41)` and `Break(41)`. Their probe source is now a named case pinned by execution.
 
-## Method rules this stretch paid for
+**Pinned, not repaired.** `if`, `match`, and `loop` accept a trailing semicolon and `for` does not.
+Accepting it widens the admitted language, which is a judgment call rather than a correctness fix.
+`GRAMMAR.md` gains the rule it was silent on, and all three accepting forms are pinned, not
+generalised from `if`.
 
-- **A probe establishes what it measured, not the question it was aimed at.** The wiring prep
-  measured region sizes and answered "how big is a region" when the design needed "what must be
-  resident at once".
-- **Check `$?` explicitly; never read success off output.**
-- **A first-try pass is a signal to check for vacuity, not to celebrate.**
-- **Write the test that can fail.** A pad test that dirties the buffer in a separate call proves
-  nothing, because every call starts from a fresh buffer.
-- **State a coverage cap; never take one silently.** Slice 6 caps at 2048 records and says so, with
-  the reason and the residual batch depth asserted.
-- **Measure the failure instead of reasoning about it.** Slice 7's control failed and my first three
-  hypotheses — a mis-parsed constant, an unbalanced brace, a misplaced guard — were each disproved
-  by checking. The brace count I had eyeballed as wrong was balanced. The real cause was that a
-  faulted VM is unusable for any later call, which no amount of reading would have suggested.
+## A claim of mine that needed checking before it shipped
+
+The grammar sentence names `if`, `match`, and `loop`. I had measured only `if`. I checked the other
+two before the merge rather than after, and both hold — but the sentence would have been a
+three-part claim resting on one measurement. **The same class as everything else on this list.**
+
+## Open
+
+- **The `analyze_class` catch-all is the highest-value open correctness item.** It ends in
+  `_ => (0, 0)`, so a control-flow opcode added later and not classified becomes "plain" silently: a
+  graph missing an edge and a bound that is finite and wrong. The boundary is pinned at nine classes
+  but the hole is not closed. Closing it needs an exhaustive `match` over `Op` so the compiler
+  refuses a new opcode until it is classified. **This is my proposed next increment.**
+- **`Op::cost()` disagrees with measurement**, two findings pinned rather than repaired. Only 17
+  opcodes of 66 were ever measured; every other emitted value is a bucket assignment checked by
+  nothing.
+- **The `for` trailing-semicolon asymmetry**, pinned. Widening is the operator's call.
+- **`-255` is live and has no negative test**; the corpus tops out at 7,680 distinct name bytes.
+- **`bin` was raised, not fixed.** 49,152 covers `parse` at 1.47x.
+- **Two pinned coverage gaps**: no stage contributes a constant-interned name, and none nests a
+  constant past depth one.
+- **`CHANGELOG.md:340`** states the checked-arithmetic push order wrongly in published text.
+- Publication remains **HELD**.
+
+## Questions for the operator
+
+1. **The `analyze_class` catch-all.** Closing it is mechanical and changes a `match`, not a bound,
+   but it will refuse to compile until every `Op` is classified, which is the point. Proceed?
+2. **The `for` trailing-semicolon asymmetry.** Accept a trailing semicolon after `for`, matching the
+   other three block forms, or leave the asymmetry pinned as it stands?
+3. **`Op::cost()`.** The two findings are pinned, not repaired. Recalibrating is a judgment call I
+   have deliberately not taken.

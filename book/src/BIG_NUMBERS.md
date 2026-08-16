@@ -16,7 +16,9 @@ op_expr {
 }
 ```
 
-The runtime computes the true result of `op_expr` in `i128`, splits it into a high and a low half, and pushes `(high, low, flag)` on the operand stack. The compiler dispatches on `flag` to one of three outcome classes (`ok`, `overflow`, `underflow`) and binds the pattern variables in that arm's body to the corresponding slot values. The `ok` arm binds a single `Word` against the in-range result; the `overflow` and `underflow` arms bind two `Word` values against the high and low halves.
+The runtime computes the true result of `op_expr` in `i128`, splits it into a high and a low half, and pushes `(low, high, flag)` on the operand stack, bottom to top. The compiler dispatches on `flag` to one of three outcome classes (`ok`, `overflow`, `underflow`) and binds the pattern variables in that arm's body to the corresponding slot values. The `ok` arm binds a single `Word` against the in-range result; the `overflow` and `underflow` arms bind two `Word` values against the high and low halves.
+
+Note that the arm binds `(h, l)` while the runtime pushes low first, so the binding order is the reverse of the stack order. You never need the stack order to write a program, and it is stated here only because it is easy to misread the two as the same. The reason for it is that an uncaptured operation such as a bare `a + b` lowers to the checked opcode followed by `PopN(2)`, which discards the flag and the high half and leaves the wrapped low half as the value of the expression.
 
 The high half is the carry-out for additive operations and the upper 64 bits of the true product for multiplication. Together with the low half (the wrapped i64 result) this is sufficient to express chained multi-digit arithmetic.
 

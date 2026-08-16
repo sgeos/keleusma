@@ -571,15 +571,30 @@ impl TextAnalysis {
                 0
             }
             _ => {
-                // Other opcodes do not produce text. Apply the
-                // recorded stack growth and shrink and treat any
-                // pushed value as non-text.
-                let shrink = op.stack_shrink() as usize;
-                for _ in 0..shrink {
+                // Other opcodes do not produce text. Pop and push what the
+                // opcode actually pops and pushes, treating every pushed value
+                // as non-text.
+                //
+                // THE COUNTS COME FROM `op_depth_effect`, NOT FROM
+                // `stack_growth`/`stack_shrink`. Those two are the operand-stack
+                // PEAK model — a transient reach and a net — and for an opcode
+                // that pops and then pushes, neither is a pop or a push count.
+                // Reading them as one desynchronised this shadow stack on every
+                // such opcode: a field read popped one entry and pushed none
+                // (losing a slot), and `CheckedAdd` popped none and pushed one
+                // against a truth of pop two, push three.
+                //
+                // `op_depth_effect` returns `(required, delta)`: the opcode pops
+                // `required` and pushes `required + delta`. That is the true
+                // shape for every opcode, including the ones the peak model
+                // deliberately states differently.
+                let (required, delta) = crate::verify::op_depth_effect(op, chunk);
+                let pops = required.max(0) as usize;
+                let pushes = (required + delta).max(0) as usize;
+                for _ in 0..pops {
                     self.pop();
                 }
-                let growth = op.stack_growth() as usize;
-                for _ in 0..growth {
+                for _ in 0..pushes {
                     self.push(TextSize::NotText);
                 }
                 0

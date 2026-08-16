@@ -266,34 +266,52 @@ loop main(resume: Word) -> Word {
     );
 }
 
-/// `codegen.kel` qualifies under the predicate, and is STILL refused by default.
+/// **`codegen.kel` IS NO LONGER A DELEGATED-SUSPENSION CASE, and this records
+/// what that cost as well as what it bought.**
 ///
-/// Both halves matter. The first shows the predicate is not so narrow that it
-/// admits only the synthetic case written to fit it. The second is the standing
-/// decision: the module has never been executed natively, so the default must not
-/// admit it.
+/// This test used to assert two things: that `codegen.kel` refuses by DEFAULT,
+/// and that it lowers WITH the flag. Both halves were about a module whose
+/// `emit_next` was a `yield fn` called from `main`, which is exactly the nested
+/// suspension the flag exists for.
+///
+/// **The `v0.2.3` line removed that shape** in `aaa87a01`, applying the nine-line
+/// refactor this line had requested through the mailbox: `emit_next` became a
+/// plain `fn` and `main` yields what it returns. The module now lowers with no
+/// flag and no delegated suspension.
+///
+/// **What that bought**: the last refusal in the shipped corpus is gone.
+///
+/// **What it cost, and it is not nothing**: the predicate's only REAL-MODULE
+/// witness. Every remaining subject in this file is synthetic — written to fit
+/// the predicate — so "the predicate is not so narrow that it admits only the
+/// case written for it" is no longer demonstrated by anything. That is a
+/// coverage loss recorded as one, not a win to be quietly banked.
+///
+/// The standing decision it also carried is unchanged and still applies to any
+/// future subject: a module whose input block is private to `src/selfhost/mod.rs`
+/// cannot be execution-differentiated here, so `lower_module` returning `Ok` is a
+/// fact about the compiler and never a substitute for running it.
 #[test]
-fn codegen_kel_qualifies_but_stays_refused_by_default() {
+fn codegen_kel_no_longer_needs_delegated_suspension() {
     let src = std::fs::read_to_string("../src/selfhost/kel/codegen.kel").expect("read codegen.kel");
     let m = module_of(&src);
 
     let default_refusals = keleusma_native::module_refusals(&m, LowerOptions::default());
     assert!(
-        default_refusals
-            .iter()
-            .any(|(_, e)| format!("{e}").contains("Stream")),
-        "codegen.kel must still refuse under the DEFAULT options. It has never been \
-         executed natively — its input block is private to `src/selfhost/mod.rs` — so \
-         admitting it by default would rest on `lower_module` returning Ok, which is a \
-         fact about the compiler and not about the program. Refusals: {default_refusals:?}"
+        default_refusals.is_empty(),
+        "codegen.kel is expected to lower under DEFAULT options since `aaa87a01` \
+         made `emit_next` a plain `fn`. If this fires, either that refactor was \
+         reverted or a NEW refusal appeared, and the two need telling apart before \
+         anything else. Refusals: {default_refusals:?}"
     );
 
+    // Not a tautology: it pins that the flag does not INTRODUCE a refusal on a
+    // module that lowers without it, which is the direction a widening can break.
     let flagged = keleusma_native::module_refusals(&m, with_flag());
     assert!(
         flagged.is_empty(),
-        "codegen.kel is the shape the predicate was written for and must lower once \
-         the flag is on. If this fires, the predicate is narrower than the design \
-         states and the design document is wrong. Refusals: {:?}",
+        "the delegated-suspension flag introduced a refusal on a module that lowers \
+         without it. Refusals: {:?}",
         flagged
             .iter()
             .map(|(n, e)| format!("{n}: {e}"))

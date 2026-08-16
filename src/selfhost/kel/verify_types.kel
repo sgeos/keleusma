@@ -1,0 +1,390 @@
+// src/selfhost/kel/verify_types.kel -- the self-hosted TYPE REJECTION stage.
+//
+// **Rejection only, and that is a measured scope rather than a simplification.**
+// Two spikes shrank the Order-1 type-checker obligation to this. Monomorphization is an identity
+// transform on all ten stage sources, pinned by `tests/selfhost_monomorphize_identity.rs`. And
+// clearing `program.fn_expr_types` leaves every stage module byte-identical, so the emitter's
+// structural fallback covers everything the subset reaches and INFERENCE FOR EMISSION IS NOT
+// REQUIRED. What remains is deciding that an ill-typed program is ill-typed, and this stage needs
+// exactly as much type propagation as that decision takes.
+//
+// **The oracle is VERDICT agreement, not message agreement.** Accept versus reject, which is what
+// the `verify_*.kel` family already uses. Reproducing the reference's English would commit this
+// stage to diagnostics the reference is free to reword.
+//
+// **The two directions are NOT symmetric, unlike the structural verifier's.** `verify_structural`
+// and friends may over-approximate and defer to a runtime guard. A type checker may not: rejecting
+// a valid program is a LANGUAGE CHANGE, not a conservative choice. So:
+//
+//   the reference accepts  ->  this stage MUST accept. A false rejection narrows the language.
+//   the reference rejects  ->  this stage must reject, for the enumerated shapes.
+//
+// The second is bounded by a corpus; the first is not, which is why the well-typed side of the
+// corpus grows with every slice rather than staying at the controls the sizing spike used.
+//
+// SLICES 1 to 5: operand agreement, call arity and argument types, name resolution, conditions,
+// and structural claims about composites.
+//
+// SLICE 0, WHICH THIS REPLACED: no rules, `verdict` always ACCEPT. That is the point rather than
+// a placeholder -- the corpus must then show every well-typed case agreeing and every ill-typed
+// case DISAGREEING, and a harness reporting success here is broken. Finding that out costs nothing
+// before a rule exists, and costs a great deal afterwards.
+//
+// See `docs/decisions/TYPECHECK_IMPLEMENTATION_PLAN.md` for the six slices and the fifteen shapes.
+require word >= 32;
+
+// The host-facing block. `cmd` selects the operation; `verdict` carries the answer out.
+//
+// The input surface is deliberately EMPTY at slice 0. The stage cannot yet see the program, and
+// stating that in the encoding is better than accepting a table nothing reads: a reader of this
+// file can tell at a glance that a passing corpus here proves the harness works and nothing about
+// type checking.
+// SLICE 1 gives the stage its first input: a table of OPERAND PAIRS, each a
+// place where two values must agree in type.
+//
+// **The tags are SYNTACTIC, and that is what keeps the oracle honest.** They
+// come from literal kinds in the parse tree -- `1` is an integer, `true` is a
+// bool -- not from the reference's inference. Marshalling inferred types would
+// make the stage agree with the reference by construction and prove nothing.
+// An operand whose type is not syntactically evident is tag 0, UNKNOWN, and an
+// unknown pair is not a rejection: this stage may not reject a valid program.
+shared data ty {
+    cmd: Word,
+    verdict: Word,
+    // Operand pairs. `n` rows of (left tag, right tag).
+    n: Word,
+    lhs: [Word; 256],
+    rhs: [Word; 256],
+    // SLICE 2: call sites, as (declared parameter count, actual argument
+    // count). Arity is PURELY SYNTACTIC -- it needs no types at all -- which is
+    // why it is the cheapest of the fifteen shapes to reach and why two of them
+    // fall to one comparison.
+    //
+    // A call to a name with no declaration contributes NO row. Undefined
+    // functions are slice 3, and inventing a declared count of zero for one
+    // would reject it here for a reason this slice cannot defend.
+    cn: Word,
+    cdecl: [Word; 128],
+    cact: [Word; 128],
+    // SLICES 4 and 5: conditions that must be bool, and structural claims about
+    // a composite. Both are "a tag must equal a required tag", so they share one
+    // table of (actual, required) rather than growing a channel each.
+    //
+    // A required tag of 0 means "no requirement" and never rejects, which is how
+    // a construct this stage cannot type stays silent rather than guessing.
+    qn: Word,
+    qact: [Word; 256],
+    qreq: [Word; 256],
+    // THE LAST TWO SHAPES: a field access naming a field its type does not
+    // declare, and a body whose type differs from the declared return type.
+    //
+    // Membership is a table of 1/0 rather than names, because the stage compares
+    // rather than searches: the host supplies the syntactic fact "this field is
+    // among that type's declared fields", and the RULE -- that a referenced
+    // field must exist -- is the stage's. That is the same division the
+    // verify_*.kel family uses, where the host marshals op tables and the stage
+    // applies the algorithm.
+    mn: Word,
+    member: [Word; 256],
+    // PART 2 SLICE a: declarations and call sites arrive SEPARATELY and the
+    // stage joins them.
+    //
+    // **A migrated channel that still receives the answer is not a migration.**
+    // The host may say "this call names declaration 3 and passes 2 arguments";
+    // it may NOT say "this call has the wrong arity". The lookup is the work,
+    // and the work is what moves.
+    //
+    //   dparams[f]  the declared parameter count of function f
+    //   csite[c]    the declaration index this call names
+    //   cargs[c]    how many arguments it passes
+    //
+    // APPENDED LAST, so no existing slot index moves. Inserting these in the
+    // middle is exactly what broke four tests on the first attempt: the shared
+    // block is addressed by SLOT, and every field after the insertion point
+    // silently shifted.
+    dn: Word,
+    dparams: [Word; 128],
+    csn: Word,
+    csite: [Word; 128],
+    cargs: [Word; 128],
+    // PART 2 SLICE b: struct field sets and field accesses arrive SEPARATELY
+    // and the stage SEARCHES.
+    //
+    // This is the channel where the copy was most obvious: the host answered
+    // "is this field declared" and the stage compared its answer to zero. Now
+    // the host says "type 2, field name 7" and the stage looks.
+    //
+    // Names are compared as interned INDICES rather than bytes, because the
+    // stage has no string type and the host already assigns every name an
+    // index. Two spellings of one name would be two indices and the search
+    // would miss -- so the index space must be shared, which it is: one table
+    // for every name mentioned by either side.
+    //
+    //   sfirst[t]/scount[t]  type t's declared field names, as a run in sfield
+    //   sfield[i]            a declared field name index
+    //   atype[a]/aname[a]    an access: the type, and the field name it names
+    //
+    // Appended last, per the convention slice a learned the hard way.
+    stn: Word,
+    sfirst: [Word; 64],
+    scount: [Word; 64],
+    sfield: [Word; 256],
+    an: Word,
+    atype: [Word; 256],
+    aname: [Word; 256],
+    // Scratch for the field search. A field rather than a local because this
+    // file follows `wire.kel`'s convention of carrying loop state in the data
+    // block, and because a total language has no early exit: the search sets a
+    // flag and runs to its bound rather than returning from inside the loop.
+    hit: Word,
+    // PART 2 SLICE c: name occurrences and the declared sets arrive SEPARATELY
+    // and the stage CLASSIFIES.
+    //
+    // The host says "occurrence 4 names index 12, and it is a call". It does
+    // not say "that is an undefined function". Classification is the work.
+    //
+    //   dname[d]   a declared name index, for the whole top-level set
+    //   oname[o]   the name index this occurrence mentions
+    //   olocal[o]  1 when the occurrence resolves to a local or parameter
+    //   ocall[o]   1 when the occurrence is a CALL rather than a value read
+    //
+    // Appended last.
+    dnn: Word,
+    dname: [Word; 128],
+    on: Word,
+    oname: [Word; 256],
+    olocal: [Word; 256],
+    ocall: [Word; 256],
+    // A program the collector could not decide about at all, for instance one
+    // with a wildcard import bringing in names it cannot enumerate. The stage
+    // then makes no resolution claim, because a name it cannot see is not
+    // evidence of anything and a rejection would narrow the language.
+    oskip: Word,
+    // PART 2 SLICE d: EXPRESSION NODES, the last channel and the largest.
+    //
+    // A flat table, one row per node the checker cares about. The host reports
+    // the SHAPE; the stage decides what the shape means.
+    //
+    //   ekind[e]   what the node is        1 binop  2 array element
+    //                                      3 condition  4 branch pair
+    //                                      5 field access on a value
+    //                                      6 index on a value
+    //                                      7 struct literal
+    //                                      8 function tail against its return
+    //   ea[e]/eb[e]  the two quantities the kind compares. For a binop they are
+    //                operand tags; for a struct literal, declared and actual
+    //                field counts; for a condition, the tag and 0.
+    //
+    // ONE TABLE RATHER THAN ONE PER KIND. Every rule here is "these two must
+    // agree" or "this must be bool", and a channel per kind would multiply the
+    // slot chain that has already produced two off-by-one defects.
+    //
+    // Appended last.
+    en: Word,
+    ekind: [Word; 256],
+    ea: [Word; 256],
+    eb: [Word; 256],
+}
+
+// The verdict constants, named rather than spelled as bare integers at the call sites, so a later
+// slice adding a rejection code cannot collide with the accept value by accident.
+fn ty_accept() -> Word { 0 }
+
+fn ty_reject() -> Word { 0 - 1 }
+
+fn ty_unknown() -> Word { 0 }
+
+// Two operands disagree when BOTH are known and they differ.
+//
+// **The unknown case accepts, and the asymmetry is the whole of the soundness
+// argument.** `verify_*.kel` may over-approximate because an over-approximation
+// defers to a runtime guard. A type checker has no such latitude in the
+// accepting direction: rejecting a valid program is a LANGUAGE CHANGE. So an
+// operand this slice cannot type is not evidence of anything, and silence is
+// the only sound answer.
+fn ty_pair_disagrees(l: Word, r: Word) -> Word {
+    if l == ty_unknown() { 0 } else {
+    if r == ty_unknown() { 0 } else {
+    if l == r { 0 } else { 1 } } }
+}
+
+// Slice 1: reject when any operand pair disagrees.
+//
+// The loop runs to completion rather than stopping at the first disagreement,
+// because the language is total and there is nothing to break out of. The
+// verdict is sticky, which also means a second disagreement cannot un-reject a
+// program.
+// Whether type `t` declares field name `f`.
+//
+// A linear walk of the type's own run, which is the right shape here for the
+// same reason the interner's dedup scan is: the language is TOTAL and has no
+// early exit, so a loop that finds the answer on its first step still costs its
+// full bound. A structure that beat a scan would have to beat it at field
+// counts a struct actually has, and those are single digits.
+//
+// `nm.found`-style state rather than a return inside the loop, because there is
+// nothing to return early from.
+fn ty_field_declared(t: Word, f: Word) -> Word {
+    ty.hit = 0;
+    for i in 0..ty_bounded(ty.scount[t]) limit 64 {
+        ty.hit = if ty.sfield[ty.sfirst[t] + i] == f { 1 } else { ty.hit };
+    }
+    ty.hit
+}
+
+// A count clamped to its table bound.
+//
+// `for .. limit` traps on ENTRY when the runtime range exceeds the static cap,
+// so an oversize count must never reach a loop. The same shape the producer's
+// `mi_bounded` uses, for the same reason.
+fn ty_bounded(v: Word) -> Word {
+    if v > 64 { 0 } else { v }
+}
+
+// How many occurrences to classify. Zero when the collector could not decide.
+fn ty_occurrences() -> Word {
+    if ty.oskip == 1 { 0 } else { ty.on }
+}
+
+// Whether a top-level declaration carries this name.
+fn ty_declared(f: Word) -> Word {
+    ty.hit = 0;
+    for i in 0..ty_bounded128(ty.dnn) limit 128 {
+        ty.hit = if ty.dname[i] == f { 1 } else { ty.hit };
+    }
+    ty.hit
+}
+
+fn ty_bounded128(v: Word) -> Word {
+    if v > 128 { 0 } else { v }
+}
+
+// The two refusals, derived rather than received.
+//
+//   a local that is CALLED  -- a V0.2.0 SURFACE RESTRICTION, not a type error,
+//                              and the one shape carrying no `type error:`
+//                              prefix in the reference
+//   neither local nor declared -- an unresolved name
+//
+// A local read as a VALUE is fine, and a declared name called or read is fine,
+// so the two conditions are written out rather than folded into one test.
+fn ty_occurrence_bad(o: Word) -> Word {
+    if ty.olocal[o] == 1 {
+        if ty.ocall[o] == 1 { 1 } else { 0 }
+    } else {
+        if ty_declared(ty.oname[o]) == 1 { 0 } else { 1 }
+    }
+}
+
+// A node kind requiring its two quantities to be EQUAL.
+//
+// Binops, array elements, branch pairs, struct-literal field counts and a
+// function tail against its return type are all one claim wearing five names.
+fn ty_kind_is_equality(k: Word) -> Word {
+    if k == 1 { 1 } else {
+    if k == 2 { 1 } else {
+    if k == 4 { 1 } else {
+    if k == 7 { 1 } else {
+    if k == 8 { 1 } else { 0 } } } } }
+}
+
+// A node kind requiring a COMPOSITE rather than a scalar.
+fn ty_kind_needs_composite(k: Word) -> Word {
+    if k == 5 { 1 } else {
+    if k == 6 { 1 } else { 0 } }
+}
+
+// Whether a node is a rejection.
+//
+// The unknown tag never rejects, for the reason established in slice 1: this
+// stage may not reject a valid program, so a shape it cannot type is silence
+// rather than a guess. A struct-literal count of 0 is a real count and not an
+// unknown, which is why the equality kinds test the KIND before the values.
+fn ty_node_bad(k: Word, a: Word, b: Word) -> Word {
+    if ty_kind_is_equality(k) == 1 {
+        if k == 7 {
+            // Counts, where 0 is a real value rather than "unknown".
+            if a == b { 0 } else { 1 }
+        } else { ty_pair_disagrees(a, b) }
+    } else {
+    if ty_kind_needs_composite(k) == 1 {
+        // The operand is a known scalar, which a field access or an index
+        // cannot be. The host reports the tag; a 0 means it could not tell.
+        if a == ty_unknown() { 0 } else { 1 }
+    } else {
+    if k == 3 {
+        // A condition must be bool.
+        ty_pair_disagrees(a, 2)
+    } else { 0 } } }
+}
+
+fn ty_check() -> Word {
+    ty.verdict = ty_accept();
+    for i in 0..ty.n limit 256 {
+        ty.verdict = if ty_pair_disagrees(ty.lhs[i], ty.rhs[i]) == 1 {
+            ty_reject()
+        } else {
+            ty.verdict
+        };
+    }
+    // Slice 2. Arity is exact rather than a bound: a call with too FEW and one
+    // with too MANY arguments are both rejections, and they are the same
+    // comparison rather than two rules.
+    for j in 0..ty.cn limit 128 {
+        ty.verdict = if ty.cdecl[j] == ty.cact[j] { ty.verdict } else { ty_reject() };
+    }
+    // THE JOIN. Each call site names a declaration; the stage reads that
+    // declaration's parameter count and compares. A site naming an index outside
+    // the declaration table is REFUSED rather than skipped: an out-of-range
+    // index means the host and the stage disagree about the table, and guessing
+    // which is right would hide it.
+    for c in 0..ty.csn limit 128 {
+        ty.verdict = if ty.csite[c] >= ty.dn { ty_reject() } else {
+            if ty.dparams[ty.csite[c]] == ty.cargs[c] { ty.verdict } else { ty_reject() }
+        };
+    }
+    // Slice 3's pre-classified channel is GONE, not merely unfed. A dead input
+    // that still rejects is a rule nobody can see being applied, and leaving it
+    // would let a future caller re-enter the old path by accident.
+    // THE CLASSIFICATION. A local that is CALLED is refused, and so is a name
+    // that is neither local nor declared. Both are computed here from facts,
+    // not received as verdicts.
+    for o in 0..ty_occurrences() limit 256 {
+        ty.verdict = if ty_occurrence_bad(o) == 1 { ty_reject() } else { ty.verdict };
+    }
+    // Slices 4 and 5. A required tag of 0 is no requirement, so it reuses the
+    // same disagreement predicate the operand pairs use: unknown never rejects.
+    // THE EXPRESSION RULES, applied from shapes rather than received as
+    // verdicts.
+    for e in 0..ty.en limit 256 {
+        ty.verdict = if ty_node_bad(ty.ekind[e], ty.ea[e], ty.eb[e]) == 1 {
+            ty_reject()
+        } else {
+            ty.verdict
+        };
+    }
+    for q in 0..ty.qn limit 256 {
+        ty.verdict = if ty_pair_disagrees(ty.qact[q], ty.qreq[q]) == 1 {
+            ty_reject()
+        } else {
+            ty.verdict
+        };
+    }
+    // A referenced field must be declared. Only 0 rejects: a row the host could
+    // not decide is not written at all, so absence and denial stay distinct.
+    for m in 0..ty.mn limit 256 {
+        ty.verdict = if ty.member[m] == 0 { ty_reject() } else { ty.verdict };
+    }
+    // THE SEARCH. Each access names a type and a field; the stage walks that
+    // type's declared run looking for the name.
+    for a in 0..ty.an limit 256 {
+        ty.verdict = if ty.atype[a] >= ty.stn { ty_reject() } else {
+            if ty_field_declared(ty.atype[a], ty.aname[a]) == 1 { ty.verdict } else { ty_reject() }
+        };
+    }
+    ty.verdict
+}
+
+fn main(cmd: Word) -> Word {
+    if cmd == 0 { ty_check() } else { 0 - 99 }
+}

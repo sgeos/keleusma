@@ -1159,10 +1159,11 @@ fn compile_scalar_shift_variable(
             fc.emit(Op::Const(one));
             fc.emit(Op::Const(wb_c));
             fc.emit(Op::GetLocal(lc));
-            // Word subtraction routes through the checked opcode; the low
-            // word of the (high, low, flag) triple is the wrapping result
-            // and the high/flag are discarded (Consolidation B removed the
-            // unchecked `Op::Sub` Int arm).
+            // Word subtraction routes through the checked opcode. The
+            // triple is pushed (low, high, flag), so the `PopN(2)` below
+            // discards flag and high and leaves the low word, which is the
+            // wrapping result (Consolidation B removed the unchecked
+            // `Op::Sub` Int arm).
             fc.emit(Op::CheckedSub);
             fc.emit(Op::PopN(2)); // word_bits - c
             fc.emit(Op::Shl); // 1 lsl (word_bits - c)
@@ -3282,9 +3283,27 @@ pub fn compile_with_options(
                         visibility,
                     });
                 } else {
-                    for k in 0..n_slots {
+                    // ONE NAME FOR THE WHOLE ARRAY, NOT ONE PER ELEMENT.
+                    //
+                    // `SchemaBuilder::add_data_layout` interns each slot's name
+                    // with dedup, so identical names collapse to a single
+                    // `NAMES` record and a single run of pool bytes. A distinct
+                    // `field[k]` per element defeated that dedup and made the
+                    // string pool and name table scale with the ELEMENT COUNT:
+                    // for `lexer` they were 6,609,960 and 3,166,432 bytes, 60.7%
+                    // of a 16,114,608-byte artifact built from a 21 KB source.
+                    //
+                    // Nothing addresses a slot by name at runtime. The host reads
+                    // and writes through `Vm::get_shared`/`set_shared` by slot
+                    // INDEX, and `Op::GetDataIndexed` resolves `base + k * stride`
+                    // as an index too; `DataSlot::name` is documented as being for
+                    // host initialization and debugging. An element's name is
+                    // recoverable as `name[k]` from the array's base slot, so the
+                    // per-element string was storing what the index already says.
+                    let array_name = format!("{}.{}", decl.name, field.name);
+                    for _ in 0..n_slots {
                         target.push(DataSlot {
-                            name: format!("{}.{}[{}]", decl.name, field.name, k),
+                            name: array_name.clone(),
                             visibility,
                         });
                     }
@@ -9851,7 +9870,9 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
 /// 1. Emit the operands and the checked opcode (`CheckedAdd`,
 ///    `CheckedSub`, `CheckedMul`, `CheckedNeg`, or `Div`/`Mod`
 ///    with stamped overflow contract). The stack carries
-///    `[high, low, flag]` after the opcode.
+///    `[low, high, flag]` after the opcode, bottom to top. Note
+///    that this is the reverse of the arm binding order: the
+///    surface form `overflow(h, l)` binds high first.
 /// 2. Stash all three slots into temporary locals.
 /// 3. Wrap the arms in a virtual `Loop` so the first matching
 ///    arm can `Break` out with its body's result on the stack.
@@ -9936,8 +9957,8 @@ fn compile_checked(
                 _ => None,
             });
 
-    // Emit the checked operation. Each path leaves [high, low,
-    // flag] on the stack.
+    // Emit the checked operation. Each path leaves [low, high,
+    // flag] on the stack, bottom to top.
     match op_expr {
         Expr::BinOp {
             op: BinOp::Add,

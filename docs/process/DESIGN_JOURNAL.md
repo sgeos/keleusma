@@ -13,6 +13,1210 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE DRIVER IS WIRED TO A MODULE, AND THE INCREMENT WAS A THIRD THE SIZE THE PLAN SAID (2026-08-15).**
+
+**Three of the four things the plan listed as remaining were already done, and I found that by
+reading the code rather than the plan.** The plan named a module-input encoding, a Keleusma-side
+producer of the interning sequence, residency staging, and removing `wire.kel` from the `read_stage`
+exclusion. Measured against the tree: `wire.kel` was ALREADY in `read_stage`; the producer was
+ALREADY self-hosted as `mi_chunk_names`/`mi_enum_names`/`mi_slot_names`/`mi_const_nodes`; and the
+staging was NEVER NEEDED. What was actually missing was the ENCODER, which lived in the test harness.
+
+**The tell was one line.** `wire_names_via_kel(module, blob, ...)` opened with `let _ = module;`. A
+function that takes a module and discards it, while a test builds its real input, is a compile path
+in appearance only. That single line located the gap faster than the plan's four-item list did.
+
+**THE STAGING COUPLING CAME FROM THE FIGURE THAT HAS NOW MISLED THIS PROJECT THREE TIMES.** The plan
+says the producer and the staging "are the same increment, and doing either alone is wasted", which
+follows from 395,804 names. Measured: the worst stage, `parse`, interns 627 from a 33,395-byte blob
+against caps of 1024 and 49,152 — 61% and 68%. Nothing in the corpus needs staging. The 395,804 is a
+`CONSTS` region record count and it still sits at five sites in that plan. **A wrong figure does not
+merely misstate a size; it invents a dependency between two pieces of work.**
+
+**The count was wrong in the unsafe direction and nothing compared it to anything.** The caller
+passed `interner_input(&module).len()` — a model that omits the data-slot contributor — which reports
+252 for `parse` where the module interns 627. Its only consumer is a cap check whose purpose is to
+refuse a module that would overrun the interner, so an under-count defeats the guard. Returning the
+blob and the count from ONE walk is the fix; that is the same "one model with two readers" shape as
+the operand-stack defect, arriving in a different file a day later.
+
+**ADDING COVERAGE IS WHAT FOUND THE REAL SEMANTICS.** I first asserted the derived count EQUALS the
+reference's `NAMES` record count, and it passed on all ten stages. Then I added a named-constant case
+and it failed, 9 against 4. The reference dedups, and `Names::intern_fresh` records its entry so a
+later `intern` can share it — so the exact count is ORDER-dependent, and reproducing it host-side
+would mean replicating the reference's interning order, which is a second model of the thing under
+test. The right answer is an explicit upper bound, documented as one, with soundness asserted and the
+looseness pinned by the case that exhibits it. **Equality on ten stages was a corpus property I was
+one test away from writing down as a guarantee.**
+
+**Two controls, and the second is the more useful.** Dropping the data-slot names from the count
+fails loudly (20 against 31 on `lexer`), so the check has teeth. Dropping the CONSTANT names leaves
+all ten stages green — which establishes by mutation that no stage in the corpus reaches that branch,
+confirming a gap this line had recorded but not demonstrated. That is why the named-constant cases
+are in the suite rather than a note in a comment.
+
+**Reported, not repaired:** `cargo doc --features self-host` fails with four unresolved intra-doc
+links on the clean base. CI's Doc job builds `signatures,encryption,shell`, so that feature set is
+never doc-built. Same class as the red Doc job V0.2.1 shipped with.
+---
+
+**A PANIC BEHIND A PUBLIC API, AND A REQUEST I REFUSED TO BUILD AS ASKED (2026-08-15).**
+
+**Reading the mailbox TO THE END is what found the defect.** I had read the `v0.3.0` mailbox far
+enough to find the `break` item I already knew about, answered it, and nearly stopped. Four further
+messages sat below it, one of which was a live report: `Vm::resume_from_breakpoint` panics on any
+module declaring shared data. **The item I already knew about was not the item that mattered.** The
+handoff's instruction to read it to the end is not a formality, and I nearly treated it as one.
+
+**The defect.** `resume_from_breakpoint` called `run()` without rebinding the host shared-data
+buffer that `call_with_shared`/`resume_with_shared` bind at entry and clear on return, so the first
+shared read reached an `.expect` and aborted the process. Reproduced before repairing; it panicked
+exactly as reported. A panic is not a `VmError`, so a host driving a debugger could not catch it,
+and all ten stage sources declare shared data.
+
+**The repair went to the boundary rather than the call site**, because the report's framing --
+"reachable from a public API on ordinary input" -- is an argument about the class, not the instance.
+`resume_from_breakpoint_with_shared` mirrors the existing pair; the bare entry point rejects with a
+message naming it; the three `.expect` sites became recoverable faults. The rejection runs BEFORE
+the suspension test, because `NotSuspended` would have sent a host to inspect its call sequence
+instead of the missing buffer -- a correct error that misdirects is worse than a vague one.
+
+**The test that earns its place is the buffer assertion**, not the panic. A step returning `Yielded`
+while writing nothing would satisfy a state-only check and would mean the buffer was never bound.
+Asserting `shared[0] == 1` is what distinguishes "the facility works" from "the facility returns".
+
+**THE REQUEST I DID NOT BUILD, WHICH IS THE MORE USEFUL RESULT.** They asked for an accessor handing
+back each stage's seeded shared buffer, and called it cheap. It is cheap for four of the five and
+**impossible as stated for `verify_datalayout`**: that stage is a batched coroutine, and
+`dl_reject_module_via_kel` walks the slot table in 1024-entry batches issuing a fresh
+`call_with_shared` per batch. No single buffer represents its input. A function handing them one
+would return batch zero, which would run, agree, and mean nothing.
+
+**That is the exact failure they were avoiding when they asked.** Their own words: "a seed a stage
+silently rejects looks exactly like coverage". Building the API as requested would have handed them
+the defect the request existed to prevent. So the deliverable is the finding plus a proposed
+signature, not four working accessors and one that lies.
+
+**The generalisation: a request encodes a model of the callee, and the model can be wrong.** They
+could not see the batching from outside, so "any one of these would be enough" was reasonable and
+incorrect. Probing before implementing is their rule; this is the first time I have applied it to
+one of their requests rather than to my own plan.
+
+**A slip worth recording because the mechanism caught it.** I edited `CHANGELOG.md` while still on
+`v0.2.3` instead of a feature branch. `git status` before committing caught it, which is precisely
+the check the handoff prescribes after a previous session made the same mistake. The rule works;
+what it needs is being run, not remembered.
+---
+
+**THE REPORTED `break` DISCREPANCY WAS A STRAY SEMICOLON, AND THE CONTROL IS WHAT SETTLED IT
+(2026-08-15).** The `v0.3.0` line reported that `docs/spec/GRAMMAR.md` documents a `break;` form the
+parser rejects, and left `BreakIf` unisolated in its opcode audit on the grounds that no documented
+form reaches it. Both halves are wrong, and the second cost them coverage.
+
+**The documented form parses verbatim.** I transcribed the grammar's own "Break Statement" example
+with nothing added but a function wrapper, and it is accepted, as are `break;` alone as a loop body,
+`break;` as the whole body of a conditional that is itself the whole loop body, and `break;`
+followed by further statements. `TokenKind::Break` is handled at statement position in `parse_block`,
+so there is no route from that form to an expression-position diagnostic at all. I established that
+by reproduction before reading the parser, and the parser then explained the reproduction rather
+than the other way round.
+
+**The real cause.** Their `break_cond` probe reads `for x in xs { ... }; b`. A `for` loop is a
+statement and consumes no trailing semicolon, so the parser resumes at statement position, reads the
+`;` as the start of an expression, and reports `unexpected token Semicolon in expression`. The
+diagnostic names the semicolon, and their source has two of them close together.
+
+**THE CONTROL IS THE WHOLE ARGUMENT.** Remove `break` entirely, keep the stray semicolon, and the
+failure is byte-identical. Without that, I would have had a plausible story about where the parser
+stopped and no evidence about what it objected to. One probe, and it converts a narrative into an
+attribution.
+
+**`BreakIf` is reachable.** With that one semicolon deleted and nothing else changed, the probe
+compiles and `main` carries `BreakIf(41)` and `Break(41)`. Measured, then pinned by execution using
+their own probe source as the case.
+
+**PINNED, NOT REPAIRED.** `if`, `match`, and `loop` accept a trailing semicolon; `for` does not.
+Accepting it widens the admitted language, which is the operator's call and not a correctness fix.
+`semicolon_and_tail_forms_are_unchanged` already pinned the accepting half for `if`, so the two
+tests now state an asymmetry rather than a rule.
+
+**A claim of my own that needed the same treatment.** The `GRAMMAR.md` sentence I wrote names three
+constructs. I had measured one. I checked `match` and `loop` before the merge rather than after,
+both hold, and all three are pinned instead of generalised from `if` — but the sentence would
+otherwise have been a three-part claim resting on a third of its evidence. **Writing the
+generalisation is the moment to check the generalisation.**
+
+**THE SHAPE, AND IT ARRIVED FROM BOTH DIRECTIONS IN ONE WEEK.** The other line sent me "a defect
+report names where a reader happened to look, not where the defect is", about `GRAMMAR.md`. This is
+the same shape returning: **a diagnostic names where the parser stopped, not what it objected to.**
+The cheap discriminator in both cases is a control that removes the suspected cause and checks the
+failure survives.
+
+**PROCESS, FROM THE CRASH RECOVERY THAT OPENED THIS SESSION.** `HANDOFF.md` reported itself stale
+correctly and for the wrong reason: its validity check was a hash match on `HEAD~1`, so the first
+unrelated merge invalidated a file whose contents were still largely true. It also carried a
+`selfhost_wire` count of 157 against the tree's 161. The rewrite uses an **ancestor check plus a
+content check** and **derives** counts with commands rather than restating them — including the
+boundary recount, whose first draft I wrote with hardcoded line numbers and then had to fix, which
+is the same defect inside the document warning about it.
+---
+
+**THE THREE REMAINING HOST MODELS, CHECKED AGAINST SOURCES THAT ARE NOT THEMSELVES (2026-08-15).**
+`analyze.kel` self-hosts the control-flow algorithm and the bound extraction, not the models, so the
+self-hosted differential reproduces whatever the reference says. One of its four inputs was found
+unsound while every differential was green. These are the other three.
+
+**`heap_alloc`: CHECKED AND CORRECT.** It claims only `NewComposite` allocates, and exactly
+`alloc_bytes()`. The arena is an independent source -- it reports what was actually handed out. Across
+seven composite shapes (tuple, array, struct, enum, nested tuple, array of struct, byte array), the
+modelled bytes equal the observed bytes above a composite-free baseline, exactly. Control: halving the
+model fails the check with "16 observed, 8 predicted".
+
+**`Op::cost()`: CHECKED, AND IT DISAGREES WITH MEASUREMENT.** The nominal model documents itself as
+"unmeasured estimates chosen for RELATIVE ORDERING", so equality is the wrong test and ordering is the
+claim. Two findings, both pinned rather than repaired, because changing a calibration is a judgment
+call rather than a correctness fix:
+
+1. **The nominal tier boundary is not supported.** Nominal separates `{Div, Mod}` (3) from
+   `{CmpEq, CmpLt}` (2). Measured on aarch64 with the SAME `ops_per_pattern: 4`, so setup overhead is
+   comparable: `Div` 138.56, `Mod` 139.36, `CmpEq` 140.70, `CmpLt` 133.55. Four opcodes within seven
+   cycles, and `Div` is the CHEAPEST -- placed by the nominal model in the dearer tier. The same
+   inversion appears on `thumbv8m` (9,164 against 10,079).
+2. **The generator discards measurements into buckets.** `CmpEq` measured 140.70 and is emitted as
+   164; `CmpLt` measured 133.55 and is emitted as 164. Overstating is conservative and therefore safe
+   for a bound, but it destroys the ordering the model exists to provide, and it is what creates the
+   apparent 140-against-164 gap that the raw measurements do not show.
+
+**I nearly reported that as one clean inversion.** The emitted model shows twenty-one pairwise
+inversions, which reduce to one tier disagreement; and checking the provenance header showed the
+comparison is only valid between opcodes sharing a pattern size. `Op::Add` itself was never measured
+-- the arithmetic bucket came from `CheckedAdd`/`CheckedSub`/`CheckedMul`, whose pattern tears down
+three stack slots against division's one -- so the headline "Div is cheaper than Add" is confounded
+and is deliberately NOT asserted. **Check a figure against the thing it claims to measure**, again.
+
+**Coverage that a green result here does not give**: 17 opcodes of 66 were ever measured. Every other
+value in the emitted model is a bucket assignment, so no ordering claim about them is checked by
+anything.
+
+**The class and opcode-kind tables: CHECKED AND CORRECT, WITH A STRUCTURAL HAZARD.** Nine classes,
+each carrying its argument -- and the argument matters as much as the class, since `analyze.kel`
+follows `If`/`Loop`/`EndLoop`/`Break` targets to rebuild the graph. Control: dropping `Loop`'s target
+while keeping its class fails with "Loop(13) classified as (4, 0), expected (4, 13)".
+
+**The hazard is the `_ => (0, 0)` catch-all.** A control-flow opcode added later and not added here
+becomes "plain" SILENTLY: no panic, no rejection, a graph missing an edge, and a bound extracted from
+it that is finite and wrong. The test pins the current boundary at nine classes but cannot close the
+hole; closing it needs an exhaustive `match` over `Op` so the compiler refuses a new opcode until it
+is classified.
+
+---
+
+**AN UNSOUND WORST-CASE-MEMORY BOUND, AND THE ROOT WAS ONE MODEL WITH TWO READERS (2026-08-15).**
+`GetField`/`GetTupleField`/`GetEnumField` declared an operand-stack net of -1 where the virtual
+machine's is 0. The net propagates into `current_offset`, so every later operation's peak was
+computed from a base one slot too low per field read. Measured on a real Stream chunk:
+`wcmu_stream_iteration` reported **96 bytes where 128 is correct**.
+
+**That is an understated bound, not a loose one.** The conservative-verification stance permits
+over-approximation; this was the other direction. A module could be certified against an operand
+budget smaller than the one it needs.
+
+**It only surfaces when a field read is on the peak-determining path.** A chunk whose peak is set
+elsewhere reports correctly, which is how it survived — and why the control has to be built from
+cases where the field read IS the peak, rather than from whatever the corpus happens to contain.
+
+**THE ROOT WAS NOT THE ARITHMETIC.** `stack_growth`/`stack_shrink` were read by two consumers
+wanting different quantities: `verify.rs` wants a transient reach and a NET, `text_size.rs` wants
+literal POP and PUSH counts. Those coincide only for an operation that does not both pop and push,
+and the field reads are exactly that shape. One pair of numbers cannot serve both, so any fix
+phrased as "correct the numbers" fixes one reader by breaking the other.
+
+The repair splits the roles rather than the values. `stack_growth`/`stack_shrink` are now
+exclusively the PEAK model; `verify::op_depth_effect`, which returns `(required, delta)` and had the
+true semantics all along, is the POP/PUSH model, and `text_size` reads that. The field reads then
+become `(0, 0)`: net and transient both EXACT rather than conservative. My first plan was `(1, 1)`,
+which is sound but over-approximates the peak by one slot per field read; moving `text_size` made
+the exact answer available.
+
+**TWO CORRECTIONS TO THE REPORT I WAS ACTING ON.** `GetIndex` was flagged as a fourth instance
+because it shares the match arm. It is not: it genuinely pops the container AND the index, so its
+net of -1 is right. And the checked family's transient is NOT understated — the virtual machine pops
+both operands before pushing any result, so `growth = 1` is exactly the true reach. What is wrong
+there is its DECOMPOSITION (`shrink = 0` against two real pops), which only the shadow stack
+noticed. So the two defects genuinely differ in kind, but not in the way reported: one is a wrong
+NET, the other a wrong DECOMPOSITION the memory arithmetic is insensitive to.
+
+**WHY NOTHING CAUGHT IT, AND THE LESSON GENERALISES.** `analyze.kel` consumes these numbers as
+host-seeded arrays through `analyze_stack_effect`, so the self-hosted differential reproduces
+whatever the reference says and agrees by construction. **A differential against the model under
+test cannot detect that the model is wrong.** The byte-identity oracle is the strongest tool in this
+project and it is blind here, because both sides read one source of truth. The control therefore
+compares the peak model against an INDEPENDENT model in the same tree, and it fails before the
+repair.
+
+---
+
+**THE JOIN ACROSS TEN STAGES, AND WHAT TEN GREEN CASES ARE ACTUALLY WORTH (2026-08-15).**
+All ten stage sources now emit `NAMES` and `STRING_POOL` byte-identically through `mi_join`.
+They passed on the first run, and the increment's real output is the measurement of what that
+does and does not mean.
+
+**NINE OF THE TEN REACH NO NEW MAXIMUM.** `parse` is the largest in every dimension measured:
+chunks (94), enum names (158), slot runs (375), constant names, constant nodes (815) and
+constant depth. Nothing else exceeds it anywhere. So the widening is a REGRESSION NET over nine
+real shapes, not additional scale, and ten green cases are not ten times the assurance of the
+one already covered. The dominance is asserted rather than described, so a stage growing past
+`parse` reports itself instead of quietly making the test worth more.
+
+**WHAT IT GENUINELY ADDS IS NINE ZERO-ENUM MODULES.** `parse` is the only stage with enum
+layouts, so before this the zero-enum path through `mi_enum_names` had no real module behind it
+in the join -- only synthetic cases.
+
+**THE DEDUP PATH HAS NO REAL-MODULE COVERAGE, AND MUTATION IS WHAT ESTABLISHED IT.** Making
+`nm_find` report "not found" unconditionally leaves all ten stages byte-identical. Every
+dedup-mode name in every stage is distinct, so the matching branch has never been taken by real
+input. `nm_find` is the quadratic scan whose cost justified capping the name count in the first
+place, and the cap's whole justification rests on a branch no stage exercises. Pinned by the
+equality between input name count and `NAMES` record count, which is the observable proxy.
+
+**Reading the counts would not have found it.** Input and output name counts being equal is
+consistent with dedup firing and finding nothing to merge; only disabling the branch and seeing
+no change distinguishes "never collides" from "collides and is handled". The counts suggested
+it; the mutation established it.
+
+**TWO MORE THINGS THE CORPUS CANNOT ESTABLISH**, both pinned as assertions that a limitation
+still holds: no stage contributes a constant-interned name, and no stage nests a constant past
+depth one. The constant contributor's name and child-position paths are exercised by `FX_CASES`
+and by nothing real. Both assertions are written so that firing means coverage was GAINED and
+the right response is to record that, not to restore the zero.
+
+**A GUARD TEST PINNED TO A LITERAL FAILED IN CI RATHER THAN ON THE BENCH.**
+`the_driver_refuses_more_names_than_one_call_can_intern` spelled `257` against a cap of 256; the
+ceiling raise took the cap to 1024 and the case silently stopped being over the bound, so the
+driver accepted where the test demanded a refusal. It was the only thing in the suite that
+caught the raise's loose end.
+
+It reached CI rather than the bench because it sits behind the `self-host` feature, and neither
+`cargo test --workspace` nor `cargo test --features compile` enables it. **Both were run and
+both were green.** The standing rule is to reproduce the gate's invocation rather than
+approximate it, and a default-feature run is an approximation: the gate is
+`cargo nextest run --profile ci` across a five-entry feature matrix. Every cap-pinned test is
+now derived from a named `NAME_CAP` rather than a literal, so the next raise moves them or
+fails loudly.
+
+---
+
+**THE NAME CEILING, AND A NUMBER THAT WAS A GUARD ON THE WRONG BUFFER (2026-08-15).**
+`parse.kel` now emits `NAMES` and `STRING_POOL` byte-identically through the join: 627 names from a
+33,395-byte blob, pinned by `the_join_holds_on_the_largest_real_stage`.
+
+**The plan's "hard ceiling is 512" was not a ceiling on names.** It was
+`fin_capacity() / nameref_fields()`, and `emit_name_records_from_nout` does not read `fin` -- it
+reads `nout`. The guard was copied from a sibling that genuinely reads `fin`, and the 512 it produced
+was recorded in the plan, in the roadmap and in a goal statement as a property of the names path. It
+is now bounded by `nout_capacity()` under its own code. **This is the same failure as the 395,804:
+a number carried forward without being checked against the thing it claims to measure.** Twice in two
+sessions, in the same document.
+
+**The binding ceiling was `bin`, and three stages breached it rather than one.** Measured:
+`parse` 33,395 bytes, `codegen` 21,225, `reconstruct` 8,849, against a buffer of 8,192 -- with
+`lexer` at 7,963, one edit from breaking. The plan named the name count, which was the third-largest
+of the four ceilings that bind.
+
+**"`parse`'s artifact does not fit the window" was true and did not matter.** The join writes two
+regions; what places them is the directory, not the artifact. A two-region directory for `parse` is
+12,840 bytes, well inside the existing 65,536-byte window. The plan framed a fork -- windowed join
+variant, or new harness -- and neither had to be built. **Check whether the obstacle is load-bearing
+before designing around it.**
+
+**The trap the goal named fired exactly as written.** `emit_pool_bytes` guards against
+`bin_capacity()` and looped `limit 8192`; raising `bin` left a guard admitting six times what the
+loop would run, and three tests died with `LoopLimitExceeded` past a guard that had said yes.
+Enumerating by the literal `256` was also not enough: `nm_find` sat at `limit 512` and is the one
+loop quadratic in the cap. **Enumerate by what BOUNDS the loop, not by the number written in it** --
+two loops at `limit 256` are bounded by a name's byte length and had to stay.
+
+**The control found two defects the raise did not cause, and a green suite could not have.**
+`mi_chunk_names` wrote its output copy ignoring `nm.mode`, so from the seventh chunk it overwrote the
+directory it would later need; the join corpus topped out at three chunks. And `mi_join` returned the
+SUM of three emitter results, so `-202` plus 7,680 reported 7,478 -- positive, therefore success --
+with `NAMES` left entirely zero. **A sum is not a conjunction.** Any earlier caller of the join could
+have accepted a half-written artifact.
+
+**Cost, measured rather than asserted.** `shared_data_bytes` 155,704 -> 237,624, up 52.6%. The WCET
+bound moves further than the memory: `nm_find` has no early exit, so the interning phase is quadratic
+in the cap and 256 -> 1024 multiplies its static bound by sixteen. Real input is unaffected; the
+BOUND is what moves, and the bound is the product.
+
+**One gap opened rather than closed.** `-255` guards `bout` overflow and was argued unreachable
+because `intern_run` refuses above `bin_capacity()` -- sound only while both buffers were 8,192. They
+are now 49,152 and 16,384, so the guard is live and has no negative test: reaching it needs more than
+16 KB of distinct name bytes and the corpus tops out at 7,680. Recorded in the source as a gap, not
+left as the old justification.
+
+---
+
+**THE THREE-PART ORDER-1 WIRING LINE, AND A FIGURE THAT SURVIVED THREE DOCUMENTS (2026-08-14).**
+The end-to-end join, the type checker's input-path consolidation, and half of `read_stage` plus
+staging. Thirty-four merges.
+
+**Two chains were each verified and unconnected.** The producer was checked against the Rust models,
+the emitters against `encode_aux_body`, and nothing ran one into the other -- so "the sequence is
+Keleusma's" and "the artifact is byte-identical" were true separately and unproven together. The
+obstacle was one assumption: `nm_offsets` sums lengths assuming concatenated names while the blob
+interleaves a two-byte prefix, so feeding the producer's output straight in would read every name
+shifted and **the failure would present as a corrupt pool rather than as an offset convention**.
+`intern_run_preoffset` is a second function rather than a flag, so the sequential path cannot regress.
+
+**A migrated channel that still receives the answer is not a migration.** All four of the type
+checker's channels moved, and the test is whether the host still holds the DECISION: it may say "this
+call names declaration 3 and passes 2 arguments" and may not say "this call has the wrong arity".
+Every superseded collector on the authoritative path is deleted, so the migration is visible in the
+diff rather than claimed in a message.
+
+**THE FIGURE THAT WAS WRONG IN THREE PLACES.** This document, the roadmap and my own goal statement
+all said residency staging is forced by "a real stage's 395,804 names". Measured across all ten
+stages, the largest `NAMES` region is **627 records**. 395,804 is a REGION record count belonging to
+`CONSTS`. It came from the pre-run-length-encoding state, when `SHARED_LAYOUT` held one record per
+array element and `lexer.kel` alone expanded to roughly 76,000 slots, and it outlived the
+representation it described. **It made a two-and-a-half-times problem look like a fifteen-hundred-times
+one**, and staging for 395,804 -- dedup state across hundreds of batches with a pool larger than
+`bin` -- would have been built and then not needed.
+
+**The measurement found the real gap while looking for something else.** The difference between the
+producer's 252 and the reference's 627 on `parse` is the DATA-SLOT contributor, which was missing
+entirely. Its order, spelling and count were measured; the mode was only read.
+
+**The mode is the one fact the corpus cannot check**, and a green suite would overstate it. A mutation
+to fresh mode passes every test, because a slot name is `<block>.<field>` and cannot collide: the dot
+keeps it from function and enum names, and a declaration cannot name the same field twice. Recorded in
+the source as the weakest link rather than left for a reader to infer.
+
+**A slot-addressed block punishes insertion twice.** Adding fields mid-block shifted every later
+field and failed four tests at once, two untouched by the change; the second time, a scratch word
+sitting between two table blocks was stepped over and `calling-a-local` was silently ACCEPTED. The
+file carries the convention "appended last so no existing slot index moves" and I ignored it twice.
+
+**`git checkout <file>` to undo a bad edit discarded an hour of unrelated work** in the same file. The
+stage change survived only because it lives elsewhere.
+
+**A commit message made a claim I had not checked.** It said six collectors were deleted; a grep said
+one remained and checking found two. Amended before merge, because the message is a claim.
+
+---
+
+**THE COVERAGE GAP THAT WAS A MISSING CAPABILITY, AND THE FIRST VALUE THE HOST DID NOT ALREADY HOLD
+(2026-08-14).** Four merges: the record-shape coverage measurement and its closure, the dedup-scan
+settlement, and two slices of the module-input producer. Plus the type checker's implementation plan.
+
+**A measurement that had to be a measurement.** The wire-format plan recorded seven region kinds
+carrying zero records across the ten stages, and the obvious way to check whether that was still true
+is to grep for the kinds in the test file. Doing so returns seven hits out of seven and **proves
+nothing**: a kind can be named in a stride table, a decoder, or a negative test without any record of
+that shape ever being written. Instrumenting every emit command across the whole suite, logging
+`(command, kind, record count)` with the issuing test, gives the real answer: **sixteen of seventeen
+shapes emitted with at least one record, and `STRUCT_TEMPLATES` under no command at any count.**
+
+**The gap was not a weak assertion. It was a missing capability.** `rows_for_kind` had no decoder for
+`0x0017`, and `emit_at` had no dispatch arm, so the emitter refused the kind outright with `-222`.
+The emitter itself has existed since slice 7 and is reachable as command 130; no caller that chooses
+the kind generically had ever asked for it. **A differential cannot see a mistranscribed offset in a
+shape it never reaches, and here it could not even have reached it.**
+
+**Why no artifact could surface it.** A struct template is written only on the compiler's BOXED path,
+and every ordinary struct flattens. `flat_alloc_bytes` returns `None` above the sixteen-bit operand
+bound, so the shortest route is a struct wider than 65,535 bytes -- 8,300 `Word` fields. All six
+formerly-empty shapes turn out to be reachable from REAL COMPILED MODULES, including `STRUCT_AUX` and
+`ENUM_AUX` via `const data`. The plan expected hand-built artifacts to be necessary; they are not,
+and real sources are the stronger oracle.
+
+**Two statements that read as a contradiction and were not.** The roadmap listed "replacing a linear
+dedup scan" among the remaining work; a standing trap said not to replace it. **They name different
+sites.** `intern_run` is batch-local and capped at 256, where a 1024-slot table would cost 1024 probes
+against roughly 256 comparisons, because a total language has no early exit. The walk-nested scan
+through `NAMES` is the one the reference's 782-second lesson bears on, and it is to be MEASURED at
+stage scale. Recorded because acting on the wrong reading either wastes an increment or undoes a
+deliberate decision.
+
+**The first value on the wiring path the host did not already hold.** Every earlier slice took input
+the host had decoded and made Keleusma recompute it. The interning SEQUENCE was the last piece still
+produced by a Rust model. A producer handed a per-name LENGTH would be hollow, so the module reaches
+Keleusma as bytes with structure and Keleusma recovers the lengths itself. Two constraints shaped the
+encoding: shared data is re-seeded on every VM call, so `nin` does not survive the return and the
+pairs are mirrored to the output buffer; and `highest_command()` refused the new command with `-99`
+until raised, which is the guard working rather than failing.
+
+**The enum section is where the two intern modes diverge**, and a producer writing dedup mode
+throughout would agree with the reference on any corpus that never repeats a name. The corpus now
+carries `enum A { B, X }` beside `enum B { Y, Z }`, where an enum NAME collides with another enum's
+VARIANT. **The enum count is always written, including when zero** -- inferring an absent section
+from the blob ending cannot distinguish empty from truncated, and it would have passed here for the
+wrong reason, since `bin` is zero-filled past the blob.
+
+**A push that reported success and did not push.** The gate ran, printed "all checks passed", and the
+ref was never created; `git ls-remote` is what caught it. The output had been truncated with `tail
+-3`, which cut the line that would have said so. **That is the truncation rule arriving in a new
+place**: not a verification whose result I meant to quote, but a command whose EFFECT I meant to
+rely on.
+
+---
+
+**A CORPUS THAT CANNOT ERODE, AND TWO GUARDS THAT WOULD HAVE SHIPPED UNEXERCISED (2026-08-13).**
+151 selfhost_wire tests, up two. The whole-artifact capstone gains a fourth case that is synthetic
+and sized against the encoder's measured output.
+
+**The increment was ranked for one reason and turned out to be needed for another.** The handoff
+ranked "a second stage through the capstone under the new encoding" first. Reading the test and the
+history before starting showed that work had already landed in `45a8870f`, inside the run-length
+encoding pull request, which updated the corpus to three stages and lowered the size-span control
+from 4x to 2x in the same change. **The ranked item was already discharged.** What was actually open
+was the thing the test says about itself: its qualifying corpus has shrunk three times, never from
+attrition, and always because the encoding improved.
+
+**A test whose corpus is destroyed by its own project's success will be weakened to keep it green.**
+The pressure arrives while landing an improvement, which is exactly the moment a lowered threshold
+looks reasonable and a reviewer is thinking about something else. The fix is to stop the corpus
+depending on what the compiler happens to emit. `synthetic_source_over` grows a generated stage until
+the encoder's own output clears a target, so an encoding win makes it emit more functions rather than
+pushing it under the window.
+
+**It sits beside the real stages and is excluded from the size-span figures.** Real artifacts are what
+make the capstone trustworthy, because they are the bytes the compiler actually emits. A synthetic
+size folded into the span control would make that control report on its own parameter.
+
+**Both guards this change installs would have shipped unexercised, and each needed a separate case.**
+
+The first is the byte comparison. **Every other assertion in the assembler is a count** -- regions
+placed, batches run, calls returning success -- and a batch written to the wrong offset changes none
+of them. Without a planted defect, the capstone's passing is consistent with an assembler that places
+bytes anywhere at all. The defect is planted through the real assembler rather than a copy, because
+this suite has already paid for the other approach once.
+
+The second is the growth loop itself. The first attempt of 384 functions already clears twice the
+window, so the doubling path never runs and **the one mechanism the increment exists to install would
+first execute on the day a future encoding win made it necessary**, which is the worst moment to
+discover it wrong. A separate case asks for a target the first attempt cannot meet.
+
+**A control that fires is not yet a control that fired for the right reason.** The must-fire case
+passed the moment it was written, by catching a panic. But the assembler's own guard, which reports
+that the sabotage could not be planted, panics too and arrives as the same `Err`. Read naively, the
+case would report the detector working at the exact moment nothing had been broken. It now asserts
+which panic fired.
+
+**A bound on a loop is not a bound on the damage.** The growth cap was first written as twelve
+doublings, which terminates and is useless: doubling makes the last attempt the expensive one, so
+attempt twelve compiles 786,432 functions and a broken assumption becomes an hours-long hang instead
+of a legible failure. Six attempts allow a 32x collapse in bytes per function, far beyond anything an
+encoding change has produced here, and keep the worst compiled source near three megabytes.
+
+**The compiler rejected the first synthetic source, correctly.** A private data block that is never
+mutated must be `const data`. That is the language holding a line rather than an obstacle, and the
+shared block plus one function that touches it is what survives the check.
+
+**A tidiness reflex in my own test was destroying evidence, and the runner that hides it is the one
+CI uses.** The must-fire case silenced its expected panic with `std::panic::set_hook`, which is
+GLOBAL TO THE PROCESS. `cargo test` runs a binary's tests as threads in one process, so for the
+seconds the sabotaged assembly runs, any other test that panicked would have its message swallowed
+while still being recorded as failed -- **a failing test stripped of the one thing needed to diagnose
+it, to keep a passing test's output tidy**. nextest gives each test its own process and would never
+have surfaced this, and CI's `Test` job runs nextest; the hazard is live under `cargo test`, which is
+what `scripts/release-gate.sh` runs. The expected panic now prints, with a comment saying the noise
+is deliberate so it is not tidied away again.
+
+Measured: 384 functions, 143,320 bytes, 2.19x the window, eleven regions, five of them batched. The
+capstone went from 9.58s to 12.73s on a quiet machine. The 2x threshold is unchanged and the three
+real stages are untouched.
+
+---
+
+**THE PARITY PLANE ARC, AND A DECISION THAT CHANGED SHAPE TWICE UNDER MEASUREMENT (2026-08-13).**
+Six merges: `SHARED_LAYOUT` run-length encoding, byte-identity coverage for the five `verify_*.kel`
+stages, the SECDED plane emitted and verified end to end, the plane-inside-signature property pinned,
+the scrub-and-signature ordering settled, and the report/scrub verbs.
+
+**A PLAN'S CENTRAL NUMBER WAS UNMEASURED AND CHECKING IT TOOK TEN MINUTES.** The plan ranked
+run-length encoding `SHARED_LAYOUT` at "roughly 27%" without measuring the distribution the saving
+depends on. `SharedSlotRecord` was ONE word and a run record needs `first_slot`, `run` and `stride`,
+taking it to TWO, so the encoding is a **pessimisation** below a mean run of 2. Raised as a blocker
+before writing encoder code and **refuted by four orders of magnitude**: 643,276 slots across eleven
+stages collapse to 18 runs, mean 35,738. The table went from 5,146,208 bytes to 400, and `codegen`'s
+auxiliary body from 154,880 to 111,864, which is the projected 27% arriving exactly.
+
+**THE ORDERING DECISION WAS WRONG IN ITS FIRST FORM AND THE EQUATIONS EXPOSED IT.** The first draft
+said verify-then-scrub is a hole outright. Writing the soundness condition as an equation showed it is
+not: `Ver(X)` forces `X = M`, and scrubbing an undamaged artifact is the identity, so at a single
+instant the order is safe. **The defect is that verification is a statement about a moment.** A
+deployed system verifies at load and scrubs later, and the assumption that ordering needs is that no
+fault occurs in the window, which is exactly what the parity plane exists because is false. **A design
+cannot rest on the negation of its own motivation.** The corrected argument is stronger and it
+connects the problem to time-of-check-to-time-of-use, a literature the first version had no reason to
+reach for.
+
+**A SAMPLED MEASUREMENT REPORTED 100% WHERE THE TRUTH IS 56.08%.** Six hand-chosen triple faults all
+mis-corrected. Enumerating all 41,664 gives 23,364, and the six were confined to byte 0 where the rate
+genuinely is 100%. A biased sample presented as a measurement, wrong by nearly a factor of two, caught
+only by enumerating a space small enough that sampling was never justified. The enumeration also
+produced the result the design turns on: **5,133 of 635,376 four-bit patterns are reported CLEAN**
+because the error pattern is itself a codeword, so a clean report is not an integrity check.
+
+**A SEPARATION SUGGESTED BY THE OPERATOR CORRECTED MY DESIGN.** I had concluded the fix was a mutable
+LOAD path. That would have pushed `&mut` into the common path and cost the zero-copy and
+worst-case-memory properties the reader exists for. Report and scrub as separate VERBS is the right
+shape: report already existed and only the mutating counterpart was missing. `scrub` returns counts
+rather than an artifact, so there is nothing to load without re-authenticating, and `&mut [u8]` makes
+the unsound order **unrepresentable** wherever the reader borrows the buffer.
+
+**FOUR DEFECTS THE GATES CAUGHT THAT MY OWN CHECKS DID NOT**, all the same shape: I approximated the
+gate's invocation instead of reproducing it. A `compile`-feature miss failed
+`--no-default-features`; a `signatures`-gate miss failed the default build; a rustdoc
+redundant-explicit-link error appeared only under the docs.rs feature set; and a `collapsible_if`
+appeared only under `--all-targets`. **Four times in one day, from four different narrowings.**
+
+**A REIMPLEMENTATION HID AN INTERFACE MISMATCH.** The ordering test carried its own copy of a scrub,
+so it exercised a private reimplementation and left the shipped verb untested. Wiring it to the real
+one failed immediately: `keleusma_wire::scrub` takes a wire CONTAINER and the test handed it a FRAMED
+module, whose header the wire crate knows nothing about. The parse failed on the magic, the scrub
+returned `None`, and nothing was repaired, silently. That is why the module-level
+`scrub_module_bytes` now exists.
+
+---
+
+**A REPORTED DEFECT AT ONE SITE WAS A DEFECT AT EIGHT, AND THE REVERSAL IS WHY (2026-08-13).** The
+`v0.3.0` session reported that `docs/spec/GRAMMAR.md:747` states the runtime pushes
+`(high, low, flag)` when it pushes `(low, high, flag)`. Verified against the implementation before
+acting, then swept the repository rather than fixing the line reported. **Eight sites carried the
+error**, including two in `src/compiler.rs` sitting directly beside the `PopN(2)` whose correctness
+depends on the order, and one in `src/bytecode.rs` claiming `CheckedNeg` pushes in "the same shape:
+high, low, flag" **twenty lines below** the `CheckedAdd` doc that had already been corrected to say
+the opposite. A file contradicting itself within twenty lines is what an incremental single-site fix
+produces.
+
+**The reason this error is durable is that BOTH orders are real.** The runtime pushes low, high,
+flag. The surface form binds `overflow(h, l)`, high first. They are genuine opposites, so any given
+statement of "the high and low halves" is correct or incorrect depending on which layer it describes,
+and a reader checking one against the other finds a contradiction that looks like a typo in either
+place. Six further sites say `(high, low)` **correctly**, about the binding.
+
+**So the fix is not a search and replace.** Each of the fourteen sites was read in context and
+classified. `GRAMMAR.md` and `book/src/BIG_NUMBERS.md` now state **both** orders and why they differ,
+rather than correcting one and leaving the reversal to be rediscovered. The reason is load-bearing
+and is now recorded at the spec: an uncaptured operation lowers to the opcode plus `PopN(2)`, which
+discards the top two slots, so pushing low first is what leaves the wrapped low half as the value of
+the expression.
+
+**Two classes deliberately left alone, and the distinction is worth keeping.** `CHANGELOG.md:340` and
+`TASKLOG.md:320,331` carry the same error in **dated historical entries**, one of them describing a
+published release. Rewriting already-published text is a separate call and is flagged rather than
+taken. Separately, `src/vm.rs:7468` and `src/bytecode.rs:2377` say "high, low" while **narrating the
+previous wrong state**; correcting those would destroy the record of the correction.
+
+**A coupling found by looking rather than by failing.** `book/` is a bilingual mdbook driven by
+gettext, so editing an English source string invalidates the matching `book/po/ja.po` entry and the
+Japanese build silently falls back to English for that block. Checked before deciding: the catalogue
+is already **four `book/src` commits stale**, so translation lag is the project's existing accepted
+state and this change adds to it rather than introducing a new failure mode. Also checked, and this
+one could have bitten: `book/src/INSTRUCTION_SET.md` is **generated** from the spec and gated by
+`git diff --exit-code` in CI. It was not edited, and it was already correct. There are two
+big-number documents in the book and only one was the right target.
+
+**What made the sweep worth more than the fix.** The reported site was in a specification. The
+unreported ones were in compiler comments that a maintainer reads while changing the very code whose
+stack discipline they misdescribe. **A defect report names where a reader happened to look, not where
+the defect is** — the same shape as "the corpus cannot reach X is a fact about the corpus", arriving
+from the direction of a bug report rather than a test corpus.
+
+---
+
+**FOUR STAGES INSTEAD OF ONE, A RATIONALE I HAD RECORDED WRONGLY, AND A LINT CHECK OF MINE THAT COULD
+NOT FAIL (2026-08-12).** 148 tests, unchanged in count and cost. The capstone now runs over four
+stages spanning 105,848 to 480,416 bytes and 2 to 76 chunks.
+
+**I had written the wrong reason for this increment into the handoff the day before.** It said a
+larger stage would exercise multi-window assembly inside whole-artifact composition. Reading the
+capstone before extending it shows otherwise: `assemble_whole_artifact` emits every batch at window
+base zero and the host splices immediately, so **no window ever accumulates, however large the
+region**. Multi-window accumulation is a different caller strategy, not a consequence of scale. The
+increment buys BREADTH — more kinds, more batches, evidence that composition is not specific to one
+source shape. **A smaller claim than the one it was ranked on, and the true one.** I would have
+carried the false rationale into the commit had I not read the code first.
+
+**THE MORE USEFUL FAILURE: MY LOCAL LINT CHECK COULD NOT FIRE.** The pre-push gate rejected a
+`clippy::empty_line_after_doc_comments` the refactor introduced, where extracting the helper left a
+blank line under a doc comment. My own check had reported clean throughout because it read `$?` after
+a PIPELINE — `cargo clippy ... | tail -2; echo "LINT_RC=$?"` reports **tail's** status, never
+clippy's.
+
+That is exactly the defect class this suite's vacuity tests exist to guard against: **a control that
+cannot report a failure, reading as evidence.** I have written that lesson into this file repeatedly
+today, about unreachable guards and permutation-invariant assertions, and then committed it in my own
+tooling — against a rule I had already recorded after making the same masked-exit-code mistake
+earlier in the session. **Recording a rule is not following it**, and what hid it was that the check
+kept returning the answer I expected. A control is only worth what its failure path is worth, and
+mine had none.
+
+CI ran real clippy on every previously merged pull request, so nothing unsound shipped; the local
+signal was simply worthless. Exit codes now go through `PIPESTATUS`.
+
+---
+
+**THE CAPSTONE: A COMPLETE REAL-STAGE ARTIFACT, AND A GREP THAT DECIDED WHAT KIND OF INCREMENT IT WAS
+(2026-08-12).** 147 to 148 tests, no Keleusma change. Keleusma's own output now builds
+`verify_datalayout`'s entire **105,848-byte** auxiliary body — header area, directory and every
+region — byte-identical to `encode_aux_body`. **Every slice before this verified one region, or one
+region's worth of mechanism. None asserted that the whole composes.**
+
+**One grep decided whether this was a caller or a week of work.** The artifact's only checksum is
+`crc32(&prologue[..12])` — twelve bytes, not the body. Had it covered the body, the driver would have
+needed an **incremental CRC carried across windows**, because 105,848 bytes never fit a 65,536-byte
+buffer and a checksum cannot be computed over data you have never held at once. It does not, so
+assembly stays positional. **Fourth consecutive gap in this area that needed a caller rather than an
+emitter**, and the first where the check could plausibly have gone the other way.
+
+**I ran a worthless mutation and it is recorded as worthless rather than counted.** Verifying the
+`DATA_SLOTS` path, I inserted `st.pad = 0` — an inert assignment to a scratch field. It changed no
+behaviour, the test passed, and for a moment that reads as a coverage gap. **A mutant that perturbs
+nothing proves nothing in either direction**, and reporting it as evidence would have been misleading
+whichever way I spun it. The real mutation, an off-by-one on the data-slot name index, fails at byte
+992 in region 26; the pool mutation fails at byte 50,440 in region 30. Two regions, independently
+confirmed.
+
+**One check the test gets for free rather than by design, worth naming because free checks are
+usually illusions.** The assembly buffer starts as zeros and only the header and non-empty regions
+are written, so byte equality means every non-zero byte of the reference is accounted for by
+something Keleusma emitted. **Nothing passes because both sides happen to be zero** — a region
+silently skipped would leave zeros where the reference has content.
+
+**What the arc adds up to.** Across eight increments the driver went from re-emitting values the host
+had decoded to computing all five it owed, batching on both paths, positioning by window across all
+seventeen record kinds, assembling across windows, and now composing a whole artifact. What remains
+open is not mechanism: it is the residency cost the operator holds, about 40.7 bytes of artifact per
+data slot, which is what makes `lexer` expensive rather than impossible.
+
+---
+
+**A REGION LARGER THAN ONE WINDOW, AND TWO BOUNDS THAT ARE NOT THE SAME BOUND (2026-08-11).** 146 to
+147 tests, and no Keleusma change. Slice 19's test asserted its region fits a single 65,536-byte
+window, deliberately, which left this case untested rather than handled — an honest gap, and this
+closes it.
+
+**The interesting part is that two different limits govern the assembly.** A pool batch is capped at
+**8,192 bytes by `bin`**, the buffer `emit_pool_bytes` copies from; a window is capped at **65,536 by
+`wire.bytes`**. Eight batches fill a window, the host flushes it, the next batch restarts at zero.
+Conflating them would either overrun `bin` or waste seven eighths of the window, and either mistake
+still produces correct bytes on a region small enough to hide it. **A control therefore asserts
+batches outnumber windows**, so one bound cannot silently stand in for the other while the byte
+comparison stays green.
+
+**Each call must be SEEDED with the window built so far**, because shared data is re-seeded on every
+call and the accumulated bytes would otherwise vanish between batches. That is the same property the
+interner's re-run pattern works around, met here from the OUTPUT side rather than the input side.
+Worth noting because the two look unrelated until you hit the second one.
+
+**Third consecutive gap in this area that needed a CALLER rather than an EMITTER.** Generic batching,
+this, and before them `DEBUG_POOL`. That is no longer a coincidence, and the handoff now says to
+check it FIRST here rather than recording it afterwards. The cost of not checking is not a wrong
+answer — it is a mechanism that works, passes its tests, and did not need to exist.
+
+---
+
+**THE INCREMENT THAT TURNED OUT TO BE A CALLER, BECAUSE I MEASURED FIRST (2026-08-11).** 145 to 146
+tests, and **no Keleusma change at all**. The handoff said to check what carries across a batch
+before building a carry mechanism. That instruction was the whole value of the slice.
+
+**Measured, per emitter: every generic emitter is stateless per record.** Only the computed chunk
+emitter holds accumulators, which is exactly why it needed bespoke carry commands. For the other
+sixteen kinds nothing crosses a batch boundary, so batching reduces to feeding the right rows at the
+right offset — and `emit_in_window` already takes both. **Without the check I would have built a
+carry mechanism for sixteen kinds with nothing to carry**, and it would have passed its own tests
+while being entirely unnecessary. A mechanism that works and is not needed is not a neutral outcome;
+it is permanent surface area.
+
+**Third time in this programme that a coverage gap needed a CALLER rather than an EMITTER.** Slice 9
+found it for `DEBUG_POOL`, slice 18 found it again for the same kind in a different dispatch, and
+here for batching. Three is enough to name, so the test names it rather than leaving a fourth
+rediscovery.
+
+**The smallest stage forces both mechanisms, which is a better case than the largest.**
+`verify_datalayout` has 3,086 `NAMES` records at two fields — 6,172 words against a 1,024-word input
+buffer — and the region starts at byte 81,160, past the 65,536-byte window. Seven batches, each
+landing at its own offset inside one window, assembled in place. Reaching for a big stage would have
+bought slower tests and no extra coverage.
+
+Mutation: ignoring the window offset fails at record 512, batch 1, and the diagnostic names the
+batch. Three controls guard the three properties independently, because any one of them failing
+quietly would leave a mechanism untested while the other two kept the test green.
+
+---
+
+**THE GENERIC DISPATCH TAKES AN OFFSET, AND TESTING EVERY KIND FOUND TWO GAPS A SAMPLE WOULD NOT
+(2026-08-11).** Command 164; 142 to 145 tests. Every arm of `emit_in_region` read
+`region_base(dir_find(k))`, so the window slice would have needed a second seventeen-arm chain.
+Taking `at` as a parameter lets one chain serve both callers.
+
+**The refactor bought depth headroom I was not shopping for.** A chain's cap is a budget of 24 split
+between chain position and arm-body nesting, and `emit_x(region_base(dir_find(k)), n)` costs more of
+it than `emit_x(at, n)`. The chain stood at SEVENTEEN arms against the eighteen a nested-call body
+allows. It was one kind away from a SIGABRT, and nothing in the file said so.
+
+**Two gaps, and neither is visible to a test that picks one representative kind.**
+
+- **Mine.** `stride_of_kind` returns a positive record stride, **0 for a byte pool**, and **-1 for an
+  unknown kind** — its own comment says exactly that. I wrote `<= 0` and merged the last two,
+  refusing `STRING_POOL`, `PARAM_TYPES` and `DEBUG_POOL`. The same zero would have bounded every pool
+  write at zero bytes, since a pool's `n` is already a byte count. It surfaced as `kind 30 refused
+  with -222`, which is `PARAM_TYPES`.
+- **Pre-existing, and found BY the regression test for the first.** `emit_at` has no arm for
+  `DEBUG_POOL`. The stride table has known the kind all along; the generic path never handled it
+  because `DEBUG_POOL` appears only under `emit_debug` and slice 9 drove it through a different
+  caller. **A test written to pin my own fix found somebody else's older hole**, which is the best
+  argument yet for pinning a fix rather than just making it.
+
+**The reading error is the same one that produced today's retraction**, one level down: a value
+carrying three meanings, read as though it carried two. There it was `2^24` as byte offset and slot
+index; here it is `0` as pool and `-1` as unknown. **When a function documents its return values in
+prose, the prose is the specification** and skimming it is how both happened.
+
+**A PROCESS SLIP WORTH RECORDING BECAUSE THE CAUSE IS MECHANICAL.** I committed this increment's code
+directly onto `v0.2.3`. Caught before any push — `origin` never saw it — and repaired locally by
+branching at the commit and hard-resetting the version branch back to match origin. The cause: I had
+checked out `v0.2.3` to merge the previous pull request, wrote a legitimate docs commit there, and
+then started editing code without cutting a branch. **Cutting the branch belongs as the first action
+of an increment, before any edit.** I did that correctly for five increments running and skipped it
+exactly when a merge had already left me standing on the version branch, which is the situation to
+guard.
+
+---
+
+**THE WINDOW BASE, A DESIGN THAT SHRANK ON INSPECTION, AND A 10x TIMING SCARE I CAUSED MYSELF
+(2026-08-11).** Commands 160-163; 139 to 142 tests. Emitters positioned records at an ABSOLUTE
+artifact offset against a 65,536-byte buffer, which works for no real stage — `verify_datalayout` is
+the smallest of the ten and its `NAMES` region starts at byte 81,160. The driver now writes a batch
+at a caller-chosen offset and the host places the result.
+
+**The increment was smaller than this file's own handoff said, and the handoff was wrong because I
+wrote it without asking what a field was FOR.** It recorded that a window base needs a sixth argument
+slot and a mechanical widening across 22 call sites. It needs neither: `first` only ever positioned a
+record inside the region, so once the host places the window the driver writes records `0..n` and the
+host adds `region_base + first * stride`. **The window base REPLACES the record index rather than
+joining it.** The carries stay, because they are cross-batch state rather than position. Five
+arguments, no churn.
+
+**Choosing the test case by artifact size would have produced a test that proved half of what it
+claimed.** `verify_yield` has `CHUNKS` at byte 143,096, visibly past the buffer, and looked ideal. It
+has EIGHT chunks. **A high region base comes from the size of the EARLIER regions** — the per-element
+data-slot tables — **and says nothing about how many records follow it.** Counting chunks across all
+ten stages settled it: `parse` 94, `codegen` 76, `reconstruct` 24, down to `verify_datalayout` 2. Only
+`parse` clears the 90-record cap, so it is the single stage where batching and the window compose on
+real input. That count also confirmed the plan's "94 chunks", which slice 16 had asserted on the
+plan's authority rather than on measurement.
+
+**Reviewing my own code found a REACHABLE guard defect**, which is rarer here than the unreachable
+ones this file keeps documenting. `ck_emit_window` formed `n * chunk_stride()` for its window bound
+before anything had rejected an absurd `n`; `emit_chunks_batch` does refuse `n > 90`, but only after
+that product exists. Ordering the count check first keeps the multiplication inside a bounded range.
+It has a negative test at 91 and at 2^40, and the caller chooses `n`, so it fires on ordinary input.
+
+**The timing scare is the part worth keeping.** The suite came back at 1456.76 seconds against a
+150-second baseline, and I began composing an explanation about the cost of compiling a real stage
+inside the suite — a plausible, self-consistent story that would have led me to redesign the test
+case. The operator asked whether the two running shells were productive. **One was a stale run of my
+own**, started before an edit that invalidated it, which I had noticed at the time and left running
+anyway. Killed it; measured clean: **150.66 seconds, no change at all.** The `parse` compile overlaps
+with the existing 60-second accumulator test and costs nothing in wall clock.
+
+Two rules. **Kill a run the moment its inputs change** — I flagged the invalidation and started a
+second run beside it instead of replacing it, which is the exact machine contention this project
+moved to hosted runners to escape. And **a 10x anomaly is a claim about the environment until proven
+otherwise**; I was one step from fixing a slowdown I had caused, in code that did not have it.
+
+---
+
+**BATCHING, AND TWO WRONG TURNS THAT WERE BOTH ABOUT ADJACENT PRECEDENT (2026-08-11).** Commands
+156-159; 137 to 139 tests. `wire.fin` holds 1024 words and a chunk costs eleven, so a call caps at 90
+records while `parse` has 94. `CHUNKS` is the smallest region in the corpus that cannot be emitted in
+one call, which is the reason to build the mechanism here rather than inside `NAMES`, where it would
+first run across 774 batches with nothing legible to read when it broke.
+
+**The three running totals are the whole difficulty and the rest is bookkeeping.** A chunk's
+`consts_first` counts from the first chunk of the REGION, not of the batch, and shared data is
+re-seeded on every call, so nothing survives between batches. The carry goes in as an argument and
+comes back as an answer the host relays. **A batch that restarted its accumulators would emit a
+STRUCTURALLY VALID region** in which every range after the first batch points somewhere wrong, which
+is the failure class worth naming: not a crash, not a refusal, a well-formed wrong answer.
+
+**The harness must not sum the counts it passed in.** It has them, so computing the carry there is
+one line and entirely natural — and it would move the accumulation back to the host and leave the
+batched path testing nothing the single-batch path already covered. Verified by mutation instead:
+dropping the consts carry-in makes the 91st record read 0 where the reference has 90.
+
+**The corpus is generated rather than borrowed, and that was forced by the vacuity question.** With
+no constants every chunk's ranges are zero, a carry-dropping emitter produces the reference bytes
+exactly, and the test asserts nothing. 140 functions each with its OWN literal gives `consts_first`
+the sequence 0, 1, 2, ..., so the boundary record is wrong by exactly the first batch's length. A
+corpus control pins that the boundary lands where the total has already advanced.
+
+**Both wrong turns were the same mistake: copying the nearer of two adjacent precedents.**
+
+- **`STRING_POOL` routed down the record path emitted silent zeros.** The generic emitter classifies
+  it as a byte pool; the interner tests do not, because there it has its own command. Two `is_pool`
+  lines sit four hundred apart in the same file and I took the wrong one. The failure was not in the
+  batching at all.
+- **The first failure printed 85 KB and located nothing**, because the assertion compared two
+  13,664-byte vectors — which is what every neighbouring test does, and is fine when the artifact is
+  912 bytes. Replacing it with the first differing byte, its region and sixteen bytes of context
+  turned both diagnoses into one line each. **The diagnostic had to be fixed before the mutation
+  check was readable enough to trust**, so the tooling change was not a detour from the verification;
+  it was a precondition for it.
+
+**A precedent is scoped to the case that produced it.** Both errors came from reusing a pattern whose
+original justification no longer held — the same shape as the day's other corrections, where a number
+was reused past what it actually bounded.
+
+---
+
+**THE FIFTH VALUE, AND A CONFIDENT NUMBER I HAD TO RETRACT THE SAME DAY (2026-08-11).** Commands
+152-155; 133 to 137 tests. The driver now derives the interning SEQUENCE from a module description
+instead of consuming one a Rust helper ordered for it.
+
+**The input is grouped by kind and the output is in interning order, and that gap is the slice.**
+`module_description` marshals every layout's names first and the chunk names last; the encoder
+interns the other way round. Marshalling in the encoder's own order would have made the derivation
+the IDENTITY, and every test would have passed against a transcription. It is a rotation rather than
+a general permutation and the comment says so rather than letting the prose imply more.
+
+**Two of the three assertions I wrote cannot fail, and noticing that was the useful part.** A name
+count and a pool length are both invariant under permutation: get the order wrong, or every pool
+offset wrong, and both still match the reference exactly. All four tests passed on the first run,
+which is precisely when this programme's own rule says to stop trusting them. Mutating the
+implementation to assign offsets in interning order left count and pool length matching and made the
+pool read `AXYmain` where the reference reads `mainAXY`. **The byte test fires; the count test
+provably would not have.**
+
+**Then I published a refutation and had to withdraw it.** Probing the plan's residency section --
+which carried an explicit "confirm this" caveat -- I measured that a declared byte costs about 40.7
+bytes of artifact, and concluded the 77% projection was "refuted by a factor of forty" with a
+~321,000-slot budget to go with it. **The budget divided a byte-addressing ceiling by a figure in
+bytes of artifact per slot.** Different quantities; the factor of forty WAS the units error.
+`MAX_DATA_ADDR` bounds a byte offset and a slot index, not the artifact, which the container
+addresses with u32 words and so may reach ~34 GB. Against the real ceilings `lexer` needs 59.2%,
+which is the 58.3% the plan already recorded. The projection was right all along.
+
+**Why it survived the check I thought I had done.** 2^24 is a byte offset, AND a slot index, AND
+coincidentally close to `lexer`'s own artifact size. The wrong reading was self-consistent from three
+directions at once, so every sanity check I ran agreed with it. **A constant that appears in several
+places for several reasons is where this goes wrong**, and the only thing that catches it is asking
+what a number BOUNDS rather than reusing one of the right order of magnitude.
+
+**What survived, and it is genuinely useful**: one data slot per array element with exact deltas,
+about 40.7 bytes of artifact per slot, and compile time of roughly 2.4 seconds per megabyte
+declared. So declaring `lexer`'s accumulator costs a ~400 MB auxiliary body and a 25-second compile
+-- a real cost the residency analysis never priced, and not a limit violation.
+
+**Three inferences of mine were corrected by measurement today and the middle one is the warning.**
+The first made me less confident, the second more, the third was a retraction of something already
+pushed. The pattern is not that measuring is good; it is that I published on the strength of a
+derived number before asking what it bounded, and a derived number is exactly the kind that carries
+unearned authority.
+
+---
+
+**THE DISPATCH-CHAIN CAP IS A SHARED DEPTH BUDGET, AND THE FAILURE MODE DEPENDS ON WHICH STACK YOU
+ARE ON (2026-08-11).** No code change; a measurement that corrects a fact this file records three
+times and that would otherwise have mis-shaped the next increment.
+
+**The recorded claim was "a dispatch chain caps at NINETEEN arms, and exceeding it is a stack
+overflow, not a parse error."** An earlier entry had recorded 24, been contradicted at nineteen, and
+concluded the ceiling was nineteen "because each arm nests more than one expression level". That
+sentence contains the right explanation and the wrong conclusion.
+
+**There is no arm count.** `MAX_PARSE_DEPTH` is 24 (`src/parser.rs:98`) and it is a budget shared
+between the chain's position and the nesting of whatever the arm calls. Measured against the real
+`dispatch_driver` rather than a synthetic chain, in the test harness:
+
+| arm body | arms `dispatch_driver` holds |
+|---|---|
+| `ck_emit()` — no argument | 20 |
+| `emit_in_region(wire.warg, wire.warg2)` | 19 |
+| `emit_chunks_computed(region_base(dir_find(kind_chunks())), wire.warg)` | 18 |
+
+So the earlier figures of 19 and 23 were both right for their arm shape and neither generalised.
+`dispatch_driver` stands at 18: **two arms of headroom, or none, depending on what the arm calls.**
+
+**The failure mode is context-dependent, and I measured the wrong context first.** Through the CLI
+every overflow is a clean `ParseError` naming the limit, at 23 arms for the shallow body. Through the
+test harness the same source aborts with SIGABRT. The difference is stack size — a 2 MB test thread
+blows before the depth guard can fire, a main thread does not. **The harness is the binding context**
+because that is where `wire.kel` is compiled, so a chain sized from a CLI reading runs two to three
+arms too generous. My first report of this session said four arms of headroom on exactly that error.
+
+**That difference is also a finding about the runtime rather than about my workflow, and it is
+flagged for the operator rather than fixed.** The guard's own message says deep nesting is "rejected
+to prevent stack overflow". On a small-stack thread it is not — the stack goes first and the process
+aborts instead of returning an error. An embedder parsing untrusted source on such a thread gets an
+availability failure at precisely the trust boundary the guard exists to hold. Lowering the constant
+narrows the admitted language surface, so it is not a change to make on one measurement.
+
+**Two errors of my own on the way here, both of which generalise.**
+
+- **A Python f-string collapsed `}}` into `}`**, silently dropping nine closing braces from the probe
+  source. The only reason I caught it is that the probe's `extra = 0` case — which must be
+  byte-identical to the tracked file — failed too. **A probe whose no-op case is not asserted to be a
+  no-op cannot tell a real finding from a broken harness**, and the first run of this one produced
+  six confident, entirely fictitious rows.
+- **I made the exact naive-grep error `AUTONOMOUS_IMPLEMENTATION_LOOP.md` warns about**, counting a
+  `Gap` inside the comment that reads "This is a Gap by design" and nearly recording a fourth
+  staleness of the construct-support boundary. Excluding comment lines gives **79 Ok / 4 Gap / 1
+  RefRejects, 84 cases**, matching the record exactly. The document's warning caught its reader.
+
+---
+
+**A GUARD THAT DOCUMENTED A CHECK IT DID NOT MAKE, AND A PROBE THAT REFUTED MY OWN INFERENCE
+(2026-08-11).** Test-only; 131 to 133 tests. No `.kel` change, so it ran in parallel with an
+unmerged pull request that owns `wire.kel`.
+
+**Found by reading a doc comment against its implementation, which is a method worth keeping.**
+`assert_no_other_contributors` said it refused modules whose names come from "data slots, natives,
+struct templates or composite constants" and checked only the first three. Nothing hid it: no source
+in `INTERNER_CASES` reaches a named constant, so the missing clause had nothing to refuse. **That is
+a fact about the corpus, not about the guard** — the same distinction that overturned two plan
+conclusions the day before, arriving this time from the opposite direction. Previously the corpus
+understated what a *source* could reach; here it understated what a *guard* had to withstand.
+
+**Then the first fix was wrong, and the failing test explained why.** Adding the clause to the shared
+guard broke `the_walk_interns_in_breadth_first_order` on `str-at-root`. **Two models share that
+guard and only one needs the clause.** `fx_input` appends the constant walk's names to the
+`interner_input` prefix, so it covers the class by construction, and `FX_CASES` exists precisely to
+reach named constants. The comment had described the *union* of what the two models need while the
+code implemented the *intersection*. The clause moved to its own `assert_constants_are_modelled` at
+the two `interner_input`-only sites.
+
+**The part worth recording is that I overclaimed the consequence and a probe caught it.** Reading
+`encode_aux_body` alone, I concluded constants intern BEFORE chunk names — `add_constant_pool` runs
+for every chunk in a loop that precedes every `add_chunk` — and therefore that an unmodelled
+constant *prepends* to the sequence and shifts every index the model produces. That would have made
+the gap a correctness hole. **It is not.** Dumping the reference's actual `NAMES` order took one
+scratch test and four sources: `fn main` with a string literal yields `["main", "hi"]`, and the
+one-struct case yields `["main", "take", "P", "x", "y"]`. Chunk names come first. An unmodelled
+constant costs a **suffix**, no modelled index moves, and an unguarded source fails the count and
+pool-length assertions **loudly** rather than passing wrongly.
+
+So the clause buys a named diagnostic at the point of the unmodelled input, plus insurance if that
+ordering ever changes. **That is a smaller claim than the one I started writing**, and the comment
+now records the measured order rather than the inferred one. Reading the call site was not enough;
+`add_constant_pool` does not intern where a straight reading says it does. **When a conclusion
+upgrades a defect's severity, measure it before writing it down** — the inference was cheap and
+wrong, the probe was cheap and right.
+
+**The controls follow the standing rule that a guard whose triggering input the corpus cannot
+generate is untested by construction.** Two must-fire tests: one asserts the predicate fires on real
+compiled sources while sparing the model corpus, so it is not vacuous in either direction; the other
+asserts the corpus contains a case where a **root-only** check would not fire. That second one is
+what makes the nested walk load-bearing — `Tuple` and `Array` intern nothing themselves but carry a
+`Struct` beneath, which is exactly the shape `const data` produces, so a root-only check would have
+passed every test while missing the reachable case.
+
+**Enumerating the scalar variants rather than defaulting caught `ConstValue::None` at compile time**,
+a variant I had not seen. A wildcard arm would have read it as harmless and compiled.
+
+---
+
+**SLICE 13: THE FLATTENER'S BREADTH-FIRST REORDERING, AND A VACUITY CONTROL THAT EARNED ITS KEEP
+(2026-08-10).** The driver's second computed value. Command 141; 122 to 125 tests. The input is a
+DEPTH-FIRST preorder — three words per node, tag, payload, child count — because handing Keleusma a
+breadth-first input would make the whole thing vacuous. The reordering is the work.
+
+**The main test passed on the first run and the vacuity check failed, which is the right way round
+and the reason to write both.** I had asserted that at least two cases distinguish breadth-first
+from depth-first. Only one did, and finding out why corrected two mistakes at once:
+
+- **When every composite sits LAST among its siblings, the two walks coincide.** `(1, (2, 3))` is
+  identical under both. Four of my five cases had that shape, so the test I had just watched pass
+  was, for four fifths of its corpus, comparing a reordering against itself. The fix is a case whose
+  composite is *not* last: `((1, 2), 3)`.
+- **Comparing tags alone is too coarse.** For `((1, 2), 3)` both walks give 8, 8, 3, 3, 3 while
+  visiting the scalars in different orders. The check now compares (tag, payload) pairs. Had I only
+  added the new case and not noticed this, the vacuity check would have gone on passing while still
+  measuring the wrong thing.
+
+**Neither error was visible from the passing test.** A green differential against a real oracle
+looked like strong evidence and was weak evidence, and the only thing that said so was a separate
+assertion about the CORPUS rather than about the code. That is a different kind of control from a
+must-fire mutation: it asks whether the inputs can tell the two answers apart at all.
+
+**A total language cost nothing here, which is worth recording because it usually costs something.**
+The reference loops until its queue drains. There is no `while`, but the queue provably ends at
+exactly `nnodes` entries — every node is enqueued once — so `for head in 0..nnodes` walks it exactly.
+The bound the language demanded was already known. Likewise `next_index`: the reference carries it
+alongside the queue, and the two are provably equal at every step, so the Keleusma side keeps one
+field and removes the chance of them disagreeing.
+
+**Guards are ordered by what would otherwise TRAP rather than report.** `for k in 0..n limit 341`
+aborts the VM when the runtime range exceeds the cap, so child counts are validated in a separate
+pass BEFORE any of them is used as a bound — a sticky error flag would be set too late to help. The
+sibling cursor is clamped as well as flagged, so a malformed input is refused from a memory-safe
+state rather than indexing off the end while the code is raising the error.
+
+**Scope stops at scalars, tuples and arrays.** `STATIC_STR`, `STRUCT` and `ENUM` intern names as
+they walk, coupling the flattener to the interner and to the two side tables. An out-of-scope tag is
+refused with `-245` rather than emitted with `aux` 0, which would be a plausible-looking wrong
+record.
+
+**Tier 1 caught a complex-type lint** after `cargo fmt` reflowed the signature I had wrapped by hand.
+Second time today the pre-commit tier caught something the targeted tests could not.
+
+---
+
+**I ASKED THE REACHABILITY QUESTION OF ALL SIX ROWS INSTEAD OF THE ONE IN FRONT OF ME, AND MY OWN
+PROBE LIED TO ME FIRST (2026-08-10).** Having been wrong twice in one day about "the corpus cannot
+reach X" implying "no source can reach X", I swept every DERIVE row in the coverage matrix rather
+than waiting to trip over them one at a time. **Five of the six are reachable.** `STRUCT_AUX` and
+`ENUM_AUX` through `const data`, `NATIVES` and `NATIVE_RETURNS` through a bare `use beep`, and
+`PRIVATE_COMPOSITE` through a written private composite field — every trigger under 1.2 KB.
+
+**The probe's first run said NATIVES was unreachable, and it was my bug.** I read that region with
+stride 16; it is 8. A wrong stride makes `records()` fail, and my `map_or(0)` turned the failure
+into a count of zero — indistinguishable from a genuinely empty region. The all-zero baseline made
+it look consistent. **A probe that reports absence must distinguish "not there" from "I could not
+read it"**, so the rewrite reports region presence separately from record count and prints
+`STRIDE-ERR` rather than `0`. Same family as the gate-progress regexes: a convenience that quietly
+answers a different question. I had the correct stride table twenty lines away in the test file and
+assumed instead of reading it.
+
+**The sixth row is a stronger result than the other five, and it came from reading rather than
+probing.** `STRUCT_TEMPLATES` needs the boxed struct-construction path, which needs
+`flat_alloc_bytes` to return `None`. Two routes, both closed here: `flat_byte_size` returns `None`
+in exactly one case — a `Text` field under a narrow word — and this suite is gated out of every
+narrow-word configuration while `wire.kel` declares `require word >= 64`; the other route, a struct
+over 65,535 bytes, is **rejected by the typed operand-stack verifier**. So it stays DERIVE for a
+structural reason instead of for want of a corpus case, which is a better justification than the one
+it had. Nine source probes could not have established that; two greps did.
+
+**The matrix still reads 14 REAL / 6 DERIVE**, because upgrading a row means rewriting its emitter
+test and none of that is done. The achievable split is 19 / 1. Writing 19/1 now would be the same
+roll-up over-claim I corrected this morning, one day later.
+
+---
+
+**I OVERTURNED ONE OF MY OWN CONCLUSIONS BY ASKING THE QUESTION THE PREVIOUS SLICE TAUGHT ME
+(2026-08-10).** The plan document said the flattener "needs hand-built constant trees", on the
+strength of a real measurement: 2,192 constant nodes across the ten stages, zero composite, depth
+zero. The measurement is sound. **The inference was not.** "The corpus cannot reach this" does not
+establish "no source can reach this", and I had written the second as though it followed from the
+first.
+
+Slice 12 had just shown that a constructed SOURCE beats a hand-built input, because it keeps
+`encode_aux_body` as the oracle instead of dropping to a model. Asking the same question here took
+about twenty minutes and produced the opposite answer: **`const data`, referenced from a function,
+emits real composite constants** — `Tuple`, `Array`, `Struct` and `Enum`, to depth 2, in artifacts of
+roughly a kilobyte. It also populates `STRUCT_AUX` (1 at depth 1, 2 at depth 2) and `ENUM_AUX`, both
+of which this document had recorded as unexercised by anything.
+
+**Finding it needed reading the compiler rather than more probing.** Thirteen source probes — tuple,
+array, nested tuple, struct, nested struct, enum payload, all as ordinary locals — returned scalars
+every time, and I was one step from writing "unreachable, confirmed". What settled it was grepping
+for the CONSTRUCTION sites of `ConstValue::Tuple` and following their callers: two entry points, both
+scalar-guarded, and a third visibility I did not know existed. **There are three data visibilities,
+not two.** `shared` admits no initializer, `private` admits only scalar ones, and `const data` is the
+only caller of `const_value_from_literal_for_field` with no guard at all. Sampling said unreachable;
+reading the call graph said otherwise, and reading was both faster and conclusive.
+
+**The generalisation, which I have now paid for twice in one day.** A "the corpus cannot reach X"
+measurement is a fact about the corpus. **The reachability of X is a separate question and has to be
+asked separately.** Three other findings in this arc are phrased the same way — the six empty record
+kinds, the second interning mode, and the deferred generics-and-floats tail — and two of the three
+have now turned out to be reachable when actually asked.
+
+**What I did NOT do:** the coverage matrix still reads 14 REAL / 6 DERIVE, because that is what the
+tests currently do. `STRUCT_AUX` and `ENUM_AUX` are now *upgradable* to real oracles; upgrading them
+means rewriting those emitter tests, and claiming 16/4 before doing so would be precisely the
+roll-up over-claim recorded two entries below.
+
+---
+
+**SLICE 12: THE DRIVER COMPUTES ITS FIRST VALUE, AND THE RULE THAT MATTERED WAS INVISIBLE
+(2026-08-10).** Every slice before this handed Keleusma values decoded out of the reference and
+checked that it re-emitted them. This one makes it compute `STRING_POOL` and `NAMES` from a sequence
+of (name, mode) pairs. Commands 136 to 140; `tests/selfhost_wire.rs` goes 116 to 122 tests.
+
+**The finding is a semantic detail that no amount of reading the two output regions could reveal.**
+`Names::intern_fresh` does `index.insert`, which OVERWRITES, so a later `intern` of duplicated bytes
+resolves to the SECOND index. A forward first-match linear scan — the obvious way to write it —
+produces `NAMES` and `STRING_POOL` that are **byte-identical to the reference** and an
+`ENUM_LAYOUTS` that is wrong. Measured before writing the Keleusma rather than after: for
+`enum A { X, P } enum B { X, Q } enum X { R }` the third layout cites index 5, not 2.
+
+**That measurement then invalidated my own test plan, which is the part worth keeping.** I had
+implemented last-match and written a comment explaining it, and only then noticed the rule was **not
+observable through anything this slice emits**. A comment plus untestable logic is the
+"assertion that never fires" defect wearing a different hat. The fix was to have the interner also
+produce an input-to-index map, which costs half the admissible name count — 512 down to 256 — and
+buys a test that can fail. It also happens to be the artefact the next slice needs. **Prefer a lower
+cap to an untestable rule.**
+
+**The corpus could not have caught any of this, for the third time in this arc.** Four of the five
+stages measured have no duplicate names at all; only `parse` has any, twenty out of 58,053, and its
+artifact is roughly 16 MB against a 65,536-byte buffer. So the cases are constructed, and the
+smallest useful one is three lines: two enums sharing a variant name. **Real compiler output is a
+strong oracle for volume and a weak one for variety**, now demonstrated on record kinds, composite
+constants, and interning modes.
+
+**A guard from the previous slice paid for itself on its first real test.** `emit_in_region` covered
+exactly the minimal module's eight region kinds and refused `ENUM_VARIANTS` with `-222` as soon as a
+source declared an enum. A refusal, not a mis-sized region — which is the whole argument for
+rejecting an unknown kind rather than sizing it zero.
+
+**What I did NOT do, recorded so it is not mistaken for done.** The (name, mode) sequence is
+generated by a Rust model of the encoder's call order, restricted to chunk names and enum layouts.
+`assert_no_other_contributors` refuses a module with natives, a data layout, or struct templates
+rather than letting the model silently under-generate. Producing that sequence from the AST is the
+driver's remaining work. The dedup scan is also linear, the shape that cost the reference 782
+seconds on a mid-sized stage before it became a `BTreeMap`; correct at ten names, and it must be
+replaced before a real stage drives it. Both notes are in `wire.kel` itself, not only in the plan.
+
+**Two incidental measurements**, both narrowing later slices: a bare `enum` declaration populates
+`enum_layouts` with no use site required, and a plain struct literal does **not** populate
+`struct_templates`.
+
+**Tier 1 caught a dead helper** that the targeted tests could not see — the clippy step earning its
+place in the pre-commit tier rather than the gate.
+
+---
+
+**SLICE 11: KELEUSMA BUILDS A COMPLETE ARTIFACT, AND THE QUALIFIER MATTERS AS MUCH AS THE RESULT
+(2026-08-10).** 912 bytes, fifteen regions, directory and every payload, **byte-identical to
+`encode_aux_body`**. 116 tests. The first time the self-hosted path has produced a whole auxiliary
+body rather than a region of one.
+
+**The mechanism is host-carried bytes, and it is the staged design in miniature.** Shared data is
+re-seeded on every VM call, so nothing survives between them. The artifact is carried forward AS
+BYTES: each call re-seeds what exists so far, fills in one more region at the place the directory
+says it goes, and returns the result. That is exactly the shape the residency measurement forced for
+`lexer` — where the artifact cannot fit at all — exercised here at 1.4% of the buffer where it can.
+
+**New Keleusma is one function**: `emit_in_region(kind, n)`, which looks a region up in the emitted
+directory rather than being handed an address. `region_base(dir_find(k))` is recomputed per arm
+rather than cached in `st`, because `dir_find` writes `st.cur` itself; borrowing that field would
+read as a bug to anyone tracing a lookup, which is the same reason `st.pad` exists separately.
+
+**WHAT THIS DOES NOT CLAIM, WRITTEN BEFORE ANYONE HAS TO ASK.** The driver **re-emits values decoded
+from the reference; it does not compute them.** Interning, constant flattening and per-chunk range
+allocation are all still ahead. The honest sentence is "Keleusma emits a complete artifact
+byte-identically GIVEN THE VALUES", and the qualifier is load-bearing.
+
+I am attaching it deliberately, because two hours earlier I caught myself dropping exactly this kind
+of qualifier when three summaries promoted six derive-oracled region kinds to "real compiler
+output". The lesson from that was that a roll-up sentence loses what the detail records. A result
+worth reporting is exactly when that happens, so the qualifier goes in the headline rather than the
+footnote.
+
+**Controls**: the directory is compared BEFORE any payload is written, at least seven regions must
+carry a payload, and a must-fire control perturbs a record count and requires the directory to move.
+
+**Clippy caught dead code, not a style nit.** `0.min(i)` had no effect because the arm it sat in
+looped over kinds that return early above it, so its output could never contribute. Restructured
+with an early return and an explicit `panic!` for an unhandled kind rather than silenced.
+
+
 **AN OVER-CLAIM OF MY OWN, CAUGHT BY THE DISTINCTION I HAD JUST WRITTEN DOWN (2026-08-10).** Three
 separate summaries said every region kind is "emitted from real compiler output". **Six of the
 twenty are not.**

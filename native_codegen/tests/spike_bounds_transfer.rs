@@ -302,6 +302,21 @@ fn q3_what_does_the_memory_bound_measure() {
 /// It establishes that the model is not a faithful abstraction on these chunks.
 /// It does NOT establish a memory-safety fault: the runtime GROWS the operand
 /// stack and reports `OutOfArena` when a pre-size proves too small, so an
+/// Does the reporting model's own running depth go under zero on this chunk?
+///
+/// Factored out because the report both COUNTS offenders and walks the first one
+/// in full; two copies of the same walk could disagree.
+fn walk_goes_negative(c: &keleusma::bytecode::Chunk) -> bool {
+    let mut off = 0i32;
+    for op in &c.ops {
+        off += op.stack_growth() as i32 - op.stack_shrink() as i32;
+        if off < 0 {
+            return true;
+        }
+    }
+    false
+}
+
 /// under-estimate surfaces as a refusal rather than as corruption. What it costs
 /// is the word "definitive" in front of WCMU for the affected chunks.
 ///
@@ -317,14 +332,26 @@ fn q4_the_stack_model_goes_negative_on_shipped_code() {
             chunks += 1;
             let mut off = 0i32;
             let mut low = 0i32;
+            // **Name the op that first drives it under.** A count says a defect
+            // exists; the culprit says where to look. The 2026-08-15 re-check
+            // needed this: the count fell 17 -> 8 after the `v0.2.3` repair and
+            // a bare count could not say whether the remainder shared a cause.
+            let mut culprit: Option<String> = None;
             for op in &c.ops {
                 off += op.stack_growth() as i32 - op.stack_shrink() as i32;
-                low = low.min(off);
+                if off < low {
+                    low = off;
+                    if culprit.is_none() || off < 0 {
+                        culprit = Some(format!("{op:?}"));
+                    }
+                }
             }
             if low < 0 {
                 worst = worst.min(low);
+                let c_name = culprit.unwrap_or_else(|| "<none>".into());
+                let short = c_name.split('(').next().unwrap_or(&c_name).to_string();
                 negative.push(format!(
-                    "{}::{} (low {low})",
+                    "{}::{} (low {low}, first at {short})",
                     path.file_name().unwrap_or_default().to_string_lossy(),
                     c.name
                 ));
@@ -338,6 +365,30 @@ fn q4_the_stack_model_goes_negative_on_shipped_code() {
     for n in negative.iter().take(10) {
         println!("   {n}");
     }
+    // **The walk of the FIRST offender, printed in full.** All eight are the
+    // `main` of a `loop`, and all eight first go under at `PopN`, so the
+    // remainder shares one cause and the sequence is short enough to show
+    // rather than describe.
+    if let Some((path, m)) = corpus().into_iter().find(|(_, m)| {
+        m.chunks
+            .iter()
+            .any(|c| c.name == "main" && walk_goes_negative(c))
+    }) && let Some(c) = m.chunks.iter().find(|c| c.name == "main" && walk_goes_negative(c))
+    {
+        println!(
+            "\n  the first offender, walked: {}::{}",
+            path.file_name().unwrap_or_default().to_string_lossy(),
+            c.name
+        );
+        let mut off = 0i32;
+        for op in &c.ops {
+            let d = op.stack_growth() as i32 - op.stack_shrink() as i32;
+            off += d;
+            let flag = if off < 0 { "  <- IMPOSSIBLE" } else { "" };
+            println!("    {off:>3}  ({d:+})  {op:?}{flag}");
+        }
+    }
+
     println!("\n  A negative operand depth is impossible. Where it occurs the peak");
     println!("  taken from the same walk is not an upper bound. REPORTED, not");
     println!("  repaired: src/verify.rs belongs to the v0.2.3 line.");
