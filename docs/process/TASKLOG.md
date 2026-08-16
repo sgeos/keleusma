@@ -31,7 +31,7 @@ Current sprint source of truth.
 > (PR #105), because **a differential against the model under test cannot detect that the model is
 > wrong**. `Op::heap_alloc()` is correct. `Op::cost()` **disagrees with measurement**, two findings
 > pinned rather than repaired, and only 17 opcodes of 66 were ever measured. The class tables are
-> correct but `analyze_class` ends in `_ => (0, 0)`, so a control-flow opcode added later and not
+> correct but `analyze_class` ended in `_ => (0, 0)` (**CLOSED 2026-08-15**, exhaustive over `Op`), so a control-flow opcode added later and not
 > classified becomes "plain" silently — **open, and the highest-value item on the correctness
 > surface**.
 >
@@ -51,6 +51,58 @@ Current sprint source of truth.
 > the worst stage, `parse`, interns 627 names from a 33,395-byte blob against caps of 1024 and
 > 49,152. The plan's claim that the producer and the staging are one increment followed from the
 > 395,804 figure, which is a `CONSTS` region record count and still sits at five sites there.
+>
+> **`concurrency` group landed on `ci.yml` (2026-08-15)**, superseding pull-request runs only. The
+> requested workflow-wide form would also have cancelled version-branch verification runs, since the
+> workflow triggers on push as well; the group keys on `run_id` for non-PR events so branch runs
+> neither cancel nor queue. No CHANGELOG entry: `.github/` is not shipped.
+>
+> **The five seed accessors are BUILT (2026-08-15).** Public under `self-host`, with the four stage
+> module builders. Every driver entry point seeds through them, so one encoding exists rather than
+> two. Five because `reconstruct` has two entry points — the `v0.3.0` line's refinement, and the part
+> I had scoped wrong. Not built for `verify_datalayout`, as agreed.
+>
+> **NEW, OPEN, TOP CORRECTNESS ITEM (2026-08-15): `Op::Yield`'s peak-model net.** Reported by the
+> `v0.3.0` line, reproduced here: the operand walk reaches -1 on `analyze::main` and
+> `verify_depth::main`, first at `PopN(1)`. `stack_growth`/`stack_shrink` give net -1;
+> `op_depth_effect` gives net 0 and says why. Same class as the `GetField` defect `d3fd5cb6` fixed,
+> and the control that repair added compares the models over five cases none of which yields, so it
+> cannot reach this. Not repaired; wants its own increment with a control that ranges over the
+> opcode set.
+>
+> **E1 link count settled: THREE, not four.** Measured from the commit before the fix: three
+> `unresolved link` errors plus rustdoc's aggregate `could not document` line. The original report
+> counted `grep -cE "^error"` and the goal statement inherited the 4. Post-fix sweep across twelve
+> feature configurations reports zero unresolved links, so there is no unfound fourth. E1 also
+> landed in TWO increments (#116, #122) where one was intended, and #122 landed after A1 and B2 —
+> a direct consequence of the initial wrong judgment.
+>
+> **E1: both halves now landed (2026-08-15, corrected).** The CI half was already done and my
+> report of it was wrong. The LINKS half was real and I dismissed it; three unresolved intra-doc
+> links to feature-gated items are fixed by naming the gate, and CI gains one lean-feature-set doc
+> step because the union-of-features steps cannot catch that class. Measured cost 5.05 s against
+> 5.16 s for an existing step.
+>
+> **E1's first report was RETRACTED (2026-08-15).** I reported that CI never doc-builds the
+> `self-host` feature surface; it does, in a Doc-job step I did not read. The finding reached a
+> resume channel and a goal statement before being checked against the code. Nothing to repair.
+>
+> **Process note (2026-08-15)**: B2 was cut in parallel with A1 and conflicted in
+> `DESIGN_JOURNAL.md`. It was rebased BEFORE its first push, so CI ran once on the final commit and
+> the merge was at that commit. The alternative — leaving it conflicting — produces no CI run at all
+> and merges something untested. The mistake was the parallel cut; the workflow section now says to
+> cut sequential branches one at a time.
+>
+> **B2 (child-position slice): already built; the coverage was not.** Collapsing `mi_name_mode` to
+> the struct rule left the whole 163-test wire suite green, so the `ENUM` dedup half was asserted by
+> nothing. Closed by `two-enums-same-variant` with a named must-fire control. The test that should
+> have caught it described the hazard in its own doc comment and carried no enum case.
+>
+> **A1 done**: `analyze_class` and `analyze_opk` exhaustive over `Op`; seven other matches were
+> already exhaustive, so this was the outlier.
+>
+> **D1 done opportunistically**: the wire-format plan gains a governing currency banner, and the two
+> places where the 395,804 figure ordered work are corrected in place.
 >
 > **One request was probed and deliberately not built.** An accessor handing back each stage's
 > seeded shared buffer cannot be written for `verify_datalayout`, which is a batched coroutine

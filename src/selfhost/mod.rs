@@ -779,19 +779,33 @@ const RC_HEAD_BODY_LEN: usize = RC_HEAD_COUNT + 1 + 16 * 3;
 /// the root/category; the side arrays (call/for/match) arrive with those kinds.
 // Compile reconstruct.kel once and clone the module per call: `self_host_compile`
 // drives it for every function, so recompiling each time dominates the runtime.
-fn reconstruct_kel_module() -> Module {
+/// The compiled `reconstruct.kel` stage module, cached after the first build.
+///
+/// Public so an external harness can construct its own [`Vm`] and drive the
+/// stage on real input via [`seed_reconstruct_shared`] or
+/// [`seed_reconstruct_multihead_shared`].
+pub fn reconstruct_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
     CACHED
         .get_or_init(|| compile_src(&read_stage("kel/reconstruct.kel")))
         .clone()
 }
 
-fn reconstruct_via_kel(records: &[(i64, i64)], category: i64, param_count: usize) -> Body {
-    let m = reconstruct_kel_module();
-    let need = required_persistent_capacity_for(&m);
-    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
-    arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify reconstruct.kel");
+/// The shared buffer `reconstruct.kel` consumes for ONE function body, seeded
+/// and ready to drive.
+///
+/// **`reconstruct` has TWO entry points and this covers one of them.** The other
+/// is the multihead form, [`seed_reconstruct_multihead_shared`], whose input is a
+/// group of heads rather than a record stream. An accessor for this one alone
+/// would drive the path that has never been the problem: the multihead dispatch
+/// predicate was wrong in both directions and no oracle caught it, because every
+/// corpus input agreed on keyword and head count.
+pub fn seed_reconstruct_shared(
+    vm: &Vm<'_, '_>,
+    records: &[(i64, i64)],
+    category: i64,
+    param_count: usize,
+) -> Vec<u8> {
     let mut shared = vec![0u8; vm.shared_data_bytes()];
     vm.set_shared(&mut shared, RC_REC_COUNT, Value::Int(records.len() as i64))
         .unwrap();
@@ -805,6 +819,16 @@ fn reconstruct_via_kel(records: &[(i64, i64)], category: i64, param_count: usize
         vm.set_shared(&mut shared, RC_REC_ARG + i, Value::Int(a))
             .unwrap();
     }
+    shared
+}
+
+fn reconstruct_via_kel(records: &[(i64, i64)], category: i64, param_count: usize) -> Body {
+    let m = reconstruct_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify reconstruct.kel");
+    let mut shared = seed_reconstruct_shared(&vm, records, category, param_count);
     let node_count = match vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call")
@@ -851,7 +875,24 @@ fn reconstruct_via_kel(records: &[(i64, i64)], category: i64, param_count: usize
 /// Drive reconstruct.kel over a group of same-named heads (a multiheaded function),
 /// feeding each head's guard and body record ranges, and read back the reconstructed
 /// multihead `Body`.
-fn reconstruct_via_kel_multihead(heads: &[&ParsedFn], pc: usize) -> Body {
+/// The shared buffer `reconstruct.kel` consumes for a group of same-named heads
+/// (a multiheaded function), seeded and ready to drive.
+///
+/// **THIS IS THE SECOND `reconstruct` ENTRY POINT AND THE ONE THAT MATTERED.**
+/// Its input is a head group, not a record stream, so
+/// [`seed_reconstruct_shared`] cannot stand in for it. The `v0.3.0` line asked
+/// for this one specifically: the multihead dispatch predicate was once wrong in
+/// both directions and no oracle caught it, because every corpus input agreed on
+/// keyword and head count.
+///
+/// The per-head guard and body ranges are computed here rather than passed in,
+/// because they are offsets into the concatenation this function performs and
+/// have no meaning outside it.
+pub fn seed_reconstruct_multihead_shared(
+    vm: &Vm<'_, '_>,
+    heads: &[&ParsedFn],
+    pc: usize,
+) -> Vec<u8> {
     // Concatenate every head's guard then body records, tracking the per-head offsets.
     let mut recs: Vec<(i64, i64)> = Vec::new();
     let mut gs = Vec::new();
@@ -866,30 +907,34 @@ fn reconstruct_via_kel_multihead(heads: &[&ParsedFn], pc: usize) -> Body {
         bl.push(h.body.len());
         recs.extend_from_slice(&h.body);
     }
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let set = |vm: &Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
+        vm.set_shared(shared, slot, Value::Int(v)).unwrap();
+    };
+    set(vm, &mut shared, RC_REC_COUNT, recs.len() as i64);
+    set(vm, &mut shared, RC_IN_CATEGORY, 3);
+    set(vm, &mut shared, RC_IN_PARAM, pc as i64);
+    for (i, &(k, a)) in recs.iter().enumerate() {
+        set(vm, &mut shared, RC_REC_KIND + i, k);
+        set(vm, &mut shared, RC_REC_ARG + i, a);
+    }
+    set(vm, &mut shared, RC_HEAD_COUNT, heads.len() as i64);
+    for h in 0..heads.len() {
+        set(vm, &mut shared, RC_HEAD_GUARD_START + h, gs[h] as i64);
+        set(vm, &mut shared, RC_HEAD_GUARD_LEN + h, gl[h] as i64);
+        set(vm, &mut shared, RC_HEAD_BODY_START + h, bs[h] as i64);
+        set(vm, &mut shared, RC_HEAD_BODY_LEN + h, bl[h] as i64);
+    }
+    shared
+}
 
+fn reconstruct_via_kel_multihead(heads: &[&ParsedFn], pc: usize) -> Body {
     let m = reconstruct_kel_module();
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
     let mut vm = Vm::new(m, &arena).expect("verify reconstruct.kel");
-    let mut shared = vec![0u8; vm.shared_data_bytes()];
-    let set = |vm: &mut Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
-        vm.set_shared(shared, slot, Value::Int(v)).unwrap();
-    };
-    set(&mut vm, &mut shared, RC_REC_COUNT, recs.len() as i64);
-    set(&mut vm, &mut shared, RC_IN_CATEGORY, 3);
-    set(&mut vm, &mut shared, RC_IN_PARAM, pc as i64);
-    for (i, &(k, a)) in recs.iter().enumerate() {
-        set(&mut vm, &mut shared, RC_REC_KIND + i, k);
-        set(&mut vm, &mut shared, RC_REC_ARG + i, a);
-    }
-    set(&mut vm, &mut shared, RC_HEAD_COUNT, heads.len() as i64);
-    for h in 0..heads.len() {
-        set(&mut vm, &mut shared, RC_HEAD_GUARD_START + h, gs[h] as i64);
-        set(&mut vm, &mut shared, RC_HEAD_GUARD_LEN + h, gl[h] as i64);
-        set(&mut vm, &mut shared, RC_HEAD_BODY_START + h, bs[h] as i64);
-        set(&mut vm, &mut shared, RC_HEAD_BODY_LEN + h, bl[h] as i64);
-    }
+    let mut shared = seed_reconstruct_multihead_shared(&vm, heads, pc);
     let node_count = match vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call")
@@ -988,7 +1033,79 @@ fn analyze_class(op: &crate::bytecode::Op) -> (i64, i64) {
         Op::BreakIf(t) => (7, *t as i64),
         Op::Trap(_) => (8, 0),
         Op::Call(_, _) => (9, 0),
-        _ => (0, 0),
+        // EVERY REMAINING OPCODE IS LISTED, and the list is the point.
+        //
+        // This was `_ => (0, 0)`. A control-flow opcode added later and not
+        // classified above would have fallen through it and become "plain"
+        // SILENTLY: `analyze.kel` rebuilds the control-flow graph by following
+        // the `If`/`Loop`/`EndLoop`/`Break` targets this function returns, so a
+        // missing arm is a graph missing an edge, and a bound extracted from
+        // that graph is finite and WRONG rather than absent. Nothing downstream
+        // can distinguish "plain opcode" from "unclassified opcode".
+        //
+        // A test cannot close that hole, because it cannot fail for an opcode
+        // nobody has written yet. The compiler can: adding a variant to `Op`
+        // now fails to build here until someone decides which class it belongs
+        // to. That is the whole change -- the classification is unaltered and
+        // every opcode below still maps to `(0, 0)`, exactly as the catch-all
+        // did.
+        Op::Const(..)
+        | Op::GetLocal(..)
+        | Op::SetLocal(..)
+        | Op::GetData(..)
+        | Op::SetData(..)
+        | Op::GetDataIndexed(..)
+        | Op::SetDataIndexed(..)
+        | Op::BoundsCheck(..)
+        | Op::Add
+        | Op::Sub
+        | Op::Mul
+        | Op::Div
+        | Op::Mod
+        | Op::Neg
+        | Op::CmpEq
+        | Op::CmpNe
+        | Op::CmpLt
+        | Op::CmpGt
+        | Op::CmpLe
+        | Op::CmpGe
+        | Op::Not
+        | Op::Stream
+        | Op::Reset
+        | Op::Return
+        | Op::Yield
+        | Op::Dup
+        | Op::NewComposite(..)
+        | Op::GetField(..)
+        | Op::GetIndex(..)
+        | Op::GetTupleField(..)
+        | Op::GetEnumField(..)
+        | Op::Len
+        | Op::IsEnum(..)
+        | Op::IsStruct(..)
+        | Op::IntToFloat
+        | Op::FloatToInt
+        | Op::WordToByte
+        | Op::ByteToWord
+        | Op::WordToFixed(..)
+        | Op::FixedToWord(..)
+        | Op::FixedMul(..)
+        | Op::FixedDiv(..)
+        | Op::CheckedAdd
+        | Op::CheckedSub
+        | Op::CheckedMul(..)
+        | Op::CheckedNeg
+        | Op::CheckedDiv(..)
+        | Op::CheckedMod
+        | Op::PushImmediate(..)
+        | Op::PopN(..)
+        | Op::BitAnd
+        | Op::BitOr
+        | Op::BitXor
+        | Op::Shl
+        | Op::Shr
+        | Op::CallVerifiedNative(..)
+        | Op::CallExternalNative(..) => (0, 0),
     }
 }
 
@@ -1011,7 +1128,77 @@ fn analyze_opk(op: &crate::bytecode::Op, chunk: &crate::bytecode::Chunk) -> (i64
         Op::PopN(n) => (7, 0, *n as i64, 0),
         Op::EndLoop(_) => (8, 0, 0, 0),
         Op::Loop(_) => (9, 0, 0, 0),
-        _ => (0, 0, 0, 0),
+        // EXHAUSTIVE FOR THE SAME REASON AS `analyze_class`, though the failure
+        // mode differs and the difference is worth stating.
+        //
+        // Every `opk` use in `analyze.kel` is a POSITIVE pattern requirement
+        // (`wa.opk[ip] == 2`, `== 3`, `== 8`), so an untagged opcode fails to
+        // match and the loop-bound shape is simply not recognised -- a bound is
+        // not extracted, which is CONSERVATIVE. That is the opposite of
+        // `analyze_class`, where a missing arm drops a control-flow edge and
+        // yields a bound that is finite and wrong.
+        //
+        // It is exhaustive anyway, because that argument is REASONING and the
+        // compiler can make it unnecessary. A new opcode should be considered
+        // for bound extraction as deliberately as for classification, and a
+        // catch-all here decides that question by default and silently.
+        Op::GetData(..)
+        | Op::SetData(..)
+        | Op::GetDataIndexed(..)
+        | Op::SetDataIndexed(..)
+        | Op::BoundsCheck(..)
+        | Op::Add
+        | Op::Sub
+        | Op::Mul
+        | Op::Div
+        | Op::Mod
+        | Op::Neg
+        | Op::CmpEq
+        | Op::CmpNe
+        | Op::CmpLt
+        | Op::CmpGt
+        | Op::CmpLe
+        | Op::Not
+        | Op::If(..)
+        | Op::Else(..)
+        | Op::EndIf
+        | Op::Break(..)
+        | Op::Stream
+        | Op::Reset
+        | Op::Call(..)
+        | Op::Return
+        | Op::Yield
+        | Op::Dup
+        | Op::NewComposite(..)
+        | Op::GetField(..)
+        | Op::GetIndex(..)
+        | Op::GetTupleField(..)
+        | Op::GetEnumField(..)
+        | Op::Len
+        | Op::IsEnum(..)
+        | Op::IsStruct(..)
+        | Op::IntToFloat
+        | Op::FloatToInt
+        | Op::WordToByte
+        | Op::ByteToWord
+        | Op::WordToFixed(..)
+        | Op::FixedToWord(..)
+        | Op::FixedMul(..)
+        | Op::FixedDiv(..)
+        | Op::Trap(..)
+        | Op::CheckedSub
+        | Op::CheckedMul(..)
+        | Op::CheckedNeg
+        | Op::CheckedDiv(..)
+        | Op::CheckedMod
+        | Op::PushImmediate(..)
+        | Op::BitAnd
+        | Op::BitOr
+        | Op::BitXor
+        | Op::Shl
+        | Op::Shr
+        | Op::CallVerifiedNative(..)
+        | Op::CallExternalNative(..) => (0, 0, 0, 0),
     }
 }
 
@@ -1198,7 +1385,12 @@ const SV_O3: usize = 9 + 1536 * 5;
 const SV_MARK: usize = 9 + 1536 * 6;
 const SV_OUT_REJECT: usize = 9 + 1536 * 7;
 
-fn verify_structural_kel_module() -> Module {
+/// The compiled `verify_structural.kel` stage module, cached after the first
+/// build.
+///
+/// Public so an external harness can construct its own [`Vm`] and drive the
+/// stage on real input via [`seed_verify_structural_shared`].
+pub fn verify_structural_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
     CACHED
         .get_or_init(|| compile_src(&read_stage("kel/verify_structural.kel")))
@@ -1286,65 +1478,12 @@ pub fn structural_reject_chunk_via_kel(
     chunk: &crate::bytecode::Chunk,
     always: &std::collections::BTreeSet<usize>,
 ) -> bool {
-    assert!(
-        chunk.ops.len() <= 1536,
-        "verify_structural.kel op-table capacity"
-    );
     let m = verify_structural_kel_module();
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
     let mut vm = Vm::new(m, &arena).expect("verify verify_structural.kel");
-    let mut shared = vec![0u8; vm.shared_data_bytes()];
-    let set = |vm: &Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
-        vm.set_shared(shared, slot, Value::Int(v)).unwrap();
-    };
-    set(&vm, &mut shared, SV_OP_COUNT, chunk.ops.len() as i64);
-    set(&vm, &mut shared, SV_LOCAL_COUNT, chunk.local_count as i64);
-    set(
-        &vm,
-        &mut shared,
-        SV_CONST_COUNT,
-        chunk.constants.len() as i64,
-    );
-    set(
-        &vm,
-        &mut shared,
-        SV_TEMPLATE_COUNT,
-        chunk.struct_templates.len() as i64,
-    );
-    set(
-        &vm,
-        &mut shared,
-        SV_DATA_LEN,
-        data_layout_slot_count(module),
-    );
-    set(&vm, &mut shared, SV_NCHUNKS, module.chunks.len() as i64);
-    set(
-        &vm,
-        &mut shared,
-        SV_WORD_BITS,
-        1i64 << module.word_bits_log2,
-    );
-    set(&vm, &mut shared, SV_BLOCK_TYPE, block_type_tag(chunk));
-    // Whether the chunk delegates its yield to an always-yielding callee (the reference's
-    // `calls_always_yielder`). Resolved from the marshalled always-yielding set.
-    let calls_ay = chunk
-        .ops
-        .iter()
-        .any(|op| matches!(op, crate::bytecode::Op::Call(g, _) if always.contains(&(*g as usize))));
-    set(&vm, &mut shared, SV_CALLS_AY, i64::from(calls_ay));
-    for (i, op) in chunk.ops.iter().enumerate() {
-        let (class, arg) = analyze_class(op);
-        set(&vm, &mut shared, SV_CLASS + i, class);
-        set(&vm, &mut shared, SV_ARG + i, arg);
-        let (opb, o1, o2, o3) = structural_opbounds(op, module);
-        set(&vm, &mut shared, SV_OPB + i, opb);
-        set(&vm, &mut shared, SV_O1 + i, o1);
-        set(&vm, &mut shared, SV_O2 + i, o2);
-        set(&vm, &mut shared, SV_O3 + i, o3);
-        set(&vm, &mut shared, SV_MARK + i, structural_marker(op));
-    }
+    let mut shared = seed_verify_structural_shared(&vm, module, chunk, always);
     match vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call verify_structural.kel")
@@ -1356,6 +1495,68 @@ pub fn structural_reject_chunk_via_kel(
         Value::Int(n) => n != 0,
         o => panic!("expected Int at out_reject, got {o:?}"),
     }
+}
+
+/// The shared buffer `verify_structural.kel` consumes for one chunk, seeded and
+/// ready to drive.
+///
+/// `always` is the module's always-yielding chunk set; it resolves the chunk's
+/// delegated-yield flag and cannot be derived from the chunk alone.
+///
+/// One encoding, two callers: [`structural_reject_chunk_via_kel`] seeds through
+/// this rather than inline, so an external harness feeds the stage exactly what
+/// the driver does.
+pub fn seed_verify_structural_shared(
+    vm: &Vm<'_, '_>,
+    module: &Module,
+    chunk: &crate::bytecode::Chunk,
+    always: &std::collections::BTreeSet<usize>,
+) -> Vec<u8> {
+    assert!(
+        chunk.ops.len() <= 1536,
+        "verify_structural.kel op-table capacity"
+    );
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let set = |vm: &Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
+        vm.set_shared(shared, slot, Value::Int(v)).unwrap();
+    };
+    set(vm, &mut shared, SV_OP_COUNT, chunk.ops.len() as i64);
+    set(vm, &mut shared, SV_LOCAL_COUNT, chunk.local_count as i64);
+    set(
+        vm,
+        &mut shared,
+        SV_CONST_COUNT,
+        chunk.constants.len() as i64,
+    );
+    set(
+        vm,
+        &mut shared,
+        SV_TEMPLATE_COUNT,
+        chunk.struct_templates.len() as i64,
+    );
+    set(vm, &mut shared, SV_DATA_LEN, data_layout_slot_count(module));
+    set(vm, &mut shared, SV_NCHUNKS, module.chunks.len() as i64);
+    set(vm, &mut shared, SV_WORD_BITS, 1i64 << module.word_bits_log2);
+    set(vm, &mut shared, SV_BLOCK_TYPE, block_type_tag(chunk));
+    // Whether the chunk delegates its yield to an always-yielding callee (the reference's
+    // `calls_always_yielder`). Resolved from the marshalled always-yielding set.
+    let calls_ay = chunk
+        .ops
+        .iter()
+        .any(|op| matches!(op, crate::bytecode::Op::Call(g, _) if always.contains(&(*g as usize))));
+    set(vm, &mut shared, SV_CALLS_AY, i64::from(calls_ay));
+    for (i, op) in chunk.ops.iter().enumerate() {
+        let (class, arg) = analyze_class(op);
+        set(vm, &mut shared, SV_CLASS + i, class);
+        set(vm, &mut shared, SV_ARG + i, arg);
+        let (opb, o1, o2, o3) = structural_opbounds(op, module);
+        set(vm, &mut shared, SV_OPB + i, opb);
+        set(vm, &mut shared, SV_O1 + i, o1);
+        set(vm, &mut shared, SV_O2 + i, o2);
+        set(vm, &mut shared, SV_O3 + i, o3);
+        set(vm, &mut shared, SV_MARK + i, structural_marker(op));
+    }
+    shared
 }
 
 // --- Self-hosted yield-coverage kernel (verify_yield.kel) and Pass 3 -------------------------
@@ -1501,47 +1702,70 @@ const DV_DNET: usize = 1 + 1536 * 3;
 const DV_IS_TERM: usize = 1 + 1536 * 4;
 const DV_OUT_REJECT: usize = 1 + 1536 * 5;
 
-fn verify_depth_kel_module() -> Module {
+/// The compiled `verify_depth.kel` stage module, cached after the first build.
+///
+/// Public so an external harness can construct its own [`Vm`] and drive the
+/// stage on real input via [`seed_verify_depth_shared`].
+pub fn verify_depth_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
     CACHED
         .get_or_init(|| compile_src(&read_stage("kel/verify_depth.kel")))
         .clone()
 }
 
-/// Run verify_depth.kel over one chunk, returning whether any op underflows the operand stack
-/// (the reference `verify_stack_depth`). Marshals the control-flow `(class, arg)` table via
-/// `analyze_class`, the actual operand consumption `(dreq, dnet)` via `op_depth_effect`, and the
-/// Trap/Return terminator flag.
-pub fn depth_reject_chunk_via_kel(chunk: &crate::bytecode::Chunk) -> bool {
+/// The shared buffer `verify_depth.kel` consumes for one chunk, seeded and
+/// ready to drive.
+///
+/// **One encoding, two callers.** [`depth_reject_chunk_via_kel`] below uses this
+/// rather than seeding inline, so an external harness driving the stage feeds it
+/// exactly what the driver does. That is the point of the accessor and it is the
+/// `v0.3.0` line's stated reason for wanting the `Vm` passed IN: a constructor of
+/// its own would be a second encoding, free to drift from this one.
+///
+/// The `vm` argument supplies the shared layout only. Build it from
+/// [`verify_depth_kel_module`].
+pub fn seed_verify_depth_shared(vm: &Vm<'_, '_>, chunk: &crate::bytecode::Chunk) -> Vec<u8> {
     use crate::bytecode::Op;
     assert!(
         chunk.ops.len() <= 1536,
         "verify_depth.kel op-table capacity"
     );
-    let m = verify_depth_kel_module();
-    let need = required_persistent_capacity_for(&m);
-    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
-    arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify verify_depth.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
     let set = |vm: &Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
         vm.set_shared(shared, slot, Value::Int(v)).unwrap();
     };
-    set(&vm, &mut shared, DV_OP_COUNT, chunk.ops.len() as i64);
+    set(vm, &mut shared, DV_OP_COUNT, chunk.ops.len() as i64);
     for (i, op) in chunk.ops.iter().enumerate() {
         let (class, arg) = analyze_class(op);
         let (req, net) = crate::verify::op_depth_effect(op, chunk);
-        set(&vm, &mut shared, DV_CLASS + i, class);
-        set(&vm, &mut shared, DV_ARG + i, arg);
-        set(&vm, &mut shared, DV_DREQ + i, i64::from(req.max(0)));
-        set(&vm, &mut shared, DV_DNET + i, i64::from(net));
+        set(vm, &mut shared, DV_CLASS + i, class);
+        set(vm, &mut shared, DV_ARG + i, arg);
+        set(vm, &mut shared, DV_DREQ + i, i64::from(req.max(0)));
+        set(vm, &mut shared, DV_DNET + i, i64::from(net));
         set(
-            &vm,
+            vm,
             &mut shared,
             DV_IS_TERM + i,
             i64::from(matches!(op, Op::Trap(_) | Op::Return)),
         );
     }
+    shared
+}
+
+/// Run verify_depth.kel over one chunk, returning whether any op underflows the operand stack
+/// (the reference `verify_stack_depth`). Marshals the control-flow `(class, arg)` table via
+/// `analyze_class`, the actual operand consumption `(dreq, dnet)` via `op_depth_effect`, and the
+/// Trap/Return terminator flag.
+///
+/// Seeds through [`seed_verify_depth_shared`], so this and any external harness
+/// drive the stage from the same encoding.
+pub fn depth_reject_chunk_via_kel(chunk: &crate::bytecode::Chunk) -> bool {
+    let m = verify_depth_kel_module();
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify verify_depth.kel");
+    let mut shared = seed_verify_depth_shared(&vm, chunk);
     match vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call verify_depth.kel")
@@ -1626,7 +1850,11 @@ const TV_CP_KIND: usize = 5 + 1536 * 12 + 768 + 64 + 12288 * 2;
 const TV_OUT_REJECT: usize = 5 + 1536 * 12 + 768 + 64 + 12288 * 3;
 const TV_CP_STRIDE: usize = 8;
 
-fn verify_typed_kel_module() -> Module {
+/// The compiled `verify_typed.kel` stage module, cached after the first build.
+///
+/// Public so an external harness can construct its own [`Vm`] and drive the
+/// stage on real input via [`seed_verify_typed_shared`].
+pub fn verify_typed_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
     CACHED
         .get_or_init(|| compile_src(&read_stage("kel/verify_typed.kel")))
@@ -1765,93 +1993,12 @@ fn typed_run(
     wb: usize,
     fb: usize,
 ) -> bool {
-    use crate::bytecode::Op;
-    assert!(
-        chunk.ops.len() <= 1536,
-        "verify_typed.kel op-table capacity"
-    );
     let m = verify_typed_kel_module();
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
     let mut vm = Vm::new(m, &arena).expect("verify verify_typed.kel");
-    let mut shared = vec![0u8; vm.shared_data_bytes()];
-    let set = |vm: &Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
-        vm.set_shared(shared, slot, Value::Int(v)).unwrap();
-    };
-    set(&vm, &mut shared, TV_OP_COUNT, chunk.ops.len() as i64);
-    // Seed the local frame from the signature's parameters (leading slots) and the resume shape.
-    if let Some(sig) = sig {
-        for (i, param) in sig.params.iter().enumerate().take(256) {
-            let (tag, size, kind) = abs_from_wire(param, wb, fb);
-            set(&vm, &mut shared, TV_SEED_TAG + i, tag);
-            set(&vm, &mut shared, TV_SEED_SIZE + i, size);
-            set(&vm, &mut shared, TV_SEED_KIND + i, kind);
-        }
-        let (rtag, rsize, rkind) = abs_from_wire(&sig.resume, wb, fb);
-        set(&vm, &mut shared, TV_RESUME_TAG, rtag);
-        set(&vm, &mut shared, TV_RESUME_SIZE, rsize);
-        set(&vm, &mut shared, TV_RESUME_KIND, rkind);
-        // The declared flat enum body sizes (`word_bytes + min_payload`), for the B8 cross-check.
-        for (i, el) in module.enum_layouts.iter().enumerate().take(64) {
-            set(
-                &vm,
-                &mut shared,
-                TV_EB_VALS + i,
-                wb as i64 + el.min_payload as i64,
-            );
-        }
-        set(
-            &vm,
-            &mut shared,
-            TV_EB_COUNT,
-            module.enum_layouts.len().min(64) as i64,
-        );
-    }
-    for (i, op) in chunk.ops.iter().enumerate() {
-        let (class, arg, is_term, tk, req, prod, ta, tb, tc) = typed_desc(op, chunk, wb, fb);
-        assert!(prod <= 4, "verify_typed.kel push_tops unroll bound");
-        set(&vm, &mut shared, TV_CLASS + i, class);
-        set(&vm, &mut shared, TV_ARG + i, arg);
-        set(&vm, &mut shared, TV_IS_TERM + i, is_term);
-        set(&vm, &mut shared, TV_TK + i, tk);
-        set(&vm, &mut shared, TV_REQ + i, req);
-        set(&vm, &mut shared, TV_PROD + i, prod);
-        set(&vm, &mut shared, TV_TA + i, ta);
-        set(&vm, &mut shared, TV_TB + i, tb);
-        set(&vm, &mut shared, TV_TC + i, tc);
-        // In the seeded form, a Call's return shape and the callee's parameter shapes (for the
-        // argument check), or a native's return shape; isolation leaves them Top, matching
-        // `typed_check_chunk`'s empty tables. An unmarshalled parameter slot (beyond the callee's
-        // count, or for a native) stays Top and defers.
-        if sig.is_some() {
-            match op {
-                Op::Call(callee, _) => {
-                    if let Some(cs) = module.signatures.get(*callee as usize) {
-                        let (tag, size, kind) = abs_from_wire(&cs.ret, wb, fb);
-                        set(&vm, &mut shared, TV_RET_TAG + i, tag);
-                        set(&vm, &mut shared, TV_RET_SIZE + i, size);
-                        set(&vm, &mut shared, TV_RET_KIND + i, kind);
-                        for (p, param) in cs.params.iter().enumerate().take(TV_CP_STRIDE) {
-                            let (ptag, psize, pkind) = abs_from_wire(param, wb, fb);
-                            set(&vm, &mut shared, TV_CP_TAG + i * TV_CP_STRIDE + p, ptag);
-                            set(&vm, &mut shared, TV_CP_SIZE + i * TV_CP_STRIDE + p, psize);
-                            set(&vm, &mut shared, TV_CP_KIND + i * TV_CP_STRIDE + p, pkind);
-                        }
-                    }
-                }
-                Op::CallVerifiedNative(idx, _) | Op::CallExternalNative(idx, _) => {
-                    if let Some(w) = module.native_return_shapes.get(*idx as usize) {
-                        let (tag, size, kind) = abs_from_wire(w, wb, fb);
-                        set(&vm, &mut shared, TV_RET_TAG + i, tag);
-                        set(&vm, &mut shared, TV_RET_SIZE + i, size);
-                        set(&vm, &mut shared, TV_RET_KIND + i, kind);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
+    let mut shared = seed_verify_typed_shared(&vm, module, chunk, sig, wb, fb);
     match vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call verify_typed.kel")
@@ -1863,6 +2010,109 @@ fn typed_run(
         Value::Int(n) => n != 0,
         o => panic!("expected Int at out_reject, got {o:?}"),
     }
+}
+
+/// The shared buffer `verify_typed.kel` consumes for one chunk, seeded and ready
+/// to drive.
+///
+/// `sig` is the chunk's entry in the module signature table, which seeds the
+/// initial operand shapes; `wb`/`fb` are the module's word and float byte
+/// widths. A chunk driven without its signature is a different, weaker check,
+/// so the argument is required rather than defaulted.
+///
+/// One encoding, two callers: `typed_run` seeds through this rather than inline,
+/// so an external harness feeds the stage exactly what the driver does.
+pub fn seed_verify_typed_shared(
+    vm: &Vm<'_, '_>,
+    module: &Module,
+    chunk: &crate::bytecode::Chunk,
+    sig: Option<&crate::bytecode::ChunkSignature>,
+    wb: usize,
+    fb: usize,
+) -> Vec<u8> {
+    use crate::bytecode::Op;
+    assert!(
+        chunk.ops.len() <= 1536,
+        "verify_typed.kel op-table capacity"
+    );
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    let set = |vm: &Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
+        vm.set_shared(shared, slot, Value::Int(v)).unwrap();
+    };
+    set(vm, &mut shared, TV_OP_COUNT, chunk.ops.len() as i64);
+    // Seed the local frame from the signature's parameters (leading slots) and the resume shape.
+    if let Some(sig) = sig {
+        for (i, param) in sig.params.iter().enumerate().take(256) {
+            let (tag, size, kind) = abs_from_wire(param, wb, fb);
+            set(vm, &mut shared, TV_SEED_TAG + i, tag);
+            set(vm, &mut shared, TV_SEED_SIZE + i, size);
+            set(vm, &mut shared, TV_SEED_KIND + i, kind);
+        }
+        let (rtag, rsize, rkind) = abs_from_wire(&sig.resume, wb, fb);
+        set(vm, &mut shared, TV_RESUME_TAG, rtag);
+        set(vm, &mut shared, TV_RESUME_SIZE, rsize);
+        set(vm, &mut shared, TV_RESUME_KIND, rkind);
+        // The declared flat enum body sizes (`word_bytes + min_payload`), for the B8 cross-check.
+        for (i, el) in module.enum_layouts.iter().enumerate().take(64) {
+            set(
+                vm,
+                &mut shared,
+                TV_EB_VALS + i,
+                wb as i64 + el.min_payload as i64,
+            );
+        }
+        set(
+            vm,
+            &mut shared,
+            TV_EB_COUNT,
+            module.enum_layouts.len().min(64) as i64,
+        );
+    }
+    for (i, op) in chunk.ops.iter().enumerate() {
+        let (class, arg, is_term, tk, req, prod, ta, tb, tc) = typed_desc(op, chunk, wb, fb);
+        assert!(prod <= 4, "verify_typed.kel push_tops unroll bound");
+        set(vm, &mut shared, TV_CLASS + i, class);
+        set(vm, &mut shared, TV_ARG + i, arg);
+        set(vm, &mut shared, TV_IS_TERM + i, is_term);
+        set(vm, &mut shared, TV_TK + i, tk);
+        set(vm, &mut shared, TV_REQ + i, req);
+        set(vm, &mut shared, TV_PROD + i, prod);
+        set(vm, &mut shared, TV_TA + i, ta);
+        set(vm, &mut shared, TV_TB + i, tb);
+        set(vm, &mut shared, TV_TC + i, tc);
+        // In the seeded form, a Call's return shape and the callee's parameter shapes (for the
+        // argument check), or a native's return shape; isolation leaves them Top, matching
+        // `typed_check_chunk`'s empty tables. An unmarshalled parameter slot (beyond the callee's
+        // count, or for a native) stays Top and defers.
+        if sig.is_some() {
+            match op {
+                Op::Call(callee, _) => {
+                    if let Some(cs) = module.signatures.get(*callee as usize) {
+                        let (tag, size, kind) = abs_from_wire(&cs.ret, wb, fb);
+                        set(vm, &mut shared, TV_RET_TAG + i, tag);
+                        set(vm, &mut shared, TV_RET_SIZE + i, size);
+                        set(vm, &mut shared, TV_RET_KIND + i, kind);
+                        for (p, param) in cs.params.iter().enumerate().take(TV_CP_STRIDE) {
+                            let (ptag, psize, pkind) = abs_from_wire(param, wb, fb);
+                            set(vm, &mut shared, TV_CP_TAG + i * TV_CP_STRIDE + p, ptag);
+                            set(vm, &mut shared, TV_CP_SIZE + i * TV_CP_STRIDE + p, psize);
+                            set(vm, &mut shared, TV_CP_KIND + i * TV_CP_STRIDE + p, pkind);
+                        }
+                    }
+                }
+                Op::CallVerifiedNative(idx, _) | Op::CallExternalNative(idx, _) => {
+                    if let Some(w) = module.native_return_shapes.get(*idx as usize) {
+                        let (tag, size, kind) = abs_from_wire(w, wb, fb);
+                        set(vm, &mut shared, TV_RET_TAG + i, tag);
+                        set(vm, &mut shared, TV_RET_SIZE + i, size);
+                        set(vm, &mut shared, TV_RET_KIND + i, kind);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    shared
 }
 
 /// Run verify_typed.kel over one chunk in isolation (no seeding), the drop-in for
@@ -3303,21 +3553,28 @@ mod classification_tables {
         }
     }
 
-    /// THE HAZARD THIS TABLE CARRIES, STATED WHERE IT IS.
+    /// The class table has exactly nine kinds, and the hole this test used to
+    /// describe is CLOSED.
     ///
-    /// `analyze_class` ends in `_ => (0, 0)`. **A control-flow opcode added
-    /// later and not added here becomes "plain" silently**: no panic, no
-    /// rejection, just a control-flow graph missing an edge and a bound
-    /// extracted from it that is finite and wrong. The same shape applies to
-    /// `analyze_opk`'s `0 other`.
+    /// It previously read: "`analyze_class` ends in `_ => (0, 0)`. A
+    /// control-flow opcode added later and not added here becomes 'plain'
+    /// silently — no panic, no rejection, just a control-flow graph missing an
+    /// edge and a bound extracted from it that is finite and wrong. This test
+    /// cannot close that hole." That was correct, and the closing move it named
+    /// is the one that was taken: `analyze_class` and `analyze_opk` are now
+    /// exhaustive over `Op`, so the compiler refuses a new opcode until someone
+    /// decides its class. Verified by adding a variant to `Op` and observing
+    /// `E0004` at both sites.
     ///
-    /// This test cannot close that hole — closing it needs an exhaustive
-    /// `match` over `Op` here, so the compiler refuses a new opcode until it is
-    /// classified. It pins the CURRENT boundary instead: exactly nine classes,
-    /// and the count is asserted so that adding a tenth without revisiting this
-    /// file fails.
+    /// **This test is still worth keeping, and its job has changed.** The
+    /// compiler now guarantees every opcode is CLASSIFIED; it cannot guarantee
+    /// the classification is RIGHT. Exhaustiveness is satisfied just as well by
+    /// mapping a new control-flow opcode to `(0, 0)` in the plain group, which
+    /// is exactly the silent-edge defect wearing a different hat. So this pins
+    /// the count: a tenth kind fails here, and `analyze.kel` needs a decoder for
+    /// it before it means anything.
     #[test]
-    fn the_class_table_covers_exactly_nine_kinds_and_defaults_silently() {
+    fn the_class_table_covers_exactly_nine_kinds() {
         let control: &[Op] = &[
             Op::If(0),
             Op::Else(0),
