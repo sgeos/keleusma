@@ -148,12 +148,29 @@ const CASES: &[(&str, &str)] = &[
     ),
     // `break` is a plain statement valid ONLY inside a `for` loop, and invalid
     // in a `loop` function (docs/spec/GRAMMAR.md). `BreakIf` is what the
-    // compiler emits for a CONDITIONAL break. My earlier `break if <cond>` was
-    // invented and the parser rejected it; this form came from the grammar and
-    // `04_for_in.kel`, not from a third guess.
+    // compiler emits for a CONDITIONAL break.
+    //
+    // **THIS CASE WAS REJECTED, AND `break` WAS NEVER THE REASON.** It read
+    // `... }; b }` -- a `for` loop is a STATEMENT and consumes no trailing
+    // semicolon, so the parser resumed at statement position, read `;` as the
+    // start of an expression, and reported `unexpected token Semicolon in
+    // expression`. Two semicolons sat near each other and the diagnostic named
+    // the wrong one. On that evidence this line reported a grammar/parser
+    // discrepancy to `v0.2.3` and left `BreakIf` unisolated with a stated reason.
+    //
+    // The `v0.2.3` line settled it with the control this line should have run:
+    // remove `break` entirely, keep the stray semicolon, and the failure is
+    // BYTE-IDENTICAL. Deleting the semicolon after the `for` block -- and nothing
+    // else -- compiles, and `main` carries `BreakIf` and `Break`.
+    //
+    // The generalisation, which arrived from both directions in one week: a
+    // diagnostic names where the parser STOPPED, not what it objected to, just
+    // as a defect report names where a reader happened to look. The cheap
+    // discriminator both times is a control that removes the suspected cause and
+    // checks whether the failure survives.
     (
         "break_cond",
-        "data s { n: Word }\nfn main(a: Word, b: Word) -> Word { let xs = [1, 2, 3, 4]; for x in xs { if x > a { break; } s.n = x; }; b }",
+        "data s { n: Word }\nfn main(a: Word, b: Word) -> Word { let xs = [1, 2, 3, 4]; for x in xs { if x > a { break; } s.n = x; } b }",
     ),
     (
         "stream_scalar",

@@ -16,14 +16,27 @@
 //! # The instrument, and why not the obvious one
 //!
 //! The first attempt measured CHUNK COVERAGE with the VM's breakpoint facility,
-//! arming op 0 of every chunk. **That does not work, and the reason is a defect
-//! worth reporting rather than a mistake here**: `resume_from_breakpoint` calls
-//! `run()` without rebinding the shared buffer that `call_with_shared` binds and
-//! clears around each entry, so the first shared read after a breakpoint stop
-//! reaches `read_shared_from_buffer`'s `.expect(...)` and **panics**. Every stage
-//! declares shared data, so every stage panics. See
-//! `the_breakpoint_facility_panics_on_any_shared_data_module` below, which pins
-//! it as a minimal reproducer.
+//! arming op 0 of every chunk. **That did not work, and the reason was a defect
+//! rather than a mistake here**: `resume_from_breakpoint` called `run()` without
+//! rebinding the shared buffer that `call_with_shared` binds and clears around
+//! each entry, so the first shared read after a breakpoint stop reached
+//! `read_shared_from_buffer`'s `.expect(...)` and **panicked**. Every stage
+//! declares shared data, so every stage panicked.
+//!
+//! **FIXED by the `v0.2.3` line** (PR #109), reported from here. The repair is
+//! `resume_from_breakpoint_with_shared`, which binds the buffer the way
+//! `call_with_shared` does; the bare entry point now returns a `VmError` naming
+//! it. `the_breakpoint_facility_now_works_on_a_shared_data_module` below drives
+//! the working path and asserts the buffer CONTENTS, since a step that yielded
+//! while writing nothing would pass a state-only check and mean the buffer was
+//! never bound.
+//!
+//! **The chunk-coverage instrument is therefore unblocked and is still the
+//! better one**, being a direct measure rather than an inference from output.
+//! It is NOT restored in this change: this increment is the sync, and rebuilding
+//! the instrument is its own increment with its own verification. Recorded here
+//! so the option is not lost, which is what the old test's failure message asked
+//! for.
 //!
 //! What is used instead is the stage's own observable output: **the sequence of
 //! yielded values**. That needs nothing from the VM, and for a tokenizer it is a
@@ -314,20 +327,24 @@ fn no_stage_declares_a_native_so_the_two_harnesses_cannot_diverge() {
     }
 }
 
-/// **A `v0.2.3` defect, pinned here because it blocked the instrument above.**
+/// **The `v0.2.3` defect that blocked the instrument above is FIXED, and this
+/// is the working path.**
 ///
-/// `Vm::set_breakpoint` is documented as working on any module. It does not work
-/// on a module that declares shared data: `resume_from_breakpoint` calls `run()`
-/// without rebinding the buffer that `call_with_shared` binds and clears around
-/// each entry, so the first shared read after the stop hits
-/// `read_shared_from_buffer`'s `.expect("... called with an active buffer")` and
-/// **panics**. A panic is not a `VmError`, so a host cannot handle it.
+/// The old test here asserted that `resume_from_breakpoint` PANICS on a
+/// shared-data module, so that a repair on their side would fail loudly rather
+/// than leave a stale claim on ours. It did exactly that, and this replaces it.
 ///
-/// `src/vm.rs` belongs to the `v0.2.3` line and is untouched. This test asserts
-/// the CURRENT behaviour so that a repair there fails it loudly rather than
-/// leaving a stale claim here.
+/// The repair is `resume_from_breakpoint_with_shared`, which binds the buffer the
+/// way `call_with_shared` does. The bare entry point now returns a `VmError`
+/// naming the method to use rather than panicking.
+///
+/// **This asserts the BUFFER CONTENTS, not merely that `Yielded` came back**, and
+/// that choice is theirs: a step that returned `Yielded` while writing nothing
+/// would satisfy a state-only check and would mean the buffer was never really
+/// bound. The module increments `s.n` on every iteration, so the byte is the
+/// evidence.
 #[test]
-fn the_breakpoint_facility_panics_on_any_shared_data_module() {
+fn the_breakpoint_facility_now_works_on_a_shared_data_module() {
     let src = "\
 shared data s { n: Word }
 loop main(resume: Word) -> Word {
@@ -340,28 +357,46 @@ loop main(resume: Word) -> Word {
         shared_data_bytes_for(&m) > 0,
         "the reproducer must declare shared data or it tests nothing"
     );
+    let n_off = shared_offset(&m, "n").expect("slot `s.n` has an offset");
 
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let arena = arena_for(&m);
-        let mut vm = Vm::new(m.clone(), &arena).expect("vm");
-        // Chunk 0 op 0 is entered on the first call, so this stops immediately.
-        vm.set_breakpoint(0, 0);
-        let mut shared = vec![0u8; shared_data_bytes_for(&m)];
-        let st = vm
-            .call_with_shared(&mut shared, &[Value::Int(0)])
-            .expect("call");
-        assert!(
-            matches!(st, VmState::BreakpointHit { .. }),
-            "expected a breakpoint stop, got {st:?}"
-        );
-        vm.resume_from_breakpoint()
-    }));
+    let arena = arena_for(&m);
+    let mut vm = Vm::new(m.clone(), &arena).expect("vm");
+    let mut shared = vec![0u8; shared_data_bytes_for(&m)];
 
+    // Chunk 0 op 0 is entered on the first call, so this stops immediately.
+    vm.set_breakpoint(0, 0);
+    let st = vm
+        .call_with_shared(&mut shared, &[Value::Int(0)])
+        .expect("call");
     assert!(
-        outcome.is_err(),
-        "`resume_from_breakpoint` no longer panics on a shared-data module. If the \
-         `v0.2.3` line has repaired the missing buffer rebind, DELETE this test and \
-         restore the chunk-coverage instrument in this file, which is strictly better \
-         than the yield-sequence one it was replaced by."
+        matches!(st, VmState::BreakpointHit { .. }),
+        "expected a breakpoint stop, got {st:?}"
+    );
+
+    // The bare entry point must now REFUSE rather than panic, and say what to use.
+    let refused = vm.resume_from_breakpoint();
+    assert!(
+        refused.is_err(),
+        "bare `resume_from_breakpoint` accepted a shared-data module; it should refuse"
+    );
+    assert!(
+        format!("{:?}", refused.unwrap_err()).contains("resume_from_breakpoint_with_shared"),
+        "the refusal must name the method to use, or it sends a host to the wrong place"
+    );
+
+    // The working path, and the byte is what proves the buffer was bound.
+    let before = shared[n_off as usize];
+    let st = vm
+        .resume_from_breakpoint_with_shared(&mut shared)
+        .expect("resume with the buffer bound");
+    assert!(
+        matches!(st, VmState::Yielded(_)),
+        "expected a yield after the resume, got {st:?}"
+    );
+    assert_ne!(
+        shared[n_off as usize], before,
+        "the step returned Yielded without writing the shared segment, so the \
+         buffer was never really bound -- which is the failure a state-only \
+         assertion would have missed"
     );
 }
