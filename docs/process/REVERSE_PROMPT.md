@@ -187,6 +187,29 @@ coverage. Closed by `two-enums-same-variant`; the must-fire control reports
 demonstrate which mutation it discriminates there — that path is `fx_*`, not `mi_*`. The comment
 says so rather than borrowing the mi finding's evidence.
 
+## HANDING BACK TO MAINLINE: where V0.2.x actually stands
+
+**The roadmap is a long way from complete, and further than the recent increment titles suggest.**
+None of the five success criteria in `V0_2_X_ROADMAP.md` hold. Even **Order 1** of six is unmet, on
+two things:
+
+1. **The self-hosted path emits TWO region kinds, not the artifact.** `wire_names_via_kel` is the only
+   driver emit entry and byte identity covers `[NAMES, STRING_POOL]` against a schema of about twenty.
+   Everything landed recently feeds those two. **The largest single gap, and invisible from the titles.**
+2. **Self-hosted type rejection is started, not done** — 7 tests against a plan sizing ~15 shapes.
+
+**The roadmap's Order 1 cell is itself stale**: "125 tests" against 163, and it lists as remaining
+several items that are done. Correct it before sizing from it.
+
+## A THIRD correctness item, and it outranks the other two
+
+`wcmu_region` reports **2** where both peak models and the native emitter say **3**, on
+`06_multiheaded::classify` and `rogue_bestiary::corpse_fill`. **An understated bound on shipped
+chunks.** Neither chunk contains a `GetField`, so `d3fd5cb6` cannot reach it. The `v0.3.0` line
+eliminated the emitter and their own harness by measurement; what they could not establish is inside
+our function — why the walk does not reach op 18 given that the `If` arm recurses and `Op::Return`
+falls through the catch-all. Start there.
+
 ## The `concurrency` group is in, and not in the form requested
 
 `ci.yml` now supersedes an in-flight run when a PULL REQUEST is pushed again, and leaves branch runs
