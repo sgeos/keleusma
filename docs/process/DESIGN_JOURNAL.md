@@ -13,6 +13,54 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE TYPE-REJECTION RULES WERE ALREADY DONE, AND THE REAL LIMIT IS ONE LAYER UNDER THEM
+(2026-08-16).**
+
+**I was one step from briefing myself to redo finished work.** "Self-hosted type rejection is 7 tests
+against ~15 shapes" appeared in the roadmap, the handoff and my own summaries. **Seven is the TEST
+count; fifteen is the SHAPE count.** `ILL_TYPED` holds sixteen cases covering all fifteen enumerated
+shapes plus `calling-a-local`, and the whole-corpus test asserts every one is rejected and every
+control accepted, with must-fire guards on both corpus sizes. **Fourth instance of the plan not
+matching the tree**, after 395,804, "125 tests", and "two of twenty region kinds" — three of the four
+were mine.
+
+**WHAT IS ACTUALLY MISSING IS THE INPUT, AND IT IS THE SAME DISTINCTION AS `HEADER`.** `stage_verdict`
+is fed by `decl_call_rows`, `expression_nodes`, `field_sets` and `occurrence_rows` — Rust functions
+walking the REFERENCE parser's AST. The stage owns the DECISION, the host owns the STRUCTURE. That is
+"encoded but not derived" again, one increment later, in a different subsystem.
+
+**AND THE TAGS ARE LITERAL-ONLY, WHICH BOUNDS EVERY RULE.** `expr_tag` maps a literal to its kind and
+everything else to 0, UNKNOWN, which the stage must not reject. Measured:
+
+| case | reference | stage |
+|---|---|---|
+| `1 + true` | rejects | rejects |
+| `let b = true; 1 + b` | rejects | **accepts** |
+| `g() + true` | rejects | **accepts** |
+| `let a = 1; let b = true; a + b` | rejects | **accepts** |
+
+**Every one of the sixteen ill-typed cases places its operands as literals**, so the corpus cannot
+show this. The suite's coverage is a property of its case list rather than of the stage — the same
+meta-defect this line keeps finding, now found in the type corpus.
+
+**THE DESIGN IS DELIBERATE AND THE STAGE SAYS SO.** `verify_types.kel` records that the tags are
+syntactic on purpose, because marshalling the reference's inferred types "would make the stage agree
+with the reference by construction and prove nothing". That reasoning is right. What was missing is
+the CONSEQUENCE, stated where a reader meets the passing tests.
+
+**SWITCHING THE INPUT PATH TO THE PIPELINE'S OWN PARSER WOULD NOT HELP, AND THAT IS THE USEFUL
+RESULT.** Structure IS available: `parse.kel` emits records and `reconstruct.kel` turns them into a
+node array. **Source types are available from nothing** — no stage computes them, and `parse.kel`
+says in its own comment that it lacks "per-element type inference"; `verify_typed.kel` reasons about
+flat bytecode shapes, not source types. So the switch would move where the structure comes from and
+change nothing about the tags, which are what actually bound the rejections.
+
+**Recorded rather than built.** Writing an AST encoding for this stage now would duplicate what
+`parse.kel` and `reconstruct.kel` already carry while still leaving every tag unknown. The blocker is
+a missing pipeline capability — inference — not a missing encoding.
+
+---
+
 **THE EMIT PATH REACHES A THIRD REGION, AND THE MEASUREMENT THAT PICKED IT MATTERED MORE THAN THE
 CODE (2026-08-16).**
 

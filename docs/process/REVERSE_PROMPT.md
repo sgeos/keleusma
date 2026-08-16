@@ -88,7 +88,10 @@ differs, which is what "the host owns the numbers" means.
 - **`FixedMul`/`FixedDiv` peak-model nets**, pinned; repairing them LOWERS shipped bounds. Yours.
 - **`Op::Yield`'s peak-model net**, pinned; repairing it raises them.
 - **`Op::cost()`**, 17 of 66 opcodes ever measured.
-- **Self-hosted type rejection**, 7 tests against roughly 15 shapes.
+- **Self-hosted type rejection**: RULES COMPLETE, INPUT NOT. All fifteen shapes plus
+  `calling-a-local` are rejected. The stage's channels come from Rust walking the REFERENCE AST,
+  and the tags are literal-only, so every rule reaches only literal-direct occurrences. Needs
+  SOURCE TYPES, which no pipeline stage computes.
 - **The `for` trailing-semicolon asymmetry**, pinned. **`CHANGELOG.md:340`** wrong in published text.
 - Publication remains **HELD**.
 
@@ -253,7 +256,7 @@ It is the next thing I pick up unless redirected.
 - **`FixedMul`/`FixedDiv` peak-model nets**, pinned in the same place, verified against the handler.
 - **`Op::cost()` disagrees with measurement**; 17 opcodes of 66 were ever measured.
 - **Order 1 remains the real gap**: the self-hosted path emits two region kinds against a schema of
-  about twenty, and type rejection is 7 tests against ~15 shapes. The roadmap cell now says so.
+  about twenty, and type rejection has complete RULES but a host-supplied, literal-only INPUT. The roadmap cell now says so.
 - **The `for` trailing-semicolon asymmetry**, pinned. Widening is the operator's call.
 - **`CHANGELOG.md:340`** states the checked-arithmetic push order wrongly in published text.
 - Publication remains **HELD**.
