@@ -247,7 +247,8 @@ fn q5_which_side_is_wrong_where_the_emitter_exceeds_the_bound() {
     // the checked family, which pops two and pushes (low, high, flag), so from
     // depth two it reaches three.
     let ctl = compile(
-        &parse(&tokenize("fn main(a: Word, b: Word) -> Word { a + b }").expect("lex")).expect("parse"),
+        &parse(&tokenize("fn main(a: Word, b: Word) -> Word { a + b }").expect("lex"))
+            .expect("parse"),
     )
     .expect("compile");
     let (cp, cd, clines) = walk_both_models(&ctl.chunks[0]);
@@ -264,7 +265,10 @@ fn q5_which_side_is_wrong_where_the_emitter_exceeds_the_bound() {
 
     for (file, want) in [
         ("06_multiheaded.kel", "examples/scripts/06_multiheaded.kel"),
-        ("rogue_bestiary.kel", "examples/scripts/rogue/rogue_bestiary.kel"),
+        (
+            "rogue_bestiary.kel",
+            "examples/scripts/rogue/rogue_bestiary.kel",
+        ),
     ] {
         let Ok(src) = std::fs::read_to_string(std::path::Path::new("..").join(want)) else {
             println!("\n  {file}: not found at {want}");
@@ -279,7 +283,11 @@ fn q5_which_side_is_wrong_where_the_emitter_exceeds_the_bound() {
             .map(|(slots, _)| slots as i32)
             .unwrap_or(-1);
 
-        println!("\n  {file}::chunk0  `{}`  ({} ops)", chunk.name, chunk.ops.len());
+        println!(
+            "\n  {file}::chunk0  `{}`  ({} ops)",
+            chunk.name,
+            chunk.ops.len()
+        );
         for l in lines.iter().take(40) {
             println!("{l}");
         }
@@ -299,7 +307,11 @@ fn q5_which_side_is_wrong_where_the_emitter_exceeds_the_bound() {
                 let b = per.get(i).map(|(s, _)| *s as i64).unwrap_or(-1);
                 println!("    chunk {i:>3}  bound {b:>3}  `{}`", c.name);
             }
-            println!("    (vec len {} against {} chunks)", per.len(), m.chunks.len());
+            println!(
+                "    (vec len {} against {} chunks)",
+                per.len(),
+                m.chunks.len()
+            );
         }
     }
 
@@ -336,7 +348,10 @@ fn q5_which_side_is_wrong_where_the_emitter_exceeds_the_bound() {
     // re-deriving before anything is reported.
     for (file, want) in [
         ("06_multiheaded.kel", "examples/scripts/06_multiheaded.kel"),
-        ("rogue_bestiary.kel", "examples/scripts/rogue/rogue_bestiary.kel"),
+        (
+            "rogue_bestiary.kel",
+            "examples/scripts/rogue/rogue_bestiary.kel",
+        ),
     ] {
         let Ok(src) = std::fs::read_to_string(std::path::Path::new("..").join(want)) else {
             continue;
@@ -563,7 +578,10 @@ fn q4_the_stack_model_goes_negative_on_shipped_code() {
         m.chunks
             .iter()
             .any(|c| c.name == "main" && walk_goes_negative(c))
-    }) && let Some(c) = m.chunks.iter().find(|c| c.name == "main" && walk_goes_negative(c))
+    }) && let Some(c) = m
+        .chunks
+        .iter()
+        .find(|c| c.name == "main" && walk_goes_negative(c))
     {
         println!(
             "\n  the first offender, walked: {}::{}",

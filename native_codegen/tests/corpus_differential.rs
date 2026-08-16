@@ -508,28 +508,76 @@ fn stage_seed(m: &Module, name: &str) -> Result<Vec<u8>, String> {
             let always = keleusma::selfhost::self_hosted_always_yielding(&subject);
             keleusma::selfhost::seed_verify_structural_shared(&vm, &subject, chunk, &always)
         }
-        // **`reconstruct.kel` CANNOT be driven from here, and it is not for want
-        // of an accessor.** Both `seed_reconstruct_shared` and
-        // `seed_reconstruct_multihead_shared` landed. The first wants
-        // `records: &[(i64, i64)]` and the second `heads: &[&ParsedFn]` --
-        // `ParsedFn` is `pub` but every FIELD is private, and the function that
-        // produces one is private too. So the input cannot be obtained from
-        // outside the crate, and inventing a record stream is precisely the
-        // "reproduce the stage's input format" this line asked the accessors to
-        // avoid: a stream the stage silently rejects looks exactly like coverage.
+        // **`reconstruct.kel` IS drivable from here. The earlier claim that its
+        // producer is private is RETRACTED** -- `parse_functions` is `pub`, and it
+        // returns the parsed heads directly, so the record stream handed to the
+        // stage is the driver's own rather than a second encoding written here.
+        //
+        // What is genuinely unreachable is `ParsedFn`'s FIELDS. Two scalars
+        // therefore cannot be read off the parsed values: which heads form the
+        // multiheaded group, and how many value parameters they declare. Neither
+        // is part of the stage's input record format -- they are properties of the
+        // SUBJECT -- and both are derived or asserted below rather than assumed,
+        // because a subject that quietly stops containing the construct it is
+        // named for is this harness's own recorded failure mode.
+        //
+        // **`seed_reconstruct_shared`, the single-head form, stays blocked.** It
+        // wants `records: &[(i64, i64)]`, which cannot be built without the field
+        // accessors. Those are on the `v0.2.3` line's open work and are not on this
+        // tree, so exactly one of the two reconstruct paths is exercised here.
         "reconstruct.kel" => {
-            return Err(
-                "blocked: needs `records` or `&[&ParsedFn]`, and ParsedFn's fields \
-                 and producer are private outside the crate"
-                    .into(),
-            );
+            let path = sources()
+                .into_iter()
+                .find(|p| {
+                    p.file_name().unwrap_or_default().to_string_lossy() == "06_multiheaded.kel"
+                })
+                .ok_or("06_multiheaded.kel is not in the corpus")?;
+            let src = std::fs::read_to_string(&path).map_err(|e| format!("read subject: {e}"))?;
+            let (fns, _names, _, _) = keleusma::selfhost::parse_functions(&src);
+            // The subject declares its three `classify` heads FIRST and then
+            // `main`, so the group is the leading run. Asserted, not trusted: if
+            // the file gains a function the seed would silently describe a
+            // different program, and a rejected seed looks exactly like coverage.
+            if fns.len() != 4 {
+                return Err(format!(
+                    "subject shape changed: expected 4 parsed heads in \
+                     06_multiheaded.kel, got {}",
+                    fns.len()
+                ));
+            }
+            let heads: Vec<&keleusma::selfhost::ParsedFn> = fns[..3].iter().collect();
+            // The parameter count is DERIVED from the compiled subject's signature
+            // for the multiheaded chunk, never written as a literal, so the two
+            // cannot drift apart.
+            let subj = compile(
+                &parse(&tokenize(&src).map_err(|e| format!("subject lex: {e:?}"))?)
+                    .map_err(|e| format!("subject parse: {e:?}"))?,
+            )
+            .map_err(|e| format!("subject compile: {e:?}"))?;
+            let idx = subj
+                .chunks
+                .iter()
+                .position(|c| c.name == "classify")
+                .ok_or("subject has no `classify` chunk")?;
+            let pc = subj
+                .signatures
+                .get(idx)
+                .map(|s| s.params.len())
+                .ok_or("subject carries no signature for `classify`")?;
+            if pc == 0 {
+                return Err("`classify` reports zero parameters".into());
+            }
+            keleusma::selfhost::seed_reconstruct_multihead_shared(&vm, &heads, pc)
         }
         other => return Err(format!("no arm for {other}")),
     };
     // The stage's own layout sizes it; the harness must not assume they agree.
     let want = shared_data_bytes_for(m);
     if seed.len() != want {
-        return Err(format!("size mismatch: accessor {} vs harness {want}", seed.len()));
+        return Err(format!(
+            "size mismatch: accessor {} vs harness {want}",
+            seed.len()
+        ));
     }
     Ok(seed)
 }
@@ -552,6 +600,14 @@ struct Run {
     results: Vec<i64>,
     log: Vec<String>,
     shared: Vec<u8>,
+    /// Whether the run CHANGED the shared segment from the bytes it was given.
+    ///
+    /// Not the same question as whether the segment is non-zero. A seeded module
+    /// starts non-zero, so a zero test answers "was it seeded", never "did it do
+    /// anything" — and every seeded stage would leave the vacuous set the moment
+    /// it was seeded, whether or not it ran. This is the honest form of that
+    /// question and it is what `is_vacuous` reads.
+    wrote_shared: bool,
 }
 
 fn run_vm(
@@ -670,6 +726,12 @@ fn run_vm(
             seed_len_bytes(m, &mut shared);
         }
     }
+    // **The segment as the module FOUND it**, kept so vacuity can ask whether the
+    // run changed anything rather than whether the buffer is non-zero. Seeding
+    // makes a non-zero test true before the module executes a single op, so
+    // without this a seeded module leaves the vacuous set BY CONSTRUCTION and the
+    // departure is evidence of nothing. See `is_vacuous`.
+    let initial_shared = shared.clone();
     let mut results = Vec::new();
 
     let first = match vm.call_with_shared(&mut shared, &vals) {
@@ -704,6 +766,7 @@ fn run_vm(
     }
     Ok(Run {
         results,
+        wrote_shared: shared != initial_shared,
         log: take_log(),
         shared,
     })
@@ -805,6 +868,9 @@ fn run_native(
         }
     }
     shared[n_shared..].copy_from_slice(&CANARY.to_le_bytes());
+    // The segment as the module found it. See `is_vacuous`: a seeded module is
+    // non-zero before it runs, so vacuity must ask what the run CHANGED.
+    let initial_shared = shared[..n_shared].to_vec();
     let mut privs = vec![0u64; n_priv + 1];
     privs[n_priv] = CANARY;
     let mut region = vec![0u64; n_region.div_ceil(8) + 1];
@@ -951,6 +1017,7 @@ fn run_native(
     shared.truncate(n_shared);
     Some(Run {
         results,
+        wrote_shared: shared != initial_shared,
         log: take_log(),
         shared,
     })
@@ -960,8 +1027,22 @@ fn run_native(
 ///
 /// The harness compares three things, and a module that exits immediately is
 /// trivial in all three at once: one repeated result, no host calls, and a shared
-/// segment still holding the zeros it was handed. Two sides agreeing on that
-/// state assert nothing about the emitter.
+/// segment the run never changed. Two sides agreeing on that state assert nothing
+/// about the emitter.
+///
+/// **THE THIRD TEST WAS "IS THE SEGMENT ALL ZERO" UNTIL 2026-08-16, AND SEEDING
+/// DEFEATED IT.** A seeded module holds a non-zero segment before it executes a
+/// single operation, so the zero test answered "was it seeded" rather than "did it
+/// do anything", and **every stage left this list the moment it was given a seed,
+/// whether or not the seed changed the run.** Three did, on 2026-08-15 and
+/// 2026-08-16, and the headline moved from 40 to 44 on the strength of it. The
+/// test now compares against the bytes the module was HANDED, so a seeded stage
+/// that writes nothing is correctly vacuous again and those three returned to this
+/// list. `reconstruct.kel` stayed out, which is the difference between a stage
+/// that does observable work and a stage that merely receives an input.
+///
+/// This is the same defect class the file already documents twice over: an
+/// experiment that cannot fail looks exactly like success.
 ///
 /// **Conservative by construction.** A run is vacuous only when EVERY observable
 /// is trivial, so a module doing real work in any one of them is counted as
@@ -982,7 +1063,7 @@ fn is_vacuous(run: &Run) -> bool {
     let mut distinct: Vec<i64> = run.results.clone();
     distinct.sort_unstable();
     distinct.dedup();
-    distinct.len() <= 1 && run.log.is_empty() && run.shared.iter().all(|b| *b == 0)
+    distinct.len() <= 1 && run.log.is_empty() && !run.wrote_shared
 }
 
 /// Modules that AGREE while producing nothing, tracked rather than counted.
@@ -996,26 +1077,39 @@ fn is_vacuous(run: &Run) -> bool {
 /// is why the headline moved from 40 to 34. Nothing regressed; the number was
 /// measuring the harness rather than the emitter.
 ///
-/// `parse.kel` has REAL coverage in `stage_differential.rs`, which seeds the
-/// segment identically on both sides. It stays listed here because this harness
-/// cannot seed a token stream from the convention alone.
+/// **The list GREW on 2026-08-16, and that is a repair rather than a regression.**
+/// `is_vacuous` had asked whether the shared segment was all zero, which a seeded
+/// module fails before it runs. Three `verify_*` stages had left this list on that
+/// basis alone and are now back. The count they were credited with, 44 executed,
+/// was measuring the fact that they had been seeded.
 ///
-/// The other four consume abstract-syntax-tree and descriptor blocks whose
-/// layouts belong to the `src/selfhost/mod.rs` driver, which this line may read
-/// but must not edit. Seeding those means reproducing four input formats, and a
-/// seed a stage silently rejects looks exactly like coverage.
+/// **Seeding a stage is not the same as a stage doing observable work**, and only
+/// `reconstruct.kel` has cleared the second bar. Every departure and every return
+/// was forced by the set-equality assertion below rather than chosen.
+///
+/// **These stages DO run.** `probe_stage_vacuity` measures each entering strictly
+/// more chunks when seeded, so the accessors bought real execution. What they did
+/// not buy is an observable this harness can compare, which is why both
+/// instruments are kept and why neither is quoted alone.
 const KNOWN_VACUOUS: &[&str] = &[
     // `lexer.kel` LEFT this list on 2026-08-15, and the set-equality assertion
     // is what noticed. It declares the documented `len` + `bytes` host
     // convention, so `seed_len_bytes` now gives it a real payload and it does
     // real work inside this harness rather than only in `stage_differential`.
     //
-    // `verify_depth.kel`, `verify_typed.kel` and `verify_structural.kel` LEFT on
-    // 2026-08-16, by the same mechanism. The
-    // `v0.2.3` line landed per-item seed accessors (`fa649ec3`) that this line
-    // requested, and `stage_seed` now hands it a REAL compiled chunk built by
-    // `seed_verify_depth_shared` -- the driver's own encoding, not a second one
-    // reproduced here.
+    // **`verify_depth.kel`, `verify_typed.kel` and `verify_structural.kel` LEFT on
+    // 2026-08-16 AND CAME BACK THE SAME DAY.** The departure was an artifact: the
+    // vacuity test asked whether the segment was all zero, and seeding makes it
+    // non-zero before the module runs, so being seeded was sufficient to leave.
+    // With the test comparing against the bytes the module was handed, all three
+    // are vacuous again -- they yield one constant value, call no native, and
+    // write nothing back.
+    //
+    // **This is not a criticism of the accessors, which work.** `probe_stage_vacuity`
+    // shows each stage entering strictly more chunks when seeded (5->7, 6->14,
+    // 4->6). They execute more of themselves and produce no observable this
+    // harness can compare. Do NOT remove them from this list to recover the
+    // headline count.
     //
     // **`verify_datalayout.kel` will NOT leave this list by seeding, and that is
     // correct rather than a gap.** It has no accessor by joint agreement: its
@@ -1023,13 +1117,23 @@ const KNOWN_VACUOUS: &[&str] = &[
     // retained buffer, with a whole-module contiguity comparison at the end, so
     // a single seeded buffer cannot produce a verdict at all. Do not invent a
     // batch-zero seed for it -- it would run, agree, and mean nothing.
-    // `reconstruct.kel` stays for a DIFFERENT reason from `verify_datalayout`.
-    // Its accessors exist; its INPUTS are unreachable. `ParsedFn` is `pub` with
-    // private fields and a private producer, so neither `records` nor
-    // `&[&ParsedFn]` can be obtained here. Reported to the `v0.2.3` line as a
-    // request rather than worked around by inventing a record stream.
-    "reconstruct.kel",
+    //
+    // **`reconstruct.kel` LEFT on 2026-08-16, and the report that had kept it
+    // here was WRONG.** This line told the `v0.2.3` line the stage was blocked
+    // because `ParsedFn`'s producer is private. It is not: `parse_functions` is
+    // `pub` and returns the parsed heads, so the multiheaded path was reachable
+    // the whole time and no new accessor was needed. The `v0.2.3` line caught
+    // the error. Only the single-head `seed_reconstruct_shared` was ever truly
+    // blocked, and it still is, on field accessors that are not on this tree.
+    //
+    // **`reconstruct.kel` stayed OUT when the vacuity test was repaired**, which
+    // is the difference that matters: it writes the reconstructed forest back into
+    // the segment, so its departure survives asking whether the run changed
+    // anything. The three stages above did not.
     "verify_datalayout.kel",
+    "verify_depth.kel",
+    "verify_structural.kel",
+    "verify_typed.kel",
 ];
 
 /// Modules KNOWN to disagree, tracked rather than ignored.
@@ -1233,7 +1337,11 @@ fn a_trapping_programs_native_side_dies_with_sigtrap() {
         );
 
         let out = std::process::Command::new(std::env::current_exe().expect("current exe"))
-            .args(["--exact", "trap_child_runs_one_module_natively", "--nocapture"])
+            .args([
+                "--exact",
+                "trap_child_runs_one_module_natively",
+                "--nocapture",
+            ])
             .env("KEL_TRAP_CHILD", name)
             .env_remove("KEL_ONLY_MODULE")
             .output()
@@ -1287,7 +1395,11 @@ fn a_trapping_programs_native_side_dies_with_sigtrap() {
                 continue;
             };
             let out = std::process::Command::new(std::env::current_exe().expect("current exe"))
-                .args(["--exact", "trap_child_runs_one_module_natively", "--nocapture"])
+                .args([
+                    "--exact",
+                    "trap_child_runs_one_module_natively",
+                    "--nocapture",
+                ])
                 .env("KEL_TRAP_CHILD", name)
                 .env_remove("KEL_ONLY_MODULE")
                 .output()
