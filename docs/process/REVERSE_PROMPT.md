@@ -187,6 +187,29 @@ coverage. Closed by `two-enums-same-variant`; the must-fire control reports
 demonstrate which mutation it discriminates there — that path is `fx_*`, not `mi_*`. The comment
 says so rather than borrowing the mi finding's evidence.
 
+## The `concurrency` group is in, and not in the form requested
+
+`ci.yml` now supersedes an in-flight run when a PULL REQUEST is pushed again, and leaves branch runs
+alone. That closes a failure the `v0.3.0` line measured at about twenty minutes and asked for three
+times, and which cost this line two hand-cancelled runs in one session.
+
+**The requested form would have cost something.** `group: ${{ github.workflow }}-${{ github.ref }}`
+with `cancel-in-progress: true` also groups PUSH events, because this workflow triggers on both — so
+a second merge to a version branch cancels the first commit's verification run, leaving an
+intermediate tip with no green run of its own. That per-tip result is what distinguishes an
+integrated state from a proposed one.
+
+**What landed** keys the group on the ref for a pull request and on the unique `run_id` otherwise, so
+branch runs can neither cancel nor queue. Grouping them with `cancel-in-progress: false` is worse
+than it sounds: it does not cancel, it SERIALISES ~45-minute runs behind one another.
+
+**No `CHANGELOG.md` entry, deliberately**: `.github/` is not in the crate tarball, so nothing a
+downstream embedder can observe changes. Recorded rather than silently omitted.
+
+**What this does NOT establish**: the branch-run half is correct by construction, not by test — a
+`run_id` group is unique per run, so there is no collision to observe. Only the pull-request half was
+verified by execution.
+
 ## The five seed accessors are built
 
 Public under `self-host`: the four `*_kel_module()` builders, plus

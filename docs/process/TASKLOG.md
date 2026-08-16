@@ -52,6 +52,11 @@ Current sprint source of truth.
 > 49,152. The plan's claim that the producer and the staging are one increment followed from the
 > 395,804 figure, which is a `CONSTS` region record count and still sits at five sites there.
 >
+> **`concurrency` group landed on `ci.yml` (2026-08-15)**, superseding pull-request runs only. The
+> requested workflow-wide form would also have cancelled version-branch verification runs, since the
+> workflow triggers on push as well; the group keys on `run_id` for non-PR events so branch runs
+> neither cancel nor queue. No CHANGELOG entry: `.github/` is not shipped.
+>
 > **The five seed accessors are BUILT (2026-08-15).** Public under `self-host`, with the four stage
 > module builders. Every driver entry point seeds through them, so one encoding exists rather than
 > two. Five because `reconstruct` has two entry points — the `v0.3.0` line's refinement, and the part
