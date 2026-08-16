@@ -210,7 +210,8 @@ pub const ED25519_VERIFYING_KEY_BYTES: usize = 32;
 
 /// Width of the encryption-metadata block appended after the
 /// signature extension on encrypted modules. The layout is
-/// documented in [`crate::encryption::EncryptionMetadata`] and in
+/// documented by `encryption::EncryptionMetadata` (that module is gated behind
+/// the `encryption` feature) and in
 /// `tmp/encrypted_signed_modules.md`. Always 88 bytes for the
 /// V0.2.1 X25519+AES-256-GCM scheme; future schemes may use the
 /// same constant or extend it through a scheme-specific
@@ -2612,7 +2613,8 @@ pub fn module_from_wire_bytes(bytes: &[u8]) -> Result<Module, LoadError> {
 /// **not** the host's choice is what follows it: **a repair must be followed by
 /// a fresh verification**, because a signature check describes the bytes at the
 /// moment it ran and a scrub modifies them. For a signed module,
-/// [`scrub_and_verify_signed`] performs the pair in the sound order and is the
+/// `scrub_and_verify_signed` (gated behind the `signatures` feature) performs
+/// the pair in the sound order and is the
 /// call to prefer.
 ///
 /// The reason is measured rather than cautionary. A (72,64) code reports

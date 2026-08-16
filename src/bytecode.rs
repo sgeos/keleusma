@@ -3839,7 +3839,13 @@ pub enum LoadError {
     /// but no key in the host's trust matrix verifies the attached
     /// signature, or the signed-extension metadata is inconsistent.
     /// Hosts respond by either refusing the module or registering an
-    /// additional [`crate::vm::Vm::register_verifying_key`] entry.
+    /// additional `Vm::register_verifying_key` entry (that method is gated
+    /// behind the `signatures` feature).
+    // NOT AN INTRA-DOC LINK, deliberately. The target exists only under
+    // `signatures`, so a link here fails to resolve in any build without it --
+    // `cargo doc --features self-host` reported exactly that. Naming the gate in
+    // prose resolves under every feature set AND tells the reader something the
+    // hyperlink did not, which is that the item is conditional.
     InvalidSignature,
     /// The bytecode is signed but the runtime build does not include
     /// the `signatures` cargo feature. The host has no way to verify

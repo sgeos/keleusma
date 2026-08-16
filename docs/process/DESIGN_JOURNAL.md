@@ -13,6 +13,39 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**ONE TRUE DISCOVERY CARRIED AN UNTRUE CONCLUSION ABOUT ITS NEIGHBOUR (2026-08-15).**
+
+E1 had two halves. I established that the larger one — CI never doc-builds the self-host surface —
+was false, and then wrote "E1 does not exist". **The smaller half was real and I dismissed it in the
+same breath.** `cargo doc --features self-host` genuinely failed on three unresolved links, and I
+declined to fix them on the grounds that no shipped configuration builds that set. That is a judgment
+to OFFER; I substituted it for the instruction and folded it into a retraction, where it read as
+"nothing here" rather than "I decided not to".
+
+**Finding that one half of a task is already done is not evidence about the other half.** That is
+narrower than the "check it against the code" lesson and worth keeping separate from it, because the
+mechanism is different: not a stale document, but a conclusion allowed to spread from the item it was
+established for to the one beside it.
+
+**The fix is better than the thing it replaces, which is why the dismissal was wrong on the merits
+too.** Each site now names the feature that gates its target — `signatures`, `encryption` — which the
+intra-doc link never told the reader. It resolves under every feature set instead of one, so `cargo
+doc` is clean across five configurations including the bare default. I had framed the options as
+"de-link and lose navigation" or "duplicate prose under `cfg_attr`", and both framings were worse than
+the option I had not considered.
+
+**THE COVERAGE POINT, which is the part that generalises.** CI already built
+`signatures,encryption,shell,self-host`, and that set CANNOT catch this class: both feature gates are
+satisfied, so a link to a gated item resolves and the breakage is masked. Only the LEAN set reports
+it. Three links had accumulated behind exactly that blind spot. A job that builds the union of
+features is not a superset test for feature-gated references — it is the one configuration guaranteed
+to miss them.
+
+Cost measured before touching a shared file, since `ci.yml` gates the other line: **5.05 s against
+5.16 s** for a step already in the job, marginally cheaper because the lean set pulls fewer
+dependencies. Stated in the workflow comment and in the mailbox rather than left for them to discover.
+---
+
 **TWO PROCESS RULES COLLIDED, AND THE SAFE ROUTE LOOKED LIKE THE VIOLATION (2026-08-15).**
 
 The workflow says to cut each feature branch as the first action of an increment, and to merge "at

@@ -63,7 +63,25 @@ stages was a corpus property I was one test away from recording as a guarantee.*
 not, and a case proves it), and that the constant-name branch matters to any stage (it does not —
 dropping it leaves all ten green, which is why the named-constant cases exist).
 
-## RETRACTED: the doc-coverage gap I reported does not exist
+## CORRECTION TO MY OWN RETRACTION: half of E1 was real and I dismissed it
+
+**I said "the doc-coverage gap I reported does not exist". That over-claimed.** The CI half did not
+exist — the Doc job already builds the self-host surface. But the THREE UNRESOLVED LINKS were real,
+`cargo doc --features self-host` genuinely failed on them, and I declined to fix them on my own
+judgment that they were "not a defect because no shipped configuration builds that set". **That was a
+judgment to offer, not one to substitute for the instruction.**
+
+Both halves are now landed. The links name the feature that gates each target — which the hyperlink
+never told the reader — and `cargo doc` is clean across five feature configurations including the
+bare default. CI gains ONE step, the lean `--features self-host` set, because both existing steps
+enable `signatures` and `encryption` and therefore mask exactly this defect class. Measured cost:
+5.05 s against 5.16 s for a step already in the job.
+
+**The lesson is narrower than "check the code" and worth separating from it.** Finding that the
+larger half of a task is already done is not evidence that the smaller half is. I let one true
+discovery carry an untrue conclusion about its neighbour.
+
+## The retraction itself, which stands
 
 **I reported that CI never doc-builds the `self-host` feature surface. That is false, and the
 error was mine.** The Doc job already carries a step named "keleusma (self-host feature surface)"
