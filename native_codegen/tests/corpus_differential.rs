@@ -478,11 +478,33 @@ fn stage_seed(m: &Module, name: &str) -> Result<Vec<u8>, String> {
             compile(&parse(&tokenize(&src).ok()?).ok()?).ok()
         })
         .ok_or("no subject module in the corpus")?;
-    let chunk = subject
-        .chunks
-        .iter()
-        .max_by_key(|c| c.ops.len())
+    let cix = (0..subject.chunks.len())
+        .max_by_key(|&i| subject.chunks[i].ops.len())
         .ok_or("subject has no chunk")?;
+
+    // **THE SUBJECT CHUNK CARRIES A DEFECT, and that is what makes these three
+    // stages observable at all.** Each writes its verdict to an `out_reject` slot
+    // as 1 for reject and 0 for accept, and the seeded buffer already holds 0. On
+    // a WELL-FORMED chunk the verdict is accept, so the stage runs, decides, and
+    // changes nothing this harness can compare -- which is precisely why all three
+    // sat in `KNOWN_VACUOUS`. Injecting the defect each stage checks for moves the
+    // verdict to 1 and the segment with it.
+    //
+    // **Each stage gets ITS OWN defect.** One mutation for all three was tried and
+    // `verify_structural.kel` accepted the operand-stack underflow, correctly: it
+    // latches block-nesting malformation, not depth. Reusing one mutation would
+    // have read as "that stage cannot be made to reject", which is false.
+    //
+    // **The ACCEPT direction is asserted in `probe_stage_vacuity`**, not here. A
+    // rejecting seed alone would be satisfied by a stage that rejects everything.
+    let mut subject = subject;
+    match name {
+        "verify_depth.kel" | "verify_typed.kel" => subject.chunks[cix].ops.insert(0, Op::PopN(4)),
+        "verify_structural.kel" => subject.chunks[cix].ops.insert(0, Op::If(1)),
+        _ => {}
+    }
+    let subject = subject;
+    let chunk = &subject.chunks[cix];
 
     let arena = arena_for(m);
     let vm = Vm::new(m.clone(), &arena).map_err(|e| format!("stage VM refuses to load: {e:?}"))?;
@@ -494,12 +516,7 @@ fn stage_seed(m: &Module, name: &str) -> Result<Vec<u8>, String> {
             // reason about are the subject's.
             let wb = (1usize << subject.word_bits_log2) / 8;
             let fb = (1usize << subject.float_bits_log2) / 8;
-            let idx = subject
-                .chunks
-                .iter()
-                .position(|c| core::ptr::eq(c, chunk))
-                .unwrap_or(0);
-            let sig = subject.signatures.get(idx);
+            let sig = subject.signatures.get(cix);
             keleusma::selfhost::seed_verify_typed_shared(&vm, &subject, chunk, sig, wb, fb)
         }
         "verify_structural.kel" => {
@@ -1083,33 +1100,33 @@ fn is_vacuous(run: &Run) -> bool {
 /// basis alone and are now back. The count they were credited with, 44 executed,
 /// was measuring the fact that they had been seeded.
 ///
-/// **Seeding a stage is not the same as a stage doing observable work**, and only
-/// `reconstruct.kel` has cleared the second bar. Every departure and every return
-/// was forced by the set-equality assertion below rather than chosen.
+/// **Seeding a stage is not the same as a stage doing observable work.** Every
+/// departure and every return was forced by the set-equality assertion below
+/// rather than chosen.
 ///
-/// **These stages DO run.** `probe_stage_vacuity` measures each entering strictly
-/// more chunks when seeded, so the accessors bought real execution. What they did
-/// not buy is an observable this harness can compare, which is why both
-/// instruments are kept and why neither is quoted alone.
+/// **The three `verify_*` stages left again the same day, by a DIFFERENT and real
+/// mechanism.** Each writes its verdict as 1 for reject and 0 for accept, and the
+/// seeded buffer already holds 0, so a well-formed subject produced a decision
+/// that changed nothing. They are now seeded with a chunk carrying the defect each
+/// one actually checks for, the verdict moves to 1, and the segment moves with it.
+/// The count returning to 45 is earned by a moved observable, **not** evidence
+/// that dropping it to 42 was mistaken. That drop was correct and remains so.
 const KNOWN_VACUOUS: &[&str] = &[
     // `lexer.kel` LEFT this list on 2026-08-15, and the set-equality assertion
     // is what noticed. It declares the documented `len` + `bytes` host
     // convention, so `seed_len_bytes` now gives it a real payload and it does
     // real work inside this harness rather than only in `stage_differential`.
     //
-    // **`verify_depth.kel`, `verify_typed.kel` and `verify_structural.kel` LEFT on
-    // 2026-08-16 AND CAME BACK THE SAME DAY.** The departure was an artifact: the
-    // vacuity test asked whether the segment was all zero, and seeding makes it
-    // non-zero before the module runs, so being seeded was sufficient to leave.
-    // With the test comparing against the bytes the module was handed, all three
-    // are vacuous again -- they yield one constant value, call no native, and
-    // write nothing back.
+    // **`verify_depth.kel`, `verify_typed.kel` and `verify_structural.kel` left,
+    // came back, and left again on 2026-08-16.** The first departure was an
+    // artifact of the zero test and is recorded in `is_vacuous`. The second is
+    // real: they are seeded with a chunk carrying the defect each checks for, so
+    // the verdict moves from accept to reject and the segment changes.
     //
-    // **This is not a criticism of the accessors, which work.** `probe_stage_vacuity`
-    // shows each stage entering strictly more chunks when seeded (5->7, 6->14,
-    // 4->6). They execute more of themselves and produce no observable this
-    // harness can compare. Do NOT remove them from this list to recover the
-    // headline count.
+    // **Do NOT restore a well-formed subject to make them look better behaved.**
+    // On a well-formed chunk all three accept, write the 0 that was already there,
+    // and become vacuous again -- correctly. The accept direction is asserted in
+    // `probe_stage_vacuity` so a stage that rejected EVERYTHING could not pass.
     //
     // **`verify_datalayout.kel` will NOT leave this list by seeding, and that is
     // correct rather than a gap.** It has no accessor by joint agreement: its
@@ -1126,14 +1143,11 @@ const KNOWN_VACUOUS: &[&str] = &[
     // the error. Only the single-head `seed_reconstruct_shared` was ever truly
     // blocked, and it still is, on field accessors that are not on this tree.
     //
-    // **`reconstruct.kel` stayed OUT when the vacuity test was repaired**, which
-    // is the difference that matters: it writes the reconstructed forest back into
-    // the segment, so its departure survives asking whether the run changed
-    // anything. The three stages above did not.
+    // **`reconstruct.kel` stayed OUT when the vacuity test was repaired**, which is
+    // the difference that matters: it writes the reconstructed forest back into the
+    // segment, so its departure survived asking whether the run changed anything
+    // without needing a defective subject at all.
     "verify_datalayout.kel",
-    "verify_depth.kel",
-    "verify_structural.kel",
-    "verify_typed.kel",
 ];
 
 /// Modules KNOWN to disagree, tracked rather than ignored.
