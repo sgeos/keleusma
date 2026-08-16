@@ -4,6 +4,14 @@
 One prediction was wrong and the miss is recorded below.
 **Date**: 2026-08-15.
 
+> **2026-08-16: 44 executed, 2 vacuous, 18 exempt.** `led.kel` is CLOSED — the
+> `gpio_set` composite return this document predicted was closeable is now
+> honoured on both sides, from one shared byte builder. `rogue_dungen.kel`
+> remains un-closeable for the reason stated below, which has not changed: the
+> range lives only in the host's head. **Closing `led.kel` cost a `Trap` subject
+> rather than gaining one** — a faithful stub returns a valid variant, so the
+> module no longer faults at all. See `NATIVE_MUTATION_CENSUS.md` Part E.
+>
 > **Later the same day: 38 executed, 5 vacuous, 20 exempt.** The extra module is
 > `lexer.kel`, which left `KNOWN_VACUOUS` rather than the exemption list, so the
 > figures in this document are unchanged where it speaks about EXEMPTIONS. The
