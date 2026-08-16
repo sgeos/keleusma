@@ -13,6 +13,117 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE UNDERSTATED WCMU BOUND WAS NOT OFF BY ONE. THE WHOLE BODY CONTRIBUTION WAS BEING DISCARDED
+(2026-08-16).**
+
+The `v0.3.0` line reported `06_multiheaded::classify` and `rogue_bestiary::corpse_fill` at a bound of
+**2** where both peak models walked branch-aware and the native emitter said **3**. Reproduced here,
+and the report understated its own finding: the reported 2 is `local_count` alone. **The body peak
+was reported as exactly 0.**
+
+**THE CAUSE IS A TYPE, NOT AN ARM.** `wcmu_region` returned `Option<McuResult>` where `None` meant
+"no path reaches the end" and carried no resources at all. Four sites therefore discarded an
+accumulated peak and heap: the `Trap` arm (which explicitly did `let _ = peak;`), the `If` arm when
+both branches exited, the `Loop` arm when the body never fell through, and every top-level caller's
+`unwrap_or(McuResult::empty())`. Patching the arm named in the report would have left three.
+
+Replaced with `McuOutcome`, in which `peak_above_initial` and `heap_total` are always meaningful and
+`delta: Option<i32>` carries the control-flow fact alone. **Resources are monotone along a path;
+control flow is not**, and the old encoding conflated them.
+
+**THE REACH WAS THE WHOLE MULTIHEAD CONSTRUCT.** A multiheaded function compiles to guarded heads
+with a trailing no-match dispatch `Trap`, so every one of them was affected. Corpus split before the
+repair, and it is total rather than suggestive:
+
+| | body peak zero | body peak non-zero |
+|---|---|---|
+| ends in `Trap` | **6** | 0 |
+| no trailing `Trap` | 0 | **58** |
+
+**A SECOND DEFECT, IN THE OPPOSITE DIRECTION, WAS SITTING UNDER IT.** With the discard fixed,
+`classify` reported 7 where the emitter allocates 3 — now overstated. `Op::Return` fell through the
+catch-all, so a multiheaded dispatch was walked as though every head ran in sequence, each head's
+`Return` leaving its offset for the next. Made a path exit like `Trap`. Both chunks then report a
+body peak of **3**, agreeing with the two peak models and the emitter.
+
+**Understating and overstating were present simultaneously and partially cancelled.** Reporting only
+the first number would have looked like a clean fix.
+
+**THE CONTROL THAT SETTLED IT** is two sources whose compiled bodies differ only by the trailing
+dispatch trap: single-head reports 3, multihead reports 0, and the multihead body strictly contains
+the single-head body. That is what makes it a defect rather than a modelling choice.
+
+**THE RANGING CHECK FOUND TWO OPCODES ON ITS FIRST RUN.** `the_peak_model_agrees_with_the_depth_model`
+compared the models over five hand-written sources; its coverage was a property of its case list.
+Replaced by a check ranging over the opcode set, with completeness asserted against the wire format's
+canonical opcode table so a new opcode is reported BY NAME rather than skipped. It immediately
+reported `FixedMul` and `FixedDiv`: peak-model net 0 against a virtual machine that pops twice and
+pushes once. Reachable by no case in the list it replaced.
+
+**Pinned, not repaired.** That error OVERSTATES, so it is a precision defect rather than a soundness
+one, and repairing it LOWERS bounds on shipped chunks — the opposite direction from this increment's
+subject. It wants its own evidence. `Yield` stays pinned for the same reason and a different cause.
+
+**I NEARLY RECORDED SIX FALSE ENTRIES.** The first draft of the known-disagreement list predicted
+that the six control-flow opcodes would disagree, since `verify_depth_region` intercepts them before
+their `op_depth_effect` entry is read. Plausible, and wrong: all six agree. The staleness assertion —
+every known entry must still disagree — is what said so. **A list of expected failures needs the same
+control as a list of expected passes.**
+
+**I PREDICTED `analyze.kel` MIRRORED THE DEFECT, THEN REPORTED THAT IT DID NOT, AND THE FIRST
+PREDICTION WAS RIGHT.** Retained in full below because the way I got it wrong is the useful part.
+
+**CORRECTION.** Its `resolve_bare_if` skips folding a broken child, and its
+`resolve_if_else` documents "treating a broken branch as absent", which is the old Rust exactly. But
+`account_op` runs BEFORE `f_broke` is set and `deliver` passes `f_peak` through, so the self-hosted
+stage never had the top-level discard that `unwrap_or(McuResult::empty())` gave the reference.
+**The reference had a defect its own self-hosted reimplementation did not.**
+
+**Three measurements, because the first two did not discriminate.** A synthetic Stream subject with a
+zero-divisor guard passes: the guard's branch is a bare trap contributing no peak above its start. A
+second with the trap at an elevated depth also passes. Instrumenting the bare-if fold to print when
+it changes an outcome fired **zero** times, including on the chunks I had just fixed — which said the
+instrument was at the wrong site, since those chunks are fixed by the `Trap` arm and by `Return`
+becoming an exit, not by the fold.
+
+**The decisive measurement is the domain.** Across the 14 Stream chunks in the corpus, including all
+ten self-hosted stages, **none contains `Op::Trap` and none contains `Op::Return`** — exactly the two
+opcodes the repair changed. So the divergence is not untested, it is unreachable in what `analyze.kel`
+analyses. A `Break`-exiting branch IS reachable, and both implementations recover its peak through the
+break-record path rather than the fold.
+
+**WHAT ACTUALLY SETTLED IT: THE DIFFERENTIAL, WHICH FOUND THREE DEFECTS I HAD ARGUED WERE ABSENT.**
+`run()` ended with `if an.child_broke == 1 { 0 } else { ... }` for cost, peak and heap — the exact
+analogue of `unwrap_or(McuResult::empty())`. Every single-head function ends in a top-level `return`,
+so it zeroed the body contribution of essentially every `fn` in every stage. **I had checked the
+child-frame path and stopped before the place the answer is produced.** `Op::Return` also had no
+control-flow class, so a dispatch was walked as though every head ran in sequence.
+
+**And the test file carried a SECOND COPY of the class table that had already drifted** — it kept the
+`_ => (0, 0)` catch-all after the driver's was made exhaustive, and passed `0` where the driver passes
+real targets. The oracle was running against the unrepaired table, which is why the driver-side fix
+changed nothing. `analyze_class`/`analyze_opk` are now `pub` and the duplicate is gone.
+
+**The lesson is not "check the code", which I did.** It is that I checked the mechanism and not the
+place the value is produced, and then wrote the negative result up with three supporting measurements
+that were all consistent with a conclusion that was false. **A conclusion supported by measurements
+that cannot discriminate is not a measured conclusion.**
+
+**`wcet_region` HAS THE IDENTICAL DEFECT AND IS NOT REPAIRED HERE.** Its `Op::Trap` arm accumulates
+`cost`, then `let _ = cost;` and returns `Ok(None)` — the same idiom in the sibling analysis, so the
+cycles spent before a trap are discarded from the worst-case EXECUTION TIME bound. Found by reading
+the structure rather than from any report. **Not repaired**: it is a different analysis with its own
+corpus, its own tests, and a self-hosted mirror whose cost folding would have to move with it, and
+this increment already changes a bound model. Recorded as the top open correctness item instead.
+
+**Instrument faults, both mine, both caught before they reached a conclusion.** My first depth walk
+destructured `op_depth_effect` as `(push, pop)` when it returns `(required, net)`, which is the
+misreading that produced a retracted report on the other line last week. My first corpus walk was
+straight-line over a branching op array and reported an understatement of 1801 slots. Neither
+survived contact with a control, and the finding does not rest on either.
+
+---
+
 **HANDING BACK TO MAINLINE, AND THE ROADMAP IS FURTHER OFF THAN THE INCREMENT TITLES SAY
 (2026-08-16).**
 

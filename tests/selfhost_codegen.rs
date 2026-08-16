@@ -6043,47 +6043,7 @@ fn analyze_kel_module() -> Module {
 /// Classify an op for analyze.kel as `(class, arg)`. The class tags the control-flow role
 /// (0 plain, 1 If, 2 Else, 3 EndIf, 4 Loop, 5 EndLoop, 6 Break, 7 BreakIf, 8 Trap, 9 Call);
 /// `arg` carries the branch target for If and Loop, and the matching EndIf position for Else.
-fn analyze_class(op: &keleusma::bytecode::Op) -> (i64, i64) {
-    use keleusma::bytecode::Op;
-    match op {
-        Op::If(t) => (1, *t as i64),
-        Op::Else(e) => (2, *e as i64),
-        Op::EndIf => (3, 0),
-        Op::Loop(x) => (4, *x as i64),
-        Op::EndLoop(_) => (5, 0),
-        Op::Break(_) => (6, 0),
-        Op::BreakIf(_) => (7, 0),
-        Op::Trap(_) => (8, 0),
-        Op::Call(_, _) => (9, 0),
-        _ => (0, 0),
-    }
-}
-
-/// Fine-grained op detail for analyze.kel's loop-bound extraction: `(opk, slot, cval, cint)`.
-/// `opk` tags the opcode (1 GetLocal, 2 SetLocal, 3 Const, 4 CmpGe, 5 BreakIf, 6 CheckedAdd,
-/// 7 PopN, 8 EndLoop, 9 Loop, 0 other); `slot` the GetLocal/SetLocal slot; `cval` the Const
-/// integer value or PopN count; `cint` 1 if a Const resolves to an integer.
-fn analyze_opk(
-    op: &keleusma::bytecode::Op,
-    chunk: &keleusma::bytecode::Chunk,
-) -> (i64, i64, i64, i64) {
-    use keleusma::bytecode::{ConstValue, Op};
-    match op {
-        Op::GetLocal(s) => (1, *s as i64, 0, 0),
-        Op::SetLocal(s) => (2, *s as i64, 0, 0),
-        Op::Const(idx) => match chunk.constants.get(*idx as usize) {
-            Some(ConstValue::Int(v)) => (3, 0, *v, 1),
-            _ => (3, 0, 0, 0),
-        },
-        Op::CmpGe => (4, 0, 0, 0),
-        Op::BreakIf(_) => (5, 0, 0, 0),
-        Op::CheckedAdd => (6, 0, 0, 0),
-        Op::PopN(n) => (7, 0, *n as i64, 0),
-        Op::EndLoop(_) => (8, 0, 0, 0),
-        Op::Loop(_) => (9, 0, 0, 0),
-        _ => (0, 0, 0, 0),
-    }
-}
+use keleusma::selfhost_host::{analyze_class, analyze_opk};
 
 /// The operand-stack `(growth, shrink)` analyze.kel accounts for `op` under the empty
 /// resolver. Identical to `Op::stack_growth()`/`stack_shrink()` except for a native call: the
@@ -6360,6 +6320,31 @@ fn analyze_via_kel_matches_the_reference_for_loops() {
         return;
     }
     let cases: &[&str] = &[
+        // A division, whose zero-divisor guard puts an `Op::Trap` inside a bare `if` -- a
+        // child that leaves without falling through.
+        //
+        // ADDED TO DISCRIMINATE A DIVERGENCE, AND IT DOES NOT. Kept, with that said
+        // plainly, because a case that cannot fail is worth less than the record of why.
+        //
+        // THE DIVERGENCE IT WAS AIMED AT WAS REAL. When `wcmu_region` and `wcet_region`
+        // stopped discarding the resources consumed before a path exit (2026-08-16),
+        // analyze.kel diverged in three ways at once: it zeroed a region's cost, peak and
+        // heap whenever no path fell through, it gave `Op::Return` no control-flow class,
+        // and the copy of the class table that used to live in THIS FILE had drifted from
+        // the driver's. None of that is visible from here, because a Stream chunk's body
+        // carries no `Op::Trap` and no `Op::Return` -- the divergence lives on the `Func`
+        // chunks that `validate_module_via_kel` also drives analyze.kel over, and that is
+        // the test which caught it.
+        //
+        // Kept as a reminder that this test's domain is narrower than analyze.kel's.
+        r#"require word >= 32;
+private data d { s: Word }
+shared data io { out: Word, a: Word, b: Word, c: Word, d: Word }
+loop main(resume: Word) -> Word {
+    d.s = (io.a + io.b) / (io.c - io.d);
+    io.out = d.s;
+    yield d.s
+}"#,
         // A plain accumulation loop.
         r#"require word >= 32;
 private data d { s: Word }

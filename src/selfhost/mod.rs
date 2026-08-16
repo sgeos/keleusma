@@ -1021,186 +1021,17 @@ fn analyze_kel_module() -> Module {
 /// exit a Break/BreakIf jumps to. (analyze.kel reads `arg` only for If and Loop; the EndLoop,
 /// Break, and BreakIf targets are ignored there and consumed only by verify_structural.kel's
 /// target-equality checks, so populating them does not affect the resource analysis.)
-fn analyze_class(op: &crate::bytecode::Op) -> (i64, i64) {
-    use crate::bytecode::Op;
-    match op {
-        Op::If(t) => (1, *t as i64),
-        Op::Else(e) => (2, *e as i64),
-        Op::EndIf => (3, 0),
-        Op::Loop(x) => (4, *x as i64),
-        Op::EndLoop(t) => (5, *t as i64),
-        Op::Break(t) => (6, *t as i64),
-        Op::BreakIf(t) => (7, *t as i64),
-        Op::Trap(_) => (8, 0),
-        Op::Call(_, _) => (9, 0),
-        // EVERY REMAINING OPCODE IS LISTED, and the list is the point.
-        //
-        // This was `_ => (0, 0)`. A control-flow opcode added later and not
-        // classified above would have fallen through it and become "plain"
-        // SILENTLY: `analyze.kel` rebuilds the control-flow graph by following
-        // the `If`/`Loop`/`EndLoop`/`Break` targets this function returns, so a
-        // missing arm is a graph missing an edge, and a bound extracted from
-        // that graph is finite and WRONG rather than absent. Nothing downstream
-        // can distinguish "plain opcode" from "unclassified opcode".
-        //
-        // A test cannot close that hole, because it cannot fail for an opcode
-        // nobody has written yet. The compiler can: adding a variant to `Op`
-        // now fails to build here until someone decides which class it belongs
-        // to. That is the whole change -- the classification is unaltered and
-        // every opcode below still maps to `(0, 0)`, exactly as the catch-all
-        // did.
-        Op::Const(..)
-        | Op::GetLocal(..)
-        | Op::SetLocal(..)
-        | Op::GetData(..)
-        | Op::SetData(..)
-        | Op::GetDataIndexed(..)
-        | Op::SetDataIndexed(..)
-        | Op::BoundsCheck(..)
-        | Op::Add
-        | Op::Sub
-        | Op::Mul
-        | Op::Div
-        | Op::Mod
-        | Op::Neg
-        | Op::CmpEq
-        | Op::CmpNe
-        | Op::CmpLt
-        | Op::CmpGt
-        | Op::CmpLe
-        | Op::CmpGe
-        | Op::Not
-        | Op::Stream
-        | Op::Reset
-        | Op::Return
-        | Op::Yield
-        | Op::Dup
-        | Op::NewComposite(..)
-        | Op::GetField(..)
-        | Op::GetIndex(..)
-        | Op::GetTupleField(..)
-        | Op::GetEnumField(..)
-        | Op::Len
-        | Op::IsEnum(..)
-        | Op::IsStruct(..)
-        | Op::IntToFloat
-        | Op::FloatToInt
-        | Op::WordToByte
-        | Op::ByteToWord
-        | Op::WordToFixed(..)
-        | Op::FixedToWord(..)
-        | Op::FixedMul(..)
-        | Op::FixedDiv(..)
-        | Op::CheckedAdd
-        | Op::CheckedSub
-        | Op::CheckedMul(..)
-        | Op::CheckedNeg
-        | Op::CheckedDiv(..)
-        | Op::CheckedMod
-        | Op::PushImmediate(..)
-        | Op::PopN(..)
-        | Op::BitAnd
-        | Op::BitOr
-        | Op::BitXor
-        | Op::Shl
-        | Op::Shr
-        | Op::CallVerifiedNative(..)
-        | Op::CallExternalNative(..) => (0, 0),
-    }
-}
-
-/// Fine-grained op detail for analyze.kel's loop-bound extraction: `(opk, slot, cval, cint)`.
-/// `opk` tags the opcode (1 GetLocal, 2 SetLocal, 3 Const, 4 CmpGe, 5 BreakIf, 6 CheckedAdd,
-/// 7 PopN, 8 EndLoop, 9 Loop, 0 other); `slot` the GetLocal/SetLocal slot; `cval` the Const
-/// integer value or PopN count; `cint` 1 if a Const resolves to an integer.
-fn analyze_opk(op: &crate::bytecode::Op, chunk: &crate::bytecode::Chunk) -> (i64, i64, i64, i64) {
-    use crate::bytecode::{ConstValue, Op};
-    match op {
-        Op::GetLocal(s) => (1, *s as i64, 0, 0),
-        Op::SetLocal(s) => (2, *s as i64, 0, 0),
-        Op::Const(idx) => match chunk.constants.get(*idx as usize) {
-            Some(ConstValue::Int(v)) => (3, 0, *v, 1),
-            _ => (3, 0, 0, 0),
-        },
-        Op::CmpGe => (4, 0, 0, 0),
-        Op::BreakIf(_) => (5, 0, 0, 0),
-        Op::CheckedAdd => (6, 0, 0, 0),
-        Op::PopN(n) => (7, 0, *n as i64, 0),
-        Op::EndLoop(_) => (8, 0, 0, 0),
-        Op::Loop(_) => (9, 0, 0, 0),
-        // EXHAUSTIVE FOR THE SAME REASON AS `analyze_class`, though the failure
-        // mode differs and the difference is worth stating.
-        //
-        // Every `opk` use in `analyze.kel` is a POSITIVE pattern requirement
-        // (`wa.opk[ip] == 2`, `== 3`, `== 8`), so an untagged opcode fails to
-        // match and the loop-bound shape is simply not recognised -- a bound is
-        // not extracted, which is CONSERVATIVE. That is the opposite of
-        // `analyze_class`, where a missing arm drops a control-flow edge and
-        // yields a bound that is finite and wrong.
-        //
-        // It is exhaustive anyway, because that argument is REASONING and the
-        // compiler can make it unnecessary. A new opcode should be considered
-        // for bound extraction as deliberately as for classification, and a
-        // catch-all here decides that question by default and silently.
-        Op::GetData(..)
-        | Op::SetData(..)
-        | Op::GetDataIndexed(..)
-        | Op::SetDataIndexed(..)
-        | Op::BoundsCheck(..)
-        | Op::Add
-        | Op::Sub
-        | Op::Mul
-        | Op::Div
-        | Op::Mod
-        | Op::Neg
-        | Op::CmpEq
-        | Op::CmpNe
-        | Op::CmpLt
-        | Op::CmpGt
-        | Op::CmpLe
-        | Op::Not
-        | Op::If(..)
-        | Op::Else(..)
-        | Op::EndIf
-        | Op::Break(..)
-        | Op::Stream
-        | Op::Reset
-        | Op::Call(..)
-        | Op::Return
-        | Op::Yield
-        | Op::Dup
-        | Op::NewComposite(..)
-        | Op::GetField(..)
-        | Op::GetIndex(..)
-        | Op::GetTupleField(..)
-        | Op::GetEnumField(..)
-        | Op::Len
-        | Op::IsEnum(..)
-        | Op::IsStruct(..)
-        | Op::IntToFloat
-        | Op::FloatToInt
-        | Op::WordToByte
-        | Op::ByteToWord
-        | Op::WordToFixed(..)
-        | Op::FixedToWord(..)
-        | Op::FixedMul(..)
-        | Op::FixedDiv(..)
-        | Op::Trap(..)
-        | Op::CheckedSub
-        | Op::CheckedMul(..)
-        | Op::CheckedNeg
-        | Op::CheckedDiv(..)
-        | Op::CheckedMod
-        | Op::PushImmediate(..)
-        | Op::BitAnd
-        | Op::BitOr
-        | Op::BitXor
-        | Op::Shl
-        | Op::Shr
-        | Op::CallVerifiedNative(..)
-        | Op::CallExternalNative(..) => (0, 0, 0, 0),
-    }
-}
+/// The op classification tables `analyze.kel` consumes, re-exported from
+/// [`crate::selfhost_host`] where they are always available.
+///
+/// **They live there rather than here so there is ONE table, not two.** This
+/// module is gated on `self-host`, and `tests/selfhost_codegen.rs` builds
+/// without it, so a consumer that could not reach these was previously obliged
+/// to reproduce them — and the copy in that file had already drifted, keeping a
+/// `_ => (0, 0)` catch-all after this table was made exhaustive and passing `0`
+/// where it passes real branch targets. The differential meant to be the oracle
+/// was running against the unrepaired copy.
+pub use crate::selfhost_host::{analyze_class, analyze_opk};
 
 /// The operand-stack `(growth, shrink)` analyze.kel accounts for `op` under the empty
 /// resolver. Identical to `Op::stack_growth()`/`stack_shrink()` except for a native call: the
@@ -3512,7 +3343,10 @@ mod classification_tables {
             (Op::EndLoop(14), 5, 14),
             (Op::Break(15), 6, 15),
             (Op::BreakIf(16), 7, 16),
+            // Class 8 is PATH EXIT, shared by both opcodes that end a path
+            // without transferring control to an enclosing loop.
             (Op::Trap(0), 8, 0),
+            (Op::Return, 8, 0),
             (Op::Call(17, 2), 9, 0),
         ];
         for (op, class, arg) in cases {
@@ -3538,7 +3372,10 @@ mod classification_tables {
             Op::CmpEq,
             Op::Dup,
             Op::Not,
-            Op::Return,
+            // `Op::Return` WAS HERE until 2026-08-16 and is now class 8. It ends
+            // the path, and treating it as plain made `analyze.kel` walk a
+            // multiheaded dispatch as though every head ran in sequence. This
+            // test failing is how that change was confirmed to reach the table.
             Op::Yield,
             Op::Stream,
             Op::Reset,
