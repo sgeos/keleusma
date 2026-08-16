@@ -10,10 +10,39 @@ expressible in Keleusma end to end: CRC-32, the container primitives and prologu
 directory, record tables and byte pools, the twenty region kinds and seventeen record shapes, the
 opcode stream and operand pool, and the framing header with its CRC trailer.
 
-`src/selfhost/kel/wire.kel` is the implementation and `tests/selfhost_wire.rs` is the differential,
-80 tests. **What remains before the artifact is produced by the self-hosted path is wiring, not
-invention**: `wire.kel` is not yet driven by the pipeline, and it is deliberately absent from
-`read_stage`.
+`src/selfhost/kel/wire.kel` is the implementation and `tests/selfhost_wire.rs` is the differential.
+~~`wire.kel` is not yet driven by the pipeline, and it is deliberately absent from `read_stage`.~~
+
+> ## CURRENCY BANNER (2026-08-15). READ THIS BEFORE ANY FIGURE BELOW.
+>
+> **Three claims in this document went stale and each produced a wrong conclusion downstream.**
+> They are struck rather than deleted, because the reasoning around them is still worth reading and
+> a deleted claim leaves a reader unable to tell what changed.
+>
+> **1. `wire.kel` IS in `read_stage` and IS driven.** It joined when `wire_names_via_kel` gained a
+> path that emits through it, and that driver now takes a `Module` and builds its own input. The
+> struck sentence above, and every "wiring remains" statement below, describes a state that ended.
+>
+> **2. THE `395,804` FIGURE IS NOT A NAME COUNT, and this banner governs every appearance of it
+> below.** It is a REGION RECORD count belonging to `CONSTS`, and it was true of `NAMES` only
+> before the run-length encoding collapsed the per-array-element slot names. Measured across all
+> ten stages on 2026-08-15: **the largest `NAMES` region is 627 records, in `parse`, from a
+> 33,395-byte blob.** Where the figure appears in a table of measurements taken at the time, it is
+> a historical measurement and is left standing under this banner. Where it drives a CONCLUSION
+> about work that remains, it is corrected in place.
+>
+> **This figure has now produced a wrong conclusion twice.** It made a 2.5x problem look like a
+> 1500x one, and it invented a dependency between the interning producer and the residency
+> staging — work the plan said "are the same increment, and doing either alone is wasted" when in
+> fact no stage in the corpus needs staging at all. **A stale figure does not merely misstate a
+> size; it manufactures dependencies between pieces of work.**
+>
+> **A note on this sweep, since it is the same failure in miniature.** The sweep was scoped as
+> "five sites". There are about sixteen appearances, of which roughly ten are stale. The count of
+> the sites of a figure whose lesson is checking figures was itself unchecked.
+>
+> **3. Test counts are not restated here.** This document said 80; the file holds 163. Derive it:
+> `grep -c '^\s*#\[test\]' tests/selfhost_wire.rs`.
 
 ## 2026-08-08: the blocker is gone. Read this before the 2026-08-03 text.
 
@@ -802,8 +831,12 @@ does not have to reach back for it.
 **The linear scan is a KNOWN DEBT with a measured cost, not an oversight.** The reference used one
 and encoding a mid-sized stage took 782 seconds before it became a `BTreeMap`. At the sizes this
 slice drives — ten names — a scan is correct, and the note sits in `wire.kel` where the next reader
-will be, not only here. **It must be replaced before the interner is driven by a real stage**, where
-the count reaches 395,804.
+will be, not only here. ~~**It must be replaced before the interner is driven by a real stage**, where the count reaches
+395,804.~~ **CORRECTED 2026-08-15**: the interner IS driven by real stages and the count reaches
+**627**, not 395,804. The scan was not replaced and did not need to be. Separately, the scan has no
+real-module coverage at all: making `nm_find` report "not found" unconditionally leaves all ten
+stages byte-identical, so **the cap this scan's cost justifies is priced on a path no stage
+reaches**.
 
 **Caps are stated and enforced with codes, not by truncation**: 256 names (`-230`), 256 bytes per
 name (`-231`), the `wire.bin` capacity (`-232`), and an out-of-range map query (`-235`). All four
@@ -1427,9 +1460,21 @@ language has no early exit, so a 1024-slot table costs 1024 probes where the lin
 a batch rather than for a stage. The table only wins past roughly a thousand entries.
 
 **The second is the site the reference's 782-second lesson actually bears on.** It is nested inside
-another walk and reads the `NAMES` region per interned name. Raising the cap to a stage's 395,804
-names is not a tuning change but the staged-batching problem, so the ordering stands: **batching
-first, index second.**
+another walk and reads the `NAMES` region per interned name. ~~Raising the cap to a stage's 395,804
+names is not a tuning change but the staged-batching problem, so the ordering stands: batching
+first, index second.~~
+
+> **CORRECTED 2026-08-15.** The cap was raised to 1024 and a stage's real name count is **627**, so
+> there is no staged-batching problem to order against: the worst stage fits in one call at 61% of
+> the cap. The "batching first, index second" ordering was derived from the 395,804 figure and
+> ordered two pieces of work of which one turned out not to exist. The measurement is now an
+> assertion — `every_stage_fits_the_driver_caps_with_margin` — so a stage that grows past the bound
+> fails with the number rather than reviving this argument by surprise.
+>
+> **What is NOT settled**: the scan's cost at stage scale is still unmeasured, and the corpus cannot
+> measure it, because making `nm_find` report "not found" unconditionally leaves all ten stages
+> byte-identical. The scan is on a path no stage reaches. That is a fact about the corpus, not
+> about the scan.
 
 **The roadmap's Order-1 cell is stale on this point.** It lists "replacing a linear dedup scan" among
 the remaining work, which was written before the 2026-08-11 analysis reversed it. Corrected there to

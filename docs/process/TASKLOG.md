@@ -52,6 +52,13 @@ Current sprint source of truth.
 > 49,152. The plan's claim that the producer and the staging are one increment followed from the
 > 395,804 figure, which is a `CONSTS` region record count and still sits at five sites there.
 >
+> **E1 was RETRACTED, not landed (2026-08-15).** I reported that CI never doc-builds the
+> `self-host` feature surface; it does, in a Doc-job step I did not read. The finding reached a
+> resume channel and a goal statement before being checked against the code. Nothing to repair.
+>
+> **D1 done opportunistically**: the wire-format plan gains a governing currency banner, and the two
+> places where the 395,804 figure ordered work are corrected in place.
+>
 > **One request was probed and deliberately not built.** An accessor handing back each stage's
 > seeded shared buffer cannot be written for `verify_datalayout`, which is a batched coroutine
 > consuming a sequence of buffers rather than one. Building it as asked would have returned batch

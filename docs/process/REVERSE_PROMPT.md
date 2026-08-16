@@ -63,11 +63,28 @@ stages was a corpus property I was one test away from recording as a guarantee.*
 not, and a case proves it), and that the constant-name branch matters to any stage (it does not —
 dropping it leaves all ten green, which is why the named-constant cases exist).
 
-## Reported, not repaired
+## RETRACTED: the doc-coverage gap I reported does not exist
 
-**`cargo doc --features self-host` fails with four unresolved intra-doc links on the clean base.**
-CI's Doc job builds `signatures,encryption,shell`, so that feature set is never doc-built. Same
-class as the red Doc job V0.2.1 shipped with.
+**I reported that CI never doc-builds the `self-host` feature surface. That is false, and the
+error was mine.** The Doc job already carries a step named "keleusma (self-host feature surface)"
+running `cargo doc -p keleusma --no-deps --features signatures,encryption,shell,self-host`, which is
+the exact command I independently derived as the fix. It ran on PR #114 and passed, so the ~200
+lines of doc comments B1 added to `src/selfhost/` were checked all along.
+
+**How I got it wrong**: I read the FIRST step of the Doc job, saw the docs.rs feature set, and
+reported the job's coverage from it without reading the remaining steps. The comment immediately
+above the step I missed says this job "lists crates BY NAME, so a new crate is invisible to it until
+someone remembers", and records that broken intra-doc links in `src/selfhost/` once survived four
+releases — so the gap was found and closed before I claimed it was open.
+
+**Two figures in that report were also wrong.** It is three unresolved links, not four; the fourth
+line I counted was rustdoc's aggregate `could not document`. And they are not a defect: they resolve
+under every feature set the project actually documents, and fail only under `--features self-host`
+alone, which neither docs.rs nor CI builds. Fixing them would mean de-linking or duplicating prose
+under `cfg_attr` to serve a configuration nobody ships.
+
+**The lesson is the one already written down**: check an item against the code before repeating it.
+I made that error while writing a finding that a goal statement then carried forward.
 
 ## The crash cost the push, not the work
 
