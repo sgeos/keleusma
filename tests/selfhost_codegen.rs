@@ -6043,7 +6043,7 @@ fn analyze_kel_module() -> Module {
 /// Classify an op for analyze.kel as `(class, arg)`. The class tags the control-flow role
 /// (0 plain, 1 If, 2 Else, 3 EndIf, 4 Loop, 5 EndLoop, 6 Break, 7 BreakIf, 8 Trap, 9 Call);
 /// `arg` carries the branch target for If and Loop, and the matching EndIf position for Else.
-use keleusma::selfhost::{analyze_class, analyze_opk};
+use keleusma::selfhost_host::{analyze_class, analyze_opk};
 
 /// The operand-stack `(growth, shrink)` analyze.kel accounts for `op` under the empty
 /// resolver. Identical to `Op::stack_growth()`/`stack_shrink()` except for a native call: the

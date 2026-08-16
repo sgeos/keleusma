@@ -198,8 +198,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   second copy of the class table that had already drifted from the shipping one, keeping a
   catch-all arm the driver's had replaced with an exhaustive match and passing zero where the
   driver passes real branch targets — so the differential was running against the unrepaired
-  table. `keleusma::selfhost::analyze_class` and `analyze_opk` are now public under the
-  `self-host` feature and the duplicate is deleted, leaving one encoding.
+  table. `analyze_class` and `analyze_opk` now live in `keleusma::selfhost_host`, which is
+  available whenever `compile` and `verify` are, and the duplicate is deleted. They are not
+  merely made public on the driver, because that module is gated on `self-host` and the
+  consumer builds without it — which is why the copy existed at all.
 
 - **An overstated bound on multiheaded dispatch, present at the same time and
   partially cancelling the understatement above.** `Op::Return` fell through the

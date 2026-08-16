@@ -131,8 +131,18 @@ trap class; no tenth class was needed and the pinned nine-class boundary still r
 drifted: it kept the `_ => (0, 0)` catch-all after the driver's was made exhaustive, and passed `0`
 where the driver passes real `EndLoop`/`Break`/`BreakIf` targets. **The differential that is supposed
 to be the oracle was running against the unrepaired table**, which is why my first driver-side fix
-changed nothing. `analyze_class` and `analyze_opk` are now `pub` under `self-host` and the duplicate
-is deleted — one encoding, the same reasoning as the per-item seed accessors.
+changed nothing. `analyze_class` and `analyze_opk` now live in `selfhost_host`, which is gated on
+`compile + verify` rather than `self-host`, and the duplicate is deleted — one encoding, the
+same reasoning as the per-item seed accessors.
+
+**WHY THE COPY EXISTED, WHICH I ONLY LEARNED FROM A RED CI JOB.** My first fix made the driver's
+copies `pub`. That failed the MSRV and broad-feature jobs with `unresolved import
+keleusma::selfhost`, because `selfhost` is gated on `self-host` and **the test file builds without
+it**. The duplicate was not carelessness; the consumer genuinely could not reach the original.
+`selfhost_host` already existed for precisely this — its own doc says it is there "so the
+parse-record transport lives in one place instead of being copied into every consumer" — so that
+is where they belong. **A duplicate with a structural cause comes back unless the cause is
+removed.**
 
 **This is the strongest argument in the whole increment for the differential.** Three defects in the
 self-hosted analyzer, one of them a silently drifted copy of a table repaired a day earlier, and none

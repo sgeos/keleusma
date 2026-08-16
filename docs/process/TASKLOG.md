@@ -50,8 +50,10 @@ Current sprint source of truth.
 > `Op::Trap` (**the nine-class boundary still reports nine**); and **`tests/selfhost_codegen.rs`
 > carried a second copy of the class table that had already drifted**, keeping the `_ => (0, 0)`
 > catch-all after the driver's was made exhaustive and passing `0` for real branch targets, so the
-> oracle was running against the unrepaired table. `analyze_class` and `analyze_opk` are now `pub`
-> under `self-host` and the duplicate is deleted. **I reported that analyze.kel did not need the
+> oracle was running against the unrepaired table. `analyze_class` and `analyze_opk` now live in
+> `selfhost_host` (gated `compile + verify`, not `self-host`) and the duplicate is deleted. The copy
+> existed because the test file builds WITHOUT `self-host` and so could not reach the driver at all;
+> a first fix that merely made the driver's copies `pub` failed CI with `unresolved import`. **I reported that analyze.kel did not need the
 > repair, with three supporting measurements, and all three were consistent and none could
 > discriminate.**
 
