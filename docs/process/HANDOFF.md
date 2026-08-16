@@ -87,6 +87,24 @@ verified strict superset of the local gate and runs in about 48 minutes against 
 3. Push, open a **draft PR to `v0.2.3`**.
 4. **Merge on CI green, at the commit CI ran, without rebasing.** Push. Delete the branch.
 
+**WHAT "WITHOUT REBASING" PROTECTS, because two of these rules can collide.** The clause exists so a
+branch does not move out from under a green CI result: a result is valid only for the tip it ran
+against, so rebasing AFTER CI passes merges something CI never tested. It is not a prohibition on
+`git rebase` as such.
+
+**Cut each branch AFTER its predecessor merges when items are sequential.** On 2026-08-15 two
+increments were cut in parallel and the second conflicted with the first in `DESIGN_JOURNAL.md`,
+which every increment prepends to. That left only two routes, and one of them is the hazard:
+
+- rebase before the first push, so CI runs once on the final commit and the merge is at that commit
+  — which is what was done, and the invariant held exactly; or
+- leave it conflicting, in which case **GitHub produces NO CI run at all, silently** (recorded by the
+  `v0.3.0` line), and merging would mean merging something CI never tested.
+
+**The rebase was the safe route and the parallel cut was the mistake.** Sequential items whose
+channels overlap should be cut one at a time. `DESIGN_JOURNAL.md`, `REVERSE_PROMPT.md` and
+`TASKLOG.md` overlap on every increment by construction, so "every increment" means "always".
+
 **VERIFY THE REF AFTER A PUSH, NOT THE GATE OUTPUT.** `git ls-remote --heads origin <branch>` is the
 check. A push once printed "pre-push: all checks passed" and never created the ref. **Do not pipe the
 push through `tail`** — it truncates the very evidence you meant to read, which happened again on
@@ -130,11 +148,16 @@ appears on `thumbv8m`. Changing a calibration is a judgment call, not a correctn
 **Only 17 opcodes of 66 were ever measured.** Every other value in the emitted cost model is a bucket
 assignment, checked by nothing. Do not read the model's ordering as evidence outside those 17.
 
-**A live structural hazard remains open**: `analyze_class` ends in `_ => (0, 0)`, so a control-flow
-opcode added later and not classified becomes "plain" **silently** — a graph missing an edge and a
-bound that is finite and wrong. The boundary is pinned at nine classes but the hole is not closed.
-Closing it needs an exhaustive `match` over `Op` so the compiler refuses a new opcode until it is
-classified. **This is the highest-value open item on the correctness surface.**
+~~**A live structural hazard remains open**: `analyze_class` ends in `_ => (0, 0)`.~~ **CLOSED
+2026-08-15.** `analyze_class` and `analyze_opk` are exhaustive over `Op`, so the compiler refuses a
+new opcode until someone decides its class. Verified by adding a variant to `Op` and observing
+`E0004` at both sites. **The classification is unchanged** — every opcode the catch-all matched
+still maps to the plain group; what changed is that the decision is now forced rather than defaulted.
+
+**What the compiler still cannot guarantee is that a classification is RIGHT.** Exhaustiveness is
+satisfied just as well by putting a new control-flow opcode in the plain group, which is the same
+silent-edge defect wearing a different hat. The nine-class count stays pinned by test for that
+reason.
 
 ## FACTS THAT COST REAL EFFORT
 

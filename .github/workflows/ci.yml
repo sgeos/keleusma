@@ -10,6 +10,33 @@ on:
   pull_request:
     branches: [main, 'v*']
 
+# Supersede an in-flight run when a PULL REQUEST is pushed again, and leave
+# branch runs entirely alone.
+#
+# WHY IT IS NEEDED. Two pushes to one pull request leave two full 22-job
+# matrices running at once; the superseded one never yields and holds runners.
+# `gh pr checks` then sits at "17 pass / 5 pending" for many minutes, which is
+# indistinguishable from a slow queue and from the CONFLICTING no-run-at-all
+# case. The `v0.3.0` line measured ~20 minutes lost to it once and has asked
+# three times; this line hand-cancelled two superseded runs in a single session.
+#
+# WHY THE GROUP IS NOT SIMPLY `github.ref`. The requested form was
+# `group: ${{ github.workflow }}-${{ github.ref }}` with `cancel-in-progress:
+# true`. This workflow triggers on PUSH as well as pull_request, so that form
+# also groups branch runs -- and on a version branch that means a second merge
+# CANCELS the first commit's verification run, leaving an intermediate tip with
+# no green run of its own. That per-tip branch result is load-bearing here: it
+# is what confirms an integrated state rather than a proposed one, and it is
+# consulted when deciding whether a merge is safe to build on.
+#
+# So the group is the ref only for a pull request, and the unique `run_id`
+# otherwise. A run keyed by its own id can never collide, so branch runs neither
+# cancel nor queue behind each other -- the alternative, grouping them without
+# cancelling, would SERIALISE ~45-minute runs behind one another.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -184,6 +211,20 @@ jobs:
       # days with gate coverage but no CI coverage. Add new crates here.
       - name: keleusma (self-host feature surface)
         run: cargo doc -p keleusma --no-deps --features signatures,encryption,shell,self-host
+      # THE LEAN SET, which is the only one that catches a link to a
+      # feature-gated item. The two steps above both enable `signatures` and
+      # `encryption`, so an intra-doc link to something behind either resolves
+      # there and the defect is masked. Three such links were live and only
+      # `--features self-host` alone reported them.
+      #
+      # COST, measured rather than estimated: 5.05 s against 5.16 s for the
+      # docs.rs step above, on a warm dependency cache. It is marginally CHEAPER
+      # than a step already here, because the lean set needs fewer dependencies.
+      # One added invocation in an existing job -- no new job and no additional
+      # runner, which matters because this workflow gates the `v0.3.0` line too
+      # and its runners are contended.
+      - name: keleusma (lean self-host set, catches feature-gated doc links)
+        run: cargo doc -p keleusma --no-deps --features self-host
       - name: keleusma-wire (all features)
         run: cargo doc -p keleusma-wire --no-deps --all-features
       - name: keleusma-wire-derive

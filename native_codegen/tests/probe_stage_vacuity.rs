@@ -235,6 +235,19 @@ fn drive(m: &Module, seed: Option<&str>) -> Result<Run, String> {
 /// Each breakpoint is DISARMED once hit, so a loop does not stop on every
 /// iteration and the drive terminates.
 fn chunk_coverage(m: &Module, seed: Option<&str>) -> Result<(Vec<usize>, usize), String> {
+    chunk_coverage_with(m, seed, None)
+}
+
+/// As [`chunk_coverage`], but accepting a WHOLE pre-built shared segment.
+///
+/// This is how an accessor-seeded stage is measured: `src/selfhost/mod.rs`
+/// returns the entire buffer, so there is nothing for this harness to encode and
+/// therefore nothing to drift.
+fn chunk_coverage_with(
+    m: &Module,
+    seed: Option<&str>,
+    preseed: Option<&[u8]>,
+) -> Result<(Vec<usize>, usize), String> {
     let arena = arena_for(m);
     let mut vm = match Vm::new(m.clone(), &arena) {
         Ok(v) => v,
@@ -257,7 +270,12 @@ fn chunk_coverage(m: &Module, seed: Option<&str>) -> Result<(Vec<usize>, usize),
     };
 
     let mut shared = vec![0u8; shared_data_bytes_for(m)];
-    if let Some(src) = seed
+    if let Some(bytes) = preseed {
+        if bytes.len() != shared.len() {
+            return Err(format!("preseed {} vs segment {}", bytes.len(), shared.len()));
+        }
+        shared.copy_from_slice(bytes);
+    } else if let Some(src) = seed
         && !seed_source(m, &mut shared, src)
     {
         return Err("no len/bytes pair to seed".into());
@@ -446,6 +464,94 @@ fn how_many_chunks_does_each_stage_actually_enter() {
          vacuity result or an instrument that only ever sees the entry, and this \
          report cannot tell them apart -- investigate before believing either."
     );
+}
+
+/// **DID THE ACCESSOR SEED MOVE EACH STAGE, measured directly?**
+///
+/// `corpus_differential` reports that three stages left `KNOWN_VACUOUS` once the
+/// `v0.2.3` accessors gave them real inputs. That is one instrument saying the
+/// OBSERVABLES changed. This is the other, and they are blind to different
+/// things: chunk coverage says whether more of the module RUNS, which an
+/// observable-only measure cannot distinguish from the same code producing
+/// different output.
+///
+/// **Asserted per stage, not in aggregate.** A total that rose because one stage
+/// moved a lot would hide a second that did not move at all — and a seed a stage
+/// silently REJECTS is exactly the failure this pair of instruments exists to
+/// separate.
+#[test]
+fn the_accessor_seeds_move_each_stages_chunk_coverage() {
+    let subject = {
+        let src = std::fs::read_to_string("../examples/scripts/02_struct_field.kel")
+            .expect("subject source");
+        compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile")
+    };
+    let chunk = subject
+        .chunks
+        .iter()
+        .max_by_key(|c| c.ops.len())
+        .expect("subject chunk");
+
+    println!("\n================ accessor-seeded chunk coverage");
+    println!("  {:<26} {:>9} {:>9} {:>7}", "stage", "unseeded", "seeded", "of");
+
+    let mut checked = 0usize;
+    for stage in ["verify_depth.kel", "verify_typed.kel", "verify_structural.kel"] {
+        let Some(path) = stage_sources()
+            .into_iter()
+            .find(|p| p.file_name().unwrap_or_default().to_string_lossy() == stage)
+        else {
+            panic!("{stage} is missing from the stage sources");
+        };
+        let m = module_of(&path).unwrap_or_else(|| panic!("{stage} compiles"));
+        let (bare, total) = chunk_coverage(&m, None).expect("unseeded coverage");
+
+        let arena = arena_for(&m);
+        let vm = Vm::new(m.clone(), &arena).expect("stage vm");
+        let seed = match stage {
+            "verify_depth.kel" => keleusma::selfhost::seed_verify_depth_shared(&vm, chunk),
+            "verify_typed.kel" => {
+                let wb = (1usize << subject.word_bits_log2) / 8;
+                let fb = (1usize << subject.float_bits_log2) / 8;
+                let idx = subject
+                    .chunks
+                    .iter()
+                    .position(|c| core::ptr::eq(c, chunk))
+                    .unwrap_or(0);
+                keleusma::selfhost::seed_verify_typed_shared(
+                    &vm,
+                    &subject,
+                    chunk,
+                    subject.signatures.get(idx),
+                    wb,
+                    fb,
+                )
+            }
+            _ => {
+                let always = keleusma::selfhost::self_hosted_always_yielding(&subject);
+                keleusma::selfhost::seed_verify_structural_shared(&vm, &subject, chunk, &always)
+            }
+        };
+        let (seeded, _) = chunk_coverage_with(&m, None, Some(&seed)).expect("seeded coverage");
+        println!(
+            "  {stage:<26} {:>9} {:>9} {:>7}",
+            bare.len(),
+            seeded.len(),
+            total
+        );
+        assert!(
+            seeded.len() > bare.len(),
+            "{stage}: the accessor seed did not move chunk coverage ({} unseeded, \
+             {} seeded). A seed a stage silently REJECTS looks like coverage from \
+             the observable side; this is the measure that tells them apart, and \
+             it says the stage is not doing more work.",
+            bare.len(),
+            seeded.len()
+        );
+        checked += 1;
+    }
+    println!("================\n");
+    assert_eq!(checked, 3, "not every seeded stage was measured");
 }
 
 fn scalar(v: &Value) -> i64 {

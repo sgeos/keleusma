@@ -13,6 +13,260 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE ACCESSOR REQUEST WAS RIGHT, AND THEIR REFINEMENT WAS THE PART I HAD WRONG (2026-08-15).**
+
+Five per-item seed accessors are public under `self-host`, with the four stage-module builders
+alongside them because without those an outside caller cannot construct the `Vm` the seeders take.
+
+**FIVE, NOT FOUR, AND THAT WAS THEIRS.** I scoped `reconstruct` as one unit of work by reading
+`reconstruct_via_kel` and not looking for a second entry point. `reconstruct_via_kel_multihead` takes
+a head GROUP rather than a record stream, and they pointed out it is where a dispatch predicate was
+once wrong in both directions with no oracle catching it, because every corpus input agreed on
+keyword and head count. **An accessor for the first alone would have handed them the path that has
+never been the problem.** The same class as my own `wire_names_via_kel` finding: a function taking an
+argument it does not use, or a table with one entry point where there are two, is invisible until
+someone looks for the second.
+
+**THE REFACTOR IS THE DELIVERABLE, not the new functions.** Every driver entry point now seeds
+THROUGH the accessor rather than inline, so exactly one encoding exists. Publishing a seeder while
+leaving the driver's own copy in place would have produced precisely the drift the request existed to
+prevent — and their reason for wanting the `Vm` passed IN rather than constructed inside is the same
+argument, which is better than the hot-path one I had offered.
+
+**WHAT I SAID THE GREEN SUITE DOES NOT ESTABLISH**, because it is weaker than it looks:
+
+- It compares the accessor's verdict against the driver's, which is two callers of ONE encoding. A
+  defect IN that encoding is invisible to it by construction.
+- It reads the `verify_depth` verdict slot as the literal `1 + 1536 * 5`, duplicating a constant
+  private to the module, and every chunk in its source is ACCEPTED — so a wrong index reading zero
+  would agree vacuously. The non-zero-buffer assertion guards the seeding, not the read.
+- Only the SEEDING is public. The verdict slot constants are not, which suits driving stages on real
+  input and does not suit reading results out. Left that way rather than widening the surface
+  unasked.
+
+**MECHANICAL FRICTION WORTH RECORDING.** Extracting a closure-based seeder changes `&vm` to `vm` at
+every call site, and my regex caught the single-line forms and missed the multi-line ones. Clippy's
+`needless_borrow` found six across three functions. The lesson is small and real: a mechanical
+transform applied by pattern needs the compiler to confirm it, not a second reading of the pattern.
+---
+
+**THE CONTROL I ADDED FOR ONE INSTANCE CANNOT REACH THE NEXT ONE (2026-08-15).**
+
+The `v0.3.0` line reports `Op::Yield` with a wrong net in the peak model. **Confirmed by walking my
+own corpus**: `analyze::main` and `verify_depth::main` reach -1, first at `PopN(1)`. `stack_growth`
+0 / `stack_shrink` 1 gives net -1; `verify::op_depth_effect` gives `(1, 0)` above a comment saying
+the resume pushes the input back. The `PopN(1)` that discards the resumed value then has nothing to
+discard.
+
+**This is the same defect class as `GetField`, which `d3fd5cb6` fixed a day ago, and the control
+that repair added cannot see it.** `the_peak_model_agrees_with_the_depth_model` compares the two
+models over five hand-written sources — struct fields, tuple field, index, checked arithmetic — and
+**not one of them yields**. It caught `GetField` because a case exercised `GetField`.
+
+**That is the third instance this session of the same meta-defect**: a suite whose coverage is a
+property of its case list, mistaken for a property of the thing under test. The enum intern mode,
+the constant-name branch, and now a stack-effect control. In every case the code was reachable and
+the evidence was not, and in every case a mutation or a corpus walk found it while green did not.
+
+**A trap I nearly fell into while checking.** I first probed the two models on a small yielding
+chunk and got peak 3 against depth 3 — agreement — and almost recorded the report as unreproduced.
+The peak is a MAX; it can coincide while the running offset underneath it is wrong. The negative
+walk is the instrument that discriminates, and their framing was sharper than my first test.
+
+**The generalisable form**: a control over a case list is only as good as the list, and the fix for
+"this control missed an opcode" is not another case but a check that ranges over the opcode set —
+the same move that closed `analyze_class`, where the compiler was made to enumerate rather than a
+test.
+---
+
+**ONE TRUE DISCOVERY CARRIED AN UNTRUE CONCLUSION ABOUT ITS NEIGHBOUR (2026-08-15).**
+
+E1 had two halves. I established that the larger one — CI never doc-builds the self-host surface —
+was false, and then wrote "E1 does not exist". **The smaller half was real and I dismissed it in the
+same breath.** `cargo doc --features self-host` genuinely failed on three unresolved links, and I
+declined to fix them on the grounds that no shipped configuration builds that set. That is a judgment
+to OFFER; I substituted it for the instruction and folded it into a retraction, where it read as
+"nothing here" rather than "I decided not to".
+
+**Finding that one half of a task is already done is not evidence about the other half.** That is
+narrower than the "check it against the code" lesson and worth keeping separate from it, because the
+mechanism is different: not a stale document, but a conclusion allowed to spread from the item it was
+established for to the one beside it.
+
+**The fix is better than the thing it replaces, which is why the dismissal was wrong on the merits
+too.** Each site now names the feature that gates its target — `signatures`, `encryption` — which the
+intra-doc link never told the reader. It resolves under every feature set instead of one, so `cargo
+doc` is clean across five configurations including the bare default. I had framed the options as
+"de-link and lose navigation" or "duplicate prose under `cfg_attr`", and both framings were worse than
+the option I had not considered.
+
+**THE COVERAGE POINT, which is the part that generalises.** CI already built
+`signatures,encryption,shell,self-host`, and that set CANNOT catch this class: both feature gates are
+satisfied, so a link to a gated item resolves and the breakage is masked. Only the LEAN set reports
+it. Three links had accumulated behind exactly that blind spot. A job that builds the union of
+features is not a superset test for feature-gated references — it is the one configuration guaranteed
+to miss them.
+
+Cost measured before touching a shared file, since `ci.yml` gates the other line: **5.05 s against
+5.16 s** for a step already in the job, marginally cheaper because the lean set pulls fewer
+dependencies. Stated in the workflow comment and in the mailbox rather than left for them to discover.
+---
+
+**TWO PROCESS RULES COLLIDED, AND THE SAFE ROUTE LOOKED LIKE THE VIOLATION (2026-08-15).**
+
+The workflow says to cut each feature branch as the first action of an increment, and to merge "at
+the commit CI ran, without rebasing". For sequential increments those two collide, because
+`DESIGN_JOURNAL.md`, `REVERSE_PROMPT.md` and `TASKLOG.md` are prepended to by **every** increment,
+so any two branches cut in parallel conflict by construction.
+
+I cut B2's branch while A1 was still in continuous integration. When A1 merged, B2 conflicted in the
+journal. That left two routes:
+
+- **Rebase before the first push**, so CI runs once, on the final commit, and the merge is at that
+  commit. Chosen. Verified afterwards: one CI run for the branch, on `4dfefcf1`, and PR #120's head
+  and merge base were that same commit. **No CI result was invalidated.**
+- **Leave it conflicting**, in which case GitHub produces **no CI run at all, silently** — a hazard
+  the `v0.3.0` line recorded — and merging means merging something CI never tested.
+
+**The second route is the one the rule exists to forbid, and it is the one that looks compliant.**
+"Without rebasing" protects the invariant "merged at the commit CI ran". Read as a blanket ban on
+`git rebase`, it would have forced the untested merge. A rule stated as a mechanism rather than as
+the property it protects can be followed into the failure it was written to prevent.
+
+**The actual mistake was upstream of both routes**: cutting the second branch before the first
+merged. Sequential items whose channels overlap must be cut one at a time, and since the three
+channels overlap on every increment, that means always. Written into the workflow section rather
+than left as this session's private knowledge.
+
+**Worth separating from the above**: this is not a defence of rebasing generally. On a shared or
+pushed branch it destroys the property outright. What made it safe here is that the branch had never
+been pushed and CI had never run on it, so there was no green result to invalidate — and I checked
+that after the fact rather than assuming it.
+---
+
+**A TEST DESCRIBED THE HAZARD IN ITS DOC COMMENT AND DID NOT CONTAIN THE CASE (2026-08-15).**
+
+B2 was specified as "the child-position slice", the constant NESTING work. **It is built** — the
+fourth item this session that a plan listed as remaining and the tree had already done. Established
+by execution: the self-hosted differential covers depth-2 strings, a struct in a non-last sibling
+subtree, structs sharing a field name, and the enum family.
+
+**Green did not mean covered, and the mutation is what showed it.** The plan named three hazards.
+Hazard 2 says `STRUCT` interns field names FRESH for contiguity while `ENUM` interns type and
+variant BOTH DEDUP, and that "a single rule would be wrong for one of the two, and only where a name
+repeats". I collapsed `mi_name_mode` to the struct rule for every tag and **the entire 163-test wire
+suite stayed green**. Every constant case in both lists was a string or a struct. No enum variant
+name ever repeated, so the enum half was asserted by nothing.
+
+**THE TEST THAT SHOULD HAVE CAUGHT IT SAYS SO IN ITS OWN DOC COMMENT.** `keleusma_produces_the_nested_constant_walk` carries the sentence "An enum interns both its names
+with dedup. A single 'a composite interns its names' rule would be wrong for one of the two, and only
+where a name repeats" — directly above a case list containing `str-in-tuple`,
+`two-strings-depth-2`, `one-struct` and `repeated-field-name`. **A comment stating a property beside
+a suite that does not check it reads as coverage and is worse than silence**, because the next reader
+takes the comment as evidence.
+
+Closed with `two-enums-same-variant`. Must-fire control: `two-enums-same-variant: name 6 (A) mode`.
+
+**A WRONG TURN WORTH RECORDING.** I first added the case to `FX_CASES` and re-ran the mutation; it
+was still not caught. The reason is that `FX_CASES` drives the `fx_*` command family and
+`mi_name_mode` serves the `mi_*` module-input path — two walks I had been treating as one. The
+useful discipline was refusing to accept the first green as an answer: the case existed, the
+mutation existed, and they did not meet.
+
+**I KEPT THE `FX_CASES` ADDITION AND SAID WHAT I DID NOT SHOW.** It is a real module compared
+byte-for-byte against the reference in a shape that list lacked, but I did not demonstrate which
+mutation it discriminates on that path. The comment says exactly that, because this file already
+warns that a case which cannot fail "reads as coverage while asserting nothing", and crediting it
+with the mi finding would have been borrowing evidence from a different test.
+
+**The residual is unchanged and is a fact about the corpus**: no stage nests a constant past depth
+one and none contributes a constant-interned name, so every child-position path is exercised by
+constructed cases and by nothing real. That is precisely why counts could not have found this and a
+mutation could.
+**THE `analyze_class` CATCH-ALL IS CLOSED, AND IT WAS THE OUTLIER (2026-08-15).**
+
+`analyze_class` and `analyze_opk` are exhaustive over `Op`. Adding a variant now fails to build at
+both sites with `E0004`, **verified by doing it** rather than asserted. No bound changed: every
+opcode the catch-all matched still maps to the plain group, and the nine-class boundary still
+reports nine.
+
+**THE FINDING I DID NOT EXPECT: seven other matches over `Op` in this crate were ALREADY
+exhaustive.** Adding the throwaway variant produced eight `E0004` errors, in `bytecode.rs` three
+times, `vm.rs`, `wire_format.rs`, and mine. The codebase already had this discipline everywhere it
+mattered; `analyze_class` was the one place that silently absorbed a new opcode. That reframes the
+item from "a hardening we should adopt" to "a place we forgot", which is a different and more
+worrying kind of gap — the convention existed and this function was outside it.
+
+**`analyze_opk` HAS THE SAME SHAPE AND NOT THE SAME CONSEQUENCE**, and the distinction is worth
+recording because I nearly reported them as one thing. Every `opk` use in `analyze.kel` is a POSITIVE
+pattern requirement (`wa.opk[ip] == 2`, `== 3`, `== 8`), so an untagged opcode fails to match, the
+loop-bound shape is not recognised, and no bound is extracted — CONSERVATIVE. `analyze_class` is the
+opposite: a missing arm drops a control-flow edge and yields a bound that is finite and WRONG.
+
+I made it exhaustive anyway. **That argument is reasoning, and the compiler can make reasoning
+unnecessary.** A new opcode deserves as deliberate a decision about bound extraction as about
+classification, and a catch-all answers that question by default and silently.
+
+**WHAT THE COMPILER STILL CANNOT DO, stated where the test lives.** Exhaustiveness forces a
+DECISION, not a correct one. A new control-flow opcode dropped into the plain group satisfies the
+compiler and reintroduces exactly the silent missing edge. So the nine-class count stays pinned by
+test, and the test that used to say "this cannot close the hole" now says what its job became.
+
+**A stale claim in a test NAME.** The boundary test was called
+`the_class_table_covers_exactly_nine_kinds_and_defaults_silently`. It no longer defaults silently.
+Leaving the name would have left a false claim in the source at the exact spot a reader goes to
+check this behaviour, which is worse than in prose because a name is read as a summary of what the
+code guarantees. Renamed, and the old doc comment is quoted in full rather than deleted so the
+reasoning that led here survives.
+---
+
+**I REPORTED A GAP THAT WAS ALREADY CLOSED, AND THE GOAL STATEMENT CARRIED IT (2026-08-15).**
+
+**The finding was wrong and the error is instructive because of WHEN it happened.** I reported that
+CI never doc-builds the `self-host` feature surface, put it in `REVERSE_PROMPT.md`, and it was then
+written into a goal statement as the next increment. It is false. The Doc job already runs
+`cargo doc -p keleusma --no-deps --features signatures,encryption,shell,self-host` — the exact
+command I later derived independently as "the fix" — and it passed on the pull request immediately
+before.
+
+**How.** I read the FIRST step of the Doc job, saw the docs.rs feature set, and reported the job's
+coverage from it. The comment directly above the step I did not reach says the job "lists crates BY
+NAME, so a new crate is invisible to it until someone remembers", and records that broken intra-doc
+links in `src/selfhost/` once survived four releases. **The gap had been found and closed, and its
+own comment says so.** I stopped reading one step early.
+
+**Two figures inside the same report were also wrong.** Three unresolved links, not four — the
+fourth was rustdoc's aggregate `could not document` line, counted as a finding. And they are not a
+defect at all: they resolve under every feature set the project documents, and fail only under
+`--features self-host` alone, which neither docs.rs nor CI builds. Repairing them would mean
+de-linking or duplicating prose under `cfg_attr` to serve a configuration nobody ships.
+
+**THE COST OF THIS CLASS IS NOT THE WASTED WORK, IT IS THAT A WRONG FINDING PROPAGATES.** It went
+from a probe, into a resume channel, into a candidate list, into a goal statement, and would have
+become a change to `ci.yml` — a file that gates the other line and whose runners are already
+contended. They would have paid runner time for a step that already exists. The check that would
+have caught it at every stage is the one already written down and now in the goal's own second
+paragraph: **check the item against the code before repeating it.**
+
+**The control was worth running even though the conclusion was wrong.** I introduced a deliberately
+broken intra-doc link in `src/selfhost/` and confirmed the docs.rs feature set reports zero errors
+while the self-host set catches it. That is a real must-fire/must-not-fire pair, and it is what
+proved the coverage exists rather than my reading of the YAML.
+
+**D1, and it is the same failure in miniature.** The sweep was scoped as "five sites" for the
+395,804 figure. There are about sixteen appearances, roughly ten of them stale. **I under-counted
+the sites of a figure whose entire lesson is checking figures.** The fix is a governing currency
+banner at the top rather than sixteen patches, because the correction already existed at line 1310
+while the stale claims sit at 355 and 806 — a reader meets the wrong version first, which is how a
+document with a correction in it still misleads.
+
+**Two live conclusions were corrected rather than annotated**, because they order work: "the scan
+must be replaced before the interner is driven by a real stage, where the count reaches 395,804"
+(it is driven, and the count is 627), and "batching first, index second" (there is no batching
+problem; the worst stage fits one call at 61% of the cap). The second is the second time this figure
+has manufactured a dependency between two pieces of work.
+---
+
 **THE DRIVER IS WIRED TO A MODULE, AND THE INCREMENT WAS A THIRD THE SIZE THE PLAN SAID (2026-08-15).**
 
 **Three of the four things the plan listed as remaining were already done, and I found that by

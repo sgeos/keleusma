@@ -23,7 +23,7 @@ license = "0BSD"
 [workspace]
 
 [dependencies]
-keleusma = { path = "..", features = ["compile"] }
+keleusma = { path = "..", features = ["compile", "self-host"] }
 inkwell = { version = "0.9", features = ["llvm22-1"] }
 
 [dev-dependencies]

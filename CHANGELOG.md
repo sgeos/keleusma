@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Five per-item seed accessors on `keleusma::selfhost`, behind the off-by-default
+  `self-host` feature.** `seed_reconstruct_shared`,
+  `seed_reconstruct_multihead_shared`, `seed_verify_depth_shared`,
+  `seed_verify_structural_shared` and `seed_verify_typed_shared` each return the
+  shared-data buffer their stage consumes for one unit of work, seeded and ready
+  to drive; the four `*_kel_module()` builders are public alongside them so a
+  caller can construct the `Vm` the seeders take. Each takes the `Vm` rather than
+  building one, so an external harness feeds a stage exactly what the driver
+  does: a constructor of its own would be a second encoding free to drift. Every
+  driver entry point now seeds THROUGH these rather than inline, so no second
+  copy remains. **`reconstruct` gets two, not one** — its multiheaded entry point
+  takes a head group rather than a record stream, and covering only the
+  single-head form would leave the path where a dispatch predicate was once wrong
+  in both directions undriven. Deliberately **not** provided for
+  `verify_datalayout`: it is three phases with different operand encodings,
+  batched at 1024, and its verdict accumulates across calls, so a single buffer
+  cannot produce a verdict at all. Nothing changes at default features.
+
 - **New workspace crates `keleusma-wire` and `keleusma-wire-derive`: a standalone
   word-oriented binary container format.** Mechanism only — framing, a triplicated
   prologue and region directory, fixed-stride record tables, byte pools, CRC-32,
