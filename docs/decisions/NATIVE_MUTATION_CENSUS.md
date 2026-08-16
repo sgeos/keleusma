@@ -1,8 +1,10 @@
 # What can the corpus differential actually detect?
 
-**Status**: measured, the harness repaired twice, and **one hole open** — `Trap`,
-which is undetectable by construction rather than for want of inputs. See Part C.
-**Date**: 2026-08-14, extended 2026-08-15 (Parts B and C).
+**Status**: measured, the harness repaired twice, and **no hole open**. `Trap`
+was closed in Part D by changing the OBSERVABLE, not the inputs. The only
+undetected mutation left is `PushImmediate`, established in round two as vacuous
+rather than a hole.
+**Date**: 2026-08-14, extended 2026-08-15 (Parts B, C and D).
 
 ## The question, and why the obvious instrument was wrong
 
@@ -422,3 +424,79 @@ sweep additionally pays one unmutated calibration run per module it will drive.
 - **A calibrated budget is not a proof of termination.** It rules out the false
   positive measured here; it does not establish that every remaining `HANG` is
   genuine non-termination rather than a slower machine.
+
+---
+
+## PART D, 2026-08-15: the `Trap` hole is CLOSED, and the first attempt closed nothing
+
+**`Trap` is DETECTED by 30/30, all genuine `DISAGREE`.** The census now has no
+undetected opcode other than `PushImmediate`, which round two established is a
+vacuous mutation rather than a hole.
+
+### The observable, as Part C specified it
+
+Part C established that no seed could close this: `corpus_differential` runs the
+virtual machine FIRST precisely so a trapping module becomes a named exemption
+rather than a `SIGTRAP` that kills the run, so a module that reaches a trap is
+never compared and a module that is compared reached none.
+
+The fix is a different observable — **the fact of the fault, not a returned
+value**. For a program whose virtual-machine run faults, the native side runs in
+a child process and must die with `SIGTRAP`. The parent asserts three things: a
+marker printed immediately before the native call (so a child that died in setup
+is not mistaken for one that trapped), that the child did not SURVIVE, and that
+the signal is `SIGTRAP` specifically.
+
+### THE FIRST IMPLEMENTATION PASSED AND PROVED NOTHING
+
+It used three corpus files that fault: `faulty.kel`, `led.kel`,
+`rogue_dungen.kel`. It was green. **Mutating `Op::Trap` left it green**, which is
+how the gap surfaced — the verification step, not review.
+
+**None of those modules emits `Op::Trap` at all.** `faulty.kel` faults through the
+emitter's DIVISION GUARD and `rogue_dungen.kel` through its BOUNDS CHECK. Both
+are emitter-inserted branches to the trap block, not the opcode. Confirmed
+against `dump_opcode_module_map`: **no module in the shipped corpus that faults on
+the virtual machine emits `Op::Trap`.**
+
+So a synthetic subject is not a convenience here, it is the only way to reach the
+opcode. A multiheaded function whose guards all fail emits `Trap(NoMatchingHead)`:
+
+```keleusma
+fn pick(x: Word) -> Word when x > 100 { 1 }
+fn pick(x: Word) -> Word when x < 0 { 2 }
+fn main(a: Word) -> Word { pick(a) }
+```
+
+**The guard that would have caught it is now in the test.** Every subject is
+labelled `Op` or `Guard`, and the labels are ASSERTED: an `Op` subject must
+contain `Op::Trap`, a `Guard` subject must not, and at least one `Op` subject must
+run or the test fails as vacuous. The two kinds are both worth covering and are
+not interchangeable evidence.
+
+### `led.kel` is EXCLUDED, and the exclusion is asserted rather than commented
+
+Its virtual-machine run faults with `NoMatchingArm`, so it passes the entry
+criterion. **Its native side dies with SIGSEGV, not SIGTRAP.** `host::gpio_set`
+records a return shape of `Flat { kind: 3, size: 16 }` and the generic stub
+returns a plain integer, which the native side dereferences as a body address.
+
+**The two sides fault for different reasons, so admitting it would be a false
+agreement** — and a check that accepted "died by some signal" would have counted
+it. The exclusion is a live assertion: if the composite return path lands and the
+stub returns a body address, the test fails and says to MOVE the module into the
+subject list.
+
+### What this does NOT establish
+
+- **`DETECTED by 30/30` is one test detecting, not 30 modules independently.**
+  The trap check runs in every invocation of this binary, so under the mutation
+  every invocation fails. That is honest detection and it is not thirty
+  witnesses.
+- **One `Op::Trap` subject, and it is synthetic.** The corpus supplies no
+  reachable one. If a real module ever reaches `Op::Trap`, it is a better subject
+  than this.
+- **`SIGTRAP` is agreement on the FACT of a fault, not on WHICH fault.** The
+  virtual machine distinguishes `NoMatchingHead` from `DivisionByZero`; the
+  native side raises the same signal for both. A lowering that trapped for the
+  wrong reason would pass.
