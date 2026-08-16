@@ -1121,7 +1121,34 @@ the format. The work is an input encoding, a producer, and the residency staging
 395,804 names force — which is the same batching problem the scan note above defers to. **Those two
 are the same increment, and doing either alone is wasted.**
 
-#### THE CHILD-POSITION SLICE, SPECIFIED BEFORE IT IS BUILT (2026-08-14)
+#### BUILT, AND ONE OF ITS THREE HAZARDS WAS ASSERTED BY NOTHING (2026-08-15)
+
+**Read this before the section below it, which specified the slice and is now history.**
+
+The child-position slice is **built**. Nesting is covered by the self-hosted differential over
+`FX_CASES` — depth-2 strings, a struct in a non-last sibling subtree, structs sharing a field name,
+and the enum family — and by the `mi_*` nested walk. Established by execution, not by reading.
+
+**HAZARD 2 WAS LIVE.** The plan says a single "composites intern their names" rule "would be wrong
+for one of the two, and only where a name repeats". It was: collapsing `mi_name_mode` to the struct
+rule for every tag — `if i == 0 { intern } else { fresh }` — left **the entire 163-test wire suite
+green**. Every constant case in both lists was a string or a struct, so no enum variant name ever
+repeated and the enum-dedup half was checked by nothing.
+
+**The test that should have caught it described the hazard in its own doc comment** and carried no
+enum in its case list. That is the sharpest form of this project's recurring defect: a comment
+stating a property, beside a suite that does not check it, reading as coverage.
+
+Closed by `two-enums-same-variant` — two enum constants sharing a variant, so `A` interns twice and
+must dedup to one record. The must-fire control now reports
+`two-enums-same-variant: name 6 (A) mode`.
+
+**What is still not established**: no stage nests a constant past depth one and no stage contributes
+a constant-interned name, so every child-position path is exercised by constructed cases and by
+nothing real. That is a fact about the corpus, and it is why the mutation was needed to find this at
+all — counts alone would not have shown it.
+
+#### THE CHILD-POSITION SLICE, SPECIFIED BEFORE IT IS BUILT (2026-08-14) (SUPERSEDED, see above)
 
 Roots are done: names (slice 14c) and the six-word node table (slice 14d). What remains of the
 constant contributor is the nesting, and it is **more intricate than the root case in three separate

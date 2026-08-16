@@ -7992,6 +7992,24 @@ const FX_CASES: &[(&str, &str)] = &[
         "enum E { A, B }\nconst data k { e: E = E::B }\n\
          fn take(v: E) -> Word { 1 }\nfn main() -> Word { take(k.e) }",
     ),
+    // A shape this list lacked: two enum constants sharing a variant name, so a
+    // variant name REPEATS and dedup and fresh become distinguishable. Every
+    // other enum case here uses a single enum constant.
+    //
+    // HONEST SCOPE: I have NOT demonstrated which mutation this case
+    // discriminates on the `fx_*` path, unlike its twin in the `mi_*` nested
+    // walk below, where the collapse of `mi_name_mode` is caught and named. It
+    // is here because it is a real module compared byte-for-byte against the
+    // reference in a shape the list did not cover — not because it is known to
+    // guard a specific defect. Recorded that way so a later reader does not
+    // credit it with coverage it has not been shown to have.
+    (
+        "two-enums-same-variant",
+        "enum E { A, B }
+const data k { t: (E, E) = (E::A, E::A) }
+         fn take(v: (E, E)) -> Word { 1 }
+fn main() -> Word { take(k.t) }",
+    ),
     // A payload variant, so the enum node also carries a child range.
     (
         "enum-payload",
@@ -10955,6 +10973,19 @@ fn keleusma_produces_the_nested_constant_walk() {
         // the second `x` would resolve to the first, and it must not, because
         // each struct's field run has to stay contiguous from its own
         // `names_first`.
+        // THE ENUM HALF, which this test's own doc comment described and its case
+        // list did not contain. Two enum constants sharing a variant name, so
+        // `A` is interned twice and must DEDUP to one record.
+        //
+        // Established by MUTATION: collapsing `mi_name_mode` to the struct rule
+        // for every tag left the ENTIRE 163-test wire suite green. The
+        // distinction the comment above calls load-bearing was asserted by
+        // nothing, because every case here is a string or a struct.
+        (
+            "two-enums-same-variant",
+            "enum E { A, B }\nconst data k { t: (E, E) = (E::A, E::A) }\n\
+             fn take(v: (E, E)) -> Word { 1 }\nfn main() -> Word { take(k.t) }",
+        ),
         (
             "repeated-field-name",
             "struct P { x: Word, y: Word }\nstruct Q { x: Word, z: Word }\n\

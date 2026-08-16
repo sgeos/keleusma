@@ -13,6 +13,45 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**A TEST DESCRIBED THE HAZARD IN ITS DOC COMMENT AND DID NOT CONTAIN THE CASE (2026-08-15).**
+
+B2 was specified as "the child-position slice", the constant NESTING work. **It is built** — the
+fourth item this session that a plan listed as remaining and the tree had already done. Established
+by execution: the self-hosted differential covers depth-2 strings, a struct in a non-last sibling
+subtree, structs sharing a field name, and the enum family.
+
+**Green did not mean covered, and the mutation is what showed it.** The plan named three hazards.
+Hazard 2 says `STRUCT` interns field names FRESH for contiguity while `ENUM` interns type and
+variant BOTH DEDUP, and that "a single rule would be wrong for one of the two, and only where a name
+repeats". I collapsed `mi_name_mode` to the struct rule for every tag and **the entire 163-test wire
+suite stayed green**. Every constant case in both lists was a string or a struct. No enum variant
+name ever repeated, so the enum half was asserted by nothing.
+
+**THE TEST THAT SHOULD HAVE CAUGHT IT SAYS SO IN ITS OWN DOC COMMENT.** `keleusma_produces_the_nested_constant_walk` carries the sentence "An enum interns both its names
+with dedup. A single 'a composite interns its names' rule would be wrong for one of the two, and only
+where a name repeats" — directly above a case list containing `str-in-tuple`,
+`two-strings-depth-2`, `one-struct` and `repeated-field-name`. **A comment stating a property beside
+a suite that does not check it reads as coverage and is worse than silence**, because the next reader
+takes the comment as evidence.
+
+Closed with `two-enums-same-variant`. Must-fire control: `two-enums-same-variant: name 6 (A) mode`.
+
+**A WRONG TURN WORTH RECORDING.** I first added the case to `FX_CASES` and re-ran the mutation; it
+was still not caught. The reason is that `FX_CASES` drives the `fx_*` command family and
+`mi_name_mode` serves the `mi_*` module-input path — two walks I had been treating as one. The
+useful discipline was refusing to accept the first green as an answer: the case existed, the
+mutation existed, and they did not meet.
+
+**I KEPT THE `FX_CASES` ADDITION AND SAID WHAT I DID NOT SHOW.** It is a real module compared
+byte-for-byte against the reference in a shape that list lacked, but I did not demonstrate which
+mutation it discriminates on that path. The comment says exactly that, because this file already
+warns that a case which cannot fail "reads as coverage while asserting nothing", and crediting it
+with the mi finding would have been borrowing evidence from a different test.
+
+**The residual is unchanged and is a fact about the corpus**: no stage nests a constant past depth
+one and none contributes a constant-interned name, so every child-position path is exercised by
+constructed cases and by nothing real. That is precisely why counts could not have found this and a
+mutation could.
 **THE `analyze_class` CATCH-ALL IS CLOSED, AND IT WAS THE OUTLIER (2026-08-15).**
 
 `analyze_class` and `analyze_opk` are exhaustive over `Op`. Adding a variant now fails to build at
