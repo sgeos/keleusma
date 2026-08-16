@@ -19,6 +19,42 @@ Current sprint source of truth.
 > and unsound**: the field ops' operand-stack net understates the WCMU peak.~~ **CLOSED** later the
 > same day; see the note below.
 
+> **Currency note (2026-08-16).** The `wcmu_region` bound reported by the `v0.3.0` line as 2-against-3
+> is **FIXED**, and it was not an off-by-one. The reported 2 was `local_count` alone; the BODY peak was
+> reported as exactly 0. `wcmu_region` returned `Option<McuResult>` in which `None` meant "does not
+> fall through" and carried no resources, so four sites discarded an accumulated operand peak and
+> arena heap: the `Trap` arm, the `If` arm when both branches exited, the `Loop` arm when the body
+> never fell through, and every top-level caller including `module_wcmu`. **Every multiheaded function
+> was affected**, since each compiles to guarded heads with a trailing no-match dispatch `Trap`; six of
+> sixty-four non-Stream corpus chunks reported a zero body peak, one of them 3905 ops. The return type
+> is now `McuOutcome`, where the peak and heap are always meaningful and only the control-flow fact is
+> optional. A **second, opposite** defect sat underneath: `Op::Return` fell through the catch-all, so a
+> dispatch was walked as if every head ran in sequence. Now a path exit. The two errors partially
+> cancelled, which is why the symptom looked small. Pinned in `tests/wcmu_exit_path_bounds.rs`.
+>
+> The five-case `the_peak_model_agrees_with_the_depth_model` control is superseded by a check
+> **ranging over the whole opcode set**, with completeness asserted against the wire format's
+> canonical opcode table so a new opcode is reported by name. It found `FixedMul` and `FixedDiv`
+> disagreeing on its first run — peak-model net 0 against a handler that pops twice and pushes once.
+> **Pinned, not repaired**: that error overstates, so repairing it lowers shipped bounds and wants its
+> own increment. `Op::Yield` likewise stays pinned, measured to be a different cause.
+
+> **Currency note (2026-08-16, later).** The repair above spread, and the differential oracle is why
+> that was safe rather than alarming. **`wcet_region` had the identical defect** (`let _ = cost;`
+> before `return Ok(None)`), so cycles spent before a trap were missing from the worst-case EXECUTION
+> TIME bound; repaired the same way, with `Op::Return` now a path exit there too. **`analyze.kel` had
+> it in three places**: `run()` zeroed a region's cost, peak and heap whenever no path fell through --
+> and every single-head function ends in a top-level `return`, so that zeroed the body contribution of
+> essentially every `fn` in every stage; `Op::Return` had no control-flow class, so a dispatch was
+> analysed as though every head ran in sequence, now fixed by sharing the PATH-EXIT class with
+> `Op::Trap` (**the nine-class boundary still reports nine**); and **`tests/selfhost_codegen.rs`
+> carried a second copy of the class table that had already drifted**, keeping the `_ => (0, 0)`
+> catch-all after the driver's was made exhaustive and passing `0` for real branch targets, so the
+> oracle was running against the unrepaired table. `analyze_class` and `analyze_opk` are now `pub`
+> under `self-host` and the duplicate is deleted. **I reported that analyze.kel did not need the
+> repair, with three supporting measurements, and all three were consistent and none could
+> discriminate.**
+
 > **Currency note (2026-08-15, later).** The understated worst-case-memory bound is **FIXED** and
 > merged (`d3fd5cb6`, PR #104). `GetField`/`GetTupleField`/`GetEnumField` declared an operand-stack
 > net of −1 where the virtual machine's is 0, so every later operation's peak was computed from a

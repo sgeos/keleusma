@@ -1021,7 +1021,16 @@ fn analyze_kel_module() -> Module {
 /// exit a Break/BreakIf jumps to. (analyze.kel reads `arg` only for If and Loop; the EndLoop,
 /// Break, and BreakIf targets are ignored there and consumed only by verify_structural.kel's
 /// target-equality checks, so populating them does not affect the resource analysis.)
-fn analyze_class(op: &crate::bytecode::Op) -> (i64, i64) {
+/// Control-flow class and target for one opcode, as `analyze.kel` consumes them.
+///
+/// **Public so there is ONE class table, not two.** A second copy lived in
+/// `tests/selfhost_codegen.rs` and had already drifted from this one: it kept a
+/// `_ => (0, 0)` catch-all after this function was made exhaustive, and passed
+/// `0` where this passes the real `EndLoop`/`Break`/`BreakIf` target. The
+/// differential that is supposed to be the oracle was therefore running against
+/// the unrepaired table. Same reasoning as the per-item seed accessors: a
+/// reconstruction of an encoding is free to drift from the encoding.
+pub fn analyze_class(op: &crate::bytecode::Op) -> (i64, i64) {
     use crate::bytecode::Op;
     match op {
         Op::If(t) => (1, *t as i64),
@@ -1031,7 +1040,14 @@ fn analyze_class(op: &crate::bytecode::Op) -> (i64, i64) {
         Op::EndLoop(t) => (5, *t as i64),
         Op::Break(t) => (6, *t as i64),
         Op::BreakIf(t) => (7, *t as i64),
-        Op::Trap(_) => (8, 0),
+        // Class 8 is PATH EXIT, not "trap". Both `Trap` and `Return` end the
+        // current path without transferring control to an enclosing loop, so
+        // they share it and no tenth class is needed.
+        //
+        // `Return` was in the plain group below until 2026-08-16, mirroring a
+        // reference that let it fall through its own catch-all. That costed and
+        // sized a multiheaded dispatch as though every head ran in sequence.
+        Op::Trap(_) | Op::Return => (8, 0),
         Op::Call(_, _) => (9, 0),
         // EVERY REMAINING OPCODE IS LISTED, and the list is the point.
         //
@@ -1072,7 +1088,6 @@ fn analyze_class(op: &crate::bytecode::Op) -> (i64, i64) {
         | Op::Not
         | Op::Stream
         | Op::Reset
-        | Op::Return
         | Op::Yield
         | Op::Dup
         | Op::NewComposite(..)
@@ -1113,7 +1128,13 @@ fn analyze_class(op: &crate::bytecode::Op) -> (i64, i64) {
 /// `opk` tags the opcode (1 GetLocal, 2 SetLocal, 3 Const, 4 CmpGe, 5 BreakIf, 6 CheckedAdd,
 /// 7 PopN, 8 EndLoop, 9 Loop, 0 other); `slot` the GetLocal/SetLocal slot; `cval` the Const
 /// integer value or PopN count; `cint` 1 if a Const resolves to an integer.
-fn analyze_opk(op: &crate::bytecode::Op, chunk: &crate::bytecode::Chunk) -> (i64, i64, i64, i64) {
+/// Fine-grained op detail for `analyze.kel`'s loop-bound extraction, as
+/// `(opk, slot, cval, cint)`. Public for the same one-encoding reason as
+/// [`analyze_class`].
+pub fn analyze_opk(
+    op: &crate::bytecode::Op,
+    chunk: &crate::bytecode::Chunk,
+) -> (i64, i64, i64, i64) {
     use crate::bytecode::{ConstValue, Op};
     match op {
         Op::GetLocal(s) => (1, *s as i64, 0, 0),
@@ -3512,7 +3533,10 @@ mod classification_tables {
             (Op::EndLoop(14), 5, 14),
             (Op::Break(15), 6, 15),
             (Op::BreakIf(16), 7, 16),
+            // Class 8 is PATH EXIT, shared by both opcodes that end a path
+            // without transferring control to an enclosing loop.
             (Op::Trap(0), 8, 0),
+            (Op::Return, 8, 0),
             (Op::Call(17, 2), 9, 0),
         ];
         for (op, class, arg) in cases {
@@ -3538,7 +3562,10 @@ mod classification_tables {
             Op::CmpEq,
             Op::Dup,
             Op::Not,
-            Op::Return,
+            // `Op::Return` WAS HERE until 2026-08-16 and is now class 8. It ends
+            // the path, and treating it as plain made `analyze.kel` walk a
+            // multiheaded dispatch as though every head ran in sequence. This
+            // test failing is how that change was confirmed to reach the table.
             Op::Yield,
             Op::Stream,
             Op::Reset,

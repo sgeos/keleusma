@@ -601,6 +601,19 @@ pub fn opcode_id_of(op: &Op) -> OpcodeId {
     OpcodeId(id)
 }
 
+/// The canonical opcode table as `(variant name, wire identifier)` pairs.
+///
+/// Exposed within the crate so a test can range over the whole opcode set
+/// rather than over a hand-written case list. The table is part of the wire
+/// format's application binary interface, so a new opcode must be added here to
+/// be encodable at all, which makes this the authority on what the opcode set
+/// is. A check driven from it reports a newly added opcode by name instead of
+/// silently not covering it.
+#[cfg(test)]
+pub(crate) fn opcode_table() -> &'static [(&'static str, u8)] {
+    OPCODE_ID_TABLE
+}
+
 /// Look up the variant name for an opcode identifier. Used by
 /// the decoder's error path to surface readable diagnostics.
 fn opcode_name_for_id(id: u8) -> Option<&'static str> {
