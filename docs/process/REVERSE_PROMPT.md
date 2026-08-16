@@ -16,11 +16,47 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 | | |
 |---|---|
-| `reconstruct` seeding | **unblocked**, and one of the two was never blocked |
-| Module-driven emit path | **three** region kinds, two computed and one encoded-not-derived |
-| The next region, `CONSTS` | **not wiring** — measured obstacles, recorded below |
-| A vacuous target avoided | `STRUCT_AUX` and `ENUM_AUX` are empty in all eleven stages |
-| Previous increment | WCMU/WCET exit-path repair, merged at `e923a57f`, 22/22 green |
+| Module-driven emit path | **four** region kinds; `CHUNKS` reaches **7 of 11** stages |
+| The four excluded stages | refused with the reason asserted, not truncated |
+| Inference sizing | **two local rules, no unification**, 5 of 5 measured |
+| A guard I wrote | **could never fire**; removed rather than repaired |
+| Stale figures corrected | fifth this session, this one in a design-governing comment |
+
+## `CHUNKS` LANDS, AND THE SPLIT IS PER FIELD
+
+`wire_chunks_via_kel` emits `NAMES`, `STRING_POOL`, `HEADER` and `CHUNKS` byte-identically from a
+`Module`. The stage **computes** each record's name index, taking it from the interner that produced
+`NAMES` rather than from the host, and **computes** the three range cursors by accumulation. Ten
+fields per record are host-supplied. Asserted, not described.
+
+**Seven of eleven stages**, and the exclusions are measured: `wire` (469 chunks) and `parse` (94)
+exceed the 90-record batch cap; `codegen` and `verify_structural` reach past the 65,536-byte buffer
+at bytes 110,648 and 101,920. The test asserts **which limit** each refusal names, because a test
+that only asserted refusal would pass on a refusal for any cause.
+
+## A GUARD THAT COULD NEVER FIRE
+
+My first version refused an oversize artifact by comparing `directory.len()` against the buffer.
+**That length is the shared array's size, 65,536 for every module**, so the comparison was false by
+construction. Removed rather than repaired — the stage already fails closed with an out-of-bounds
+naming the offset and the bound, which is a better refusal than a host guess.
+
+The comment governing that design was itself stale: it claimed absolute positioning "works for no
+real stage", citing offsets of 81,160 and 143,096 where the real values are 1,504 and 30,576.
+
+## INFERENCE IS SMALLER THAN THE ROADMAP IMPLIED
+
+Sized by execution in `sizing_how_far_local_propagation_reaches`. A prototype adding **two local
+rules** — a `let` binds its initialiser's tag; a call or parameter takes its DECLARED type — reaches
+**5 of 5** cases the stage accepts today, including the composed one. **Nothing unifies.**
+
+The structural reason matters more than the count: the subset declares every parameter and return
+type and initialises every `let`, so no type is determined by use. **No new channel is needed** —
+`ParsedFn` already carries `param_types` and `return_type`, and let initialisers are in the body
+records.
+
+Full detail, with what would change the answer, in
+[`../decisions/TYPECHECK_INFERENCE_SIZING.md`](../decisions/TYPECHECK_INFERENCE_SIZING.md).
 
 ## TWO INHERITED CLAIMS WERE WRONG, ONE FROM EACH LINE
 

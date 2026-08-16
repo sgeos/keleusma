@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The chunk region emitted from a compiled module through the Keleusma wire
+  stage, under the off-by-default `self-host` feature.** `wire_chunks_via_kel`
+  emits `NAMES`, `STRING_POOL`, the header record and the chunk region
+  byte-identically to the reference encoder, for the seven of eleven pipeline
+  stages that fit two stated limits. The stage computes each record's name index
+  from the interner that produced the names region, rather than accepting one from
+  the host, and computes the three running range cursors by accumulation across
+  records; the remaining ten fields per record are host-supplied, and the tests
+  assert that split rather than describing it. The four stages that do not fit —
+  two past a ninety-record batch, two past the stage's sixty-four kilobyte buffer
+  — are refused with the reason named, and the tests assert the reason rather than
+  merely the refusal, so a refusal for an unrelated cause cannot pass as the limit
+  being respected.
+
+
 - **`ParsedFn` accessors and a widened self-hosted emit entry, both under the
   off-by-default `self-host` feature.** `ParsedFn::category`, `param_count`,
   `guard_records` and `body_records` make `seed_reconstruct_shared` callable by an

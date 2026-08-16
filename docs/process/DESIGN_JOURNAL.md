@@ -13,6 +13,48 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE CHUNK REGION REACHES SEVEN OF ELEVEN STAGES, AND INFERENCE IS SMALLER THAN FEARED
+(2026-08-16).**
+
+**`CHUNKS` from a `Module`, byte-identical, on real stages.** `mi_join_chunks` is additive beside
+`mi_join_header`; `highest_command` moved 168 to 169. The stage COMPUTES the name index, taking it
+from the interner that produced `NAMES` rather than from the host, and computes the three range
+cursors by accumulation. Ten fields per record are host-supplied, and the split is asserted by
+`the_chunk_name_index_comes_from_the_interner` rather than described.
+
+**Seven of eleven, and the four exclusions are asserted with their REASONS.** `wire` (469 chunks)
+and `parse` (94) exceed the 90-record batch; `codegen` and `verify_structural` reach past the
+65,536-byte buffer at 110,648 and 101,920. A test that only asserted refusal would pass on a
+refusal for any cause, so it asserts which limit the message names.
+
+**I WROTE A GUARD THAT COULD NEVER FIRE, AND FOUND IT BY MEASURING.** The first version compared
+`directory.len()` against the buffer to refuse an oversize artifact. That length is the SHARED
+ARRAY's size, 65,536 for every module, so the comparison was false by construction. Removed rather
+than repaired: the stage already fails closed with an out-of-bounds naming the offset and the bound,
+which is a better refusal than a host guess. **A guard that cannot fire reads as coverage**, which is
+this line's recurring defect wearing a new hat.
+
+**THE COMMENT GOVERNING THAT DESIGN WAS ITSELF STALE.** It said absolute positioning "works for no
+real stage", citing `verify_datalayout` NAMES at 81,160 and `verify_yield` CHUNKS at 143,096. The
+real values are 1,504 and 30,576, and seven stages fit entirely. Fifth stale figure this session.
+
+**INFERENCE IS TWO LOCAL RULES, NOT A HINDLEY-MILNER PORT.** The sizing spike measures a throwaway
+prototype adding exactly two lookups — a `let` binds its initialiser's tag, and a call or parameter
+takes its DECLARED type — against cases the stage accepts today. **Five of five, including the
+composed case.** Nothing unifies: no substitution, no occurs check, no type variable.
+
+**And the structural reason is better than the count.** The subset is monomorphic code in which every
+function declares its parameter and return types and every `let` has an initialiser, so there is no
+position where a type is determined by use. **No new channel either** — `ParsedFn` already carries
+`param_types` and `return_type`, and let initialisers are in the body records. The tags are a
+computation over records the pipeline already emits.
+
+**Recorded as a range, not a number**, in `docs/decisions/TYPECHECK_INFERENCE_SIZING.md`, with what
+would change the answer: a `let` without an initialiser, a function without a declared return type,
+or generics. Each turns two rules into a fixpoint.
+
+---
+
 **THE TYPE-REJECTION RULES WERE ALREADY DONE, AND THE REAL LIMIT IS ONE LAYER UNDER THEM
 (2026-08-16).**
 
