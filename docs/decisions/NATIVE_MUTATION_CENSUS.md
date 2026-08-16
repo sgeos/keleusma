@@ -271,6 +271,10 @@ and an unguarded "it passes under O2" would be the same mistake in a new place.
 
 ## PART C, 2026-08-15: round three, a false-positive instrument, and one hole left
 
+> **THE HOLE IS CLOSED. See PART D**, which changed the observable rather than the inputs.
+> Part C's diagnosis — that no seed could close it — is correct and is what made Part D
+> findable; only its status is superseded.
+
 ### Read this first: an intermediate result in this section's history was WRONG
 
 Round three ran, then the harness was widened, and the widened harness reported
@@ -409,8 +413,10 @@ proposition is that unbounded programs are rejected rather than silently wrong.
 because a `Stream` entry and a zero-parameter entry each keep a single seed. The
 sweep additionally pays one unmutated calibration run per module it will drive.
 
-- **The `Trap` hole is open**, and it is the largest this census has found: 28
-  modules, the safety path, undetectable by construction.
+- ~~**The `Trap` hole is open**, and it is the largest this census has found: 28
+  modules, the safety path, undetectable by construction.~~ **CLOSED in Part D**,
+  by a subprocess `SIGTRAP` differential. Struck rather than deleted: the
+  reasoning that made it look permanent is why the fix took the shape it did.
 - **Eight opcodes have never been perturbed in any round** — `Break`, `Else`,
   `EndIf`, `EndLoop`, `Loop`, `PopN`, `Reset`, `Stream` — each with a stated
   reason. The summary now computes that residue by subtracting every mutation
