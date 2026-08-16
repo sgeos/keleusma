@@ -182,6 +182,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A conflated figure that had been repeated across the roadmap, the handoff and
+  the resume channels.** "Self-hosted type rejection is 7 tests against ~15 shapes"
+  read a test count as a shape count. The rejection rules are complete: all fifteen
+  enumerated shapes plus the `calling-a-local` surface restriction are rejected over
+  a sixteen-case ill-typed corpus with well-typed controls. What remains is the
+  input path, and the tests now say which half of the checker is self-hosted — the
+  stage decides the verdict, while a host helper supplies the structure by walking
+  the reference parser's abstract syntax tree, and the type tags it supplies cover
+  literals only. Three cases where the reference rejects and the stage accepts are
+  pinned as measured disagreements rather than described in prose.
+
+
 - **An understated worst-case-memory bound on every chunk whose paths leave
   without falling through, which is every multiheaded function.** The WCMU walk
   returned an `Option` in which the "does not fall through" case carried no

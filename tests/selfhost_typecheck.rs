@@ -9,6 +9,44 @@
 //! broken, and finding that out costs nothing before a rule exists and a great
 //! deal afterwards.
 //!
+//! # WHAT IS DONE AND WHAT IS NOT, BECAUSE THE TEST COUNT HAS BEEN MISREAD
+//!
+//! **The rejection RULES are complete.** All fifteen enumerated shapes plus the
+//! `calling-a-local` surface restriction are rejected, over a sixteen-case
+//! ill-typed corpus with well-typed controls. The roadmap and the resume channels
+//! carried "7 tests against ~15 shapes" for some time: **seven is the test count
+//! and fifteen is the shape count, and they are not the same axis.**
+//!
+//! **What is NOT self-hosted is the INPUT.** The stage decides; the host supplies.
+//! Concretely, `stage_verdict` is fed by `decl_call_rows`, `expression_nodes`,
+//! `field_sets` and `occurrence_rows` — Rust functions walking the REFERENCE
+//! parser's AST. So a claim that the type checker is self-hosted must say which
+//! half is meant: the verdict is the stage's, the structure is the host's.
+//!
+//! **And the tags are literal-only, which bounds every rule.** See
+//! `the_rules_reach_only_literal_direct_occurrences`: move any of these errors off
+//! a literal, through a `let` or a call, and the stage accepts what the reference
+//! rejects. Three such cases are pinned as disagreements.
+//!
+//! # Why the input path is not simply switched to the pipeline's own parser
+//!
+//! Measured rather than assumed. **Structure is available**: `parse.kel` emits
+//! records and `reconstruct.kel` turns them into an AST node array, so the
+//! host-side structural extraction could in principle be replaced.
+//!
+//! **Types are available from nothing.** No stage in the pipeline computes source
+//! types — the set is lexer, parse, reconstruct, codegen, analyze and the
+//! `verify_*` family — and `parse.kel` says so in its own comment, describing
+//! "per-element type inference the pipeline lacks". `verify_typed.kel` reasons
+//! about flat bytecode shapes, not source types. So switching the input path would
+//! move where the STRUCTURE comes from and change nothing about the TAGS, which is
+//! what actually bounds the rejections.
+//!
+//! **That is a missing pipeline capability, not a missing rule, and not a second
+//! encoding waiting to be written.** Inventing an AST encoding for this stage
+//! before inference exists would duplicate what `parse.kel` and `reconstruct.kel`
+//! already carry while still leaving every tag unknown.
+//!
 //! # The oracle
 //!
 //! **Verdict agreement. Accept versus reject.** Not message agreement, which
@@ -1524,4 +1562,85 @@ fn the_stage_agrees_with_the_reference_on_the_whole_corpus() {
     // agreement it never observed.
     assert!(ILL_TYPED.len() >= 16, "the rejection corpus shrank");
     assert!(WELL_TYPED.len() >= 7, "the control corpus shrank");
+}
+
+/// THE LIMIT OF THE FIFTEEN SHAPES, WHICH THE CORPUS ABOVE CANNOT SHOW.
+///
+/// Every rule in the stage fires on a pair of TYPE TAGS, and the tags are
+/// syntactic: `expr_tag` maps a literal to its kind and **everything else to 0,
+/// UNKNOWN**, which the stage must not reject. That is deliberate and
+/// `verify_types.kel` states the reason — marshalling the reference's inferred
+/// types would make the stage agree by construction and prove nothing.
+///
+/// **The consequence is not stated anywhere until here.** Every one of the
+/// sixteen ill-typed cases places its offending operands as LITERALS. Route the
+/// identical error through a `let` binding or a call return and the operand tags
+/// become unknown, so the stage accepts a program the reference rejects. The
+/// corpus is not wrong; its coverage is a property of its case list rather than
+/// of the stage, which is the defect this project keeps finding in its own suites.
+///
+/// **These cases are pinned as DISAGREEMENTS, not repaired.** Repairing them
+/// means giving the pipeline source types, and nothing in it computes any: the
+/// stages are lexer, parse, reconstruct, codegen, analyze and the `verify_*`
+/// family, and `parse.kel` says in its own comment that it lacks "per-element
+/// type inference". `verify_typed.kel` is the flat operand-stack verifier and
+/// reasons about bytecode shapes, not source types. So this is a missing
+/// pipeline capability, not a missing rule.
+///
+/// If inference ever lands, this test fails and must be updated — which is the
+/// point of asserting the disagreement rather than describing it in prose.
+#[test]
+fn the_rules_reach_only_literal_direct_occurrences() {
+    // Each is the same error as a case the corpus already rejects, moved off a
+    // literal. The reference rejects all of them.
+    let cases: &[(&str, &str)] = &[
+        (
+            "operand-through-a-let",
+            "fn main() -> Word { let b = true; 1 + b }",
+        ),
+        (
+            "operand-through-a-call",
+            "fn g() -> Word { 1 }\nfn main() -> Word { g() + true }",
+        ),
+        (
+            "both-operands-through-lets",
+            "fn main() -> Word { let a = 1; let b = true; a + b }",
+        ),
+    ];
+
+    let mut accepted_by_stage = 0;
+    for (label, src) in cases {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+
+        let mut for_reference = ast.clone();
+        assert!(
+            keleusma::typecheck::check(&mut for_reference).is_err(),
+            "{label}: the reference ACCEPTS this, so it is not an ill-typed case and \
+             this test is measuring nothing"
+        );
+
+        let (dparams, sites, arg_pairs) = decl_call_rows(&ast);
+        let stage_accepts = stage_verdict(&StageInput {
+            pairs: &arg_pairs,
+            nodes: &expression_nodes(&ast),
+            dparams: &dparams,
+            sites: &sites,
+            sets: Some(&field_sets(&ast)),
+            occ: Some(&occurrence_rows(&ast)),
+            ..Default::default()
+        });
+        assert!(
+            stage_accepts,
+            "{label}: the stage now REJECTS this. If source types reached the stage, \
+             remove this case and move it into ILL_TYPED; the limitation this test \
+             records has been lifted."
+        );
+        accepted_by_stage += 1;
+    }
+
+    assert_eq!(
+        accepted_by_stage,
+        cases.len(),
+        "every case here must be one the reference rejects and the stage accepts"
+    );
 }

@@ -113,7 +113,7 @@ first of six milestones, is not met, and two things block it:
    producer, the caps — feeds those two. **This is the largest single gap and it is invisible from the
    increment titles.**
 2. **Self-hosted type rejection is started, not done.** `tests/selfhost_typecheck.rs` holds 7 tests
-   against a plan sizing the obligation at roughly 15 rejection shapes.
+   and the RULES are COMPLETE against all fifteen enumerated shapes plus `calling-a-local`. **The count of tests is not the count of shapes.** What remains is the input path: host-extracted channels off the reference AST, with literal-only tags.
 
 **The roadmap's Order 1 cell is itself stale**: it states "`tests/selfhost_wire.rs` is 125 tests"
 against a file holding 163, and lists as remaining several items that are done (the child-position

@@ -110,7 +110,7 @@ Current sprint source of truth.
 >
 > **HANDED BACK TO MAINLINE (2026-08-16).** Measured against the roadmap: none of the five V0.2.x
 > success criteria hold, and Order 1 of six is unmet on two items — the self-hosted path emits two
-> region kinds of about twenty, and self-hosted type rejection is 7 tests against ~15 shapes. The
+> region kinds of about twenty, and self-hosted type rejection is COMPLETE as to RULES: all fifteen enumerated shapes plus `calling-a-local` are rejected over a sixteen-case ill-typed corpus with well-typed controls, in eight tests. **The count of TESTS is not the count of SHAPES** and this line conflated them. What is not self-hosted is the INPUT: the stage's channels are extracted by Rust from the REFERENCE parser's AST, and the tags are literal-only, so every rule reaches only literal-direct occurrences -- move the same error through a `let` and the stage accepts it. Pinned by `the_rules_reach_only_literal_direct_occurrences`. Repairing that needs SOURCE TYPES, which no stage in the pipeline computes. The
 > roadmap's own Order 1 cell is stale (125 tests against 163) and lists done work as remaining.
 >
 > **Top correctness item is now `wcmu_region` reporting 2 where the models and emitter say 3** on two
