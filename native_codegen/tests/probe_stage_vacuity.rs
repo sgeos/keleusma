@@ -31,12 +31,25 @@
 //! while writing nothing would pass a state-only check and mean the buffer was
 //! never bound.
 //!
-//! **The chunk-coverage instrument is therefore unblocked and is still the
-//! better one**, being a direct measure rather than an inference from output.
-//! It is NOT restored in this change: this increment is the sync, and rebuilding
-//! the instrument is its own increment with its own verification. Recorded here
-//! so the option is not lost, which is what the old test's failure message asked
-//! for.
+//! **THE CHUNK-COVERAGE INSTRUMENT IS NOW RESTORED**, in
+//! `how_many_chunks_does_each_stage_actually_enter`, and it is verified against a
+//! known answer before its output is used — a coverage instrument that silently
+//! measures nothing reports near-zero coverage, which is indistinguishable from
+//! the finding it exists to make.
+//!
+//! **It did not confirm what was expected, and that is the point of having it.**
+//! Two of the five modules `corpus_differential` pins as vacuous run substantial
+//! control flow: `verify_datalayout` enters every chunk it has and `verify_depth`
+//! half of its own. The vacuity CLASSIFICATION is not refuted — `is_vacuous`
+//! tests observables, not control flow — but the EXPLANATION recorded beside it,
+//! that each stage takes an immediate end-of-input exit, is measurably wrong for
+//! those two. They run, and produce nothing the harness can see.
+//!
+//! Both instruments are kept. They are blind to different things, which is the
+//! whole argument for the second one.
+//!
+//! **Cost**: this file went from about 14s to 59s, dominated by `wire.kel`, whose
+//! 465 chunks are each armed, hit and disarmed, twice.
 //!
 //! What is used instead is the stage's own observable output: **the sequence of
 //! yielded values**. That needs nothing from the VM, and for a tokenizer it is a
@@ -54,6 +67,11 @@ use keleusma::vm::{
     Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for, shared_data_bytes_for,
 };
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
+
+/// A short source for the seeded column. Content does not matter beyond being
+/// non-empty: the question is whether a non-zero segment changes which chunks
+/// run, not what the stage computes from it.
+const SEED_PROBE: &str = "fn main(a: Word) -> Word { a + 1 }";
 
 /// Matches `corpus_differential::TICKS`, so this measures the same run.
 const TICKS: i64 = 60;
@@ -192,6 +210,242 @@ fn drive(m: &Module, seed: Option<&str>) -> Result<Run, String> {
     }
 
     Ok(Run { yields, outcome })
+}
+
+/// **CHUNK COVERAGE, MEASURED DIRECTLY.** Which chunks does a run actually enter?
+///
+/// The yield-sequence instrument above INFERS how far a stage gets from what it
+/// emits. This asks the machine instead: arm op 0 of every chunk, drive the
+/// module, and record each `BreakpointHit`. A chunk is REACHED when control
+/// arrives at its first op.
+///
+/// **This is the instrument the first attempt wanted and could not have.**
+/// `resume_from_breakpoint` panicked on any module declaring shared data, and
+/// every stage declares some. `resume_from_breakpoint_with_shared` (PR #109 on
+/// the `v0.2.3` line, reported from here) binds the buffer the way
+/// `call_with_shared` does, which is what makes this possible at all.
+///
+/// **What REACHED means, stated because the word is not self-evident.** Control
+/// arrived at the chunk's first op. It does NOT mean the chunk ran to
+/// completion, and it does not measure how much of the chunk ran — a chunk
+/// entered once and abandoned counts the same as one executed a thousand times.
+/// This is coverage of ENTRY, which is the quantity the vacuity question needs:
+/// a stage that exits immediately enters almost nothing.
+///
+/// Each breakpoint is DISARMED once hit, so a loop does not stop on every
+/// iteration and the drive terminates.
+fn chunk_coverage(m: &Module, seed: Option<&str>) -> Result<(Vec<usize>, usize), String> {
+    let arena = arena_for(m);
+    let mut vm = match Vm::new(m.clone(), &arena) {
+        Ok(v) => v,
+        Err(e) => return Err(format!("VM refuses to load: {e:?}")),
+    };
+    let total = m.chunks.len();
+    for c in 0..total {
+        if !m.chunks[c].ops.is_empty() {
+            vm.set_breakpoint(c, 0);
+        }
+    }
+
+    let entry = m.entry_point.ok_or("no entry point")?;
+    let n = m.chunks[entry].param_count as usize;
+    let is_stream = m.chunks[entry].block_type == BlockType::Stream;
+    let vals: Vec<Value> = if is_stream && n == 1 {
+        vec![Value::Int(0)]
+    } else {
+        (0..n).map(|i| Value::Int((i as i64 + 1) * 3 + 1)).collect()
+    };
+
+    let mut shared = vec![0u8; shared_data_bytes_for(m)];
+    if let Some(src) = seed
+        && !seed_source(m, &mut shared, src)
+    {
+        return Err("no len/bytes pair to seed".into());
+    }
+
+    let mut reached: Vec<usize> = Vec::new();
+    let note = |vm: &mut Vm<'_, '_>, reached: &mut Vec<usize>, st: &VmState| -> bool {
+        if let VmState::BreakpointHit { chunk, op } = st {
+            if !reached.contains(chunk) {
+                reached.push(*chunk);
+            }
+            vm.clear_breakpoint(*chunk, *op);
+            return true;
+        }
+        false
+    };
+
+    let mut state = match vm.call_with_shared(&mut shared, &vals) {
+        Ok(s) => s,
+        Err(e) => return Err(format!("VM refuses to run: {e:?}")),
+    };
+
+    // **A bounded drive.** Each breakpoint fires at most once because it is
+    // disarmed on the spot, so the stop count is bounded by the chunk count; the
+    // tick budget bounds the rest.
+    let budget = total + TICKS as usize * 4;
+    for _ in 0..budget {
+        if note(&mut vm, &mut reached, &state) {
+            state = match vm.resume_from_breakpoint_with_shared(&mut shared) {
+                Ok(s) => s,
+                Err(e) => return Err(format!("resume from breakpoint failed: {e:?}")),
+            };
+            continue;
+        }
+        match state {
+            VmState::Finished(_) => break,
+            VmState::Yielded(_) | VmState::Reset => {
+                if !is_stream {
+                    break;
+                }
+                state = match vm.resume_with_shared(&mut shared, Value::Int(1)) {
+                    Ok(s) => s,
+                    Err(_) => break,
+                };
+            }
+            ref other => return Err(format!("unexpected state: {other:?}")),
+        }
+    }
+
+    reached.sort_unstable();
+    Ok((reached, total))
+}
+
+/// **THE INSTRUMENT IS VERIFIED BEFORE ITS OUTPUT IS TRUSTED.**
+///
+/// A coverage instrument that silently measures nothing reports near-zero
+/// coverage — which is EXACTLY the finding it exists to make about the vacuous
+/// stages. The two are indistinguishable from the number alone, so the number
+/// alone is not evidence.
+///
+/// Two modules with reached-chunk sets known in advance, one where a chunk is
+/// deliberately UNREACHABLE, so the instrument has to be able to report both
+/// "yes" and "no" rather than only agreeing with whatever is expected.
+#[test]
+fn the_coverage_instrument_reports_a_known_answer() {
+    // `helper` is called; `never` is not. Three chunks plus the entry.
+    let src = "\
+fn helper(x: Word) -> Word { x + 1 }
+fn never(x: Word) -> Word { x * 2 }
+fn main(a: Word) -> Word { helper(a) }
+";
+    let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let (reached, total) = chunk_coverage(&m, None).expect("coverage");
+
+    let name_of = |i: &usize| m.chunks[*i].name.clone();
+    let names: Vec<String> = reached.iter().map(name_of).collect();
+
+    assert!(
+        names.iter().any(|n| n == "main"),
+        "the entry was not reported as reached, so the instrument sees nothing. \
+         reached: {names:?} of {total}"
+    );
+    assert!(
+        names.iter().any(|n| n == "helper"),
+        "`helper` is called by `main` and was not reported as reached, so the \
+         instrument misses a CALLED chunk. reached: {names:?} of {total}"
+    );
+    // The half that makes the other half mean something.
+    assert!(
+        !names.iter().any(|n| n == "never"),
+        "`never` is never called and was reported as reached, so the instrument \
+         reports coverage it does not have. reached: {names:?} of {total}"
+    );
+}
+
+/// **HOW MUCH OF EACH STAGE ACTUALLY RUNS?** The direct measure, beside the
+/// inferred one.
+///
+/// A REPORT with two assertions, matching the file's existing discipline: the
+/// counts move whenever the differential's seeding changes, so pinning them
+/// would be pinning the harness rather than the emitter.
+///
+/// The two assertions are the properties that would make the measurement
+/// meaningless. The first is that the instrument works at all here — it is
+/// verified on a synthetic module in `the_coverage_instrument_reports_a_known_answer`,
+/// and a stage could still defeat it. The second is the one the vacuity question
+/// turns on.
+#[test]
+fn how_many_chunks_does_each_stage_actually_enter() {
+    println!("\n================ CHUNK COVERAGE, measured with breakpoints");
+    println!("  reached = control arrived at the chunk's first op, once or many times");
+    println!("  {:<26} {:>9}  {:>7}   {:>8}", "stage", "reached", "of", "seeded");
+
+    let mut any_nonzero = false;
+    let mut rows: Vec<(String, usize, usize)> = Vec::new();
+    for p in stage_sources() {
+        let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let Some(m) = module_of(&p) else {
+            println!("  {name:<26} reference compiler rejects it");
+            continue;
+        };
+        match chunk_coverage(&m, None) {
+            Ok((reached, total)) => {
+                if reached.len() > 1 {
+                    any_nonzero = true;
+                }
+                // Seeded too, where the module declares the documented `len` +
+                // `bytes` convention. This is what `corpus_differential`'s
+                // `seed_len_bytes` supplies, so the delta is what seeding BOUGHT,
+                // measured in chunks rather than argued.
+                let seeded = chunk_coverage(&m, Some(SEED_PROBE))
+                    .ok()
+                    .map(|(r, _)| r.len());
+                let seeded_col = match seeded {
+                    Some(k) if k != reached.len() => format!("{k}"),
+                    Some(_) => "same".into(),
+                    None => "n/a".into(),
+                };
+                println!(
+                    "  {name:<26} {:>9}  {:>7}   {seeded_col:>8}",
+                    reached.len(),
+                    total
+                );
+                rows.push((name, reached.len(), total));
+            }
+            Err(e) => println!("  {name:<26} {e}"),
+        }
+    }
+
+    println!("\n  WHAT THIS MEASURED, AND IT IS NOT WHAT WAS PREDICTED.");
+    println!("  The five modules in corpus_differential's KNOWN_VACUOUS were");
+    println!("  expected to show near-zero coverage. Two do not:");
+    println!("    verify_datalayout  2 of 2   -- every chunk it has");
+    println!("    verify_depth       5 of 10  -- half");
+    println!("  reconstruct (2 of 24), verify_structural (4 of 14) and");
+    println!("  verify_typed (6 of 22) are low, as expected.");
+    println!();
+    println!("  THE CLASSIFICATION IS NOT REFUTED, because it measures a different");
+    println!("  quantity: `is_vacuous` requires repeated identical results, an empty");
+    println!("  call log AND an all-zero shared segment -- OBSERVABLES. Chunk entry");
+    println!("  is control flow. A stage can run and still write nothing.");
+    println!();
+    println!("  WHAT IS REFUTED IS THE EXPLANATION ATTACHED TO IT. The recorded");
+    println!("  claim that each stage `takes an immediate end-of-input exit` is");
+    println!("  measurably wrong for those two: they run substantial control flow");
+    println!("  and produce nothing the differential can see. The repair those");
+    println!("  modules need is not `make them run` but `make what they do");
+    println!("  OBSERVABLE`, which is a different piece of work.");
+    println!();
+    println!("  The seeded column is the direct measure of what seeding bought:");
+    println!("  lexer.kel goes 1 -> 16 chunks. wire.kel reads a wire blob and a");
+    println!("  command selector rather than source text, so a SOURCE seed does");
+    println!("  nothing for it -- corpus_differential drives it by selector value");
+    println!("  instead, and `same` here is not evidence that seeding failed there.");
+    println!("================\n");
+
+    assert!(
+        !rows.is_empty(),
+        "no stage was measured, so this report asserts nothing"
+    );
+    // If EVERY stage entered exactly its entry chunk and nothing else, the
+    // instrument is indistinguishable from one that reports only the entry.
+    assert!(
+        any_nonzero,
+        "every stage reported at most its entry chunk. That is either a total \
+         vacuity result or an instrument that only ever sees the entry, and this \
+         report cannot tell them apart -- investigate before believing either."
+    );
 }
 
 fn scalar(v: &Value) -> i64 {
