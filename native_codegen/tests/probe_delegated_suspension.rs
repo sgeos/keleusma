@@ -1,9 +1,19 @@
 //! **What does delegated suspension actually look like in bytecode?**
 //!
-//! `codegen.kel` is the last refusal. The record describes it as a design
-//! problem: it has no `Yield` of its own and a `Reentrant` callee, so
-//! `resume_after_enter` writing slot 0 of the ENTRY chunk cannot be modelled by
-//! the degenerate-stream transform, which turns a `Yield` into a return.
+//! **HISTORICAL AS OF 2026-08-15, and retained deliberately.** `codegen.kel` WAS
+//! the last refusal. The record described it as a design problem: it had no
+//! `Yield` of its own and a `Reentrant` callee, so `resume_after_enter` writing
+//! slot 0 of the ENTRY chunk could not be modelled by the degenerate-stream
+//! transform, which turns a `Yield` into a return.
+//!
+//! The `v0.2.3` line then changed the module (`aaa87a01`), applying the nine-line
+//! refactor this line had requested: `emit_next` became a plain `fn` and `main`
+//! yields what it returns. **`codegen.kel` now lowers with no flag and is not a
+//! delegated-suspension case.** The backend refuses nothing in the corpus.
+//!
+//! This file is kept because the MECHANISM it measured is still implemented and
+//! still flagged off, and because the synthetic reproducer below is now its only
+//! subject. What the file no longer provides is a real-module witness.
 //!
 //! Every increment of this arc has falsified a recorded claim, so this reads the
 //! bytecode before any design is written. Prints, does not assert, except for the
@@ -98,9 +108,24 @@ fn what_shape_is_codegen_kels_suspension() {
     assert!(!ys.is_empty(), "codegen.kel must contain a Yield somewhere");
 }
 
-/// The claim the whole refusal rests on: the entry has no `Yield` of its own.
+/// **THE CLAIM THIS PROBE WAS BUILT ON IS NOW FALSE, AND THAT IS THE REFACTOR
+/// LANDING RATHER THAN THE DIAGNOSIS BEING WRONG.**
+///
+/// The delegated-suspension refusal rested on `codegen.kel`'s entry having NO
+/// `Yield` of its own, so the degenerate-stream transform — which turns a `Yield`
+/// into a return — had nothing in the entry to transform.
+///
+/// The `v0.2.3` line changed the module in `aaa87a01`, applying the nine-line
+/// refactor this line requested: `emit_next` became a plain `fn` and `main` does
+/// the yielding. **The entry now has a `Yield`, the module lowers with no flag,
+/// and it is no longer a delegated-suspension case at all.**
+///
+/// The assertion is INVERTED rather than deleted. A probe whose premise has been
+/// removed by someone else's change should say so where a reader meets it;
+/// deleting it would leave the design document's diagnosis looking unexamined.
+/// The original diagnosis was correct for the module as it stood.
 #[test]
-fn the_entry_chunk_contains_no_yield_of_its_own() {
+fn the_entry_chunk_now_yields_because_the_refactor_moved_it_there() {
     let m = module_of("../src/selfhost/kel/codegen.kel");
     let entry = m.entry_point.expect("entry point");
     let n = m.chunks[entry]
@@ -108,11 +133,13 @@ fn the_entry_chunk_contains_no_yield_of_its_own() {
         .iter()
         .filter(|o| matches!(o, Op::Yield))
         .count();
-    assert_eq!(
-        n, 0,
-        "the entry chunk contains {n} `Yield` ops. The delegated-suspension \
-         refusal is stated as resting on the entry having NONE, so if this fires \
-         the recorded diagnosis is wrong and the design must be rederived."
+    assert!(
+        n > 0,
+        "the entry chunk contains no `Yield`. Since `aaa87a01` it should contain \
+         one, because `main` yields what `emit_next` returns. If this fires, that \
+         refactor has been reverted and `codegen.kel` is a delegated-suspension \
+         case again -- which would also make it refuse, so check \
+         `module_refusals` before rederiving anything."
     );
 }
 
