@@ -366,6 +366,107 @@ fn shared_offset(m: &Module, suffix: &str) -> Option<u32> {
 /// missing was something to checksum.
 const PAYLOAD: &[u8] = b"keleusma wire payload: 0123456789 ABCDEF \x01\x02\x7f\x80\xfe\xff";
 
+/// **A REAL INPUT for a self-hosted verifier stage, built by the driver's own
+/// accessor rather than reproduced here.**
+///
+/// `src/selfhost/mod.rs` now exposes per-item seed accessors (`fa649ec3`), which
+/// this line requested precisely so the harness would not carry a second
+/// encoding of the stage input formats. Using them means the bytes are the ones
+/// a real driver hands the module; a constructor of our own would be free to
+/// drift, which is the defect class this whole arc has been about.
+///
+/// **`verify_datalayout` deliberately gets nothing.** It has no accessor by joint
+/// agreement: its verdict accumulates across three differently-encoded phases in
+/// the retained buffer, so a single seeded buffer cannot produce a verdict at
+/// all. It stays in `KNOWN_VACUOUS`, and that is correct rather than a gap.
+///
+/// The subject chunk is a real compiled chunk, because verifying a chunk is what
+/// these stages do. Returns the WHOLE segment, sized from the stage's own layout,
+/// so both sides can be given identical bytes.
+/// Stages with a `stage_seed` arm. Named so the applied/not-applied line is
+/// printed for exactly those, rather than for every module in the corpus.
+const STAGE_SEEDED: &[&str] = &[
+    "verify_depth.kel",
+    "verify_typed.kel",
+    "verify_structural.kel",
+    // Listed so the harness PRINTS why it is blocked rather than omitting it.
+    "reconstruct.kel",
+];
+
+fn stage_seed(m: &Module, name: &str) -> Result<Vec<u8>, String> {
+    if !STAGE_SEEDED.contains(&name) {
+        return Err("no arm for this stage".into());
+    }
+    // **A chunk from the SHIPPED CORPUS, not a synthetic one.** Verifying a real
+    // chunk is what these stages do, and a hand-written subject only proves the
+    // stage handles what the harness author thought to write. The first attempt
+    // used an invented source that did not even parse, and the accessor
+    // declining is how that surfaced -- which is why this reports WHY it
+    // declined rather than returning `None`.
+    let subject = sources()
+        .into_iter()
+        .filter(|p| p.file_name().unwrap_or_default().to_string_lossy() == "02_struct_field.kel")
+        .find_map(|p| {
+            let src = std::fs::read_to_string(&p).ok()?;
+            compile(&parse(&tokenize(&src).ok()?).ok()?).ok()
+        })
+        .ok_or("no subject module in the corpus")?;
+    let chunk = subject
+        .chunks
+        .iter()
+        .max_by_key(|c| c.ops.len())
+        .ok_or("subject has no chunk")?;
+
+    let arena = arena_for(m);
+    let vm = Vm::new(m.clone(), &arena).map_err(|e| format!("stage VM refuses to load: {e:?}"))?;
+    let seed = match name {
+        "verify_depth.kel" => keleusma::selfhost::seed_verify_depth_shared(&vm, chunk),
+        "verify_typed.kel" => {
+            // Word and float widths come from the SUBJECT module, not this stage:
+            // the stage is verifying that module's chunk, so the widths it must
+            // reason about are the subject's.
+            let wb = (1usize << subject.word_bits_log2) / 8;
+            let fb = (1usize << subject.float_bits_log2) / 8;
+            let idx = subject
+                .chunks
+                .iter()
+                .position(|c| core::ptr::eq(c, chunk))
+                .unwrap_or(0);
+            let sig = subject.signatures.get(idx);
+            keleusma::selfhost::seed_verify_typed_shared(&vm, &subject, chunk, sig, wb, fb)
+        }
+        "verify_structural.kel" => {
+            // The always-yielding set is the subject module's, computed by the
+            // driver's own fixpoint rather than re-derived here.
+            let always = keleusma::selfhost::self_hosted_always_yielding(&subject);
+            keleusma::selfhost::seed_verify_structural_shared(&vm, &subject, chunk, &always)
+        }
+        // **`reconstruct.kel` CANNOT be driven from here, and it is not for want
+        // of an accessor.** Both `seed_reconstruct_shared` and
+        // `seed_reconstruct_multihead_shared` landed. The first wants
+        // `records: &[(i64, i64)]` and the second `heads: &[&ParsedFn]` --
+        // `ParsedFn` is `pub` but every FIELD is private, and the function that
+        // produces one is private too. So the input cannot be obtained from
+        // outside the crate, and inventing a record stream is precisely the
+        // "reproduce the stage's input format" this line asked the accessors to
+        // avoid: a stream the stage silently rejects looks exactly like coverage.
+        "reconstruct.kel" => {
+            return Err(
+                "blocked: needs `records` or `&[&ParsedFn]`, and ParsedFn's fields \
+                 and producer are private outside the crate"
+                    .into(),
+            );
+        }
+        other => return Err(format!("no arm for {other}")),
+    };
+    // The stage's own layout sizes it; the harness must not assume they agree.
+    let want = shared_data_bytes_for(m);
+    if seed.len() != want {
+        return Err(format!("size mismatch: accessor {} vs harness {want}", seed.len()));
+    }
+    Ok(seed)
+}
+
 fn seed_len_bytes(m: &Module, buf: &mut [u8]) -> bool {
     let (Some(len_off), Some(bytes_off)) = (shared_offset(m, "len"), shared_offset(m, "bytes"))
     else {
@@ -386,7 +487,12 @@ struct Run {
     shared: Vec<u8>,
 }
 
-fn run_vm(m: &Module, table: &[(String, usize)], seed: usize) -> Result<Run, String> {
+fn run_vm(
+    m: &Module,
+    table: &[(String, usize)],
+    seed: usize,
+    preseed: Option<&[u8]>,
+) -> Result<Run, String> {
     let _ = take_log();
     SAW_REF_ARG.with(|f| *f.borrow_mut() = false);
     let arena = arena_for(m);
@@ -433,7 +539,12 @@ fn run_vm(m: &Module, table: &[(String, usize)], seed: usize) -> Result<Run, Str
         args_for_seed(n, seed).into_iter().map(Value::Int).collect()
     };
     let mut shared = vec![0u8; shared_data_bytes_for(m)];
-    seed_len_bytes(m, &mut shared);
+    match preseed {
+        Some(bytes) => shared.copy_from_slice(bytes),
+        None => {
+            seed_len_bytes(m, &mut shared);
+        }
+    }
     let mut results = Vec::new();
 
     let first = match vm.call_with_shared(&mut shared, &vals) {
@@ -487,7 +598,12 @@ fn scalar_of(st: &VmState) -> i64 {
     }
 }
 
-fn run_native(m: &Module, table: &[(String, usize)], seed: usize) -> Option<Run> {
+fn run_native(
+    m: &Module,
+    table: &[(String, usize)],
+    seed: usize,
+    preseed: Option<&[u8]>,
+) -> Option<Run> {
     let _ = take_log();
     TABLE.with(|t| *t.borrow_mut() = table.to_vec());
     let addrs = stub_addrs();
@@ -553,7 +669,15 @@ fn run_native(m: &Module, table: &[(String, usize)], seed: usize) -> Option<Run>
         // bytes, so one helper serves both and there is no second encoding to
         // drift.
         let (body, _) = shared.split_at_mut(n_shared);
-        seed_len_bytes(m, body);
+        match preseed {
+            // **The SAME bytes, not a second construction.** A differential whose
+            // two sides build their own seed compares two encodings rather than
+            // two lowerings.
+            Some(bytes) => body.copy_from_slice(bytes),
+            None => {
+                seed_len_bytes(m, body);
+            }
+        }
     }
     shared[n_shared..].copy_from_slice(&CANARY.to_le_bytes());
     let mut privs = vec![0u64; n_priv + 1];
@@ -760,11 +884,27 @@ const KNOWN_VACUOUS: &[&str] = &[
     // is what noticed. It declares the documented `len` + `bytes` host
     // convention, so `seed_len_bytes` now gives it a real payload and it does
     // real work inside this harness rather than only in `stage_differential`.
+    //
+    // `verify_depth.kel`, `verify_typed.kel` and `verify_structural.kel` LEFT on
+    // 2026-08-16, by the same mechanism. The
+    // `v0.2.3` line landed per-item seed accessors (`fa649ec3`) that this line
+    // requested, and `stage_seed` now hands it a REAL compiled chunk built by
+    // `seed_verify_depth_shared` -- the driver's own encoding, not a second one
+    // reproduced here.
+    //
+    // **`verify_datalayout.kel` will NOT leave this list by seeding, and that is
+    // correct rather than a gap.** It has no accessor by joint agreement: its
+    // verdict accumulates across three differently-encoded phases in the
+    // retained buffer, with a whole-module contiguity comparison at the end, so
+    // a single seeded buffer cannot produce a verdict at all. Do not invent a
+    // batch-zero seed for it -- it would run, agree, and mean nothing.
+    // `reconstruct.kel` stays for a DIFFERENT reason from `verify_datalayout`.
+    // Its accessors exist; its INPUTS are unreachable. `ParsedFn` is `pub` with
+    // private fields and a private producer, so neither `records` nor
+    // `&[&ParsedFn]` can be obtained here. Reported to the `v0.2.3` line as a
+    // request rather than worked around by inventing a record stream.
     "reconstruct.kel",
     "verify_datalayout.kel",
-    "verify_depth.kel",
-    "verify_structural.kel",
-    "verify_typed.kel",
 ];
 
 /// Modules KNOWN to disagree, tracked rather than ignored.
@@ -884,7 +1024,7 @@ fn trap_child_runs_one_module_natively() {
     use std::io::Write;
     std::io::stdout().flush().ok();
 
-    let _ = run_native(&m, &table, 0);
+    let _ = run_native(&m, &table, 0, None);
 
     // Reaching this line means the native side did NOT trap where the virtual
     // machine faults. Exit non-zero WITHOUT a signal, which the parent reports
@@ -948,7 +1088,7 @@ fn a_trapping_programs_native_side_dies_with_sigtrap() {
 
         // **The premise, checked rather than assumed.** If it stops faulting,
         // this is comparing nothing and must say so instead of passing.
-        let vm_err = match run_vm(&m, &table, 0) {
+        let vm_err = match run_vm(&m, &table, 0, None) {
             Err(e) => e,
             Ok(_) => panic!(
                 "{name} no longer faults on the VM side, so it is not a trap subject any more. \
@@ -1113,6 +1253,28 @@ fn every_lowering_module_executes_or_is_exempt() {
             SEEDS
         };
 
+        // **A real stage input, from the driver's own accessor.** Computed once
+        // and handed to BOTH sides, so the comparison is of two lowerings rather
+        // than of two encodings.
+        let stage = stage_seed(&m, &name);
+        // **Say whether a seed was APPLIED, not just whether one exists.** A seed
+        // the accessor declined to build and a seed the stage silently rejects
+        // produce the same downstream number -- "still vacuous" -- and only the
+        // first is an instrument fault. Printed for every stage that has an arm.
+        if STAGE_SEEDED.contains(&name.as_str()) {
+            println!(
+                "  stage seed for {name}: {}",
+                match &stage {
+                    Ok(b) => format!(
+                        "APPLIED, {} bytes, {} non-zero",
+                        b.len(),
+                        b.iter().filter(|x| **x != 0).count()
+                    ),
+                    Err(why) => format!("NOT BUILT -- {why}"),
+                }
+            );
+        }
+
         let mut runs: Vec<(usize, Run, Run)> = Vec::new();
         let mut bail: Option<String> = None;
         for seed in 0..seeds {
@@ -1121,7 +1283,7 @@ fn every_lowering_module_executes_or_is_exempt() {
             // `llvm.trap`, which kills the process with SIGTRAP and takes the whole
             // harness with it. Asking the tolerant side first turns a fatal signal
             // into a named exemption.
-            let v = match run_vm(&m, &table, seed) {
+            let v = match run_vm(&m, &table, seed, stage.as_deref().ok()) {
                 Ok(v) => v,
                 Err(why) => {
                     // A LATER seed that traps is not an exemption for the module:
@@ -1133,7 +1295,7 @@ fn every_lowering_module_executes_or_is_exempt() {
                     break;
                 }
             };
-            let Some(n) = run_native(&m, &table, seed) else {
+            let Some(n) = run_native(&m, &table, seed, stage.as_deref().ok()) else {
                 if seed == 0 {
                     bail = Some("entry signature shape the harness does not drive".into());
                 }
