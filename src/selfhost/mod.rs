@@ -121,6 +121,42 @@ pub struct ParsedFn {
     body: Vec<(i64, i64)>,
 }
 
+impl ParsedFn {
+    /// The declaration category (`fn`, `yield`, and so on) as `reconstruct.kel`
+    /// consumes it.
+    pub fn category(&self) -> i64 {
+        self.cat
+    }
+
+    /// The number of value parameters this head declares.
+    pub fn param_count(&self) -> usize {
+        self.params
+    }
+
+    /// The head's `when` guard as a record stream, empty when it has none.
+    pub fn guard_records(&self) -> &[(i64, i64)] {
+        &self.guard
+    }
+
+    /// The head's body as a record stream.
+    ///
+    /// **Accessors rather than `pub` fields, deliberately.** The `v0.3.0` line
+    /// needs a record stream to call [`seed_reconstruct_shared`] and asked us to
+    /// choose between opening the fields and exposing a reader. Opening them
+    /// would freeze the parse representation as public API, and this stage's
+    /// input shape has already changed once. A reader hands out the same bytes
+    /// while leaving the layout ours to change.
+    ///
+    /// **[`seed_reconstruct_multihead_shared`] never needed this.** It takes
+    /// `&[&ParsedFn]`, and [`parse_functions`] is public and returns
+    /// `Vec<ParsedFn>`, so that accessor was reachable from outside the crate all
+    /// along — measured, not assumed. The report that both entry points were
+    /// blocked was wrong in that half.
+    pub fn body_records(&self) -> &[(i64, i64)] {
+        &self.body
+    }
+}
+
 /// Whether a group of same-named heads compiles as a multiheaded guard dispatch.
 ///
 /// **The decision is a property of the heads, not of the declaration keyword.** This
@@ -3133,6 +3169,154 @@ pub fn wire_names_from_input(
         other => {
             return Err(SelfHostError::Unsupported {
                 detail: alloc::format!("wire.kel refused the join: {other:?}"),
+            });
+        }
+    }
+    let mut out = vec![0u8; directory.len()];
+    for (i, slot) in out.iter_mut().enumerate() {
+        *slot = match vm.get_shared(&shared, 1 + i).expect("read") {
+            Value::Byte(b) => b,
+            other => panic!("shared byte slot held {other:?}"),
+        };
+    }
+    Ok(out)
+}
+
+/// The eleven `HEADER` record fields a module contributes, in the order
+/// `emit_header_record_at` reads them from `fin`.
+///
+/// Host-side because they are scalar module properties rather than anything the
+/// blob walk derives. See [`wire_regions_via_kel`] for what that means for the
+/// coverage claim.
+fn header_fields_of(module: &Module) -> [i64; 11] {
+    [
+        // `ABSENT` for a module with no entry point, matching the reference's
+        // own sentinel rather than inventing one.
+        module
+            .entry_point
+            .map_or(i64::from(crate::wire_schema::ABSENT), |e| e as i64),
+        module.word_bits_log2 as i64,
+        module.addr_bits_log2 as i64,
+        module.float_bits_log2 as i64,
+        0, // flags
+        0, // wcet_cycles
+        0, // wcmu_bytes
+        0, // shared_data_bytes
+        0, // private_data_bytes
+        0, // schema_hash
+        0, // reserved
+    ]
+}
+
+/// Emit `NAMES`, `STRING_POOL` and the `HEADER` record for `module` through
+/// `wire.kel`, returning the artifact bytes.
+///
+/// # What this covers, stated precisely because the distinction is the point
+///
+/// - `NAMES` and `STRING_POOL` are **computed**: the stage walks the module blob
+///   built by [`module_input`], interns the names itself, and derives every byte
+///   of both regions from that walk.
+/// - `HEADER` is **encoded but not derived**: the eleven scalar field values are
+///   read off the `Module` here and seeded into `fin`, and the stage decides the
+///   record's offsets, widths and endianness. Keleusma owns the ENCODING, the
+///   host owns the NUMBERS.
+///
+/// Neither region's payload comes from the reference artifact, so both are
+/// module-driven; but only the first two are self-hosted end to end, and a
+/// reader should not read the third as more than it is.
+///
+/// # Why `CONSTS` is not here, which is the largest region by an order of magnitude
+///
+/// `CONSTS` is 663,120 bytes across the eleven stages against 34,960 for `NAMES`
+/// and `STRING_POOL` together, so it is the obvious next target and it is **not**
+/// a wiring job. Two obstacles, both measured rather than anticipated:
+///
+/// 1. **The producer and the consumer use different arrays.** `mi_put_node_full`
+///    writes the constant node table into `wire.bytes` at byte zero, which is
+///    where the artifact lives, while the flattener reads its nodes from
+///    `wire.fin`. Running the node walk inside a join that also emits would
+///    overwrite the directory, which is the same failure this file already
+///    records for the seventh chunk onward.
+/// 2. **The two paths intern in different orders.** The module walk interns in
+///    preorder by linear scan; the flattener interns breadth-first as it walks,
+///    and that order is observable in `NAMES`. One artifact cannot carry both.
+///
+/// `STRUCT_AUX` and `ENUM_AUX` are deliberately not candidates either: measured
+/// across the eleven stages, both regions are EMPTY in all of them, so a byte
+/// identity for either would pass without emitting anything.
+pub fn wire_regions_via_kel(
+    module: &Module,
+    directory: &[u8],
+    regions: usize,
+) -> Result<Vec<u8>, SelfHostError> {
+    let (blob, names) = module_input(module);
+    wire_regions_from_input(&blob, names, directory, regions, &header_fields_of(module))
+}
+
+/// [`wire_regions_via_kel`] with the module input and header fields supplied
+/// directly, so the cap refusals stay reachable.
+pub fn wire_regions_from_input(
+    blob: &[u8],
+    names: usize,
+    directory: &[u8],
+    regions: usize,
+    header: &[i64; 11],
+) -> Result<Vec<u8>, SelfHostError> {
+    const NAME_CAP: usize = 1024;
+    const BLOB_CAP: usize = 49152;
+    if names > NAME_CAP {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "wire.kel interns at most {NAME_CAP} names per call and this module has \
+                 {names}; staging is not implemented"
+            ),
+        });
+    }
+    if blob.len() > BLOB_CAP {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "wire.kel's blob buffer holds {BLOB_CAP} bytes and this module's blob is \
+                 {}; staging is not implemented",
+                blob.len()
+            ),
+        });
+    }
+    let m = compile_src(&read_stage("kel/wire.kel"));
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    const NREGIONS_SLOT: usize = 1 + 65536;
+    const FIN_SLOT: usize = 1 + 65536 + 1 + 1024 * 4 + 5;
+    const BIN_SLOT: usize = FIN_SLOT + 1024;
+    /// `mi_join_header`. Mirrored from `wire.kel`'s dispatch, where
+    /// `highest_command` is a real guard: a command above it returns `0 - 99`.
+    const CMD_JOIN_HEADER: i64 = 168;
+    vm.set_shared(&mut shared, 0, Value::Int(directory.len() as i64))
+        .expect("len");
+    vm.set_shared(&mut shared, NREGIONS_SLOT, Value::Int(regions as i64))
+        .expect("nregions");
+    for (i, &b) in directory.iter().enumerate() {
+        vm.set_shared(&mut shared, 1 + i, Value::Byte(b))
+            .expect("seed");
+    }
+    for (i, &v) in header.iter().enumerate() {
+        vm.set_shared(&mut shared, FIN_SLOT + i, Value::Int(v))
+            .expect("header field");
+    }
+    for (i, &b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(b))
+            .expect("blob");
+    }
+    let st = vm
+        .call_with_shared(&mut shared, &[Value::Int(CMD_JOIN_HEADER)])
+        .expect("run wire.kel");
+    match st {
+        crate::vm::VmState::Finished(Value::Int(v)) if v >= 0 => {}
+        other => {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel refused the widened join: {other:?}"),
             });
         }
     }

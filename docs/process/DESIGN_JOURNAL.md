@@ -13,6 +13,58 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE EMIT PATH REACHES A THIRD REGION, AND THE MEASUREMENT THAT PICKED IT MATTERED MORE THAN THE
+CODE (2026-08-16).**
+
+**Two claims I inherited were wrong, one from each line.**
+
+The `v0.3.0` line reported both `seed_reconstruct_*` accessors unreachable because "the function
+that produces one is private". **`parse_functions` is `pub`.** `seed_reconstruct_multihead_shared`
+was callable from outside the crate all along, measured before anything changed and kept as a
+standing test. Only `seed_reconstruct_shared` was blocked; it now has four accessors on `ParsedFn`
+rather than public fields, so the parse representation stays ours.
+
+**And my own "two of twenty region kinds" understated the tree**, the same shape as the 395,804
+incident. True of `wire_names_via_kel`, but `wire.kel` already carries `emit_*` commands for
+nineteen kinds and the differential already drives Keleusma computation of six to whole-artifact
+byte identity — from harness inputs rather than from a `Module`.
+
+**THE MEASUREMENT SAVED ME FROM A VACUOUS TARGET.** I had chosen `ENUM_AUX` as the next region on
+the reasoning that the blob already carries enum names and an emitter exists. Measured region
+payloads across the eleven stages first:
+
+| region | non-empty | bytes |
+|---|---|---|
+| `CONSTS` | 11/11 | **663,120** |
+| `CHUNKS` | 11/11 | 36,096 |
+| `NAMES` + `STRING_POOL` | 11/11 | 34,960 |
+| `SIGNATURES` | 11/11 | 12,032 |
+| **`STRUCT_AUX`, `ENUM_AUX`** | **0/11** | **0** |
+
+**`ENUM_AUX` is empty in every stage.** A byte identity for it would have passed while emitting
+nothing — the exact vacuity this project keeps finding, and I was one increment from adding an
+instance of it.
+
+**`CONSTS` IS THE PRIZE AND IT IS NOT WIRING.** It is 94% of the auxiliary body. Two obstacles, both
+found by reading rather than predicted: the node producer writes into `wire.bytes` at byte zero,
+where the artifact lives, while the flattener reads nodes from `wire.fin`; and the two paths intern
+in DIFFERENT ORDERS, preorder by linear scan against breadth-first as the flattener walks, which is
+observable in `NAMES`. One artifact cannot carry both orders. That is a multi-increment problem and
+sizing it as integration would have been wrong.
+
+**SO THE INCREMENT TOOK THE SMALLEST CORRECT STEP INSTEAD.** `HEADER`, 32 bytes per stage, non-empty
+in all eleven, a single record. `mi_join_header` is additive beside `mi_join` rather than a flag on
+it, and `highest_command` moved 167 to 168 — a real guard, so the two had to change together.
+
+**WHAT IT COVERS IS STATED WEAKER THAN IT LOOKS.** `NAMES` and `STRING_POOL` are COMPUTED: the stage
+walks the blob and derives every byte. `HEADER` is ENCODED BUT NOT DERIVED: the host reads eleven
+scalars off the `Module` and the stage owns offsets, widths and endianness. Both are module-driven,
+since neither payload comes from the reference, but only two are self-hosted end to end. The
+must-fire control makes that concrete rather than rhetorical — feed a wrong field value and the
+artifact differs, which is precisely what "the host owns the numbers" means.
+
+---
+
 **THE UNDERSTATED WCMU BOUND WAS NOT OFF BY ONE. THE WHOLE BODY CONTRIBUTION WAS BEING DISCARDED
 (2026-08-16).**
 

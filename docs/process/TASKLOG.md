@@ -39,6 +39,24 @@ Current sprint source of truth.
 > **Pinned, not repaired**: that error overstates, so repairing it lowers shipped bounds and wants its
 > own increment. `Op::Yield` likewise stays pinned, measured to be a different cause.
 
+> **Currency note (2026-08-16, third).** The module-driven emit path reaches **three** region kinds
+> and the three are not equal. `NAMES` and `STRING_POOL` are COMPUTED by the stage from the module
+> blob; the `HEADER` record is ENCODED BUT NOT DERIVED, with the host supplying eleven scalars and the
+> stage owning offsets, widths and endianness. **Report the two separately.** `wire_regions_via_kel`
+> is the entry; `mi_join_header` is additive beside `mi_join` and `highest_command` moved 167 to 168.
+>
+> **`reconstruct` seeding is unblocked, and one of the two accessors was never blocked**:
+> `parse_functions` is `pub`, so `seed_reconstruct_multihead_shared` was always externally callable.
+> `ParsedFn` gains four accessors rather than `pub` fields for the other.
+>
+> **Measured before choosing a target, which is what stopped this being vacuous.** Region payloads
+> across the eleven stages: `CONSTS` 663,120 bytes (11/11), `CHUNKS` 36,096, names plus pool 34,960,
+> `SIGNATURES` 12,032. **`STRUCT_AUX` and `ENUM_AUX` are EMPTY in all eleven** — `ENUM_AUX` was the
+> region about to be chosen. **`CONSTS` is 94% of the body and is NOT wiring**: the node producer
+> writes into `wire.bytes` at byte zero where the artifact lives while the flattener reads `wire.fin`,
+> and the two intern in different orders (preorder against breadth-first), which is observable in
+> `NAMES`.
+
 > **Currency note (2026-08-16, later).** The repair above spread, and the differential oracle is why
 > that was safe rather than alarming. **`wcet_region` had the identical defect** (`let _ = cost;`
 > before `return Ok(None)`), so cycles spent before a trap were missing from the worst-case EXECUTION
