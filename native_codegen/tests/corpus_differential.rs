@@ -43,9 +43,18 @@ const TICKS: i64 = 60;
 /// Stub slots. Must be at least the corpus's distinct-native count (42).
 const STUBS: usize = 48;
 
+/// One stub's identity: name, argument count, and the RECORDED composite return
+/// shape (`CompositeKind` tag and body size) if it returns one.
+type NativeEntry = (String, usize, Option<(u8, u32)>);
+
 thread_local! {
-    /// Index -> (name, argc) for the module currently under test.
-    static TABLE: RefCell<Vec<(String, usize)>> = const { RefCell::new(Vec::new()) };
+    /// Index -> (name, argc, composite return shape) for the module under test.
+    static TABLE: RefCell<Vec<NativeEntry>> = const { RefCell::new(Vec::new()) };
+    /// Per-native scratch for a COMPOSITE return on the native side. The stub
+    /// hands back an ADDRESS, so the bytes must outlive the call; one fixed
+    /// buffer per stub index is enough because a native is called at one arity
+    /// and one shape (both asserted elsewhere).
+    static COMPOSITE_RET: RefCell<Vec<[u8; COMPOSITE_RET_CAP]>> = const { RefCell::new(Vec::new()) };
     static LOG: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// Set when a native received a NON-INTEGER argument on the VM side.
     ///
@@ -60,39 +69,69 @@ fn take_log() -> Vec<String> {
     LOG.with(|l| core::mem::take(&mut *l.borrow_mut()))
 }
 
-/// **Why two exemptions are NOT closed by a contract, and what it would take.**
+/// **ONE exemption remains that a contract could not close, and it is not
+/// `led.kel` any more.**
 ///
-/// `rogue_dungen.kel` and `led.kel` both fault because this stub honours no
-/// contract. The bytecode was checked rather than assumed
-/// (`what_return_contract_does_the_bytecode_record`), and the two cases differ:
+/// Both used to fault because the stub honoured no contract. The bytecode was
+/// checked rather than assumed (`what_return_contract_does_the_bytecode_record`),
+/// and the two differed:
 ///
 /// | native | recorded return shape | derivable? |
 /// |---|---|---|
 /// | `host::rng_range` | `Scalar { kind: 3 }` | the TYPE, yes. the RANGE, **no** |
-/// | `host::gpio_set` | `Flat { kind: 3, size: 16 }` | the SHAPE, yes. the value needs a body |
+/// | `host::gpio_set` | `Flat { kind: 3, size: 16 }` | the SHAPE, yes — **now honoured** |
 ///
-/// **`rogue_dungen` cannot be closed at all.** `use host::rng_range(Word, Word)
-/// -> Word` records types and nothing else; `[lo, hi)` exists only in the host's
-/// head. Inferring a range from the argument positions would work here and is
-/// exactly the guess that must not be made.
+/// **`led.kel` IS CLOSED.** `gpio_set` records a sixteen-byte enum body, so the
+/// stub returns a real body ADDRESS on both sides: an arena-resident
+/// `Value::Enum(EnumBody::Flat(_))` built through `register_native_with_ctx_closure`
+/// on the virtual-machine side, and a matching buffer behind the native stub.
+/// The bytes come from ONE builder, so there is no second encoding to drift.
 ///
-/// **`led` is closeable, and the work is specific**: `gpio_set` returns a
-/// sixteen-byte enum body, so a faithful stub must return a body ADDRESS on both
-/// sides — an arena-resident `Value::Enum(EnumBody::Flat(_))` on the virtual
-/// machine side, which needs `register_native_with_ctx_closure` rather than the
-/// plain closure used here, and a matching sixteen-byte buffer behind the native
-/// stub. Picking a variant deterministically is no more of an invention than
-/// `stub_value` already is for a `Word`, so the obstacle is the composite return
-/// path and not the choice of value.
+/// **`rogue_dungen` cannot be closed at all**, and that is unchanged.
+/// `use host::rng_range(Word, Word) -> Word` records types and nothing else;
+/// `[lo, hi)` exists only in the host's head. Inferring a range from the argument
+/// positions would work here and is exactly the guess that must not be made.
 ///
-/// Both stay exempt until that lands. A stub that makes a module pass by
-/// accident is worse than an exemption.
+/// A stub that makes a module pass by accident is worse than an exemption. The
+/// discriminant chosen is 0 — the FIRST DECLARED VARIANT, a value the module can
+/// genuinely match — not an arbitrary integer that would make it fault.
 ///
 /// The value a native returns, on BOTH sides.
 ///
 /// Deterministic, and asymmetric in the argument positions so a swapped or
 /// dropped argument changes it. A random source would make the two runs
 /// incomparable, which is the point of stubbing at all.
+/// Largest composite return the stub table serves. Asserted against, so a
+/// larger one fails loudly rather than truncating.
+const COMPOSITE_RET_CAP: usize = 64;
+
+/// **The bytes of a stubbed COMPOSITE return, identical on both sides.**
+///
+/// One function, called by the virtual-machine closure and by the native stub,
+/// so there is no second encoding to drift — the same rule the shared-segment
+/// seeding follows.
+///
+/// **The discriminant is 0 and the payload is zero.** For an enum body the
+/// layout is `[discriminant: word_bytes][payload]`, and 0 is the FIRST DECLARED
+/// VARIANT — a value the module can genuinely match, which is the whole point.
+/// `Status::Ok = 0` in the rtos prelude, so `led.kel` takes its `Status::Ok`
+/// arm rather than falling through to a trap.
+///
+/// **This is deterministic invention, and it is no more invention than
+/// `stub_value` already is for a `Word`.** What it must never be is a value the
+/// module cannot match: that would make the module fault and the harness would
+/// be measuring the stub rather than the lowering.
+fn composite_stub_bytes(size: u32, word_bytes: usize, out: &mut [u8]) {
+    let n = size as usize;
+    out[..n].fill(0);
+    // Discriminant 0, written at the module's word width. Explicit rather than
+    // relying on the fill, because a future non-zero choice must have one place
+    // to change.
+    let disc: u64 = 0;
+    let w = word_bytes.min(8).min(n);
+    out[..w].copy_from_slice(&disc.to_le_bytes()[..w]);
+}
+
 fn stub_value(idx: usize, args: &[i64]) -> i64 {
     let mut acc = (idx as i64 + 1) * 7;
     for (i, a) in args.iter().enumerate() {
@@ -104,15 +143,31 @@ fn stub_value(idx: usize, args: &[i64]) -> i64 {
 }
 
 fn record(idx: usize, all: [i64; 5]) -> i64 {
-    let (name, argc) = TABLE.with(|t| {
+    let (name, argc, shape) = TABLE.with(|t| {
         t.borrow()
             .get(idx)
             .cloned()
-            .unwrap_or_else(|| (format!("<unmapped #{idx}>"), 0))
+            .unwrap_or_else(|| (format!("<unmapped #{idx}>"), 0, None))
     });
     let args = &all[..argc.min(5)];
     let parts: Vec<String> = args.iter().map(|a| a.to_string()).collect();
     LOG.with(|l| l.borrow_mut().push(format!("{name}({})", parts.join(", "))));
+
+    // **A COMPOSITE return is an ADDRESS natively.** Returning `stub_value`'s
+    // integer here is what made `led.kel` segfault: the module dereferenced it
+    // as a body pointer. The bytes come from the shared builder, so they match
+    // what the virtual-machine side hands its own caller.
+    if let Some((_kind, size)) = shape {
+        return COMPOSITE_RET.with(|c| {
+            let mut bufs = c.borrow_mut();
+            if bufs.len() <= idx {
+                bufs.resize(idx + 1, [0u8; COMPOSITE_RET_CAP]);
+            }
+            let buf = &mut bufs[idx];
+            composite_stub_bytes(size, 8, buf);
+            buf.as_ptr() as i64
+        });
+    }
     stub_value(idx, args)
 }
 
@@ -205,7 +260,12 @@ fn source_for(p: &std::path::Path) -> Option<String> {
 /// `(native index, argc)` for every native the module actually calls.
 ///
 /// Asserts the single-arity property this whole design rests on.
-fn native_table(m: &Module) -> Vec<(String, usize)> {
+/// Name, argument count, and the RECORDED composite return shape if any.
+///
+/// The shape comes from `native_return_shapes`, so a native that returns a
+/// composite is stubbed as one on both sides rather than as an integer the
+/// native side would dereference as a body address.
+fn native_table(m: &Module) -> Vec<NativeEntry> {
     let mut argc: Vec<Option<usize>> = vec![None; m.native_names.len()];
     for c in &m.chunks {
         for op in &c.ops {
@@ -228,8 +288,15 @@ fn native_table(m: &Module) -> Vec<(String, usize)> {
     }
     m.native_names
         .iter()
+        .enumerate()
         .zip(argc)
-        .map(|(n, a)| (n.clone(), a.unwrap_or(0)))
+        .map(|((i, n), a)| {
+            let shape = match m.native_return_shapes.get(i) {
+                Some(WireShape::Flat { kind, size }) => Some((*kind, *size)),
+                _ => None,
+            };
+            (n.clone(), a.unwrap_or(0), shape)
+        })
         .collect()
 }
 
@@ -489,7 +556,7 @@ struct Run {
 
 fn run_vm(
     m: &Module,
-    table: &[(String, usize)],
+    table: &[NativeEntry],
     seed: usize,
     preseed: Option<&[u8]>,
 ) -> Result<Run, String> {
@@ -503,11 +570,69 @@ fn run_vm(
         Ok(v) => v,
         Err(e) => return Err(format!("the VM refuses to load it: {e:?}")),
     };
-    for (idx, (name, argc)) in table.iter().enumerate() {
+    for (idx, (name, argc, shape)) in table.iter().enumerate() {
         if name.is_empty() {
             continue;
         }
         let (n, ac) = (name.clone(), *argc);
+
+        // **A native whose RECORDED return shape is a composite is stubbed as
+        // one.** `register_native_closure` cannot: it has no arena, so it can
+        // only return a scalar, and the native side would then dereference that
+        // scalar as a body address. `register_native_with_ctx_closure` supplies
+        // the arena, which is what makes a faithful body possible at all.
+        if let Some((kind, size)) = *shape {
+            assert!(
+                size as usize <= COMPOSITE_RET_CAP,
+                "native `{n}` returns a {size}-byte composite; the stub table caps at \
+                 {COMPOSITE_RET_CAP}. Raise the cap rather than truncating."
+            );
+            let n2 = n.clone();
+            vm.register_native_with_ctx_closure(name, move |ctx, args: &[Value]| {
+                let vals: Vec<i64> = args
+                    .iter()
+                    .take(ac)
+                    .map(|v| match v {
+                        Value::Int(x) => *x,
+                        Value::Byte(b) => i64::from(*b),
+                        Value::Bool(b) => i64::from(*b),
+                        _ => {
+                            SAW_REF_ARG.with(|f| *f.borrow_mut() = true);
+                            0
+                        }
+                    })
+                    .collect();
+                let parts: Vec<String> = vals.iter().map(|a| a.to_string()).collect();
+                LOG.with(|l| l.borrow_mut().push(format!("{n2}({})", parts.join(", "))));
+
+                let wb = ctx.word_bytes;
+                let fc = keleusma::flat_value::FlatComposite::build_in_arena(
+                    ctx.arena,
+                    size as usize,
+                    |dst| {
+                        composite_stub_bytes(size, wb, dst);
+                        Ok(())
+                    },
+                )
+                .map_err(|_| {
+                    keleusma::vm::VmError::NativeError("arena exhausted in composite stub".into())
+                })?
+                .ok_or_else(|| {
+                    keleusma::vm::VmError::NativeError("composite stub body not flat".into())
+                })?;
+                // Every composite body has a `Flat` variant, so all four kinds
+                // are constructible from the same bytes. Kind is taken from the
+                // RECORDED shape rather than guessed.
+                Ok(match kind {
+                    3 => Value::Enum(keleusma::bytecode::EnumBody::Flat(fc)),
+                    2 => Value::Struct(keleusma::bytecode::StructBody::Flat(fc)),
+                    1 => Value::Array(keleusma::bytecode::ArrayBody::Flat(fc)),
+                    _ => Value::Tuple(keleusma::bytecode::TupleBody::Flat(fc)),
+                })
+            });
+            continue;
+        }
+
         vm.register_native_closure(name, move |args: &[Value]| {
             let vals: Vec<i64> = args
                 .iter()
@@ -600,7 +725,7 @@ fn scalar_of(st: &VmState) -> i64 {
 
 fn run_native(
     m: &Module,
-    table: &[(String, usize)],
+    table: &[NativeEntry],
     seed: usize,
     preseed: Option<&[u8]>,
 ) -> Option<Run> {
@@ -641,8 +766,8 @@ fn run_native(
     let by_symbol: std::collections::BTreeMap<String, usize> = table
         .iter()
         .enumerate()
-        .filter(|(_, (n, _))| !n.is_empty())
-        .map(|(i, (n, _))| {
+        .filter(|(_, (n, _, _))| !n.is_empty())
+        .map(|(i, (n, _, _))| {
             let mut s = String::from("kel_native_");
             for c in n.chars() {
                 s.push(if c.is_ascii_alphanumeric() || c == '_' {
@@ -979,23 +1104,29 @@ fn subject_source(name: &str) -> Option<String> {
     }
 }
 
-/// **`led.kel` LOOKS like a subject and is NOT one. Measured, not assumed.**
+/// **NO MODULE IS CURRENTLY EXCLUDED, and `led.kel`'s departure is the reason
+/// this list is empty rather than deleted.**
 ///
-/// Its virtual-machine run faults with `NoMatchingArm`, so it passes the entry
-/// criterion. Its native side dies with **SIGSEGV, not SIGTRAP** — checked, and
-/// the reason is on record in `NATIVE_EXEMPTION_AUDIT.md`: `host::gpio_set`
-/// records a return shape of `Flat { kind: 3, size: 16 }`, a sixteen-byte enum
-/// body, and the generic stub returns a plain integer that the native side then
-/// dereferences as a body address.
+/// `led.kel` was here because its virtual-machine run faulted with
+/// `NoMatchingArm` while its native side died with **SIGSEGV, not SIGTRAP** — the
+/// two sides faulting for DIFFERENT reasons, which would have been a false
+/// agreement. The cause was the generic stub returning a plain integer where
+/// `host::gpio_set` records a sixteen-byte enum body, which the native side then
+/// dereferenced as an address.
 ///
-/// **The two sides therefore fault for DIFFERENT REASONS**, and admitting it
-/// would be a false agreement. A check that accepted "died by some signal" would
-/// have counted it and been wrong.
-const TRAP_NOT_SUBJECTS: &[(&str, &str)] = &[(
-    "led.kel",
-    "native side dies with SIGSEGV, not SIGTRAP: the stub returns an integer where \
-     `host::gpio_set` records a 16-byte enum body, and the native side dereferences it",
-)];
+/// **The stub now returns a real composite body on both sides, so `led.kel` does
+/// not fault at all** and is neither a subject nor an exclusion.
+///
+/// **THAT COST A TRAP SUBJECT RATHER THAN GAINING ONE, and the reasoning is
+/// worth keeping.** `led.kel` DOES emit `Op::Trap` (asserted in
+/// `does_led_kel_reach_op_trap`), so closing the exemption looked like it would
+/// hand this observable its first real-module opcode subject. It does the
+/// opposite: `led.kel` matches both `Status::Ok` and `Status::Err(code)`, so a
+/// FAITHFUL stub returns a valid variant, an arm matches, and the trap is never
+/// reached. Reaching it needs a discriminant matching no variant — an unfaithful
+/// stub, and a false agreement. **The two are mutually exclusive and
+/// faithfulness wins.** The `Op::Trap` subject remains synthetic.
+const TRAP_NOT_SUBJECTS: &[(&str, &str)] = &[];
 
 /// Marker the child prints immediately before entering native code.
 ///
