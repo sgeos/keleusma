@@ -168,6 +168,31 @@ coverage. Closed by `two-enums-same-variant`; the must-fire control reports
 demonstrate which mutation it discriminates there — that path is `fx_*`, not `mi_*`. The comment
 says so rather than borrowing the mi finding's evidence.
 
+## TOP OPEN CORRECTNESS ITEM: `Op::Yield`'s peak-model net, confirmed by execution
+
+**Reported by the `v0.3.0` line and reproduced on this tree.** Walking
+`stack_growth - stack_shrink` over the stage corpus, `analyze::main` and `verify_depth::main` both
+reach **-1, first at op 3 = `PopN(1)`**. An operand stack cannot hold a negative number of slots, so
+wherever this happens the walk is not tracking the real stack.
+
+**The two models disagree and one states the reason.** `Op::stack_growth` is 0 and `stack_shrink` is
+1, giving `Yield` a net of **-1**. `verify::op_depth_effect` gives `(1, 0)` — net **0** — above the
+comment "Yield pops the output and the resume pushes the input: net 0". Their measurement across a
+larger corpus: 8 of 958 chunks, low -1, and emitted operand slots exceeding the proven bound on two.
+
+**THE CONTROL ADDED FOR THE LAST INSTANCE CANNOT REACH THIS ONE.** `d3fd5cb6` split the two models
+because one had a wrong net, and added `the_peak_model_agrees_with_the_depth_model`. That control
+compares them over **five hand-written cases, none of which yields** — all plain `fn` chunks. It
+caught `GetField` because a case exercised `GetField`. Its coverage is a fact about its case list,
+not about the opcode set. **Same shape as the enum hazard found in the wire suite this session.**
+
+**Do not read a matching peak as evidence.** On a small yielding chunk the two models return the
+same peak, 3 and 3, because a max can coincide while the running offset is wrong. The negative-walk
+measurement is the sharper instrument.
+
+**Not repaired.** Changing a bound model is the same class of work as `d3fd5cb6` and wants its own
+increment, with a control that reaches `Yield` rather than another case list that happens not to.
+
 ## Open
 
 - ~~**The `analyze_class` catch-all**~~ **CLOSED.** `analyze_class` and `analyze_opk` are exhaustive

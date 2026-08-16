@@ -52,6 +52,14 @@ Current sprint source of truth.
 > 49,152. The plan's claim that the producer and the staging are one increment followed from the
 > 395,804 figure, which is a `CONSTS` region record count and still sits at five sites there.
 >
+> **NEW, OPEN, TOP CORRECTNESS ITEM (2026-08-15): `Op::Yield`'s peak-model net.** Reported by the
+> `v0.3.0` line, reproduced here: the operand walk reaches -1 on `analyze::main` and
+> `verify_depth::main`, first at `PopN(1)`. `stack_growth`/`stack_shrink` give net -1;
+> `op_depth_effect` gives net 0 and says why. Same class as the `GetField` defect `d3fd5cb6` fixed,
+> and the control that repair added compares the models over five cases none of which yields, so it
+> cannot reach this. Not repaired; wants its own increment with a control that ranges over the
+> opcode set.
+>
 > **E1: both halves now landed (2026-08-15, corrected).** The CI half was already done and my
 > report of it was wrong. The LINKS half was real and I dismissed it; three unresolved intra-doc
 > links to feature-gated items are fixed by naming the gate, and CI gains one lean-feature-set doc
