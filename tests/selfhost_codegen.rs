@@ -197,19 +197,26 @@ fn data_slot(ctx: &Ctx, data_name: &str, field: &str) -> i64 {
 }
 
 /// Resolve a `data.field[..]` array reference to its element-0 slot (base) and its
-/// length, from the per-element slot names `data.field[0]`, `data.field[1]`, ...
+/// length.
+///
+/// Every element of an array carries the ARRAY's name rather than a distinct
+/// `field[k]`: a per-element string defeated the name interner's dedup and made
+/// the string pool scale with the element count. The run is therefore found by
+/// EXACT name and its length is the run's own length. The older form keyed off a
+/// `field[` prefix, using the naming convention as a lookup index.
+///
+/// **This is the third copy of this lookup in the test suite** — the others are in
+/// `selfhost_parse.rs` and the data-slot model below. All three encoded the same
+/// convention independently, which is why changing it in `compiler.rs` broke six
+/// tests in three places rather than one.
 fn array_base_len(ctx: &Ctx, data_name: &str, field: &str) -> (i64, i64) {
-    let prefix = format!("{data_name}.{field}[");
-    let base =
-        ctx.data_slots
-            .iter()
-            .position(|n| n.starts_with(&prefix))
-            .unwrap_or_else(|| panic!("no array data slot with prefix `{prefix}`")) as i64;
-    let len = ctx
+    let want = format!("{data_name}.{field}");
+    let base = ctx
         .data_slots
         .iter()
-        .filter(|n| n.starts_with(&prefix))
-        .count() as i64;
+        .position(|n| n == &want)
+        .unwrap_or_else(|| panic!("no data slot named `{want}`")) as i64;
+    let len = ctx.data_slots.iter().filter(|n| *n == &want).count() as i64;
     (base, len)
 }
 
@@ -3947,6 +3954,22 @@ struct ParsedFn {
     body: Vec<(i64, i64)>,
 }
 
+/// Whether a group of same-named heads compiles as a multiheaded guard dispatch.
+///
+/// This mirrors `keleusma::selfhost::is_multihead_group`, which it cannot call because
+/// this harness carries its own `ParsedFn`. **That duplication is the reason the same
+/// defect had to be fixed in three places**, and it is recorded here rather than left
+/// for the next reader to rediscover: `self_host_compile` below is a copy of the
+/// shipping driver, so a fix to one is not a fix to the other.
+///
+/// The predicate is a property of the heads, not of the declaration keyword. See the
+/// library copy for the two silent miscompiles the keyword form produced and for why
+/// the corpus could not reach either.
+fn is_multihead_group(group: &[&ParsedFn]) -> bool {
+    debug_assert!(!group.is_empty(), "a head group is never empty");
+    group.len() > 1 || group.first().is_some_and(|h| !h.guard.is_empty())
+}
+
 /// Drive lexer.kel then parse.kel over `src` and return every function it yields, each
 /// with its guard and body records, plus the interned-name table. Multiheaded functions
 /// appear as several same-named entries in declaration order.
@@ -4276,12 +4299,13 @@ fn self_host_compile(src: &str) -> Module {
         }
         i = j;
         let pc = group[0].params;
-        // A yield head compiles as a multihead chunk; a fn or loop as a single body.
+        // More than one head, or one guarded head, compiles as a multihead dispatch;
+        // anything else as a single body. See `is_multihead_group` above.
         // The reconstruction runs through the self-hosted reconstruct.kel stage rather
         // than the Rust `reconstruct_into`, so the whole self-host compile path is
         // Keleusma from lexing through code generation and the host only moves data
         // between stages.
-        let body = if group[0].cat == 2 {
+        let body = if is_multihead_group(&group) {
             reconstruct_via_kel_multihead(&group, pc)
         } else {
             let category = if group[0].cat == 3 { 2 } else { 0 };
@@ -4541,6 +4565,108 @@ fn self_host_compiles_lexer_kel_byte_identically() {
     common::selfhost_cache::record_pass(
         "self_host_compiles_lexer_kel_byte_identically",
         KEL_PIPELINE,
+    );
+}
+
+/// The byte-identity assertion the five `verify_*.kel` stage tests below share.
+///
+/// Written once rather than copied five times. The five stage tests above it
+/// each inline this block, which is five copies of one assertion and exactly the
+/// duplication that lets one copy drift.
+fn assert_stage_byte_identical(cache_id: &str, stage_file: &str) {
+    if common::selfhost_cache::hit(cache_id, KEL_PIPELINE) {
+        return;
+    }
+    let src = std::fs::read_to_string(common::stage_path(stage_file))
+        .unwrap_or_else(|e| panic!("read {stage_file}: {e}"));
+    let module = self_host_compile(&src);
+    let reference = compile_src(&src);
+
+    // MUST-FIRE. A stage that produced no chunks would satisfy the zip loop
+    // below vacuously, and every one of these tests would pass while comparing
+    // nothing at all.
+    assert!(
+        !reference.chunks.is_empty(),
+        "{stage_file}: the reference compiler produced no chunks, so the \
+         comparison below is vacuous"
+    );
+
+    assert_eq!(
+        module.chunks.len(),
+        reference.chunks.len(),
+        "{stage_file}: chunk count"
+    );
+    for (m, r) in module.chunks.iter().zip(reference.chunks.iter()) {
+        assert_eq!(m.name, r.name, "{stage_file}: chunk order");
+        assert_eq!(m.ops, r.ops, "{stage_file}: ops for chunk `{}`", r.name);
+        assert_eq!(
+            m.constants, r.constants,
+            "{stage_file}: pool for chunk `{}`",
+            r.name
+        );
+        assert_eq!(
+            m.local_count, r.local_count,
+            "{stage_file}: local_count for chunk `{}`",
+            r.name
+        );
+    }
+    common::selfhost_cache::record_pass(cache_id, KEL_PIPELINE);
+}
+
+// THE FIVE `verify_*.kel` STAGES, WHICH HAD NO SELF-HOSTED COVERAGE AT ALL.
+//
+// Until now exactly five of the ten stages had a byte-identity test: `lexer`,
+// `parse`, `reconstruct`, `codegen` and `analyze`. The five verifiers appeared
+// only in `tests/wire_corpus.rs` and `tests/selfhost_wire.rs`, and only as
+// REFERENCE-compiled inputs to wire-format tests, which never run the
+// self-hosted compiler over them.
+//
+// **That was a gap in the tests, not in the compiler**, and the distinction was
+// settled by a probe before any work was planned around it: all five already
+// self-compile byte-identically, so this is five test functions rather than the
+// frontier expansion "no coverage" could equally have meant. The probe carried
+// `codegen` as a control, since a probe that reports a stage WITH a passing test
+// as divergent is broken rather than informative.
+//
+// Cost: about 61 seconds for all five, against `selfhost_codegen`'s ~520.
+
+#[test]
+fn self_host_compiles_verify_structural_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_verify_structural_kel_byte_identically",
+        "verify_structural.kel",
+    );
+}
+
+#[test]
+fn self_host_compiles_verify_typed_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_verify_typed_kel_byte_identically",
+        "verify_typed.kel",
+    );
+}
+
+#[test]
+fn self_host_compiles_verify_yield_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_verify_yield_kel_byte_identically",
+        "verify_yield.kel",
+    );
+}
+
+#[test]
+fn self_host_compiles_verify_depth_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_verify_depth_kel_byte_identically",
+        "verify_depth.kel",
+    );
+}
+
+#[test]
+fn self_host_compiles_verify_datalayout_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_verify_datalayout_kel_byte_identically",
+        "verify_datalayout.kel",
     );
 }
 
@@ -5231,9 +5357,16 @@ fn assemble_data_slots(
                         visibility,
                     });
                 } else {
-                    for k in 0..count {
+                    // ONE NAME FOR THE WHOLE ARRAY, mirroring the reference
+                    // compiler. A distinct `field[k]` per element defeated the
+                    // name interner's dedup and made the string pool and name
+                    // table scale with the ELEMENT COUNT. This model exists to
+                    // agree with `compiler.rs` byte for byte, so it tracks that
+                    // change rather than encoding the older convention.
+                    let array_name = format!("{bname}.{fname}");
+                    for _ in 0..count {
                         slots.push(DataSlot {
-                            name: format!("{bname}.{fname}[{k}]"),
+                            name: array_name.clone(),
                             visibility,
                         });
                     }

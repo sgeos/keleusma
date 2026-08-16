@@ -565,7 +565,7 @@ The compiler emits a specialised inline bytecode sequence per `(operation, N)`. 
 
 | Operation | Algorithm | Linear / quadratic | Approximate op count at N = 4 |
 |-----------|-----------|--------------------|-------------------------------|
-| `+`, `-` | N-step cascade. Each digit: `Op::CheckedAdd` (or Sub), unpack `(high, low, flag)`, fold the carry / borrow into the next digit. | Linear in N | ~50 |
+| `+`, `-` | N-step cascade. Each digit: `Op::CheckedAdd` (or Sub), unpack `(low, high, flag)`, fold the carry / borrow into the next digit. | Linear in N | ~50 |
 | `==`, `!=` | N digit-wise equality reduction via the existing `Op::Eq` and AND. | Linear in N | ~30 |
 | `<`, `<=`, `>`, `>=` | Compare from most-significant to least-significant digit. The top digit is signed; lower digits are unsigned. Break on first inequality. | Linear in N | ~80 |
 | `*` | Schoolbook: N² partial products via `Op::CheckedMul`, each depositing `(high, low)` at adjacent digit positions, then a carry-propagation pass. The result is truncated to Multiword<N>; full 2N width requires a separate widening multiply op not in this spec. | Quadratic in N | ~250 |
@@ -579,7 +579,7 @@ The per-digit cascade must propagate the **unsigned** carry and borrow, not the 
 
 ### Why no new opcodes are needed
 
-- The checked-arithmetic opcodes (`Op::CheckedAdd` / Sub / Mul / Div / Mod) already produce the `(high, low, flag)` triple that the cascade consumes. The pattern-arm `ok` / `overflow` / `underflow` dispatch surfaces the flag through bytecode without an extra opcode.
+- The checked-arithmetic opcodes (`Op::CheckedAdd` / Sub / Mul / Div / Mod) already produce the `(low, high, flag)` triple that the cascade consumes. The pattern-arm `ok` / `overflow` / `underflow` dispatch surfaces the flag through bytecode without an extra opcode.
 - `Op::ArrayIndex` and `Op::NewArray` handle the internal array storage.
 - Local slots and `Op::GetLocal` / `Op::SetLocal` carry the intermediate carries, borrows, and partial products between digit steps.
 - `Op::If` and `Op::Loop` are sufficient for the comparison short-circuit, the Knuth D adjustment step, and the variable shift loop.

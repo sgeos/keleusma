@@ -148,6 +148,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`Vm::resume_from_breakpoint` no longer panics on a module that declares shared
+  data.** It called `run()` without rebinding the host shared-data buffer that
+  `call_with_shared`/`resume_with_shared` bind at entry and clear on return, so the
+  first shared read after a breakpoint stop reached an `.expect` and aborted the
+  process. A panic is not a `VmError`, so a host driving a debugger could not catch
+  it, and every module with a `shared data` block was affected. The new
+  `Vm::resume_from_breakpoint_with_shared` lends the buffer for the duration of the
+  step, mirroring the existing `*_with_shared` pair; the bare entry point now
+  returns `VmError::NativeError` naming it, checked before the suspension test so a
+  host is not misdirected to its call sequence by a `NotSuspended`. The three
+  `.expect` sites on the shared read and write paths became recoverable faults as
+  defence in depth.
+
+- **The worst-case-memory-usage bound was UNDERSTATED for any chunk whose peak lies
+  on a field read.** `GetField`, `GetTupleField`, and `GetEnumField` declared an
+  operand-stack net of −1 where the virtual machine's is 0. The net propagates, so
+  every later operation's peak was computed from a base one slot too low per field
+  read: `wcmu_stream_iteration` reported 96 bytes for a Stream chunk where 128 is
+  correct. This is the opposite direction from the conservative-verification stance,
+  which is what makes it a defect rather than looseness. The root was one model
+  serving two readers with different needs; `stack_growth`/`stack_shrink` are now
+  exclusively the peak model and `verify::op_depth_effect` is the pop/push model
+  that `text_size` reads. Nothing caught it because `analyze.kel` consumes these
+  numbers as host-seeded arrays, so the self-hosted differential agreed by
+  construction — **a differential against the model under test cannot detect that
+  the model is wrong.**
+
 - **The `_` pipeline placeholder is now honored by the type checker.** GRAMMAR
   documents that `value |> f(a, _)` inserts the piped value at the `_` position
   rather than prepending it, and the compiler already desugared this way, but the

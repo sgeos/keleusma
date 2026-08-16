@@ -49,6 +49,26 @@ use crate::scalar::{u8_at, u64_at};
 /// Number of check bits per word.
 pub const CHECK_BITS: usize = 8;
 
+/// High bit marking a region kind as the parity plane for the kind below it.
+///
+/// A plane needs its own region kind, and choosing one per protected kind by
+/// hand is a by-name enumeration waiting to drift. The convention instead
+/// derives it: the plane for kind `k` is `k | ECC_KIND_BIT`. Every schema kind
+/// this project defines sits well below `0x8000`, so the mapping is injective
+/// over the kinds in use and a plane's own kind can never collide with a
+/// payload kind.
+///
+/// The reader does not depend on this. [`crate::WireView::ecc_for`] matches on
+/// a plane's `covers` field, so the convention is the ENCODER's business alone
+/// and an artifact numbering its planes differently still reads correctly.
+pub const ECC_KIND_BIT: u16 = 0x8000;
+
+/// The parity-plane kind protecting `kind`, by the [`ECC_KIND_BIT`] convention.
+#[inline]
+pub const fn plane_kind_for(kind: u16) -> u16 {
+    kind | ECC_KIND_BIT
+}
+
 /// Parity columns: 64 data columns then 8 check columns.
 ///
 /// Generated from the construction rule so the matrix cannot drift from its
@@ -168,7 +188,20 @@ pub struct EccReport {
 }
 
 impl EccReport {
-    /// True when nothing was wrong.
+    /// True when no word produced a syndrome.
+    ///
+    /// # This is not an integrity check, and the distinction is measured
+    ///
+    /// It means "the code noticed nothing", **not** "the artifact is
+    /// undamaged". A distance-four code has weight-four codewords, and an error
+    /// pattern that IS a codeword decodes with a zero syndrome. Enumerated over
+    /// one 64-bit word, **5,133 of the 635,376 four-bit patterns are reported
+    /// clean** while the word is wrong.
+    ///
+    /// A caller that skipped a cryptographic check because this returned `true`
+    /// would accept every one of them. Use this to decide whether a scrub found
+    /// work to do, and a signature or authenticated-encryption tag to decide
+    /// whether the artifact is what its publisher produced.
     #[inline]
     pub fn is_clean(&self) -> bool {
         self.corrected == 0 && self.uncorrectable == 0

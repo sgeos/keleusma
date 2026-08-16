@@ -123,11 +123,11 @@ mod view;
 #[cfg(feature = "alloc")]
 pub use build::{RegionId, WireBuilder};
 pub use crc::crc32;
-pub use ecc::{EccPlane, EccReport, WordStatus};
+pub use ecc::{ECC_KIND_BIT, EccPlane, EccReport, WordStatus, plane_kind_for};
 pub use error::WireError;
 pub use layout::Region;
 pub use record::WireRecord;
-pub use view::{Pool, RecordTable, WireView};
+pub use view::{Pool, RecordTable, WireView, scrub};
 
 #[cfg(feature = "derive")]
 pub use keleusma_wire_derive::WireRecord;

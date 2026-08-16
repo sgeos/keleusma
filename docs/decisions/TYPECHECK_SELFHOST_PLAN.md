@@ -206,8 +206,11 @@ unexpected acceptance had somewhere to be checked against.
 1. **Finish wire-format serialization**, slices 5 to 7. In progress, sliced, harness built.
 2. ~~**Spike A.**~~ **Done. The monomorphizer obligation is empty.**
 3. ~~**Spike B.**~~ **Done. The inference obligation is empty too.**
-4. **Then write the implementation plan**, sliced the way the wire-format plan is, with rejection
-   and inference as separate tracks and their real sizes known rather than guessed.
+4. ~~**Then write the implementation plan**, sliced the way the wire-format plan is, with rejection
+   and inference as separate tracks and their real sizes known rather than guessed.~~ **Done,
+   2026-08-14**: [`TYPECHECK_IMPLEMENTATION_PLAN.md`](./TYPECHECK_IMPLEMENTATION_PLAN.md). The two
+   tracks did not survive contact with the spikes -- inference for emission is not required at all,
+   so the plan is rejection only, in six slices.
 
 ## Caveats
 

@@ -121,6 +121,37 @@ commit**, with its own `CARGO_TARGET_DIR`. Two things improve at once:
   mechanism — the same mechanism-over-procedure argument made below about CI. The script
   re-checks that the tree is at the requested commit and refuses if it is dirty.
 
+**A WAITER MUST WATCH A CONDITION, NOT A FILE.** Twice now a gate has been abandoned mid-run and
+replaced by one on another commit. `gate-status.sh` reports that; a background waiter that resolved
+the newest log ONCE and pinned the path did not — it watched a dead file until its timeout killed
+it, reporting nothing. The display was fixed for this failure in the morning and the same bug
+survived in the instrument beside it, which is the more useful half of the lesson: **fixing a
+failure mode in one tool does not fix it in the tool that shares the assumption.** Wait on "no gate
+is running", re-evaluated each iteration, rather than "this log has a verdict".
+
+**THE SAME `pgrep` CALL IS RIGHT HERE AND FATAL IN `gate-status.sh`, AND THE DIFFERENCE IS WORTH
+STATING** so nobody "fixes" the working one. `gate-in-worktree.sh` refuses to start a second gate
+with `pgrep -f "release-gate.sh"`, which is the literal pattern `gate-status.sh` warns against in
+capitals. Both are correct:
+
+- **In a WAITER LOOP it is fatal.** `until ! pgrep -f "release-gate.sh"` matches the shell running
+  the loop, so it never exits. That deadlocked a session for hours.
+- **In a ONE-SHOT REFUSAL it is fine.** `gate-in-worktree.sh` does not have that string in its own
+  command line, and the worst failure mode is a false positive that declines to start a gate —
+  which is the safe direction for a guard whose job is to decline.
+
+The rule is therefore about the *shape of the use*, not the call: **never let a `pgrep` for a script
+name gate a loop's exit; a one-shot refusal may use one.**
+
+**THE REFUSAL IS OVER-BROAD FOR `--setup-only`, noted and NOT fixed.** The running-gate check sits
+above the `--setup-only` early exit, so a queued session cannot even prepare its worktree while
+another session's gate runs — although setup touches only that session's own named directory and
+runs no cargo at all. Preparing ahead is exactly what a queued session should be able to do. Left
+alone deliberately: this is shared gate infrastructure, and changing it while a gate runs and
+another is imminent puts risk into the mechanism both sessions are about to depend on. The narrow
+fix, when someone does it, is to scope the check to `$GATE_DIR` for the setup-only path rather than
+to move it.
+
 **On the canary, which is the obvious objection.** This deliberately introduces concurrent
 load, and `tests/perf_canary.rs` wants a quiet machine. Accept it, because the error is
 directional: **load can only make the canary slower.** It can therefore produce a false
@@ -186,7 +217,7 @@ change that recorded this.
 
 ### Prefer a pattern to an enumeration; a by-name list is a latent hole
 
-The same defect has now produced three separate failures in this repository, and
+The same defect has now produced **five** separate failures in this repository, and
 in each case the fix is a rule that matches rather than a list that remembers.
 
 | Enumeration | What it missed | Cost |
@@ -194,13 +225,26 @@ in each case the fix is a rule that matches rather than a list that remembers.
 | `release-gate.sh` lists crates by name | `keleusma-wire` | four days of gate coverage with no CI coverage |
 | CI Doc job lists crates by name | `src/selfhost/`, then both new crates | broken intra-doc links survived four releases |
 | Root `.gitignore` listed nested `target/` dirs by name | `native_codegen/target/` | 571 build artifacts swept into a commit |
+| A gate-progress regex bounded to 70 characters | the 71-character twelfth step | every "step N of 12" report was wrong for a day |
+| A gate-progress regex anchored to line start | the same header wrapped in ANSI escapes | reported `steps=0` for a gate that had run thirteen |
+
+**A HAND-WRITTEN BOUND IS A BY-NAME ENUMERATION.** The last two rows are the same
+defect wearing different clothing, and recognising that took embarrassingly long:
+`{5,70}` enumerates the acceptable lengths and `^` enumerates the acceptable
+prefixes, both over a set that was free to grow. A list enumerates members; a
+bound enumerates a range. Neither is a rule that matches.
 
 **A by-name list is correct on the day it is written and silently wrong the moment
 the set grows.** Nobody is at fault when it fails, which is exactly why it keeps
 happening. Where a pattern can express the intent — `**/target/` rather than one
-line per package — use the pattern. Where enumeration is unavoidable, put a
-comment at the point of failure saying what must be added, and expect that to work
-only sometimes.
+line per package, `[^=]+` rather than `[^=]{5,70}` — use the pattern. Where
+enumeration is unavoidable, put a comment at the point of failure saying what must
+be added, and expect that to work only sometimes.
+
+**Every one of the five failed silently and read as success**, which is the
+property that makes the class worth naming rather than just fixing case by case.
+A gate with no coverage passes; a doc job with no crate reports green; a regex
+that matches nothing reports zero.
 
 The `.gitignore` case carries an extra lesson for parallel work: **a guard that
 lives on one branch does not protect another.** A package's ignore rule in its own

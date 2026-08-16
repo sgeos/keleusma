@@ -17,5 +17,32 @@
 # ad-hoc `pgrep` at the prompt — which produced three separate defects in one
 # day, including a self-matching `pgrep` that deadlocked a sibling session.
 # See `scripts/gate-status.sh` for the reasoning and the failure modes it avoids.
+#
+# TWO INSTRUMENTS, COMPOSED HERE RATHER THAN MERGED. `gate-status.sh` reports a
+# local `release-gate.sh` run and `ci-status.sh` reports continuous integration.
+# They are separate scripts with separate failure modes, and this file is the
+# only place that knows about both, so a change to either cannot alter how the
+# other is reported.
+#
+# THE ORDER IS DELIBERATE. Continuous integration gates feature branches under
+# the workflow adopted on 2026-08-11 and the local gate is reserved for
+# pre-publication and offline work, so the thing that is usually in flight goes
+# first. Before this, the segment showed only the local gate, and on 2026-08-13
+# that meant it displayed an abandoned run from sixty-six hours earlier while two
+# pull requests sat in live continuous integration.
+#
+# NEITHER PART MAY BLOCK. `ci-status.sh` reads a cache and forks its refresh;
+# `gate-status.sh` reads log files. Measured: 0.026 s warm and 0.33 s on the
+# render that forks a refresh, against the caller's timeout of about 1.09 s.
 set -uo pipefail
-exec "$(dirname "$0")/gate-status.sh" --oneline
+here="$(dirname "$0")"
+
+ci=$("$here/ci-status.sh" 2>/dev/null | head -1)
+gate=$("$here/gate-status.sh" --oneline 2>/dev/null | head -1)
+
+# A part that has nothing to say contributes nothing, rather than an empty
+# separator that reads as a missing value.
+out=""
+[ -n "$ci" ] && out="$ci"
+[ -n "$gate" ] && { [ -n "$out" ] && out="$out  $gate" || out="$gate"; }
+printf '%s\n' "$out"

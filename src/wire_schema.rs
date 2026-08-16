@@ -566,6 +566,8 @@ pub struct SchemaBuilder {
     /// Set once any contributor asks for a constant pool, so an artifact with no
     /// constants emits no constant regions rather than three empty ones.
     wants_constants: bool,
+    /// Set by [`SchemaBuilder::with_ecc`]; emits a parity plane per region.
+    want_ecc: bool,
     /// Every contributor's struct templates, concatenated. Deferred for the same
     /// reason constants are: templates are declared **per chunk**, so the table
     /// serves many contributors and each needs a range rather than the whole of it.
@@ -836,7 +838,43 @@ impl SchemaBuilder {
         for r in &self.names.refs {
             self.b.push_record(names, r);
         }
+        // Planes LAST, after every region exists. A region declared after this
+        // point would be silently unprotected.
+        if self.want_ecc {
+            self.b.protect_all()?;
+        }
         self.b.finish()
+    }
+
+    /// Emits a (72,64) SECDED parity plane beside every region.
+    ///
+    /// **Off by default, and that default is load-bearing.** Planes change the
+    /// artifact's bytes, and byte identity against this encoder is the oracle
+    /// the self-hosted compiler is verified with. Turning them on unconditionally
+    /// would move every artifact the corpus compares against.
+    ///
+    /// # What it buys and what it costs
+    ///
+    /// One flipped bit per 64-bit word becomes correctable and two become
+    /// detectable, per protected region. The cost approaches 12.5% of the
+    /// protected bytes plus one directory entry per plane, and the region
+    /// ceiling counts planes, so an artifact may carry half as many payload
+    /// regions.
+    ///
+    /// **12.5% is asymptotic and a small artifact pays much more.** Each plane
+    /// is padded to a whole word and every artifact here carries the same
+    /// nineteen regions, so the rounding is amortised only by size. Measured:
+    /// **20.0% at 680 payload bytes**, 12.6% at 30,616, 12.5% at 303,472.
+    ///
+    /// # Compatibility
+    ///
+    /// Purely additive. Planes are extra regions, and every reader in this
+    /// project resolves regions BY KIND rather than by enumerating the
+    /// directory, so an artifact with planes decodes identically through the
+    /// ordinary path. No `BYTECODE_VERSION` change.
+    pub fn with_ecc(mut self) -> Self {
+        self.want_ecc = true;
+        self
     }
 }
 
@@ -1811,19 +1849,93 @@ pub struct DataSlotRecord {
     pub visibility: u8,
     /// Reserved.
     pub reserved: u8,
-    /// Reserved; keeps the record one whole word.
-    pub reserved2: u16,
+    /// RUN LENGTH: how many consecutive slots this record stands for, all
+    /// sharing this name and visibility. Never zero.
+    ///
+    /// An array declares one slot per element and every element carries the
+    /// ARRAY's name, so an array is exactly such a run. Emitting one record per
+    /// element made this table scale with the element count -- 3,166,272 bytes
+    /// for `lexer`. A `u16` caps a single record at 65,535 elements; a longer
+    /// array simply emits another record, which is why the field needs no
+    /// escape value.
+    ///
+    /// This is an ENCODING detail. `slot_count` still reports logical slots and
+    /// `Op::GetData`/`SetData` operands are still logical slot indices; nothing
+    /// about addressing changes.
+    pub run: u16,
 }
 
-/// One shared slot's byte layout in the host buffer. A single word.
+/// A RUN of consecutive shared slots sharing a kind and a length, whose byte
+/// offsets advance by a constant stride. Two words.
+///
+/// # Why a run and not a slot
+///
+/// An array declares one shared slot per element, all with the same kind and
+/// length and evenly spaced, so an array is exactly such a run. Emitting one
+/// record per element made this table scale with the ELEMENT COUNT. Measured
+/// across all eleven stage sources: 643,276 slots collapse to 18 runs, and the
+/// table goes from 5,146,208 bytes to 400.
+///
+/// The trade is not free and was measured rather than assumed. This record is
+/// TWICE the width of the per-slot record it replaces, so the encoding is a
+/// PESSIMISATION below a mean run of two. The measured mean is 35,738.
+/// [`tests/shared_layout_runs.rs`](../../tests/shared_layout_runs.rs) pins that
+/// property, because it is a fact about how stages DECLARE shared data rather
+/// than about this encoder, and a future stage declaring many small distinct
+/// shared slots would silently turn the encoding into a size regression.
+///
+/// # Why `first_slot` is stored rather than derived
+///
+/// [`DataLayoutTable::shared_slot`] resolves a LOGICAL slot index on the
+/// `get_shared`/`set_shared` path, which runs on every host access to a shared
+/// slot. Deriving each run's first index would mean a prefix sum, so a lookup
+/// would scan. Storing it makes the lookup a binary search whose bound is
+/// `log2(records)` and, crucially, is STATIC rather than data-dependent. With
+/// one to six records per stage a scan would in fact be fast today; a
+/// data-dependent bound is the thing this project does not sell.
+///
+/// # Why `stride` is stored rather than derived
+///
+/// A scalar run advances by the kind's size and a composite run by `len`.
+/// Deriving it would put a kind-to-size table on BOTH the Rust and the
+/// Keleusma side, and cross-language duplication of exactly that shape produced
+/// three separate defects on 2026-08-12.
 #[derive(WireRecord, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SharedSlotRecord {
-    /// Byte offset within the host buffer.
+    /// Byte offset of the run's FIRST slot within the host buffer.
     pub offset: u32,
     /// Scalar or composite kind tag; the high bit marks a composite.
     pub kind: u8,
     /// Reserved; keeps `len` at a fixed offset.
     pub reserved: u8,
+    /// Flat composite body length; zero for a scalar slot.
+    pub len: u16,
+    /// Logical slot index of the run's first slot. Runs are emitted in
+    /// ascending slot order and are contiguous, so this is what makes a lookup
+    /// a binary search.
+    pub first_slot: u32,
+    /// How many consecutive slots this record stands for. Never zero. A `u16`
+    /// caps a record at 65,535 slots; a longer run simply emits another record,
+    /// exactly as [`DataSlotRecord::run`] does, which is why the field needs no
+    /// escape value. `lexer`'s largest run is 393,216 and chunks into seven.
+    pub run: u16,
+    /// Byte delta between consecutive slots in the run. Zero when `run` is 1,
+    /// where it is unused. A run is only formed when the delta fits a `u16`.
+    pub stride: u16,
+}
+
+/// One shared slot's byte layout, resolved from the run that contains it.
+///
+/// This is what a LOGICAL slot lookup returns. It is deliberately a distinct
+/// type from [`SharedSlotRecord`]: the record is run-space and the resolved
+/// entry is slot-space, and letting one type serve both is how a logical index
+/// gets passed where a record index belongs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SharedSlotEntry {
+    /// Byte offset of this slot within the host buffer.
+    pub offset: u32,
+    /// Scalar or composite kind tag; the high bit marks a composite.
+    pub kind: u8,
     /// Flat composite body length; zero for a scalar slot.
     pub len: u16,
 }
@@ -1869,31 +1981,98 @@ impl SchemaBuilder {
         let privcomp = self.b.region(kind::PRIVATE_COMPOSITE, 0)?;
         let init = self.b.region(kind::DATA_INIT, 0)?;
 
-        for s in &layout.slots {
+        // Consecutive slots sharing a name and visibility collapse into one
+        // record with a run length. Grouping is on the ENCODED pair, so two
+        // adjacent arrays that happen to share a name and visibility merge into
+        // one run -- which is correct, because the expansion is identical.
+        let mut i = 0usize;
+        while i < layout.slots.len() {
+            let s = &layout.slots[i];
+            let vis = match s.visibility {
+                SlotVisibility::Shared => visibility_tag::SHARED,
+                SlotVisibility::Private => visibility_tag::PRIVATE,
+            };
+            let mut n = 1usize;
+            while i + n < layout.slots.len()
+                && layout.slots[i + n].name == s.name
+                && layout.slots[i + n].visibility == s.visibility
+            {
+                n += 1;
+            }
             let name = self.names.intern(&s.name);
-            self.b.push_record(
-                slots,
-                &DataSlotRecord {
-                    name,
-                    visibility: match s.visibility {
-                        SlotVisibility::Shared => visibility_tag::SHARED,
-                        SlotVisibility::Private => visibility_tag::PRIVATE,
+            // Chunked at `u16::MAX` rather than rejected: a longer array is
+            // legal and simply needs a second record.
+            let mut left = n;
+            while left > 0 {
+                let take = left.min(u16::MAX as usize);
+                self.b.push_record(
+                    slots,
+                    &DataSlotRecord {
+                        name,
+                        visibility: vis,
+                        reserved: 0,
+                        run: take as u16,
                     },
-                    reserved: 0,
-                    reserved2: 0,
-                },
-            );
+                );
+                left -= take;
+            }
+            i += n;
         }
-        for l in &layout.shared_layout {
-            self.b.push_record(
-                shared,
-                &SharedSlotRecord {
-                    offset: l.offset,
-                    kind: l.kind,
-                    reserved: 0,
-                    len: l.len,
-                },
-            );
+        // Group consecutive shared slots into runs. A run is entries sharing
+        // `kind` and `len` whose `offset` advances by a CONSTANT stride, which
+        // is exactly the shape an array of uniform elements produces and the
+        // only shape a `(first_slot, run, stride)` record can reproduce.
+        let sl = &layout.shared_layout;
+        let mut i = 0usize;
+        while i < sl.len() {
+            let a = &sl[i];
+            let mut n = 1usize;
+            let mut stride: u32 = 0;
+            if i + 1 < sl.len() {
+                let b = &sl[i + 1];
+                if b.kind == a.kind && b.len == a.len {
+                    let d = b.offset.wrapping_sub(a.offset);
+                    // A run is only formed when the stride fits the field. A
+                    // wider delta falls back to single-slot records rather
+                    // than truncating, which would place every later slot in
+                    // the run at a wrong offset.
+                    if d <= u32::from(u16::MAX) {
+                        stride = d;
+                        n = 2;
+                        while i + n < sl.len() {
+                            let c = &sl[i + n];
+                            let p = &sl[i + n - 1];
+                            if c.kind != a.kind
+                                || c.len != a.len
+                                || c.offset.wrapping_sub(p.offset) != d
+                            {
+                                break;
+                            }
+                            n += 1;
+                        }
+                    }
+                }
+            }
+            // Chunked at `u16::MAX` rather than rejected, as `DataSlotRecord`
+            // is: `lexer`'s largest run is 393,216 and needs seven records.
+            let mut done = 0usize;
+            while done < n {
+                let take = (n - done).min(u16::MAX as usize);
+                self.b.push_record(
+                    shared,
+                    &SharedSlotRecord {
+                        offset: a.offset + (done as u32) * stride,
+                        kind: a.kind,
+                        reserved: 0,
+                        len: a.len,
+                        first_slot: (i + done) as u32,
+                        run: take as u16,
+                        stride: stride as u16,
+                    },
+                );
+                done += take;
+            }
+            i += n;
         }
         for p in &layout.private_composite_layout {
             self.b.push_record(
@@ -1952,7 +2131,7 @@ impl<'a> DataLayoutTable<'a> {
             init,
         };
 
-        for i in 0..t.slot_count() {
+        for i in 0..t.slot_record_count() {
             let r = t.slot(i).ok_or(SchemaError::BadIndex)?;
             if r.name as usize >= t.names.len() {
                 return Err(SchemaError::BadIndex);
@@ -1960,17 +2139,38 @@ impl<'a> DataLayoutTable<'a> {
             if r.visibility != visibility_tag::SHARED && r.visibility != visibility_tag::PRIVATE {
                 return Err(SchemaError::UnknownTag(r.visibility as u16));
             }
+            // A zero run would make the table describe fewer slots than it has
+            // records, so every logical index past it would be off by one with
+            // nothing else detecting it.
+            if r.run == 0 {
+                return Err(SchemaError::UnknownTag(0));
+            }
         }
         Ok(Some(t))
     }
 
-    /// Number of declared slots.
+    /// Number of LOGICAL slots, expanding run lengths.
+    ///
+    /// A slot index in a `GetData`/`SetData` operand counts logical slots, so
+    /// this is the number those operands are bounded by. It is NOT the number of
+    /// records in the table -- use [`Self::slot_record_count`] for that. The two
+    /// were the same before slot runs, and code that conflates them will index a
+    /// record with a logical index.
     #[inline]
     pub fn slot_count(&self) -> usize {
+        (0..self.slots.len())
+            .filter_map(|i| self.slots.get_as::<DataSlotRecord>(i))
+            .map(|r| r.run as usize)
+            .sum()
+    }
+
+    /// Number of RECORDS in the slot table, each standing for `run` slots.
+    #[inline]
+    pub fn slot_record_count(&self) -> usize {
         self.slots.len()
     }
 
-    /// The slot record at `index`.
+    /// The slot record at `index`, indexed by RECORD rather than logical slot.
     #[inline]
     pub fn slot(&self, index: usize) -> Option<DataSlotRecord> {
         self.slots.get_as::<DataSlotRecord>(index)
@@ -1984,16 +2184,78 @@ impl<'a> DataLayoutTable<'a> {
         self.pool.slice(n.offset, n.length)
     }
 
-    /// The shared-slot layout at `index`.
+    /// The shared-slot RUN record at `index`, indexed by RECORD.
+    ///
+    /// Pair this with [`Self::shared_record_count`]. Pairing it with
+    /// [`Self::shared_slot_count`] mixes a logical count with a record index,
+    /// which is the exact defect the `DataSlotRecord` split produced when
+    /// `slot()` stayed record-indexed beside a logical `slot_count()`.
     #[inline]
-    pub fn shared_slot(&self, index: usize) -> Option<SharedSlotRecord> {
+    pub fn shared_record(&self, index: usize) -> Option<SharedSlotRecord> {
         self.shared.get_as::<SharedSlotRecord>(index)
     }
 
-    /// Number of shared-slot layout entries.
+    /// Number of RECORDS in the shared-slot table, each standing for `run`
+    /// slots.
     #[inline]
-    pub fn shared_count(&self) -> usize {
+    pub fn shared_record_count(&self) -> usize {
         self.shared.len()
+    }
+
+    /// Number of LOGICAL shared slots, summing the runs.
+    ///
+    /// Renamed from `shared_count` when the table became run-length encoded.
+    /// The rename is deliberate: leaving the old name in place would have
+    /// changed its meaning silently, and every caller had to be reconsidered.
+    pub fn shared_slot_count(&self) -> usize {
+        (0..self.shared.len())
+            .filter_map(|i| self.shared.get_as::<SharedSlotRecord>(i))
+            .map(|r| r.run as usize)
+            .sum()
+    }
+
+    /// Resolve a LOGICAL shared-slot index to its byte layout.
+    ///
+    /// This is the `get_shared`/`set_shared` hot path. Runs are emitted in
+    /// ascending slot order and are contiguous, so the containing record is
+    /// found by binary search on `first_slot`, giving a `log2(records)` bound
+    /// that does not depend on the data.
+    pub fn shared_slot(&self, slot: usize) -> Option<SharedSlotEntry> {
+        let n = self.shared.len();
+        if n == 0 {
+            return None;
+        }
+        let slot = u32::try_from(slot).ok()?;
+        // Largest record whose `first_slot` is <= `slot`.
+        let (mut lo, mut hi) = (0usize, n - 1);
+        let mut found: Option<SharedSlotRecord> = None;
+        while lo <= hi {
+            let mid = lo + (hi - lo) / 2;
+            let r = self.shared.get_as::<SharedSlotRecord>(mid)?;
+            if r.first_slot <= slot {
+                found = Some(r);
+                lo = mid + 1;
+            } else if mid == 0 {
+                break;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        let r = found?;
+        // A corrupt table can carry a zero run or a `slot` past the run's end;
+        // both are rejected rather than resolved to a wrong offset. Validation
+        // refuses a zero run at load, so this is defence in depth.
+        let within = slot.checked_sub(r.first_slot)?;
+        if r.run == 0 || within >= u32::from(r.run) {
+            return None;
+        }
+        Some(SharedSlotEntry {
+            offset: r
+                .offset
+                .checked_add(within.checked_mul(u32::from(r.stride))?)?,
+            kind: r.kind,
+            len: r.len,
+        })
     }
 
     /// The private-composite placement at `index`.
@@ -2028,30 +2290,50 @@ pub fn decode_data_layout(bytes: &[u8]) -> Result<Option<DataLayout>, SchemaErro
         return Ok(None);
     };
 
+    // Iterates RECORDS and expands each run. Iterating logical indices would
+    // rescan the run table per slot, which is quadratic on the tables this
+    // encoding exists to shrink.
     let mut slots = Vec::with_capacity(t.slot_count());
-    for i in 0..t.slot_count() {
+    for i in 0..t.slot_record_count() {
         let r = t.slot(i).ok_or(SchemaError::BadIndex)?;
         let name = core::str::from_utf8(t.slot_name(i).ok_or(SchemaError::BadName)?)
             .map(String::from)
             .map_err(|_| SchemaError::BadName)?;
-        slots.push(DataSlot {
-            name,
-            visibility: if r.visibility == visibility_tag::SHARED {
-                SlotVisibility::Shared
-            } else {
-                SlotVisibility::Private
-            },
-        });
+        let visibility = if r.visibility == visibility_tag::SHARED {
+            SlotVisibility::Shared
+        } else {
+            SlotVisibility::Private
+        };
+        for _ in 0..r.run {
+            slots.push(DataSlot {
+                name: name.clone(),
+                visibility,
+            });
+        }
     }
 
-    let mut shared_layout = Vec::with_capacity(t.shared_count());
-    for i in 0..t.shared_count() {
-        let r = t.shared_slot(i).ok_or(SchemaError::BadIndex)?;
-        shared_layout.push(SharedSlotLayout {
-            offset: r.offset,
-            kind: r.kind,
-            len: r.len,
-        });
+    // Expand runs by iterating RECORDS, not by resolving each logical slot.
+    // Both produce the same vector; this one is linear where a per-slot lookup
+    // would pay the binary search 395,778 times on `lexer`.
+    let mut shared_layout = Vec::with_capacity(t.shared_slot_count());
+    for i in 0..t.shared_record_count() {
+        let r = t.shared_record(i).ok_or(SchemaError::BadIndex)?;
+        if r.run == 0 {
+            return Err(SchemaError::BadIndex);
+        }
+        for k in 0..u32::from(r.run) {
+            shared_layout.push(SharedSlotLayout {
+                offset: r
+                    .offset
+                    .checked_add(
+                        k.checked_mul(u32::from(r.stride))
+                            .ok_or(SchemaError::BadIndex)?,
+                    )
+                    .ok_or(SchemaError::BadIndex)?,
+                kind: r.kind,
+                len: r.len,
+            });
+        }
     }
 
     let mut private_composite_layout = Vec::with_capacity(t.private_composite_count());
@@ -2533,7 +2815,40 @@ impl<'a> ModuleTable<'a> {
 ///
 /// Propagates a [`WireError`] from the container builder.
 pub fn encode_aux_body(aux: &crate::wire_format::WireAuxBody) -> Result<Vec<u8>, WireError> {
+    encode_aux_body_opt(aux, false)
+}
+
+/// Encodes an auxiliary body with a (72,64) SECDED parity plane per region.
+///
+/// Same bytes as [`encode_aux_body`] for every payload region, plus one plane
+/// region each. One flipped bit per 64-bit word becomes correctable and two
+/// become detectable. The cost approaches 12.5% of the protected bytes and is
+/// **20.0% on a small artifact**, because each plane is padded to a whole word
+/// and the rounding is per region.
+///
+/// Read back with the ordinary [`decode_aux_body`], which is unaffected — planes
+/// are additive regions and every reader resolves by kind. Use
+/// [`keleusma_wire::WireView::verify_all`] to scan them.
+///
+/// # Errors
+///
+/// [`WireError`] as [`encode_aux_body`], plus
+/// [`WireError::TooManyRegions`] if
+/// the planes push the artifact past the region ceiling.
+pub fn encode_aux_body_with_ecc(
+    aux: &crate::wire_format::WireAuxBody,
+) -> Result<Vec<u8>, WireError> {
+    encode_aux_body_opt(aux, true)
+}
+
+fn encode_aux_body_opt(
+    aux: &crate::wire_format::WireAuxBody,
+    ecc: bool,
+) -> Result<Vec<u8>, WireError> {
     let mut b = SchemaBuilder::new();
+    if ecc {
+        b = b.with_ecc();
+    }
 
     // Per-chunk data first, so each chunk record can carry the ranges the
     // contributions returned. A chunk cannot describe a range it did not write.

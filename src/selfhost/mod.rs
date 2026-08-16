@@ -20,12 +20,13 @@
 //! subproject re-exports this module and its `main.rs`/tests drive it). `prelude.kel` is
 //! not read by the Rust host and stays in `compiler/kel/`.
 //!
-//! `src/selfhost/kel/` also holds **`wire.kel`, which is not one of those ten** and is
-//! deliberately absent from the `read_stage` table. It is the wire format being written in
-//! Keleusma (step 6 of the wire-format programme), and the driver does not run it because
-//! it does not yet emit an artifact. `tests/selfhost_wire.rs` compiles it directly against
-//! the Rust implementation. It joins the stage table when it produces bytes rather than a
-//! checksum. See `docs/decisions/WIRE_FORMAT_SELFHOST_PLAN.md`.
+//! `src/selfhost/kel/` also holds **`wire.kel`, which is not one of those ten**. It is the
+//! wire format written in Keleusma (step 6 of the wire-format programme), and it IS in the
+//! `read_stage` table: it joined when the driver gained a path that emits through it, which
+//! is `wire_names_via_kel` below. This paragraph said the opposite — "deliberately absent
+//! from the `read_stage` table" — for as long as the entry existed fifty lines below it, so
+//! the file contradicted itself and a reader could not tell which half to trust. See
+//! `docs/decisions/WIRE_FORMAT_SELFHOST_PLAN.md`.
 
 use alloc::boxed::Box;
 use alloc::format;
@@ -66,6 +67,13 @@ fn read_stage(rel: &str) -> String {
         "verify_depth.kel" => include_str!("kel/verify_depth.kel"),
         "verify_typed.kel" => include_str!("kel/verify_typed.kel"),
         "verify_datalayout.kel" => include_str!("kel/verify_datalayout.kel"),
+        // JOINED THE TABLE when the driver gained a path that emits through it
+        // (`wire_names_via_kel` below). The criterion this module has carried
+        // since step 6 was "when it produces bytes rather than a checksum"; it
+        // produced bytes in the tests some time before the DRIVER could ask it
+        // to, and an entry added then would have recorded a capability the
+        // system did not have.
+        "wire.kel" => include_str!("kel/wire.kel"),
         other => panic!("unknown embedded stage source `{other}`"),
     };
     s.to_string()
@@ -111,6 +119,35 @@ pub struct ParsedFn {
     return_type: i64,
     guard: Vec<(i64, i64)>,
     body: Vec<(i64, i64)>,
+}
+
+/// Whether a group of same-named heads compiles as a multiheaded guard dispatch.
+///
+/// **The decision is a property of the heads, not of the declaration keyword.** This
+/// asked `cat == 2` (a `yield` declaration) until 2026-08-12, which was wrong in both
+/// directions and silent in both:
+///
+/// - A multiheaded `fn` took the single-body path, which reads `group[0].body` and
+///   discards every later head together with every `when` guard. The reference admits
+///   and lowers a multiheaded `fn`, so the two compilers emitted different programs
+///   with no diagnostic from either.
+/// - A single-headed `yield` took the dispatch path and gained a parameter copy and a
+///   `Trap(NoMatchingHead)` the reference never emits.
+///
+/// **Neither was reachable from the corpus**, which is why the whole-stage
+/// byte-identity self-compiles never reported it: the ten stage sources contain
+/// exactly one multiheaded function, `codegen.kel`'s nine-headed `emit_next`, and it
+/// was declared `yield`. The keyword and the head count agreed on every input the
+/// oracle had ever seen. That agreement is a fact about the corpus rather than about
+/// the predicate.
+///
+/// A lone GUARDED head still needs the dispatch: its guard can fail, and the reference
+/// emits the trap for that path. A lone guarded `yield` head is inadmissible — it is
+/// not always-yielding, so structural verification rejects any `loop` that delegates
+/// productivity to it — so this predicate never has to route one.
+fn is_multihead_group(group: &[&ParsedFn]) -> bool {
+    debug_assert!(!group.is_empty(), "a head group is never empty");
+    group.len() > 1 || group.first().is_some_and(|h| !h.guard.is_empty())
 }
 
 const KINDS: usize = 1;
@@ -687,10 +724,12 @@ pub fn self_host_compile(src: &str) -> Module {
         }
         i = j;
         let pc = group[0].params;
-        // A yield head compiles as a multihead chunk; a fn or loop as a single body.
+        // More than one head, or one guarded head, compiles as a multihead dispatch;
+        // anything else as a single body. See `is_multihead_group` for why this is not
+        // decided by the declaration keyword.
         // The reconstruction runs through the self-hosted reconstruct.kel stage, so the
         // whole compile path is Keleusma and the host only moves data between stages.
-        let body = if group[0].cat == 2 {
+        let body = if is_multihead_group(&group) {
             reconstruct_via_kel_multihead(&group, pc)
         } else {
             let category = if group[0].cat == 3 { 2 } else { 0 };
@@ -2106,9 +2145,20 @@ fn assemble_data_slots(
                         visibility,
                     });
                 } else {
-                    for k in 0..count {
+                    // ONE NAME FOR THE WHOLE ARRAY, mirroring `compiler.rs`.
+                    //
+                    // This driver builds the data layout from the self-hosted
+                    // parser's data-block records, and its output is compared
+                    // against the reference compiler's byte for byte -- including
+                    // `schema_hash`, which covers the layout. A distinct
+                    // `field[k]` per element defeated the name interner's dedup
+                    // and made the string pool scale with the element count; the
+                    // reference stopped doing it, so this must too or the two
+                    // compilers disagree.
+                    let array_name = format!("{bname}.{fname}");
+                    for _ in 0..count {
                         slots.push(DataSlot {
-                            name: format!("{bname}.{fname}[{k}]"),
+                            name: array_name.clone(),
                             visibility,
                         });
                     }
@@ -2517,7 +2567,7 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
         }
         i = j;
         let pc = group[0].params;
-        let body = if group[0].cat == 2 {
+        let body = if is_multihead_group(&group) {
             reconstruct_via_kel_multihead(&group, pc)
         } else {
             let category = if group[0].cat == 3 { 2 } else { 0 };
@@ -2664,6 +2714,356 @@ impl core::fmt::Display for SelfHostError {
 }
 
 impl std::error::Error for SelfHostError {}
+
+/// Emit a module's `NAMES` and `STRING_POOL` regions through `wire.kel`.
+///
+/// **This is the first thing the DRIVER asks `wire.kel` to do**, and it is what
+/// makes `wire.kel`'s place in the stage table honest. Until now the wire format
+/// was exercised only from the test harness; the driver ran pipeline stages and
+/// produced no auxiliary body at all.
+///
+/// The module reaches Keleusma as a length-prefixed blob and nothing else: no
+/// Every constant root in a module, in chunk order.
+fn const_roots_of(module: &Module) -> Vec<ConstValue> {
+    let mut roots = Vec::new();
+    for c in &module.chunks {
+        roots.extend(c.constants.iter().cloned());
+    }
+    roots
+}
+
+/// The wire tag and payload for a constant node.
+///
+/// Composite tags are RETURNED rather than rejected, so a refusal comes from the
+/// stage. A host that quietly dropped them would make the stage's guard
+/// untestable, which is the same reason the blob carries a zero enum count
+/// rather than omitting the section.
+fn const_tag_and_name(c: &ConstValue) -> (u16, i64) {
+    use ConstValue as K;
+    match c {
+        K::Unit => (1, 0),
+        K::Bool(b) => (2, i64::from(*b)),
+        K::Int(v) => (3, *v),
+        K::Byte(v) => (4, i64::from(*v)),
+        K::Fixed(v) => (5, *v),
+        K::None => (12, 0),
+        K::StaticStr(_) => (7, 0),
+        K::Tuple(_) => (8, 0),
+        K::Array(_) => (9, 0),
+        K::Struct { .. } => (10, 0),
+        K::Enum { .. } => (11, 0),
+        other => panic!("const_tag_and_name has no tag for {other:?}"),
+    }
+}
+
+/// Total nodes in a constant forest, counting every descendant.
+fn count_blob_nodes(roots: &[ConstValue]) -> usize {
+    use ConstValue as K;
+    fn go(c: &K) -> usize {
+        1 + match c {
+            K::Tuple(v) | K::Array(v) => v.iter().map(go).sum::<usize>(),
+            K::Struct { fields, .. } => fields.iter().map(|(_, v)| go(v)).sum::<usize>(),
+            K::Enum { fields, .. } => fields.iter().map(go).sum::<usize>(),
+            _ => 0,
+        }
+    }
+    roots.iter().map(go).sum()
+}
+
+/// The names a constant node contributes, in the order the reference interns
+/// them.
+fn blob_node_names(c: &ConstValue) -> Vec<&str> {
+    use ConstValue as K;
+    match c {
+        K::Struct { type_name, fields } => {
+            let mut n = vec![type_name.as_str()];
+            n.extend(fields.iter().map(|(f, _)| f.as_str()));
+            n
+        }
+        K::Enum {
+            type_name, variant, ..
+        } => vec![type_name.as_str(), variant.as_str()],
+        K::StaticStr(s) => vec![s.as_str()],
+        _ => Vec::new(),
+    }
+}
+
+/// One constant node in PREORDER: tag, payload, child count, flags,
+/// discriminant, its interned names, then its children.
+///
+/// The order is the reference's rather than a fresh choice: the reference
+/// flattener pushes a node and then descends, so both the node table and the
+/// name sequence are depth-first preorder. Writing the blob in that order is
+/// what lets the stage reproduce both with a linear scan.
+fn push_blob_node(c: &ConstValue, out: &mut Vec<u8>, names: &mut usize) {
+    use ConstValue as K;
+    let node_names = blob_node_names(c);
+    let children: Vec<&ConstValue> = match c {
+        K::Tuple(v) | K::Array(v) => v.iter().collect(),
+        K::Struct { fields, .. } => fields.iter().map(|(_, v)| v).collect(),
+        K::Enum { fields, .. } => fields.iter().collect(),
+        _ => Vec::new(),
+    };
+    let (tag, payload) = const_tag_and_name(c);
+    let (flags, disc): (i64, i64) = match c {
+        K::Enum {
+            discriminant: Some(d),
+            ..
+        } => (1, *d),
+        _ => (0, 0),
+    };
+    out.extend_from_slice(&tag.to_le_bytes());
+    out.extend_from_slice(&payload.to_le_bytes());
+    out.extend_from_slice(
+        &u16::try_from(children.len())
+            .expect("kids fit u16")
+            .to_le_bytes(),
+    );
+    out.extend_from_slice(&flags.to_le_bytes());
+    out.extend_from_slice(&disc.to_le_bytes());
+    out.extend_from_slice(
+        &u16::try_from(node_names.len())
+            .expect("names fit u16")
+            .to_le_bytes(),
+    );
+    for n in node_names {
+        let b = n.as_bytes();
+        out.extend_from_slice(&u16::try_from(b.len()).expect("len fits u16").to_le_bytes());
+        out.extend_from_slice(b);
+        *names += 1;
+    }
+    for ch in children {
+        push_blob_node(ch, out, names);
+    }
+}
+
+/// The module-input blob and an UPPER BOUND on the names it interns.
+///
+/// **The two are returned together deliberately.** They are the same walk, and
+/// until this moved out of the test harness the caller supplied the count
+/// separately — from a model that omitted the data-slot contributor entirely,
+/// reporting 252 for `parse` where the module really interns 627. A count that
+/// disagrees with the blob it describes is the "one model with two readers"
+/// shape that produced the understated worst-case-memory bound, so there is one
+/// walk and no second opinion.
+///
+/// **It is a BOUND rather than the record count, and the direction matters.**
+/// The count returned here is the number of interning EVENTS. The reference
+/// dedups, so its `NAMES` record count can be lower — and by how much is
+/// order-dependent, because `Names::intern_fresh` records its entry in the
+/// index so a later `intern` can share it. Reproducing the exact count
+/// host-side would mean replicating the reference's interning ORDER, which is
+/// precisely what `wire.kel`'s `mi_*` producers already do and what the
+/// byte-identity oracle already checks. Duplicating it here would be a second
+/// model of the thing under test.
+///
+/// The bound's only consumer is the cap check in [`wire_names_via_kel`], where
+/// over-counting refuses slightly early and under-counting would admit a module
+/// that overruns the interner. The old caller under-counted. On all ten corpus
+/// stages the bound is exact; an enum constant makes it loose, and both facts
+/// are pinned by test.
+///
+/// Sections, in the order `wire.kel`'s `mi_*` producers read them: chunk names,
+/// the enum layouts, the data-slot runs, then the constant forest as a tail.
+/// **Every count is written even when it is zero.** Inferring an absent section
+/// from the blob ENDING cannot distinguish empty from truncated, and it would
+/// have passed here by accident, because `bin` is zero-filled past the blob so a
+/// reader would find a zero count and be right for a reason that is not the
+/// encoding.
+pub fn module_input(module: &Module) -> (Vec<u8>, usize) {
+    let mut out = Vec::new();
+    let mut names = 0usize;
+    fn push_name(out: &mut Vec<u8>, s: &str, names: &mut usize) {
+        let b = s.as_bytes();
+        let l = u16::try_from(b.len()).expect("name length fits u16");
+        out.extend_from_slice(&l.to_le_bytes());
+        out.extend_from_slice(b);
+        *names += 1;
+    }
+
+    let n = u16::try_from(module.chunks.len()).expect("chunk count fits u16");
+    out.extend_from_slice(&n.to_le_bytes());
+    for c in &module.chunks {
+        push_name(&mut out, &c.name, &mut names);
+    }
+
+    // The constant section rides at the END, so the sections the stage reads
+    // first are at fixed offsets from the start.
+    let consts = const_roots_of(module);
+    let mut nodes = Vec::new();
+    let mut const_names = 0usize;
+    for c in &consts {
+        push_blob_node(c, &mut nodes, &mut const_names);
+    }
+    let cn = u16::try_from(count_blob_nodes(&consts)).expect("node count fits u16");
+    let mut tail = Vec::new();
+    tail.extend_from_slice(&cn.to_le_bytes());
+    tail.extend_from_slice(&nodes);
+
+    let e = u16::try_from(module.enum_layouts.len()).expect("enum count fits u16");
+    out.extend_from_slice(&e.to_le_bytes());
+    for l in &module.enum_layouts {
+        push_name(&mut out, &l.type_name, &mut names);
+        let v = u16::try_from(l.variants.len()).expect("variant count fits u16");
+        out.extend_from_slice(&v.to_le_bytes());
+        for var in &l.variants {
+            push_name(&mut out, &var.name, &mut names);
+        }
+    }
+
+    // The DATA-SLOT section, one name per RUN. Consecutive slots sharing a name
+    // and visibility collapse into one record in the reference, and the name is
+    // interned once per run; interning per SLOT would emit one name per array
+    // element, which is how the pre-run-length-encoding artifact reached tens of
+    // thousands of names and produced the 395,804 figure that outlived it.
+    let mut runs: Vec<&str> = Vec::new();
+    if let Some(dl) = &module.data_layout {
+        let mut i = 0usize;
+        while i < dl.slots.len() {
+            let s = &dl.slots[i];
+            let mut n = 1usize;
+            while i + n < dl.slots.len()
+                && dl.slots[i + n].name == s.name
+                && dl.slots[i + n].visibility == s.visibility
+            {
+                n += 1;
+            }
+            runs.push(s.name.as_str());
+            i += n;
+        }
+    }
+    let sn = u16::try_from(runs.len()).expect("slot run count fits u16");
+    out.extend_from_slice(&sn.to_le_bytes());
+    for r in &runs {
+        push_name(&mut out, r, &mut names);
+    }
+
+    out.extend_from_slice(&tail);
+    (out, names + const_names)
+}
+
+/// name lengths, no offsets, no interning sequence. Keleusma recovers all three
+/// and runs the interner and the emitters in ONE call, because shared data is
+/// re-seeded on every call and the sequence would not survive a return.
+///
+/// **Bounded, and it says so.** The interner admits at most `NAME_CAP` names per
+/// call and the blob must fit `wire.kel`'s `bin`. Both bounds now cover every
+/// stage in the corpus: the largest, `parse`, interns 627 names from a
+/// 33,395-byte blob. A module past either bound is refused rather than
+/// truncated, because a silent partial artifact would be byte-identical for a
+/// prefix and wrong after it.
+///
+/// The figure previously named here — "a real stage's 395,804" — described no
+/// name count. It was a REGION RECORD count belonging to `CONSTS`, carried over
+/// from the pre-run-length-encoding representation, and it made a 2.5x problem
+/// look like a 1500x one. Measured: the largest `NAMES` region is 627 records.
+///
+/// **THE DRIVER IS WIRED TO THE MODULE, NOT TO A MODEL.** It builds the blob and
+/// its name count with [`module_input`] rather than accepting them. Until this
+/// changed the function took a pre-built blob and opened with `let _ = module;`
+/// — the module was in the signature and unused, and the only producer of the
+/// blob was a Rust function in the test harness. A path that cannot be driven
+/// from a `Module` is not a compile path, however byte-identical its output.
+///
+/// [`wire_names_from_input`] remains for tests that must inject a blob or a
+/// count the encoder would never produce, which is the only way to reach the
+/// two cap refusals.
+pub fn wire_names_via_kel(
+    module: &Module,
+    directory: &[u8],
+    regions: usize,
+) -> Result<Vec<u8>, SelfHostError> {
+    let (blob, names) = module_input(module);
+    wire_names_from_input(&blob, names, directory, regions)
+}
+
+/// [`wire_names_via_kel`] with the module input supplied directly.
+///
+/// Separate so the cap refusals are reachable: both bounds cover every stage in
+/// the corpus, so no real module can exercise them and a negative test must
+/// inject the input.
+pub fn wire_names_from_input(
+    blob: &[u8],
+    names: usize,
+    directory: &[u8],
+    regions: usize,
+) -> Result<Vec<u8>, SelfHostError> {
+    /// The interner's per-call name bound, mirrored from `wire.kel`'s
+    /// `nm_max_names`. Named rather than spelled inline so a widening there is
+    /// a compile-time mismatch here rather than a silent overrun.
+    const NAME_CAP: usize = 1024;
+    /// The blob buffer's size, mirrored from `wire.kel`'s `bin_capacity`.
+    ///
+    /// Checked HERE because the stage cannot check it: the host seeds `bin` by
+    /// slot before the call, and a blob longer than the array writes past it or
+    /// is silently truncated depending on the seeding loop. `bin_capacity` is
+    /// consulted inside `wire.kel` only against the interner's cursor, which is
+    /// a different quantity.
+    const BLOB_CAP: usize = 49152;
+    if names > NAME_CAP {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "wire.kel interns at most {NAME_CAP} names per call and this module has \
+                 {names}; staging is not implemented"
+            ),
+        });
+    }
+    if blob.len() > BLOB_CAP {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "wire.kel's blob buffer holds {BLOB_CAP} bytes and this module's blob is \
+                 {}; staging is not implemented",
+                blob.len()
+            ),
+        });
+    }
+    let m = compile_src(&read_stage("kel/wire.kel"));
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    // Slot layout mirrors `wire.kel`'s shared block: `len`, then `bytes`, then
+    // the region inputs. The directory is seeded so `dir_find` can locate
+    // NAMES and STRING_POOL; the blob rides `bin`.
+    const NREGIONS_SLOT: usize = 1 + 65536;
+    const BIN_SLOT: usize = 1 + 65536 + 1 + 1024 * 4 + 5 + 1024;
+    const CMD_JOIN: i64 = 167;
+    vm.set_shared(&mut shared, 0, Value::Int(directory.len() as i64))
+        .expect("len");
+    // `dir_find` walks `0..wire.nregions`, so a directory seeded without its
+    // COUNT is a directory the stage cannot see: the first attempt refused with
+    // -233, which reads as "no NAMES region" and means "no regions at all".
+    vm.set_shared(&mut shared, NREGIONS_SLOT, Value::Int(regions as i64))
+        .expect("nregions");
+    for (i, &b) in directory.iter().enumerate() {
+        vm.set_shared(&mut shared, 1 + i, Value::Byte(b))
+            .expect("seed");
+    }
+    for (i, &b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(b))
+            .expect("blob");
+    }
+    let st = vm
+        .call_with_shared(&mut shared, &[Value::Int(CMD_JOIN)])
+        .expect("run wire.kel");
+    match st {
+        crate::vm::VmState::Finished(Value::Int(v)) if v >= 0 => {}
+        other => {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel refused the join: {other:?}"),
+            });
+        }
+    }
+    let mut out = vec![0u8; directory.len()];
+    for (i, slot) in out.iter_mut().enumerate() {
+        *slot = match vm.get_shared(&shared, 1 + i).expect("read") {
+            Value::Byte(b) => b,
+            other => panic!("shared byte slot held {other:?}"),
+        };
+    }
+    Ok(out)
+}
 
 /// Compile a whole program with the self-hosted pipeline, returning a self-hosted-built
 /// [`Module`] for an in-subset program at the host target.
@@ -2823,5 +3223,151 @@ mod decoder_drift_guard {
             // operand 0 is the minimal representative word for each tag; decode must not panic.
             let _ = decode_op(tag);
         }
+    }
+}
+
+/// Structural checks on the classification tables `analyze.kel` consumes.
+///
+/// These are not numbers, so no numeric differential can see them wrong: a
+/// misclassified opcode changes the control-flow graph `analyze.kel`
+/// reconstructs, and the bound it extracts from a wrong graph can be finite and
+/// wrong rather than absent.
+#[cfg(test)]
+mod classification_tables {
+    use super::{analyze_class, analyze_opk};
+    use crate::bytecode::{Chunk, Op};
+
+    fn scratch_chunk() -> Chunk {
+        let m = crate::compiler::compile(
+            &crate::parser::parse(&crate::lexer::tokenize("fn main() -> Word { 1 }").expect("lex"))
+                .expect("parse"),
+        )
+        .expect("compile");
+        m.chunks.first().expect("a chunk").clone()
+    }
+
+    /// Every control-flow opcode carries its own class, and its ARGUMENT.
+    ///
+    /// The argument matters as much as the class: `analyze.kel` follows
+    /// `If`/`Loop`/`EndLoop`/`Break` targets to rebuild the graph, so a class
+    /// that is right with an argument that is wrong reconstructs a graph that
+    /// is plausible and not the program's.
+    #[test]
+    fn every_control_flow_opcode_keeps_its_class_and_its_target() {
+        let cases: &[(Op, i64, i64)] = &[
+            (Op::If(11), 1, 11),
+            (Op::Else(12), 2, 12),
+            (Op::EndIf, 3, 0),
+            (Op::Loop(13), 4, 13),
+            (Op::EndLoop(14), 5, 14),
+            (Op::Break(15), 6, 15),
+            (Op::BreakIf(16), 7, 16),
+            (Op::Trap(0), 8, 0),
+            (Op::Call(17, 2), 9, 0),
+        ];
+        for (op, class, arg) in cases {
+            let got = analyze_class(op);
+            assert_eq!(
+                got,
+                (*class, *arg),
+                "{op:?} classified as {got:?}, expected ({class}, {arg})"
+            );
+        }
+    }
+
+    /// Ordinary opcodes must classify as plain, or `analyze.kel` invents an edge.
+    #[test]
+    fn ordinary_opcodes_classify_as_plain() {
+        let cases: &[Op] = &[
+            Op::Const(0),
+            Op::GetLocal(0),
+            Op::SetLocal(0),
+            Op::Add,
+            Op::Sub,
+            Op::Div,
+            Op::CmpEq,
+            Op::Dup,
+            Op::Not,
+            Op::Return,
+            Op::Yield,
+            Op::Stream,
+            Op::Reset,
+            Op::Len,
+        ];
+        for op in cases {
+            assert_eq!(
+                analyze_class(op),
+                (0, 0),
+                "{op:?} was given a control-flow class it does not have"
+            );
+        }
+    }
+
+    /// THE HAZARD THIS TABLE CARRIES, STATED WHERE IT IS.
+    ///
+    /// `analyze_class` ends in `_ => (0, 0)`. **A control-flow opcode added
+    /// later and not added here becomes "plain" silently**: no panic, no
+    /// rejection, just a control-flow graph missing an edge and a bound
+    /// extracted from it that is finite and wrong. The same shape applies to
+    /// `analyze_opk`'s `0 other`.
+    ///
+    /// This test cannot close that hole — closing it needs an exhaustive
+    /// `match` over `Op` here, so the compiler refuses a new opcode until it is
+    /// classified. It pins the CURRENT boundary instead: exactly nine classes,
+    /// and the count is asserted so that adding a tenth without revisiting this
+    /// file fails.
+    #[test]
+    fn the_class_table_covers_exactly_nine_kinds_and_defaults_silently() {
+        let control: &[Op] = &[
+            Op::If(0),
+            Op::Else(0),
+            Op::EndIf,
+            Op::Loop(0),
+            Op::EndLoop(0),
+            Op::Break(0),
+            Op::BreakIf(0),
+            Op::Trap(0),
+            Op::Call(0, 0),
+        ];
+        let classes: alloc::collections::BTreeSet<i64> =
+            control.iter().map(|op| analyze_class(op).0).collect();
+        assert_eq!(
+            classes.len(),
+            9,
+            "the class table no longer has nine distinct kinds; a new one needs a decoder \
+             in analyze.kel before it means anything"
+        );
+        assert!(
+            !classes.contains(&0),
+            "a control-flow opcode fell through to the plain default"
+        );
+    }
+
+    /// The loop-bound extraction's opcode tags, which pick out the induction
+    /// variable's update. A wrong tag here yields a bound, not an error.
+    #[test]
+    fn the_bound_extraction_tags_name_the_right_opcodes() {
+        let chunk = scratch_chunk();
+        let cases: &[(Op, i64)] = &[
+            (Op::GetLocal(3), 1),
+            (Op::SetLocal(4), 2),
+            (Op::CmpGe, 4),
+            (Op::BreakIf(0), 5),
+            (Op::CheckedAdd, 6),
+            (Op::PopN(2), 7),
+            (Op::EndLoop(0), 8),
+            (Op::Loop(0), 9),
+            (Op::Add, 0),
+            (Op::Mul, 0),
+        ];
+        for (op, opk) in cases {
+            let got = analyze_opk(op, &chunk).0;
+            assert_eq!(got, *opk, "{op:?} tagged {got}, expected {opk}");
+        }
+        // The slot travels with the tag; a tag without its slot reads the wrong
+        // local and extracts a bound for a variable that is not the induction one.
+        assert_eq!(analyze_opk(&Op::GetLocal(3), &chunk).1, 3);
+        assert_eq!(analyze_opk(&Op::SetLocal(4), &chunk).1, 4);
+        assert_eq!(analyze_opk(&Op::PopN(2), &chunk).2, 2);
     }
 }

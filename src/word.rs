@@ -119,7 +119,7 @@ pub trait Word:
 /// The widened multiplication intermediate. Implemented for the
 /// `Wide` type of each [`Word`] impl. Carries the arithmetic
 /// and range-check operations the VM needs to derive the
-/// `(high, low, flag)` shape of the checked-arithmetic opcodes.
+/// `(low, high, flag)` shape of the checked-arithmetic opcodes.
 pub trait WideWord:
     Copy
     + Default

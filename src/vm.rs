@@ -503,6 +503,26 @@ fn stale_arena_body() -> VmError {
     ))
 }
 
+/// Fault when a shared-data access runs with no host buffer bound.
+///
+/// The buffer is bound by `enter_shared` for the duration of one
+/// `call_with_shared`/`resume_with_shared` and cleared on return, so the
+/// virtual machine retains no pointer into the host's borrow. Any entry point
+/// that resumes execution must therefore rebind it.
+///
+/// **This was a `panic!` (an `.expect`) until 2026-08-15, and it was reachable
+/// from safe public API on ordinary input**: `resume_from_breakpoint` called
+/// `run()` without rebinding, so the first shared read after a breakpoint stop
+/// aborted the process. A panic is not a [`VmError`], so a host driving a
+/// debugger could not catch it. Reported by the `v0.3.0` line. The entry point
+/// is fixed, and this is the defence in depth behind it — a fault a host can
+/// handle rather than an abort, for any future path that forgets to rebind.
+fn shared_buffer_not_bound(op: &str) -> VmError {
+    VmError::NativeError(alloc::format!(
+        "{op} ran with no shared-data buffer bound; drive a module with shared data through `call_with_shared`/`resume_with_shared`/`resume_from_breakpoint_with_shared` with a buffer of `shared_data_bytes()`"
+    ))
+}
+
 /// Fault when an `==`/`!=` reaches the runtime `CmpEq`/`CmpNe` with a flat
 /// composite operand (B28 P3 item 5).
 ///
@@ -2130,12 +2150,17 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 Some(dl) => {
                     let mut shared = 0u32;
                     let mut private_ = 0u32;
-                    for i in 0..dl.slot_count() {
+                    // Iterates RECORDS and adds each run, not logical slots:
+                    // `slot(i)` takes a record index, and a slot table is now
+                    // run-length encoded. Counting one per record would
+                    // undercount an array by its element count.
+                    for i in 0..dl.slot_record_count() {
                         let Some(slot) = dl.slot(i) else { continue };
+                        let run = u32::from(slot.run);
                         if slot.visibility == crate::wire_schema::visibility_tag::SHARED {
-                            shared = shared.saturating_add(1);
+                            shared = shared.saturating_add(run);
                         } else {
-                            private_ = private_.saturating_add(1);
+                            private_ = private_.saturating_add(run);
                         }
                     }
                     (shared, private_)
@@ -2553,7 +2578,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let buf = self
             .shared_buf
             .bytes()
-            .expect("read_shared_from_buffer called with an active buffer");
+            .ok_or_else(|| shared_buffer_not_bound("read_shared_from_buffer"))?;
         if kind & crate::bytecode::SHARED_SLOT_COMPOSITE_FLAG == 0 {
             let sk = ScalarKind::from_tag(kind)
                 .ok_or_else(|| VmError::InvalidBytecode(String::from("bad shared scalar kind")))?;
@@ -2645,7 +2670,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             let buf = self
                 .shared_buf
                 .bytes_mut()
-                .expect("write_shared_to_buffer called with an active buffer");
+                .ok_or_else(|| shared_buffer_not_bound("write_shared_to_buffer"))?;
             value.write_scalar_le(buf, offset, wb, fb)?;
             Ok(())
         } else {
@@ -2678,7 +2703,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             let buf = self
                 .shared_buf
                 .bytes_mut()
-                .expect("write_shared_to_buffer called with an active buffer");
+                .ok_or_else(|| shared_buffer_not_bound("write_shared_to_buffer"))?;
             buf[offset..offset + body.len()].copy_from_slice(&body);
             Ok(())
         }
@@ -4677,7 +4702,57 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// suspension or completion. Unlike [`resume`](Self::resume) this
     /// pushes no value, since a breakpoint is not a yield. Returns
     /// [`VmError::NotSuspended`] if the VM is not in a suspended state.
+    ///
+    /// # Modules that declare shared data
+    ///
+    /// This entry point binds no host buffer, so it is usable only on a module
+    /// whose `shared_data_bytes` is zero. On a module with shared data it
+    /// returns [`VmError::NativeError`]; use
+    /// [`resume_from_breakpoint_with_shared`](Self::resume_from_breakpoint_with_shared)
+    /// instead.
+    ///
+    /// **Until 2026-08-15 it did not reject, and the first shared read after
+    /// the breakpoint stop PANICKED**, which a host driving a debugger could
+    /// not catch. Reported by the `v0.3.0` line, whose case is worth keeping in
+    /// mind for the blast radius: all ten self-hosted stage sources declare
+    /// shared data, so every one of them aborted on the first step.
     pub fn resume_from_breakpoint(&mut self) -> Result<GenericVmState<W, F>, VmError> {
+        // Checked BEFORE the suspension test so a shared-data module gets the
+        // actionable diagnostic rather than `NotSuspended`, which would send a
+        // host looking at its call sequence instead of at the missing buffer.
+        if self.aux_resolved.shared_data_bytes != 0 {
+            return Err(VmError::NativeError(alloc::format!(
+                "resume_from_breakpoint binds no shared-data buffer but the module declares {} bytes; use `resume_from_breakpoint_with_shared` with a buffer of `shared_data_bytes()`",
+                self.aux_resolved.shared_data_bytes
+            )));
+        }
+        self.resume_from_breakpoint_after_enter()
+    }
+
+    /// Like [`resume_from_breakpoint`](Self::resume_from_breakpoint), but the
+    /// host lends its shared-data buffer for the duration of the step, exactly
+    /// as [`call_with_shared`](Self::call_with_shared) and
+    /// [`resume_with_shared`](Self::resume_with_shared) do.
+    ///
+    /// This is the entry point a debugger uses on a module with shared data.
+    /// The buffer must be exactly `shared_data_bytes()` long, or empty for a
+    /// module that declares none. It is cleared before returning, so the
+    /// virtual machine retains no reference past the call and the host may
+    /// swap, mutate, or drop the buffer between steps.
+    pub fn resume_from_breakpoint_with_shared(
+        &mut self,
+        shared: &mut [u8],
+    ) -> Result<GenericVmState<W, F>, VmError> {
+        self.enter_shared(shared)?;
+        let result = self.resume_from_breakpoint_after_enter();
+        self.shared_buf.clear();
+        result
+    }
+
+    /// The shared step of both breakpoint-resume entry points, factored so the
+    /// buffer-binding decision lives at the boundary and the resume logic
+    /// exists once. Mirrors the `call_after_enter`/`resume_after_enter` shape.
+    fn resume_from_breakpoint_after_enter(&mut self) -> Result<GenericVmState<W, F>, VmError> {
         if !self.started || self.frames.is_empty() {
             return Err(VmError::NotSuspended);
         }
@@ -12625,6 +12700,99 @@ mod tests {
         }
     }
 
+    /// The reproducer the `v0.3.0` line reported, which PANICKED before
+    /// 2026-08-15.
+    ///
+    /// `resume_from_breakpoint` called `run()` without rebinding the host
+    /// shared-data buffer that `call_with_shared` binds at entry and clears on
+    /// return, so the first shared read reached an `.expect` and aborted. A
+    /// panic is not a `VmError`, so a host driving a debugger could not catch
+    /// it, and every one of the ten self-hosted stage sources declares shared
+    /// data.
+    ///
+    /// The fault must be the SPECIFIC one, not merely a fault: returning
+    /// `NotSuspended` here would send a host looking at its call sequence
+    /// rather than at the missing buffer, so the check runs before the
+    /// suspension test and the message names the method to use instead.
+    #[test]
+    fn resume_from_breakpoint_faults_rather_than_panics_on_a_shared_data_module() {
+        let module = build_module(
+            "shared data s { n: Word }\n\
+             loop main(resume: Word) -> Word {\n  s.n = s.n + 1;\n  yield s.n\n}",
+        );
+        let need = shared_data_bytes_for(&module);
+        assert_ne!(need, 0, "the reproducer must declare shared data");
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        vm.set_breakpoint(0, 0);
+        let mut shared = alloc::vec![0u8; need];
+        match vm
+            .call_with_shared(&mut shared, &[Value::Int(0)])
+            .expect("call")
+        {
+            VmState::BreakpointHit { chunk: 0, op: 0 } => {}
+            other => panic!("expected BreakpointHit(0, 0), got {:?}", other),
+        }
+        match vm.resume_from_breakpoint() {
+            Err(VmError::NativeError(msg)) => {
+                assert!(
+                    msg.contains("resume_from_breakpoint_with_shared"),
+                    "the fault must name the method to use instead, got {msg:?}"
+                );
+            }
+            other => panic!("expected a NativeError naming the fix, got {:?}", other),
+        }
+    }
+
+    /// The working path for the same module, which is what makes the rejection
+    /// above a redirection rather than a refusal of the facility.
+    ///
+    /// The assertion is on the BUFFER as well as the state: a step that
+    /// returned `Yielded` while writing nothing would satisfy a state-only
+    /// check and would mean the buffer was never really bound.
+    #[test]
+    fn resume_from_breakpoint_with_shared_steps_and_writes_through_the_buffer() {
+        let module = build_module(
+            "shared data s { n: Word }\n\
+             loop main(resume: Word) -> Word {\n  s.n = s.n + 1;\n  yield s.n\n}",
+        );
+        let need = shared_data_bytes_for(&module);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        vm.set_breakpoint(0, 0);
+        let mut shared = alloc::vec![0u8; need];
+        vm.call_with_shared(&mut shared, &[Value::Int(0)])
+            .expect("call");
+        match vm
+            .resume_from_breakpoint_with_shared(&mut shared)
+            .expect("resume through the buffer")
+        {
+            VmState::Yielded(v) => assert_eq!(v, Value::Int(1)),
+            other => panic!("expected Yielded(1), got {:?}", other),
+        }
+        assert_eq!(
+            shared[0], 1,
+            "the increment must be visible in the host's buffer, not only in the yielded value"
+        );
+    }
+
+    /// The must-not-fire half. A module with no shared data keeps working
+    /// through the bare entry point, so the new rejection is scoped to the
+    /// case that used to abort rather than narrowing the facility.
+    #[test]
+    fn resume_from_breakpoint_still_works_without_shared_data() {
+        let module = build_module("loop main(resume: Word) -> Word { yield resume + 1 }");
+        assert_eq!(shared_data_bytes_for(&module), 0);
+        let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module, &arena).expect("verify");
+        vm.set_breakpoint(0, 0);
+        vm.call(&[Value::Int(0)]).expect("call");
+        match vm.resume_from_breakpoint().expect("resume") {
+            VmState::Yielded(v) => assert_eq!(v, Value::Int(1)),
+            other => panic!("expected Yielded(1), got {:?}", other),
+        }
+    }
+
     #[test]
     fn resume_from_breakpoint_when_not_suspended_errors() {
         let module = build_module("fn main() -> Word { 7 + 35 }");
@@ -14123,6 +14291,62 @@ mod tests {
         match vm.call(&[]).unwrap() {
             VmState::Finished(v) => assert_eq!(v, Value::Int(42)),
             other => panic!("expected Finished(42), got {:?}", other),
+        }
+    }
+
+    /// The signature covers the auxiliary body, and therefore any parity plane.
+    ///
+    /// # Why this is a test and not an observation
+    ///
+    /// A parity plane is a region of the auxiliary body, and the signature
+    /// covers the whole framed buffer, so the plane is signed. **That is
+    /// inherited from a coincidence of layout and nothing enforces it.** A
+    /// change that moved the auxiliary body outside the signed span, or emitted
+    /// planes into a trailer, would leave an attacker able to supply a hostile
+    /// plane and steer the corrections a scrub applies. Under a
+    /// scrub-then-verify order the signature still refuses the result, so
+    /// integrity holds and it becomes an **availability** attack requiring no
+    /// key, against a mechanism installed to improve availability.
+    ///
+    /// # Why it flips a byte instead of comparing offsets
+    ///
+    /// Comparing the auxiliary-body span against the signed span is arithmetic
+    /// over two numbers this crate computes, so it would agree with itself if
+    /// both were wrong. Flipping a byte and requiring verification to FAIL
+    /// establishes coverage by execution.
+    #[cfg(feature = "signatures")]
+    #[test]
+    fn the_signature_covers_the_auxiliary_body_where_a_parity_plane_would_live() {
+        use ed25519_dalek::SigningKey;
+        let signer = SigningKey::from_bytes(&[77u8; 32]);
+        let verifying = signer.verifying_key();
+        let src = "signed fn main() -> Word { 21 + 21 }";
+        let module =
+            compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let bytes =
+            crate::wire_format::module_to_signed_wire_bytes(&module, &signer).expect("sign");
+
+        // CONTROL. The undamaged artifact must verify, or every assertion below
+        // passes against a signature that never verified in the first place.
+        crate::wire_format::verify_module_signature(&bytes, &[verifying])
+            .expect("CONTROL: the freshly signed artifact must verify");
+
+        let aux_start = u32::from_le_bytes([bytes[48], bytes[49], bytes[50], bytes[51]]) as usize;
+        let aux_len = u32::from_le_bytes([bytes[52], bytes[53], bytes[54], bytes[55]]) as usize;
+        assert!(
+            aux_len > 0 && aux_start + aux_len <= bytes.len(),
+            "the auxiliary body span must lie inside the artifact"
+        );
+
+        // Every byte of the auxiliary body is covered. A plane lives here.
+        for off in [aux_start, aux_start + aux_len / 2, aux_start + aux_len - 1] {
+            let mut damaged = bytes.clone();
+            damaged[off] ^= 0x01;
+            assert!(
+                crate::wire_format::verify_module_signature(&damaged, &[verifying]).is_err(),
+                "a flipped bit at auxiliary-body offset {off} did not break verification, so the \
+                 signature does not cover the region a parity plane occupies"
+            );
         }
     }
 

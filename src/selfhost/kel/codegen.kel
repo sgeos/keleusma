@@ -2808,40 +2808,40 @@ fn drain_header() -> Word {
 // the PENDING 0. Guards read only `data` fields and comparisons, never call a
 // function, as the guard grammar requires. Because every path through this
 // function yields, it yields on every one of its paths.
-yield emit_next(resume: Word) -> Word when st.started == 0 {
-    yield seed_step()
+fn emit_next(resume: Word) -> Word when st.started == 0 {
+    seed_step()
 }
 
-yield emit_next(resume: Word) -> Word when st.sp > 0 {
-    yield walk_step()
+fn emit_next(resume: Word) -> Word when st.sp > 0 {
+    walk_step()
 }
 
-yield emit_next(resume: Word) -> Word when st.ret_done == 0 {
-    yield drain_return()
+fn emit_next(resume: Word) -> Word when st.ret_done == 0 {
+    drain_return()
 }
 
-yield emit_next(resume: Word) -> Word when st.emit_cursor < st.op_count {
-    yield drain_buffer()
+fn emit_next(resume: Word) -> Word when st.emit_cursor < st.op_count {
+    drain_buffer()
 }
 
-yield emit_next(resume: Word) -> Word when st.count_done == 0 {
-    yield drain_count()
+fn emit_next(resume: Word) -> Word when st.count_done == 0 {
+    drain_count()
 }
 
-yield emit_next(resume: Word) -> Word when st.pool_cursor < st.pool_count {
-    yield drain_pool()
+fn emit_next(resume: Word) -> Word when st.pool_cursor < st.pool_count {
+    drain_pool()
 }
 
-yield emit_next(resume: Word) -> Word when st.tag_cursor < st.pool_count {
-    yield drain_tags()
+fn emit_next(resume: Word) -> Word when st.tag_cursor < st.pool_count {
+    drain_tags()
 }
 
-yield emit_next(resume: Word) -> Word when st.header_done == 0 {
-    yield drain_header()
+fn emit_next(resume: Word) -> Word when st.header_done == 0 {
+    drain_header()
 }
 
-yield emit_next(resume: Word) -> Word {
-    yield 0
+fn emit_next(resume: Word) -> Word {
+    0
 }
 
 // The loop delegates its single yield to `emit_next`. Because `emit_next` yields
@@ -2850,5 +2850,5 @@ yield emit_next(resume: Word) -> Word {
 // contract (Word in, Word out) matches, so the yield transparently reaches the
 // host.
 loop main(resume: Word) -> Word {
-    emit_next(resume)
+    yield emit_next(resume)
 }
