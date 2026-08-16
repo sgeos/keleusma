@@ -133,11 +133,14 @@ three-part claim resting on one measurement. **The same class as everything else
 
 ## Open
 
-- **The `analyze_class` catch-all is the highest-value open correctness item.** It ends in
-  `_ => (0, 0)`, so a control-flow opcode added later and not classified becomes "plain" silently: a
-  graph missing an edge and a bound that is finite and wrong. The boundary is pinned at nine classes
-  but the hole is not closed. Closing it needs an exhaustive `match` over `Op` so the compiler
-  refuses a new opcode until it is classified. **This is my proposed next increment.**
+- ~~**The `analyze_class` catch-all**~~ **CLOSED.** `analyze_class` and `analyze_opk` are exhaustive
+  over `Op`; adding a variant now fails to build at both sites with `E0004`, verified rather than
+  asserted. No bound changed and the nine-class boundary still reports nine. **`analyze_class` was
+  the outlier**: seven other matches over `Op` in this crate were already exhaustive, so the codebase
+  already had the discipline and this one function silently absorbed a new opcode.
+  **Residual, and it is not closable by a compiler**: exhaustiveness forces a DECISION, not a correct
+  one. A new control-flow opcode placed in the plain group satisfies the compiler and reintroduces
+  the silent missing edge. The pinned nine-class count is what guards that.
 - **`Op::cost()` disagrees with measurement**, two findings pinned rather than repaired. Only 17
   opcodes of 66 were ever measured; every other emitted value is a bucket assignment checked by
   nothing.
@@ -151,8 +154,7 @@ three-part claim resting on one measurement. **The same class as everything else
 
 ## Questions for the operator
 
-1. **The `analyze_class` catch-all.** Closing it is mechanical and changes a `match`, not a bound,
-   but it will refuse to compile until every `Op` is classified, which is the point. Proceed?
+1. ~~**The `analyze_class` catch-all.**~~ Done; no bound changed.
 2. **The `for` trailing-semicolon asymmetry.** Accept a trailing semicolon after `for`, matching the
    other three block forms, or leave the asymmetry pinned as it stands?
 3. **`Op::cost()`.** The two findings are pinned, not repaired. Recalibrating is a judgment call I

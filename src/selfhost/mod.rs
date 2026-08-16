@@ -988,7 +988,79 @@ fn analyze_class(op: &crate::bytecode::Op) -> (i64, i64) {
         Op::BreakIf(t) => (7, *t as i64),
         Op::Trap(_) => (8, 0),
         Op::Call(_, _) => (9, 0),
-        _ => (0, 0),
+        // EVERY REMAINING OPCODE IS LISTED, and the list is the point.
+        //
+        // This was `_ => (0, 0)`. A control-flow opcode added later and not
+        // classified above would have fallen through it and become "plain"
+        // SILENTLY: `analyze.kel` rebuilds the control-flow graph by following
+        // the `If`/`Loop`/`EndLoop`/`Break` targets this function returns, so a
+        // missing arm is a graph missing an edge, and a bound extracted from
+        // that graph is finite and WRONG rather than absent. Nothing downstream
+        // can distinguish "plain opcode" from "unclassified opcode".
+        //
+        // A test cannot close that hole, because it cannot fail for an opcode
+        // nobody has written yet. The compiler can: adding a variant to `Op`
+        // now fails to build here until someone decides which class it belongs
+        // to. That is the whole change -- the classification is unaltered and
+        // every opcode below still maps to `(0, 0)`, exactly as the catch-all
+        // did.
+        Op::Const(..)
+        | Op::GetLocal(..)
+        | Op::SetLocal(..)
+        | Op::GetData(..)
+        | Op::SetData(..)
+        | Op::GetDataIndexed(..)
+        | Op::SetDataIndexed(..)
+        | Op::BoundsCheck(..)
+        | Op::Add
+        | Op::Sub
+        | Op::Mul
+        | Op::Div
+        | Op::Mod
+        | Op::Neg
+        | Op::CmpEq
+        | Op::CmpNe
+        | Op::CmpLt
+        | Op::CmpGt
+        | Op::CmpLe
+        | Op::CmpGe
+        | Op::Not
+        | Op::Stream
+        | Op::Reset
+        | Op::Return
+        | Op::Yield
+        | Op::Dup
+        | Op::NewComposite(..)
+        | Op::GetField(..)
+        | Op::GetIndex(..)
+        | Op::GetTupleField(..)
+        | Op::GetEnumField(..)
+        | Op::Len
+        | Op::IsEnum(..)
+        | Op::IsStruct(..)
+        | Op::IntToFloat
+        | Op::FloatToInt
+        | Op::WordToByte
+        | Op::ByteToWord
+        | Op::WordToFixed(..)
+        | Op::FixedToWord(..)
+        | Op::FixedMul(..)
+        | Op::FixedDiv(..)
+        | Op::CheckedAdd
+        | Op::CheckedSub
+        | Op::CheckedMul(..)
+        | Op::CheckedNeg
+        | Op::CheckedDiv(..)
+        | Op::CheckedMod
+        | Op::PushImmediate(..)
+        | Op::PopN(..)
+        | Op::BitAnd
+        | Op::BitOr
+        | Op::BitXor
+        | Op::Shl
+        | Op::Shr
+        | Op::CallVerifiedNative(..)
+        | Op::CallExternalNative(..) => (0, 0),
     }
 }
 
@@ -1011,7 +1083,77 @@ fn analyze_opk(op: &crate::bytecode::Op, chunk: &crate::bytecode::Chunk) -> (i64
         Op::PopN(n) => (7, 0, *n as i64, 0),
         Op::EndLoop(_) => (8, 0, 0, 0),
         Op::Loop(_) => (9, 0, 0, 0),
-        _ => (0, 0, 0, 0),
+        // EXHAUSTIVE FOR THE SAME REASON AS `analyze_class`, though the failure
+        // mode differs and the difference is worth stating.
+        //
+        // Every `opk` use in `analyze.kel` is a POSITIVE pattern requirement
+        // (`wa.opk[ip] == 2`, `== 3`, `== 8`), so an untagged opcode fails to
+        // match and the loop-bound shape is simply not recognised -- a bound is
+        // not extracted, which is CONSERVATIVE. That is the opposite of
+        // `analyze_class`, where a missing arm drops a control-flow edge and
+        // yields a bound that is finite and wrong.
+        //
+        // It is exhaustive anyway, because that argument is REASONING and the
+        // compiler can make it unnecessary. A new opcode should be considered
+        // for bound extraction as deliberately as for classification, and a
+        // catch-all here decides that question by default and silently.
+        Op::GetData(..)
+        | Op::SetData(..)
+        | Op::GetDataIndexed(..)
+        | Op::SetDataIndexed(..)
+        | Op::BoundsCheck(..)
+        | Op::Add
+        | Op::Sub
+        | Op::Mul
+        | Op::Div
+        | Op::Mod
+        | Op::Neg
+        | Op::CmpEq
+        | Op::CmpNe
+        | Op::CmpLt
+        | Op::CmpGt
+        | Op::CmpLe
+        | Op::Not
+        | Op::If(..)
+        | Op::Else(..)
+        | Op::EndIf
+        | Op::Break(..)
+        | Op::Stream
+        | Op::Reset
+        | Op::Call(..)
+        | Op::Return
+        | Op::Yield
+        | Op::Dup
+        | Op::NewComposite(..)
+        | Op::GetField(..)
+        | Op::GetIndex(..)
+        | Op::GetTupleField(..)
+        | Op::GetEnumField(..)
+        | Op::Len
+        | Op::IsEnum(..)
+        | Op::IsStruct(..)
+        | Op::IntToFloat
+        | Op::FloatToInt
+        | Op::WordToByte
+        | Op::ByteToWord
+        | Op::WordToFixed(..)
+        | Op::FixedToWord(..)
+        | Op::FixedMul(..)
+        | Op::FixedDiv(..)
+        | Op::Trap(..)
+        | Op::CheckedSub
+        | Op::CheckedMul(..)
+        | Op::CheckedNeg
+        | Op::CheckedDiv(..)
+        | Op::CheckedMod
+        | Op::PushImmediate(..)
+        | Op::BitAnd
+        | Op::BitOr
+        | Op::BitXor
+        | Op::Shl
+        | Op::Shr
+        | Op::CallVerifiedNative(..)
+        | Op::CallExternalNative(..) => (0, 0, 0, 0),
     }
 }
 
@@ -3303,21 +3445,28 @@ mod classification_tables {
         }
     }
 
-    /// THE HAZARD THIS TABLE CARRIES, STATED WHERE IT IS.
+    /// The class table has exactly nine kinds, and the hole this test used to
+    /// describe is CLOSED.
     ///
-    /// `analyze_class` ends in `_ => (0, 0)`. **A control-flow opcode added
-    /// later and not added here becomes "plain" silently**: no panic, no
-    /// rejection, just a control-flow graph missing an edge and a bound
-    /// extracted from it that is finite and wrong. The same shape applies to
-    /// `analyze_opk`'s `0 other`.
+    /// It previously read: "`analyze_class` ends in `_ => (0, 0)`. A
+    /// control-flow opcode added later and not added here becomes 'plain'
+    /// silently — no panic, no rejection, just a control-flow graph missing an
+    /// edge and a bound extracted from it that is finite and wrong. This test
+    /// cannot close that hole." That was correct, and the closing move it named
+    /// is the one that was taken: `analyze_class` and `analyze_opk` are now
+    /// exhaustive over `Op`, so the compiler refuses a new opcode until someone
+    /// decides its class. Verified by adding a variant to `Op` and observing
+    /// `E0004` at both sites.
     ///
-    /// This test cannot close that hole — closing it needs an exhaustive
-    /// `match` over `Op` here, so the compiler refuses a new opcode until it is
-    /// classified. It pins the CURRENT boundary instead: exactly nine classes,
-    /// and the count is asserted so that adding a tenth without revisiting this
-    /// file fails.
+    /// **This test is still worth keeping, and its job has changed.** The
+    /// compiler now guarantees every opcode is CLASSIFIED; it cannot guarantee
+    /// the classification is RIGHT. Exhaustiveness is satisfied just as well by
+    /// mapping a new control-flow opcode to `(0, 0)` in the plain group, which
+    /// is exactly the silent-edge defect wearing a different hat. So this pins
+    /// the count: a tenth kind fails here, and `analyze.kel` needs a decoder for
+    /// it before it means anything.
     #[test]
-    fn the_class_table_covers_exactly_nine_kinds_and_defaults_silently() {
+    fn the_class_table_covers_exactly_nine_kinds() {
         let control: &[Op] = &[
             Op::If(0),
             Op::Else(0),

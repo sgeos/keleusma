@@ -13,6 +13,43 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE `analyze_class` CATCH-ALL IS CLOSED, AND IT WAS THE OUTLIER (2026-08-15).**
+
+`analyze_class` and `analyze_opk` are exhaustive over `Op`. Adding a variant now fails to build at
+both sites with `E0004`, **verified by doing it** rather than asserted. No bound changed: every
+opcode the catch-all matched still maps to the plain group, and the nine-class boundary still
+reports nine.
+
+**THE FINDING I DID NOT EXPECT: seven other matches over `Op` in this crate were ALREADY
+exhaustive.** Adding the throwaway variant produced eight `E0004` errors, in `bytecode.rs` three
+times, `vm.rs`, `wire_format.rs`, and mine. The codebase already had this discipline everywhere it
+mattered; `analyze_class` was the one place that silently absorbed a new opcode. That reframes the
+item from "a hardening we should adopt" to "a place we forgot", which is a different and more
+worrying kind of gap — the convention existed and this function was outside it.
+
+**`analyze_opk` HAS THE SAME SHAPE AND NOT THE SAME CONSEQUENCE**, and the distinction is worth
+recording because I nearly reported them as one thing. Every `opk` use in `analyze.kel` is a POSITIVE
+pattern requirement (`wa.opk[ip] == 2`, `== 3`, `== 8`), so an untagged opcode fails to match, the
+loop-bound shape is not recognised, and no bound is extracted — CONSERVATIVE. `analyze_class` is the
+opposite: a missing arm drops a control-flow edge and yields a bound that is finite and WRONG.
+
+I made it exhaustive anyway. **That argument is reasoning, and the compiler can make reasoning
+unnecessary.** A new opcode deserves as deliberate a decision about bound extraction as about
+classification, and a catch-all answers that question by default and silently.
+
+**WHAT THE COMPILER STILL CANNOT DO, stated where the test lives.** Exhaustiveness forces a
+DECISION, not a correct one. A new control-flow opcode dropped into the plain group satisfies the
+compiler and reintroduces exactly the silent missing edge. So the nine-class count stays pinned by
+test, and the test that used to say "this cannot close the hole" now says what its job became.
+
+**A stale claim in a test NAME.** The boundary test was called
+`the_class_table_covers_exactly_nine_kinds_and_defaults_silently`. It no longer defaults silently.
+Leaving the name would have left a false claim in the source at the exact spot a reader goes to
+check this behaviour, which is worse than in prose because a name is read as a summary of what the
+code guarantees. Renamed, and the old doc comment is quoted in full rather than deleted so the
+reasoning that led here survives.
+---
+
 **I REPORTED A GAP THAT WAS ALREADY CLOSED, AND THE GOAL STATEMENT CARRIED IT (2026-08-15).**
 
 **The finding was wrong and the error is instructive because of WHEN it happened.** I reported that
