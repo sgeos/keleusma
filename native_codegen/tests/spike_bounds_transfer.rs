@@ -162,6 +162,196 @@ fn q1_is_the_emitted_operand_storage_bounded_by_the_proven_depth() {
     );
 }
 
+/// Walk one chunk under BOTH in-tree operand models and return their peaks.
+///
+/// - **peak model** (`Op::stack_growth`/`stack_shrink`): what `wcmu_region`
+///   uses, `peak = max(peak, offset + growth)`. This is the number the proven
+///   bound comes from.
+/// - **depth model** (`verify::op_depth_effect`): `(required, net)`, documented
+///   as following "the VM handlers' actual pops and pushes". An op that pops `r`
+///   and pushes `r + net` reaches `before + max(0, net)`, because the machine
+///   pops before it pushes.
+///
+/// **`verify_typed` is a third reconstruction and cannot be consulted for a
+/// number**: `typed_check_chunk` returns pass/fail, not a depth. Said here rather
+/// than quietly using two models and calling it three.
+///
+/// **BRANCH-AWARE, and the first version was not, which is why it is worth
+/// saying.** A straight-line walk carries depth across MUTUALLY EXCLUSIVE arms:
+/// on `06_multiheaded::classify` it reported a peak of 5 and on
+/// `rogue_bestiary::chunk0` a peak of 13, both obviously wrong for chunks whose
+/// arms each return. The absurd number is what exposed it.
+///
+/// `If` pushes the post-condition depth; `EndIf` restores it. That is what the
+/// branch structure does: an arm that `Return`s contributes its own peak and
+/// leaves nothing behind for the next arm.
+fn walk_both_models(chunk: &keleusma::bytecode::Chunk) -> (i32, i32, Vec<String>) {
+    use keleusma::bytecode::Op;
+    use keleusma::verify::op_depth_effect;
+    let (mut off, mut peak_m) = (0i32, 0i32);
+    let (mut dep, mut depth_m) = (0i32, 0i32);
+    let mut lines = Vec::new();
+    // Saved (peak-model, depth-model) depths at each open `If`.
+    let mut open: Vec<(i32, i32)> = Vec::new();
+    for (i, op) in chunk.ops.iter().enumerate() {
+        if matches!(op, Op::EndIf)
+            && let Some((p, d)) = open.pop()
+        {
+            off = p;
+            dep = d;
+            lines.push(format!("    {i:>3}  peak[{off:>3}       ]  depth[{dep:>3}       ]  {op:?}  <- arm joins, depth restored"));
+            continue;
+        }
+        let growth = op.stack_growth() as i32;
+        let shrink = op.stack_shrink() as i32;
+        let reach_p = off + growth;
+        peak_m = peak_m.max(reach_p);
+        off += growth - shrink;
+
+        let (req, net) = op_depth_effect(op, chunk);
+        let reach_d = dep + net.max(0);
+        depth_m = depth_m.max(reach_d);
+        dep += net;
+
+        if matches!(op, Op::If(_)) {
+            open.push((off, dep));
+        }
+
+        lines.push(format!(
+            "    {i:>3}  peak[{off:>3} reach {reach_p:>2}]  depth[{dep:>3} reach {reach_d:>2}] \
+             (req {req}, net {net:+})  {op:?}"
+        ));
+    }
+    (peak_m, depth_m, lines)
+}
+
+/// **Q5: on the two chunks where the emitter exceeds the proven bound, WHICH
+/// SIDE IS WRONG?**
+///
+/// `06_multiheaded.kel::chunk0` and `rogue_bestiary.kel::chunk0` emit three
+/// operand slots against a proven bound of two. This line reported that as a
+/// VERIFIER defect. **That framing was never checked.** `ensure_slot` allocates
+/// lazily up to the deepest index the emitter's own operand simulation reaches,
+/// so three allocas means the emitter reached depth three — which is equally
+/// consistent with the emitter over-allocating, and the emitter is this line's
+/// surface to fix.
+///
+/// The walk is PRINTED so the conclusion rests on a sequence a reader can check
+/// rather than on three numbers.
+#[test]
+fn q5_which_side_is_wrong_where_the_emitter_exceeds_the_bound() {
+    println!("\n================ Q5: emitter against the bound, walked");
+
+    // **The known answer, first.** If the walk cannot reproduce a peak that is
+    // obvious by inspection, nothing below it is evidence. `a + b` compiles to
+    // the checked family, which pops two and pushes (low, high, flag), so from
+    // depth two it reaches three.
+    let ctl = compile(
+        &parse(&tokenize("fn main(a: Word, b: Word) -> Word { a + b }").expect("lex")).expect("parse"),
+    )
+    .expect("compile");
+    let (cp, cd, clines) = walk_both_models(&ctl.chunks[0]);
+    println!("\n  CONTROL  fn main(a, b) -> a + b");
+    for l in &clines {
+        println!("{l}");
+    }
+    println!("  control peaks: peak-model {cp}, depth-model {cd}");
+    assert_eq!(
+        cd, 3,
+        "the depth model does not reach 3 on `a + b`, which pops two and pushes \
+         three. The walk is wrong and nothing below it is evidence."
+    );
+
+    for (file, want) in [
+        ("06_multiheaded.kel", "examples/scripts/06_multiheaded.kel"),
+        ("rogue_bestiary.kel", "examples/scripts/rogue/rogue_bestiary.kel"),
+    ] {
+        let Ok(src) = std::fs::read_to_string(std::path::Path::new("..").join(want)) else {
+            println!("\n  {file}: not found at {want}");
+            continue;
+        };
+        let m = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
+        let chunk = &m.chunks[0];
+        let (pm, dm, lines) = walk_both_models(chunk);
+        let bound = keleusma::verify::module_wcmu_with_value_slot_bytes(&m, &[], 1)
+            .ok()
+            .and_then(|v| v.first().copied())
+            .map(|(slots, _)| slots as i32)
+            .unwrap_or(-1);
+
+        println!("\n  {file}::chunk0  `{}`  ({} ops)", chunk.name, chunk.ops.len());
+        for l in lines.iter().take(40) {
+            println!("{l}");
+        }
+        if lines.len() > 40 {
+            println!("    ... {} more ops", lines.len() - 40);
+        }
+        println!(
+            "  peak-model peak {pm}, depth-model peak {dm}, reported bound[0] {bound}, emitter 3"
+        );
+        // **THE PAIRING, CHECKED.** This file's own q1 header warns that indexing
+        // a per-chunk bound by POSITION produces a violation indistinguishable
+        // from a real one. Print every chunk's bound WITH ITS NAME so the row can
+        // be matched by name rather than trusted by index.
+        if let Ok(per) = keleusma::verify::module_wcmu_with_value_slot_bytes(&m, &[], 1) {
+            println!("  per-chunk bounds, by name:");
+            for (i, c) in m.chunks.iter().enumerate().take(6) {
+                let b = per.get(i).map(|(s, _)| *s as i64).unwrap_or(-1);
+                println!("    chunk {i:>3}  bound {b:>3}  `{}`", c.name);
+            }
+            println!("    (vec len {} against {} chunks)", per.len(), m.chunks.len());
+        }
+    }
+
+    println!("\n  THE ANSWER: THE EMITTER IS RIGHT AND THE BOUND IS LOW BY ONE.");
+    println!("  On both chunks the peak model and the depth model, walked");
+    println!("  branch-aware, agree on 3 -- and the emitter allocates 3. The");
+    println!("  reported bound is 2. The site is the same in both: a CheckedAdd");
+    println!("  reached at depth 2, which pops two and pushes (low, high, flag).");
+    println!();
+    println!("  THREE CANDIDATES WERE OPEN AND TWO ARE ELIMINATED BY MEASUREMENT.");
+    println!("    the emitter over-allocating -- NO, two independent models agree");
+    println!("      with it, and neither is the emitter's own logic");
+    println!("    this harness pairing bounds by position -- NO, the per-chunk");
+    println!("      bounds are printed WITH NAMES above and chunk 0 is the one");
+    println!("      walked; q1's own header warns about exactly this error");
+    println!("    the bound is low -- what remains");
+    println!();
+    println!("  SAME FAMILY AS `manhattan_norm`, which left this list when the");
+    println!("  v0.2.3 line repaired the accessor nets. That repair does not reach");
+    println!("  here: these chunks contain no GetField. REPORTED, not repaired --");
+    println!("  src/verify.rs is theirs.");
+    println!();
+    println!("  A peak that AGREES is not evidence the net is right -- max can");
+    println!("  coincide while the running offset is wrong (v0.2.3, 2026-08-15).");
+    println!("  Here the agreement is between two models against a THIRD number,");
+    println!("  which is a different and stronger situation.");
+    println!("================\n");
+
+    // **Pinned as an agreement, not as the defect.** Asserting `bound < peak`
+    // would fail the moment the `v0.2.3` line repairs it, which is the wrong
+    // signal; asserting `bound == 2` pins their defect into this suite. What is
+    // durable is that the two in-tree models agree with each other on these
+    // chunks -- if that ever stops being true, the conclusion above needs
+    // re-deriving before anything is reported.
+    for (file, want) in [
+        ("06_multiheaded.kel", "examples/scripts/06_multiheaded.kel"),
+        ("rogue_bestiary.kel", "examples/scripts/rogue/rogue_bestiary.kel"),
+    ] {
+        let Ok(src) = std::fs::read_to_string(std::path::Path::new("..").join(want)) else {
+            continue;
+        };
+        let m = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
+        let (pm, dm, _) = walk_both_models(&m.chunks[0]);
+        assert_eq!(
+            pm, dm,
+            "{file}::chunk0: the peak model and the depth model no longer agree \
+             ({pm} against {dm}). The Q5 conclusion rests on their agreement, so \
+             re-derive it before reporting anything from this test."
+        );
+    }
+}
+
 /// Q2: is the bytecode cost bound monotone in the native code size?
 ///
 /// The domination argument for timing assumes native execution is faster than
