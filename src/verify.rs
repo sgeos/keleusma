@@ -2308,10 +2308,15 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
 /// This is deliberately distinct from [`crate::bytecode::Op::stack_shrink`]
 /// and [`crate::bytecode::Op::stack_growth`], which encode the worst-case-
 /// memory net and do not capture actual operand consumption: `Add`
-/// consumes two operands yet has `stack_shrink` 1, the checked ops consume
-/// two yet have `stack_shrink` 0, and `Yield` is modelled there as net -1
-/// though it pops the output and pushes the resume value (net 0). The
-/// values here follow the VM handlers' actual pops and pushes. The
+/// consumes two operands yet has `stack_shrink` 1, and the checked ops
+/// consume two yet have `stack_shrink` 0. The values here follow the VM
+/// handlers' actual pops and pushes.
+///
+/// The two models are otherwise required to agree on the NET, which
+/// `the_two_operand_stack_models_agree_across_the_whole_opcode_set` asserts
+/// over the entire opcode table. `Yield` was named here as a standing
+/// exception, modelled as net -1 against the true net 0; it is repaired, and
+/// so are `FixedMul` and `FixedDiv`, so there is no exception left. The
 /// control-flow ops `If`, `Loop`, `Break`, `Trap`, and `Return` are
 /// intercepted by [`verify_depth_region`]; their entries here are used
 /// only as a defensive fall-through.

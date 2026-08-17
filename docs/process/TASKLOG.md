@@ -10,6 +10,42 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-16, fifth).** Two increments on `fix/operand-stack-model-remainder`.
+>
+> **The operand-stack known-disagreement list is EMPTY.** All three entries repaired against the
+> virtual machine handlers. `Op::Yield` had net -1 against a true net 0 -- the **unsound** direction:
+> the model accounted for the pop of the yielded value and not for `resume_after_enter` pushing the
+> reply back onto the same stack. Measured end to end, two sources with the identical peak expression
+> report **192 bytes against 288**, one value slot short per preceding yield, and the running offset
+> reached **-4** on a three-yield body. `FixedMul` and `FixedDiv` had net 0 against a true net -1,
+> which merely overstates, so their repair LOWERS bounds. This supersedes the "pinned, not repaired"
+> note below for all three.
+>
+> **`--all-features` HAS NEVER PASSED and `CLAUDE.md` claimed it did**, and pointed the everyday
+> verification command at it. It cascades the mutually exclusive `narrow-word-*` selectors into the
+> narrowest word, under which the 64-bit checked-addition test fails. **CI already documents this** in
+> a comment on its broad-features job. Corrected to the three sets CI actually runs. Eighth
+> stale-figure incident, and the first in the file that governs how the work is done.
+>
+> **CONSTS: neither recorded obstacle is what blocks it.** The interning-order conflict is
+> UNREACHABLE -- the flattener interns only for `StaticStr`, `Struct` and `Enum`, and all **40,332
+> constants across the eleven stages are `Int`**, so Option B has nothing to re-sequence. The real
+> bound is capacity: `wire.fin` is 1,024 WORDS at six words a node, so the walk takes **170 nodes**
+> against `parse`'s 17,391 -- the note below states the word count as though it were a node count.
+> Widening the array **diverges**: a private data array is initialised one `Int(0)` per word, so a
+> `fin` for N nodes adds `6N` records to the walker's own `CONSTS`, six times the region it would
+> emit. Batching is the route.
+>
+> **A second gap: the tested node model omitted `DataLayout::private_init`**, which is 38,087 of the
+> 40,332 constants, because every `FLATTEN_CASES` source used `const data`. Three `private data` cases
+> added; the byte identity now covers both pools. Folding the two sources into one shared helper took
+> `parse`'s blob to **530,675 bytes** and broke two join tests, so the blob model and the encoder model
+> are now separate functions.
+>
+> **Held for the operator**: every one of the 38,087 data-segment initialisers is `Int(0)`, roughly
+> **85% of the corpus auxiliary body spent encoding zeros**, and it is also what makes the region too
+> large to window. Collapsing it is a wire-format change.
+
 > **Currency note (2026-08-15).** The interner's name ceiling is raised and the join now covers the
 > whole stage corpus. `parse.kel` (627 names, a 33,395-byte module blob) emits `NAMES` and
 > `STRING_POOL` byte-identically, as do the other nine stages. The "hard limit of 512" recorded in

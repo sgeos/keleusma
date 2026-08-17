@@ -3265,7 +3265,7 @@ fn header_fields_of(module: &Module) -> [i64; 11] {
 /// * **The 170-node cap.** `wire.fin` is 1,024 words and a node costs six, so
 ///   the flattener walks at most 170 nodes per call. `parse` needs 17,391.
 /// * **The node model omits the larger source.** `const_roots_of` collects
-///   `Chunk::constants` and not [`DataLayout::private_init`]. Those are 2,245
+///   `Chunk::constants` and not `DataLayout::private_init`. Those are 2,245
 ///   and 38,087 constants respectively across the corpus, so the tested path
 ///   covers the smaller 6%. The `FLATTEN_CASES` sources use `const data`, which
 ///   lands in chunk constants, so nothing there ever reached the other pool.

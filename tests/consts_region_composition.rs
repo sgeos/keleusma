@@ -19,7 +19,7 @@
 //! The first attempt classified only `Chunk::constants` and concluded that the
 //! flattener interns nothing. That conclusion was right and the measurement did
 //! not support it: the chunk pools are 2,245 of the corpus's 40,332 constants,
-//! and the other 38,087 arrive through [`DataLayout::private_init`], which the
+//! and the other 38,087 arrive through `DataLayout::private_init`, which the
 //! probe never walked.
 //!
 //! The second attempt compared the string pool of a full artifact against one
