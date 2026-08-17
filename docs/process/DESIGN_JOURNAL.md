@@ -13,6 +13,63 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**85% OF THE AUXILIARY BODY WAS ZEROS, AND REMOVING THEM BROKE FIVE VACUITY CONTROLS (2026-08-17).**
+
+**The operator authorised Option A and ruled out a version bump**: no version-2 artifact has ever
+been published, so refining the format costs nothing.
+
+**The change is small because the shape is binary.** A private slot with no explicit initialiser is
+zero, materialised as one `ConstValue::Int(0)` per slot WORD at a sixteen-byte record each. Measured:
+**38,087 of the corpus's 40,332 constants were such initialisers and every one was zero.**
+`DataInitRecord.first` already existed; setting it to `ABSENT` says "wholly default, stored nothing"
+and the decoder reconstructs. No new region, no container change, no version change.
+
+**Wholly-default only, and the reason is a value written last.** A trailing-run scheme would elide
+nothing for `private data d { xs: [Word; 4], flag: Word = 7 }` and, worse, invites an implementation
+that elides a run in the middle. The sentinel is explicit rather than inferred, and
+`decode_constant_pools` REJECTS it, so a reader that has not handled the elision fails on the range
+instead of returning whatever `u32::MAX` addresses.
+
+| | before | after | |
+|---|---|---|---|
+| `parse` | 304,432 | 39,216 | 7.8x |
+| `codegen` | 111,864 | 20,632 | 5.4x |
+| `verify_structural` | 102,256 | 3,840 | **26.6x** |
+| corpus | **712,936** | **103,544** | **6.9x** |
+
+**ALL ELEVEN STAGES NOW FIT THE WINDOW**, where three did not, and the driver emits the chunk region
+for **nine of eleven** rather than seven. The artifact-size ceiling is gone; what remains is the
+90-record chunk batch cap, which only `parse` (94) and `wire` (475) reach.
+
+**THE INTERESTING PART IS WHAT THE WIN DID TO THE TESTS.** Seven byte-identity tests failed and
+**none was a defect.** Five were vacuity controls of the form "this input must exceed the buffer, or
+the mechanism under test is untested" — and the elision removed every oversize real input. Without
+those controls, the windowing and batching machinery would have stopped being exercised while the
+whole suite stayed green. **That is the single most valuable thing this increment demonstrated**: a
+vacuity control is what converts a silent loss of coverage into a failing test.
+
+Two of them carried comments recording they had already been re-aimed TWICE for the same reason, and
+a previous increment had built `synthetic_source_over` precisely to end the cycle — sized against the
+encoder's own output, so a win grows the input rather than disqualifying it. This was the third
+round and there is no larger real stage left to move to, so the generator is now the input.
+
+The preconditions were RELOCATED, not weakened: a real stage still proves region coverage and byte
+identity; the synthetic case carries the oversize and batching guarantees. Two assertions came out of
+the shared `assemble_whole_artifact` helper for the same reason — a helper that demanded an oversize
+input would reject every real stage.
+
+**The tests that quantified the waste are inverted rather than deleted**, plus two the corpus cannot
+supply: a pool with a non-default value stored in full, and the round trip, which is the only
+property a host actually depends on. An encoder that computed the elision and stored the records
+anyway would pass a test of intent; only reading the artifact catches it.
+
+**A process failure worth recording.** I lost the mailbox announcement once by stashing every file
+except it, switching branch, then overwriting it with `git checkout <branch> -- <file>`. Recovered
+from the script that generated it. A partial stash plus a branch switch is not a safe way to move one
+file.
+
+---
+
 **THE CONSTS BLOCKER WAS NEITHER OF THE TWO THINGS RECORDED, AND WIDENING THE ARRAY DIVERGES
 (2026-08-16).**
 
