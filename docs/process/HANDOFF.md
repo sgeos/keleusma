@@ -5,6 +5,11 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
+> **Refreshed 2026-08-17** against the merge at `81ddd260`, with every pinned count re-measured
+> rather than carried forward. The state, macro position, correctness items and operator-held list
+> changed; the workflow, method rules and hard-won facts below did not and were left alone. Four
+> operator decisions are now RULED ON and two are DONE — read that section before asking anything.
+>
 > **Rewritten whole, 2026-08-16 (second rewrite that day).** The previous one was stamped six merges
 > back and **passed all of its own validity checks while being wrong about every open item** — it
 > named a repaired bound as the top concern and said the emit path covered two region kinds when it
@@ -21,12 +26,14 @@ always-current, so it must be able to report itself stale rather than mislead a 
 recorded parent is a claim that nothing else ever lands, and it has failed twice.
 
 ```sh
-git merge-base --is-ancestor 10ccd520 HEAD    # must succeed
+git merge-base --is-ancestor 81ddd260 HEAD    # must succeed
 
 # Content. If ANY of these differ, say so rather than acting on the state below.
-grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs     # 11
-grep -c '^\s*#\[test\]' tests/selfhost_wire.rs          # 169
-grep -c '^\s*#\[test\]' tests/block_form_statements.rs  # 11  (was 8; the empty statement)
+grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 11
+grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 169
+grep -c '^\s*#\[test\]' tests/block_form_statements.rs      # 11
+grep -c '^\s*#\[test\]' tests/consts_region_composition.rs  # 7
+grep -c '^\s*#\[test\]' tests/operand_stack_model.rs        # 6
 grep -oE 'fn highest_command\(\) -> Word \{ [0-9]+ \}' src/selfhost/kel/wire.kel   # 173
 
 awk '/let cases: &\[\(&str, Support, &str\)\] = &\[/{f=1;next} f&&/^    \];/{f=0} f' \
@@ -92,9 +99,12 @@ push cancelled run `31932202253` and `31932359730` replaced it.
 | | |
 |---|---|
 | construct-support boundary | **79 Ok / 4 Gap / 1 RefRejects**, 84 cases |
+| auxiliary body | **103,544 bytes** across eleven stages, down from 712,936 |
+| stages fitting one 65,536-byte window | **11 of 11**, where three did not |
+| chunk region emitted by the driver | **9 of 11 stages**, up from 7 |
 | module-driven emit path | **four region kinds** of twenty, and they differ in strength |
-| windowed emit | **10 of 11 stages**; `wire` alone cannot be walked |
-| type rejection | **rules COMPLETE**; the stage now RESOLVES names, not just compares tags |
+| operand-stack models | **agree on every one of the 66 opcodes**; the known list is EMPTY |
+| type rejection | **rules COMPLETE**; the stage RESOLVES names, not just compares tags |
 | ill-typed corpus | **20** cases, 7 well-typed controls, both guards raised |
 | `analyze_class` / `analyze_opk` | exhaustive over `Op`, and in `selfhost_host` so there is ONE copy |
 
@@ -106,42 +116,53 @@ but not derived**. A region whose payload came from the harness or the reference
 
 **THREE DIFFERENT LIMITS, AND CONFLATING THEM IS HOW THE LAST STALE COMMENT HAPPENED.**
 
-1. **Artifact offset past the 65,536 buffer** — LIFTED. Regions are emitted at window offset zero
-   and placed by the host. The ceiling was never region SIZE: the largest of the four payloads is
-   `wire`'s `CHUNKS` at 22,512 bytes.
-2. **Chunk records past one batch of 90** — `parse` has 94, so its other regions emit and
-   `chunks_emitted` reports false.
-3. **Constant-forest nodes past the walk's 1024 cap** — `wire.kel` has **1,148**, so the walk refuses
-   with `-240` before any region is emitted. `parse` is next at 815.
+1. **Artifact offset past the 65,536 buffer** — GONE, twice over. Regions are emitted at window
+   offset zero and placed by the host, AND the all-default elision took every stage's whole artifact
+   under the buffer. `parse` is 39,216 bytes where it was 304,432.
+2. **Chunk records past one batch of 90** — `parse` has 94 and `wire` 475. The only limit still
+   excluding a real stage.
+3. **TWO NODE CAPS, AND THEY ARE DIFFERENT CAPS.** I conflated them once and told the other line
+   their figure was wrong when it was right; retracted in `50d949ab`. The **module-input walk**
+   refuses past **1,024 nodes** (`nm_max_names`, error `-240`), which `wire.kel` hits at 1,148 chunk
+   constants. The **flattener out of `wire.fin`** refuses past **170**, `fin` being 1,024 words at six
+   words a node. Only the second is derived from a word count.
 
 ## THE MACRO POSITION
 
 **V0.2.x completes when the five success criteria in
 [`../roadmap/V0_2_X_ROADMAP.md`](../roadmap/V0_2_X_ROADMAP.md) hold. None do.** Order 1 needs:
 
-1. **`CONSTS`, which is 94% of the auxiliary body** — 663,120 bytes across the eleven stages against
-   34,960 for names and pool together. **NOT wiring.** The node producer writes into `wire.bytes` at
-   byte zero where the artifact lives, while the flattener reads nodes from `wire.fin`; and the two
-   paths intern in DIFFERENT ORDERS, preorder against breadth-first, which is observable in `NAMES`.
-   **Choosing an order is a design decision with a currently-passing region at stake, and it has been
-   left to the operator twice.**
-2. **The remaining region kinds.** `SIGNATURES` (12,032 bytes), `DATA_SLOTS` (6,768), `SHAPES`
-   (5,512) are the next by size and are the same shape as `CHUNKS`. **`STRUCT_AUX` and `ENUM_AUX` are
-   EMPTY in all eleven stages** — a byte identity for either passes while emitting nothing.
+1. **`CONSTS`, and BOTH RECORDED OBSTACLES TO IT WERE WRONG.** The interning-order conflict is
+   **unreachable** for this corpus: the flattener interns only for `StaticStr`, `Struct` and `Enum`,
+   and every corpus constant is `Int`. Pinned by `the_flattener_interns_no_name_for_any_stage`. The
+   figures were wrong too — 645,312 measured against the 663,120 recorded, and all of it is now
+   historical, because eliding the all-default initialiser pool removed 85% of the body. **What
+   remains is the 170-node flattener cap**, needing about five batches for `parse` rather than a
+   hundred and three. Derive figures from `tests/consts_region_composition.rs`, never from prose.
+2. **The remaining region kinds**, which are the same shape as `CHUNKS`. Re-measure their sizes
+   before sizing work from them: every figure recorded for them predates the elision. **`STRUCT_AUX`
+   and `ENUM_AUX` are EMPTY in all eleven stages** — a byte identity for either passes while emitting
+   nothing, and the reason is the same census as item 1: both are written only for `Struct` and `Enum`
+   constants, and there are none.
 3. **The type checker's INPUT.** Its rules are complete and its resolution is now in the stage, but
    the extraction is still Rust walking the REFERENCE parser's AST. Structure is available from
    `parse.kel` plus `reconstruct.kel`; **do not invent a second encoding.**
 
 ## OPEN CORRECTNESS ITEMS
 
-**1. `FixedMul`/`FixedDiv` peak-model nets.** Both declare net 0 against a handler that pops twice
-and pushes once. **Pinned, not repaired, because the error OVERSTATES**: fixing it LOWERS bounds on
-shipped chunks. Operator's call.
+**1 and 2 ARE CLOSED.** `Op::Yield`, `FixedMul` and `FixedDiv` are all repaired against the virtual
+machine handlers, and the ranging check's known-disagreement list is **empty**: the two operand-stack
+models agree on every one of the 66 opcodes. `Yield` was the unsound one — it accounted for the pop of
+the yielded value and not for the resume pushing the reply back, so a bound understated by one value
+slot per preceding yield. **Confirmed independently by the `v0.3.0` line**, which registered its
+prediction before merging: chunks reaching negative operand depth went 8 to 0, every offender a stream
+`main` whose `PopN(1)` went under. Bounds RISE for yield-bearing chunks, which is a changelog-visible
+consequence.
 
-**2. `Op::Yield`'s peak-model net.** −1 against the depth model's 0. Pinned in the same ranging
-check, which fails if either is repaired without removing its entry, so neither can be lost.
-
-**3. `Op::cost()` disagrees with measurement.** 17 opcodes of 66 were ever measured.
+**3. `Op::cost()` disagrees with measurement.** `OPCODE_SPECS` holds 17 entries covering **16 distinct
+opcodes of 66**, so 50 carry estimates. Worst-case execution time is the project's headline claim, so
+this is the largest gap between what is asserted and what is measured. **Operator's ruling: close it
+sometime after Order 1.**
 
 **4. Derived operands in type rejection.** A field read, an index or an arithmetic result is still
 UNKNOWN and therefore accepted. Pinned by `the_rules_still_do_not_reach_a_derived_operand`.
@@ -196,11 +217,30 @@ looked complete. **In every case the code was reachable and the evidence was not
 
 ## Open, held by the operator
 
-- **Publication remains HELD.**
-- **`CONSTS`'s interning order** — see the macro position. A design decision, not a coding one.
-- **`FixedMul`/`FixedDiv`**, whose repair lowers shipped bounds.
-- **`Op::cost()`** recalibration.
-- **The `for` trailing-semicolon asymmetry**, pinned.
+**FOUR OF THESE ARE NOW RULED ON. Do not re-ask them; the ruling is the answer.**
+
+- **Publication remains HELD.** Reaffirmed 2026-08-17.
+- **`CONSTS` representation** — *ruled: Option A, elide the zeros, and no `BYTECODE_VERSION` bump,
+  because no version-2 artifact has ever been published.* **DONE**, merged at `81ddd260`.
+- **`Op::cost()`** recalibration — *ruled: close it sometime after Order 1.*
+- **Derived operands in type rejection** — *ruled: before publishing V0.3.0.* Whether a V0.2.x version
+  ships before V0.3.0 is itself undecided.
+- **The Japanese FAQ entry** is stale and renders as English — *ruled: correct eventually.*
+- **The `for` trailing-semicolon asymmetry** — *ruled: accept it, shape A.* **DONE**, merged at
+  `1f0e5e19`. Both parsers implement the empty statement and agree byte-identically.
+- **A WINDOWED COMPILER, in the Turbo Pascal sense, is a stated goal.** Measured: ten of the twelve
+  stages are already `loop main(resume) -> Word` coroutines stepped one yield at a time, and bounded
+  working set is forced by the language rather than by discipline. `wire.kel` and `verify_types.kel`
+  are the two that are not. **I claimed a windowed verifier was blocked because a bound needs a whole
+  chunk's control-flow graph; the operator challenged it and was right.** The analysis is a fold over
+  a well-nested bracket structure with a stack of depth equal to the nesting level. What is not
+  forward-only is the IMPLEMENTATION: the walk jumps on `Loop(target)`, the `If` arm peeks at
+  `ops[target - 1]` for an `Else`, `trace_const_set_local` scans BACKWARD for a bound constant, and
+  `loop_body_advances_induction` scans FORWARD to the body tail. Each has a bounded-state streaming
+  equivalent — decide at `EndLoop` rather than at `Loop`, and carry a slot-to-last-constant map.
+  **Unresolved: nesting depth has no static cap anywhere**, which a verifier written in Keleusma would
+  need; and the break fold assumes every break in a loop leaves the same stack depth, which I have not
+  confirmed.
 - **`MAX_PARSE_DEPTH` does not do its stated job on a small stack.**
 - **`CHANGELOG.md:340`** states the checked-arithmetic push order wrongly in published text.
 - **`-255` is live and has no negative test.**
