@@ -231,3 +231,137 @@ fn the_depth_model_gives_true_pop_and_push_counts() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// The three disagreements the whole-opcode-set ranging check left open, now
+// repaired. Each test below fails on the pre-repair model and passes after.
+// ---------------------------------------------------------------------------
+
+/// **MUST FIRE.** A yield must not lower the base of everything that follows it.
+///
+/// The peak model gave `Op::Yield` a net of -1, accounting for the pop of the
+/// yielded value but not for the resume pushing the reply back onto the same
+/// operand stack. Every operation after a yield was then costed from a base one
+/// slot too low, and the shortfall compounded with the number of yields on the
+/// path. That is the UNSOUND direction: the reported bound sits below the stack
+/// the chunk actually needs.
+///
+/// The two sources below carry the IDENTICAL peak expression and differ only in
+/// whether three yields precede it, so any difference in the reported bound is
+/// attributable to the yields and to nothing else. Measured before the repair,
+/// at 32 bytes per value slot: 192 bytes against 288, a shortfall of exactly one
+/// slot per yield.
+///
+/// A test that merely asserted the yield-bearing figure equals 288 would pass
+/// for a model that overstates both. The control is what makes the comparison
+/// mean something.
+#[test]
+fn a_yield_does_not_lower_the_base_of_what_follows_it() {
+    const PEAK_EXPR: &str = "yield (a + b) * (c + a) + (a * b) * (c + b)";
+    let with_yields = format!(
+        "loop main(r: Word) -> Word {{ let a = yield r; let b = yield a; let c = yield b; {PEAK_EXPR} }}"
+    );
+    // The control binds the same three locals without suspending.
+    let without_yields =
+        format!("loop main(r: Word) -> Word {{ let a = r; let b = r; let c = r; {PEAK_EXPR} }}");
+
+    let (yielding, _) =
+        keleusma::verify::wcmu_stream_iteration(&chunk_named(&with_yields, "main")).expect("wcmu");
+    let (control, _) =
+        keleusma::verify::wcmu_stream_iteration(&chunk_named(&without_yields, "main"))
+            .expect("wcmu");
+
+    assert_eq!(
+        yielding, control,
+        "the same peak expression reports {yielding} bytes after three yields and {control} \
+         bytes with none. A yield is a suspension, not a net consumption: the resume pushes \
+         the reply back, so the depth on the far side of the boundary is the depth on the near \
+         side. A LOWER figure for the yielding form understates the bound."
+    );
+}
+
+/// **MUST FIRE.** The peak model's running offset can never go negative.
+///
+/// This is the invariant behind the test above, stated as a property rather than
+/// as a pair of numbers, so it holds for shapes no case list names. An operand
+/// stack cannot hold a negative number of entries, so a walk that reaches one has
+/// mis-modelled some operation on the way, and every later peak it computes is
+/// taken from a base that does not exist.
+///
+/// Measured before the repair: the three-yield body reached -4, first dropping
+/// below zero at the `SetLocal` that binds the first resumed value.
+#[test]
+fn the_peak_models_running_offset_never_goes_negative() {
+    const SOURCES: &[(&str, &str)] = &[
+        (
+            "three-yields",
+            "loop main(r: Word) -> Word { let a = yield r; let b = yield a; let c = yield b; \
+             yield (a + b) * (c + a) + (a * b) * (c + b) }",
+        ),
+        (
+            "yield-feeding-a-call",
+            "fn g(x: Word) -> Word { x + 1 }\n\
+             loop main(r: Word) -> Word { let a = yield r; let b = yield g(a); yield g(b) }",
+        ),
+        (
+            "fixed-point-chain",
+            "fn f(a: Fixed<16>, b: Fixed<16>, c: Fixed<16>) -> Fixed<16> { a * b * c * a * b }\n\
+             fn main() -> Word { 0 }",
+        ),
+    ];
+
+    let mut walked = 0;
+    for (label, src) in SOURCES {
+        let name = if label.starts_with("fixed") {
+            "f"
+        } else {
+            "main"
+        };
+        let chunk = chunk_named(src, name);
+        let mut cur = 0i32;
+        for (i, op) in chunk.ops.iter().enumerate() {
+            cur += op.stack_growth() as i32 - op.stack_shrink() as i32;
+            assert!(
+                cur >= 0,
+                "{label}: the running operand offset reached {cur} at op {i} ({op:?}), which an \
+                 operand stack cannot do. Every peak computed from here is taken from a base \
+                 below the true floor."
+            );
+        }
+        walked += 1;
+    }
+    assert_eq!(walked, SOURCES.len(), "not every source was walked");
+}
+
+/// The fixed-point multiply and divide consume both operands.
+///
+/// Their peak-model entries read `growth 0 / shrink 0`, giving a net of 0 against
+/// a true net of -1. That direction is merely loose rather than unsound, and it
+/// is why the repair LOWERS the reported bound on a chunk that uses them. Stated
+/// per operation so a failure names the operation.
+///
+/// Neither opcode was reachable by any case in the five-case comparison above.
+/// The whole-opcode-set check in `src/verify.rs` found both on its first run.
+#[test]
+fn the_fixed_point_ops_consume_both_operands() {
+    let chunk = chunk_named(
+        "fn f(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> { a * b }\nfn main() -> Word { 0 }",
+        "f",
+    );
+    for op in [Op::FixedMul(16), Op::FixedDiv(16)] {
+        let net = op.stack_growth() as i32 - op.stack_shrink() as i32;
+        assert_eq!(
+            net, -1,
+            "{op:?}: the peak model's net is {net}. The virtual machine handler pops both \
+             operands and pushes one result, so the net is -1 and the transient reach is 0."
+        );
+        assert_eq!(
+            op.stack_growth(),
+            0,
+            "{op:?}: the handler pops before it pushes, so it reaches no higher than its entry \
+             depth"
+        );
+        let (required, delta) = op_depth_effect(&op, &chunk);
+        assert_eq!((required, delta), (2, -1), "{op:?}: the depth model moved");
+    }
+}

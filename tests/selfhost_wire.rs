@@ -7494,14 +7494,62 @@ const FLATTEN_CASES: &[(&str, &str)] = &[
         "tuple-composite-first",
         "const data k { t: ((Word, Word), Word) = ((1, 2), 3) }\n         fn main() -> Word { k.t.1 }",
     ),
+    // THE DATA SEGMENT, which every case above misses. A mutable `data` block
+    // contributes through `add_data_layout` rather than through any chunk, and
+    // that pool is 94% of the region on a real stage. `const data` folds into
+    // chunk constants instead, so none of the six cases above reaches it.
+    (
+        "data-scalar",
+        "private data d { n: Word }\nfn main() -> Word { d.n = 1; d.n }",
+    ),
+    (
+        "data-array",
+        "private data d { xs: [Word; 8] }\nfn main() -> Word { d.xs[0] = 3; d.xs[0] }",
+    ),
+    // Both pools at once, in the order the encoder accumulates them: the chunk
+    // constants first, the initialisers after. A model that concatenated them
+    // the other way round passes every single-source case above and fails here.
+    (
+        "data-and-const-together",
+        "const data k { t: (Word, Word) = (1, 2) }\n\
+         private data d { xs: [Word; 4] }\n\
+         fn main() -> Word { d.xs[0] = k.t.0; d.xs[0] }",
+    ),
 ];
 
-/// Every chunk's constants, concatenated in chunk order — which is exactly what
-/// `SchemaBuilder::const_roots` accumulates and hands to `flatten`.
+/// Every chunk's constants, concatenated in chunk order.
+///
+/// **THIS IS THE BLOB MODEL, NOT THE ENCODER MODEL, and the two are different.**
+/// `SchemaBuilder::const_roots` accumulates the chunk pools and then reaches
+/// `add_data_layout`, which adds `private_init` as well; see
+/// [`encoder_const_roots`]. What this function describes is the narrower thing
+/// the module-input blob carries.
+///
+/// Keeping them apart is not fussiness. Folding the data-segment pool in here
+/// took `parse`'s blob from about 8 KB to 530,675 bytes, an order of magnitude
+/// past `bin`, and broke the join tests — which is the size bound the blob path
+/// runs into, showing up in a different place.
 fn const_roots_of(module: &keleusma::bytecode::Module) -> Vec<keleusma::bytecode::ConstValue> {
     let mut roots = Vec::new();
     for c in &module.chunks {
         roots.extend(c.constants.iter().cloned());
+    }
+    roots
+}
+
+/// Every constant the reference encoder flattens, in the order it accumulates
+/// them: each chunk's pool in chunk order, then the data segment's initialisers.
+///
+/// **THE SECOND SOURCE IS THE LARGER ONE BY A FACTOR OF SEVENTEEN.** Measured
+/// across the eleven stage modules: 2,245 constants from chunks against 38,087
+/// from the data segment, pinned by `tests/consts_region_composition.rs`. Only
+/// a `private data` block contributes there; `const data` folds into chunk
+/// constants, and every `FLATTEN_CASES` source used `const data`, so the
+/// omission could not surface until the `data-*` cases were added.
+fn encoder_const_roots(module: &keleusma::bytecode::Module) -> Vec<keleusma::bytecode::ConstValue> {
+    let mut roots = const_roots_of(module);
+    if let Some(dl) = &module.data_layout {
+        roots.extend(dl.private_init.iter().cloned());
     }
     roots
 }
@@ -7616,7 +7664,7 @@ fn keleusma_flattens_a_constant_forest_breadth_first() {
         let total = want.len();
         assert!(total < CAPACITY, "{label}: artifact is {total} bytes");
 
-        let roots = const_roots_of(&module);
+        let roots = encoder_const_roots(&module);
         let fields = preorder_of(&roots);
         let nroots = roots.len() as i64;
         let nnodes = node_count(&roots) as i64;
@@ -7721,7 +7769,7 @@ fn the_two_walk_orders_genuinely_disagree_on_this_corpus() {
     for (label, src) in FLATTEN_CASES {
         let module =
             compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
-        let roots = const_roots_of(&module);
+        let roots = encoder_const_roots(&module);
         let (bf, df) = node_orders(&roots);
         assert_eq!(
             bf.len(),
@@ -11242,6 +11290,376 @@ fn the_produced_sequence_emits_names_and_pool_byte_identically() {
     }
 
     assert_eq!(checked, CASES.len(), "not every case was checked");
+}
+
+/// THE WINDOWED PATH: TEN OF ELEVEN STAGES, INCLUDING ALL FOUR THE BUFFER EXCLUDED.
+///
+/// # What the buffer ceiling actually was
+///
+/// **Not region size.** Measured across the eleven stage sources, the largest of
+/// these four payloads is `wire.kel`'s `CHUNKS` at 22,512 bytes, a third of the
+/// 65,536-byte window. What overflowed was the ABSOLUTE OFFSET: `parse.kel` puts
+/// `NAMES` at byte 299,416 of a 304,432-byte artifact, and the earlier joins
+/// write there directly. Each region is now emitted at window offset zero and
+/// placed by the host, so the offset ceiling is gone.
+///
+/// # THREE LIMITS, AND THEY ARE DIFFERENT LIMITS
+///
+/// Recorded separately because conflating them is how the earlier "works for no
+/// real stage" comment became stale by an order of magnitude.
+///
+/// 1. **Artifact offset past the buffer** — LIFTED by windowing. It excluded
+///    `parse`, `codegen` and `verify_structural`, and excludes none of them now.
+/// 2. **Chunk records past one batch of 90** — `parse` has 94. Its other regions
+///    are emitted; `chunks_emitted` reports false and this test asserts it.
+/// 3. **Constant-forest nodes past the walk's 1024 cap** — `wire.kel` has
+///    **1,148**, so the walk refuses with `-240` before any region is emitted and
+///    the stage cannot be reached at all. `parse` is next at 815, comfortably
+///    under. This is a cap on the WALK, not on the window, and lifting it is
+///    unrelated to either limit above.
+///
+/// # What each region owes to whom, unchanged by windowing
+///
+/// `NAMES` and `STRING_POOL` are COMPUTED from the module blob. `CHUNKS` is mixed
+/// per field — the stage computes the name index from its own interner and the
+/// three range cursors by accumulation, and ten fields per record come from the
+/// host. `HEADER` is ENCODED but not derived.
+///
+/// # What this does NOT establish
+///
+/// Four regions of twenty. Nothing here touches `CONSTS`, which is 94% of the
+/// auxiliary body and blocked on a different problem entirely.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_windowed_path_reaches_every_stage_it_can_walk() {
+    use keleusma::wire_schema::kind;
+
+    /// What each stage is expected to do, and why.
+    enum Expect {
+        /// Every region emitted, chunks included.
+        Full,
+        /// Regions emitted, chunks omitted: past the 90-record batch.
+        NoChunks,
+        /// Not reachable: the constant forest is past the walk's node cap.
+        WalkRefuses,
+    }
+
+    let stages: &[(&str, Expect)] = &[
+        ("lexer", Expect::Full),
+        ("parse", Expect::NoChunks),
+        ("reconstruct", Expect::Full),
+        ("codegen", Expect::Full),
+        ("analyze", Expect::Full),
+        ("verify_structural", Expect::Full),
+        ("verify_yield", Expect::Full),
+        ("verify_depth", Expect::Full),
+        ("verify_typed", Expect::Full),
+        ("verify_datalayout", Expect::Full),
+        ("wire", Expect::WalkRefuses),
+    ];
+
+    let mut full = 0;
+    let mut no_chunks = 0;
+    let mut refused = 0;
+    for (stage, expect) in stages {
+        let path = format!("src/selfhost/kel/{stage}.kel");
+        let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+        let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse"))
+            .unwrap_or_else(|e| panic!("{stage}: compile: {e:?}"));
+        let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module))
+            .unwrap_or_else(|e| panic!("{stage}: encode: {e:?}"));
+        let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+
+        let mut regions: Vec<(u16, usize, usize)> = Vec::new();
+        for i in 0..view.region_count() {
+            let r = view.region_at(i).expect("region");
+            regions.push((
+                r.kind,
+                (r.word_offset as usize) * 8,
+                (r.word_length as usize) * 8,
+            ));
+        }
+
+        let got = keleusma::selfhost::wire_windowed_via_kel(&module, want.len(), &regions);
+
+        if matches!(expect, Expect::WalkRefuses) {
+            let err = got.err().unwrap_or_else(|| {
+                panic!(
+                    "{stage}: the driver ACCEPTED a module whose constant forest is past the \
+                     walk's cap; emitting it would mean the walk silently truncated"
+                )
+            });
+            // The REASON is asserted. A refusal for some other cause is not this
+            // limit being respected.
+            let detail = format!("{err:?}");
+            assert!(
+                detail.contains("-240") || detail.contains("240"),
+                "{stage}: refused, but not by the walk's node cap: {detail}"
+            );
+            refused += 1;
+            continue;
+        }
+
+        let got = got.unwrap_or_else(|e| panic!("{stage}: the windowed driver refused: {e:?}"));
+        let expect_chunks = matches!(expect, Expect::Full);
+        assert_eq!(
+            got.chunks_emitted,
+            expect_chunks,
+            "{stage}: chunks_emitted is {} with {} chunks against a cap of 90",
+            got.chunks_emitted,
+            module.chunks.len()
+        );
+        if expect_chunks {
+            full += 1;
+        } else {
+            no_chunks += 1;
+        }
+
+        let mut compared = 0;
+        for k in [kind::NAMES, kind::STRING_POOL, kind::HEADER, kind::CHUNKS] {
+            if k == kind::CHUNKS && !got.chunks_emitted {
+                continue;
+            }
+            let region = view.find_region(k).expect("region");
+            let base = region.byte_offset().expect("offset");
+            let stored = view.region_bytes(&region).expect("payload");
+            assert!(
+                !stored.is_empty(),
+                "{stage}: region {k:#06x} is empty, so this compares nothing"
+            );
+            assert_eq!(
+                &got.bytes[base..base + stored.len()],
+                stored,
+                "{stage}: region {k:#06x} differs from the reference"
+            );
+            compared += 1;
+        }
+        assert!(
+            compared >= 3,
+            "{stage}: only {compared} regions were compared"
+        );
+    }
+
+    assert_eq!(full, 9, "nine stages should emit every region");
+    assert_eq!(no_chunks, 1, "only `parse` is past the batch cap");
+    assert_eq!(refused, 1, "only `wire` is past the walk's node cap");
+}
+
+/// MUST FIRE: the windowed path reaches a stage the absolute-offset path cannot.
+///
+/// Without this the test above could pass on a set of stages that never needed
+/// windowing at all, and the ceiling would look lifted because nothing pushed
+/// against it.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_absolute_path_still_refuses_what_the_window_reaches() {
+    let src = std::fs::read_to_string("src/selfhost/kel/parse.kel").expect("read");
+    let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+
+    let specs = region_counts_for(&want);
+    let mut vm = vm_for(WIRE_KEL);
+    let (_, directory) = run_call(
+        &mut vm,
+        &Call {
+            cmd: CMD_BUILD_REGION_TABLE,
+            nregions: specs.len() as i64,
+            seed: &[],
+            regions: &specs,
+            fields: &[],
+            names: &[],
+            pool: &[],
+            args: [0, 0, 0, 0, 0],
+            read_len: want.len(),
+        },
+    )
+    .expect("run");
+
+    assert!(
+        keleusma::selfhost::wire_chunks_via_kel(&module, &directory, specs.len()).is_err(),
+        "the absolute-offset driver accepted `parse`, so the windowed path is not \
+         reaching anything the old one could not and the test above proves less than \
+         it appears to"
+    );
+}
+
+/// THE CHUNK REGION, FROM A MODULE, ON REAL STAGES.
+///
+/// # Which stages, and why not all eleven
+///
+/// Two limits, both mirrored from `wire.kel`:
+///
+/// - **90 chunk records per call.** `wire.fin` is 1024 words at eleven per chunk.
+///   Refused by the driver before the stage runs.
+/// - **65,536 artifact bytes.** The emitter writes at ABSOLUTE artifact offsets
+///   into `wire.bytes`, so a region past the buffer faults. It **fails closed**
+///   with an out-of-bounds naming the offset and the bound, which the driver
+///   turns into a refusal rather than a truncation.
+///
+/// Measured over the eleven stage sources: `wire.kel` has 469 chunks and
+/// `parse.kel` 94, both past the record cap; `codegen.kel` reaches byte 110,648
+/// and `verify_structural.kel` 101,920, both past the buffer. **Seven stages
+/// satisfy both** and are the subjects here. The four that do not are asserted to
+/// be refused FOR ONE OF THOSE TWO REASONS, so a refusal for some unrelated cause
+/// does not count as the limit being respected.
+///
+/// # What each field owes to whom
+///
+/// The stage **computes** the name index, taking it from the interner that
+/// produced `NAMES` beside it rather than from the host, and **computes** the
+/// three running range cursors by accumulation across records. The other ten
+/// fields per record are host-supplied. Asserted by
+/// `the_chunk_name_index_comes_from_the_interner`.
+///
+/// # What this does NOT establish
+///
+/// That the emit path scales. Seven of eleven stages is not the corpus, and the
+/// four excluded are the four largest. The windowed emitter exists and is driven
+/// from harness inputs only.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_driver_emits_the_chunk_region_on_the_stages_that_fit() {
+    use keleusma::wire_schema::kind;
+
+    const STAGES: &[(&str, bool)] = &[
+        ("lexer", true),
+        ("reconstruct", true),
+        ("analyze", true),
+        ("verify_yield", true),
+        ("verify_depth", true),
+        ("verify_typed", true),
+        ("verify_datalayout", true),
+        ("parse", false),
+        ("codegen", false),
+        ("verify_structural", false),
+        ("wire", false),
+    ];
+
+    let mut emitted = 0;
+    let mut refused = 0;
+    for (stage, fits) in STAGES {
+        let path = format!("src/selfhost/kel/{stage}.kel");
+        let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+        let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse"))
+            .unwrap_or_else(|e| panic!("{stage}: compile: {e:?}"));
+        let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module))
+            .unwrap_or_else(|e| panic!("{stage}: encode: {e:?}"));
+        let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+
+        let specs = region_counts_for(&want);
+        let mut vm = vm_for(WIRE_KEL);
+        let (_, directory) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_BUILD_REGION_TABLE,
+                nregions: specs.len() as i64,
+                seed: &[],
+                regions: &specs,
+                fields: &[],
+                names: &[],
+                pool: &[],
+                args: [0, 0, 0, 0, 0],
+                read_len: want.len(),
+            },
+        )
+        .expect("run");
+
+        let got = keleusma::selfhost::wire_chunks_via_kel(&module, &directory, specs.len());
+
+        if !fits {
+            let err = got.err().unwrap_or_else(|| {
+                panic!(
+                    "{stage}: the driver ACCEPTED a module past a stated limit ({} chunks, \
+                     {}-byte artifact); truncating either emits a structurally valid \
+                     artifact that is wrong",
+                    module.chunks.len(),
+                    want.len()
+                )
+            });
+            let detail = format!("{err:?}");
+            assert!(
+                detail.contains("chunk records per call")
+                    || detail.contains("absolute artifact offsets"),
+                "{stage}: refused, but not for either stated limit: {detail}"
+            );
+            refused += 1;
+            continue;
+        }
+
+        let out = got.unwrap_or_else(|e| panic!("{stage}: the driver refused: {e:?}"));
+        for k in [kind::NAMES, kind::STRING_POOL, kind::HEADER, kind::CHUNKS] {
+            let region = view.find_region(k).expect("region");
+            let base = region.byte_offset().expect("offset");
+            let stored = view.region_bytes(&region).expect("payload");
+            assert!(
+                !stored.is_empty(),
+                "{stage}: region {k:#06x} is empty, so this case compares nothing"
+            );
+            assert_eq!(
+                &out[base..base + stored.len()],
+                stored,
+                "{stage}: region {k:#06x} differs from the reference"
+            );
+        }
+        emitted += 1;
+    }
+
+    assert_eq!(emitted, 7, "expected seven stages emitted");
+    assert_eq!(refused, 4, "expected four stages refused");
+}
+
+/// MUST FIRE: the chunk record's name index is the STAGE's, not the host's.
+///
+/// The host seeds slot zero of every record with zero and the stage overwrites it
+/// from the interner. If the indices came out zero, the field would be
+/// host-carried rather than computed and the coverage claim above would be wrong.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_chunk_name_index_comes_from_the_interner() {
+    use keleusma::wire_schema::kind;
+
+    let src = std::fs::read_to_string("src/selfhost/kel/verify_yield.kel").expect("read");
+    let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+    let specs = region_counts_for(&want);
+    let mut vm = vm_for(WIRE_KEL);
+    let (_, directory) = run_call(
+        &mut vm,
+        &Call {
+            cmd: CMD_BUILD_REGION_TABLE,
+            nregions: specs.len() as i64,
+            seed: &[],
+            regions: &specs,
+            fields: &[],
+            names: &[],
+            pool: &[],
+            args: [0, 0, 0, 0, 0],
+            read_len: want.len(),
+        },
+    )
+    .expect("run");
+
+    let out = keleusma::selfhost::wire_chunks_via_kel(&module, &directory, specs.len())
+        .expect("the driver emits");
+    let region = view.find_region(kind::CHUNKS).expect("chunks region");
+    let base = region.byte_offset().expect("offset");
+    let stride = view.region_bytes(&region).expect("payload").len() / module.chunks.len();
+
+    let mut non_zero = 0;
+    for j in 0..module.chunks.len() {
+        let at = base + j * stride;
+        let idx = u32::from_le_bytes([out[at], out[at + 1], out[at + 2], out[at + 3]]);
+        if idx != 0 {
+            non_zero += 1;
+        }
+    }
+    assert!(
+        non_zero >= module.chunks.len() - 1,
+        "only {non_zero} of {} chunk name indices are non-zero; the host seeds them all with \
+         zero, so the stage is not filling them from the interner",
+        module.chunks.len()
+    );
 }
 
 /// THE DRIVER EMITS A THIRD REGION, AND THE THIRD IS WEAKER THAN THE FIRST TWO.

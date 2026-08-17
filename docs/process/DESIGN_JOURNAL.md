@@ -13,6 +13,234 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE CONSTS BLOCKER WAS NEITHER OF THE TWO THINGS RECORDED, AND WIDENING THE ARRAY DIVERGES
+(2026-08-16).**
+
+**Both recorded obstacles were wrong about what stops the largest region, and one of them has no
+instances at all.** The operator authorised Option B, re-sequencing the reference flattener to match
+the self-hosted interning order, after a discovery-order investigation. The investigation says the
+conflict is unreachable: the flattener interns only for `StaticStr`, `Struct` and `Enum`, and all
+**40,332 constants across the eleven stages are `Int`**. There is nothing to re-sequence.
+
+**A measurement that could not discriminate, caught before it was recorded.** The first probe walked
+`Chunk::constants` only and reported zero name-bearing nodes. Right answer, wrong evidence: chunk
+pools are 2,245 of the 40,332, and the other 38,087 arrive through `DataLayout::private_init`. The
+second probe compared string pools with and without every constant, saw a 5,264-byte difference for
+`parse`, and **nearly recorded the opposite conclusion** — clearing `private_init` also removes the
+slot names `add_data_layout` interns directly. Only the third form, holding the layout in place and
+clearing just what the flattener sees, separates them. Same lesson as `analyze.kel`, second
+occurrence.
+
+**THE REAL BLOCKER IS A CAPACITY BOUND, AND WIDENING THE ARRAY IS SELF-DEFEATING.** The flattener
+already runs from real modules and already emits a byte-identical region. `wire.fin` is 1,024 words
+at six words a node, so the flattener walk takes **170 nodes against `parse`'s 17,391**.
+
+**AND I GOT THE NEIGHBOURING FIGURE WRONG WHILE CORRECTING THIS ONE.** I recorded, and sent to the
+other line, that the mailbox row reading "constant nodes past the walk's 1,024" stated a word count
+as though it were a node count. It does not. There are TWO caps: the module-input node walk refuses
+past **1,024 nodes** (`nm_max_names`, error `-240`), which is what `wire.kel` hits at 1,148 chunk
+constants, and the flattener out of `wire.fin` refuses past **170**. Only the second is about words.
+Measured after the fact, which is the wrong order and the whole point. Retracted on the version
+branch rather than quietly edited, because it had already been sent.
+
+A stage's private data array is initialised one `Int(0)` per word, so a `fin` wide enough for N
+nodes adds `6N` records to the walking stage's **own** `CONSTS`. Holding `parse`'s forest costs
+1,669,536 bytes to emit 278,256 — **six times the region it is trying to produce**. The stage's
+capacity to describe a data segment is paid for out of a data segment described the same way, so
+the approach diverges. Batching is the only route, and this corpus is its easy case: a forest of
+scalars with no interning and no children carries no state between batches.
+
+**A SECOND GAP, UNRECORDED UNTIL NOW.** The tested node model omitted `private_init` entirely, so
+the byte-identical path covered 6% of the region. Every `FLATTEN_CASES` source used `const data`,
+which folds into chunk constants; only `private data` reaches the other pool. Three cases added, and
+the must-fire check confirms it: without the second source, `data-scalar` reports one node against
+the reference's two.
+
+**AND THE FIRST ATTEMPT AT THAT FIX BROKE TWO TESTS**, which is the useful part. Folding
+`private_init` into the shared `const_roots_of` took `parse`'s blob from about 8 KB to **530,675
+bytes**, past `bin`. The blob model and the encoder model are different things and the helper was
+serving both. Now two functions.
+
+**RECORDED, NOT ACTED ON.** Every one of the 38,087 data-segment initialisers is `Int(0)`, at a
+16-byte record each — roughly **85% of the corpus auxiliary body spent encoding zeros**. It is also
+what makes the region too large to window. Collapsing it is a wire-format change and belongs to the
+operator.
+
+Five tests pin every figure above. The doc comment they correct quoted 663,120 bytes where the
+measured total is 645,312.
+
+---
+
+**A YIELD IS A SUSPENSION, NOT A CONSUMPTION, AND `--all-features` HAS NEVER BEEN GREEN
+(2026-08-16).**
+
+**The operand-stack ranging check has now emptied its own known-disagreement list.** All three
+entries are repaired against the virtual machine handlers, and the two models agree on every opcode
+in the set. Two of the three were reachable by no case in the five-case comparison the ranging check
+replaced, which remains the argument for ranging over the opcode table rather than extending a case
+list.
+
+| opcode | peak-model net | true net | direction | effect of repair |
+|---|---|---|---|---|
+| `Yield` | -1 | **0** | **understates** | raises bounds |
+| `FixedMul` | 0 | **-1** | overstates | lowers bounds |
+| `FixedDiv` | 0 | **-1** | overstates | lowers bounds |
+
+**THE YIELD ENTRY WAS THE UNSOUND ONE AND THE OPERATOR'S READING WAS HALF OF IT.** The reading put
+to me was that the yielded value lives in the caller's memory and therefore does not affect the
+worst-case-memory bound. That is correct **about the yielded value**, and the model already treats
+it that way. What it does not cover is the RESUMED value: `resume_after_enter` pushes the reply back
+onto the same operand stack (`vm.rs`, `sp!(self, input)`), so the depth on the far side of the
+boundary is the depth on the near side. The pop was modelled and the push was not.
+
+**Measured end to end rather than argued.** Two sources carrying the identical peak expression,
+differing only in whether three yields precede it: 192 bytes against 288, a shortfall of exactly one
+value slot per yield. The running offset reached **-4** on a three-yield body, first going negative
+at the `SetLocal` binding the first resumed value. An operand stack cannot hold a negative number of
+entries, and every peak computed after that point is taken from a base that does not exist.
+
+The invariant is now a test in its own right rather than a pair of numbers, because the numbers
+version only catches the shapes a case list happens to name.
+
+**`--all-features` IS NOT A SUPPORTED CONFIGURATION AND `CLAUDE.md` SAID IT PASSES.** Found by
+running it as a gate for the above. It cascades the mutually exclusive `narrow-word-*` selectors
+into the narrowest word, under which the test pinning 64-bit checked-addition semantics fails, and
+it pulls in `sdl3-example`. **The continuous-integration workflow already says so in a comment on
+its broad-features job.** The instruction file every session reads said the opposite, and pointed
+the everyday verification command at the same unsupported set. Corrected to the three sets
+continuous integration actually runs.
+
+This is the eighth stale-figure incident on this line and the first one in the file that governs how
+the work is done, which makes it the most expensive of them. The pattern holds: seven of the eight
+were in documents no test reads.
+
+---
+
+**THE BUFFER CEILING WAS NEVER REGION SIZE, AND THE HANDOFF WAS CERTIFYING ITS OWN STALENESS
+(2026-08-16).**
+
+**Measured before building, which changed the design.** Every one of the four emitted regions fits
+the 65,536-byte window on every stage — the largest is `wire`'s `CHUNKS` at 22,512 bytes, a third of
+it. What overflowed was the ABSOLUTE OFFSET: `parse` puts `NAMES` at byte 299,416. So the fix is one
+region per call at window offset zero with the host placing it, not batching within a region.
+
+**THREE LIMITS, AND THEY ARE DIFFERENT LIMITS.** Recorded separately because conflating them is
+exactly how the `ck_emit_window` comment came to claim absolute positioning "works for no real
+stage" while citing offsets an order of magnitude wrong.
+
+| limit | who it excludes | status |
+|---|---|---|
+| artifact offset past the buffer | `parse`, `codegen`, `verify_structural` | **lifted** |
+| chunk records past one batch of 90 | `parse` (94) | other regions emit |
+| constant nodes past the walk's 1024 | `wire` (**1,148**) | cannot be walked at all |
+
+**TWO DEFECTS I INTRODUCED, BOTH FOUND BY A TEST RATHER THAN BY READING.**
+
+The dispatch chain hit the parser's depth ceiling at twenty-two arms and **presented as a stack
+overflow in the test binary**, not a parse error — precisely what this file already recorded for
+`dispatch_emit` at twenty. Split into a new group rather than hunting the exact ceiling.
+
+And `wire.fin` is 1024 words whose users OVERLAP: chunk records take 0..990 at eleven each, the
+header rides 990..1001. `parse`'s 94 chunks are 1,034 fields, which **silently rewrote the header**.
+It surfaced as one stage's header differing from the reference while every other stage passed — the
+kind of single-subject failure that is easy to dismiss as noise.
+
+**THE HANDOFF WAS THE OTHER HALF, AND IT WAS THE MORE DANGEROUS ONE.** Stamped six merges back, it
+**passed every one of its own validity checks** — ancestor, boundary 79/4/1, block-form 8 — while
+naming a repaired bound as the top open item and saying the emit path covered two region kinds when
+it covered four. A document that certifies its own currency and is wrong is worse than one that
+reports staleness, which is what its own header says.
+
+Rewritten whole. The durable material survives — the workflow, the method rules, the `/goal`
+observations, the hazards. What was replaced is the state, the macro position and the open items.
+**Its check block now includes a warning that passing checks are not a current document**, because
+that is the failure this instance actually had.
+
+---
+
+**THE TYPE STAGE NOW RESOLVES, AND THE INTERESTING PART IS WHERE THE JOIN LIVES (2026-08-16).**
+
+**The rules were complete; the reach was not.** Every rule fired on a pair of TAGS, and `expr_tag`
+typed only literals, so an error routed through a `let` or a call was accepted. Every one of the
+sixteen corpus cases placed its operands as literals, so the limit was invisible — the same
+meta-defect this line keeps finding, this time in its own type corpus.
+
+**THE TRAP WAS A FOUR-LINE HOST CHANGE THAT WOULD HAVE LOOKED LIKE SUCCESS.** Extending `expr_tag`
+to resolve names makes all the failing cases pass and makes the checker LESS self-hosted, because
+every tag the host resolves is a decision the stage did not make. The sizing spike's prototype did
+exactly that and was labelled throwaway for exactly that reason.
+
+**The line that made this tractable**: a DECLARED type is syntax and the host may report it; an
+INFERRED one is a conclusion and the stage must reach it. `fn f(a: Word)` and `let b = true` are
+text on the page. Which operand a binding flows to is not.
+
+So the stage gained a binding table and an operand FORM, and does the join. `the_stage_and_not_the
+_host_resolves_an_operand` is what makes that checkable rather than asserted: withhold the binding
+rows and the identical program is ACCEPTED. Without that test the claim would rest on my say-so.
+
+**THE CASE THE SIZING MISSED, AND WHY IT MISSED IT.** `let a = g(); a + true` needs the let rule and
+the declared-return rule COMPOSED. The spike's prototype composed them in the host and so reported
+5 of 5 without noticing that the composition was the whole question. In the stage it needs an alias
+row — `a` binds to the NAME `g` — and one bounded hop. **A throwaway prototype measures
+reachability, not where the reasoning belongs**, and that is the useful correction to how I sized it.
+
+**The hop bound is a decision, stated as one.** A chain longer than one hop resolves to unknown and
+therefore ACCEPTS, which is the safe direction: this stage may not refuse a program it cannot type.
+A total language needs a static cap, so raising it is a choice about how much chaining to admit.
+
+**The corpus grew 16 to 20** rather than shrinking, and the four former disagreements are ordinary
+members driven through the resolving path. `the_rules_reach_only_literal_direct_occurrences` is
+retired with a pointer, because the limit it pinned MOVED rather than vanished:
+`the_rules_still_do_not_reach_a_derived_operand` holds the new edge, where an operand's type comes
+from an arithmetic result.
+
+**Still not self-hosted, and the header says which half.** The extraction is Rust walking the
+reference parser's AST. This slice moved the RESOLUTION.
+
+---
+
+**THE CHUNK REGION REACHES SEVEN OF ELEVEN STAGES, AND INFERENCE IS SMALLER THAN FEARED
+(2026-08-16).**
+
+**`CHUNKS` from a `Module`, byte-identical, on real stages.** `mi_join_chunks` is additive beside
+`mi_join_header`; `highest_command` moved 168 to 169. The stage COMPUTES the name index, taking it
+from the interner that produced `NAMES` rather than from the host, and computes the three range
+cursors by accumulation. Ten fields per record are host-supplied, and the split is asserted by
+`the_chunk_name_index_comes_from_the_interner` rather than described.
+
+**Seven of eleven, and the four exclusions are asserted with their REASONS.** `wire` (469 chunks)
+and `parse` (94) exceed the 90-record batch; `codegen` and `verify_structural` reach past the
+65,536-byte buffer at 110,648 and 101,920. A test that only asserted refusal would pass on a
+refusal for any cause, so it asserts which limit the message names.
+
+**I WROTE A GUARD THAT COULD NEVER FIRE, AND FOUND IT BY MEASURING.** The first version compared
+`directory.len()` against the buffer to refuse an oversize artifact. That length is the SHARED
+ARRAY's size, 65,536 for every module, so the comparison was false by construction. Removed rather
+than repaired: the stage already fails closed with an out-of-bounds naming the offset and the bound,
+which is a better refusal than a host guess. **A guard that cannot fire reads as coverage**, which is
+this line's recurring defect wearing a new hat.
+
+**THE COMMENT GOVERNING THAT DESIGN WAS ITSELF STALE.** It said absolute positioning "works for no
+real stage", citing `verify_datalayout` NAMES at 81,160 and `verify_yield` CHUNKS at 143,096. The
+real values are 1,504 and 30,576, and seven stages fit entirely. Fifth stale figure this session.
+
+**INFERENCE IS TWO LOCAL RULES, NOT A HINDLEY-MILNER PORT.** The sizing spike measures a throwaway
+prototype adding exactly two lookups — a `let` binds its initialiser's tag, and a call or parameter
+takes its DECLARED type — against cases the stage accepts today. **Five of five, including the
+composed case.** Nothing unifies: no substitution, no occurs check, no type variable.
+
+**And the structural reason is better than the count.** The subset is monomorphic code in which every
+function declares its parameter and return types and every `let` has an initialiser, so there is no
+position where a type is determined by use. **No new channel either** — `ParsedFn` already carries
+`param_types` and `return_type`, and let initialisers are in the body records. The tags are a
+computation over records the pipeline already emits.
+
+**Recorded as a range, not a number**, in `docs/decisions/TYPECHECK_INFERENCE_SIZING.md`, with what
+would change the answer: a `let` without an initialiser, a function without a declared return type,
+or generics. Each turns two rules into a fixpoint.
+
+---
+
 **THE TYPE-REJECTION RULES WERE ALREADY DONE, AND THE REAL LIMIT IS ONE LAYER UNDER THEM
 (2026-08-16).**
 

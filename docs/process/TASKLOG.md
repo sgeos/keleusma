@@ -10,6 +10,45 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-16, fifth).** Two increments on `fix/operand-stack-model-remainder`.
+>
+> **The operand-stack known-disagreement list is EMPTY.** All three entries repaired against the
+> virtual machine handlers. `Op::Yield` had net -1 against a true net 0 -- the **unsound** direction:
+> the model accounted for the pop of the yielded value and not for `resume_after_enter` pushing the
+> reply back onto the same stack. Measured end to end, two sources with the identical peak expression
+> report **192 bytes against 288**, one value slot short per preceding yield, and the running offset
+> reached **-4** on a three-yield body. `FixedMul` and `FixedDiv` had net 0 against a true net -1,
+> which merely overstates, so their repair LOWERS bounds. This supersedes the "pinned, not repaired"
+> note below for all three.
+>
+> **`--all-features` HAS NEVER PASSED and `CLAUDE.md` claimed it did**, and pointed the everyday
+> verification command at it. It cascades the mutually exclusive `narrow-word-*` selectors into the
+> narrowest word, under which the 64-bit checked-addition test fails. **CI already documents this** in
+> a comment on its broad-features job. Corrected to the three sets CI actually runs. Eighth
+> stale-figure incident, and the first in the file that governs how the work is done.
+>
+> **CONSTS: neither recorded obstacle is what blocks it.** The interning-order conflict is
+> UNREACHABLE -- the flattener interns only for `StaticStr`, `Struct` and `Enum`, and all **40,332
+> constants across the eleven stages are `Int`**, so Option B has nothing to re-sequence. The real
+> bound is capacity: `wire.fin` is 1,024 WORDS at six words a node, so the FLATTENER walk takes
+> **170 nodes** against `parse`'s 17,391. **Two caps, and an earlier revision of this note conflated
+> them**: the MODULE-INPUT node walk separately refuses past 1,024 NODES (`nm_max_names`, error
+> -240), which is what `wire.kel` hits at 1,148 chunk constants, so the note below is correct as
+> written and the correction of it was the error.
+> Widening the array **diverges**: a private data array is initialised one `Int(0)` per word, so a
+> `fin` for N nodes adds `6N` records to the walker's own `CONSTS`, six times the region it would
+> emit. Batching is the route.
+>
+> **A second gap: the tested node model omitted `DataLayout::private_init`**, which is 38,087 of the
+> 40,332 constants, because every `FLATTEN_CASES` source used `const data`. Three `private data` cases
+> added; the byte identity now covers both pools. Folding the two sources into one shared helper took
+> `parse`'s blob to **530,675 bytes** and broke two join tests, so the blob model and the encoder model
+> are now separate functions.
+>
+> **Held for the operator**: every one of the 38,087 data-segment initialisers is `Int(0)`, roughly
+> **85% of the corpus auxiliary body spent encoding zeros**, and it is also what makes the region too
+> large to window. Collapsing it is a wire-format change.
+
 > **Currency note (2026-08-15).** The interner's name ceiling is raised and the join now covers the
 > whole stage corpus. `parse.kel` (627 names, a 33,395-byte module blob) emits `NAMES` and
 > `STRING_POOL` byte-identically, as do the other nine stages. The "hard limit of 512" recorded in
@@ -38,6 +77,35 @@ Current sprint source of truth.
 > disagreeing on its first run — peak-model net 0 against a handler that pops twice and pushes once.
 > **Pinned, not repaired**: that error overstates, so repairing it lowers shipped bounds and wants its
 > own increment. `Op::Yield` likewise stays pinned, measured to be a different cause.
+
+> **Currency note (2026-08-16, fourth and last of the day).** Two more increments landed, PRs #142
+> and #144.
+>
+> **The type stage now RESOLVES a name, not just compares tags.** Every rule fired on a pair of tags
+> and `expr_tag` typed only literals, so an error routed through a `let` or a call was ACCEPTED --
+> and all sixteen corpus cases placed their operands as literals, so the limit was invisible. The
+> stage gained a binding table and an operand FORM and performs the join itself. **The trap was a
+> four-line host change that would have looked like success**: resolving names in `expr_tag` turns
+> every failing case green and makes the checker LESS self-hosted.
+> `the_stage_and_not_the_host_resolves_an_operand` keeps it honest by withholding the rows and
+> requiring the same program to be ACCEPTED. Corpus 16 -> 20, both guards raised. **The extraction is
+> still host-side**; this moved the RESOLUTION only.
+>
+> **The artifact-size ceiling is LIFTED and it was never region size.** Every emitted region fits the
+> 65,536-byte window on every stage -- the largest is `wire`'s `CHUNKS` at 22,512 bytes. What
+> overflowed was the ABSOLUTE OFFSET (`parse` puts `NAMES` at byte 299,416), so each region is now
+> emitted at window offset zero and placed by the host. **Ten of eleven stages reached.** THREE
+> DIFFERENT LIMITS, kept separate because conflating them produced the last stale comment: the offset
+> ceiling (lifted); `parse`'s 94 chunks against a 90-record batch (other regions emit); and
+> **`wire.kel`'s 1,148 constant-forest nodes against the walk's 1,024 cap**, which stops it being
+> walked at all. Both remaining exclusions assert WHICH limit they hit.
+>
+> **The emit path now covers FOUR region kinds**, correcting the note below. `STRUCT_AUX` and
+> `ENUM_AUX` remain EMPTY in all eleven stages, so a byte identity for either proves nothing.
+>
+> **`HANDOFF.md` was rewritten whole because it passed every one of its own validity checks while
+> being wrong about the top open item and the emit coverage.** Its check block now warns that passing
+> checks are not a current document.
 
 > **Currency note (2026-08-16, third).** The module-driven emit path reaches **three** region kinds
 > and the three are not equal. `NAMES` and `STRING_POOL` are COMPUTED by the stage from the module

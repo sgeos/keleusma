@@ -2630,6 +2630,7 @@ private data nm {
     // result is CHECKED, not summed; see `jn` for what a sum hid.
     jj: Word,
     jh: Word,
+    jc: Word,
 }
 
 // The longest name this slice admits, and it is a STATED CAP rather than a
@@ -3198,6 +3199,132 @@ fn mi_join_header() -> Word {
     if dir_find(kind_header()) < 0 { 0 - 255 } else {
         nm.jh = emit_header_record_at(region_base(dir_find(kind_header())));
         if nm.jh < 0 { nm.jh } else { nm.jj + nm.jh } } }
+}
+
+// THE JOIN, WIDENED TO THE CHUNK REGION.
+//
+// Additive beside `mi_join_header` for the same reason that one is additive
+// beside `mi_join`: each is what some caller relies on, and each emit result is
+// CHECKED rather than summed.
+//
+// THE NAME FIELD IS THE INTERNER'S OWN OUTPUT, NOT A HOST INPUT. Chunk names are
+// the first `warg` names the walk interns, so record `i` takes `nmap[i]`. It is
+// OVERWRITTEN here rather than seeded, so a host that supplied a different index
+// cannot disagree with the interner that produced the `NAMES` region beside it.
+// The three range cursors are computed by `emit_chunks_batch` as before. The
+// remaining ten fields per record are host-supplied: counts, debug span, opcode
+// span, local and parameter counts, and the block tag.
+//
+// SINGLE BATCH ONLY. `ck_max` is 90 records and this writes at ABSOLUTE artifact
+// offsets, so it serves a module whose chunk count fits one batch AND whose
+// artifact fits `wire.bytes`. `ck_emit_window` exists for the rest and is not
+// driven from a module yet; the host refuses rather than truncating.
+// Where the header record's eleven fields ride when the chunk join is running.
+//
+// `fin` is 1024 words. Chunk records take eleven each from slot zero, and 90 is
+// the record cap, so slots 0..990 belong to the chunks and the header takes
+// 990..1001. **The two CANNOT share slot zero**: every region of one artifact is
+// emitted in a single call, because shared data is re-seeded on every call, so a
+// header read from slot zero would read chunk data instead. Found by writing it
+// that way first.
+fn header_field_base() -> Word { 990 }
+
+// `emit_header_record_at` with the field base given rather than assumed zero.
+// Additive: the original keeps its slot-zero reading and its callers.
+fn emit_header_record_from(at: Word, b: Word) -> Word {
+    put_u32(at + header_off_entry_point(), wire.fin[b]);
+    put_u8(at + header_off_word_bits_log2(), wire.fin[b + 1]);
+    put_u8(at + header_off_addr_bits_log2(), wire.fin[b + 2]);
+    put_u8(at + header_off_float_bits_log2(), wire.fin[b + 3]);
+    put_u8(at + header_off_flags(), wire.fin[b + 4]);
+    put_u32(at + header_off_wcet_cycles(), wire.fin[b + 5]);
+    put_u32(at + header_off_wcmu_bytes(), wire.fin[b + 6]);
+    put_u32(at + header_off_shared_data_bytes(), wire.fin[b + 7]);
+    put_u32(at + header_off_private_data_bytes(), wire.fin[b + 8]);
+    put_u32(at + header_off_schema_hash(), wire.fin[b + 9]);
+    put_u32(at + header_off_reserved(), wire.fin[b + 10]);
+    header_stride()
+}
+
+fn mi_join_chunks() -> Word {
+    nm.jj = mi_join();
+    if nm.jj < 0 { nm.jj } else {
+    if dir_find(kind_header()) < 0 { 0 - 255 } else {
+    if dir_find(kind_chunks()) < 0 { 0 - 261 } else {
+    if wire.warg > ck_max() { 0 - 262 } else {
+        nm.jh = emit_header_record_from(
+            region_base(dir_find(kind_header())),
+            header_field_base(),
+        );
+        for i in 0..wire.warg limit 90 {
+            wire.fin[i * ck_fields()] = wire.nmap[i];
+        }
+        nm.jc = emit_chunks_computed(region_base(dir_find(kind_chunks())), wire.warg);
+        if nm.jh < 0 { nm.jh } else {
+        if nm.jc < 0 { nm.jc } else { nm.jj + nm.jh + nm.jc } } } } } }
+}
+
+// --- THE WINDOWED JOINS: ONE REGION PER CALL, WRITTEN AT OFFSET ZERO ------
+//
+// **The buffer ceiling was never about region SIZE.** Measured across the eleven
+// stages, the largest of these four payloads is `wire`'s `CHUNKS` at 22,512
+// bytes, a third of the window. What overflows is the ABSOLUTE OFFSET: `parse`
+// puts `NAMES` at byte 299,416 of a 304,432-byte artifact, and the joins write
+// there directly.
+//
+// So each of these emits ONE region at window offset ZERO and returns the byte
+// length written. The host copies that many bytes to the region's true base. The
+// buffer stops being a picture of the artifact and becomes a window onto one
+// region of it, which is the same move `ck_emit_window` already makes for a
+// host-supplied batch.
+//
+// ONE REGION PER CALL COSTS A RE-WALK, AND THAT IS SOUND RATHER THAN WASTEFUL.
+// Shared data is re-seeded on every call, so each of these re-walks the blob and
+// re-interns. The interner is a pure function of its input -- `intern_index_of`
+// relies on exactly this and says so -- meaning the second run is the same answer
+// rather than a second answer. A host that instead carried indices between calls
+// would be reproducing the stage's output, which is the drift this file has
+// recorded four times.
+fn mi_window_prepare() -> Word {
+    nm.mode = mi_mode_silent();
+    nm.total = mi_chunk_names();
+    nm.mode = mi_mode_pairs();
+    if nm.total < 0 { nm.total } else { intern_run_preoffset(nm.total) }
+}
+
+fn mi_window_names() -> Word {
+    nm.jj = mi_window_prepare();
+    if nm.jj < 0 { nm.jj } else { emit_name_records_from_nout(0, nm.cnt) }
+}
+
+fn mi_window_pool() -> Word {
+    nm.jj = mi_window_prepare();
+    if nm.jj < 0 { nm.jj } else {
+        nm.jp = emit_pool_bytes_from_bout(0, nm.ocur);
+        nm.jd = emit_pool_pad(nm.ocur, nm.ocur);
+        if nm.jp < 0 { nm.jp } else {
+        if nm.jd < 0 { nm.jd } else { nm.jp + nm.jd } } }
+}
+
+// The header needs no walk: its eleven fields ride `fin` from the host, so this
+// is the ENCODING in a window and nothing more. Reported that way rather than
+// counted alongside the two above, which derive every byte from the blob.
+fn mi_window_header() -> Word {
+    emit_header_record_from(0, header_field_base())
+}
+
+// Chunk records at window offset zero, with the NAME field taken from the
+// interner rather than from the host, exactly as `mi_join_chunks` does. Still one
+// batch: `ck_max` is 90, so a module with more chunks is refused here and the
+// batching carries remain undriven from a module.
+fn mi_window_chunks() -> Word {
+    nm.jj = mi_window_prepare();
+    if nm.jj < 0 { nm.jj } else {
+    if wire.warg > ck_max() { 0 - 262 } else {
+        for i in 0..wire.warg limit 90 {
+            wire.fin[i * ck_fields()] = wire.nmap[i];
+        }
+        emit_chunks_computed(0, wire.warg) } }
 }
 
 // The `NAMES` index that input name `j` resolved to.
@@ -3975,11 +4102,17 @@ fn ck_emit_batch() -> Word {
 // SLICE 17: the same batch, emitted into a LOW WINDOW.
 //
 // `ck_emit_batch` positions records at `region_base(i) + rec * stride`, an
-// ABSOLUTE artifact offset, and `wire.bytes` is 65,536. Measured 2026-08-11, that
-// works for no real stage: `verify_datalayout` is the smallest of the ten and its
-// `NAMES` region starts at byte 81,160, while `verify_yield` has `CHUNKS` at
-// 143,096. Absolute positioning holds for artifacts under 65,536 bytes, which is
-// the constructed corpus and nothing else.
+// ABSOLUTE artifact offset, and `wire.bytes` is 65,536.
+//
+// **RE-MEASURED 2026-08-16, AND THE FIGURES THAT WERE HERE WERE STALE.** This
+// comment read that absolute positioning "works for no real stage", citing
+// `verify_datalayout` NAMES at byte 81,160 and `verify_yield` CHUNKS at 143,096.
+// Both are wrong on the current format: the real values are 1,504 and 30,576, and
+// SEVEN of the eleven stages fit the buffer entirely. The four that do not are
+// `parse` (304,432 bytes), `codegen` (111,864), `verify_structural` (102,256) and
+// -- for the record cap rather than the buffer -- `wire` itself at 469 chunks.
+// A stale figure in a comment that governs a design decision is how this file's
+// own history records the 395,804 mistake being made.
 //
 // So the driver writes the batch at a caller-chosen offset and the host places
 // the result at the true one, patching the directory afterwards. The buffer stops
@@ -4246,6 +4379,20 @@ fn sq_emit_pool() -> Word {
 // error: a 2 MB test thread blows before the depth guard can report. Through the
 // CLI the same source is rejected cleanly at 23 arms, so a chain sized from a CLI
 // reading runs two to three arms too generous.
+// SPLIT OUT OF `dispatch_driver2`, WHICH HAD REACHED TWENTY-TWO ARMS.
+//
+// The parser's nesting limit again, and it presents as a STACK OVERFLOW in the
+// test binary rather than as a parse error -- the same failure this file already
+// records for `dispatch_emit` at twenty arms. A chain grows until it stops
+// compiling, so a new group is cheaper than finding the ceiling twice.
+fn dispatch_window(cmd: Word) -> Word {
+    if cmd == 170 { mi_window_names() } else {
+    if cmd == 171 { mi_window_pool() } else {
+    if cmd == 172 { mi_window_header() } else {
+    if cmd == 173 { mi_window_chunks() } else {
+    0 - 97 }}}}
+}
+
 fn dispatch_driver2(cmd: Word) -> Word {
     if cmd == 152 { sq_names() } else {
     if cmd == 153 { sq_poollen() } else {
@@ -4267,7 +4414,8 @@ fn dispatch_driver2(cmd: Word) -> Word {
     if cmd == 166 { mi_const_nodes() } else {
     if cmd == 167 { mi_join() } else {
     if cmd == 168 { mi_join_header() } else {
-    0 - 98 }}}}}}}}}}}}}}}}}
+    if cmd == 169 { mi_join_chunks() } else {
+    0 - 98 }}}}}}}}}}}}}}}}}}
 }
 
 fn dispatch_driver(cmd: Word) -> Word {
@@ -4299,7 +4447,7 @@ fn dispatch_driver(cmd: Word) -> Word {
 // did for four consecutive slices — and got wrong once.
 // RAISED FROM 167 for `mi_join_header`. This is a REAL GUARD: a new command
 // returns `0 - 99` until the ceiling moves, so the two must change together.
-fn highest_command() -> Word { 168 }
+fn highest_command() -> Word { 173 }
 
 fn main(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {
@@ -4311,7 +4459,8 @@ fn main(cmd: Word) -> Word {
     if cmd < 92 { dispatch_ops(cmd) } else {
     if cmd < 103 { dispatch_pool(cmd) } else {
     if cmd > highest_command() { 0 - 99 } else {
+    if cmd >= 170 { dispatch_window(cmd) } else {
     if cmd < 115 { dispatch_frame(cmd) } else {
     if cmd < 134 { dispatch_emit(cmd) } else {
-    if cmd < 152 { dispatch_driver(cmd) } else { dispatch_driver2(cmd) } } } } } } } } } } } }
+    if cmd < 152 { dispatch_driver(cmd) } else { dispatch_driver2(cmd) } } } } } } } } } } } } }
 }

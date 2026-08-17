@@ -9,6 +9,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A windowed emit path, lifting the artifact-size ceiling on self-hosted
+  auxiliary-body emission.** Each region is now emitted at offset zero of the
+  stage's buffer and placed at its true offset by the host, so a module whose
+  artifact is larger than that buffer is no longer refused. The ceiling was never
+  region size: the largest of the four emitted payloads across the eleven pipeline
+  stages is twenty-two kilobytes against a sixty-four kilobyte window, and what
+  overflowed was the offset, one stage placing its name region past byte 299,000.
+  Ten of the eleven stages are now reached. Two unrelated limits remain and are
+  reported separately, because conflating them is how an earlier comment came to
+  cite offsets an order of magnitude wrong: one stage exceeds the ninety-record
+  single batch for the chunk region and emits its other regions without it, and
+  one stage has a constant forest larger than the walk's node table and cannot be
+  walked at all. Both are asserted in the tests with the reason, not merely as
+  refusals.
+
+
+- **Local type resolution in the self-hosted type-rejection stage.** The stage
+  previously compared operand type tags and could therefore only reject an error
+  whose operands were written as literals; every case in its corpus was of that
+  shape, so the limit did not show. It now receives binding rows and operands
+  marked as naming something, and performs the join itself: a name resolves
+  through a declared parameter type, a declared return type or a literal
+  initialiser, with one further hop for a binding whose initialiser is a call.
+  The host supplies only what the source states outright and never the conclusion
+  that an operand has a particular type, which a test enforces by withholding the
+  binding rows and requiring the same program to be accepted. The ill-typed corpus
+  grows from sixteen cases to twenty. The input structure is still extracted by
+  the host from the reference parser, so the checker remains self-hosted in its
+  decisions and not in its input, and the tests say so where a reader meets them.
+
+
+- **The chunk region emitted from a compiled module through the Keleusma wire
+  stage, under the off-by-default `self-host` feature.** `wire_chunks_via_kel`
+  emits `NAMES`, `STRING_POOL`, the header record and the chunk region
+  byte-identically to the reference encoder, for the seven of eleven pipeline
+  stages that fit two stated limits. The stage computes each record's name index
+  from the interner that produced the names region, rather than accepting one from
+  the host, and computes the three running range cursors by accumulation across
+  records; the remaining ten fields per record are host-supplied, and the tests
+  assert that split rather than describing it. The four stages that do not fit —
+  two past a ninety-record batch, two past the stage's sixty-four kilobyte buffer
+  — are refused with the reason named, and the tests assert the reason rather than
+  merely the refusal, so a refusal for an unrelated cause cannot pass as the limit
+  being respected.
+
+
 - **`ParsedFn` accessors and a widened self-hosted emit entry, both under the
   off-by-default `self-host` feature.** `ParsedFn::category`, `param_count`,
   `guard_records` and `body_records` make `seed_reconstruct_shared` callable by an
@@ -255,6 +301,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   host is not misdirected to its call sequence by a `NotSuspended`. The three
   `.expect` sites on the shared read and write paths became recoverable faults as
   defence in depth.
+
+- **The worst-case-memory-usage bound was UNDERSTATED for any chunk with a yield
+  before its peak.** `Op::Yield` declared an operand-stack net of −1 where the
+  virtual machine's is 0. The model accounted for the pop of the yielded value and
+  not for the resume pushing the reply back onto the same operand stack, so every
+  operation after a yield was costed from a base one slot too low and the shortfall
+  compounded with the number of yields on the path. Two sources carrying the
+  identical peak expression, differing only in whether three yields precede it,
+  reported 192 bytes against 288. The running offset reached −4 on a three-yield
+  body, which an operand stack cannot do. **Bounds rise for affected chunks**, so a
+  program sized against a fixed arena may now need a larger one; that is the
+  correction of an unsound figure rather than a new requirement. The net of 0 is
+  forced by the lowering rather than chosen: `let a = yield r;` compiles to
+  `GetLocal; Yield; SetLocal`, and at −1 the `SetLocal` would pop an empty stack.
+
+- **The worst-case-memory-usage bound was OVERSTATED for chunks using fixed-point
+  multiply or divide.** `Op::FixedMul` and `Op::FixedDiv` declared a net of 0 where
+  their handlers pop both operands and push one result, so the true net is −1. The
+  error accumulated with each such operation in a chunk. Bounds fall for affected
+  chunks, and nothing that verified before stops verifying. Found by a check ranging
+  over the whole opcode set rather than by a case list; neither opcode was reachable
+  by any case in the five-case comparison that check replaced.
+
+  With these two and the field reads below, the two operand-stack models now agree
+  on every one of the 66 opcodes, asserted against the wire format's canonical
+  opcode table so a new opcode is reported by name rather than silently uncovered.
 
 - **The worst-case-memory-usage bound was UNDERSTATED for any chunk whose peak lies
   on a field read.** `GetField`, `GetTupleField`, and `GetEnumField` declared an

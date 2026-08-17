@@ -9,43 +9,49 @@
 //! broken, and finding that out costs nothing before a rule exists and a great
 //! deal afterwards.
 //!
-//! # WHAT IS DONE AND WHAT IS NOT, BECAUSE THE TEST COUNT HAS BEEN MISREAD
+//! # WHAT DECIDES, WHAT IS SUPPLIED, AND WHAT NEITHER REACHES
 //!
 //! **The rejection RULES are complete.** All fifteen enumerated shapes plus the
-//! `calling-a-local` surface restriction are rejected, over a sixteen-case
-//! ill-typed corpus with well-typed controls. The roadmap and the resume channels
-//! carried "7 tests against ~15 shapes" for some time: **seven is the test count
-//! and fifteen is the shape count, and they are not the same axis.**
+//! `calling-a-local` surface restriction are rejected, over a twenty-case
+//! ill-typed corpus with seven well-typed controls. The roadmap and the resume
+//! channels carried "7 tests against ~15 shapes" for a while: **seven was the
+//! TEST count and fifteen the SHAPE count, and they are not the same axis.**
 //!
-//! **What is NOT self-hosted is the INPUT.** The stage decides; the host supplies.
-//! Concretely, `stage_verdict` is fed by `decl_call_rows`, `expression_nodes`,
-//! `field_sets` and `occurrence_rows` — Rust functions walking the REFERENCE
-//! parser's AST. So a claim that the type checker is self-hosted must say which
-//! half is meant: the verdict is the stage's, the structure is the host's.
+//! **The stage now RESOLVES as well as compares.** It receives `(name, tag)`
+//! binding rows and operands marked as "this is name N", and joins one through
+//! the other. Before that, every rule fired only where the operands were
+//! literals, and since every corpus case placed them so, the limit was invisible.
 //!
-//! **And the tags are literal-only, which bounds every rule.** See
-//! `the_rules_reach_only_literal_direct_occurrences`: move any of these errors off
-//! a literal, through a `let` or a call, and the stage accepts what the reference
-//! rejects. Three such cases are pinned as disagreements.
+//! **THE LINE BETWEEN THE TWO SIDES, because it is the point.** The host may
+//! report a syntactic fact: this parameter is declared `Word`; this `let` is
+//! written `= true`; this one is written `= g()`; this operand IS the name `b`.
+//! It may not report the conclusion that a given operand therefore has a given
+//! type. That join is the stage's, and
+//! `the_stage_and_not_the_host_resolves_an_operand` is what makes the claim
+//! checkable: withhold the binding rows and the same program is ACCEPTED.
 //!
-//! # Why the input path is not simply switched to the pipeline's own parser
+//! **What is still NOT self-hosted is the extraction.** `stage_verdict` is fed by
+//! `decl_call_rows`, `expression_nodes_resolvable`, `field_sets`,
+//! `occurrence_rows` and `binding_rows` — Rust functions walking the REFERENCE
+//! parser's AST. This slice moved the RESOLUTION into the stage; it did not move
+//! the EXTRACTION. **No claim here should call the type checker self-hosted
+//! without saying which half is meant.**
 //!
-//! Measured rather than assumed. **Structure is available**: `parse.kel` emits
-//! records and `reconstruct.kel` turns them into an AST node array, so the
-//! host-side structural extraction could in principle be replaced.
+//! # What these tests do NOT establish
 //!
-//! **Types are available from nothing.** No stage in the pipeline computes source
-//! types — the set is lexer, parse, reconstruct, codegen, analyze and the
-//! `verify_*` family — and `parse.kel` says so in its own comment, describing
-//! "per-element type inference the pipeline lacks". `verify_typed.kel` reasons
-//! about flat bytecode shapes, not source types. So switching the input path would
-//! move where the STRUCTURE comes from and change nothing about the TAGS, which is
-//! what actually bounds the rejections.
-//!
-//! **That is a missing pipeline capability, not a missing rule, and not a second
-//! encoding waiting to be written.** Inventing an AST encoding for this stage
-//! before inference exists would duplicate what `parse.kel` and `reconstruct.kel`
-//! already carry while still leaving every tag unknown.
+//! - **The corpus is a case list.** Twenty ill-typed programs are twenty
+//!   programs. This project has four recorded instances of a suite whose
+//!   coverage was a property of its cases rather than of the thing under test,
+//!   and one of them was this corpus.
+//! - **Tags reach only what the source declares or literally initialises**, plus
+//!   one alias hop for a `let` bound to a call. An operand whose type is DERIVED
+//!   — a field read, an index, an arithmetic result — is still unknown and still
+//!   accepted. `the_rules_still_do_not_reach_a_derived_operand` pins one, and the
+//!   hop bound is a decision rather than a limit of the approach.
+//! - **Unknown never rejects, by design.** A stage that cannot type an operand
+//!   accepts it, because rejecting a valid program is a language change rather
+//!   than a conservative choice. The well-typed controls are the half that can
+//!   fail.
 //!
 //! # The oracle
 //!
@@ -148,6 +154,26 @@ const ILL_TYPED: &[(&str, &str)] = &[
     (
         "calling-a-local",
         "fn g() -> Word { 1 }\nfn main() -> Word { let f = g; f() }",
+    ),
+    // ADDED WHEN LOCAL RESOLUTION LANDED. Each is an error the stage already had
+    // a rule for and could not SEE, because its operands are not literals. They
+    // were pinned as measured disagreements until the stage could resolve a name
+    // through its binding table; they are ordinary corpus members now.
+    (
+        "operand-through-a-let",
+        "fn main() -> Word { let b = true; 1 + b }",
+    ),
+    (
+        "operand-through-a-call",
+        "fn g() -> Word { 1 }\nfn main() -> Word { g() + true }",
+    ),
+    (
+        "both-operands-through-lets",
+        "fn main() -> Word { let a = 1; let b = true; a + b }",
+    ),
+    (
+        "let-bound-to-a-call",
+        "fn g() -> Word { 1 }\nfn main() -> Word { let a = g(); a + true }",
     ),
 ];
 
@@ -538,7 +564,166 @@ fn occurrence_rows(ast: &keleusma::ast::Program) -> OccurrenceRows {
 /// One table rather than one per kind, because every rule is "these two must
 /// agree" or "this must be bool", and a channel per kind would multiply a slot
 /// chain that has already produced two off-by-one defects.
+/// A binding row: `(name id, value, form)` where form 0 makes the value a tag
+/// and form 1 makes it another name id.
+type BindingRow = (i64, i64, i64);
+
+/// The name table and the binding rows [`binding_rows`] returns.
+type BindingRows = (std::collections::BTreeMap<String, i64>, Vec<BindingRow>);
+
+/// An expression node with each operand tagged by form: `(kind, a, af, b, bf)`.
+type ResolvableNode = (i64, i64, i64, i64, i64);
+
+/// One operand, reported as `(value, form)` and nothing more.
+///
+/// Form 0 is a TAG, form 1 is a NAME id. **Deliberately shallow.** A literal
+/// reports its own kind, which is what it says on the page; a name or a call
+/// reports WHICH name, not what type that name has. The second question is the
+/// stage's, and answering it here is the change that would make the tests pass
+/// while making the checker less self-hosted.
+fn operand_form(
+    e: &keleusma::ast::Expr,
+    names: &std::collections::BTreeMap<String, i64>,
+) -> (i64, i64) {
+    use keleusma::ast::Expr;
+    match e {
+        Expr::Literal { value, .. } => (literal_tag(value), 0),
+        Expr::Ident { name, .. } => names.get(name).map_or((0, 0), |id| (*id, 1)),
+        Expr::Call { name, .. } => names.get(name).map_or((0, 0), |id| (*id, 1)),
+        _ => (0, 0),
+    }
+}
+
+/// The name table and the binding rows, both read straight off the source.
+///
+/// Returns `(name id by spelling, rows of (name id, tag))`. Three sources, each
+/// a syntactic fact:
+///
+/// 1. a declared parameter type,
+/// 2. a declared return type, keyed by the function name so a call resolves,
+/// 3. a `let` whose initialiser is a literal.
+///
+/// **Nothing here is inferred.** Each row restates something the program writes
+/// down. What none of them says is which operand has which type: a row records
+/// that the NAME `b` was written `= true`, not that the left side of some
+/// addition is a bool. The stage performs that join, which is why
+/// `the_stage_and_not_the_host_resolves_an_operand` can tell the two apart.
+///
+/// **Known narrowing, stated rather than discovered later.** One flat namespace
+/// covers locals and functions, so a local shadowing a function name would give
+/// one row for two meanings. The subset's stage sources do not do this and the
+/// corpus does not exercise it; a shadowing case would need the table split.
+fn binding_rows(ast: &keleusma::ast::Program) -> BindingRows {
+    use keleusma::ast::{Expr, Pattern, Stmt, TypeExpr};
+    use keleusma::visitor::Visitor;
+    use std::collections::BTreeMap;
+
+    let mut names: BTreeMap<String, i64> = BTreeMap::new();
+    // `(name id, value, form)`; form 0 is a tag and form 1 a name id.
+    let mut rows: Vec<BindingRow> = Vec::new();
+    let id_of = |names: &mut BTreeMap<String, i64>, n: &str| -> i64 {
+        let next = names.len() as i64 + 1;
+        *names.entry(n.to_string()).or_insert(next)
+    };
+
+    for f in &ast.functions {
+        // A declared return type, keyed by the function's own name.
+        let fid = id_of(&mut names, &f.name);
+        if let TypeExpr::Prim(p, _) = &f.return_type {
+            let t = prim_tag(p);
+            if t != 0 {
+                rows.push((fid, t, 0));
+            }
+        }
+        // Declared parameter types.
+        for prm in &f.params {
+            if let (Pattern::Variable(n, _), Some(TypeExpr::Prim(p, _))) =
+                (&prm.pattern, &prm.type_expr)
+            {
+                let t = prim_tag(p);
+                if t != 0 {
+                    let id = id_of(&mut names, n);
+                    rows.push((id, t, 0));
+                }
+            }
+        }
+    }
+
+    // `let` bindings whose initialiser is a literal.
+    struct Lets {
+        found: Vec<(String, i64)>,
+        aliases: Vec<(String, String)>,
+    }
+    impl Visitor for Lets {
+        fn visit_stmt(&mut self, stmt: &Stmt) {
+            if let Stmt::Let(l) = stmt
+                && let Pattern::Variable(n, _) = &l.pattern
+            {
+                match &l.value {
+                    Expr::Literal { value, .. } => {
+                        let t = literal_tag(value);
+                        if t != 0 {
+                            self.found.push((n.clone(), t));
+                        }
+                    }
+                    // `let a = g()` says `a` takes whatever `g` returns. That is
+                    // a syntactic fact; joining it to `g`'s declared return type
+                    // is the stage's alias hop, not this function's.
+                    Expr::Call { name, .. } => {
+                        self.aliases.push((n.clone(), name.clone()));
+                    }
+                    _ => {}
+                }
+            }
+            self.walk_stmt(stmt);
+        }
+    }
+    let mut lets = Lets {
+        found: Vec::new(),
+        aliases: Vec::new(),
+    };
+    for f in &ast.functions {
+        lets.visit_block(&f.body);
+    }
+    for (n, t) in lets.found {
+        let id = id_of(&mut names, &n);
+        rows.push((id, t, 0));
+    }
+    for (n, target) in lets.aliases {
+        let id = id_of(&mut names, &n);
+        let tid = id_of(&mut names, &target);
+        rows.push((id, tid, 1));
+    }
+
+    (names, rows)
+}
+
+/// The expression table with only tags, which is what every caller predating
+/// local resolution wants.
+///
+/// A thin wrapper over [`expression_nodes_resolvable`] with an EMPTY name table,
+/// so there is ONE walk rather than two that could drift. With no names to
+/// resolve, every operand that is not a literal takes form 0 and value 0, which
+/// is exactly the behaviour before resolution existed.
 fn expression_nodes(ast: &keleusma::ast::Program) -> Vec<(i64, i64, i64)> {
+    expression_nodes_resolvable(ast, &std::collections::BTreeMap::new())
+        .into_iter()
+        .map(|(k, a, _af, b, _bf)| (k, a, b))
+        .collect()
+}
+
+/// The expression table with each operand tagged by FORM: `(kind, a, af, b, bf)`
+/// where a form of 0 means the value is a tag and 1 means it is a name the stage
+/// resolves through its binding table.
+///
+/// **This function does not decide any operand's type.** It reports that an
+/// operand IS a literal of kind `t`, or that it IS the name `n`. Which type `n`
+/// then has, and whether that disagrees with the other operand, is the stage's
+/// join. That line is the point of the whole slice.
+fn expression_nodes_resolvable(
+    ast: &keleusma::ast::Program,
+    names: &std::collections::BTreeMap<String, i64>,
+) -> Vec<ResolvableNode> {
     use keleusma::ast::{Expr, Pattern, Stmt, TypeDef, TypeExpr};
     use keleusma::visitor::Visitor;
     use std::collections::{BTreeMap, BTreeSet};
@@ -561,8 +746,9 @@ fn expression_nodes(ast: &keleusma::ast::Program) -> Vec<(i64, i64, i64)> {
 
     struct Nodes<'a> {
         structs: &'a BTreeMap<String, i64>,
+        names: &'a BTreeMap<String, i64>,
         scalars: BTreeSet<String>,
-        out: Vec<(i64, i64, i64)>,
+        out: Vec<ResolvableNode>,
     }
     impl Visitor for Nodes<'_> {
         fn visit_stmt(&mut self, stmt: &Stmt) {
@@ -577,13 +763,16 @@ fn expression_nodes(ast: &keleusma::ast::Program) -> Vec<(i64, i64, i64)> {
         fn visit_expr(&mut self, expr: &Expr) {
             match expr {
                 Expr::BinOp { left, right, .. } => {
-                    self.out.push((BINOP, expr_tag(left), expr_tag(right)));
+                    let (a, af) = operand_form(left, self.names);
+                    let (b, bf) = operand_form(right, self.names);
+                    self.out.push((BINOP, a, af, b, bf));
                 }
                 Expr::ArrayLiteral { elements, .. } => {
                     if let Some(first) = elements.first() {
-                        let ft = expr_tag(first);
+                        let (ft, ff) = operand_form(first, self.names);
                         for e in elements.iter().skip(1) {
-                            self.out.push((ARRAY_ELEM, ft, expr_tag(e)));
+                            let (t, f) = operand_form(e, self.names);
+                            self.out.push((ARRAY_ELEM, ft, ff, t, f));
                         }
                     }
                 }
@@ -593,30 +782,37 @@ fn expression_nodes(ast: &keleusma::ast::Program) -> Vec<(i64, i64, i64)> {
                     else_block,
                     ..
                 } => {
-                    self.out.push((CONDITION, expr_tag(condition), 0));
+                    let (c, cf) = operand_form(condition, self.names);
+                    self.out.push((CONDITION, c, cf, 0, 0));
                     if let Some(e) = else_block {
-                        let t = then_block.tail_expr.as_ref().map_or(0, |e| expr_tag(e));
-                        let f = e.tail_expr.as_ref().map_or(0, |e| expr_tag(e));
-                        self.out.push((BRANCH_PAIR, t, f));
+                        let (t, tf) = then_block
+                            .tail_expr
+                            .as_ref()
+                            .map_or((0, 0), |x| operand_form(x, self.names));
+                        let (g, gf) = e
+                            .tail_expr
+                            .as_ref()
+                            .map_or((0, 0), |x| operand_form(x, self.names));
+                        self.out.push((BRANCH_PAIR, t, tf, g, gf));
                     }
                 }
                 Expr::FieldAccess { object, .. } => {
                     if let Expr::Ident { name, .. } = object.as_ref()
                         && self.scalars.contains(name)
                     {
-                        self.out.push((FIELD_ON_VALUE, 1, 0));
+                        self.out.push((FIELD_ON_VALUE, 1, 0, 0, 0));
                     }
                 }
                 Expr::ArrayIndex { object, .. } => {
                     if let Expr::Ident { name, .. } = object.as_ref()
                         && self.scalars.contains(name)
                     {
-                        self.out.push((INDEX_ON_VALUE, 1, 0));
+                        self.out.push((INDEX_ON_VALUE, 1, 0, 0, 0));
                     }
                 }
                 Expr::StructInit { name, fields, .. } => {
                     if let Some(n) = self.structs.get(name) {
-                        self.out.push((STRUCT_LIT, *n, fields.len() as i64));
+                        self.out.push((STRUCT_LIT, *n, 0, fields.len() as i64, 0));
                     }
                 }
                 _ => {}
@@ -629,13 +825,15 @@ fn expression_nodes(ast: &keleusma::ast::Program) -> Vec<(i64, i64, i64)> {
     for f in &ast.functions {
         let mut n = Nodes {
             structs: &struct_fields,
+            names,
             scalars: BTreeSet::new(),
             out: Vec::new(),
         };
         n.visit_block(&f.body);
         out.extend(n.out);
         if let Some(tail) = f.body.tail_expr.as_ref() {
-            out.push((TAIL_VS_RETURN, expr_tag(tail), type_tag(&f.return_type)));
+            let (t, tf) = operand_form(tail, names);
+            out.push((TAIL_VS_RETURN, t, tf, type_tag(&f.return_type), 0));
         }
     }
     out
@@ -764,6 +962,11 @@ struct StageInput<'a> {
     sets: Option<&'a FieldSets>,
     occ: Option<&'a OccurrenceRows>,
     nodes: &'a [(i64, i64, i64)],
+    /// `(kind, a, a-form, b, b-form)`. When present it REPLACES `nodes`, so the
+    /// two are never seeded together and cannot disagree.
+    nodes_resolvable: Option<&'a [ResolvableNode]>,
+    /// `(name id, tag)` rows the stage resolves a form-1 operand through.
+    bindings: &'a [BindingRow],
 }
 
 fn stage_verdict(input: &StageInput<'_>) -> bool {
@@ -777,6 +980,8 @@ fn stage_verdict(input: &StageInput<'_>) -> bool {
         sets,
         occ,
         nodes,
+        nodes_resolvable,
+        bindings,
     } = *input;
     static EMPTY_SETS: FieldSets = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let sets = sets.unwrap_or(&EMPTY_SETS);
@@ -1073,14 +1278,31 @@ fn stage_verdict(input: &StageInput<'_>) -> bool {
     const EKIND_SLOT: usize = EN_SLOT + 1;
     const EA_SLOT: usize = EKIND_SLOT + 256;
     const EB_SLOT: usize = EA_SLOT + 256;
-    assert!(nodes.len() <= 256, "the expression table overflows");
+    // Appended after `eb`, matching the stage's declaration order exactly. A
+    // slot chain is the defect source this file already carries two notes about,
+    // so these are derived from the previous constant rather than written out.
+    const BN_SLOT: usize = EB_SLOT + 256;
+    const BNAME_SLOT: usize = BN_SLOT + 1;
+    const BTAG_SLOT: usize = BNAME_SLOT + 128;
+    const BFORM_SLOT: usize = BTAG_SLOT + 128;
+    const ALIAS_SLOT: usize = BFORM_SLOT + 128;
+    const EAF_SLOT: usize = ALIAS_SLOT + 1;
+    const EBF_SLOT: usize = EAF_SLOT + 256;
+    // The resolvable table REPLACES the tag-only one when present, so the two are
+    // never seeded together. Widening every operand to a form here means the
+    // stage sees one shape regardless of which caller built the table.
+    let widened: Vec<ResolvableNode> = match nodes_resolvable {
+        Some(rows) => rows.to_vec(),
+        None => nodes.iter().map(|(k, a, b)| (*k, *a, 0, *b, 0)).collect(),
+    };
+    assert!(widened.len() <= 256, "the expression table overflows");
     vm.set_shared(
         &mut shared,
         EN_SLOT,
-        keleusma::bytecode::Value::Int(nodes.len() as i64),
+        keleusma::bytecode::Value::Int(widened.len() as i64),
     )
     .expect("en");
-    for (i, (k, a, b)) in nodes.iter().enumerate() {
+    for (i, (k, a, af, b, bf)) in widened.iter().enumerate() {
         vm.set_shared(
             &mut shared,
             EKIND_SLOT + i,
@@ -1091,6 +1313,47 @@ fn stage_verdict(input: &StageInput<'_>) -> bool {
             .expect("ea");
         vm.set_shared(&mut shared, EB_SLOT + i, keleusma::bytecode::Value::Int(*b))
             .expect("eb");
+        vm.set_shared(
+            &mut shared,
+            EAF_SLOT + i,
+            keleusma::bytecode::Value::Int(*af),
+        )
+        .expect("eaf");
+        vm.set_shared(
+            &mut shared,
+            EBF_SLOT + i,
+            keleusma::bytecode::Value::Int(*bf),
+        )
+        .expect("ebf");
+    }
+    // The binding table, appended after the expression channel to match the
+    // stage's slot order.
+    assert!(bindings.len() <= 128, "the binding table overflows");
+    vm.set_shared(
+        &mut shared,
+        BN_SLOT,
+        keleusma::bytecode::Value::Int(bindings.len() as i64),
+    )
+    .expect("bn");
+    for (i, (n, t, f)) in bindings.iter().enumerate() {
+        vm.set_shared(
+            &mut shared,
+            BNAME_SLOT + i,
+            keleusma::bytecode::Value::Int(*n),
+        )
+        .expect("bname");
+        vm.set_shared(
+            &mut shared,
+            BTAG_SLOT + i,
+            keleusma::bytecode::Value::Int(*t),
+        )
+        .expect("btag");
+        vm.set_shared(
+            &mut shared,
+            BFORM_SLOT + i,
+            keleusma::bytecode::Value::Int(*f),
+        )
+        .expect("bform");
     }
     let out = vm
         .call_with_shared(&mut shared, &[keleusma::bytecode::Value::Int(0)])
@@ -1125,7 +1388,7 @@ fn the_corpus_labels_agree_with_the_reference() {
 
     // MUST-FIRE on the corpus being non-empty in both directions. A table
     // emptied by a later edit would leave every loop above vacuous.
-    assert!(ILL_TYPED.len() >= 15, "the rejection corpus shrank");
+    assert!(ILL_TYPED.len() >= 20, "the rejection corpus shrank");
     assert!(!WELL_TYPED.is_empty(), "the control corpus is empty");
 }
 
@@ -1517,9 +1780,15 @@ fn the_stage_agrees_with_the_reference_on_the_whole_corpus() {
         // the join is load-bearing rather than redundant with a channel that
         // already knew the answer.
         let (dparams, sites, _) = decl_call_rows(&ast);
+        // THE WHOLE CORPUS GOES THROUGH THE RESOLVING PATH, which is what makes
+        // the four non-literal cases ordinary members rather than exceptions.
+        let (bnames, bindings) = binding_rows(&ast);
+        let resolvable = expression_nodes_resolvable(&ast, &bnames);
         stage_verdict(&StageInput {
             pairs: &pairs,
-            nodes: &expression_nodes(&ast),
+            nodes: &[],
+            nodes_resolvable: Some(&resolvable),
+            bindings: &bindings,
             dparams: &dparams,
             sites: &sites,
             sets: Some(&field_sets(&ast)),
@@ -1560,39 +1829,260 @@ fn the_stage_agrees_with_the_reference_on_the_whole_corpus() {
     // MUST-FIRE on the corpus being the thing that was checked. Both sides must
     // be non-empty, or the loops above are vacuous and this test reports
     // agreement it never observed.
-    assert!(ILL_TYPED.len() >= 16, "the rejection corpus shrank");
+    assert!(ILL_TYPED.len() >= 20, "the rejection corpus shrank");
     assert!(WELL_TYPED.len() >= 7, "the control corpus shrank");
 }
 
-/// THE LIMIT OF THE FIFTEEN SHAPES, WHICH THE CORPUS ABOVE CANNOT SHOW.
+// `the_rules_reach_only_literal_direct_occurrences` STOOD HERE and is retired.
+//
+// It pinned three programs the reference rejected and the stage accepted, because
+// every rule fired only on literal operands. Local resolution reaches all three,
+// so they are no longer disagreements: they are ordinary members of `ILL_TYPED`
+// above, and the whole-corpus test drives them through the resolving path.
+//
+// The limit it recorded has not vanished, it has MOVED, and
+// `the_rules_still_do_not_reach_a_derived_operand` holds the new edge.
+
+// ---------------------------------------------------------------------------
+// SIZING SPIKE: what would it take to reach a non-literal operand?
+//
+// A MEASUREMENT, NOT AN IMPLEMENTATION. Nothing here is wired into the stage.
+// The question is what the pipeline would have to compute, and the answer
+// determines whether the next increment is small or is a Hindley-Milner port.
+// ---------------------------------------------------------------------------
+
+/// A prototype tagger, host-side and deliberately throwaway.
 ///
-/// Every rule in the stage fires on a pair of TYPE TAGS, and the tags are
-/// syntactic: `expr_tag` maps a literal to its kind and **everything else to 0,
-/// UNKNOWN**, which the stage must not reject. That is deliberate and
-/// `verify_types.kel` states the reason — marshalling the reference's inferred
-/// types would make the stage agree by construction and prove nothing.
+/// It extends `expr_tag` with exactly two rules, both LOCAL:
 ///
-/// **The consequence is not stated anywhere until here.** Every one of the
-/// sixteen ill-typed cases places its offending operands as LITERALS. Route the
-/// identical error through a `let` binding or a call return and the operand tags
-/// become unknown, so the stage accepts a program the reference rejects. The
-/// corpus is not wrong; its coverage is a property of its case list rather than
-/// of the stage, which is the defect this project keeps finding in its own suites.
+/// 1. a `let` whose initialiser is a literal binds that literal's tag;
+/// 2. a call to a declared function takes the declared return type's tag.
 ///
-/// **These cases are pinned as DISAGREEMENTS, not repaired.** Repairing them
-/// means giving the pipeline source types, and nothing in it computes any: the
-/// stages are lexer, parse, reconstruct, codegen, analyze and the `verify_*`
-/// family, and `parse.kel` says in its own comment that it lacks "per-element
-/// type inference". `verify_typed.kel` is the flat operand-stack verifier and
-/// reasons about bytecode shapes, not source types. So this is a missing
-/// pipeline capability, not a missing rule.
+/// **Neither rule unifies anything.** There is no substitution, no occurs check,
+/// no type variable. Both are lookups over information the source states
+/// outright, which is why this is the cheap end of the design space.
+fn prototype_tag(
+    e: &keleusma::ast::Expr,
+    lets: &std::collections::BTreeMap<String, i64>,
+    rets: &std::collections::BTreeMap<String, i64>,
+) -> i64 {
+    use keleusma::ast::Expr;
+    match e {
+        Expr::Literal { value, .. } => literal_tag(value),
+        Expr::Ident { name, .. } => lets.get(name).copied().unwrap_or(0),
+        Expr::Call { name, .. } => rets.get(name).copied().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// How far the two local rules get, measured over cases the stage accepts today.
 ///
-/// If inference ever lands, this test fails and must be updated — which is the
-/// point of asserting the disagreement rather than describing it in prose.
+/// **This is the sizing result and it is the whole point of the spike.** If every
+/// currently-missed rejection falls to local propagation, the next increment is a
+/// tagger over records the pipeline already emits. If some need unification, the
+/// next increment is much larger and should be planned as such.
 #[test]
-fn the_rules_reach_only_literal_direct_occurrences() {
-    // Each is the same error as a case the corpus already rejects, moved off a
-    // literal. The reference rejects all of them.
+fn sizing_how_far_local_propagation_reaches() {
+    use keleusma::ast::{Expr, Pattern, Stmt, TypeExpr};
+    use keleusma::visitor::Visitor;
+    use std::collections::BTreeMap;
+
+    // (label, source, needs) where `needs` names the least information that
+    // would decide the operand types.
+    const CASES: &[(&str, &str, &str)] = &[
+        (
+            "let-bound literal",
+            "fn main() -> Word { let b = true; 1 + b }",
+            "local: let initialiser",
+        ),
+        (
+            "call return",
+            "fn g() -> Word { 1 }\nfn main() -> Word { g() + true }",
+            "local: declared return type",
+        ),
+        (
+            "two let-bound literals",
+            "fn main() -> Word { let a = 1; let b = true; a + b }",
+            "local: let initialiser",
+        ),
+        (
+            "let bound to a call",
+            "fn g() -> Word { 1 }\nfn main() -> Word { let a = g(); a + true }",
+            "local: both rules composed",
+        ),
+        (
+            "parameter operand",
+            "fn f(a: Word) -> Word { a + true }\nfn main() -> Word { f(1) }",
+            "local: declared parameter type",
+        ),
+    ];
+
+    let mut reached = 0;
+    let mut missed: Vec<&str> = Vec::new();
+
+    for (label, src, _needs) in CASES {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+
+        // The reference must reject, or the case measures nothing.
+        let mut for_ref = ast.clone();
+        assert!(
+            keleusma::typecheck::check(&mut for_ref).is_err(),
+            "{label}: the reference ACCEPTS this; it is not an ill-typed case"
+        );
+
+        // Declared return types, by name.
+        let mut rets: BTreeMap<String, i64> = BTreeMap::new();
+        for f in &ast.functions {
+            if let TypeExpr::Prim(p, _) = &f.return_type {
+                rets.insert(f.name.clone(), prim_tag(p));
+            }
+        }
+
+        // Let-bound literals and declared parameters, by name.
+        struct Binds<'a> {
+            lets: BTreeMap<String, i64>,
+            rets: &'a BTreeMap<String, i64>,
+        }
+        impl Visitor for Binds<'_> {
+            fn visit_stmt(&mut self, stmt: &Stmt) {
+                if let Stmt::Let(l) = stmt
+                    && let Pattern::Variable(n, _) = &l.pattern
+                {
+                    let t = prototype_tag(&l.value, &self.lets, self.rets);
+                    if t != 0 {
+                        self.lets.insert(n.clone(), t);
+                    }
+                }
+                self.walk_stmt(stmt);
+            }
+        }
+        let mut binds = Binds {
+            lets: BTreeMap::new(),
+            rets: &rets,
+        };
+        for f in &ast.functions {
+            for (pname, pty) in f
+                .params
+                .iter()
+                .filter_map(|p| match (&p.pattern, &p.type_expr) {
+                    (Pattern::Variable(n, _), Some(TypeExpr::Prim(x, _))) => {
+                        Some((n.clone(), prim_tag(x)))
+                    }
+                    _ => None,
+                })
+            {
+                binds.lets.insert(pname, pty);
+            }
+            binds.visit_block(&f.body);
+        }
+
+        // Would a binary operation now disagree?
+        struct Check<'a> {
+            lets: &'a BTreeMap<String, i64>,
+            rets: &'a BTreeMap<String, i64>,
+            caught: bool,
+        }
+        impl Visitor for Check<'_> {
+            fn visit_expr(&mut self, expr: &Expr) {
+                if let Expr::BinOp { left, right, .. } = expr {
+                    let l = prototype_tag(left, self.lets, self.rets);
+                    let r = prototype_tag(right, self.lets, self.rets);
+                    if l != 0 && r != 0 && l != r {
+                        self.caught = true;
+                    }
+                }
+                self.walk_expr(expr);
+            }
+        }
+        let mut chk = Check {
+            lets: &binds.lets,
+            rets: &rets,
+            caught: false,
+        };
+        for f in &ast.functions {
+            chk.visit_block(&f.body);
+        }
+
+        if chk.caught {
+            reached += 1;
+        } else {
+            missed.push(label);
+        }
+    }
+
+    println!("local propagation reaches {reached} of {}", CASES.len());
+    if !missed.is_empty() {
+        println!("not reached: {missed:?}");
+    }
+
+    // THE PINNED RESULT. If this number moves, the sizing in
+    // TYPECHECK_INFERENCE_SIZING.md is stale and must be re-derived.
+    assert_eq!(
+        reached,
+        CASES.len(),
+        "local propagation reached {reached} of {}; the cases it missed are {missed:?}, and \
+         each one is evidence that something beyond the two local rules is needed",
+        CASES.len()
+    );
+}
+
+/// The primitive-type tag, matching `literal_tag`'s numbering.
+fn prim_tag(p: &keleusma::ast::PrimType) -> i64 {
+    use keleusma::ast::PrimType as P;
+    match p {
+        P::Word => 1,
+        P::Bool => 2,
+        P::Byte => 3,
+        P::Float => 4,
+        _ => 0,
+    }
+}
+
+/// Drive the stage with the binding table and resolvable operands.
+fn stage_verdict_resolving(src: &str) -> bool {
+    let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+    let (names, bindings) = binding_rows(&ast);
+    let nodes = expression_nodes_resolvable(&ast, &names);
+    let (dparams, sites, arg_pairs) = decl_call_rows(&ast);
+    stage_verdict(&StageInput {
+        pairs: &arg_pairs,
+        nodes: &[],
+        nodes_resolvable: Some(&nodes),
+        bindings: &bindings,
+        dparams: &dparams,
+        sites: &sites,
+        sets: Some(&field_sets(&ast)),
+        occ: Some(&occurrence_rows(&ast)),
+        ..Default::default()
+    })
+}
+
+/// THE SLICE: an error whose operands are NOT literals is now rejected.
+///
+/// Each case is one the stage accepted before local resolution existed, pinned
+/// then in `the_rules_reach_only_literal_direct_occurrences` as a measured
+/// disagreement. They are rejections now.
+///
+/// # What moved, and what did not
+///
+/// **The stage gained the join.** It receives `(name, tag)` rows the host read
+/// off the source and operands tagged as "this is name N", and it resolves one
+/// through the other. The host does not decide any operand's type; see
+/// `the_stage_and_not_the_host_resolves_an_operand`, which is what makes that
+/// claim checkable rather than asserted.
+///
+/// **The input structure still comes from the reference parser.** This slice
+/// moves the RESOLUTION into the stage; it does not move the EXTRACTION. The
+/// checker is not self-hosted and no claim here should say it is.
+///
+/// # What this does NOT establish
+///
+/// Four cases are a case list, and the tags reach only what the source declares
+/// or literally initialises. An operand whose type comes from anywhere else — a
+/// field read, an index, an arithmetic result — is still UNKNOWN and still
+/// accepted. `the_rules_still_do_not_reach_a_derived_operand` pins one.
+#[test]
+fn resolution_reaches_an_operand_that_is_not_a_literal() {
     let cases: &[(&str, &str)] = &[
         (
             "operand-through-a-let",
@@ -1606,41 +2096,97 @@ fn the_rules_reach_only_literal_direct_occurrences() {
             "both-operands-through-lets",
             "fn main() -> Word { let a = 1; let b = true; a + b }",
         ),
+        (
+            "let-bound-to-a-call",
+            "fn g() -> Word { 1 }\nfn main() -> Word { let a = g(); a + true }",
+        ),
     ];
 
-    let mut accepted_by_stage = 0;
+    let mut rejected = 0;
     for (label, src) in cases {
-        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
-
-        let mut for_reference = ast.clone();
+        let mut for_ref = parse(&tokenize(src).expect("lex")).expect("parse");
         assert!(
-            keleusma::typecheck::check(&mut for_reference).is_err(),
-            "{label}: the reference ACCEPTS this, so it is not an ill-typed case and \
-             this test is measuring nothing"
+            keleusma::typecheck::check(&mut for_ref).is_err(),
+            "{label}: the reference ACCEPTS this, so it measures nothing"
         );
-
-        let (dparams, sites, arg_pairs) = decl_call_rows(&ast);
-        let stage_accepts = stage_verdict(&StageInput {
-            pairs: &arg_pairs,
-            nodes: &expression_nodes(&ast),
-            dparams: &dparams,
-            sites: &sites,
-            sets: Some(&field_sets(&ast)),
-            occ: Some(&occurrence_rows(&ast)),
-            ..Default::default()
-        });
         assert!(
-            stage_accepts,
-            "{label}: the stage now REJECTS this. If source types reached the stage, \
-             remove this case and move it into ILL_TYPED; the limitation this test \
-             records has been lifted."
+            !stage_verdict_resolving(src),
+            "{label}: the reference rejects this and the stage accepted it"
         );
-        accepted_by_stage += 1;
+        rejected += 1;
     }
+    assert_eq!(rejected, cases.len(), "not every case was reached");
+}
 
-    assert_eq!(
-        accepted_by_stage,
-        cases.len(),
-        "every case here must be one the reference rejects and the stage accepts"
+/// MUST FIRE: without the binding table the same programs are ACCEPTED.
+///
+/// **This is what separates the stage doing the join from the host doing it.**
+/// The operands are identical in both runs; only the rows the stage resolves
+/// through are withheld. If these still rejected, the type would be arriving
+/// already decided and the slice above would prove nothing about where the
+/// reasoning happens.
+#[test]
+fn the_stage_and_not_the_host_resolves_an_operand() {
+    let src = "fn main() -> Word { let b = true; 1 + b }";
+    let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+    let (names, bindings) = binding_rows(&ast);
+    let nodes = expression_nodes_resolvable(&ast, &names);
+    assert!(
+        !bindings.is_empty() && nodes.iter().any(|(_, _, af, _, bf)| *af == 1 || *bf == 1),
+        "the subject must carry both a binding row and a name-form operand, or this \
+         comparison is between two identical runs"
+    );
+
+    let (dparams, sites, arg_pairs) = decl_call_rows(&ast);
+    let with = stage_verdict(&StageInput {
+        pairs: &arg_pairs,
+        nodes: &[],
+        nodes_resolvable: Some(&nodes),
+        bindings: &bindings,
+        dparams: &dparams,
+        sites: &sites,
+        sets: Some(&field_sets(&ast)),
+        occ: Some(&occurrence_rows(&ast)),
+        ..Default::default()
+    });
+    let without = stage_verdict(&StageInput {
+        pairs: &arg_pairs,
+        nodes: &[],
+        nodes_resolvable: Some(&nodes),
+        bindings: &[],
+        dparams: &dparams,
+        sites: &sites,
+        sets: Some(&field_sets(&ast)),
+        occ: Some(&occurrence_rows(&ast)),
+        ..Default::default()
+    });
+
+    assert!(!with, "with the binding rows the stage must reject");
+    assert!(
+        without,
+        "WITHOUT the binding rows the stage still rejected, so the operand's type is not \
+         being resolved from those rows and the host is deciding it somewhere"
+    );
+}
+
+/// The limit that remains, pinned as a disagreement so it cannot be forgotten.
+///
+/// A binding table built from declarations and literal initialisers says nothing
+/// about an operand whose type is DERIVED — here, the result of an arithmetic
+/// expression. The reference rejects; the stage accepts. Reaching it needs a
+/// rule that propagates through operators, which is a fixpoint rather than a
+/// lookup and is deliberately out of this slice.
+#[test]
+fn the_rules_still_do_not_reach_a_derived_operand() {
+    let src = "fn main() -> Word { let a = 1 + 2; let b = true; a + b }";
+    let mut for_ref = parse(&tokenize(src).expect("lex")).expect("parse");
+    assert!(
+        keleusma::typecheck::check(&mut for_ref).is_err(),
+        "the reference ACCEPTS this, so it measures nothing"
+    );
+    assert!(
+        stage_verdict_resolving(src),
+        "the stage now REJECTS a derived operand. If propagation through operators \
+         landed, move this case into the slice above and record what it now reaches."
     );
 }

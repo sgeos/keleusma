@@ -5,58 +5,56 @@
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **Rewritten whole, 2026-08-16**, not patched. A handoff that contradicts itself is worse than a
-> stale one, because a reader cannot tell which half to trust. Overwrite this file; do not append.
+> **Rewritten whole, 2026-08-16 (second rewrite that day).** The previous one was stamped six merges
+> back and **passed all of its own validity checks while being wrong about every open item** — it
+> named a repaired bound as the top concern and said the emit path covered two region kinds when it
+> covered four. A document that certifies its own currency and is wrong is the worst case this file
+> exists to avoid. Overwrite; do not append.
 
 ## Validity
 
 - **Branch**: `v0.2.3`, or a branch cut from it. If you are on `v0.3.0`, read
   `docs/process/handoffs/v0.3.0.md` and **do not overwrite this file**.
-- **Written**: 2026-08-16, describing the tree at `e5c1afbe`.
-- **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint. It governs
-  documentation, commit messages, code comments, and anything drafted for publication.
+- **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
 **Validate by ANCESTRY and by CONTENT, never by a hash match.** A stamp requiring `HEAD~1` to equal a
-recorded parent is a claim that nothing else ever lands; the previous one failed its own check while
-its contents were still true.
+recorded parent is a claim that nothing else ever lands, and it has failed twice.
 
 ```sh
-git merge-base --is-ancestor e5c1afbe HEAD    # must succeed
+git merge-base --is-ancestor 10ccd520 HEAD    # must succeed
 
-cargo test --features compile,verify --test block_form_statements    # 8 passed
+# Content. If ANY of these differ, say so rather than acting on the state below.
+grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs     # 11
+grep -c '^\s*#\[test\]' tests/selfhost_wire.rs          # 169
+grep -c '^\s*#\[test\]' tests/block_form_statements.rs  # 8
+grep -oE 'fn highest_command\(\) -> Word \{ [0-9]+ \}' src/selfhost/kel/wire.kel   # 173
 
-# The construct-support boundary, found by its own declaration rather than by
-# line number, because a hardcoded range is the defect this file warns about.
 awk '/let cases: &\[\(&str, Support, &str\)\] = &\[/{f=1;next} f&&/^    \];/{f=0} f' \
     tests/selfhost_codegen.rs \
   | sed 's://.*::' | grep -oE '\b(SOk|Gap|RefRejects)\b' | sort | uniq -c
 # expect: 4 Gap, 1 RefRejects, 79 SOk
 ```
 
-Strip comments before counting. The aliases are `SOk`, `Gap`, `RefRejects` — only the first carries
-the `S` — and a previous session reported three wrong numbers extracting them by hand. **If the
-counts differ, say so rather than acting on the state below.**
+**A CHECK THAT PASSES IS NOT A CURRENT DOCUMENT.** The last one passed every check six merges after
+it was written. If the counts hold but the dates below are old, read the three channels first and
+trust them over this file.
 
 ## Derive numbers; do not copy them forward
 
-This project has been bitten by stale figures **seven** times now, most recently a roadmap cell
-reading "125 tests" against a file holding 163, and the `395,804` that invented a dependency between
-two pieces of work.
+**Bitten SEVEN times now**, most recently by a comment in `wire.kel` that governed a design decision
+while citing region offsets an order of magnitude wrong.
 
 ```sh
-grep -c '^\s*#\[test\]' tests/selfhost_wire.rs      # the wire differential
-git log --oneline -1 v0.2.3                          # where the version branch is
-gh pr list --state open                              # in flight, BY BASE BRANCH
-gh run list --branch v0.2.3 --limit 1                # is the tip verified
+git log --oneline -1 v0.2.3
+gh pr list --state open                  # BY BASE BRANCH; the other line's appear here too
+gh run list --branch v0.2.3 --limit 1
 ```
 
 ## On resume, before doing anything
 
 1. **Read `secret/notes/APPENDIX_B.md`.**
 2. **Read the other line's mailbox**: `git show origin/v0.3.0:docs/process/handoffs/v0.3.0.md`.
-   No wake; poll at increment boundaries. **Read it to the end** — the item you already know about is
-   usually not the one that matters. Reading only as far as a familiar heading is how a live
-   `Vm::set_breakpoint` panic sat unnoticed.
+   No wake; poll at increment boundaries. **Read it to the end.**
 3. **Read this branch's mailbox** [`handoffs/v0.2.3.md`](./handoffs/v0.2.3.md) and the three channels:
    [`REVERSE_PROMPT.md`](./REVERSE_PROMPT.md), [`DESIGN_JOURNAL.md`](./DESIGN_JOURNAL.md) (newest
    first), [`TASKLOG.md`](./TASKLOG.md).
@@ -91,99 +89,99 @@ push cancelled run `31932202253` and `31932359730` replaced it.
 
 ## THE STATE
 
-Tip `e5c1afbe`, CI green, tree clean, nothing of this line open.
-
 | | |
 |---|---|
 | construct-support boundary | **79 Ok / 4 Gap / 1 RefRejects**, 84 cases |
-| the driver | wired to a `Module`; builds its own input via `selfhost::module_input` |
-| stage seed accessors | **five**, public under `self-host`, one encoding shared with the driver |
-| `analyze_class` / `analyze_opk` | **exhaustive over `Op`**; a new opcode fails to build until classified |
-| residency staging | **not needed** — worst stage `parse` at 627 names / 33,395 bytes vs caps 1024 / 49,152 |
+| module-driven emit path | **four region kinds** of twenty, and they differ in strength |
+| windowed emit | **10 of 11 stages**; `wire` alone cannot be walked |
+| type rejection | **rules COMPLETE**; the stage now RESOLVES names, not just compares tags |
+| ill-typed corpus | **20** cases, 7 well-typed controls, both guards raised |
+| `analyze_class` / `analyze_opk` | exhaustive over `Op`, and in `selfhost_host` so there is ONE copy |
 
-## THE MACRO POSITION, WHICH IS FURTHER OFF THAN RECENT INCREMENTS SUGGEST
+**WHAT EACH EMITTED REGION OWES TO WHOM, because the distinction is the coverage claim.**
+`NAMES` and `STRING_POOL` are **computed** — the stage walks the module blob and derives every byte.
+`CHUNKS` is **mixed per field**: the stage computes the name index from its own interner and the
+three range cursors by accumulation; ten fields per record come from the host. `HEADER` is **encoded
+but not derived**. A region whose payload came from the harness or the reference is **not covered**.
+
+**THREE DIFFERENT LIMITS, AND CONFLATING THEM IS HOW THE LAST STALE COMMENT HAPPENED.**
+
+1. **Artifact offset past the 65,536 buffer** — LIFTED. Regions are emitted at window offset zero
+   and placed by the host. The ceiling was never region SIZE: the largest of the four payloads is
+   `wire`'s `CHUNKS` at 22,512 bytes.
+2. **Chunk records past one batch of 90** — `parse` has 94, so its other regions emit and
+   `chunks_emitted` reports false.
+3. **Constant-forest nodes past the walk's 1024 cap** — `wire.kel` has **1,148**, so the walk refuses
+   with `-240` before any region is emitted. `parse` is next at 815.
+
+## THE MACRO POSITION
 
 **V0.2.x completes when the five success criteria in
-[`../roadmap/V0_2_X_ROADMAP.md`](../roadmap/V0_2_X_ROADMAP.md) hold. None do.** Even **Order 1**, the
-first of six milestones, is not met, and two things block it:
+[`../roadmap/V0_2_X_ROADMAP.md`](../roadmap/V0_2_X_ROADMAP.md) hold. None do.** Order 1 needs:
 
-1. **The self-hosted path emits TWO region kinds, not the artifact.** `wire_names_via_kel` is the only
-   driver emit entry and the byte-identity check covers `[kind::NAMES, kind::STRING_POOL]`. The schema
-   defines about twenty. Everything landed recently — the module-input encoding, the interning
-   producer, the caps — feeds those two. **This is the largest single gap and it is invisible from the
-   increment titles.**
-2. **Self-hosted type rejection is started, not done.** `tests/selfhost_typecheck.rs` holds 7 tests
-   and the RULES are COMPLETE against all fifteen enumerated shapes plus `calling-a-local`. **The count of tests is not the count of shapes.** What remains is the input path: host-extracted channels off the reference AST, with literal-only tags.
+1. **`CONSTS`, which is 94% of the auxiliary body** — 663,120 bytes across the eleven stages against
+   34,960 for names and pool together. **NOT wiring.** The node producer writes into `wire.bytes` at
+   byte zero where the artifact lives, while the flattener reads nodes from `wire.fin`; and the two
+   paths intern in DIFFERENT ORDERS, preorder against breadth-first, which is observable in `NAMES`.
+   **Choosing an order is a design decision with a currently-passing region at stake, and it has been
+   left to the operator twice.**
+2. **The remaining region kinds.** `SIGNATURES` (12,032 bytes), `DATA_SLOTS` (6,768), `SHAPES`
+   (5,512) are the next by size and are the same shape as `CHUNKS`. **`STRUCT_AUX` and `ENUM_AUX` are
+   EMPTY in all eleven stages** — a byte identity for either passes while emitting nothing.
+3. **The type checker's INPUT.** Its rules are complete and its resolution is now in the stage, but
+   the extraction is still Rust walking the REFERENCE parser's AST. Structure is available from
+   `parse.kel` plus `reconstruct.kel`; **do not invent a second encoding.**
 
-**The roadmap's Order 1 cell is itself stale**: it states "`tests/selfhost_wire.rs` is 125 tests"
-against a file holding 163, and lists as remaining several items that are done (the child-position
-constant walk; `wire.kel` in `read_stage`; residency staging). Correct it before sizing from it.
+## OPEN CORRECTNESS ITEMS
 
-## OPEN CORRECTNESS ITEMS, HIGHEST FIRST
+**1. `FixedMul`/`FixedDiv` peak-model nets.** Both declare net 0 against a handler that pops twice
+and pushes once. **Pinned, not repaired, because the error OVERSTATES**: fixing it LOWERS bounds on
+shipped chunks. Operator's call.
 
-> **Updated 2026-08-16 after PR #135 (`e923a57f`).** Items 1 and 3 below are CLOSED and item 2 is
-> deliberately still open. Left in place rather than deleted, because what the old item 1 turned out
-> to be is the most useful thing on this page.
+**2. `Op::Yield`'s peak-model net.** −1 against the depth model's 0. Pinned in the same ranging
+check, which fails if either is repaired without removing its entry, so neither can be lost.
 
-**~~1. `wcmu_region` reports 2 where both peak models say 3.~~ CLOSED, and it was not off by one.**
-The reported 2 was `local_count` alone; the BODY peak was exactly 0. `wcmu_region` returned
-`Option<McuResult>` where `None` meant "does not fall through" AND carried no resources, so four
-sites discarded an accumulated peak and heap. **Every multiheaded function was affected.** A second,
-opposite defect sat underneath (`Op::Return` fell through the catch-all, so a dispatch was walked as
-though every head ran in sequence) and the two partially cancelled. `wcet_region` had the identical
-defect, so the WCET bound was understated the same way. `analyze.kel` had it in three places, and
-`tests/selfhost_codegen.rs` held a second copy of the class table that had already drifted. See
-`tests/wcmu_exit_path_bounds.rs` and the 2026-08-16 journal entry.
+**3. `Op::cost()` disagrees with measurement.** 17 opcodes of 66 were ever measured.
 
-**2. `Op::Yield`'s peak-model net. STILL OPEN, deliberately.** `stack_growth` 0 / `stack_shrink` 1
-gives net −1; `verify::op_depth_effect` gives net 0, above a comment saying the resume pushes the
-input back. **It is now pinned in `the_two_operand_stack_models_agree_across_the_whole_opcode_set`,
-which fails if it is repaired without removing its entry**, so it cannot be lost. Measured to be a
-different cause from item 1. Derive the corrected pair from the virtual machine, not by analogy.
-
-**2b. `FixedMul`/`FixedDiv` peak-model nets, FOUND by that check on its first run.** Both declare
-net 0 against a handler that pops twice and pushes once. Pinned rather than repaired **because the
-error OVERSTATES**, so fixing it lowers bounds on shipped chunks. Operator's call.
-
-**~~3. The control that cannot reach either.~~ CLOSED.** The five hand-written cases are superseded
-by a check ranging over the opcode set, with completeness asserted against the wire format's
-canonical opcode table so a new opcode is reported BY NAME. Mutation-verified.
-
-**4. `Op::cost()` disagrees with measurement.** Two findings pinned, not repaired. Only 17 opcodes of
-66 were ever measured; every other emitted value is an unchecked bucket assignment.
-
-**5. OWED TO `v0.3.0`: the `ParsedFn` visibility decision.** Their `seed_reconstruct_*` accessors are
-one `pub` away from being callable. They asked us to choose between `pub` fields and a `pub fn`
-returning the records for a source string. Not bundled into #135 on purpose.
+**4. Derived operands in type rejection.** A field read, an index or an arithmetic result is still
+UNKNOWN and therefore accepted. Pinned by `the_rules_still_do_not_reach_a_derived_operand`.
+Reaching them is a fixpoint, not a lookup.
 
 ## THE META-DEFECT THIS LINE KEEPS FINDING
 
 **A suite whose coverage is a property of its case list, mistaken for a property of the thing under
-test.** Four instances in two days: the enum intern mode, the constant-name branch, the peak/depth
-control, and — on the other line, the same day — a green `Trap` observable whose subjects emit no
-`Op::Trap` at all. **In every case the code was reachable and the evidence was not, and in every case
-a mutation or a corpus walk found what green did not.** When a comment states a property, check that
-the suite beside it tests that property; twice it did not.
+test.** **SIX instances now**: the enum intern mode, the constant-name branch, the peak/depth
+control, the other line's `Trap` observable, the WCMU corpus, and the type corpus — where every one
+of sixteen ill-typed cases placed its operands as literals, so a rule that could only see literals
+looked complete. **In every case the code was reachable and the evidence was not.**
 
 ## FACTS THAT COST REAL EFFORT
 
-- **CHECK A FIGURE AGAINST THE THING IT CLAIMS TO MEASURE.** `395,804` is a `CONSTS` region record
-  count; read as a name count it made a 2.5x problem look like 1500x **and invented a dependency**
-  between the interning producer and residency staging. A wrong figure does not merely misstate a
-  size.
-- **A COUNT OF ERRORS IS NOT A COUNT OF DEFECTS.** "Four unresolved doc links" was three plus
-  rustdoc's aggregate line, counted by `grep -cE "^error"`.
-- **THE PLAN IS NOT THE TREE.** Five items across two days were listed as remaining and were already
-  done. Check each against the code before building.
-- **A JOB BUILDING THE UNION OF FEATURES CANNOT CATCH A FEATURE-GATED REFERENCE** — both gates are
-  satisfied, so the link resolves. Only a lean set reports it; three had accumulated behind that.
-- **A diagnostic names where the parser stopped, not what it objected to.** The `break` report was a
-  stray `;` after a `for` block.
+- **A GUARD THAT CANNOT FIRE IS WORSE THAN NONE.** I wrote one comparing `directory.len()` against
+  the stage buffer; that length is the SHARED ARRAY's size, 65,536 for every module, so it was false
+  by construction. **Before adding a check, construct the input that makes it fire.**
+- **CHECK A FIGURE AGAINST THE THING IT CLAIMS TO MEASURE.** `395,804` was a `CONSTS` record count
+  read as a name count and it INVENTED A DEPENDENCY between two unrelated pieces of work.
+- **A COUNT OF TESTS IS NOT A COUNT OF SHAPES.** "7 tests against ~15 shapes" was repeated in four
+  documents; the rules were complete and I nearly rewrote them.
+- **THE PLAN IS NOT THE TREE.** Five instances, three of them mine.
+- **A DUPLICATE WITH A STRUCTURAL CAUSE RETURNS UNLESS THE CAUSE IS REMOVED.** The drifted class
+  table existed because the consumer could not reach the original.
+- **THE DISPATCH CHAINS HAVE A PARSE-DEPTH CEILING** and it presents as a STACK OVERFLOW in the test
+  binary, not a parse error. `dispatch_emit` hit it at twenty arms, `dispatch_driver2` at twenty-two.
+  Split the group rather than hunting the ceiling.
+- **`wire.fin` IS 1024 WORDS AND ITS USERS OVERLAP.** Chunk records take 0..990 at eleven each; the
+  header rides 990..1001. `parse`'s 94 chunks overran it and silently rewrote the header.
 - **APPEND TO A SLOT-ADDRESSED BLOCK, NEVER INSERT.**
-- **`emit_at` is at EIGHTEEN arms**, the measured parse-depth ceiling for that shape in the harness.
-- **`highest_command()` is a real guard**; a new command returns `0 - 99` until the ceiling rises.
-- **Private data PERSISTS across VM calls; shared data is RE-SEEDED.**
+- **`highest_command()` is a real guard**; it has moved 167 → 173 and a new command returns `0 - 99`
+  until it moves again.
+- **Private data PERSISTS across VM calls; shared data is RE-SEEDED.** Every region of one artifact
+  must therefore be emitted in one call, or the host must place windows itself.
+- **The interner is a PURE FUNCTION of its input**, so a re-walk is the same answer rather than a
+  second one. Rely on that instead of carrying state between calls.
 - **On macOS `timeout` does not exist**; it is `gtimeout`.
+- **VERIFY A PUSH BY THE REF, NEVER THE HOOK OUTPUT.** A push printed "all checks passed" and did not
+  land, on a dropped SSH connection.
 
 ## METHOD RULES THIS LINE PAID FOR
 
@@ -199,14 +197,13 @@ the suite beside it tests that property; twice it did not.
 ## Open, held by the operator
 
 - **Publication remains HELD.**
-- **The `ci.yml` concurrency FORM.** The `v0.3.0` line asked three times for
-  `group: ${{ github.workflow }}-${{ github.ref }}`. What landed scopes cancellation to pull requests,
-  to preserve per-tip branch verification. **They have not answered the mailbox note**, and the edit
-  is one line if they or the operator prefer the simpler form.
-- **The `for` trailing-semicolon asymmetry**, pinned; widening is the operator's call.
+- **`CONSTS`'s interning order** — see the macro position. A design decision, not a coding one.
+- **`FixedMul`/`FixedDiv`**, whose repair lowers shipped bounds.
+- **`Op::cost()`** recalibration.
+- **The `for` trailing-semicolon asymmetry**, pinned.
 - **`MAX_PARSE_DEPTH` does not do its stated job on a small stack.**
 - **`CHANGELOG.md:340`** states the checked-arithmetic push order wrongly in published text.
-- **`-255` is live and has no negative test**; the corpus tops out at 7,680 distinct name bytes.
+- **`-255` is live and has no negative test.**
 - **`v0.2.3-prerebase-backup`**, local only. Do not delete without being asked.
 - **MSRV**: CI checks 1.85 for `keleusma-arena`, 1.88 for `keleusma`.
 
@@ -229,10 +226,15 @@ across a dozen iterations quoted prose, never a file. Consequences worth knowing
 `git show origin/v0.3.0:docs/process/handoffs/v0.3.0.md`; mine is
 [`handoffs/v0.2.3.md`](./handoffs/v0.2.3.md). Poll at increment boundaries. They hold
 `src/wire_schema.rs`, `src/bytecode.rs`, `src/vm.rs`, `src/verify.rs` and `.github/workflows/`
-read-only and announce before widening. **Extend the same courtesy, and announce BEFORE landing on a
-shared file, not simultaneously** — that was got wrong on `ci.yml` this session.
+read-only and announce before widening. **Extend the same courtesy.**
 
-Owed to them: nothing outstanding. Owed by them: an answer on the concurrency form.
+**NEITHER OF US IS A RELIABLE NARRATOR ABOUT THE OTHER'S CODE, and we now have three instances.**
+They reported `reconstruct` blocked on a `pub` when `parse_functions` was already public; I reported
+`analyze.kel` free of a defect it had in three places; they retracted an inflated coverage figure
+whose instrument called a seeded-but-unrun module non-vacuous. **Check the claim against the code
+before acting on it, especially when it says someone else must act.**
+
+Owed to them: nothing outstanding. Owed by them: nothing outstanding.
 
 ## Untracked artifacts a fresh session cannot see
 
