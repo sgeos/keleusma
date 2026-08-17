@@ -13,6 +13,48 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE BUFFER CEILING WAS NEVER REGION SIZE, AND THE HANDOFF WAS CERTIFYING ITS OWN STALENESS
+(2026-08-16).**
+
+**Measured before building, which changed the design.** Every one of the four emitted regions fits
+the 65,536-byte window on every stage — the largest is `wire`'s `CHUNKS` at 22,512 bytes, a third of
+it. What overflowed was the ABSOLUTE OFFSET: `parse` puts `NAMES` at byte 299,416. So the fix is one
+region per call at window offset zero with the host placing it, not batching within a region.
+
+**THREE LIMITS, AND THEY ARE DIFFERENT LIMITS.** Recorded separately because conflating them is
+exactly how the `ck_emit_window` comment came to claim absolute positioning "works for no real
+stage" while citing offsets an order of magnitude wrong.
+
+| limit | who it excludes | status |
+|---|---|---|
+| artifact offset past the buffer | `parse`, `codegen`, `verify_structural` | **lifted** |
+| chunk records past one batch of 90 | `parse` (94) | other regions emit |
+| constant nodes past the walk's 1024 | `wire` (**1,148**) | cannot be walked at all |
+
+**TWO DEFECTS I INTRODUCED, BOTH FOUND BY A TEST RATHER THAN BY READING.**
+
+The dispatch chain hit the parser's depth ceiling at twenty-two arms and **presented as a stack
+overflow in the test binary**, not a parse error — precisely what this file already recorded for
+`dispatch_emit` at twenty. Split into a new group rather than hunting the exact ceiling.
+
+And `wire.fin` is 1024 words whose users OVERLAP: chunk records take 0..990 at eleven each, the
+header rides 990..1001. `parse`'s 94 chunks are 1,034 fields, which **silently rewrote the header**.
+It surfaced as one stage's header differing from the reference while every other stage passed — the
+kind of single-subject failure that is easy to dismiss as noise.
+
+**THE HANDOFF WAS THE OTHER HALF, AND IT WAS THE MORE DANGEROUS ONE.** Stamped six merges back, it
+**passed every one of its own validity checks** — ancestor, boundary 79/4/1, block-form 8 — while
+naming a repaired bound as the top open item and saying the emit path covered two region kinds when
+it covered four. A document that certifies its own currency and is wrong is worse than one that
+reports staleness, which is what its own header says.
+
+Rewritten whole. The durable material survives — the workflow, the method rules, the `/goal`
+observations, the hazards. What was replaced is the state, the macro position and the open items.
+**Its check block now includes a warning that passing checks are not a current document**, because
+that is the failure this instance actually had.
+
+---
+
 **THE TYPE STAGE NOW RESOLVES, AND THE INTERESTING PART IS WHERE THE JOIN LIVES (2026-08-16).**
 
 **The rules were complete; the reach was not.** Every rule fired on a pair of TAGS, and `expr_tag`

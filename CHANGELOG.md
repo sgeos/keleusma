@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A windowed emit path, lifting the artifact-size ceiling on self-hosted
+  auxiliary-body emission.** Each region is now emitted at offset zero of the
+  stage's buffer and placed at its true offset by the host, so a module whose
+  artifact is larger than that buffer is no longer refused. The ceiling was never
+  region size: the largest of the four emitted payloads across the eleven pipeline
+  stages is twenty-two kilobytes against a sixty-four kilobyte window, and what
+  overflowed was the offset, one stage placing its name region past byte 299,000.
+  Ten of the eleven stages are now reached. Two unrelated limits remain and are
+  reported separately, because conflating them is how an earlier comment came to
+  cite offsets an order of magnitude wrong: one stage exceeds the ninety-record
+  single batch for the chunk region and emits its other regions without it, and
+  one stage has a constant forest larger than the walk's node table and cannot be
+  walked at all. Both are asserted in the tests with the reason, not merely as
+  refusals.
+
+
 - **Local type resolution in the self-hosted type-rejection stage.** The stage
   previously compared operand type tags and could therefore only reject an error
   whose operands were written as literals; every case in its corpus was of that
