@@ -312,7 +312,21 @@ These remain unresolved after the 2026-05-21 research pass.
 
    The **memory half is measured** in `native_codegen/tests/retcon_m3.rs`. Per-coroutine cost is not one number: it splits between the caller-provided buffer, which the caller supplies whether or not it is filled, and the arena frame, requested only when the live state overflows that buffer. Measuring the arena frame against live state under an 8-byte buffer gives `0, 12, 20, 36, 68` bytes for `0, 1, 2, 4, 8` live 64-bit values — **4 bytes of base plus 8 per live word**, every figure a compile-time literal recoverable without executing anything, which is the input Workstream E needs. The crossover is located rather than assumed: with no live state the frame fits the buffer and the coroutine costs **zero** arena bytes.
 
-   The **timing half is NOT measured, deliberately.** `native_codegen/pending/README.md` records that two sessions share one machine and a full gate saturates it. A wall-clock figure taken under that contention is the confident-wrong-number failure this package keeps finding in its own instruments. Closing it needs a stated baseline and a noise floor, not just a stopwatch.
+   The **timing half is now measured too, 2026-08-17**, in `native_codegen/tests/retcon_m3_timing.rs`. The earlier deferral rested on an untested assumption about machine contention, and this project had already solved that problem: `keleusma-bench` warms up, inlines repetitions to amortise counter resolution, and takes the **minimum across measurement passes**. The minimum is the right estimator for a structural reason — contention only ADDS time, so the least sample is the least contaminated.
+
+   Against a baseline that is the coroutine's own body written as a direct call, with the same state, the same arithmetic and the same two external calls, over 2,000,000 repetitions, 3 warmup and 15 measurement passes:
+
+   | | minimum per pass | per operation |
+   |---|---|---|
+   | coroutine | 4,961,000 ns | **2.4805 ns** |
+   | baseline A | 4,660,000 ns | 2.3300 ns |
+   | baseline B | 4,661,000 ns | 2.3305 ns |
+
+   **The noise floor is measured, not assumed.** The baseline is timed twice as two identical workloads; their minima differ by 1,000 ns, which is exactly one clock tick, so the host was quiet. The coroutine-against-baseline difference is 300,500 ns per pass, some 300 times that floor, giving **about 0.15 ns of extra cost per resumption, roughly 6.5%**. The median-based figure agrees at 298,500 ns, so the estimate does not depend on the choice of estimator.
+
+   **The clock's tick was measured rather than assumed**: `CLOCK_MONOTONIC` reports in nanoseconds but ticks at **1,000 ns** on this host, which is why the repetition count is what it is.
+
+   **Limits.** One host, one coroutine shape, and the arena-resident buffer configuration. The figure is **per resumption**; spawn and release happen once per pass and are amortised to near nothing by it, so this says nothing about their cost. The roadmap already expects per-platform calibration.
 
 5. **Native-side WCET cost models.** The bytecode WCET model in V0.2.0 does not translate to native execution. New cost models need calibration on each Tier 1 platform, analogous to what `keleusma-bench` did for the VM. Not in any R-doc; surfaced by `tmp/research/IMPLEMENTATION_ORDER.md`.
 
