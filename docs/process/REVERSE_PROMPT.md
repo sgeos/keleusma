@@ -85,9 +85,37 @@ sources under the 170-node flattener cap. The elision figures are properties of 
 stage gaining a non-default initialiser would store its pool in full, which
 `a_pool_with_any_non_default_value_is_stored_in_full` pins because the corpus cannot supply it.
 
+## ALL TWELVE STAGES ARE COROUTINES NOW
+
+`verify_types.kel` and `wire.kel` were the last two entered as `fn main(cmd)`. Merged at `eec49eae`.
+
+**`verify_types` genuinely streams** — one row per resume, cursors in a private block so they survive
+the loop's `RESET`. **The eleven verdict tests could not establish that**: a stage folding everything
+in its first step and yielding the answer immediately satisfies all of them while streaming nothing.
+`the_fold_advances_one_row_per_resume` measures the resume count instead, and it failed first at two
+yields per row — my counter was counting the loop's `RESET` as a step. The stage was right and the
+instrument was wrong.
+
+**`wire.kel` has a coroutine ENTRY, not streaming commands.** Each still answers in one yield. That is
+a shell that would pass all 169 tests while streaming nothing, and the file says so.
+
+### A COROUTINE MUST BE RESUMED, NOT RE-CALLED
+
+Three parity tests failed with `OutOfArena` at 67,424 bytes while 166 passed. The three were the only
+ones issuing hundreds of commands against ONE machine: each `call` on a suspended coroutine stacks
+another activation instead of replacing it. Resuming reclaims the iteration's arena, so a thousand
+commands cost what one costs — **which is the bounded-memory property the windowed goal is about**.
+It surfaced as an arena error naming the operand stack, not the call pattern.
+
 ## Next intended increment
 
-Batched `CONSTS` emit: a window command formatting a seeded batch of scalar nodes at offset zero,
-the host placing batches, and a refusal for any forest containing a composite or a name-bearing node.
-That refusal is load-bearing — without it the path would silently emit a wrong region for the general
-case it cannot handle.
+**Convert `wire.kel`'s emit commands to yield per record.** The entry is done and could not have been
+done second. The concrete prize is the LAST remaining emit exclusion: the 90-record chunk batch cap
+that keeps `parse` (94 chunks) and `wire` (475) from emitting their chunk regions. A per-record yield
+removes the cap rather than routing around it, which is the difference between the windowed
+architecture and a workaround — and it subsumes the batched-`CONSTS` increment that was planned
+before the goal was stated.
+
+Whatever is built, a refusal for any constant forest containing a composite or a name-bearing node
+stays load-bearing: without it the path would silently emit a wrong region for the general case it
+cannot handle.

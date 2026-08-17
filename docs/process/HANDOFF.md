@@ -26,10 +26,10 @@ always-current, so it must be able to report itself stale rather than mislead a 
 recorded parent is a claim that nothing else ever lands, and it has failed twice.
 
 ```sh
-git merge-base --is-ancestor 81ddd260 HEAD    # must succeed
+git merge-base --is-ancestor eec49eae HEAD    # must succeed
 
 # Content. If ANY of these differ, say so rather than acting on the state below.
-grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 11
+grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs         # 12
 grep -c '^\s*#\[test\]' tests/selfhost_wire.rs              # 169
 grep -c '^\s*#\[test\]' tests/block_form_statements.rs      # 11
 grep -c '^\s*#\[test\]' tests/consts_region_composition.rs  # 7
@@ -98,6 +98,9 @@ push cancelled run `31932202253` and `31932359730` replaced it.
 
 | | |
 |---|---|
+| ALL TWELVE STAGES | **`loop main(...)` coroutines**; the last two converted |
+| `verify_types.kel` | **streams**, one row per resume, asserted by resume COUNT |
+| `wire.kel` | coroutine ENTRY only; its commands still answer in one yield |
 | construct-support boundary | **79 Ok / 4 Gap / 1 RefRejects**, 84 cases |
 | auxiliary body | **103,544 bytes** across eleven stages, down from 712,936 |
 | stages fitting one 65,536-byte window | **11 of 11**, where three did not |
