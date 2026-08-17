@@ -308,7 +308,11 @@ These remain unresolved after the 2026-05-21 research pass.
 
    **The buffer-versus-arena distinction is confirmed at RUN TIME, not only in the emitted code.** With an 8-byte buffer the run reports one allocation and one release; with a 256-byte buffer it reports none, while still producing the same three values. That pair is what makes the arena result mean something.
 
-   **M3 REMAINS.** Nothing measures per-coroutine overhead. The ahead-of-time path is used deliberately, because the just-in-time path never crosses a real C calling convention.
+   **M3 IS HALF DONE, 2026-08-17, and the halves are not equally trustworthy.**
+
+   The **memory half is measured** in `native_codegen/tests/retcon_m3.rs`. Per-coroutine cost is not one number: it splits between the caller-provided buffer, which the caller supplies whether or not it is filled, and the arena frame, requested only when the live state overflows that buffer. Measuring the arena frame against live state under an 8-byte buffer gives `0, 12, 20, 36, 68` bytes for `0, 1, 2, 4, 8` live 64-bit values — **4 bytes of base plus 8 per live word**, every figure a compile-time literal recoverable without executing anything, which is the input Workstream E needs. The crossover is located rather than assumed: with no live state the frame fits the buffer and the coroutine costs **zero** arena bytes.
+
+   The **timing half is NOT measured, deliberately.** `native_codegen/pending/README.md` records that two sessions share one machine and a full gate saturates it. A wall-clock figure taken under that contention is the confident-wrong-number failure this package keeps finding in its own instruments. Closing it needs a stated baseline and a noise floor, not just a stopwatch.
 
 5. **Native-side WCET cost models.** The bytecode WCET model in V0.2.0 does not translate to native execution. New cost models need calibration on each Tier 1 platform, analogous to what `keleusma-bench` did for the VM. Not in any R-doc; surfaced by `tmp/research/IMPLEMENTATION_ORDER.md`.
 

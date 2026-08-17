@@ -2308,10 +2308,15 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
 /// This is deliberately distinct from [`crate::bytecode::Op::stack_shrink`]
 /// and [`crate::bytecode::Op::stack_growth`], which encode the worst-case-
 /// memory net and do not capture actual operand consumption: `Add`
-/// consumes two operands yet has `stack_shrink` 1, the checked ops consume
-/// two yet have `stack_shrink` 0, and `Yield` is modelled there as net -1
-/// though it pops the output and pushes the resume value (net 0). The
-/// values here follow the VM handlers' actual pops and pushes. The
+/// consumes two operands yet has `stack_shrink` 1, and the checked ops
+/// consume two yet have `stack_shrink` 0. The values here follow the VM
+/// handlers' actual pops and pushes.
+///
+/// The two models are otherwise required to agree on the NET, which
+/// `the_two_operand_stack_models_agree_across_the_whole_opcode_set` asserts
+/// over the entire opcode table. `Yield` was named here as a standing
+/// exception, modelled as net -1 against the true net 0; it is repaired, and
+/// so are `FixedMul` and `FixedDiv`, so there is no exception left. The
 /// control-flow ops `If`, `Loop`, `Break`, `Trap`, and `Return` are
 /// intercepted by [`verify_depth_region`]; their entries here are used
 /// only as a defensive fall-through.
@@ -5770,42 +5775,26 @@ mod tests {
         // predict that their entries would drift. Measured: all six AGREE, and
         // the staleness assertion below is what said so. Six plausible entries
         // with a plausible reason would otherwise have gone in unchallenged.
-        let known: &[&str] = &[
-            // NOT CLOSED, and reported by the native-code-generation line
-            // rather than found here. The peak model gives `Yield` a net of -1
-            // (growth 0, shrink 1) while the depth model gives net 0, above a
-            // comment recording that the resume pushes the input back. Walking the peak model over the
-            // stage corpus drives the running offset NEGATIVE, first at the
-            // `PopN` that discards the resumed value, which an operand stack
-            // cannot do. The depth model is the one that is right.
-            //
-            // Deliberately left open rather than repaired here: it is a
-            // different cause from the exit-path resource discard this file's
-            // `McuOutcome` addresses, and changing a bound model wants its own
-            // increment with its own evidence. This entry is what stops it
-            // being forgotten, and the test fails if it is fixed without
-            // removing the entry.
-            "Yield",
-            // FOUND BY THIS CHECK ON ITS FIRST RUN, and reachable by no case in
-            // the five-case control it replaced.
-            //
-            // Measured against the virtual machine rather than inferred: the
-            // `Op::FixedMul` handler in `crate::vm` pops twice and pushes once,
-            // so the net is -1 and the transient reach above the current level
-            // is 0. The depth model's -1 is correct; the peak model's entries
-            // (growth 0, shrink 0) give 0 and are wrong. `Op::FixedDiv` shares
-            // the arm and the handler shape.
-            //
-            // The error OVERSTATES: a net one slot too high walks every later
-            // operation from a base one slot too high, and it compounds with
-            // each fixed-point multiply or divide in a chunk. The bound stays
-            // an upper bound, so this is a precision defect and not a soundness
-            // one, which is why it is pinned here rather than repaired in an
-            // increment whose subject is an UNDERSTATED bound. Repairing it
-            // lowers bounds on shipped chunks and wants its own evidence.
-            "FixedMul(0)",
-            "FixedDiv(0)",
-        ];
+        // THE LIST IS NOW EMPTY, and the staleness assertion below is what
+        // keeps it honest: an entry left here after its repair fails the test
+        // just as loudly as an unrecorded disagreement fails the assertion
+        // above. The two models agree on every opcode in the set.
+        //
+        // Three entries stood here and all three are repaired in
+        // `crate::bytecode`, each measured against the virtual machine handler
+        // rather than inferred from the opcode's name:
+        //
+        // * `Yield` had net -1 against a true net 0, because the peak model
+        //   accounted for the pop of the yielded value and not for the resume
+        //   pushing the reply back onto the same stack. This was the UNSOUND
+        //   direction and it compounded with the number of yields on a path.
+        // * `FixedMul` and `FixedDiv` had net 0 against a true net -1. That
+        //   direction is merely loose, and the repair lowers reported bounds.
+        //
+        // Two of the three were reachable by no case in the five-case
+        // comparison this check replaced. That is the argument for ranging over
+        // the opcode table instead of extending a case list.
+        let known: &[&str] = &[];
 
         let mut unexpected: Vec<alloc::string::String> = Vec::new();
         for (name, peak_net, depth_net) in &disagreements {

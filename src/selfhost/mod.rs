@@ -3227,23 +3227,71 @@ fn header_fields_of(module: &Module) -> [i64; 11] {
 ///
 /// # Why `CONSTS` is not here, which is the largest region by an order of magnitude
 ///
-/// `CONSTS` is 663,120 bytes across the eleven stages against 34,960 for `NAMES`
-/// and `STRING_POOL` together, so it is the obvious next target and it is **not**
-/// a wiring job. Two obstacles, both measured rather than anticipated:
+/// `CONSTS` is 645,312 bytes across the eleven stages, which is 90.5% of the
+/// 712,936-byte corpus total, against 24,408 for `NAMES` and `STRING_POOL`
+/// together. It is the obvious next target and it is **not** a wiring job.
+/// Every figure in this section is derived by a test in
+/// `tests/consts_region_composition.rs`; an earlier revision quoted 663,120 and
+/// 34,960 here, from a measurement nothing re-ran.
+///
+/// Two obstacles were recorded. **Only the first is real for this corpus**, and
+/// the correction matters because the second is the one that looked like a
+/// design decision:
 ///
 /// 1. **The producer and the consumer use different arrays.** `mi_put_node_full`
 ///    writes the constant node table into `wire.bytes` at byte zero, which is
 ///    where the artifact lives, while the flattener reads its nodes from
 ///    `wire.fin`. Running the node walk inside a join that also emits would
 ///    overwrite the directory, which is the same failure this file already
-///    records for the seventh chunk onward.
-/// 2. **The two paths intern in different orders.** The module walk interns in
-///    preorder by linear scan; the flattener interns breadth-first as it walks,
-///    and that order is observable in `NAMES`. One artifact cannot carry both.
+///    records for the seventh chunk onward. This one stands.
+/// 2. **The two paths intern in different orders** — the module walk in preorder
+///    by linear scan, the flattener breadth-first, with the difference
+///    observable in `NAMES`. True of the general case and **unreachable here**.
+///    The flattener interns only for `StaticStr`, `Struct` and `Enum` nodes, and
+///    all 40,332 constants across the eleven stages are `Int`. Pinned by
+///    `the_flattener_interns_no_name_for_any_stage`, which asserts both the node
+///    census and the observation that clearing every constant leaves the string
+///    pool byte-identical.
+///
+/// # What actually blocks it, which is neither of the two above
+///
+/// The emit machinery is **already driven from real modules and already
+/// byte-identical**: `keleusma_flattens_a_constant_forest_breadth_first` in
+/// `tests/selfhost_wire.rs` compiles a source, seeds its constants into
+/// `wire.fin` as nodes, and compares the emitted `CONSTS` region against the
+/// reference. What excludes the eleven stages is a CAPACITY BOUND, not a
+/// disagreement:
+///
+/// * **The 170-node flattener cap.** `wire.fin` is 1,024 words and a node costs
+///   six, so the flattener walks at most 170 nodes per call. `parse` needs
+///   17,391. **This is not the only node cap and the two are easy to conflate**:
+///   the MODULE-INPUT walk separately refuses past 1,024 NODES
+///   (`nm_max_names`, error `-240`), which is what `wire.kel` hits at 1,148
+///   chunk constants. Different walks, different bounds, and only this one is
+///   derived from a word count.
+/// * **The node model omits the larger source.** `const_roots_of` collects
+///   `Chunk::constants` and not `DataLayout::private_init`. Those are 2,245
+///   and 38,087 constants respectively across the corpus, so the tested path
+///   covers the smaller 6%. The `FLATTEN_CASES` sources use `const data`, which
+///   lands in chunk constants, so nothing there ever reached the other pool.
+///
+/// # Why enlarging `wire.fin` cannot be the answer
+///
+/// A stage's private data array is itself initialised, one `Int(0)` per word, so
+/// widening `fin` to hold N nodes adds 6N records to `wire.kel`'s **own**
+/// `CONSTS` region. Walking `parse`'s 17,391 nodes needs `fin` at 104,346 words,
+/// which is 1,669,536 bytes of `CONSTS` in the walking stage — six times the
+/// 278,256-byte region it is trying to emit. The stage's capacity to describe a
+/// data segment is paid for out of a data segment described the same way, so the
+/// approach diverges rather than converging. Batching across calls is the route,
+/// and for a scalar-only forest it is sound with no carried state, because each
+/// record depends on nothing outside itself.
 ///
 /// `STRUCT_AUX` and `ENUM_AUX` are deliberately not candidates either: measured
 /// across the eleven stages, both regions are EMPTY in all of them, so a byte
-/// identity for either would pass without emitting anything.
+/// identity for either would pass without emitting anything. That is the same
+/// fact as the census above, seen from the other side — both regions are written
+/// only for `Struct` and `Enum` constants, and there are none.
 pub fn wire_regions_via_kel(
     module: &Module,
     directory: &[u8],
@@ -3328,6 +3376,376 @@ pub fn wire_regions_from_input(
         };
     }
     Ok(out)
+}
+
+/// The ten host-supplied fields of each chunk record, in the order
+/// `emit_chunks_batch` reads them from `fin` after slot zero.
+///
+/// Slot zero is left at zero deliberately: the stage overwrites it with the
+/// interner's own index, so the host cannot supply a name index the `NAMES`
+/// region would disagree with.
+fn chunk_fields_of(module: &Module) -> Vec<i64> {
+    use crate::bytecode::BlockType;
+    let mut out = Vec::with_capacity(module.chunks.len() * 11);
+    for c in &module.chunks {
+        out.push(0); // name: the stage fills this from the interner
+        out.push(c.constants.len() as i64);
+        out.push(c.struct_templates.len() as i64);
+        out.push(c.param_types.len() as i64);
+        // No debug pool in the auxiliary body this path builds, so the span is
+        // ABSENT rather than an empty range. The reference uses the sentinel to
+        // distinguish `None` from `Some(empty)`.
+        out.push(i64::from(crate::wire_schema::ABSENT));
+        out.push(0);
+        out.push(0); // op_byte_offset
+        out.push(0); // op_record_count
+        out.push(c.local_count as i64);
+        out.push(c.param_count as i64);
+        out.push(match c.block_type {
+            BlockType::Func => i64::from(crate::wire_schema::block_tag::FUNC),
+            BlockType::Reentrant => i64::from(crate::wire_schema::block_tag::REENTRANT),
+            BlockType::Stream => i64::from(crate::wire_schema::block_tag::STREAM),
+        });
+    }
+    out
+}
+
+/// `wire.kel`'s single-batch chunk cap, mirrored so a module past it is refused
+/// here rather than truncated there.
+const CHUNK_BATCH_CAP: usize = 90;
+
+/// `wire.bytes`, the stage's artifact buffer. Mirrored for the same reason.
+const STAGE_BUFFER_BYTES: usize = 65536;
+
+/// Emit `NAMES`, `STRING_POOL`, the `HEADER` record and the `CHUNKS` region for
+/// `module`, returning the artifact bytes.
+///
+/// # What each region owes to whom
+///
+/// - `NAMES` and `STRING_POOL` are **computed**: the stage walks the module blob
+///   and derives every byte.
+/// - `HEADER` is **encoded but not derived**: eleven scalars come from the host.
+/// - `CHUNKS` is **mixed, per field**. The stage computes the name index, taking
+///   it from the interner that produced `NAMES` rather than from the host, and it
+///   computes the three running range cursors `consts_first`, `templates_first`
+///   and `param_types_first` by accumulation across records. The other ten fields
+///   per record are host-supplied.
+///
+/// # Which modules this serves, and why not all of them
+///
+/// Two limits, both mirrored from `wire.kel` and both measured against the eleven
+/// stage sources:
+///
+/// - **90 chunk records per call.** `wire.fin` is 1024 words at eleven per chunk.
+///   `wire.kel` itself has 466 chunks and `parse.kel` has 94.
+/// - **65,536 artifact bytes.** The emitter writes at absolute artifact offsets
+///   into `wire.bytes`. `parse.kel` produces 304,432 bytes, `codegen.kel` 111,864
+///   and `verify_structural.kel` 102,256.
+///
+/// Seven of the eleven stages satisfy both. The four that do not are refused with
+/// a stated reason rather than truncated. `ck_emit_window` exists for the
+/// oversize case and is not driven from a module yet.
+pub fn wire_chunks_via_kel(
+    module: &Module,
+    directory: &[u8],
+    regions: usize,
+) -> Result<Vec<u8>, SelfHostError> {
+    if module.chunks.len() > CHUNK_BATCH_CAP {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "wire.kel emits at most {CHUNK_BATCH_CAP} chunk records per call and this \
+                 module has {}; the windowed path is not driven from a module yet",
+                module.chunks.len()
+            ),
+        });
+    }
+    // NO ARTIFACT-SIZE GUARD HERE, AND THE FIRST VERSION HAD ONE THAT COULD NEVER
+    // FIRE. It compared `directory.len()` against the buffer, but that length is
+    // the SHARED ARRAY's size, not the artifact's -- it is 65,536 for every
+    // module, so the comparison was false by construction. A guard that cannot
+    // fire is worse than none: it reads as coverage.
+    //
+    // The real limit is enforced where it is actually known. The stage writes at
+    // absolute artifact offsets and FAILS CLOSED with an out-of-bounds fault
+    // naming the offset and the bound, which the call below turns into a refusal.
+    let (blob, names) = module_input(module);
+    wire_chunks_from_input(
+        &blob,
+        names,
+        directory,
+        regions,
+        &header_fields_of(module),
+        &chunk_fields_of(module),
+        module.chunks.len(),
+    )
+}
+
+/// [`wire_chunks_via_kel`] with every input supplied directly.
+#[allow(clippy::too_many_arguments)]
+pub fn wire_chunks_from_input(
+    blob: &[u8],
+    names: usize,
+    directory: &[u8],
+    regions: usize,
+    header: &[i64; 11],
+    chunk_fields: &[i64],
+    chunk_count: usize,
+) -> Result<Vec<u8>, SelfHostError> {
+    const NAME_CAP: usize = 1024;
+    const BLOB_CAP: usize = 49152;
+    if names > NAME_CAP {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "wire.kel interns at most {NAME_CAP} names per call and this module has {names}"
+            ),
+        });
+    }
+    if blob.len() > BLOB_CAP {
+        return Err(SelfHostError::Unsupported {
+            detail: alloc::format!(
+                "wire.kel's blob buffer holds {BLOB_CAP} bytes and this module's blob is {}",
+                blob.len()
+            ),
+        });
+    }
+    let m = compile_src(&read_stage("kel/wire.kel"));
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    const NREGIONS_SLOT: usize = 1 + 65536;
+    const WARG_SLOT: usize = 1 + 65536 + 1 + 1024 * 4;
+    const FIN_SLOT: usize = WARG_SLOT + 5;
+    const BIN_SLOT: usize = FIN_SLOT + 1024;
+    /// `mi_join_chunks`, mirrored from `wire.kel`'s dispatch where
+    /// `highest_command` is a real guard.
+    const CMD_JOIN_CHUNKS: i64 = 169;
+    vm.set_shared(&mut shared, 0, Value::Int(directory.len() as i64))
+        .expect("len");
+    vm.set_shared(&mut shared, NREGIONS_SLOT, Value::Int(regions as i64))
+        .expect("nregions");
+    // `warg` carries the chunk-record count the join emits.
+    vm.set_shared(&mut shared, WARG_SLOT, Value::Int(chunk_count as i64))
+        .expect("warg");
+    for (i, &b) in directory.iter().enumerate() {
+        vm.set_shared(&mut shared, 1 + i, Value::Byte(b))
+            .expect("seed");
+    }
+    // Chunk records take `fin[0..990]` at eleven words each; the header rides
+    // `fin[990..1001]`. **Disjoint on purpose.** Every region of one artifact is
+    // emitted in a single call, because shared data is re-seeded on every call,
+    // so a header at slot zero would be read out of chunk data. The first version
+    // of this function did exactly that.
+    const HEADER_FIELD_BASE: usize = 990;
+    for (i, &v) in header.iter().enumerate() {
+        vm.set_shared(&mut shared, FIN_SLOT + HEADER_FIELD_BASE + i, Value::Int(v))
+            .expect("header field");
+    }
+    for (i, &v) in chunk_fields.iter().enumerate() {
+        vm.set_shared(&mut shared, FIN_SLOT + i, Value::Int(v))
+            .expect("chunk field");
+    }
+    for (i, &b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(b))
+            .expect("blob");
+    }
+    let st = match vm.call_with_shared(&mut shared, &[Value::Int(CMD_JOIN_CHUNKS)]) {
+        Ok(st) => st,
+        Err(e) => {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!(
+                    "wire.kel writes at absolute artifact offsets into a \
+                     {STAGE_BUFFER_BYTES}-byte buffer and this artifact reaches past it; \
+                     the windowed path is not driven from a module yet ({e:?})"
+                ),
+            });
+        }
+    };
+    match st {
+        crate::vm::VmState::Finished(Value::Int(v)) if v >= 0 => {}
+        other => {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel refused the chunk join: {other:?}"),
+            });
+        }
+    }
+    let mut out = vec![0u8; directory.len()];
+    for (i, slot) in out.iter_mut().enumerate() {
+        *slot = match vm.get_shared(&shared, 1 + i).expect("read") {
+            Value::Byte(b) => b,
+            other => panic!("shared byte slot held {other:?}"),
+        };
+    }
+    Ok(out)
+}
+
+/// Emit `NAMES`, `STRING_POOL`, `HEADER` and, where the chunk count allows,
+/// `CHUNKS` for `module`, assembling the artifact from one window per region.
+///
+/// # Why this exists when [`wire_chunks_via_kel`] already emits those regions
+///
+/// That entry writes at ABSOLUTE artifact offsets into a 65,536-byte buffer, so
+/// it serves only a module whose artifact fits. **The ceiling was never about
+/// region size.** Measured across the eleven stage sources, the largest of these
+/// four payloads is `wire.kel`'s `CHUNKS` at 22,512 bytes, a third of the buffer;
+/// what overflows is the OFFSET, and `parse.kel` puts `NAMES` at byte 299,416 of
+/// a 304,432-byte artifact.
+///
+/// So each region is emitted at window offset zero and copied to its true base
+/// here. Every stage is reachable for the three regions that need no batching.
+///
+/// # What each region owes to whom
+///
+/// - `NAMES` and `STRING_POOL` are **computed**: the stage walks the module blob
+///   and derives every byte.
+/// - `CHUNKS` is **mixed per field** — the stage computes the name index from its
+///   own interner and the three range cursors by accumulation; ten fields per
+///   record come from the host.
+/// - `HEADER` is **encoded but not derived**: eleven scalars come from the host
+///   and the stage owns the record layout.
+///
+/// # The one limit that remains
+///
+/// `CHUNKS` is a single batch of at most 90 records. `wire.kel` has 469 chunks
+/// and `parse.kel` 94, so both are emitted without it and say so through
+/// [`WindowedArtifact::chunks_emitted`]. The batching carries exist in the stage
+/// and are exercised from harness inputs; driving them from a module is a further
+/// step.
+///
+/// # Cost, stated because it looks wasteful and is not
+///
+/// One call per region re-walks the blob and re-interns, because shared data is
+/// re-seeded on every call. The interner is a pure function of its input, so the
+/// second run is the same answer rather than a second answer. Carrying indices
+/// between calls host-side would reproduce the stage's output, which is the drift
+/// this crate has now found four times.
+pub struct WindowedArtifact {
+    /// The assembled artifact bytes.
+    pub bytes: Vec<u8>,
+    /// Whether the chunk region was emitted. False when the module exceeds the
+    /// single-batch cap, in which case those bytes are left zero.
+    pub chunks_emitted: bool,
+}
+
+/// Emit one region into the window and return the bytes written.
+fn window_emit(
+    blob: &[u8],
+    names: usize,
+    header: &[i64; 11],
+    chunk_fields: &[i64],
+    chunk_count: usize,
+    cmd: i64,
+    want: usize,
+) -> Result<Vec<u8>, SelfHostError> {
+    let m = compile_src(&read_stage("kel/wire.kel"));
+    let need = required_persistent_capacity_for(&m);
+    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+    arena.resize_persistent(need).expect("resize");
+    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    const WARG_SLOT: usize = 1 + 65536 + 1 + 1024 * 4;
+    const FIN_SLOT: usize = WARG_SLOT + 5;
+    const BIN_SLOT: usize = FIN_SLOT + 1024;
+    const HEADER_FIELD_BASE: usize = 990;
+    vm.set_shared(&mut shared, WARG_SLOT, Value::Int(chunk_count as i64))
+        .expect("warg");
+    for (i, &v) in header.iter().enumerate() {
+        vm.set_shared(&mut shared, FIN_SLOT + HEADER_FIELD_BASE + i, Value::Int(v))
+            .expect("header field");
+    }
+    // CAPPED AT THE BATCH BOUND, WHICH IS EXACTLY WHERE THE HEADER STARTS.
+    // `fin` is 1024 words and a chunk costs eleven, so 90 records fill slots
+    // 0..990 and the header rides 990..1001. `parse.kel` has 94 chunks, whose
+    // 1034 fields overran the header and silently rewrote it -- the emitted
+    // header then differed from the reference for that stage alone, which is how
+    // this was found. A module past the cap does not have its chunks emitted at
+    // all, so truncating here loses nothing that would otherwise be written.
+    const CHUNK_FIELD_LIMIT: usize = CHUNK_BATCH_CAP * 11;
+    for (i, &v) in chunk_fields.iter().take(CHUNK_FIELD_LIMIT).enumerate() {
+        vm.set_shared(&mut shared, FIN_SLOT + i, Value::Int(v))
+            .expect("chunk field");
+    }
+    for (i, &b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(b))
+            .expect("blob");
+    }
+    let _ = names;
+    let st = match vm.call_with_shared(&mut shared, &[Value::Int(cmd)]) {
+        Ok(st) => st,
+        Err(e) => {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel faulted emitting into the window: {e:?}"),
+            });
+        }
+    };
+    match st {
+        crate::vm::VmState::Finished(Value::Int(v)) if v >= 0 => {}
+        other => {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!("wire.kel refused the windowed emit: {other:?}"),
+            });
+        }
+    }
+    let mut out = vec![0u8; want];
+    for (i, slot) in out.iter_mut().enumerate() {
+        *slot = match vm.get_shared(&shared, 1 + i).expect("read") {
+            Value::Byte(b) => b,
+            other => panic!("shared byte slot held {other:?}"),
+        };
+    }
+    Ok(out)
+}
+
+/// See [`WindowedArtifact`]. `regions` gives each region's `(kind, base, len)` in
+/// the artifact the caller is assembling.
+pub fn wire_windowed_via_kel(
+    module: &Module,
+    artifact_len: usize,
+    regions: &[(u16, usize, usize)],
+) -> Result<WindowedArtifact, SelfHostError> {
+    const WINDOW: usize = 65536;
+    let (blob, names) = module_input(module);
+    let header = header_fields_of(module);
+    let fields = chunk_fields_of(module);
+    let chunks_fit = module.chunks.len() <= CHUNK_BATCH_CAP;
+
+    let mut out = vec![0u8; artifact_len];
+    for &(kind, base, len) in regions {
+        let cmd = match kind {
+            k if k == crate::wire_schema::kind::NAMES => 170,
+            k if k == crate::wire_schema::kind::STRING_POOL => 171,
+            k if k == crate::wire_schema::kind::HEADER => 172,
+            k if k == crate::wire_schema::kind::CHUNKS => {
+                if !chunks_fit {
+                    continue;
+                }
+                173
+            }
+            _ => continue,
+        };
+        if len > WINDOW {
+            return Err(SelfHostError::Unsupported {
+                detail: alloc::format!(
+                    "region {kind:#06x} is {len} bytes and the stage window holds {WINDOW};                      emitting a region larger than the window needs batching within it"
+                ),
+            });
+        }
+        let win = window_emit(
+            &blob,
+            names,
+            &header,
+            &fields,
+            module.chunks.len(),
+            cmd,
+            len,
+        )?;
+        out[base..base + len].copy_from_slice(&win[..len]);
+    }
+    Ok(WindowedArtifact {
+        bytes: out,
+        chunks_emitted: chunks_fit,
+    })
 }
 
 /// Compile a whole program with the self-hosted pipeline, returning a self-hosted-built
