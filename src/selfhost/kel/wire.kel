@@ -3529,6 +3529,12 @@ private data fl {
     // struct pair, and separate from it because the two tables are independent.
     eaux: Word,
     eauxat: Word,
+    // The STREAMING emit's record cursor. A field of its own rather than a reuse
+    // of `qn`: that one is the breadth-first queue length, and the streaming path
+    // has no queue at all. Sharing them would be correct only for as long as the
+    // two paths never ran against the same block, which is not a property anyone
+    // can check by reading one function.
+    scur: Word,
 }
 
 // `wire.fin` holds six words per node, so 1024 words is 170 nodes. A STATED cap:
@@ -3785,6 +3791,62 @@ fn fl_put_record(at: Word, head: Word) -> Word {
             fl_payload_of(wire.fq[head])
         },
     )
+}
+
+// Whether a tag makes the walk intern a name.
+//
+// `STATIC_STR`, `STRUCT` and `ENUM` each put a name index in the record's `aux`,
+// so emitting one without running the interner writes a plausible-looking wrong
+// answer rather than failing. The streaming path refuses them on this predicate.
+fn fl_tag_interns(t: Word) -> Word {
+    if t == tag_static_str() { 1 } else {
+    if t == tag_struct() { 1 } else {
+    if t == tag_enum() { 1 } else { 0 } } }
+}
+
+// --- CONSTANT NODES, ONE RECORD PER CALL ------------------------------------
+//
+// `flatten_emit_consts` refuses past `fl_max_nodes()` -- 170 -- because the whole
+// forest must sit in `wire.fin`, which is 1,024 words at six words a node. That
+// is the bound keeping `CONSTS` out of the emit path: `parse` carries 817 chunk
+// constants.
+//
+// **WHY THIS PATH CAN STREAM AND THE BREADTH-FIRST WALK CANNOT.** `fl_walk` needs
+// a QUEUE, because a composite's record carries `(first, count)` into children
+// numbered after every node at its own depth -- so it cannot write a record until
+// it knows how many nodes precede its children. A forest of SCALARS has no
+// children, the queue never grows past the roots, and the walk degenerates to a
+// linear scan. Then one node in, one record out, and no state but the cursor.
+//
+// **THE REFUSAL IS LOAD-BEARING AND IS THE POINT OF THE SLICE.** Every constant
+// across the eleven stages is `Int`, pinned by
+// `tests/consts_region_composition.rs`, so this path covers the corpus entirely.
+// It covers the general case NOT AT ALL, and a composite reaching it would be
+// emitted with a zero range and a zero `aux` -- structurally valid, silently
+// wrong, and indistinguishable from a correct record downstream. Refusing is what
+// keeps the gap visible instead of encoding it in the bytes.
+fn fl_stream_begin() -> Word {
+    fl.scur = 0;
+    fl.err = 0;
+    0
+}
+
+// Emit the record for the node seeded at `wire.fin[0..6]`, at WINDOW OFFSET ZERO.
+//
+// The host places the sixteen bytes. `aux` is written as zero rather than left
+// alone, because the window is reused between calls and a stale index from an
+// earlier record is exactly the kind of wrong answer that looks right.
+fn fl_stream_step() -> Word {
+    if fl_children_of(0) > 0 { 0 - 264 } else {
+    if fl_tag_interns(fl_tag_of(0)) == 1 { 0 - 265 } else {
+    if fl_tag_has_range(fl_tag_of(0)) == 1 { 0 - 266 } else {
+        fl.sink = put_u16(const_off_tag(), fl_tag_of(0));
+        fl.sink = put_u16(const_off_flags(), fl_flags_of(0));
+        fl.sink = put_u32(const_off_aux(), 0);
+        fl.sink = put_u64(const_off_payload(), fl_payload_of(0));
+        fl.scur = fl.scur + 1;
+        const_stride()
+    } } }
 }
 
 // The breadth-first walk. `fl.qn` is both the queue length and the next index
@@ -4463,7 +4525,9 @@ fn dispatch_window(cmd: Word) -> Word {
     if cmd == 173 { mi_window_chunks() } else {
     if cmd == 174 { ck_stream_begin() } else {
     if cmd == 175 { ck_stream_step() } else {
-    0 - 97 }}}}}}
+    if cmd == 176 { fl_stream_begin() } else {
+    if cmd == 177 { fl_stream_step() } else {
+    0 - 97 }}}}}}}}
 }
 
 fn dispatch_driver2(cmd: Word) -> Word {
@@ -4520,7 +4584,7 @@ fn dispatch_driver(cmd: Word) -> Word {
 // did for four consecutive slices — and got wrong once.
 // RAISED FROM 167 for `mi_join_header`. This is a REAL GUARD: a new command
 // returns `0 - 99` until the ceiling moves, so the two must change together.
-fn highest_command() -> Word { 175 }
+fn highest_command() -> Word { 177 }
 
 // --- THE ENTRY, AS A COROUTINE ----------------------------------------------
 //

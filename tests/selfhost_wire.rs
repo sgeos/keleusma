@@ -12756,3 +12756,152 @@ fn wire_is_excluded_by_the_node_walk_and_not_by_the_chunk_cap() {
         other => panic!("begin returned {other:?}"),
     }
 }
+
+/// **THE 170-NODE FLATTENER CAP IS GONE FOR A SCALAR FOREST**, and the subject is
+/// past it by a factor of nearly five.
+///
+/// `flatten_emit_consts` refuses past `fl_max_nodes()` because the whole forest
+/// must sit in `wire.fin`, 1,024 words at six words a node. `parse` carries 817
+/// chunk constants, so that bound is what kept `CONSTS` — the largest region —
+/// out of the emit path.
+///
+/// The breadth-first walk cannot stream: a composite's record carries a range
+/// into children numbered after every node at its own depth, so it cannot write a
+/// record until it knows how many nodes precede them. A forest of scalars has no
+/// children, the queue never grows, and one node in gives one record out.
+///
+/// The comparison is against the reference region BYTE FOR BYTE, because a record
+/// with the right tag and a wrong payload is what a careless streaming emitter
+/// produces and a count would not see it.
+#[cfg(feature = "self-host")]
+#[test]
+fn constant_nodes_stream_one_record_per_call_past_the_flattener_cap() {
+    use keleusma::wire_schema::kind;
+    const CMD_FL_BEGIN: i64 = 176;
+    const CMD_FL_STEP: i64 = 177;
+    const OLD_NODE_CAP: usize = 170;
+
+    let src = std::fs::read_to_string("src/selfhost/kel/parse.kel").expect("read parse.kel");
+    let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+    let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+
+    let region = view.find_region(kind::CONSTS).expect("CONSTS region");
+    let stored = view.region_bytes(&region).expect("payload");
+    let nodes = stored.len() / 16;
+    assert!(
+        nodes > OLD_NODE_CAP,
+        "parse has {nodes} constant nodes, within the {OLD_NODE_CAP}-node cap, so it would \
+         have emitted under the batch path and proves nothing about removing it"
+    );
+
+    // The node model, mirroring the encoder's accumulation. Every one is a scalar
+    // here, which `tests/consts_region_composition.rs` pins for the whole corpus.
+    let roots = encoder_const_roots(&module);
+    let fields = preorder_of(&roots);
+    assert_eq!(
+        fields.len() / 6,
+        nodes,
+        "the model counts {} nodes and the reference emitted {nodes}",
+        fields.len() / 6
+    );
+
+    let mut vm = vm_for(WIRE_KEL);
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    match enter(&mut vm, &mut shared, CMD_FL_BEGIN).expect("begin") {
+        VmState::Yielded(Value::Int(n)) => assert_eq!(n, 0, "begin refused with {n}"),
+        other => panic!("begin returned {other:?}"),
+    }
+
+    let mut got = vec![0u8; stored.len()];
+    for (j, node) in fields.chunks_exact(6).enumerate() {
+        for (f, v) in node.iter().enumerate() {
+            vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(*v))
+                .expect("node field");
+        }
+        let wrote = match enter(&mut vm, &mut shared, CMD_FL_STEP).expect("step") {
+            VmState::Yielded(Value::Int(n)) => n,
+            other => panic!("step {j} returned {other:?}"),
+        };
+        assert!(wrote > 0, "step {j} refused with {wrote}");
+        let stride = wrote as usize;
+        for k in 0..stride {
+            got[j * stride + k] = match vm.get_shared(&shared, 1 + k).expect("read") {
+                Value::Byte(b) => b,
+                other => panic!("shared byte slot held {other:?}"),
+            };
+        }
+    }
+
+    assert_eq!(
+        got, stored,
+        "the streamed CONSTS region differs from the reference over {nodes} records"
+    );
+}
+
+/// **MUST FIRE.** A composite or name-bearing node is REFUSED, not emitted wrong.
+///
+/// The streaming path has no queue and never runs the interner, so a `TUPLE`
+/// would get a zero range and a `STATIC_STR` a zero name index — structurally
+/// valid records, silently wrong, and indistinguishable downstream from correct
+/// ones.
+///
+/// **The corpus cannot supply this case.** Every constant across the eleven
+/// stages is `Int`, so a path that elided the guard entirely would pass the test
+/// above and every other test in this file. That is precisely why the refusal is
+/// asserted here with the code it must return, rather than described in a
+/// comment.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_streaming_node_path_refuses_what_it_cannot_encode() {
+    const CMD_FL_BEGIN: i64 = 176;
+    const CMD_FL_STEP: i64 = 177;
+    // (label, node fields, expected refusal)
+    // Node layout: tag, payload, children, names_first, flags, disc.
+    const CASES: &[(&str, [i64; 6], i64)] = &[
+        ("tuple-with-children", [8, 0, 2, 0, 0, 0], -264),
+        ("static-str", [7, 0, 0, 0, 0, 0], -265),
+        ("empty-array-still-has-a-range", [9, 0, 0, 0, 0, 0], -266),
+        ("struct", [10, 0, 0, 0, 0, 0], -265),
+        ("enum", [11, 0, 0, 0, 0, 0], -265),
+    ];
+
+    let mut vm = vm_for(WIRE_KEL);
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    for (label, node, expect) in CASES {
+        match enter(&mut vm, &mut shared, CMD_FL_BEGIN).expect("begin") {
+            VmState::Yielded(Value::Int(0)) => {}
+            other => panic!("{label}: begin returned {other:?}"),
+        }
+        for (f, v) in node.iter().enumerate() {
+            vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(*v))
+                .expect("node field");
+        }
+        match enter(&mut vm, &mut shared, CMD_FL_STEP).expect("step") {
+            VmState::Yielded(Value::Int(n)) => assert_eq!(
+                n, *expect,
+                "{label}: refused with {n}, expected {expect}. A refusal proves which guard \
+                 fired only if the test names the one it expected."
+            ),
+            other => panic!("{label}: step returned {other:?}"),
+        }
+    }
+
+    // MUST-NOT-FIRE: a scalar of the same shape is accepted, or the guards above
+    // are rejecting everything and prove nothing.
+    match enter(&mut vm, &mut shared, CMD_FL_BEGIN).expect("begin") {
+        VmState::Yielded(Value::Int(0)) => {}
+        other => panic!("control: begin returned {other:?}"),
+    }
+    for (f, v) in [3i64, 42, 0, 0, 0, 0].iter().enumerate() {
+        vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(*v))
+            .expect("node field");
+    }
+    match enter(&mut vm, &mut shared, CMD_FL_STEP).expect("step") {
+        VmState::Yielded(Value::Int(n)) => assert!(
+            n > 0,
+            "an Int node was refused with {n}, so the guards reject everything"
+        ),
+        other => panic!("control: step returned {other:?}"),
+    }
+}
