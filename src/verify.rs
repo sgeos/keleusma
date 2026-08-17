@@ -275,6 +275,36 @@ fn op_wcet_cycles(
     Ok(cost_model.cycles(&chunk.ops[ip]).saturating_add(extra))
 }
 
+/// The outcome of costing a region: cycles spent, plus whether any path falls
+/// through to `end`.
+///
+/// The worst-case-execution-time twin of [`McuOutcome`], and it exists for the
+/// same reason. **Cost is monotone along a path; control flow is not.** A region
+/// whose every path leaves via `Trap` or `Return` still executed the cycles it
+/// executed before leaving, and a bound that omits them is understated.
+///
+/// This replaced a `Option<u32>` return in which `None` carried no cost at all,
+/// discarding an accumulated figure at four sites — the `Trap` arm (which did
+/// `let _ = cost;`), the `If` arm when both branches exited, the `Loop` arm when
+/// the body never fell through, and each top-level caller's `unwrap_or(0)`.
+#[derive(Debug, Clone, Copy)]
+struct WcetOutcome {
+    /// Cycles spent on the region's worst path. Always meaningful.
+    cost: u32,
+    /// Whether any path reaches `end`.
+    falls_through: bool,
+}
+
+impl WcetOutcome {
+    /// A region that leaves without reaching `end`, carrying what it spent.
+    fn exits(cost: u32) -> Self {
+        Self {
+            cost,
+            falls_through: false,
+        }
+    }
+}
+
 fn wcet_region(
     chunk: &Chunk,
     start: usize,
@@ -283,7 +313,7 @@ fn wcet_region(
     cost_model: &crate::bytecode::CostModel,
     clamp_productive_yield_loops: bool,
     wcet_extra: &[u32],
-) -> Result<Option<u32>, VerifyError> {
+) -> Result<WcetOutcome, VerifyError> {
     let ops = &chunk.ops;
     let mut cost: u32 = 0;
     let mut ip = start;
@@ -295,15 +325,27 @@ fn wcet_region(
             Op::Break(_) => {
                 cost = cost.saturating_add(op_wcet_cycles(chunk, ip, cost_model, wcet_extra)?);
                 break_costs.push(cost);
-                return Ok(None);
+                return Ok(WcetOutcome::exits(cost));
             }
             Op::Trap(_) => {
                 // Trap halts execution. Treat as path-exit. Does not
                 // push to break_costs because it does not transfer
                 // control to the enclosing loop.
+                //
+                // The cycles accumulated BEFORE the trap are reported, not
+                // discarded. The program really did execute them, so a
+                // worst-case EXECUTION TIME bound that omits them is
+                // understated for exactly the same reason the memory bound was.
                 cost = cost.saturating_add(op_wcet_cycles(chunk, ip, cost_model, wcet_extra)?);
-                let _ = cost;
-                return Ok(None);
+                return Ok(WcetOutcome::exits(cost));
+            }
+            Op::Return => {
+                // Return leaves the chunk: nothing after it runs on this path.
+                // Without this arm it fell through the catch-all, so a
+                // multiheaded dispatch was costed as though every head ran in
+                // sequence. Reports the cycles spent before leaving.
+                cost = cost.saturating_add(op_wcet_cycles(chunk, ip, cost_model, wcet_extra)?);
+                return Ok(WcetOutcome::exits(cost));
             }
             Op::BreakIf(_) => {
                 cost = cost.saturating_add(op_wcet_cycles(chunk, ip, cost_model, wcet_extra)?);
@@ -337,13 +379,17 @@ fn wcet_region(
                         clamp_productive_yield_loops,
                         wcet_extra,
                     )?;
-                    let branch_cost = match (then_cost, else_cost) {
-                        (Some(a), Some(b)) => Some(if a > b { a } else { b }),
-                        (Some(a), None) => Some(a),
-                        (None, Some(b)) => Some(b),
-                        (None, None) => return Ok(None),
+                    // Exactly one branch runs, so the cost is the maximum of
+                    // the two. Taken unconditionally, including from a branch
+                    // that exits: an exiting branch still spent its cycles.
+                    cost += if then_cost.cost > else_cost.cost {
+                        then_cost.cost
+                    } else {
+                        else_cost.cost
                     };
-                    cost += branch_cost.unwrap_or(0);
+                    if !then_cost.falls_through && !else_cost.falls_through {
+                        return Ok(WcetOutcome::exits(cost));
+                    }
                     ip = endif_pos + 1;
                 } else {
                     let then_cost = wcet_region(
@@ -357,12 +403,9 @@ fn wcet_region(
                     )?;
                     // False path has zero additional cost (skips to EndIf).
                     // Worst case is the then-body if it is more expensive.
-                    match then_cost {
-                        Some(c) => cost += c,
-                        None => {
-                            // Then-branch breaks. False path falls through with zero cost.
-                        }
-                    }
+                    // Taken unconditionally: a then-branch that exits via Trap
+                    // or Return still spent its cycles on the path that took it.
+                    cost += then_cost.cost;
                     ip = target + 1;
                 }
             }
@@ -383,8 +426,8 @@ fn wcet_region(
                     clamp_productive_yield_loops,
                     wcet_extra,
                 )?;
-                if loop_break_costs.is_empty() && body_cost.is_none() {
-                    return Ok(None);
+                if loop_break_costs.is_empty() && !body_cost.falls_through {
+                    return Ok(WcetOutcome::exits(cost.saturating_add(body_cost.cost)));
                 }
                 // Strict mode iteration count. Under
                 // `clamp_productive_yield_loops` (the per-resume WCET of a
@@ -397,7 +440,7 @@ fn wcet_region(
                 // a loop that is not provably productive keeps its full
                 // iteration bound, so a conditional yield (which a resume
                 // could skip across many iterations) is never under-counted.
-                let iter_count = if body_cost.is_none()
+                let iter_count = if !body_cost.falls_through
                     || (clamp_productive_yield_loops
                         && loop_body_all_paths_yield_no_inner_loop(ops, ip + 1, endloop_ip))
                 {
@@ -419,7 +462,7 @@ fn wcet_region(
                         }
                     }
                 };
-                let body_cost_total = body_cost.unwrap_or(0).saturating_mul(iter_count);
+                let body_cost_total = body_cost.cost.saturating_mul(iter_count);
                 let max_break = loop_break_costs.iter().copied().max().unwrap_or(0);
                 cost += if max_break > body_cost_total {
                     max_break
@@ -438,7 +481,10 @@ fn wcet_region(
         }
     }
 
-    Ok(Some(cost))
+    Ok(WcetOutcome {
+        cost,
+        falls_through: true,
+    })
 }
 
 /// Detect a bounded for-range loop pattern starting at `loop_ip` and
@@ -664,12 +710,47 @@ struct McuResult {
     heap_total: u32,
 }
 
-impl McuResult {
-    fn empty() -> Self {
+/// The outcome of walking a region: resources consumed, plus whether any path
+/// falls through to `end`.
+///
+/// **Resources are monotone along a path; control flow is not.** A region whose
+/// every path exits via `Trap` or `Break` still consumed operand slots and arena
+/// bytes before exiting, and a bound that omits them is understated. Separating
+/// the two — `peak_above_initial` and `heap_total` are always meaningful, while
+/// `delta` is `None` exactly when no path reaches `end` — is what keeps a
+/// non-fall-through region from silently contributing zero.
+///
+/// This type replaced an `Option<McuResult>` return in which `None` carried no
+/// resources at all. Under that encoding four separate sites discarded an
+/// accumulated peak and heap: the `Trap` arm, the `If` arm when both branches
+/// exited, the `Loop` arm when the body never fell through, and every top-level
+/// caller's `unwrap_or(McuResult::empty())`. The consequence was measured rather
+/// than reasoned about: **every chunk in the example corpus whose fall-through
+/// path ends in a dispatch `Trap` reported a body peak of exactly zero**, six of
+/// sixty-four, including a 3905-op chunk. A multiheaded function always ends in
+/// that `Trap`, so the whole construct was affected. See
+/// `tests/wcmu_exit_path_bounds.rs`.
+#[derive(Debug, Clone, Copy)]
+struct McuOutcome {
+    /// Maximum stack depth observed during the region, relative to the initial
+    /// stack offset. Meaningful whether or not the region falls through.
+    peak_above_initial: u32,
+    /// Total arena bytes allocated by the region on its worst path. Meaningful
+    /// whether or not the region falls through.
+    heap_total: u32,
+    /// `Some(offset)` when some path reaches `end`, carrying the stack offset
+    /// there relative to the region's initial offset. `None` when every path
+    /// exits via `Break` or `Trap`.
+    delta: Option<i32>,
+}
+
+impl McuOutcome {
+    /// A region that exits without reaching `end`, carrying what it consumed.
+    fn exits(peak_above_initial: u32, heap_total: u32) -> Self {
         Self {
-            peak_above_initial: 0,
-            delta: 0,
-            heap_total: 0,
+            peak_above_initial,
+            heap_total,
+            delta: None,
         }
     }
 }
@@ -776,8 +857,10 @@ fn shared_composite_copyout_bytes(
 /// rejected with a `VerifyError`. The WCMU bound is therefore sound for
 /// every program that passes verification.
 ///
-/// Returns `Ok(Some(McuResult))` for paths that fall through to `end`.
-/// Returns `Ok(None)` if all paths exit via Break or Trap. Returns
+/// Returns an [`McuOutcome`] whose `peak_above_initial` and `heap_total` are
+/// always meaningful, and whose `delta` is `Some` exactly when some path falls
+/// through to `end`. A region that exits via Break or Trap still reports what it
+/// consumed before exiting; see [`McuOutcome`] for why that matters. Returns
 /// `Err(VerifyError)` for strict mode violations.
 fn wcmu_region(
     chunk: &Chunk,
@@ -786,7 +869,7 @@ fn wcmu_region(
     break_results: &mut Vec<McuResult>,
     resolver: &CallResolver,
     value_slot_bytes: u32,
-) -> Result<Option<McuResult>, VerifyError> {
+) -> Result<McuOutcome, VerifyError> {
     let ops = &chunk.ops;
     let mut current_offset: i32 = 0;
     let mut peak: u32 = 0;
@@ -810,13 +893,20 @@ fn wcmu_region(
                     delta: current_offset,
                     heap_total: heap,
                 });
-                return Ok(None);
+                return Ok(McuOutcome::exits(peak, heap));
             }
             Op::Trap(_) => {
                 // Trap halts execution. Treat as path-exit so the analysis
                 // does not walk past unreachable code. Trap does not push
                 // to break_results because it does not transfer control to
                 // the enclosing loop.
+                //
+                // The peak and heap accumulated BEFORE the trap are reported,
+                // not discarded: the program really did reach that depth and
+                // allocate those bytes on its way here, and the arena has to
+                // have held them. Discarding them is what made every
+                // multiheaded function, which ends in a dispatch trap, report a
+                // body peak of zero.
                 let shrink = op.stack_shrink() as i32;
                 let growth = op.stack_growth() as i32;
                 let during_peak = (current_offset + growth).max(0) as u32;
@@ -824,9 +914,25 @@ fn wcmu_region(
                 heap = heap.saturating_add(op_iteration_heap(op, chunk, resolver));
                 current_offset += growth - shrink;
                 let _ = current_offset;
-                let _ = peak;
-                let _ = heap;
-                return Ok(None);
+                return Ok(McuOutcome::exits(peak, heap));
+            }
+            Op::Return => {
+                // Return leaves the chunk, so nothing after it executes on this
+                // path. Treating it as a path exit rather than letting it fall
+                // through the catch-all is what stops a multiheaded dispatch
+                // from being walked as though every head ran in sequence: each
+                // head ends in Return, and under the catch-all the running
+                // offset carried from one head into the next while the peak
+                // accumulated across all of them.
+                //
+                // Like Trap it reports what was consumed before leaving, and it
+                // does not push to `break_results`, because it transfers control
+                // out of the chunk rather than to an enclosing loop.
+                let growth = op.stack_growth() as i32;
+                let during_peak = (current_offset + growth).max(0) as u32;
+                peak = peak.max(during_peak);
+                heap = heap.saturating_add(op_iteration_heap(op, chunk, resolver));
+                return Ok(McuOutcome::exits(peak, heap));
             }
             Op::BreakIf(_) => {
                 let shrink = op.stack_shrink() as i32;
@@ -876,27 +982,21 @@ fn wcmu_region(
                         resolver,
                         value_slot_bytes,
                     )?;
-                    match (then_branch, else_branch) {
-                        (Some(a), Some(b)) => {
-                            peak = peak.max(a.peak_above_initial).max(b.peak_above_initial);
-                            heap = heap.saturating_add(a.heap_total.max(b.heap_total));
-                            // Branches should end at the same offset, but if
-                            // not, take the maximum to remain conservative.
-                            current_offset = a.delta.max(b.delta);
-                        }
-                        (Some(a), None) => {
-                            peak = peak.max(a.peak_above_initial);
-                            heap = heap.saturating_add(a.heap_total);
-                            current_offset = a.delta;
-                        }
-                        (None, Some(b)) => {
-                            peak = peak.max(b.peak_above_initial);
-                            heap = heap.saturating_add(b.heap_total);
-                            current_offset = b.delta;
-                        }
-                        (None, None) => {
-                            return Ok(None);
-                        }
+                    // Exactly one branch executes, so the peak and heap are the
+                    // maximum across the two. This is taken unconditionally,
+                    // including from a branch that exits rather than falling
+                    // through: an exiting branch still consumed what it consumed.
+                    peak = peak
+                        .max(then_branch.peak_above_initial)
+                        .max(else_branch.peak_above_initial);
+                    heap = heap.saturating_add(then_branch.heap_total.max(else_branch.heap_total));
+                    match (then_branch.delta, else_branch.delta) {
+                        // Branches should end at the same offset, but if not,
+                        // take the maximum to remain conservative.
+                        (Some(a), Some(b)) => current_offset = a.max(b),
+                        (Some(a), None) => current_offset = a,
+                        (None, Some(b)) => current_offset = b,
+                        (None, None) => return Ok(McuOutcome::exits(peak, heap)),
                     }
                     ip = endif_pos + 1;
                 } else {
@@ -909,12 +1009,15 @@ fn wcmu_region(
                         resolver,
                         value_slot_bytes,
                     )?;
-                    if let Some(a) = then_branch {
-                        peak = peak.max(a.peak_above_initial);
-                        heap = heap.saturating_add(a.heap_total);
+                    // Taken unconditionally: a then-branch that exits via Trap
+                    // still consumed operand slots and arena bytes, and the
+                    // false path skipping it does not undo that.
+                    peak = peak.max(then_branch.peak_above_initial);
+                    heap = heap.saturating_add(then_branch.heap_total);
+                    if let Some(a) = then_branch.delta {
                         // The false path skips with zero contribution.
                         // Conservative final offset is the maximum.
-                        current_offset = current_offset.max(a.delta);
+                        current_offset = current_offset.max(a);
                     }
                     ip = target + 1;
                 }
@@ -942,8 +1045,10 @@ fn wcmu_region(
                     resolver,
                     value_slot_bytes,
                 )?;
-                let body_peak = body.as_ref().map_or(0, |r| r.peak_above_initial);
-                let body_heap_one = body.as_ref().map_or(0, |r| r.heap_total);
+                // Taken from the outcome unconditionally: a body that always
+                // traps still runs once and consumes what it consumes.
+                let body_peak = body.peak_above_initial;
+                let body_heap_one = body.heap_total;
                 // Strict mode loop iteration determination.
                 // - If body is None, all paths exit via Break or Trap.
                 //   The loop iterates at most once. Sound.
@@ -952,7 +1057,7 @@ fn wcmu_region(
                 //   canonical for-range pattern. Otherwise the loop has
                 //   no statically computable bound and the analysis
                 //   rejects it.
-                let iter_count = if body.is_none() {
+                let iter_count = if body.delta.is_none() {
                     1
                 } else {
                     match extract_loop_iteration_bound(chunk, ip) {
@@ -980,8 +1085,8 @@ fn wcmu_region(
                 let break_heap = loop_breaks.iter().map(|r| r.heap_total).max().unwrap_or(0);
                 peak = peak.max(body_peak).max(break_peak);
                 heap = heap.saturating_add(body_heap.max(break_heap));
-                if loop_breaks.is_empty() && body.is_none() {
-                    return Ok(None);
+                if loop_breaks.is_empty() && body.delta.is_none() {
+                    return Ok(McuOutcome::exits(peak, heap));
                 }
                 ip = loop_exit_target;
             }
@@ -1035,11 +1140,11 @@ fn wcmu_region(
         }
     }
 
-    Ok(Some(McuResult {
+    Ok(McuOutcome {
         peak_above_initial: peak,
-        delta: current_offset,
         heap_total: heap,
-    }))
+        delta: Some(current_offset),
+    })
 }
 
 /// Helper that recurses into a subregion with an explicit initial offset
@@ -1054,7 +1159,7 @@ fn wcmu_subregion(
     break_results: &mut Vec<McuResult>,
     resolver: &CallResolver,
     value_slot_bytes: u32,
-) -> Result<Option<McuResult>, VerifyError> {
+) -> Result<McuOutcome, VerifyError> {
     let mut sub_breaks: Vec<McuResult> = Vec::new();
     let result = wcmu_region(
         chunk,
@@ -1072,11 +1177,13 @@ fn wcmu_subregion(
             heap_total: b.heap_total,
         });
     }
-    Ok(result.map(|r| McuResult {
-        peak_above_initial: (offset_at_start.max(0) as u32) + r.peak_above_initial,
-        delta: offset_at_start + r.delta,
-        heap_total: r.heap_total,
-    }))
+    // The peak is lifted whether or not the subregion falls through, so that an
+    // exiting subregion still contributes its consumption to the caller.
+    Ok(McuOutcome {
+        peak_above_initial: (offset_at_start.max(0) as u32) + result.peak_above_initial,
+        heap_total: result.heap_total,
+        delta: result.delta.map(|d| offset_at_start + d),
+    })
 }
 
 /// Compute the worst-case memory usage of one full Stream iteration.
@@ -1140,8 +1247,7 @@ pub fn wcmu_stream_iteration_with_value_slot_bytes(
         &mut breaks,
         &resolver,
         value_slot_bytes,
-    )?
-    .unwrap_or(McuResult::empty());
+    )?;
 
     let body_peak = body.peak_above_initial;
     let body_heap = body.heap_total;
@@ -1267,7 +1373,7 @@ pub fn wcet_stream_iteration_with_cost_model(
     // Include Stream and Reset instruction costs, plus the once-per-chunk
     // external-native body contribution (#50).
     let overhead = cost_model.cycles(&ops[stream_pos]) + cost_model.cycles(&ops[reset_pos]);
-    let region_cost = body_cost.unwrap_or(0);
+    let region_cost = body_cost.cost;
 
     Ok(overhead
         .saturating_add(region_cost)
@@ -1352,7 +1458,7 @@ pub fn wcet_whole_chunk_with_cost_model(
         clamp,
         &wcet_extra,
     )?;
-    Ok(body_cost.unwrap_or(0).saturating_add(external))
+    Ok(body_cost.cost.saturating_add(external))
 }
 
 /// Per-chunk worst-case execution time including host-attested native body time
@@ -1447,7 +1553,7 @@ fn reentrant_segmented_wcet(
             false,
             &wcet_extra,
         )?
-        .unwrap_or(0);
+        .cost;
         max_cost = max_cost.max(c);
         seg_start = y + 1;
     }
@@ -1462,7 +1568,7 @@ fn reentrant_segmented_wcet(
         false,
         &wcet_extra,
     )?
-    .unwrap_or(0);
+    .cost;
     max_cost = max_cost.max(c);
     Ok(Some(max_cost))
 }
@@ -1505,8 +1611,7 @@ pub fn wcmu_whole_chunk_with_value_slot_bytes(
         &mut breaks,
         &resolver,
         value_slot_bytes,
-    )?
-    .unwrap_or(McuResult::empty());
+    )?;
 
     let stack_slots = chunk.local_count as u32 + body.peak_above_initial;
     let stack_bytes = stack_slots * value_slot_bytes;
@@ -1898,8 +2003,7 @@ fn compute_chunk_wcmu(
     };
 
     let mut breaks: Vec<McuResult> = Vec::new();
-    let body = wcmu_region(chunk, start, end, &mut breaks, resolver, value_slot_bytes)?
-        .unwrap_or(McuResult::empty());
+    let body = wcmu_region(chunk, start, end, &mut breaks, resolver, value_slot_bytes)?;
 
     let stack_slots = chunk.local_count as u32 + body.peak_above_initial;
     let stack_bytes = stack_slots * value_slot_bytes;
@@ -3640,7 +3744,7 @@ mod tests {
             &extra,
         )
         .unwrap()
-        .unwrap_or(0);
+        .cost;
         assert!(
             segmented < cumulative,
             "per-segment max {segmented} should be tighter than cumulative {cumulative}"
@@ -5486,5 +5590,244 @@ mod tests {
         let (_stack, heap) = wcmu_stream_iteration(&chunk).unwrap();
         // 0 iterations means the body's heap allocation does not count.
         assert_eq!(heap, 0);
+    }
+
+    // ---------------------------------------------------------------------
+    // The two operand-stack models, checked across the WHOLE opcode set.
+    // ---------------------------------------------------------------------
+
+    /// One representative value per `Op` variant.
+    ///
+    /// Completeness is not asserted by counting this list. It is asserted
+    /// against `wire_format::opcode_table`, which is the wire format's
+    /// application binary interface: a new opcode has to appear there to be
+    /// encodable at all, so an opcode added without a representative here is
+    /// reported BY NAME rather than silently skipped.
+    fn representative_ops() -> Vec<Op> {
+        use crate::bytecode::{ArrayElem, EnumField, NewCompositeOperand, StructField, TupleField};
+        use crate::value_layout::{CompositeKind, ScalarKind};
+        vec![
+            Op::Const(0),
+            Op::GetLocal(0),
+            Op::SetLocal(0),
+            Op::GetData(0),
+            Op::SetData(0),
+            Op::GetDataIndexed(0, 0),
+            Op::SetDataIndexed(0, 0),
+            Op::BoundsCheck(0),
+            Op::Add,
+            Op::Sub,
+            Op::Mul,
+            Op::Div,
+            Op::Mod,
+            Op::Neg,
+            Op::CmpEq,
+            Op::CmpNe,
+            Op::CmpLt,
+            Op::CmpGt,
+            Op::CmpLe,
+            Op::CmpGe,
+            Op::Not,
+            Op::If(0),
+            Op::Else(0),
+            Op::EndIf,
+            Op::Loop(0),
+            Op::EndLoop(0),
+            Op::Break(0),
+            Op::BreakIf(0),
+            Op::Stream,
+            Op::Reset,
+            Op::Call(0, 0),
+            Op::Return,
+            Op::Yield,
+            Op::Dup,
+            Op::NewComposite(NewCompositeOperand::Flat {
+                kind: CompositeKind::Struct,
+                count: 1,
+                byte_size: 8,
+            }),
+            Op::GetField(StructField::Flat {
+                offset: 0,
+                kind: ScalarKind::Int,
+            }),
+            Op::GetIndex(ArrayElem::Flat {
+                kind: ScalarKind::Int,
+            }),
+            Op::GetTupleField(TupleField::Flat {
+                offset: 0,
+                kind: ScalarKind::Int,
+            }),
+            Op::GetEnumField(EnumField::Flat {
+                offset: 0,
+                kind: ScalarKind::Int,
+            }),
+            Op::Len,
+            Op::IsEnum(0, 0, 0),
+            Op::IsStruct(0),
+            Op::IntToFloat,
+            Op::FloatToInt,
+            Op::WordToByte,
+            Op::ByteToWord,
+            Op::WordToFixed(0),
+            Op::FixedToWord(0),
+            Op::FixedMul(0),
+            Op::FixedDiv(0),
+            Op::Trap(0),
+            Op::CheckedAdd,
+            Op::CheckedSub,
+            Op::CheckedMul(0),
+            Op::CheckedNeg,
+            Op::CheckedDiv(0),
+            Op::CheckedMod,
+            Op::PushImmediate(0),
+            Op::PopN(1),
+            Op::BitAnd,
+            Op::BitOr,
+            Op::BitXor,
+            Op::Shl,
+            Op::Shr,
+            Op::CallVerifiedNative(0, 0),
+            Op::CallExternalNative(0, 0),
+        ]
+    }
+
+    /// Every opcode in the canonical table has a representative above.
+    ///
+    /// Separated from the agreement check so a missing representative is
+    /// reported as a missing representative, rather than as a model
+    /// disagreement it would otherwise hide.
+    #[test]
+    fn every_opcode_has_a_representative() {
+        let reps = representative_ops();
+        let mut covered: alloc::collections::BTreeSet<u8> = alloc::collections::BTreeSet::new();
+        for op in &reps {
+            covered.insert(crate::wire_format::opcode_id_of(op).0);
+        }
+        for (name, id) in crate::wire_format::opcode_table() {
+            assert!(
+                covered.contains(id),
+                "opcode {name} (wire id {id}) has no representative in \
+                 representative_ops(). Add one; a case list that silently omits \
+                 an opcode is the defect this check exists to prevent."
+            );
+        }
+        assert_eq!(
+            covered.len(),
+            crate::wire_format::opcode_table().len(),
+            "representative_ops() covers {} opcodes but the canonical table has {}",
+            covered.len(),
+            crate::wire_format::opcode_table().len()
+        );
+    }
+
+    /// THE RANGING CHECK: the peak model's net must equal the depth model's net
+    /// for every opcode, not merely for the opcodes someone wrote a case for.
+    ///
+    /// `Op::stack_growth() - Op::stack_shrink()` is the peak model's net and
+    /// `op_depth_effect`'s second component is the depth model's net. They
+    /// describe the same quantity, so a disagreement is a defect in one of them.
+    ///
+    /// **This replaces a five-case control that could not have found what it was
+    /// added to prevent.** That control compared the two models over five
+    /// hand-written source cases, none of which yielded, so its coverage was a
+    /// property of its case list rather than of the opcode set. It was added the
+    /// day before a wrong net in `Op::Yield` was found by other means, and it
+    /// could not have reported that opcode however long it ran. Adding a sixth
+    /// case would have closed one instance and left the next invisible.
+    #[test]
+    fn the_two_operand_stack_models_agree_across_the_whole_opcode_set() {
+        // A representative chunk; `op_depth_effect` ignores it for every opcode
+        // whose effect is not chunk-dependent.
+        let chunk = Chunk {
+            name: alloc::string::String::from("probe"),
+            ops: vec![],
+            constants: vec![],
+            struct_templates: vec![],
+            local_count: 0,
+            param_count: 0,
+            block_type: BlockType::Func,
+            param_types: vec![],
+            debug_pool: None,
+        };
+
+        let mut disagreements: Vec<(alloc::string::String, i32, i32)> = Vec::new();
+        for op in representative_ops() {
+            let peak_net = op.stack_growth() as i32 - op.stack_shrink() as i32;
+            let (_required, depth_net) = op_depth_effect(&op, &chunk);
+            if peak_net != depth_net {
+                disagreements.push((alloc::format!("{op:?}"), peak_net, depth_net));
+            }
+        }
+
+        // Known disagreements. Each entry needs a reason, and the set is
+        // asserted to be EXACTLY this, so a newly disagreeing opcode fails here
+        // and so does a repaired one whose entry was left behind.
+        //
+        // THE CONTROL-FLOW OPCODES ARE NOT IN THIS LIST, and the first draft of
+        // it wrongly assumed they would be. `If`, `Loop`, `Break`, `BreakIf`,
+        // `Trap` and `Return` are intercepted by `verify_depth_region` before
+        // their `op_depth_effect` entry is consulted, so it seemed safe to
+        // predict that their entries would drift. Measured: all six AGREE, and
+        // the staleness assertion below is what said so. Six plausible entries
+        // with a plausible reason would otherwise have gone in unchallenged.
+        let known: &[&str] = &[
+            // NOT CLOSED, and reported by the native-code-generation line
+            // rather than found here. The peak model gives `Yield` a net of -1
+            // (growth 0, shrink 1) while the depth model gives net 0, above a
+            // comment recording that the resume pushes the input back. Walking the peak model over the
+            // stage corpus drives the running offset NEGATIVE, first at the
+            // `PopN` that discards the resumed value, which an operand stack
+            // cannot do. The depth model is the one that is right.
+            //
+            // Deliberately left open rather than repaired here: it is a
+            // different cause from the exit-path resource discard this file's
+            // `McuOutcome` addresses, and changing a bound model wants its own
+            // increment with its own evidence. This entry is what stops it
+            // being forgotten, and the test fails if it is fixed without
+            // removing the entry.
+            "Yield",
+            // FOUND BY THIS CHECK ON ITS FIRST RUN, and reachable by no case in
+            // the five-case control it replaced.
+            //
+            // Measured against the virtual machine rather than inferred: the
+            // `Op::FixedMul` handler in `crate::vm` pops twice and pushes once,
+            // so the net is -1 and the transient reach above the current level
+            // is 0. The depth model's -1 is correct; the peak model's entries
+            // (growth 0, shrink 0) give 0 and are wrong. `Op::FixedDiv` shares
+            // the arm and the handler shape.
+            //
+            // The error OVERSTATES: a net one slot too high walks every later
+            // operation from a base one slot too high, and it compounds with
+            // each fixed-point multiply or divide in a chunk. The bound stays
+            // an upper bound, so this is a precision defect and not a soundness
+            // one, which is why it is pinned here rather than repaired in an
+            // increment whose subject is an UNDERSTATED bound. Repairing it
+            // lowers bounds on shipped chunks and wants its own evidence.
+            "FixedMul(0)",
+            "FixedDiv(0)",
+        ];
+
+        let mut unexpected: Vec<alloc::string::String> = Vec::new();
+        for (name, peak_net, depth_net) in &disagreements {
+            if !known.contains(&name.as_str()) {
+                unexpected.push(alloc::format!(
+                    "{name}: peak model net {peak_net}, depth model net {depth_net}"
+                ));
+            }
+        }
+        assert!(
+            unexpected.is_empty(),
+            "opcodes whose two models disagree and which are not recorded as known:\n  {}\n\
+             A peak net LOWER than the depth net understates the worst-case-memory bound.",
+            unexpected.join("\n  ")
+        );
+
+        for k in known {
+            assert!(
+                disagreements.iter().any(|(n, _, _)| n == k),
+                "{k} is recorded as a known model disagreement but the two models now agree. \
+                 If it was repaired, remove it from the list."
+            );
+        }
     }
 }

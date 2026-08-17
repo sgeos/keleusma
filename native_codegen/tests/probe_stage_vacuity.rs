@@ -62,7 +62,7 @@
 //! The counts are printed, not asserted, because they will move when the
 //! differential is repaired. The two assertions are the properties that would
 //! make the measurement meaningless if they failed.
-use keleusma::bytecode::{BlockType, Module, SlotVisibility, Value};
+use keleusma::bytecode::{BlockType, Module, Op, SlotVisibility, Value};
 use keleusma::vm::{
     Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for, shared_data_bytes_for,
 };
@@ -607,6 +607,128 @@ fn the_accessor_seeds_move_each_stages_chunk_coverage() {
     assert_eq!(checked, 4, "not every seeded stage was measured");
 }
 
+/// **THE SINGLE-HEAD RECONSTRUCT PATH, the half that WAS genuinely blocked.**
+///
+/// `reconstruct.kel` has two entry points. The multiheaded one is driven by the
+/// corpus differential. This is the other, `seed_reconstruct_shared`, and until
+/// the `v0.2.3` line's `ParsedFn` accessors landed it could not be called from
+/// outside the crate at all: it wants a record stream, and the fields holding one
+/// were private. **That half of the old report was correct**, unlike the claim
+/// about the producer, which was not and is retracted.
+///
+/// **The subject declares exactly ONE function, so nothing here depends on
+/// declaration order.** The multiheaded path cannot say that -- no accessor
+/// exposes a parsed function's name, so grouping same-named heads still rests on
+/// the order they appear in, which is why that subject's shape stays asserted.
+///
+/// **The category is MAPPED, not passed through.** The driver sends 2 for a
+/// `yield` declaration and 0 for anything else, and handing it the raw parsed
+/// category would seed a different program. Read from the driver rather than
+/// inferred from the multiheaded path, which concatenates differently.
+///
+/// Two signals, because either alone is weak. Coverage says more of the stage
+/// runs; the yielded node count says the stage ACCEPTED the records rather than
+/// taking an early exit, and a rejected stream is indistinguishable from coverage
+/// without it.
+#[test]
+fn the_single_head_reconstruct_seed_drives_the_stage() {
+    // **The subject is SELECTED by the property it must have, not named.** A
+    // hand-picked file was tried first and `parse_functions` reported two heads
+    // for a source that visibly declares one, so a literal name here would encode
+    // a belief about the parser rather than a fact about it. The property is what
+    // matters: exactly one parsed head, unguarded, with a non-empty body. That is
+    // what `is_multihead_group` routes to the single-head driver.
+    let mut chosen: Option<(String, Vec<keleusma::selfhost::ParsedFn>)> = None;
+    let mut panicked: Vec<String> = Vec::new();
+    println!("\n================ single-head reconstruct");
+    println!(
+        "  {:<24} {:>5} {:>7} {:>6}",
+        "candidate", "heads", "guarded", "body"
+    );
+    for p in stage_sources_examples() {
+        let name = p
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let Ok(src) = std::fs::read_to_string(&p) else {
+            continue;
+        };
+        // **`parse_functions` PANICS on part of the shipped corpus**, so this
+        // survey cannot simply call it. See the assertion below: the panic is a
+        // finding about a public API, not an obstacle to route around silently.
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let parsed = std::panic::catch_unwind(|| keleusma::selfhost::parse_functions(&src));
+        std::panic::set_hook(prev);
+        let Ok((fns, _names, _, _)) = parsed else {
+            println!("  {name:<24} {:>5}", "PANIC");
+            panicked.push(name);
+            continue;
+        };
+        let guarded = fns.iter().filter(|f| !f.guard_records().is_empty()).count();
+        let body = fns.first().map(|f| f.body_records().len()).unwrap_or(0);
+        println!("  {name:<24} {:>5} {guarded:>7} {body:>6}", fns.len());
+        if fns.len() == 1 && guarded == 0 && body > 0 && chosen.is_none() {
+            chosen = Some((name, fns));
+        }
+    }
+    if !panicked.is_empty() {
+        println!("  parse_functions PANICKED on: {}", panicked.join(", "));
+    }
+    let (subject_name, fns) = chosen.expect(
+        "no corpus example parses to exactly one unguarded head with a non-empty \
+         body, so the single-head path has no subject that avoids an ordering \
+         assumption. Report this rather than falling back to a positional pick.",
+    );
+    println!("  SELECTED: {subject_name}");
+    let h = &fns[0];
+    let records = h.body_records();
+    // The driver's own mapping. See `reconstruct_via_kel`'s call site.
+    let category = if h.category() == 3 { 2 } else { 0 };
+
+    let m = keleusma::selfhost::reconstruct_kel_module();
+    let arena = arena_for(&m);
+    let vm = Vm::new(m.clone(), &arena).expect("stage vm");
+    let seed = keleusma::selfhost::seed_reconstruct_shared(&vm, records, category, h.param_count());
+    drop(vm);
+
+    let (bare, total) = chunk_coverage(&m, None).expect("unseeded coverage");
+    let (seeded, _) = chunk_coverage_with(&m, None, Some(&seed)).expect("seeded coverage");
+    println!("  records            {}", records.len());
+    println!("  category           {category}");
+    println!("  param_count        {}", h.param_count());
+    println!(
+        "  chunk coverage     {} unseeded -> {} seeded, of {total}",
+        bare.len(),
+        seeded.len()
+    );
+
+    // **The stage must ACCEPT the stream, not merely be handed it.** The entry
+    // yields the reconstructed node count, so a zero here is an early exit and
+    // exactly the silent rejection this whole arc keeps finding.
+    let arena2 = arena_for(&m);
+    let mut vm2 = Vm::new(m.clone(), &arena2).expect("stage vm");
+    let mut shared = seed.clone();
+    let nodes = match vm2.call_with_shared(&mut shared, &[Value::Int(0)]) {
+        Ok(VmState::Yielded(Value::Int(n))) => n,
+        other => panic!("reconstruct.kel did not yield a node count: {other:?}"),
+    };
+    println!("  nodes reconstructed {nodes}");
+    println!("================\n");
+    assert!(
+        nodes > 0,
+        "the stage yielded {nodes} nodes, so it took an early exit and the seed was \
+         effectively rejected"
+    );
+    assert!(
+        seeded.len() > bare.len(),
+        "the single-head seed did not move chunk coverage ({} unseeded, {} seeded)",
+        bare.len(),
+        seeded.len()
+    );
+}
+
 fn scalar(v: &Value) -> i64 {
     match v {
         Value::Int(x) => *x,
@@ -628,6 +750,159 @@ fn stage_sources() -> Vec<std::path::PathBuf> {
     let dir = std::path::Path::new("../src/selfhost/kel");
     let mut out: Vec<_> = std::fs::read_dir(dir)
         .expect("read src/selfhost/kel")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "kel"))
+        .collect();
+    out.sort();
+    out
+}
+
+/// **CAN A VERIFY STAGE BE MADE TO REJECT, and does the verdict actually move?**
+///
+/// The three `verify_*` stages sit in `KNOWN_VACUOUS` not because they exit early
+/// -- they run, and chunk coverage proves it -- but because their verdict on a
+/// well-formed chunk is ACCEPT, which they encode as 0, over a seeded buffer that
+/// already holds 0. Nothing the differential can observe changes.
+///
+/// So the question is whether a rejecting subject moves the verdict to 1. This
+/// probe answers it by measurement instead of by argument, and prints both
+/// directions per stage. **The accept case is not decoration**: a stage that
+/// rejected everything would show a moving verdict and be worthless, which is the
+/// must-fire and must-not-fire pair this line uses everywhere else.
+#[test]
+fn can_a_rejecting_subject_move_each_verify_stages_verdict() {
+    let src = std::fs::read_to_string("../examples/scripts/01_arithmetic.kel").expect("subject");
+    let subject =
+        compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile subject");
+    let chunk_ix = (0..subject.chunks.len())
+        .max_by_key(|&i| subject.chunks[i].ops.len())
+        .expect("subject has a chunk");
+
+    // **Each stage gets the defect IT checks for, because they do not check the
+    // same thing.** An operand-stack underflow was tried against all three first
+    // and `verify_structural.kel` accepted it, correctly: it latches block-nesting
+    // malformation, not depth. One mutation for all three would have read as "that
+    // stage cannot be made to reject", which is a different and false claim.
+    type Mutate = fn(&mut Module, usize);
+    let cases: &[(&str, &str, Mutate)] = &[
+        ("verify_depth.kel", "operand-stack underflow", |m, i| {
+            m.chunks[i].ops.insert(0, Op::PopN(4))
+        }),
+        ("verify_typed.kel", "operand-stack underflow", |m, i| {
+            m.chunks[i].ops.insert(0, Op::PopN(4))
+        }),
+        ("verify_structural.kel", "unclosed block opener", |m, i| {
+            m.chunks[i].ops.insert(0, Op::If(1))
+        }),
+    ];
+
+    println!("\n================ verify verdicts, accept against reject");
+    println!(
+        "  {:<26} {:>8} {:>8}  defect injected",
+        "stage", "well", "broken"
+    );
+    for (stage, defect, mutate) in cases {
+        let stage = *stage;
+        let mut broken = subject.clone();
+        mutate(&mut broken, chunk_ix);
+        let path = stage_sources()
+            .into_iter()
+            .find(|p| p.file_name().unwrap_or_default().to_string_lossy() == stage)
+            .unwrap_or_else(|| panic!("{stage} missing"));
+        let m = module_of(&path).unwrap_or_else(|| panic!("{stage} compiles"));
+
+        let arena = arena_for(&m);
+        let vm = Vm::new(m.clone(), &arena).expect("stage vm");
+        let well = verify_stage_seed(stage, &m, &vm, &subject, chunk_ix);
+        let ill = verify_stage_seed(stage, &m, &vm, &broken, chunk_ix);
+        drop(vm);
+
+        let a = verify_stage_verdict(&m, &well);
+        let b = verify_stage_verdict(&m, &ill);
+        let show = |r: &Result<i64, String>| match r {
+            Ok(v) => v.to_string(),
+            Err(e) => format!("ERR {e}"),
+        };
+        println!("  {stage:<26} {:>8} {:>8}  {defect}", show(&a), show(&b));
+        // **Both directions, asserted.** The reject case alone would pass for a
+        // stage that rejects everything, and the accept case alone proves only
+        // that it runs.
+        assert_eq!(
+            a.as_ref().ok(),
+            Some(&0),
+            "{stage} did not ACCEPT a well-formed chunk, so a moving verdict would \
+             say nothing about the injected defect"
+        );
+        assert_eq!(
+            b.as_ref().ok(),
+            Some(&1),
+            "{stage} did not REJECT a chunk carrying {defect}, so its verdict does \
+             not move and it cannot leave the vacuous set by this route"
+        );
+    }
+    println!("================\n");
+}
+
+/// Build the seed a stage expects for `chunk` of `subject`.
+///
+/// One place, so the accept case and the reject case cannot drift into being two
+/// different constructions -- which would make a differing verdict evidence about
+/// the harness rather than about the chunk.
+fn verify_stage_seed(
+    stage: &str,
+    m: &Module,
+    vm: &Vm<'_, '_>,
+    subject: &Module,
+    chunk_ix: usize,
+) -> Vec<u8> {
+    let _ = m;
+    let chunk = &subject.chunks[chunk_ix];
+    match stage {
+        "verify_depth.kel" => keleusma::selfhost::seed_verify_depth_shared(vm, chunk),
+        "verify_typed.kel" => {
+            let wb = (1usize << subject.word_bits_log2) / 8;
+            let fb = (1usize << subject.float_bits_log2) / 8;
+            keleusma::selfhost::seed_verify_typed_shared(
+                vm,
+                subject,
+                chunk,
+                subject.signatures.get(chunk_ix),
+                wb,
+                fb,
+            )
+        }
+        _ => {
+            let always = keleusma::selfhost::self_hosted_always_yielding(subject);
+            keleusma::selfhost::seed_verify_structural_shared(vm, subject, chunk, &always)
+        }
+    }
+}
+
+/// Drive a verify stage once and return the verdict it yields.
+///
+/// Each of the three ends in `yield run()`, and `run()`'s final expression is its
+/// `out_reject` slot, so the yielded value IS the verdict. Read from the stage
+/// sources rather than assumed.
+fn verify_stage_verdict(m: &Module, seed: &[u8]) -> Result<i64, String> {
+    let arena = arena_for(m);
+    let mut vm = Vm::new(m.clone(), &arena).map_err(|e| format!("stage refuses to load: {e:?}"))?;
+    let mut shared = seed.to_vec();
+    match vm.call_with_shared(&mut shared, &[Value::Int(0)]) {
+        Ok(VmState::Yielded(Value::Int(v))) => Ok(v),
+        Ok(other) => Err(format!("unexpected state: {other:?}")),
+        Err(e) => Err(format!("stage refuses to run: {e:?}")),
+    }
+}
+
+/// The top-level example scripts, as candidate reconstruct subjects.
+///
+/// Deliberately NOT recursive: the `rogue` and `piano_roll` subdirectories carry
+/// multi-file programs whose parts do not stand alone.
+fn stage_sources_examples() -> Vec<std::path::PathBuf> {
+    let dir = std::path::Path::new("../examples/scripts");
+    let mut out: Vec<_> = std::fs::read_dir(dir)
+        .expect("read examples/scripts")
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "kel"))

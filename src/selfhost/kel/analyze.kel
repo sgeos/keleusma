@@ -10,10 +10,11 @@
 // -frame stack walked by a single bounded work loop, folding both analyses into one pass.
 //
 // Control-flow forms handled: straight-line, `if`/`else`, bare `if`, `break`/`breakif`/
-// `trap`, and `loop`. An `if`/`else` takes the max of its two branches; a bare `if` the max
+// `trap`/`return`, and `loop`. An `if`/`else` takes the max of its two branches; a bare `if` the max
 // of its then-branch and the zero-cost fall-through. A `break`/`breakif` records the cost,
-// peak, and heap at its point (a `trap` ends a path without recording, since it does not
-// transfer control to the enclosing loop). Break records propagate up the frame stack -- the
+// peak, and heap at its point (a `trap` or `return` ends a path without recording a break, since neither
+// transfers control to the enclosing loop, but the cost, peak and heap it reached ARE
+// reported: resources are monotone along a path, control flow is not). Break records propagate up the frame stack -- the
 // WCET cost unlifted, the WCMU peak lifted by the depth at each region boundary -- until a
 // `loop` consumes them: a loop multiplies its body cost and heap by the statically extracted
 // iteration count, and folds in the maximum break cost/peak/heap of its body.
@@ -328,12 +329,16 @@ fn lift(i: Word) -> Word {
 // cost, leaving the depth unchanged but for a conservative max on the delta. Break records
 // from the then-branch propagate regardless of the false path.
 fn resolve_bare_if(i: Word) -> Word {
+    // The then-branch's cost, peak and heap count whether or not it falls through: a branch
+    // that leaves via `trap` or `return` still spent its cycles, reached its depth, and
+    // allocated its bytes on the path that took it. Only the resulting OFFSET depends on the
+    // branch falling through, because only that is a control-flow fact.
+    an.f_cost[i] = an.f_cost[i] + an.child_cost;
+    if an.lcp > an.f_peak[i] {
+        an.f_peak[i] = an.lcp;
+    }
+    an.f_heap[i] = an.f_heap[i] + an.child_heap;
     if an.child_broke == 0 {
-        an.f_cost[i] = an.f_cost[i] + an.child_cost;
-        if an.lcp > an.f_peak[i] {
-            an.f_peak[i] = an.lcp;
-        }
-        an.f_heap[i] = an.f_heap[i] + an.child_heap;
         if an.lcd > an.f_off[i] {
             an.f_off[i] = an.lcd;
         }
@@ -374,23 +379,27 @@ fn resolve_if_else(i: Word) -> Word {
     } else {
         let tb = an.f_ptb[i];
         let cb = an.child_broke;
+        // Exactly one branch runs, so cost, peak and heap are the maximum across the two.
+        // Taken unconditionally, including from a branch that leaves rather than falling
+        // through: an exiting branch still consumed what it consumed. Only the offset and
+        // whether this region itself falls through depend on `tb`/`cb`.
+        if an.f_ptc[i] > an.child_cost {
+            an.f_cost[i] = an.f_cost[i] + an.f_ptc[i];
+        } else {
+            an.f_cost[i] = an.f_cost[i] + an.child_cost;
+        }
+        if an.f_ptp[i] > an.f_peak[i] {
+            an.f_peak[i] = an.f_ptp[i];
+        }
+        if an.lcp > an.f_peak[i] {
+            an.f_peak[i] = an.lcp;
+        }
+        if an.f_pth[i] > an.child_heap {
+            an.f_heap[i] = an.f_heap[i] + an.f_pth[i];
+        } else {
+            an.f_heap[i] = an.f_heap[i] + an.child_heap;
+        }
         if tb == 0 andalso cb == 0 {
-            if an.f_ptc[i] > an.child_cost {
-                an.f_cost[i] = an.f_cost[i] + an.f_ptc[i];
-            } else {
-                an.f_cost[i] = an.f_cost[i] + an.child_cost;
-            }
-            if an.f_ptp[i] > an.f_peak[i] {
-                an.f_peak[i] = an.f_ptp[i];
-            }
-            if an.lcp > an.f_peak[i] {
-                an.f_peak[i] = an.lcp;
-            }
-            if an.f_pth[i] > an.child_heap {
-                an.f_heap[i] = an.f_heap[i] + an.f_pth[i];
-            } else {
-                an.f_heap[i] = an.f_heap[i] + an.child_heap;
-            }
             if an.f_ptd[i] > an.lcd {
                 an.f_off[i] = an.f_ptd[i];
             } else {
@@ -400,21 +409,11 @@ fn resolve_if_else(i: Word) -> Word {
             an.f_pa[i] = 0;
         } else {
         if tb == 0 andalso cb == 1 {
-            an.f_cost[i] = an.f_cost[i] + an.f_ptc[i];
-            if an.f_ptp[i] > an.f_peak[i] {
-                an.f_peak[i] = an.f_ptp[i];
-            }
-            an.f_heap[i] = an.f_heap[i] + an.f_pth[i];
             an.f_off[i] = an.f_ptd[i];
             an.f_ip[i] = an.f_pj[i];
             an.f_pa[i] = 0;
         } else {
         if tb == 1 andalso cb == 0 {
-            an.f_cost[i] = an.f_cost[i] + an.child_cost;
-            if an.lcp > an.f_peak[i] {
-                an.f_peak[i] = an.lcp;
-            }
-            an.f_heap[i] = an.f_heap[i] + an.child_heap;
             an.f_off[i] = an.lcd;
             an.f_ip[i] = an.f_pj[i];
             an.f_pa[i] = 0;
@@ -578,7 +577,8 @@ fn scan_op(i: Word) -> Word {
         0
     } else {
     if c == 8 {
-        // Trap: account and end this path without recording a break.
+        // Path exit (`trap` or `return`): account, then end this path. No break record,
+        // because neither transfers control to an enclosing loop.
         account_op(i, ip);
         an.f_broke[i] = 1;
         an.f_ip[i] = an.f_end[i];
@@ -668,9 +668,16 @@ fn run() -> Word {
         0
     } else {
         wa.out_reject = 0;
-        let region_cost = if an.child_broke == 1 { 0 } else { an.child_cost };
-        let region_peak = if an.child_broke == 1 { 0 } else { an.child_peak };
-        let region_heap = if an.child_broke == 1 { 0 } else { an.child_heap };
+        // Resources are monotone along a path; control flow is not. A region whose every
+        // path leaves via `trap` or `return` still spent its cycles, reached its depth and
+        // allocated its bytes, so they are REPORTED rather than zeroed. All three read
+        // `if an.child_broke == 1 { 0 } else { ... }` until 2026-08-16 -- the exact analogue
+        // of the reference's `unwrap_or(McuResult::empty())`, and wrong for the same reason.
+        // Every single-head function ends in a top-level `return`, so this zeroed the body
+        // contribution of essentially every `fn` in every stage.
+        let region_cost = an.child_cost;
+        let region_peak = an.child_peak;
+        let region_heap = an.child_heap;
         wa.out_wcet = wa.cost[wa.stream_pos] + wa.cost[wa.reset_pos] + region_cost;
         wa.out_stack_bytes = (wa.local_count + region_peak) * wa.value_slot_bytes;
         wa.out_heap = region_heap;

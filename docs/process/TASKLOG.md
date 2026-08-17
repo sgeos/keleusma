@@ -19,6 +19,62 @@ Current sprint source of truth.
 > and unsound**: the field ops' operand-stack net understates the WCMU peak.~~ **CLOSED** later the
 > same day; see the note below.
 
+> **Currency note (2026-08-16).** The `wcmu_region` bound reported by the `v0.3.0` line as 2-against-3
+> is **FIXED**, and it was not an off-by-one. The reported 2 was `local_count` alone; the BODY peak was
+> reported as exactly 0. `wcmu_region` returned `Option<McuResult>` in which `None` meant "does not
+> fall through" and carried no resources, so four sites discarded an accumulated operand peak and
+> arena heap: the `Trap` arm, the `If` arm when both branches exited, the `Loop` arm when the body
+> never fell through, and every top-level caller including `module_wcmu`. **Every multiheaded function
+> was affected**, since each compiles to guarded heads with a trailing no-match dispatch `Trap`; six of
+> sixty-four non-Stream corpus chunks reported a zero body peak, one of them 3905 ops. The return type
+> is now `McuOutcome`, where the peak and heap are always meaningful and only the control-flow fact is
+> optional. A **second, opposite** defect sat underneath: `Op::Return` fell through the catch-all, so a
+> dispatch was walked as if every head ran in sequence. Now a path exit. The two errors partially
+> cancelled, which is why the symptom looked small. Pinned in `tests/wcmu_exit_path_bounds.rs`.
+>
+> The five-case `the_peak_model_agrees_with_the_depth_model` control is superseded by a check
+> **ranging over the whole opcode set**, with completeness asserted against the wire format's
+> canonical opcode table so a new opcode is reported by name. It found `FixedMul` and `FixedDiv`
+> disagreeing on its first run — peak-model net 0 against a handler that pops twice and pushes once.
+> **Pinned, not repaired**: that error overstates, so repairing it lowers shipped bounds and wants its
+> own increment. `Op::Yield` likewise stays pinned, measured to be a different cause.
+
+> **Currency note (2026-08-16, third).** The module-driven emit path reaches **three** region kinds
+> and the three are not equal. `NAMES` and `STRING_POOL` are COMPUTED by the stage from the module
+> blob; the `HEADER` record is ENCODED BUT NOT DERIVED, with the host supplying eleven scalars and the
+> stage owning offsets, widths and endianness. **Report the two separately.** `wire_regions_via_kel`
+> is the entry; `mi_join_header` is additive beside `mi_join` and `highest_command` moved 167 to 168.
+>
+> **`reconstruct` seeding is unblocked, and one of the two accessors was never blocked**:
+> `parse_functions` is `pub`, so `seed_reconstruct_multihead_shared` was always externally callable.
+> `ParsedFn` gains four accessors rather than `pub` fields for the other.
+>
+> **Measured before choosing a target, which is what stopped this being vacuous.** Region payloads
+> across the eleven stages: `CONSTS` 663,120 bytes (11/11), `CHUNKS` 36,096, names plus pool 34,960,
+> `SIGNATURES` 12,032. **`STRUCT_AUX` and `ENUM_AUX` are EMPTY in all eleven** — `ENUM_AUX` was the
+> region about to be chosen. **`CONSTS` is 94% of the body and is NOT wiring**: the node producer
+> writes into `wire.bytes` at byte zero where the artifact lives while the flattener reads `wire.fin`,
+> and the two intern in different orders (preorder against breadth-first), which is observable in
+> `NAMES`.
+
+> **Currency note (2026-08-16, later).** The repair above spread, and the differential oracle is why
+> that was safe rather than alarming. **`wcet_region` had the identical defect** (`let _ = cost;`
+> before `return Ok(None)`), so cycles spent before a trap were missing from the worst-case EXECUTION
+> TIME bound; repaired the same way, with `Op::Return` now a path exit there too. **`analyze.kel` had
+> it in three places**: `run()` zeroed a region's cost, peak and heap whenever no path fell through --
+> and every single-head function ends in a top-level `return`, so that zeroed the body contribution of
+> essentially every `fn` in every stage; `Op::Return` had no control-flow class, so a dispatch was
+> analysed as though every head ran in sequence, now fixed by sharing the PATH-EXIT class with
+> `Op::Trap` (**the nine-class boundary still reports nine**); and **`tests/selfhost_codegen.rs`
+> carried a second copy of the class table that had already drifted**, keeping the `_ => (0, 0)`
+> catch-all after the driver's was made exhaustive and passing `0` for real branch targets, so the
+> oracle was running against the unrepaired table. `analyze_class` and `analyze_opk` now live in
+> `selfhost_host` (gated `compile + verify`, not `self-host`) and the duplicate is deleted. The copy
+> existed because the test file builds WITHOUT `self-host` and so could not reach the driver at all;
+> a first fix that merely made the driver's copies `pub` failed CI with `unresolved import`. **I reported that analyze.kel did not need the
+> repair, with three supporting measurements, and all three were consistent and none could
+> discriminate.**
+
 > **Currency note (2026-08-15, later).** The understated worst-case-memory bound is **FIXED** and
 > merged (`d3fd5cb6`, PR #104). `GetField`/`GetTupleField`/`GetEnumField` declared an operand-stack
 > net of −1 where the virtual machine's is 0, so every later operation's peak was computed from a
@@ -51,6 +107,14 @@ Current sprint source of truth.
 > the worst stage, `parse`, interns 627 names from a 33,395-byte blob against caps of 1024 and
 > 49,152. The plan's claim that the producer and the staging are one increment followed from the
 > 395,804 figure, which is a `CONSTS` region record count and still sits at five sites there.
+>
+> **HANDED BACK TO MAINLINE (2026-08-16).** Measured against the roadmap: none of the five V0.2.x
+> success criteria hold, and Order 1 of six is unmet on two items — the self-hosted path emits two
+> region kinds of about twenty, and self-hosted type rejection is COMPLETE as to RULES: all fifteen enumerated shapes plus `calling-a-local` are rejected over a sixteen-case ill-typed corpus with well-typed controls, in eight tests. **The count of TESTS is not the count of SHAPES** and this line conflated them. What is not self-hosted is the INPUT: the stage's channels are extracted by Rust from the REFERENCE parser's AST, and the tags are literal-only, so every rule reaches only literal-direct occurrences -- move the same error through a `let` and the stage accepts it. Pinned by `the_rules_reach_only_literal_direct_occurrences`. Repairing that needs SOURCE TYPES, which no stage in the pipeline computes. The
+> roadmap's own Order 1 cell is stale (125 tests against 163) and lists done work as remaining.
+>
+> **Top correctness item is now `wcmu_region` reporting 2 where the models and emitter say 3** on two
+> shipped chunks — an understated bound, unreachable by the `GetField` repair.
 >
 > **`concurrency` group landed on `ci.yml` (2026-08-15)**, superseding pull-request runs only. The
 > requested workflow-wide form would also have cancelled version-branch verification runs, since the
