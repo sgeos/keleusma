@@ -713,3 +713,75 @@ mistyped request. It now says so and returns cleanly.
 - **One perturbation per opcode per round.** `Shr` is the second opcode after `CmpLt` where round one
   and round two disagree, which is direct evidence that a single perturbation can miss.
 - **Modules, not sites.** A detected opcode may still be observed at a fraction of its sites.
+
+
+---
+
+## PART G, 2026-08-16: `Shr` is an equivalent mutant, measured rather than argued
+
+Three rounds, all run against the tree this part describes, each carrying the fixed-answer control.
+
+| round | what it perturbs | `Shr` | control `PushImmediate` |
+|---|---|---|---|
+| one | arithmetic right shift → logical | **UNDETECTED** across 1 | UNDETECTED across 31 |
+| two | result → constant zero | **DETECTED by 1/1** `[DISAGREE 1]` | UNDETECTED across 31 |
+| sign probe | trap when the shifted value is negative | **UNDETECTED** across 1, i.e. AGREE | UNDETECTED across 31 |
+
+Calibration covered 31 modules, slowest budget `wire.kel` at 94s. The emitter was verified
+byte-identical after each round.
+
+### What the three rounds establish together
+
+Round one's mutation flips `build_right_shift`'s sign-extend flag. An arithmetic and a logical right
+shift produce **identical bits for every non-negative operand** and differ only on a negative one.
+
+- **Round two proves the sites execute and are observable.** Replacing the result with zero is
+  caught. So an undetected round-one result cannot be explained by dead code.
+- **The sign probe proves no negative operand ever reaches a site.** It faults on a negative value,
+  and it never fired.
+
+**Therefore round one's mutant is semantically equivalent on this corpus**, and `Shr` is not a hole.
+The opcode is covered by round two.
+
+**The prediction was recorded before the probe ran**, in `MUTATIONS_SIGN_PROBE`'s docstring, and it
+said AGREE. It matched. It is written in the tool rather than here so that a matching result cannot
+be a story told afterwards.
+
+### What is NOT established, and will not be dressed up
+
+**Why PART C recorded `Shr` as DETECTED is untested.** What has been ruled out, by measurement:
+
+- the mutation text changed — **no**, git history shows both `Shr` entries added once and never
+  edited;
+- the sites stopped executing — **no**, round two detects them;
+- the module stopped running or became vacuous — **no**, `wire.kel` executes and is not vacuous, and
+  `BitAnd` and `BitOr` in that same module are still detected.
+
+What is measured but not tested as a cause: **`wire.kel` gained 2009 lines since PART C**, and
+`src/verify.rs`, `src/vm.rs`, `src/compiler.rs` and `src/bytecode.rs` all changed substantially. A
+subject that no longer produces a negative shifted value would explain it exactly. **That is a
+hypothesis. It has not been run against the older tree**, which would need the whole native backend
+built at that commit.
+
+### The re-sweep of the remaining 37 opcodes is NOT the next increment
+
+PART F called it "the obvious next increment". **That is withdrawn.** Enlarging a denominator is
+monotone: adding modules can only create more chances to detect an opcode, never fewer, so it cannot
+move any opcode from DETECTED to UNDETECTED. All 37 are already detected. Re-sweeping refreshes
+denominators and costs hours of sweep time. Worth doing eventually for accuracy; not worth doing for
+discovery.
+
+### The eight unperturbed opcodes are not eight blind spots
+
+`Break`, `Else`, `EndIf`, `EndLoop`, `Loop`, `PopN`, `Reset`, `Stream` have never been perturbed in
+any round. The reasons already recorded in `NOT_PERTURBED` divide them:
+
+| opcode | why |
+|---|---|
+| `EndIf`, `Loop`, `Stream`, `Reset` | **lower to nothing.** There is no emitted native code to perturb, so this is permanent and correct rather than deferred |
+| `Else`, `Break`, `EndLoop` | perturbing the branch target produces **invalid IR**, not different behaviour |
+| `PopN` | desynchronises the emitter's operand stack and **aborts lowering** |
+
+The count is real and the sweep is still not exhaustive over the instruction set. But four of the
+eight admit no value perturbation at all, and the bare number invites a stronger reading than the
+evidence supports.
