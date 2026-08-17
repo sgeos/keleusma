@@ -3227,23 +3227,66 @@ fn header_fields_of(module: &Module) -> [i64; 11] {
 ///
 /// # Why `CONSTS` is not here, which is the largest region by an order of magnitude
 ///
-/// `CONSTS` is 663,120 bytes across the eleven stages against 34,960 for `NAMES`
-/// and `STRING_POOL` together, so it is the obvious next target and it is **not**
-/// a wiring job. Two obstacles, both measured rather than anticipated:
+/// `CONSTS` is 645,312 bytes across the eleven stages, which is 90.5% of the
+/// 712,936-byte corpus total, against 24,408 for `NAMES` and `STRING_POOL`
+/// together. It is the obvious next target and it is **not** a wiring job.
+/// Every figure in this section is derived by a test in
+/// `tests/consts_region_composition.rs`; an earlier revision quoted 663,120 and
+/// 34,960 here, from a measurement nothing re-ran.
+///
+/// Two obstacles were recorded. **Only the first is real for this corpus**, and
+/// the correction matters because the second is the one that looked like a
+/// design decision:
 ///
 /// 1. **The producer and the consumer use different arrays.** `mi_put_node_full`
 ///    writes the constant node table into `wire.bytes` at byte zero, which is
 ///    where the artifact lives, while the flattener reads its nodes from
 ///    `wire.fin`. Running the node walk inside a join that also emits would
 ///    overwrite the directory, which is the same failure this file already
-///    records for the seventh chunk onward.
-/// 2. **The two paths intern in different orders.** The module walk interns in
-///    preorder by linear scan; the flattener interns breadth-first as it walks,
-///    and that order is observable in `NAMES`. One artifact cannot carry both.
+///    records for the seventh chunk onward. This one stands.
+/// 2. **The two paths intern in different orders** — the module walk in preorder
+///    by linear scan, the flattener breadth-first, with the difference
+///    observable in `NAMES`. True of the general case and **unreachable here**.
+///    The flattener interns only for `StaticStr`, `Struct` and `Enum` nodes, and
+///    all 40,332 constants across the eleven stages are `Int`. Pinned by
+///    `the_flattener_interns_no_name_for_any_stage`, which asserts both the node
+///    census and the observation that clearing every constant leaves the string
+///    pool byte-identical.
+///
+/// # What actually blocks it, which is neither of the two above
+///
+/// The emit machinery is **already driven from real modules and already
+/// byte-identical**: `keleusma_flattens_a_constant_forest_breadth_first` in
+/// `tests/selfhost_wire.rs` compiles a source, seeds its constants into
+/// `wire.fin` as nodes, and compares the emitted `CONSTS` region against the
+/// reference. What excludes the eleven stages is a CAPACITY BOUND, not a
+/// disagreement:
+///
+/// * **The 170-node cap.** `wire.fin` is 1,024 words and a node costs six, so
+///   the flattener walks at most 170 nodes per call. `parse` needs 17,391.
+/// * **The node model omits the larger source.** `const_roots_of` collects
+///   `Chunk::constants` and not [`DataLayout::private_init`]. Those are 2,245
+///   and 38,087 constants respectively across the corpus, so the tested path
+///   covers the smaller 6%. The `FLATTEN_CASES` sources use `const data`, which
+///   lands in chunk constants, so nothing there ever reached the other pool.
+///
+/// # Why enlarging `wire.fin` cannot be the answer
+///
+/// A stage's private data array is itself initialised, one `Int(0)` per word, so
+/// widening `fin` to hold N nodes adds 6N records to `wire.kel`'s **own**
+/// `CONSTS` region. Walking `parse`'s 17,391 nodes needs `fin` at 104,346 words,
+/// which is 1,669,536 bytes of `CONSTS` in the walking stage — six times the
+/// 278,256-byte region it is trying to emit. The stage's capacity to describe a
+/// data segment is paid for out of a data segment described the same way, so the
+/// approach diverges rather than converging. Batching across calls is the route,
+/// and for a scalar-only forest it is sound with no carried state, because each
+/// record depends on nothing outside itself.
 ///
 /// `STRUCT_AUX` and `ENUM_AUX` are deliberately not candidates either: measured
 /// across the eleven stages, both regions are EMPTY in all of them, so a byte
-/// identity for either would pass without emitting anything.
+/// identity for either would pass without emitting anything. That is the same
+/// fact as the census above, seen from the other side — both regions are written
+/// only for `Struct` and `Enum` constants, and there are none.
 pub fn wire_regions_via_kel(
     module: &Module,
     directory: &[u8],

@@ -7494,14 +7494,62 @@ const FLATTEN_CASES: &[(&str, &str)] = &[
         "tuple-composite-first",
         "const data k { t: ((Word, Word), Word) = ((1, 2), 3) }\n         fn main() -> Word { k.t.1 }",
     ),
+    // THE DATA SEGMENT, which every case above misses. A mutable `data` block
+    // contributes through `add_data_layout` rather than through any chunk, and
+    // that pool is 94% of the region on a real stage. `const data` folds into
+    // chunk constants instead, so none of the six cases above reaches it.
+    (
+        "data-scalar",
+        "private data d { n: Word }\nfn main() -> Word { d.n = 1; d.n }",
+    ),
+    (
+        "data-array",
+        "private data d { xs: [Word; 8] }\nfn main() -> Word { d.xs[0] = 3; d.xs[0] }",
+    ),
+    // Both pools at once, in the order the encoder accumulates them: the chunk
+    // constants first, the initialisers after. A model that concatenated them
+    // the other way round passes every single-source case above and fails here.
+    (
+        "data-and-const-together",
+        "const data k { t: (Word, Word) = (1, 2) }\n\
+         private data d { xs: [Word; 4] }\n\
+         fn main() -> Word { d.xs[0] = k.t.0; d.xs[0] }",
+    ),
 ];
 
-/// Every chunk's constants, concatenated in chunk order — which is exactly what
-/// `SchemaBuilder::const_roots` accumulates and hands to `flatten`.
+/// Every chunk's constants, concatenated in chunk order.
+///
+/// **THIS IS THE BLOB MODEL, NOT THE ENCODER MODEL, and the two are different.**
+/// `SchemaBuilder::const_roots` accumulates the chunk pools and then reaches
+/// `add_data_layout`, which adds `private_init` as well; see
+/// [`encoder_const_roots`]. What this function describes is the narrower thing
+/// the module-input blob carries.
+///
+/// Keeping them apart is not fussiness. Folding the data-segment pool in here
+/// took `parse`'s blob from about 8 KB to 530,675 bytes, an order of magnitude
+/// past `bin`, and broke the join tests — which is the size bound the blob path
+/// runs into, showing up in a different place.
 fn const_roots_of(module: &keleusma::bytecode::Module) -> Vec<keleusma::bytecode::ConstValue> {
     let mut roots = Vec::new();
     for c in &module.chunks {
         roots.extend(c.constants.iter().cloned());
+    }
+    roots
+}
+
+/// Every constant the reference encoder flattens, in the order it accumulates
+/// them: each chunk's pool in chunk order, then the data segment's initialisers.
+///
+/// **THE SECOND SOURCE IS THE LARGER ONE BY A FACTOR OF SEVENTEEN.** Measured
+/// across the eleven stage modules: 2,245 constants from chunks against 38,087
+/// from the data segment, pinned by `tests/consts_region_composition.rs`. Only
+/// a `private data` block contributes there; `const data` folds into chunk
+/// constants, and every `FLATTEN_CASES` source used `const data`, so the
+/// omission could not surface until the `data-*` cases were added.
+fn encoder_const_roots(module: &keleusma::bytecode::Module) -> Vec<keleusma::bytecode::ConstValue> {
+    let mut roots = const_roots_of(module);
+    if let Some(dl) = &module.data_layout {
+        roots.extend(dl.private_init.iter().cloned());
     }
     roots
 }
@@ -7616,7 +7664,7 @@ fn keleusma_flattens_a_constant_forest_breadth_first() {
         let total = want.len();
         assert!(total < CAPACITY, "{label}: artifact is {total} bytes");
 
-        let roots = const_roots_of(&module);
+        let roots = encoder_const_roots(&module);
         let fields = preorder_of(&roots);
         let nroots = roots.len() as i64;
         let nnodes = node_count(&roots) as i64;
@@ -7721,7 +7769,7 @@ fn the_two_walk_orders_genuinely_disagree_on_this_corpus() {
     for (label, src) in FLATTEN_CASES {
         let module =
             compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
-        let roots = const_roots_of(&module);
+        let roots = encoder_const_roots(&module);
         let (bf, df) = node_orders(&roots);
         assert_eq!(
             bf.len(),
