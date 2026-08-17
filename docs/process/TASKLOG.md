@@ -30,8 +30,11 @@ Current sprint source of truth.
 > **CONSTS: neither recorded obstacle is what blocks it.** The interning-order conflict is
 > UNREACHABLE -- the flattener interns only for `StaticStr`, `Struct` and `Enum`, and all **40,332
 > constants across the eleven stages are `Int`**, so Option B has nothing to re-sequence. The real
-> bound is capacity: `wire.fin` is 1,024 WORDS at six words a node, so the walk takes **170 nodes**
-> against `parse`'s 17,391 -- the note below states the word count as though it were a node count.
+> bound is capacity: `wire.fin` is 1,024 WORDS at six words a node, so the FLATTENER walk takes
+> **170 nodes** against `parse`'s 17,391. **Two caps, and an earlier revision of this note conflated
+> them**: the MODULE-INPUT node walk separately refuses past 1,024 NODES (`nm_max_names`, error
+> -240), which is what `wire.kel` hits at 1,148 chunk constants, so the note below is correct as
+> written and the correction of it was the error.
 > Widening the array **diverges**: a private data array is initialised one `Int(0)` per word, so a
 > `fin` for N nodes adds `6N` records to the walker's own `CONSTS`, six times the region it would
 > emit. Batching is the route.

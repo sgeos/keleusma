@@ -33,9 +33,15 @@ occurrence.
 
 **THE REAL BLOCKER IS A CAPACITY BOUND, AND WIDENING THE ARRAY IS SELF-DEFEATING.** The flattener
 already runs from real modules and already emits a byte-identical region. `wire.fin` is 1,024 words
-at six words a node, so the walk takes **170 nodes against `parse`'s 17,391**. The mailbox table
-stated the word count as though it were a node count, which made a hundredfold margin look
-marginal.
+at six words a node, so the flattener walk takes **170 nodes against `parse`'s 17,391**.
+
+**AND I GOT THE NEIGHBOURING FIGURE WRONG WHILE CORRECTING THIS ONE.** I recorded, and sent to the
+other line, that the mailbox row reading "constant nodes past the walk's 1,024" stated a word count
+as though it were a node count. It does not. There are TWO caps: the module-input node walk refuses
+past **1,024 nodes** (`nm_max_names`, error `-240`), which is what `wire.kel` hits at 1,148 chunk
+constants, and the flattener out of `wire.fin` refuses past **170**. Only the second is about words.
+Measured after the fact, which is the wrong order and the whole point. Retracted on the version
+branch rather than quietly edited, because it had already been sent.
 
 A stage's private data array is initialised one `Int(0)` per word, so a `fin` wide enough for N
 nodes adds `6N` records to the walking stage's **own** `CONSTS`. Holding `parse`'s forest costs

@@ -3262,8 +3262,13 @@ fn header_fields_of(module: &Module) -> [i64; 11] {
 /// reference. What excludes the eleven stages is a CAPACITY BOUND, not a
 /// disagreement:
 ///
-/// * **The 170-node cap.** `wire.fin` is 1,024 words and a node costs six, so
-///   the flattener walks at most 170 nodes per call. `parse` needs 17,391.
+/// * **The 170-node flattener cap.** `wire.fin` is 1,024 words and a node costs
+///   six, so the flattener walks at most 170 nodes per call. `parse` needs
+///   17,391. **This is not the only node cap and the two are easy to conflate**:
+///   the MODULE-INPUT walk separately refuses past 1,024 NODES
+///   (`nm_max_names`, error `-240`), which is what `wire.kel` hits at 1,148
+///   chunk constants. Different walks, different bounds, and only this one is
+///   derived from a word count.
 /// * **The node model omits the larger source.** `const_roots_of` collects
 ///   `Chunk::constants` and not `DataLayout::private_init`. Those are 2,245
 ///   and 38,087 constants respectively across the corpus, so the tested path

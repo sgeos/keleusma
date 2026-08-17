@@ -319,10 +319,19 @@ fn every_data_segment_initialiser_is_zero() {
     );
 }
 
-/// The 170-node walk cap, read out of `wire.kel` rather than restated.
+/// The 170-node FLATTENER cap, read out of `wire.kel` rather than restated.
 ///
 /// `wire.fin` is 1,024 words and a constant node costs six, so the flattener
-/// walks at most 170 nodes in one call. Reading the figure from the source is
+/// walks at most 170 nodes in one call.
+///
+/// **There is a second node cap and conflating the two is an error already made
+/// once here.** The module-input walk refuses past 1,024 NODES
+/// (`nm_max_names`, error `-240`), which `wire.kel` hits at 1,148 chunk
+/// constants. That bound has nothing to do with `wire.fin`'s width; it merely
+/// shares the number 1,024, which is what made the two look like one figure
+/// stated two ways.
+///
+/// Reading the figure from the source is
 /// the same discipline `highest_command` uses: a bound restated in a second
 /// place is a bound that can drift.
 fn declared_node_cap() -> usize {
