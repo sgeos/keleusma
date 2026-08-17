@@ -4,6 +4,17 @@
 
 **A sizing result, measured 2026-08-16. Not a plan and not an implementation.**
 
+> **OUTCOME, 2026-08-16.** The slice this sized has landed and the estimate held. Local resolution
+> is in `verify_types.kel` as a binding table plus a lookup, with ONE alias hop for a `let` bound to
+> a call. No unification, no fixpoint, no new input channel. The four cases below moved from
+> disagreements to ordinary corpus members.
+>
+> **One thing the estimate did not anticipate.** `let a = g()` needs the let rule and the
+> declared-return rule COMPOSED, and composing them host-side would have been the very join the
+> stage exists to perform. It is resolved in the stage by an alias row and a bounded hop instead.
+> The prototype below did the composition in the host and so did not surface it -- **a throwaway
+> prototype measures reachability, not where the reasoning belongs.**
+
 ## The question
 
 The self-hosted type-rejection stage rejects all fifteen enumerated shapes, but every rule fires

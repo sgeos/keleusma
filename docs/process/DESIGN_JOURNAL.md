@@ -13,6 +13,47 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE TYPE STAGE NOW RESOLVES, AND THE INTERESTING PART IS WHERE THE JOIN LIVES (2026-08-16).**
+
+**The rules were complete; the reach was not.** Every rule fired on a pair of TAGS, and `expr_tag`
+typed only literals, so an error routed through a `let` or a call was accepted. Every one of the
+sixteen corpus cases placed its operands as literals, so the limit was invisible — the same
+meta-defect this line keeps finding, this time in its own type corpus.
+
+**THE TRAP WAS A FOUR-LINE HOST CHANGE THAT WOULD HAVE LOOKED LIKE SUCCESS.** Extending `expr_tag`
+to resolve names makes all the failing cases pass and makes the checker LESS self-hosted, because
+every tag the host resolves is a decision the stage did not make. The sizing spike's prototype did
+exactly that and was labelled throwaway for exactly that reason.
+
+**The line that made this tractable**: a DECLARED type is syntax and the host may report it; an
+INFERRED one is a conclusion and the stage must reach it. `fn f(a: Word)` and `let b = true` are
+text on the page. Which operand a binding flows to is not.
+
+So the stage gained a binding table and an operand FORM, and does the join. `the_stage_and_not_the
+_host_resolves_an_operand` is what makes that checkable rather than asserted: withhold the binding
+rows and the identical program is ACCEPTED. Without that test the claim would rest on my say-so.
+
+**THE CASE THE SIZING MISSED, AND WHY IT MISSED IT.** `let a = g(); a + true` needs the let rule and
+the declared-return rule COMPOSED. The spike's prototype composed them in the host and so reported
+5 of 5 without noticing that the composition was the whole question. In the stage it needs an alias
+row — `a` binds to the NAME `g` — and one bounded hop. **A throwaway prototype measures
+reachability, not where the reasoning belongs**, and that is the useful correction to how I sized it.
+
+**The hop bound is a decision, stated as one.** A chain longer than one hop resolves to unknown and
+therefore ACCEPTS, which is the safe direction: this stage may not refuse a program it cannot type.
+A total language needs a static cap, so raising it is a choice about how much chaining to admit.
+
+**The corpus grew 16 to 20** rather than shrinking, and the four former disagreements are ordinary
+members driven through the resolving path. `the_rules_reach_only_literal_direct_occurrences` is
+retired with a pointer, because the limit it pinned MOVED rather than vanished:
+`the_rules_still_do_not_reach_a_derived_operand` holds the new edge, where an operand's type comes
+from an arithmetic result.
+
+**Still not self-hosted, and the header says which half.** The extraction is Rust walking the
+reference parser's AST. This slice moved the RESOLUTION.
+
+---
+
 **THE CHUNK REGION REACHES SEVEN OF ELEVEN STAGES, AND INFERENCE IS SMALLER THAN FEARED
 (2026-08-16).**
 
