@@ -1531,6 +1531,63 @@ fn emit_data_slot_records(at: Word, n: Word) -> Word {
     }
 }
 
+// --- ONE RECORD PER CALL, AT WINDOW OFFSET ZERO -----------------------------
+//
+// Each `emit_*_records` above refuses past `fin_capacity()` divided by its field
+// count -- 256 records for a four-field table. These hold ONE record, so the
+// bound is gone: the host seeds the fields and places the bytes.
+//
+// **NONE OF THEM TOUCHES A DATA BLOCK, and that is why they can live here.** A
+// first attempt assigned each `put_*` result to `ck.sink` and had to be moved
+// beside the other stream commands, because the parser is single pass and `ck` is
+// declared far below. Dropping the assignments removes both the relocation and
+// the cross-block coupling: a bare call is a statement, the puts are performed
+// for effect, and the stride is the value. The relocation was a heavier fix than
+// the constraint required.
+//
+// **COVERAGE IS WHAT THESE ARE, WHICH IS FORMATTING.** They lay out records the
+// host hands them. `DATA_SLOTS`'s run-length grouping, a signature's parameter
+// range, a shape's size -- all are decided outside. That makes these regions
+// encoded but not derived, the standing the `HEADER` record has, and counting
+// them beside `NAMES`, which the stage computes from the module blob, would
+// overstate what is self-hosted.
+//
+// **THERE IS NO `*_stream_begin` FOR ANY OF THEM.** The chunk and constant
+// streams need one because they carry state between records. These records depend
+// on nothing outside themselves, so a begin would exist only to look symmetric
+// with its neighbours, and a reader would have to open its body to learn it reset
+// nothing.
+fn ds_stream_step() -> Word {
+    put_u32(dslot_off_name(), wire.fin[0]);
+    put_u8(dslot_off_visibility(), wire.fin[1]);
+    put_u8(dslot_off_reserved(), wire.fin[2]);
+    put_u16(dslot_off_run(), wire.fin[3]);
+    dslot_stride()
+}
+
+fn sh_stream_step() -> Word {
+    put_u16(shape_off_tag(), wire.fin[0]);
+    put_u8(shape_off_kind(), wire.fin[1]);
+    put_u8(shape_off_reserved(), wire.fin[2]);
+    put_u32(shape_off_size(), wire.fin[3]);
+    shape_stride()
+}
+
+fn sg_stream_step() -> Word {
+    put_u32(sig_off_params_first(), wire.fin[0]);
+    put_u32(sig_off_params_count(), wire.fin[1]);
+    put_u32(sig_off_ret(), wire.fin[2]);
+    put_u32(sig_off_resume(), wire.fin[3]);
+    sig_stride()
+}
+
+fn ev_stream_step() -> Word {
+    put_u32(evar_off_name(), wire.fin[0]);
+    put_u32(evar_off_reserved(), wire.fin[1]);
+    put_u32(evar_off_disc(), wire.fin[2]);
+    evar_stride()
+}
+
 // Seven inputs per record, not four: the run-length form carries `first_slot`,
 // `run` and `stride` alongside the original four fields. The host supplies all
 // seven; grouping slots into runs is the CALLER's job, exactly as it is for
@@ -4527,7 +4584,11 @@ fn dispatch_window(cmd: Word) -> Word {
     if cmd == 175 { ck_stream_step() } else {
     if cmd == 176 { fl_stream_begin() } else {
     if cmd == 177 { fl_stream_step() } else {
-    0 - 97 }}}}}}}}
+    if cmd == 178 { ds_stream_step() } else {
+    if cmd == 179 { sh_stream_step() } else {
+    if cmd == 180 { sg_stream_step() } else {
+    if cmd == 181 { ev_stream_step() } else {
+    0 - 97 }}}}}}}}}}}}
 }
 
 fn dispatch_driver2(cmd: Word) -> Word {
@@ -4584,7 +4645,7 @@ fn dispatch_driver(cmd: Word) -> Word {
 // did for four consecutive slices — and got wrong once.
 // RAISED FROM 167 for `mi_join_header`. This is a REAL GUARD: a new command
 // returns `0 - 99` until the ceiling moves, so the two must change together.
-fn highest_command() -> Word { 177 }
+fn highest_command() -> Word { 181 }
 
 // --- THE ENTRY, AS A COROUTINE ----------------------------------------------
 //
