@@ -4449,7 +4449,26 @@ fn dispatch_driver(cmd: Word) -> Word {
 // returns `0 - 99` until the ceiling moves, so the two must change together.
 fn highest_command() -> Word { 173 }
 
-fn main(cmd: Word) -> Word {
+// --- THE ENTRY, AS A COROUTINE ----------------------------------------------
+//
+// `wire.kel` was the last stage entered as `fn main(cmd)`. It is now a `loop`
+// like its ten siblings, which is the shape the windowed-compiler goal asks for.
+//
+// **WHAT THIS DOES AND DOES NOT BUY, stated plainly because the distinction is
+// easy to lose.** Changing the entry makes the stage RESUMABLE: it may now yield
+// more than once for one request, and its private working blocks survive the
+// loop's RESET, so a command can carry a cursor between yields. That is the
+// enabling change. It does not by itself make any command stream -- a command
+// that computes its whole answer and yields once is a coroutine shell around a
+// one-shot call, and would satisfy every existing test while streaming nothing.
+// `dispatch` below still answers each command in one yield; converting the emit
+// commands to yield per record is the increment that follows, and the reason to
+// do the entry first is that it cannot be done second.
+//
+// The command arrives as the initial call argument and is re-supplied on every
+// resume by the Stream parameter-slot update, so a resumed command sees the same
+// number it was entered with.
+fn dispatch(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {
     if cmd < 26 { dispatch_schema(cmd) } else {
     if cmd < 38 { dispatch_consts(cmd) } else {
@@ -4463,4 +4482,8 @@ fn main(cmd: Word) -> Word {
     if cmd < 115 { dispatch_frame(cmd) } else {
     if cmd < 134 { dispatch_emit(cmd) } else {
     if cmd < 152 { dispatch_driver(cmd) } else { dispatch_driver2(cmd) } } } } } } } } } } } } }
+}
+
+loop main(cmd: Word) -> Word {
+    yield dispatch(cmd)
 }

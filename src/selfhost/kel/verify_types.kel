@@ -402,77 +402,148 @@ fn ty_resolve(f: Word, v: Word) -> Word {
     }
 }
 
-fn ty_check() -> Word {
-    ty.verdict = ty_accept();
-    for i in 0..ty.n limit 256 {
-        ty.verdict = if ty_pair_disagrees(ty.lhs[i], ty.rhs[i]) == 1 {
-            ty_reject()
-        } else {
-            ty.verdict
-        };
-    }
-    // Slice 2. Arity is exact rather than a bound: a call with too FEW and one
-    // with too MANY arguments are both rejections, and they are the same
-    // comparison rather than two rules.
-    for j in 0..ty.cn limit 128 {
-        ty.verdict = if ty.cdecl[j] == ty.cact[j] { ty.verdict } else { ty_reject() };
-    }
-    // THE JOIN. Each call site names a declaration; the stage reads that
-    // declaration's parameter count and compares. A site naming an index outside
-    // the declaration table is REFUSED rather than skipped: an out-of-range
-    // index means the host and the stage disagree about the table, and guessing
-    // which is right would hide it.
-    for c in 0..ty.csn limit 128 {
-        ty.verdict = if ty.csite[c] >= ty.dn { ty_reject() } else {
-            if ty.dparams[ty.csite[c]] == ty.cargs[c] { ty.verdict } else { ty_reject() }
-        };
-    }
-    // Slice 3's pre-classified channel is GONE, not merely unfed. A dead input
-    // that still rejects is a rule nobody can see being applied, and leaving it
-    // would let a future caller re-enter the old path by accident.
-    // THE CLASSIFICATION. A local that is CALLED is refused, and so is a name
-    // that is neither local nor declared. Both are computed here from facts,
-    // not received as verdicts.
-    for o in 0..ty_occurrences() limit 256 {
-        ty.verdict = if ty_occurrence_bad(o) == 1 { ty_reject() } else { ty.verdict };
-    }
-    // Slices 4 and 5. A required tag of 0 is no requirement, so it reuses the
-    // same disagreement predicate the operand pairs use: unknown never rejects.
-    // THE EXPRESSION RULES, applied from shapes rather than received as
-    // verdicts.
-    for e in 0..ty.en limit 256 {
-        ty.verdict = if ty_node_bad(
-            ty.ekind[e],
-            ty_resolve(ty.eaf[e], ty.ea[e]),
-            ty_resolve(ty.ebf[e], ty.eb[e]),
-        ) == 1 {
-            ty_reject()
-        } else {
-            ty.verdict
-        };
-    }
-    for q in 0..ty.qn limit 256 {
-        ty.verdict = if ty_pair_disagrees(ty.qact[q], ty.qreq[q]) == 1 {
-            ty_reject()
-        } else {
-            ty.verdict
-        };
-    }
-    // A referenced field must be declared. Only 0 rejects: a row the host could
-    // not decide is not written at all, so absence and denial stay distinct.
-    for m in 0..ty.mn limit 256 {
-        ty.verdict = if ty.member[m] == 0 { ty_reject() } else { ty.verdict };
-    }
-    // THE SEARCH. Each access names a type and a field; the stage walks that
-    // type's declared run looking for the name.
-    for a in 0..ty.an limit 256 {
-        ty.verdict = if ty.atype[a] >= ty.stn { ty_reject() } else {
-            if ty_field_declared(ty.atype[a], ty.aname[a]) == 1 { ty.verdict } else { ty_reject() }
-        };
-    }
-    ty.verdict
+// --- THE FOLD, AS A RESUMABLE STREAM ----------------------------------------
+//
+// `ty_check` used to run all eight tables in ONE call and return the verdict.
+// The rules were already a single forward fold, so nothing about the analysis
+// needed the whole corpus resident -- only the ENTRY did. This stage is now a
+// coroutine in the same shape as its nine siblings (`lexer`, `parse`,
+// `reconstruct`, `codegen`, `analyze` and the four other verifiers), which is
+// what the windowed-compiler goal asks for.
+//
+// WHY THE CURSORS ARE PRIVATE AND NOT SHARED. `ty` is a shared block, so the
+// host may rewrite any of it between resumes -- that is the point of shared
+// data. A cursor living there could be reset mid-fold, and the stage would
+// silently re-walk a table or skip one with no signal. Private data persists
+// across the loop's RESET and the host cannot reach it, so the position is the
+// stage's own.
+private data tyc {
+    // Which table is being folded, 0..=7. `tyc_phases()` means finished.
+    phase: Word,
+    // Row cursor within the current table.
+    i: Word,
+    // The running verdict, folded across every row of every table.
+    verdict: Word,
 }
 
-fn main(cmd: Word) -> Word {
-    if cmd == 0 { ty_check() } else { 0 - 99 }
+fn tyc_phases() -> Word { 8 }
+
+// PENDING, yielded by a step that advanced the fold without finishing it.
+//
+// 63 rather than a fresh number, because that is what the streaming stages
+// already use and a second convention for the same idea is how two readers come
+// to disagree. It cannot collide with a verdict: `ty_accept` is 0 and
+// `ty_reject` is -1, so a yielded 63 is unambiguously "not done yet".
+fn tyc_pending() -> Word { 63 }
+
+// How many rows the current window holds for phase `p`.
+//
+// Read from the shared block on every step rather than captured once, so a host
+// that refills a table between resumes is honoured rather than ignored.
+fn tyc_count(p: Word) -> Word {
+    if p == 0 { ty.n } else {
+    if p == 1 { ty.cn } else {
+    if p == 2 { ty.csn } else {
+    if p == 3 { ty_occurrences() } else {
+    if p == 4 { ty.en } else {
+    if p == 5 { ty.qn } else {
+    if p == 6 { ty.mn } else {
+    if p == 7 { ty.an } else {
+    0 }}}}}}}}
+}
+
+// Whether row `i` of phase `p` rejects. One arm per rule, and every arm is the
+// SAME predicate the one-shot fold applied, moved rather than rewritten.
+fn tyc_row_rejects(p: Word, i: Word) -> Word {
+    if p == 0 {
+        ty_pair_disagrees(ty.lhs[i], ty.rhs[i])
+    } else {
+    if p == 1 {
+        // Arity is exact rather than a bound: too FEW and too MANY arguments are
+        // both rejections, and they are the same comparison rather than two rules.
+        if ty.cdecl[i] == ty.cact[i] { 0 } else { 1 }
+    } else {
+    if p == 2 {
+        // THE JOIN. Each call site names a declaration; the stage reads that
+        // declaration's parameter count and compares. A site naming an index
+        // outside the declaration table is REFUSED rather than skipped: an
+        // out-of-range index means the host and the stage disagree about the
+        // table, and guessing which is right would hide it.
+        if ty.csite[i] >= ty.dn { 1 } else {
+            if ty.dparams[ty.csite[i]] == ty.cargs[i] { 0 } else { 1 } }
+    } else {
+    if p == 3 {
+        // A local that is CALLED is refused, and so is a name that is neither
+        // local nor declared. Both are computed from facts, not received as
+        // verdicts.
+        ty_occurrence_bad(i)
+    } else {
+    if p == 4 {
+        // THE EXPRESSION RULES, applied from shapes rather than received as
+        // verdicts, with each operand resolved through the binding table.
+        ty_node_bad(ty.ekind[i], ty_resolve(ty.eaf[i], ty.ea[i]), ty_resolve(ty.ebf[i], ty.eb[i]))
+    } else {
+    if p == 5 {
+        // A required tag of 0 is no requirement, so this reuses the operand
+        // pairs' disagreement predicate: unknown never rejects.
+        ty_pair_disagrees(ty.qact[i], ty.qreq[i])
+    } else {
+    if p == 6 {
+        // A referenced field must be declared. Only 0 rejects: a row the host
+        // could not decide is not written at all, so absence and denial stay
+        // distinct.
+        if ty.member[i] == 0 { 1 } else { 0 }
+    } else {
+    if p == 7 {
+        // THE SEARCH. Each access names a type and a field; the stage walks that
+        // type's declared run looking for the name.
+        if ty.atype[i] >= ty.stn { 1 } else {
+            if ty_field_declared(ty.atype[i], ty.aname[i]) == 1 { 0 } else { 1 } }
+    } else {
+    0 }}}}}}}}
+}
+
+// One step of the fold: at most one row, and no unbounded work.
+//
+// Three cases, in this order. Finished, so repeated resumes keep reporting the
+// same verdict rather than running off the end. A table exhausted, so advance to
+// the next one. Otherwise fold one row.
+//
+// ADVANCING THE PHASE COSTS ITS OWN STEP rather than looping to the next
+// non-empty table. A loop here would be bounded by the phase count and so still
+// total, but it would make the number of steps depend on how many tables are
+// empty, and a host counting resumes against a bound should not have to model
+// that.
+fn ty_step() -> Word {
+    if tyc.phase >= tyc_phases() {
+        tyc.verdict
+    } else {
+    if tyc.i >= tyc_count(tyc.phase) {
+        tyc.phase = tyc.phase + 1;
+        tyc.i = 0;
+        tyc_pending()
+    } else {
+        tyc.verdict = if tyc_row_rejects(tyc.phase, tyc.i) == 1 {
+            ty_reject()
+        } else {
+            tyc.verdict
+        };
+        tyc.i = tyc.i + 1;
+        tyc_pending()
+    } }
+}
+
+// The most resumes a complete fold can need, so a host can bound its drive loop
+// rather than trusting the stage to terminate.
+//
+// One step per row across every table at its cap, one step per phase boundary,
+// and one to report the verdict. Stated as a function so the host reads it from
+// here instead of restating a sum that would drift the moment a cap moves.
+fn ty_max_steps() -> Word { 256 + 128 + 128 + 256 + 256 + 256 + 256 + 256 + 8 + 1 }
+
+// `resume` is unused: this stage has one job and no commands. It is named rather
+// than dropped because a Stream function's parameter slot is rewritten on every
+// resume, so a reader should see that nothing depends on it.
+loop main(resume: Word) -> Word {
+    yield ty_step()
 }

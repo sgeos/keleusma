@@ -117,6 +117,45 @@ const NAME_CAP: usize = 1024;
 /// Omitting the persistent sizing makes every module with a `private data` block
 /// fail at `Vm::new` for a reason unrelated to the construct under test, which
 /// reads exactly like a language restriction. It is not one.
+/// Enter `wire.kel` with `cmd`, calling on the first use of a virtual machine and
+/// RESUMING on every later one.
+///
+/// **A COROUTINE MUST BE RESUMED, NOT RE-CALLED, and getting that wrong is not a
+/// harness detail.** `wire.kel` is now a `loop` stage, so a call leaves it
+/// suspended at its yield. Calling again stacks a second activation on the
+/// operand stack instead of replacing the first, and a test issuing hundreds of
+/// commands against one machine exhausts the arena -- which is exactly how the
+/// three parity cases failed, with `OutOfArena` at 67,424 bytes, while the other
+/// 166 passed because they build a fresh machine per command.
+///
+/// Resuming is also what keeps the memory bounded, which is the property the
+/// whole conversion is for: the loop's RESET reclaims the iteration's arena
+/// before the next command runs, so a thousand commands cost what one costs.
+///
+/// The first entry is detected by attempting the resume and treating
+/// `NotSuspended` as "not started yet", because the virtual machine exposes no
+/// predicate for it. The alternative was threading a bool through five helpers,
+/// where one stale copy silently reintroduces the accumulation.
+fn enter(vm: &mut Vm<'static, 'static>, shared: &mut [u8], cmd: i64) -> Result<VmState, VmError> {
+    // The loop block emits a RESET between iterations, so a resume reports that
+    // before it reports the command's answer. Skipped here rather than at five
+    // call sites, and BOUNDED rather than `loop`: a stage that only ever reset
+    // would spin forever, and the one thing a total language should not need is a
+    // harness that can hang.
+    const MAX_RESETS: usize = 4;
+    let mut st = match vm.resume_with_shared(shared, Value::Int(cmd)) {
+        Err(VmError::NotSuspended) => vm.call_with_shared(shared, &[Value::Int(cmd)])?,
+        other => other?,
+    };
+    for _ in 0..MAX_RESETS {
+        if !matches!(st, VmState::Reset) {
+            return Ok(st);
+        }
+        st = vm.resume_with_shared(shared, Value::Int(cmd))?;
+    }
+    panic!("wire.kel reset {MAX_RESETS} times without yielding for command {cmd}")
+}
+
 fn vm_for(src: &str) -> Vm<'static, 'static> {
     let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     let need = required_persistent_capacity_for(&module);
@@ -147,8 +186,8 @@ fn run_crc_on(
     for (i, byte) in buf.iter().enumerate() {
         vm.set_shared(&mut shared, 1 + i, Value::Byte(*byte))?;
     }
-    match vm.call_with_shared(&mut shared, &[Value::Int(0)])? {
-        VmState::Finished(Value::Int(n)) => Ok(n),
+    match enter(vm, &mut shared, 0)? {
+        VmState::Yielded(Value::Int(n)) => Ok(n),
         other => panic!("unexpected VM state: {other:?}"),
     }
 }
@@ -229,8 +268,8 @@ fn run_cmd_args(
             Value::Int(i64::from(*covers)),
         )?;
     }
-    let ret = match vm.call_with_shared(&mut shared, &[Value::Int(cmd)])? {
-        VmState::Finished(Value::Int(n)) => n,
+    let ret = match enter(vm, &mut shared, cmd)? {
+        VmState::Yielded(Value::Int(n)) => n,
         other => panic!("unexpected VM state: {other:?}"),
     };
     let n = read_len.min(CAPACITY);
@@ -284,8 +323,8 @@ fn run_cmd_fields(
             Value::Int(i64::from(*covers)),
         )?;
     }
-    let ret = match vm.call_with_shared(&mut shared, &[Value::Int(cmd)])? {
-        VmState::Finished(Value::Int(n)) => n,
+    let ret = match enter(vm, &mut shared, cmd)? {
+        VmState::Yielded(Value::Int(n)) => n,
         other => panic!("unexpected VM state: {other:?}"),
     };
     let n = read_len.min(CAPACITY);
@@ -323,8 +362,8 @@ fn run_cmd_pool(
     for (i, b) in bin.iter().enumerate() {
         vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(*b))?;
     }
-    let ret = match vm.call_with_shared(&mut shared, &[Value::Int(cmd)])? {
-        VmState::Finished(Value::Int(n)) => n,
+    let ret = match enter(vm, &mut shared, cmd)? {
+        VmState::Yielded(Value::Int(n)) => n,
         other => panic!("unexpected VM state: {other:?}"),
     };
     let n = read_len.min(CAPACITY);
@@ -6470,8 +6509,8 @@ fn run_call(vm: &mut Vm<'static, 'static>, c: &Call<'_>) -> Result<(i64, Vec<u8>
     for (i, b) in c.pool.iter().enumerate() {
         vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(*b))?;
     }
-    let ret = match vm.call_with_shared(&mut shared, &[Value::Int(c.cmd)])? {
-        VmState::Finished(Value::Int(n)) => n,
+    let ret = match enter(vm, &mut shared, c.cmd)? {
+        VmState::Yielded(Value::Int(n)) => n,
         other => panic!("unexpected VM state: {other:?}"),
     };
     let n = c.read_len.min(CAPACITY);
