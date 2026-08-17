@@ -39,6 +39,35 @@ Current sprint source of truth.
 > **Pinned, not repaired**: that error overstates, so repairing it lowers shipped bounds and wants its
 > own increment. `Op::Yield` likewise stays pinned, measured to be a different cause.
 
+> **Currency note (2026-08-16, fourth and last of the day).** Two more increments landed, PRs #142
+> and #144.
+>
+> **The type stage now RESOLVES a name, not just compares tags.** Every rule fired on a pair of tags
+> and `expr_tag` typed only literals, so an error routed through a `let` or a call was ACCEPTED --
+> and all sixteen corpus cases placed their operands as literals, so the limit was invisible. The
+> stage gained a binding table and an operand FORM and performs the join itself. **The trap was a
+> four-line host change that would have looked like success**: resolving names in `expr_tag` turns
+> every failing case green and makes the checker LESS self-hosted.
+> `the_stage_and_not_the_host_resolves_an_operand` keeps it honest by withholding the rows and
+> requiring the same program to be ACCEPTED. Corpus 16 -> 20, both guards raised. **The extraction is
+> still host-side**; this moved the RESOLUTION only.
+>
+> **The artifact-size ceiling is LIFTED and it was never region size.** Every emitted region fits the
+> 65,536-byte window on every stage -- the largest is `wire`'s `CHUNKS` at 22,512 bytes. What
+> overflowed was the ABSOLUTE OFFSET (`parse` puts `NAMES` at byte 299,416), so each region is now
+> emitted at window offset zero and placed by the host. **Ten of eleven stages reached.** THREE
+> DIFFERENT LIMITS, kept separate because conflating them produced the last stale comment: the offset
+> ceiling (lifted); `parse`'s 94 chunks against a 90-record batch (other regions emit); and
+> **`wire.kel`'s 1,148 constant-forest nodes against the walk's 1,024 cap**, which stops it being
+> walked at all. Both remaining exclusions assert WHICH limit they hit.
+>
+> **The emit path now covers FOUR region kinds**, correcting the note below. `STRUCT_AUX` and
+> `ENUM_AUX` remain EMPTY in all eleven stages, so a byte identity for either proves nothing.
+>
+> **`HANDOFF.md` was rewritten whole because it passed every one of its own validity checks while
+> being wrong about the top open item and the emit coverage.** Its check block now warns that passing
+> checks are not a current document.
+
 > **Currency note (2026-08-16, third).** The module-driven emit path reaches **three** region kinds
 > and the three are not equal. `NAMES` and `STRING_POOL` are COMPUTED by the stage from the module
 > blob; the `HEADER` record is ENCODED BUT NOT DERIVED, with the host supplying eleven scalars and the
