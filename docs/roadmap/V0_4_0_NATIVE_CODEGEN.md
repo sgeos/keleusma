@@ -304,7 +304,11 @@ These remain unresolved after the 2026-05-21 research pass.
 
    **One finding changes how the sentence above this list should be read.** The arena is the **overflow path, not the default**: `coro.id.retcon`'s first argument sizes a CALLER-PROVIDED buffer, and when the frame fits it, `coro-split` uses the buffer and never calls the allocator. A 256-byte buffer produces zero allocator calls, pinned as the must-not-fire half. So "size and alignment surface through `coro.id.retcon`'s size and align arguments" is true of the inline buffer; the arena serves frames too large for it. Frame accounting must not assume every coroutine allocates.
 
-   **M2 and M3 remain.** M2 lowers to native and links against a Rust harness exercising spawn, resume and release; M3 measures per-coroutine overhead. Nothing here executes the coroutine — it verifies and splits.
+   **M2 IS ALSO DONE, 2026-08-16.** `native_codegen/tests/retcon_m2.rs` emits the split fragment to a real object file, links it against a C host with the system linker, and runs it as a separate process. The coroutine **spawns, resumes twice, and releases**: it produces `7 8 9` across two resumptions, and the release call returns a null continuation. The host protocol was read off the split intermediate representation rather than assumed — the ramp stores the frame pointer into the caller's buffer and returns a continuation; the continuation takes that same buffer plus an unwind flag, returns itself while resuming, and on unwind calls the deallocator and returns null.
+
+   **The buffer-versus-arena distinction is confirmed at RUN TIME, not only in the emitted code.** With an 8-byte buffer the run reports one allocation and one release; with a 256-byte buffer it reports none, while still producing the same three values. That pair is what makes the arena result mean something.
+
+   **M3 REMAINS.** Nothing measures per-coroutine overhead. The ahead-of-time path is used deliberately, because the just-in-time path never crosses a real C calling convention.
 
 5. **Native-side WCET cost models.** The bytecode WCET model in V0.2.0 does not translate to native execution. New cost models need calibration on each Tier 1 platform, analogous to what `keleusma-bench` did for the VM. Not in any R-doc; surfaced by `tmp/research/IMPLEMENTATION_ORDER.md`.
 
