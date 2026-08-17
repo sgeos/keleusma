@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The wholly-default private-slot initialiser pool is elided, taking the
+  auxiliary body down by a factor of 6.9.** A private slot with no explicit
+  initialiser is zero, and the compiler materialised that as one constant per slot
+  word, each costing a sixteen-byte pool record. Measured across the eleven
+  self-hosted pipeline stages, 38,087 of the 40,332 constants were such
+  initialisers and every one was zero, so roughly 85% of the whole auxiliary body
+  encoded a value the decoder can supply for nothing. The data-init record now
+  writes an absent marker in place of a pool range when every initialiser is
+  default, and the decoder reconstructs them. A pool carrying any non-default
+  value is stored in full, because a scheme that elided only a trailing run would
+  lose a value written last. The marker is explicit rather than inferred, and the
+  constant-pool decoder rejects it outright, so a reader that has not handled the
+  elision fails on the range instead of returning an arbitrary pool. Measured at
+  the artifact rather than at the encoder: the eleven stages fall from 712,936
+  bytes to 103,544, the largest single reduction being a factor of 26.6, and every
+  one of them now fits the sixty-four kilobyte staging window where three
+  previously did not. There is no wire-version change, since no version-2 artifact
+  has been published.
+
 - **The empty statement, which makes a trailing semicolon after a `for` loop
   legal.** A semicolon at statement position with nothing to terminate is
   discarded, so `for i in 0..8 { .. };` now parses as the block-form `if`,
