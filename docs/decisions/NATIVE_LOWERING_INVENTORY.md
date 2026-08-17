@@ -618,16 +618,34 @@ down as a finding before testing it.
 
 Three results that bear on other workstreams:
 
-1. **The frame allocator survives `coro-split`.** The probe deliberately used a
-   named external allocator rather than `malloc`, and the split output still
-   calls it. **Workstream C's arena-resident coroutine frames are mechanically
-   supported**, not merely desirable.
-2. **The frame size folds to a compile-time constant.** After splitting, the
-   allocation reads `call ptr @kel_arena_alloc(i32 32)` — a literal. A
-   coroutine's memory contribution is therefore statically recoverable from the
-   emitted IR, which is what **Workstream E** needs for a native worst-case
-   memory bound. This does not by itself establish the bound; it establishes
-   that the input to one is obtainable.
+1. **The frame allocator survives `coro-split`, measured with the SWITCH-RESUME
+   family.** The probe deliberately used a named external allocator rather than
+   `malloc`, and the split output still calls it. **Workstream C's arena-resident
+   coroutine frames are mechanically supported**, not merely desirable.
+   **Confirmed independently for the RETURNED-CONTINUATION family on 2026-08-16**
+   by `native_codegen/tests/retcon_m1.rs`, with the caveat in item 4 below.
+2. **The frame size folds to a compile-time constant, measured with the
+   SWITCH-RESUME family.** After splitting, the allocation reads
+   `call ptr @kel_arena_alloc(i32 32)` — a literal. A coroutine's memory
+   contribution is therefore statically recoverable from the emitted IR, which is
+   what **Workstream E** needs for a native worst-case memory bound. This does not
+   by itself establish the bound; it establishes that the input to one is
+   obtainable. **Also holds under retcon**, where the same measurement reads
+   `call ptr @kel_arena_alloc(i32 36)`.
+
+   **The family is named on both of these deliberately.** They were originally
+   recorded without it, and retcon is the family the roadmap's allocator design
+   depends on, so "a coroutine" would have invited the reader to assume a
+   measurement that had not been made.
+4. **Under RETCON the arena is the OVERFLOW path, not the default** (2026-08-16).
+   `coro.id.retcon`'s first argument sizes a caller-provided buffer. When the
+   frame fits it, `coro-split` uses the buffer and the allocator is **never
+   called**: a 256-byte buffer yields zero allocator call sites, an 8-byte one
+   yields a single `kel_arena_alloc(i32 36)`. Both directions are pinned in
+   `retcon_m1.rs`. **Frame accounting must not assume every coroutine allocates**,
+   and a text search for the allocator's name does not answer the question —
+   the `declare` line is present either way, which an earlier version of that
+   test wrongly accepted as evidence.
 3. **`llvm.coro.end` returns `void` in LLVM 22, not `i1`.** Widely published
    examples use `i1` and fail verification with "Intrinsic has incorrect return
    type". Cheap to hit and confusing, because the diagnostic names the function
