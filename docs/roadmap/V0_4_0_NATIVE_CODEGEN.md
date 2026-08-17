@@ -322,7 +322,21 @@ These remain unresolved after the 2026-05-21 research pass.
    | baseline A | 4,660,000 ns | 2.3300 ns |
    | baseline B | 4,661,000 ns | 2.3305 ns |
 
-   **The noise floor is measured, not assumed.** The baseline is timed twice as two identical workloads; their minima differ by 1,000 ns, which is exactly one clock tick, so the host was quiet. The coroutine-against-baseline difference is 300,500 ns per pass, some 300 times that floor, giving **about 0.15 ns of extra cost per resumption, roughly 6.5%**. The median-based figure agrees at 298,500 ns, so the estimate does not depend on the choice of estimator.
+   **The noise floor is measured, not assumed**, by timing the baseline twice as two identical workloads. Their minima differ by one clock tick when the host is quiet.
+
+   **Five runs, and the picture is better than any single one of them.** The estimate is stable; what varies is the floor:
+
+   | run | noise floor, ns per pass | effect, ns per pass | ns per resumption | verdict |
+   |---|---|---|---|---|
+   | 1 | 1,000 | 300,500 | 0.1502 | resolvable |
+   | 2 | **150,000** | 281,000 | 0.1405 | **declined** |
+   | 3 | 1,000 | 316,500 | 0.1583 | resolvable |
+   | 4 | 1,000 | 316,500 | 0.1583 | resolvable |
+   | 5 | 0 | 320,000 | 0.1600 | resolvable |
+
+   So a resumption costs roughly **0.14 to 0.16 ns more than an equivalent direct call, about 6 percent**, and the instrument **declined once**, when the floor rose 150-fold on a busy moment. That refusal is the guard working rather than a gap: the effect estimate that run produced, 0.1405, sits inside the range the other four give, so the instrument was conservative rather than wrong.
+
+   **The floor is a property of the moment, not of the host.** A single run is therefore not enough to certify this figure, which is why five are recorded.
 
    **The clock's tick was measured rather than assumed**: `CLOCK_MONOTONIC` reports in nanoseconds but ticks at **1,000 ns** on this host, which is why the repetition count is what it is.
 
