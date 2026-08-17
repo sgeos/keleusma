@@ -3811,6 +3811,30 @@ fn step_sc_closing() -> Word {
 }
 
 // An operator or statement token.
+// True when a `;` at this position terminates nothing, which is an EMPTY STATEMENT.
+//
+// `for` is dispatched as a statement and consumes no terminator of its own, so
+// `for .. { .. };` arrives here with no expression parsed since the last statement
+// boundary. Draining then commits an `ExprStmt` carrying no expression, and that
+// surfaces much later as a missing binary operand rather than as anything a reader
+// would connect to a stray semicolon.
+//
+// THREE CONDITIONS, AND ALL THREE ARE LOAD-BEARING. `expect_operand` alone is also
+// true in the middle of `let x = ;`, which must stay an error rather than becoming
+// a silently accepted empty statement; the pending-statement prefix and the operator
+// depth are what separate a true statement start from an incomplete expression. The
+// operator depth is measured against the enclosing branch's base rather than zero,
+// so an empty statement inside an `if` body is recognised as one.
+//
+// The reference parser admits the same form by the same rule. A widening only one of
+// the two parsers honours is a divergence, not a feature.
+fn semi_terminates_nothing() -> Word {
+    let base = if branch.if_sp > 0 { branch.if_opbase[branch.if_sp - 1] } else { 0 };
+    if ops.expect_operand == 1
+        andalso stmt.pstmt_sp == stmt.stmt_base
+        andalso ops.opsp == base { 1 } else { 0 }
+}
+
 fn step_op(k: Word) -> Word {
     if k == Tok::For() as Word {
         // Push a fresh loop context; a nested loop stacks above the enclosing one.
@@ -3838,9 +3862,15 @@ fn step_op(k: Word) -> Word {
             // The `;` after a `break` was already recorded; consume it without draining.
             stmt.break_pending = 0;
         } else {
+        if semi_terminates_nothing() == 1 {
+            // An empty statement. Consume it and leave every cursor where it was;
+            // the assignment below is already true and is written to keep the arm
+            // a statement rather than to change anything.
+            ops.draining = 0;
+        } else {
             ops.drain_reason = 0;
             ops.draining = 1;
-        }
+        } }
         0
     } else {
     if k == Tok::Yield() as Word {

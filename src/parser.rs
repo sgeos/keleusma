@@ -1388,6 +1388,33 @@ impl<'a> Parser<'a> {
                 break;
             }
 
+            // A bare semicolon is an EMPTY STATEMENT, and this arm is what makes
+            // `for x in xs { .. };` parse like its three siblings.
+            //
+            // The asymmetry it removes was structural rather than a slip. `for`
+            // is dispatched below as a STATEMENT and consumes exactly the loop,
+            // so a following `;` reached the expression parser and was reported
+            // as `unexpected token Semicolon in expression` — naming a construct
+            // the author did not write. `if`, `match` and `loop` are
+            // EXPRESSIONS, so in statement position they take the
+            // expression-statement path, which already eats a terminator.
+            //
+            // The diagnostic pointing away from the cause is the expensive part.
+            // It produced two wrong reports from the parallel line: that the
+            // grammar's documented `break` form was rejected, and that
+            // `Op::BreakIf` was unreachable from any documented source. Both
+            // probe sources carried a stray semicolon after a `for` block, and
+            // neither report was about `break` at all.
+            //
+            // This arm fires only in statement-START position. A semicolon
+            // terminating an expression statement is still consumed by that
+            // path, so whether a block-form `if` is a statement or the block's
+            // tail expression is decided exactly as before.
+            if self.at(&TokenKind::Semicolon) {
+                self.bump();
+                continue;
+            }
+
             // Contextual `assert` statement. `assert` is not a reserved
             // keyword; a lowercase `assert` at statement position that
             // is not followed by `(` is the assertion form. `assert(x)`

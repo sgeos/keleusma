@@ -444,6 +444,16 @@ Any expression can appear as a statement. The result is discarded.
 play_note(0, 60, 0.8);     // Call for side effect; result discarded.
 ````
 
+### Empty Statements
+
+A semicolon at statement position with nothing to terminate is an empty statement and is discarded. This is what allows a trailing semicolon after a `for` loop, which is a statement and consumes no terminator of its own, and it admits a run of semicolons or one before any other statement.
+
+````
+for i in 0..8 { audio::set_volume(i, 0.0); };   // Accepted; the `;` terminates nothing.
+````
+
+An empty statement does not stand in for a missing expression. A block whose only statement is a semicolon produces the unit value and is rejected where a value is required, and a semicolon in the middle of an incomplete expression, as in `let x = ;`, remains an error.
+
 ### For Loop
 
 The `for` loop iterates over arrays and ranges. Iteration is guaranteed to terminate because arrays have fixed size and ranges have fixed bounds.
@@ -460,7 +470,7 @@ for i in 0..8 {
 
 The loop variable is immutable within each iteration. Ranges use `..` for exclusive upper bound. The compiler verifies that the iterable is a fixed-size array or a range expression with statically known or bounded endpoints.
 
-A `for` loop is a statement and takes **no** trailing semicolon. A semicolon after the closing brace is rejected with `unexpected token Semicolon in expression`, because the parser resumes at statement position and reads the semicolon as the start of an expression. This differs from the block-form `if`, `match`, and `loop` statements, which accept a trailing semicolon as well as omitting one. The asymmetry is stated here because the diagnostic names the semicolon and not the `for`, which has misdirected at least one defect report toward `break`. Both halves are pinned by `tests/block_form_statements.rs`.
+A `for` loop is a statement and needs no trailing semicolon, but one is accepted, as it is after the block-form `if`, `match`, and `loop` statements. A semicolon at statement position with nothing to terminate is an empty statement and is discarded. Earlier revisions rejected the form after `for` alone, with `unexpected token Semicolon in expression`, because `for` is a statement and consumes no terminator while the other three are expressions whose expression-statement path already consumed one. That diagnostic named the semicolon rather than the `for` and misdirected two defect reports toward `break`, neither of which was about `break`. The current behaviour is pinned by `tests/block_form_statements.rs`, and the agreement of the reference and self-hosted parsers on the form by `tests/selfhost_codegen.rs`.
 
 All host-provided iterable types are assumed finite by contract. The compiler checks that only iterable types are used with `for..in`. The host is responsible for not providing infinite iterators.
 
@@ -1218,7 +1228,8 @@ comparison_op   = '==' | '!=' | '<' | '>' | '<=' | '>='
 block           = { statement } [ expression ]
 statement       = let_stmt | for_stmt | break_stmt | assert_stmt
                 | data_field_assign | data_field_index_assign
-                | expr_stmt
+                | expr_stmt | empty_stmt
+empty_stmt      = ';'
 let_stmt        = 'let' pattern [ ':' type_expr ] '=' expression ';'
 assert_stmt     = 'assert' expression [ ',' string_lit ] ';'
 for_stmt        = 'for' lower_ident 'in' iterable [ 'limit' expression ]

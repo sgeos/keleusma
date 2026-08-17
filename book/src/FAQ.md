@@ -189,18 +189,31 @@ The feature requires the `signatures` cargo feature, which is off by default and
 
 Use case: multi-party module delivery to embedded targets. A signer compiles scripts and signs them; a device flashed with the signer's public key verifies before loading. See the [Distributing signed bytecode](./COOKBOOK.md#distributing-signed-bytecode) cookbook recipe and `R42` in [RESOLVED.md](../../docs/decisions/RESOLVED.md).
 
-### If-else at statement position requires a trailing semicolon
+### A trailing semicolon after a block-form statement is optional
 
-The parser does not auto-insert semicolons. An `if-else` expression used as a statement (followed by another statement) requires `;` even though the expression evaluates to unit.
+The parser does not auto-insert semicolons, but a block-form `if`, `if-else`, `match`, `loop`, or `for` used as a statement does not need one. Both forms below parse, and they mean the same thing.
 
 ```
 if state.rem0 == 0 {
     /* ... */
 } else {
     state.rem0 = state.rem0 - 1;
-};   // <-- this semicolon is required
+}    // <-- no semicolon needed
+state.rem1 = state.rem1 - 1;
+
+if state.rem0 == 0 {
+    /* ... */
+} else {
+    state.rem0 = state.rem0 - 1;
+};   // <-- also accepted
 state.rem1 = state.rem1 - 1;
 ```
+
+An earlier revision of this entry stated the semicolon was required. It was not, and had not been; the behaviour is pinned by `an_if_else_before_another_statement_needs_no_semicolon` in `tests/block_form_statements.rs`.
+
+The semicolon does still matter in one position. Omitting it makes a block-form expression the block's **tail expression**, so its value is the block's value; writing it makes the construct a statement and the block's value comes from whatever follows.
+
+Ordinary expression statements, such as a call made for its side effect, do require a terminator.
 
 ### Opaque types flow through the native boundary as `Value::Opaque`
 
