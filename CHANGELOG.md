@@ -302,6 +302,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.expect` sites on the shared read and write paths became recoverable faults as
   defence in depth.
 
+- **The worst-case-memory-usage bound was UNDERSTATED for any chunk with a yield
+  before its peak.** `Op::Yield` declared an operand-stack net of −1 where the
+  virtual machine's is 0. The model accounted for the pop of the yielded value and
+  not for the resume pushing the reply back onto the same operand stack, so every
+  operation after a yield was costed from a base one slot too low and the shortfall
+  compounded with the number of yields on the path. Two sources carrying the
+  identical peak expression, differing only in whether three yields precede it,
+  reported 192 bytes against 288. The running offset reached −4 on a three-yield
+  body, which an operand stack cannot do. **Bounds rise for affected chunks**, so a
+  program sized against a fixed arena may now need a larger one; that is the
+  correction of an unsound figure rather than a new requirement. The net of 0 is
+  forced by the lowering rather than chosen: `let a = yield r;` compiles to
+  `GetLocal; Yield; SetLocal`, and at −1 the `SetLocal` would pop an empty stack.
+
+- **The worst-case-memory-usage bound was OVERSTATED for chunks using fixed-point
+  multiply or divide.** `Op::FixedMul` and `Op::FixedDiv` declared a net of 0 where
+  their handlers pop both operands and push one result, so the true net is −1. The
+  error accumulated with each such operation in a chunk. Bounds fall for affected
+  chunks, and nothing that verified before stops verifying. Found by a check ranging
+  over the whole opcode set rather than by a case list; neither opcode was reachable
+  by any case in the five-case comparison that check replaced.
+
+  With these two and the field reads below, the two operand-stack models now agree
+  on every one of the 66 opcodes, asserted against the wire format's canonical
+  opcode table so a new opcode is reported by name rather than silently uncovered.
+
 - **The worst-case-memory-usage bound was UNDERSTATED for any chunk whose peak lies
   on a field read.** `GetField`, `GetTupleField`, and `GetEnumField` declared an
   operand-stack net of −1 where the virtual machine's is 0. The net propagates, so
