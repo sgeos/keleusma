@@ -12607,3 +12607,152 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     assert_eq!(worst_names, 628, "the worst-case name count moved");
     assert_eq!(worst_blob, 33480, "the worst-case blob size moved");
 }
+
+/// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**
+///
+/// `emit_chunks_batch` refuses past 90 records because `wire.fin` is 1,024 words
+/// and a chunk record costs eleven fields. `parse` has 94 chunks and `wire` 475,
+/// so that cap was the last limit keeping a real stage out of the emit path once
+/// the all-default elision removed the artifact-size ceiling.
+///
+/// The batch carries existed because a plain function is entered fresh every
+/// time, so a HOST had to relay the three running totals between calls. As a
+/// coroutine the stage remembers them itself in a private block that survives the
+/// loop's RESET, so `fin` holds ONE record and the cap is removed rather than
+/// raised.
+///
+/// # What makes this a real check rather than a restatement
+///
+/// The comparison is against the reference region BYTE FOR BYTE, not against a
+/// record count. The three `*_first` cursors are what a streaming emitter gets
+/// wrong: a step that restarted them emits a structurally valid region whose
+/// every later range points somewhere else, and only the bytes catch that.
+///
+/// Both subjects are past the old cap. A case under it would pass for a stage
+/// that had merely kept the batch path working.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_chunk_region_streams_one_record_per_call_past_the_old_batch_cap() {
+    use keleusma::wire_schema::kind;
+    const CMD_STREAM_BEGIN: i64 = 174;
+    const CMD_STREAM_STEP: i64 = 175;
+    const OLD_BATCH_CAP: usize = 90;
+
+    // `parse` ONLY, and `wire` is checked separately below for a limit that is
+    // NOT this one. `wire` has 475 chunks and would exceed the batch cap, but it
+    // never reaches the emit at all: its 1,148 constant nodes exceed the
+    // module-input walk's 1,024-node bound and it refuses with `-240` before any
+    // record is written. Treating it as a subject here would have reported the
+    // chunk cap as still binding when a different limit fired, which is the
+    // conflation this file's own history keeps recording.
+    for stage in ["parse"] {
+        let path = format!("src/selfhost/kel/{stage}.kel");
+        let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+        let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse"))
+            .unwrap_or_else(|e| panic!("{stage}: compile: {e:?}"));
+        let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+        let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+
+        let rows = rows_for_kind(&view, kind::CHUNKS);
+        assert!(
+            rows.len() > OLD_BATCH_CAP,
+            "{stage} has {} chunks, within the {OLD_BATCH_CAP}-record cap, so it would have \
+             emitted under the batch path and proves nothing about removing it",
+            rows.len()
+        );
+
+        let region = view.find_region(kind::CHUNKS).expect("CHUNKS region");
+        let stored = view.region_bytes(&region).expect("payload");
+        let (blob, _names) = keleusma::selfhost::module_input(&module);
+
+        let mut vm = vm_for(WIRE_KEL);
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        for (i, b) in blob.iter().enumerate() {
+            vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(*b))
+                .expect("blob");
+        }
+        vm.set_shared(&mut shared, WARG_SLOT, Value::Int(rows.len() as i64))
+            .expect("chunk count");
+
+        let began = match enter(&mut vm, &mut shared, CMD_STREAM_BEGIN).expect("begin") {
+            VmState::Yielded(Value::Int(n)) => n,
+            other => panic!("{stage}: begin returned {other:?}"),
+        };
+        assert!(began >= 0, "{stage}: begin refused with {began}");
+
+        // One record per call, the host placing each forty-eight-byte window at
+        // its own offset. This is the whole point: the stage never holds more
+        // than one record and never learns where the region lives.
+        let mut got = vec![0u8; stored.len()];
+        let fields = chunk_inputs(&rows);
+        for (j, row) in fields.chunks_exact(11).enumerate() {
+            for (f, v) in row.iter().enumerate() {
+                vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(*v))
+                    .expect("field");
+            }
+            let wrote = match enter(&mut vm, &mut shared, CMD_STREAM_STEP).expect("step") {
+                VmState::Yielded(Value::Int(n)) => n,
+                other => panic!("{stage}: step {j} returned {other:?}"),
+            };
+            assert!(wrote > 0, "{stage}: step {j} refused with {wrote}");
+            let stride = wrote as usize;
+            for k in 0..stride {
+                got[j * stride + k] = match vm.get_shared(&shared, 1 + k).expect("read") {
+                    Value::Byte(b) => b,
+                    other => panic!("shared byte slot held {other:?}"),
+                };
+            }
+        }
+
+        assert_eq!(
+            got,
+            stored,
+            "{stage}: the streamed CHUNKS region differs from the reference over {} records",
+            rows.len()
+        );
+    }
+}
+
+/// **`wire` IS STILL EXCLUDED, AND BY A DIFFERENT LIMIT.** Asserted so the two
+/// are not conflated.
+///
+/// Removing the 90-record chunk batch cap admits `parse`. It does NOT admit
+/// `wire`, whose 1,148 constant nodes exceed the module-input walk's 1,024-node
+/// bound: it refuses with `-240` before a single record is emitted, so its 475
+/// chunks never reach the question.
+///
+/// This is asserted rather than noted because the first version of the test above
+/// took `wire` as a subject and read its `-240` as the chunk cap still binding. A
+/// refusal proves which limit fired only if the test says which one it expected.
+#[cfg(feature = "self-host")]
+#[test]
+fn wire_is_excluded_by_the_node_walk_and_not_by_the_chunk_cap() {
+    const CMD_STREAM_BEGIN: i64 = 174;
+    const NODE_CAP_REFUSAL: i64 = -240;
+
+    let src = std::fs::read_to_string("src/selfhost/kel/wire.kel").expect("read wire.kel");
+    let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
+
+    // The premise: it really does carry more constant nodes than the walk admits.
+    let chunk_consts: usize = module.chunks.iter().map(|c| c.constants.len()).sum();
+    assert!(
+        chunk_consts > 1024,
+        "wire carries {chunk_consts} chunk constants, within the 1,024-node walk bound, so          the refusal below would be for some other reason"
+    );
+
+    let (blob, _names) = keleusma::selfhost::module_input(&module);
+    let mut vm = vm_for(WIRE_KEL);
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    for (i, b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(*b))
+            .expect("blob");
+    }
+
+    match enter(&mut vm, &mut shared, CMD_STREAM_BEGIN).expect("begin") {
+        VmState::Yielded(Value::Int(n)) => assert_eq!(
+            n, NODE_CAP_REFUSAL,
+            "wire refused with {n}, not the node-walk code {NODE_CAP_REFUSAL}. If it now              SUCCEEDS, the node bound moved and the exclusion recorded across the process              documents is stale."
+        ),
+        other => panic!("begin returned {other:?}"),
+    }
+}
