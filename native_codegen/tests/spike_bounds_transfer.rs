@@ -598,17 +598,33 @@ fn q4_the_stack_model_goes_negative_on_shipped_code() {
     }
 
     println!("\n  A negative operand depth is impossible. Where it occurs the peak");
-    println!("  taken from the same walk is not an upper bound. REPORTED, not");
-    println!("  repaired: src/verify.rs belongs to the v0.2.3 line.");
+    println!("  taken from the same walk is not an upper bound.");
+    println!("  REPAIRED by the v0.2.3 line, 2026-08-17: `Op::Yield` declared a");
+    println!("  net -1 against a true net 0, so every stream `main` went under at");
+    println!("  the `PopN` after the yield. This now GUARDS that repair.");
     println!("================\n");
 
     assert!(
         chunks > 700,
         "only {chunks} chunks walked; too thin to conclude from"
     );
-    // Pinned as a REPORT with a pinned count, not as a passing assertion that
-    // the count is zero. Asserting zero would fail the suite over a defect this
-    // branch does not own; asserting the current figure would fail the moment
-    // the other line repairs it, which is the wrong signal in the other
-    // direction. The count is printed and the corpus size is guarded.
+    // **THIS ASSERTED NOTHING ABOUT THE COUNT UNTIL 2026-08-17, and the reason
+    // it did not has now expired.** While the defect was open, asserting zero
+    // would have failed the suite over something this line does not own, and
+    // asserting the then-current 8 would have failed the moment the other line
+    // repaired it. Both were the wrong signal.
+    //
+    // The repair has landed. Measured here before the sync: 8 of 959 chunks
+    // negative, every one a stream `main`, worst offset -1. Measured after: 0 of
+    // 971. So zero is now a property this line can hold the tree to, and a
+    // regression is a real finding rather than a known gap.
+    assert_eq!(
+        negative.len(),
+        0,
+        "{} chunk(s) reach a negative operand depth under the peak model. This was \
+         8 before the v0.2.3 operand-stack repair and 0 after it, so a non-zero \
+         count here is a REGRESSION, not the known gap it used to be:\n{}",
+        negative.len(),
+        negative.join("\n")
+    );
 }
