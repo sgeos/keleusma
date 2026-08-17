@@ -117,6 +117,45 @@ const NAME_CAP: usize = 1024;
 /// Omitting the persistent sizing makes every module with a `private data` block
 /// fail at `Vm::new` for a reason unrelated to the construct under test, which
 /// reads exactly like a language restriction. It is not one.
+/// Enter `wire.kel` with `cmd`, calling on the first use of a virtual machine and
+/// RESUMING on every later one.
+///
+/// **A COROUTINE MUST BE RESUMED, NOT RE-CALLED, and getting that wrong is not a
+/// harness detail.** `wire.kel` is now a `loop` stage, so a call leaves it
+/// suspended at its yield. Calling again stacks a second activation on the
+/// operand stack instead of replacing the first, and a test issuing hundreds of
+/// commands against one machine exhausts the arena -- which is exactly how the
+/// three parity cases failed, with `OutOfArena` at 67,424 bytes, while the other
+/// 166 passed because they build a fresh machine per command.
+///
+/// Resuming is also what keeps the memory bounded, which is the property the
+/// whole conversion is for: the loop's RESET reclaims the iteration's arena
+/// before the next command runs, so a thousand commands cost what one costs.
+///
+/// The first entry is detected by attempting the resume and treating
+/// `NotSuspended` as "not started yet", because the virtual machine exposes no
+/// predicate for it. The alternative was threading a bool through five helpers,
+/// where one stale copy silently reintroduces the accumulation.
+fn enter(vm: &mut Vm<'static, 'static>, shared: &mut [u8], cmd: i64) -> Result<VmState, VmError> {
+    // The loop block emits a RESET between iterations, so a resume reports that
+    // before it reports the command's answer. Skipped here rather than at five
+    // call sites, and BOUNDED rather than `loop`: a stage that only ever reset
+    // would spin forever, and the one thing a total language should not need is a
+    // harness that can hang.
+    const MAX_RESETS: usize = 4;
+    let mut st = match vm.resume_with_shared(shared, Value::Int(cmd)) {
+        Err(VmError::NotSuspended) => vm.call_with_shared(shared, &[Value::Int(cmd)])?,
+        other => other?,
+    };
+    for _ in 0..MAX_RESETS {
+        if !matches!(st, VmState::Reset) {
+            return Ok(st);
+        }
+        st = vm.resume_with_shared(shared, Value::Int(cmd))?;
+    }
+    panic!("wire.kel reset {MAX_RESETS} times without yielding for command {cmd}")
+}
+
 fn vm_for(src: &str) -> Vm<'static, 'static> {
     let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     let need = required_persistent_capacity_for(&module);
@@ -147,8 +186,8 @@ fn run_crc_on(
     for (i, byte) in buf.iter().enumerate() {
         vm.set_shared(&mut shared, 1 + i, Value::Byte(*byte))?;
     }
-    match vm.call_with_shared(&mut shared, &[Value::Int(0)])? {
-        VmState::Finished(Value::Int(n)) => Ok(n),
+    match enter(vm, &mut shared, 0)? {
+        VmState::Yielded(Value::Int(n)) => Ok(n),
         other => panic!("unexpected VM state: {other:?}"),
     }
 }
@@ -229,8 +268,8 @@ fn run_cmd_args(
             Value::Int(i64::from(*covers)),
         )?;
     }
-    let ret = match vm.call_with_shared(&mut shared, &[Value::Int(cmd)])? {
-        VmState::Finished(Value::Int(n)) => n,
+    let ret = match enter(vm, &mut shared, cmd)? {
+        VmState::Yielded(Value::Int(n)) => n,
         other => panic!("unexpected VM state: {other:?}"),
     };
     let n = read_len.min(CAPACITY);
@@ -284,8 +323,8 @@ fn run_cmd_fields(
             Value::Int(i64::from(*covers)),
         )?;
     }
-    let ret = match vm.call_with_shared(&mut shared, &[Value::Int(cmd)])? {
-        VmState::Finished(Value::Int(n)) => n,
+    let ret = match enter(vm, &mut shared, cmd)? {
+        VmState::Yielded(Value::Int(n)) => n,
         other => panic!("unexpected VM state: {other:?}"),
     };
     let n = read_len.min(CAPACITY);
@@ -323,8 +362,8 @@ fn run_cmd_pool(
     for (i, b) in bin.iter().enumerate() {
         vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(*b))?;
     }
-    let ret = match vm.call_with_shared(&mut shared, &[Value::Int(cmd)])? {
-        VmState::Finished(Value::Int(n)) => n,
+    let ret = match enter(vm, &mut shared, cmd)? {
+        VmState::Yielded(Value::Int(n)) => n,
         other => panic!("unexpected VM state: {other:?}"),
     };
     let n = read_len.min(CAPACITY);
@@ -6470,8 +6509,8 @@ fn run_call(vm: &mut Vm<'static, 'static>, c: &Call<'_>) -> Result<(i64, Vec<u8>
     for (i, b) in c.pool.iter().enumerate() {
         vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(*b))?;
     }
-    let ret = match vm.call_with_shared(&mut shared, &[Value::Int(c.cmd)])? {
-        VmState::Finished(Value::Int(n)) => n,
+    let ret = match enter(vm, &mut shared, c.cmd)? {
+        VmState::Yielded(Value::Int(n)) => n,
         other => panic!("unexpected VM state: {other:?}"),
     };
     let n = c.read_len.min(CAPACITY);
@@ -7547,9 +7586,20 @@ fn const_roots_of(module: &keleusma::bytecode::Module) -> Vec<keleusma::bytecode
 /// constants, and every `FLATTEN_CASES` source used `const data`, so the
 /// omission could not surface until the `data-*` cases were added.
 fn encoder_const_roots(module: &keleusma::bytecode::Module) -> Vec<keleusma::bytecode::ConstValue> {
+    use keleusma::bytecode::ConstValue as K;
     let mut roots = const_roots_of(module);
     if let Some(dl) = &module.data_layout {
-        roots.extend(dl.private_init.iter().cloned());
+        // THE ALL-DEFAULT POOL IS ELIDED BY THE ENCODER AND SO IS ABSENT HERE.
+        // `add_data_layout` writes `first = ABSENT` and stores no records when
+        // every private-slot initialiser is zero, because the decoder supplies
+        // them. The rule is mirrored rather than approximated: a model counting
+        // them would over-count the region by the whole data segment, which on a
+        // real stage is most of it.
+        let all_default =
+            !dl.private_init.is_empty() && dl.private_init.iter().all(|v| matches!(v, K::Int(0)));
+        if !all_default {
+            roots.extend(dl.private_init.iter().cloned());
+        }
     }
     roots
 }
@@ -9233,7 +9283,22 @@ const CMD_CK_WINDOW_PTYPES: i64 = 163;
 /// region sits at byte 143,096, far past the buffer, yet it has eight chunks. A
 /// high region base comes from the SIZE OF THE EARLIER REGIONS -- the per-element
 /// data-slot tables -- and says nothing about how many records follow it.
-const WINDOW_STAGE: &str = include_str!("../src/selfhost/kel/parse.kel");
+/// An artifact that does NOT fit the window, for the tests whose whole subject is
+/// window positioning.
+///
+/// **This was `parse.kel` and can no longer be a real stage at all.** Eliding the
+/// all-default private-slot pool took the corpus from 712,936 bytes to 103,544,
+/// and every one of the eleven stages now fits a single 65,536-byte window --
+/// `parse` fell from 304,432 to 39,216. A test of window positioning fed a
+/// fitting artifact is not a weaker test, it is a test of the previous slice.
+///
+/// Sized against the encoder's own measured output by
+/// [`synthetic_source_over`], so the next encoding win grows this input rather
+/// than disqualifying it. That property is the reason the generator exists, and
+/// this is the third round in which the real corpus outgrew its own controls.
+fn window_stage_source() -> String {
+    synthetic_source_over(CAPACITY + CAPACITY / 2).0
+}
 
 /// `CHUNKS` assembled from LOW WINDOWS matches a real stage's region byte for byte.
 ///
@@ -9247,12 +9312,12 @@ const WINDOW_STAGE: &str = include_str!("../src/selfhost/kel/parse.kel");
 /// here for the first time: batching decides how many records reach the emitter,
 /// the window decides where they land, and the carries cross both.
 #[test]
-fn chunk_records_assembled_from_windows_match_a_real_stage() {
+fn chunk_records_assembled_from_windows_match_an_oversize_artifact() {
     use keleusma::wire_schema::kind;
     let mut vm = vm_for(WIRE_KEL);
 
-    let module =
-        compile(&parse(&tokenize(WINDOW_STAGE).expect("lex")).expect("parse")).expect("compile");
+    let module = compile(&parse(&tokenize(&window_stage_source()).expect("lex")).expect("parse"))
+        .expect("compile");
     let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
     let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
 
@@ -9422,8 +9487,19 @@ fn every_fitting_region_of_a_real_stage_emits_into_a_window() {
     // three that still has several such regions, so the test stays cheap.
     // If a later reduction pulls `codegen` inside too, move to `parse` and then
     // to a synthetic case -- do NOT relax the control.
-    let src = include_str!("../src/selfhost/kel/codegen.kel");
-    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    // THE THIRD RE-POINT, AND THE LAST ONE THIS TEST SHOULD NEED.
+    //
+    // Twice before, a size reduction pulled every region inside the buffer and
+    // this test had to be aimed at whatever stage was still large enough. The
+    // all-default elision ended that supply: the corpus fell from 712,936 bytes
+    // to 103,544 and ALL ELEVEN stages now fit one window, so there is no real
+    // stage left to move to.
+    //
+    // `window_stage_source` is sized against the encoder's own measured output,
+    // so the next encoding win makes it emit MORE rather than pushing it under
+    // the window. Chasing the corpus was always going to end here.
+    let src = window_stage_source();
+    let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
     let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
     let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
 
@@ -9595,8 +9671,19 @@ fn a_region_larger_than_the_input_buffer_batches_through_the_window() {
     use keleusma::wire_schema::kind;
     let mut vm = vm_for(WIRE_KEL);
 
-    let src = include_str!("../src/selfhost/kel/parse.kel");
-    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    // THE THIRD RE-POINT, AND THE LAST ONE THIS TEST SHOULD NEED.
+    //
+    // Twice before, a size reduction pulled every region inside the buffer and
+    // this test had to be aimed at whatever stage was still large enough. The
+    // all-default elision ended that supply: the corpus fell from 712,936 bytes
+    // to 103,544 and ALL ELEVEN stages now fit one window, so there is no real
+    // stage left to move to.
+    //
+    // `window_stage_source` is sized against the encoder's own measured output,
+    // so the next encoding win makes it emit MORE rather than pushing it under
+    // the window. Chasing the corpus was always going to end here.
+    let src = window_stage_source();
+    let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
     let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
     let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
 
@@ -9709,8 +9796,19 @@ fn a_region_larger_than_one_window_is_assembled_across_two() {
     // bounds it exercises are the same pair, at different sizes: a batch is capped
     // by `wire.fin` at 1,024 WORDS (256 four-field records), a window by
     // `wire.bytes` at 65,536 BYTES.
-    let src = include_str!("../src/selfhost/kel/codegen.kel");
-    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    // THE THIRD RE-POINT, AND THE LAST ONE THIS TEST SHOULD NEED.
+    //
+    // Twice before, a size reduction pulled every region inside the buffer and
+    // this test had to be aimed at whatever stage was still large enough. The
+    // all-default elision ended that supply: the corpus fell from 712,936 bytes
+    // to 103,544 and ALL ELEVEN stages now fit one window, so there is no real
+    // stage left to move to.
+    //
+    // `window_stage_source` is sized against the encoder's own measured output,
+    // so the next encoding win makes it emit MORE rather than pushing it under
+    // the window. Chasing the corpus was always going to end here.
+    let src = window_stage_source();
+    let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
     let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
     let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
 
@@ -9839,10 +9937,23 @@ fn assemble_whole_artifact(label: &str, src: &str, sabotage: Sabotage) -> (usize
     let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
     let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+    // THE OVERSIZE PRECONDITION MOVED TO THE CALLER, and the reason is the point.
+    //
+    // It used to sit here, asserting the artifact exceeded the buffer so that
+    // composition across windows was actually exercised. Eliding the all-default
+    // private-slot pool took the corpus from 712,936 bytes to 103,544, and every
+    // one of the eleven stages now fits a single window -- `verify_structural`
+    // alone fell by a factor of 26.6. A helper that still demanded an oversize
+    // input would reject every real stage.
+    //
+    // The control is not weakened, it is relocated: the synthetic caller sizes
+    // its source against the encoder's own output and asserts the bound there,
+    // where an encoding win grows the input rather than disqualifying it. A real
+    // stage still proves region coverage, batching within a window and byte
+    // identity, which is what its callers now assert.
     assert!(
-        want.len() > CAPACITY,
-        "{label}: artifact is {} bytes and fits the buffer, so nothing here is composed",
-        want.len()
+        !want.is_empty(),
+        "{label}: the reference encoder produced no artifact at all"
     );
 
     let specs = region_counts_for(&want);
@@ -9958,11 +10069,11 @@ fn assemble_whole_artifact(label: &str, src: &str, sabotage: Sabotage) -> (usize
         regions_placed >= 8,
         "{label}: only {regions_placed} regions placed"
     );
-    assert!(
-        batched_regions >= 1,
-        "no region needed more than one batch, so composition with batching is \
-         untested at whole-artifact scale"
-    );
+    // THE BATCHING PRECONDITION ALSO MOVED TO THE CALLER, for the same reason as
+    // the oversize one above: after the all-default elision no real stage has a
+    // region large enough to need a second batch. The count is returned instead,
+    // so a caller that can still guarantee batching asserts it and one that
+    // cannot does not pretend to.
 
     // The region-targeted defect is planted after assembly, since it asks
     // whether the COMPARISON covers the region rather than whether the emitter
@@ -10160,10 +10271,13 @@ fn the_whole_artifact_assembly_holds_across_several_stages() {
     let mut largest = 0usize;
     for (label, src) in STAGES {
         let (bytes, regions, batched) = assemble_whole_artifact(label, src, Sabotage::None);
-        assert!(
-            regions >= 8 && batched >= 1,
-            "{label}: {regions} regions, {batched} batched"
-        );
+        // A real stage proves REGION COVERAGE and byte identity. It no longer
+        // proves batching: the elision left none of the eleven with a region
+        // needing a second batch. `batched` is read rather than asserted so the
+        // figure stays visible, and the synthetic case below carries the
+        // batching guarantee.
+        assert!(regions >= 8, "{label}: only {regions} regions placed");
+        let _ = batched;
         smallest = smallest.min(bytes);
         largest = largest.max(bytes);
     }
@@ -10477,11 +10591,21 @@ fn the_struct_template_shape_is_emitted_from_real_compiler_output() {
 fn a_misplaced_batch_fails_the_whole_artifact_comparison() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    // The smallest qualifying real stage, so the control costs one assembly.
-    const SRC: &str = include_str!("../src/selfhost/kel/verify_structural.kel");
+    // SYNTHETIC, BECAUSE THE SABOTAGE NEEDS A BATCH TO MISPLACE.
+    //
+    // This was `verify_structural`, the smallest real stage that still had a
+    // region needing more than one batch. After the all-default elision it has
+    // none, and neither does any other stage: the corpus fell from 712,936 bytes
+    // to 103,544 and every artifact fits one window. Misplacing "one batch" of a
+    // single-batch region is not the defect this test exists to catch.
+    //
+    // The source is sized against the encoder's own output, so it stays oversize
+    // through later encoding wins rather than having to be re-aimed a fourth
+    // time.
+    let src = window_stage_source();
 
     let honest = catch_unwind(AssertUnwindSafe(|| {
-        assemble_whole_artifact("verify_structural", SRC, Sabotage::None)
+        assemble_whole_artifact("synthetic", &src, Sabotage::None)
     }));
     assert!(
         honest.is_ok(),
@@ -10499,7 +10623,7 @@ fn a_misplaced_batch_fails_the_whole_artifact_comparison() {
     // failing test's evidence for tidier output on a passing one is the wrong
     // way round, so the noise stays.
     let sabotaged = catch_unwind(AssertUnwindSafe(|| {
-        assemble_whole_artifact("verify_structural", SRC, Sabotage::MisplaceOneBatch)
+        assemble_whole_artifact("synthetic", &src, Sabotage::MisplaceOneBatch)
     }));
 
     let Err(payload) = sabotaged else {
@@ -11529,9 +11653,18 @@ fn the_driver_emits_the_chunk_region_on_the_stages_that_fit() {
         ("verify_depth", true),
         ("verify_typed", true),
         ("verify_datalayout", true),
+        // THE EXCLUSION LIST IS DOWN TO THE CHUNK CAP, and that is the whole
+        // effect of the all-default elision on this test. `codegen` and
+        // `verify_structural` were excluded because their artifacts overran the
+        // 65,536-byte buffer at 111,864 and 102,256 bytes; they are now 20,632
+        // and 3,840, and every one of the eleven stages fits a single window.
+        //
+        // What still refuses is the 90-record chunk batch, and only two stages
+        // reach it: `parse` at 94 chunks and `wire` at 475. Measured, not
+        // inferred -- the other nine are between 2 and 76.
         ("parse", false),
-        ("codegen", false),
-        ("verify_structural", false),
+        ("codegen", true),
+        ("verify_structural", true),
         ("wire", false),
     ];
 
@@ -11604,8 +11737,12 @@ fn the_driver_emits_the_chunk_region_on_the_stages_that_fit() {
         emitted += 1;
     }
 
-    assert_eq!(emitted, 7, "expected seven stages emitted");
-    assert_eq!(refused, 4, "expected four stages refused");
+    // NINE OF ELEVEN, up from seven. `codegen` and `verify_structural` joined the
+    // emitting set when the all-default elision took their artifacts under the
+    // window. Pinned as counts rather than derived from the table above, so a
+    // stage silently changing category fails here instead of being absorbed.
+    assert_eq!(emitted, 9, "expected nine stages emitted");
+    assert_eq!(refused, 2, "expected two stages refused");
 }
 
 /// MUST FIRE: the chunk record's name index is the STAGE's, not the host's.
@@ -11872,13 +12009,13 @@ fn the_driver_emits_names_and_pool_through_wire_kel() {
 ///
 /// The text here previously said "a stage's 395,804 names do not fit". That
 /// figure described no name count -- it was a `CONSTS` region record count. The
-/// largest `NAMES` region in the corpus is `parse` at 627, which now FITS.
+/// largest `NAMES` region in the corpus is `parse` at 628, which now FITS.
 #[cfg(feature = "self-host")]
 #[test]
 fn the_driver_refuses_more_names_than_one_call_can_intern() {
     // NO MODULE IS COMPILED HERE, AND THAT IS THE POINT. Both caps cover every
-    // stage in the corpus -- the largest, `parse`, interns 627 names from a
-    // 33,395-byte blob against bounds of 1024 and 49,152 -- so no real module
+    // stage in the corpus -- the largest, `parse`, interns 628 names from a
+    // 33,480-byte blob against bounds of 1024 and 49,152 -- so no real module
     // reaches either refusal. The input is injected because it cannot be
     // produced.
 
@@ -11918,8 +12055,8 @@ fn the_driver_refuses_more_names_than_one_call_can_intern() {
 /// different reason, and two of those were defects that the raise did not cause
 /// and that no existing test could reach:
 ///
-/// 1. `-236`, the name-count cap: 627 against 256. The ceiling this increment
-///    set out to raise.
+/// 1. `-236`, the name-count cap: 627 against 256, as `parse` stood then. The
+///    ceiling this increment set out to raise.
 /// 2. `-233`, read as "no NAMES region" and meaning "the directory has been
 ///    overwritten". `mi_chunk_names` wrote its output copy ignoring `nm.mode`,
 ///    at byte `8 * i`, while `mi_join` runs the walk in SILENT mode precisely
@@ -12344,7 +12481,7 @@ fn the_join_holds_across_every_stage() {
 /// **This is the check the old interface could not make.** The caller used to
 /// pass the count separately, from `interner_input` — a model in this file that
 /// omits the data-slot contributor entirely. It reports 252 for `parse` where
-/// the module really interns 627, and nothing compared the two, because the
+/// the module really interns 628, and nothing compared the two, because the
 /// count is consumed only as a bound. An under-reported bound admits a module
 /// that should have been refused, and the refusal exists to prevent a silently
 /// truncated artifact.
@@ -12429,7 +12566,7 @@ fn the_derived_name_bound_is_exact_on_every_stage_and_sound_elsewhere() {
 /// **Residency staging is therefore not required for the corpus**, which is the
 /// opposite of what the plan concluded while it sized the problem from 395,804.
 /// That figure was a `CONSTS` region record count. Measured, the worst stage is
-/// `parse` at 627 names against a cap of 1024 and 33,395 blob bytes against
+/// `parse` at 628 names against a cap of 1024 and 33,480 blob bytes against
 /// 49,152 — 61% and 68%.
 ///
 /// This is an ASSERTION rather than a note because the conclusion is load
@@ -12459,7 +12596,163 @@ fn every_stage_fits_the_driver_caps_with_margin() {
         worst_names = worst_names.max(names);
         worst_blob = worst_blob.max(blob.len());
     }
-    // Pinned so a change in the worst case is visible rather than absorbed.
-    assert_eq!(worst_names, 627, "the worst-case name count moved");
-    assert_eq!(worst_blob, 33395, "the worst-case blob size moved");
+    // Pinned so a change in the worst case is visible rather than absorbed, and
+    // it has already earned that once. Adding `semi_terminates_nothing` to
+    // `parse.kel` for the empty statement moved the worst case from 627 names
+    // and 33,395 bytes to 628 and 33,480 — one chunk name and its blob record.
+    // The margins are 61% and 68% of the caps, so the increment was admissible;
+    // the point of the pin is that a stage growing toward either bound is
+    // reported here with the number rather than surfacing later as an
+    // `Unsupported` at some call site.
+    assert_eq!(worst_names, 628, "the worst-case name count moved");
+    assert_eq!(worst_blob, 33480, "the worst-case blob size moved");
+}
+
+/// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**
+///
+/// `emit_chunks_batch` refuses past 90 records because `wire.fin` is 1,024 words
+/// and a chunk record costs eleven fields. `parse` has 94 chunks and `wire` 475,
+/// so that cap was the last limit keeping a real stage out of the emit path once
+/// the all-default elision removed the artifact-size ceiling.
+///
+/// The batch carries existed because a plain function is entered fresh every
+/// time, so a HOST had to relay the three running totals between calls. As a
+/// coroutine the stage remembers them itself in a private block that survives the
+/// loop's RESET, so `fin` holds ONE record and the cap is removed rather than
+/// raised.
+///
+/// # What makes this a real check rather than a restatement
+///
+/// The comparison is against the reference region BYTE FOR BYTE, not against a
+/// record count. The three `*_first` cursors are what a streaming emitter gets
+/// wrong: a step that restarted them emits a structurally valid region whose
+/// every later range points somewhere else, and only the bytes catch that.
+///
+/// Both subjects are past the old cap. A case under it would pass for a stage
+/// that had merely kept the batch path working.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_chunk_region_streams_one_record_per_call_past_the_old_batch_cap() {
+    use keleusma::wire_schema::kind;
+    const CMD_STREAM_BEGIN: i64 = 174;
+    const CMD_STREAM_STEP: i64 = 175;
+    const OLD_BATCH_CAP: usize = 90;
+
+    // `parse` ONLY, and `wire` is checked separately below for a limit that is
+    // NOT this one. `wire` has 475 chunks and would exceed the batch cap, but it
+    // never reaches the emit at all: its 1,148 constant nodes exceed the
+    // module-input walk's 1,024-node bound and it refuses with `-240` before any
+    // record is written. Treating it as a subject here would have reported the
+    // chunk cap as still binding when a different limit fired, which is the
+    // conflation this file's own history keeps recording.
+    for stage in ["parse"] {
+        let path = format!("src/selfhost/kel/{stage}.kel");
+        let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+        let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse"))
+            .unwrap_or_else(|e| panic!("{stage}: compile: {e:?}"));
+        let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+        let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+
+        let rows = rows_for_kind(&view, kind::CHUNKS);
+        assert!(
+            rows.len() > OLD_BATCH_CAP,
+            "{stage} has {} chunks, within the {OLD_BATCH_CAP}-record cap, so it would have \
+             emitted under the batch path and proves nothing about removing it",
+            rows.len()
+        );
+
+        let region = view.find_region(kind::CHUNKS).expect("CHUNKS region");
+        let stored = view.region_bytes(&region).expect("payload");
+        let (blob, _names) = keleusma::selfhost::module_input(&module);
+
+        let mut vm = vm_for(WIRE_KEL);
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        for (i, b) in blob.iter().enumerate() {
+            vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(*b))
+                .expect("blob");
+        }
+        vm.set_shared(&mut shared, WARG_SLOT, Value::Int(rows.len() as i64))
+            .expect("chunk count");
+
+        let began = match enter(&mut vm, &mut shared, CMD_STREAM_BEGIN).expect("begin") {
+            VmState::Yielded(Value::Int(n)) => n,
+            other => panic!("{stage}: begin returned {other:?}"),
+        };
+        assert!(began >= 0, "{stage}: begin refused with {began}");
+
+        // One record per call, the host placing each forty-eight-byte window at
+        // its own offset. This is the whole point: the stage never holds more
+        // than one record and never learns where the region lives.
+        let mut got = vec![0u8; stored.len()];
+        let fields = chunk_inputs(&rows);
+        for (j, row) in fields.chunks_exact(11).enumerate() {
+            for (f, v) in row.iter().enumerate() {
+                vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(*v))
+                    .expect("field");
+            }
+            let wrote = match enter(&mut vm, &mut shared, CMD_STREAM_STEP).expect("step") {
+                VmState::Yielded(Value::Int(n)) => n,
+                other => panic!("{stage}: step {j} returned {other:?}"),
+            };
+            assert!(wrote > 0, "{stage}: step {j} refused with {wrote}");
+            let stride = wrote as usize;
+            for k in 0..stride {
+                got[j * stride + k] = match vm.get_shared(&shared, 1 + k).expect("read") {
+                    Value::Byte(b) => b,
+                    other => panic!("shared byte slot held {other:?}"),
+                };
+            }
+        }
+
+        assert_eq!(
+            got,
+            stored,
+            "{stage}: the streamed CHUNKS region differs from the reference over {} records",
+            rows.len()
+        );
+    }
+}
+
+/// **`wire` IS STILL EXCLUDED, AND BY A DIFFERENT LIMIT.** Asserted so the two
+/// are not conflated.
+///
+/// Removing the 90-record chunk batch cap admits `parse`. It does NOT admit
+/// `wire`, whose 1,148 constant nodes exceed the module-input walk's 1,024-node
+/// bound: it refuses with `-240` before a single record is emitted, so its 475
+/// chunks never reach the question.
+///
+/// This is asserted rather than noted because the first version of the test above
+/// took `wire` as a subject and read its `-240` as the chunk cap still binding. A
+/// refusal proves which limit fired only if the test says which one it expected.
+#[cfg(feature = "self-host")]
+#[test]
+fn wire_is_excluded_by_the_node_walk_and_not_by_the_chunk_cap() {
+    const CMD_STREAM_BEGIN: i64 = 174;
+    const NODE_CAP_REFUSAL: i64 = -240;
+
+    let src = std::fs::read_to_string("src/selfhost/kel/wire.kel").expect("read wire.kel");
+    let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
+
+    // The premise: it really does carry more constant nodes than the walk admits.
+    let chunk_consts: usize = module.chunks.iter().map(|c| c.constants.len()).sum();
+    assert!(
+        chunk_consts > 1024,
+        "wire carries {chunk_consts} chunk constants, within the 1,024-node walk bound, so          the refusal below would be for some other reason"
+    );
+
+    let (blob, _names) = keleusma::selfhost::module_input(&module);
+    let mut vm = vm_for(WIRE_KEL);
+    let mut shared = vec![0u8; vm.shared_data_bytes()];
+    for (i, b) in blob.iter().enumerate() {
+        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(*b))
+            .expect("blob");
+    }
+
+    match enter(&mut vm, &mut shared, CMD_STREAM_BEGIN).expect("begin") {
+        VmState::Yielded(Value::Int(n)) => assert_eq!(
+            n, NODE_CAP_REFUSAL,
+            "wire refused with {n}, not the node-walk code {NODE_CAP_REFUSAL}. If it now              SUCCEEDS, the node bound moved and the exclusion recorded across the process              documents is stale."
+        ),
+        other => panic!("begin returned {other:?}"),
+    }
 }

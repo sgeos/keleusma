@@ -4087,6 +4087,77 @@ fn emit_chunks_computed(at: Word, n: Word) -> Word {
     emit_chunks_batch(at, n, 0, 0, 0, 0)
 }
 
+// --- THE CHUNK REGION, ONE RECORD PER YIELD ---------------------------------
+//
+// `emit_chunks_batch` refuses past 90 records because `wire.fin` is 1,024 words
+// and a chunk record costs eleven fields. `parse` has 94 chunks and `wire` has
+// 475, so that cap is the LAST limit keeping a real stage out of the emit path:
+// the artifact-size ceiling went with the all-default elision, and every stage
+// now fits one window.
+//
+// **THE CARRIES EXISTED BECAUSE THE STAGE COULD NOT REMEMBER.** `emit_chunks_batch`
+// takes `first`, `c0`, `t0` and `p0` so a HOST could relay the three running
+// totals between calls, each call starting from figures it was handed. That is
+// what a function entered fresh every time requires. This stage is a coroutine
+// now, `ck` is private, and private data survives the loop's RESET -- so the
+// totals carry themselves and the relay is gone. `fin` then has to hold ONE
+// record rather than ninety, and the cap is REMOVED rather than raised.
+//
+// A raised cap would have been the wrong shape twice over: it would still be a
+// number that some module eventually exceeds, and it would still make the
+// artifact's correctness depend on the host relaying figures it has no way to
+// check.
+fn ck_stream_begin() -> Word {
+    // The interner runs ONCE, here, rather than per record. It is a pure function
+    // of its input, so re-running it per step would give the same answer at
+    // quadratic cost; and `wire.nmap` is shared, so its result survives to every
+    // later step for as long as the host keeps handing back the same buffer.
+    nm.jj = mi_window_prepare();
+    if nm.jj < 0 { nm.jj } else {
+        ck.consts = 0;
+        ck.templates = 0;
+        ck.ptypes = 0;
+        ck.j = 0;
+        nm.cnt
+    }
+}
+
+// Emit the record for chunk `ck.j` at WINDOW OFFSET ZERO and advance.
+//
+// The host seeds the ten host-supplied fields at `fin[1..11]` and places the
+// forty-eight bytes this writes; field 0 is not read, because the NAME INDEX is
+// the stage's own -- taken from the interner that produced `NAMES`, exactly as
+// the batch path takes it, so the two cannot disagree about a name.
+//
+// Each `*_first` is written BEFORE its accumulator advances, so a chunk's range
+// starts where the previous chunk's ended. That is the one ordering the whole
+// region depends on and it is why the totals must persist: a step that restarted
+// them would emit a structurally valid region whose every later range points
+// somewhere wrong.
+fn ck_stream_step() -> Word {
+    if ck.j >= nm_max_names() { 0 - 263 } else {
+        ck.sink = put_u32(chunk_off_name(), wire.nmap[ck.j]);
+        ck.sink = put_u32(chunk_off_consts_first(), ck.consts);
+        ck.sink = put_u32(chunk_off_consts_count(), ck_in(0, 1));
+        ck.consts = ck.consts + ck_in(0, 1);
+        ck.sink = put_u32(chunk_off_templates_first(), ck.templates);
+        ck.sink = put_u32(chunk_off_templates_count(), ck_in(0, 2));
+        ck.templates = ck.templates + ck_in(0, 2);
+        ck.sink = put_u32(chunk_off_param_types_first(), ck.ptypes);
+        ck.sink = put_u32(chunk_off_param_types_count(), ck_in(0, 3));
+        ck.ptypes = ck.ptypes + ck_in(0, 3);
+        ck.sink = put_u32(chunk_off_debug_first(), ck_in(0, 4));
+        ck.sink = put_u32(chunk_off_debug_len(), ck_in(0, 5));
+        ck.sink = put_u32(chunk_off_op_byte_offset(), ck_in(0, 6));
+        ck.sink = put_u32(chunk_off_op_record_count(), ck_in(0, 7));
+        ck.sink = put_u16(chunk_off_local_count(), ck_in(0, 8));
+        ck.sink = put_u8(chunk_off_param_count(), ck_in(0, 9));
+        ck.sink = put_u8(chunk_off_block_type(), ck_in(0, 10));
+        ck.j = ck.j + 1;
+        chunk_stride()
+    }
+}
+
 fn ck_emit() -> Word {
     if dir_find(kind_chunks()) < 0 { 0 - 261 } else {
         emit_chunks_computed(region_base(dir_find(kind_chunks())), wire.warg) }
@@ -4390,7 +4461,9 @@ fn dispatch_window(cmd: Word) -> Word {
     if cmd == 171 { mi_window_pool() } else {
     if cmd == 172 { mi_window_header() } else {
     if cmd == 173 { mi_window_chunks() } else {
-    0 - 97 }}}}
+    if cmd == 174 { ck_stream_begin() } else {
+    if cmd == 175 { ck_stream_step() } else {
+    0 - 97 }}}}}}
 }
 
 fn dispatch_driver2(cmd: Word) -> Word {
@@ -4447,9 +4520,28 @@ fn dispatch_driver(cmd: Word) -> Word {
 // did for four consecutive slices — and got wrong once.
 // RAISED FROM 167 for `mi_join_header`. This is a REAL GUARD: a new command
 // returns `0 - 99` until the ceiling moves, so the two must change together.
-fn highest_command() -> Word { 173 }
+fn highest_command() -> Word { 175 }
 
-fn main(cmd: Word) -> Word {
+// --- THE ENTRY, AS A COROUTINE ----------------------------------------------
+//
+// `wire.kel` was the last stage entered as `fn main(cmd)`. It is now a `loop`
+// like its ten siblings, which is the shape the windowed-compiler goal asks for.
+//
+// **WHAT THIS DOES AND DOES NOT BUY, stated plainly because the distinction is
+// easy to lose.** Changing the entry makes the stage RESUMABLE: it may now yield
+// more than once for one request, and its private working blocks survive the
+// loop's RESET, so a command can carry a cursor between yields. That is the
+// enabling change. It does not by itself make any command stream -- a command
+// that computes its whole answer and yields once is a coroutine shell around a
+// one-shot call, and would satisfy every existing test while streaming nothing.
+// `dispatch` below still answers each command in one yield; converting the emit
+// commands to yield per record is the increment that follows, and the reason to
+// do the entry first is that it cannot be done second.
+//
+// The command arrives as the initial call argument and is re-supplied on every
+// resume by the Stream parameter-slot update, so a resumed command sees the same
+// number it was entered with.
+fn dispatch(cmd: Word) -> Word {
     if cmd < 13 { dispatch_container(cmd) } else {
     if cmd < 26 { dispatch_schema(cmd) } else {
     if cmd < 38 { dispatch_consts(cmd) } else {
@@ -4463,4 +4555,8 @@ fn main(cmd: Word) -> Word {
     if cmd < 115 { dispatch_frame(cmd) } else {
     if cmd < 134 { dispatch_emit(cmd) } else {
     if cmd < 152 { dispatch_driver(cmd) } else { dispatch_driver2(cmd) } } } } } } } } } } } } }
+}
+
+loop main(cmd: Word) -> Word {
+    yield dispatch(cmd)
 }

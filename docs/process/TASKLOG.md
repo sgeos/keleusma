@@ -10,6 +10,36 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-08-17).** Option A landed: the **wholly-default private-slot initialiser pool
+> is elided**, authorised by the operator with no `BYTECODE_VERSION` change since no version-2
+> artifact has ever been published.
+>
+> **38,087 of the corpus's 40,332 constants were zero-valued data-segment initialisers** at sixteen
+> bytes each. `DataInitRecord.first` now carries `ABSENT` for a wholly-default pool and stores
+> nothing; a pool with any non-default value is stored in full, and `decode_constant_pools` rejects
+> the sentinel so an unaware reader fails loudly. **Corpus auxiliary body 712,936 -> 103,544 bytes,
+> a factor of 6.9**, `verify_structural` alone 26.6x.
+>
+> **ALL ELEVEN STAGES NOW FIT THE 65,536-BYTE WINDOW**, where three did not. The driver emits the
+> chunk region for **nine of eleven** rather than seven; the artifact-size limit is gone and only the
+> 90-record chunk batch cap remains, reached by `parse` (94) and `wire` (475). Every region-payload
+> figure in the roadmap cell is superseded -- derive current ones from
+> `tests/consts_region_composition.rs`.
+>
+> **SEVEN BYTE-IDENTITY TESTS FAILED AND NONE WAS A DEFECT.** Five were vacuity controls asserting
+> their input exceeds the buffer, and the elision removed every oversize real input; without them the
+> windowing and batching machinery would have stopped being exercised while the suite stayed green.
+> Two had already been re-aimed twice for the same reason. They now use `synthetic_source_over`, which
+> sizes against the encoder's own output and therefore cannot be outgrown. Preconditions were
+> relocated, not weakened.
+>
+> **The empty statement also landed** (PR #149): a trailing semicolon after `for` now parses, as it
+> does after `if`, `match` and `loop`. Both parsers implement it and agree byte-identically;
+> `parse.kel` needed `semi_terminates_nothing` because a semicolon there triggers an operator drain
+> that with nothing pending commits an `ExprStmt` carrying no expression. The guide's FAQ claim that
+> the semicolon was REQUIRED after an if-else was wrong and had been wrong before this change,
+> confirmed against the unmodified parser.
+
 > **Currency note (2026-08-16, fifth).** Two increments on `fix/operand-stack-model-remainder`.
 >
 > **The operand-stack known-disagreement list is EMPTY.** All three entries repaired against the

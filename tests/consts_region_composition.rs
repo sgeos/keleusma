@@ -245,42 +245,140 @@ fn the_flattener_interns_no_name_for_any_stage() {
     assert_eq!(checked, CORPUS_STAGES.len(), "not every stage was checked");
 }
 
-/// The region is dominated by the data segment, not by code constants.
+/// **THE ELISION, MEASURED AT THE ARTIFACT.** The wholly-default initialiser pool
+/// contributes no records at all.
 ///
-/// Stated as a ratio rather than as a byte total so it survives a stage source
-/// edit. The point it pins is that an emit path targeting `Chunk::constants`
-/// alone would reach a small minority of the region, which is the shape of
-/// mistake the first probe here made.
+/// This test previously asserted the opposite — that the region holds the sum of
+/// both sources — and that assertion is what quantified the waste this change
+/// removes. It is inverted rather than deleted, because the property worth
+/// guarding now is that the elision actually reaches the bytes. A test of the
+/// encoder's intent that never looked at an artifact would pass for an encoder
+/// that computed the elision and then stored the records anyway.
+///
+/// Both halves are asserted. A stage whose data segment is wholly default must
+/// contribute nothing, and the pool must be non-empty first, or the case is
+/// vacuous: a stage with no data segment would satisfy the first half for a
+/// reason that has nothing to do with eliding anything.
 #[test]
-fn the_consts_region_is_mostly_data_segment_initialisers() {
-    let mut chunk_consts = 0usize;
-    let mut data_consts = 0usize;
+fn the_all_default_initialiser_pool_is_elided_from_the_region() {
+    let mut with_elision = 0usize;
+    let mut elided_records = 0usize;
     for (name, src) in CORPUS_STAGES {
         let m = compile_stage(src);
         let from_chunks: usize = m.chunks.iter().map(|c| c.constants.len()).sum();
         let from_data = m.data_layout.as_ref().map_or(0, |d| d.private_init.len());
+        let all_default = from_data > 0
+            && m.data_layout.as_ref().is_some_and(|d| {
+                d.private_init
+                    .iter()
+                    .all(|v| matches!(v, ConstValue::Int(0)))
+            });
 
-        // The region really does carry the sum of the two, which is what makes
-        // the ratio below a statement about the artifact and not about the
-        // module.
-        let records = region_bytes(&encode(&corpus_aux_of(&m)), KIND_CONSTS).len();
-        assert_eq!(
-            records / CONST_RECORD_BYTES,
-            from_chunks + from_data,
-            "{name}: the region holds {} records against {from_chunks} chunk constants plus \
-             {from_data} data initialisers. A mismatch means the flattener expanded a \
-             composite, and every all-scalar assumption in this file is void.",
-            records / CONST_RECORD_BYTES
-        );
-        chunk_consts += from_chunks;
-        data_consts += from_data;
+        let records =
+            region_bytes(&encode(&corpus_aux_of(&m)), KIND_CONSTS).len() / CONST_RECORD_BYTES;
+
+        if all_default {
+            assert_eq!(
+                records, from_chunks,
+                "{name}: the region holds {records} records against {from_chunks} chunk \
+                 constants, so {from_data} wholly-default initialisers reached the artifact \
+                 after all"
+            );
+            with_elision += 1;
+            elided_records += from_data;
+        } else {
+            assert_eq!(
+                records,
+                from_chunks + from_data,
+                "{name}: a pool that is not wholly default must be stored in full"
+            );
+        }
     }
 
     assert!(
-        data_consts > chunk_consts * 4,
-        "the data segment contributes {data_consts} constants against the chunks' \
-         {chunk_consts}. This test exists because an emit path aimed at chunk constants \
-         alone was mistaken for one that would reach the region."
+        with_elision >= 8,
+        "only {with_elision} stages had a wholly-default pool to elide, so the corpus no \
+         longer exercises the case this encoding exists for"
+    );
+    assert!(
+        elided_records > 30_000,
+        "only {elided_records} records were elided; the measurement that justified this \
+         encoding found 38,087, and a collapse of that figure means the data segment \
+         changed shape"
+    );
+}
+
+/// A pool that is NOT wholly default is stored in full.
+///
+/// **MUST-NOT-FIRE, and the corpus cannot supply it.** Every stage's data segment
+/// is entirely zero, so nothing above exercises the fallback, and an encoder that
+/// elided unconditionally would pass every test in this file. The value here is
+/// deliberately non-zero and deliberately last, which is also the position a
+/// trailing-run scheme would get wrong.
+#[test]
+fn a_pool_with_any_non_default_value_is_stored_in_full() {
+    let m = compile_stage(
+        "private data d { xs: [Word; 4], flag: Word = 7 }\n\
+         fn main() -> Word { d.xs[0] = 1; d.flag }",
+    );
+    let dl = m.data_layout.as_ref().expect("a private data segment");
+    assert!(
+        dl.private_init
+            .iter()
+            .any(|v| !matches!(v, ConstValue::Int(0))),
+        "the subject has no non-default initialiser, so it tests nothing"
+    );
+
+    let from_chunks: usize = m.chunks.iter().map(|c| c.constants.len()).sum();
+    let records = region_bytes(&encode(&corpus_aux_of(&m)), KIND_CONSTS).len() / CONST_RECORD_BYTES;
+    assert_eq!(
+        records,
+        from_chunks + dl.private_init.len(),
+        "a pool carrying a non-default value must be stored whole; eliding it would lose \
+         the value"
+    );
+
+    // And it must survive the round trip, which is the property that actually
+    // matters to a host: the encoder may store or elide, but the decoder must
+    // return what went in either way.
+    let bytes = encode(&corpus_aux_of(&m));
+    let back = keleusma::wire_schema::decode_aux_body(&bytes).expect("decode");
+    assert_eq!(
+        back.data_layout.as_ref().map(|d| &d.private_init),
+        Some(&dl.private_init),
+        "the initialisers did not round-trip"
+    );
+}
+
+/// The elided pool round-trips, which is the only property a host depends on.
+///
+/// The encoder storing nothing is worth having only if the decoder reconstructs
+/// exactly what was elided. Asserted against a real stage rather than a
+/// constructed one, so the count is whatever the compiler actually emits.
+#[test]
+fn an_elided_pool_round_trips_to_the_values_it_replaced() {
+    let m = compile_stage(CORPUS_STAGES[1].1);
+    let before = m
+        .data_layout
+        .as_ref()
+        .map(|d| d.private_init.clone())
+        .expect("parse has a private data segment");
+    assert!(
+        before.len() > 1000,
+        "the subject carries only {} initialisers, too few to be the case of interest",
+        before.len()
+    );
+
+    let bytes = encode(&corpus_aux_of(&m));
+    let back = keleusma::wire_schema::decode_aux_body(&bytes).expect("decode");
+    let after = back
+        .data_layout
+        .as_ref()
+        .map(|d| d.private_init.clone())
+        .expect("the decoded layout is present");
+    assert_eq!(
+        after, before,
+        "the elided pool decoded to something other than the values it replaced"
     );
 }
 
