@@ -26,7 +26,7 @@ git merge-base --is-ancestor 10ccd520 HEAD    # must succeed
 # Content. If ANY of these differ, say so rather than acting on the state below.
 grep -c '^\s*#\[test\]' tests/selfhost_typecheck.rs     # 11
 grep -c '^\s*#\[test\]' tests/selfhost_wire.rs          # 169
-grep -c '^\s*#\[test\]' tests/block_form_statements.rs  # 8
+grep -c '^\s*#\[test\]' tests/block_form_statements.rs  # 11  (was 8; the empty statement)
 grep -oE 'fn highest_command\(\) -> Word \{ [0-9]+ \}' src/selfhost/kel/wire.kel   # 173
 
 awk '/let cases: &\[\(&str, Support, &str\)\] = &\[/{f=1;next} f&&/^    \];/{f=0} f' \
