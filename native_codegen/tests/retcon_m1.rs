@@ -322,3 +322,34 @@ fn the_arena_is_the_overflow_path_not_the_default_under_retcon() {
         m.alloc_calls
     );
 }
+
+/// **A DIAGNOSTIC, not an assertion.** Prints the post-split module so the host
+/// protocol is READ off the actual signatures rather than assumed. What the
+/// caller passes on resumption, and how release is signalled, are ABI details
+/// that a wrong guess turns into a crash that looks like the ABI being unusable.
+///
+/// `retcon_m2.rs` was written from this output. The protocol it showed: the ramp
+/// stores the frame pointer into the caller's buffer and returns a continuation;
+/// the continuation takes that same buffer and an unwind flag, returns itself
+/// while resuming, and on unwind calls the deallocator and returns null.
+#[test]
+fn dump_the_split_retcon_module() {
+    let ctx = Context::create();
+    let mut bytes = m1_ir(8).as_bytes().to_vec();
+    bytes.push(0);
+    let buf = MemoryBuffer::create_from_memory_range(&bytes, "dump");
+    let module = ctx.create_module_from_ir(buf).expect("parse");
+    let machine = host_machine();
+    module
+        .run_passes(
+            "coro-early,coro-split,coro-cleanup",
+            &machine,
+            PassBuilderOptions::create(),
+        )
+        .expect("passes");
+    println!(
+        "\n================ SPLIT RETCON MODULE\n{}",
+        module.print_to_string().to_string()
+    );
+    println!("================\n");
+}
