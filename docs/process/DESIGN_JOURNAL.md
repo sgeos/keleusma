@@ -13,6 +13,109 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**THE CONSTS BLOCKER WAS NEITHER OF THE TWO THINGS RECORDED, AND WIDENING THE ARRAY DIVERGES
+(2026-08-16).**
+
+**Both recorded obstacles were wrong about what stops the largest region, and one of them has no
+instances at all.** The operator authorised Option B, re-sequencing the reference flattener to match
+the self-hosted interning order, after a discovery-order investigation. The investigation says the
+conflict is unreachable: the flattener interns only for `StaticStr`, `Struct` and `Enum`, and all
+**40,332 constants across the eleven stages are `Int`**. There is nothing to re-sequence.
+
+**A measurement that could not discriminate, caught before it was recorded.** The first probe walked
+`Chunk::constants` only and reported zero name-bearing nodes. Right answer, wrong evidence: chunk
+pools are 2,245 of the 40,332, and the other 38,087 arrive through `DataLayout::private_init`. The
+second probe compared string pools with and without every constant, saw a 5,264-byte difference for
+`parse`, and **nearly recorded the opposite conclusion** — clearing `private_init` also removes the
+slot names `add_data_layout` interns directly. Only the third form, holding the layout in place and
+clearing just what the flattener sees, separates them. Same lesson as `analyze.kel`, second
+occurrence.
+
+**THE REAL BLOCKER IS A CAPACITY BOUND, AND WIDENING THE ARRAY IS SELF-DEFEATING.** The flattener
+already runs from real modules and already emits a byte-identical region. `wire.fin` is 1,024 words
+at six words a node, so the flattener walk takes **170 nodes against `parse`'s 17,391**.
+
+**AND I GOT THE NEIGHBOURING FIGURE WRONG WHILE CORRECTING THIS ONE.** I recorded, and sent to the
+other line, that the mailbox row reading "constant nodes past the walk's 1,024" stated a word count
+as though it were a node count. It does not. There are TWO caps: the module-input node walk refuses
+past **1,024 nodes** (`nm_max_names`, error `-240`), which is what `wire.kel` hits at 1,148 chunk
+constants, and the flattener out of `wire.fin` refuses past **170**. Only the second is about words.
+Measured after the fact, which is the wrong order and the whole point. Retracted on the version
+branch rather than quietly edited, because it had already been sent.
+
+A stage's private data array is initialised one `Int(0)` per word, so a `fin` wide enough for N
+nodes adds `6N` records to the walking stage's **own** `CONSTS`. Holding `parse`'s forest costs
+1,669,536 bytes to emit 278,256 — **six times the region it is trying to produce**. The stage's
+capacity to describe a data segment is paid for out of a data segment described the same way, so
+the approach diverges. Batching is the only route, and this corpus is its easy case: a forest of
+scalars with no interning and no children carries no state between batches.
+
+**A SECOND GAP, UNRECORDED UNTIL NOW.** The tested node model omitted `private_init` entirely, so
+the byte-identical path covered 6% of the region. Every `FLATTEN_CASES` source used `const data`,
+which folds into chunk constants; only `private data` reaches the other pool. Three cases added, and
+the must-fire check confirms it: without the second source, `data-scalar` reports one node against
+the reference's two.
+
+**AND THE FIRST ATTEMPT AT THAT FIX BROKE TWO TESTS**, which is the useful part. Folding
+`private_init` into the shared `const_roots_of` took `parse`'s blob from about 8 KB to **530,675
+bytes**, past `bin`. The blob model and the encoder model are different things and the helper was
+serving both. Now two functions.
+
+**RECORDED, NOT ACTED ON.** Every one of the 38,087 data-segment initialisers is `Int(0)`, at a
+16-byte record each — roughly **85% of the corpus auxiliary body spent encoding zeros**. It is also
+what makes the region too large to window. Collapsing it is a wire-format change and belongs to the
+operator.
+
+Five tests pin every figure above. The doc comment they correct quoted 663,120 bytes where the
+measured total is 645,312.
+
+---
+
+**A YIELD IS A SUSPENSION, NOT A CONSUMPTION, AND `--all-features` HAS NEVER BEEN GREEN
+(2026-08-16).**
+
+**The operand-stack ranging check has now emptied its own known-disagreement list.** All three
+entries are repaired against the virtual machine handlers, and the two models agree on every opcode
+in the set. Two of the three were reachable by no case in the five-case comparison the ranging check
+replaced, which remains the argument for ranging over the opcode table rather than extending a case
+list.
+
+| opcode | peak-model net | true net | direction | effect of repair |
+|---|---|---|---|---|
+| `Yield` | -1 | **0** | **understates** | raises bounds |
+| `FixedMul` | 0 | **-1** | overstates | lowers bounds |
+| `FixedDiv` | 0 | **-1** | overstates | lowers bounds |
+
+**THE YIELD ENTRY WAS THE UNSOUND ONE AND THE OPERATOR'S READING WAS HALF OF IT.** The reading put
+to me was that the yielded value lives in the caller's memory and therefore does not affect the
+worst-case-memory bound. That is correct **about the yielded value**, and the model already treats
+it that way. What it does not cover is the RESUMED value: `resume_after_enter` pushes the reply back
+onto the same operand stack (`vm.rs`, `sp!(self, input)`), so the depth on the far side of the
+boundary is the depth on the near side. The pop was modelled and the push was not.
+
+**Measured end to end rather than argued.** Two sources carrying the identical peak expression,
+differing only in whether three yields precede it: 192 bytes against 288, a shortfall of exactly one
+value slot per yield. The running offset reached **-4** on a three-yield body, first going negative
+at the `SetLocal` binding the first resumed value. An operand stack cannot hold a negative number of
+entries, and every peak computed after that point is taken from a base that does not exist.
+
+The invariant is now a test in its own right rather than a pair of numbers, because the numbers
+version only catches the shapes a case list happens to name.
+
+**`--all-features` IS NOT A SUPPORTED CONFIGURATION AND `CLAUDE.md` SAID IT PASSES.** Found by
+running it as a gate for the above. It cascades the mutually exclusive `narrow-word-*` selectors
+into the narrowest word, under which the test pinning 64-bit checked-addition semantics fails, and
+it pulls in `sdl3-example`. **The continuous-integration workflow already says so in a comment on
+its broad-features job.** The instruction file every session reads said the opposite, and pointed
+the everyday verification command at the same unsupported set. Corrected to the three sets
+continuous integration actually runs.
+
+This is the eighth stale-figure incident on this line and the first one in the file that governs how
+the work is done, which makes it the most expensive of them. The pattern holds: seven of the eight
+were in documents no test reads.
+
+---
+
 **THE BUFFER CEILING WAS NEVER REGION SIZE, AND THE HANDOFF WAS CERTIFYING ITS OWN STALENESS
 (2026-08-16).**
 

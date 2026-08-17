@@ -2970,7 +2970,26 @@ impl Op {
             Op::If(_) | Op::BreakIf(_) => 1,
             Op::Else(_) | Op::EndIf | Op::Loop(_) | Op::EndLoop(_) | Op::Break(_) => 0,
             Op::Stream | Op::Reset => 0,
-            Op::Yield => 1,
+            // A yield is a SUSPENSION, not a net consumption. The `Op::Yield`
+            // handler pops the output value, and `resume_after_enter` pushes
+            // the resume value back onto the same operand stack before
+            // execution continues, so the depth on the far side of the boundary
+            // is the depth on the near side. The net is 0.
+            //
+            // This entry read 1 (net -1), which is the UNSOUND direction. The
+            // running offset fell by one slot at every yield, so every later
+            // operation in the same region was costed from a base too low and
+            // the understatement compounded with the number of yields on the
+            // path. Measured before the repair, at 32 bytes per value slot: a
+            // stream body whose peak expression follows three yields reported
+            // 192 bytes where the same expression with no preceding yield
+            // reported 288, a shortfall of exactly one slot per yield.
+            //
+            // The yielded value itself is correctly absent from this figure. It
+            // leaves for the host and does not occupy an operand slot past the
+            // pop. It is the RESUMED value, which the same boundary pushes
+            // back, that this entry was failing to account for.
+            Op::Yield => 0,
 
             Op::Call(_, n) => *n as u32,
             Op::Return => 0,
@@ -3011,7 +3030,20 @@ impl Op {
             | Op::ByteToWord
             | Op::WordToFixed(_)
             | Op::FixedToWord(_) => 0,
-            Op::FixedMul(_) | Op::FixedDiv(_) => 0,
+            // The `Op::FixedMul` and `Op::FixedDiv` handlers in [`crate::vm`]
+            // pop both operands and then push one result, so the net is -1 and
+            // the transient reach above the current level is 0. Measured
+            // against the handlers rather than inferred from the arithmetic.
+            //
+            // This entry read 0 until the whole-opcode-set ranging check found
+            // it, which no case in the five-case comparison it replaced could
+            // reach. A net one slot too high walks every later operation from a
+            // base one slot too high and compounds with each fixed-point
+            // multiply or divide, so the previous entry OVERSTATED. Repairing
+            // it lowers the reported bound on chunks that use these ops; the
+            // bound was an upper bound throughout, so nothing that verified
+            // before stops verifying.
+            Op::FixedMul(_) | Op::FixedDiv(_) => 1,
 
             Op::Trap(_) => 0,
 
