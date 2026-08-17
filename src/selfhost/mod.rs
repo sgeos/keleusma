@@ -3165,7 +3165,7 @@ pub fn wire_names_from_input(
         .call_with_shared(&mut shared, &[Value::Int(CMD_JOIN)])
         .expect("run wire.kel");
     match st {
-        crate::vm::VmState::Finished(Value::Int(v)) if v >= 0 => {}
+        crate::vm::VmState::Yielded(Value::Int(v)) if v >= 0 => {}
         other => {
             return Err(SelfHostError::Unsupported {
                 detail: alloc::format!("wire.kel refused the join: {other:?}"),
@@ -3361,7 +3361,7 @@ pub fn wire_regions_from_input(
         .call_with_shared(&mut shared, &[Value::Int(CMD_JOIN_HEADER)])
         .expect("run wire.kel");
     match st {
-        crate::vm::VmState::Finished(Value::Int(v)) if v >= 0 => {}
+        crate::vm::VmState::Yielded(Value::Int(v)) if v >= 0 => {}
         other => {
             return Err(SelfHostError::Unsupported {
                 detail: alloc::format!("wire.kel refused the widened join: {other:?}"),
@@ -3563,7 +3563,7 @@ pub fn wire_chunks_from_input(
         }
     };
     match st {
-        crate::vm::VmState::Finished(Value::Int(v)) if v >= 0 => {}
+        crate::vm::VmState::Yielded(Value::Int(v)) if v >= 0 => {}
         other => {
             return Err(SelfHostError::Unsupported {
                 detail: alloc::format!("wire.kel refused the chunk join: {other:?}"),
@@ -3680,7 +3680,7 @@ fn window_emit(
         }
     };
     match st {
-        crate::vm::VmState::Finished(Value::Int(v)) if v >= 0 => {}
+        crate::vm::VmState::Yielded(Value::Int(v)) if v >= 0 => {}
         other => {
             return Err(SelfHostError::Unsupported {
                 detail: alloc::format!("wire.kel refused the windowed emit: {other:?}"),

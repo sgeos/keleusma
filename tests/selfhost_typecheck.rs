@@ -970,6 +970,16 @@ struct StageInput<'a> {
 }
 
 fn stage_verdict(input: &StageInput<'_>) -> bool {
+    stage_verdict_counting(input).0
+}
+
+/// [`stage_verdict`] with the number of resumes the fold took.
+///
+/// The count is what makes the conversion checkable. A stage that did every row
+/// in its first step and yielded the verdict immediately would satisfy every
+/// verdict assertion in this file while streaming nothing, so
+/// `the_fold_advances_one_row_per_resume` reads this rather than the verdict.
+fn stage_verdict_counting(input: &StageInput<'_>) -> (bool, usize) {
     let StageInput {
         pairs,
         arity,
@@ -1355,13 +1365,89 @@ fn stage_verdict(input: &StageInput<'_>) -> bool {
         )
         .expect("bform");
     }
-    let out = vm
+    // THE STAGE IS A COROUTINE NOW, so drive it to a verdict rather than calling
+    // it once. It yields `PENDING` (63) per folded row and the verdict when the
+    // fold completes, matching the nine sibling stages.
+    //
+    // The drive loop is BOUNDED by the stage's own `ty_max_steps`, read from the
+    // source rather than restated here, and exhausting the bound is a hard
+    // failure. A `loop { resume }` with no cap would hang on a stage that never
+    // reported done, which is the one failure mode a total language is supposed
+    // to make impossible and a harness should not reintroduce.
+    const PENDING: i64 = 63;
+    let cap = declared_max_steps();
+
+    // TWO COUNTERS, BECAUSE THEY BOUND DIFFERENT THINGS, and conflating them is
+    // what made the first version of `the_fold_advances_one_row_per_resume`
+    // report two resumes per row.
+    //
+    // `yields` counts PENDING yields only, which is what "one row per step"
+    // means and what that test measures. A `loop` block also produces a `Reset`
+    // between iterations, so a counter incremented on every returned state
+    // reports exactly twice the row count -- a property of the drive loop, not
+    // of the stage.
+    //
+    // `states` bounds the whole drive so a stage that never reports done cannot
+    // hang the harness. It allows two states per step plus slack, because that
+    // is the observed shape rather than a guess.
+    let mut yields = 0usize;
+    let mut states = 0usize;
+    let state_cap = 2 * cap + 4;
+
+    let mut out = vm
         .call_with_shared(&mut shared, &[keleusma::bytecode::Value::Int(0)])
         .expect("run");
-    match out {
-        keleusma::vm::VmState::Finished(keleusma::bytecode::Value::Int(v)) => v == 0,
-        other => panic!("verify_types.kel returned {other:?}, not a finished Int verdict"),
+    loop {
+        match out {
+            // The loop block's own RESET between iterations, not an answer. The
+            // driver's `next_word` skips it for the same reason.
+            keleusma::vm::VmState::Reset => {}
+            keleusma::vm::VmState::Yielded(keleusma::bytecode::Value::Int(PENDING)) => {
+                yields += 1;
+                assert!(
+                    yields <= cap,
+                    "the stage reported PENDING {yields} times against its own declared \
+                     maximum of {cap} steps without producing a verdict"
+                );
+            }
+            keleusma::vm::VmState::Yielded(keleusma::bytecode::Value::Int(v)) => {
+                return (v == 0, yields);
+            }
+            other => panic!("verify_types.kel yielded {other:?}, not an Int"),
+        }
+        states += 1;
+        assert!(
+            states <= state_cap,
+            "the drive loop saw {states} virtual-machine states against a bound of \
+             {state_cap}; the stage is producing something other than one yield and one \
+             reset per step"
+        );
+        out = vm
+            .resume_with_shared(&mut shared, keleusma::bytecode::Value::Int(0))
+            .expect("resume");
     }
+}
+
+/// The stage's own step bound, read out of `verify_types.kel` rather than
+/// restated.
+///
+/// Same discipline `highest_command` uses: a bound written in two places is a
+/// bound that drifts, and a harness whose cap is smaller than the stage's real
+/// worst case would report a spurious failure on the largest corpus.
+fn declared_max_steps() -> usize {
+    const SRC: &str = include_str!("../src/selfhost/kel/verify_types.kel");
+    let line = SRC
+        .lines()
+        .find(|l| l.trim_start().starts_with("fn ty_max_steps()"))
+        .expect("verify_types.kel declares ty_max_steps");
+    let body = line
+        .rsplit_once('{')
+        .and_then(|(_, t)| t.split_once('}'))
+        .expect("ty_max_steps has a literal body")
+        .0;
+    body.split('+')
+        .map(|t| t.trim().parse::<usize>().expect("a sum of literals"))
+        .sum()
 }
 
 /// THE CORPUS IS CHECKED AGAINST THE REFERENCE BEFORE ANYTHING ELSE IS.
@@ -2188,5 +2274,63 @@ fn the_rules_still_do_not_reach_a_derived_operand() {
         stage_verdict_resolving(src),
         "the stage now REJECTS a derived operand. If propagation through operators \
          landed, move this case into the slice above and record what it now reaches."
+    );
+}
+
+/// **THE CHECK THAT MAKES THE COROUTINE CONVERSION MEAN SOMETHING.**
+///
+/// `verify_types.kel` was `fn main(cmd)` doing all eight table folds in one call.
+/// It is now `loop main(resume)` yielding `PENDING` per folded row, matching the
+/// nine sibling stages and the windowed-compiler goal.
+///
+/// Every other test in this file asserts a VERDICT, and a stage that kept doing
+/// the whole fold in its first step and yielded the answer immediately would
+/// satisfy all of them while streaming nothing. Changing the entry shape and
+/// changing the execution shape are different things, and only the resume count
+/// tells them apart.
+///
+/// Two properties, and the second is the load-bearing one:
+///
+/// 1. A fold with rows takes strictly more resumes than the empty floor, so rows
+///    really are consumed one per step.
+/// 2. **More rows take strictly more resumes.** A constant count would mean the
+///    stage finishes in a fixed number of steps regardless of input, which is
+///    what a one-shot fold behind a coroutine shell looks like from outside.
+#[test]
+fn the_fold_advances_one_row_per_resume() {
+    // The floor: no rows at all. Eight phase advances plus the verdict.
+    let (_, empty_steps) = stage_verdict_counting(&StageInput::default());
+
+    // Well-typed rows, so the verdict stays ACCEPT and the count is the only
+    // thing that moves. A rejecting corpus would fold identically, but tying the
+    // measurement to an accepting one keeps this test about stepping rather than
+    // about any rule.
+    let few: Vec<(i64, i64)> = (0..4).map(|_| (1, 1)).collect();
+    let many: Vec<(i64, i64)> = (0..40).map(|_| (1, 1)).collect();
+
+    let (few_ok, few_steps) = stage_verdict_counting(&StageInput {
+        pairs: &few,
+        ..Default::default()
+    });
+    let (many_ok, many_steps) = stage_verdict_counting(&StageInput {
+        pairs: &many,
+        ..Default::default()
+    });
+
+    assert!(
+        few_ok && many_ok,
+        "the subjects must be well typed, or this measures a rejection path"
+    );
+    assert!(
+        few_steps > empty_steps,
+        "four rows took {few_steps} resumes against an empty fold's {empty_steps}, so rows \
+         are not being consumed one per step"
+    );
+    assert_eq!(
+        many_steps - few_steps,
+        many.len() - few.len(),
+        "thirty-six extra rows cost {} extra resumes. One row per resume is the property \
+         the conversion claims; anything else means the stage is batching internally.",
+        many_steps - few_steps
     );
 }
