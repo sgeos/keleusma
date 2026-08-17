@@ -347,6 +347,51 @@ MUTATIONS_ROUND3_STRONG = {
 # can establish.  This is the instrument-rather-than-grep rule applied to
 # "does anything ever do X".
 # ---------------------------------------------------------------------------
+# **A SIGN PROBE, pre-registered with its expected answer BEFORE it was run.**
+#
+# Round one's `Shr` mutation flips `build_right_shift`'s sign-extend flag from
+# true to false -- an ARITHMETIC right shift becomes a LOGICAL one.  Those two
+# produce identical bits for every NON-NEGATIVE operand and differ only when the
+# shifted value is negative.  So an undetected round-one result has a specific
+# possible cause that no other round tests: the sites run, but never on a
+# negative value.
+#
+# Round two already detects `Shr` 1/1 by replacing the result with a constant, so
+# the sites are known to execute and be observable.  That rules out "never runs"
+# and leaves exactly this question.
+#
+# The probe traps when the shifted value is negative, so the outcomes read:
+#
+#   AGREE     no negative operand ever reaches an `Shr` site -- round one's
+#             mutation is EQUIVALENT on this corpus, and its earlier DETECTED
+#             result must have come from a tree where a negative one did occur
+#   SIGNAL    a negative operand does reach a site, so the mutation is NOT
+#             equivalent and the change of status has some other cause
+#
+# **PREDICTION, recorded before running: AGREE.** `wire.kel` is the only module
+# with `Shr` sites and it computes CRC-32 and byte assembly, which stay inside
+# 32 bits and therefore never set an `i64` sign bit.  Written down so that a
+# result matching it cannot be a story told afterwards, and so that a result
+# contradicting it is reportable rather than quietly dropped.
+MUTATIONS_SIGN_PROBE = {
+    "Shr": (
+        '                    Op::Shr => st.b.build_right_shift(value, masked, true, "shr").unwrap(),',
+        '                    Op::Shr => {\n'
+        '                        let neg = st.b.build_int_compare(IntPredicate::SLT, value, i64t.const_zero(), "shrneg").unwrap();\n'
+        '                        let cont = ctx.append_basic_block(func, "shrnonneg");\n'
+        '                        st.b.build_conditional_branch(neg, trap_bb, cont).unwrap();\n'
+        '                        st.b.position_at_end(cont);\n'
+        '                        st.b.build_right_shift(value, masked, true, "shr").unwrap()\n'
+        '                    }',
+    ),
+    # **THE CONTROL, carried into this table so the round has one of its own.**
+    # Identical to round one's: it edits an arm with ZERO emitted sites, so it
+    # cannot be detected by anything. A round in which this reports DETECTED is
+    # measuring the harness, which is exactly how a flat timeout budget once
+    # turned four undetected opcodes into false closures.
+    "PushImmediate": ("                    1 => 1,", "                    1 => 2,"),
+}
+
 MUTATIONS_REACHABILITY = {
     "WordToByte": (
         "            Op::WordToByte => {\n                let v = st.pop();",
@@ -517,6 +562,14 @@ def main():
         wanted.remove("--reachability")
         table = MUTATIONS_REACHABILITY
         print("REACHABILITY: an executed site traps, so AGREE means never run\n")
+    if "--sign-probe" in wanted:
+        wanted.remove("--sign-probe")
+        table = MUTATIONS_SIGN_PROBE
+        print(
+            "SIGN PROBE: a NEGATIVE shifted operand traps, so AGREE means the\n"
+            "round-one arithmetic-to-logical flip is EQUIVALENT on this corpus.\n"
+            "Prediction recorded before running: AGREE.\n"
+        )
     backup = tempfile.NamedTemporaryFile(delete=False, suffix=".rs").name
     shutil.copy(LIB, backup)
     original = open(LIB).read()
