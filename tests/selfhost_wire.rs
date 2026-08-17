@@ -11824,13 +11824,13 @@ fn the_driver_emits_names_and_pool_through_wire_kel() {
 ///
 /// The text here previously said "a stage's 395,804 names do not fit". That
 /// figure described no name count -- it was a `CONSTS` region record count. The
-/// largest `NAMES` region in the corpus is `parse` at 627, which now FITS.
+/// largest `NAMES` region in the corpus is `parse` at 628, which now FITS.
 #[cfg(feature = "self-host")]
 #[test]
 fn the_driver_refuses_more_names_than_one_call_can_intern() {
     // NO MODULE IS COMPILED HERE, AND THAT IS THE POINT. Both caps cover every
-    // stage in the corpus -- the largest, `parse`, interns 627 names from a
-    // 33,395-byte blob against bounds of 1024 and 49,152 -- so no real module
+    // stage in the corpus -- the largest, `parse`, interns 628 names from a
+    // 33,480-byte blob against bounds of 1024 and 49,152 -- so no real module
     // reaches either refusal. The input is injected because it cannot be
     // produced.
 
@@ -11870,8 +11870,8 @@ fn the_driver_refuses_more_names_than_one_call_can_intern() {
 /// different reason, and two of those were defects that the raise did not cause
 /// and that no existing test could reach:
 ///
-/// 1. `-236`, the name-count cap: 627 against 256. The ceiling this increment
-///    set out to raise.
+/// 1. `-236`, the name-count cap: 627 against 256, as `parse` stood then. The
+///    ceiling this increment set out to raise.
 /// 2. `-233`, read as "no NAMES region" and meaning "the directory has been
 ///    overwritten". `mi_chunk_names` wrote its output copy ignoring `nm.mode`,
 ///    at byte `8 * i`, while `mi_join` runs the walk in SILENT mode precisely
@@ -12296,7 +12296,7 @@ fn the_join_holds_across_every_stage() {
 /// **This is the check the old interface could not make.** The caller used to
 /// pass the count separately, from `interner_input` — a model in this file that
 /// omits the data-slot contributor entirely. It reports 252 for `parse` where
-/// the module really interns 627, and nothing compared the two, because the
+/// the module really interns 628, and nothing compared the two, because the
 /// count is consumed only as a bound. An under-reported bound admits a module
 /// that should have been refused, and the refusal exists to prevent a silently
 /// truncated artifact.
@@ -12381,7 +12381,7 @@ fn the_derived_name_bound_is_exact_on_every_stage_and_sound_elsewhere() {
 /// **Residency staging is therefore not required for the corpus**, which is the
 /// opposite of what the plan concluded while it sized the problem from 395,804.
 /// That figure was a `CONSTS` region record count. Measured, the worst stage is
-/// `parse` at 627 names against a cap of 1024 and 33,395 blob bytes against
+/// `parse` at 628 names against a cap of 1024 and 33,480 blob bytes against
 /// 49,152 — 61% and 68%.
 ///
 /// This is an ASSERTION rather than a note because the conclusion is load
@@ -12411,7 +12411,14 @@ fn every_stage_fits_the_driver_caps_with_margin() {
         worst_names = worst_names.max(names);
         worst_blob = worst_blob.max(blob.len());
     }
-    // Pinned so a change in the worst case is visible rather than absorbed.
-    assert_eq!(worst_names, 627, "the worst-case name count moved");
-    assert_eq!(worst_blob, 33395, "the worst-case blob size moved");
+    // Pinned so a change in the worst case is visible rather than absorbed, and
+    // it has already earned that once. Adding `semi_terminates_nothing` to
+    // `parse.kel` for the empty statement moved the worst case from 627 names
+    // and 33,395 bytes to 628 and 33,480 — one chunk name and its blob record.
+    // The margins are 61% and 68% of the caps, so the increment was admissible;
+    // the point of the pin is that a stage growing toward either bound is
+    // reported here with the number rather than surfacing later as an
+    // `Unsupported` at some call site.
+    assert_eq!(worst_names, 628, "the worst-case name count moved");
+    assert_eq!(worst_blob, 33480, "the worst-case blob size moved");
 }
