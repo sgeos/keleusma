@@ -57,6 +57,28 @@ fn stub_value(idx: usize, args: &[i64]) -> i64 {
     acc % 1024
 }
 
+/// The source to compile for `p`, composed the way the differential composes it.
+///
+/// **This mirrors `corpus_differential::source_for` deliberately and must keep
+/// mirroring it.** The opcode map decides which modules the mutation sweep
+/// drives, so a map built from a different composition than the differential's
+/// measures a different corpus than the one being verified — which is exactly how
+/// five rtos modules stayed out of every mutation round.
+///
+/// The rtos host prepends `prelude.kel` at `examples/rtos/src/setup.rs:429`.
+/// `prelude.kel` itself is excluded, since prepending it to itself is not what any
+/// host does.
+fn source_for(p: &std::path::Path) -> Option<String> {
+    let src = std::fs::read_to_string(p).ok()?;
+    let is_rtos = p.components().any(|c| c.as_os_str() == "rtos");
+    let is_prelude = p.file_name().is_some_and(|n| n == "prelude.kel");
+    if is_rtos && !is_prelude {
+        let prelude = std::fs::read_to_string("../examples/rtos/scripts/prelude.kel").ok()?;
+        return Some(format!("{prelude}\n{src}"));
+    }
+    Some(src)
+}
+
 fn sources() -> Vec<std::path::PathBuf> {
     let root = std::path::Path::new("..");
     let mut out = Vec::new();
@@ -477,6 +499,22 @@ fn how_often_does_each_opcode_occur_in_the_measured_corpus() {
 /// modules that actually emit the mutated opcode. That is both faster and more
 /// honest: a module with no site for an opcode cannot detect a defect in it, and
 /// counting it as "did not detect" would understate the corpus.
+///
+/// **THE MAP NOW COMPOSES SOURCE THE WAY THE DIFFERENTIAL DOES**, so the five
+/// `examples/rtos/scripts/` modules are in it and the mutation sweep drives them.
+///
+/// It previously compiled every source standalone, so each rtos script failed to
+/// compile and was **silently** absent, and the sweep -- which drives only mapped
+/// modules -- had never exercised them. That was recorded rather than repaired,
+/// on the stated ground that "a module compiled with a prelude is not the module
+/// the differential drives standalone".
+///
+/// **That ground was false.** `corpus_differential::source_for` prepends
+/// `prelude.kel` for exactly these scripts, as the host does at
+/// `examples/rtos/src/setup.rs:429`. The differential drives them WITH the
+/// prelude, so composing it here makes the two agree; omitting it is what made
+/// them diverge. Census denominators grow accordingly, which is a change to state
+/// rather than a change to hide.
 #[test]
 fn dump_opcode_module_map() {
     use std::collections::BTreeMap;
@@ -484,7 +522,7 @@ fn dump_opcode_module_map() {
 
     for p in sources() {
         let name = p.file_name().unwrap().to_str().unwrap().to_string();
-        let Ok(src) = std::fs::read_to_string(&p) else {
+        let Some(src) = source_for(&p) else {
             continue;
         };
         let Some(m) = tokenize(&src)
@@ -704,26 +742,28 @@ fn variant_distribution_of_the_skipped_opcodes() {
     assert!(!var.is_empty(), "no variants counted; the check is vacuous");
 }
 
-/// **THE OPCODE MAP EXCLUDES EVERY rtos SCRIPT, so the mutation sweep never
-/// drives them.** Measured, not inferred.
+/// **THE OPCODE MAP NOW INCLUDES EVERY rtos SCRIPT, so the mutation sweep drives
+/// them.** This test pinned their ABSENCE until 2026-08-16 and now pins their
+/// presence. It was inverted rather than deleted, on its own former instruction.
 ///
-/// `dump_opcode_module_map` compiles each source STANDALONE. Every source under
-/// `examples/rtos/scripts/` needs `prelude.kel` prepended to compile — the host
-/// does exactly that at `examples/rtos/src/setup.rs:429` — so each fails to
-/// compile here and is silently absent from the map.
+/// The exclusion was real: `dump_opcode_module_map` compiled each source
+/// STANDALONE, every source under `examples/rtos/scripts/` needs `prelude.kel`
+/// prepended to compile, so each failed and was silently absent. The sweep drives
+/// only mapped modules, so five modules had never entered any round and every
+/// denominator in `NATIVE_MUTATION_CENSUS.md` excluded them.
 ///
-/// **`tools/mutation_sweep.py` drives only the modules the map lists per
-/// opcode.** So every figure in `NATIVE_MUTATION_CENSUS.md` is over a corpus
-/// that excludes these five, and a "DETECTED by n/m" denominator is smaller than
-/// the corpus a reader would assume.
+/// **It was left unrepaired for a reason that turned out to be false.** The note
+/// said prepending the prelude would make the map describe a module the
+/// differential does not drive. `corpus_differential::source_for` prepends the
+/// prelude for these scripts, mirroring `examples/rtos/src/setup.rs:429`, so the
+/// differential drives them WITH it. Composing it here makes the two instruments
+/// agree.
 ///
-/// **This is the same species as the vacuity findings**: a coverage claim that
-/// is really a claim about the instrument's input list. Recorded rather than
-/// repaired, because prepending the prelude changes what the map MEANS — a
-/// module compiled with a prelude is not the module the differential drives
-/// standalone — and that is a decision, not a fix.
+/// **The species of defect was diagnosed correctly even so**: a coverage claim
+/// that is really a claim about the instrument's input list, the same shape as
+/// the vacuity findings.
 #[test]
-fn the_opcode_map_excludes_every_rtos_script() {
+fn the_opcode_map_includes_every_rtos_script() {
     let map_out = std::process::Command::new(std::env::current_exe().expect("exe"))
         .args(["--exact", "dump_opcode_module_map", "--nocapture"])
         .output()
@@ -743,20 +783,21 @@ fn the_opcode_map_excludes_every_rtos_script() {
 
     println!("\n================ rtos scripts in the opcode map");
     println!("  present: {rtos:?}");
-    println!("  The map compiles standalone; these need `prelude.kel` prepended,");
-    println!("  so the mutation sweep -- which drives only mapped modules -- has");
-    println!("  never exercised them. Census denominators exclude them.");
+    println!("  The map composes source as the differential does, so the mutation");
+    println!("  sweep -- which drives only mapped modules -- now reaches these five.");
     println!("================\n");
 
     assert!(
         !text.is_empty(),
         "the map produced no output, so this asserts nothing about it"
     );
-    assert!(
-        rtos.is_empty(),
-        "rtos scripts now appear in the opcode map: {rtos:?}. If the map began \
-         prepending the prelude, the mutation sweep's corpus grew and the census \
-         denominators changed -- update the census rather than deleting this test."
+    assert_eq!(
+        rtos.len(),
+        5,
+        "expected all five rtos scripts in the opcode map, found {rtos:?}. If the \
+         map stopped composing the rtos prelude, the mutation sweep's corpus \
+         SHRANK and every census denominator is now overstated -- update the \
+         census rather than deleting this test."
     );
 }
 

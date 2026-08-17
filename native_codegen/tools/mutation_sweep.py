@@ -463,6 +463,14 @@ def calibrate(modules):
             base = CALIBRATION_CEILING
             print(f"  !! {mod} did not finish unmutated inside {CALIBRATION_CEILING}s")
         budget[mod] = max(PER_MODULE_TIMEOUT, base * HANG_MULTIPLIER)
+    if not budget:
+        # **An empty driven set is a NAMING error, not a result.** Asking for an
+        # opcode that the SELECTED table does not carry -- `--reachability Shr`,
+        # say, when `Shr` lives only in the round-one table -- used to reach
+        # `max()` on an empty dict and die in a traceback, which reads like a
+        # broken tool rather than a mistyped request.
+        print("  nothing to calibrate: no named opcode has sites in the selected table")
+        return budget
     slow = max(budget.items(), key=lambda kv: kv[1])
     print(f"  calibrated {len(budget)} modules; slowest budget {slow[0]} {slow[1]:.0f}s\n")
     return budget
