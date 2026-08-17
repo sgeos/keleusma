@@ -13,6 +13,51 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+**A YIELD IS A SUSPENSION, NOT A CONSUMPTION, AND `--all-features` HAS NEVER BEEN GREEN
+(2026-08-16).**
+
+**The operand-stack ranging check has now emptied its own known-disagreement list.** All three
+entries are repaired against the virtual machine handlers, and the two models agree on every opcode
+in the set. Two of the three were reachable by no case in the five-case comparison the ranging check
+replaced, which remains the argument for ranging over the opcode table rather than extending a case
+list.
+
+| opcode | peak-model net | true net | direction | effect of repair |
+|---|---|---|---|---|
+| `Yield` | -1 | **0** | **understates** | raises bounds |
+| `FixedMul` | 0 | **-1** | overstates | lowers bounds |
+| `FixedDiv` | 0 | **-1** | overstates | lowers bounds |
+
+**THE YIELD ENTRY WAS THE UNSOUND ONE AND THE OPERATOR'S READING WAS HALF OF IT.** The reading put
+to me was that the yielded value lives in the caller's memory and therefore does not affect the
+worst-case-memory bound. That is correct **about the yielded value**, and the model already treats
+it that way. What it does not cover is the RESUMED value: `resume_after_enter` pushes the reply back
+onto the same operand stack (`vm.rs`, `sp!(self, input)`), so the depth on the far side of the
+boundary is the depth on the near side. The pop was modelled and the push was not.
+
+**Measured end to end rather than argued.** Two sources carrying the identical peak expression,
+differing only in whether three yields precede it: 192 bytes against 288, a shortfall of exactly one
+value slot per yield. The running offset reached **-4** on a three-yield body, first going negative
+at the `SetLocal` binding the first resumed value. An operand stack cannot hold a negative number of
+entries, and every peak computed after that point is taken from a base that does not exist.
+
+The invariant is now a test in its own right rather than a pair of numbers, because the numbers
+version only catches the shapes a case list happens to name.
+
+**`--all-features` IS NOT A SUPPORTED CONFIGURATION AND `CLAUDE.md` SAID IT PASSES.** Found by
+running it as a gate for the above. It cascades the mutually exclusive `narrow-word-*` selectors
+into the narrowest word, under which the test pinning 64-bit checked-addition semantics fails, and
+it pulls in `sdl3-example`. **The continuous-integration workflow already says so in a comment on
+its broad-features job.** The instruction file every session reads said the opposite, and pointed
+the everyday verification command at the same unsupported set. Corrected to the three sets
+continuous integration actually runs.
+
+This is the eighth stale-figure incident on this line and the first one in the file that governs how
+the work is done, which makes it the most expensive of them. The pattern holds: seven of the eight
+were in documents no test reads.
+
+---
+
 **THE BUFFER CEILING WAS NEVER REGION SIZE, AND THE HANDOFF WAS CERTIFYING ITS OWN STALENESS
 (2026-08-16).**
 
