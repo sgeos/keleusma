@@ -529,11 +529,16 @@ the instrument's input list, which is the error this whole document exists to ca
 here because no reported conclusion depends on those five; it is recorded so that the next figure
 quoted from this census carries its true denominator.
 
-**Recorded rather than repaired, deliberately.** Prepending the prelude would change what the map
+~~**Recorded rather than repaired, deliberately.** Prepending the prelude would change what the map
 MEANS: a module compiled with a prelude is not the module `corpus_differential` drives standalone,
 and the two would no longer be the same corpus. That is a decision about the instrument, not a
-defect to patch quietly. `the_opcode_map_excludes_every_rtos_script` pins the current state and says
-what to do if it ever changes.
+defect to patch quietly.~~
+
+> **REPAIRED 2026-08-16, and the reasoning above was WRONG.** The premise was that the differential
+> drives these scripts standalone. It does not: `corpus_differential::source_for` prepends
+> `prelude.kel` for exactly these five, mirroring `examples/rtos/src/setup.rs:429`. Composing the
+> prelude in the map makes the two instruments agree; omitting it is what made them diverge. See
+> PART F. The pinning test is inverted, not deleted.
 
 ### A related closure, for the record
 
@@ -547,3 +552,164 @@ byte builder.
 faithful stub returns a valid variant, an arm matches, and the trap is never reached. Reaching it
 would require a discriminant matching no variant — an unfaithful stub and a false agreement. **The
 `Op::Trap` subject remains synthetic.**
+
+
+---
+
+## PART F, 2026-08-16: the corpus grew by five modules, and one closure turned out to be an equivalent mutant
+
+Every figure in this part was measured on the tree it describes, with per-module time budgets
+produced by `calibrate()` rather than fixed in advance.
+
+### The rtos exclusion is repaired
+
+`dump_opcode_module_map` composed its source the way no host does. It compiled every script
+standalone, so the five under `examples/rtos/scripts/` failed to compile and were **silently** absent
+from the map, and `mutation_sweep.py` drives only mapped modules. Those five had therefore never
+entered any round.
+
+**The reason recorded for leaving it alone was false**, and checking it is what moved this. The note
+said prepending the prelude would describe a module the differential does not drive. The differential
+composes through `source_for`, which prepends `prelude.kel` for exactly these scripts. The two
+instruments now agree.
+
+`the_opcode_map_excludes_every_rtos_script` became
+`the_opcode_map_includes_every_rtos_script`, inverted rather than deleted, on its own former
+instruction.
+
+### The denominators, stated rather than implied
+
+The corpus is **59 modules across 50 opcodes**, up from 54 across 50, and the total
+`(opcode, module)` pair count went **1083 → 1169**. Twenty-six opcodes gained modules.
+
+**A "DETECTED by n/m" figure counts MODULES, not sites.** `Shr` shows a denominator of 1 because one
+module emits it, not because it has one site; this census earlier recorded 20 `Shr` sites in
+`wire.kel`.
+
+| opcode | modules before | modules after | rtos added |
+|---|---|---|---|
+| `BitAnd` | 1 | 1 | — |
+| `BitOr` | 1 | 1 | — |
+| `BitXor` | 1 | 1 | — |
+| `Break` | 26 | 28 | **+2** |
+| `BreakIf` | 17 | 17 | — |
+| `ByteToWord` | 2 | 2 | — |
+| `Call` | 33 | 33 | — |
+| `CallVerifiedNative` | 15 | 20 | **+5** |
+| `CheckedAdd` | 45 | 50 | **+5** |
+| `CheckedMul` | 21 | 21 | — |
+| `CheckedNeg` | 18 | 18 | — |
+| `CheckedSub` | 26 | 26 | — |
+| `CmpEq` | 44 | 47 | **+3** |
+| `CmpGe` | 24 | 24 | — |
+| `CmpGt` | 26 | 27 | **+1** |
+| `CmpLe` | 11 | 11 | — |
+| `CmpLt` | 26 | 26 | — |
+| `CmpNe` | 8 | 8 | — |
+| `Const` | 54 | 59 | **+5** |
+| `Div` | 13 | 14 | **+1** |
+| `Dup` | 11 | 11 | — |
+| `Else` | 42 | 45 | **+3** |
+| `EndIf` | 46 | 50 | **+4** |
+| `EndLoop` | 29 | 31 | **+2** |
+| `GetData` | 24 | 28 | **+4** |
+| `GetDataIndexed` | 15 | 15 | — |
+| `GetEnumField` | 1 | 2 | **+1** |
+| `GetField` | 1 | 1 | — |
+| `GetIndex` | 2 | 2 | — |
+| `GetLocal` | 53 | 57 | **+4** |
+| `GetTupleField` | 5 | 5 | — |
+| `If` | 46 | 50 | **+4** |
+| `IsEnum` | 3 | 4 | **+1** |
+| `Loop` | 29 | 31 | **+2** |
+| `Mod` | 13 | 14 | **+1** |
+| `NewComposite` | 21 | 26 | **+5** |
+| `Not` | 14 | 14 | — |
+| `PopN` | 52 | 57 | **+5** |
+| `PushImmediate` | 28 | 31 | **+3** |
+| `Reset` | 21 | 26 | **+5** |
+| `Return` | 52 | 52 | — |
+| `SetData` | 25 | 29 | **+4** |
+| `SetDataIndexed` | 13 | 13 | — |
+| `SetLocal` | 49 | 53 | **+4** |
+| `Shl` | 2 | 2 | — |
+| `Shr` | 1 | 1 | — |
+| `Stream` | 21 | 26 | **+5** |
+| `Trap` | 30 | 32 | **+2** |
+| `WordToByte` | 1 | 1 | — |
+| `Yield` | 21 | 26 | **+5** |
+| **total pairs** | **1083** | **1169** | **+86** |
+
+### What was re-swept, and what was not
+
+Thirteen opcodes, chosen as the union of those whose denominator grew and are perturbable in round
+one, and the five previously recorded as holes:
+
+```
+CheckedAdd CmpEq CmpGt Const GetLocal If PushImmediate SetLocal
+BitAnd BitOr CmpNe Shl Shr
+```
+
+| opcode | result |
+|---|---|
+| `BitAnd` | DETECTED by 1/1 `[DISAGREE 1]` |
+| `BitOr` | DETECTED by 1/1 `[DISAGREE 1]` |
+| `CheckedAdd` | DETECTED by 21/50 `[DISAGREE 11, SIGNAL 6, HANG 4]` |
+| `CmpEq` | DETECTED by 24/47 `[DISAGREE 15, SIGNAL 9]` |
+| `CmpGt` | DETECTED by 9/27 `[DISAGREE 4, SIGNAL 5]` |
+| `CmpNe` | DETECTED by 1/8 `[SIGNAL 1]` |
+| `Const` | DETECTED by 32/59 `[DISAGREE 30, SIGNAL 2]` |
+| `GetLocal` | DETECTED by 23/57 `[DISAGREE 18, SIGNAL 4, HANG 1]` |
+| `If` | DETECTED by 50/50 `[DISAGREE 39, SIGNAL 11]` |
+| `PushImmediate` | **UNDETECTED** across 31 — *the control, see below* |
+| `SetLocal` | DETECTED by 24/53 `[DISAGREE 10, SIGNAL 14]` |
+| `Shl` | DETECTED by 1/2 `[DISAGREE 1]` |
+| `Shr` | **UNDETECTED** across 1 under round one — *see below* |
+
+Calibration covered 59 modules; the slowest budget was `wire.kel` at **91s**. The old fixed 20s
+budget is what once counted timeouts as detection and produced four false closures.
+
+**The control behaved.** `PushImmediate` mutates an arm with zero sites and therefore *cannot* be
+detected. It reported UNDETECTED across 31, which is the answer fixed in advance. A sweep in which
+the control reports detection is measuring itself.
+
+**The other 37 opcodes in the map were not re-swept in this part**, so their figures remain those of
+PART C and were measured against the smaller 54-module corpus. Any of them whose denominator grew is
+now quoted against a corpus that no longer matches.
+
+### `Shr` changed status, and it is an EQUIVALENT MUTANT rather than a reopened hole
+
+PART C recorded `Shr` as closed by a genuine `DISAGREE`. Round one no longer detects it.
+
+An undetected round-one result has two readings, and round two exists to separate them. Round two,
+which replaces the operation's result with a constant, reports:
+
+```
+Shr                DETECTED by 1/1 [DISAGREE 1]
+```
+
+**So the sites execute and are observable.** Round one's weaker perturbation is semantically
+equivalent for the values `wire.kel` actually encounters. The opcode remains covered; what changed is
+which perturbation reaches it.
+
+**Why round one stopped detecting it is NOT established.** `wire.kel` executes and is not vacuous,
+and `BitAnd` and `BitOr` in that same module are still detected, so the module is not the
+explanation. Candidates, offered as hypotheses rather than a diagnosis: the `v0.2.3` sync changed the
+compiled bytecode through the verifier and self-hosted-emit work, or the perturbation's observability
+was always marginal for these values. **Neither has been tested.**
+
+### The instrument itself had a defect, found by using it
+
+`--reachability Shr` died in a traceback. Naming an opcode absent from the *selected* table left the
+driven set empty and `calibrate()` called `max()` on it. That reads as a broken tool rather than a
+mistyped request. It now says so and returns cleanly.
+
+### What this still does NOT establish
+
+- **Eight opcodes have never been perturbed in ANY round**: `Break`, `Else`, `EndIf`, `EndLoop`,
+  `Loop`, `PopN`, `Reset`, `Stream`. The sweep is not exhaustive over the instruction set.
+- **Thirty-seven opcodes were not re-swept here**, so their PART C figures stand against a corpus
+  that has since grown.
+- **One perturbation per opcode per round.** `Shr` is the second opcode after `CmpLt` where round one
+  and round two disagree, which is direct evidence that a single perturbation can miss.
+- **Modules, not sites.** A detected opcode may still be observed at a fraction of its sites.
