@@ -1302,6 +1302,15 @@ pub fn decode_constant_pools(
     let t = ConstTable::parse(bytes)?;
 
     for r in ranges {
+        // THE ELISION SENTINEL IS NOT A RANGE AND MUST NOT BE READ AS ONE.
+        // `add_data_layout` writes `first = ABSENT` for a wholly-default
+        // private-slot pool, which the data-layout decoder reconstructs. Any
+        // other caller reaching here with it has skipped that step, and failing
+        // on the range is the difference between a loud error and a pool of
+        // whatever `u32::MAX` happens to address.
+        if r.0 == ABSENT {
+            return Err(SchemaError::BadIndex);
+        }
         let end = (r.0 as usize)
             .checked_add(r.1 as usize)
             .ok_or(SchemaError::BadIndex)?;
@@ -1974,7 +1983,37 @@ impl SchemaBuilder {
     pub fn add_data_layout(&mut self, layout: &DataLayout) -> Result<(), WireError> {
         use crate::bytecode::SlotVisibility;
 
-        let (first, count) = self.add_constant_pool(&layout.private_init);
+        // THE ALL-DEFAULT CASE CARRIES NO INFORMATION AND IS ELIDED.
+        //
+        // A private slot with no explicit initialiser is zero, and the compiler
+        // materialises that as one `ConstValue::Int(0)` per slot WORD. Those
+        // reach the constant pool as one sixteen-byte record each, and they
+        // dominate the artifact: measured across the eleven pipeline stages,
+        // 38,087 of the 40,332 constants are private-slot initialisers and every
+        // one of them is zero, which is roughly 85% of the whole auxiliary body
+        // spent encoding a value the decoder can supply for nothing.
+        //
+        // `first` is set to [`ABSENT`] rather than to a real index, so the
+        // elision is a SENTINEL the decoder must recognise rather than an
+        // absence it has to infer. A reader that does not handle it fails on the
+        // range instead of quietly producing a wrong pool, which is why
+        // `decode_constant_pools` rejects the sentinel explicitly.
+        //
+        // Only the wholly-default case is elided. A layout with any non-default
+        // initialiser is stored in full, as before. That is the shape the corpus
+        // has; a mostly-default layout with a few set values would want a sparse
+        // encoding, and none exists to measure.
+        let count = layout.private_init.len() as u32;
+        let all_default = !layout.private_init.is_empty()
+            && layout
+                .private_init
+                .iter()
+                .all(|v| matches!(v, ConstValue::Int(0)));
+        let (first, count) = if all_default {
+            (ABSENT, count)
+        } else {
+            self.add_constant_pool(&layout.private_init)
+        };
 
         let slots = self.b.region(kind::DATA_SLOTS, 0)?;
         let shared = self.b.region(kind::SHARED_LAYOUT, 0)?;
@@ -2345,7 +2384,14 @@ pub fn decode_data_layout(bytes: &[u8]) -> Result<Option<DataLayout>, SchemaErro
         });
     }
 
-    let private_init = decode_constant_pool(bytes, t.private_init_range())?;
+    // The elided all-default pool, reconstructed rather than read. See the
+    // sentinel's justification in `SchemaBuilder::add_data_layout`.
+    let (init_first, init_count) = t.private_init_range();
+    let private_init = if init_first == ABSENT {
+        alloc::vec![ConstValue::Int(0); init_count as usize]
+    } else {
+        decode_constant_pool(bytes, (init_first, init_count))?
+    };
 
     Ok(Some(DataLayout {
         slots,

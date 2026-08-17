@@ -7547,9 +7547,20 @@ fn const_roots_of(module: &keleusma::bytecode::Module) -> Vec<keleusma::bytecode
 /// constants, and every `FLATTEN_CASES` source used `const data`, so the
 /// omission could not surface until the `data-*` cases were added.
 fn encoder_const_roots(module: &keleusma::bytecode::Module) -> Vec<keleusma::bytecode::ConstValue> {
+    use keleusma::bytecode::ConstValue as K;
     let mut roots = const_roots_of(module);
     if let Some(dl) = &module.data_layout {
-        roots.extend(dl.private_init.iter().cloned());
+        // THE ALL-DEFAULT POOL IS ELIDED BY THE ENCODER AND SO IS ABSENT HERE.
+        // `add_data_layout` writes `first = ABSENT` and stores no records when
+        // every private-slot initialiser is zero, because the decoder supplies
+        // them. The rule is mirrored rather than approximated: a model counting
+        // them would over-count the region by the whole data segment, which on a
+        // real stage is most of it.
+        let all_default =
+            !dl.private_init.is_empty() && dl.private_init.iter().all(|v| matches!(v, K::Int(0)));
+        if !all_default {
+            roots.extend(dl.private_init.iter().cloned());
+        }
     }
     roots
 }
@@ -9233,7 +9244,22 @@ const CMD_CK_WINDOW_PTYPES: i64 = 163;
 /// region sits at byte 143,096, far past the buffer, yet it has eight chunks. A
 /// high region base comes from the SIZE OF THE EARLIER REGIONS -- the per-element
 /// data-slot tables -- and says nothing about how many records follow it.
-const WINDOW_STAGE: &str = include_str!("../src/selfhost/kel/parse.kel");
+/// An artifact that does NOT fit the window, for the tests whose whole subject is
+/// window positioning.
+///
+/// **This was `parse.kel` and can no longer be a real stage at all.** Eliding the
+/// all-default private-slot pool took the corpus from 712,936 bytes to 103,544,
+/// and every one of the eleven stages now fits a single 65,536-byte window --
+/// `parse` fell from 304,432 to 39,216. A test of window positioning fed a
+/// fitting artifact is not a weaker test, it is a test of the previous slice.
+///
+/// Sized against the encoder's own measured output by
+/// [`synthetic_source_over`], so the next encoding win grows this input rather
+/// than disqualifying it. That property is the reason the generator exists, and
+/// this is the third round in which the real corpus outgrew its own controls.
+fn window_stage_source() -> String {
+    synthetic_source_over(CAPACITY + CAPACITY / 2).0
+}
 
 /// `CHUNKS` assembled from LOW WINDOWS matches a real stage's region byte for byte.
 ///
@@ -9247,12 +9273,12 @@ const WINDOW_STAGE: &str = include_str!("../src/selfhost/kel/parse.kel");
 /// here for the first time: batching decides how many records reach the emitter,
 /// the window decides where they land, and the carries cross both.
 #[test]
-fn chunk_records_assembled_from_windows_match_a_real_stage() {
+fn chunk_records_assembled_from_windows_match_an_oversize_artifact() {
     use keleusma::wire_schema::kind;
     let mut vm = vm_for(WIRE_KEL);
 
-    let module =
-        compile(&parse(&tokenize(WINDOW_STAGE).expect("lex")).expect("parse")).expect("compile");
+    let module = compile(&parse(&tokenize(&window_stage_source()).expect("lex")).expect("parse"))
+        .expect("compile");
     let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
     let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
 
@@ -9422,8 +9448,19 @@ fn every_fitting_region_of_a_real_stage_emits_into_a_window() {
     // three that still has several such regions, so the test stays cheap.
     // If a later reduction pulls `codegen` inside too, move to `parse` and then
     // to a synthetic case -- do NOT relax the control.
-    let src = include_str!("../src/selfhost/kel/codegen.kel");
-    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    // THE THIRD RE-POINT, AND THE LAST ONE THIS TEST SHOULD NEED.
+    //
+    // Twice before, a size reduction pulled every region inside the buffer and
+    // this test had to be aimed at whatever stage was still large enough. The
+    // all-default elision ended that supply: the corpus fell from 712,936 bytes
+    // to 103,544 and ALL ELEVEN stages now fit one window, so there is no real
+    // stage left to move to.
+    //
+    // `window_stage_source` is sized against the encoder's own measured output,
+    // so the next encoding win makes it emit MORE rather than pushing it under
+    // the window. Chasing the corpus was always going to end here.
+    let src = window_stage_source();
+    let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
     let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
     let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
 
@@ -9595,8 +9632,19 @@ fn a_region_larger_than_the_input_buffer_batches_through_the_window() {
     use keleusma::wire_schema::kind;
     let mut vm = vm_for(WIRE_KEL);
 
-    let src = include_str!("../src/selfhost/kel/parse.kel");
-    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    // THE THIRD RE-POINT, AND THE LAST ONE THIS TEST SHOULD NEED.
+    //
+    // Twice before, a size reduction pulled every region inside the buffer and
+    // this test had to be aimed at whatever stage was still large enough. The
+    // all-default elision ended that supply: the corpus fell from 712,936 bytes
+    // to 103,544 and ALL ELEVEN stages now fit one window, so there is no real
+    // stage left to move to.
+    //
+    // `window_stage_source` is sized against the encoder's own measured output,
+    // so the next encoding win makes it emit MORE rather than pushing it under
+    // the window. Chasing the corpus was always going to end here.
+    let src = window_stage_source();
+    let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
     let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
     let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
 
@@ -9709,8 +9757,19 @@ fn a_region_larger_than_one_window_is_assembled_across_two() {
     // bounds it exercises are the same pair, at different sizes: a batch is capped
     // by `wire.fin` at 1,024 WORDS (256 four-field records), a window by
     // `wire.bytes` at 65,536 BYTES.
-    let src = include_str!("../src/selfhost/kel/codegen.kel");
-    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    // THE THIRD RE-POINT, AND THE LAST ONE THIS TEST SHOULD NEED.
+    //
+    // Twice before, a size reduction pulled every region inside the buffer and
+    // this test had to be aimed at whatever stage was still large enough. The
+    // all-default elision ended that supply: the corpus fell from 712,936 bytes
+    // to 103,544 and ALL ELEVEN stages now fit one window, so there is no real
+    // stage left to move to.
+    //
+    // `window_stage_source` is sized against the encoder's own measured output,
+    // so the next encoding win makes it emit MORE rather than pushing it under
+    // the window. Chasing the corpus was always going to end here.
+    let src = window_stage_source();
+    let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
     let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
     let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
 
@@ -9839,10 +9898,23 @@ fn assemble_whole_artifact(label: &str, src: &str, sabotage: Sabotage) -> (usize
     let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
     let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
     let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+    // THE OVERSIZE PRECONDITION MOVED TO THE CALLER, and the reason is the point.
+    //
+    // It used to sit here, asserting the artifact exceeded the buffer so that
+    // composition across windows was actually exercised. Eliding the all-default
+    // private-slot pool took the corpus from 712,936 bytes to 103,544, and every
+    // one of the eleven stages now fits a single window -- `verify_structural`
+    // alone fell by a factor of 26.6. A helper that still demanded an oversize
+    // input would reject every real stage.
+    //
+    // The control is not weakened, it is relocated: the synthetic caller sizes
+    // its source against the encoder's own output and asserts the bound there,
+    // where an encoding win grows the input rather than disqualifying it. A real
+    // stage still proves region coverage, batching within a window and byte
+    // identity, which is what its callers now assert.
     assert!(
-        want.len() > CAPACITY,
-        "{label}: artifact is {} bytes and fits the buffer, so nothing here is composed",
-        want.len()
+        !want.is_empty(),
+        "{label}: the reference encoder produced no artifact at all"
     );
 
     let specs = region_counts_for(&want);
@@ -9958,11 +10030,11 @@ fn assemble_whole_artifact(label: &str, src: &str, sabotage: Sabotage) -> (usize
         regions_placed >= 8,
         "{label}: only {regions_placed} regions placed"
     );
-    assert!(
-        batched_regions >= 1,
-        "no region needed more than one batch, so composition with batching is \
-         untested at whole-artifact scale"
-    );
+    // THE BATCHING PRECONDITION ALSO MOVED TO THE CALLER, for the same reason as
+    // the oversize one above: after the all-default elision no real stage has a
+    // region large enough to need a second batch. The count is returned instead,
+    // so a caller that can still guarantee batching asserts it and one that
+    // cannot does not pretend to.
 
     // The region-targeted defect is planted after assembly, since it asks
     // whether the COMPARISON covers the region rather than whether the emitter
@@ -10160,10 +10232,13 @@ fn the_whole_artifact_assembly_holds_across_several_stages() {
     let mut largest = 0usize;
     for (label, src) in STAGES {
         let (bytes, regions, batched) = assemble_whole_artifact(label, src, Sabotage::None);
-        assert!(
-            regions >= 8 && batched >= 1,
-            "{label}: {regions} regions, {batched} batched"
-        );
+        // A real stage proves REGION COVERAGE and byte identity. It no longer
+        // proves batching: the elision left none of the eleven with a region
+        // needing a second batch. `batched` is read rather than asserted so the
+        // figure stays visible, and the synthetic case below carries the
+        // batching guarantee.
+        assert!(regions >= 8, "{label}: only {regions} regions placed");
+        let _ = batched;
         smallest = smallest.min(bytes);
         largest = largest.max(bytes);
     }
@@ -10477,11 +10552,21 @@ fn the_struct_template_shape_is_emitted_from_real_compiler_output() {
 fn a_misplaced_batch_fails_the_whole_artifact_comparison() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    // The smallest qualifying real stage, so the control costs one assembly.
-    const SRC: &str = include_str!("../src/selfhost/kel/verify_structural.kel");
+    // SYNTHETIC, BECAUSE THE SABOTAGE NEEDS A BATCH TO MISPLACE.
+    //
+    // This was `verify_structural`, the smallest real stage that still had a
+    // region needing more than one batch. After the all-default elision it has
+    // none, and neither does any other stage: the corpus fell from 712,936 bytes
+    // to 103,544 and every artifact fits one window. Misplacing "one batch" of a
+    // single-batch region is not the defect this test exists to catch.
+    //
+    // The source is sized against the encoder's own output, so it stays oversize
+    // through later encoding wins rather than having to be re-aimed a fourth
+    // time.
+    let src = window_stage_source();
 
     let honest = catch_unwind(AssertUnwindSafe(|| {
-        assemble_whole_artifact("verify_structural", SRC, Sabotage::None)
+        assemble_whole_artifact("synthetic", &src, Sabotage::None)
     }));
     assert!(
         honest.is_ok(),
@@ -10499,7 +10584,7 @@ fn a_misplaced_batch_fails_the_whole_artifact_comparison() {
     // failing test's evidence for tidier output on a passing one is the wrong
     // way round, so the noise stays.
     let sabotaged = catch_unwind(AssertUnwindSafe(|| {
-        assemble_whole_artifact("verify_structural", SRC, Sabotage::MisplaceOneBatch)
+        assemble_whole_artifact("synthetic", &src, Sabotage::MisplaceOneBatch)
     }));
 
     let Err(payload) = sabotaged else {
@@ -11529,9 +11614,18 @@ fn the_driver_emits_the_chunk_region_on_the_stages_that_fit() {
         ("verify_depth", true),
         ("verify_typed", true),
         ("verify_datalayout", true),
+        // THE EXCLUSION LIST IS DOWN TO THE CHUNK CAP, and that is the whole
+        // effect of the all-default elision on this test. `codegen` and
+        // `verify_structural` were excluded because their artifacts overran the
+        // 65,536-byte buffer at 111,864 and 102,256 bytes; they are now 20,632
+        // and 3,840, and every one of the eleven stages fits a single window.
+        //
+        // What still refuses is the 90-record chunk batch, and only two stages
+        // reach it: `parse` at 94 chunks and `wire` at 475. Measured, not
+        // inferred -- the other nine are between 2 and 76.
         ("parse", false),
-        ("codegen", false),
-        ("verify_structural", false),
+        ("codegen", true),
+        ("verify_structural", true),
         ("wire", false),
     ];
 
@@ -11604,8 +11698,12 @@ fn the_driver_emits_the_chunk_region_on_the_stages_that_fit() {
         emitted += 1;
     }
 
-    assert_eq!(emitted, 7, "expected seven stages emitted");
-    assert_eq!(refused, 4, "expected four stages refused");
+    // NINE OF ELEVEN, up from seven. `codegen` and `verify_structural` joined the
+    // emitting set when the all-default elision took their artifacts under the
+    // window. Pinned as counts rather than derived from the table above, so a
+    // stage silently changing category fails here instead of being absorbed.
+    assert_eq!(emitted, 9, "expected nine stages emitted");
+    assert_eq!(refused, 2, "expected two stages refused");
 }
 
 /// MUST FIRE: the chunk record's name index is the STAGE's, not the host's.
