@@ -16,11 +16,50 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 | | |
 |---|---|
-| Type stage | now **RESOLVES**, not just compares; corpus 16 → 20 |
-| Where the join lives | **in the stage**, enforced by a withhold-the-rows test |
-| Still host-side | the EXTRACTION, from the reference parser's AST |
-| Module-driven emit path | four region kinds; `CHUNKS` reaches 7 of 11 stages |
-| Inference sizing | held, with one correction about what a prototype can measure |
+| Windowed emit path | **10 of 11 stages**; the buffer ceiling is lifted |
+| Remaining limits | two, and they are DIFFERENT limits — see below |
+| The handoff | **rewritten whole**; the old one passed its checks while being wrong |
+| Type stage | resolves names, not just tags; corpus 20 |
+| Emit coverage | four region kinds of twenty |
+
+## THE BUFFER CEILING WAS NEVER REGION SIZE
+
+Measured before building. Every one of the four regions fits the 65,536-byte window on every stage —
+the largest is `wire`'s `CHUNKS` at **22,512 bytes**, a third of it. What overflowed was the
+**absolute offset**: `parse` puts `NAMES` at byte 299,416. So each region is now emitted at window
+offset zero and placed by the host.
+
+**Three limits, recorded separately because conflating them is how the old comment came to cite
+offsets an order of magnitude wrong:**
+
+| limit | excludes | status |
+|---|---|---|
+| artifact offset past the buffer | `parse`, `codegen`, `verify_structural` | **lifted** |
+| chunk records past one batch of 90 | `parse` (94) | other regions emit |
+| constant nodes past the walk's 1024 | `wire` (**1,148**) | cannot be walked at all |
+
+Both remaining limits are asserted **with their reason**, so a refusal for some other cause does not
+count as the limit being respected.
+
+## TWO DEFECTS I INTRODUCED, BOTH CAUGHT BY A TEST
+
+The dispatch chain hit the parser's depth ceiling at 22 arms and **presented as a stack overflow in
+the test binary**, not a parse error — what this file already recorded for `dispatch_emit` at 20.
+Split into a new group.
+
+And `wire.fin` is 1024 words whose users OVERLAP: chunk records take 0..990, the header rides
+990..1001. `parse`'s 94 chunks are 1,034 fields, which **silently rewrote the header**. It surfaced
+as one stage's header differing while every other passed.
+
+## THE HANDOFF WAS CERTIFYING ITS OWN STALENESS
+
+Stamped six merges back, it **passed every one of its own validity checks** while naming a repaired
+bound as the top open item and saying the emit path covered two region kinds when it covered four.
+A document that certifies its currency and is wrong is worse than one that reports staleness — its
+own header says so.
+
+Rewritten whole. The durable material survives; the state, macro position and open items were
+replaced. Its check block now warns that **passing checks are not a current document**.
 
 ## THE TYPE STAGE REACHES A NON-LITERAL OPERAND
 

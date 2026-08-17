@@ -11244,6 +11244,197 @@ fn the_produced_sequence_emits_names_and_pool_byte_identically() {
     assert_eq!(checked, CASES.len(), "not every case was checked");
 }
 
+/// THE WINDOWED PATH: TEN OF ELEVEN STAGES, INCLUDING ALL FOUR THE BUFFER EXCLUDED.
+///
+/// # What the buffer ceiling actually was
+///
+/// **Not region size.** Measured across the eleven stage sources, the largest of
+/// these four payloads is `wire.kel`'s `CHUNKS` at 22,512 bytes, a third of the
+/// 65,536-byte window. What overflowed was the ABSOLUTE OFFSET: `parse.kel` puts
+/// `NAMES` at byte 299,416 of a 304,432-byte artifact, and the earlier joins
+/// write there directly. Each region is now emitted at window offset zero and
+/// placed by the host, so the offset ceiling is gone.
+///
+/// # THREE LIMITS, AND THEY ARE DIFFERENT LIMITS
+///
+/// Recorded separately because conflating them is how the earlier "works for no
+/// real stage" comment became stale by an order of magnitude.
+///
+/// 1. **Artifact offset past the buffer** — LIFTED by windowing. It excluded
+///    `parse`, `codegen` and `verify_structural`, and excludes none of them now.
+/// 2. **Chunk records past one batch of 90** — `parse` has 94. Its other regions
+///    are emitted; `chunks_emitted` reports false and this test asserts it.
+/// 3. **Constant-forest nodes past the walk's 1024 cap** — `wire.kel` has
+///    **1,148**, so the walk refuses with `-240` before any region is emitted and
+///    the stage cannot be reached at all. `parse` is next at 815, comfortably
+///    under. This is a cap on the WALK, not on the window, and lifting it is
+///    unrelated to either limit above.
+///
+/// # What each region owes to whom, unchanged by windowing
+///
+/// `NAMES` and `STRING_POOL` are COMPUTED from the module blob. `CHUNKS` is mixed
+/// per field — the stage computes the name index from its own interner and the
+/// three range cursors by accumulation, and ten fields per record come from the
+/// host. `HEADER` is ENCODED but not derived.
+///
+/// # What this does NOT establish
+///
+/// Four regions of twenty. Nothing here touches `CONSTS`, which is 94% of the
+/// auxiliary body and blocked on a different problem entirely.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_windowed_path_reaches_every_stage_it_can_walk() {
+    use keleusma::wire_schema::kind;
+
+    /// What each stage is expected to do, and why.
+    enum Expect {
+        /// Every region emitted, chunks included.
+        Full,
+        /// Regions emitted, chunks omitted: past the 90-record batch.
+        NoChunks,
+        /// Not reachable: the constant forest is past the walk's node cap.
+        WalkRefuses,
+    }
+
+    let stages: &[(&str, Expect)] = &[
+        ("lexer", Expect::Full),
+        ("parse", Expect::NoChunks),
+        ("reconstruct", Expect::Full),
+        ("codegen", Expect::Full),
+        ("analyze", Expect::Full),
+        ("verify_structural", Expect::Full),
+        ("verify_yield", Expect::Full),
+        ("verify_depth", Expect::Full),
+        ("verify_typed", Expect::Full),
+        ("verify_datalayout", Expect::Full),
+        ("wire", Expect::WalkRefuses),
+    ];
+
+    let mut full = 0;
+    let mut no_chunks = 0;
+    let mut refused = 0;
+    for (stage, expect) in stages {
+        let path = format!("src/selfhost/kel/{stage}.kel");
+        let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+        let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse"))
+            .unwrap_or_else(|e| panic!("{stage}: compile: {e:?}"));
+        let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module))
+            .unwrap_or_else(|e| panic!("{stage}: encode: {e:?}"));
+        let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+
+        let mut regions: Vec<(u16, usize, usize)> = Vec::new();
+        for i in 0..view.region_count() {
+            let r = view.region_at(i).expect("region");
+            regions.push((
+                r.kind,
+                (r.word_offset as usize) * 8,
+                (r.word_length as usize) * 8,
+            ));
+        }
+
+        let got = keleusma::selfhost::wire_windowed_via_kel(&module, want.len(), &regions);
+
+        if matches!(expect, Expect::WalkRefuses) {
+            let err = got.err().unwrap_or_else(|| {
+                panic!(
+                    "{stage}: the driver ACCEPTED a module whose constant forest is past the \
+                     walk's cap; emitting it would mean the walk silently truncated"
+                )
+            });
+            // The REASON is asserted. A refusal for some other cause is not this
+            // limit being respected.
+            let detail = format!("{err:?}");
+            assert!(
+                detail.contains("-240") || detail.contains("240"),
+                "{stage}: refused, but not by the walk's node cap: {detail}"
+            );
+            refused += 1;
+            continue;
+        }
+
+        let got = got.unwrap_or_else(|e| panic!("{stage}: the windowed driver refused: {e:?}"));
+        let expect_chunks = matches!(expect, Expect::Full);
+        assert_eq!(
+            got.chunks_emitted,
+            expect_chunks,
+            "{stage}: chunks_emitted is {} with {} chunks against a cap of 90",
+            got.chunks_emitted,
+            module.chunks.len()
+        );
+        if expect_chunks {
+            full += 1;
+        } else {
+            no_chunks += 1;
+        }
+
+        let mut compared = 0;
+        for k in [kind::NAMES, kind::STRING_POOL, kind::HEADER, kind::CHUNKS] {
+            if k == kind::CHUNKS && !got.chunks_emitted {
+                continue;
+            }
+            let region = view.find_region(k).expect("region");
+            let base = region.byte_offset().expect("offset");
+            let stored = view.region_bytes(&region).expect("payload");
+            assert!(
+                !stored.is_empty(),
+                "{stage}: region {k:#06x} is empty, so this compares nothing"
+            );
+            assert_eq!(
+                &got.bytes[base..base + stored.len()],
+                stored,
+                "{stage}: region {k:#06x} differs from the reference"
+            );
+            compared += 1;
+        }
+        assert!(
+            compared >= 3,
+            "{stage}: only {compared} regions were compared"
+        );
+    }
+
+    assert_eq!(full, 9, "nine stages should emit every region");
+    assert_eq!(no_chunks, 1, "only `parse` is past the batch cap");
+    assert_eq!(refused, 1, "only `wire` is past the walk's node cap");
+}
+
+/// MUST FIRE: the windowed path reaches a stage the absolute-offset path cannot.
+///
+/// Without this the test above could pass on a set of stages that never needed
+/// windowing at all, and the ceiling would look lifted because nothing pushed
+/// against it.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_absolute_path_still_refuses_what_the_window_reaches() {
+    let src = std::fs::read_to_string("src/selfhost/kel/parse.kel").expect("read");
+    let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
+    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+
+    let specs = region_counts_for(&want);
+    let mut vm = vm_for(WIRE_KEL);
+    let (_, directory) = run_call(
+        &mut vm,
+        &Call {
+            cmd: CMD_BUILD_REGION_TABLE,
+            nregions: specs.len() as i64,
+            seed: &[],
+            regions: &specs,
+            fields: &[],
+            names: &[],
+            pool: &[],
+            args: [0, 0, 0, 0, 0],
+            read_len: want.len(),
+        },
+    )
+    .expect("run");
+
+    assert!(
+        keleusma::selfhost::wire_chunks_via_kel(&module, &directory, specs.len()).is_err(),
+        "the absolute-offset driver accepted `parse`, so the windowed path is not \
+         reaching anything the old one could not and the test above proves less than \
+         it appears to"
+    );
+}
+
 /// THE CHUNK REGION, FROM A MODULE, ON REAL STAGES.
 ///
 /// # Which stages, and why not all eleven
