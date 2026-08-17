@@ -209,6 +209,25 @@ looked complete. **In every case the code was reachable and the evidence was not
 
 ## METHOD RULES THIS LINE PAID FOR
 
+- **CUT THE FEATURE BRANCH BEFORE THE FIRST EDIT, not before the commit.** Demonstrated, not
+  hypothetical: `be296d89` (the streaming chunk emit) went straight onto `v0.2.3` because the previous
+  task had left the session on the version branch and nothing forced a branch before `wire.kel` was
+  opened. Knowing the rule is not the same as having a habit that enforces it, and the enforcing habit
+  is positional. Not reverted -- rewriting published history on a branch the `v0.3.0` line rebases
+  from is worse than the violation -- so CI on the version branch was the only gate that change got.
+  It passed 22 of 22, which is luck rather than process.
+- **AN INSTRUMENT'S FILTER ENCODES WHAT YOU ASSUME THE FIELD CONTAINS.** Two failures in one session,
+  in opposite directions. A resume counter reported two steps per row because it counted the loop's
+  `RESET` as a step. A CI monitor reported two jobs FAILED because `gh` writes `""` into `conclusion`
+  for a job still running and the filter tested `!= null`. Neither was caught by reading the code;
+  both by output whose shape did not match the expectation. **Check what the source actually emits
+  before filtering on it**, and prefer an instrument that shows its raw evidence over one that only
+  shows its verdict.
+- **A test that measures a VERDICT cannot tell a streaming stage from a one-shot fold behind a
+  coroutine shell.** Eleven verdict tests passed either way; only the resume count discriminated.
+- **A REFUSAL PROVES WHICH LIMIT FIRED ONLY IF THE TEST NAMES THE ONE IT EXPECTED.** Third near-miss
+  of the session: `wire` refusing `-240` was read as the chunk batch cap when it is the 1,024-node
+  module-input walk.
 - **Mutate to test a control.** Green proves nothing about a branch no case reaches.
 - **A control removes the suspected cause and checks the failure survives.**
 - **Assert WHICH failure fired**, not merely that one did.
