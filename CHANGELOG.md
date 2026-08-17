@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The empty statement, which makes a trailing semicolon after a `for` loop
+  legal.** A semicolon at statement position with nothing to terminate is
+  discarded, so `for i in 0..8 { .. };` now parses as the block-form `if`,
+  `match`, and `loop` statements already did. The asymmetry was structural rather
+  than an oversight: `for` is a statement and consumes no terminator of its own,
+  while the other three are expressions whose expression-statement path already
+  consumed one, so the stray semicolon reached the expression parser and was
+  reported as `unexpected token Semicolon in expression`. That diagnostic named a
+  construct the author had not written and misdirected two defect reports, one
+  claiming the documented `break` form was rejected and one recording an opcode
+  as unreachable from any documented source; neither was about `break`. The
+  widening admits a run of semicolons and one before any other statement, and
+  admits nothing else: a block whose only statement is a semicolon still produces
+  unit and is rejected where a value is required, and `let x = ;` remains an
+  error. Both parsers implement it and agree byte-identically on the form, which
+  the self-hosted differential asserts; a widening only the reference honoured
+  would be a divergence rather than a feature.
+
 - **A windowed emit path, lifting the artifact-size ceiling on self-hosted
   auxiliary-body emission.** Each region is now emitted at offset zero of the
   stage's buffer and placed at its true offset by the host, so a module whose

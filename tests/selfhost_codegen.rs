@@ -3761,6 +3761,22 @@ fn parse_into_codegen_for_limit_matches_the_reference() {
             10,
             30,
         ),
+        // A TRAILING SEMICOLON AFTER THE LOOP, which the reference parser began
+        // accepting when the empty statement was admitted. `for` is a statement
+        // and consumes no terminator, so this form used to reach the expression
+        // parser and be rejected; `if`, `match` and `loop` never were.
+        //
+        // The self-hosted parser is a token-stream state machine rather than a
+        // recursive-descent block parser, so whether it agrees is not something
+        // that can be read off either grammar. This case is here because a
+        // language widening has two consumers, and a widening only one of them
+        // honours is a divergence rather than a feature. The byte identity is
+        // what settles it: the two compilers must agree, not merely both accept.
+        (
+            "private data d { s: Word } fn main(n: Word) -> Word { for i in 0..n limit 8 { d.s = d.s + i; }; d.s }",
+            4,
+            6,
+        ),
     ];
     assert_parse_into_codegen_matches(cases);
 }
