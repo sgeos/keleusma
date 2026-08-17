@@ -16,11 +16,45 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 | | |
 |---|---|
-| Module-driven emit path | **four** region kinds; `CHUNKS` reaches **7 of 11** stages |
-| The four excluded stages | refused with the reason asserted, not truncated |
-| Inference sizing | **two local rules, no unification**, 5 of 5 measured |
-| A guard I wrote | **could never fire**; removed rather than repaired |
-| Stale figures corrected | fifth this session, this one in a design-governing comment |
+| Type stage | now **RESOLVES**, not just compares; corpus 16 → 20 |
+| Where the join lives | **in the stage**, enforced by a withhold-the-rows test |
+| Still host-side | the EXTRACTION, from the reference parser's AST |
+| Module-driven emit path | four region kinds; `CHUNKS` reaches 7 of 11 stages |
+| Inference sizing | held, with one correction about what a prototype can measure |
+
+## THE TYPE STAGE REACHES A NON-LITERAL OPERAND
+
+Every rule fired on a pair of tags and `expr_tag` typed only literals, so an error routed through a
+`let` or a call was accepted. **All sixteen corpus cases placed their operands as literals**, so the
+limit was invisible — the same meta-defect this line keeps finding, now in its own type corpus.
+
+The stage gained a binding table and an operand FORM, and does the join itself. Four cases moved
+from pinned disagreements to ordinary corpus members.
+
+**THE TRAP, WHICH WOULD HAVE LOOKED LIKE SUCCESS.** A four-line change to `expr_tag` makes every
+failing case pass and makes the checker LESS self-hosted, because each tag the host resolves is a
+decision the stage did not make. `the_stage_and_not_the_host_resolves_an_operand` is what keeps that
+honest: withhold the binding rows and the identical program is ACCEPTED.
+
+**The line drawn**: a DECLARED type is syntax the host may report; an INFERRED one is a conclusion
+the stage must reach.
+
+## WHAT THE SIZING SPIKE COULD NOT SEE
+
+It reported 5 of 5 and the estimate held — but its prototype composed the let rule with the
+declared-return rule IN THE HOST, so it never surfaced that the composition was the whole question.
+In the stage, `let a = g()` needs an alias row and a bounded hop. **A throwaway prototype measures
+reachability, not where the reasoning belongs.**
+
+The hop bound is a decision, not a limit: a longer chain resolves to unknown and therefore ACCEPTS,
+which is the safe direction, and a total language needs a static cap.
+
+## What remains, stated plainly
+
+- **The extraction is still host-side**, walking the reference parser's AST. This slice moved the
+  RESOLUTION only, and the test header says so.
+- **Derived operands are still unreachable** — a field read, an index, an arithmetic result. Pinned
+  by `the_rules_still_do_not_reach_a_derived_operand`. Reaching them is a fixpoint, not a lookup.
 
 ## `CHUNKS` LANDS, AND THE SPLIT IS PER FIELD
 

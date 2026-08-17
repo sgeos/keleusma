@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Local type resolution in the self-hosted type-rejection stage.** The stage
+  previously compared operand type tags and could therefore only reject an error
+  whose operands were written as literals; every case in its corpus was of that
+  shape, so the limit did not show. It now receives binding rows and operands
+  marked as naming something, and performs the join itself: a name resolves
+  through a declared parameter type, a declared return type or a literal
+  initialiser, with one further hop for a binding whose initialiser is a call.
+  The host supplies only what the source states outright and never the conclusion
+  that an operand has a particular type, which a test enforces by withholding the
+  binding rows and requiring the same program to be accepted. The ill-typed corpus
+  grows from sixteen cases to twenty. The input structure is still extracted by
+  the host from the reference parser, so the checker remains self-hosted in its
+  decisions and not in its input, and the tests say so where a reader meets them.
+
+
 - **The chunk region emitted from a compiled module through the Keleusma wire
   stage, under the off-by-default `self-host` feature.** `wire_chunks_via_kel`
   emits `NAMES`, `STRING_POOL`, the header record and the chunk region

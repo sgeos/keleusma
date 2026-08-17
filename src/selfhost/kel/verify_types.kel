@@ -184,6 +184,40 @@ shared data ty {
     ekind: [Word; 256],
     ea: [Word; 256],
     eb: [Word; 256],
+    // SLICE 6: LOCAL RESOLUTION. Until this, `ea`/`eb` were always tags, so a
+    // rule could only fire where the operand was a literal. Every ill-typed case
+    // in the corpus placed its operands as literals, so that limit was invisible
+    // and the stage accepted `let b = true; 1 + b`, which the reference rejects.
+    //
+    // `eaf[e]`/`ebf[e]` give the FORM of each operand:
+    //   0  the value is a TAG, as before
+    //   1  the value is a NAME id, and the stage resolves it here
+    //
+    // THE HOST SUPPLIES SYNTAX; THE STAGE DOES THE JOIN. A declared parameter
+    // type, a declared return type and a literal initialiser are all written in
+    // the source, so the host may read them off and hand over `(name, tag)`
+    // rows. What it may NOT hand over is the conclusion that a given OPERAND has
+    // a given type -- that join is this stage's whole job, and marshalling it
+    // would make the stage agree with the reference by construction, which is
+    // the same objection recorded at the top of this file against inferred tags.
+    //
+    // Appended last.
+    bn: Word,
+    bname: [Word; 128],
+    btag: [Word; 128],
+    // The FORM of each binding row, so an initialiser that is not a literal can
+    // still be reported syntactically:
+    //   0  `btag[b]` is a tag        -- `fn f(a: Word)`, `let b = true`
+    //   1  `btag[b]` is a NAME id    -- `let a = g()`, which binds `a` to `g`
+    //
+    // Form 1 exists so the host does not have to chain. `let a = g()` says only
+    // that `a` takes whatever `g` returns; turning that into a TAG needs `g`'s
+    // declared return row as well, and performing that join host-side is exactly
+    // what this slice moved into the stage.
+    bform: [Word; 128],
+    alias: Word,
+    eaf: [Word; 256],
+    ebf: [Word; 256],
 }
 
 // The verdict constants, named rather than spelled as bare integers at the call sites, so a later
@@ -318,6 +352,56 @@ fn ty_node_bad(k: Word, a: Word, b: Word) -> Word {
     } else { 0 } } }
 }
 
+// Resolve one operand to a tag.
+//
+// Form 0 is already a tag. Form 1 is a NAME id, looked up in the binding table;
+// **a name with no binding resolves to UNKNOWN, not to a rejection.** That is the
+// direction the whole file leans: an operand this stage cannot type is not an
+// operand it may refuse, because rejecting a valid program is a language change
+// rather than a conservative choice.
+//
+// A LINEAR SCAN, capped at the table size. The subset binds few names per
+// function and a total language has no early exit, so a map would cost more than
+// it saves -- the same reasoning `intern_run`'s batch-local scan records.
+fn ty_direct(v: Word) -> Word {
+    ty.hit = ty_unknown();
+    for b in 0..ty.bn limit 128 {
+        ty.hit = if ty.bname[b] == v {
+            if ty.bform[b] == 0 { ty.btag[b] } else { ty.hit }
+        } else { ty.hit };
+    }
+    ty.hit
+}
+
+fn ty_alias_of(v: Word) -> Word {
+    ty.alias = 0;
+    for b in 0..ty.bn limit 128 {
+        ty.alias = if ty.bname[b] == v {
+            if ty.bform[b] == 1 { ty.btag[b] } else { ty.alias }
+        } else { ty.alias };
+    }
+    ty.alias
+}
+
+fn ty_resolve(f: Word, v: Word) -> Word {
+    if f == 0 { v } else {
+        ty.hit = ty_direct(v);
+        if ty.hit == 0 {
+            // ONE ALIAS HOP, AND THE BOUND IS DELIBERATE. `let a = g()` binds
+            // `a` to the name `g`, whose declared return type is a direct row,
+            // so one hop reaches it. A longer chain -- `let a = g(); let c = a;`
+            // -- resolves to UNKNOWN and therefore ACCEPTS, which is the safe
+            // direction: this stage may not refuse a program it cannot type.
+            //
+            // A bounded hop count rather than a fixpoint because the language is
+            // total and every loop needs a static cap. Raising the bound is a
+            // decision about how much chaining to admit, not a bug fix.
+            ty.alias = ty_alias_of(v);
+            if ty.alias == 0 { ty_unknown() } else { ty_direct(ty.alias) }
+        } else { ty.hit }
+    }
+}
+
 fn ty_check() -> Word {
     ty.verdict = ty_accept();
     for i in 0..ty.n limit 256 {
@@ -357,7 +441,11 @@ fn ty_check() -> Word {
     // THE EXPRESSION RULES, applied from shapes rather than received as
     // verdicts.
     for e in 0..ty.en limit 256 {
-        ty.verdict = if ty_node_bad(ty.ekind[e], ty.ea[e], ty.eb[e]) == 1 {
+        ty.verdict = if ty_node_bad(
+            ty.ekind[e],
+            ty_resolve(ty.eaf[e], ty.ea[e]),
+            ty_resolve(ty.ebf[e], ty.eb[e]),
+        ) == 1 {
             ty_reject()
         } else {
             ty.verdict
