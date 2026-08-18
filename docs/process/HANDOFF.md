@@ -260,9 +260,19 @@ looked complete. **In every case the code was reachable and the evidence was not
   `ops[target - 1]` for an `Else`, `trace_const_set_local` scans BACKWARD for a bound constant, and
   `loop_body_advances_induction` scans FORWARD to the body tail. Each has a bounded-state streaming
   equivalent — decide at `EndLoop` rather than at `Loop`, and carry a slot-to-last-constant map.
-  **Unresolved: nesting depth has no static cap anywhere**, which a verifier written in Keleusma would
-  need; and the break fold assumes every break in a loop leaves the same stack depth, which I have not
-  confirmed.
+  **BOTH FORMERLY-OPEN QUESTIONS ARE NOW ANSWERED** by the `v0.3.0` line, by measurement over 985
+  chunks in 64 modules, in their handoff rewrite (PR #159).
+  * **The break fold holds.** 0 of 386 loops carrying a break disagree on operand depth, guarded by a
+    must-fire control on a synthetic unbalanced loop. The assumption was safe.
+  * **Nesting depth still has NO static cap, and 19 is NOT one.** The deepest observed is 19, in
+    `parse.kel::body_step`. Their warning is the load-bearing part and is repeated here verbatim in
+    spirit: **that is what the corpus contains, not a bound on what the language admits, and it must
+    never be offered as one.** A verifier written in Keleusma needs a DECLARED cap with programs past
+    it rejected, not a number read off today's sources.
+  * They also warn against a second walker: one written independently for the break question invented
+    its own `If`/`EndIf` handling and reported 365 of 386 loops disagreeing. `EndIf` RESTORES the
+    depth saved at its `If` rather than restoring and then applying its own effect. **Do not compete
+    with a validated walker.**
 - **`MAX_PARSE_DEPTH` does not do its stated job on a small stack.**
 - **`CHANGELOG.md:340`** states the checked-arithmetic push order wrongly in published text.
 - **`-255` is live and has no negative test.**
