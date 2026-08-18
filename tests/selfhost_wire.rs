@@ -12905,3 +12905,121 @@ fn the_streaming_node_path_refuses_what_it_cannot_encode() {
         other => panic!("control: step returned {other:?}"),
     }
 }
+
+/// The largest region of one kind found while surveying, with the stage that
+/// produced it and its reference rows.
+///
+/// A named type because clippy is right that the bare tuple was doing too much:
+/// three unrelated things held positionally, where swapping the last two still
+/// compiles.
+type RegionSubject<'a> = (&'a str, Vec<u8>, Vec<Vec<i64>>);
+
+/// Four record tables stream one record per call, past their input bounds.
+///
+/// Each `emit_*_records` refuses past `fin_capacity()` divided by its field
+/// count, so 256 records for a four-field table. These paths hold ONE record and
+/// have no such bound.
+///
+/// # What this covers, at the strength it actually has
+///
+/// **These format records the host hands them.** `DATA_SLOTS`'s run-length
+/// grouping, a signature's parameter range, a shape's size — every one is decided
+/// outside the stage. That makes these regions ENCODED BUT NOT DERIVED, the same
+/// standing the `HEADER` record has, and a coverage claim counting them beside
+/// `NAMES` — which the stage computes from the module blob — would overstate what
+/// is self-hosted. Together they are 16.3% of the corpus body against the 79%
+/// already reached, but not 16.3% of the same quality.
+///
+/// Each subject is the stage with the LARGEST region of its kind, chosen by
+/// measurement, so a case is past the old bound rather than merely representative.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_four_formatting_regions_stream_one_record_per_call() {
+    use keleusma::wire_schema::kind;
+    // (kind, command, fields per record)
+    const TABLES: &[(u16, i64, usize)] = &[
+        (kind::DATA_SLOTS, 178, 4),
+        (kind::SHAPES, 179, 4),
+        (kind::SIGNATURES, 180, 4),
+        (kind::ENUM_VARIANTS, 181, 3),
+    ];
+    const STAGES: &[&str] = &[
+        "lexer",
+        "parse",
+        "codegen",
+        "reconstruct",
+        "verify_structural",
+        "verify_typed",
+    ];
+
+    let mut covered = 0;
+    for (k, cmd, nfields) in TABLES {
+        let mut best: Option<RegionSubject<'_>> = None;
+        for stage in STAGES {
+            let path = format!("src/selfhost/kel/{stage}.kel");
+            let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+            let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse"))
+                .unwrap_or_else(|e| panic!("{stage}: compile: {e:?}"));
+            let want =
+                keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
+            let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+            let Some(region) = view.find_region(*k) else {
+                continue;
+            };
+            let stored = view.region_bytes(&region).expect("payload").to_vec();
+            if stored.is_empty() {
+                continue;
+            }
+            if best.as_ref().is_none_or(|(_, b, _)| stored.len() > b.len()) {
+                best = Some((stage, stored, rows_for_kind(&view, *k)));
+            }
+        }
+        let Some((stage, stored, rows)) = best else {
+            panic!("no stage carries a non-empty region {k:#06x}, so nothing is exercised");
+        };
+        assert!(
+            !rows.is_empty(),
+            "{stage}: region {k:#06x} has bytes but no rows, so the row model is wrong"
+        );
+
+        let mut vm = vm_for(WIRE_KEL);
+        let mut shared = vec![0u8; vm.shared_data_bytes()];
+        let mut got = vec![0u8; stored.len()];
+
+        for (j, row) in rows.iter().enumerate() {
+            assert!(
+                row.len() >= *nfields,
+                "{stage}: region {k:#06x} row {j} has {} fields, fewer than the {nfields} the                  command reads",
+                row.len()
+            );
+            for (f, v) in row.iter().take(*nfields).enumerate() {
+                vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(*v))
+                    .expect("field");
+            }
+            let wrote = match enter(&mut vm, &mut shared, *cmd).expect("step") {
+                VmState::Yielded(Value::Int(n)) => n,
+                other => panic!("{stage}: region {k:#06x} step {j} returned {other:?}"),
+            };
+            assert!(
+                wrote > 0,
+                "{stage}: region {k:#06x} step {j} refused with {wrote}"
+            );
+            let stride = wrote as usize;
+            for b in 0..stride {
+                got[j * stride + b] = match vm.get_shared(&shared, 1 + b).expect("read") {
+                    Value::Byte(v) => v,
+                    other => panic!("shared byte slot held {other:?}"),
+                };
+            }
+        }
+
+        assert_eq!(
+            got,
+            stored,
+            "{stage}: the streamed region {k:#06x} differs from the reference over {} records",
+            rows.len()
+        );
+        covered += 1;
+    }
+    assert_eq!(covered, TABLES.len(), "not every table was exercised");
+}
