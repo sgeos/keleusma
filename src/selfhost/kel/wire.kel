@@ -2907,6 +2907,24 @@ fn mi_offset(k: Word, at: Word) -> Word {
 // Six words per node: tag, payload, child count, names_first, flags, disc.
 // Mirrors the reference preorder exactly; the widths are the reference's, not
 // a fresh choice.
+// The NODE table's own capacity, which is what `wire.bytes` holds in node mode:
+// 65,536 bytes at six words a node.
+//
+// **THIS WAS `nm_max_names()`, AND THAT IS A BOUND ON A DIFFERENT QUANTITY.** The
+// walk refused a forest of more than 1,024 NODES using the cap that sizes the
+// NAME arrays -- `nin` is 2,048 words at two per name, `nmap` is 1,024 entries.
+// The two happen to be comparable numbers and are otherwise unrelated, so the
+// guard read as though it were checking capacity while checking someone else's.
+//
+// It excluded `wire.kel` from its own emit path at 1,148 constant nodes. Every
+// one of them is `Int`: the walk interns NOTHING for it, so the name arrays it
+// was being measured against were never touched. The node table it actually
+// writes into holds 1,365.
+//
+// The name bound is now enforced where names are interned, which is the only
+// place it means anything.
+fn mi_max_nodes() -> Word { 1365 }
+
 fn mi_node_words() -> Word { 6 }
 
 fn mi_put_node_full(
@@ -3120,7 +3138,7 @@ fn mi_tag_struct() -> Word { 10 }
 fn mi_const_names() -> Word {
     nm.ccnt = mi_u16(nm.icur);
     nm.icur = nm.icur + 2;
-    nm.err = if nm.ccnt > nm_max_names() { 0 - 240 } else { nm.err };
+    nm.err = if nm.ccnt > mi_max_nodes() { 0 - 240 } else { nm.err };
     for c in 0..mi_bounded(nm.ccnt) limit 1024 {
         nm.sink = if nm.err < 0 { 0 } else {
             // ONE LINEAR SCAN, NOT A STACK WALK (slice 14e). The blob carries
@@ -3147,6 +3165,13 @@ fn mi_const_names() -> Word {
             // records zero, matching the reference.
             nm.cfirst = if nm.cnames == 0 { 0 } else { nm.cnt };
             for q in 0..mi_bounded(nm.cnames) limit 1024 {
+                // THE NAME BOUND, HERE, WHERE A NAME IS ACTUALLY INTERNED.
+                // `mi_pair` writes `wire.nin[k * 2]`, so an unguarded `nm.cnt`
+                // past the array faults on the bounds check rather than
+                // refusing. Checked before the write rather than after, because
+                // a refusal that arrives once the damage is done is a crash
+                // report, not a guard.
+                nm.err = if nm.cnt >= nm_max_names() { 0 - 236 } else { nm.err };
                 nm.sink = if nm.err < 0 { 0 } else {
                     nm.sink = mi_offset(nm.cnt, nm.icur + 2);
                     nm.cnt = mi_pair(nm.cnt, mi_u16(nm.icur), mi_name_mode(nm.ctag, q));

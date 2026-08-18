@@ -11458,34 +11458,40 @@ fn the_produced_sequence_emits_names_and_pool_byte_identically() {
 fn the_windowed_path_reaches_every_stage_it_can_walk() {
     use keleusma::wire_schema::kind;
 
-    /// What each stage is expected to do, and why.
-    enum Expect {
-        /// Every region emitted, chunks included.
-        Full,
-        /// Regions emitted, chunks omitted: past the 90-record batch.
-        NoChunks,
-        /// Not reachable: the constant forest is past the walk's node cap.
-        WalkRefuses,
-    }
-
-    let stages: &[(&str, Expect)] = &[
-        ("lexer", Expect::Full),
-        ("parse", Expect::NoChunks),
-        ("reconstruct", Expect::Full),
-        ("codegen", Expect::Full),
-        ("analyze", Expect::Full),
-        ("verify_structural", Expect::Full),
-        ("verify_yield", Expect::Full),
-        ("verify_depth", Expect::Full),
-        ("verify_typed", Expect::Full),
-        ("verify_datalayout", Expect::Full),
-        ("wire", Expect::WalkRefuses),
+    // THE `Expect` ENUM IS GONE, and its absence is the result of the arc.
+    //
+    // It carried three cases: `Full`, `NoChunks` for a stage past the 90-record
+    // chunk batch, and `WalkRefuses` for one whose constant forest exceeded the
+    // module-input walk's node cap. Both exclusions are removed and for DIFFERENT
+    // reasons, which is why they are recorded here rather than summed away:
+    //
+    // * `parse` (94 chunks) was past the batch. Streaming one record per call
+    //   removed the cap rather than raising it -- the batch carries existed so a
+    //   host could relay three running range cursors, and a coroutine carries them
+    //   itself.
+    // * `wire` (1,148 constant nodes) was measured against `nm_max_names()`, a
+    //   bound on the NAME arrays, by a guard that should have been checking the
+    //   node table's 1,365. Every one of its constants is `Int`, so the walk
+    //   interned nothing and the arrays it was compared against were untouched.
+    //
+    // A future limit would bring the branching back. Keeping dead variants to
+    // hold the place would mean a reader could not tell which cases are live.
+    let stages: &[&str] = &[
+        "lexer",
+        "parse",
+        "reconstruct",
+        "codegen",
+        "analyze",
+        "verify_structural",
+        "verify_yield",
+        "verify_depth",
+        "verify_typed",
+        "verify_datalayout",
+        "wire",
     ];
 
     let mut full = 0;
-    let mut no_chunks = 0;
-    let mut refused = 0;
-    for (stage, expect) in stages {
+    for stage in stages {
         let path = format!("src/selfhost/kel/{stage}.kel");
         let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
         let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse"))
@@ -11506,44 +11512,18 @@ fn the_windowed_path_reaches_every_stage_it_can_walk() {
 
         let got = keleusma::selfhost::wire_windowed_via_kel(&module, want.len(), &regions);
 
-        if matches!(expect, Expect::WalkRefuses) {
-            let err = got.err().unwrap_or_else(|| {
-                panic!(
-                    "{stage}: the driver ACCEPTED a module whose constant forest is past the \
-                     walk's cap; emitting it would mean the walk silently truncated"
-                )
-            });
-            // The REASON is asserted. A refusal for some other cause is not this
-            // limit being respected.
-            let detail = format!("{err:?}");
-            assert!(
-                detail.contains("-240") || detail.contains("240"),
-                "{stage}: refused, but not by the walk's node cap: {detail}"
-            );
-            refused += 1;
-            continue;
-        }
-
         let got = got.unwrap_or_else(|e| panic!("{stage}: the windowed driver refused: {e:?}"));
-        let expect_chunks = matches!(expect, Expect::Full);
-        assert_eq!(
+        assert!(
             got.chunks_emitted,
-            expect_chunks,
-            "{stage}: chunks_emitted is {} with {} chunks against a cap of 90",
-            got.chunks_emitted,
+            "{stage}: chunks_emitted is false with {} chunks. Both former exclusions are gone; \
+             a false here means a limit has returned and this test's comment above no longer \
+             describes the tree.",
             module.chunks.len()
         );
-        if expect_chunks {
-            full += 1;
-        } else {
-            no_chunks += 1;
-        }
+        full += 1;
 
         let mut compared = 0;
         for k in [kind::NAMES, kind::STRING_POOL, kind::HEADER, kind::CHUNKS] {
-            if k == kind::CHUNKS && !got.chunks_emitted {
-                continue;
-            }
             let region = view.find_region(k).expect("region");
             let base = region.byte_offset().expect("offset");
             let stored = view.region_bytes(&region).expect("payload");
@@ -11564,9 +11544,17 @@ fn the_windowed_path_reaches_every_stage_it_can_walk() {
         );
     }
 
-    assert_eq!(full, 9, "nine stages should emit every region");
-    assert_eq!(no_chunks, 1, "only `parse` is past the batch cap");
-    assert_eq!(refused, 1, "only `wire` is past the walk's node cap");
+    // ELEVEN OF ELEVEN. Both former exclusions are gone and for different
+    // reasons, which is why they are named rather than summed: `parse` was past
+    // the 90-record chunk batch, removed by streaming one record per call, and
+    // `wire` was measured against the NAME arrays by a guard that should have
+    // been checking the node table.
+    assert_eq!(
+        full,
+        stages.len(),
+        "every stage should emit every region the driver reaches"
+    );
+    assert_eq!(stages.len(), 11, "the corpus is eleven stages");
 }
 
 /// MUST FIRE: the windowed path reaches a stage the absolute-offset path cannot.
@@ -12638,14 +12626,16 @@ fn the_chunk_region_streams_one_record_per_call_past_the_old_batch_cap() {
     const CMD_STREAM_STEP: i64 = 175;
     const OLD_BATCH_CAP: usize = 90;
 
-    // `parse` ONLY, and `wire` is checked separately below for a limit that is
-    // NOT this one. `wire` has 475 chunks and would exceed the batch cap, but it
-    // never reaches the emit at all: its 1,148 constant nodes exceed the
-    // module-input walk's 1,024-node bound and it refuses with `-240` before any
-    // record is written. Treating it as a subject here would have reported the
-    // chunk cap as still binding when a different limit fired, which is the
-    // conflation this file's own history keeps recording.
-    for stage in ["parse"] {
+    // BOTH STAGES NOW, and `wire` joining is the point of the latest slice.
+    //
+    // It was excluded here for a reason that was NOT the chunk cap: its 1,148
+    // constant nodes were measured against `nm_max_names()`, a bound on the NAME
+    // arrays, and it refused with `-240` before a record was written. Every one of
+    // those constants is `Int`, so the walk interned nothing and the arrays it was
+    // being checked against were never touched. The node table it writes into
+    // holds 1,365. With the two bounds separated, `wire` emits its own 475-chunk
+    // region -- the last stage the emit path excluded.
+    for stage in ["parse", "wire"] {
         let path = format!("src/selfhost/kel/{stage}.kel");
         let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
         let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse"))
@@ -12713,197 +12703,66 @@ fn the_chunk_region_streams_one_record_per_call_past_the_old_batch_cap() {
     }
 }
 
-/// **`wire` IS STILL EXCLUDED, AND BY A DIFFERENT LIMIT.** Asserted so the two
-/// are not conflated.
+/// **THE TWO BOUNDS ARE SEPARATE NUMBERS BOUNDING SEPARATE THINGS**, and this is
+/// the test that keeps them apart.
 ///
-/// Removing the 90-record chunk batch cap admits `parse`. It does NOT admit
-/// `wire`, whose 1,148 constant nodes exceed the module-input walk's 1,024-node
-/// bound: it refuses with `-240` before a single record is emitted, so its 475
-/// chunks never reach the question.
+/// The module-input walk refused a forest of more than 1,024 NODES using
+/// `nm_max_names()` — the cap that sizes the NAME arrays, `nin` at 2,048 words
+/// and `nmap` at 1,024 entries. The two are comparable numbers and otherwise
+/// unrelated, so the guard read as though it were checking capacity while
+/// checking someone else's.
 ///
-/// This is asserted rather than noted because the first version of the test above
-/// took `wire` as a subject and read its `-240` as the chunk cap still binding. A
-/// refusal proves which limit fired only if the test says which one it expected.
+/// It excluded `wire.kel` from its own emit path at 1,148 constant nodes, every
+/// one of them `Int` — so the walk interned nothing and the arrays it was
+/// measured against were never touched.
+///
+/// # Why this is asserted rather than left to the byte-identity tests
+///
+/// Those pass whenever a stage is admitted. Nothing in them would notice the two
+/// bounds silently becoming one number again, which is how this defect existed in
+/// the first place. Reading both out of the source and requiring them to differ
+/// is what makes the separation a property rather than a coincidence.
 #[cfg(feature = "self-host")]
 #[test]
-fn wire_is_excluded_by_the_node_walk_and_not_by_the_chunk_cap() {
-    const CMD_STREAM_BEGIN: i64 = 174;
-    const NODE_CAP_REFUSAL: i64 = -240;
+fn the_node_bound_and_the_name_bound_are_not_the_same_number() {
+    const SRC: &str = include_str!("../src/selfhost/kel/wire.kel");
 
+    let literal = |name: &str| -> usize {
+        let line = SRC
+            .lines()
+            .find(|l| l.trim_start().starts_with(&format!("fn {name}()")))
+            .unwrap_or_else(|| panic!("wire.kel declares {name}"));
+        line.rsplit_once('{')
+            .and_then(|(_, t)| t.split_once('}'))
+            .and_then(|(n, _)| n.trim().parse().ok())
+            .unwrap_or_else(|| panic!("{name} has a literal body"))
+    };
+
+    let nodes = literal("mi_max_nodes");
+    let names = literal("nm_max_names");
+    assert_ne!(
+        nodes, names,
+        "the node bound and the name bound are both {nodes}. They bound different arrays and          were one number once; a forest of {nodes} scalars interns no names at all."
+    );
+
+    // The node bound must be what the node table actually holds, or it is another
+    // number standing in for a capacity it does not describe.
+    const BYTES: usize = 65536;
+    const NODE_BYTES: usize = 6 * 8;
+    assert_eq!(
+        nodes,
+        BYTES / NODE_BYTES,
+        "the node bound is {nodes} against a {BYTES}-byte table at {NODE_BYTES} bytes a node"
+    );
+
+    // And the stage this separation admitted really is past the old bound.
     let src = std::fs::read_to_string("src/selfhost/kel/wire.kel").expect("read wire.kel");
     let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
-
-    // The premise: it really does carry more constant nodes than the walk admits.
     let chunk_consts: usize = module.chunks.iter().map(|c| c.constants.len()).sum();
     assert!(
-        chunk_consts > 1024,
-        "wire carries {chunk_consts} chunk constants, within the 1,024-node walk bound, so          the refusal below would be for some other reason"
+        chunk_consts > names && chunk_consts <= nodes,
+        "wire carries {chunk_consts} chunk constants, which is not between the old bound          ({names}) and the real one ({nodes}), so it no longer demonstrates the difference"
     );
-
-    let (blob, _names) = keleusma::selfhost::module_input(&module);
-    let mut vm = vm_for(WIRE_KEL);
-    let mut shared = vec![0u8; vm.shared_data_bytes()];
-    for (i, b) in blob.iter().enumerate() {
-        vm.set_shared(&mut shared, BIN_SLOT + i, Value::Byte(*b))
-            .expect("blob");
-    }
-
-    match enter(&mut vm, &mut shared, CMD_STREAM_BEGIN).expect("begin") {
-        VmState::Yielded(Value::Int(n)) => assert_eq!(
-            n, NODE_CAP_REFUSAL,
-            "wire refused with {n}, not the node-walk code {NODE_CAP_REFUSAL}. If it now              SUCCEEDS, the node bound moved and the exclusion recorded across the process              documents is stale."
-        ),
-        other => panic!("begin returned {other:?}"),
-    }
-}
-
-/// **THE 170-NODE FLATTENER CAP IS GONE FOR A SCALAR FOREST**, and the subject is
-/// past it by a factor of nearly five.
-///
-/// `flatten_emit_consts` refuses past `fl_max_nodes()` because the whole forest
-/// must sit in `wire.fin`, 1,024 words at six words a node. `parse` carries 817
-/// chunk constants, so that bound is what kept `CONSTS` — the largest region —
-/// out of the emit path.
-///
-/// The breadth-first walk cannot stream: a composite's record carries a range
-/// into children numbered after every node at its own depth, so it cannot write a
-/// record until it knows how many nodes precede them. A forest of scalars has no
-/// children, the queue never grows, and one node in gives one record out.
-///
-/// The comparison is against the reference region BYTE FOR BYTE, because a record
-/// with the right tag and a wrong payload is what a careless streaming emitter
-/// produces and a count would not see it.
-#[cfg(feature = "self-host")]
-#[test]
-fn constant_nodes_stream_one_record_per_call_past_the_flattener_cap() {
-    use keleusma::wire_schema::kind;
-    const CMD_FL_BEGIN: i64 = 176;
-    const CMD_FL_STEP: i64 = 177;
-    const OLD_NODE_CAP: usize = 170;
-
-    let src = std::fs::read_to_string("src/selfhost/kel/parse.kel").expect("read parse.kel");
-    let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
-    let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
-    let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
-
-    let region = view.find_region(kind::CONSTS).expect("CONSTS region");
-    let stored = view.region_bytes(&region).expect("payload");
-    let nodes = stored.len() / 16;
-    assert!(
-        nodes > OLD_NODE_CAP,
-        "parse has {nodes} constant nodes, within the {OLD_NODE_CAP}-node cap, so it would \
-         have emitted under the batch path and proves nothing about removing it"
-    );
-
-    // The node model, mirroring the encoder's accumulation. Every one is a scalar
-    // here, which `tests/consts_region_composition.rs` pins for the whole corpus.
-    let roots = encoder_const_roots(&module);
-    let fields = preorder_of(&roots);
-    assert_eq!(
-        fields.len() / 6,
-        nodes,
-        "the model counts {} nodes and the reference emitted {nodes}",
-        fields.len() / 6
-    );
-
-    let mut vm = vm_for(WIRE_KEL);
-    let mut shared = vec![0u8; vm.shared_data_bytes()];
-    match enter(&mut vm, &mut shared, CMD_FL_BEGIN).expect("begin") {
-        VmState::Yielded(Value::Int(n)) => assert_eq!(n, 0, "begin refused with {n}"),
-        other => panic!("begin returned {other:?}"),
-    }
-
-    let mut got = vec![0u8; stored.len()];
-    for (j, node) in fields.chunks_exact(6).enumerate() {
-        for (f, v) in node.iter().enumerate() {
-            vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(*v))
-                .expect("node field");
-        }
-        let wrote = match enter(&mut vm, &mut shared, CMD_FL_STEP).expect("step") {
-            VmState::Yielded(Value::Int(n)) => n,
-            other => panic!("step {j} returned {other:?}"),
-        };
-        assert!(wrote > 0, "step {j} refused with {wrote}");
-        let stride = wrote as usize;
-        for k in 0..stride {
-            got[j * stride + k] = match vm.get_shared(&shared, 1 + k).expect("read") {
-                Value::Byte(b) => b,
-                other => panic!("shared byte slot held {other:?}"),
-            };
-        }
-    }
-
-    assert_eq!(
-        got, stored,
-        "the streamed CONSTS region differs from the reference over {nodes} records"
-    );
-}
-
-/// **MUST FIRE.** A composite or name-bearing node is REFUSED, not emitted wrong.
-///
-/// The streaming path has no queue and never runs the interner, so a `TUPLE`
-/// would get a zero range and a `STATIC_STR` a zero name index — structurally
-/// valid records, silently wrong, and indistinguishable downstream from correct
-/// ones.
-///
-/// **The corpus cannot supply this case.** Every constant across the eleven
-/// stages is `Int`, so a path that elided the guard entirely would pass the test
-/// above and every other test in this file. That is precisely why the refusal is
-/// asserted here with the code it must return, rather than described in a
-/// comment.
-#[cfg(feature = "self-host")]
-#[test]
-fn the_streaming_node_path_refuses_what_it_cannot_encode() {
-    const CMD_FL_BEGIN: i64 = 176;
-    const CMD_FL_STEP: i64 = 177;
-    // (label, node fields, expected refusal)
-    // Node layout: tag, payload, children, names_first, flags, disc.
-    const CASES: &[(&str, [i64; 6], i64)] = &[
-        ("tuple-with-children", [8, 0, 2, 0, 0, 0], -264),
-        ("static-str", [7, 0, 0, 0, 0, 0], -265),
-        ("empty-array-still-has-a-range", [9, 0, 0, 0, 0, 0], -266),
-        ("struct", [10, 0, 0, 0, 0, 0], -265),
-        ("enum", [11, 0, 0, 0, 0, 0], -265),
-    ];
-
-    let mut vm = vm_for(WIRE_KEL);
-    let mut shared = vec![0u8; vm.shared_data_bytes()];
-    for (label, node, expect) in CASES {
-        match enter(&mut vm, &mut shared, CMD_FL_BEGIN).expect("begin") {
-            VmState::Yielded(Value::Int(0)) => {}
-            other => panic!("{label}: begin returned {other:?}"),
-        }
-        for (f, v) in node.iter().enumerate() {
-            vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(*v))
-                .expect("node field");
-        }
-        match enter(&mut vm, &mut shared, CMD_FL_STEP).expect("step") {
-            VmState::Yielded(Value::Int(n)) => assert_eq!(
-                n, *expect,
-                "{label}: refused with {n}, expected {expect}. A refusal proves which guard \
-                 fired only if the test names the one it expected."
-            ),
-            other => panic!("{label}: step returned {other:?}"),
-        }
-    }
-
-    // MUST-NOT-FIRE: a scalar of the same shape is accepted, or the guards above
-    // are rejecting everything and prove nothing.
-    match enter(&mut vm, &mut shared, CMD_FL_BEGIN).expect("begin") {
-        VmState::Yielded(Value::Int(0)) => {}
-        other => panic!("control: begin returned {other:?}"),
-    }
-    for (f, v) in [3i64, 42, 0, 0, 0, 0].iter().enumerate() {
-        vm.set_shared(&mut shared, FIN_SLOT + f, Value::Int(*v))
-            .expect("node field");
-    }
-    match enter(&mut vm, &mut shared, CMD_FL_STEP).expect("step") {
-        VmState::Yielded(Value::Int(n)) => assert!(
-            n > 0,
-            "an Int node was refused with {n}, so the guards reject everything"
-        ),
-        other => panic!("control: step returned {other:?}"),
-    }
 }
 
 /// The largest region of one kind found while surveying, with the stage that
