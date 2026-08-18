@@ -216,13 +216,25 @@ looked complete. **In every case the code was reachable and the evidence was not
   is positional. Not reverted -- rewriting published history on a branch the `v0.3.0` line rebases
   from is worse than the violation -- so CI on the version branch was the only gate that change got.
   It passed 22 of 22, which is luck rather than process.
-- **AN INSTRUMENT'S FILTER ENCODES WHAT YOU ASSUME THE FIELD CONTAINS.** Two failures in one session,
-  in opposite directions. A resume counter reported two steps per row because it counted the loop's
-  `RESET` as a step. A CI monitor reported two jobs FAILED because `gh` writes `""` into `conclusion`
-  for a job still running and the filter tested `!= null`. Neither was caught by reading the code;
-  both by output whose shape did not match the expectation. **Check what the source actually emits
-  before filtering on it**, and prefer an instrument that shows its raw evidence over one that only
-  shows its verdict.
+- **NEVER CLASSIFY A STATE AS FAILURE BY EXCLUSION. Enumerate the terminal failure states, or do not
+  classify at all.** This is the narrow form of a rule that was written too broadly and therefore did
+  not work: an earlier revision said "check what the source emits before filtering on it", the defect
+  was fixed in a CI monitor, the lesson was written down -- **and then reproduced verbatim an hour
+  later in the shell version of the same wait.** Fixing the instance is not fixing the habit, and a
+  rule you cannot mechanically apply is a rule you will re-break.
+  The working form: a wait that counts the literal string `pending` and stops at zero reads no field
+  and assumes nothing. A filter saying `!= SUCCESS && != SKIPPED && != NEUTRAL` calls every running
+  job a failure.
+- **FIVE CONSTRUCTED STATUSES IN ONE SESSION, none caught by reading the code.** Every one was caught
+  by output whose SHAPE did not match the expectation, which is the argument for instruments that
+  show raw evidence over ones that show a verdict.
+  | claimed | true |
+  |---|---|
+  | gate ran, exit 0 | `timeout` does not exist on macOS; it never executed |
+  | `echo "CLIPPY OK"` | clippy was failing; the echo was unconditional |
+  | `\| tail -1; echo $?` gave 0 | that is the PIPE's exit, not clippy's, which was 101 |
+  | monitor: 2 jobs failed | 0 failed, 2 still running |
+  | shell: 4 jobs failed | 0 failed, 4 still running -- the same bug again |
 - **A test that measures a VERDICT cannot tell a streaming stage from a one-shot fold behind a
   coroutine shell.** Eleven verdict tests passed either way; only the resume count discriminated.
 - **A REFUSAL PROVES WHICH LIMIT FIRED ONLY IF THE TEST NAMES THE ONE IT EXPECTED.** Third near-miss
